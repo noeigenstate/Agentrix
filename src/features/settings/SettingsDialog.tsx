@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, CaretDown, House, ArrowsOutSimple, Terminal as TerminalIcon, Check, Power, ArrowCounterClockwise, Monitor, Cpu, Info, SpeakerHigh, Globe, Microphone, BookOpen, FloppyDisk, Palette, Robot, Keyboard } from '@phosphor-icons/react';
-import type { AgentsState, AppUpdateState, Settings, Workspace } from '../../shared/types';
+import { Bell, CaretDown, House, ArrowsOutSimple, Terminal as TerminalIcon, Check, Power, ArrowCounterClockwise, Monitor, Cpu, Info, SpeakerHigh, Globe, Microphone, BookOpen, FloppyDisk, Palette, Robot, Keyboard, ImageSquare, ArrowLeft } from '@phosphor-icons/react';
+import type { AgentsState, AppUpdateState, Project, Settings, Workspace } from '../../shared/types';
 import { themes } from '../../shared/themes';
 import { VoiceModelSetting } from '../voice/VoiceButton';
 import { currentLanguage, t } from '../../shared/i18n';
@@ -11,6 +11,7 @@ import { isMac, isLinux } from '../../shared/platform';
 import { recommendedAppearance } from '../../shared/theme-presets';
 import { TerminalFontSettings } from './TerminalFontSettings';
 import { UserAvatarSetting } from './UserAvatarSetting';
+import { ProjectImagesSettings } from './ProjectImagesSettings';
 
 // The theme picker shows one row; "更多主题" unfolds the rest. The theme in use is always in that row: one from further
 // down takes the row's last place.
@@ -21,14 +22,15 @@ function shownThemes<T extends { id: string }>(all: readonly T[], selected: stri
   return chosen && !row.includes(chosen) ? [...row.slice(0, THEME_ROW - 1), chosen] : row;
 }
 
-export function SettingsDialog({ settings, desktopGlass, localShell, agents, onAgents, initialSection, updates, onCheckUpdate, onInstallUpdate, onDownloadPage, onGuide, close, update, quit }: {
+export function SettingsDialog({ settings, projects = [], desktopGlass, localShell, agents, onAgents, initialSection, updates, onCheckUpdate, onInstallUpdate, onDownloadPage, onGuide, close, update, quit }: {
   localShell: Workspace['localShell']; agents: AgentsState | null; onAgents: (state: AgentsState) => void; initialSection: string;
-  desktopGlass?: Workspace['desktopGlass']; settings: Settings; close: () => void; update: (patch: Partial<Settings>) => void; quit: () => void; onGuide: () => void;
+  projects?: Project[]; desktopGlass?: Workspace['desktopGlass']; settings: Settings; close: () => void; update: (patch: Partial<Settings>) => void; quit: () => void; onGuide: () => void;
   updates: AppUpdateState | null; onCheckUpdate: () => void; onInstallUpdate: () => void; onDownloadPage: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const pane = useRef<HTMLDivElement>(null);
   const [activeSection, setActiveSection] = useState(initialSection), [allThemes, setAllThemes] = useState(false);
+  const [projectImages, setProjectImages] = useState(false);
   // One category at a time: the sidebar chooses it and the pane beside it shows only that category.
   const sections = [
     { id: 'appearance', title: t('外观'), hint: t('主题、语言、材质与动画'), icon: <Palette size={17} /> },
@@ -40,7 +42,7 @@ export function SettingsDialog({ settings, desktopGlass, localShell, agents, onA
   ];
   const current = sections.find(section => section.id === activeSection) || sections[0];
   const preset = recommendedAppearance(settings.theme, !!desktopGlass?.supported);
-  const choose = (id: string) => { setActiveSection(id); pane.current?.scrollTo({ top: 0 }); };
+  const choose = (id: string) => { setProjectImages(false); setActiveSection(id); pane.current?.scrollTo({ top: 0 }); };
   useEffect(() => { dialog.current?.showModal(); }, []);
   // Up and down move between categories while the sidebar has focus.
   const navKeys = (event: React.KeyboardEvent) => {
@@ -53,13 +55,13 @@ export function SettingsDialog({ settings, desktopGlass, localShell, agents, onA
     <div className="settings-shell">
       <aside className="settings-sidebar">
         <div className="settings-brand"><span className="eyebrow">PREFERENCES</span><h2>{t('工作台设置')}</h2></div>
-        <nav className="settings-nav" aria-label={t('设置分类')} onKeyDown={navKeys}>{sections.map(section => <button type="button" key={section.id} data-settings-tab={section.id} aria-controls={`settings-${section.id}`} aria-current={current.id === section.id ? 'page' : undefined} onClick={() => choose(section.id)}>{section.icon}<span>{section.title}</span></button>)}</nav>
+        <nav className="settings-nav" aria-label={t('设置分类')} onKeyDown={navKeys}>{sections.map(section => <button type="button" key={section.id} data-settings-tab={section.id} aria-controls={section.id === 'appearance' && projectImages ? 'settings-project-images' : `settings-${section.id}`} aria-current={current.id === section.id ? 'page' : undefined} onClick={() => choose(section.id)}>{section.icon}<span>{section.title}</span></button>)}</nav>
         <div className="settings-sidebar-footer"><button className="text-button" onClick={onGuide}><BookOpen size={15} />{t('使用指南')}</button><button className="text-button danger-text" onClick={quit}><Power size={15} />{t('退出应用')}</button></div>
       </aside>
       <div className="settings-main">
-        <header className="settings-main-head"><h3>{current.title}</h3><p>{current.hint}</p></header>
+        <header className="settings-main-head"><h3>{projectImages ? t('项目缩略图') : current.title}</h3><p>{projectImages ? t('自动选择、固定图片与原有编号') : current.hint}</p></header>
         <div className="settings-pane" ref={pane}>
-      <section className="settings-section" id="settings-appearance" aria-label={t('外观')} hidden={current.id !== 'appearance'}>
+      <section className="settings-section" id="settings-appearance" aria-label={t('外观')} hidden={current.id !== 'appearance' || projectImages}>
       <fieldset className="theme-picker"><legend>{t('外观主题')}</legend><div className="theme-options">
         {shownThemes(themes, settings.theme, allThemes).map(theme => <label key={theme.id} className={`theme-option ${settings.theme === theme.id ? 'is-selected' : ''}`}>
           <input type="radio" name="theme" value={theme.id} checked={settings.theme === theme.id} aria-label={t(theme.name)} onChange={() => update({ theme: theme.id })} />
@@ -72,6 +74,7 @@ export function SettingsDialog({ settings, desktopGlass, localShell, agents, onA
       </fieldset>
       <label className="setting-row"><span><Globe size={19} /><span><b>{t('语言')}</b><small>{t('界面与提示的语言')}</small></span></span><select aria-label={t('语言')} value={settings.language} onChange={event => update({ language: event.target.value as Settings['language'] })}><option value="zh">中文</option><option value="en">English</option></select></label>
       <UserAvatarSetting avatar={settings.userAvatar} update={userAvatar => update({ userAvatar })} />
+      <div className="setting-row" data-project-images-setting><span><ImageSquare size={19} /><span><b>{t('项目缩略图')}</b><small>{t('自动选择、固定图片与原有编号')}</small></span></span><button type="button" className="button secondary" data-project-images-open onClick={() => { setProjectImages(true); pane.current?.scrollTo({ top: 0 }); }}>{t('管理…')}</button></div>
       <label className="setting-row"><span><House size={19} /><span><b>{t('启动时打开')}</b><small>{t('决策：先看需要你决定的事；工作台：项目网格')}</small></span></span><select aria-label={t('启动时打开')} value={settings.startView} onChange={event => update({ startView: event.target.value as Settings['startView'] })}><option value="decisions">{t('决策')}</option><option value="workspace">{t('工作台')}</option></select></label>
       <label className="setting-row"><span><Monitor size={19} /><span><b>{t('界面材质')}</b><small>{t('实色：面板不透明，文字用 ClearType 渲染，最锐利，也更省显卡；玻璃：透出壁纸')}</small></span></span><select aria-label={t('界面材质')} value={settings.surface} onChange={event => update({ surface: event.target.value as Settings['surface'] })}><option value="glass">{t('液态玻璃')}</option><option value="solid">{t('实色（更清晰）')}</option></select></label>
       {settings.surface === 'glass' && <label className="setting-row"><span><Monitor size={19} /><span><b>{t('玻璃背景')}</b><small>{t('主题背景使用应用内壁纸；桌面背景模糊窗口背后的内容')}</small></span></span><select aria-label={t('玻璃背景')} value={settings.glassBackground} onChange={event => update({ glassBackground: event.target.value as Settings['glassBackground'] })}><option value="theme">{t('主题背景')}</option><option value="desktop" disabled={!desktopGlass?.supported}>{t('桌面背景')}</option></select></label>}
@@ -84,6 +87,9 @@ export function SettingsDialog({ settings, desktopGlass, localShell, agents, onA
       <label className="setting-row"><span><TerminalIcon size={19} /><span><b>{t('终端字重')}</b><small>{t('背景透明时可提高字重；不改变终端内容和字号')}</small></span></span><select aria-label={t('终端字重')} value={settings.terminalFontWeight} onChange={event => update({ terminalFontWeight: Number(event.target.value) as Settings['terminalFontWeight'] })}><option value="400">{t('标准')}</option><option value="500">{t('中等')}</option><option value="600">{t('更醒目')}</option></select></label>
       <TerminalFontSettings settings={settings} update={update} />
       <div className="setting-row"><span><Palette size={19} /><span><b>{t('主题推荐配置')}</b><small>{t('只调整外观；手动修改和切换主题不会自动覆盖你的配置')}</small><small>{t('{size}px · {weight} · {renderer} · {background}', { size: preset.fontSize, weight: t(preset.terminalFontWeight === 400 ? '标准' : '中等'), renderer: t(preset.terminalRenderer === 'gpu' ? 'GPU 加速' : '兼容模式'), background: t(preset.glassBackground === 'desktop' ? '桌面背景' : '主题背景') })}</small></span></span><button className="button secondary" onClick={() => update(preset)}>{t('应用推荐配置')}</button></div>
+      </section>
+      <section className="settings-section" id="settings-project-images" aria-label={t('项目缩略图')} hidden={current.id !== 'appearance' || !projectImages}>
+        {projectImages && <><button type="button" className="text-button" data-project-images-back onClick={() => choose('appearance')}><ArrowLeft size={15} />{t('返回外观')}</button><ProjectImagesSettings projects={projects} /></>}
       </section>
       <section className="settings-section" id="settings-notifications" aria-label={t('提醒')} hidden={current.id !== 'notifications'}>
       <label className="setting-row"><span><Bell size={19} /><span><b>{t('桌面通知')}</b><small>{t('一轮结束时发送系统通知')}</small></span></span><input type="checkbox" checked={settings.notifications} onChange={e => update({ notifications: e.target.checked })} /></label>

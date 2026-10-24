@@ -1,4 +1,4 @@
-function registerWorkspaceIpc({ handle, publicState, dialog, getWindow, t, addProject, getRecentProjects, existsSync, getRecentEntry, forgetRecent, clearHistory, getRecentSSH, forgetRecentSSH, clearSSHHistory, reorderTerminals, getEditorFile, allowEditorClose, confirmTerminalClose, disposeProjectTerminals, findProject, closeProjectPreviews, removeProject, forgetBranch, broadcast, acknowledgeProject, reorderProjects, getSettings, updateStoreSettings, rebuildMenus, clearRestorePlans, chooseVoiceModel }) {
+function registerWorkspaceIpc({ handle, publicState, dialog, getWindow, t, addProject, getRecentProjects, existsSync, getRecentEntry, forgetRecent, clearHistory, getRecentSSH, forgetRecentSSH, clearSSHHistory, reorderTerminals, getEditorFile, allowEditorClose, confirmTerminalClose, disposeProjectTerminals, findProject, closeProjectPreviews, removeProject, forgetBranch, broadcast, acknowledgeProject, reorderProjects, setProjectImage, listProjectImageCandidates, getSettings, updateStoreSettings, rebuildMenus, clearRestorePlans, chooseVoiceModel }) {
   // Adds a local folder as a project; an already open folder just returns its id. Its card then offers Claude Code
   // and Codex (new or continuing), so no terminal is opened before one is chosen.
   function addLocalProject(folder, name) {
@@ -36,6 +36,11 @@ function registerWorkspaceIpc({ handle, publicState, dialog, getWindow, t, addPr
   });
   handle('workspace:acknowledge', id => { findProject(id); acknowledgeProject(id); broadcast(); });
   handle('workspace:reorder', ids => { reorderProjects(ids); broadcast(); });
+  handle('workspace:set-project-image', (id, image, mode) => { setProjectImage(id, image, mode); broadcast(); });
+  handle('workspace:project-image-candidates', id => {
+    const project = findProject(id);
+    return project.kind === 'ssh' ? { candidates: [], unavailable: 'ssh' } : listProjectImageCandidates(project.path);
+  });
   handle('workspace:reorder-terminals', (projectId, ids) => { reorderTerminals(projectId, ids); broadcast(); });
   function updateSettings(patch) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('无效的设置。');
