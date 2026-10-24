@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowSquareOut, ChatCircleDots, CircleNotch, Clock, ListChecks, Package, ShieldCheck, SignIn, WarningCircle } from '@phosphor-icons/react';
+import { CaretDown, CircleNotch } from '@phosphor-icons/react';
 import type { Decision, DecisionKind } from './decisions';
 import { snooze } from './decisions';
 import { parseAgentScreen } from '../agents/agent-screen';
@@ -11,11 +11,8 @@ import { ReadingQuestion } from '../reading/ReadingQuestion';
 import { currentLanguage, t } from '../../shared/i18n';
 import { ReviewCard } from './ReviewCard';
 
-const KINDS: Record<DecisionKind, { label: string; Icon: typeof ShieldCheck }> = {
-  approval: { label: '需要审批', Icon: ShieldCheck }, question: { label: '回答问题', Icon: ChatCircleDots }, choice: { label: '需要选择', Icon: ListChecks },
-  signin: { label: '需要登录', Icon: SignIn }, attention: { label: '需要你处理', Icon: WarningCircle }, review: { label: '交付审查', Icon: Package },
-};
-export const decisionKind = (kind: DecisionKind) => KINDS[kind];
+const KINDS: Record<DecisionKind, string> = { approval: '需要审批', question: '需要回答', choice: '需要选择', signin: '需要登录', attention: '需要你处理', review: '交付审查' };
+export const kindLabel = (kind: DecisionKind) => t(KINDS[kind]);
 const AGENTS = { claude: 'Claude Code', codex: 'Codex' };
 
 // How long a decision has waited, in the words of a clock on the wall.
@@ -28,6 +25,8 @@ export function waited(since: number, now: number) {
 // says nothing about that.
 const STEPS: Record<string, string> = { 'Bash command': '运行命令', 'Edit file': '修改文件', 'Create file': '新建文件', 'Write file': '写入文件', 'Read file': '读取文件', 'Fetch': '访问网页' };
 function approvalTitle(decision: Decision) {
+  const params = decision.native?.params, input = params?.input && typeof params.input === 'object' ? params.input as Record<string, unknown> : undefined, nativeCommand = params?.command ?? input?.command;
+  if (typeof nativeCommand === 'string') return t('{step}：{target}', { step: t('运行命令'), target: nativeCommand });
   const lines = decision.context.map(line => line.trim()), at = lines.findIndex(line => STEPS[line]);
   const command = lines.find(line => /^\$\s/.test(line))?.slice(2);
   if (at >= 0 && lines[at + 1]) return t('{step}：{target}', { step: t(STEPS[lines[at]]), target: lines[at + 1] });
@@ -58,9 +57,14 @@ export function DecisionCard({ decision, now, onOpen, onDone, onError }: {
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => { setPicked(null); setState('idle'); setLater(false); }, [decision.id, decision.choice?.approval?.stamp?.sessionId, decision.choice?.approval?.stamp?.revision]);
-  const { label, Icon } = KINDS[decision.kind];
-  if (decision.native) return <NativeApprovalCard key={decision.native.token} request={decision.native} source={`${decision.projectName} · ${decision.terminalTitle}`} onOpen={() => onOpen(decision)} onError={onError} />;
-  if (decision.kind === 'review') return <ReviewCard decision={decision} now={now} kind={<span className="decision-kind"><Icon size={15} weight="fill" />{t(label)}</span>} onOpen={onOpen} onDone={onDone} onError={onError} />;
+  const kind = <span className="decision-kind">{kindLabel(decision.kind)}</span>;
+  const source = `${decision.projectName}${decision.multipleTerminals ? ` · ${decision.terminalTitle}` : ''} · ${AGENTS[decision.agent]} · ${waited(decision.since, now)}`;
+  if (decision.native) return <article className="decision-card is-approval" data-approval-mode="native" aria-label={decisionTitle(decision)}>
+    <header className="decision-card-head">{kind}<span className="decision-mode">{decision.native.provider === 'claude' ? 'Claude SDK' : 'Codex'}</span><span className="decision-source">{source}</span></header>
+    <h2 className="decision-title">{decisionTitle(decision)}</h2>
+    <div className="decision-body"><NativeApprovalCard key={decision.native.token} request={decision.native} onOpen={() => onOpen(decision)} onError={onError} /></div>
+  </article>;
+  if (decision.kind === 'review') return <ReviewCard decision={decision} now={now} kind={kind} onOpen={onOpen} onDone={onDone} onError={onError} />;
   const options = decision.choice?.options ?? [];
   const terminalOnly = decision.kind === 'approval' || decision.choice?.kind === 'permission', copy = terminalApprovalCopy(currentLanguage());
   const send = async () => {
@@ -79,29 +83,35 @@ export function DecisionCard({ decision, now, onOpen, onDone, onError }: {
   const putOff = (minutes: number) => { snooze(decision.id, Date.now() + minutes * 60000); setLater(false); onDone(t('已暂缓，{time} 后再提醒；执行仍在等你。', { time: minutes < 60 ? t('{count} 分钟', { count: minutes }) : t('{count} 小时', { count: minutes / 60 }) })); };
   return <article className={`decision-card is-${decision.kind}`} data-approval-mode={terminalOnly ? 'terminal-only' : undefined} aria-label={decisionTitle(decision)}>
     <header className="decision-card-head">
-      <span className="decision-kind"><Icon size={15} weight="fill" />{t(label)}</span>
-      <span className="decision-source">{decision.projectName}{decision.multipleTerminals ? ` · ${decision.terminalTitle}` : ''} · {AGENTS[decision.agent]} · {waited(decision.since, now)}</span>
+      {kind}{terminalOnly && <span className="decision-mode">{t('终端模式')}</span>}
+      <span className="decision-source">{source}</span>
     </header>
     <h2 className="decision-title">{decisionTitle(decision)}</h2>
-    {terminalOnly && <p className="decision-why" role="status">{copy.message}</p>}
-    {decision.context.length > 0 && decision.kind !== 'question' && <pre className="decision-evidence">{decision.context.join('\n')}</pre>}
-    {decision.kind === 'question' && decision.choice
-      ? <div className="decision-question"><ReadingQuestion key={decision.id} choice={decision.choice} terminalId={decision.terminalId} onError={onError} /></div>
-      : options.length > 0 && <div className="decision-options" role="radiogroup" aria-label={decisionTitle(decision)}>
-        {options.map((option, index) => <label key={option.number} className={`decision-option ${picked === index ? 'is-picked' : ''}`}>
-          <input type="radio" name={`decision-${decision.id}`} checked={picked === index} disabled={terminalOnly || state === 'sending'} onChange={() => { if (!terminalOnly) setPicked(index); }} />
-          <span><b>{option.label}</b>{option.detail && <small>{option.detail}</small>}</span>
-        </label>)}
-      </div>}
-    {decision.kind === 'signin' && <p className="decision-why">{t('打开它的阅读视图，在登录窗口里打开登录页或粘贴授权码。')}</p>}
-    {decision.kind === 'attention' && <p className="decision-why">{t('这件事在它的终端里处理：打开来源，看它在问什么。')}</p>}
-    {state === 'expired' && <p className="decision-state is-expired" role="status">{t('这个问题已经变了，没有发送。请看更新后的内容再决定。')}</p>}
+    <div className="decision-body">
+      {terminalOnly && <p className="decision-why" role="status">{copy.message}</p>}
+      {decision.context.length > 0 && decision.kind !== 'question' && <pre className="decision-evidence">{decision.context.join('\n')}</pre>}
+      {decision.kind === 'question' && decision.choice
+        ? <div className="decision-question"><ReadingQuestion key={decision.id} choice={decision.choice} terminalId={decision.terminalId} onError={onError} /></div>
+        : options.length > 0 && (terminalOnly
+          ? <ol className="decision-options-readonly" aria-label={decisionTitle(decision)}>
+            {options.map(option => <li key={option.number}>{option.label}{option.detail && <small>{option.detail}</small>}</li>)}
+          </ol>
+          : <div className="decision-options" role="radiogroup" aria-label={decisionTitle(decision)}>
+            {options.map((option, index) => <label key={option.number} className={`decision-option ${picked === index ? 'is-picked' : ''}`}>
+              <input type="radio" name={`decision-${decision.id}`} checked={picked === index} disabled={state === 'sending'} onChange={() => setPicked(index)} />
+              <span><b>{option.label}</b>{option.detail && <small>{option.detail}</small>}</span>
+            </label>)}
+          </div>)}
+      {decision.kind === 'signin' && <p className="decision-why">{t('打开它的阅读视图，在登录窗口里打开登录页或粘贴授权码。')}</p>}
+      {decision.kind === 'attention' && <p className="decision-why">{t('这件事在它的终端里处理：打开来源，看它在问什么。')}</p>}
+      {state === 'expired' && <p className="decision-state is-expired" role="status">{t('这个问题已经变了，没有发送。请看更新后的内容再决定。')}</p>}
+    </div>
     <footer className="decision-actions">
       {options.length > 0 && decision.kind !== 'question' && !terminalOnly && <button type="button" className="button primary" disabled={picked === null || state !== 'idle'} onClick={() => void send()}>
-        {state === 'sending' && <CircleNotch size={14} className="loading-spinner" />}{picked === null ? t('先选一个答案') : t('确认：{answer}', { answer: options[picked].label })}</button>}
-      <button type="button" className="button secondary" data-approval-open-terminal={terminalOnly || undefined} onClick={() => onOpen(decision)}><ArrowSquareOut size={15} />{terminalOnly ? copy.open : t('打开来源')}</button>
+        {state === 'sending' && <CircleNotch size={16}className="loading-spinner" />}{picked === null ? t('先选一个答案') : t('确认：{answer}', { answer: options[picked].label })}</button>}
+      <button type="button" className={`button ${terminalOnly ? 'primary' : 'secondary'}`} data-approval-open-terminal={terminalOnly || undefined} onClick={() => onOpen(decision)}>{terminalOnly ? copy.open : t('打开来源')}</button>
       <span className="decision-later">
-        <button type="button" className="text-button" aria-expanded={later} onClick={() => setLater(!later)}><Clock size={14} />{t('稍后处理')}</button>
+        <button type="button" className="button secondary" aria-expanded={later} onClick={() => setLater(!later)}>{t('稍后处理')}<CaretDown size={16} /></button>
         {later && <span className="decision-later-menu" role="menu">
           {[10, 60, 180].map(minutes => <button type="button" role="menuitem" key={minutes} onClick={() => putOff(minutes)}>{minutes < 60 ? t('{count} 分钟后', { count: minutes }) : t('{count} 小时后', { count: minutes / 60 })}</button>)}
         </span>}

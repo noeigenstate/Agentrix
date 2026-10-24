@@ -20,7 +20,7 @@ const project = { id: randomUUID(), name: '对话分层预览', path: path.join(
 for (const directory of [profile, home, claudeHome, project.path]) await fs.mkdir(directory, { recursive: true });
 await fs.writeFile(path.join(project.path, 'large.txt'), 'A'.repeat(256 * 1024) + '\nPAGE_TWO_MARKER\n');
 await fs.writeFile(path.join(project.path, 'slow-save.txt'), 'original');
-await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', startView: 'workspace', theme: 'daylight', focusAnimation: 'off', terminalRenderer: 'dom', restoreSessions: false, notifications: false, sound: false, announce: false, closeToTray: false, activityPane: false, guideVersion: '9.9.9' } }));
+await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', startView: 'workspace', focusAnimation: 'off', terminalRenderer: 'dom', restoreSessions: false, notifications: false, sound: false, announce: false, closeToTray: false, activityPane: false, guideVersion: '9.9.9' } }));
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: home, CLAUDE_CONFIG_DIR: claudeHome };
 delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const at = new Date(2026, 9, 17, 22, 10).getTime();
@@ -77,15 +77,15 @@ try {
     assert.ok(result.overflow <= 1, `${label}: no horizontal overflow`);
     console.log(label, JSON.stringify(result));
   };
-  await checkGeometry('daylight focused');
+  await checkGeometry('catalina focused');
   await reader.evaluate(node => { node.scrollTop = 0; });
   await page.mouse.move(5, 5);
-  await reader.screenshot({ path: path.join(output, 'daylight-focused.png') });
+  await reader.screenshot({ path: path.join(output, 'catalina-focused.png') });
   const command = card.locator('.reading-tools-head').filter({ hasText: '运行 2 条命令' });
   await command.click();
   assert.equal(await command.getAttribute('aria-expanded'), 'true');
   await card.locator('.reading-tools-tree').getByText('git status --short', { exact: true }).waitFor();
-  await reader.screenshot({ path: path.join(output, 'daylight-expanded.png') });
+  await reader.screenshot({ path: path.join(output, 'catalina-expanded.png') });
   await command.click(); assert.equal(await command.getAttribute('aria-expanded'), 'false');
   // Refreshing a stream must preserve the expanded tool component and its parent.
   await command.click();
@@ -100,14 +100,6 @@ try {
   await publish(entries);
   await waitFor(async () => await card.locator('.reading-tool-command.is-running').count() === 0, 'running fixture removed');
   await command.click();
-  for (const theme of ['mono-amber', 'mono-amber-dark']) {
-    await page.evaluate(theme => window.agentrix.settings({ theme }), theme);
-    await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, theme);
-    await checkGeometry(theme);
-    await reader.evaluate(node => { node.scrollTop = 0; });
-    await reader.screenshot({ path: path.join(output, `${theme}.png`) });
-  }
-  await page.evaluate(() => window.agentrix.settings({ theme: 'daylight' }));
   await page.keyboard.press('Control+Shift+g');
   await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(650, 800));
@@ -204,7 +196,7 @@ try {
   assert.equal(await editor.inputValue(), 'edit B during a slow save');
   await page.locator('.file-preview').screenshot({ path: path.join(output, 'autosave-latest.png') });
   assert.deepEqual(errors, []);
-  console.log(`PASS reading hierarchy and file regressions: leading skills, command branches, expansion across 400-entry eviction, queued transcript messages, popup pagination, latest autosave, both agents, themes and compact cards. Screenshots: ${output}`);
+  console.log(`PASS reading hierarchy and file regressions: leading skills, command branches, expansion across 400-entry eviction, queued transcript messages, popup pagination, latest autosave, both agents, Catalina and compact cards. Screenshots: ${output}`);
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});
   throw error;

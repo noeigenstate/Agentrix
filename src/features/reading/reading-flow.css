@@ -9,11 +9,6 @@
   --flow-user: #5ea6ff;
   --step-node: 28px; --step-gap: 10px; --step-lead: calc(var(--step-node) + var(--step-gap));
 }
-:root:is([data-theme="mono-amber"], [data-theme="mono-amber-dark"]) .reading-view {
-  --flow-card: var(--theme-hover); --flow-line: var(--theme-line); --flow-ink: var(--theme-ink); --flow-muted: var(--theme-muted); --flow-faint: var(--theme-muted);
-  --flow-ok: var(--theme-ink); --flow-fail: var(--mono-alert-ink); --flow-lead: var(--theme-ink); --flow-avatar: var(--theme-ink); --flow-codex: var(--theme-ink); --flow-claude: var(--mono-orange);
-  --flow-rail: var(--theme-line); --flow-step: var(--theme-ink); --flow-user: var(--theme-ink);
-}
 
 /* A step: its node on the line, then what it is, under a head line with the speaker and the time. The line runs from each node's foot to the next one's head
    (the steps stand 10px apart), never through the glass. */
@@ -36,9 +31,8 @@
 .reading-step.is-claude .reading-node { --node-tint: var(--flow-claude); }
 .reading-step.is-codex .reading-node { --node-tint: var(--flow-codex); }
 /* The official Blossom's 716-unit canvas includes its clear space: keep the full canvas inside the existing node.
-   Only the two supplied black/white variants are used; Claude retains its official orange in every theme. */
+   Codex uses its supplied white mark; Claude retains its official orange. */
 .reading-node > .agent-brand-codex { width: var(--step-node); height: var(--step-node); }
-:root[data-theme="mono-amber"] .agent-brand-codex path { fill: black; }
 /* A running node sends soft rings out from its rim. Brand geometry stays still. One that failed is marked red. */
 .reading-step.is-running .reading-node::before, .reading-step.is-running .reading-node::after { content: ''; position: absolute; inset: 0; border-radius: 50%;
   box-shadow: 0 0 0 1.5px var(--node-tint); opacity: 0; pointer-events: none; animation: reading-node-ripple 2.4s cubic-bezier(.2, .6, .35, 1) infinite; }

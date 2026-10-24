@@ -21,12 +21,10 @@
 .guide-footer { display: flex; width: 100%; gap: 14px; padding-top: 24px; border-top: 1px solid var(--theme-line); }
 .guide-footer .button { flex: 1; height: 50px; border-radius: 14px; font-size: 15px; }
 .guide-dialog .button.primary { text-shadow: none; }
-:root:not([data-theme^="mono"]) .guide-dialog .button.primary { color: #ffffff; background: var(--accent-blue, #3b9eff); border-color: transparent; box-shadow: 0 6px 16px -6px #3b9effb0; }
-:root:not([data-theme^="mono"]) .guide-dialog .button.primary:hover { filter: brightness(1.08); }
-:root[data-theme^="mono"] .guide-dialog .button.primary { color: var(--theme-button-ink); }
+:root[data-theme="catalina"] .guide-dialog .button.primary { color: #ffffff; background: var(--accent-blue, #3b9eff); border-color: transparent; box-shadow: 0 6px 16px -6px #3b9effb0; }
+:root[data-theme="catalina"] .guide-dialog .button.primary:hover { filter: brightness(1.08); }
 .guide-links { display: flex; justify-content: center; gap: 22px; margin-top: 14px; }
 .guide-links .text-button { font-size: 12px; color: var(--theme-muted); }
 .guide-links .text-button:hover { color: var(--theme-ink); }
-/* The themes' `.settings-dialog :where(*) { color: inherit }` would override a plain class, so the badge ink needs the root selector. */
-:root:not([data-theme^="mono"]) .guide-dialog .guide-badge { color: #ffffff; }
-:root[data-theme^="mono"] .guide-dialog .guide-badge { color: var(--theme-button-ink); background: var(--theme-button); }
+/* Dialog styles override a plain class, so the badge ink needs the root selector. */
+:root[data-theme="catalina"] .guide-dialog .guide-badge { color: #ffffff; }

@@ -28,9 +28,9 @@ export function styleTerminal(terminal: Terminal): IDisposable {
     try { draw(); } catch { /* Decorations are an experimental xterm API; without them the terminal is simply unstyled. */ }
   };
   const draw = () => {
-    const colors = terminalDecorationColors(document.documentElement.dataset.theme);
+    const colors = terminalDecorationColors();
     const buffer = terminal.buffer.active;
-    if (buffer.type !== 'normal' || ['mono-amber', 'mono-amber-dark'].includes(document.documentElement.dataset.theme || '')) { clear(); return; }
+    if (buffer.type !== 'normal') { clear(); return; }
     const cellBuffer = buffer.getNullCell();
     const wanted: { row: number; x: number; width: number; foregroundColor: string }[] = [];
     let previousBlank = false;
@@ -63,8 +63,6 @@ export function styleTerminal(terminal: Terminal): IDisposable {
   };
   const later = () => { if (!timer && !disposed) timer = window.setTimeout(scan, 160); };
   const subscriptions = [terminal.onWriteParsed(later), terminal.onScroll(later), terminal.onResize(later)];
-  const themeObserver = new MutationObserver(later);
-  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   later();
-  return { dispose() { disposed = true; clearTimeout(timer); themeObserver.disconnect(); subscriptions.forEach(item => item.dispose()); clear(); } };
+  return { dispose() { disposed = true; clearTimeout(timer); subscriptions.forEach(item => item.dispose()); clear(); } };
 }

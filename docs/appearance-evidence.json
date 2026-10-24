@@ -28,10 +28,6 @@
         "exit": 0
       },
       {
-        "script": "test:monochrome",
-        "exit": 0
-      },
-      {
         "script": "test:glass-transparency",
         "exit": 0
       },
@@ -92,10 +88,6 @@
         "exit": 0
       },
       {
-        "script": "test:monochrome-dark",
-        "exit": 0
-      },
-      {
         "script": "test:appearance-packaged",
         "exit": 0
       }
@@ -118,174 +110,8 @@
         "exit": 0
       },
       {
-        "script": "test:monochrome",
-        "exit": 0
-      },
-      {
         "script": "test:question-appearance",
         "exit": 0
-      },
-      {
-        "script": "test:monochrome-dark",
-        "exit": 0
-      }
-    ],
-    "finalMonochrome": {
-      "light": [
-        "GPU terminal renders without recreating its session",
-        "theme switches preserve terminal identity, 16/256-colour ANSI text and unsent input; original colours restore",
-        "neutral working activity outline and readable fullscreen titlebar",
-        "working is neutral, unread completion amber, reading headings and code are monochrome",
-        "Git additions and removals retain explicit prefixes and distinct neutral surfaces; solid mode works",
-        "selected theme survives restart"
-      ],
-      "dark": [
-        "GPU terminal renders without recreating its session",
-        "theme switches preserve terminal identity, 16/256-colour ANSI text and unsent input; original colours restore",
-        "neutral working activity outline and readable fullscreen titlebar",
-        "working is neutral, unread completion amber, reading headings and code are monochrome",
-        "Git additions and removals retain explicit prefixes and distinct neutral surfaces; solid mode works",
-        "selected theme survives restart"
-      ]
-    },
-    "sourceMatrix": {
-      "cases": [
-        "daylight/gpu/glass",
-        "daylight/gpu/desktop-glass",
-        "daylight/gpu/solid",
-        "daylight/dom/glass",
-        "daylight/dom/desktop-glass",
-        "daylight/dom/solid",
-        "forest/gpu/glass",
-        "forest/gpu/desktop-glass",
-        "forest/gpu/solid",
-        "forest/dom/glass",
-        "forest/dom/desktop-glass",
-        "forest/dom/solid",
-        "mountain-blue/gpu/glass",
-        "mountain-blue/gpu/desktop-glass",
-        "mountain-blue/gpu/solid",
-        "mountain-blue/dom/glass",
-        "mountain-blue/dom/desktop-glass",
-        "mountain-blue/dom/solid",
-        "wild-red/gpu/glass",
-        "wild-red/gpu/desktop-glass",
-        "wild-red/gpu/solid",
-        "wild-red/dom/glass",
-        "wild-red/dom/desktop-glass",
-        "wild-red/dom/solid",
-        "mono-amber/gpu/glass",
-        "mono-amber/gpu/desktop-glass",
-        "mono-amber/gpu/solid",
-        "mono-amber/dom/glass",
-        "mono-amber/dom/desktop-glass",
-        "mono-amber/dom/solid",
-        "mono-amber-dark/gpu/glass",
-        "mono-amber-dark/gpu/desktop-glass",
-        "mono-amber-dark/gpu/solid",
-        "mono-amber-dark/dom/glass",
-        "mono-amber-dark/dom/desktop-glass",
-        "mono-amber-dark/dom/solid"
-      ],
-      "checks": [
-        "six themes × renderers × linked materials",
-        "native/theme background selection remembered through solid mode",
-        "truecolor program surfaces preserved",
-        "font, session, host and draft preserved",
-        "recommendations touch appearance only",
-        "file preview on all themes",
-        "English settings",
-        "restart and no font downloads"
-      ],
-      "contentOpacity": "1 in all tested combinations"
-    },
-    "finalPackagedMatrix": {
-      "cases": [
-        "daylight/gpu/glass",
-        "daylight/gpu/desktop-glass",
-        "daylight/gpu/solid",
-        "daylight/dom/glass",
-        "daylight/dom/desktop-glass",
-        "daylight/dom/solid",
-        "forest/gpu/glass",
-        "forest/gpu/desktop-glass",
-        "forest/gpu/solid",
-        "forest/dom/glass",
-        "forest/dom/desktop-glass",
-        "forest/dom/solid",
-        "mountain-blue/gpu/glass",
-        "mountain-blue/gpu/desktop-glass",
-        "mountain-blue/gpu/solid",
-        "mountain-blue/dom/glass",
-        "mountain-blue/dom/desktop-glass",
-        "mountain-blue/dom/solid",
-        "wild-red/gpu/glass",
-        "wild-red/gpu/desktop-glass",
-        "wild-red/gpu/solid",
-        "wild-red/dom/glass",
-        "wild-red/dom/desktop-glass",
-        "wild-red/dom/solid",
-        "mono-amber/gpu/glass",
-        "mono-amber/gpu/desktop-glass",
-        "mono-amber/gpu/solid",
-        "mono-amber/dom/glass",
-        "mono-amber/dom/desktop-glass",
-        "mono-amber/dom/solid",
-        "mono-amber-dark/gpu/glass",
-        "mono-amber-dark/gpu/desktop-glass",
-        "mono-amber-dark/gpu/solid",
-        "mono-amber-dark/dom/glass",
-        "mono-amber-dark/dom/desktop-glass",
-        "mono-amber-dark/dom/solid"
-      ],
-      "checks": [
-        "six themes × renderers × linked materials",
-        "native/theme background selection remembered through solid mode",
-        "truecolor program surfaces preserved",
-        "font, session, host and draft preserved",
-        "recommendations touch appearance only",
-        "file preview on all themes",
-        "English settings",
-        "restart and no font downloads"
-      ],
-      "contentOpacity": "1 in all tested combinations"
-    },
-    "recommendations": [
-      {
-        "theme": "daylight",
-        "fontSize": 12,
-        "transparency": null,
-        "renderer": "gpu"
-      },
-      {
-        "theme": "forest",
-        "fontSize": 12,
-        "transparency": null,
-        "renderer": "gpu"
-      },
-      {
-        "theme": "mountain-blue",
-        "fontSize": 12,
-        "transparency": null,
-        "renderer": "gpu"
-      },
-      {
-        "theme": "wild-red",
-        "fontSize": 12,
-        "transparency": null,
-        "renderer": "gpu"
-      },
-      {
-        "theme": "mono-amber",
-        "fontSize": 16,
-        "transparency": 25,
-        "renderer": "dom"
-      },
-      {
-        "theme": "mono-amber-dark",
-        "fontSize": 16,
-        "transparency": 20,
-        "renderer": "dom"
       }
     ]
   },
@@ -532,7 +358,7 @@
     "Linux font order tested; hardware visual validation pending",
     "Original physical pointer disappearance not fully reproduced",
     "Package audit covers independent whitelist build, not production release configuration",
-    "Baseline suite precedes final targeted appearance changes; followups and final packaged matrix recorded separately"
+    "Baseline suite precedes final targeted appearance changes; retired appearance matrices omitted"
   ],
   "cloudCiDiagnosis": {
     "originalPrRun": 37887112177,
@@ -699,5 +525,6 @@
         "permissionAssertion": "BLOCKED unchanged; CHECKING marker and failure diagnostics added"
       }
     }
-  }
+  },
+  "scopeNote": "Historical evidence from 2026-10-09. Retired appearance matrices and preset checks have been removed; this is not validation of the Catalina-only app."
 }

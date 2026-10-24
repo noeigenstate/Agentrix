@@ -21,15 +21,12 @@ await fs.writeFile(path.join(projects[0].path, 'README.md'), '# 清晰的工作�
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { language: 'zh', terminalRenderer: 'dom', notifications: false, sound: false, closeToTray: false, restoreSessions: false, fontSize: 14 } }));
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: home }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const packaged = process.argv.includes('--packaged');
-// --daylight-only: run the Daylight checks (material, working glow, body contrast) and stop before the other themes.
-const daylightOnly = process.argv.includes('--daylight-only');
-class DaylightDone extends Error {}
 let app, page;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
 const panel = index => page.locator(`[data-project-id="${projects[index].id}"]`);
 const write = (index, data) => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: projects[index].id, data });
 const breathing = index => panel(index).evaluate(node => node.getAnimations({ subtree: true }).filter(animation => animation.animationName === 'signal-breathe').length);
-async function checkDaylightContrast() {
+async function checkContrast() {
   // Hide only body content in this isolated profile so the screenshot measures the actual
   // composited wallpaper, blur, glass and working wash without glyphs or the cursor.
   const selector = '.project-panel:not(.has-unread, .round-complete, .has-error) .panel-terminal-area';
@@ -40,7 +37,7 @@ async function checkDaylightContrast() {
       return { x: box.x, y: box.y, width: box.width, height: box.height };
     }));
     assert.ok(areas.length >= 2, 'contrast covers working and resting cards');
-    const screenshot = await page.screenshot({ path: path.join(output, 'daylight-body-contrast.png') });
+    const screenshot = await page.screenshot({ path: path.join(output, 'catalina-body-contrast.png') });
     const contrasts = await page.evaluate(async ({ png, areas }) => {
       const image = new Image(); image.src = `data:image/png;base64,${png}`; await image.decode();
       const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
@@ -57,16 +54,16 @@ async function checkDaylightContrast() {
             brightest = Math.max(brightest, .2126 * linear(pixels[p]) + .7152 * linear(pixels[p + 1]) + .0722 * linear(pixels[p + 2]));
           }
         }
-        // Daylight's terminal foreground, #ebebeb: light ink, so its worst ground is the brightest one.
-        const ink = .2126 * linear(235) + .7152 * linear(235) + .0722 * linear(235);
+        // Catalina's terminal foreground, #ffffff: light ink, so its worst ground is the brightest one.
+        const ink = .2126 * linear(255) + .7152 * linear(255) + .0722 * linear(255);
         return (Math.max(ink, brightest) + .05) / (Math.min(ink, brightest) + .05);
       });
     }, { png: screenshot.toString('base64'), areas });
     // The wallpaper keeps its own brightness; each card's frost dims what lies behind it, so even the brightest ground
     // behind the text (clouds) leaves white ink above 3:1.
-    console.log(`Daylight ink contrast with the brightest ground per card: ${contrasts.map(value => value.toFixed(2)).join(', ')}`);
+    console.log(`Catalina ink contrast with the brightest ground per card: ${contrasts.map(value => value.toFixed(2)).join(', ')}`);
     assert.ok(contrasts.every(value => value >= 3), `white ink stays legible over the brightest ground: ${contrasts.map(value => value.toFixed(2)).join(', ')}`);
-    await fs.writeFile(path.join(output, 'daylight-contrast.json'), JSON.stringify(contrasts, null, 2));
+    await fs.writeFile(path.join(output, 'catalina-contrast.json'), JSON.stringify(contrasts, null, 2));
   } finally { await mask.evaluate(node => node.remove()); }
 }
 const errors = [];
@@ -76,8 +73,8 @@ try {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1600, 900));
   await page.waitForSelector('.project-panel');
-  assert.equal((await state()).settings.theme, 'daylight');
-  await page.waitForFunction(() => document.documentElement.dataset.theme === 'daylight');
+  assert.equal('theme' in (await state()).settings, false);
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'catalina');
   for (let index = 0; index < 4; index++) {
     await panel(index).getByRole('button', { name: '只打开终端', exact: true }).click();
     await waitFor(async () => (await state()).projects[index].shellReady, 'native terminal ready');
@@ -115,7 +112,8 @@ try {
       assert.deepEqual(sample, samples[0], `${mode}: working lights and reading surface stay steady`);
       assert.equal(sample.edge, .95, `${mode}: vivid working edge stays steady`);
       assert.equal(sample.glow, 1, `${mode}: blue body wash stays steady`);
-      assert.ok(sample.edgeShadow.includes('24px') && /rgba\((47, 111, 208|59, 158, 255)/.test(sample.tint) && sample.tint.includes('60%'), `${mode}: blue glow and fading wash ${JSON.stringify(sample)}`);
+      assert.equal(sample.edgeShadow, 'rgba(78, 161, 255, 0.44) 0px 0px 24px 0px', `${mode}: Catalina working edge shadow`);
+      assert.equal(sample.tint, 'linear-gradient(rgba(35, 102, 195, 0.32), rgba(43, 117, 214, 0.14) 28%, rgba(0, 0, 0, 0) 60%)', `${mode}: Catalina working wash`);
       assert.equal(sample.text.opacity, '1'); assert.equal(sample.text.animation, 'none');
     }
     liveSamples.push({ mode, samples });
@@ -124,7 +122,7 @@ try {
   await page.evaluate(() => document.activeElement?.blur()); await page.mouse.move(2, 2);
   assert.equal(await breathing(1), 0, 'old unread completion stays quiet');
   assert.equal(await breathing(2), 0, 'ready shell stays quiet');
-  await page.screenshot({ path: path.join(output, 'daylight-working.png') });
+  await page.screenshot({ path: path.join(output, 'catalina-working.png') });
   // Every card is one frosted pane (clarity.css): a dark fill over a strong blur, and nothing inside it is glass again
   // (no header band, no inner screen).
   const pane = await panel(0).evaluate(node => ({ filter: getComputedStyle(node, '::before').backdropFilter, color: getComputedStyle(node, '::before').backgroundColor }));
@@ -134,24 +132,17 @@ try {
     return { backdrop: style.backdropFilter, fill: style.backgroundColor, image: style.backgroundImage, shadow: style.boxShadow, margin: style.margin };
   }));
   for (const part of inner) assert.deepEqual([part.backdrop, part.fill, part.image, part.shadow, part.margin], ['none', 'rgba(0, 0, 0, 0)', 'none', 'none', '0px'], `nothing inside a card is glass on glass: ${JSON.stringify(inner)}`);
-  if (daylightOnly) { await checkDaylightContrast(); await page.screenshot({ path: path.join(output, 'daylight.png') }); throw new DaylightDone(); }
-  for (const [theme, name] of [['daylight', '晴空'], ['forest', '林间光影'], ['mountain-blue', '山青蓝'], ['wild-red', '西野红']]) {
-    await page.evaluate(theme => window.agentrix.settings({ theme }), theme);
-    await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, theme);
-    await page.screenshot({ path: path.join(output, `${theme}.png`) });
-    assert.equal(await panel(0).locator('.status-badge').innerText(), '正在处理');
-    assert.equal(await panel(0).locator('.panel-signal').evaluate(node => Number(getComputedStyle(node).opacity)), .95, `${name}: working edge remains visible`);
-    const chips = await page.locator('.panel-index').evaluateAll(nodes => nodes.map(node => ({ background: getComputedStyle(node).backgroundColor, color: getComputedStyle(node).color, weight: getComputedStyle(node).fontWeight })));
-    assert.deepEqual(chips.map(chip => chip.background), ['rgb(59, 130, 246)', 'rgb(100, 116, 139)', 'rgb(139, 92, 246)', 'rgb(245, 158, 11)', 'rgb(244, 63, 94)', 'rgb(14, 165, 233)'], `${name}: project colors survive working and unread states`);
-    assert.ok(chips.every(chip => chip.color === 'rgb(255, 255, 255)' && chip.weight === '700'), `${name}: white bold digits`);
-    assert.equal(await breathing(2), 0, `${name}: ready shell stays quiet`);
-    if (theme === 'daylight') await checkDaylightContrast();
-  }
-  await page.evaluate(() => window.agentrix.settings({ theme: 'forest' }));
-  await page.waitForFunction(() => document.documentElement.dataset.theme === 'forest');
+  await page.screenshot({ path: path.join(output, `catalina.png`) });
+  assert.equal(await panel(0).locator('.status-badge').innerText(), '正在处理');
+  assert.equal(await panel(0).locator('.panel-signal').evaluate(node => Number(getComputedStyle(node).opacity)), .95, `Catalina: working edge remains visible`);
+  const chips = await page.locator('.panel-index').evaluateAll(nodes => nodes.map(node => ({ background: getComputedStyle(node).backgroundColor, color: getComputedStyle(node).color, weight: getComputedStyle(node).fontWeight })));
+  assert.deepEqual(chips.map(chip => chip.background), ['rgb(59, 130, 246)', 'rgb(100, 116, 139)', 'rgb(139, 92, 246)', 'rgb(245, 158, 11)', 'rgb(244, 63, 94)', 'rgb(14, 165, 233)'], `Catalina: project colors survive working and unread states`);
+  assert.ok(chips.every(chip => chip.color === 'rgb(255, 255, 255)' && chip.weight === '700'), `Catalina: white bold digits`);
+  assert.equal(await breathing(2), 0, `Catalina: ready shell stays quiet`);
+  await checkContrast();
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1920, height: 1080, deviceScaleFactor: 2, mobile: false });
-  await page.screenshot({ path: path.join(output, 'forest-3840x2160.png') });
+  await page.screenshot({ path: path.join(output, 'catalina-3840x2160.png') });
   await cdp.send('Emulation.clearDeviceMetricsOverride'); await cdp.detach();
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(820, 560));
   await page.waitForFunction(() => Math.abs(innerWidth - 820) <= 1); // Windows DPI can round the client width by one CSS pixel.
@@ -185,9 +176,9 @@ try {
   assert.deepEqual(text, { opacity: '1', animation: 'none' }, 'terminal text itself never pulses');
   const completed = (await state()).projects[0].lastCompletedAt;
   await page.screenshot({ path: path.join(output, 'fresh-completion.png') });
-  // Rerender via theme changes and repeated lifecycle callbacks must not restart an old alert.
+  // Rerender via settings changes and repeated lifecycle callbacks must not restart an old alert.
   await fs.appendFile(transcript, record('task_complete', 'visual-turn'));
-  await page.evaluate(() => window.agentrix.settings({ theme: 'wild-red' }));
+  await page.evaluate(() => window.agentrix.settings({ fontSize: 16 }));
   assert.equal(await breathing(0), 0); assert.equal((await state()).projects[0].lastCompletedAt, completed);
   await page.evaluate(id => window.agentrix.acknowledge(id), projects[0].id);
   await waitFor(async () => panel(0).evaluate(node => node.classList.contains('round-complete')), 'viewed automatic round becomes steady green');
@@ -213,17 +204,14 @@ try {
   await page.screenshot({ path: path.join(output, 'finished-steady.png') });
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, liveSamples, compact, compactEdges, errors }, null, 2));
-  console.log(`PASS: steady blue working edge and wash, daylight body contrast, a steady glow on completion, quiet unviewed glow, quiet idle, all themes, high DPI, compact controls, explorer and preserved small-card input. Screenshots: ${output}`);
+  console.log(`PASS: steady blue working edge and wash, catalina body contrast, a steady glow on completion, quiet unviewed glow, quiet idle, Catalina, high DPI, compact controls, explorer and preserved small-card input. Screenshots: ${output}`);
 } catch (error) {
-  if (error instanceof DaylightDone) { assert.deepEqual(errors, []); console.log(`PASS (Daylight only): frosted pane material, legible ink and steady working edge. Screenshots: ${output}`); }
-  else {
   console.error(error);
   if (page) {
     await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});
     console.error('Visual test viewport:', await page.evaluate(() => ({ width: innerWidth, height: innerHeight, scale: devicePixelRatio })).catch(() => null));
   }
   throw error;
-  }
 } finally {
   // Release our simulated task and exit only this isolated profile's shells
   // before Electron tears down ConPTY handles.

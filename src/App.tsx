@@ -10,7 +10,6 @@ import { useProjectReorder } from './features/workspace/useProjectReorder';
 import { pruneReadingCli } from './features/reading/reading-terminal';
 import { setReading } from './features/reading/reading-mode';
 import { useProjectFocusMotion } from './features/workspace/useProjectFocusMotion';
-import { applyTheme } from './shared/themes';
 import { applyMotion } from './shared/motion';
 import { setTerminalRenderer } from './features/terminal/terminal-renderer';
 import { terminalFontFamily } from './features/terminal/terminal-font';
@@ -27,7 +26,7 @@ import { ProjectPanel, isRoundComplete } from './features/workspace/ProjectPanel
 import { SettingsDialog } from './features/settings/SettingsDialog';
 import { DecisionHome } from './features/home/DecisionHome';
 import { useDecisions, type Decision } from './features/home/decisions';
-import { decisionKind, decisionTitle } from './features/home/DecisionCard';
+import { decisionTitle, kindLabel } from './features/home/DecisionCard';
 const FilePreview = lazy(() => import('./features/files/FilePreview').then(module => ({ default: module.FilePreview })));
 const FilePopup = lazy(() => import('./features/files/FilePopup').then(module => ({ default: module.FilePopup })));
 const GitDiffView = lazy(() => import('./features/git/GitDiffView').then(module => ({ default: module.GitDiffView })));
@@ -55,7 +54,6 @@ const NO_PROJECTS: Project[] = [];
 
 export function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  useEffect(() => { if (workspace) applyTheme(workspace.settings.theme); }, [workspace?.settings.theme]);
   useLayoutEffect(() => { setUserAvatar(workspace?.settings.userAvatar ?? ''); }, [workspace?.settings.userAvatar]);
   useEffect(() => { applyMotion(workspace?.settings.focusAnimation || 'smooth'); }, [workspace?.settings.focusAnimation]);
   // The surface (glass or solid) is a mode of the whole stylesheet, like the theme.
@@ -268,7 +266,7 @@ export function App() {
     if (seenDecisions.current) for (const decision of decisions) {
       // Work handed in is announced by the round's own completion notice; announcing it again would ring twice.
       if (decision.kind === 'review' || seenDecisions.current.has(decision.id) || (shownView === 'decisions' && document.hasFocus())) continue;
-      void api?.notifyDecision(decision.projectId, decisionTitle(decision), t(decisionKind(decision.kind).label));
+      void api?.notifyDecision(decision.projectId, decisionTitle(decision), kindLabel(decision.kind));
     }
     if (workspace) seenDecisions.current = ids;
   }, [decisions, shownView, workspace]);

@@ -8,149 +8,6 @@
   --theme-editor: #07131b88;
   --theme-code: #07131baa;
 }
-/* Daylight's ink is white at 92%, with teal green for titles and success and bright blue for accents, over the
-   frosted panes every theme uses (clarity.css). */
-:root[data-theme="daylight"] {
-  color-scheme: dark;
-  color: rgba(255, 255, 255, .92);
-  background: #6e9fc5;
-  --glass: transparent;
-  --glass-strong: rgba(6, 24, 34, .74);
-  --glass-solid: #0d2530;
-  --glass-border: rgba(160, 240, 235, .22);
-  --glass-sheen: linear-gradient(transparent, transparent);
-  --glass-lift: 0 20px 44px -22px rgba(5, 30, 65, .35), 0 2px 8px rgba(5, 30, 65, .08);
-  --glass-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), 0 12px 36px -12px rgba(0, 12, 20, .45);
-  --theme-accent: #3b9eff;
-  --theme-ink: rgba(255, 255, 255, .92);
-  --theme-heading: #3ddc97;
-  --theme-muted: rgba(255, 255, 255, .72);
-  --theme-line: rgba(160, 240, 235, .24);
-  --theme-hover: rgba(90, 242, 230, .12);
-  --theme-chrome: rgba(4, 20, 28, .45);
-  --theme-sidebar: rgba(4, 20, 28, .45);
-  --theme-pane: rgba(4, 20, 28, .3);
-  --theme-control: rgba(4, 20, 28, .38);
-  --theme-editor: rgba(4, 20, 28, .3);
-  --theme-code: rgba(4, 20, 28, .45);
-  --theme-button: rgba(90, 242, 230, .2);
-  --theme-button-ink: #d8fffb;
-  --theme-success: #3ddc97;
-  --theme-info: #3b9eff;
-  --theme-error: #ff6b6b;
-  --theme-warning: #fbbf24;
-  --sidebar-ink: var(--theme-ink);
-  --sidebar-muted: var(--theme-muted);
-  --sidebar-accent: var(--theme-accent);
-  --muted: var(--theme-muted);
-  --subtle: var(--theme-muted);
-  --red: var(--theme-error);
-  --green: var(--theme-success);
-  --surface: var(--glass-solid);
-  --panel: var(--glass);
-}
-:root[data-theme="mountain-blue"] {
-  background: #193b49;
-  --glass: rgba(9, 35, 46, .42);
-  --glass-strong: rgba(15, 39, 52, .72);
-  --glass-solid: #173847;
-  --glass-border: #d8f4f257;
-  --theme-accent: #b1dedc;
-  --theme-ink: #f7ffff;
-  --theme-muted: #e1f2fa;
-  --theme-line: #c5e6e43b;
-  --theme-hover: #c2eeec16;
-  --theme-chrome: rgba(13, 40, 52, .5);
-  --theme-sidebar: rgba(12, 40, 50, .52);
-  --theme-pane: rgba(4, 23, 34, .16);
-  --theme-control: rgba(26, 65, 78, .2);
-  --theme-editor: rgba(6, 27, 39, .4);
-  --theme-code: #09212d60;
-  --theme-button: #d2e9e7a1;
-  --theme-button-ink: #183d48;
-}
-:root[data-theme="wild-red"] {
-  background: #3e2830;
-  --glass: rgba(40, 21, 32, .42);
-  --glass-strong: rgba(43, 24, 37, .74);
-  --glass-solid: #3a2634;
-  --glass-border: #ffe9df57;
-  --theme-accent: #e6b2a8;
-  --theme-ink: #fff9f5;
-  --theme-muted: #fae9e6;
-  --theme-line: #edd0c43b;
-  --theme-hover: #f7d1bf16;
-  --theme-chrome: rgba(48, 25, 38, .5);
-  --theme-sidebar: rgba(42, 24, 36, .52);
-  --theme-pane: rgba(25, 10, 24, .16);
-  --theme-control: rgba(83, 48, 65, .2);
-  --theme-editor: rgba(29, 18, 31, .4);
-  --theme-code: #241b2466;
-  --theme-button: #ead9d0a1;
-  --theme-button-ink: #502e39;
-}
-/* The macOS landscapes added later (Yosemite, El Capitan, Mojave, Catalina): each tints the dialogs and menus with its
-   wallpaper's own colors; the panes over it are the frosted ones every theme uses (clarity.css). */
-:root[data-theme="yosemite"] {
-  background: #4f3946;
-  --glass: rgba(46, 26, 38, .42);
-  --glass-strong: rgba(48, 28, 42, .74);
-  --glass-solid: #3f2a39;
-  --glass-border: #ffe6e257;
-  --theme-accent: #f3b9ae;
-  --theme-ink: #fff8f6;
-  --theme-muted: #fbe8e6;
-  --theme-line: #f1cdc63b;
-  --theme-hover: #f8d3c916;
-  --theme-chrome: rgba(52, 28, 42, .5);
-  --theme-sidebar: rgba(46, 26, 40, .52);
-  --theme-pane: rgba(28, 12, 24, .16);
-  --theme-control: rgba(88, 52, 70, .2);
-  --theme-editor: rgba(32, 18, 30, .4);
-  --theme-code: #261a2466;
-  --theme-button: #f1d9d2a1;
-  --theme-button-ink: #55303d;
-}
-:root[data-theme="el-capitan"] {
-  background: #36404c;
-  --glass: rgba(24, 32, 42, .42);
-  --glass-strong: rgba(26, 34, 46, .74);
-  --glass-solid: #28323f;
-  --glass-border: #ffe3cf57;
-  --theme-accent: #f2a46b;
-  --theme-ink: #fffaf5;
-  --theme-muted: #eef0f3;
-  --theme-line: #e9d6c83b;
-  --theme-hover: #f6cfae16;
-  --theme-chrome: rgba(26, 34, 44, .5);
-  --theme-sidebar: rgba(24, 32, 42, .52);
-  --theme-pane: rgba(10, 16, 24, .16);
-  --theme-control: rgba(52, 62, 76, .2);
-  --theme-editor: rgba(16, 22, 30, .4);
-  --theme-code: #141c2666;
-  --theme-button: #efd9c6a1;
-  --theme-button-ink: #4a3222;
-}
-:root[data-theme="mojave"] {
-  background: #4a3a2a;
-  --glass: rgba(40, 30, 22, .42);
-  --glass-strong: rgba(44, 32, 24, .74);
-  --glass-solid: #3a2c20;
-  --glass-border: #ffeacc57;
-  --theme-accent: #e9c08b;
-  --theme-ink: #fffaf2;
-  --theme-muted: #f6ecdd;
-  --theme-line: #ecd8b93b;
-  --theme-hover: #f5dcb516;
-  --theme-chrome: rgba(46, 34, 24, .5);
-  --theme-sidebar: rgba(40, 30, 22, .52);
-  --theme-pane: rgba(24, 16, 10, .16);
-  --theme-control: rgba(84, 64, 44, .2);
-  --theme-editor: rgba(30, 22, 16, .4);
-  --theme-code: #221a1266;
-  --theme-button: #eedcc2a1;
-  --theme-button-ink: #4f3a22;
-}
 :root[data-theme="catalina"] {
   background: #2b2d46;
   --glass: rgba(24, 24, 44, .42);
@@ -171,81 +28,32 @@
   --theme-button: #dcdaf4a1;
   --theme-button-ink: #2f2c58;
 }
-:root[data-theme="daylight"] .app-shell {
-  --wallpaper: url('../../assets/daylight-glacier.webp') center 38% / cover no-repeat;
-}
-:root[data-theme="mountain-blue"] .app-shell {
-  --wallpaper: url('../../assets/macos-big-sur.webp') center 35% / cover no-repeat;
-}
-:root[data-theme="wild-red"] .app-shell {
-  --wallpaper: url('../../assets/macos-sierra.webp') center / cover no-repeat;
-}
-:root[data-theme="yosemite"] .app-shell {
-  --wallpaper: url('../../assets/macos-yosemite.webp') center 30% / cover no-repeat;
-}
-:root[data-theme="el-capitan"] .app-shell {
-  --wallpaper: url('../../assets/macos-el-capitan.webp') center 30% / cover no-repeat;
-}
-:root[data-theme="mojave"] .app-shell {
-  --wallpaper: url('../../assets/macos-mojave.webp') center / cover no-repeat;
-}
 :root[data-theme="catalina"] .app-shell {
   --wallpaper: url('../../assets/macos-catalina.webp') center 42% / cover no-repeat;
 }
-
-/* Shared theme materials; Daylight's complete light treatment is loaded last. */
-:root:not([data-theme="forest"]) .titlebar { background: transparent; }
-:root:not([data-theme="forest"]) .focus-sidebar { background: var(--glass-sheen), var(--theme-sidebar); border-color: var(--glass-hairline); }
-:root:not([data-theme="forest"]) :is(.settings-dialog, .dropdown) { background: var(--glass-sheen), var(--glass-strong); border-color: var(--theme-line); color: var(--theme-ink); }
-:root:not([data-theme="forest"]) .file-preview { background: var(--glass-sheen), var(--theme-sidebar); border-color: var(--glass-hairline); }
-:root:not([data-theme="forest"]) .panel-terminal-area { background: var(--theme-pane); }
-:root:not([data-theme="forest"]) .terminal-grid.has-splits { background: var(--theme-line); }
-:root:not([data-theme="forest"]) .has-splits .terminal-split { background: var(--theme-pane); }
-:root:not([data-theme="forest"]) .panel-header { background: transparent; border-color: var(--theme-line); }
-:root:not([data-theme="forest"]) :is(.search-input, .setting-row select, .button.secondary, .file-name-label input, .titlebar-tools > .icon-button) { background: var(--glass-sheen), var(--theme-control); border-color: var(--theme-line); color: var(--theme-ink); }
-:root:not([data-theme="forest"]) .button.primary { background: linear-gradient(160deg, #fff7f160, #ffffff00), var(--theme-button); color: var(--theme-button-ink); border-color: #fff7f1a3; }
-:root:not([data-theme="forest"]) .button.primary:hover { filter: brightness(1.07); }
-:root:not([data-theme="forest"]) :is(.panel-name, .tree-row, .titlebar-brand, .terminal-split-header > span:first-child, .file-tabs, .preview-option, .text-button:not(.danger-text)) { color: var(--theme-ink); }
-:root:not([data-theme="forest"]) :is(.panel-meta, .explorer-path, .workspace-summary, .file-preview-toolbar, .file-preview-footer, .preview-readonly, .settings-note, .setting-row small, .setting-row svg, .theme-option small) { color: var(--theme-muted); }
-:root:not([data-theme="forest"]) :is(.icon-button:hover:not(.window-close), .dropdown button:hover, .preview-option[aria-pressed="true"]) { background: var(--theme-hover); border-color: var(--theme-line); }
-:root:not([data-theme="forest"]) .setting-row input[type="checkbox"]:checked { background: var(--theme-accent); border-color: #fff5e999; }
-:root:not([data-theme="forest"]) :is(.setting-row, .setting-group, .shortcut-settings) { border-color: var(--theme-line); }
-:root:not([data-theme="forest"]) :is(.file-text-editor, .file-code-scroll) { background: var(--theme-editor); color: var(--theme-ink); }
-:root:not([data-theme="forest"]) .file-editor { background: var(--theme-editor); }
-:root:not([data-theme="forest"]) .file-editor .file-text-editor { background: transparent; }
-:root:not([data-theme="forest"]) .editor-gutter { color: var(--theme-muted); border-color: var(--theme-line); }
-:root:not([data-theme="forest"]) .editor-gutter .is-current { color: var(--theme-ink); }
-:root:not([data-theme="forest"]) .file-text-editor:focus { box-shadow: inset 0 0 0 1px var(--theme-line); }
-
-.theme-picker { margin: 21px 0 8px; padding: 0 0 21px; border: 0; border-bottom: 1px solid var(--theme-line); min-width: 0; }
-.theme-picker legend { margin-bottom: 12px; padding: 0; font-size: 12px; font-weight: 600; color: var(--theme-ink); }
-.theme-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; }
-.theme-option { position: relative; min-width: 0; cursor: pointer; }
-.theme-more { display: flex; align-items: center; gap: 5px; margin: 12px 0 0 auto; font-size: 12.5px; }
-.theme-more svg { transition: transform .2s ease; }
-.theme-more svg.is-open { transform: rotate(180deg); }
-.theme-option input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
-.theme-swatch { position: relative; display: block; height: 79px; overflow: hidden; border: 1px solid #ffffff38; border-radius: 8px; box-shadow: inset 0 1px 0 #ffffff38; transition: border-color .15s, box-shadow .15s; }
-.theme-swatch[data-theme-preview="daylight"] { background: url('../../assets/swatches/daylight-glacier.webp') center 38% / cover; }
-.theme-swatch[data-theme-preview="forest"] { background: url('../../assets/swatches/macos-high-sierra.webp') center / cover; }
-.theme-swatch[data-theme-preview="mountain-blue"] { background: url('../../assets/swatches/macos-big-sur.webp') center 35% / cover; }
-.theme-swatch[data-theme-preview="wild-red"] { background: url('../../assets/swatches/macos-sierra.webp') center / cover; }
-.theme-swatch[data-theme-preview="yosemite"] { background: url('../../assets/swatches/macos-yosemite.webp') center 30% / cover; }
-.theme-swatch[data-theme-preview="el-capitan"] { background: url('../../assets/swatches/macos-el-capitan.webp') center 30% / cover; }
-.theme-swatch[data-theme-preview="mojave"] { background: url('../../assets/swatches/macos-mojave.webp') center / cover; }
-.theme-swatch[data-theme-preview="catalina"] { background: url('../../assets/swatches/macos-catalina.webp') center 42% / cover; }
-.theme-mini-window { display: flex; flex-direction: column; gap: 5px; position: absolute; inset: 20px 14px -8px; padding: 11px 10px; border: 1px solid #ffffff52; border-radius: 3.5px 3.5px 0 0; background: #0e1c2587; backdrop-filter: blur(7px); }
-.theme-mini-window i { width: 58%; height: 3px; border-radius: 1.5px; background: #e4f3f19c; }
-.theme-mini-window i:nth-child(2) { width: 78%; opacity: .65; }.theme-mini-window i:nth-child(3) { width: 38%; opacity: .45; }
-.theme-swatch[data-theme-preview="daylight"] .theme-mini-window { background: transparent; border-color: #ffffffcc; box-shadow: inset 0 1px 0 #ffffffb3; }
-.theme-swatch[data-theme-preview="daylight"] .theme-mini-window i { background: #5af2e6; box-shadow: 0 0 2px #00121c; }
-.theme-check { display: none; position: absolute; top: 6px; right: 6px; width: 18px; height: 18px; align-items: center; justify-content: center; border-radius: 50%; background: var(--theme-accent); color: #203338; }
-.theme-option.is-selected .theme-check { display: flex; }
-.theme-option.is-selected .theme-swatch { border-color: var(--theme-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--theme-accent) 28%, transparent); }
-.theme-option:focus-within .theme-swatch { outline: 2px solid var(--theme-accent); outline-offset: 3px; }
-.theme-name { display: block; margin-top: 9px; font-size: 12px; color: var(--theme-ink); }
-.theme-option small { display: block; margin-top: 4px; color: var(--theme-muted); font-size: 11px; line-height: 1.5; }
+:root[data-theme="catalina"] .titlebar { background: transparent; }
+:root[data-theme="catalina"] .focus-sidebar { background: var(--glass-sheen), var(--theme-sidebar); border-color: var(--glass-hairline); }
+:root[data-theme="catalina"] :is(.settings-dialog, .dropdown) { background: var(--glass-sheen), var(--glass-strong); border-color: var(--theme-line); color: var(--theme-ink); }
+:root[data-theme="catalina"] .file-preview { background: var(--glass-sheen), var(--theme-sidebar); border-color: var(--glass-hairline); }
+:root[data-theme="catalina"] .panel-terminal-area { background: var(--theme-pane); }
+:root[data-theme="catalina"] .terminal-grid.has-splits { background: var(--theme-line); }
+:root[data-theme="catalina"] .has-splits .terminal-split { background: var(--theme-pane); }
+:root[data-theme="catalina"] .panel-header { background: transparent; border-color: var(--theme-line); }
+:root[data-theme="catalina"] :is(.search-input, .setting-row select, .button.secondary, .file-name-label input, .titlebar-tools > .icon-button) { background: var(--glass-sheen), var(--theme-control); border-color: var(--theme-line); color: var(--theme-ink); }
+:root[data-theme="catalina"] .button.primary { background: linear-gradient(160deg, #fff7f160, #ffffff00), var(--theme-button); color: var(--theme-button-ink); border-color: #fff7f1a3; }
+:root[data-theme="catalina"] .button.primary:hover { filter: brightness(1.07); }
+:root[data-theme="catalina"] :is(.panel-name, .tree-row, .titlebar-brand, .terminal-split-header > span:first-child, .file-tabs, .preview-option, .text-button:not(.danger-text)) { color: var(--theme-ink); }
+:root[data-theme="catalina"] :is(.panel-meta, .explorer-path, .workspace-summary, .file-preview-toolbar, .file-preview-footer, .preview-readonly, .settings-note, .setting-row small, .setting-row svg) { color: var(--theme-muted); }
+:root[data-theme="catalina"] :is(.icon-button:hover:not(.window-close), .dropdown button:hover, .preview-option[aria-pressed="true"]) { background: var(--theme-hover); border-color: var(--theme-line); }
+:root[data-theme="catalina"] .setting-row input[type="checkbox"]:checked { background: var(--theme-accent); border-color: #fff5e999; }
+:root[data-theme="catalina"] :is(.setting-row, .setting-group, .shortcut-settings) { border-color: var(--theme-line); }
+:root[data-theme="catalina"] :is(.file-text-editor, .file-code-scroll) { background: var(--theme-editor); color: var(--theme-ink); }
+:root[data-theme="catalina"] .file-editor { background: var(--theme-editor); }
+:root[data-theme="catalina"] .file-editor .file-text-editor { background: transparent; }
+:root[data-theme="catalina"] .editor-gutter { color: var(--theme-muted); border-color: var(--theme-line); }
+:root[data-theme="catalina"] .editor-gutter .is-current { color: var(--theme-ink); }
+:root[data-theme="catalina"] .file-text-editor:focus { box-shadow: inset 0 0 0 1px var(--theme-line); }
 @media (prefers-reduced-transparency: reduce) {
-  :root:not([data-theme="forest"]) :is(.project-panel, .titlebar, .focus-sidebar, .file-preview, .settings-dialog, .dropdown) { background: var(--glass-solid); backdrop-filter: none; }
+  :root[data-theme="catalina"] :is(.project-panel, .titlebar, .focus-sidebar, .file-preview, .settings-dialog, .dropdown) { background: var(--glass-solid); backdrop-filter: none; }
 }
-:root[data-surface="solid"]:not([data-theme="forest"]) :is(.project-panel, .titlebar, .focus-sidebar, .file-preview, .settings-dialog, .dropdown) { background: var(--glass-solid); backdrop-filter: none; }
+:root[data-surface="solid"][data-theme="catalina"] :is(.project-panel, .titlebar, .focus-sidebar, .file-preview, .settings-dialog, .dropdown) { background: var(--glass-solid); backdrop-filter: none; }

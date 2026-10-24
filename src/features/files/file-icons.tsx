@@ -3,8 +3,8 @@ import './file-icons.css';
 
 // Agentrix's own file-tree icons, drawn here as vectors on a 16-unit grid (no third-party artwork, no brand marks).
 // A folder is a small filled folder in its own soft colour with one light mark, picked by its name; a file is a
-// rounded page tile with a crisp mark, picked by its type. Colours are tokens in file-icons.css; the monochrome
-// themes redraw every icon in the theme's ink. Strokes are 1 unit on half-unit coordinates, so they stay on whole pixels.
+// rounded page tile with a crisp mark, picked by its type. Colours are tokens in file-icons.css.
+// Strokes are 1 unit on half-unit coordinates, so they stay on whole pixels.
 
 type Tone = 'blue' | 'green' | 'yellow' | 'orange' | 'red' | 'purple' | 'indigo' | 'teal' | 'cyan' | 'grey' | 'slate' | 'dark' | 'page';
 

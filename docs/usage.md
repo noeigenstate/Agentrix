@@ -192,15 +192,7 @@ Markdown（`.md`、`.markdown`、`.mdown`、`.mkd`）提供「编辑 / 预览」
 - 终端文字默认用显卡绘制（设置 › 外观 › 终端渲染 › GPU 加速）。Codex 和 Claude Code 工作时每秒重绘界面十次左右，用网页方式逐行排版会占去大部分处理器时间；显卡绘制后，四个助手同时工作时窗口的处理器占用约为原来的四分之一。最多 12 个终端用显卡绘制，其余的和显卡出错（例如从睡眠唤醒）时自动改用兼容方式。如果终端文字显示异常，选择「兼容模式」。
 - 按住 **Ctrl + 鼠标左键** 点击终端链接：HTTP/HTTPS 地址交给默认浏览器，项目内文件和文件夹在当前界面弹窗打开，不会进入项目页（项目页已打开时，文件夹在目录栏中展开）。支持普通网址、Markdown 文件链接、OSC 8 超链接、中文路径和终端自动换行的链接；普通单击不打开链接。`art/report.html`、`./art/report.html` 等相对路径自动按对应项目根目录补全，本地和 SSH 项目均适用。Codex 输出的 `报告 (art/report.html)`、方括号包裹的路径，以及文件名中合法的括号均可识别。
 
-## 主题选择
-
-打开 **工作台设置 → 外观主题**，点击配色预览即时切换：
-
-- **林间光影**：High Sierra 山湖与秋日林光。
-- **山青蓝**：Big Sur 青山与蔚蓝海岸，搭配冷色玻璃材质。
-- **西野红**：Sierra 暮色云霞与暖红山峰。
-
-选择会自动保存，重开应用继续使用。侧栏、设置、文件编辑器及 Markdown 预览一起切换；终端 ANSI 色彩、任务状态灯和运行中的会话保持独立。
+外观固定为「海岛暮蓝」（Catalina），仍可在「工作台设置 → 外观」调整材质、玻璃透明度、字号与终端字体。
 
 ## 状态
 
@@ -333,7 +325,7 @@ npm run dist
 - `test:motion`：检查真实卡片展开、缩回的中间尺寸、快速反向切换、窗口尺寸变化和减少动态效果，并验证同一终端及未发送输入得以保留。截图在 `.test-output/focus-motion-*/`，支持 `-- --packaged`。
 - `test:completion`：通过离线 Codex 进程、主会话轮次记录和真实 PowerShell 通知钩子验证运行、完成、中断，检查子会话通知、旧轮次、草稿和重启不会误报完成。系统通知会被测试计数器替代，不打扰日常工作区，支持 `-- --packaged`。
 - `test:editor-terminals`：验证本地与 SSH 路径复制、文本/HTML 保存、外部修改冲突、未保存导航与退出，以及同项目独立终端、自动分屏、各自恢复会话和关闭一个后保留另一个。截图在 `.test-output/editor-terminals-*/`。
-- `test:themes-markdown`：实际切换并重启验证主题保存，检查终端颜色、会话与草稿不变；验证自动编辑及本地/SSH Markdown 的渲染、保存、相对资源、链接和脚本过滤。
+- `test:themes-markdown`：验证海岛暮蓝壁纸离线加载与重启后的固定外观、终端颜色、会话与草稿；检查自动编辑及本地/SSH Markdown 的渲染、保存、相对资源、链接和脚本过滤。
 - `test:git`：在隔离配置与 Git 仓库中验证目录标记、已暂存／工作区更改、提交合并关系、提交文件、自动刷新和失败退避、目录收起、未保存保护及本地／SSH 切换。支持 `-- --packaged`，截图与结果在 `.test-output/git-*/`。
 - `node scripts/verify-update-artifacts.cjs`：校验安装包、SHA-512、更新清单和应用内置更新源。
 - `node scripts/linux-smoke.mjs [--packaged] [--shell zsh]`：在 Linux 上以隔离配置和独立 HOME 启动应用，验证 Bash 或 zsh 终端、Codex 开始与结束状态、`Ctrl+Shift+C` 复制和 `Ctrl+C` 中断；`node scripts/appimage-smoke.mjs <AppImage>` 启动 AppImage，确认终端环境不含 AppImage 的目录和变量。

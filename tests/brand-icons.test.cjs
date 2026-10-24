@@ -71,12 +71,12 @@ test('ClaudeSpark retains its export and size API as a direct official-logo alia
   );
 });
 
-test('light monochrome uses black and dark monochrome retains white, with busy animation confined to the rim', () => {
+test('Codex retains white ink, with busy animation confined to the rim', () => {
   const css = fs.readFileSync(path.join(root, 'src/features/reading/reading-flow.css'), 'utf8');
   const fillRules = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
     .filter(([, selector, body]) => selector.includes('.agent-brand-codex') && /\bfill\s*:/.test(body))
     .map(([, selector, body]) => ({ selector: selector.trim(), fill: body.match(/\bfill\s*:\s*([^;]+)/)[1].trim() }));
-  assert.deepEqual(fillRules, [{ selector: ':root[data-theme="mono-amber"] .agent-brand-codex path', fill: 'black' }]);
+  assert.deepEqual(fillRules, []);
   assert.match(renderToStaticMarkup(React.createElement(CodexLogo)), /fill="white"/);
   assert.match(css, /\.reading-node > \.agent-brand-codex \{ width: var\(--step-node\); height: var\(--step-node\); \}/);
   assert.doesNotMatch(css, /reading-spark|spark-bloom|agent-brand-[^{]+\{[^}]*\b(?:animation|transform):/);

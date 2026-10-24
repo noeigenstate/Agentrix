@@ -158,7 +158,7 @@ try {
 
   // The decision page: the cleanup waiting for approval, the finished round to review, every session beside them.
   await page.locator('.home-nav button', { hasText: '决策' }).click();
-  await page.locator('.deck-title').first().waitFor();
+  await page.locator('.decision-card .decision-title').first().waitFor();
   await page.mouse.move(800, 2); await page.waitForTimeout(1200);
   await shot('decisions.jpg');
   await page.locator('.home-nav button', { hasText: '工作台' }).click();

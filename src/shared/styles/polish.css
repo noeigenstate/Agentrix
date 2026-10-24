@@ -50,15 +50,6 @@
 .panel-name small { max-width: 140px; }
 .focus-mode .panel-name small { max-width: 280px; }
 
-/* Theme swatches feel like picking up a card: it lifts, its little window rises to meet you. */
-.theme-swatch { transition: border-color .18s, box-shadow .25s ease, transform .3s cubic-bezier(.2, .8, .2, 1); }
-.theme-option:hover .theme-swatch { transform: translateY(-2px); box-shadow: inset 0 1px 0 #ffffff38, 0 10px 22px #0714204d; }
-.theme-option:active .theme-swatch { transform: translateY(0) scale(.98); transition-duration: .1s; }
-.theme-mini-window { transition: transform .45s cubic-bezier(.2, .8, .2, 1); }
-.theme-option:hover .theme-mini-window { transform: translateY(-5px); }
-.theme-option.is-selected .theme-check { animation: polish-pop .32s cubic-bezier(.34, 1.56, .64, 1); }
-@keyframes polish-pop { from { transform: scale(.3); opacity: 0; } to { transform: none; opacity: 1; } }
-
 /* Switches: the knob springs across and stretches while held, like a real toggle. */
 .setting-row input[type="checkbox"]::before { transition: transform .32s cubic-bezier(.34, 1.4, .64, 1), width .18s ease; }
 .setting-row input[type="checkbox"]:active::before { width: 21px; }
@@ -71,11 +62,6 @@
 
 /* The file tree follows the pointer smoothly. */
 .tree-row { transition: background .14s ease; }
-
-/* The dialog focuses the first theme when it opens. Outline a swatch only for keyboard focus,
-   so a mouse user never sees two themes that both look selected. */
-.theme-option:focus-within .theme-swatch { outline: none; }
-.theme-option:has(input:focus-visible) .theme-swatch { outline: 2px solid var(--theme-accent); outline-offset: 3px; }
 
 /* ── Project sidebar ─────────────────────────────────────────────────────── */
 
@@ -97,7 +83,7 @@
 .tree-chevron { transition: color .15s ease; }
 .tree-row:hover .tree-chevron { color: var(--sidebar-ink); }
 /* Folders take the theme's own accent, so a warm theme doesn't carry cold blue folders. */
-:root:not([data-theme="forest"]) .folder-icon { color: color-mix(in srgb, var(--theme-accent) 85%, white); }
+:root[data-theme="catalina"] .folder-icon { color: color-mix(in srgb, var(--theme-accent) 85%, white); }
 
 /* The open file carries a soft wash of the theme accent. */
 .tree-row.file-selected { background: linear-gradient(90deg, color-mix(in srgb, var(--theme-accent, #8fcbff) 30%, transparent), #ffffff1a 70%); box-shadow: inset 0 1px 0 #ffffff14; }

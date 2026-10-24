@@ -10,9 +10,9 @@ import { waitFor } from './wait.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
 const output = await testRun('question-appearance'), profile = path.join(output, 'profile'), project = path.join(output, 'project');
 await fs.mkdir(profile, { recursive: true }); await fs.mkdir(project);
-await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ id: 'questions', name: '问题主题对照', path: project, restore: { terminal: false, codex: false } }], settings: { language: 'zh', theme: 'mono-amber', terminalRenderer: 'dom', fontSize: 10, restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false } }));
+await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ id: 'questions', name: '问题主题对照', path: project, restore: { terminal: false, codex: false } }], settings: { language: 'zh', terminalRenderer: 'dom', fontSize: 10, restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false } }));
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
-const errors = [], results = []; let app, page;
+const theme = 'catalina', errors = [], results = []; let app, page;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
 const write = data => page.evaluate(data => window.agentrix.writeTerminal('questions', data), data);
 try {
@@ -31,16 +31,14 @@ try {
     await waitFor(async () => (await page.evaluate(() => window.agentrix.attachTerminal('questions'))).value.data.includes(content.trim().split(/[\r\n]/)[0].trim()), 'fixture reaches real PTY');
     const show = page.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }); if (await show.isVisible()) await show.click();
     await page.locator('.reading-question-title, .reading-question-review').first().waitFor();
-    for (const theme of ['mono-amber', 'mono-amber-dark']) {
-      await page.evaluate(theme => window.agentrix.settings({ theme }), theme); await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, theme);
-      const colors = await page.locator('.reading-question-title, .reading-question-review dd, .reading-question-input input').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color));
-      assert.ok(colors.length); assert.ok(colors.every(color => color === (theme === 'mono-amber' ? 'rgb(23, 25, 29)' : 'rgb(241, 242, 244)')), JSON.stringify({ file, theme, colors }));
-      assert.equal((await state()).projects[0].sessionId, session);
-      await page.screenshot({ path: path.join(output, theme + '-' + file + '.png') }); results.push({ theme, file, colors });
-    }
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'catalina');
+    const colors = await page.locator('.reading-question-title, .reading-question-review dd, .reading-question-input input').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color));
+    assert.ok(colors.length); assert.ok(colors.every(color => color === 'rgb(255, 255, 255)'), JSON.stringify({ file, theme, colors }));
+    assert.equal((await state()).projects[0].sessionId, session);
+    await page.screenshot({ path: path.join(output, theme + '-' + file + '.png') }); results.push({ theme, file, colors });
     await fs.writeFile(release, 'done'); await waitFor(() => page.locator('.reading-question-title, .reading-question-review').count().then(count => count === 0), 'fixture returns to shell');
   }
   assert.deepEqual(errors, []); await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(results, null, 2));
-  console.log('PASS: actual PTY question, multiselect, review and typed-answer cards on both monochrome themes: ' + output);
+  console.log('PASS: actual PTY question, multiselect, review and typed-answer cards on Catalina: ' + output);
 } catch (error) { if (page) { await fs.writeFile(path.join(output, 'failure.json'), JSON.stringify({ state: await state(), terminal: await page.evaluate(() => window.agentrix.attachTerminal('questions')), rows: await page.locator('.xterm-rows').allTextContents() }, null, 2)).catch(() => {}); } if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {}); throw error; }
 finally { if (app) await app.close(); }

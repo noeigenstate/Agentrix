@@ -11,7 +11,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), r
 const { desktopGlassKind } = require('../electron/desktop-glass.cjs');
 const backend = desktopGlassKind(), output = await testRun('readability'), profile = path.join(output, 'profile'), project = path.join(output, 'project');
 await fs.mkdir(profile); await fs.mkdir(project);
-await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ id: 'readability', name: '字体对照', path: project, kind: 'local', restore: { terminal: false, codex: false } }], settings: { language: 'zh', theme: 'mono-amber', surface: 'glass', glassBackground: backend ? 'desktop' : 'theme', glassTransparency: 0, fontSize: 16, terminalFontWeight: 400, terminalRenderer: 'gpu', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false } }));
+await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ id: 'readability', name: '字体对照', path: project, kind: 'local', restore: { terminal: false, codex: false } }], settings: { language: 'zh', surface: 'glass', glassBackground: backend ? 'desktop' : 'theme', glassTransparency: 0, fontSize: 16, terminalFontWeight: 400, terminalRenderer: 'gpu', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false } }));
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 let app, page; const errors = [], results = { backend, fonts: [], checks: [] };
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
@@ -41,7 +41,7 @@ async function capture(name) {
   const result = await app.evaluate(async () => {
     const image = await readabilityWindow.capturePage({ x: 10, y: 86, width: 1150, height: 235 }, { stayAwake: true });
     const pixels = image.toBitmap(); let ink = 0;
-    for (let i = 0; i < pixels.length; i += 4) if (Math.max(pixels[i], pixels[i + 1], pixels[i + 2]) < 110) ink++;
+    for (let i = 0; i < pixels.length; i += 4) if (Math.min(pixels[i], pixels[i + 1], pixels[i + 2]) > 180) ink++;
     return { png: image.toPNG().toString('base64'), ink };
   });
   await fs.writeFile(path.join(output, name), Buffer.from(result.png, 'base64')); return result.ink;

@@ -15,7 +15,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const output = await testRun('latency'), profile = path.join(output, 'profile'), claude = path.join(output, 'claude'), codexHome = path.join(output, 'codex-home');
 const projects = ['Claude', 'Codex'].map(name => ({ id: randomUUID(), name, path: path.join(output, 'p', name), restore: { terminal: false, codex: false } }));
 for (const directory of [profile, path.join(claude, 'projects'), path.join(codexHome, 'sessions'), ...projects.map(project => project.path)]) await fs.mkdir(directory, { recursive: true });
-await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false, language: 'zh', theme: 'daylight', startView: 'workspace' } }));
+await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false, language: 'zh', startView: 'workspace' } }));
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CLAUDE_CONFIG_DIR: claude, CODEX_HOME: codexHome }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const app = await electron.launch({ executablePath: require('electron'), args: [root], cwd: root, env, timeout: 30000 });
 const page = await app.firstWindow();

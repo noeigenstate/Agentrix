@@ -158,30 +158,32 @@ test('corrupt workspace is copied aside before a new workspace can be saved', t 
   assert.equal(fs.readFileSync(path.join(directory, backups[0]), 'utf8'), '{ invalid');
 });
 
-test('daylight is the default for new workspaces and settings without a saved theme', t => {
+test('new workspaces and settings have no theme choice', t => {
   const { store, file } = fixture(t);
-  assert.equal(store.settings.theme, 'daylight');
-  assert.equal(cleanSettings().theme, 'daylight');
-  assert.equal(cleanSettings({ theme: 'unknown' }).theme, 'daylight');
-  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-  delete saved.settings.theme;
-  fs.writeFileSync(file, JSON.stringify(saved));
-  assert.equal(new WorkspaceStore(file).settings.theme, 'daylight');
+  assert.equal('theme' in store.settings, false);
+  assert.equal('theme' in cleanSettings(), false);
+  assert.equal('theme' in new WorkspaceStore(file).settings, false);
 });
 
-test('saved forest and other theme choices survive loading and unrelated settings updates', t => {
-  const { store, file } = fixture(t);
-  for (const theme of ['forest', 'mountain-blue', 'wild-red', 'daylight']) {
-    store.updateSettings({ theme });
+test('legacy theme values are discarded on load and subsequent settings updates', t => {
+  const { file } = fixture(t);
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  for (const theme of ['retired', 'catalina', '', null, 42, { id: 'retired' }]) {
+    fs.writeFileSync(file, JSON.stringify({ ...saved, settings: { ...saved.settings, theme, fontSize: 16 } }));
     const restored = new WorkspaceStore(file);
-    assert.equal(restored.settings.theme, theme);
-    restored.updateSettings({ fontSize: 14 });
-    assert.equal(new WorkspaceStore(file).settings.theme, theme);
+    assert.equal(restored.warning, null);
+    assert.equal('theme' in restored.settings, false);
+    assert.equal(restored.settings.fontSize, 16);
+    assert.deepEqual(restored.projects.map(project => project.id), saved.projects.map(project => project.id));
+    restored.updateSettings({ theme, fontSize: 14 });
+    assert.equal('theme' in new WorkspaceStore(file).settings, false);
+    assert.equal('theme' in JSON.parse(fs.readFileSync(file, 'utf8')).settings, false);
+    assert.equal(restored.settings.fontSize, 14);
   }
 });
 
 test('settings reject invalid layout and font values', () => {
-  assert.deepEqual(cleanSettings({ columns: 999, fontSize: -2, notifications: 'yes', sound: false }), { startView: 'decisions', fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', focusAnimation: 'smooth', theme: 'daylight', language: 'en', surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', shortcuts: {}, guideVersion: '', shell: 'powershell', notifications: true, sound: false, closeToTray: true, explorerCollapsed: false, restoreSessions: true, autoSave: true, activityPane: true, voiceModel: 'sensevoice' });
+  assert.deepEqual(cleanSettings({ columns: 999, fontSize: -2, notifications: 'yes', sound: false }), { startView: 'decisions', fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', focusAnimation: 'smooth', language: 'en', surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', shortcuts: {}, guideVersion: '', shell: 'powershell', notifications: true, sound: false, closeToTray: true, explorerCollapsed: false, restoreSessions: true, autoSave: true, activityPane: true, voiceModel: 'sensevoice' });
   // The spoken notice is gone: its old settings are dropped.
   const old = cleanSettings({ announce: true, announcePhrase: '{项目}', summary: { mode: 'local' } });
   assert.equal('announce' in old || 'announcePhrase' in old || 'summary' in old, false);
@@ -317,15 +319,15 @@ test('glass transparency is optional, validated and preserved across material ch
   }
 });
 
-test('desktop glass is opt-in and persisted separately from the theme', t => {
+test('desktop glass is opt-in and persisted across surface changes', t => {
   const { store, file } = fixture(t);
   assert.equal(store.settings.surface, 'glass');
-  store.updateSettings({ glassBackground: 'desktop', theme: 'mono-amber' });
+  store.updateSettings({ glassBackground: 'desktop' });
   const saved = new WorkspaceStore(file);
-  assert.equal(saved.settings.surface, 'glass'); assert.equal(saved.settings.glassBackground, 'desktop'); assert.equal(saved.settings.theme, 'mono-amber');
+  assert.equal(saved.settings.surface, 'glass'); assert.equal(saved.settings.glassBackground, 'desktop');
   saved.updateSettings({ surface: 'solid' }); assert.equal(new WorkspaceStore(file).settings.glassBackground, 'desktop');
-  saved.updateSettings({ surface: 'glass' }); assert.equal(saved.settings.glassBackground, 'desktop'); assert.equal(saved.settings.theme, 'mono-amber');
-  saved.updateSettings({ glassBackground: 'theme', theme: 'mono-amber-dark' }); assert.equal(new WorkspaceStore(file).settings.theme, 'mono-amber-dark');
+  saved.updateSettings({ surface: 'glass' }); assert.equal(saved.settings.glassBackground, 'desktop');
+  saved.updateSettings({ glassBackground: 'theme' }); assert.equal(new WorkspaceStore(file).settings.glassBackground, 'theme');
   assert.equal(cleanSettings({ glassBackground: 'unknown' }).glassBackground, 'theme');
 });
 

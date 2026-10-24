@@ -10,7 +10,7 @@ export async function writeApprovalAction(_terminalId: string, _agent: ScreenAge
 export function terminalApprovalCopy(language: 'zh' | 'en') {
   return language === 'zh' ? {
     message: '请在源终端中确认或拒绝此请求。权限卡片无法安全地发送审批按键。',
-    open: '打开终端',
+    open: '去终端处理',
   } : {
     message: 'Confirm or reject this request in the source terminal. Permission cards cannot safely send approval keys.',
     open: 'Open terminal',

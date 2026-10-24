@@ -30,6 +30,20 @@ Each is answered with numbers, not taste. Measure the app window's UI only: not 
 | | | P5 icon family, icon sizes | one family, ≤ 3 sizes |
 | | | P6 token sets across pages of the same product | identical |
 
+## Grayscale checklist (the owner's 灰度设计验收清单)
+
+Layout and hierarchy are accepted in grayscale before any colour work. Judge the page converted to grayscale (and the
+blurred F3 shot), at the default size, a mid size (about 1100×720) and the minimum window size. Report each item
+PASS/FAIL with the screenshot and what was measured.
+
+1. 不看文字，只看排版，能找到最重要的操作区域: with text ignored, the primary action area stands out first.
+2. 所有卡片、输入框和按钮的圆角都有统一规则: radii of cards, inputs, selects, buttons, rows and tags come from one stated rule.
+3. 主文字、辅助文字、占位文字有明确的明暗差异: three clearly distinct grey levels, measured from pixels.
+4. 左侧列表的选中状态即使没有品牌色也能被识别: selection shows by fill and indicator, not hue.
+5. 输入框、下拉菜单、按钮的点击区域足够清晰: every control has visible bounds or a hover fill, at least 32px tall.
+6. 窗口缩小后不会出现布局拥挤或文字异常截断: no crowding or clipped controls; long text ends in a clean ellipsis.
+7. 所有边框都有必要，没有重复描边或过重的视觉轮廓: no double outlines (box plus inner field, card plus pane) or heavy strokes.
+
 ## Definitions (so a hand count and the script agree)
 
 - **Alignment line (A1, A2):** the left edge of a row's first visible box (a heading, row container, card, the first

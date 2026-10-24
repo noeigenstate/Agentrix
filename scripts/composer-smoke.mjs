@@ -81,12 +81,8 @@ try {
   assert.deepEqual(await cellBackgrounds(), original, 'another shell in the same project keeps all ANSI backgrounds');
   const sessions = (await state()).projects[0].terminals.map(terminal => terminal.sessionId);
   await terminal.locator('.terminal-host').evaluate(node => { globalThis.composerTerminal = node; });
-  for (const theme of ['daylight', 'forest', 'mountain-blue', 'wild-red']) {
-    await page.evaluate(theme => window.agentrix.settings({ theme }), theme);
-    await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, theme);
-    await composerSample(terminal, theme);
-    await page.screenshot({ path: path.join(output, `${theme}-empty.png`) });
-  }
+  await composerSample(terminal, 'catalina');
+  await page.screenshot({ path: path.join(output, 'catalina-empty.png') });
   await terminal.locator('textarea.xterm-helper-textarea').focus();
   await page.evaluate(() => window.agentrix.copy('第一行：透明输入与清晰文字'));
   await page.keyboard.press('Control+v');
@@ -152,10 +148,6 @@ try {
   await waitFor(async () => (await state()).projects[0].terminals[1].codexActive, 'control becomes an authenticated Codex fixture');
   await showTerminal(control);
   await waitFor(async () => (await cellBackgrounds()).DARK_SURFACE === 'rgba(0, 0, 0, 0)', 'same dark history surface becomes transparent');
-  // Back to the theme the ANSI backgrounds were first measured in (Daylight has its own palette).
-  await page.evaluate(() => window.agentrix.settings({ theme: 'daylight' }));
-  await page.waitForFunction(() => document.documentElement.dataset.theme === 'daylight');
-  await waitFor(async () => JSON.stringify(await cellBackgrounds()) === JSON.stringify(original), 'Daylight ANSI backgrounds again').catch(() => {});
   const agentColors = await cellBackgrounds();
   for (const label of ['DIFF_RED', 'DIFF_GREEN', 'ANSI_RED', 'INVERSE']) assert.equal(agentColors[label], original[label], `${label} background survives`);
   assert.ok(!requests.some(request => request.method === 'POST'), `draft input must never submit a model request: ${JSON.stringify(requests)}`);

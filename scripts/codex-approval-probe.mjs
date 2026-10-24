@@ -20,7 +20,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const output = await testRun('codex-approval'), profile = path.join(output, 'profile'), home = path.join(output, 'codex-home');
 const project = { id: randomUUID(), name: 'approval', path: path.join(output, 'approval'), restore: { terminal: false, codex: false } };
 for (const directory of [profile, project.path, home]) await fs.mkdir(directory, { recursive: true });
-await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, language: 'zh', theme: 'daylight', startView: 'workspace' } }));
+await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, language: 'zh', startView: 'workspace' } }));
 
 // The stand-in model, answering as the Responses API streams: a tool call for the words RUNCOMMAND and MAKEEDIT, a
 // short message for anything else (Codex asks it for a title too) and for the outcome of its own calls.

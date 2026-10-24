@@ -11,12 +11,12 @@ test('a new dev profile copies projects and settings but restores no terminal or
   const installed = temp(), dev = path.join(temp(), 'Agentrix Dev');
   const restore = { terminal: true, codex: true, cwd: 'E:\\p', threadId: 'thread', agent: 'claude', interrupted: false };
   fs.writeFileSync(path.join(installed, 'workspace.json'), JSON.stringify({
-    version: 2, settings: { theme: 'daylight', restoreSessions: true }, history: ['a'],
+    version: 2, settings: { restoreSessions: true }, history: ['a'],
     projects: [{ id: 'p', name: 'P', path: 'E:\\p', kind: 'local', restore, terminals: [{ id: 't', restore }] }],
   }));
   assert.equal(seedDevProfile(installed, dev), true);
   const seeded = JSON.parse(fs.readFileSync(path.join(dev, 'workspace.json'), 'utf8'));
-  assert.deepEqual(seeded.settings, { theme: 'daylight', restoreSessions: true });
+  assert.deepEqual(seeded.settings, { restoreSessions: true });
   assert.deepEqual(seeded.history, ['a']);
   assert.deepEqual(seeded.projects[0].restore, { ...restore, terminal: false, codex: false });
   assert.deepEqual(seeded.projects[0].terminals[0].restore, { ...restore, terminal: false, codex: false });

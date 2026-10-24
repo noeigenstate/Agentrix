@@ -5,10 +5,6 @@
   --flow-ok: var(--accent-green, #3ddc97); --flow-warm: #f2c14e; --flow-fail: #ff7b72;
   gap: 10px; padding: 10px; overflow-y: auto; overscroll-behavior: contain;
 }
-:root:is([data-theme="mono-amber"], [data-theme="mono-amber-dark"]) .activity-pane {
-  --flow-card: var(--theme-hover); --flow-line: var(--theme-line); --flow-inset: var(--theme-hover);
-  --flow-ink: var(--theme-ink); --flow-muted: var(--theme-muted); --flow-faint: var(--theme-muted); --flow-ok: var(--theme-ink); --flow-warm: var(--mono-alert-ink); --flow-fail: var(--mono-alert-ink);
-}
 .activity-card { flex: none; min-width: 0; border-radius: var(--card-radius, 12px); background: var(--flow-card); box-shadow: inset 0 0 0 1px var(--flow-line), inset 0 1px 0 rgba(255, 255, 255, .12); }
 .activity-card-title { margin: 0; padding: 11px 14px 8px; font-size: 12.5px; font-weight: 600; color: var(--flow-ink); }
 

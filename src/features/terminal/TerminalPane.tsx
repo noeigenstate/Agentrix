@@ -89,7 +89,7 @@ export function TerminalPane({ id, sessionId, fontSize, onError, focused, onOpen
       // that reflow too, or later output can overwrite old prompt characters.
       reflowCursorLine: !remote,
       linkHandler: { activate: activateLink, hover: hoverLink, leave: leaveLink, allowNonHttpProtocols: true },
-      theme: terminalTheme(document.documentElement.dataset.theme),
+      theme: terminalTheme(),
     });
     terminal.open(host.current);
     setTerminalWeight(terminal, chosenWeight());
@@ -110,15 +110,14 @@ export function TerminalPane({ id, sessionId, fontSize, onError, focused, onOpen
       return true;
     });
     const styling = styleTerminal(terminal);
-    const themeObserver = new MutationObserver(records => {
-      if (records.some(record => record.attributeName === 'data-theme')) terminal.options.theme = terminalTheme(document.documentElement.dataset.theme);
+    const fontObserver = new MutationObserver(records => {
       if (records.some(record => record.attributeName === 'data-terminal-weight')) setTerminalWeight(terminal, chosenWeight());
       if (records.some(record => record.attributeName === 'data-terminal-font-family')) {
         terminal.options.fontFamily = document.documentElement.dataset.terminalFontFamily || terminal.options.fontFamily;
         requestAnimationFrame(() => { if (term.current === terminal && host.current?.clientWidth) fitTerminal(terminal); });
       }
     });
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-terminal-weight', 'data-terminal-font-family'] });
+    fontObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-terminal-weight', 'data-terminal-font-family'] });
     term.current = terminal;
     const unregister = registerScreen(id, terminal, sessionId);
     const unregisterPopup = registerReadingTerminal(id, sessionId, terminal);
@@ -216,7 +215,7 @@ export function TerminalPane({ id, sessionId, fontSize, onError, focused, onOpen
     const frame = requestAnimationFrame(resize);
     return () => {
       disposed = true; queued = [];
-      unsubscribe(); offPaste(); input.dispose(); selection.dispose(); resized.dispose(); links.dispose(); clipboardWrites.dispose(); styling.dispose(); themeObserver.disconnect(); observer.disconnect(); cancelAnimationFrame(frame); clearTimeout(settle);
+      unsubscribe(); offPaste(); input.dispose(); selection.dispose(); resized.dispose(); links.dispose(); clipboardWrites.dispose(); styling.dispose(); fontObserver.disconnect(); observer.disconnect(); cancelAnimationFrame(frame); clearTimeout(settle);
       terminal.textarea?.removeEventListener('focus', focusIn); terminal.textarea?.removeEventListener('blur', focusOut); focusOut();
       terminal.element?.removeEventListener('contextmenu', contextMenu); unregisterPopup();
       gpu.current?.dispose(); gpu.current = null; unregister();

@@ -1,9 +1,8 @@
 // How smooth each interaction is: the frame times while it plays, with the window maximised under a theme with its
-// wallpaper and glass (default mountain-blue) and the terminals drawn by the GPU, as a person runs Agentrix. It covers
-// the decision cards' gestures and their sheet, the page switches, hovering, opening and closing a project, the
+// wallpaper and glass (Catalina) and the terminals drawn by the GPU, as a person runs Agentrix. It covers
+// the decision inbox's selection, the page switches, hovering, opening and closing a project, the
 // reading view (scrolling, the activity pane, terminal and reading), and the settings. For each it prints the frames,
 // the 95th percentile and the worst, and how many took over 33 ms (a stutter a person sees).
-//   --theme=<id>          another theme (daylight, mono-amber, …)
 //   --trace=<name>        record that interaction and print, for each frame over 33 ms, what every thread spent 4 ms
 //                         or more on inside it
 //   --only=<a,b>          just these interactions
@@ -19,14 +18,14 @@ import { _electron as electron } from 'playwright-core';
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.split('=')[1];
-const theme = option('theme') || 'mountain-blue', traced = option('trace'), only = option('only')?.split(',');
+const theme = 'catalina', traced = option('trace'), only = option('only')?.split(',');
 // --css="…": a style change to try, compared against a run without it.
 const css = process.argv.find(arg => arg.startsWith('--css='))?.slice(6);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const output = await testRun('smooth'), profile = path.join(output, 'profile'), claude = path.join(output, 'claude');
 const projects = ['支付服务', '登录页', '订单服务', '阅读'].map(name => ({ id: randomUUID(), name, path: path.join(output, 'p', name), restore: { terminal: false, codex: false } }));
 for (const directory of [profile, path.join(claude, 'projects'), path.join(output, 'codex-home'), ...projects.map(project => project.path)]) await fs.mkdir(directory, { recursive: true });
-await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { theme, surface: 'glass', terminalRenderer: 'gpu', activityPane: true, startView: 'decisions',
+await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { surface: 'glass', terminalRenderer: 'gpu', activityPane: true, startView: 'decisions',
   language: 'zh', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false, guideVersion: '9.9.9' } }));
 // Three agents waiting on a decision, drawn the way Claude Code draws them.
 const fixture = async (name, lines) => {
@@ -71,7 +70,7 @@ try {
   await page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: projects[3].id, data: hook('start', { session_id: 's1', transcript_path: transcript, prompt: '第 39 个需求' }) });
   await sleep(1200);
   await page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: projects[3].id, data: hook('stop', { session_id: 's1' }) });
-  await waitFor(async () => (await home.locator('.deck-card').count()) >= 3, 'three decision cards');
+  await waitFor(async () => (await home.locator('.inbox-row').count()) >= 3, 'three inbox rows');
   await sleep(1500);
 
   if (css) await page.addStyleTag({ content: css });
@@ -120,20 +119,9 @@ try {
       }
     }
   }
-  const deck = home.locator('.decision-deck');
-  await deck.focus();
-  await measure('deck-fade', () => page.keyboard.press('ArrowDown'), 900);
-  await deck.hover();
-  await measure('deck-sink', () => page.mouse.wheel(0, 120), 900);
-  const box = await home.locator('.deck-card.is-front').boundingBox();
-  await measure('deck-slide', async () => {
-    await page.mouse.move(box.x + box.width / 2, box.y + 80); await page.mouse.down();
-    for (let dx = 0; dx <= 320; dx += 20) { await page.mouse.move(box.x + box.width / 2 + dx, box.y + 82); await sleep(16); }
-    await page.mouse.up();
-  }, 900);
-  await measure('deck-depth', () => page.mouse.click(box.x + box.width / 2, box.y + box.height + 12), 900);
-  await measure('sheet-open', async () => { await home.locator('.deck-card.is-front').click(); await page.locator('.decision-sheet').waitFor({ timeout: 5000 }); }, 600);
-  await measure('sheet-close', () => page.keyboard.press('Escape'), 600);
+  await home.locator('.inbox-list').focus();
+  await measure('inbox-select', () => page.keyboard.press('ArrowDown'), 600);
+  await measure('inbox-click', () => home.locator('.inbox-row').nth(2).click(), 600);
   const nav = name => page.locator('.home-nav button', { hasText: name });
   await measure('to-workbench', () => nav('工作台').click(), 900);
   const panels = page.locator('.project-panel');

@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from 'react
 import { ArrowRight, CaretDown, CheckCircle, CircleNotch, FolderSimple, X } from '@phosphor-icons/react';
 import type { Project, Result } from '../../shared/types';
 import type { Decision } from './decisions';
-import { DecisionDeck } from './DecisionDeck';
-import { SessionOverview } from './SessionOverview';
+import { DecisionCard } from './DecisionCard';
+import { DecisionInbox } from './DecisionInbox';
+import { inboxItems, isWorking } from './inbox-items';
+import { SessionDetail } from './SessionDetail';
 import { acceptedToday } from './ReviewCard';
 import { sendToAgent, untilAtPrompt } from './send-to-agent';
 import { dataUrl, thumbnail } from '../reading/image-thumbnail';
@@ -13,10 +15,9 @@ import { showPopup } from '../files/file-popup';
 import { t } from '../../shared/i18n';
 import './home.css';
 
-// The home page, for grading the work like a teacher: what needs you, as a stack of cards to flip through and draw
-// from (permissions, questions, work handed in); where to say what comes next; and beside them every session and what
-// it is working on. Nothing
-// here is solved by looking at it.
+// The home page as an inbox, for grading the work like a teacher: one list of what needs you and of every session, by
+// urgency, on the left; the selected decision (or session) in full on the right, with the box that says what comes next
+// docked under it. Nothing here is solved by looking at it.
 export function DecisionHome({ projects, decisions, snoozed, onOpenProject, onOpenDecision, onAction, onError }: {
   projects: readonly Project[]; decisions: readonly Decision[]; snoozed: number;
   onOpenProject: (projectId: string) => void; onOpenDecision: (decision: Decision) => void;
@@ -26,51 +27,43 @@ export function DecisionHome({ projects, decisions, snoozed, onOpenProject, onOp
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(timer); }, []);
   const [notice, setNotice] = useState('');
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 5000); return () => clearTimeout(timer); }, [notice]);
-  const terminals = projects.flatMap(project => project.terminals.map(terminal => ({ project, terminal })));
-  const working = terminals.filter(({ terminal }) => terminal.codexActive && terminal.codexActivity === 'working');
-  // What the decisions are, by kind: "1 次审批 · 2 项交付审查".
-  const breakdown = (Object.entries(BREAKDOWN) as [Decision['kind'], string][]).map(([kind, label]) => [label, decisions.filter(decision => decision.kind === kind).length] as const).filter(([, count]) => count > 0);
+  const items = useMemo(() => inboxItems(projects, decisions), [projects, decisions]);
+  // A pick that is gone (a decision answered, or a session that now has one) falls back to the most urgent decision.
+  const [picked, setPicked] = useState<string | null>(null);
+  const selected = items.find(item => item.id === picked) ?? items.find(item => item.decision);
+  const working = items.filter(({ terminal }) => isWorking(terminal)).length;
   const accepted = useMemo(() => acceptedToday(), [decisions]);
-  const headline = decisions.length ? t('{count} 件事需要你决定', { count: decisions.length })
-    : working.length ? t('现在没有需要你处理的事') : t('接下来想创造什么？');
-  const quiet = !decisions.length;
-  // What needs you and what comes next in the left column, every session in the right one: two columns of panes that
-  // start and end on the same lines.
+  const headline = decisions.length ? t('{count} 件事需要你决定', { count: decisions.length }) : t('所有会话');
+  const summary = [t('{count} 个会话', { count: items.length }), working > 0 && t('{count} 个工作中', { count: working }),
+    accepted > 0 && t('今天已接受 {count} 项交付', { count: accepted }), snoozed > 0 && t('{count} 件已暂缓', { count: snoozed }), items.length > 1 && t('↑↓ 切换')].filter(Boolean).join(' · ');
   return <div className="home-page decision-home">
-    <div className="home-main">
-      <section className="home-pane home-overview" aria-label={headline}>
-        <header className="home-head">
-          <h1>{headline}</h1>
-          <p className="home-counts">
-            {working.length > 0 && <span><CircleNotch size={13} className="loading-spinner" />{t('{count} 个会话正在工作', { count: working.length })}</span>}
-            {breakdown.map(([label, count]) => <span key={label} className="home-count-kind">{t(label, { count })}</span>)}
-            {accepted > 0 && <span><CheckCircle size={13} weight="fill" />{t('今天已接受 {count} 项交付', { count: accepted })}</span>}
-            {snoozed > 0 && <span>{t('{count} 件已暂缓', { count: snoozed })}</span>}
-            {quiet && !working.length && <span>{t('描述一个目标，选择项目后开始。')}</span>}
-          </p>
-        </header>
-        {notice && <p className="home-notice" role="status"><CheckCircle size={15} weight="fill" />{notice}</p>}
-        {quiet ? <div className="home-empty">
-          <CheckCircle size={84} weight="thin" aria-hidden="true" />
-          <b>{t('所有待办已处理')}</b>
-          <span>{t('你可以开始一项新任务，或让会话继续工作')}</span>
-        </div> : <DecisionDeck decisions={decisions} now={now} onOpen={onOpenDecision} onDone={setNotice} onError={onError} />}
-      </section>
-      <NewWork projects={projects} onAction={onAction} onDone={setNotice} onError={onError} />
+    <section className="home-pane home-inbox" aria-label={headline}>
+      <header className="home-head">
+        <h1>{headline}</h1>
+        <p className="home-counts">{summary}</p>
+      </header>
+      {notice && <p className="home-notice" role="status"><CheckCircle size={16} weight="fill" />{notice}</p>}
+      <DecisionInbox items={items} selectedId={selected?.id ?? null} now={now} onSelect={setPicked} />
+    </section>
+    <div className={`home-right${selected ? '' : ' is-empty'}`}>
+      {!selected ? <div className="home-empty">
+        <h2>{working > 0 ? t('现在没有需要你处理的事') : t('接下来想创造什么？')}</h2>
+        <p>{working > 0 ? t('{count} 个会话正在工作', { count: working }) : t('描述一个目标，选择项目后开始。')}</p>
+      </div> : selected.decision
+        ? <DecisionCard decision={selected.decision} now={now} onOpen={onOpenDecision} onDone={setNotice} onError={onError} />
+        : <SessionDetail item={selected} now={now} onOpenProject={onOpenProject} />}
+      <NewWork projects={projects} takeFocus={!selected} onAction={onAction} onDone={setNotice} onError={onError} />
     </div>
-    <SessionOverview projects={projects} decisions={decisions} onOpenProject={onOpenProject} />
   </div>;
 }
-
-const BREAKDOWN: Partial<Record<Decision['kind'], string>> = { approval: '{count} 次审批', question: '{count} 个问题', choice: '{count} 个选择', signin: '{count} 个登录', attention: '{count} 件要你处理', review: '{count} 项交付审查' };
 
 const VOICE_TARGET = 'decision-home';
 
 // "What next": a goal sent to a project's agent from here, without leaving the page. One that runs gets it at once (it
 // queues it while it works); otherwise the chosen agent is started first and gets it when its input is ready. Its
 // progress then shows in the session list beside it and its work comes back as a card.
-function NewWork({ projects, onAction, onDone, onError }: {
-  projects: readonly Project[];
+function NewWork({ projects, takeFocus, onAction, onDone, onError }: {
+  projects: readonly Project[]; takeFocus: boolean;
   onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>; onDone: (message: string) => void; onError: (message: string) => void;
 }) {
   const local = useMemo(() => projects.filter(project => project.kind !== 'ssh' || project.terminals[0]?.codexActive), [projects]);
@@ -80,6 +73,8 @@ function NewWork({ projects, onAction, onDone, onError }: {
   // the project to send to is chosen below once there is something to send.
   const box = useRef<HTMLTextAreaElement>(null);
   useDictatedBox(VOICE_TARGET, box, setText);
+  // With nothing to decide the page's one job is this box, so it takes the focus.
+  useEffect(() => { if (takeFocus) box.current?.focus({ preventScroll: true }); }, [takeFocus, local.length]);
   // Pictures pasted here go as files: the agent may not run yet to take them from the clipboard, so each is saved and
   // its path sent with the goal for the agent to look at.
   const [images, setImages] = useState<{ blob: Blob; preview: string }[]>([]);
@@ -127,7 +122,7 @@ function NewWork({ projects, onAction, onDone, onError }: {
   return <section className="home-pane new-work" aria-label={t('新任务')}>
     <h3>{t('告诉 Agentrix 接下来要做什么')}</h3>
     <div className="new-work-input" data-voice-target={VOICE_TARGET} aria-label={t('新任务')}>
-      <textarea ref={box} value={text} rows={3} placeholder={t('描述要做的事，比如“给登录页加上验证码”；可以直接粘贴截图')} onChange={event => setText(event.target.value)} onPaste={paste}
+      <textarea ref={box} value={text} rows={2} placeholder={t('描述要做的事，比如“给登录页加上验证码”；可以直接粘贴截图')} onChange={event => setText(event.target.value)} onPaste={paste}
         onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void start(); } }} />
       <VoiceButton terminalId={VOICE_TARGET} sessionId={null} name={t('新任务')} size={16} onError={onError} />
     </div>
@@ -140,7 +135,7 @@ function NewWork({ projects, onAction, onDone, onError }: {
       <label className="new-work-select" title={t('项目')}><FolderSimple size={16} aria-hidden="true" /><select aria-label={t('项目')} value={project?.id} onChange={event => setProjectId(event.target.value)}>{local.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><CaretDown size={13} aria-hidden="true" /></label>
       {terminal && !terminal.codexActive && <label className="new-work-select" title={t('助手')}><select aria-label={t('助手')} value={agent} onChange={event => setAgent(event.target.value as 'claude' | 'codex')}><option value="claude">Claude Code</option><option value="codex">Codex</option></select><CaretDown size={13} aria-hidden="true" /></label>}
       {!empty && <span className="new-work-note">{terminal?.codexActive ? t('直接发给它，不离开这一页') : t('先启动助手，准备好就发给它')}</span>}
-      <button type="button" className="button primary new-work-start" disabled={busy || empty} onClick={() => void start()}>{busy ? t('发送中…') : t('开始')}{busy ? <CircleNotch size={16} className="loading-spinner" /> : <ArrowRight size={16} weight="bold" />}</button>
+      <button type="button" className={`button ${empty ? 'secondary' : 'primary'} new-work-start`} disabled={busy || empty} onClick={() => void start()}>{busy ? t('发送中…') : t('开始')}{busy ? <CircleNotch size={16} className="loading-spinner" /> : <ArrowRight size={16} weight="bold" />}</button>
     </div>
   </section>;
 }

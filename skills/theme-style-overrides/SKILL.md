@@ -5,8 +5,8 @@ description: Use when changing a size, color or font of any Agentrix view (readi
 
 # Theme stylesheets override feature styles
 
-Every theme sets `data-theme` on `<html>`, and `src/shared/styles/clarity.css` (with `monochrome.css` and the other
-theme files) restyles feature classes under `:root[data-theme] …`. Those rules win over a feature's own stylesheet,
+The renderer sets `data-theme="catalina"` on `<html>`, and `src/shared/styles/clarity.css` (with the other
+shared stylesheets) restyles feature classes under `:root[data-theme] …`. Those rules win over a feature's own stylesheet,
 so a change made only in `src/features/<feature>/*.css` can do nothing at all.
 
 ## Rule
@@ -19,4 +19,4 @@ so a change made only in `src/features/<feature>/*.css` can do nothing at all.
   screen). A new font size in the reading view is written `calc(13px * var(--reading-text))`.
 - Verify in the app, not by reading CSS: in a desktop probe read
   `getComputedStyle(element).fontSize` on an isolated profile (`AGENTRIX_DATA_DIR`), and take a screenshot in the
-  晴空 theme.
+  Catalina theme.

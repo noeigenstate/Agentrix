@@ -21,10 +21,6 @@
 .fi-m .sq { stroke-linecap: butt; }
 .fi-m .fi-m2 { stroke: #f4cf5c; }
 
-/* Monochrome themes: a tinted shape with every mark in the theme's ink. */
-:root:is([data-theme="mono-amber"], [data-theme="mono-amber-dark"]) .fi { --fi: color-mix(in srgb, var(--theme-ink) 24%, transparent); --fi-mark: var(--theme-ink); --fi-hl: var(--theme-ink); }
-:root:is([data-theme="mono-amber"], [data-theme="mono-amber-dark"]) .fi .fi-m2 { stroke: var(--theme-ink); }
-
 /* File marks are bold; folder marks are drawn a fifth larger, so their stroke is thinned to stay about 1 unit. */
 .fi-m { stroke-width: 1.5; }
 .fi-m.fi-fm { stroke-width: .85; }

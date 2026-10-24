@@ -43,9 +43,9 @@ Codex runs with no approvals and full access, so the scope comes from the prompt
 A brief it can act on alone:
 - The chosen concept (image paths), what was wrong before, the files it may change, and the behaviour it must keep.
 - The house rules: AGENTS.md, the `design-polish` skill, the 界面清晰化 look (sharp wallpaper, frosted panes, white ink, no
-  dark overlay), and the monochrome themes still working.
+  dark overlay), and the Catalina appearance unchanged.
 - How to check: `tsc`, `npm test`, a build, screenshots from an isolated probe (`AGENTRIX_DATA_DIR` in a new folder,
-  the daylight theme) at several window sizes, then the relevant desktop suites one at a time.
+  the Catalina theme) at several window sizes, then the relevant desktop suites one at a time.
 - Never: the owner's real Agentrix, its sessions or the system clipboard. Never commit, push or release.
 - Its report: the files changed, the checks run with results, and the screenshot paths.
 

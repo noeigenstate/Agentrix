@@ -107,7 +107,9 @@ for (const agent of ['claude', 'codex']) {
       assert.equal(root.props['data-approval-mode'], 'terminal-only');
       assert.ok(nodes(root).some(n => n.type === 'pre' && n.props.children.includes('hello.txt')));
       const options = nodes(root).filter(n => (n.type === 'button' && /reading-choice-option/.test(n.props.className)) || n.type === 'input');
-      assert.ok(options.length > 0); assert.ok(options.every(n => n.props.disabled));
+      // The decision card lists the terminal's options as plain text; the reading card shows them disabled.
+      if (view === 'decision') { assert.equal(options.length, 0); assert.ok(nodes(root).filter(n => n.type === 'li').length > 0); }
+      else { assert.ok(options.length > 0); assert.ok(options.every(n => n.props.disabled)); }
       assert.ok(nodes(root).some(n => n.props.children === 'Confirm or reject this request in the source terminal. Permission cards cannot safely send approval keys.'));
       const open = nodes(root).find(n => n.props['data-approval-open-terminal']);
       assert.ok(open); open.props.onClick(); assert.deepEqual(h.opened, ['aba']);

@@ -23,5 +23,5 @@ timestamps, expansion, running/failure states and generated file cards.
 
 Validate with `node --test tests/visible-tail.test.cjs tests/reading-ui.test.cjs`, a build, then
 `node scripts/reading-hierarchy-smoke.mjs`. The GUI check uses an isolated profile and covers leading tools,
-stream updates, rolling eviction, transcript queues, both agents, monochrome themes and compact cards. It also
+stream updates, rolling eviction, transcript queues, both agents, Catalina and compact cards. It also
 checks file-popup pagination and delayed autosave. Inspect its screenshots; `--packaged` uses the built Windows app.

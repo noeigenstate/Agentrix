@@ -1,137 +1,109 @@
 /* The home page (decisions and sessions) lies over the workbench, which keeps running under them, hidden. Like the
-   workbench ("界面清晰化"), the wallpaper shows sharp at its own brightness and what sits on it is a frosted pane. */
+   workbench ("界面清晰化"), the wallpaper shows sharp at its own brightness and what sits on it is a frosted pane.
+   One set of tokens, shared by every part of the page: radii 8 / 12 / 16 / pill, type 20 / 16 / 13 / 12 / 11 in
+   weights 400 / 600, spacing 4 / 8 / 12 / 16 / 24, buttons 32px high and one motion. Colour is kept to two accents:
+   amber for what needs you, blue for what is working; everything else is the pane's own ink. */
 .home-layer {
   --home-card: var(--glass-solid, #102331); --home-line: var(--card-line, rgba(255, 255, 255, .13)); --home-row: var(--card-fill, rgba(255, 255, 255, .07));
   --home-ink: var(--ink, #f2f7fc); --home-muted: var(--ink-secondary, #b9c8d8); --home-faint: var(--ink-faint, rgba(255, 255, 255, .5));
-  --home-ok: var(--accent-green, #3ddc97); --home-blue: var(--accent-blue, #3b9eff); --home-pink: #ff5fa2; --home-amber: #ffb347; --home-red: #ff7b72;
+  --home-blue: var(--accent-blue, #3b9eff); --home-amber: #ffb347; --home-red: #ff7b72;
   --home-pane: var(--pane-fill, rgba(28, 32, 40, .3)); --home-frost: var(--pane-blur, blur(24px) saturate(130%) brightness(.62)); --home-edge: rgba(255, 255, 255, .2);
+  --home-hover: color-mix(in srgb, var(--home-ink) 8%, transparent); --home-selected: color-mix(in srgb, var(--home-ink) 13%, transparent);
+  --home-motion: 140ms cubic-bezier(.2, .8, .2, 1);
   position: absolute; inset: 0; z-index: 4; overflow: auto; background: transparent;
 }
 .main-workspace[inert] { visibility: hidden; }
 /* An open project's file sidebar sits beside the workbench, not in it: it goes with it under the home pages. */
 .workspace-layout:has(> .home-layer) > .focus-sidebar { visibility: hidden; }
-:root:is([data-theme="mono-amber"], [data-theme="mono-amber-dark"]) .home-layer {
-  --home-row: var(--theme-hover); --home-line: var(--theme-line); --home-ink: var(--theme-ink); --home-muted: var(--theme-muted); --home-faint: var(--theme-muted);
-  --home-ok: var(--theme-ink); --home-blue: var(--theme-ink); --home-pink: var(--mono-orange); --home-amber: var(--mono-orange); --home-red: var(--mono-alert-ink);
-  --home-pane: var(--theme-hover); --home-frost: none; --home-edge: var(--theme-line);
-  background: var(--theme-editor);
-}
-.home-page { width: min(1440px, 100%); margin: 0 auto; padding: 24px; color: var(--home-ink); }
-.home-head h1 { margin: 0; font-size: 30px; font-weight: 700; line-height: 40px; letter-spacing: -.01em; }
-.home-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; margin: 8px 0 0; font-size: 15px; line-height: 22px; color: var(--home-ink); }
-.home-counts > span { display: inline-flex; align-items: center; gap: 6px; }
-.home-counts > span + span::before { content: '\00b7'; margin: 0 12px; color: var(--home-faint); }
-.home-counts .is-unread { color: var(--home-pink); }
-.home-notice { display: flex; align-items: center; gap: 8px; margin: 16px 0 0; padding: 10px 14px; border-radius: 12px; font-size: 13.5px; color: var(--home-ink); background: var(--home-row); box-shadow: inset 0 0 0 1px var(--home-line); }
-.home-notice svg { color: var(--home-ok); }
+.home-page { width: min(1440px, 100%); margin: 0 auto; padding: 24px; color: var(--home-ink); font-size: 13px; }
+.home-head h1 { margin: 0; padding: 0 12px; font-size: 16px; font-weight: 600; line-height: 24px; }
+.home-counts { margin: 4px 0 0; padding: 0 12px; font-size: 12px; line-height: 16px; color: var(--home-muted); }
+.home-notice { display: flex; align-items: center; gap: 8px; margin: 12px 12px 0; padding: 8px 12px; border-radius: 8px; font-size: 12px; color: var(--home-ink); background: var(--home-row); box-shadow: inset 0 0 0 1px var(--home-line); }
 
-/* A decision in full. */
-.decision-card { margin-top: 22px; padding: 20px 22px; border-radius: 16px; background: var(--home-card); box-shadow: inset 0 0 0 1px var(--home-line), 0 18px 48px -26px rgba(0, 0, 0, .7); }
-.decision-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
-.decision-kind { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--home-row); color: var(--home-ink); }
-.decision-card.is-approval .decision-kind svg { color: var(--home-amber); }
-.decision-card.is-question .decision-kind svg, .decision-card.is-choice .decision-kind svg { color: var(--home-blue); }
-.decision-card.is-signin .decision-kind svg { color: var(--home-ok); }
-.decision-card.is-attention .decision-kind svg { color: var(--home-pink); }
-.decision-source { font-size: 12.5px; color: var(--home-muted); }
-.decision-title { margin: 14px 0 6px; font-size: 19px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
-.decision-why { margin: 0 0 12px; font-size: 14px; line-height: 1.6; color: var(--home-muted); }
-.decision-evidence { margin: 10px 0 14px; padding: 12px 14px; max-height: 220px; overflow: auto; border-radius: 10px; font: 13px/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--home-ink); background: rgba(0, 0, 0, .28); box-shadow: inset 0 0 0 1px var(--home-line); user-select: text; }
-.decision-options { display: grid; gap: 8px; margin: 12px 0 4px; }
-.decision-option { display: flex; align-items: flex-start; gap: 12px; padding: 11px 14px; border-radius: 12px; cursor: pointer; background: var(--home-row); box-shadow: inset 0 0 0 1px var(--home-line); }
-.decision-option:hover { background: rgba(255, 255, 255, .1); }
-.decision-option.is-picked { box-shadow: inset 0 0 0 2px var(--home-blue); }
-.decision-option input { margin: 3px 0 0; accent-color: var(--home-blue); }
-.decision-option span { display: grid; gap: 2px; min-width: 0; }
-.decision-option b { font-size: 14.5px; font-weight: 500; overflow-wrap: anywhere; }
-.decision-option small { font-size: 12.5px; color: var(--home-muted); }
-.decision-question { margin-top: 10px; }
-.decision-state { margin: 10px 0 0; font-size: 13.5px; }
+/* The tags: one shape for a decision's kind, its mode, and a session's state. Needs-you is amber, working is blue, the
+   rest neutral; tinted and outlined, never a solid block, so the card's one primary button stays the strongest thing. */
+.inbox-tag, .decision-kind, .decision-mode { display: inline-flex; flex: none; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 20px; white-space: nowrap; color: var(--home-muted); background: var(--home-row); box-shadow: inset 0 0 0 1px var(--home-line); }
+:is(.inbox-tag, .decision-kind).is-need, .decision-card:not(.session-detail) .decision-kind { color: var(--home-amber); background: color-mix(in srgb, var(--home-amber) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--home-amber) 40%, transparent); }
+:is(.inbox-tag, .decision-kind).is-work { color: var(--home-blue); background: color-mix(in srgb, var(--home-blue) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--home-blue) 40%, transparent); }
+
+/* The inbox: one list by urgency, 52px rows. The selected row is one fill and a 2px bar on its left. */
+.home-inbox { display: flex; flex-direction: column; min-height: 0; padding: 24px 12px 12px; }
+.inbox-list { flex: 1; min-height: 0; margin-top: 8px; overflow: auto; scrollbar-width: thin; outline: none; }
+.inbox-group { margin: 0; padding: 16px 12px 4px; font-size: 12px; font-weight: 600; line-height: 16px; color: var(--home-muted); }
+.inbox-row { position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 8px; height: 52px; padding: 0 12px; border-radius: 8px; cursor: pointer; transition: background-color var(--home-motion); }
+.inbox-row:hover { background: var(--home-hover); }
+.inbox-row[aria-selected="true"] { background: var(--home-selected); }
+.inbox-row::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px; border-radius: 2px; background: var(--home-ink); opacity: 0; transition: opacity var(--home-motion); }
+.inbox-row[aria-selected="true"]::before { opacity: 1; }
+.inbox-list:focus-visible .inbox-row[aria-selected="true"] { box-shadow: 0 0 0 2px var(--home-blue); }
+.inbox-mark { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: var(--home-ink); background: var(--home-row); }
+.inbox-mark:has(.agent-brand-claude) { color: #e8855f; }
+.inbox-text { display: grid; min-width: 0; }
+.inbox-text b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; line-height: 20px; }
+.inbox-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; color: var(--home-muted); }
+
+/* The right column: the selected decision (or session) fills it; what-next is docked under it. */
+.decision-home { box-sizing: border-box; display: grid; grid-template-columns: clamp(320px, 28vw, 420px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 16px; height: 100%; min-height: 560px; }
+.home-pane { box-sizing: border-box; border-radius: 16px; }
+.home-right { display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 0; }
+/* Nothing to decide: one pane, with the headline and the what-next box in the middle of it. */
+.home-right.is-empty { justify-content: center; align-items: center; padding: 24px; border-radius: 16px; }
+.home-empty { margin-bottom: 24px; text-align: center; }
+.home-empty h2 { margin: 0; font-size: 20px; font-weight: 600; line-height: 28px; }
+.home-empty p { margin: 4px 0 0; font-size: 13px; line-height: 20px; color: var(--home-muted); }
+
+/* A decision (or a session) in full: a fixed header, the title, a body that scrolls and a fixed bar of actions. */
+.decision-card { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; margin: 0; border-radius: 16px; overflow: hidden; background: var(--home-card); box-shadow: inset 0 0 0 1px var(--home-line); }
+.decision-card-head { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 8px; padding: 24px 24px 0; }
+.decision-source { font-size: 12px; color: var(--home-muted); }
+.decision-title { flex: none; margin: 0; padding: 16px 24px 0; font-size: 20px; font-weight: 600; line-height: 28px; overflow-wrap: anywhere; }
+.review-submission { margin-left: 8px; vertical-align: middle; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 20px; display: inline-flex; align-items: center; color: var(--home-amber); background: color-mix(in srgb, var(--home-amber) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--home-amber) 40%, transparent); }
+.decision-body { flex: 1 1 auto; min-height: 0; padding: 16px 24px; overflow: auto; scrollbar-width: thin; user-select: text; }
+.decision-why { margin: 0 0 12px; font-size: 13px; line-height: 20px; color: var(--home-muted); }
+.decision-evidence { margin: 0 0 16px; padding: 12px; border-radius: 8px; font: 12px/20px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--home-ink); background: rgba(0, 0, 0, .28); box-shadow: inset 0 0 0 1px var(--home-line); }
+.decision-options { display: grid; gap: 8px; margin: 0 0 4px; }
+.decision-option { display: flex; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 8px; cursor: pointer; background: var(--home-row); box-shadow: inset 0 0 0 1px var(--home-line); transition: background-color var(--home-motion); }
+.decision-option:hover { background: var(--home-selected); }
+.decision-option.is-picked { box-shadow: inset 0 0 0 2px var(--home-ink); }
+.decision-option input { margin: 2px 0 0; accent-color: var(--home-ink); }
+.decision-option span { display: grid; gap: 4px; min-width: 0; }
+.decision-option b { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.decision-option small { font-size: 12px; color: var(--home-muted); }
+.decision-state { margin: 12px 0 0; font-size: 13px; }
 .decision-state.is-expired { color: var(--home-amber); }
-.decision-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--home-line); }
-.decision-actions .button { display: inline-flex; align-items: center; gap: 7px; }
+.decision-actions { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 8px; padding: 16px 24px; border-top: 1px solid var(--home-line); }
+.home-layer .button { height: 32px; padding: 0 16px; font-size: 13px; font-weight: 600; line-height: 20px; }
 .decision-later { position: relative; margin-left: auto; }
-.decision-later > .text-button { display: inline-flex; align-items: center; gap: 6px; }
-.decision-later-menu { position: absolute; right: 0; bottom: calc(100% + 6px); display: grid; min-width: 130px; padding: 5px; border-radius: 10px; background: var(--home-card); box-shadow: inset 0 0 0 1px var(--home-line), 0 12px 30px -12px rgba(0, 0, 0, .7); z-index: 2; }
-.decision-later-menu button { padding: 7px 10px; border: 0; border-radius: 7px; text-align: left; font: inherit; font-size: 13px; color: var(--home-ink); background: none; cursor: pointer; }
-.decision-later-menu button:hover { background: var(--home-row); }
+.decision-later-menu { position: absolute; right: 0; bottom: calc(100% + 8px); display: grid; min-width: 128px; padding: 4px; border-radius: 12px; background: var(--home-card); box-shadow: inset 0 0 0 1px var(--home-line), 0 12px 24px -12px rgba(0, 0, 0, .7); z-index: 2; }
+.decision-later-menu button { height: 32px; padding: 0 12px; border: 0; border-radius: 8px; text-align: left; font: inherit; font-size: 13px; color: var(--home-ink); background: none; cursor: pointer; }
+.decision-later-menu button:hover { background: var(--home-hover); }
 
-/* The others, one line each. */
-.decision-rows, .task-rows { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.decision-rows button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; width: 100%; padding: 10px 14px; border: 0; border-radius: 12px; text-align: left; font: inherit; color: var(--home-ink); background: var(--home-row); box-shadow: inset 0 0 0 1px var(--home-line); cursor: pointer; }
-.decision-rows button:hover { background: rgba(255, 255, 255, .1); }
-.decision-rows b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; }
-.decision-rows span, .decision-rows small { font-size: 12.5px; color: var(--home-muted); white-space: nowrap; }
-.decision-row-icon.is-approval { color: var(--home-amber); }
-.decision-row-icon:is(.is-question, .is-choice) { color: var(--home-blue); }
-.decision-row-icon.is-signin { color: var(--home-ok); }
-.decision-row-icon.is-attention { color: var(--home-pink); }
-
-/* What next: a pane with its heading, a box of three lines with the microphone in it, and a footer of choices and the
-   start button. */
-.new-work { display: flex; flex-direction: column; flex: none; }
-.new-work > h3, .session-overview > h3 { margin: 0; font-size: 20px; font-weight: 700; line-height: 28px; color: var(--home-ink); }
-.new-work-input { position: relative; margin-top: 16px; }
-.new-work-input .voice-button { position: absolute; right: 10px; bottom: 10px; width: 32px; height: 32px; border-radius: 10px; }
-.new-work textarea { display: block; width: 100%; min-height: 96px; padding: 12px 52px 12px 14px; border: 0; border-radius: 12px; resize: none; font: 14.5px/24px var(--font-ui); color: var(--home-ink); background: var(--home-row); box-shadow: inset 0 0 0 1px var(--home-line); outline: none; }
+/* What next: a heading, a box of two lines with the microphone in it, and a footer of choices and the start button. */
+.new-work { display: flex; flex: none; flex-direction: column; padding: 16px 24px; }
+.new-work > h3 { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--home-ink); }
+.new-work-input { position: relative; margin-top: 8px; }
+.new-work-input .voice-button { position: absolute; right: 8px; bottom: 8px; width: 32px; height: 32px; border-radius: 8px; }
+.new-work textarea { display: block; width: 100%; min-height: 64px; padding: 12px 48px 12px 12px; border: 0; border-radius: 12px; resize: none; font: 13px/20px var(--font-ui); color: var(--home-ink); background: var(--home-row); box-shadow: inset 0 0 0 1px var(--home-line); outline: none; transition: box-shadow var(--home-motion); }
 .new-work textarea:focus { box-shadow: inset 0 0 0 2px var(--home-blue); }
 /* Their own border is their focus mark: the app's focus outline would draw a second ring around it. */
 :is(.new-work, .review-feedback) textarea:focus-visible { outline: none; }
 .new-work textarea::placeholder { color: var(--home-faint); }
-.new-work-options { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-top: 12px; font-size: 13px; color: var(--home-muted); }
-.new-work-select { position: relative; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; border-radius: 12px; color: var(--home-ink); background: var(--home-row); box-shadow: inset 0 0 0 1px var(--home-line); }
-.new-work-select select { max-width: 200px; padding: 0 2px; border: 0; appearance: none; font: 500 14px var(--font-ui); color: var(--home-ink); background: transparent; outline: none; cursor: pointer; }
+.new-work-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--home-muted); }
+.new-work-select { position: relative; display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-radius: 8px; color: var(--home-ink); background: var(--home-row); box-shadow: inset 0 0 0 1px var(--home-line); }
+.new-work-select select { max-width: 200px; padding: 0 4px; border: 0; appearance: none; font: 13px var(--font-ui); color: var(--home-ink); background: transparent; outline: none; cursor: pointer; }
 .new-work-select select option { color: #101820; background: #fff; }
 .new-work-select svg { flex: none; color: var(--home-muted); pointer-events: none; }
 .new-work-select:focus-within { box-shadow: inset 0 0 0 2px var(--home-blue); }
 .new-work-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.new-work-start { display: inline-flex; align-items: center; gap: 8px; height: 40px; margin-left: auto; padding: 0 20px; border-radius: 12px; font-size: 14.5px; font-weight: 600; }
+.new-work-start { margin-left: auto; }
+.home-right.is-empty .new-work { width: min(560px, 100%); padding: 0; }
+.home-right.is-empty .new-work > h3 { display: none; }
 
-/* The decision page: two columns that start and end on the same lines. The left one is the overview pane (the headline
-   and the deck, or the empty state) over the new-work pane; the right one is the sessions pane, as tall as both. One
-   column when the window is narrow. */
-.decision-home { box-sizing: border-box; display: grid; grid-template-columns: minmax(0, 1fr) clamp(460px, 34vw, 520px); gap: 18px; min-height: 100%; }
-.home-main { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-.home-pane { box-sizing: border-box; padding: 24px 28px; border-radius: 20px; }
-.home-overview { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
-/* The deck sits right under the counts; what is left over lies below it. */
-.home-overview .decision-deck-wrap { margin: 24px 0 0; }
-.home-empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 200px; padding: 16px 0; text-align: center; }
-.home-empty svg { margin-bottom: 8px; color: var(--home-ok); }
-.home-empty b { font-size: 20px; font-weight: 600; line-height: 28px; }
-.home-empty span { font-size: 14.5px; line-height: 22px; color: var(--home-muted); }
-/* The sessions take the height of the row and scroll inside it; their own length never stretches the left column. */
-.session-overview { display: flex; flex-direction: column; min-height: 0; contain: size; overflow: hidden; }
-.session-counts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 0; font-size: 14px; line-height: 22px; color: var(--home-muted); }
-.session-counts .is-deciding { color: var(--home-amber); }
-.session-counts .is-working { color: var(--home-blue); }
-.session-counts .is-unread { color: var(--home-pink); }
-.task-rows { flex: 1; min-height: 0; margin: 16px -12px 0; padding: 0 12px; overflow: auto; list-style: none; scrollbar-width: thin; }
-.task-rows li + li { border-top: 1px solid var(--home-line); }
-.task-rows button { display: grid; grid-template-columns: 44px minmax(0, 1fr) 16px; align-items: center; gap: 14px; width: 100%; padding: 14px 8px; border: 0; border-radius: 12px; text-align: left; font: inherit; color: var(--home-ink); background: none; cursor: pointer; }
-.task-rows button:hover { background: rgba(255, 255, 255, .08); }
-.task-tile { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; color: var(--home-ink); background: var(--home-row); box-shadow: inset 0 0 0 1px var(--home-line); }
-.task-tile.is-claude { color: #e8855f; }
-.task-chevron { justify-self: end; color: var(--home-muted); }
-.task-state { flex: none; min-width: 5.6em; padding: 2px 10px; text-align: center; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 18px; white-space: nowrap; background: rgba(255, 255, 255, .12); color: var(--home-ink); }
-.task-state.is-deciding { color: #1b1206; background: var(--home-amber); }
-.task-state.is-working { color: #fff; background: var(--home-blue); }
-.task-state.is-unread { color: #fff; background: var(--home-pink); }
-.task-state.is-done { color: #06231a; background: var(--home-ok); }
-.task-main { display: grid; gap: 4px; min-width: 0; }
-.task-top { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.task-top b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; }
-.task-top em { flex: none; padding-left: 12px; border-left: 1px solid var(--home-line); font-style: normal; font-size: 13.5px; color: var(--home-muted); }
-.task-main > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--home-muted); }
-.task-main > .task-top { overflow: visible; }
-.task-main > .task-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; color: var(--home-faint); }
-.task-meta .is-deciding { color: var(--home-amber); }
-.task-empty { margin: 16px 0 0; font-size: 13.5px; color: var(--home-muted); }
-@media (max-width: 1100px) {
-  .decision-home { grid-template-columns: minmax(0, 1fr); align-content: start; }
-  .home-overview { flex: none; }
-  .session-overview { contain: none; overflow: visible; }
-  .task-rows { overflow: visible; }
+/* A narrow window: one column, the list above the card. */
+@media (max-width: 1000px) {
+  .decision-home { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; height: auto; }
+  .home-inbox { max-height: 320px; }
+  .home-right { min-height: 560px; }
 }
 
 /* The home pages lie over the workbench inside its layout. */
@@ -143,66 +115,68 @@
 .home-nav button:hover { color: var(--ink, #fff); background: rgba(255, 255, 255, .08); }
 .home-nav button[aria-current="page"] { color: var(--ink, #fff); background: rgba(255, 255, 255, .16); }
 .home-nav-count { min-width: 18px; padding: 0 5px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center; color: #1b1206; background: var(--accent-amber, #ffb347); }
-:root:is([data-theme="mono-amber"], [data-theme="mono-amber-dark"]) .home-nav { background: var(--theme-hover); }
-:root:is([data-theme="mono-amber"], [data-theme="mono-amber-dark"]) .home-nav button { color: var(--theme-muted); }
-:root:is([data-theme="mono-amber"], [data-theme="mono-amber-dark"]) .home-nav button[aria-current="page"] { color: var(--theme-ink); background: var(--theme-control); }
-@media (max-width: 900px) { .home-page { padding: 16px; } .home-pane { padding: 20px; } }
+@media (max-width: 900px) { .home-page { padding: 16px; } }
 
 /* Work handed in, graded like homework: what was asked, the agent's account, what it made, how it was checked, what
    changed, your notes from last time, and the call. */
 .review-block { margin-top: 16px; }
-.review-block h4 { margin: 0 0 8px; font-size: 12.5px; font-weight: 600; letter-spacing: .02em; color: var(--home-muted); }
-.review-goal { margin: 0; padding: 10px 14px; border-radius: 10px; font-size: 14.5px; line-height: 1.6; background: var(--home-row); white-space: pre-wrap; overflow-wrap: anywhere; }
-.review-reply { padding: 4px 2px; font-size: 14px; line-height: 1.65; }
+.review-block:first-child { margin-top: 0; }
+.review-block h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--home-muted); }
+.review-goal { margin: 0; padding: 12px; border-radius: 8px; font-size: 13px; line-height: 20px; background: var(--home-row); white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-reply { font-size: 13px; line-height: 20px; }
 .review-reply.is-folded { max-height: 260px; overflow: hidden; -webkit-mask-image: linear-gradient(#000 75%, transparent); mask-image: linear-gradient(#000 75%, transparent); }
-.review-checks, .review-files { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.review-checks li { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; font-size: 13.5px; background: var(--home-row); }
-.review-checks code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12.5px var(--font-mono); color: var(--home-muted); }
-.review-checks li > span { font-size: 12.5px; }
-.review-checks li.is-passed > svg, .review-checks li.is-passed > span { color: var(--home-ok); }
+.review-checks, .review-files { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.review-checks li { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 8px; font-size: 13px; background: var(--home-row); }
+.review-checks code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--font-mono); color: var(--home-muted); }
+.review-checks li > span { font-size: 12px; }
 .review-checks li.is-failed > svg, .review-checks li.is-failed > span { color: var(--home-red); }
-.review-unverified { display: flex; align-items: center; gap: 8px; margin: 0; padding: 9px 12px; border-radius: 10px; font-size: 13.5px; color: var(--home-amber); background: color-mix(in srgb, var(--home-amber) 12%, transparent); }
-.review-files li { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 13px; }
-.review-file-status { flex: none; min-width: 42px; padding: 1px 6px; border-radius: 6px; font-size: 11.5px; text-align: center; color: var(--home-muted); background: var(--home-row); }
-.review-files .text-button { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12.5px var(--font-mono); }
+.review-unverified { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 12px; border-radius: 8px; font-size: 13px; color: var(--home-amber); background: color-mix(in srgb, var(--home-amber) 12%, transparent); }
+.review-files li { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
+.review-file-status { flex: none; min-width: 48px; padding: 0 8px; border-radius: 8px; font-size: 11px; line-height: 20px; text-align: center; color: var(--home-muted); background: var(--home-row); }
+.review-files .text-button { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--font-mono); }
 .review-more, .review-note { margin: 8px 0 0; font-size: 12px; color: var(--home-faint); }
-.review-submission { margin-left: 10px; padding: 2px 10px; border-radius: 999px; vertical-align: middle; font-size: 12.5px; font-weight: 600; color: #fff; background: var(--home-pink); }
-.review-last-note { padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, var(--home-pink) 12%, transparent); box-shadow: inset 3px 0 0 var(--home-pink); }
-.review-last-note h4 { color: var(--home-pink); }
-.review-last-note p { margin: 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
-.review-last-note small { display: block; margin-top: 6px; font-size: 12px; color: var(--home-muted); }
-.review-feedback { position: relative; }
-.review-feedback .voice-button { position: absolute; top: 24px; right: 8px; width: 30px; height: 30px; border-radius: 9px; }
-.review-feedback textarea { display: block; width: 100%; margin-top: 16px; padding: 12px 46px 12px 14px; border: 0; border-radius: 12px; resize: vertical; font: 14px/1.55 var(--font-ui); color: var(--home-ink); background: var(--home-row); box-shadow: inset 0 0 0 2px var(--home-pink); outline: none; }
-.decision-card.is-review .decision-kind svg { color: var(--home-pink); }
-.task-step { color: var(--home-blue) !important; }
+.review-last-note { padding: 12px; border-radius: 8px; background: color-mix(in srgb, var(--home-amber) 12%, transparent); box-shadow: inset 2px 0 0 var(--home-amber); }
+.review-last-note h4 { color: var(--home-amber); }
+.review-last-note p { margin: 0; font-size: 13px; line-height: 20px; white-space: pre-wrap; }
+.review-last-note small { display: block; margin-top: 8px; font-size: 12px; color: var(--home-muted); }
+.review-feedback { position: relative; flex: none; padding: 0 24px 16px; }
+.review-feedback .voice-button { position: absolute; right: 32px; bottom: 24px; width: 32px; height: 32px; border-radius: 8px; }
+.review-feedback textarea { display: block; width: 100%; min-height: 64px; padding: 12px 48px 12px 12px; border: 0; border-radius: 12px; resize: none; font: 13px/20px var(--font-ui); color: var(--home-ink); background: var(--home-row); box-shadow: inset 0 0 0 2px var(--home-amber); outline: none; }
 
-/* On the wallpaper: every card, row, notice and input is a frosted pane with a thin light edge (the content inside it
-   sits on flat, lighter cards); the headings with no pane under them keep a soft shadow, like the title bar. */
-.home-layer :is(.decision-card, .home-notice, .decision-rows button, .home-pane, .decision-later-menu) {
+/* On the wallpaper: every card, notice and pane is frosted glass with a thin light edge (the content inside it sits on
+   flat, lighter cards); the headings with no pane under them keep a soft shadow, like the title bar. */
+.home-layer :is(.decision-card, .home-pane, .home-right.is-empty, .decision-later-menu) {
   background: var(--home-pane); backdrop-filter: var(--home-frost);
   box-shadow: inset 0 0 0 1px var(--home-edge), inset 0 1px 0 rgba(255, 255, 255, .1), 0 8px 24px rgba(0, 0, 0, .18);
 }
-/* A frosted pane inside a pane (the notice) is flatter, or the blur is blurred twice. */
-.home-layer .home-pane .home-notice { backdrop-filter: none; box-shadow: inset 0 0 0 1px var(--home-line); }
-.home-layer .decision-rows button:hover { background: color-mix(in srgb, var(--home-pane), rgba(255, 255, 255, .5) 12%); }
-.home-layer :is(.home-head, .new-work > h3, .session-overview > h3) { text-shadow: 0 1px 1px rgba(0, 0, 0, .3); }
-:root:is([data-theme="mono-amber"], [data-theme="mono-amber-dark"]) .home-layer :is(.home-head, .new-work > h3, .session-overview > h3) { text-shadow: none; }
+/* A pane inside a pane is flatter, or the blur is blurred twice. */
+.home-layer .home-right.is-empty .new-work { background: none; backdrop-filter: none; box-shadow: none; }
+.home-layer :is(.home-head, .new-work > h3) { text-shadow: 0 1px 1px rgba(0, 0, 0, .3); }
 
 /* Pictures pasted into "what next": small, each with its own remove button. */
-.new-work-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.new-work-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .new-work-images span { position: relative; display: block; }
-.new-work-images img { display: block; height: 64px; max-width: 120px; object-fit: cover; border-radius: 9px; box-shadow: inset 0 0 0 1px var(--home-edge), 0 6px 16px rgba(0, 0, 0, .25); }
-.new-work-images .new-work-zoom { position: static; display: block; width: auto; height: auto; padding: 0; border-radius: 9px; background: none; box-shadow: none; cursor: zoom-in; }
+.new-work-images img { display: block; height: 64px; max-width: 120px; object-fit: cover; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--home-edge), 0 6px 16px rgba(0, 0, 0, .25); }
+.new-work-images .new-work-zoom { position: static; display: block; width: auto; height: auto; padding: 0; border-radius: 8px; background: none; box-shadow: none; cursor: zoom-in; }
 .new-work-images .new-work-zoom:hover { background: none; }
-.new-work-images button:not(.new-work-zoom) { position: absolute; top: -6px; right: -6px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; color: #fff; background: rgba(12, 16, 24, .82); box-shadow: 0 0 0 1px rgba(255, 255, 255, .3); cursor: pointer; }
+.new-work-images button:not(.new-work-zoom) { position: absolute; top: -4px; right: -4px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; color: #fff; background: rgba(12, 16, 24, .82); box-shadow: 0 0 0 1px rgba(255, 255, 255, .3); cursor: pointer; }
 .new-work-images button:not(.new-work-zoom):hover { background: var(--home-red); }
 
-/* The delivery summary, first on the homework card: three numbered parts (a fix pink, an optimization green). */
-.review-delivery { display: grid; gap: 10px; }
-.review-delivery-part { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 12px; padding: 12px 14px; border-radius: 12px; background: var(--home-row); box-shadow: inset 0 0 0 1px var(--home-line); }
-.review-delivery-step { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; font-size: 13px; font-weight: 700; color: #fff; background: var(--home-pink); }
-.review-delivery.is-optimize .review-delivery-step { color: #06231a; background: var(--home-ok); }
-.review-delivery-part h4 { margin: 2px 0 4px; font-size: 13px; font-weight: 600; color: var(--home-muted); }
-.review-delivery-part .reading-markdown, .review-delivery-part p { margin: 0; font-size: 14.5px; line-height: 1.6; }
+/* The delivery summary, first on the homework card: three numbered parts. */
+.review-delivery { display: grid; gap: 8px; }
+.review-delivery-part { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; padding: 12px; border-radius: 8px; background: var(--home-row); box-shadow: inset 0 0 0 1px var(--home-line); }
+.review-delivery-step { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; font-size: 12px; font-weight: 600; color: var(--home-ink); background: var(--home-selected); }
+.review-delivery-part h4 { margin: 4px 0; font-size: 12px; font-weight: 600; color: var(--home-muted); }
+.review-delivery-part .reading-markdown, .review-delivery-part p { margin: 0; font-size: 13px; line-height: 20px; }
 .review-delivery ~ .review-block .review-reply.is-folded { max-height: 120px; }
+
+/* A session with nothing to decide is as tall as its content; a long summary scrolls inside the card. */
+.decision-card.session-detail { flex: 0 1 auto; }
+.decision-options-readonly { margin: 0 0 12px; padding-left: 24px; font-size: 12px; line-height: 20px; color: var(--home-muted); }
+.decision-options-readonly small { display: block; font-size: 12px; color: var(--home-faint); }
+
+/* The reading view's pink and blue Markdown markers are neutral inside the home cards. */
+.home-layer .reading-markdown ul > li::before { background: var(--home-muted); box-shadow: none; }
+.home-layer .reading-markdown ul ul > li::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--home-muted); }
+.home-layer .reading-markdown ol > li::marker { color: var(--home-muted); }
+.home-layer .reading-markdown :is(h1, h2, h3, h4, h5, h6) { border-left-color: var(--home-line); color: var(--home-ink); }

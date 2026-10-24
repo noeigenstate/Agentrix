@@ -29,7 +29,6 @@
     "test:gpu-terminal": "node scripts/gpu-terminal-smoke.mjs",
     "test:editor-terminals": "node scripts/editor-terminals-smoke.mjs",
     "test:themes-markdown": "node scripts/themes-markdown-smoke.mjs",
-    "test:monochrome": "node scripts/monochrome-smoke.mjs",
     "test:glass-transparency": "node scripts/glass-transparency-smoke.mjs",
     "test:desktop-glass": "node scripts/desktop-glass-smoke.mjs",
     "test:visual": "node scripts/visual-smoke.mjs",

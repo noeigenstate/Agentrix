@@ -16,7 +16,7 @@ const output = await testRun('desktop-glass'), profile = path.join(output, 'prof
 await fs.mkdir(profile, { recursive: true });
 const projects = ['清晰文字', '等待查看'].map((name, index) => ({ id: randomUUID(), name, path: path.join(output, 'project-' + index), kind: 'local', unread: index, lastCompletedAt: index ? Date.now() : null, restore: { terminal: false, codex: false } }));
 for (const project of projects) { await fs.mkdir(project.path); await fs.writeFile(path.join(project.path, 'README.md'), '# Native glass\n\nThe operating system blurs the real background.\n'); }
-await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { language: 'zh', theme: 'mono-amber', surface: 'glass', glassBackground: 'desktop', glassTransparency: 37, terminalRenderer: 'dom', columns: 2, notifications: false, sound: false, announce: false, restoreSessions: false, closeToTray: false, fontSize: 15 } }));
+await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { language: 'zh', surface: 'glass', glassBackground: 'desktop', glassTransparency: 37, terminalRenderer: 'dom', columns: 2, notifications: false, sound: false, announce: false, restoreSessions: false, closeToTray: false, fontSize: 15 } }));
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 let app, page; const errors = [], results = { backend, checks: [] };
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
@@ -53,8 +53,8 @@ try {
   await fs.writeFile(path.join(output, 'capture.ps1'), 'param([string]$Output,[int]$X,[int]$Y,[int]$Width,[int]$Height)\nAdd-Type -AssemblyName System.Drawing\n$bitmap=New-Object System.Drawing.Bitmap $Width,$Height\n$graphics=[System.Drawing.Graphics]::FromImage($bitmap)\ntry { $graphics.CopyFromScreen($X,$Y,0,0,$bitmap.Size); $bitmap.Save($Output,[System.Drawing.Imaging.ImageFormat]::Png) } finally { $graphics.Dispose(); $bitmap.Dispose() }\n');
   await page.locator('[data-project-id="' + projects[0].id + '"]').getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await state()).projects[0].shellReady, 'shell ready'); const session = (await state()).projects[0].sessionId;
-  await write("Clear-Host; Write-Host 'AGENTRIX / DESKTOP GLASS'; Write-Host ''; Write-Host '真正背景 → 系统模糊 → 透明面板 → 清晰文字'; Write-Host ''; Write-Host 'Orange means attention. Normal work stays neutral.'\r");
-  await waitFor(() => page.locator('.xterm-rows').innerText().then(text => text.includes('Orange means attention.')), 'terminal text');
+  await write("Clear-Host; Write-Host 'AGENTRIX / DESKTOP GLASS'; Write-Host ''; Write-Host '真正背景 → 系统模糊 → 透明面板 → 清晰文字'; Write-Host ''; Write-Host 'Clear text over the desktop background.'\r");
+  await waitFor(() => page.locator('.xterm-rows').innerText().then(text => text.includes('Clear text over the desktop background.')), 'terminal text');
   await capture('native-glass.png');
   if (backend === 'windows-compat') {
     const handle = await app.evaluate(() => globalThis.desktopGlassMain.getNativeWindowHandle().readBigUInt64LE().toString());
@@ -90,7 +90,7 @@ try {
   await app.evaluate(() => { globalThis.desktopGlassMain.setFullScreen(false); globalThis.desktopGlassMain.setBounds({ x: 200, y: 120, width: 1500, height: 940 }); });
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).click(); await page.locator('.file-preview').waitFor();
   const cdp = await page.context().newCDPSession(page); await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }] });
-  assert.equal(await page.locator('.app-shell').evaluate(node => getComputedStyle(node, '::after').backgroundColor), 'rgb(244, 245, 246)'); await cdp.send('Emulation.setEmulatedMedia', { features: [] }); await cdp.detach();
+  assert.equal(await page.locator('.app-shell').evaluate(node => getComputedStyle(node, '::after').backgroundColor), 'rgb(38, 40, 63)'); await cdp.send('Emulation.setEmulatedMedia', { features: [] }); await cdp.detach();
   results.checks.push('material switches preserve terminal and draft; panel alpha changes without another blur; GPU, settings, resizing, expanded file view and reduced transparency work');
   assert.deepEqual(errors, []);
   await app.close(); app = null; await launch(); assert.ok((await state()).desktopGlass.active); assert.equal((await state()).settings.glassTransparency, 75);

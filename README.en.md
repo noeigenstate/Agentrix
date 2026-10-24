@@ -127,7 +127,7 @@ Press <kbd>Ctrl</kbd>+<kbd>T</kbd> and talk to the current terminal; Enter sends
 ### 🔑 From install to sign-in, all in the window
 
 - **Nothing installed yet?** A new project's card marks an agent that is missing; one click installs it and starts it, and without Node.js it takes you to the download first.
-- **A first start that never gets stuck:** trusting a folder, picking a theme or a sign-in method and update offers are popups; signing in opens a *Sign in to Claude Code / Codex* window to open the sign-in page in your browser, paste the code or API key, or copy a one-time code. The code goes to the CLI only and never appears in the conversation or the task list.
+- **A first start that never gets stuck:** trusting a folder or picking a sign-in method and update offers are popups; signing in opens a *Sign in to Claude Code / Codex* window to open the sign-in page in your browser, paste the code or API key, or copy a one-time code. The code goes to the CLI only and never appears in the conversation or the task list.
 
 ### And also
 
@@ -135,7 +135,7 @@ Press <kbd>Ctrl</kbd>+<kbd>T</kbd> and talk to the current terminal; Enter sends
 - **SSH projects**: reuse your VS Code Remote-SSH hosts; terminals, files, Git and previews all run over SSH, and pages and pictures made on a machine on your network preview too.
 - **Files at hand**: a folder tree, an auto-saving editor (VS Code's editing keys, <kbd>Ctrl</kbd>+<kbd>F</kbd> to find), previews of images, web pages, video and Markdown, and a right-click to open a file's location; <kbd>Ctrl</kbd>+click (<kbd>⌘</kbd>+click on macOS) a path in the terminal to open it in a popup; an enlarged picture fits the window, a click shows it at its own size to drag around.
 - **Splits you drag**: several terminals for one project side by side, with dividers you drag to resize.
-- **Clear to read**: dark frosted glass with white text over a wallpaper at its own brightness; switch to the **solid** surface for the sharpest text. Two minimal themes, light *Monochrome amber* and dark *White, Black & Amber*.
+- **Clear to read**: dark frosted glass with white text over a wallpaper at its own brightness; switch to the **solid** surface for the sharpest text. The appearance is fixed to **Island Dusk (Catalina)**; glass transparency, font size and terminal fonts remain adjustable.
 - **English and Chinese, remappable shortcuts, automatic updates on Windows**, and a guided tour the first time you open it.
 
 ## 📦 Get started

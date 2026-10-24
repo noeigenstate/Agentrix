@@ -18,6 +18,7 @@ await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ versio
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const packaged = process.argv.includes('--packaged'); let app, page;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
+const theme = 'catalina';
 const errors = [], performanceSamples = [], materials = [], typography = [], edges = [];
 const layoutGap = 6;
 // Every panel keeps the same gap to its neighbours, the title bar and the bottom of the window.
@@ -104,68 +105,59 @@ try {
   for (const terminal of (await state()).projects[0].terminals) await page.evaluate(({ id, encoded }) => window.agentrix.writeTerminal(id, `Clear-Host; [Console]::Write([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')))\r`), { id: terminal.id, encoded });
   await waitFor(async () => first.locator('.xterm-rows').first().innerText().then(value => value.includes('DIM_INVERSE')), 'readability sample rendered');
   const sessions = (await state()).projects[0].terminals.map(terminal => terminal.sessionId);
-  for (const theme of ['daylight', 'forest', 'mountain-blue', 'wild-red']) {
-    await page.evaluate(theme => window.agentrix.settings({ theme }), theme);
-    await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, theme);
-    const cells = await readCells(first.locator('.xterm-rows').first());
-    for (const cell of cells) {
-      // Terminal text is regular, and bold is 700, in every theme (terminal-theme.ts).
-      assert.equal(cell.weight, cell.label === 'BOLD' ? '700' : '400');
-      assert.equal(cell.size, '13px', 'user font size stays unchanged');
-      assert.equal(cell.filter, 'none'); assert.equal(cell.opacity, '1');
-      if (cell.label.startsWith('DIM_')) {
-        assert.equal(cell.fill[3], 255, `${cell.label} glyphs use full brightness`);
-        assert.ok(cell.fill.slice(0, 3).every((value, index) => Math.abs(value - cell.color[index]) <= 2), 'DIM keeps the resolved RGB channels');
-      }
+  const cells = await readCells(first.locator('.xterm-rows').first());
+  for (const cell of cells) {
+    // Terminal text is regular, and bold is 700, on Catalina (terminal-theme.ts).
+    assert.equal(cell.weight, cell.label === 'BOLD' ? '700' : '400');
+    assert.equal(cell.size, '13px', 'user font size stays unchanged');
+    assert.equal(cell.filter, 'none'); assert.equal(cell.opacity, '1');
+    if (cell.label.startsWith('DIM_')) {
+      assert.equal(cell.fill[3], 255, `${cell.label} glyphs use full brightness`);
+      assert.ok(cell.fill.slice(0, 3).every((value, index) => Math.abs(value - cell.color[index]) <= 2), 'DIM keeps the resolved RGB channels');
     }
-    assert.ok(cells.find(cell => cell.label === 'DIM_RED').fill[0] > cells.find(cell => cell.label === 'DIM_RED').fill[1]);
-    assert.ok(cells.find(cell => cell.label === 'DIM_GREEN').fill[1] > cells.find(cell => cell.label === 'DIM_GREEN').fill[0]);
-    await page.screenshot({ path: path.join(output, `${theme}-bright-text.png`) });
-    await first.locator('textarea.xterm-helper-textarea').first().focus(); await page.keyboard.press('Control+Shift+a');
-    await waitFor(async () => (await readCells(first.locator('.xterm-rows').first())).every(cell => cell.selected), 'selection rendered');
-    const selected = await readCells(first.locator('.xterm-rows').first());
-    for (const cell of selected) {
-      if (['INVERSE', 'DIM_INVERSE'].includes(cell.label)) {
-        // Daylight's white ink sits on a dark contrast base too (the frosted pane), so inverse reads as in the other themes.
-        assert.ok(cell.fill.every(value => value >= 240), `${theme}: selected default inverse stays readable`);
-      }
-      else {
-        // xterm may brighten RGB against the selection background to meet its
-        // contrast setting. The glyph must keep that resolved color, not turn white.
-        assert.ok(cell.fill.slice(0, 3).every((value, index) => Math.abs(value - cell.color[index]) <= 2), `${theme}: selection keeps ${cell.label} resolved RGB`);
-        if (['DIM_RED', 'DIM_GREEN', 'DIM_256', 'DIM_RGB'].includes(cell.label)) {
-          const original = cells.find(original => original.label === cell.label).fill;
-          assert.ok(Math.max(...cell.fill.slice(0, 3)) - Math.min(...cell.fill.slice(0, 3)) > 50, `${cell.label} remains colored`);
-          for (let channel = 0; channel < 2; channel++) assert.equal(Math.sign(cell.fill[channel] - cell.fill[channel + 1]), Math.sign(original[channel] - original[channel + 1]), `${cell.label} preserves hue ordering`);
-        }
-      }
-    }
-    await page.screenshot({ path: path.join(output, `${theme}-split-selection.png`) });
-    await page.keyboard.press('Escape');
-    await waitFor(async () => (await readCells(first.locator('.xterm-rows').first())).every(cell => !cell.selected), 'selection cleared');
-    // xterm may repaint dim cells a frame after the selection flag clears; wait for the colours to settle.
-    await waitFor(async () => JSON.stringify(await readCells(first.locator('.xterm-rows').first())) === JSON.stringify(cells), 'colours restored after selection').catch(() => {});
-    const cleared = await readCells(first.locator('.xterm-rows').first());
-    assert.deepEqual(cleared, cells, 'clearing selection restores original inverse and ANSI colors');
-    typography.push({ theme, cells, selected, cleared });
-    assert.deepEqual((await state()).projects[0].terminals.map(terminal => terminal.sessionId), sessions);
   }
+  assert.ok(cells.find(cell => cell.label === 'DIM_RED').fill[0] > cells.find(cell => cell.label === 'DIM_RED').fill[1]);
+  assert.ok(cells.find(cell => cell.label === 'DIM_GREEN').fill[1] > cells.find(cell => cell.label === 'DIM_GREEN').fill[0]);
+  await page.screenshot({ path: path.join(output, `${theme}-bright-text.png`) });
+  await first.locator('textarea.xterm-helper-textarea').first().focus(); await page.keyboard.press('Control+Shift+a');
+  await waitFor(async () => (await readCells(first.locator('.xterm-rows').first())).every(cell => cell.selected), 'selection rendered');
+  const selected = await readCells(first.locator('.xterm-rows').first());
+  for (const cell of selected) {
+    if (['INVERSE', 'DIM_INVERSE'].includes(cell.label)) {
+      assert.ok(cell.fill.every(value => value >= 240), `${theme}: selected default inverse stays readable`);
+    }
+    else {
+      // xterm may brighten RGB against the selection background to meet its
+      // contrast setting. The glyph must keep that resolved color, not turn white.
+      assert.ok(cell.fill.slice(0, 3).every((value, index) => Math.abs(value - cell.color[index]) <= 2), `${theme}: selection keeps ${cell.label} resolved RGB`);
+      if (['DIM_RED', 'DIM_GREEN', 'DIM_256', 'DIM_RGB'].includes(cell.label)) {
+        const original = cells.find(original => original.label === cell.label).fill;
+        assert.ok(Math.max(...cell.fill.slice(0, 3)) - Math.min(...cell.fill.slice(0, 3)) > 50, `${cell.label} remains colored`);
+        for (let channel = 0; channel < 2; channel++) assert.equal(Math.sign(cell.fill[channel] - cell.fill[channel + 1]), Math.sign(original[channel] - original[channel + 1]), `${cell.label} preserves hue ordering`);
+      }
+    }
+  }
+  await page.screenshot({ path: path.join(output, `${theme}-split-selection.png`) });
+  await page.keyboard.press('Escape');
+  await waitFor(async () => (await readCells(first.locator('.xterm-rows').first())).every(cell => !cell.selected), 'selection cleared');
+  // xterm may repaint dim cells a frame after the selection flag clears; wait for the colours to settle.
+  await waitFor(async () => JSON.stringify(await readCells(first.locator('.xterm-rows').first())) === JSON.stringify(cells), 'colours restored after selection').catch(() => {});
+  const cleared = await readCells(first.locator('.xterm-rows').first());
+  assert.deepEqual(cleared, cells, 'clearing selection restores original inverse and ANSI colors');
+  typography.push({ theme, cells, selected, cleared });
+  assert.deepEqual((await state()).projects[0].terminals.map(terminal => terminal.sessionId), sessions);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }] });
-  for (const theme of ['daylight', 'forest', 'mountain-blue', 'wild-red']) {
-    await page.evaluate(theme => window.agentrix.settings({ theme }), theme);
-    await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, theme);
-    const surfaces = await page.locator('.titlebar, .focus-sidebar, .project-panel:visible').evaluateAll(nodes => nodes.map(node => {
-      const style = getComputedStyle(node), values = style.backgroundColor.match(/[\d.]+/g).map(Number);
-      return { className: node.className, backdrop: style.backdropFilter, alpha: values.length === 4 ? values[3] : 1 };
-    }));
-    assert.ok(surfaces.every(surface => surface.backdrop === 'none' && surface.alpha === 1), JSON.stringify(surfaces));
-    materials.push({ theme, surfaces });
-    await page.screenshot({ path: path.join(output, `${theme}-reduced-transparency.png`) });
-  }
+  const surfaces = await page.locator('.titlebar, .focus-sidebar, .project-panel:visible').evaluateAll(nodes => nodes.map(node => {
+    const style = getComputedStyle(node), values = style.backgroundColor.match(/[\d.]+/g).map(Number);
+    return { className: node.className, backdrop: style.backdropFilter, alpha: values.length === 4 ? values[3] : 1 };
+  }));
+  assert.ok(surfaces.every(surface => surface.backdrop === 'none' && surface.alpha === 1), JSON.stringify(surfaces));
+  materials.push({ theme, surfaces });
+  await page.screenshot({ path: path.join(output, `${theme}-reduced-transparency.png`) });
   await cdp.send('Emulation.setEmulatedMedia', { features: [] }); await cdp.detach();
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, performanceSamples, materials, typography, edges, errors }, null, 2));
-  console.log(`PASS: 6/16 glass cards with six streaming PTYs, split ANSI/selection/cursor, opaque reduced-transparency fallback in four themes. Evidence: ${output}`);
+  console.log(`PASS: 6/16 glass cards with six streaming PTYs, split ANSI/selection/cursor, opaque reduced-transparency fallback on Catalina. Evidence: ${output}`);
 } catch (error) { if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {}); throw error; }
 finally { if (app) await app.close(); }

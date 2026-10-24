@@ -6,8 +6,6 @@
 .reading-cli-head strong { flex: 1; color: #8fc4ff; font: 600 calc(13px * var(--reading-text)) var(--font-mono); }
 .reading-cli-body { min-height: 0; padding: 14px 18px 16px; overflow: auto; }
 @keyframes reading-cli-in { from { opacity: 0; } }
-:root[data-theme="mono-amber"] .reading-cli-head { border-bottom-color: rgba(0, 0, 0, .1); }
-:root[data-theme="mono-amber"] .reading-cli-head strong { color: var(--theme-ink); }
 
 /* The CLI signing in: its words, the sign-in page to open, a one-time code, the field for what the browser gave back. */
 .reading-sign-in { width: min(620px, 100%); }

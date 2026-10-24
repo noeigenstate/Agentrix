@@ -27,7 +27,7 @@ m3 mix Claude Code 和 Codex 的 slash command 都要测试一遍。
 m4 mix 这个 bug 是因为 WebGL renderer 的 texture atlas 没有刷新。
 m5 mix 帮我在 GitHub 上开一个 pull request，标题写 fix voice input。
 m6 mix 用 FireRed ASR 和 SenseVoice 做一个 benchmark 对比一下。
-m7 mix 把 daylight theme 的 font weight 改成 semibold。
+m7 mix 把 catalina appearance 的 font weight 改成 semibold。
 m8 mix 先 git pull 一下，再看 TypeScript 有没有 error。
 m9 mix 这个 API 的 response 里面缺了 status code。
 m10 mix 打开 settings 页面，把 terminal 的 font size 调小一点。

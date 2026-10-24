@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowSquareOut, CheckCircle, CircleNotch, FileText, PaperPlaneRight, Question, XCircle } from '@phosphor-icons/react';
+import { CheckCircle, CircleNotch, XCircle } from '@phosphor-icons/react';
 import type { AgentAction, ConversationEntry, GitStatus } from '../../shared/types';
 import type { Decision } from './decisions';
 import { decisionTitle, waited } from './DecisionCard';
@@ -22,7 +22,7 @@ type Round = { goal: string; reply: string; written: string[] };
 
 // What the round did, from the agent's own conversation: the last thing you asked, the answer it ended on, and the
 // files its steps wrote.
-function lastRound(entries: readonly ConversationEntry[]): Round {
+export function lastRound(entries: readonly ConversationEntry[]): Round {
   let start = -1;
   for (let index = entries.length - 1; index >= 0; index--) if (entries[index].role === 'user' && !entries[index].answer && !entries[index].queued) { start = index; break; }
   const round = entries.slice(start + 1);
@@ -84,37 +84,39 @@ export function ReviewCard({ decision, now, kind, onOpen, onDone, onError }: {
   return <article className="decision-card is-review" aria-label={decisionTitle(decision)}>
     <header className="decision-card-head">{kind}<span className="decision-source">{decision.projectName}{decision.multipleTerminals ? ` · ${decision.terminalTitle}` : ''} · {decision.agent === 'claude' ? 'Claude Code' : 'Codex'} · {t('交付于 {time}', { time: waited(decision.since, now).replace(/^等了 /, '') })}</span></header>
     <h2 className="decision-title">{decisionTitle(decision)}{history.submission > 1 && <span className="review-submission">{t('第 {count} 次提交', { count: history.submission })}</span>}</h2>
-    {lastNote && <section className="review-block review-last-note"><h4>{t('你上次的批语')}</h4><p>{lastNote.text}</p>
-      {history.notes.length > 1 && <small>{t('之前还打回过 {count} 次', { count: history.notes.length - 1 })}</small>}</section>}
-    {entries === null ? <p className="decision-why"><CircleNotch size={14} className="loading-spinner" /> {t('正在整理这一轮的交付…')}</p> : <>
-      {round.goal && round.goal.trim() !== lastNote?.text.trim() && <section className="review-block"><h4>{t('你让它做的')}</h4><p className="review-goal">{round.goal}</p></section>}
-      {/* What the grading is about, first: for a fix, the problem, its cause and the result; for an optimization, what
-          was done, what it solves and the comparison. Its whole account folds under it. */}
-      {delivery ? <section className={`review-block review-delivery is-${delivery.kind}`} aria-label={delivery.kind === 'fix' ? t('修复') : t('优化')}>
-        {delivery.parts.map((part, index) => <div key={part.label} className="review-delivery-part"><span className="review-delivery-step">{index + 1}</span>
-          <div><h4>{t(part.label)}</h4><Markdown text={part.text} /></div></div>)}
-      </section> : round.reply && <p className="review-unverified"><Question size={16} weight="fill" />{t('它没有按“问题、原因、结果”写交付摘要，下面是它的原话。')}</p>}
-      <section className="review-block"><h4>{delivery ? t('完整交付说明') : t('它的交付说明')}</h4>
-        {round.reply ? <div className={`review-reply ${(delivery || replyLong) && !fullReply ? 'is-folded' : ''}`}><Markdown text={round.reply} /></div> : <p className="decision-why">{t('这一轮没有留下说明。')}</p>}
-        {(delivery || replyLong) && round.reply && <button type="button" className="text-button" onClick={() => setFullReply(!fullReply)}>{fullReply ? t('收起') : t('展开全文')}</button>}
-      </section>
-      {made.length > 0 && <section className="review-block"><h4>{t('产出物')}</h4><FileCards projectId={decision.projectId} files={made} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet /></section>}
-      <section className="review-block"><h4>{t('验证')}</h4>
-        {checks.length ? <ul className="review-checks">{checks.map(check => <li key={check.id} className={check.failed ? 'is-failed' : check.done ? 'is-passed' : 'is-running'}>
-          {check.failed ? <XCircle size={16} weight="fill" /> : check.done ? <CheckCircle size={16} weight="fill" /> : <CircleNotch size={16} className="loading-spinner" />}
-          <b>{t(check.phrase!)}</b><code>{check.target}</code><span>{check.failed ? t('执行了，失败') : check.done ? t('执行了，通过') : t('还在运行')}</span>
-        </li>)}</ul>
-          : <p className="review-unverified"><Question size={16} weight="fill" />{SELF_REPORT.test(round.reply) ? t('这一轮没有运行验证命令；说明里的“通过”只是它自己说的。') : t('这一轮没有运行测试或检查。')}</p>}
-      </section>
-      {git && <section className="review-block"><h4>{git.total ? t('改动 · 工作区 {count} 个文件', { count: git.total }) : t('改动')}</h4>
-        {git.total ? <ul className="review-files">{git.files.slice(0, 8).map(change => <li key={change.path}>
-          <span className="review-file-status">{status(change)}</span>
-          <button type="button" className="text-button" title={change.path} onClick={() => showPopup({ kind: 'file', projectId: decision.projectId, path: change.path })}><FileText size={14} />{change.path}</button>
-        </li>)}</ul> : <p className="decision-why">{t('工作区没有未提交的改动。')}</p>}
-        {git.total > 8 && <p className="review-more">{t('还有 {count} 个文件，在工作台的 Git 里查看。', { count: git.total - 8 })}</p>}
-        {git.total > 0 && <p className="review-note">{t('这是工作区里所有未提交的改动，不一定都来自这一轮。')}</p>}
-      </section>}
-    </>}
+    <div className="decision-body">
+      {lastNote && <section className="review-block review-last-note"><h4>{t('你上次的批语')}</h4><p>{lastNote.text}</p>
+        {history.notes.length > 1 && <small>{t('之前还打回过 {count} 次', { count: history.notes.length - 1 })}</small>}</section>}
+      {entries === null ? <p className="decision-why"><CircleNotch size={16} className="loading-spinner" /> {t('正在整理这一轮的交付…')}</p> : <>
+        {round.goal && round.goal.trim() !== lastNote?.text.trim() && <section className="review-block"><h4>{t('你让它做的')}</h4><p className="review-goal">{round.goal}</p></section>}
+        {/* What the grading is about, first: for a fix, the problem, its cause and the result; for an optimization, what
+            was done, what it solves and the comparison. Its whole account folds under it. */}
+        {delivery ? <section className={`review-block review-delivery is-${delivery.kind}`} aria-label={delivery.kind === 'fix' ? t('修复') : t('优化')}>
+          {delivery.parts.map((part, index) => <div key={part.label} className="review-delivery-part"><span className="review-delivery-step">{index + 1}</span>
+            <div><h4>{t(part.label)}</h4><Markdown text={part.text} /></div></div>)}
+        </section> : round.reply && <p className="review-unverified">{t('它没有按“问题、原因、结果”写交付摘要，下面是它的原话。')}</p>}
+        <section className="review-block"><h4>{delivery ? t('完整交付说明') : t('它的交付说明')}</h4>
+          {round.reply ? <div className={`review-reply ${(delivery || replyLong) && !fullReply ? 'is-folded' : ''}`}><Markdown text={round.reply} /></div> : <p className="decision-why">{t('这一轮没有留下说明。')}</p>}
+          {(delivery || replyLong) && round.reply && <button type="button" className="text-button" onClick={() => setFullReply(!fullReply)}>{fullReply ? t('收起') : t('展开全文')}</button>}
+        </section>
+        {made.length > 0 && <section className="review-block"><h4>{t('产出物')}</h4><FileCards projectId={decision.projectId} files={made} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet /></section>}
+        <section className="review-block"><h4>{t('验证')}</h4>
+          {checks.length ? <ul className="review-checks">{checks.map(check => <li key={check.id} className={check.failed ? 'is-failed' : check.done ? 'is-passed' : 'is-running'}>
+            {check.failed ? <XCircle size={16} weight="bold" /> : check.done ? <CheckCircle size={16} weight="bold" /> : <CircleNotch size={16} className="loading-spinner" />}
+            <b>{t(check.phrase!)}</b><code>{check.target}</code><span>{check.failed ? t('执行了，失败') : check.done ? t('执行了，通过') : t('还在运行')}</span>
+          </li>)}</ul>
+            : <p className="review-unverified">{SELF_REPORT.test(round.reply) ? t('这一轮没有运行验证命令；说明里的“通过”只是它自己说的。') : t('这一轮没有运行测试或检查。')}</p>}
+        </section>
+        {git && <section className="review-block"><h4>{git.total ? t('改动 · 工作区 {count} 个文件', { count: git.total }) : t('改动')}</h4>
+          {git.total ? <ul className="review-files">{git.files.slice(0, 8).map(change => <li key={change.path}>
+            <span className="review-file-status">{status(change)}</span>
+            <button type="button" className="text-button" title={change.path} onClick={() => showPopup({ kind: 'file', projectId: decision.projectId, path: change.path })}>{change.path}</button>
+          </li>)}</ul> : <p className="decision-why">{t('工作区没有未提交的改动。')}</p>}
+          {git.total > 8 && <p className="review-more">{t('还有 {count} 个文件，在工作台的 Git 里查看。', { count: git.total - 8 })}</p>}
+          {git.total > 0 && <p className="review-note">{t('这是工作区里所有未提交的改动，不一定都来自这一轮。')}</p>}
+        </section>}
+      </>}
+    </div>
     {revising && <div className="review-feedback" data-voice-target={voiceTarget} aria-label={t('批语')}>
       <textarea ref={feedbackBox} value={feedback} rows={3} autoFocus placeholder={t('写批语：哪里不对、要改成什么样，比如“错误提示再明确一点”；也可以点麦克风说')} onChange={event => setFeedback(event.target.value)}
         onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void revise(); } }} />
@@ -122,11 +124,11 @@ export function ReviewCard({ decision, now, kind, onOpen, onDone, onError }: {
     </div>}
     <footer className="decision-actions">
       {revising
-        ? <><button type="button" className="button primary" disabled={!feedback.trim() || busy} onClick={() => void revise()}>{busy ? <CircleNotch size={14} className="loading-spinner" /> : <PaperPlaneRight size={15} />}{t('打回并发送批语')}</button>
+        ? <><button type="button" className="button primary" disabled={!feedback.trim() || busy} onClick={() => void revise()}>{busy ? <CircleNotch size={16} className="loading-spinner" /> : null}{t('打回并发送批语')}</button>
           <button type="button" className="button secondary" onClick={() => setRevising(false)}>{t('取消')}</button></>
-        : <><button type="button" className="button primary" disabled={busy || entries === null} onClick={() => void accept()}><CheckCircle size={15} weight="fill" />{t('通过')}</button>
+        : <><button type="button" className="button primary" disabled={busy || entries === null} onClick={() => void accept()}>{t('通过')}</button>
           <button type="button" className="button secondary" disabled={busy} onClick={() => setRevising(true)}>{t('打回修改')}</button></>}
-      <button type="button" className="button secondary" onClick={() => onOpen(decision)}><ArrowSquareOut size={15} />{t('在工作台查看')}</button>
+      <button type="button" className="button secondary" onClick={() => onOpen(decision)}>{t('在工作台查看')}</button>
     </footer>
   </article>;
 }

@@ -11,15 +11,14 @@ import { waitFor } from './wait.mjs';
 const require = createRequire(import.meta.url);
 const { createSSHFixture } = require('../tests/helpers/ssh-fixture.cjs');
 const { terminalTheme } = require('../src/features/terminal/terminal-theme.ts');
-// Each theme's own ANSI red, green and blue as the terminal renders them (Daylight has its own palette).
-const ansiColors = theme => ['red', 'green', 'blue'].map(key => `rgb(${terminalTheme(theme)[key].slice(1).match(/../g).map(value => parseInt(value, 16)).join(', ')})`);
+const ansiColors = ['red', 'green', 'blue'].map(key => `rgb(${terminalTheme()[key].slice(1).match(/../g).map(value => parseInt(value, 16)).join(', ')})`);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = await testRun('themes-markdown'), profile = path.join(output, 'profile');
 const ssh = await createSSHFixture({ nativeWorker: false });
 const projects = ['产品工作台', '等待查看', '工具项目'].map((name, index) => ({ id: randomUUID(), name, path: path.join(output, `project-${index}`), kind: 'local', unread: index === 1 ? 1 : 0, lastCompletedAt: index ? Date.now() : null, restore: { terminal: false, codex: false } }));
 await fs.mkdir(profile, { recursive: true });
 for (const project of projects) await fs.mkdir(path.join(project.path, 'docs'), { recursive: true });
-const content = '# Agentrix\n\n清楚地看见每一个项目，随时接着工作。\n\n## 功能\n\n- **多终端分屏**：保留各自的输入与会话。\n- [x] 编辑文件\n- [ ] 查看结果\n\n> 按 Ctrl+S 保存，未保存的内容也可以预览。\n\n| 功能 | 状态 |\n| --- | --- |\n| 主题切换 | 可用 |\n| Markdown | 可用 |\n\n```ts\nconst message = "Hello, Agentrix";\nconsole.log(message);\n```\n\n![项目图标](../assets/icon.png)\n\n[打开说明](../note.txt) · [网页链接](https://example.com/docs) · [回到功能](#功能)\n';
+const content = '# Agentrix\n\n清楚地看见每一个项目，随时接着工作。\n\n## 功能\n\n- **多终端分屏**：保留各自的输入与会话。\n- [x] 编辑文件\n- [ ] 查看结果\n\n> 按 Ctrl+S 保存，未保存的内容也可以预览。\n\n| 功能 | 状态 |\n| --- | --- |\n| 文件编辑 | 可用 |\n| Markdown | 可用 |\n\n```ts\nconst message = "Hello, Agentrix";\nconsole.log(message);\n```\n\n![项目图标](../assets/icon.png)\n\n[打开说明](../note.txt) · [网页链接](https://example.com/docs) · [回到功能](#功能)\n';
 for (const directory of [projects[0].path, ssh.project]) {
   await fs.mkdir(path.join(directory, 'assets'), { recursive: true }); await fs.mkdir(path.join(directory, 'docs'), { recursive: true });
   await fs.copyFile(path.join(root, 'assets/icon.png'), path.join(directory, 'assets/icon.png'));
@@ -40,38 +39,10 @@ async function launch() {
   await app.evaluate(({ dialog, shell }) => { dialog.showMessageBox = async (_window, options) => ({ response: options.title === '未保存的修改' ? 2 : 1 }); globalThis.openedMarkdownLinks = []; shell.openExternal = async url => { globalThis.openedMarkdownLinks.push(url); }; });
   await page.waitForSelector('.project-panel');
 }
-async function chooseTheme(id, name) {
-  await page.getByRole('button', { name: '工作台设置', exact: true }).click();
-  const dialog = page.locator('dialog[open]');
-  await dialog.getByText(name, { exact: true }).click();
-  await waitFor(async () => page.evaluate(id => document.documentElement.dataset.theme === id, id), 'theme applied');
-  assert.ok(await dialog.getByRole('radio', { name, exact: true }).isChecked());
-  const wallpaper = await page.evaluate(async id => {
-    const surface = getComputedStyle(document.querySelector('.app-shell'), '::after');
-    const swatch = getComputedStyle(document.querySelector(`[data-theme-preview="${id}"]`));
-    const url = style => style.backgroundImage.match(/url\("([^"]+)"\)/)?.[1];
-    const image = new Image(); image.src = url(surface); await image.decode();
-    return { theme: id, url: image.src, preview: url(swatch), width: image.naturalWidth, height: image.naturalHeight, fit: surface.backgroundSize, position: surface.backgroundPosition, previewPosition: swatch.backgroundPosition, online: navigator.onLine };
-  }, id);
-  // The settings preview shows the same picture, from a small copy: eight full wallpapers decoded at once stalled the
-  // window opening the settings.
-  const named = url => url?.split('/').pop().replace(/-[\w-]{8}\.webp$/, '');
-  assert.equal(named(wallpaper.preview), named(wallpaper.url), 'settings preview shows the actual wallpaper');
-  assert.notEqual(wallpaper.preview, wallpaper.url, 'settings preview uses its small copy');
-  const preview = await page.evaluate(async src => { const image = new Image(); image.src = src; await image.decode(); return image.naturalWidth; }, wallpaper.preview);
-  assert.ok(preview <= 480, `settings preview is ${preview}px wide`);
-  assert.ok(!/^https?:/.test(wallpaper.url), 'wallpaper is a packaged local asset');
-  assert.equal(wallpaper.width, 2560, 'wallpaper is 2560px: the background is softened, so larger images only add size');
-  assert.ok(wallpaper.height >= 1440 && wallpaper.fit.includes('cover'), 'wallpaper fills without stretching');
-  assert.equal(wallpaper.position.split(',').at(-1).trim(), wallpaper.previewPosition, 'preview and workspace crop match');
-  wallpaperChecks.push(wallpaper);
-  await page.screenshot({ path: path.join(output, `${id}-settings.png`) });
-  await dialog.getByRole('button', { name: '完成', exact: true }).click();
-}
 try {
   await launch();
-  assert.equal((await state()).settings.theme, 'daylight');
-  await page.waitForFunction(() => document.documentElement.dataset.theme === 'daylight');
+  assert.equal('theme' in (await state()).settings, false);
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'catalina');
   const first = page.locator(`[data-project-id="${projects[0].id}"]`);
   await first.getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await state()).projects[0].shellReady, 'shell ready');
@@ -79,24 +50,29 @@ try {
   await page.evaluate(id => window.agentrix.writeTerminal(id, "Write-Host (([string][char]27) + '[31mRED ' + ([string][char]27) + '[32mGREEN ' + ([string][char]27) + '[34mBLUE' + ([string][char]27) + '[0m')\r"), projects[0].id);
   await waitFor(async () => first.locator('.xterm-rows > div').evaluateAll(rows => rows.some(row => row.textContent.trim() === 'RED GREEN BLUE')), 'ANSI colors');
   const colors = () => first.locator('.xterm-rows > div').evaluateAll(rows => [...rows.find(row => row.textContent.trim() === 'RED GREEN BLUE').querySelectorAll('span')].map(span => getComputedStyle(span).color));
-  assert.deepEqual(await colors(), ansiColors('daylight'));
+  assert.deepEqual(await colors(), ansiColors);
   await first.locator('.terminal-host').evaluate(node => { globalThis.originalThemeTerminal = node; });
-  await page.evaluate(id => window.agentrix.writeTerminal(id, "Write-Output 'PENDING_THEME_DRAFT'"), projects[0].id);
+  await page.evaluate(id => window.agentrix.writeTerminal(id, "Write-Output 'PENDING_APPEARANCE_DRAFT'"), projects[0].id);
   await page.context().setOffline(true);
-  for (const [id, name] of [['daylight', '晴空'], ['mountain-blue', '山青蓝'], ['wild-red', '西野红'], ['forest', '林间光影']]) {
-    await chooseTheme(id, name);
-    assert.equal((await state()).projects[0].sessionId, sessionId);
-    assert.ok(await first.locator('.terminal-host').evaluate(node => node === globalThis.originalThemeTerminal));
-    await waitFor(async () => JSON.stringify(await colors()) === JSON.stringify(ansiColors(id)), `${name}: its own ANSI colors`);
-    const signal = await page.locator(`[data-project-id="${projects[1].id}"]`).evaluate(node => getComputedStyle(node).getPropertyValue('--signal-rgb').trim());
-    assert.equal(signal, '255, 134, 212');
-    await page.screenshot({ path: path.join(output, `${id}-overview.png`) });
-  }
-  assert.ok(wallpaperChecks.every(wallpaper => !wallpaper.online), 'all themes and previews load offline');
+  const wallpaper = await page.evaluate(async () => {
+    const surface = getComputedStyle(document.querySelector('.app-shell'), '::after');
+    const image = new Image(); image.src = surface.backgroundImage.match(/url\("([^"]+)"\)/)?.[1]; await image.decode();
+    return { theme: document.documentElement.dataset.theme, url: image.src, width: image.naturalWidth, height: image.naturalHeight, fit: surface.backgroundSize, position: surface.backgroundPosition, online: navigator.onLine };
+  });
+  assert.equal(wallpaper.theme, 'catalina'); assert.equal(wallpaper.online, false);
+  assert.ok(!/^https?:/.test(wallpaper.url), 'wallpaper is a packaged local asset');
+  assert.equal(wallpaper.width, 2560); assert.equal(wallpaper.height, 2560);
+  assert.ok(wallpaper.fit.includes('cover')); assert.equal(wallpaper.position, '50% 42%');
+  wallpaperChecks.push(wallpaper);
+  assert.equal((await state()).projects[0].sessionId, sessionId);
+  assert.ok(await first.locator('.terminal-host').evaluate(node => node === globalThis.originalThemeTerminal));
+  assert.deepEqual(await colors(), ansiColors);
+  const signal = await page.locator(`[data-project-id="${projects[1].id}"]`).evaluate(node => getComputedStyle(node).getPropertyValue('--signal-rgb').trim());
+  assert.equal(signal, '255, 134, 212');
+  await page.screenshot({ path: path.join(output, 'catalina-overview.png') });
   await fs.writeFile(path.join(output, 'wallpapers.json'), JSON.stringify(wallpaperChecks, null, 2));
   await page.context().setOffline(false);
-  assert.ok((await page.evaluate(id => window.agentrix.attachTerminal(id), projects[0].id)).value.data.includes('PENDING_THEME_DRAFT'));
-  await chooseTheme('mountain-blue', '山青蓝');
+  assert.ok((await page.evaluate(id => window.agentrix.attachTerminal(id), projects[0].id)).value.data.includes('PENDING_APPEARANCE_DRAFT'));
   await first.getByRole('button', { name: `全屏查看 ${projects[0].name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await page.getByRole('treeitem', { name: 'docs', exact: true }).click();
@@ -117,16 +93,15 @@ try {
   assert.equal(await markdown.locator('pre code').count(), 1);
   assert.equal(await markdown.locator('input[type="checkbox"][disabled]').count(), 2);
   await waitFor(async () => markdown.getByAltText('项目图标').evaluate(image => image.complete && image.naturalWidth === 256), 'relative Markdown image');
-  await page.screenshot({ path: path.join(output, 'markdown-mountain-blue.png') });
+  await page.screenshot({ path: path.join(output, 'markdown-catalina.png') });
   await page.getByRole('button', { name: '编辑', exact: true }).click();
   const dirtyContent = content.replace('# Agentrix', '# 未保存的预览');
   await editor.fill(dirtyContent);
   await page.getByRole('button', { name: '预览', exact: true }).click();
   await markdown.getByRole('heading', { name: '未保存的预览', exact: true }).waitFor();
   assert.equal(await fs.readFile(path.join(projects[0].path, 'docs/README.md'), 'utf8'), content);
-  await chooseTheme('wild-red', '西野红');
   await markdown.getByRole('heading', { name: '未保存的预览', exact: true }).waitFor();
-  await page.screenshot({ path: path.join(output, 'markdown-wild-red.png') });
+  await page.screenshot({ path: path.join(output, 'markdown-dirty.png') });
   await page.getByRole('button', { name: '编辑', exact: true }).click();
   assert.equal(await editor.inputValue(), dirtyContent);
   const unsafe = dirtyContent + '\n<script>globalThis.mdPwned=true</script>\n<style>html{display:none}</style>\n<iframe src="https://example.com"></iframe>\n<a href="javascript:globalThis.mdPwned=true">危险链接</a>\n<img src="missing.png" onerror="globalThis.mdPwned=true">\n<input autofocus onfocus="globalThis.mdPwned=true">\n';
@@ -154,10 +129,10 @@ try {
   await waitFor(async () => (await fs.readFile(path.join(ssh.project, 'docs/README.md'), 'utf8')) === '# SSH 保存成功', 'SSH Markdown edit saves');
   await app.close(); app = null;
   await launch();
-  assert.equal((await state()).settings.theme, 'wild-red');
-  await waitFor(async () => page.evaluate(() => document.documentElement.dataset.theme === 'wild-red'), 'theme survives restart');
+  assert.equal('theme' in (await state()).settings, false);
+  await waitFor(async () => page.evaluate(() => document.documentElement.dataset.theme === 'catalina'), 'Catalina after restart');
   await fs.writeFile(path.join(output, 'wallpapers.json'), JSON.stringify(wallpaperChecks, null, 2));
-  console.log('PASS: four persistent themes preserve ANSI colors, task colors, terminal identity and drafts');
+  console.log('PASS: Catalina preserves ANSI colors, task colors, terminal identity and drafts');
   console.log('PASS: automatic editing, local/SSH Markdown render and save, GFM, relative resources and links, and sanitized HTML');
   console.log(`Screenshots: ${output}`);
 } catch (error) { if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {}); throw error; }
