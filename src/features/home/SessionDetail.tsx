@@ -17,13 +17,14 @@ export function SessionDetail({ item, now, onOpenProject }: { item: InboxItem; n
   }, [terminal.id, terminal.lastCompletedAt]);
   const reply = useMemo(() => lastRound(entries).reply, [entries]);
   const task = sessionTask(terminal), queued = (terminal.prompts || []).filter(prompt => prompt.state === 'queued').length;
+  const name = project.name + (project.terminals.length > 1 ? ` · ${terminal.title}` : '');
   const agent = terminal.codexActive ? terminal.agent === 'claude' ? 'Claude Code' : 'Codex' : '';
   return <article className="decision-card session-detail" aria-label={project.name}>
     <header className="decision-card-head">
       <span className={`decision-kind${item.group === 'working' ? ' is-work' : ' is-quiet'}`}>{sessionStateLabel(project, terminal)}</span>
-      <span className="decision-source">{[project.name + (project.terminals.length > 1 ? ` · ${terminal.title}` : ''), agent, terminal.lastCompletedAt && t('上次完成 {time}', { time: relativeTime(terminal.lastCompletedAt, now) })].filter(Boolean).join(' · ')}</span>
+      <span className="decision-source">{[task && name, agent, terminal.lastCompletedAt && t('上次完成 {time}', { time: relativeTime(terminal.lastCompletedAt, now) })].filter(Boolean).join(' · ')}</span>
     </header>
-    <h2 className="decision-title">{task || (terminal.codexActive ? t('还没有交代任务') : t('没有运行中的助手'))}</h2>
+    <h2 className="decision-title">{task || name}</h2>
     <div className="decision-body">
       {queued > 0 && <p className="decision-why">{t('{count} 条排队', { count: queued })}</p>}
       <section className="review-block"><h4>{t('上一轮的总结')}</h4>

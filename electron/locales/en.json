@@ -1156,6 +1156,7 @@
   "放进它的消息框，看一眼再发送": "Goes into its message box for you to send after a look",
   "先启动助手，再放进它的消息框": "Starts the agent, then puts it in its message box",
   "开始": "Start",
+  "开始 (Ctrl + Enter)": "Start (Ctrl + Enter)",
   "未启动": "Not started",
   "等你决定": "Needs a decision",
   "工作中": "Working",

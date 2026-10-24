@@ -1,5 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react';
-import { TerminalWindow } from '@phosphor-icons/react';
+import { ArrowSquareOut, TerminalWindow } from '@phosphor-icons/react';
 import type { Decision } from './decisions';
 import { kindLabel, trustedFolder, trustsFolder, waited } from './DecisionCard';
 import { isWorking, sessionTask, type Group, type InboxItem } from './inbox-items';
@@ -32,9 +32,10 @@ function brief(decision: Decision) {
   return submission > 1 ? t('第 {count} 次提交 · 上次批语：{note}', { count: submission, note: notes.at(-1)?.text ?? '' }) : t('做完了，等你批改');
 }
 
+// What a session is on, or '' when it has no task: such a row is one line, not a line of filler.
 function sessionLine({ terminal }: InboxItem) {
   if (isWorking(terminal) && terminal.action) return t('正在{step}', { step: actionText(terminal.action) });
-  return sessionTask(terminal) || (terminal.codexActive ? t('还没有交代任务') : t('没有运行中的助手'));
+  return sessionTask(terminal);
 }
 
 function AgentMark({ agent }: { agent: 'claude' | 'codex' | 'terminal' }) {
@@ -43,7 +44,7 @@ function AgentMark({ agent }: { agent: 'claude' | 'codex' | 'terminal' }) {
 
 // Every decision and session in one list, most urgent first: ↑↓ moves the selection while the list has focus, a click
 // selects. The right pane shows what is selected.
-export function DecisionInbox({ items, selectedId, now, onSelect }: { items: readonly InboxItem[]; selectedId: string | null; now: number; onSelect: (id: string) => void }) {
+export function DecisionInbox({ items, selectedId, now, onSelect, onOpenProject }: { items: readonly InboxItem[]; selectedId: string | null; now: number; onSelect: (id: string) => void; onOpenProject: (projectId: string) => void }) {
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => { if (selectedId) list.current?.querySelector(`[data-item-id="${CSS.escape(selectedId)}"]`)?.scrollIntoView({ block: 'nearest' }); }, [selectedId]);
   const keys = (event: KeyboardEvent) => {
@@ -53,21 +54,26 @@ export function DecisionInbox({ items, selectedId, now, onSelect }: { items: rea
     const at = items.findIndex(item => item.id === selectedId), next = items[Math.min(items.length - 1, Math.max(0, at < 0 ? (step > 0 ? 0 : items.length - 1) : at + step))];
     if (next) onSelect(next.id);
   };
+  // With one group the page header already names the list; labels only tell several groups apart.
+  const groups = GROUPS.filter(([group]) => items.some(item => item.group === group));
   return <div ref={list} className="inbox-list" role="listbox" aria-label={t('待决定的事')} tabIndex={0} aria-activedescendant={selectedId ? `inbox-${selectedId}` : undefined} onKeyDown={keys}>
-    {GROUPS.map(([group, label]) => {
+    {groups.map(([group, label]) => {
       const rows = items.filter(item => item.group === group);
-      return rows.length > 0 && <div key={group} role="group" aria-label={t(label)}>
-        <h4 className="inbox-group">{t(label)} · {rows.length}</h4>
+      return <div key={group} role="group" aria-label={t(label)}>
+        {groups.length > 1 && <h4 className="inbox-group">{t(label)} · {rows.length}</h4>}
         {rows.map(item => {
           const { decision, project, terminal } = item, agent = terminal.codexActive ? terminal.agent === 'claude' ? 'claude' : 'codex' : 'terminal';
-          const tag = decision ? kindLabel(decision.kind) : sessionStateLabel(project, terminal);
-          return <div key={item.id} id={`inbox-${item.id}`} data-item-id={item.id} role="option" aria-selected={item.id === selectedId} className="inbox-row" onClick={() => { onSelect(item.id); list.current?.focus({ preventScroll: true }); }}>
+          const tag = decision ? kindLabel(decision.kind) : sessionStateLabel(project, terminal), line = decision ? `${waited(decision.since, now)} · ${brief(decision)}` : sessionLine(item);
+          return <div key={item.id} id={`inbox-${item.id}`} data-item-id={item.id} role="option" aria-selected={item.id === selectedId} className={`inbox-row${line ? '' : ' is-compact'}`} onClick={() => { onSelect(item.id); list.current?.focus({ preventScroll: true }); }}>
             <AgentMark agent={decision?.agent ?? agent} />
             <span className="inbox-text">
               <b>{project.name}{project.terminals.length > 1 ? ` · ${terminal.title}` : ''}</b>
-              <small>{decision ? `${waited(decision.since, now)} · ${brief(decision)}` : sessionLine(item)}</small>
+              {line && <small>{line}</small>}
             </span>
-            <span className={`inbox-tag${decision ? ' is-need' : group === 'working' ? ' is-work' : ''}`}>{tag}</span>
+            <span className="inbox-end">
+              {decision || group === 'working' ? <span className={`inbox-tag ${decision ? 'is-need' : 'is-work'}`}>{tag}</span> : <span className="inbox-state">{tag}</span>}
+              <button type="button" className="inbox-open" tabIndex={-1} title={t('打开')} aria-label={t('打开 {name}', { name: project.name })} onClick={event => { event.stopPropagation(); onOpenProject(project.id); }}><ArrowSquareOut size={16} /></button>
+            </span>
           </div>;
         })}
       </div>;

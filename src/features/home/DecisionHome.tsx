@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from 'react';
-import { ArrowRight, CaretDown, CheckCircle, CircleNotch, FolderSimple, X } from '@phosphor-icons/react';
+import { ArrowUp, CaretDown, CircleNotch, X } from '@phosphor-icons/react';
 import type { Project, Result } from '../../shared/types';
 import type { Decision } from './decisions';
 import { DecisionCard } from './DecisionCard';
@@ -34,16 +34,15 @@ export function DecisionHome({ projects, decisions, snoozed, onOpenProject, onOp
   const working = items.filter(({ terminal }) => isWorking(terminal)).length;
   const accepted = useMemo(() => acceptedToday(), [decisions]);
   const headline = decisions.length ? t('{count} 件事需要你决定', { count: decisions.length }) : t('所有会话');
-  const summary = [t('{count} 个会话', { count: items.length }), working > 0 && t('{count} 个工作中', { count: working }),
-    accepted > 0 && t('今天已接受 {count} 项交付', { count: accepted }), snoozed > 0 && t('{count} 件已暂缓', { count: snoozed }), items.length > 1 && t('↑↓ 切换')].filter(Boolean).join(' · ');
+  const summary = [t('{count} 个会话', { count: items.length }), accepted > 0 && t('今天已接受 {count} 项交付', { count: accepted }), snoozed > 0 && t('{count} 件已暂缓', { count: snoozed }), items.length > 1 && t('↑↓ 切换')].filter(Boolean).join(' · ');
   return <div className="home-page decision-home">
     <section className="home-pane home-inbox" aria-label={headline}>
       <header className="home-head">
         <h1>{headline}</h1>
         <p className="home-counts">{summary}</p>
       </header>
-      {notice && <p className="home-notice" role="status"><CheckCircle size={16} weight="fill" />{notice}</p>}
-      <DecisionInbox items={items} selectedId={selected?.id ?? null} now={now} onSelect={setPicked} />
+      {notice && <p className="home-notice" role="status">{notice}</p>}
+      <DecisionInbox items={items} selectedId={selected?.id ?? null} now={now} onSelect={setPicked} onOpenProject={onOpenProject} />
     </section>
     <div className={`home-right${selected ? '' : ' is-empty'}`}>
       {!selected ? <div className="home-empty">
@@ -124,18 +123,18 @@ function NewWork({ projects, takeFocus, onAction, onDone, onError }: {
     <div className="new-work-input" data-voice-target={VOICE_TARGET} aria-label={t('新任务')}>
       <textarea ref={box} value={text} rows={2} placeholder={t('描述要做的事，比如“给登录页加上验证码”；可以直接粘贴截图')} onChange={event => setText(event.target.value)} onPaste={paste}
         onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void start(); } }} />
-      <VoiceButton terminalId={VOICE_TARGET} sessionId={null} name={t('新任务')} size={16} onError={onError} />
-    </div>
-    {images.length > 0 && <div className="new-work-images" role="list" aria-label={t('附图')}>{images.map((image, index) => <span key={index} role="listitem">
-      <button type="button" className="new-work-zoom" title={t('点击放大')} aria-label={t('放大 {name}', { name: t('附加的图片 {n}', { n: index + 1 }) })}
-        onClick={() => showPopup({ kind: 'picture', src: image.preview, path: t('附加的图片 {n}', { n: index + 1 }) })}><img src={image.preview} alt={t('附加的图片 {n}', { n: index + 1 })} /></button>
-      <button type="button" aria-label={t('移除这张图片')} onClick={() => setImages(list => list.filter((_, at) => at !== index))}><X size={12} weight="bold" /></button>
-    </span>)}</div>}
-    <div className="new-work-options">
-      <label className="new-work-select" title={t('项目')}><FolderSimple size={16} aria-hidden="true" /><select aria-label={t('项目')} value={project?.id} onChange={event => setProjectId(event.target.value)}>{local.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><CaretDown size={13} aria-hidden="true" /></label>
-      {terminal && !terminal.codexActive && <label className="new-work-select" title={t('助手')}><select aria-label={t('助手')} value={agent} onChange={event => setAgent(event.target.value as 'claude' | 'codex')}><option value="claude">Claude Code</option><option value="codex">Codex</option></select><CaretDown size={13} aria-hidden="true" /></label>}
-      {!empty && <span className="new-work-note">{terminal?.codexActive ? t('直接发给它，不离开这一页') : t('先启动助手，准备好就发给它')}</span>}
-      <button type="button" className={`button ${empty ? 'secondary' : 'primary'} new-work-start`} disabled={busy || empty} onClick={() => void start()}>{busy ? t('发送中…') : t('开始')}{busy ? <CircleNotch size={16} className="loading-spinner" /> : <ArrowRight size={16} weight="bold" />}</button>
+      {images.length > 0 && <div className="new-work-images" role="list" aria-label={t('附图')}>{images.map((image, index) => <span key={index} role="listitem">
+        <button type="button" className="new-work-zoom" title={t('点击放大')} aria-label={t('放大 {name}', { name: t('附加的图片 {n}', { n: index + 1 }) })}
+          onClick={() => showPopup({ kind: 'picture', src: image.preview, path: t('附加的图片 {n}', { n: index + 1 }) })}><img src={image.preview} alt={t('附加的图片 {n}', { n: index + 1 })} /></button>
+        <button type="button" aria-label={t('移除这张图片')} onClick={() => setImages(list => list.filter((_, at) => at !== index))}><X size={12} weight="bold" /></button>
+      </span>)}</div>}
+      <div className="new-work-bar">
+        <label className="new-work-select" title={t('项目')}><select aria-label={t('项目')} value={project?.id} onChange={event => setProjectId(event.target.value)}>{local.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><CaretDown size={13} aria-hidden="true" /></label>
+        {!empty && <span className="new-work-note">{terminal?.codexActive ? t('直接发给它，不离开这一页') : t('先启动助手，准备好就发给它')}</span>}
+        {terminal && !terminal.codexActive && <label className="new-work-select is-agent" title={t('助手')}><select aria-label={t('助手')} value={agent} onChange={event => setAgent(event.target.value as 'claude' | 'codex')}><option value="claude">Claude Code</option><option value="codex">Codex</option></select><CaretDown size={13} aria-hidden="true" /></label>}
+        <VoiceButton terminalId={VOICE_TARGET} sessionId={null} name={t('新任务')} size={16} onError={onError} />
+        <button type="button" className={`button ${empty ? 'secondary' : 'primary'} new-work-start`} title={t('开始 (Ctrl + Enter)')} aria-label={t('开始 (Ctrl + Enter)')} disabled={busy || empty} onClick={() => void start()}>{busy ? <CircleNotch size={16} className="loading-spinner" /> : <ArrowUp size={16} weight="bold" />}</button>
+      </div>
     </div>
   </section>;
 }
