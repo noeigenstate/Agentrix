@@ -136,6 +136,7 @@ Press <kbd>Ctrl</kbd>+<kbd>T</kbd> and talk to the current terminal; Enter sends
 - **Files at hand**: a folder tree, an auto-saving editor (VS Code's editing keys, <kbd>Ctrl</kbd>+<kbd>F</kbd> to find), previews of images, web pages, video and Markdown, and a right-click to open a file's location; <kbd>Ctrl</kbd>+click (<kbd>⌘</kbd>+click on macOS) a path in the terminal to open it in a popup; an enlarged picture fits the window, a click shows it at its own size to drag around.
 - **Splits you drag**: several terminals for one project side by side, with dividers you drag to resize.
 - **Clear to read**: dark frosted glass with white text over a wallpaper at its own brightness; switch to the **solid** surface for the sharpest text. Two minimal themes, light *Monochrome amber* and dark *White, Black & Amber*.
+- **Project thumbnails**: automatically pick a local project image and keep it fixed; change it or restore numbered cards in [Appearance settings](docs/project-images.md).
 - **English and Chinese, remappable shortcuts, automatic updates on Windows**, and a guided tour the first time you open it.
 
 ## 📦 Get started
