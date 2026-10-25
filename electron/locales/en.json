@@ -1050,7 +1050,6 @@
   "终端模式": "Terminal mode",
   "其他会话": "Other sessions",
   "上一轮的总结": "Last round's summary",
-  "{count} 个会话": "{count} sessions",
   "↑↓ 切换": "↑↓ to switch",
   "「{project}」第 {count} 次提交已通过；改动留在工作区，没有自动提交。": "{project}: submission {count} passed; the changes stay in the working tree, nothing was committed.",
   "「{project}」这一轮已通过；改动留在工作区，没有自动提交。": "{project}: this round passed; the changes stay in the working tree, nothing was committed.",

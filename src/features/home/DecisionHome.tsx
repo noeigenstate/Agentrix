@@ -34,7 +34,7 @@ export function DecisionHome({ projects, decisions, snoozed, onOpenProject, onOp
   const working = items.filter(({ terminal }) => isWorking(terminal)).length;
   const accepted = useMemo(() => acceptedToday(), [decisions]);
   const headline = decisions.length ? t('{count} 件事需要你决定', { count: decisions.length }) : t('所有会话');
-  const summary = [t('{count} 个会话', { count: items.length }), accepted > 0 && t('今天已接受 {count} 项交付', { count: accepted }), snoozed > 0 && t('{count} 件已暂缓', { count: snoozed }), items.length > 1 && t('↑↓ 切换')].filter(Boolean).join(' · ');
+  const summary = [accepted > 0 && t('今天已接受 {count} 项交付', { count: accepted }), snoozed > 0 && t('{count} 件已暂缓', { count: snoozed }), items.length > 1 && t('↑↓ 切换')].filter(Boolean).join(' · ');
   return <div className="home-page decision-home">
     <section className="home-pane home-inbox" aria-label={headline}>
       <header className="home-head">
