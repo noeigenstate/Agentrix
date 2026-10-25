@@ -44,6 +44,18 @@ PASS/FAIL with the screenshot and what was measured.
 6. 窗口缩小后不会出现布局拥挤或文字异常截断: no crowding or clipped controls; long text ends in a clean ellipsis.
 7. 所有边框都有必要，没有重复描边或过重的视觉轮廓: no double outlines (box plus inner field, card plus pane) or heavy strokes.
 
+## The accepted grey design (what new UI must match)
+
+- Six greys from the owner, one token set (`--grey-*` in `src/shared/styles/themes.css`): canvas #191919, panel #242424,
+  input/hover #2D2D2D, border/selected #404040, secondary text #A3A3A3, primary text #F0F0F0. Derived: #8c8c8c quiet
+  state, #fff focus. Content keeps its colour (ANSI output, syntax, diff bands, images); chrome never does.
+- Radii: 0 for layout regions, 16 for real cards, menus and dialogs, 12 for composers and dropdown triggers, 8 for
+  buttons, rows and wells, pill for tags. Layout regions are separated by a grey step and spacing, not by cards.
+- No glass, wallpaper, glow or gradients. The one shadow is the dropdown menu's. State reads by fill step, ring, tag
+  shape and dot shape, never by hue.
+- Dropdowns use `src/shared/Select.tsx`, never a native `<select>` (its pop-up is drawn by the OS in system blue).
+- Native GUI checks drive it with `scripts/select-helper.mjs`.
+
 ## Definitions (so a hand count and the script agree)
 
 - **Alignment line (A1, A2):** the left edge of a row's first visible box (a heading, row container, card, the first
