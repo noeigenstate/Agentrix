@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ArrowUpRight, FolderSimple, HardDrives, TerminalWindow } from '@phosphor-icons/react';
 import type { ConversationEntry } from '../../shared/types';
 import { sessionStateLabel } from './DecisionInbox';
 import { sessionTask, type InboxItem } from './inbox-items';
 import { lastRound } from './ReviewCard';
-import { Markdown } from '../reading/ReadingView';
 import { relativeTime } from '../../shared/time';
 import { t } from '../../shared/i18n';
 
-// A session with nothing to decide: what it is on, how its last round ended, and the way into it.
-export function SessionDetail({ item, now, onOpenProject }: { item: InboxItem; now: number; onOpenProject: (projectId: string) => void }) {
+// A session with nothing to decide, as one card that is the whole task flow: where it stands (name, state, what its last
+// round said, the way in), a hairline, then what comes next (the composer, passed in as children).
+export function SessionDetail({ item, now, onOpenProject, children }: { item: InboxItem; now: number; onOpenProject: (projectId: string) => void; children?: ReactNode }) {
   const { project, terminal } = item, [entries, setEntries] = useState<ConversationEntry[]>([]);
   useEffect(() => {
     let live = true;
@@ -19,20 +20,19 @@ export function SessionDetail({ item, now, onOpenProject }: { item: InboxItem; n
   const task = sessionTask(terminal), queued = (terminal.prompts || []).filter(prompt => prompt.state === 'queued').length;
   const name = project.name + (project.terminals.length > 1 ? ` · ${terminal.title}` : '');
   const agent = terminal.codexActive ? terminal.agent === 'claude' ? 'Claude Code' : 'Codex' : '';
-  return <article className="decision-card session-detail" aria-label={project.name}>
-    <header className="decision-card-head">
-      <span className={`decision-kind${item.group === 'working' ? ' is-work' : ' is-quiet'}`}>{sessionStateLabel(project, terminal)}</span>
-      <span className="decision-source">{[task && name, agent, terminal.lastCompletedAt && t('上次完成 {time}', { time: relativeTime(terminal.lastCompletedAt, now) })].filter(Boolean).join(' · ')}</span>
+  // One line: the first line of the last round's summary as plain text (the row ellipsizes it), else the task it is on, else nothing to say.
+  const summary = (reply || task || '').split('\n').map(line => line.replace(/^[\s#>*-]+/, '').replace(/[*`]/g, '').trim()).find(Boolean) ?? '';
+  const Icon = project.kind === 'ssh' ? HardDrives : terminal.sessionId && !terminal.codexActive ? TerminalWindow : FolderSimple;
+  const details = [agent, terminal.lastCompletedAt && t('上次完成 {time}', { time: relativeTime(terminal.lastCompletedAt, now) }), queued > 0 && t('{count} 条排队', { count: queued })].filter(Boolean).join(' · ');
+  return <article className="decision-card session-detail" aria-label={project.name} title={details || undefined}>
+    <header className="session-head">
+      <Icon size={20} className="session-icon" aria-hidden="true" />
+      <h2 className="session-name">{name}</h2>
+      <span className={`decision-kind${item.group === 'working' ? ' is-work' : ''}`}>{sessionStateLabel(project, terminal)}</span>
+      <button type="button" className="button secondary session-open" onClick={() => onOpenProject(project.id)}>{t('打开会话')}<ArrowUpRight size={16} /></button>
     </header>
-    <h2 className="decision-title">{task || name}</h2>
-    <div className="decision-body">
-      {queued > 0 && <p className="decision-why">{t('{count} 条排队', { count: queued })}</p>}
-      <section className="review-block"><h4>{t('上一轮的总结')}</h4>
-        {reply ? <div className="review-reply"><Markdown text={reply} /></div> : <p className="decision-why">{t('这一轮没有留下说明。')}</p>}
-      </section>
-    </div>
-    <footer className="decision-actions">
-      <button type="button" className="button secondary" onClick={() => onOpenProject(project.id)}>{t('打开')}</button>
-    </footer>
+    <p className="session-summary">{summary || t('这个项目还没有任务记录')}</p>
+    {children && <hr className="session-divider" />}
+    {children}
   </article>;
 }

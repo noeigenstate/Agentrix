@@ -73,8 +73,19 @@
 
 /* A decision (or a session) in full: a fixed header, the title, a body that scrolls and a fixed bar of actions. */
 .decision-card { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; margin: 0; border-radius: 16px; overflow: hidden; background: var(--home-card); }
-/* A session with nothing to decide is as tall as its content; a long summary scrolls inside the card. */
-.decision-card.session-detail { flex: 0 1 auto; }
+/* A session with nothing to decide is one compact row: tile, name and state over a one-line summary, and the way in. */
+.decision-card.session-detail { display: block; flex: none; padding: 24px; overflow: visible; }
+.session-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.session-icon { flex: none; color: var(--home-muted); }
+.session-name { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; font-weight: 600; line-height: 28px; }
+.session-summary { margin: 8px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 20px; color: var(--home-muted); }
+.session-divider { height: 0; margin: 24px 0; border: 0; border-top: 1px solid var(--home-line); }
+.home-layer .session-open { display: inline-flex; flex: none; align-items: center; gap: 4px; margin-left: auto; }
+/* The composer inside the session card: no pane of its own, a 16px heading, the box under it. */
+.new-work.is-inline { padding: 0; }
+.new-work.is-inline > h3 { font-size: 16px; line-height: 24px; }
+.new-work.is-inline .new-work-input { margin-top: 12px; }
+.new-work.is-inline textarea { min-height: 60px; }
 .decision-card-head { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 8px; padding: 24px 24px 0; }
 .decision-source { font-size: 12px; color: var(--home-muted); }
 .decision-title { flex: none; margin: 0; padding: 16px 24px 0; font-size: 20px; font-weight: 600; line-height: 28px; overflow-wrap: anywhere; }

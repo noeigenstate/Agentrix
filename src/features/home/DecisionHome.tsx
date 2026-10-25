@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from 'react';
-import { ArrowUp, CaretDown, CircleNotch, X } from '@phosphor-icons/react';
+import { ArrowUp, CaretDown, CircleNotch, FolderSimple, X } from '@phosphor-icons/react';
 import type { Project, Result } from '../../shared/types';
 import type { Decision } from './decisions';
 import { DecisionCard } from './DecisionCard';
@@ -50,8 +50,10 @@ export function DecisionHome({ projects, decisions, snoozed, onOpenProject, onOp
         <p>{working > 0 ? t('{count} 个会话正在工作', { count: working }) : t('描述一个目标，选择项目后开始。')}</p>
       </div> : selected.decision
         ? <DecisionCard decision={selected.decision} now={now} onOpen={onOpenDecision} onDone={setNotice} onError={onError} />
-        : <SessionDetail item={selected} now={now} onOpenProject={onOpenProject} />}
-      <NewWork projects={projects} takeFocus={!selected} onAction={onAction} onDone={setNotice} onError={onError} />
+        : <SessionDetail item={selected} now={now} onOpenProject={onOpenProject}>
+          <NewWork inCard projects={projects} takeFocus={false} onAction={onAction} onDone={setNotice} onError={onError} />
+        </SessionDetail>}
+      {!(selected && !selected.decision) && <NewWork projects={projects} takeFocus={!selected} onAction={onAction} onDone={setNotice} onError={onError} />}
     </div>
   </div>;
 }
@@ -61,8 +63,8 @@ const VOICE_TARGET = 'decision-home';
 // "What next": a goal sent to a project's agent from here, without leaving the page. One that runs gets it at once (it
 // queues it while it works); otherwise the chosen agent is started first and gets it when its input is ready. Its
 // progress then shows in the session list beside it and its work comes back as a card.
-function NewWork({ projects, takeFocus, onAction, onDone, onError }: {
-  projects: readonly Project[]; takeFocus: boolean;
+function NewWork({ projects, takeFocus, inCard, onAction, onDone, onError }: {
+  projects: readonly Project[]; takeFocus: boolean; inCard?: boolean;
   onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>; onDone: (message: string) => void; onError: (message: string) => void;
 }) {
   const local = useMemo(() => projects.filter(project => project.kind !== 'ssh' || project.terminals[0]?.codexActive), [projects]);
@@ -118,10 +120,10 @@ function NewWork({ projects, takeFocus, onAction, onDone, onError }: {
   };
   if (!local.length) return null;
   const empty = !text.trim() && !images.length;
-  return <section className="home-pane new-work" aria-label={t('新任务')}>
-    <h3>{t('告诉 Agentrix 接下来要做什么')}</h3>
+  return <section className={`home-pane new-work${inCard ? ' is-inline' : ''}`} aria-label={t('新任务')}>
+    <h3>{inCard ? t('接下来要做什么？') : t('告诉 Agentrix 接下来要做什么')}</h3>
     <div className="new-work-input" data-voice-target={VOICE_TARGET} aria-label={t('新任务')}>
-      <textarea ref={box} value={text} rows={2} placeholder={t('描述要做的事，比如“给登录页加上验证码”；可以直接粘贴截图')} onChange={event => setText(event.target.value)} onPaste={paste}
+      <textarea ref={box} value={text} rows={2} placeholder={inCard ? t('描述目标、提出问题，或粘贴截图…') : t('描述要做的事，比如“给登录页加上验证码”；可以直接粘贴截图')} onChange={event => setText(event.target.value)} onPaste={paste}
         onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void start(); } }} />
       {images.length > 0 && <div className="new-work-images" role="list" aria-label={t('附图')}>{images.map((image, index) => <span key={index} role="listitem">
         <button type="button" className="new-work-zoom" title={t('点击放大')} aria-label={t('放大 {name}', { name: t('附加的图片 {n}', { n: index + 1 }) })}
@@ -129,7 +131,7 @@ function NewWork({ projects, takeFocus, onAction, onDone, onError }: {
         <button type="button" aria-label={t('移除这张图片')} onClick={() => setImages(list => list.filter((_, at) => at !== index))}><X size={12} weight="bold" /></button>
       </span>)}</div>}
       <div className="new-work-bar">
-        <label className="new-work-select" title={t('项目')}><select aria-label={t('项目')} value={project?.id} onChange={event => setProjectId(event.target.value)}>{local.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><CaretDown size={13} aria-hidden="true" /></label>
+        <label className="new-work-select" title={t('项目')}>{inCard && <FolderSimple size={16} aria-hidden="true" />}<select aria-label={t('项目')} value={project?.id} onChange={event => setProjectId(event.target.value)}>{local.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><CaretDown size={13} aria-hidden="true" /></label>
         {!empty && <span className="new-work-note">{terminal?.codexActive ? t('直接发给它，不离开这一页') : t('先启动助手，准备好就发给它')}</span>}
         {terminal && !terminal.codexActive && <label className="new-work-select is-agent" title={t('助手')}><select aria-label={t('助手')} value={agent} onChange={event => setAgent(event.target.value as 'claude' | 'codex')}><option value="claude">Claude Code</option><option value="codex">Codex</option></select><CaretDown size={13} aria-hidden="true" /></label>}
         <VoiceButton terminalId={VOICE_TARGET} sessionId={null} name={t('新任务')} size={16} onError={onError} />
