@@ -310,8 +310,7 @@ export function App() {
         <button type="button" aria-current={shownView === 'decisions' ? 'page' : undefined} title={t('回到决策 · {key}', { key: shortcut('decisions') })} onClick={() => setView('decisions')}><Tray size={16} />{t('决策')}{decisions.length > 0 && <span className="home-nav-count" aria-label={t('{count} 件待决定', { count: decisions.length })}>{decisions.length}</span>}</button>
         <button type="button" aria-current={shownView === 'workspace' ? 'page' : undefined} onClick={() => setView('workspace')}><CirclesFour size={16} />{t('工作台')}</button>
       </nav>
-      {!!projects.length && <div className="workspace-summary" role="status" aria-label={t('工作区概况')}>
-        <span>{projects.length === 1 ? t('1 个项目') : t('{count} 个项目', { count: projects.length })}{projects.some(project => project.kind === 'ssh') ? t(' · 含 SSH') : ''}</span>
+      {!!(unread || completed) && <div className="workspace-summary" role="status" aria-label={t('工作区概况')}>
         {!!unread && <span className="summary-unread"><i className="legend-red" />{t('{count} 待查看', { count: unread })}</span>}
         {!!completed && <span className="summary-complete"><i className="legend-green" />{t('{count} 本轮完成', { count: completed })}</span>}
       </div>}

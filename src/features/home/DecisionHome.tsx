@@ -33,7 +33,7 @@ export function DecisionHome({ projects, decisions, snoozed, onOpenProject, onOp
   const selected = items.find(item => item.id === picked) ?? items.find(item => item.decision);
   const working = items.filter(({ terminal }) => isWorking(terminal)).length;
   const accepted = useMemo(() => acceptedToday(), [decisions]);
-  const headline = decisions.length ? t('{count} 件事需要你决定', { count: decisions.length }) : t('所有会话');
+  const headline = decisions.length ? t('{count} 件事需要你决定', { count: decisions.length }) : t('项目');
   const summary = [accepted > 0 && t('今天已接受 {count} 项交付', { count: accepted }), snoozed > 0 && t('{count} 件已暂缓', { count: snoozed }), items.length > 1 && t('↑↓ 切换')].filter(Boolean).join(' · ');
   return <div className="home-page decision-home">
     <section className="home-pane home-inbox" aria-label={headline}>
@@ -42,7 +42,7 @@ export function DecisionHome({ projects, decisions, snoozed, onOpenProject, onOp
         <p className="home-counts">{summary}</p>
       </header>
       {notice && <p className="home-notice" role="status">{notice}</p>}
-      <DecisionInbox items={items} selectedId={selected?.id ?? null} now={now} onSelect={setPicked} onOpenProject={onOpenProject} />
+      <DecisionInbox items={items} selectedId={selected?.id ?? null} now={now} onSelect={setPicked} />
     </section>
     <div className={`home-right${selected ? '' : ' is-empty'}`}>
       {!selected ? <div className="home-empty">

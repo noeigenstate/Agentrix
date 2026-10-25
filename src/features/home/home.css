@@ -49,13 +49,7 @@
 .inbox-text { display: grid; min-width: 0; }
 .inbox-text b { overflow: hidden; color: color-mix(in srgb, var(--home-ink) 78%, transparent); text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; line-height: 20px; }
 .inbox-end { display: grid; place-items: center end; }
-.inbox-end > * { grid-area: 1 / 1; }
 .inbox-state { font-size: 12px; line-height: 16px; white-space: nowrap; color: var(--home-faint); }
-.inbox-open { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid var(--home-line); border-radius: 8px; color: var(--home-ink); background: var(--home-page); opacity: 0; cursor: pointer; }
-.inbox-open:hover { border-color: var(--home-muted); }
-/* The action takes the state's place on hover, and for the keyboard on the selected row or once it has focus. */
-.inbox-row:is(:hover, :focus-within) :is(.inbox-tag, .inbox-state), .inbox-list:focus-visible .inbox-row[aria-selected="true"] :is(.inbox-tag, .inbox-state) { opacity: 0; }
-.inbox-row:is(:hover, :focus-within) .inbox-open, .inbox-list:focus-visible .inbox-row[aria-selected="true"] .inbox-open { opacity: 1; }
 .inbox-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; color: var(--home-muted); }
 
 /* The right column: the selected decision (or session) fills it; what-next is docked under it. */
@@ -67,7 +61,7 @@
 /* Nothing to decide: one pane, with the headline and the what-next box in the middle of it. */
 .home-right.is-empty { justify-content: center; align-items: center; }
 /* The empty state is one column: the headline and the composer share a width and an axis, 32px apart (8 + the column gap 16 + the box's 8). */
-.home-empty { width: min(672px, 100%); margin-bottom: 8px; text-align: center; }
+.home-empty { width: min(672px, 100%); text-align: center; }
 .home-empty h2 { margin: 0; font-size: 20px; font-weight: 600; line-height: 28px; }
 .home-empty p { margin: 4px 0 0; font-size: 13px; line-height: 20px; color: var(--home-muted); }
 
@@ -124,7 +118,7 @@
 /* Every other focusable thing on the page: one ring, from the focus token, only for the keyboard. */
 .home-layer :is(button, [tabindex]):focus-visible { outline: 2px solid var(--home-focus); outline-offset: 2px; }
 .home-layer .inbox-list:focus-visible { outline: none; }
-.new-work textarea::placeholder { color: var(--home-faint); }
+.new-work textarea::placeholder { color: var(--home-muted); }
 .new-work-bar { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--home-muted); }
 .new-work-bar .voice-button { flex: none; margin-left: auto; width: 32px; height: 32px; border-radius: 8px; }
 .new-work-select { position: relative; display: inline-flex; flex: 0 1 auto; align-items: center; gap: 4px; min-width: 0; height: 32px; padding: 0 8px; border-radius: 8px; color: var(--home-ink); }

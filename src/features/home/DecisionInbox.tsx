@@ -1,5 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react';
-import { ArrowSquareOut, TerminalWindow } from '@phosphor-icons/react';
+import { TerminalWindow } from '@phosphor-icons/react';
 import type { Decision } from './decisions';
 import { kindLabel, trustedFolder, trustsFolder, waited } from './DecisionCard';
 import { isWorking, sessionTask, type Group, type InboxItem } from './inbox-items';
@@ -44,7 +44,7 @@ function AgentMark({ agent }: { agent: 'claude' | 'codex' | 'terminal' }) {
 
 // Every decision and session in one list, most urgent first: ↑↓ moves the selection while the list has focus, a click
 // selects. The right pane shows what is selected.
-export function DecisionInbox({ items, selectedId, now, onSelect, onOpenProject }: { items: readonly InboxItem[]; selectedId: string | null; now: number; onSelect: (id: string) => void; onOpenProject: (projectId: string) => void }) {
+export function DecisionInbox({ items, selectedId, now, onSelect }: { items: readonly InboxItem[]; selectedId: string | null; now: number; onSelect: (id: string) => void }) {
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => { if (selectedId) list.current?.querySelector(`[data-item-id="${CSS.escape(selectedId)}"]`)?.scrollIntoView({ block: 'nearest' }); }, [selectedId]);
   const keys = (event: KeyboardEvent) => {
@@ -72,7 +72,6 @@ export function DecisionInbox({ items, selectedId, now, onSelect, onOpenProject 
             </span>
             <span className="inbox-end">
               {decision || group === 'working' ? <span className={`inbox-tag ${decision ? 'is-need' : 'is-work'}`}>{tag}</span> : <span className="inbox-state">{tag}</span>}
-              <button type="button" className="inbox-open" tabIndex={-1} title={t('打开')} aria-label={t('打开 {name}', { name: project.name })} onClick={event => { event.stopPropagation(); onOpenProject(project.id); }}><ArrowSquareOut size={16} /></button>
             </span>
           </div>;
         })}
