@@ -1,12 +1,10 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react';
-import { TerminalWindow } from '@phosphor-icons/react';
 import type { Decision } from './decisions';
 import { kindLabel, trustedFolder, trustsFolder, waited } from './DecisionCard';
 import { isWorking, sessionTask, type Group, type InboxItem } from './inbox-items';
 import type { Project, ProjectTerminal } from '../../shared/types';
 import { reviewHistory } from './review-history';
 import { actionText } from '../agents/action-text';
-import { ClaudeLogo, CodexLogo } from '../agents/AgentBrandIcon';
 import { t } from '../../shared/i18n';
 
 const GROUPS: [Group, string][] = [['decide', '等你决定'], ['working', '工作中'], ['other', '其他会话']];
@@ -38,11 +36,8 @@ function sessionLine({ terminal }: InboxItem) {
   return sessionTask(terminal);
 }
 
-function AgentMark({ agent }: { agent: 'claude' | 'codex' | 'terminal' }) {
-  return <span className="inbox-mark" aria-hidden="true">{agent === 'claude' ? <ClaudeLogo size={16} /> : agent === 'codex' ? <CodexLogo size={16} /> : <TerminalWindow size={16} />}</span>;
-}
-
-// Every decision and session in one list, most urgent first: ↑↓ moves the selection while the list has focus, a click
+// Every decision and session in one list, most urgent first (a session shows its state only when it holds a finished round
+// for you; idle ones are just their names): ↑↓ moves the selection while the list has focus, a click
 // selects. The right pane shows what is selected.
 export function DecisionInbox({ items, selectedId, now, onSelect }: { items: readonly InboxItem[]; selectedId: string | null; now: number; onSelect: (id: string) => void }) {
   const list = useRef<HTMLDivElement>(null);
@@ -62,16 +57,15 @@ export function DecisionInbox({ items, selectedId, now, onSelect }: { items: rea
       return <div key={group} role="group" aria-label={t(label)}>
         {groups.length > 1 && <h4 className="inbox-group">{t(label)} · {rows.length}</h4>}
         {rows.map(item => {
-          const { decision, project, terminal } = item, agent = terminal.codexActive ? terminal.agent === 'claude' ? 'claude' : 'codex' : 'terminal';
+          const { decision, project, terminal } = item;
           const tag = decision ? kindLabel(decision.kind) : sessionStateLabel(project, terminal), line = decision ? `${waited(decision.since, now)} · ${brief(decision)}` : sessionLine(item);
           return <div key={item.id} id={`inbox-${item.id}`} data-item-id={item.id} role="option" aria-selected={item.id === selectedId} className={`inbox-row${line ? '' : ' is-compact'}`} onClick={() => { onSelect(item.id); list.current?.focus({ preventScroll: true }); }}>
-            <AgentMark agent={decision?.agent ?? agent} />
             <span className="inbox-text">
               <b>{project.name}{project.terminals.length > 1 ? ` · ${terminal.title}` : ''}</b>
               {line && <small>{line}</small>}
             </span>
             <span className="inbox-end">
-              {decision || group === 'working' ? <span className={`inbox-tag ${decision ? 'is-need' : 'is-work'}`}>{tag}</span> : <span className="inbox-state">{tag}</span>}
+              {decision || group === 'working' ? <span className={`inbox-tag ${decision ? 'is-need' : 'is-work'}`}>{tag}</span> : terminal.codexActive && terminal.codexActivity === 'complete' && <span className="inbox-state">{tag}</span>}
             </span>
           </div>;
         })}

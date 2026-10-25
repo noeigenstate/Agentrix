@@ -3,7 +3,7 @@
    No hue, no shadow, no blur, no gradient, no translucency, no motion; decorative icons are left out. One set of tokens
    serves every part of the page: radii 8 / 12 / 16 / pill, type 20 / 16 / 13 / 12 / 11 in weights 400 / 600, spacing
    4 / 8 / 12 / 16 / 24, buttons 32px high. */
-:is(.home-layer, .app-shell:has(.home-layer)) {
+:is(.home-layer, .app-shell) {
   /* The ladder; nothing else is used below. Surfaces from the page up: page (#191919, also the right side) < pane and card (#242424) < input
      and row fill, hover (#2d2d2d) < selected and the hairline (#404040). One hairline; one ring for keyboard focus. Text: primary, secondary, placeholder
      (the last is also the disabled grey). Radii: 0 for layout regions (the list band, the canvas), 16 real cards, menus
@@ -31,23 +31,20 @@
 :is(.inbox-tag, .decision-kind).is-need, .decision-card:not(.session-detail) .decision-kind { color: var(--home-ink); background: none; border: 1px solid var(--home-ink); line-height: 18px; }
 :is(.inbox-tag, .decision-kind).is-work { color: var(--home-ink); background: var(--home-selected); }
 
-/* The inbox: one list by urgency; a row is the name, what it is on (only when it is on something) and its state. A row
-   with nothing to say under its name is compact, 40px; the rest are 52px. The selected row is unmistakable: a strong fill,
-   a 2px bar on its left and its name in full ink, while the others sit quieter. */
-.home-inbox { display: flex; flex-direction: column; min-height: 0; padding: 24px 12px 12px; }
+/* The inbox: one list by urgency, no icon chips; a row is the name, what it is on (only when it is on something) and its state. A row
+   with nothing to say under its name is compact, 40px; the rest are 52px. The selected row is a strong fill (#404040 on the
+   #242424 band) with its name in full ink, while the others are names in secondary grey. */
+.home-inbox { display: flex; flex-direction: column; min-height: 0; padding: 24px 12px 12px; border-right: 1px solid var(--home-row); }
 .inbox-list { flex: 1; min-height: 0; margin-top: 8px; overflow: auto; scrollbar-width: thin; outline: none; }
 .inbox-group { margin: 0; padding: 16px 12px 4px; font-size: 12px; font-weight: 600; line-height: 16px; color: var(--home-muted); }
-.inbox-row { position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 8px; height: 52px; padding: 0 12px; border-radius: 8px; cursor: pointer; }
+.inbox-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; height: 52px; padding: 0 12px; border-radius: 8px; cursor: pointer; }
 .inbox-row.is-compact { height: 40px; }
 .inbox-row:hover { background: var(--home-hover); }
 .inbox-row[aria-selected="true"] { background: var(--home-selected); }
 .inbox-row[aria-selected="true"] .inbox-text b { color: var(--home-ink); }
-.inbox-row::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px; border-radius: 2px; background: var(--home-ink); opacity: 0; }
-.inbox-row[aria-selected="true"]::before { opacity: 1; }
 .inbox-list:focus-visible .inbox-row[aria-selected="true"] { box-shadow: inset 0 0 0 2px var(--home-focus); }
-.inbox-mark { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: var(--home-ink); background: var(--home-row); }
 .inbox-text { display: grid; min-width: 0; }
-.inbox-text b { overflow: hidden; color: color-mix(in srgb, var(--home-ink) 78%, transparent); text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; line-height: 20px; }
+.inbox-text b { overflow: hidden; color: var(--home-muted); text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; line-height: 20px; }
 .inbox-end { display: grid; place-items: center end; }
 .inbox-state { font-size: 12px; line-height: 16px; white-space: nowrap; color: var(--home-faint); }
 .inbox-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; color: var(--home-muted); }
@@ -145,18 +142,22 @@
 .workspace-layout { position: relative; }
 
 /* Top-level navigation in the title bar. */
-.home-nav { display: flex; align-items: center; gap: 2px; margin-left: 18px; padding: 3px; border-radius: 10px; background: rgba(0, 0, 0, .22); -webkit-app-region: no-drag; }
-.home-nav button { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 0; border-radius: 7px; font: 500 13px var(--font-ui); color: var(--ink-secondary, #c6d4e2); background: none; cursor: pointer; }
+.home-nav { display: flex; align-items: center; gap: 4px; margin-left: 18px; padding: 2px; border-radius: 10px; background: rgba(0, 0, 0, .22); -webkit-app-region: no-drag; }
+.home-nav button { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: 8px; font: 600 13px var(--font-ui); color: var(--ink-secondary, #c6d4e2); background: none; cursor: pointer; }
 .home-nav button:hover { color: var(--ink, #fff); background: rgba(255, 255, 255, .08); }
 .home-nav button[aria-current="page"] { color: var(--ink, #fff); background: rgba(255, 255, 255, .16); }
 .home-nav-count { min-width: 18px; padding: 0 5px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center; color: var(--home-on-strong); background: var(--home-strong); }
-/* In the grey design the title bar is part of the page: flat, on the same ladder. */
+/* In the grey design the title bar (the same in the decision page and the workbench) is one full-width bar (38px, as it always was, so the top-right corner does not move; the nav pills are 28px) on the canvas grey with a faint hairline
+   under it (drawn on the page, so the bar and the top-right corner keep their exact geometry); the list below is a lighter band, so nothing in the bar reads as part of the list. Only the current tab is
+   filled, the group has no fill, the brand mark is an outline and the gear is a plain icon. */
 .app-shell:has(.home-layer) { background: var(--home-page); }
-:root .app-shell:has(.home-layer) .titlebar { background: var(--home-page); text-shadow: none; backdrop-filter: none; box-shadow: none; }
-.app-shell:has(.home-layer) .home-nav { background: var(--home-pane); }
-.app-shell:has(.home-layer) .home-nav button { color: var(--home-muted); }
-.app-shell:has(.home-layer) .home-nav button:hover { color: var(--home-ink); background: var(--home-row); }
-.app-shell:has(.home-layer) .home-nav button[aria-current="page"] { color: var(--home-ink); background: var(--home-selected); }
+:root[data-theme] .app-shell .titlebar { background: var(--home-page); text-shadow: none; backdrop-filter: none; box-shadow: none; }
+.home-layer::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--home-row); pointer-events: none; }
+:root[data-theme] .app-shell .home-nav { background: none; }
+:root[data-theme] .app-shell .home-nav button { color: var(--home-muted); }
+:root[data-theme] .app-shell .home-nav button:hover { color: var(--home-ink); background: var(--home-pane); }
+:root[data-theme] .app-shell .home-nav button[aria-current="page"] { color: var(--home-ink); background: var(--home-row); }
+:root[data-theme] .app-shell .home-nav-count { color: var(--home-on-strong); background: var(--home-strong); }
 @media (max-width: 900px) { .home-page:not(.decision-home) { padding: 16px; } }
 
 /* Work handed in, graded like homework: what was asked, the agent's account, what it made, how it was checked, what
@@ -222,11 +223,11 @@
 :root[data-theme] .home-layer .button.button:active:not(:disabled) { transform: none; }
 .home-layer :is(.home-head, .new-work > h3) { text-shadow: none; }
 /* The marks and markers that carry colour of their own are grey here: the agent mark, the title bar's status dots, the microphone. */
-.home-layer .inbox-mark { filter: grayscale(1); }
-:root .app-shell:has(.home-layer) :is(.legend-red, .legend-green) { background: var(--home-muted); box-shadow: none; }
-:root .app-shell:has(.home-layer) :is(.summary-unread, .summary-complete) { color: var(--home-muted); text-shadow: none; }
+:root[data-theme] .app-shell :is(.legend-red, .legend-green) { background: var(--home-muted); box-shadow: none; }
+:root[data-theme] .app-shell :is(.summary-unread, .summary-complete) { color: var(--home-muted); text-shadow: none; }
 :root .home-layer .voice-button:is(.mic-connected, .mic-missing, .is-busy) { color: var(--home-ink); }
 :root .home-layer .voice-button.is-recording { color: var(--home-on-strong); background: var(--home-strong); box-shadow: none; }
-:root .app-shell:has(.home-layer) .brand-mark i { background: var(--home-muted); }
+:root[data-theme] .app-shell .brand-mark i { background: none; border: 1px solid var(--home-muted); }
+:root[data-theme] .app-shell .titlebar-brand { color: var(--home-ink); font-weight: 600; }
 :root .app-shell:has(.home-layer) .titlebar-tools > .icon-button { background: var(--home-row); border-color: var(--home-line); box-shadow: none; }
-:root .app-shell:has(.home-layer) :is(.home-nav button, .titlebar-tools > .icon-button):focus-visible { outline: 2px solid var(--home-focus); outline-offset: 2px; box-shadow: none; }
+:root[data-theme] .app-shell :is(.home-nav button, .titlebar-tools > .icon-button):focus-visible { outline: 2px solid var(--home-focus); outline-offset: 2px; box-shadow: none; }
