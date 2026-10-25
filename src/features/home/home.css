@@ -4,14 +4,14 @@
    serves every part of the page: radii 8 / 12 / 16 / pill, type 20 / 16 / 13 / 12 / 11 in weights 400 / 600, spacing
    4 / 8 / 12 / 16 / 24, buttons 32px high. */
 :is(.home-layer, .app-shell:has(.home-layer)) {
-  /* The ladder; nothing else is used below. Surfaces from the page up: page < pane and card < raised row (and the sunken
-     code well) < hover < selected. One hairline; one ring for keyboard focus. Text: primary, secondary, placeholder
-     (the last is also the disabled grey). Radii: 16 pane and card, 12 the composer box and menus, 8 buttons, pickers,
-     rows and wells, the pill only for tags. */
-  --home-page: #1b1b1b; --home-pane: #242424; --home-card: #242424; --home-row: #2e2e2e; --home-sunken: #1b1b1b;
-  --home-hover: #383838; --home-selected: #4a4a4a; --home-strong: #f2f2f2; --home-on-strong: #141414;
-  --home-line: #4a4a4a; --home-focus: #ffffff;
-  --home-ink: #f2f2f2; --home-muted: #b8b8b8; --home-faint: #8c8c8c;
+  /* The ladder; nothing else is used below. Surfaces from the page up: page (#191919, also the right side) < pane and card (#242424) < input
+     and row fill, hover (#2d2d2d) < selected and the hairline (#404040). One hairline; one ring for keyboard focus. Text: primary, secondary, placeholder
+     (the last is also the disabled grey). Radii: 0 for layout regions (the list band, the canvas), 16 real cards, menus
+     and dialogs, 12 the composer box, 8 buttons, pickers, rows and wells, the pill only for tags. */
+  --home-page: #191919; --home-pane: #242424; --home-card: #242424; --home-row: #2d2d2d; --home-sunken: #191919;
+  --home-hover: #2d2d2d; --home-selected: #404040; --home-strong: #f0f0f0; --home-on-strong: #191919;
+  --home-line: #404040; --home-focus: #ffffff;
+  --home-ink: #f0f0f0; --home-muted: #a3a3a3; --home-faint: #8c8c8c;
 }
 .home-layer {
   position: absolute; inset: 0; z-index: 4; overflow: auto; background: var(--home-page);
@@ -51,20 +51,23 @@
 .inbox-end { display: grid; place-items: center end; }
 .inbox-end > * { grid-area: 1 / 1; }
 .inbox-state { font-size: 12px; line-height: 16px; white-space: nowrap; color: var(--home-faint); }
-.inbox-open { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 8px; color: var(--home-ink); background: var(--home-hover); opacity: 0; cursor: pointer; }
-.inbox-open:hover { background: var(--home-selected); }
+.inbox-open { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid var(--home-line); border-radius: 8px; color: var(--home-ink); background: var(--home-page); opacity: 0; cursor: pointer; }
+.inbox-open:hover { border-color: var(--home-muted); }
 /* The action takes the state's place on hover, and for the keyboard on the selected row or once it has focus. */
 .inbox-row:is(:hover, :focus-within) :is(.inbox-tag, .inbox-state), .inbox-list:focus-visible .inbox-row[aria-selected="true"] :is(.inbox-tag, .inbox-state) { opacity: 0; }
 .inbox-row:is(:hover, :focus-within) .inbox-open, .inbox-list:focus-visible .inbox-row[aria-selected="true"] .inbox-open { opacity: 1; }
 .inbox-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; color: var(--home-muted); }
 
 /* The right column: the selected decision (or session) fills it; what-next is docked under it. */
-.decision-home { box-sizing: border-box; display: grid; grid-template-columns: minmax(240px, 21fr) minmax(0, 79fr); grid-template-rows: minmax(0, 1fr); gap: 16px; height: 100%; min-height: 560px; }
-.home-pane { box-sizing: border-box; border-radius: 16px; }
-.home-right { display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 0; }
+.decision-home { box-sizing: border-box; display: grid; grid-template-columns: minmax(240px, 21fr) minmax(0, 79fr); grid-template-rows: minmax(0, 1fr); gap: 0; width: 100%; max-width: none; padding: 0; height: 100%; min-height: 560px; }
+/* Layout regions are not cards: the list is a lighter band against the window edge, the right side is the canvas itself.
+   Only a real card (the decision card), a menu or a dialog gets the 16px radius. */
+.home-pane { box-sizing: border-box; }
+.home-right { display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 0; padding: 24px; overflow: auto; }
 /* Nothing to decide: one pane, with the headline and the what-next box in the middle of it. */
-.home-right.is-empty { justify-content: center; align-items: center; padding: 24px; border-radius: 16px; }
-.home-empty { margin-bottom: 24px; text-align: center; }
+.home-right.is-empty { justify-content: center; align-items: center; }
+/* The empty state is one column: the headline and the composer share a width and an axis, 32px apart (8 + the column gap 16 + the box's 8). */
+.home-empty { width: min(672px, 100%); margin-bottom: 8px; text-align: center; }
 .home-empty h2 { margin: 0; font-size: 20px; font-weight: 600; line-height: 28px; }
 .home-empty p { margin: 4px 0 0; font-size: 13px; line-height: 20px; color: var(--home-muted); }
 
@@ -94,12 +97,12 @@
 .decision-actions { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 8px; padding: 16px 24px; border-top: 1px solid var(--home-line); }
 .home-layer .button { height: 32px; border-radius: 8px; padding: 0 16px; font-size: 13px; font-weight: 600; line-height: 20px; }
 .decision-later { position: relative; margin-left: auto; }
-.decision-later-menu { position: absolute; right: 0; bottom: calc(100% + 8px); display: grid; min-width: 128px; padding: 4px; border-radius: 12px; background: var(--home-row); border: 1px solid var(--home-line); z-index: 2; }
+.decision-later-menu { position: absolute; right: 0; bottom: calc(100% + 8px); display: grid; min-width: 128px; padding: 8px; border-radius: 16px; background: var(--home-card); border: 1px solid var(--home-line); z-index: 2; }
 .decision-later-menu button { height: 32px; padding: 0 12px; border: 0; border-radius: 8px; text-align: left; font: inherit; font-size: 13px; color: var(--home-ink); background: none; cursor: pointer; }
 .decision-later-menu button:hover { background: var(--home-hover); }
 
 /* What next: a heading, a box of two lines with the microphone in it, and a footer of choices and the start button. */
-.new-work { display: flex; flex: none; flex-direction: column; padding: 16px 24px; }
+.new-work { display: flex; flex: none; flex-direction: column; padding: 16px 0 0; }
 .new-work > h3 { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--home-ink); }
 /* One bordered box: the text on top, and along its bottom edge the project (left) and the agent, microphone and send (right). */
 .new-work-input { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding: 12px; border-radius: 12px; background: var(--home-row); border: 1px solid var(--home-line); }
@@ -114,7 +117,7 @@
 .new-work-bar { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--home-muted); }
 .new-work-bar .voice-button { flex: none; margin-left: auto; width: 32px; height: 32px; border-radius: 8px; }
 .new-work-select { position: relative; display: inline-flex; flex: 0 1 auto; align-items: center; gap: 4px; min-width: 0; height: 32px; padding: 0 8px; border-radius: 8px; color: var(--home-ink); }
-.new-work-select:hover { background: var(--home-hover); }
+.new-work-select:hover { background: var(--home-selected); }
 .new-work-select.is-agent { margin-left: auto; }
 .new-work-select.is-agent ~ .voice-button { margin-left: 0; }
 .new-work-select select { min-width: 0; max-width: 200px; padding: 0 4px; border: 0; appearance: none; font: 13px var(--font-ui); color: var(--home-ink); background: transparent; outline: none; cursor: pointer; text-overflow: ellipsis; }
@@ -123,14 +126,14 @@
 .new-work-select:has(select:focus-visible) { box-shadow: inset 0 0 0 2px var(--home-focus); }
 .new-work-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-layer .new-work-start { display: grid; place-items: center; flex: none; width: 32px; padding: 0; }
-.home-right.is-empty .new-work { width: min(560px, 100%); padding: 0; }
+.home-right.is-empty .new-work { width: min(672px, 100%); padding: 0; }
 .home-right.is-empty .new-work > h3 { display: none; }
 
 /* A narrow window: one column, the list above the card. */
 @media (max-width: 1000px) {
   .decision-home { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; height: auto; }
   .home-inbox { max-height: 320px; }
-  .home-right { min-height: 560px; }
+  .home-right { min-height: 560px; padding: 16px; }
 }
 
 /* The home pages lie over the workbench inside its layout. */
@@ -145,11 +148,11 @@
 /* In the grey design the title bar is part of the page: flat, on the same ladder. */
 .app-shell:has(.home-layer) { background: var(--home-page); }
 :root .app-shell:has(.home-layer) .titlebar { background: var(--home-page); text-shadow: none; backdrop-filter: none; box-shadow: none; }
-.app-shell:has(.home-layer) .home-nav { background: var(--home-row); }
+.app-shell:has(.home-layer) .home-nav { background: var(--home-pane); }
 .app-shell:has(.home-layer) .home-nav button { color: var(--home-muted); }
-.app-shell:has(.home-layer) .home-nav button:hover { color: var(--home-ink); background: var(--home-hover); }
+.app-shell:has(.home-layer) .home-nav button:hover { color: var(--home-ink); background: var(--home-row); }
 .app-shell:has(.home-layer) .home-nav button[aria-current="page"] { color: var(--home-ink); background: var(--home-selected); }
-@media (max-width: 900px) { .home-page { padding: 16px; } }
+@media (max-width: 900px) { .home-page:not(.decision-home) { padding: 16px; } }
 
 /* Work handed in, graded like homework: what was asked, the agent's account, what it made, how it was checked, what
    changed, your notes from last time, and the call. */
@@ -178,9 +181,9 @@
 .review-feedback textarea { box-sizing: border-box; display: block; width: 100%; min-height: 64px; padding: 12px 48px 12px 12px; border-radius: 12px; resize: none; font: 13px/20px var(--font-ui); color: var(--home-ink); background: var(--home-row); border: 1px solid var(--home-line); outline: none; }
 .review-feedback textarea:focus-visible { border-color: var(--home-muted); }
 
-/* Panes and cards are flat: a fill of their own on the page, no edge, no shadow, no blur. */
-.home-layer :is(.decision-card, .home-pane, .home-right.is-empty) { background: var(--home-pane); }
-.home-layer .home-right.is-empty .new-work { background: none; }
+/* The list band and the cards are flat: a fill of their own on the page, no edge, no shadow, no blur. */
+.home-layer .home-inbox { background: var(--home-pane); }
+.home-layer .decision-card { background: var(--home-card); }
 
 /* Pictures pasted into "what next": small, each with its own remove button. */
 .new-work-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
@@ -207,7 +210,7 @@
 
 /* Buttons in grey: the primary action is the one solid light block, the rest a fill with a hairline; nothing glows. */
 :root[data-theme] .home-layer .button.button { border: 1px solid var(--home-line); color: var(--home-ink); background: var(--home-row); background-image: none; box-shadow: none; text-shadow: none; }
-:root[data-theme] .home-layer .button.button:hover:not(:disabled) { background: var(--home-hover); box-shadow: none; }
+:root[data-theme] .home-layer .button.button:hover:not(:disabled) { background: var(--home-selected); box-shadow: none; }
 :root[data-theme] .home-layer .button.button.primary { border-color: var(--home-strong); color: var(--home-on-strong); background: var(--home-strong); }
 :root[data-theme] .home-layer .button.button.primary:hover:not(:disabled) { background: #ffffff; }
 :root[data-theme] .home-layer .button.button:disabled { border-color: var(--home-line); color: var(--home-faint); background: var(--home-row); opacity: 1; cursor: default; }
