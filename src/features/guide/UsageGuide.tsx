@@ -7,11 +7,11 @@ import './guide.css';
 
 type Page = { id: string; badge: ReactNode; title: string; body: ReactNode };
 
-// The app icon (assets/icon-mac.png) drawn as vector: a dark rounded square holding a 2x2 grid, the last cell coral.
+// The app icon (assets/icon-mac.png) drawn as vector: a dark rounded square holding a 2x2 grid, the last cell the brightest.
 const LOGO_CELLS = [[138, 138], [438, 138], [138, 438], [438, 438]];
 function AgentrixLogo() {
-  return <svg viewBox="0 0 824 824"><rect x="1.5" y="1.5" width="821" height="821" rx="190" fill="#181d25" stroke="#ffffff2e" strokeWidth="3" />
-    {LOGO_CELLS.map(([x, y], cell) => <rect key={cell} x={x} y={y} width="248" height="248" fill={cell === 3 ? '#ef7882' : '#bfd0e0'} />)}</svg>;
+  return <svg viewBox="0 0 824 824"><rect x="1.5" y="1.5" width="821" height="821" rx="190" fill="#2d2d2d" stroke="#404040" strokeWidth="3" />
+    {LOGO_CELLS.map(([x, y], cell) => <rect key={cell} x={x} y={y} width="248" height="248" fill={cell === 3 ? '#f0f0f0' : '#a3a3a3'} />)}</svg>;
 }
 
 // Reference pages: the shortcuts in use and what changed in this version. It opens after each update on

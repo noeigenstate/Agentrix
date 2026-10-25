@@ -71,7 +71,7 @@ test('ClaudeSpark retains its export and size API as a direct official-logo alia
   );
 });
 
-test('Codex retains white ink, with busy animation confined to the rim', () => {
+test('Codex retains white ink, and a running node is a heavier ring with no animation', () => {
   const css = fs.readFileSync(path.join(root, 'src/features/reading/reading-flow.css'), 'utf8');
   const fillRules = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
     .filter(([, selector, body]) => selector.includes('.agent-brand-codex') && /\bfill\s*:/.test(body))
@@ -80,6 +80,6 @@ test('Codex retains white ink, with busy animation confined to the rim', () => {
   assert.match(renderToStaticMarkup(React.createElement(CodexLogo)), /fill="white"/);
   assert.match(css, /\.reading-node > \.agent-brand-codex \{ width: var\(--step-node\); height: var\(--step-node\); \}/);
   assert.doesNotMatch(css, /reading-spark|spark-bloom|agent-brand-[^{]+\{[^}]*\b(?:animation|transform):/);
-  assert.match(css, /\[data-motion="off"\][^{]+\.reading-node::after \{ animation: none; \}/);
-  assert.match(css, /prefers-reduced-motion: reduce/);
+  assert.match(css, /\.reading-step\.is-running \.reading-node \{ box-shadow: inset 0 0 0 2px var\(--node-tint\); \}/);
+  assert.doesNotMatch(css, /@keyframes|animation:/);
 });

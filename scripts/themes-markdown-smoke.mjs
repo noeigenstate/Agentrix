@@ -42,7 +42,6 @@ async function launch() {
 try {
   await launch();
   assert.equal('theme' in (await state()).settings, false);
-  await page.waitForFunction(() => document.documentElement.dataset.theme === 'catalina');
   const first = page.locator(`[data-project-id="${projects[0].id}"]`);
   await first.getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await state()).projects[0].shellReady, 'shell ready');
@@ -54,21 +53,18 @@ try {
   await first.locator('.terminal-host').evaluate(node => { globalThis.originalThemeTerminal = node; });
   await page.evaluate(id => window.agentrix.writeTerminal(id, "Write-Output 'PENDING_APPEARANCE_DRAFT'"), projects[0].id);
   await page.context().setOffline(true);
-  const wallpaper = await page.evaluate(async () => {
-    const surface = getComputedStyle(document.querySelector('.app-shell'), '::after');
-    const image = new Image(); image.src = surface.backgroundImage.match(/url\("([^"]+)"\)/)?.[1]; await image.decode();
-    return { theme: document.documentElement.dataset.theme, url: image.src, width: image.naturalWidth, height: image.naturalHeight, fit: surface.backgroundSize, position: surface.backgroundPosition, online: navigator.onLine };
-  });
-  assert.equal(wallpaper.theme, 'catalina'); assert.equal(wallpaper.online, false);
-  assert.ok(!/^https?:/.test(wallpaper.url), 'wallpaper is a packaged local asset');
-  assert.equal(wallpaper.width, 2560); assert.equal(wallpaper.height, 2560);
-  assert.ok(wallpaper.fit.includes('cover')); assert.equal(wallpaper.position, '50% 42%');
+  // The grey design has no wallpaper: the window is the one #191919 canvas, offline or not.
+  const wallpaper = await page.evaluate(() => ({
+    image: getComputedStyle(document.querySelector('.app-shell'), '::after').backgroundImage, ground: getComputedStyle(document.querySelector('.app-shell')).backgroundColor, online: navigator.onLine,
+  }));
+  assert.equal(wallpaper.online, false); assert.equal(wallpaper.image, 'none'); assert.equal(wallpaper.ground, 'rgb(25, 25, 25)');
   wallpaperChecks.push(wallpaper);
   assert.equal((await state()).projects[0].sessionId, sessionId);
   assert.ok(await first.locator('.terminal-host').evaluate(node => node === globalThis.originalThemeTerminal));
   assert.deepEqual(await colors(), ansiColors);
-  const signal = await page.locator(`[data-project-id="${projects[1].id}"]`).evaluate(node => getComputedStyle(node).getPropertyValue('--signal-rgb').trim());
-  assert.equal(signal, '255, 134, 212');
+  // A card that needs you has the white 2px edge (no hue): the one strongest state in the grey design.
+  const signal = await page.locator(`[data-project-id="${projects[1].id}"] .panel-signal`).evaluate(node => getComputedStyle(node).boxShadow);
+  assert.equal(signal, 'rgb(255, 255, 255) 0px 0px 0px 2px inset');
   await page.screenshot({ path: path.join(output, 'catalina-overview.png') });
   await fs.writeFile(path.join(output, 'wallpapers.json'), JSON.stringify(wallpaperChecks, null, 2));
   await page.context().setOffline(false);
@@ -130,9 +126,8 @@ try {
   await app.close(); app = null;
   await launch();
   assert.equal('theme' in (await state()).settings, false);
-  await waitFor(async () => page.evaluate(() => document.documentElement.dataset.theme === 'catalina'), 'Catalina after restart');
   await fs.writeFile(path.join(output, 'wallpapers.json'), JSON.stringify(wallpaperChecks, null, 2));
-  console.log('PASS: Catalina preserves ANSI colors, task colors, terminal identity and drafts');
+  console.log('PASS: the grey design preserves ANSI colors, the needs-you edge, terminal identity and drafts');
   console.log('PASS: automatic editing, local/SSH Markdown render and save, GFM, relative resources and links, and sanitized HTML');
   console.log(`Screenshots: ${output}`);
 } catch (error) { if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {}); throw error; }

@@ -12,7 +12,7 @@ const output = await testRun('question-appearance'), profile = path.join(output,
 await fs.mkdir(profile, { recursive: true }); await fs.mkdir(project);
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ id: 'questions', name: '问题主题对照', path: project, restore: { terminal: false, codex: false } }], settings: { language: 'zh', terminalRenderer: 'dom', fontSize: 10, restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false } }));
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
-const theme = 'catalina', errors = [], results = []; let app, page;
+const theme = 'grey', errors = [], results = []; let app, page;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
 const write = data => page.evaluate(data => window.agentrix.writeTerminal('questions', data), data);
 try {
@@ -31,9 +31,8 @@ try {
     await waitFor(async () => (await page.evaluate(() => window.agentrix.attachTerminal('questions'))).value.data.includes(content.trim().split(/[\r\n]/)[0].trim()), 'fixture reaches real PTY');
     const show = page.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }); if (await show.isVisible()) await show.click();
     await page.locator('.reading-question-title, .reading-question-review').first().waitFor();
-    await page.waitForFunction(() => document.documentElement.dataset.theme === 'catalina');
     const colors = await page.locator('.reading-question-title, .reading-question-review dd, .reading-question-input input').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color));
-    assert.ok(colors.length); assert.ok(colors.every(color => color === 'rgb(255, 255, 255)'), JSON.stringify({ file, theme, colors }));
+    assert.ok(colors.length); assert.ok(colors.every(color => color === 'rgb(240, 240, 240)'), JSON.stringify({ file, theme, colors }));
     assert.equal((await state()).projects[0].sessionId, session);
     await page.screenshot({ path: path.join(output, theme + '-' + file + '.png') }); results.push({ theme, file, colors });
     await fs.writeFile(release, 'done'); await waitFor(() => page.locator('.reading-question-title, .reading-question-review').count().then(count => count === 0), 'fixture returns to shell');

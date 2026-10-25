@@ -1,12 +1,9 @@
 /* The main rail follows user and agent turns. Replies and tool groups keep their cards inside the agent's body;
    tools have a small branch mark, and their pills still open into the detailed tree. */
 .reading-view {
-  --flow-card: var(--card-fill, rgba(255, 255, 255, .07)); --flow-line: var(--card-line, rgba(255, 255, 255, .13));
-  --flow-ink: var(--ink, #f2f7fc); --flow-muted: var(--ink-secondary, #b9c8d8); --flow-faint: var(--ink-faint, rgba(255, 255, 255, .5));
-  --flow-ok: var(--accent-green, #3ddc97); --flow-fail: #ff7b72; --flow-lead: #6cb4ff; --flow-avatar: #3b82f6;
-  --flow-claude: #e8875f; --flow-codex: #d7e6f5;
-  --flow-rail: #4fd3e8; --flow-step: #5fd8ec;
-  --flow-user: #5ea6ff;
+  --flow-card: var(--grey-pane); --flow-line: var(--grey-line); --flow-inset: var(--grey-row);
+  --flow-ink: var(--grey-ink); --flow-muted: var(--grey-muted); --flow-faint: var(--grey-faint);
+  --flow-ok: var(--grey-ink); --flow-fail: var(--grey-ink); --flow-lead: var(--grey-muted); --flow-rail: var(--grey-line); --flow-step: var(--grey-muted);
   --step-node: 28px; --step-gap: 10px; --step-lead: calc(var(--step-node) + var(--step-gap));
 }
 
@@ -15,30 +12,24 @@
 .reading-scroll { container-type: inline-size; }
 .reading-step { position: relative; display: grid; grid-template-columns: var(--step-node) minmax(0, 1fr); column-gap: var(--step-gap); align-items: start; }
 .reading-step::before { content: ''; position: absolute; left: calc(var(--step-node) / 2 - 1px); top: var(--step-node); bottom: -10px; width: 2px;
-  border-radius: 1px; background: var(--flow-rail); opacity: .85; }
+  border-radius: 1px; background: var(--flow-rail); }
 .reading-step:not(:has(~ .reading-step))::before { display: none; }
 /* The head line stands level with the node (28px): the speaker in the label style, the time small and muted beside it. */
 .reading-step-head { display: flex; align-items: center; gap: 8px; min-height: var(--step-node); }
 .reading-step-head > time, .reading-turn-item-body > time { font: 500 calc(11.5px * var(--reading-text))/1.4 var(--font-ui); color: var(--flow-muted); opacity: .8; font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* Each node a hollow ring: the wallpaper shows through it (no dark fill), a hairline rim and the glyph in the colour of
-   what it is (blue you, warm orange Claude, cool white Codex, cyan a step). No glow anywhere on the line: every edge is
-   hard, so nothing looks hazy over the wallpaper. */
+/* Each node a hollow ring in grey: you are the brightest, an agent the secondary grey, a step the hairline; the glyph tells which. */
 .reading-node { --node-tint: var(--flow-step); position: relative; z-index: 1; display: grid; place-items: center; width: var(--step-node); height: var(--step-node); border-radius: 50%;
-  color: var(--node-tint); background: color-mix(in srgb, var(--node-tint) 7%, transparent);
-  box-shadow: inset 0 0 0 1.5px var(--node-tint); }
+  color: var(--node-tint); box-shadow: inset 0 0 0 1.5px var(--node-tint); }
 .reading-node > svg { display: block; shape-rendering: geometricPrecision; }
-.reading-step.is-user .reading-node { --node-tint: var(--flow-user); }
-.reading-step.is-claude .reading-node { --node-tint: var(--flow-claude); }
-.reading-step.is-codex .reading-node { --node-tint: var(--flow-codex); }
+.reading-step.is-user .reading-node { --node-tint: var(--grey-ink); }
+.reading-step.is-claude .reading-node { --node-tint: var(--grey-muted); }
+.reading-step.is-codex .reading-node { --node-tint: var(--grey-muted); }
 /* The official Blossom's 716-unit canvas includes its clear space: keep the full canvas inside the existing node.
    Codex uses its supplied white mark; Claude retains its official orange. */
 .reading-node > .agent-brand-codex { width: var(--step-node); height: var(--step-node); }
-/* A running node sends soft rings out from its rim. Brand geometry stays still. One that failed is marked red. */
-.reading-step.is-running .reading-node::before, .reading-step.is-running .reading-node::after { content: ''; position: absolute; inset: 0; border-radius: 50%;
-  box-shadow: 0 0 0 1.5px var(--node-tint); opacity: 0; pointer-events: none; animation: reading-node-ripple 2.4s cubic-bezier(.2, .6, .35, 1) infinite; }
-.reading-step.is-running .reading-node::after { animation-delay: 1.2s; }
-@keyframes reading-node-ripple { 0% { transform: scale(1); opacity: .75; } 100% { transform: scale(1.9); opacity: 0; } }
-.reading-step.is-failed .reading-node { --node-tint: var(--flow-fail); }
+/* A running node has the heavier ring; one that failed has it in full ink. */
+.reading-step.is-running .reading-node { box-shadow: inset 0 0 0 2px var(--node-tint); }
+.reading-step.is-failed .reading-node { --node-tint: var(--grey-ink); box-shadow: inset 0 0 0 2px var(--grey-ink); }
 /* The cards start at the node's right edge, 14px from the rail and nearer to it than the name label, which stays beside the node. */
 .reading-step-body > :is(.reading-user, .reading-turn) { margin-left: calc(var(--step-node) - var(--step-lead)); }
 .reading-step-body { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -50,68 +41,40 @@
 .reading-turn-tools { position: relative; min-width: 0; margin-left: 6px; display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 6px; }
 .reading-turn-tools::before { content: ''; position: absolute; left: 5.5px; top: 20px; bottom: 0; border-left: 1px solid var(--flow-line); }
 .reading-turn-mark { display: grid; place-items: center; height: 28px; color: var(--flow-step); }
-.reading-turn-tools.is-failed .reading-turn-mark { color: var(--flow-fail); }
+.reading-turn-tools.is-failed .reading-turn-mark { color: var(--flow-ink); }
 .reading-turn-tools .reading-turn-item-body { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 4px 10px; }
 .reading-turn-tools .reading-tools { min-width: 0; flex: 0 1 auto; }
 .reading-turn-tools .reading-tools.is-open { flex: 1 1 100%; }
 .reading-turn-tools .reading-turn-item-body > time { padding-top: 7px; }
 .reading-step .reading-status { margin: 5px 0 0; flex-wrap: wrap; }
 .reading-step .reading-status-mark { display: none; }
-:root[data-motion="off"] .reading-step.is-running .reading-node::before,
-:root[data-motion="off"] .reading-step.is-running .reading-node::after { animation: none; }
-@media (prefers-reduced-motion: reduce) {
-  :root[data-motion="system"] .reading-step.is-running .reading-node::before,
-  :root[data-motion="system"] .reading-step.is-running .reading-node::after { animation: none; }
-}
-
-/* The pointer passing over a step makes its card hop: up 12px, down, a small second bounce, then it lands where it was.
-   The hover is the step's row, which never moves, so a card hopping out from under the pointer does not restart it.
-   Only the pointer moving makes a step hop: a scroll disarms them until it moves again ([data-hover]), so the steps
-   sliding under a still pointer stay put; with motion turned off nothing hops. */
-.reading-scroll[data-hover] .reading-step:hover > .reading-step-body > .reading-user,
-.reading-scroll[data-hover] .reading-turn-message:hover .reading-assistant,
-.reading-scroll[data-hover] .reading-turn-tools:hover .reading-tools { animation: reading-hop .75s both; }
-@keyframes reading-hop {
-  0% { transform: translateY(0); animation-timing-function: cubic-bezier(.2, .75, .35, 1); }
-  32% { transform: translateY(-12px); animation-timing-function: cubic-bezier(.55, 0, .85, .45); }
-  56% { transform: translateY(0); animation-timing-function: cubic-bezier(.2, .75, .35, 1); }
-  72% { transform: translateY(-4px); animation-timing-function: cubic-bezier(.55, 0, .85, .45); }
-  86% { transform: translateY(0); animation-timing-function: ease-out; }
-  93% { transform: translateY(-1px); animation-timing-function: ease-in; }
-  100% { transform: translateY(0); } }
-:root[data-motion="off"] .reading-scroll[data-hover] .reading-step:hover :is(.reading-user, .reading-assistant, .reading-tools) { animation: none; }
-@media (prefers-reduced-motion: reduce) { :root[data-motion="system"] .reading-scroll[data-hover] .reading-step:hover :is(.reading-user, .reading-assistant, .reading-tools) { animation: none; } }
-
-/* Your message: a frosted card beside its person. */
+/* Your message: a card beside its person. */
 .reading-user { align-self: stretch; display: flex; flex-direction: column; gap: 4px; padding: 10px 16px;
-  border-radius: var(--card-radius, 12px); background: var(--flow-card); box-shadow: inset 0 0 0 1px var(--flow-line); }
+  border-radius: 16px; background: var(--flow-card); }
 .reading-user > p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--flow-ink); }
 
-/* The agent's answer: a frosted card. Pictures and cards it names sit inside it. */
-.reading-assistant { padding: 12px 16px 14px; border-radius: var(--card-radius, 12px); color: var(--flow-ink); background: var(--flow-card); box-shadow: inset 0 0 0 1px var(--flow-line); }
+/* The agent’s answer: a card. Pictures and cards it names sit inside it. */
+.reading-assistant { padding: 12px 16px 16px; border-radius: 16px; color: var(--flow-ink); background: var(--flow-card); }
 .reading-assistant .reading-markdown > :first-child { margin-top: 0; }
 .reading-assistant > :not(:first-child) { margin-top: 10px; }
 
 /* A group of steps: a pill; opened, a card holding the pill and the steps. */
-.reading-tools { align-self: flex-start; max-width: 100%; display: flex; flex-direction: column; border-radius: 14px; }
-.reading-tools.is-open { align-self: stretch; background: var(--flow-card); box-shadow: inset 0 0 0 1px var(--flow-line); }
+.reading-tools { align-self: flex-start; max-width: 100%; display: flex; flex-direction: column; border-radius: 16px; }
+.reading-tools.is-open { align-self: stretch; background: var(--flow-card); }
 .reading-tools-head { display: inline-flex; align-self: flex-start; align-items: center; flex-wrap: wrap; gap: 6px 9px; min-width: 0; max-width: 100%; padding: 7px 14px 7px 12px; border: 0;
-  border-radius: 999px; font: inherit; font-size: calc(13.5px * var(--reading-text)); color: var(--flow-ink); background: var(--flow-card); box-shadow: inset 0 0 0 1px var(--flow-line); cursor: pointer; }
+  border-radius: 999px; font: inherit; font-size: calc(13.5px * var(--reading-text)); color: var(--flow-ink); background: var(--flow-card); cursor: pointer; }
 .reading-tools.is-open .reading-tools-head { background: transparent; box-shadow: none; }
-.reading-tools-head:hover { background: rgba(255, 255, 255, .1); }
+.reading-tools-head:hover { background: var(--grey-hover); }
 .reading-tools-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.reading-tools-head em { font-style: normal; font-size: calc(12px * var(--reading-text)); color: var(--flow-fail); }
-.reading-tools-file { flex: none; max-width: min(160px, 100%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 8px; border-radius: 999px; font: 400 calc(12px * var(--reading-text))/1.6 var(--font-mono); color: var(--flow-ink); background: rgba(255, 255, 255, .08); box-shadow: inset 0 0 0 1px var(--flow-line); }
+.reading-tools-head em { font-style: normal; font-size: calc(12px * var(--reading-text)); color: var(--flow-ink); font-weight: 600; }
+.reading-tools-file { flex: none; max-width: min(160px, 100%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 8px; border-radius: 999px; font: 400 calc(12px * var(--reading-text))/1.6 var(--font-mono); color: var(--flow-ink); background: var(--grey-row); }
 .reading-tools-more { flex: none; font-size: calc(12px * var(--reading-text)); color: var(--flow-muted); }
 .reading-tools-lead { flex: none; color: var(--flow-lead); }
-.reading-tools-caret { flex: none; color: var(--flow-ok); }
-.reading-step-state { flex: none; color: var(--flow-ok); }
+.reading-tools-caret { flex: none; color: var(--flow-muted); }
+.reading-step-state { flex: none; color: var(--flow-muted); }
 .reading-step-state.is-running { position: relative; display: grid; place-items: center; width: 17px; height: 17px; color: var(--flow-rail); }
 .reading-step-state.is-running::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.reading-step-state.is-running::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; box-shadow: 0 0 0 1.5px currentColor; opacity: 0; animation: reading-node-ripple 2s cubic-bezier(.2, .6, .35, 1) infinite; }
-:root[data-motion="off"] .reading-step-state.is-running::after { animation: none; }
-@media (prefers-reduced-motion: reduce) { :root[data-motion="system"] .reading-step-state.is-running::after { animation: none; } }
-.reading-step-state.is-failed { color: var(--flow-fail); }
+.reading-step-state.is-failed { color: var(--flow-ink); }
 /* The steps as a tree under the pill. */
 .reading-tools-tree { position: relative; display: flex; flex-direction: column; gap: 2px; margin: 0 0 0 22px; padding: 2px 14px 10px 18px; list-style: none; }
 .reading-tools-tree::before { content: ''; position: absolute; left: 0; top: 0; bottom: 22px; border-left: 1px solid var(--flow-line); }
@@ -121,12 +84,12 @@
 .reading-tools-tree li > code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 calc(12.5px * var(--reading-text))/1.6 var(--font-mono); color: var(--flow-ink); }
 .reading-tools-tree li > small { grid-column: 4; font-size: calc(11.5px * var(--reading-text)); color: var(--flow-faint); overflow-wrap: anywhere; }
 .reading-tool-icon { color: var(--flow-muted); }
-.reading-tools-tree li.is-failed > code { color: var(--flow-fail); }
+.reading-tools-tree li.is-failed > code { color: var(--flow-ink); font-weight: 600; }
 /* What the steps wrote (cards, a picture being drawn) sits under the pill or inside the opened card. */
 .reading-tools > :is(.file-cards, .reading-generating) { margin-left: 4px; }
 .reading-tools.is-open > :is(.file-cards, .reading-generating) { margin: 0 14px 12px; }
 
 /* An answer to the agent's own question: labelled as such, its "question → answer" lines under the label. */
-.reading-user-label { font-size: calc(12px * var(--reading-text)); font-weight: 600; color: var(--flow-muted, rgba(255, 255, 255, .72)); }
+.reading-user-label { font-size: calc(12px * var(--reading-text)); font-weight: 600; color: var(--flow-muted); }
 /* The user's picture fills the node inside its ring, leaving a hair of the tint around it. */
 .reading-node > .user-avatar { width: calc(100% - 5px); height: calc(100% - 5px); }

@@ -4,6 +4,7 @@ import { toggleDictation, useVoice } from './voice-input';
 import './voice-overlay.css';
 import { t } from '../../shared/i18n';
 import { shortcut } from '../shortcuts/shortcuts';
+import { Select } from '../../shared/Select';
 
 // What each recognizer is for, shown with its name and download size.
 const VOICE_MODEL_KINDS: Record<string, string> = { sensevoice: '标准 · 速度快', qwen3: '高精度 · 中英混合' };
@@ -20,9 +21,8 @@ export function VoiceModelSetting({ choice, onChoose }: { choice: string; onChoo
       ? t('下载中 {percent}%，完成前继续使用 {model}', { percent: chosen.percent, model: voice.model }) : t('下载中 {percent}%', { percent: chosen.percent })}</span>
     : <button type="button" className="button secondary small" title={chosen.error ? t(chosen.error) : undefined} onClick={() => void window.agentrix.prepareVoice()}>{chosen.phase === 'error' ? t('重试下载') : t('下载模型')}</button>;
   return <span className="voice-model-setting">
-    <select aria-label={t('语音识别模型')} value={chosen.id} onChange={event => onChoose(event.target.value)}>
-      {voice.models.map(model => <option key={model.id} value={model.id}>{`${model.label} · ${t(VOICE_MODEL_KINDS[model.id] ?? '')}（${downloadSize(model.downloadBytes)}）`}</option>)}
-    </select>
+    <Select label={t('语音识别模型')} value={chosen.id} onChange={onChoose}
+      options={voice.models.map(model => ({ value: model.id, label: `${model.label} · ${t(VOICE_MODEL_KINDS[model.id] ?? '')}（${downloadSize(model.downloadBytes)}）` }))} />
     {status}
   </span>;
 }
@@ -68,24 +68,21 @@ function useCardBox(terminalId: string | null) {
   return box;
 }
 
-// The bars of one side of the sound wave, from the sphere outward: [height px, tint]. Short and blue by the sphere,
-// rising to a cyan peak, then lower and greyer blue, then dots.
-const BARS: [number, string][] = [[14, '#2f6dff'], [22, '#3480ff'], [34, '#3a9cff'], [48, '#3cc4ff'], [60, '#42d4ff'], [46, '#3aa8ff'],
-  [32, '#4a88f0'], [22, '#5a86d8'], [14, '#6688cc'], [8, '#7090c8']];
+// The bars of one side of the sound wave, from the sphere outward: their heights in px. Short by the sphere, rising to a peak, then lower, then dots.
+const BARS = [14, 22, 34, 48, 60, 46, 32, 22, 14, 8];
 const DOTS = 3;
 function Wave({ side }: { side: 'left' | 'right' }) {
   return <div className={`voice-wave is-${side}`}>
-    {BARS.map(([height, tint], index) => <i key={index} style={{ '--bar': `${height}px`, '--tint': tint, '--delay': `${(index * .13) % 1.3}s` } as CSSProperties} />)}
+    {BARS.map((height, index) => <i key={index} style={{ '--bar': `${height}px`, '--delay': `${(index * .13) % 1.3}s` } as CSSProperties} />)}
     {Array.from({ length: DOTS }, (_, index) => <i key={`dot${index}`} className="is-dot" />)}
   </div>;
 }
-// A microphone drawn to sit in the sphere: a rounded capsule, its stand, stem and foot, lit from above.
+// A microphone drawn to sit in the sphere: a rounded capsule, its stand, stem and foot.
 function MicrophoneGlyph() {
   return <svg viewBox="0 0 50 70" fill="none">
-    <defs><linearGradient id="voice-mic" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#ffffff" /><stop offset="1" stopColor="#d6e8ff" /></linearGradient></defs>
-    <rect x="13" y="2" width="24" height="38" rx="12" fill="url(#voice-mic)" />
-    <path d="M5 30c0 11 9 20 20 20s20-9 20-20" stroke="url(#voice-mic)" strokeWidth="4.5" strokeLinecap="round" />
-    <path d="M25 50v13M16 65h18" stroke="url(#voice-mic)" strokeWidth="4.5" strokeLinecap="round" />
+    <rect x="13" y="2" width="24" height="38" rx="12" fill="currentColor" />
+    <path d="M5 30c0 11 9 20 20 20s20-9 20-20" stroke="currentColor" strokeWidth="4.5" strokeLinecap="round" />
+    <path d="M25 50v13M16 65h18" stroke="currentColor" strokeWidth="4.5" strokeLinecap="round" />
   </svg>;
 }
 

@@ -1,6 +1,6 @@
 /* A compact window above the composer; the light backdrop keeps the conversation readable and a press on it closes. */
-.reading-terminal-overlay { position: absolute; inset: 0; z-index: 6; display: flex; align-items: flex-end; justify-content: center; padding: 12px 12px 76px; background: rgba(4, 9, 16, .06); }
-.reading-terminal-popup { position: relative; display: flex; flex-direction: column; width: min(720px, 100%); height: min(420px, 100%); max-width: none; max-height: none; min-width: 0; margin: 0; padding: 0; border: 0; border-radius: var(--card-radius, 12px); color: var(--ink); background: var(--glass-solid); backdrop-filter: var(--glass-filter, blur(24px)); box-shadow: inset 0 0 0 1px var(--card-line), 0 16px 48px rgba(0, 0, 0, .3); overflow: hidden; }
-.reading-terminal-popup > header { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 2px 10px; border-bottom: 1px solid var(--card-line); }
+.reading-terminal-overlay { position: absolute; inset: 0; z-index: 6; display: flex; align-items: flex-end; justify-content: center; padding: 12px 12px 76px; }
+.reading-terminal-popup { position: relative; display: flex; flex-direction: column; width: min(720px, 100%); height: min(420px, 100%); max-width: none; max-height: none; min-width: 0; margin: 0; padding: 0; border: 1px solid var(--grey-line); border-radius: 16px; color: var(--grey-ink); background: var(--grey-pane); overflow: hidden; }
+.reading-terminal-popup > header { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 2px 10px; border-bottom: 1px solid var(--grey-line); }
 .reading-terminal-popup > header strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 12px var(--font-mono); }
 .terminal-split-body .reading-terminal-popup > .terminal-host { position: relative; inset: auto; flex: 1; min-width: 0; min-height: 0; margin: 4px 6px; visibility: visible; }

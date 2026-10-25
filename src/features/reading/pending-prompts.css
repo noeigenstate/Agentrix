@@ -1,23 +1,23 @@
 .reading-pending.is-sending { opacity: .75; }
-.reading-pending > small { font-size: calc(11px * var(--reading-text)); color: var(--theme-accent, #8fcbff); }
+.reading-pending > small { font-size: calc(11px * var(--reading-text)); color: var(--grey-muted); }
 
 /* Pictures sent with a message, as small thumbnails under its text. */
 .reading-user-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .reading-user-images button { display: block; padding: 0; border: 0; border-radius: 8px; background: none; cursor: zoom-in; }
-.reading-user-images button:focus-visible { outline: 2px solid #8fcbff; outline-offset: 2px; }
-.reading-user-images img { display: block; max-width: 220px; max-height: 140px; border-radius: 8px; object-fit: cover; box-shadow: 0 0 0 1px rgba(255, 255, 255, .16); transition: box-shadow .15s ease; }
-.reading-user-images button:hover img { box-shadow: 0 0 0 2px rgba(143, 203, 255, .7); }
+.reading-user-images button:focus-visible { outline: 2px solid var(--grey-focus); outline-offset: 2px; }
+.reading-user-images img { display: block; max-width: 220px; max-height: 140px; border-radius: 8px; object-fit: cover; }
+.reading-user-images button:hover img { outline: 2px solid var(--grey-muted); }
 .reading-attachments .reading-user-images { margin: 0 0 0 8px; }
 .reading-attachments .reading-user-images img { max-width: 64px; max-height: 40px; border-radius: 4px; }
 .reading-attachments-remove { display: grid; place-items: center; width: 22px; height: 22px; margin-left: 2px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: inherit; opacity: .72; cursor: pointer; }
-.reading-attachments-remove:hover { opacity: 1; background: rgba(255, 255, 255, .12); }
+.reading-attachments-remove:hover { opacity: 1; background: var(--grey-hover); }
 .reading-attachments-remove:focus-visible { opacity: 1; outline: 1px solid currentColor; outline-offset: 1px; }
 
 /* A message the agent never took: marked in the warning colour, with what can be done about it. */
-.reading-pending.is-undelivered { box-shadow: inset 0 0 0 1px rgba(255, 176, 64, .55); }
+.reading-pending.is-undelivered { box-shadow: inset 0 0 0 1px var(--grey-ink); }
 .reading-undelivered { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
-.reading-undelivered small { flex: 1; font-size: calc(11.5px * var(--reading-text)); color: #ffc46b; }
+.reading-undelivered small { flex: 1; font-size: calc(11.5px * var(--reading-text)); font-weight: 600; color: var(--grey-ink); }
 
 /* A long message folds to three lines; its button sits under the text, in the text's column. */
 .reading-user > p.is-folded { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
-.reading-user-more { align-self: flex-start; margin-top: 4px; font-size: calc(12px * var(--reading-text)); color: var(--accent-blue, #6fb3ff); }
+.reading-user-more { align-self: flex-start; margin-top: 4px; font-size: calc(12px * var(--reading-text)); color: var(--grey-muted); }

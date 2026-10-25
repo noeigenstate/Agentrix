@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
 import { testRun } from './test-output.mjs';
+import { pick, picked } from './select-helper.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url), output = await testRun('glass-transparency');
@@ -17,7 +18,7 @@ const project = { id: randomUUID(), name: '透明度预览', path: projectPath, 
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', surface: 'glass', terminalRenderer: 'dom', notifications: false, sound: false, announce: false, restoreSessions: false, closeToTray: false } }));
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile };
 delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
-const theme = 'catalina';
+const theme = 'grey';
 let app, page; const errors = [], samples = [];
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
 async function launch() {
@@ -54,7 +55,8 @@ try {
   for (const value of [0, 75, 100]) {
     await settings({ glassTransparency: value }); const sample = await material();
     assert.equal(sample.ink, original.ink); assert.equal(sample.opacity, '1');
-    assert.equal(alpha(sample.backingDisplay === 'none' ? sample.tint : sample.backing), 1 - value / 100, JSON.stringify(sample));
+    // The grey design is opaque: the transparency setting is kept and stored, but no surface follows it.
+    assert.deepEqual(sample, original, `transparency ${value}% leaves the flat grey surfaces unchanged`); assert.equal(sample.tint, 'rgb(36, 36, 36)');
     assert.equal((await state()).projects[0].sessionId, session);
     assert.ok(await page.locator('.terminal-host').evaluate(node => node === globalThis.transparencyTerminal));
     samples.push({ theme, value, sample });
@@ -64,15 +66,15 @@ try {
   await page.evaluate(id => window.agentrix.writeTerminal(id, '\x03'), project.id);
   await settings({ glassTransparency: null });
   await page.getByRole('button', { name: '工作台设置', exact: true }).click();
-  await page.getByRole('combobox', { name: '玻璃透明度模式', exact: true }).selectOption('custom');
+  await pick(page, page.getByRole('combobox', { name: '玻璃透明度模式', exact: true }), 'custom');
   await page.getByRole('slider', { name: '背景透明度', exact: true }).fill('63');
   await waitFor(async () => (await state()).settings.glassTransparency === 63, 'slider saved');
   await page.screenshot({ path: path.join(output, 'settings.png') });
-  await page.getByRole('combobox', { name: '界面材质', exact: true }).selectOption('solid');
+  await pick(page, page.getByRole('combobox', { name: '界面材质', exact: true }), 'solid');
   assert.ok(await page.getByRole('slider', { name: '背景透明度', exact: true }).isDisabled());
   assert.ok(await page.getByRole('combobox', { name: '玻璃透明度模式', exact: true }).isDisabled());
   assert.equal((await state()).settings.glassTransparency, 63);
-  await page.getByRole('combobox', { name: '界面材质', exact: true }).selectOption('glass');
+  await pick(page, page.getByRole('combobox', { name: '界面材质', exact: true }), 'glass');
   await page.getByRole('button', { name: '完成', exact: true }).click();
   await page.getByRole('button', { name: '全屏查看 透明度预览', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('.focus-motion-panel'));
@@ -82,7 +84,7 @@ try {
   const cdp = await page.context().newCDPSession(page);
   await settings({ glassTransparency: 75 });
   const preview = await page.locator('.file-preview').evaluate(node => ({ tint: getComputedStyle(node).backgroundColor, backing: getComputedStyle(node, '::before').backgroundColor, backingDisplay: getComputedStyle(node, '::before').display }));
-  assert.equal(alpha(preview.backingDisplay === 'none' ? preview.tint : preview.backing), .25, theme + ': ' + JSON.stringify(preview));
+  assert.equal(preview.tint, 'rgb(25, 25, 25)', theme + ': the file view stays the opaque canvas grey at any transparency: ' + JSON.stringify(preview));
   for (const surface of ['solid', 'glass']) {
     if (surface === 'solid') await page.evaluate(() => window.agentrix.settings({ surface: 'solid' }));
     else { await page.evaluate(() => window.agentrix.settings({ surface: 'glass' })); await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }] }); }
@@ -98,6 +100,6 @@ try {
   assert.equal((await state()).settings.glassTransparency, 63);
   await waitFor(() => page.evaluate(() => document.documentElement.style.getPropertyValue('--glass-alpha') === '0.37'), 'transparency restores');
   await settings({ glassTransparency: null }); assert.deepEqual(errors, []);
-  console.log('PASS: Catalina, background-only transparency, exact default restoration, terminal identity and draft, slider persistence, solid/reduced-transparency expanded panes');
+  console.log('PASS: the transparency setting still stores and restores, while the flat grey surfaces ignore it; terminal identity and draft, slider persistence, opaque expanded panes');
 } catch (error) { if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {}); throw error; }
 finally { if (app) await app.close(); await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ samples, errors }, null, 2)); console.log('Transparency artifacts:', output); }

@@ -1,0 +1,115 @@
+/* Dialogs and Settings in grey: a dialog is a #242424 pane with radius 16 over a flat scrim; its fields are #2d2d2d with a hairline,
+   the left list of categories shows its selection by a fill, and a switch is a pill that turns from outline to solid. */
+dialog { color: var(--grey-ink); }
+.settings-dialog { width: 510px; max-width: calc(100vw - 40px); max-height: calc(100vh - 40px); padding: 0; overflow: auto; border: 1px solid var(--grey-line); border-radius: 16px; color: var(--grey-ink); background: var(--grey-pane); }
+.settings-dialog::backdrop { background: color-mix(in srgb, var(--grey-page) 80%, transparent); }
+.settings-dialog::-webkit-scrollbar-track { margin-block: 16px; }
+.dialog-content { padding: 24px; }
+.dialog-heading { display: flex; align-items: center; justify-content: space-between; }
+.dialog-heading h2 { margin: 8px 0 0; font-size: 20px; font-weight: 600; }
+.dialog-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 20px; }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--grey-line); }
+.setting-row > span { display: flex; align-items: center; gap: 12px; }
+.setting-row svg { flex: none; color: var(--grey-muted); }
+.setting-row b { display: block; font-size: 13px; font-weight: 600; }
+.setting-row small { display: block; margin-top: 4px; font-size: 12px; line-height: 20px; color: var(--grey-muted); }
+.setting-group { border-bottom: 1px solid var(--grey-line); }
+.setting-group > .setting-row { border-bottom: 0; }
+.setting-row select { height: 34px; padding: 0 8px; border: 1px solid var(--grey-line); border-radius: 12px; color: var(--select-value); background: var(--grey-row); }
+.setting-row .select-trigger { flex: none; width: 200px; }
+.setting-row input[type="checkbox"] { appearance: none; flex: 0 0 38px; position: relative; width: 38px; height: 22px; border: 1px solid var(--grey-line); border-radius: 999px; background: var(--grey-row); cursor: pointer; }
+.setting-row input[type="checkbox"]::before { content: ''; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--grey-muted); }
+.setting-row input[type="checkbox"]:checked { background: var(--grey-strong); border-color: var(--grey-strong); }
+.setting-row input[type="checkbox"]:checked::before { background: var(--grey-on-strong); transform: translateX(16px); }
+.setting-row input[type="range"] { accent-color: var(--grey-ink); }
+.settings-note { display: flex; gap: 8px; margin: 20px 0; color: var(--grey-muted); }
+.settings-note svg { flex-shrink: 0; margin-top: 3px; }
+.settings-note p { margin: 0; font-size: 12px; line-height: 20px; }
+.settings-section { scroll-margin-top: var(--settings-nav-offset, 100px); }
+.settings-section h3 { margin: 20px 0 8px; font-size: 12px; font-weight: 600; }
+.agent-setting .setting-row { padding: 12px 0 8px; border-bottom: 0; }
+.agent-command { display: block; padding-bottom: 12px; border-bottom: 1px solid var(--grey-line); font: 11px/1.7 var(--font-mono); overflow-wrap: anywhere; color: var(--grey-muted); }
+.agents-node { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; font-size: 12px; }
+.agents-error { white-space: pre-wrap; overflow-wrap: anywhere; }
+.agents-warning > span { flex: 1; min-width: 0; }
+.agents-warning > svg, .agents-warning > .button { flex-shrink: 0; }
+.glass-transparency-control { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; flex: 0 1 220px; }
+.glass-transparency-control input[type="range"] { flex: 1; width: 160px; min-width: 80px; height: 20px; }
+.glass-transparency-control output { min-width: 4ch; text-align: right; font-variant-numeric: tabular-nums; }
+.glass-transparency-endpoints { width: 100%; text-align: right; }
+
+/* Keyboard shortcuts: one row per action, the key shown as a key cap you click to record a new one. */
+.shortcut-settings { padding: 16px 0; border-bottom: 1px solid var(--grey-line); }
+.settings-section .shortcut-settings { padding-top: 0; }
+.shortcut-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; margin-top: 12px; }
+.shortcut-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; font-size: 12px; }
+.shortcut-key { min-width: 92px; height: 28px; padding: 0 12px; border: 1px solid var(--grey-line); border-radius: 8px; font: 400 11px var(--font-mono); text-align: center; color: var(--grey-ink); background: var(--grey-row); }
+.shortcut-key:hover { border-color: var(--grey-muted); }
+.shortcut-key.is-recording { border-color: var(--grey-focus); color: var(--grey-ink); font-family: inherit; }
+.shortcut-settings .form-error { margin: 12px 0 0; }
+.shortcut-note { margin: 12px 0 0; font-size: 12px; color: var(--grey-muted); }
+
+/* Updates, spoken summaries, the voice model. */
+.update-section { padding: 16px 0 0; }
+.update-heading { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.update-heading b { font-weight: 600; }
+.update-heading > span { font-size: 11px; color: var(--grey-muted); }
+.settings-section .update-heading h3 { margin: 20px 0 8px; }
+.update-section p { margin: 8px 0 12px; font-size: 12px; line-height: 20px; color: var(--grey-muted); }
+.update-section progress, .voice-model-setting progress { display: block; width: 100%; height: 6px; margin-bottom: 16px; accent-color: var(--grey-ink); }
+.update-actions { display: flex; justify-content: flex-end; }
+.voice-model-setting { display: flex; flex: none; align-items: center; gap: 12px; min-width: 0; }
+.voice-model-setting .select-trigger { width: 300px; max-width: 100%; }
+.voice-model-status { font-size: 12px; white-space: nowrap; color: var(--grey-muted); }
+.voice-model-status.is-ready { color: var(--grey-ink); }
+.summary-test { display: flex; align-items: center; gap: 12px; min-height: 32px; padding: 0 0 16px 32px; border-bottom: 1px solid var(--grey-line); }
+.summary-status { min-width: 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; color: var(--grey-muted); }
+.summary-status.is-ok, .summary-status.is-error { color: var(--grey-ink); }
+.summary-status.is-error { font-weight: 600; }
+.summary-settings > .setting-row { align-items: flex-start; }
+.summary-settings > .setting-row .select-trigger { flex: none; width: 250px; max-width: 46%; }
+.setting-row.terminal-font-row input { width: 220px; max-width: 48%; height: 34px; padding: 0 12px; border: 1px solid var(--grey-line); border-radius: 12px; font: inherit; color: var(--grey-ink); background: var(--grey-row); }
+.setting-row.terminal-font-row input::placeholder { color: var(--grey-muted); opacity: 1; }
+.user-avatar-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.user-avatar-preview { width: 34px; height: 34px; flex: none; }
+
+/* Settings as two panes: the categories on the left, the chosen one on the right. The dialog keeps one size, so moving between categories never makes it jump. */
+.settings-dialog.settings-paned { width: min(860px, calc(100vw - 40px)); max-width: none; height: min(640px, calc(100vh - 40px)); max-height: none; overflow: hidden; }
+.settings-shell { display: grid; grid-template-columns: 216px minmax(0, 1fr); height: 100%; }
+.settings-sidebar { display: flex; flex-direction: column; min-height: 0; padding: 24px 12px 16px; background: var(--grey-page); }
+.settings-brand { padding: 0 12px 16px; }
+.settings-brand h2 { margin: 4px 0 0; font-size: 16px; font-weight: 600; }
+.settings-nav { display: flex; flex-direction: column; gap: 4px; }
+.settings-nav button { display: flex; align-items: center; gap: 12px; width: 100%; height: 36px; padding: 0 12px; border: 0; border-radius: 8px; font-size: 13px; text-align: left; color: var(--grey-muted); background: transparent; }
+.settings-nav button svg { flex: none; }
+.settings-nav button:hover { color: var(--grey-ink); background: var(--grey-hover); }
+.settings-nav button[aria-current="page"] { color: var(--grey-ink); background: var(--grey-selected); }
+.settings-sidebar-footer { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: auto; padding: 12px 4px 0; border-top: 1px solid var(--grey-line); }
+.settings-sidebar-footer .text-button { display: inline-flex; align-items: center; gap: 8px; padding: 8px 8px; font-size: 12px; }
+.settings-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.settings-main-head { padding: 24px 32px 12px; border-bottom: 1px solid var(--grey-line); }
+.settings-main-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.settings-main-head p { margin: 4px 0 0; font-size: 12px; color: var(--grey-muted); }
+.settings-pane { flex: 1; min-height: 0; overflow: auto; padding: 8px 32px 16px; }
+.settings-pane > .settings-section:first-child > .setting-row:first-child { margin-top: 8px; }
+.settings-main-foot { display: flex; justify-content: flex-end; padding: 12px 32px 16px; border-top: 1px solid var(--grey-line); }
+@media (max-width: 640px) {
+  .settings-shell { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .settings-sidebar { padding: 16px 12px 8px; }
+  .settings-brand, .settings-sidebar-footer { display: none; }
+  .settings-nav { flex-direction: row; flex-wrap: wrap; }
+  .settings-nav button { width: auto; }
+}
+
+/* The usage guide: a centred card with the app mark, the page's text, a hairline and two wide buttons; and the tour that points at the window. */
+.tour-layer { position: fixed; inset: 0; z-index: 400; pointer-events: none; }
+.tour-shade { position: fixed; pointer-events: auto; background: color-mix(in srgb, var(--grey-page) 70%, transparent); }
+.tour-ring { position: fixed; pointer-events: none; border-radius: 8px; box-shadow: 0 0 0 2px var(--grey-focus); }
+.tour-ring.tour-blocked { pointer-events: auto; }
+.tour-bubble { position: fixed; pointer-events: auto; box-sizing: border-box; padding: 16px; border: 1px solid var(--grey-line); border-radius: 16px; color: var(--grey-ink); background: var(--grey-pane); }
+.tour-bubble h3 { margin: 4px 0 8px; font-size: 16px; font-weight: 600; }
+.tour-bubble p { margin: 0 0 8px; font-size: 13px; line-height: 20px; color: var(--grey-muted); }
+.tour-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.tour-bubble::before { content: ''; position: absolute; left: var(--tour-arrow); width: 12px; height: 12px; margin-left: -6px; background: var(--grey-pane); border: 1px solid var(--grey-line); border-right: 0; border-bottom: 0; display: none; }
+.tour-arrow-up::before { display: block; top: -7px; transform: rotate(45deg); }
+.tour-arrow-down::before { display: block; bottom: -7px; transform: rotate(225deg); }

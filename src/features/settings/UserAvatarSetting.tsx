@@ -2,7 +2,6 @@ import { useRef, useState } from 'react';
 import { UserCircle } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
 import { AVATAR_MAX_BYTES, AVATAR_TYPES, avatarFromFile } from './avatar-image';
-import './user-avatar-setting.css';
 
 // The picture shown wherever the user speaks: the reading view's timeline, queued messages. It is stored in settings,
 // so every place changes the moment it is picked.

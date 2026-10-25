@@ -1,49 +1,26 @@
-/* The dictation window: a pane of deep navy glass with a thin pale-blue rim. In its middle a glossy blue sphere
-   holds a white microphone inside two rings; sound-wave bars run out from it on both sides, peaking in cyan
-   and tapering to dots, and rise and fall with the voice. Below: the state, then the keys. */
-/* Drawn at full size below and scaled as a whole, so every proportion of the design holds. */
-.voice-overlay-anchor { container-type: size; }
-.voice-overlay { zoom: .82; position: relative; width: 420px; max-width: calc(100% - 32px); display: flex; flex-direction: column; align-items: center; padding: 34px 28px 30px; border-radius: 18px; color: #ffffff; isolation: isolate; pointer-events: none;
-  background: radial-gradient(120% 70% at 50% 0%, rgba(70, 110, 190, .2), transparent 65%), linear-gradient(180deg, rgba(20, 30, 50, .84), rgba(11, 17, 31, .9));
-  backdrop-filter: blur(24px) saturate(140%);
-  box-shadow: 0 24px 60px -16px rgba(0, 0, 0, .65), 0 0 44px -14px rgba(60, 130, 255, .5), inset 0 0 44px rgba(70, 120, 230, .07);
-  transform-origin: 50% 60%; animation: voice-rise .26s cubic-bezier(.2, .9, .25, 1.08); }
-/* The rim: brightest along the top, a little bluer down the sides. */
-.voice-overlay::after { content: ''; position: absolute; inset: 0; padding: 1.5px; border-radius: inherit; pointer-events: none;
-  background: linear-gradient(180deg, rgba(170, 200, 255, .9), rgba(100, 150, 240, .5) 45%, rgba(110, 160, 250, .7));
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask-composite: exclude; }
-@keyframes voice-rise { from { opacity: 0; transform: translateY(10px) scale(.96); } }
+/* The dictation window, in grey: a #242424 pane with a flat disc for the microphone, two rings that follow the voice level and bars either side
+   that rise and fall with it. Below: the state, then the keys. Drawn at full size and scaled as a whole, so every proportion holds. */
+.voice-overlay-anchor { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; pointer-events: none; container-type: size; }
+.voice-overlay { zoom: .82; position: relative; width: 420px; max-width: calc(100% - 32px); display: flex; flex-direction: column; align-items: center; padding: 32px 24px 32px; border: 1px solid var(--grey-line); border-radius: 16px; color: var(--grey-ink); background: var(--grey-pane); pointer-events: none; }
 @container (max-width: 560px) or (max-height: 440px) { .voice-overlay { zoom: .62; } }
-
 .voice-stage { position: relative; width: 100%; height: 196px; display: grid; place-items: center; }
-/* Two rings: a deep blue band hugging the sphere, and a faint line further out that breathes with the voice. */
 .voice-halo { position: absolute; left: 50%; top: 50%; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
-.voice-halo.is-near { width: 154px; height: 154px; background: radial-gradient(circle, rgba(24, 56, 150, .6) 70%, rgba(30, 70, 175, .5));
-  box-shadow: 0 0 0 1px rgba(90, 150, 255, .45), 0 0 30px rgba(40, 110, 255, .35); }
-.voice-halo.is-far { width: calc(186px + var(--voice-level, 0) * 14px); height: calc(186px + var(--voice-level, 0) * 14px);
-  background: radial-gradient(circle, transparent 60%, rgba(30, 70, 170, .16)); box-shadow: 0 0 0 1px rgba(90, 140, 235, .32); transition: width .08s linear, height .08s linear; }
-/* The sphere: glossy blue, lighter at the upper left, with a pale bright rim. */
-.voice-orb { position: relative; z-index: 1; width: 124px; height: 124px; border-radius: 50%; display: grid; place-items: center;
-  background: radial-gradient(circle at 34% 24%, #6aa0ff 0%, #3271ff 32%, #1554ea 62%, #0b3fcf 100%);
-  box-shadow: inset 0 0 0 3px rgba(150, 205, 255, .85), inset 0 -12px 22px rgba(10, 40, 160, .45), 0 0 0 1.5px rgba(40, 100, 230, .8), 0 0 38px rgba(40, 120, 255, .7); }
-.voice-orb::before { content: ''; position: absolute; left: 16%; top: 10%; width: 50%; height: 32%; border-radius: 50%; transform: rotate(-22deg);
-  background: radial-gradient(ellipse at 50% 40%, rgba(255, 255, 255, .3), transparent 72%); }
-.voice-orb svg { position: relative; z-index: 1; width: 46px; height: 64px; filter: drop-shadow(0 2px 4px rgba(4, 20, 90, .4)); }
-.voice-orb .loading-spinner { width: 42px; height: 42px; color: #e8f4ff; }
-/* Sound-wave bars, mirrored on either side. Each bar keeps its own tint; the voice scales them. */
+.voice-halo.is-near { width: 154px; height: 154px; background: var(--grey-row); }
+.voice-halo.is-far { width: calc(186px + var(--voice-level, 0) * 14px); height: calc(186px + var(--voice-level, 0) * 14px); box-shadow: 0 0 0 1px var(--grey-line); }
+.voice-orb { position: relative; z-index: 1; width: 124px; height: 124px; border-radius: 50%; display: grid; place-items: center; color: var(--grey-ink); background: var(--grey-selected); }
+.voice-orb svg { position: relative; z-index: 1; width: 46px; height: 64px; }
+.voice-orb .loading-spinner { width: 42px; height: 42px; color: var(--grey-ink); }
 .voice-wave { position: absolute; z-index: 2; top: 50%; display: flex; align-items: center; gap: 5px; height: 80px; transform: translateY(-50%); pointer-events: none; }
-.voice-wave.is-left { right: calc(50% + 80px); flex-direction: row-reverse; }.voice-wave.is-right { left: calc(50% + 80px); }
-.voice-wave i { display: block; width: 3px; height: var(--bar); border-radius: 2px; background: var(--tint); box-shadow: 0 0 6px var(--tint);
-  transform: scaleY(calc(.45 + var(--voice-level, 0) * 1.1)); transition: transform .09s linear; }
-.voice-wave i.is-dot { width: 3.5px; height: 3.5px; border-radius: 50%; background: rgba(110, 150, 225, .75); box-shadow: none; transform: none; }
-.voice-stage.is-recording .voice-wave i:not(.is-dot) { animation: voice-bar 1.3s ease-in-out infinite; animation-delay: var(--delay); }
-@keyframes voice-bar { 0%, 100% { opacity: .8; } 50% { opacity: 1; filter: brightness(1.2); } }
+.voice-wave.is-left { right: calc(50% + 80px); flex-direction: row-reverse; }
+.voice-wave.is-right { left: calc(50% + 80px); }
+.voice-wave i { display: block; width: 3px; height: var(--bar); border-radius: 2px; background: var(--grey-muted); transform: scaleY(calc(.45 + var(--voice-level, 0) * 1.1)); }
+.voice-wave i.is-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--grey-line); transform: none; }
 .voice-stage.is-busy .voice-wave { opacity: .4; }
-
-.voice-overlay .voice-title { margin-top: 8px; font-size: 22px; font-weight: 700; letter-spacing: 1px; line-height: 1.3; color: #ffffff; text-shadow: 0 1px 2px rgba(0, 0, 0, .4); }
-.voice-overlay-keys { display: flex; align-items: center; gap: 11px; margin-top: 20px; font-size: 15px; color: #aeb9cb; }
-.voice-overlay-keys kbd { min-width: 0; padding: 6px 17px; border-radius: 8px; border: 1px solid rgba(140, 165, 215, .45); background: rgba(14, 22, 40, .72); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
-  color: #f2f6ff; font: 600 15px var(--font-ui); letter-spacing: .3px; }
-.voice-overlay-keys .voice-keys-gap { width: 1px; height: 22px; margin: 0 14px; background: rgba(160, 180, 220, .3); }
-:root[data-surface="solid"] .voice-overlay { background: #111a2c; backdrop-filter: none; }
-@media (prefers-reduced-transparency: reduce) { .voice-overlay { background: #111a2c; backdrop-filter: none; } }
+.voice-overlay .voice-title { margin-top: 8px; font-size: 20px; font-weight: 600; line-height: 28px; color: var(--grey-ink); }
+.voice-overlay-keys { display: flex; align-items: center; gap: 12px; margin-top: 20px; font-size: 13px; color: var(--grey-muted); }
+.voice-overlay-keys kbd { min-width: 0; padding: 4px 16px; border-radius: 8px; font: 600 13px var(--font-ui); color: var(--grey-ink); background: var(--grey-row); }
+.voice-overlay-keys .voice-keys-gap { width: 1px; height: 20px; margin: 0 12px; background: var(--grey-line); }
+/* The microphone button: it is the grey of its surroundings when a device is connected or busy, and a solid light disc while it records. */
+.voice-button.mic-missing { color: var(--grey-muted); }
+.voice-button.is-recording { color: var(--grey-on-strong); background: var(--grey-strong); }
+.voice-button.is-recording:hover { background: #ffffff; }

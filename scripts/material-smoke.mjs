@@ -18,10 +18,10 @@ await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ versio
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const packaged = process.argv.includes('--packaged'); let app, page;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
-const theme = 'catalina';
+const theme = 'grey';
 const errors = [], performanceSamples = [], materials = [], typography = [], edges = [];
-const layoutGap = 6;
-// Every panel keeps the same gap to its neighbours, the title bar and the bottom of the window.
+const layoutGap = 12;
+// Every card keeps the same gap to its neighbours, the title bar and the bottom of the window; the explorer is a band flush with the window's edges.
 async function checkGaps(mode) {
   const gaps = await page.evaluate(() => {
     const rect = selector => document.querySelector(selector)?.getBoundingClientRect();
@@ -33,7 +33,7 @@ async function checkGaps(mode) {
     else measured.left = left;
     return measured;
   });
-  for (const [name, value] of Object.entries(gaps)) assert.ok(Math.abs(value - layoutGap) <= 1, `${mode}: ${name} gap is ${value}px, expected ${layoutGap}px`);
+  for (const [name, value] of Object.entries(gaps)) { const expected = name.startsWith('side') && name !== 'sideToPanel' ? 0 : layoutGap; assert.ok(Math.abs(value - expected) <= 1, `${mode}: ${name} gap is ${value}px, expected ${expected}px`); }
   edges.push({ mode, gaps });
 }
 async function checkEdges(mode) {
@@ -68,16 +68,14 @@ try {
   await checkEdges('overview');
   await checkGaps('overview');
   const geometry = await page.locator('.agentrix').evaluate(grid => ({ gap: getComputedStyle(grid).gap, radius: getComputedStyle(grid.querySelector('.project-panel')).borderTopLeftRadius, header: getComputedStyle(grid.querySelector('.panel-header')).borderTopLeftRadius }));
-  assert.deepEqual(geometry, { gap: `${layoutGap}px`, radius: '16px', header: '15px' });
+  assert.deepEqual(geometry, { gap: `${layoutGap}px`, radius: '16px', header: '16px' });
   for (const project of projects.slice(0, 6)) await page.evaluate(id => window.agentrix.startTerminal(id), project.id);
   await waitFor(async () => (await state()).projects.slice(0, 6).every(project => project.shellReady), 'six real shells ready');
-  const lens = await page.locator('.app-shell').evaluate(node => node.style.getPropertyValue('--liquid-backdrop'));
   for (const count of [6, 16]) {
     await search.fill(count === 6 ? '运行样例' : '');
     await waitFor(async () => (await state()).projects.slice(0, 6).every(project => project.shellReady), 'shells ready for next output stream');
     for (const project of projects.slice(0, 6)) await page.evaluate(id => window.agentrix.writeTerminal(id, "for ($pgGlassFrame=0; $pgGlassFrame -lt 120; $pgGlassFrame++) { [Console]::WriteLine(('LIVE OUTPUT {0:D3}  中文与 ANSI 字体保持清晰' -f $pgGlassFrame)); Start-Sleep -Milliseconds 50 }\r"), project.id);
-    for (const [mode, filter] of [['withoutLens', 'blur(1.5px) saturate(135%)'], ['withLens', lens]]) {
-      await page.locator('.app-shell').evaluate((node, filter) => node.style.setProperty('--liquid-backdrop', filter), filter);
+    for (const mode of ['flat']) {
       await app.evaluate(({ app }) => { app.getAppMetrics(); }); // Start this group's CPU sampling interval.
       const frames = await page.evaluate(async () => {
         await new Promise(resolve => setTimeout(resolve, 200));
@@ -107,7 +105,7 @@ try {
   const sessions = (await state()).projects[0].terminals.map(terminal => terminal.sessionId);
   const cells = await readCells(first.locator('.xterm-rows').first());
   for (const cell of cells) {
-    // Terminal text is regular, and bold is 700, on Catalina (terminal-theme.ts).
+    // Terminal text is regular, and bold is 700 (terminal-theme.ts).
     assert.equal(cell.weight, cell.label === 'BOLD' ? '700' : '400');
     assert.equal(cell.size, '13px', 'user font size stays unchanged');
     assert.equal(cell.filter, 'none'); assert.equal(cell.opacity, '1');
@@ -158,6 +156,6 @@ try {
   await cdp.send('Emulation.setEmulatedMedia', { features: [] }); await cdp.detach();
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, performanceSamples, materials, typography, edges, errors }, null, 2));
-  console.log(`PASS: 6/16 glass cards with six streaming PTYs, split ANSI/selection/cursor, opaque reduced-transparency fallback on Catalina. Evidence: ${output}`);
+  console.log(`PASS: 6/16 flat grey cards with six streaming PTYs, split ANSI/selection/cursor, opaque surfaces under reduced transparency. Evidence: ${output}`);
 } catch (error) { if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {}); throw error; }
 finally { if (app) await app.close(); }

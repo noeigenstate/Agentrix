@@ -35,7 +35,7 @@ export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects:
     },
     {
       id: 'prompt', title: t('下达指令'), interactive: true,
-      body: [t('直接写下要做的事，按回车发送；按 {key} 可以用说的。', { key: shortcut('voice') }), t('这一轮做完，方框亮起粉色并语音提醒，你不必盯着。')],
+      body: [t('直接写下要做的事，按回车发送；按 {key} 可以用说的。', { key: shortcut('voice') }), t('这一轮做完，方框亮起白色边框并语音提醒，你不必盯着。')],
       target: () => visible('.project-panel'), done: () => !!project?.codexActive && project.codexActivity === 'working',
     },
     {

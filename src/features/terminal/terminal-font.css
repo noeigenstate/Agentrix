@@ -1,3 +1,0 @@
-.setting-row.terminal-font-row input { width: 220px; max-width: 48%; padding: 8px 10px; border: 1px solid var(--theme-line); border-radius: 7px; background: var(--theme-control); color: var(--theme-ink); font: inherit; }
-.setting-row.terminal-font-row input::placeholder { color: var(--theme-muted); opacity: 1; }
-.setting-row.terminal-font-row input:focus-visible { outline: 2px solid var(--theme-accent); outline-offset: 2px; }

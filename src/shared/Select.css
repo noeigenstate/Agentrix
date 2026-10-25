@@ -1,0 +1,15 @@
+/* The shared dropdown. Trigger: the field fill with a hairline, 34px, radius 12. Menu: as wide as the trigger and one grey step
+   above what it opens over (the canvas, or a dialog or card, which is already a step up), with the one soft shadow in the app. */
+.select-trigger { display: inline-flex; align-items: center; gap: 8px; box-sizing: border-box; min-width: 0; height: 34px; padding: 0 10px 0 12px; border: 1px solid var(--grey-line); border-radius: 12px; font: 13px var(--font-ui); text-align: left; color: var(--select-value); background: var(--grey-row); cursor: pointer; }
+.select-trigger:hover:not(:disabled), .select-trigger[aria-expanded="true"] { border-color: var(--grey-faint); }
+.select-trigger:focus-visible { outline: 2px solid var(--grey-focus); outline-offset: 2px; }
+.select-trigger:disabled { opacity: .5; cursor: default; }
+.select-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.select-trigger > svg { flex: none; color: var(--select-caret); opacity: .8; pointer-events: none; }
+.select-menu { position: fixed; z-index: 500; box-sizing: border-box; margin: 0; padding: 4px; overflow-y: auto; scrollbar-width: thin; list-style: none; border: 1px solid var(--grey-line); border-radius: 12px; background: var(--grey-pane); box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+.select-menu.is-raised { background: var(--grey-row); }
+.select-menu li { display: flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px var(--font-ui); color: var(--select-item); cursor: pointer; }
+.select-menu li[data-active="true"] { background: var(--grey-hover); }
+.select-menu.is-raised li[data-active="true"] { background: color-mix(in srgb, var(--grey-row), var(--grey-selected) 50%); }
+.select-menu li[aria-selected="true"] { font-weight: 600; color: var(--select-value); background: var(--grey-selected); }
+.select-menu li[aria-disabled="true"] { opacity: .45; cursor: default; }

@@ -1,59 +1,12 @@
+/* The one token set of the app (the grey design). Surfaces from the page up: page (#191919, also the right side) < pane and card (#242424) < input
+   and row fill, hover (#2d2d2d) < selected and the hairline (#404040). One hairline; one ring for keyboard focus. Text: primary, secondary, placeholder
+   (the last is also the disabled grey). Radii: 0 for layout regions, 16 real cards, menus and dialogs, 12 the composer box and dropdown triggers,
+   8 buttons, pickers, rows and wells, the pill only for tags. The dropdowns carry the owner's own three text greys. */
 :root {
   color-scheme: dark;
-  --theme-accent: #b9e6d5;
-  --theme-ink: #ffffff;
-  --theme-muted: #e7f1fa;
-  --theme-line: #deefff38;
-  --theme-hover: #e6f4ff14;
-  --theme-editor: #07131b88;
-  --theme-code: #07131baa;
+  --grey-page: #191919; --grey-pane: #242424; --grey-card: #242424; --grey-row: #2d2d2d; --grey-sunken: #191919;
+  --grey-hover: #2d2d2d; --grey-selected: #404040; --grey-strong: #f0f0f0; --grey-on-strong: #191919;
+  --grey-line: #404040; --grey-focus: #ffffff;
+  --grey-ink: #f0f0f0; --grey-muted: #a3a3a3; --grey-faint: #8c8c8c;
+  --select-value: #f3f4f6; --select-item: #e5e7eb; --select-caret: #9ca3af;
 }
-:root[data-theme="catalina"] {
-  background: #2b2d46;
-  --glass: rgba(24, 24, 44, .42);
-  --glass-strong: rgba(26, 26, 48, .74);
-  --glass-solid: #26283f;
-  --glass-border: #e4e2ff57;
-  --theme-accent: #b9b6f2;
-  --theme-ink: #f9f8ff;
-  --theme-muted: #e8e7f8;
-  --theme-line: #d2d0f03b;
-  --theme-hover: #d6d4ff16;
-  --theme-chrome: rgba(26, 26, 46, .5);
-  --theme-sidebar: rgba(24, 24, 44, .52);
-  --theme-pane: rgba(10, 10, 26, .16);
-  --theme-control: rgba(56, 56, 92, .2);
-  --theme-editor: rgba(16, 16, 32, .4);
-  --theme-code: #16163066;
-  --theme-button: #dcdaf4a1;
-  --theme-button-ink: #2f2c58;
-}
-:root[data-theme="catalina"] .app-shell {
-  --wallpaper: url('../../assets/macos-catalina.webp') center 42% / cover no-repeat;
-}
-:root[data-theme="catalina"] .titlebar { background: transparent; }
-:root[data-theme="catalina"] .focus-sidebar { background: var(--glass-sheen), var(--theme-sidebar); border-color: var(--glass-hairline); }
-:root[data-theme="catalina"] :is(.settings-dialog, .dropdown) { background: var(--glass-sheen), var(--glass-strong); border-color: var(--theme-line); color: var(--theme-ink); }
-:root[data-theme="catalina"] .file-preview { background: var(--glass-sheen), var(--theme-sidebar); border-color: var(--glass-hairline); }
-:root[data-theme="catalina"] .panel-terminal-area { background: var(--theme-pane); }
-:root[data-theme="catalina"] .terminal-grid.has-splits { background: var(--theme-line); }
-:root[data-theme="catalina"] .has-splits .terminal-split { background: var(--theme-pane); }
-:root[data-theme="catalina"] .panel-header { background: transparent; border-color: var(--theme-line); }
-:root[data-theme="catalina"] :is(.search-input, .setting-row select, .button.secondary, .file-name-label input, .titlebar-tools > .icon-button) { background: var(--glass-sheen), var(--theme-control); border-color: var(--theme-line); color: var(--theme-ink); }
-:root[data-theme="catalina"] .button.primary { background: linear-gradient(160deg, #fff7f160, #ffffff00), var(--theme-button); color: var(--theme-button-ink); border-color: #fff7f1a3; }
-:root[data-theme="catalina"] .button.primary:hover { filter: brightness(1.07); }
-:root[data-theme="catalina"] :is(.panel-name, .tree-row, .titlebar-brand, .terminal-split-header > span:first-child, .file-tabs, .preview-option, .text-button:not(.danger-text)) { color: var(--theme-ink); }
-:root[data-theme="catalina"] :is(.panel-meta, .explorer-path, .workspace-summary, .file-preview-toolbar, .file-preview-footer, .preview-readonly, .settings-note, .setting-row small, .setting-row svg) { color: var(--theme-muted); }
-:root[data-theme="catalina"] :is(.icon-button:hover:not(.window-close), .dropdown button:hover, .preview-option[aria-pressed="true"]) { background: var(--theme-hover); border-color: var(--theme-line); }
-:root[data-theme="catalina"] .setting-row input[type="checkbox"]:checked { background: var(--theme-accent); border-color: #fff5e999; }
-:root[data-theme="catalina"] :is(.setting-row, .setting-group, .shortcut-settings) { border-color: var(--theme-line); }
-:root[data-theme="catalina"] :is(.file-text-editor, .file-code-scroll) { background: var(--theme-editor); color: var(--theme-ink); }
-:root[data-theme="catalina"] .file-editor { background: var(--theme-editor); }
-:root[data-theme="catalina"] .file-editor .file-text-editor { background: transparent; }
-:root[data-theme="catalina"] .editor-gutter { color: var(--theme-muted); border-color: var(--theme-line); }
-:root[data-theme="catalina"] .editor-gutter .is-current { color: var(--theme-ink); }
-:root[data-theme="catalina"] .file-text-editor:focus { box-shadow: inset 0 0 0 1px var(--theme-line); }
-@media (prefers-reduced-transparency: reduce) {
-  :root[data-theme="catalina"] :is(.project-panel, .titlebar, .focus-sidebar, .file-preview, .settings-dialog, .dropdown) { background: var(--glass-solid); backdrop-filter: none; }
-}
-:root[data-surface="solid"][data-theme="catalina"] :is(.project-panel, .titlebar, .focus-sidebar, .file-preview, .settings-dialog, .dropdown) { background: var(--glass-solid); backdrop-filter: none; }

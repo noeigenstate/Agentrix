@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowsOutSimple, Play, Plus, Terminal as TerminalIcon, DotsThree, GitBranch, X, FolderOpen, ArrowCounterClockwise, Info, Globe, ListChecks, Article } from '@phosphor-icons/react';
 import type { Project, Result } from '../../shared/types';
 import { ProjectTerminals } from '../terminal/ProjectTerminals';
-import { projectAccent } from './project-colors';
 import { ActivityPane } from '../agents/ActivityPane';
 import { readingShown, setReading, useTerminalChoice } from '../reading/reading-mode';
 import { VoiceButton } from '../voice/VoiceButton';
@@ -75,10 +74,9 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
     className={`project-panel ${showActivity ? 'has-activity' : ''} ${project.unread && !working ? 'has-unread' : ''} ${freshCompletion ? 'attention-active' : ''} ${working ? 'is-working' : ''} ${roundComplete ? 'round-complete' : ''} ${focused ? 'is-focused' : ''} ${navTarget ? 'is-nav-target' : ''} ${project.error ? 'has-error' : ''} ${dragging ? 'drag-source' : ''} ${dropTarget ? 'drop-target' : ''}`}
     data-project-id={project.id} data-status={working ? 'working' : project.unread ? 'unread' : project.status}
     tabIndex={-1}
-    style={{ display: hidden ? 'none' : undefined, '--project-accent': projectAccent(index) } as CSSProperties}
+    style={{ display: hidden ? 'none' : undefined }}
   >
     <span key={signalKey} className="panel-signal" aria-hidden="true" />
-    <span key={`glow:${signalKey}`} className="panel-glow" aria-hidden="true" />
     {navTarget && <span key={`nav:${navTarget}`} className="panel-nav-ring" aria-hidden="true" />}
     {/* Where next/previous project landed, over the card itself (the screen-reader announcement is ProjectSwitchHud). */}
     {navTarget && <div key={`hud:${navTarget}`} className="panel-nav-hud" aria-hidden="true"><span className="project-switch-index">{String(index + 1).padStart(2, '0')}</span><b>{project.name}</b>{navPosition && <small>{navPosition}</small>}</div>}

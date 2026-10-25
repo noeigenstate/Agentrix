@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
 import { testRun } from './test-output.mjs';
+import { pick, picked } from './select-helper.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
 const { desktopGlassKind } = require('../electron/desktop-glass.cjs');
@@ -79,7 +80,8 @@ try {
       console.log(renderer + ' weight ' + weight); const ink = await capture(renderer + '-' + weight + '.png'); counts.push(ink); results.fonts.push({ renderer, weight, ink }); assert.equal((await state()).projects[0].sessionId, session);
     }
     assert.ok(counts[2] > counts[0] * 1.15, renderer + ' heavier text must cover more pixels');
-    await page.evaluate(() => window.agentrix.settings({ terminalFontWeight: 400 })); await page.waitForTimeout(300); assert.equal(await capture(renderer + '-restored.png'), counts[0], 'standard weight restores the same raster');
+    await page.evaluate(() => window.agentrix.settings({ terminalFontWeight: 400 })); await page.waitForTimeout(300); // The cards are opaque now, so Windows draws their text with ClearType and a re-rasterised line can differ by a few sub-pixels: the same raster within 2%.
+    const restored = await capture(renderer + '-restored.png'); assert.ok(Math.abs(restored - counts[0]) <= counts[0] * .02, `standard weight restores the same raster: ${restored} vs ${counts[0]}`);
   }
   const cdp = await page.context().newCDPSession(page); await cdp.send('DOM.enable'); await cdp.send('CSS.enable');
   async function platformFonts() {
@@ -117,7 +119,7 @@ try {
   results.checks.push('actual Latin/CJK platform families recorded; GPU and DOM live changes; missing and empty families fall back to original fonts');
   await write("Write-Output 'READABILITY_UNSENT_DRAFT'");
   await page.getByRole('button', { name: '工作台设置', exact: true }).click();
-  await page.getByRole('combobox', { name: '终端字重', exact: true }).selectOption('600');
+  await pick(page, page.getByRole('combobox', { name: '终端字重', exact: true }), '600');
   const latinInput = page.getByLabel('终端西文字体', { exact: true }), chineseInput = page.getByLabel('终端中文字体', { exact: true });
   await latinInput.fill('Consolas'); await latinInput.press('Enter'); await chineseInput.fill('Noto Sans SC'); await chineseInput.press('Enter');
   await page.waitForFunction(() => document.documentElement.dataset.terminalFontFamily.startsWith("'Consolas'") && document.documentElement.dataset.terminalFontFamily.includes("'Noto Sans SC'"));

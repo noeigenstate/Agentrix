@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
 import { testRun } from './test-output.mjs';
+import { pick, picked } from './select-helper.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
 const { desktopGlassKind } = require('../electron/desktop-glass.cjs'), backend = desktopGlassKind();
@@ -36,7 +37,7 @@ async function capture(name) {
   await fs.writeFile(path.join(output, name), bytes);
   if (name.endsWith('-solid.png')) {
     const pane = await app.evaluate(({ nativeImage }, encoded) => { const image = nativeImage.createFromBuffer(Buffer.from(encoded, 'base64')), size = image.getSize(), pixels = image.toBitmap(), offset = (Math.floor(size.height * .7) * size.width + Math.floor(size.width / 2)) * 4; return [pixels[offset + 2], pixels[offset + 1], pixels[offset]]; }, bytes.toString('base64'));
-    assert.deepEqual(pane, [38, 40, 63], 'screenshot must show the selected solid theme');
+    assert.deepEqual(pane, [36, 36, 36], 'screenshot must show the flat grey card');
   }
 }
 try {
@@ -56,21 +57,21 @@ try {
     }
     const sample = await page.locator('.project-panel').evaluate(node => ({ ink: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor, opacity: getComputedStyle(node).opacity, backdrop: getComputedStyle(node).backdropFilter }));
     assert.equal(sample.opacity, '1'); if (mode.visual !== 'glass') assert.equal(sample.backdrop, 'none');
-    assert.equal(sample.ink, 'rgba(255, 255, 255, 0.92)');
+    assert.equal(sample.ink, 'rgb(240, 240, 240)');
     assert.equal((await state()).projects[0].sessionId, session); assert.ok(await terminal.evaluate(node => node.isConnected));
     results.cases.push({ theme, renderer, mode: mode.visual, ...sample });
-    if (mode.surface === 'solid' && renderer === 'dom') await capture('catalina-solid.png');
+    if (mode.surface === 'solid' && renderer === 'dom') await capture('grey-solid.png');
   }
   await page.evaluate(() => window.agentrix.writeTerminal('appearance', "Write-Output 'APPEARANCE_UNSENT_DRAFT'"));
   await settings({ fontSize: 18, terminalFontWeight: 600, terminalFontFamily: 'Consolas', terminalCjkFontFamily: 'Noto Sans SC', surface: 'glass', glassBackground: backend ? 'desktop' : 'theme' });
   assert.equal((await state()).settings.fontSize, 18);
   await page.getByRole('button', { name: '工作台设置', exact: true }).click();
-  await capture('catalina-settings.png');
+  await capture('grey-settings.png');
   const material = page.getByRole('combobox', { name: '界面材质', exact: true });
-  assert.deepEqual(await material.locator('option').evaluateAll(options => options.map(option => option.value)), ['glass', 'solid']);
-  const background = page.getByRole('combobox', { name: '玻璃背景', exact: true }); assert.equal(await background.inputValue(), backend ? 'desktop' : 'theme');
-  await material.selectOption('solid'); await background.waitFor({ state: 'detached' });
-  await material.selectOption('glass'); await background.waitFor(); assert.equal(await background.inputValue(), backend ? 'desktop' : 'theme');
+  await material.click(); assert.deepEqual(await page.locator('.select-menu [role="option"]').evaluateAll(options => options.map(option => option.dataset.value)), ['glass', 'solid']); await page.keyboard.press('Escape');
+  const background = page.getByRole('combobox', { name: '玻璃背景', exact: true }); assert.equal(await picked(background), backend ? 'desktop' : 'theme');
+  await pick(page, material, 'solid'); await background.waitFor({ state: 'detached' });
+  await pick(page, material, 'glass'); await background.waitFor(); assert.equal(await picked(background), backend ? 'desktop' : 'theme');
   assert.equal((await state()).settings.fontSize, 18); assert.equal((await state()).settings.terminalFontWeight, 600);
   assert.equal((await state()).settings.notifications, false); assert.equal((await state()).settings.restoreSessions, false); assert.deepEqual((await state()).settings.shortcuts, { search: 'Ctrl+K' });
   assert.equal((await state()).projects[0].sessionId, session);
@@ -85,9 +86,9 @@ try {
   await settings({ language: 'en' }); await page.getByRole('button', { name: 'Workspace settings', exact: true }).click();
   await page.getByRole('combobox', { name: 'Glass background', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Done', exact: true }).click(); await settings({ language: 'zh' });
-  await app.close(); app = null; await launch(); await page.waitForFunction(() => document.documentElement.dataset.theme === 'catalina'); assert.equal((await state()).settings.glassBackground, backend ? 'desktop' : 'theme');
+  await app.close(); app = null; await launch(); await page.waitForSelector('.project-panel'); assert.equal((await state()).settings.glassBackground, backend ? 'desktop' : 'theme');
   assert.deepEqual(fontRequests, [], 'installed fonts must not trigger font downloads'); assert.deepEqual(errors, []);
-  results.checks = ['Catalina × renderers × linked materials', 'native/theme background selection remembered through solid mode', 'truecolor program surfaces preserved', 'font, session, host and draft preserved', 'file preview on Catalina', 'English settings', 'restart and no font downloads'];
+  results.checks = ['grey design × renderers × linked materials', 'native/theme background selection remembered through solid mode', 'truecolor program surfaces preserved', 'font, session, host and draft preserved', 'file preview on the grey canvas', 'English settings', 'restart and no font downloads'];
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(results, null, 2)); console.log('PASS ' + results.cases.length + ' appearance combinations: ' + output);
 } catch (error) { await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(results, null, 2)); if (app) await capture('failure.png').catch(() => {}); throw error; }
 finally { if (app) await app.close(); }

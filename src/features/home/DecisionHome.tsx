@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from 'react';
-import { ArrowUp, CaretDown, CircleNotch, FolderSimple, X } from '@phosphor-icons/react';
+import { ArrowUp, CircleNotch, FolderSimple, X } from '@phosphor-icons/react';
 import type { Project, Result } from '../../shared/types';
 import type { Decision } from './decisions';
 import { DecisionCard } from './DecisionCard';
@@ -13,6 +13,7 @@ import { VoiceButton } from '../voice/VoiceButton';
 import { useDictatedBox } from '../voice/voice-input';
 import { showPopup } from '../files/file-popup';
 import { t } from '../../shared/i18n';
+import { Select } from '../../shared/Select';
 import './home.css';
 
 // The home page as an inbox, for grading the work like a teacher: one list of what needs you and of every session, by
@@ -59,6 +60,7 @@ export function DecisionHome({ projects, decisions, snoozed, onOpenProject, onOp
 }
 
 const VOICE_TARGET = 'decision-home';
+const AGENT_OPTIONS = [{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex' }];
 
 // "What next": a goal sent to a project's agent from here, without leaving the page. One that runs gets it at once (it
 // queues it while it works); otherwise the chosen agent is started first and gets it when its input is ready. Its
@@ -131,9 +133,9 @@ function NewWork({ projects, takeFocus, inCard, onAction, onDone, onError }: {
         <button type="button" aria-label={t('移除这张图片')} onClick={() => setImages(list => list.filter((_, at) => at !== index))}><X size={12} weight="bold" /></button>
       </span>)}</div>}
       <div className="new-work-bar">
-        <label className="new-work-select" title={t('项目')}>{inCard && <FolderSimple size={16} aria-hidden="true" />}<select aria-label={t('项目')} value={project?.id} onChange={event => setProjectId(event.target.value)}>{local.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><CaretDown size={13} aria-hidden="true" /></label>
+        <Select className="new-work-select" label={t('项目')} icon={inCard ? <FolderSimple size={16} aria-hidden="true" /> : undefined} value={project?.id ?? ''} onChange={setProjectId} options={local.map(item => ({ value: item.id, label: item.name }))} />
         {!empty && <span className="new-work-note">{terminal?.codexActive ? t('直接发给它，不离开这一页') : t('先启动助手，准备好就发给它')}</span>}
-        {terminal && !terminal.codexActive && <label className="new-work-select is-agent" title={t('助手')}><select aria-label={t('助手')} value={agent} onChange={event => setAgent(event.target.value as 'claude' | 'codex')}><option value="claude">Claude Code</option><option value="codex">Codex</option></select><CaretDown size={13} aria-hidden="true" /></label>}
+        {terminal && !terminal.codexActive && <Select className="new-work-select is-agent" label={t('助手')} value={agent} onChange={value => setAgent(value as 'claude' | 'codex')} options={AGENT_OPTIONS} />}
         <VoiceButton terminalId={VOICE_TARGET} sessionId={null} name={t('新任务')} size={16} onError={onError} />
         <button type="button" className={`button ${empty ? 'secondary' : 'primary'} new-work-start`} title={t('开始 (Ctrl + Enter)')} aria-label={t('开始 (Ctrl + Enter)')} disabled={busy || empty} onClick={() => void start()}>{busy ? <CircleNotch size={16} className="loading-spinner" /> : <ArrowUp size={16} weight="bold" />}</button>
       </div>

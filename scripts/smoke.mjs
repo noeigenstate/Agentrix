@@ -127,10 +127,9 @@ try {
   await waitFor(async () => (await page.locator(`.focus-mode [data-project-id="${firstCard}"].is-focused`).count()) === 1, 'Ctrl+Shift+Enter expands the current project');
   await page.keyboard.press('Control+Shift+Enter');
   await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
-  // The pane's blur sits on the card itself or on its backing layer (::before).
-  const material = await page.locator('.project-panel').first().evaluate(el => ({ filter: `${getComputedStyle(el).backdropFilter} ${getComputedStyle(el, '::before').backdropFilter}`, reduced: matchMedia('(prefers-reduced-transparency: reduce)').matches, background: getComputedStyle(el).backgroundColor }));
-  console.log('Glass material:', JSON.stringify(material));
-  assert.ok(material.filter.includes('blur') || material.reduced);
+  // The grey design: a card is one flat #242424 pane, with no blur.
+  const material = await page.locator('.project-panel').first().evaluate(el => ({ filter: getComputedStyle(el).backdropFilter, background: getComputedStyle(el).backgroundColor }));
+  assert.deepEqual(material, { filter: 'none', background: 'rgb(36, 36, 36)' });
   console.log('PASS: desktop loads six real project folders');
 
   for (const [index, project] of projects.entries()) {
@@ -218,15 +217,15 @@ try {
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[0].lastCompletedAt, firstCompletedAt);
   const animation = await page.locator(`[data-project-id="${projects[0].id}"]`).evaluate(el => ({
     panel: getComputedStyle(el).animationName, lit: el.classList.contains('attention-active'),
-    lights: ['.panel-signal', '.status-dot', '.panel-glow'].map(selector => {
+    lights: ['.panel-signal', '.status-dot'].map(selector => {
       const style = getComputedStyle(el.querySelector(selector));
       return [style.animationName, style.animationDuration, style.animationIterationCount];
     }),
   }));
   assert.equal(animation.panel, 'none', 'the reading surface never flashes');
   assert.ok(animation.lit, 'a finished turn lights its card');
-  assert.deepEqual(animation.lights.map(([name]) => name), ['none', 'none', 'none'], 'ring, dot and inner glow stay steady after a finished turn: no breathing');
-  console.log('PASS: parent lifecycle lights the red panel; unrelated notify callbacks are ignored');
+  assert.deepEqual(animation.lights.map(([name]) => name), ['none', 'none'], 'ring and dot stay steady after a finished turn: no breathing');
+  console.log('PASS: parent lifecycle marks the card with the white needs-you edge; unrelated notify callbacks are ignored');
 
   const projectOrder = () => page.locator('.agentrix > .project-slot > .project-panel').evaluateAll(panels => panels.map(panel => panel.dataset.projectId));
   const beginProjectDrag = async (sourceId, targetId) => {

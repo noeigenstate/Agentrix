@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
+import { pick, picked } from './select-helper.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -192,7 +193,7 @@ try {
   await page.getByRole('button', { name: '工作台设置', exact: true }).click();
   await page.getByLabel('界面动画', { exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(output, 'motion-settings.png') });
-  await page.getByLabel('界面动画', { exact: true }).selectOption('system');
+  await pick(page, page.getByLabel('界面动画', { exact: true }), 'system');
   await page.getByRole('button', { name: '完成', exact: true }).click();
   await panel.locator('.panel-name').click(); await settled(true);
   assert.equal(await page.locator('.focus-motion-panel').count(), 0);
@@ -201,7 +202,7 @@ try {
   console.log('PASS: choosing follow-system respects reduced motion');
 
   await page.getByRole('button', { name: '工作台设置', exact: true }).click();
-  await page.getByLabel('界面动画', { exact: true }).selectOption('off');
+  await pick(page, page.getByLabel('界面动画', { exact: true }), 'off');
   await page.getByRole('button', { name: '完成', exact: true }).click();
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await panel.locator('.panel-name').click(); await settled(true);

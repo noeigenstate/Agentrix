@@ -9,6 +9,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
+import { pick, picked } from './select-helper.mjs';
 const require = createRequire(import.meta.url), exec = promisify(execFile);
 const { fileClipboard } = require('../electron/file-clipboard.cjs');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -295,7 +296,7 @@ try {
   assert.equal(await page.locator('.agent-launcher-title').innerText(), 'Pick an agent and start');
   await page.getByRole('button', { name: 'Workspace settings', exact: true }).click();
   await page.getByRole('heading', { name: 'Workspace settings', exact: true }).waitFor();
-  assert.equal(await page.getByRole('combobox', { name: 'Language', exact: true }).inputValue(), 'en');
+  assert.equal(await picked(page.getByRole('combobox', { name: 'Language', exact: true })), 'en');
   await page.screenshot({ path: path.join(output, 'settings-english.png') });
   await page.getByRole('button', { name: 'Done', exact: true }).click();
   assert.equal((await page.evaluate(() => window.agentrix.addRecentProject('C:\\missing-folder'))).error, 'This project is not in the recent list. Choose the folder again.', 'main-process errors arrive in English');
