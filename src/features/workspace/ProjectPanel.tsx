@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowsOutSimple, Play, Plus, Terminal as TerminalIcon, DotsThree, GitBranch, X, FolderOpen, ArrowCounterClockwise, Info, Globe, ListChecks, Article } from '@phosphor-icons/react';
+import { ArrowsOutSimple, Play, Plus, Terminal as TerminalIcon, DotsThree, GitBranch, X, FolderOpen, ArrowCounterClockwise, Info, Globe, ListChecks, Article, ImageSquare } from '@phosphor-icons/react';
 import type { Project, Result } from '../../shared/types';
 import { ProjectTerminals } from '../terminal/ProjectTerminals';
 import { ActivityPane } from '../agents/ActivityPane';
@@ -7,6 +7,7 @@ import { readingShown, setReading, useTerminalChoice } from '../reading/reading-
 import { VoiceButton } from '../voice/VoiceButton';
 import { t } from '../../shared/i18n';
 import { shortcut } from '../shortcuts/shortcuts';
+import { ProjectImageDialog } from './ProjectImageDialog';
 
 const api = window.agentrix;
 
@@ -43,6 +44,7 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
   dragging?: boolean; dropTarget?: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [imageOpen, setImageOpen] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
   const first = project.terminals[0];
@@ -79,11 +81,11 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
     <span key={signalKey} className="panel-signal" aria-hidden="true" />
     {navTarget && <span key={`nav:${navTarget}`} className="panel-nav-ring" aria-hidden="true" />}
     {/* Where next/previous project landed, over the card itself (the screen-reader announcement is ProjectSwitchHud). */}
-    {navTarget && <div key={`hud:${navTarget}`} className="panel-nav-hud" aria-hidden="true"><span className="project-switch-index">{String(index + 1).padStart(2, '0')}</span><b>{project.name}</b>{navPosition && <small>{navPosition}</small>}</div>}
+    {navTarget && <div key={`hud:${navTarget}`} className="panel-nav-hud" aria-hidden="true">{project.image && <img className="project-image project-switch-image" src={project.image} alt="" draggable={false} data-audit-ignore />}<span className="project-switch-index">{String(index + 1).padStart(2, '0')}</span><b>{project.name}</b>{navPosition && <small>{navPosition}</small>}</div>}
     <header className="panel-header" title={focused ? undefined : t('点击标题栏放大，按住标题栏拖动排序')} onClick={event => {
       if (!focused && event.button === 0 && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && !(event.target as Element).closest('button, [role="menu"]')) onFocus(project.id);
     }}>
-      <span className="panel-index">{String(index + 1).padStart(2, '0')}</span>
+      {project.image ? <><img className="project-image panel-project-image" src={project.image} alt="" draggable={false} data-audit-ignore /><span className="panel-index panel-project-image-fallback">{String(index + 1).padStart(2, '0')}</span></> : <span className="panel-index">{String(index + 1).padStart(2, '0')}</span>}
       <button className="panel-name" onClick={() => !focused && onFocus(project.id)} title={project.kind === 'ssh' ? `${project.ssh?.host}:${project.path}` : project.path}>
         <span>{project.name}</span>
         {project.branch && <small><GitBranch size={11} />{project.branch}</small>}
@@ -104,12 +106,14 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
         {menuOpen && <div className="dropdown panel-menu" role="menu">
           <button role="menuitem" onClick={() => action(() => void addTerminal())}><Plus size={16} />{t('新建终端并分屏')}<span className="menu-shortcut" aria-hidden="true">{shortcut('newTerminal')}</span></button>
           <button role="menuitem" onClick={() => action(() => onRevealProject(project.id))}><FolderOpen size={16} />{t('打开项目目录')}</button>
+          <button role="menuitem" onClick={() => action(() => setImageOpen(true))}><ImageSquare size={16} />{t('项目图片…')}</button>
           <button role="menuitem" onClick={() => action(() => { onAction(api.restartTerminal(currentTerminal.id)); })}><ArrowCounterClockwise size={16} />{project.kind === 'ssh' ? t('重新连接 SSH') : t('重启当前终端')}</button>
           <div className="menu-divider" />
           <button role="menuitem" className="danger-text" onClick={() => action(() => { onAction(api.removeProject(project.id)); })}><X size={16} />{t('移除项目')}<span className="menu-shortcut" aria-hidden="true">{shortcut('removeProject')}</span></button>
         </div>}
       </div>
     </header>
+    {imageOpen && <ProjectImageDialog project={project} index={index} onClose={() => setImageOpen(false)} />}
     <ProjectTerminals project={project} focused={focused} fontSize={fontSize} activeId={activeTerminalId} setActiveId={setActiveTerminalId} onAction={onAction} onError={onError} onOpenLink={onOpenLink} />
     {showActivity && <ActivityPane terminal={currentTerminal} />}
     {project.error && <div className="panel-error"><Info size={13} /><span>{t(project.error)}</span></div>}

@@ -42,11 +42,25 @@ const defaults = { startView: DEFAULT_START, surface: 'glass', glassBackground: 
 // The user's picture is a small data URL made in the window (256x256 WebP, about 20 KB); anything else is dropped.
 const AVATAR_URL = /^data:image\/(?:webp|png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/;
 const AVATAR_MAX_LENGTH = 200_000;
+const PROJECT_IMAGE_MODES = new Set(['auto', 'custom', 'number']);
 const SHORTCUT_ACTIONS = ['search', 'addProject', 'voice', 'overview', 'decisions', 'explorer', 'settings', 'nextProject', 'previousProject', 'projectAbove', 'projectBelow', 'maximize', 'fullscreen', 'newTerminal', 'removeProject'];
 const SHORTCUT = /^(?:(?:Ctrl\+)?(?:Alt\+)?(?:Shift\+)?(?:F(?:[1-9]|1[0-2]))|(?=Ctrl\+|Alt\+)(?:Ctrl\+)?(?:Alt\+)?(?:Shift\+)?(?:[A-Z0-9,./;'[\]\\=`-]|Space|Tab|Enter|Left|Right|Up|Down))$/;
 function cleanShortcuts(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
   return Object.fromEntries(SHORTCUT_ACTIONS.filter(action => typeof input[action] === 'string' && SHORTCUT.test(input[action])).map(action => [action, input[action]]));
+}
+
+// Project pictures use the same bounded data URLs as avatars; never retain external paths or SVG content.
+function validProjectImage(input) {
+  if (typeof input !== 'string' || input.length > AVATAR_MAX_LENGTH || !AVATAR_URL.test(input)) return false;
+  const [type, data] = input.slice(5).split(';base64,');
+  const bytes = Buffer.from(data, 'base64');
+  if (bytes.toString('base64') !== data) return false;
+  const chunk = bytes.toString('ascii', 12, 16);
+  if (type === 'image/png') return bytes.length >= 33 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && chunk === 'IHDR';
+  if (type === 'image/jpeg') return bytes.length >= 20 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 && bytes.at(-2) === 255 && bytes.at(-1) === 217;
+  if (bytes.length < 20 || bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.readUInt32LE(4) + 8 !== bytes.length || bytes.toString('ascii', 8, 12) !== 'WEBP') return false;
+  return ['VP8 ', 'VP8L'].includes(chunk) || chunk === 'VP8X' && bytes.length >= 30 && !(bytes[20] & 2);
 }
 
 function cleanSettings(input = {}) {
@@ -98,9 +112,13 @@ class WorkspaceStore {
         else if (!path.isAbsolute(p.path)) return false;
         ids.add(p.id); return true;
       }).map(p => {
+        const image = validProjectImage(p.image) ? p.image : '';
+        const imageMode = PROJECT_IMAGE_MODES.has(p.imageMode) && (p.imageMode !== 'custom' || image) ? p.imageMode : null;
         const project = {
         id: p.id, name: String(p.name || path.basename(p.path)).slice(0, 120), path: p.path,
         kind: p.kind === 'ssh' ? 'ssh' : 'local',
+        ...(image && imageMode !== 'number' ? { image } : {}),
+        ...(imageMode ? { imageMode } : {}),
         ...(p.kind === 'ssh' ? { ssh: { host: p.ssh.host, configFile: p.ssh.configFile || null } } : {}),
         primaryTerminalClosed: p.primaryTerminalClosed === true,
         restore: p.restore && typeof p.restore === 'object' ? { terminal: p.restore.terminal === true, codex: p.restore.codex === true, cwd: typeof p.restore.cwd === 'string' && (p.kind === 'ssh' ? p.restore.cwd.startsWith('/') : path.isAbsolute(p.restore.cwd)) ? p.restore.cwd : null, ...(/^[a-f\d-]{36}$/i.test(p.restore.threadId || '') ? { threadId: p.restore.threadId } : {}), ...agentFields(p.restore) } : null,
@@ -177,6 +195,26 @@ class WorkspaceStore {
     const base = path.posix.basename(connection.path);
     const project = { id: randomUUID(), name: String(input.name || (base === '~' ? connection.host : base) || connection.host).slice(0, 120), kind: 'ssh', path: connection.path, ssh: { host: connection.host, configFile: connection.configFile }, primaryTerminalClosed: false, restore: { terminal: false, codex: false }, unread: 0, lastCompletedAt: null, completionArmed: false, seenEvents: [] };
     this.projects.push(project); this.remember(project); this.save(); return { project, added: true };
+  }
+
+  setProjectImage(id, image, mode = image ? 'custom' : 'number') {
+    const project = this.projects.find(item => item.id === id);
+    if (!project) throw new Error('项目不存在。');
+    if (!PROJECT_IMAGE_MODES.has(mode) || mode === 'number' && image !== '' || mode === 'custom' && !image) throw new Error('无效的项目图片模式。');
+    if (image !== '' && !validProjectImage(image)) throw new Error('请选择有效的 WebP、PNG 或 JPEG 项目图片（不超过 150 KB）。');
+    if ((project.image || '') === image && project.imageMode === mode) return;
+    const previous = project.image, previousMode = project.imageMode;
+    if (image) project.image = image;
+    else delete project.image;
+    project.imageMode = mode;
+    try { this.save(); }
+    catch (error) {
+      if (previous) project.image = previous;
+      else delete project.image;
+      if (previousMode) project.imageMode = previousMode;
+      else delete project.imageMode;
+      throw error;
+    }
   }
 
   setRestore(id, patch) {

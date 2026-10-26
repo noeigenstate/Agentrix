@@ -2,9 +2,12 @@ export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 export type AgentCommand = { name: string; description: string; source: 'builtin' | 'project' | 'user' | 'skill'; view: 'terminal' | 'reading' };
 // messages is exact within 256 KiB, estimated from record density for larger transcripts.
 export type AgentSession = { id: string; updatedAt: number; title: string; messages: number };
+export type ProjectImageMode = 'auto' | 'custom' | 'number';
+export type ProjectImageCandidate = { path: string; source: 'icon' | 'readme' | 'asset'; image: string };
+export type ProjectImageCandidates = { candidates: ProjectImageCandidate[]; unavailable?: 'ssh' };
 export type ProjectLocation = { kind: 'external' } | { kind: 'file' | 'directory'; path: string };
 export type Project = {
-  id: string; name: string; path: string; branch: string; unread: number;
+  id: string; name: string; path: string; branch: string; unread: number; image?: string; imageMode?: ProjectImageMode;
   kind: 'local' | 'ssh'; ssh: { host: string; configFile: string | null } | null;
   lastCompletedAt: number | null;
   sessionId: string | null; status: 'stopped' | 'starting' | 'shell' | 'codex' | 'exited';
@@ -99,6 +102,8 @@ type Bridge = {
   // ask: confirm even with no terminal running (a removal by shortcut).
   removeProject(id: string, ask?: boolean): Promise<Result<boolean>>;
   reorderProjects(ids: string[]): Promise<Result<void>>;
+  setProjectImage(projectId: string, image: string, mode?: ProjectImageMode): Promise<Result<void>>;
+  listProjectImageCandidates(projectId: string): Promise<Result<ProjectImageCandidates>>;
   reorderTerminals(projectId: string, ids: string[]): Promise<Result<void>>;
   acknowledge(id: string): Promise<Result<void>>;
   settings(patch: Partial<Settings>): Promise<Result<void>>;

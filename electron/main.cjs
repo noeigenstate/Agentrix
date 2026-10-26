@@ -5,6 +5,8 @@ const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-g
 const { createNativeSession } = require('./features/terminal/native-session.cjs');
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
 const { registerWorkspaceIpc } = require('./features/workspace/ipc.cjs');
+const { listProjectImageCandidates, projectImageDimensions, LIMITS: PROJECT_IMAGE_LIMITS } = require('./features/workspace/project-images.cjs');
+const { createProjectImageAuto } = require('./features/workspace/project-image-auto.cjs');
 const { createSshRuntime } = require('./features/ssh/runtime.cjs');
 const { registerSshIpc } = require('./features/ssh/ipc.cjs');
 const { registerFilesIpc } = require('./features/files/ipc.cjs');
@@ -36,6 +38,20 @@ const thumbnail = image => {
 };
 const small = image => thumbnail(image) || (image.isEmpty() ? null : image.toDataURL());
 const pictureOf = file => small(nativeImage.createFromPath(file));
+function thumbnailProjectImage(bytes, source) {
+  if (!projectImageDimensions(bytes, source)) return null;
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) return null;
+  const { width, height } = image.getSize(), side = Math.min(width, height);
+  if (side < (source === 'icon' ? 16 : 48) || Math.max(width, height) > side * 4 || width * height > 40_000_000) return null;
+  const square = image.crop({ x: Math.floor((width - side) / 2), y: Math.floor((height - side) / 2), width: side, height: side }).resize({ width: 256, height: 256, quality: 'good' });
+  const png = square.toDataURL();
+  return png.length <= 200_000 ? png : `data:image/jpeg;base64,${square.toJPEG(82).toString('base64')}`;
+}
+function projectImageCandidates(folder, candidates = 6) {
+  return listProjectImageCandidates(folder, thumbnailProjectImage, { ...PROJECT_IMAGE_LIMITS, candidates });
+}
+
 setThumbnailer(pictureOf, url => thumbnail(nativeImage.createFromDataURL(url)) || url);
 const path = require('node:path');
 const fs = require('node:fs');
@@ -102,7 +118,7 @@ protocol.registerSchemesAsPrivileged([
 const { translate } = require('./i18n.cjs');
 // Text shown by the main process follows the language chosen in settings (Chinese source -> locales/en.json).
 const t = (text, values) => translate(store?.settings.language, text, values);
-let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc;
+let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
 const sessions = new Map();
@@ -199,6 +215,8 @@ function publicState() {
       return {
         id: p.id, name: p.name, path: p.path, unread: p.unread, lastCompletedAt: p.lastCompletedAt,
         kind: p.kind || 'local', ssh: p.ssh || null,
+        ...(p.image ? { image: p.image } : {}),
+        ...(p.imageMode ? { imageMode: p.imageMode } : {}),
         branch: getBranch(p.id) || '',
         terminals, sessionId: first.sessionId, status,
         codexActive: activeCodex.length > 0, codexActivity: activity, agent: activeCodex[0]?.agent || null,
@@ -1097,10 +1115,17 @@ function registerIpc() {
     startTerminal, setStartupError: (id, message) => startupErrors.set(id, message), broadcast });
   updatesIpc = registerUpdatesIpc({ handle, updateManager, openExternal: url => shell.openExternal(url), getWindow: () => window, dialog, t,
     allowEditorClose, liveTerminalCount: () => [...sessions.values()].filter(session => session.status !== 'exited').length, setQuitting: value => { quitting = value; } });
-  registerWorkspaceIpc({ handle, publicState, dialog, getWindow: () => window, t, addProject: (folder, name) => store.add(folder, name), getRecentProjects: () => store.recentProjects(), getRecentSSH: () => store.recentSSH(), forgetRecentSSH: (host, folder) => store.forgetSSH(host, folder), clearSSHHistory: () => store.clearSSHHistory(), existsSync: fs.existsSync,
+  registerWorkspaceIpc({ handle, publicState, dialog, getWindow: () => window, t, addProject: (folder, name) => {
+    const added = store.add(folder, name); projectImageAuto.enqueue(added.project); return added;
+  }, getRecentProjects: () => store.recentProjects(), getRecentSSH: () => store.recentSSH(), forgetRecentSSH: (host, folder) => store.forgetSSH(host, folder), clearSSHHistory: () => store.clearSSHHistory(), existsSync: fs.existsSync,
     getRecentEntry: folder => store.recentEntry(folder), forgetRecent: folder => store.forget(folder), clearHistory: () => store.clearHistory(),
     getEditorFile, allowEditorClose, confirmTerminalClose, disposeProjectTerminals, findProject, closeProjectPreviews: id => previewResources.closeProject(id),
     removeProject: id => store.remove(id), forgetBranch, broadcast, acknowledgeProject: id => store.acknowledge(id), reorderProjects: ids => store.reorderProjects(ids), reorderTerminals,
+    setProjectImage: (id, image, mode) => {
+      store.setProjectImage(id, image, mode);
+      if (mode === 'auto' && !image) projectImageAuto.enqueue(store.projects.find(project => project.id === id));
+    },
+    listProjectImageCandidates: projectImageCandidates,
     getSettings: () => store.settings, updateStoreSettings: patch => store.updateSettings(patch),
     rebuildMenus: () => { trayMenu(); if (process.platform === 'darwin') Menu.setApplicationMenu(macMenu()); },
     clearRestorePlans: () => restorePlans.clear(), chooseVoiceModel: model => voiceManager.choose(model) });
@@ -1244,6 +1269,11 @@ if (!app.requestSingleInstanceLock()) {
       loginShellPath(process.platform === 'linux' ? { shell: process.env.SHELL || findShell('bash') || '/bin/bash', env: withoutAppImage(process.env) } : undefined).then(value => { if (value) process.env.PATH = mergePath(value, process.env.PATH); agents.changed(); }).catch(() => {});
     }
     store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'));
+    projectImageAuto = createProjectImageAuto({
+      getProject: id => quitting ? null : store.projects.find(project => project.id === id),
+      listCandidates: folder => projectImageCandidates(folder, 1),
+      setProjectImage: (id, image, mode) => store.setProjectImage(id, image, mode), broadcast,
+    });
     voiceManager = new VoiceManager({ directory: voiceDirectory(), model: store.settings.voiceModel, fetcher: (url, options) => electronNet.fetch(url, options), changed: state => send('voice:state', state) });
     // Download the offline model in the background after installation so dictation works on first use.
     // Waits for startup and session restore first; isolated test profiles skip the 239 MB download.
@@ -1370,6 +1400,7 @@ if (!app.requestSingleInstanceLock()) {
     Menu.setApplicationMenu(process.platform === 'darwin' ? macMenu() : null);
     for (const project of store.projects) captureBranch(project);
     await window.loadURL(devUrl || 'agentrix://app/index.html');
+    for (const project of store.projects) projectImageAuto.enqueue(project);
     updateIndicators();
     if (!process.env.AGENTRIX_DATA_DIR) updateManager.start();
     if (store.settings.restoreSessions && (!process.env.AGENTRIX_DATA_DIR || process.env.AGENTRIX_TEST_RESTORE === '1')) {
