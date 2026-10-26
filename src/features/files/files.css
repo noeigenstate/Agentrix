@@ -1,5 +1,5 @@
 /* The explorer beside a focused project, and the file views (editor, Markdown, code, pictures). The explorer is a band
-   (the sidebar colour, radius 0); the editor and the viewers sit on the app colour. Selection is a fill; the active tab's bar is the accent. */
+   (the sidebar colour, radius 0); the editor and the viewers sit on the app colour. Selection is a fill; the active tab's bar is the secondary text colour. */
 .focus-sidebar { position: relative; display: flex; flex-direction: column; flex: 0 0 284px; width: 284px; min-height: 0; border-right: 1px solid var(--divider); background: var(--bg-sidebar); }
 .focus-sidebar.is-collapsed { flex-basis: 52px; width: 52px; }
 @media (max-width: 1100px) { .focus-sidebar:not(.is-collapsed) { width: 248px; flex-basis: 248px; } }
@@ -58,7 +58,7 @@
 .file-preview { position: absolute; inset: 0; z-index: 5; display: flex; flex: 1; min-height: 0; min-width: 0; flex-direction: column; overflow: hidden; background: var(--bg-app); }
 .file-tabs { display: flex; height: 40px; flex-shrink: 0; border-bottom: 1px solid var(--divider); background: var(--bg-titlebar); }
 .selected-file-tab { position: relative; display: flex; gap: 8px; align-items: center; min-width: 0; padding: 0 8px 0 16px; border-right: 1px solid var(--divider); font-size: 12px; color: var(--text-1); background: var(--bg-app); }
-.selected-file-tab::after { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--accent); }
+.selected-file-tab::after { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--text-2); }
 .selected-file-tab > span { white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
 .selected-file-tab > svg { flex-shrink: 0; }
 .selected-file-tab .icon-button { width: 28px; height: 28px; margin-left: 8px; }
@@ -137,7 +137,7 @@
 .editor-find-count { min-width: 60px; padding: 0 4px; font-size: 12px; text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-3); }
 .editor-find .icon-button { width: 32px; height: 32px; }
 .editor-find-case { font: 600 12px var(--font-ui); }
-.editor-find .icon-button[aria-pressed="true"] { color: var(--accent); background: var(--bg-selected); }
+.editor-find .icon-button[aria-pressed="true"] { color: var(--text-1); background: var(--bg-selected); }
 .editor-message { padding: 8px 18px; font-size: 12px; color: var(--text-1); background: var(--bg-card); }
 .editor-error { font-weight: 600; color: var(--danger); }
 .file-code-scroll { flex: 1; overflow: auto; min-height: 0; background: var(--bg-app); }

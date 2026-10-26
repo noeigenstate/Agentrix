@@ -1,5 +1,5 @@
 /* Dialogs and Settings: a dialog is a card with radius 16 over a flat scrim; its fields take the input colour with a border, its sidebar of categories
-   the sidebar colour and shows its selection by a fill, and a switch is a pill that turns from outline to the accent. */
+   the sidebar colour and shows its selection by a fill, and a switch is a pill that turns from outline to the primary text colour. */
 dialog { color: var(--text-1); }
 .settings-dialog { width: 510px; max-width: calc(100vw - 40px); max-height: calc(100vh - 40px); padding: 0; overflow: auto; border: 1px solid var(--border); border-radius: 16px; color: var(--text-1); background: var(--bg-card); }
 .settings-dialog::backdrop { background: color-mix(in srgb, var(--bg-app) 80%, transparent); }
@@ -19,9 +19,9 @@ dialog { color: var(--text-1); }
 .setting-row .select-trigger { flex: none; width: 200px; }
 .setting-row input[type="checkbox"] { appearance: none; flex: 0 0 38px; position: relative; width: 38px; height: 22px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input); cursor: pointer; }
 .setting-row input[type="checkbox"]::before { content: ''; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-2); }
-.setting-row input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
+.setting-row input[type="checkbox"]:checked { background: var(--text-1); border-color: var(--text-1); }
 .setting-row input[type="checkbox"]:checked::before { background: var(--bg-app); transform: translateX(16px); }
-.setting-row input[type="range"] { accent-color: var(--accent); }
+.setting-row input[type="range"] { accent-color: var(--text-1); }
 .settings-note { display: flex; gap: 8px; margin: 20px 0; color: var(--text-2); }
 .settings-note svg { flex-shrink: 0; margin-top: 3px; }
 .settings-note p { margin: 0; font-size: 12px; line-height: 20px; }
@@ -45,7 +45,7 @@ dialog { color: var(--text-1); }
 .shortcut-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; font-size: 12px; }
 .shortcut-key { min-width: 92px; height: 28px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; font: 400 11px var(--font-mono); text-align: center; color: var(--text-1); background: var(--bg-input); }
 .shortcut-key:hover { border-color: var(--border-hover); }
-.shortcut-key.is-recording { border-color: var(--accent); color: var(--text-1); font-family: inherit; }
+.shortcut-key.is-recording { border-color: var(--text-1); color: var(--text-1); font-family: inherit; }
 .shortcut-settings .form-error { margin: 12px 0 0; }
 .shortcut-note { margin: 12px 0 0; font-size: 12px; color: var(--text-2); }
 
@@ -56,7 +56,7 @@ dialog { color: var(--text-1); }
 .update-heading > span { font-size: 11px; color: var(--text-3); }
 .settings-section .update-heading h3 { margin: 20px 0 8px; }
 .update-section p { margin: 8px 0 12px; font-size: 12px; line-height: 20px; color: var(--text-2); }
-.update-section progress, .voice-model-setting progress { display: block; width: 100%; height: 6px; margin-bottom: 16px; accent-color: var(--accent); }
+.update-section progress, .voice-model-setting progress { display: block; width: 100%; height: 6px; margin-bottom: 16px; accent-color: var(--text-1); }
 .update-actions { display: flex; justify-content: flex-end; }
 .voice-model-setting { display: flex; flex: none; align-items: center; gap: 12px; min-width: 0; }
 .voice-model-setting .select-trigger { width: 300px; max-width: 100%; }
@@ -115,12 +115,12 @@ dialog { color: var(--text-1); }
 .tour-arrow-up::before { display: block; top: -7px; transform: rotate(45deg); }
 .tour-arrow-down::before { display: block; bottom: -7px; transform: rotate(225deg); }
 
-/* The theme picker: one tile per theme (radius 8, like a row); the chosen tile takes the selected fill and an accent ring, the radio itself is hidden. */
+/* The theme picker: one tile per theme (radius 8, like a row); the chosen tile takes the selected fill and a ring in the primary text colour, the radio itself is hidden. */
 .theme-setting { display: flex; flex-wrap: wrap; gap: 12px; min-width: 0; margin: 0; padding: 16px 0; border: 0; border-bottom: 1px solid var(--divider); }
 .theme-setting legend { float: left; width: 100%; padding: 0; font-size: 13px; font-weight: 600; }
 .theme-option { display: flex; flex: 1 1 200px; align-items: center; gap: 12px; min-width: 0; max-width: 320px; padding: 8px; border-radius: 8px; background: var(--bg-input); cursor: pointer; }
 .theme-option:hover { background: var(--bg-hover); }
-.theme-option:has(input:checked) { background: var(--bg-selected); box-shadow: inset 0 0 0 1px var(--accent); }
+.theme-option:has(input:checked) { background: var(--bg-selected); box-shadow: inset 0 0 0 1px var(--text-1); }
 .theme-option:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .theme-option input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .theme-preview { display: flex; flex: none; flex-direction: column; gap: 4px; width: 56px; height: 40px; padding: 4px; border: 1px solid var(--swatch-line); border-radius: 8px; background: var(--swatch-page); }

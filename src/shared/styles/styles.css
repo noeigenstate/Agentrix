@@ -23,9 +23,9 @@ h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 .main-workspace { position: relative; flex: 1; display: flex; min-width: 0; min-height: 0; flex-direction: column; background: var(--bg-app); }
 .main-workspace[inert] { visibility: hidden; }
 
-/* The title bar (38px) is one full-width bar in the title bar colour, the same in the decision page and the workbench; only the current
+/* The title bar (40px) is one full-width bar in the title bar colour, the same in the decision page and the workbench; only the current
    tab is filled, the group has no fill and the brand mark is an outline. */
-.titlebar { height: 38px; flex: 0 0 38px; display: flex; align-items: center; justify-content: space-between; overflow: hidden; background: var(--bg-titlebar); user-select: none; -webkit-app-region: drag; }
+.titlebar { height: 40px; flex: 0 0 40px; display: flex; align-items: center; justify-content: space-between; overflow: hidden; background: var(--bg-titlebar); user-select: none; -webkit-app-region: drag; }
 .titlebar-brand { flex-shrink: 0; display: flex; align-items: center; gap: 9px; padding-left: 16px; font-size: 13.5px; font-weight: 600; color: var(--text-1); }
 .brand-mark { display: grid; grid-template-columns: repeat(2, 6px); gap: 2px; }
 .brand-mark i { width: 6px; height: 6px; border-radius: 1px; background: none; border: 1px solid var(--text-2); }
@@ -57,10 +57,10 @@ h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 :root[data-platform="darwin"] .app-shell:not(.is-fullscreen) .titlebar-brand { padding-left: 86px; }
 :root[data-platform="darwin"] .titlebar-tools { margin-right: 14px; }
 
-/* Buttons: the primary action is the one solid light block, the rest an input-coloured fill with a border; 32px high, radius 8. A toggle that is on takes the accent. */
+/* Buttons: the primary action is the one solid light block, the rest an input-coloured fill with a border; 32px high, radius 8. A toggle that is on takes the primary text colour and the selected fill. */
 .icon-button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); }
 .icon-button:hover { color: var(--text-1); background: var(--bg-hover); }
-.icon-button.is-active { color: var(--accent); background: var(--bg-selected); }
+.icon-button.is-active { color: var(--text-1); background: var(--bg-selected); }
 .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 16px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; line-height: 20px; font-weight: 600; white-space: nowrap; color: var(--text-1); background: var(--bg-input); }
 .button:hover:not(:disabled) { background: var(--bg-hover); }
 .button.primary { border-color: var(--button-primary); color: var(--button-primary-text); background: var(--button-primary); }
@@ -99,7 +99,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--border); border-radius: 4px; fon
 .workspace-warning { display: flex; align-items: center; gap: 8px; padding: 8px 24px; font-size: 12px; color: var(--text-1); background: var(--bg-card); }
 .startup-message { display: flex; height: 100%; flex-direction: column; justify-content: center; align-items: center; gap: 16px; color: var(--text-2); }
 .startup-message h1 { font-size: 21px; }
-.loading-spinner { animation: spinner-turn .85s linear infinite; flex-shrink: 0; color: var(--accent); }
+.loading-spinner { animation: spinner-turn .85s linear infinite; flex-shrink: 0; color: var(--text-2); }
 .button.primary .loading-spinner { color: inherit; }
 @keyframes spinner-turn { to { transform: rotate(360deg); } }
 .user-avatar { display: block; border-radius: 50%; object-fit: cover; }

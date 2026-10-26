@@ -3,10 +3,10 @@
 
 /* Pictures sent with a message, as small thumbnails under its text. */
 .reading-user-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.reading-user-images button { display: block; padding: 0; border: 0; border-radius: 8px; background: none; cursor: zoom-in; }
+.reading-user-images button { display: block; padding: 0; overflow: hidden; border: 1px solid var(--divider); border-radius: 8px; background: var(--bg-app); cursor: zoom-in; }
 .reading-user-images button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.reading-user-images img { display: block; max-width: 220px; max-height: 140px; border-radius: 8px; object-fit: cover; }
-.reading-user-images button:hover img { outline: 2px solid var(--border-hover); }
+.reading-user-images img { display: block; max-width: 220px; max-height: 140px; object-fit: cover; }
+.reading-user-images button:hover { border-color: var(--border-hover); }
 .reading-attachments .reading-user-images { margin: 0 0 0 8px; }
 .reading-attachments .reading-user-images img { max-width: 64px; max-height: 40px; border-radius: 4px; }
 .reading-attachments-remove { display: grid; place-items: center; width: 22px; height: 22px; margin-left: 2px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: inherit; opacity: .72; cursor: pointer; }

@@ -20,7 +20,7 @@ Each is answered with numbers, not taste. Measure the app window's UI only: not 
 | 3 | Regular spacing | S1 padding/margin/gap off the scale {2,4,8,12,16,20,24,32,40,48,64} | 0 |
 | | | S2 distinct spacing values | ≤ 8 |
 | | | S3 repeated rows/cards | identical heights and gaps |
-| 4 | Restrained colour and material | C1 chromatic hue families (30° buckets, saturation ≥ 25%) | ≤ accent + 4 status + 2 agent marks |
+| 4 | Restrained colour and material | C1 chromatic hue families (30° buckets, saturation ≥ 25%) | ≤ 5 semantic colours + the Claude mark |
 | | | C2 chromatic background area of the pane | ≤ 5% |
 | | | C3 backdrop-filters / box-shadows / surface alphas | ≤ 2 / ≤ 3 / ≤ 4 |
 | 5 | One product | P1 border radii | ≤ 4, from one set |
@@ -32,7 +32,7 @@ Each is answered with numbers, not taste. Measure the app window's UI only: not 
 
 ## Grayscale checklist (the owner's 灰度设计验收清单)
 
-Layout and hierarchy are accepted in grayscale, even though the app now carries the accent and the status colours:
+Layout and hierarchy are accepted in grayscale, even though the app carries a few semantic colours:
 colour is added on top of a design that already works without it. Judge the page converted to grayscale (and the
 blurred F3 shot), at the default size, a mid size (about 1100×720) and the minimum window size. Report each item
 PASS/FAIL with the screenshot and what was measured.
@@ -49,46 +49,76 @@ PASS/FAIL with the screenshot and what was measured.
 
 The owner's semantic colours, one token per role in `src/shared/styles/themes.css`. **New UI uses only these tokens**: never a
 grey picked from a scale, never a literal hex, and no alias that renames one. Each surface takes the token of its role.
+The title bar, the decision page, Settings and dialogs use the first HEX; the **workbench** (the project grid and a project in
+focus) overrides some tokens, shown in brackets, see below.
 
-| Role | Token | HEX | Where |
+| Role | Token | HEX (workbench) | Where |
 | --- | --- | --- | --- |
-| App background | `--bg-app` | #181818 | main workspace, empty canvas, wells that sink into it |
-| Top navigation bar | `--bg-titlebar` | #202020 | the title bar (38px) and the file tab strip |
-| Left sidebar | `--bg-sidebar` | #232323 | project and session lists, the explorer, Settings' categories, the docked activity pane |
-| Card | `--bg-card` | #262626 | project cards, agent tiles, task information, dialogs, activity and reading cards |
-| Input | `--bg-input` | #2D2D2D | the message composer, fields, chips and wells inside a card |
+| App background | `--bg-app` | #181818 (#191919) | main page, empty canvas, wells that sink into it; in the workbench the grid canvas and the centre (terminal, reading view, file preview) |
+| Top navigation bar | `--bg-titlebar` | #1C1C1C | the title bar (40px, the same everywhere) and the file tab strip |
+| Left sidebar | `--bg-sidebar` | #232323 (#222222) | project and session lists, the explorer, Settings' categories |
+| Right info pane | `--bg-aside` | #232323 (#202020) | the docked activity pane |
+| Pane well | `--bg-aside-well` | #2D2D2D (#2B2B2B) | in the activity pane only: the model chip and the meters' tracks |
+| Card | `--bg-card` | #262626 (#242424) | project cards, dialogs; in the workbench also your message bubble and the tool groups in focus |
+| Input | `--bg-input` | #2D2D2D (#2A2A2A) | the message composer, fields, chips and wells inside a card |
 | Popup | `--bg-menu` | #303030 | dropdowns, context menus, tooltips, popovers, toasts, floating panels |
-| Hover | `--bg-hover` | #343434 | row and button hover |
-| Selected | `--bg-selected` | #383838 | current project, nav item, selected rows |
-| Border | `--border` | #404040 | cards, controls, dropdowns |
+| Hover | `--bg-hover` | #343434 (#303030) | row and button hover; inside a menu in the workbench it is `--bg-selected`, so it differs from the menu |
+| Selected | `--bg-selected` | #383838 (#373737) | current project, nav item, selected rows |
+| Border | `--border` | #424242 | cards, controls, dropdowns (1px) |
 | Hover border | `--border-hover` | #595959 | a control's border on hover |
-| Divider | `--divider` | #333333 | between regions, hairlines, list dividers |
+| Divider | `--divider` | #333333 (#343434) | between regions, hairlines, list dividers |
 | Primary text | `--text-1` | #F2F2F2 | headings, main content |
 | Secondary text | `--text-2` | #B5B5B5 | descriptions, secondary labels, placeholders |
 | Tertiary text | `--text-3` | #999999 | dates, times, counts, auxiliary information |
 | Disabled text | `--text-disabled` | #777777 | disabled states |
 | Primary button | `--button-primary` / `--button-primary-text` | #E5E5E5 / #181818 | the one main action; its hover is `--text-1` |
 | Focus ring | `--focus-ring` | #D0D0D0 | every `:focus-visible` ring, and only keyboard focus |
-| Brand accent | `--accent` | #65B8AE | key interactions and active state: checked boxes and switches, picked options, links, meters and progress, the active tab bar, spinners |
-| Success | `--success` | #4CAF83 | task complete: a finished round, a passed step |
-| Warning | `--warning` | #E5B45A | needs approval or attention: a decision waiting on you, a question |
-| Danger | `--danger` | #E47777 | execution failed |
-| Claude Code | `--agent-claude` | #D97757 | the agent's mark |
-| Codex | `--agent-codex` | #34D5A5 | Agentrix's own colour to tell the CLI apart |
+| Claude Code | `--agent-claude` | #D97757 | its brand icon |
+| Succeeded | `--success` | #70BFA4 | command done, check passed, a finished round |
+| Running | `--running` | #78A8CC | tasks in progress: a working card's edge, tag and dot, the reading view's running dot |
+| Needs approval | `--warning` | #D8AE67 | only where something waits for the owner's decision |
+| Failed | `--danger` | #DE7878 | errors and failures |
+| Usage | `--usage` | #68B8AE | progress bars and usage meters |
 
-- Hue rule: **chrome is grey.** The only colour is the accent (key interactions, active state), the four status colours
-  (working = accent, finished = success, needs you = warning, failed = danger), the two agent marks, and the file-type icons
-  (`--fi-*` in file-icons.css, whose type colours are content). Content keeps its colour too (ANSI output, syntax, diff bands,
-  images). The accent is never the focus ring, the primary button or a selected background.
+- Hue rule: **everything is neutral grey except these six**: Claude's brand icon, succeeded, running, needs approval, failed, usage.
+  There is no accent and no "key interaction" colour: a checked switch or checkbox, a picked option or tile, the active file tab,
+  a toggled icon button, the guide's current dot and a spinner take `--text-1` or `--text-2`; a link is underlined. Codex's mark is
+  monochrome (`--text-1`). Not coloured by these rules: file-type icons (`--fi-*` in file-icons.css, content), ANSI output, syntax,
+  diff bands, images. **One owner exception:** list bullets and numbers in the reading view are `--usage`.
+- Colour goes on icons and indicators (a check, a cross, a dot, a ring, a bar), never on a pill, a card or a panel background: a
+  command pill is a grey pill with grey text, and only its check is green, its cross red, its running dot blue. A state colour paints a
+  ring, a tag's text, a dot or an icon, never a panel. Warning and danger appear only for what is waiting or failed; usage meters do not warm.
 - State keeps a non-hue cue next to its colour (ring, tag shape, dot shape), so it still reads in grayscale: working is a
   filled tag and dot, finished a plain tag and a filled dot, finished-and-unseen an outlined tag and a hollow dot (its ring
   breathes in white while fresh, then settles into success), failed a square dot.
-- Radii: 0 for layout regions, 16 for real cards, menus and dialogs, 12 for composers and dropdown triggers, 8 for
-  buttons, rows and wells, pill for tags. Layout regions are separated by a colour step, a divider and spacing, not by cards.
-- No glass, wallpaper, glow or gradients, and no tinted panels. The one shadow is the dropdown menu's. A state colour paints
-  a ring, a tag's text, a dot or an icon, never a panel.
+- Radii: 0 for layout regions, 16 for project cards, menus and dialogs, 12 for message containers (your bubble, tool groups, code
+  and error wells, file cards), composers and dropdown triggers, 8 for buttons, rows and small wells, pill for tags. Layout regions
+  are separated by a colour step, a divider and spacing, not by cards.
+- No glass, wallpaper, glow or gradients, and no tinted panels. The one shadow is the dropdown menu's.
 - Dropdowns use `src/shared/Select.tsx`, never a native `<select>` (its pop-up is drawn by the OS in system blue).
 - Native GUI checks drive it with `scripts/select-helper.mjs`.
+
+## The workbench
+
+- Its tokens are overridden on `.workspace-layout:not(:has(> .home-layer))` (themes.css), the layout that holds the grid and a
+  project in focus; the decision page is a layer in the same layout, so it is left out. The title bar, Settings and dialogs are
+  outside it. `--bg-titlebar` is global (#1C1C1C). `--bg-aside` is the activity pane's own surface (#202020 in the workbench, the
+  sidebar colour elsewhere), and `--bg-aside-well` (#2B2B2B) the pane's one fill, for the model chip and the meters' tracks.
+- Menus inside the workbench set `--bg-hover` to `--bg-selected` (the popup colour equals the workbench hover). Menus drawn on the page
+  body keep the standard hover.
+- A grid card's reading view is the card colour; in focus it is the app colour. Your message and the tool groups are one step above
+  it (`--flow-card`: the input colour on a card, the card colour in focus). The agent's plain reply has no card; code blocks, errors
+  and file cards are wells (`--bg-app` with a divider edge, radius 12). The model tag over the composer hides while the activity pane,
+  which shows the model route, is open.
+- The activity pane is a quiet status inspector: groups without cards or borders on the pane colour, a 13px title, 12px content, 11px
+  notes, 20px between groups, 4 to 12px inside a group, 16px padding. The plan's first usage bar is `--usage`; every other meter is
+  `--text-3` on the well.
+
+## Sizes (the owner's spec, logical px)
+
+Title bar 40 · explorer rows 30 to 32 with 13px text · message body 13 to 14px on a 1.5 to 1.6 line · message container radius 12 · tool
+pill 28 high (its 18px icon centred on it) · chat padding 24 left and right (16 in a card narrower than 480px) · right pane padding 16 ·
+composer 48 to 56 high and growing, radius 12 · default border 1px `--border` (#424242).
 
 ## Definitions (so a hand count and the script agree)
 

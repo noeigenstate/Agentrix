@@ -1,153 +1,98 @@
-/* The cards of the model's route, running tasks, context and usage: card colour on the sidebar-coloured pane, which is docked to the main area's right edge. A meter
-   fills in the accent; how full it is is told by its number, and a filling one by a bold figure in the warning colour from 70%, the danger colour from 90%. */
+/* The activity pane, a quiet status inspector on the pane colour, docked to the main area's right edge. Its groups (model route, tasks, context, usage) have no card: a 13px
+   title over its content, 20px between groups, 4 to 12px inside one. Text is 13px for titles and the task itself, 12px for content, 11px for notes. Only the model chip and the
+   tracks of the meters take the pane's own well fill; the plan's first usage bar is the one colour (the usage teal) and the other meters are muted grey. */
 .activity-pane {
-  --flow-card: var(--bg-card); --flow-line: var(--divider); --flow-inset: var(--bg-input);
+  --flow-line: var(--divider); --flow-inset: var(--bg-aside-well);
   --flow-ink: var(--text-1); --flow-muted: var(--text-2); --flow-faint: var(--text-3);
-  --flow-ok: var(--accent);
-  gap: 12px; padding: 12px; overflow-y: auto; overscroll-behavior: contain;
+  gap: 20px; padding: 16px; overflow-y: auto; overscroll-behavior: contain;
 }
-.activity-card { flex: none; min-width: 0; border-radius: 16px; background: var(--flow-card); }
-.activity-card-title { margin: 0; padding: 11px 14px 8px; font-size: 12.5px; font-weight: 600; color: var(--flow-ink); }
+.activity-card { flex: none; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.activity-card-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
+.activity-note { margin: 0; font-size: 11px; line-height: 16px; color: var(--flow-faint); overflow-wrap: anywhere; }
+.activity-empty { margin: 0; font-size: 12px; line-height: 18px; color: var(--flow-muted); }
 
 /* The task being worked on, and those waiting their turn. */
-/* Size to the prompts; a long queue scrolls inside its card. */
-.activity-tasks { display: flex; flex-direction: column; min-height: 0; max-height: 260px; padding-bottom: 10px; overflow: hidden; }
-.activity-tasks > .activity-card-title { display: flex; align-items: center; gap: 8px; flex: none; }
-.activity-task-count { padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 18px; color: var(--flow-ink); background: var(--bg-selected); font-variant-numeric: tabular-nums; }
-.activity-prompts { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; align-content: start; gap: 6px; margin: 0; padding: 0 10px 4px; list-style: none;
- }
-.activity-prompts li { display: grid; gap: 4px; padding: 8px 12px; border-radius: 8px; background: var(--flow-inset); }
-.activity-prompts li p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--flow-ink); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.activity-prompt-state { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--flow-muted); }
-.activity-prompts li.is-working { gap: 8px; padding: 12px 14px; }
-.activity-prompts li.is-working .activity-prompt-state { font-size: 13px; font-weight: 600; color: var(--flow-ok); }
-.activity-prompts li.is-working .activity-prompt-state svg { color: var(--flow-ok); }
-.activity-task-quiet { min-height: 0; overflow-y: auto; margin: 0 14px; font-size: 12.5px; line-height: 1.6; color: var(--flow-muted); overflow-wrap: anywhere; }
+/* Size to the prompts; a long queue scrolls inside its group. */
+.activity-tasks { min-height: 0; max-height: 260px; overflow: hidden; }
+.activity-tasks > .activity-card-title { display: flex; align-items: baseline; gap: 8px; flex: none; }
+.activity-task-count { font-size: 12px; font-weight: 400; color: var(--flow-faint); font-variant-numeric: tabular-nums; }
+.activity-prompts { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; align-content: start; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.activity-prompts li { display: grid; gap: 2px; }
+.activity-prompts li p { margin: 0; font-size: 13px; line-height: 20px; color: var(--flow-ink); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.activity-prompt-state { display: flex; align-items: center; gap: 6px; font-size: 11px; line-height: 16px; color: var(--flow-faint); }
+.activity-prompts li.is-working .activity-prompt-state { font-size: 12px; font-weight: 600; color: var(--running); }
+.activity-prompts li.is-working .activity-prompt-state svg { width: 14px; height: 14px; color: var(--running); }
+.activity-task-quiet { min-height: 0; overflow-y: auto; margin: 0; font-size: 12px; line-height: 18px; color: var(--flow-muted); overflow-wrap: anywhere; }
 
 /* Agent › service › model, then how the model runs. */
-.activity-route-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 4px; margin: 0; padding: 0 14px; list-style: none; }
+.activity-route-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 4px; margin: 0; padding: 0; list-style: none; }
 .activity-route-steps li { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .activity-route-steps li > svg { flex: none; color: var(--flow-faint); }
-.activity-route-steps span { min-width: 0; padding: 3px 9px; border-radius: 999px; background: var(--flow-inset); font-size: 12px; line-height: 1.5; color: var(--flow-muted); overflow-wrap: anywhere; }
-.activity-route-steps .is-model span { font-weight: 600; color: var(--flow-ink); background: var(--bg-selected); }
-.activity-note { margin: 0; padding: 8px 14px 12px; font-size: 11.5px; line-height: 1.6; color: var(--flow-faint); overflow-wrap: anywhere; }
-.activity-note + .activity-note { padding-top: 0; }
-.activity-route-calls { border-top: 1px solid var(--flow-line); margin: 0 14px; padding: 10px 0 4px; }
-.activity-route-calls h5 { margin: 0 0 8px; color: var(--flow-muted); font-size: 11px; font-weight: 500; }
-.activity-route-call .activity-route-steps { padding: 0; gap: 4px 3px; }
-.activity-route-call .activity-route-steps span { padding: 2px 7px; font-size: 11px; }
-.activity-route-call .activity-note { padding: 5px 0 10px; font-size: 11px; }
-.activity-call-items { display: grid; gap: 4px; margin: 0; padding: 0 0 10px; list-style: none; }
-.activity-call-items li { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 11px; line-height: 1.6; color: var(--flow-muted); }
+.activity-route-steps span { min-width: 0; padding: 2px 10px; border-radius: 999px; background: var(--flow-inset); font-size: 12px; line-height: 20px; color: var(--flow-muted); overflow-wrap: anywhere; }
+.activity-route-steps .is-model span { font-weight: 600; color: var(--flow-ink); }
+.activity-route-calls { display: grid; gap: 12px; margin-top: 4px; }
+.activity-route-calls h5 { margin: 0; font-size: 12px; font-weight: 600; line-height: 18px; color: var(--flow-muted); }
+.activity-route-call { display: grid; gap: 4px; }
+/* A call's route is plain text: the chip is the pane's own model only. */
+.activity-route-call .activity-route-steps { gap: 2px; }
+.activity-route-call .activity-route-steps span { padding: 0; background: none; line-height: 18px; }
+.activity-call-items { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.activity-call-items li { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 11px; line-height: 16px; color: var(--flow-muted); }
 .activity-call-items i, .activity-call-role { flex: none; white-space: nowrap; }
 .activity-call-items i { margin: 0; }
 .activity-call-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-call-items .activity-call-more { padding-left: 17px; color: var(--flow-faint); }
 .activity-call-state { white-space: nowrap; }
-:is(.activity-call-preparing, .activity-call-running, .activity-call-reviewing) { position: relative; display: inline-grid; place-items: center; width: 13px; height: 13px; margin-right: 4px; vertical-align: -2px; color: var(--flow-ok); }
+:is(.activity-call-preparing, .activity-call-running, .activity-call-reviewing) { position: relative; display: inline-grid; place-items: center; width: 13px; height: 13px; margin-right: 4px; vertical-align: -2px; color: var(--running); }
 :is(.activity-call-preparing, .activity-call-running, .activity-call-reviewing)::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .activity-call-preparing { color: var(--flow-faint); }
 .activity-call-preparing::before { background: none; box-shadow: inset 0 0 0 1px currentColor; }
-.activity-call-reviewing { color: var(--flow-ok); }
 .activity-call-reviewing::after { content: ''; position: absolute; inset: 1px; border-radius: 50%; box-shadow: 0 0 0 1px currentColor; }
 
-/* A title with its figure at the right end, a big number, and a meter that warms as it fills. */
-.activity-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding-right: 14px; }
-.activity-percent { font-size: 13px; font-weight: 600; color: var(--flow-ok); font-variant-numeric: tabular-nums; }
-.activity-figure { margin: 0; padding: 0 14px 8px; font-size: 12px; color: var(--flow-muted); font-variant-numeric: tabular-nums; }
-.activity-figure b { font-size: 20px; font-weight: 600; color: var(--flow-ink); }
+/* A title with its figure at the right end, then a meter: a muted fill on the well track. */
+.activity-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.activity-percent { font-size: 12px; font-weight: 600; color: var(--flow-ink); font-variant-numeric: tabular-nums; }
+.activity-figure { margin: 0; font-size: 12px; line-height: 18px; color: var(--flow-muted); font-variant-numeric: tabular-nums; }
+.activity-figure b { font-size: 13px; font-weight: 600; color: var(--flow-ink); }
 .activity-meter { position: relative; display: block; height: 6px; border-radius: 999px; overflow: hidden; background: var(--flow-inset); }
-.activity-meter.is-expired { background: var(--flow-line); }
-.activity-meter i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--flow-ok); }
-.activity-context > .activity-meter { margin: 0 14px; }
-:is(.activity-percent, .activity-limit b):is(.is-warm, .is-high) { font-weight: 700; }
-:is(.activity-meter, .activity-percent, .activity-limit b).is-warm { --flow-ok: var(--warning); }
-:is(.activity-meter, .activity-percent, .activity-limit b).is-high { --flow-ok: var(--danger); }
+.activity-meter.is-expired { opacity: .5; }
+.activity-meter i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--flow-faint); }
+.activity-limit:first-child .activity-meter i { background: var(--usage); }
 
 /* The plan's windows, then the tokens of the round and the conversation. */
-.activity-limits { display: grid; gap: 10px; padding: 0 14px 10px; }
-.activity-limit { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; row-gap: 5px; column-gap: 8px; font-size: 12px; color: var(--flow-muted); }
-.activity-limit b { font-weight: 600; color: var(--flow-ok); font-variant-numeric: tabular-nums; }
+.activity-limits { display: grid; gap: 12px; }
+.activity-limit { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 8px; font-size: 12px; line-height: 18px; color: var(--flow-muted); }
+.activity-limit b { font-weight: 600; color: var(--flow-ink); font-variant-numeric: tabular-nums; }
 .activity-limit .activity-meter, .activity-limit small { grid-column: 1 / -1; }
-.activity-limit small { font-size: 11px; color: var(--flow-faint); }
-.activity-tokens { display: grid; gap: 8px; margin: 0; padding: 0 14px 12px; }
-.activity-limits + .activity-tokens { margin: 0 14px; padding: 10px 0 12px; border-top: 1px solid var(--flow-line); }
-.activity-token-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; column-gap: 8px; }
-.activity-token-row dt { font-size: 12px; color: var(--flow-muted); }
-.activity-token-row dd { margin: 0; font-size: 11.5px; color: var(--flow-muted); font-variant-numeric: tabular-nums; }
-.activity-token-row dd b { font-size: 14px; font-weight: 600; color: var(--flow-ink); }
-.activity-token-row small { grid-column: 1 / -1; font-size: 11px; line-height: 1.6; color: var(--flow-faint); font-variant-numeric: tabular-nums; }
-.activity-tokens + .activity-note { padding-top: 0; }
-.activity-empty { margin: 0; padding: 12px 14px; font-size: 12px; line-height: 1.7; color: var(--flow-muted); }
+.activity-limit small { margin-top: -4px; font-size: 11px; line-height: 16px; color: var(--flow-faint); }
+.activity-tokens { display: grid; gap: 8px; margin: 0; }
+.activity-limits + .activity-tokens { margin-top: 4px; }
+.activity-token-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; column-gap: 8px; row-gap: 2px; }
+.activity-token-row dt { font-size: 12px; line-height: 18px; color: var(--flow-muted); }
+.activity-token-row dd { margin: 0; font-size: 12px; color: var(--flow-muted); font-variant-numeric: tabular-nums; }
+.activity-token-row dd b { font-weight: 600; color: var(--flow-ink); }
+.activity-token-row small { grid-column: 1 / -1; font-size: 11px; line-height: 16px; color: var(--flow-faint); font-variant-numeric: tabular-nums; }
 
-/* A limit reset: a flat round button with its icon (or, counting down, the seconds), its label under it and how many are left beside it. Counting down, a ring
-   runs out around it and the way out stands beside it. With no reset to use it is the disabled grey. */
-.activity-reset { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px 16px; margin: 0 14px 14px; padding-top: 14px; border-top: 1px solid var(--flow-line); }
-.activity-reset > small { justify-self: end; font-size: 12px; color: var(--flow-ink); font-variant-numeric: tabular-nums; }
-.activity-reset-note { grid-column: 1 / -1; margin: 0; font-size: 11px; line-height: 1.6; color: var(--flow-faint); }
-.activity-estop-wrap { display: grid; justify-items: center; gap: 8px; }
-.activity-estop { position: relative; display: block; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; }
-.activity-estop:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 4px; }
+/* A limit reset, a small outlined round button with its icon (or, counting down, the seconds) and its label beside it, how many are left at the far end. Counting down, a ring
+   runs out around the button and the way out stands at the end. With no reset to use it is the disabled grey. */
+.activity-reset { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+.activity-estop-wrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.activity-estop { position: relative; display: block; flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; }
+.activity-estop:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .activity-estop-hazard, .activity-estop-bezel { display: none; }
-.activity-estop-dome { position: absolute; inset: 0; display: grid; place-items: center; border-radius: 50%; color: var(--button-primary-text); background: var(--button-primary); }
-.activity-estop-dome > b { font: 600 22px/1 var(--font-ui); font-variant-numeric: tabular-nums; }
-.activity-estop:hover:not(:disabled) .activity-estop-dome { background: var(--text-1); }
+.activity-estop-dome { position: absolute; inset: 0; display: grid; place-items: center; border-radius: 50%; color: var(--flow-ink); box-shadow: inset 0 0 0 1px var(--border); }
+.activity-estop-dome > svg { width: 14px; height: 14px; }
+.activity-estop-dome > b { font: 600 12px/1 var(--font-ui); font-variant-numeric: tabular-nums; }
+.activity-estop:hover:not(:disabled) .activity-estop-dome { background: var(--bg-hover); }
 .activity-estop[aria-disabled] { cursor: default; }
 .activity-estop:disabled { cursor: default; }
-.activity-estop:disabled .activity-estop-dome { color: var(--text-disabled); background: var(--bg-selected); }
-.activity-estop-ring { position: absolute; left: -6px; top: -6px; width: 84px; height: 84px; transform: rotate(-90deg); overflow: visible; }
-.activity-estop-ring circle { fill: none; stroke: var(--text-1); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 100; stroke-dashoffset: 0; animation: activity-estop-run linear forwards; }
+.activity-estop:disabled .activity-estop-dome { color: var(--text-disabled); }
+.activity-estop-ring { position: absolute; left: -3px; top: -3px; width: 34px; height: 34px; transform: rotate(-90deg); overflow: visible; }
+.activity-estop-ring circle { fill: none; stroke: var(--text-1); stroke-width: 5; stroke-linecap: round; stroke-dasharray: 100; stroke-dashoffset: 0; animation: activity-estop-run linear forwards; }
 @keyframes activity-estop-run { to { stroke-dashoffset: 100; } }
 .activity-estop-label { font-size: 12px; font-weight: 600; color: var(--flow-ink); }
 .activity-reset.is-counting .activity-estop-label { font-variant-numeric: tabular-nums; }
-.activity-reset-cancel { justify-self: end; height: 32px; padding: 0 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--flow-ink); font: 600 13px var(--font-ui); cursor: pointer; }
+.activity-reset > small { margin-left: auto; font-size: 11px; color: var(--flow-faint); font-variant-numeric: tabular-nums; }
+.activity-reset-note { flex-basis: 100%; margin: 0; font-size: 11px; line-height: 16px; color: var(--flow-faint); }
+.activity-reset-cancel { margin-left: auto; height: 28px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: none; color: var(--flow-ink); font: 600 12px var(--font-ui); cursor: pointer; }
 .activity-reset-cancel:hover, .activity-reset-cancel:focus-visible { background: var(--bg-hover); outline: none; }
-
-/* Shorter windows tighten the cards to keep more of the pane in view. */
-@media (max-height: 960px) {
-  .activity-pane { gap: 8px; }
-  .activity-card-title { padding: 9px 14px 6px; }
-  .activity-note { padding: 6px 14px 9px; }
-  .activity-route-calls { padding: 7px 0 0; }
-  .activity-route-calls h5 { margin-bottom: 5px; }
-  .activity-route-call .activity-note { padding: 3px 0 7px; }
-  .activity-context { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; }
-  .activity-context > .activity-card-head { grid-column: 1 / -1; }
-  .activity-context > .activity-figure { padding-bottom: 6px; }
-  .activity-context > .activity-note { padding: 0 14px 6px 0; text-align: right; }
-  .activity-context > .activity-meter { grid-column: 1 / -1; grid-row: 3; margin-bottom: 11px; }
-  .activity-limits { gap: 8px; padding-bottom: 8px; }
-  .activity-tokens { gap: 6px; padding-bottom: 9px; }
-  .activity-limits + .activity-tokens { padding: 8px 0 9px; }
-  .activity-reset { gap: 6px 14px; margin-bottom: 10px; padding-top: 10px; }
-  .activity-estop-wrap { display: flex; align-items: center; gap: 12px; }
-  .activity-estop { zoom: .83; }
-  .activity-reset-note { line-height: 1.5; }
-  /* Each limit's reset time shares its label row: name, time, percent, then the bar. */
-  .activity-limit { grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 4px; }
-  .activity-limit > span { grid-area: 1 / 1; }
-  .activity-limit > b { grid-area: 1 / 3; }
-  .activity-limit > small { grid-area: 1 / 2; justify-self: end; }
-  .activity-limit > .activity-meter { grid-area: 2 / 1 / 3 / -1; }
-}
-@media (max-height: 800px) {
-  .activity-pane { gap: 6px; padding-top: 6px; }
-  .activity-card-title { padding: 7px 14px 4px; }
-  .activity-note { padding: 4px 14px 7px; font-size: 11px; line-height: 1.5; }
-  .activity-route-steps span { padding: 2px 8px; }
-  .activity-route-call .activity-note { padding: 2px 0 5px; }
-  .activity-route-calls { padding-top: 5px; }
-  .activity-figure { padding-bottom: 4px; }
-  .activity-figure b { font-size: 17px; }
-  .activity-limits { gap: 6px; padding-bottom: 6px; }
-  .activity-tokens { gap: 4px; padding-bottom: 7px; }
-  .activity-token-row small { line-height: 1.45; }
-  .activity-limits + .activity-tokens { padding: 6px 0 7px; }
-  .activity-reset { margin-bottom: 8px; padding-top: 8px; }
-  .activity-estop { zoom: .72; }
-  .activity-token-row { grid-template-columns: auto minmax(0, 1fr) auto; }
-  .activity-token-row dt { grid-area: 1 / 1; }
-  .activity-token-row dd { grid-area: 1 / 3; }
-  .activity-token-row small { grid-area: 1 / 2; justify-self: end; align-self: center; }
-  .activity-reset-note { font-size: 10.5px; line-height: 1.4; }
-}

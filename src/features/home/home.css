@@ -1,5 +1,5 @@
 /* The home page (decisions and sessions) lies over the workbench, which keeps running under them, hidden. Layout, information and hierarchy
-   are grey; colour is for state only (the tags and rows below) and the accent for a picked option. No shadow, no blur, no gradient,
+   are grey; colour is for state only (the tags and rows below) and a picked option takes the primary text colour. No shadow, no blur, no gradient,
    no translucency, no motion; decorative icons are left out. One set of tokens serves every part of the page: radii 8 / 12 / 16 / pill,
    type 20 / 16 / 13 / 12 / 11 in weights 400 / 600, spacing 4 / 8 / 12 / 16 / 24, buttons 32px high. */
 .home-layer {
@@ -11,12 +11,12 @@
 .home-notice { display: flex; align-items: center; gap: 8px; margin: 12px 12px 0; padding: 8px 12px; border-radius: 8px; font-size: 12px; color: var(--text-1); background: var(--bg-card); }
 
 /* The tags: one shape for a decision's kind, its mode, and a session's state. Needs-you is outlined in the warning colour, a finished round to review
-   outlined in success, working filled with the accent, a finished session plain success, the rest neutral; never a solid light block, so the card's one primary button stays the strongest thing. */
+   outlined in success, working filled and in the running colour, a finished session plain success, the rest neutral; never a solid light block, so the card's one primary button stays the strongest thing. */
 .inbox-tag, .decision-kind, .decision-mode { display: inline-flex; flex: none; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 20px; white-space: nowrap; color: var(--text-2); background: var(--bg-input); }
 /* Without the colour the shapes still tell them apart: what needs you or waits for review is outlined, what is working is filled, the rest is plain. */
 :is(.inbox-tag, .decision-kind):is(.is-need, .is-review), .decision-card:not(.session-detail) .decision-kind { color: var(--warning); background: none; border: 1px solid currentColor; line-height: 18px; }
 :is(.inbox-tag, .decision-kind).is-review, .decision-card.is-review .decision-kind { color: var(--success); }
-:is(.inbox-tag, .decision-kind).is-work { color: var(--accent); background: var(--bg-selected); }
+:is(.inbox-tag, .decision-kind).is-work { color: var(--running); background: var(--bg-selected); }
 .decision-kind.is-done { color: var(--success); }
 
 /* The inbox: one list by urgency, no icon chips; a row is the name, what it is on (only when it is on something) and its state. A row
@@ -75,8 +75,8 @@
 .decision-options { display: grid; gap: 8px; margin: 0 0 4px; }
 .decision-option { display: flex; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 8px; cursor: pointer; background: var(--bg-input); }
 .decision-option:hover { background: var(--bg-hover); }
-.decision-option.is-picked { background: var(--bg-selected); outline: 2px solid var(--accent); outline-offset: -2px; }
-.decision-option input { margin: 2px 0 0; accent-color: var(--accent); }
+.decision-option.is-picked { background: var(--bg-selected); outline: 2px solid var(--text-1); outline-offset: -2px; }
+.decision-option input { margin: 2px 0 0; accent-color: var(--text-1); }
 .decision-option span { display: grid; gap: 4px; min-width: 0; }
 .decision-option b { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .decision-option small { font-size: 12px; color: var(--text-2); }

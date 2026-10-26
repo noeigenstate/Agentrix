@@ -20,7 +20,7 @@
 .guide-body .guide-note { margin-top: 12px; font-size: 12px; }
 .guide-dots { display: flex; justify-content: center; gap: 8px; margin: 8px 0 16px; }
 .guide-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--border); }
-.guide-dots i.is-current { width: 18px; border-radius: 3px; background: var(--accent); }
+.guide-dots i.is-current { width: 18px; border-radius: 3px; background: var(--text-1); }
 .guide-footer { display: flex; width: 100%; gap: 12px; padding-top: 24px; border-top: 1px solid var(--divider); }
 .guide-footer .button { flex: 1; height: 40px; font-size: 14px; }
 .guide-links { display: flex; justify-content: center; gap: 24px; margin-top: 12px; }

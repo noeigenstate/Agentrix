@@ -10,9 +10,9 @@
 .agent-launcher-agent { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; row-gap: 4px; align-items: center; flex: 1 1 200px; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-card); color: var(--text-1); text-align: left; cursor: pointer; }
 .agent-launcher-agent:hover:not(:disabled) { background: var(--bg-hover); }
 .agent-launcher-agent:disabled { cursor: default; opacity: .7; }
-.agent-launcher-mark { grid-row: span 2; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 8px; font: 600 16px var(--font-mono); color: var(--agent); background: color-mix(in srgb, var(--agent) 10%, var(--bg-app)); }
+.agent-launcher-mark { grid-row: span 2; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 8px; font: 600 16px var(--font-mono); color: var(--agent); background: var(--bg-input); }
 .agent-launcher-agent.is-claude { --agent: var(--agent-claude); }
-.agent-launcher-agent.is-codex { --agent: var(--agent-codex); }
+.agent-launcher-agent.is-codex { --agent: var(--text-1); }
 .agent-launcher-agent.is-claude .agent-launcher-mark { font-size: 22px; }
 .agent-launcher-agent.is-codex .agent-launcher-mark { font-size: 14px; }
 .agent-launcher-agent b { font-size: 13px; font-weight: 600; }

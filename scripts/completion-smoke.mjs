@@ -85,7 +85,6 @@ try {
   assert.deepEqual(await text('.activity-context .activity-percent'), ['38%']);
   assert.deepEqual(await text('.activity-limit > span:first-child'), ['5 小时额度', '每周额度'], 'the plan windows are named by their length');
   assert.deepEqual(await text('.activity-limit > b'), ['34%', '92%']);
-  assert.ok((await pane.locator('.activity-limit .activity-meter').nth(1).getAttribute('class')).includes('is-high'), 'a nearly used-up allowance is marked');
   assert.deepEqual(await text('.activity-token-row dt'), ['本轮', '本次对话']);
   assert.deepEqual(await text('.activity-token-row small'), ['输入 320k · 缓存命中 91% · 输出 4.2k', '输入 320k · 缓存命中 91% · 输出 4.2k']);
   // The overview lists the prompts: the one being worked on, then one sent while it works. The card's size is fixed:

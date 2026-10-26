@@ -15,8 +15,6 @@ export function tokenCount(value: number) {
   return `${(value / 1e6).toFixed(value < 1e7 ? 2 : 1).replace(/\.?0+$/, '')}M`;
 }
 const exactCount = (value: number) => value.toLocaleString('en-US');
-// How full a meter is: calm, then amber from 70%, red from 90%.
-const level = (percent: number) => percent >= 90 ? 'is-high' : percent >= 70 ? 'is-warm' : '';
 const percentOf = (part: number, whole: number) => whole > 0 ? Math.min(100, Math.round(part / whole * 100)) : 0;
 
 // Beside an expanded project's terminal: the model route, running tasks, context and usage.
@@ -85,7 +83,7 @@ function ContextCard({ usage }: { usage: AgentUsage | null | undefined }) {
   const context = usage?.context;
   const percent = context ? percentOf(context.used, context.window) : 0;
   return <section className="activity-card activity-context" aria-label={t('上下文长度')}>
-    <header className="activity-card-head"><h4 className="activity-card-title">{t('上下文长度')}</h4>{context && <b className={`activity-percent ${level(percent)}`}>{percent}%</b>}</header>
+    <header className="activity-card-head"><h4 className="activity-card-title">{t('上下文长度')}</h4>{context && <b className="activity-percent">{percent}%</b>}</header>
     {context ? <>
       <p className="activity-figure" title={`${exactCount(context.used)} / ${exactCount(context.window)} tokens`}><b>{tokenCount(context.used)}</b><span> / {tokenCount(context.window)} tokens</span></p>
       <Meter percent={percent} label={t('上下文已用 {percent}%', { percent })} />
@@ -108,7 +106,7 @@ function UsageCard({ usage, terminal }: { usage: AgentUsage | null | undefined; 
         const name = limitName(limit.minutes), expired = limit.resetsAt != null && limit.resetsAt <= now;
         const label = expired ? t('已重置，等待更新') : t('{name}已用 {percent}%', { name, percent: Math.round(limit.percent) });
         return <div key={limit.minutes ?? 0} className="activity-limit">
-          <span>{name}</span>{!expired && <b className={level(limit.percent)} title={[`${limit.percent.toFixed(1)}%`, updated].filter(Boolean).join(' · ')}>{Math.round(limit.percent)}%</b>}
+          <span>{name}</span>{!expired && <b title={[`${limit.percent.toFixed(1)}%`, updated].filter(Boolean).join(' · ')}>{Math.round(limit.percent)}%</b>}
           <Meter percent={expired ? null : limit.percent} label={label} />
           {expired ? <small>{label}</small> : limit.resetsAt != null && <small>{t('{time} 重置', { time: resetTime(limit.resetsAt) })}</small>}
         </div>;
@@ -173,8 +171,7 @@ function ResetQuota({ terminal }: { terminal: ProjectTerminal }) {
     const failed = window.dispatchEvent(event) && terminal.sessionId ? await sendToAgent(terminal.id, terminal.sessionId, 'codex', command) : null;
     setNote(failed ?? t('已打开 Codex 的 /usage，在那里选择要用的重置并确认。'));
   };
-  // An emergency stop: a red dome in a metal bezel ringed with hazard stripes. Counting down, the seconds take the
-  // dome, a red ring runs out around it and the way out sits beside it.
+  // A small round button. Counting down, the seconds take its place, a ring runs out around it and the way out sits at the end.
   const counting = count !== null, none = left === 0;
   const start = () => { fired.current = false; setNote(null); setCount(COUNTDOWN); };
   return <div className={`activity-reset${counting ? ' is-counting' : ''}`} role={counting ? 'timer' : undefined} aria-live={counting ? 'polite' : undefined}
@@ -209,7 +206,7 @@ function TokenRow({ label, tokens }: { label: string; tokens: AgentTokens }) {
 function Meter({ percent, label }: { percent: number | null; label: string }) {
   if (percent === null) return <span className="activity-meter is-expired" aria-hidden="true" />;
   const value = Math.max(0, Math.min(100, percent));
-  return <span className={`activity-meter ${level(value)}`} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(value)} aria-label={label}><i style={{ width: `${value}%` }} /></span>;
+  return <span className="activity-meter" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(value)} aria-label={label}><i style={{ width: `${value}%` }} /></span>;
 }
 
 // A rate-limit window by its length: 5 hours, a week.

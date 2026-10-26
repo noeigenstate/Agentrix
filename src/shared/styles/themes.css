@@ -1,16 +1,26 @@
 /* The one token set of the app, named by role. New UI uses these and nothing else; a grey is never picked from a scale.
-   Surfaces: app (canvas), titlebar, sidebar, card, input, menu (dropdowns, popovers, toasts), hover, selected. Lines: border (cards, controls), border-hover,
+   Surfaces: app (canvas), titlebar, sidebar, aside (the activity pane), card, input, menu (dropdowns, popovers, toasts), hover, selected. Lines: border (cards, controls), border-hover,
    divider (between regions, hairlines). Text: 1 primary, 2 secondary, 3 tertiary, disabled. Buttons: the primary button, its text and the one ring for keyboard focus.
-   Colour is for meaning only: the accent marks key interactions and active state, success, warning and danger mark state, and the two agents keep their own marks.
-   Radii: 0 for layout regions, 16 real cards, menus and dialogs, 12 the composer box and dropdown triggers, 8 buttons, pickers, rows and wells, the pill only for tags. */
+   Colour is for meaning only, on icons and indicators and never on a pill or a card: running, success, needs approval, failed and usage, and Claude Code's own mark. Everything else is grey; there is no accent.
+   Radii: 0 for layout regions, 16 project cards, menus and dialogs, 12 the message containers (your bubble, tool groups, code and error wells, file cards), the composer box and dropdown triggers, 8 buttons, pickers, rows and small wells, the pill only for tags. */
 :root {
   color-scheme: dark;
-  --bg-app: #181818; --bg-titlebar: #202020; --bg-sidebar: #232323; --bg-card: #262626; --bg-input: #2d2d2d; --bg-menu: #303030;
+  --bg-app: #181818; --bg-titlebar: #1c1c1c; --bg-sidebar: #232323; --bg-aside: var(--bg-sidebar); --bg-aside-well: var(--bg-input); --bg-card: #262626; --bg-input: #2d2d2d; --bg-menu: #303030;
   --bg-hover: #343434; --bg-selected: #383838;
-  --border: #404040; --border-hover: #595959; --divider: #333333;
+  --border: #424242; --border-hover: #595959; --divider: #333333;
   --text-1: #f2f2f2; --text-2: #b5b5b5; --text-3: #999999; --text-disabled: #777777;
   --button-primary: #e5e5e5; --button-primary-text: #181818; --focus-ring: #d0d0d0;
-  --accent: #65b8ae; --success: #4caf83; --warning: #e5b45a; --danger: #e47777;
-  /* The agents' marks: Claude Code's coral, and the Codex colour Agentrix gives it to tell the two CLIs apart. */
-  --agent-claude: #d97757; --agent-codex: #34d5a5;
+  --success: #70bfa4; --running: #78a8cc; --warning: #d8ae67; --danger: #de7878; --usage: #68b8ae;
+  /* Claude Code's brand colour, on its icon only; Codex's mark is monochrome, so it takes the primary text colour. */
+  --agent-claude: #d97757;
 }
+
+/* The workbench (the project grid and a project in focus) is staged darker, on the layout that holds it so the title bar, the decision page, Settings and dialogs keep the set above:
+   the canvas and the centre are the quietest, the explorer and the activity pane lift a step (the pane a little less, with its own well for the model chip and the usage bars), then cards, inputs, hover and selection.
+   The decision page is a layer inside the same layout, so the layout is left out while that layer is shown. */
+.workspace-layout:not(:has(> .home-layer)) {
+  --bg-app: #191919; --bg-sidebar: #222222; --bg-aside: #202020; --bg-aside-well: #2b2b2b; --bg-card: #242424; --bg-input: #2a2a2a; --bg-hover: #303030; --bg-selected: #373737; --divider: #343434;
+}
+/* A menu is the popup colour (#303030), the same step as the workbench's hover, so inside the workbench a menu's items hover to the selected step.
+   Menus drawn on the page body (the explorer's, the terminal's, dropdowns) are outside the layout and keep the standard hover. */
+.workspace-layout:not(:has(> .home-layer)) :is(.dropdown, .editor-find, .reading-commands, .reading-terminal-popup) { --bg-hover: var(--bg-selected); }

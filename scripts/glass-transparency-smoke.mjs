@@ -56,7 +56,7 @@ try {
     await settings({ glassTransparency: value }); const sample = await material();
     assert.equal(sample.ink, original.ink); assert.equal(sample.opacity, '1');
     // The grey design is opaque: the transparency setting is kept and stored, but no surface follows it.
-    assert.deepEqual(sample, original, `transparency ${value}% leaves the flat grey surfaces unchanged`); assert.equal(sample.tint, 'rgb(38, 38, 38)');
+    assert.deepEqual(sample, original, `transparency ${value}% leaves the flat grey surfaces unchanged`); assert.equal(sample.tint, 'rgb(36, 36, 36)');
     assert.equal((await state()).projects[0].sessionId, session);
     assert.ok(await page.locator('.terminal-host').evaluate(node => node === globalThis.transparencyTerminal));
     samples.push({ theme, value, sample });
@@ -84,7 +84,7 @@ try {
   const cdp = await page.context().newCDPSession(page);
   await settings({ glassTransparency: 75 });
   const preview = await page.locator('.file-preview').evaluate(node => ({ tint: getComputedStyle(node).backgroundColor, backing: getComputedStyle(node, '::before').backgroundColor, backingDisplay: getComputedStyle(node, '::before').display }));
-  assert.equal(preview.tint, 'rgb(24, 24, 24)', theme + ': the file view stays the opaque canvas grey at any transparency: ' + JSON.stringify(preview));
+  assert.equal(preview.tint, 'rgb(25, 25, 25)', theme + ': the file view stays the opaque canvas grey at any transparency: ' + JSON.stringify(preview));
   for (const surface of ['solid', 'glass']) {
     if (surface === 'solid') await page.evaluate(() => window.agentrix.settings({ surface: 'solid' }));
     else { await page.evaluate(() => window.agentrix.settings({ surface: 'glass' })); await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }] }); }

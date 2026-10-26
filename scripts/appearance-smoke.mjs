@@ -37,7 +37,7 @@ async function capture(name) {
   await fs.writeFile(path.join(output, name), bytes);
   if (name.endsWith('-solid.png')) {
     const pane = await app.evaluate(({ nativeImage }, encoded) => { const image = nativeImage.createFromBuffer(Buffer.from(encoded, 'base64')), size = image.getSize(), pixels = image.toBitmap(), offset = (Math.floor(size.height * .7) * size.width + Math.floor(size.width / 2)) * 4; return [pixels[offset + 2], pixels[offset + 1], pixels[offset]]; }, bytes.toString('base64'));
-    assert.deepEqual(pane, [38, 38, 38], 'screenshot must show the flat grey card');
+    assert.deepEqual(pane, [36, 36, 36], 'screenshot must show the flat grey card');
   }
 }
 try {

@@ -1,7 +1,7 @@
 /* The workbench: the project grid, a project card (and the one card in use), its terminals and the dialogs that add projects.
    A card is a real card (card colour, radius 16) on the canvas; the terminal takes the card's own colour. Nothing glows, blurs or moves;
    a card's state reads from its tag and its edge, by colour and by shape, so it also reads in grayscale:
-     working  accent 2px edge, filled tag, filled dot   |   round complete  success edge, plain tag, filled dot
+     working  running-colour 2px edge, filled tag, filled dot   |   round complete  success edge, plain tag, filled dot
      finished, not yet seen  white breath while fresh, then a success edge, outlined tag, hollow dot   |   error  danger edge, plain tag, square dot. */
 .grid-area { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
 /* An expanded project is the page itself: it runs to the edges of the main area, so the activity pane docks to them like the explorer on the left. */
@@ -21,7 +21,7 @@
 
 /* A card's state is its edge: the signal span is a 2px inset ring in the state's colour, none at rest. */
 .panel-signal { position: absolute; inset: 0; z-index: 3; border-radius: inherit; pointer-events: none; }
-.project-panel.is-working .panel-signal { box-shadow: inset 0 0 0 2px var(--accent); }
+.project-panel.is-working .panel-signal { box-shadow: inset 0 0 0 2px var(--running); }
 .project-panel:is(.round-complete, .has-unread:not(.round-complete)) .panel-signal { box-shadow: inset 0 0 0 2px var(--success); }
 .project-panel.has-error:not(.is-working, .has-unread) .panel-signal { box-shadow: inset 0 0 0 2px var(--danger); }
 .focus-mode .project-panel .panel-signal { box-shadow: none; }
@@ -57,7 +57,7 @@
 .status-badge { display: flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; color: var(--text-2); }
 .status-button { border: 0; background: transparent; font: inherit; font-size: 11px; font-weight: 600; }
 .status-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-.status-badge.is-working { color: var(--accent); background: var(--bg-selected); }
+.status-badge.is-working { color: var(--running); background: var(--bg-selected); }
 .status-badge.is-complete { color: var(--success); }
 .status-badge.is-review { color: var(--success); box-shadow: inset 0 0 0 1px var(--success); }
 .status-badge.is-review .status-dot { background: none; box-shadow: inset 0 0 0 1.5px currentColor; }
@@ -84,7 +84,7 @@
 .project-panel > :last-child { border-radius: 0 0 16px 16px; }
 .focus-mode .project-panel > :last-child { border-radius: 0; }
 .project-panel.has-activity .panel-terminal-area { margin-right: 340px; }
-.activity-pane { position: absolute; top: var(--panel-header-height); right: 0; bottom: 0; z-index: 1; display: flex; flex-direction: column; width: 340px; min-height: 0; border-left: 1px solid var(--divider); background: var(--bg-sidebar); }
+.activity-pane { position: absolute; top: var(--panel-header-height); right: 0; bottom: 0; z-index: 1; display: flex; flex-direction: column; width: 340px; min-height: 0; border-left: 1px solid var(--divider); background: var(--bg-aside); }
 @media (max-width: 1000px) { .project-panel.has-activity .panel-terminal-area { margin-right: 0; } .activity-pane { display: none; } }
 .terminal-host { position: absolute; inset: 10px 7px 5px 11px; overflow: hidden; }
 .focus-mode .terminal-host { inset: 16px 12px 10px 18px; }
@@ -158,7 +158,7 @@
 .project-dialog, .ssh-auth-dialog { width: min(560px, calc(100vw - 40px)); }
 .project-kind-selector { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 24px 0 16px; }
 .project-kind-selector button { display: flex; align-items: center; gap: 12px; padding: 16px 12px; border: 1px solid var(--border); border-radius: 8px; text-align: left; background: var(--bg-input); }
-.project-kind-selector button[aria-pressed="true"] { border-color: var(--accent); background: var(--bg-selected); }
+.project-kind-selector button[aria-pressed="true"] { border-color: var(--text-1); background: var(--bg-selected); }
 .project-kind-selector b { display: block; font-size: 13px; font-weight: 600; }
 .project-kind-selector small { display: block; margin-top: 4px; font-size: 11px; color: var(--text-2); }
 .remote-project-fields { display: flex; flex-direction: column; gap: 16px; }
