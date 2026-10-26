@@ -1,4 +1,5 @@
 import type { ITheme } from '@xterm/xterm';
+import { currentTheme } from '../../shared/themes.ts';
 
 export const darkTerminalTheme: ITheme = {
   background: '#00000000', foreground: '#f2f2f2', cursor: '#f2f2f2',
@@ -10,14 +11,25 @@ export const darkTerminalTheme: ITheme = {
   scrollbarSliderBackground: '#40404088', scrollbarSliderHoverBackground: '#59595988', scrollbarSliderActiveBackground: '#595959cc',
 };
 
+export const lightTerminalTheme: ITheme = {
+  // Transparent white keeps xterm's contrast correction anchored to the light card's RGB.
+  background: '#ffffff00', foreground: '#181818', cursor: '#181818',
+  selectionBackground: '#dedede', black: '#181818', red: '#a12622',
+  green: '#176b35', yellow: '#805900', blue: '#1b57a6', magenta: '#843a9c',
+  cyan: '#006b78', white: '#6e6e6e', brightBlack: '#5e5e5e', brightRed: '#b02b2b',
+  brightGreen: '#21733c', brightYellow: '#8a6200', brightBlue: '#2563b5',
+  brightMagenta: '#9340a8', brightCyan: '#087484', brightWhite: '#5e5e5e',
+  scrollbarSliderBackground: '#d0d0d088', scrollbarSliderHoverBackground: '#b0b0b088', scrollbarSliderActiveBackground: '#b0b0b0cc',
+};
+
 // The colours are the tokens' values (xterm takes literals, not CSS variables): text-1, selected, and the border and hover border for the scrollbar. The background stays clear: the card's own
 // body shows through (the app colour in focus mode). Regular and bold text share one contrast floor, which xterm applies against that ground.
 export const terminalOptions = { fontWeight: '400', fontWeightBold: '700', minimumContrastRatio: 4.5 } as const;
 
 export function terminalTheme(): ITheme {
-  return { ...darkTerminalTheme };
+  return { ...(currentTheme() === 'light' ? lightTerminalTheme : darkTerminalTheme) };
 }
 
 export function terminalDecorationColors() {
-  return { bullet: '#b5b5b5', heading: '#f2f2f2' };
+  return currentTheme() === 'light' ? { bullet: '#5e5e5e', heading: '#181818' } : { bullet: '#b5b5b5', heading: '#f2f2f2' };
 }

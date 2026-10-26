@@ -122,7 +122,7 @@ for (const folder of ['icons', 'icon', 'desktop/assets/icons']) for (const name 
     const result = await listProjectImageCandidates(root, () => assert.fail('SVG was rasterized'));
     assert.equal(result.candidates[0]?.path, file); assert.equal(result.candidates[0]?.source, 'icon');
     assert.match(result.candidates[0].image, /^data:image\/svg\+xml;base64,/);
-    assert.match(Buffer.from(result.candidates[0].image.split(',')[1], 'base64').toString(), /fill="#f2f2f2"/);
+    assert.match(Buffer.from(result.candidates[0].image.split(',')[1], 'base64').toString(), /fill="var\(--agentrix-project-ink, #f2f2f2\)"/);
   });
 }
 

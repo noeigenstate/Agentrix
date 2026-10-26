@@ -3,6 +3,7 @@
 // so it stays right whichever theme is active. electron/state.cjs lists the same ids when it sanitizes settings.
 export const THEMES = [
   { id: 'mono', name: '黑底白字', description: '黑色底，白色文字，灰阶为主，颜色只表示状态', swatch: { page: '#181818', pane: '#262626', line: '#404040', ink: '#f2f2f2' } },
+  { id: 'light', name: '白底黑字', description: '白色底，黑色文字，灰阶为主，颜色只表示状态', swatch: { page: '#ffffff', pane: '#f5f5f5', line: '#d0d0d0', ink: '#181818' } },
 ] as const;
 
 export type ThemeId = typeof THEMES[number]['id'];
@@ -10,3 +11,13 @@ export type ThemeId = typeof THEMES[number]['id'];
 export const DEFAULT_THEME: ThemeId = THEMES[0].id;
 
 export function applyTheme(theme: ThemeId | undefined) { document.documentElement.dataset.theme = theme ?? DEFAULT_THEME; }
+
+export function currentTheme(): ThemeId {
+  return typeof document !== 'undefined' && document.documentElement?.dataset?.theme === 'light' ? 'light' : DEFAULT_THEME;
+}
+
+export function subscribeTheme(listener: () => void) {
+  const observer = new MutationObserver(listener);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  return () => observer.disconnect();
+}

@@ -24,3 +24,64 @@
 /* A menu is the popup colour (#303030), the same step as the workbench's hover, so inside the workbench a menu's items hover to the selected step.
    Menus drawn on the page body (the explorer's, the terminal's, dropdowns) are outside the layout and keep the standard hover. */
 .workspace-layout:not(:has(> .home-layer)) :is(.dropdown, .editor-find, .reading-commands, .reading-terminal-popup) { --bg-hover: var(--bg-selected); }
+
+/* 白底黑字: the light theme (id "light" in src/shared/themes.ts).
+   The base is the brightest surface and each step is a little darker (dark goes lighter): app 100, card 96.5, input 93.7, hover 91.3, selected 88.5 (L*).
+   Every token keeps its role. Colour is still only on icons and indicators; the five semantic colours are the dark theme's hues, darkened to 4.5:1 or more on every surface. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-app: #ffffff; --bg-titlebar: #f7f7f7; --bg-sidebar: #f7f7f7; --bg-card: #f5f5f5; --bg-input: #ededed; --bg-menu: #ffffff;
+  --bg-hover: #e6e6e6; --bg-selected: #dedede; --border: #d0d0d0; --border-hover: #b0b0b0; --divider: #e0e0e0;
+  --text-1: #181818; --text-2: #444444; --text-3: #5e5e5e; --text-disabled: #8f8f8f;
+  --button-primary: #333333; --button-primary-text: #ffffff; --focus-ring: #404040;
+  --success: #186f57; --running: #386687; --warning: #825b05; --danger: #a34346; --usage: #136e66;
+  /* --bg-aside and --bg-aside-well follow --bg-sidebar and --bg-input outside the workbench, as in the dark theme; --agent-claude stays #d97757 (the brand colour). */
+  /* File and folder icon tones (file-icons.css): content colour, 3:1 or more on the sidebar and on a selected row. */
+  --fi-slate: #6b7f9e; --fi-blue: #427ed3; --fi-green: #258f59; --fi-yellow: #9e7900;
+  --fi-orange: #c1661a; --fi-red: #d25743; --fi-purple: #8b6bd8;
+}
+
+/* The workbench. This block must restate every token the dark block sets on .workspace-layout (app, sidebar, aside, well, card, input, hover, selected, divider):
+   a rule on the layout beats the value inherited from :root, so a token left out here would keep its dark value inside the workbench. */
+:root[data-theme="light"] .workspace-layout:not(:has(> .home-layer)) {
+  --bg-app: #ffffff; --bg-sidebar: #f7f7f7; --bg-aside: #fafafa; --bg-aside-well: #ededed; --bg-card: #f5f5f5; --bg-input: #ededed; --bg-hover: #e6e6e6; --bg-selected: #dedede; --divider: #e0e0e0;
+}
+
+/* The completion glow of a finished, not yet seen grid card: the same inset vignette from the edge inward, no line, now in ink: --text-1 at 0.22 alpha
+   (the dark theme's white at .3 would be invisible on white). Same selector as the rule in workspace.css, behind the theme attribute. */
+:root[data-theme="light"] .app-shell:not(.focus-mode) .project-panel.has-unread:not(.focus-motion-panel, .drag-source) .panel-signal { box-shadow: inset 0 0 48px 8px rgb(from var(--text-1) r g b / 0.22); }
+
+/* Colours that live outside the tokens, each restated for the light surfaces. */
+/* styles.css: the window's close button hover is red; its glyph must stay white. */
+:root[data-theme="light"] .window-actions .window-close:hover { color: var(--bg-app); }
+/* Select.css: the one soft shadow in the app, lighter on white. */
+:root[data-theme="light"] .select-menu { box-shadow: 0 8px 24px rgb(from var(--text-1) r g b / .14); }
+
+/* git.css: file names by Git state (dark: pastel tints of white), the diff bands and the sign column. */
+:root[data-theme="light"] .git-added { color: #116329; }
+:root[data-theme="light"] .git-modified { color: #8a5700; }
+:root[data-theme="light"] :is(.git-deleted, .git-conflict) { color: #b31d28; }
+:root[data-theme="light"] .git-renamed { color: #0550ae; }
+:root[data-theme="light"] .tree-row[data-git-tone="modified"] .tree-filename { color: #8a5700; }
+:root[data-theme="light"] .tree-row[data-git-tone="added"] .tree-filename { color: #116329; }
+:root[data-theme="light"] .tree-row:is([data-git-tone="deleted"], [data-git-tone="conflict"]) .tree-filename { color: #b31d28; }
+:root[data-theme="light"] .tree-row[data-git-tone="renamed"] .tree-filename { color: #0550ae; }
+:root[data-theme="light"] .git-line-removed { background: rgb(207 34 46 / .12); }
+:root[data-theme="light"] .git-line-removed > pre { color: var(--text-1); }
+:root[data-theme="light"] .git-line-removed > span:nth-child(3) { color: #b31d28; }
+:root[data-theme="light"] .git-line-added { background: rgb(26 127 55 / .12); }
+:root[data-theme="light"] .git-line-added > pre { color: var(--text-1); }
+:root[data-theme="light"] .git-line-added > span:nth-child(3) { color: #116329; }
+
+/* files.css: change bars in the editor gutter, merge-conflict bands and the find bands. */
+:root[data-theme="light"] .editor-gutter .git-added::before { background: #1a7f37; }
+:root[data-theme="light"] .editor-gutter .git-modified::before { background: #0969da; }
+:root[data-theme="light"] .editor-gutter :is(.git-deleted-after, .git-deleted-before)::after { border-left-color: #cf222e; }
+:root[data-theme="light"] .conflict-current { background: #1a7f3722; }
+:root[data-theme="light"] .conflict-incoming { background: #0969da22; }
+:root[data-theme="light"] .conflict-base { background: #6e778122; }
+:root[data-theme="light"] .conflict-marker { background: #18181812; }
+:root[data-theme="light"] .conflict-marker.current { background: #1a7f3740; }
+:root[data-theme="light"] .conflict-marker.incoming { background: #0969da40; }
+:root[data-theme="light"] .find-bands i { background: #18181814; }
+:root[data-theme="light"] .find-bands i.is-current { background: #18181829; }

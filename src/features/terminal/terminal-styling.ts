@@ -1,5 +1,6 @@
 import type { IDecoration, IDisposable, IMarker, Terminal } from '@xterm/xterm';
-import { terminalDecorationColors } from './terminal-theme';
+import { subscribeTheme } from '../../shared/themes.ts';
+import { terminalDecorationColors, terminalTheme } from './terminal-theme.ts';
 
 // A light touch of the reading view inside the real terminal. Claude Code and Codex print Markdown already
 // rendered: no "##", no backticks are left, only attributes. So the visible rows are read for those:
@@ -63,6 +64,10 @@ export function styleTerminal(terminal: Terminal): IDisposable {
   };
   const later = () => { if (!timer && !disposed) timer = window.setTimeout(scan, 160); };
   const subscriptions = [terminal.onWriteParsed(later), terminal.onScroll(later), terminal.onResize(later)];
+  const unsubscribeTheme = subscribeTheme(() => {
+    terminal.options.theme = terminalTheme();
+    clearTimeout(timer); scan();
+  });
   later();
-  return { dispose() { disposed = true; clearTimeout(timer); subscriptions.forEach(item => item.dispose()); clear(); } };
+  return { dispose() { disposed = true; clearTimeout(timer); unsubscribeTheme(); subscriptions.forEach(item => item.dispose()); clear(); } };
 }

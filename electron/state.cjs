@@ -76,7 +76,7 @@ function cleanSettings(input = {}) {
     startView: ['decisions', 'workspace'].includes(input.startView) ? input.startView : defaults.startView,
     language: ['zh', 'en'].includes(input.language) ? input.language : defaults.language,
     // Ids of src/shared/themes.ts; a profile that holds a removed theme gets the first.
-    theme: ['mono'].includes(input.theme) ? input.theme : defaults.theme,
+    theme: ['mono', 'light'].includes(input.theme) ? input.theme : defaults.theme,
     // glass: translucent panes over the wallpaper. solid: opaque panes, on which Windows draws text with
     // ClearType and nothing is blurred behind them.
     surface: input.surface === 'solid' ? 'solid' : 'glass',

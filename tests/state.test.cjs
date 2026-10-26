@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { WorkspaceStore, cleanSettings } = require('../electron/state.cjs');
+const { THEMES } = require('../src/shared/themes.ts');
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-test-'));
@@ -163,6 +164,16 @@ test('new workspaces and settings start on the first theme', t => {
   assert.equal(store.settings.theme, 'mono');
   assert.equal(cleanSettings().theme, 'mono');
   assert.equal(new WorkspaceStore(file).settings.theme, 'mono');
+});
+
+test('every theme offered in Settings survives saving, loading and switching', t => {
+  const { store, file } = fixture(t);
+  for (const { id } of [...THEMES, THEMES[0]]) {
+    assert.equal(cleanSettings({ theme: id }).theme, id);
+    store.updateSettings({ theme: id });
+    assert.equal(new WorkspaceStore(file).settings.theme, id);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).settings.theme, id);
+  }
 });
 
 test('legacy theme values fall back to the first theme on load and on settings updates', t => {

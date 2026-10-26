@@ -1438,6 +1438,8 @@
   "主题": "Theme",
   "黑底白字": "Black and white",
   "黑色底，白色文字，灰阶为主，颜色只表示状态": "Black background, white text, mostly greys, colour only for state",
+  "白底黑字": "Black on white",
+  "白色底，黑色文字，灰阶为主，颜色只表示状态": "White background, black text, mostly greys, colour only for state",
   "主轮次、后台子代理与命令、排队消息和项目内其他终端的工作全部结束后，卡片才亮起白色呼吸光，直到你查看。": "The card pulses with a white glow until you view it, only after the main round, background subagents and commands, queued messages and work in every other project terminal have all finished.",
   "打开活动栏时，顶栏和按钮保持原位，不再上下移动。": "Opening the activity pane keeps the header and its buttons in place, with no vertical shift."
 }

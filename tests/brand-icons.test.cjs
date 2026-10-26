@@ -51,9 +51,26 @@ test('16px marks preserve aspect ratio, original paths and clear-space canvases'
   assert.equal(marks.claude.viewBox, '0 0 125 125');
 });
 
-test('Claude uses the official orange and Codex uses the supplied white', () => {
+test('Claude uses the official orange and Codex keeps its original white in mono', () => {
   assert.match(renderToStaticMarkup(React.createElement(ClaudeLogo)), /fill="#D97757"/);
-  assert.match(renderToStaticMarkup(React.createElement(CodexLogo)), /fill="white"/);
+  const codex = renderToStaticMarkup(React.createElement(CodexLogo));
+  assert.match(codex, /color="#ffffff"/);
+  assert.match(codex, /fill="currentColor"/);
+});
+
+test('Codex follows the selected theme while keeping its official geometry', t => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  t.after(() => { if (descriptor) Object.defineProperty(globalThis, 'document', descriptor); else delete globalThis.document; });
+  globalThis.document = { documentElement: { dataset: {} } };
+  for (const [theme, ink] of [['light', '#181818'], ['mono', '#ffffff']]) {
+    document.documentElement.dataset.theme = theme;
+    const html = renderToStaticMarkup(React.createElement(CodexLogo));
+    assert.match(html, new RegExp(`color="${ink}"`));
+    assert.match(html, /fill="currentColor"/);
+    assert.deepEqual(geometry(html), { viewBox: marks.openai.viewBox, path: marks.openai.path });
+  }
+  delete document.documentElement;
+  assert.match(renderToStaticMarkup(React.createElement(CodexLogo)), /color="#ffffff"/);
 });
 
 test('ClaudeSpark retains its export and size API as a direct official-logo alias', () => {
@@ -71,13 +88,13 @@ test('ClaudeSpark retains its export and size API as a direct official-logo alia
   );
 });
 
-test('Codex retains white ink, and a running node is a heavier ring with no animation', () => {
+test('Codex inherits its own ink, and a running node is a heavier ring with no animation', () => {
   const css = fs.readFileSync(path.join(root, 'src/features/reading/reading-flow.css'), 'utf8');
   const fillRules = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
     .filter(([, selector, body]) => selector.includes('.agent-brand-codex') && /\bfill\s*:/.test(body))
     .map(([, selector, body]) => ({ selector: selector.trim(), fill: body.match(/\bfill\s*:\s*([^;]+)/)[1].trim() }));
   assert.deepEqual(fillRules, []);
-  assert.match(renderToStaticMarkup(React.createElement(CodexLogo)), /fill="white"/);
+  assert.match(renderToStaticMarkup(React.createElement(CodexLogo)), /fill="currentColor"/);
   assert.match(css, /\.reading-node > \.agent-brand-codex \{ width: var\(--step-node\); height: var\(--step-node\); \}/);
   assert.doesNotMatch(css, /reading-spark|spark-bloom|agent-brand-[^{]+\{[^}]*\b(?:animation|transform):/);
   assert.match(css, /\.reading-step\.is-running \.reading-node \{ box-shadow: inset 0 0 0 2px var\(--node-tint\); \}/);

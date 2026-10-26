@@ -2,19 +2,20 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { sanitizeProjectSvg, SVG_MAX_BYTES } = require('../electron/project-svg.cjs');
+const { sanitizeProjectSvg, projectSvgForTheme, SVG_MAX_BYTES } = require('../electron/project-svg.cjs');
 
 const svg = text => Buffer.from(text);
 const content = url => Buffer.from(url.split(',')[1], 'base64').toString('utf8');
+const ink = 'var(--agentrix-project-ink, #f2f2f2)';
 
 test('rayrea app.svg stays SVG with the card primary ink and canonical storage validation', () => {
   const bytes = fs.readFileSync(path.join(__dirname, 'fixtures/project-images/rayrea-app.svg'));
   const result = sanitizeProjectSvg(bytes);
   assert.match(result, /^data:image\/svg\+xml;base64,/);
-  assert.equal(content(result), bytes.toString('utf8').replace(/currentColor/g, '#f2f2f2'));
+  assert.equal(content(result), bytes.toString('utf8').replace(/currentColor/g, ink));
   assert.equal(sanitizeProjectSvg(result), result);
   assert.equal(content(sanitizeProjectSvg(svg('<svg viewBox="0 0 48 24"><path fill="CuRrEnTcOlOr" d="M0 0h48v24z"/></svg>'))),
-    '<svg viewBox="0 0 48 24"><path fill="#f2f2f2" d="M0 0h48v24z"/></svg>');
+    `<svg viewBox="0 0 48 24"><path fill="${ink}" d="M0 0h48v24z"/></svg>`);
 });
 
 test('static gradients, same-document references, XML declaration, comments and UTF-8 text are accepted', () => {
@@ -23,7 +24,30 @@ test('static gradients, same-document references, XML declaration, comments and 
     '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><defs><path id="part" d="M0 0"/></defs><use href="#part"/><use xlink:href="&#35;part"/></svg>',
     '<svg><defs><linearGradient id="ink"><stop stop-color="#fff"/></linearGradient></defs><path fill="url(#ink)" style="stroke: url(\'#ink\')"/></svg>',
     '<svg><style>.ink { fill: currentColor; }</style><g class="ink"/></svg>',
-  ]) assert.equal(content(sanitizeProjectSvg(svg(text))), text.replace(/currentColor/g, '#f2f2f2'));
+  ]) assert.equal(content(sanitizeProjectSvg(svg(text))), text.replace(/currentColor/g, ink));
+});
+
+test('the same canonical SVG follows theme switches while authored colours remain unchanged', () => {
+  const original = '<svg><path fill="currentColor" stroke="#f2f2f2"/><path fill="#e03050"/></svg>';
+  const stored = sanitizeProjectSvg(svg(original));
+  const light = projectSvgForTheme(stored, 'light');
+  assert.equal(content(light), original.replace('currentColor', 'var(--agentrix-project-ink, #181818)'));
+  assert.equal(sanitizeProjectSvg(light), stored);
+  assert.equal(projectSvgForTheme(stored, 'mono'), stored);
+  assert.equal(projectSvgForTheme(light, 'mono'), stored);
+  assert.equal(projectSvgForTheme(light, 'light'), light);
+  assert.equal(projectSvgForTheme(stored, 'light'), light);
+});
+
+test('legacy saved SVGs adapt their baked primary ink and keep their original dark rendering', () => {
+  const legacy = sanitizeProjectSvg(svg('<svg><path fill="#f2f2f2" stroke="#cc3020"/></svg>'));
+  assert.equal(projectSvgForTheme(legacy, 'mono'), legacy);
+  const light = projectSvgForTheme(legacy, 'light');
+  assert.equal(content(light), '<svg><path fill="var(--agentrix-project-ink, #181818)" stroke="#cc3020"/></svg>');
+  const saved = sanitizeProjectSvg(light);
+  assert.equal(sanitizeProjectSvg(saved), saved);
+  assert.equal(content(projectSvgForTheme(saved, 'mono')), '<svg><path fill="var(--agentrix-project-ink, #f2f2f2)" stroke="#cc3020"/></svg>');
+  for (const image of [undefined, '', 'data:image/png;base64,YWJj', 'https://example.com/image.svg']) assert.equal(projectSvgForTheme(image, 'light'), image);
 });
 
 const rejected = {

@@ -9,6 +9,9 @@ const ELEMENTS = new Set(('svg g defs symbol use path rect circle ellipse line p
   'feGaussianBlur feImage feMerge feMergeNode feMorphology feOffset fePointLight feSpecularLighting feSpotLight feTile feTurbulence').split(' '));
 const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 const FRAGMENT = /^#[^\s"'()<>\\#]+$/;
+// The fallback renders in an <img>; retaining this token lets delivery change the ink without losing its origin.
+const PROJECT_INK = 'var(--agentrix-project-ink, #f2f2f2)';
+const THEMED_INK = /var\(--agentrix-project-ink, #(?:f2f2f2|181818)\)/g;
 
 function xmlText(value) {
   let valid = true;
@@ -36,7 +39,7 @@ function staticUrls(value, stylesheet = false) {
 }
 
 // Only a static SVG tree is accepted. This data URL belongs exclusively in <img src>, never in a document/DOM.
-// The only transformation is literal currentColor -> the card's primary ink.
+// Literal currentColor becomes the card's primary ink, with a token retained in canonical storage.
 function sanitizeProjectSvg(input) {
   let bytes = input;
   if (typeof input === 'string') {
@@ -95,11 +98,21 @@ function sanitizeProjectSvg(input) {
     at = tag.lastIndex;
   }
   if (!root || stack.length) return null;
-  text = text.replace(/currentColor/gi, '#f2f2f2');
+  text = text.replace(/currentColor/gi, PROJECT_INK).replace(THEMED_INK, PROJECT_INK);
   // Encoded currentColor is safe but would remain black; reject it rather than rewriting XML attributes.
   if (/currentcolor/i.test(xmlText(text) || '')) return null;
   const sanitized = Buffer.from(text, 'utf8');
   return sanitized.length <= SVG_MAX_BYTES ? `data:image/svg+xml;base64,${sanitized.toString('base64')}` : null;
 }
 
-module.exports = { sanitizeProjectSvg, SVG_MAX_BYTES };
+function projectSvgForTheme(image, theme) {
+  if (typeof image !== 'string' || !SVG_URL.test(image)) return image;
+  const text = Buffer.from(image.split(',')[1], 'base64').toString('utf8');
+  const ink = `var(--agentrix-project-ink, ${theme === 'light' ? '#181818' : '#f2f2f2'})`;
+  // Older saved SVGs lost currentColor's origin. Their exact baked ink is the legacy token; other colours stay literal.
+  const themed = text.includes('--agentrix-project-ink') ? text.replace(THEMED_INK, ink)
+    : theme === 'light' ? text.replace(/#f2f2f2\b/g, ink) : text;
+  return themed === text ? image : `data:image/svg+xml;base64,${Buffer.from(themed).toString('base64')}`;
+}
+
+module.exports = { sanitizeProjectSvg, projectSvgForTheme, SVG_MAX_BYTES };

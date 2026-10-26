@@ -4,6 +4,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { en } = require('../electron/i18n.cjs');
 const { listAgentCommands } = require('../electron/agent-commands.cjs');
+const { THEMES } = require('../src/shared/themes.ts');
+
+test('the Settings theme registry has English names and descriptions', () => {
+  for (const { name, description } of THEMES) {
+    assert.equal(typeof en[name], 'string', name);
+    assert.equal(typeof en[description], 'string', description);
+  }
+  assert.equal(en['白底黑字'], 'Black on white');
+});
 
 // Every literal t('…') phrase in the window and the main process has an English entry,
 // so switching to English never leaves a Chinese label behind.

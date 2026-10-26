@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const { WorkspaceStore } = require('../electron/state.cjs');
 const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
 const { registerWorkspaceIpc } = require('../electron/features/workspace/ipc.cjs');
-const { sanitizeProjectSvg, SVG_MAX_BYTES } = require('../electron/project-svg.cjs');
+const { sanitizeProjectSvg, projectSvgForTheme, SVG_MAX_BYTES } = require('../electron/project-svg.cjs');
 
 const webp = 'data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==';
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQ0AAAAASUVORK5CYII=';
@@ -173,10 +173,10 @@ test('the secured preload API saves then broadcasts and returns rejected mutatio
   assert.equal(project.image, before); assert.equal(broadcasts, 5);
 });
 
-test('public state adds a picture without changing the projected terminal or project state', t => {
-  const { store, project } = fixture(t);
+test('public state themes SVG pictures without changing their canonical storage or terminal state', t => {
+  const { store, project, file } = fixture(t);
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const context = vm.createContext({ store, sessions: new Map(), startupErrors: new Map(),
+  const context = vm.createContext({ store, projectSvgForTheme, sessions: new Map(), startupErrors: new Map(),
     terminalIds: p => [p.id], shownTerminalIds: p => [p.id], getBranch: () => 'main', t: text => text,
     localShell: () => ({ kind: 'powershell' }), process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: 'isolated' } },
     app: { getVersion: () => '1' }, desktopGlassBackend: null, desktopGlassWindow: false, desktopGlassActive: false });
@@ -189,6 +189,32 @@ test('public state adds a picture without changing the projected terminal or pro
   assert.equal(after.projects[0].imageMode, 'custom');
   delete after.projects[0].image; delete after.projects[0].imageMode;
   assert.deepEqual(after, before);
+  store.setProjectImage(project.id, svg);
+  for (const theme of ['light', 'mono', 'light']) {
+    store.updateSettings({ theme });
+    const projected = JSON.parse(JSON.stringify(context.publicState()));
+    assert.equal(projected.projects[0].image, projectSvgForTheme(svg, theme));
+    assert.equal(store.projects[0].image, svg);
+    assert.equal(new WorkspaceStore(file).projects[0].image, svg);
+    delete projected.projects[0].image; delete projected.projects[0].imageMode;
+    projected.settings.theme = before.settings.theme;
+    assert.deepEqual(projected, before);
+  }
+});
+
+test('candidate previews use the requested theme and automatic selection keeps canonical SVGs', async () => {
+  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const context = vm.createContext({ projectSvgForTheme, PROJECT_IMAGE_LIMITS: { candidates: 6 }, thumbnailProjectImage: () => {},
+    listProjectImageCandidates: async (folder, thumbnail, limits) => {
+      assert.equal(folder, 'project'); assert.equal(typeof thumbnail, 'function'); assert.equal(limits.candidates, 1);
+      return { candidates: [{ path: 'icon.svg', source: 'icon', image: svg }, { path: 'logo.png', source: 'icon', image: png }] };
+    } });
+  vm.runInContext(main.slice(main.indexOf('async function projectImageCandidates('), main.indexOf('setThumbnailer(')), context);
+  const light = await context.projectImageCandidates('project', 1, 'light');
+  assert.equal(light.candidates[0].image, projectSvgForTheme(svg, 'light'));
+  assert.equal(light.candidates[1].image, png);
+  assert.equal(sanitizeProjectSvg(light.candidates[0].image), svg);
+  assert.equal((await context.projectImageCandidates('project', 1)).candidates[0].image, svg);
 });
 
 

@@ -7,6 +7,7 @@ const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
 const { registerWorkspaceIpc } = require('./features/workspace/ipc.cjs');
 const { listProjectImageCandidates, projectImageDimensions, LIMITS: PROJECT_IMAGE_LIMITS } = require('./features/workspace/project-images.cjs');
 const { createProjectImageAuto } = require('./features/workspace/project-image-auto.cjs');
+const { projectSvgForTheme } = require('./project-svg.cjs');
 const { createSshRuntime } = require('./features/ssh/runtime.cjs');
 const { registerSshIpc } = require('./features/ssh/ipc.cjs');
 const { registerFilesIpc } = require('./features/files/ipc.cjs');
@@ -48,8 +49,9 @@ function thumbnailProjectImage(bytes, source) {
   const png = square.toDataURL();
   return png.length <= 200_000 ? png : `data:image/jpeg;base64,${square.toJPEG(82).toString('base64')}`;
 }
-function projectImageCandidates(folder, candidates = 6) {
-  return listProjectImageCandidates(folder, thumbnailProjectImage, { ...PROJECT_IMAGE_LIMITS, candidates });
+async function projectImageCandidates(folder, candidates = 6, theme = 'mono') {
+  const result = await listProjectImageCandidates(folder, thumbnailProjectImage, { ...PROJECT_IMAGE_LIMITS, candidates });
+  return { ...result, candidates: result.candidates.map(candidate => ({ ...candidate, image: projectSvgForTheme(candidate.image, theme) })) };
 }
 
 setThumbnailer(pictureOf, url => thumbnail(nativeImage.createFromDataURL(url)) || url);
@@ -122,6 +124,13 @@ const t = (text, values) => translate(store?.settings.language, text, values);
 let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
+function windowBackgroundColor() { return store.settings.theme === 'light' ? '#ffffff' : '#181818'; }
+function updateStoreSettings(patch) {
+  const theme = store.settings.theme;
+  store.updateSettings(patch);
+  // An active system backdrop needs its transparent ground, including when the theme changes.
+  if (theme !== store.settings.theme && window && !window.isDestroyed() && !desktopGlassActive) window.setBackgroundColor(windowBackgroundColor());
+}
 const sessions = new Map();
 const { setBranch, captureBranch, getBranch, forgetBranch, remoteBranch } = createGitRuntime({ getProjects: () => store.projects, execFile, broadcast });
 const projectGit = new ProjectGit(id => remoteFor(id));
@@ -217,7 +226,7 @@ function publicState() {
       return {
         id: p.id, name: p.name, path: p.path, unread: p.unread, lastCompletedAt: p.lastCompletedAt,
         kind: p.kind || 'local', ssh: p.ssh || null,
-        ...(p.image ? { image: p.image } : {}),
+        ...(p.image ? { image: projectSvgForTheme(p.image, store.settings.theme) } : {}),
         ...(p.imageMode ? { imageMode: p.imageMode } : {}),
         branch: getBranch(p.id) || '',
         terminals, sessionId: first.sessionId, status,
@@ -1214,8 +1223,8 @@ function registerIpc() {
       store.setProjectImage(id, image, mode);
       if (mode === 'auto' && !image) projectImageAuto.enqueue(store.projects.find(project => project.id === id));
     },
-    listProjectImageCandidates: projectImageCandidates,
-    getSettings: () => store.settings, updateStoreSettings: patch => store.updateSettings(patch),
+    listProjectImageCandidates: folder => projectImageCandidates(folder, 6, store.settings.theme),
+    getSettings: () => store.settings, updateStoreSettings,
     rebuildMenus: () => { trayMenu(); if (process.platform === 'darwin') Menu.setApplicationMenu(macMenu()); },
     clearRestorePlans: () => restorePlans.clear(), chooseVoiceModel: model => voiceManager.choose(model) });
   filesIpc = registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperations, clipboardWrites, clipboard, previewResources, affectsEditor, allowEditorClose, shell,
@@ -1403,7 +1412,7 @@ if (!app.requestSingleInstanceLock()) {
     desktopGlassWindow = store.settings.surface === 'glass' && store.settings.glassBackground === 'desktop' && !!desktopGlassBackend;
     window = new BrowserWindow({
       width: 1500, height: 940, minWidth: 820, minHeight: 560,
-      title: t('Agentrix'), backgroundColor: '#181818',
+      title: t('Agentrix'), backgroundColor: windowBackgroundColor(),
       ...(desktopGlassWindow ? desktopGlassOptions(desktopGlassBackend) : {}),
       // macOS keeps its own window buttons over the title bar; Windows draws them in the page.
       ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden', trafficLightPosition: { x: 16, y: 12 } } : { frame: false }),
@@ -1412,7 +1421,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     if (desktopGlassWindow) {
       try { await applyDesktopGlass(window, runtimeDir, desktopGlassBackend); desktopGlassActive = true; }
-      catch { window.setBackgroundColor('#181818'); }
+      catch { window.setBackgroundColor(windowBackgroundColor()); }
     }
     if (process.platform === 'win32') window.setAppDetails({ appId: appUserModelId, appIconPath: shellIcon, appIconIndex: 0,
       relaunchCommand: app.isPackaged ? `"${process.execPath}"` : `"${process.execPath}" "${root}"`,
