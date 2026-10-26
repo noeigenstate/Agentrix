@@ -190,6 +190,7 @@ function publicState() {
       const terminals = shownTerminalIds(p).map(id => {
         const s = sessions.get(id);
         return { id, title: t('终端 {n}', { n: opened.indexOf(id) + 1 }), shell: s?.shellKind || (p.kind === 'ssh' ? 'bash' : localShell().kind), sessionId: s?.sessionId || null, status: s?.status || 'stopped', codexActive: s?.codexActive || false, agent: s?.codexActive ? s.agent || 'codex' : null,
+          agentStarting: !!s?.agentStarting && !s.codexActive && s.status !== 'exited' && !s.error,
           agentStartedAt: s?.codexActive ? s.activitySince : null,
           nativeMode: s?.nativeMode || null, nativeApprovals: s?.native?.registry.list() || [], nativeMessages: s?.nativeMessages || [], nativeReady: !!s?.nativeReady,
           // The model, effort and fast mode its records show, above the reading view's message box.
@@ -667,11 +668,14 @@ function onEvent(event) {
     s.ready = event.type === 'shell-prompt';
     s.inputDirty = false;
     s.status = 'shell';
+    // A prompt after the launch command was typed means the agent ended before it started: show the terminal.
+    if (!launchPlans.has(s.terminalId)) s.agentStarting = false;
     s.codexAvailable = event.codexAvailable === true;
     s.claudeAvailable = event.claudeAvailable === true;
     if (typeof event.codexHome === 'string') s.codexHome = event.codexHome;
     if (!quitting && typeof event.cwd === 'string') store.setRestore(s.terminalId, { cwd: event.cwd });
   } else if (event.type === 'codex-started') {
+    s.agentStarting = false;
     // A run of the CLI that is no conversation (codex update, claude --version: agent-command.cjs): the reading view
     // says what it does and shows its output; nothing is handed over, followed or restored for it.
     s.agentCommand = agentCommand(event.agent, event.command);
@@ -921,7 +925,7 @@ function nativeSessionEvent(id, sessionId, message) {
   }
 }
 
-function startTerminal(id, nativeMode = null) {
+function startTerminal(id, nativeMode = null, agentStarting = false) {
   const project = findProject(id);
   const old = sessions.get(id);
   if (old && old.status !== 'exited') return;
@@ -973,7 +977,7 @@ function startTerminal(id, nativeMode = null) {
     name: 'xterm-256color', cols: 90, rows: 22, cwd: startPath, env, useConpty: true, useConptyDll: true,
   }));
   const s = {
-    terminal, terminalId: id, projectId: project.id, sessionId, sessionKey, bootstrapFile, status: 'starting', ready: false, shellKind,
+    terminal, terminalId: id, projectId: project.id, sessionId, sessionKey, bootstrapFile, status: 'starting', agentStarting, ready: false, shellKind,
     // Command Prompt reports its prompts through markers in its output instead of the event pipe.
     usageEnv: project.kind === 'ssh' ? null : { ...env },
     prompts: !native && shellKind === 'cmd' ? new PromptMarkers() : null,
@@ -1220,7 +1224,7 @@ function registerIpc() {
     if (!['new', 'continue'].includes(mode)) throw new Error('Unsupported agent session mode');
     const history = mode === 'continue' ? (await folderHistory(folderOf(id)))[agent] : null;
     launchPlans.set(id, { agent, command: launchCommand(agent, history), threadId: history?.id || null });
-    startTerminal(id); broadcast(); return true;
+    startTerminal(id, null, true); broadcast(); return true;
   });
   registerNativeIpc({ handle, findProject, getSession: id => sessions.get(id) });
   registerTerminalIpc({ handle, listen, findProject, getSession: id => sessions.get(id), hasSession: id => sessions.has(id), startTerminal,

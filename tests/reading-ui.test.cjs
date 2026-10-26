@@ -576,6 +576,28 @@ test('reading view requires an active agent and a live terminal session', () => 
   assert.equal(mode.readingShown({ ...value, sessionId: null }, []), false);
 });
 
+test('the terminal surface follows reading intent even before the reading subtree exists, and respects raw choice', () => {
+  const mode = readingMode(), value = { ...terminal('surface', null), title: 'Terminal', status: 'shell' };
+  const { ProjectTerminals } = loadUI('features/terminal/ProjectTerminals.tsx', {
+    './reading-mode': mode,
+    './ReadingView': { ReadingView: () => null },
+    './TerminalPane': { TerminalPane: props => React.createElement('div', { className: 'terminal-host', 'data-focused': props.focused }) },
+    './AgentLauncher': { AgentLauncher: () => null }, './VoiceButton': { VoiceButton: () => null },
+    './useProjectReorder': { useReorder: () => ({}) },
+  });
+  const render = terminal => renderToStaticMarkup(React.createElement(ProjectTerminals, {
+    project: { id: 'project', name: 'Project', terminals: [terminal] }, focused: true, activeId: value.id, setActiveId() {}, fontSize: 14,
+  }));
+  const starting = render({ ...value, codexActive: false, agentStarting: true });
+  assert.match(starting, /data-reading="true"/); assert.match(starting, /data-focused="false"/);
+  const reading = render(value);
+  assert.match(reading, /data-reading="true"/); assert.doesNotMatch(reading, /class="reading-view"/);
+  mode.setReading(value.id, false);
+  const raw = render(value);
+  assert.match(raw, /data-reading="false"/); assert.match(raw, /data-focused="true"/);
+  assert.match(render({ ...value, codexActive: false }), /data-reading="false"/, 'ordinary shells remain visible');
+});
+
 function readingHarness(t, entries = [], overrides = {}) {
   const tail = require('../src/features/reading/useVisibleTail.ts');
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');

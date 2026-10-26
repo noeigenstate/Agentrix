@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 const { folderHistory, latestCodexSession, launchCommand } = require('../electron/features/agents/launch.cjs');
 
 test('a new project starts each agent fresh, or resumes the conversation found for its folder', () => {
@@ -35,4 +36,23 @@ test('folder history reports each agent separately and survives one of them fail
     codex: async () => { throw new Error('unreadable'); },
   });
   assert.deepEqual(history, { claude: { id: 'c1', at: 5 }, codex: null });
+});
+
+test('public state reserves the reading surface during agent startup and releases it on success, error or exit', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const session = { sessionId: 'session', status: 'starting', agentStarting: true, promptQueue: { list: () => [] } };
+  const context = vm.createContext({
+    store: { projects: [{ id: 'project', name: 'Project' }], settings: {} }, sessions: new Map([['project', session]]), startupErrors: new Map(),
+    terminalIds: () => ['project'], shownTerminalIds: () => ['project'], getBranch: () => '', t: text => text,
+    localShell: () => ({ kind: 'powershell' }), process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: 'isolated' } },
+    app: { getVersion: () => 'test' }, desktopGlassBackend: null, desktopGlassWindow: false, desktopGlassActive: false,
+  });
+  vm.runInContext(source.slice(source.indexOf('function publicState('), source.indexOf('function terminalIds(')), context);
+  const terminal = () => context.publicState().projects[0].terminals[0];
+  assert.equal(terminal().agentStarting, true);
+  session.status = 'shell'; assert.equal(terminal().agentStarting, true, 'the first shell prompt still belongs to the pending agent launch');
+  session.codexActive = true; assert.equal(terminal().agentStarting, false);
+  session.codexActive = false; session.error = 'agent not installed'; assert.equal(terminal().agentStarting, false, 'errors expose the terminal for diagnosis');
+  session.error = null; session.status = 'exited'; assert.equal(terminal().agentStarting, false);
+  session.status = 'shell'; session.agentStarting = false; assert.equal(terminal().agentStarting, false, 'a plain shell stays visible');
 });

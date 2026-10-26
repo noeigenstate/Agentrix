@@ -43,6 +43,7 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
     onPointerDown={reorder.onPointerDown} onClickCapture={reorder.onClickCapture}>
     {shown.map(terminal => {
       const stopped = terminal.status === 'stopped' || terminal.status === 'exited';
+      const reading = readingShown(terminal, raw);
       const name = `${project.name} ${terminal.title}`;
       return <div key={terminal.id} className={`terminal-slot ${reorder.drag?.id === terminal.id ? 'drag-placeholder' : ''}`} data-terminal-slot={terminal.id}>
       <section className={`terminal-split ${selected === terminal.id ? 'is-active-terminal' : ''} ${reorder.drag?.id === terminal.id ? 'drag-source' : ''} ${reorder.drag?.targetId === terminal.id ? 'drop-target' : ''}`} data-terminal-id={terminal.id} data-session-id={terminal.sessionId || ''} data-codex-active={terminal.codexActive} aria-label={name} onPointerDownCapture={() => setActiveId(terminal.id)} onFocusCapture={() => setActiveId(terminal.id)}>
@@ -50,9 +51,9 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
           <button className="icon-button" title={t('重启此终端')} aria-label={t('重启 {name}', { name })} onClick={() => void onAction(window.agentrix.restartTerminal(terminal.id))}><ArrowCounterClockwise size={13} /></button>
           <button className="icon-button" title={t('关闭此终端')} aria-label={t('关闭 {name}', { name })} onClick={() => void onAction(window.agentrix.closeTerminal(terminal.id))}><X size={13} /></button>
         </header>}
-        <div className="terminal-split-body">
-          {readingShown(terminal, raw) && <ReadingView projectId={project.id} terminal={terminal} remote={project.kind === 'ssh'} autoFocus={focused && selected === terminal.id} active={selected === terminal.id} onShowTerminal={() => setReading(terminal.id, false)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />}
-          {terminal.sessionId ? <TerminalPane id={terminal.id} sessionId={terminal.sessionId} fontSize={fontSize} focused={focused && selected === terminal.id && !readingShown(terminal, raw)} onError={onError} onOpenLink={(_id, target) => onOpenLink(project.id, target)} remote={project.kind === 'ssh'} />
+        <div className="terminal-split-body" data-reading={reading || !!terminal.agentStarting}>
+          {reading && <ReadingView projectId={project.id} terminal={terminal} remote={project.kind === 'ssh'} autoFocus={focused && selected === terminal.id} active={selected === terminal.id} onShowTerminal={() => setReading(terminal.id, false)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />}
+          {terminal.sessionId ? <TerminalPane id={terminal.id} sessionId={terminal.sessionId} fontSize={fontSize} focused={focused && selected === terminal.id && !reading && !terminal.agentStarting} onError={onError} onOpenLink={(_id, target) => onOpenLink(project.id, target)} remote={project.kind === 'ssh'} />
             // A local project starts with the agent chosen here; an SSH project connects first, in its terminal.
             : project.kind !== 'ssh' ? <AgentLauncher terminalId={terminal.id} onAction={onAction} />
             : <div className="terminal-empty"><TerminalIcon size={28} weight="light" /><p>{t('项目已就位')}</p><span>{t('启动终端，在这里开始开发')}</span><button className="button secondary small" onClick={() => void onAction(window.agentrix.startTerminal(terminal.id))}><Play size={13} weight="fill" />{t('启动终端')}</button></div>}
