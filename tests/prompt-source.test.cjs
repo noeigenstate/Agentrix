@@ -113,7 +113,11 @@ test('Claude queued notifications and hand-backs never consume a human queue ite
     assert.deepEqual(log.list.map(entry => entry.text), ['Human request.']);
     feed('dequeue', undefined, 1200);
     assert.deepEqual(log.list.map(entry => entry.text), ['Human request.']);
-    feed('dequeue', undefined, 1300); assert.deepEqual(log.list, []);
+    feed('dequeue', undefined, 1300);
+    assert.deepEqual(log.list.map(entry => entry.text), ['Human request.'], 'anonymous dequeues cannot identify the received command');
+    claudeConversation(log, claude('Human request.', 1350));
+    assert.deepEqual(log.list.map(entry => [entry.text, !!entry.queued]), [['Human request.', false]]);
+    log.reset();
     claudeConversation(log, { type: 'attachment', timestamp: stamp(1400), attachment: { type: 'queued_command', commandMode: 'prompt', prompt: content } });
     assert.deepEqual(log.list, []);
   }
@@ -282,6 +286,28 @@ test('real main-process conversation callbacks ignore injections without rearmin
     assert.equal(s.promptQueue.task.summary, '/model'); assert.deepEqual(s.promptQueue.list(), []);
     assert.equal(h.arms(), 1); assert.equal(project.completionArmed, false, 'local slash commands cannot arm a model round');
   }
+});
+
+test('Claude queue receipts and withdrawals update activity without arming completion from history or callbacks', () => {
+  const h = activityHarness('claude'), { s, project, context } = h;
+  context.claudeActivity(project, s, { state: 'working', sessionId: 'session', eventId: 'session:input', prompt: 'Initial work.' });
+  claudeConversation(s.conversation, claude('Initial work.', 2000));
+  s.promptQueue.submit('Next work.', true, 2100);
+  const queue = (operation, at) => claudeConversation(s.conversation, { type: 'queue-operation', operation, timestamp: stamp(at), content: 'Next work.' });
+  s.promptQueue.submit('Historical work.', true, 2100);
+  claudeConversation(s.conversation, { type: 'queue-operation', operation: 'enqueue', timestamp: stamp(1100), content: 'Historical work.' });
+  claudeConversation(s.conversation, { type: 'queue-operation', operation: 'popAll', timestamp: stamp(1200), content: 'Historical work.' });
+  assert.ok(s.promptQueue.list().some(item => item.text === 'Historical work.'));
+  s.promptQueue.cancel('Historical work.', 2150);
+  queue('enqueue', 2200); queue('popAll', 2300);
+  assert.deepEqual(s.promptQueue.list().map(item => item.text), ['Initial work.']);
+  assert.equal(h.arms(), 1);
+  context.applyActivity(project, s, { state: 'complete', threadId: 'thread', turnId: 'turn', updatedAt: 2500 });
+  h.store.acknowledge(project.id);
+  queue('enqueue', 2600); claudeConversation(s.conversation, claude('Next work.', 2700));
+  assert.equal(s.conversation.list.filter(entry => entry.queued && !entry.cancelled).length, 0);
+  context.applyActivity(project, s, { state: 'complete', threadId: 'thread', turnId: 'background', updatedAt: 3000 });
+  assert.equal(h.arms(), 1); assert.equal(h.alerts(), 1); assert.equal(project.unread, 0);
 });
 
 test('main keeps the short lastTask and long card task across bare follow-ups in terminal and managed sessions', () => {

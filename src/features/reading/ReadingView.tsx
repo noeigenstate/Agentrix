@@ -244,7 +244,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     cleared.delete(conversationKey(terminal.id, terminal.sessionId)); setHidden(undefined);
   }, [conversationEntries, hidden]);
   const entries = useMemo(() => conversationEntries.filter(entry => !entry.queued && !hidden?.has(entry.id)), [conversationEntries, hidden]);
-  const { pending, echo, cancelEcho } = usePendingPrompts(terminal.id, terminal.sessionId, entries);
+  const { pending, echo, cancelEcho } = usePendingPrompts(terminal.id, terminal.sessionId, conversationEntries);
   // Queued records wait after the active turn, with or without a renderer echo. They never start a new agent turn.
   const cards = useMemo(() => pendingPromptCards(pending, conversationEntries.filter(entry => !hidden?.has(entry.id))), [pending, conversationEntries, hidden]);
   const queued = (prompt: PendingPrompt) => cards.queuedIds.has(prompt.id);

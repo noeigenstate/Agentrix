@@ -745,6 +745,25 @@ test('real Claude queue records render without an echo and promote once in produ
   html = render(); assert.match(html, /QUEUED_FROM_TERMINAL/); assert.doesNotMatch(html, /welcome preserved/);
 });
 
+test('a queue receipt removes the stale card and keeps message order, while a withdrawn card is invisible', t => {
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const log = new ConversationLog(), timestamp = '2026-10-17T01:00:00Z';
+  const feed = record => claudeConversation(log, { timestamp, ...record });
+  log.put(readingEntry('active', 'assistant', 0, { text: 'active reply' }));
+  feed({ type: 'queue-operation', operation: 'enqueue', content: 'TAKEN_UP_WITHOUT_REMOVE' });
+  feed({ type: 'user', uuid: 'accepted', message: { content: 'TAKEN_UP_WITHOUT_REMOVE' } });
+  feed({ type: 'assistant', uuid: 'next', message: { content: [{ type: 'text', text: 'worked on it' }] } });
+  feed({ type: 'queue-operation', operation: 'enqueue', content: 'WITHDRAWN_SEND' });
+  feed({ type: 'queue-operation', operation: 'popAll', content: 'WITHDRAWN_SEND' });
+  const { state, render } = readingHarness(t, log.list);
+  state.terminal.agent = 'claude'; state.terminal.codexActivity = 'idle';
+  const html = render();
+  assert.doesNotMatch(html, /is-queued|WITHDRAWN_SEND/);
+  assert.equal((html.match(/TAKEN_UP_WITHOUT_REMOVE/g) || []).length, 1);
+  assert.ok(html.indexOf('active reply') < html.indexOf('TAKEN_UP_WITHOUT_REMOVE'));
+  assert.ok(html.indexOf('TAKEN_UP_WITHOUT_REMOVE') < html.indexOf('worked on it'));
+});
+
 test('an expanded visible tool group keeps its component state through rolling eviction and snapshot refreshes', t => {
   const { applyConversationPacket } = require('../src/features/reading/conversation-buffer.ts');
   // Retain hook state at React's keyed ancestry, so a changed parent or child key resets ToolGroup's open state.

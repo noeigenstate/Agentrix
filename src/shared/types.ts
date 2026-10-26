@@ -62,7 +62,8 @@ export type PendingPrompt = { id: string; text: string; summary: string; state: 
 export type AgentAction = AgentActionBrief & { id: string; at: number; description: string; failed: boolean; server?: string; files?: { path: string; change: 'add' | 'update' | 'delete' | 'write' }[] };
 // One message or tool call of an agent's conversation, for the reading view.
 // queued: a message Claude Code holds in its queue until it takes it up, never shown as a message itself.
-export type ConversationEntry = { id: string; at: number; role: 'user' | 'assistant' | 'tool'; text?: string; original?: string; answer?: boolean; queued?: boolean; images?: string[]; generated?: { path: string; prompt: string }; tool?: AgentActionBrief & { failed: boolean } };
+// cancelled: a withdrawn queue receipt, hidden but still used to cancel its renderer echo.
+export type ConversationEntry = { id: string; at: number; role: 'user' | 'assistant' | 'tool'; text?: string; original?: string; answer?: boolean; queued?: boolean; cancelled?: boolean; images?: string[]; generated?: { path: string; prompt: string }; tool?: AgentActionBrief & { failed: boolean } };
 export type ConversationPacket = { id: string; list?: ConversationEntry[]; changes?: ConversationEntry[] };
 type GitDiffLine = { type: ' ' | '+' | '-' | '\\'; text: string };
 export type GitHunk = { header: string; oldStart: number; oldLines: number; newStart: number; newLines: number; lines: GitDiffLine[]; patch: string };

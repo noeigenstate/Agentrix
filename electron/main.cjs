@@ -1001,6 +1001,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   s.conversation = new ConversationLog(change => {
     publishConversation(s, change);
     const entry = change.entry;
+    if (entry?.cancelled) s.promptQueue.cancel(entry.original ?? entry.text, entry.at);
     if (entry?.role === 'assistant' && s.codexActive) s.promptQueue.reply(entry);
     // An answer to the agent's own question is not a prompt: it goes on with the round it answered.
     if (entry?.role === 'user' && !entry.answer && !entry.queued && s.codexActive) {

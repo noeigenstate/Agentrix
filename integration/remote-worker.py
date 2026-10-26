@@ -159,22 +159,31 @@ def json_records(filename, history_window=False):
             try: yield json.loads(line)
             except (ValueError, UnicodeError): continue
 
+def prompt_provenance(record):
+    kept = {key: record[key] for key in ("isMeta", "isCompactSummary", "isVisibleInTranscriptOnly", "queueTranscriptOnly", "promptSource", "turnOrigin", "humanTurn", "commandMode") if key in record}
+    if isinstance(record.get("origin"), dict) and isinstance(record["origin"].get("kind"), str):
+        kept["origin"] = {"kind": record["origin"]["kind"]}
+    return kept
+
+
 def compact_claude_record(record):
     """The messages, tool calls, results and settings the other computer needs, with the model route, context and token
     usage kept for the activity pane. Pictures and outputs stay here."""
     if not isinstance(record, dict) or record.get("isSidechain"): return None
+    provenance = prompt_provenance(record)
     # A message Claude queued while it worked, and when it took it up: the reading view marks the message as waiting.
     if record.get("type") == "queue-operation":
-        kept = {key: record.get(key) for key in ("type", "operation", "timestamp") if isinstance(record.get(key), str)}
+        kept = {**provenance, **{key: record.get(key) for key in ("type", "operation", "timestamp", "reason") if isinstance(record.get(key), str)}}
         if isinstance(record.get("content"), str): kept["content"] = clip(record["content"])
+        elif isinstance(record.get("content"), list): kept["content"] = [{"type": "text", "text": clip(block["text"])} for block in record["content"] if isinstance(block, dict) and isinstance(block.get("text"), str)]
         return kept
     if record.get("type") == "attachment":
         attachment = record.get("attachment") or {}
         if not isinstance(attachment, dict) or attachment.get("type") != "queued_command" or attachment.get("commandMode") == "bash": return None
         prompt = attachment.get("prompt")
         if isinstance(prompt, list): prompt = [{"type": "text", "text": clip(block.get("text"))} for block in prompt if isinstance(block, dict) and block.get("type") == "text"]
-        return {"type": "attachment", "uuid": record.get("uuid"), "timestamp": record.get("timestamp"),
-                "attachment": {"type": "queued_command", "commandMode": attachment.get("commandMode"), "prompt": clip(prompt)}}
+        return {**provenance, "type": "attachment", "uuid": record.get("uuid"), "timestamp": record.get("timestamp"),
+                "attachment": {**prompt_provenance(attachment), "type": "queued_command", "commandMode": attachment.get("commandMode"), "prompt": clip(prompt)}}
     if record.get("type") not in ("user", "assistant"): return None
     message = record.get("message") if isinstance(record.get("message"), dict) else {}
     content = message.get("content")
@@ -191,7 +200,7 @@ def compact_claude_record(record):
                               "input": {key: clip(value, 600) for key, value in arguments.items() if isinstance(value, (str, int, float, bool))}})
             elif kind == "tool_result": parts.append({"type": "tool_result", "tool_use_id": block.get("tool_use_id"), "is_error": bool(block.get("is_error")), "content": ""})
     else: return None
-    kept = {key: record.get(key) for key in ("type", "uuid", "parentUuid", "timestamp", "cwd", "sessionId", "isMeta", "isCompactSummary", "isVisibleInTranscriptOnly", "effort") if key in record}
+    kept = {**provenance, **{key: record.get(key) for key in ("type", "uuid", "parentUuid", "timestamp", "cwd", "sessionId", "effort") if key in record}}
     kept["message"] = {"role": message.get("role"), "content": parts}
     if isinstance(message.get("model"), str): kept["message"]["model"] = message["model"]
     if isinstance(message.get("id"), str): kept["message"]["id"] = message["id"]

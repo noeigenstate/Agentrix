@@ -170,9 +170,11 @@ test("Claude Code's queue marks a message sent while it works until it takes it 
   assert.deepEqual(log.list.map(entry => entry.text), ['second message']);
   assert.ok(changes.some(change => change.reset), 'the window gets the list without it');
   claudeConversation(log, { type: 'attachment', uuid: 'a1', timestamp: '2026-10-16T06:22:32.000Z', attachment: { type: 'queued_command', commandMode: 'prompt', prompt: '[Image #27]很多时候信息会显示发送中' } });
-  // Taken up as the next turn: dequeue names nothing and takes the oldest.
+  // A priority-selected dequeue names nothing; the following user record identifies what was taken up.
   queue('dequeue', undefined, '2026-10-16T06:23:00.000Z');
-  assert.deepEqual(log.list.map(entry => [entry.text, !!entry.queued]), [['很多时候信息会显示发送中', false]]);
+  assert.equal(log.list.filter(entry => entry.queued).length, 1);
+  claudeConversation(log, user('second message', { uuid: 'a2', timestamp: '2026-10-16T06:23:00.010Z' }));
+  assert.deepEqual(log.list.map(entry => [entry.text, !!entry.queued]), [['很多时候信息会显示发送中', false], ['second message', false]]);
 });
 
 test('Codex script commands and workdirs stay with their own calls across literal quote styles', () => {

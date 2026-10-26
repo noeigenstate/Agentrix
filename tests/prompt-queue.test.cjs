@@ -48,6 +48,29 @@ test('a message read after its round already ended does not linger as working', 
   assert.deepEqual(view(q), ['working:下一条']);
 });
 
+test('distinct identical user records take up distinct queued sends during the same round', () => {
+  const { q } = queue();
+  q.submit('same', true, 1000); q.submit('same', true, 1200);
+  q.start('same', 1100, 'first'); q.start('same', 1300, 'second');
+  assert.deepEqual(view(q), ['working:same', 'working:same']);
+  q.start('same', 1300, 'second'); assert.equal(q.list().length, 2);
+  q.finish(1500); assert.deepEqual(view(q), []);
+});
+
+test('long common prefixes cannot make the activity queue take up a different waiting send', () => {
+  const { q } = queue(), prefix = 'x'.repeat(100);
+  q.submit(prefix + 'A', true, 1000); q.submit(prefix + 'B', true, 1100);
+  q.start(prefix + 'B', 1200, 'second');
+  assert.deepEqual(view(q), [`working:${prefix}B`, `queued:${prefix}A`]);
+});
+
+test('a historical withdrawal cannot cancel a newer identical waiting send', () => {
+  const { q } = queue();
+  q.submit('same', true, 5000);
+  q.cancel('same', 1000); assert.deepEqual(view(q), ['queued:same']);
+  q.cancel('same', 5100); assert.deepEqual(view(q), []);
+});
+
 test('the terminal keeps the text of a submitted line', () => {
   const tracker = new SubmissionTracker();
   tracker.write('加个按钮x'); tracker.write('\x7f');

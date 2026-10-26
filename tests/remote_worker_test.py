@@ -145,6 +145,17 @@ class RemoteFilesTest(unittest.TestCase):
         self.assertIsNone(first["parentUuid"]); self.assertIn("parentUuid", first)
         self.assertEqual(later["parentUuid"], "a")
 
+    def test_claude_queue_compaction_keeps_text_blocks_cancellations_and_provenance(self):
+        content = [{"type": "text", "text": "Queued work"}, {"type": "image", "source": {"data": "hidden"}}]
+        for operation in ("enqueue", "remove", "dequeue", "popAll", "popOne", "clear"):
+            kept = remote.compact_claude_record({"type": "queue-operation", "operation": operation, "content": content,
+                                                "reason": "cleared_on_cancel", "origin": {"kind": "peer"}, "humanTurn": False})
+            self.assertEqual(kept["content"], [{"type": "text", "text": "Queued work"}])
+            self.assertEqual(kept["reason"], "cleared_on_cancel")
+            self.assertEqual(kept["origin"], {"kind": "peer"}); self.assertFalse(kept["humanTurn"])
+        kept = remote.compact_claude_record({"type": "user", "turnOrigin": "peer", "message": {"content": "Peer text"}})
+        self.assertEqual(kept["turnOrigin"], "peer")
+
     def test_claude_status_resets_on_replacement_truncation_or_new_run(self):
         filename = self.claude_file()
         def row(text): return json.dumps({"type": "user", "message": {"content": text}}) + "\n"

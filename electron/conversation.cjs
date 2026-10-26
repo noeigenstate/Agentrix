@@ -1,6 +1,6 @@
 const { claudeAction, claudeOwnRecord, codexActions, codexFailed, resolvePath } = require('./agent-actions.cjs');
 const { IMAGE_LIMIT } = require('./oversized-record.cjs');
-const { messageText, promptText, promptCommand } = require('./prompt-queue.cjs');
+const { messageText, promptText, promptKey, promptCommand } = require('./prompt-queue.cjs');
 
 // The conversation of a terminal's agent, for the reading view: what the user asked, what the agent
 // answered (Markdown), and the tools it called in between. It is read from the records each agent already
@@ -64,12 +64,19 @@ const brief = (action, cwd = action.cwd) => ({ kind: action.kind, tool: action.t
 // Entries keep their order; a later record about the same entry (a tool that finished) replaces it.
 class ConversationLog {
   // cwd: the folder Codex works in (its session's and each turn's), which relative file paths in its steps start from.
-  constructor(changed = () => {}, limit = 400) { this.changed = changed; this.limit = limit; this.list = []; this.cwd = null; this.queue = []; }
+  constructor(changed = () => {}, limit = 400) {
+    this.changed = changed; this.limit = limit; this.list = []; this.cwd = null;
+    this.queue = []; this.queueCount = 0; this.received = new Set(); this.deliveries = [];
+  }
   // Records still feed activity tracking during replay, but reading snapshots wait for the file tail.
   beginHistory() { this.loading = true; }
   endHistory() { if (!this.loading) return; this.loading = false; this.changed({ reset: true }); }
   snapshot() { return this.loading ? [] : this.list; }
-  reset() { this.queue = []; if (!this.list.length) return; this.list = []; this.changed({ reset: true }); }
+  reset() {
+    this.queue = []; this.queueCount = 0; this.received.clear(); this.deliveries = [];
+    if (!this.list.length) return;
+    this.list = []; this.changed({ reset: true });
+  }
   // inOrder: a new entry goes before those stamped after it, and the window gets the whole list again.
   put(entry, inOrder = false) {
     const index = this.list.findIndex(item => item.id === entry.id);
@@ -106,25 +113,63 @@ class ConversationLog {
   }
 }
 
-// Claude Code queues a message sent while it works (a queue-operation "enqueue" naming it) and writes it into the
-// conversation only when it takes it up: within the turn ("remove", absorbed_mid_turn) or as the next one ("dequeue",
-// the oldest). Until then it stands in the list marked queued, which the reading view shows on the message it sent and
-// is never shown as a message itself.
+function dropQueued(log, index, cancelled = false) {
+  const [entry] = log.queue.splice(index, 1);
+  // Keep an invisible withdrawal receipt so the renderer cancels its echo rather than automatically resending it.
+  if (cancelled) log.put({ ...entry, cancelled: true });
+  else log.drop(entry.id);
+}
+
+// Removal and receipt can be written in either order. Keep just the unpaired signal, without retaining pictures.
+function noteDelivery(log, { original, at }, received) {
+  log.deliveries.push({ original, at, received });
+  if (log.deliveries.length > 1000) log.deliveries.shift();
+}
+
+// Anonymous dequeues do not identify a message: Claude selects by priority and the history tail may omit earlier
+// enqueues. Only a named removal or the actual user/queued_command receipt can retire a particular queued card.
 function claudeQueue(log, record) {
   const original = promptText(record.content, record), text = original === null ? '' : clean(original);
   if (record.operation === 'enqueue') {
     // A slash command or shell line sent while it works is not a message (the reading view's isTypedCommand).
-    const command = (/^\/[^\s/]+(?:\s|$)/.test(text) || text.startsWith('!')) && !/[\r\n]/.test(text);
-    const id = original !== null && !command ? `q:${record.timestamp}:${log.queue.length}` : null;
-    log.queue.push({ id, text: record.content });
-    if (id) log.put({ id, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original, queued: true });
+    const command = /^\s*<command-name>/.test(original || '') || (/^\/[^\s/]+(?:\s|$)/.test(text) || text.startsWith('!')) && !/[\r\n]/.test(text);
+    if (original === null || command) return;
+    const entry = withImages({ id: `q:${record.timestamp}:${++log.queueCount}`, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original, queued: true }, record.content);
+    log.queue.push(entry); log.put(entry);
     return;
   }
-  if (record.operation !== 'remove' && record.operation !== 'dequeue') return;
-  const index = record.content ? log.queue.findIndex(item => item.text === record.content || original !== null && item.id && clean(item.text) === text) : 0;
-  if (index < 0 || !log.queue[index]) return;
-  const [entry] = log.queue.splice(index, 1);
-  if (entry.id) log.drop(entry.id);
+  if (record.operation === 'clear' || record.operation === 'popAll' && record.content == null) {
+    while (log.queue.length) dropQueued(log, 0, true);
+    return;
+  }
+  if (!['remove', 'dequeue', 'popAll', 'popOne'].includes(record.operation) || original === null) return;
+  const cancelled = ['popAll', 'popOne'].includes(record.operation) || ['cleared_on_cancel', 'dropped_by_hook'].includes(record.reason);
+  if (!cancelled) {
+    const received = log.deliveries.findIndex(entry => entry.received && promptKey(entry.original) === promptKey(original));
+    if (received >= 0) { log.deliveries.splice(received, 1); return; }
+  }
+  const index = log.queue.findIndex(entry => promptKey(entry.original) === promptKey(original));
+  if (index < 0) return;
+  if (!cancelled) noteDelivery(log, log.queue[index], false);
+  dropQueued(log, index, cancelled);
+}
+
+function receivedPrompt(log, entry, { inOrder = false, fromQueue = false } = {}) {
+  if (!log.received.has(entry.id)) {
+    log.received.add(entry.id);
+    if (log.received.size > 1000) log.received.delete(log.received.values().next().value);
+    // queued_command proves receipt even when a slow hook puts enqueue's timestamp after the original send.
+    // Other old replayed turns cannot take up a newer identical send; each receipt consumes one occurrence.
+    const matches = queued => (fromQueue || queued.at <= entry.at + 500) && promptKey(queued.original) === promptKey(entry.original);
+    const removed = log.deliveries.findIndex(queued => !queued.received && matches(queued));
+    // A named removal and the user record are two reports of the same delivery, not two identical sends.
+    if (removed >= 0) log.deliveries.splice(removed, 1);
+    else {
+      const index = log.queue.findIndex(matches);
+      if (index >= 0) { noteDelivery(log, log.queue[index], true); dropQueued(log, index); }
+    }
+  }
+  log.put(entry, inOrder);
 }
 
 function claudeConversation(log, record, cwd) {
@@ -136,7 +181,7 @@ function claudeConversation(log, record, cwd) {
     if (original === null) return;
     const text = promptCommand(original) || clean(original);
     const entry = withImages({ id: `u:${record.uuid || record.timestamp}`, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original }, queued.prompt);
-    if (text || entry.images) log.put(entry);
+    if (text || entry.images) receivedPrompt(log, entry, { fromQueue: true });
     return;
   }
   if (!record || record.isSidechain || !record.message || record.isMeta) return;
@@ -151,7 +196,7 @@ function claudeConversation(log, record, cwd) {
     const text = promptCommand(original) || clean(original);
     const entry = withImages({ id: `u:${base}`, at, role: 'user', text: bounded(text), original }, content);
     // A conversation's first prompt, which Claude Code writes after the reply to it, goes before that reply.
-    if (text || entry.images) log.put(entry, record.parentUuid === null);
+    if (text || entry.images) receivedPrompt(log, entry, { inOrder: record.parentUuid === null });
     return;
   }
   if (record.type !== 'assistant' || !Array.isArray(content)) return;

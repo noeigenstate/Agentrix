@@ -2,17 +2,21 @@
 export const PENDING_PROMPT_TIMEOUT = 20_000;
 // The reading view keeps 400 entries; the user records seen are bounded well above that.
 const SEEN_LIMIT = 1000;
-type UserRecord = { id: string; role: string; text?: string; at?: number; queued?: boolean; images?: string[] };
+type UserRecord = { id: string; role: string; text?: string; original?: string; at?: number; queued?: boolean; cancelled?: boolean; images?: string[] };
 export type PendingPrompt = { id: string; role: 'user'; text: string; at: number; sending: boolean; images?: string[] };
 export type PendingPrompts = { sessionId: string | null; prompts: readonly PendingPrompt[]; seen: readonly string[] };
 
 export const normalizePrompt = (text: string) => text.trim().replace(/\s+/g, ' ');
 
 const timely = (prompt: { at: number }, record: UserRecord) => record.at === undefined || record.at >= prompt.at - 500;
-const transcriptMatches = (message: string, record: string) => normalizePrompt(message) === normalizePrompt(record)
-  // conversation.cjs bounds transcript text at 20,000 characters with this exact marker. Unlike an input's
-  // paste summary, it still carries the message's words (verified against the actual queue producer).
-  || (record.length === 20003 && record.endsWith('\n\n…') && normalizePrompt(message).startsWith(normalizePrompt(record.slice(0, 20000))));
+const transcriptMatches = (message: string, record: string, original?: string) => {
+  const bounded = record.length === 20003 && record.endsWith('\n\n…');
+  // The producer retains the full original beside its 20,000-character display. Shared prefixes cannot identify
+  // distinct long sends. Keep the legacy prefix fallback only for records without that original.
+  if (bounded && original !== undefined) record = original.replace(/<\/?pasted_content\b[^>]*>\n?/g, '').replace(/\[Image #\d+\]\s?/g, '').trim();
+  return normalizePrompt(message) === normalizePrompt(record)
+    || (bounded && original === undefined && normalizePrompt(message).startsWith(normalizePrompt(record.slice(0, 20000))));
+};
 
 // Pair queue records and renderer echoes one-to-one. Raw-terminal sends and reloads have no echo;
 // the transcript still owns a queued card, its timestamp and its position ahead of later sends.
@@ -20,8 +24,8 @@ export function pendingPromptCards(prompts: readonly PendingPrompt[], records: r
   const remaining = [...prompts], queuedIds = new Set<string>();
   const cards: PendingPrompt[] = [];
   for (const record of records) {
-    if (!record.queued || record.role !== 'user') continue;
-    const index = remaining.findIndex(prompt => timely(prompt, record) && transcriptMatches(prompt.text, record.text ?? ''));
+    if (!record.queued || record.cancelled || record.role !== 'user') continue;
+    const index = remaining.findIndex(prompt => timely(prompt, record) && transcriptMatches(prompt.text, record.text ?? '', record.original));
     const echo = index >= 0 ? remaining.splice(index, 1)[0] : undefined;
     const card: PendingPrompt = { ...echo, id: echo?.id ?? record.id, role: 'user', text: echo?.text ?? record.text ?? '', at: record.at ?? echo?.at ?? 0, sending: false, images: record.images ?? echo?.images };
     cards.push(card); queuedIds.add(card.id);
@@ -48,7 +52,7 @@ export function sameMessage(message: string, draft: string) {
 }
 
 export function createPendingPrompts(sessionId: string | null, entries: readonly UserRecord[] = []): PendingPrompts {
-  return { sessionId, prompts: [], seen: entries.filter(entry => entry.role === 'user' && !entry.queued).map(entry => entry.id).slice(-SEEN_LIMIT) };
+  return { sessionId, prompts: [], seen: entries.filter(entry => entry.role === 'user' && (!entry.queued || entry.cancelled)).map(entry => entry.id).slice(-SEEN_LIMIT) };
 }
 
 export function reconcilePendingPrompts(state: PendingPrompts, sessionId: string | null, entries: readonly UserRecord[], now: number): PendingPrompts {
@@ -56,12 +60,12 @@ export function reconcilePendingPrompts(state: PendingPrompts, sessionId: string
   const seen = new Set(state.seen), prompts = [...state.prompts];
   let changed = false;
   for (const entry of entries) {
-    if (entry.role !== 'user' || entry.queued || seen.has(entry.id)) continue;
+    if (entry.role !== 'user' || entry.queued && !entry.cancelled || seen.has(entry.id)) continue;
     seen.add(entry.id); changed = true;
     // The echo with the same text, or one this record ends with: a prompt Claude put back after an interrupt can
     // precede what was sent.
     const text = normalizePrompt(entry.text ?? '');
-    let index = prompts.findIndex(prompt => timely(prompt, entry) && transcriptMatches(prompt.text, entry.text ?? ''));
+    let index = prompts.findIndex(prompt => timely(prompt, entry) && transcriptMatches(prompt.text, entry.text ?? '', entry.original));
     if (index < 0) index = prompts.findIndex(prompt => timely(prompt, entry) && text.endsWith(normalizePrompt(prompt.text)));
     if (index >= 0) prompts.splice(index, 1);
   }

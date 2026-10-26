@@ -11,10 +11,11 @@
 const NOT_A_PROMPT = /^[/!#]/;
 const FOLLOW_UP = /^(继续|接着|继续吧|继续执行|好的?|可以|行|嗯|是的?|对|go on|continue|keep going|ok(ay)?|yes|y|proceed)[。.!！\s]*$/i;
 const clean = text => String(text || '').replace(/\s+/g, ' ').trim();
-const key = text => clean(text).slice(0, 80);
 
 const MACHINE = /^\s*(?:<(?:task-notification|agent-message|teammate[_-]message|subagent[_-](?:message|notification)|system-reminder|local-command-(?:caveat|stdout|stderr)|environment_context|user_instructions|system_instructions|developer_instructions|user-prompt-submit-hook|send_user_message_question_reply|turn_aborted|tool[_-](?:result|response))\b|#\s*AGENTS\.md instructions\b|\[Subagent hand-back\])/i;
 const messageText = content => typeof content === 'string' ? content : Array.isArray(content) ? content.filter(block => typeof block?.text === 'string').map(block => block.text).join('\n') : '';
+// Match the complete prompt, not its bounded display/summary. The CLIs expand pasted tags and image marks.
+const promptKey = content => clean(messageText(content).replace(/<\/?pasted_content\b[^>]*>\n?/g, '').replace(/\[Image #\d+\]\s?/g, '')) || clean(messageText(content));
 const ownMessage = text => /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(text) || text.trimStart().startsWith('This session is being continued from a previous conversation');
 const promptCommand = text => /^\s*<command-name>\s*(\/[^<\s]+)\s*<\/command-name>/.exec(text)?.[1] || /^\s*(\/[\w:-]+)(?=\s|$)/.exec(text)?.[1] || '';
 const omitPath = text => text.endsWith('.') ? ' .' : ' ';
@@ -108,9 +109,8 @@ class PromptQueue {
       }
       return;
     }
-    if (this.items.some(item => item.state === 'working' && key(item.text) === key(value))) return;
     const waiting = this.items.filter(item => item.state === 'queued');
-    const item = waiting.find(candidate => key(candidate.text) === key(value)) || waiting[0];
+    const item = waiting.find(candidate => promptKey(candidate.text) === promptKey(value)) || waiting[0];
     const summary = promptSummary(value);
     if (!this.task || at >= this.task.at) {
       // A bare continuation starts a round but keeps the work named by the preceding request or delivery.
@@ -127,6 +127,12 @@ class PromptQueue {
     // Working prompts come first, in the order the agent took them up.
     this.items.sort((a, b) => (a.state === 'working' ? 0 : 1) - (b.state === 'working' ? 0 : 1) || (a.started ?? a.at) - (b.started ?? b.at));
     this.changed();
+  }
+  // Esc can return a queued send to the CLI's input. It is no longer submitted work.
+  cancel(text, at = this.now()) {
+    const index = this.items.findIndex(item => item.state === 'queued' && item.at <= at + 500 && promptKey(item.text) === promptKey(text));
+    if (index < 0) return;
+    this.items.splice(index, 1); this.schedule(); this.changed();
   }
   // A round ended at this time: the prompts it took up are done. A prompt taken up later belongs to the next
   // round. Waiting ones are sent next by the agent, so they get a short while to be taken up.
@@ -165,4 +171,4 @@ class PromptQueue {
   }
 }
 
-module.exports = { PromptQueue, messageText, ownMessage, promptText, promptCommand, promptSummary };
+module.exports = { PromptQueue, messageText, ownMessage, promptText, promptKey, promptCommand, promptSummary };

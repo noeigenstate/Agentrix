@@ -196,6 +196,22 @@ test('producer-bounded long queued and accepted transcripts keep one echo and it
   assert.deepEqual(sync(state, log.list, Date.parse(timestamp)).prompts, []);
 });
 
+for (const accepted of [false, true]) test(`long prompts with the same displayed prefix pair the ${accepted ? 'receipt' : 'queue'} to the full original text`, () => {
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const log = new ConversationLog(), timestamp = '2026-10-17T01:00:00Z', at = Date.parse(timestamp), prefix = 'x'.repeat(20100);
+  let state = add(createPendingPrompts('session'), 'first', prefix + 'A', at - 100);
+  state = add(state, 'second', prefix + 'B', at - 50);
+  claudeConversation(log, { type: 'queue-operation', operation: 'enqueue', timestamp, content: prefix + 'B' });
+  if (accepted) {
+    claudeConversation(log, { type: 'user', uuid: 'accepted', timestamp, message: { content: prefix + 'B' } });
+    state = sync(state, log.list, at);
+    assert.deepEqual(state.prompts.map(prompt => prompt.id), ['first']);
+  } else {
+    const cards = pendingPromptCards(state.prompts, log.list);
+    assert.deepEqual([...cards.queuedIds], ['second']);
+  }
+});
+
 test('a prompt received after one Claude put back in its input still acknowledges the echo', () => {
   const state = add(createPendingPrompts('session'), 'p', '只回复：MARK-4');
   assert.deepEqual(sync(state, [user('u', '写一篇文章。最后写 MARK-3。只回复：MARK-4')]).prompts, []);

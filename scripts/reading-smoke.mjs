@@ -24,12 +24,12 @@ const waitForFixtureIdle = async (readRows, label) => {
     return Date.now() - emptySince >= 600;
   }, `${label}: fixture has stable empty CLI input`);
 };
-const output = await testRun('reading'), profile = path.join(output, 'profile'), home = path.join(output, 'codex-home');
+const output = await testRun('reading'), profile = path.join(output, 'profile'), home = path.join(output, 'codex-home'), claudeHome = path.join(output, 'claude-home');
 const project = { id: randomUUID(), name: '阅读命令', path: path.join(output, 'project'), restore: { terminal: false, codex: false } };
-for (const directory of [profile, home, path.join(project.path, '.claude/commands')]) await fs.mkdir(directory, { recursive: true });
+for (const directory of [profile, home, claudeHome, path.join(project.path, '.claude/commands')]) await fs.mkdir(directory, { recursive: true });
 await fs.writeFile(path.join(project.path, '.claude/commands/fix-issue.md'), '---\ndescription: 修复问题\n---\nFix issue $ARGUMENTS.\n');
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false, language: 'zh' } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: home }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: home, CLAUDE_CONFIG_DIR: claudeHome }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const packaged = process.argv.includes('--packaged'), errors = [], checks = [];
 let app, page;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals[0];
@@ -223,6 +223,36 @@ try {
   assert.deepEqual(await writes(), [], 'palette Escape does not interrupt');
   await composer.press('Escape'); await waitFor(async () => (await writes()).some(item => item.data === '\x1b'), 'Escape interrupts working CLI');
   checks.push('manual view choice and status, palette Escape before interrupt');
+  // Replay actual transcript shapes through the main-process reader, IPC and React, in this run's Claude home.
+  const queueSession = randomUUID(), transcript = path.join(claudeHome, 'projects', project.path.replace(/[^A-Za-z0-9]/gu, '-'), `${queueSession}.jsonl`);
+  await fs.mkdir(path.dirname(transcript), { recursive: true });
+  const row = record => JSON.stringify({ timestamp: new Date().toISOString(), ...record }) + '\n';
+  await fs.writeFile(transcript, row({ type: 'user', uuid: 'queue-start', message: { content: 'Queue fixture work' } }));
+  await write(hook('start', { session_id: queueSession, transcript_path: transcript, prompt: 'Queue fixture work' }));
+  await waitFor(async () => (await terminal.locator('.reading-user', { hasText: 'Queue fixture work' }).count()) === 1, 'isolated Claude transcript is bound');
+  const queueRows = records => fs.appendFile(transcript, records.map(row).join(''));
+  const queueCard = text => terminal.locator('.reading-pending.is-queued', { hasText: text });
+  await queueRows([
+    { type: 'queue-operation', operation: 'enqueue', content: 'GUI_TAKEN_UP' },
+    { type: 'queue-operation', operation: 'enqueue', content: 'GUI_STILL_WAITING' },
+    { type: 'queue-operation', operation: 'enqueue', content: '<task-notification>done</task-notification>' },
+    { type: 'queue-operation', operation: 'dequeue' },
+  ]);
+  await queueCard('GUI_TAKEN_UP').waitFor(); await queueCard('GUI_STILL_WAITING').waitFor();
+  await queueRows([
+    { type: 'user', uuid: 'queue-received', message: { content: [{ type: 'text', text: 'GUI_TAKEN_UP' }] } },
+    { type: 'assistant', uuid: 'queue-reply', message: { content: [{ type: 'text', text: 'GUI_WORKED_ON_IT' }] } },
+  ]);
+  await queueCard('GUI_TAKEN_UP').waitFor({ state: 'detached' });
+  assert.equal(await terminal.locator('.reading-user', { hasText: 'GUI_TAKEN_UP' }).count(), 1);
+  assert.equal(await queueCard('GUI_STILL_WAITING').count(), 1, 'the receipt does not discard another waiting send');
+  const order = await terminal.locator('.reading-content').innerText();
+  assert.ok(order.indexOf('GUI_TAKEN_UP') < order.indexOf('GUI_WORKED_ON_IT'));
+  await queueRows([{ type: 'queue-operation', operation: 'popAll', content: 'GUI_STILL_WAITING' }]);
+  await queueCard('GUI_STILL_WAITING').waitFor({ state: 'detached' });
+  assert.equal(await terminal.locator('.reading-user', { hasText: 'GUI_STILL_WAITING' }).count(), 0);
+  await page.screenshot({ path: path.join(output, 'queue-receipt.png') });
+  checks.push('transcript receipt clears stale queue status, anonymous dequeue preserves waiting work, popAll withdraws it, and message order stays intact');
   await write("Send-AgentrixEvent 'codex-started' -Agent 'codex'\r");
   await waitFor(async () => (await state()).agent === 'codex', 'fixture agent changes');
   await composer.fill('/a'); await composer.fill('/');
