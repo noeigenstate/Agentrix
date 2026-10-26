@@ -1,20 +1,23 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const { sanitizeProjectSvg, SVG_MAX_BYTES } = require('../../project-svg.cjs');
+const { projectIcons, nativeIcons, ICON_EXTENSIONS } = require('./project-icon-sources.cjs');
 
 const LIMITS = Object.freeze({ directories: 48, entries: 2400, depth: 4, projects: 8, readmes: 8, files: 120,
   readmeBytes: 256 * 1024, manifestBytes: 64 * 1024, imageBytes: 8 * 1024 * 1024, totalBytes: 24 * 1024 * 1024, thumbnails: 32, candidates: 6 });
-const RASTER = /\.(?:png|jpe?g|webp|gif|ico)$/i;
+const IMAGE = /\.(?:png|jpe?g|webp|gif|ico|svg)$/i;
 const README = /^readme(?:[._-][\p{L}\p{M}\p{N}_.-]+)?\.md$/iu;
 const ICON = /^(?:(?:app|product)[-_])?(?:icon|logo|favicon)(?:[-_.@][\w.-]+)?$/i;
-const ASSETS = new Set(['assets', 'public', 'static', 'resources', 'docs', 'doc', 'images', 'img', 'screenshots', 'media', 'branding']);
-const SKIP = new Set(['node_modules', 'vendor', 'dist', 'build', 'out', 'target', 'coverage', 'cache', 'tmp', 'temp', '__pycache__']);
+const ASSETS = new Set(['assets', 'public', 'static', 'resources', 'docs', 'doc', 'images', 'img', 'screenshots', 'media', 'branding', 'icons', 'icon', 'desktop', 'src-tauri', 'native', 'windows', 'win32', 'ios', 'macos']);
+const SKIP = new Set(['node_modules', 'vendor', 'runtime', 'third_party', 'third-party', 'external', 'tools', 'python', 'tcl', 'dist', 'build', 'out', 'target', 'coverage', 'cache', 'tmp', 'temp', '__pycache__', 'site-packages', 'venv']);
 const DATA_IMAGE = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
 const HTML_ENTITIES = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>' };
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const inside = (root, file) => { const relative = path.relative(root, file); return !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`); };
-const visibleDirectory = entry => entry.isDirectory() && !entry.name.startsWith('.') && !SKIP.has(entry.name.toLowerCase());
+const skipped = name => name.startsWith('.') || SKIP.has(name.toLowerCase()) || /^(?:cpython|python|tcl|tk)(?:[\d._-]|$)/i.test(name);
+const visibleDirectory = entry => entry.isDirectory() && !skipped(entry.name);
 
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const JPEG_SOF = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
@@ -149,19 +152,21 @@ function localImage(root, directory, input) {
 async function listProjectImageCandidates(folder, thumbnail, limits = LIMITS) {
   let root;
   try { root = await fs.realpath(folder); if (!(await fs.stat(root)).isDirectory()) return { candidates: [] }; } catch { return { candidates: [] }; }
-  const found = new Map(), visited = new Set();
+  const found = new Map(), visited = new Map();
   let directories = 0, entries = 0, readmes = 0, projects = 0, bytesRead = 0;
 
   async function list(directory) {
-    if (directories >= limits.directories || entries >= limits.entries || visited.has(directory)) return [];
-    visited.add(directory); directories++;
+    if (visited.has(directory)) return visited.get(directory);
+    if (directories >= limits.directories || entries >= limits.entries) return [];
+    visited.set(directory, []);
     const result = [];
     try {
       if ((await fs.lstat(directory)).isSymbolicLink() || !inside(root, await fs.realpath(directory))) return [];
+      directories++;
       const stream = await fs.opendir(directory);
       for await (const entry of stream) { result.push(entry); if (++entries >= limits.entries) break; }
     } catch { return []; }
-    return result.sort((a, b) => compare(a.name, b.name));
+    result.sort((a, b) => compare(a.name, b.name)); visited.set(directory, result); return result;
   }
 
   async function read(file, limit) {
@@ -170,10 +175,11 @@ async function listProjectImageCandidates(folder, thumbnail, limits = LIMITS) {
     try {
       const resolved = await fs.realpath(file);
       if (!inside(root, resolved) || !(await fs.stat(resolved)).isFile()) return null;
+      if (path.relative(root, resolved).split(path.sep).slice(0, -1).some(part => skipped(part) && part.toLowerCase() !== 'build')) return null;
       // Never follow a directory link, even when a README or manifest names it explicitly.
       let current = root;
       for (const part of path.relative(root, file).split(path.sep).slice(0, -1)) {
-        if (part.startsWith('.') || SKIP.has(part.toLowerCase()) && part.toLowerCase() !== 'build') return null;
+        if (skipped(part) && part.toLowerCase() !== 'build') return null;
         current = path.join(current, part);
         if ((await fs.lstat(current)).isSymbolicLink()) return null;
       }
@@ -187,31 +193,36 @@ async function listProjectImageCandidates(folder, thumbnail, limits = LIMITS) {
     } catch { return null; } finally { await handle?.close().catch(() => {}); }
   }
 
-  function add(file, source, rank) {
-    if (!file || !RASTER.test(file) || !inside(root, file) || /(?:^|[-_.])(?:badge|coverage|shields)(?:[-_.]|$)/i.test(path.basename(file))) return;
+  function add(file, source, rank, variant = 0) {
+    if (!file || !IMAGE.test(file) || !inside(root, file) || /(?:^|[-_.])(?:badge|coverage|shields)(?:[-_.]|$)/i.test(path.basename(file))) return;
     const previous = found.get(file);
-    if (previous) { if (rank < previous.rank) found.set(file, { file, source, rank }); return; }
-    if (found.size < limits.files) found.set(file, { file, source, rank });
+    if (previous) { if (rank < previous.rank) found.set(file, { file, source, rank, variant }); return; }
+    if (found.size < limits.files) found.set(file, { file, source, rank, variant });
   }
 
-  async function manifest(file, packageFile = false) {
+  const readText = async file => (await read(file, limits.manifestBytes))?.toString('utf8');
+  function addTarget(directory, target, rank = 0, web = false) {
+    // A site's /favicon is project-local; other absolute paths and all URL schemes remain forbidden.
+    const icon = localImage(root, directory,
+      web && typeof target === 'string' ? target.replace(/^\/(?!\/)/, '') : target);
+    if (!icon) return;
+    if (path.extname(icon)) add(icon, 'icon', rank);
+    else for (const extension of ICON_EXTENSIONS) add(icon + extension, 'icon', rank);
+  }
+  async function resourceIcons(directory, target) {
+    const resource = localImage(root, directory, target);
+    if (!resource) return;
+    for (const entry of await list(resource)) if (entry.isFile() && /^(?:icon\.(?:png|ico|svg)|logo\.png)$/i.test(entry.name)) add(path.join(resource, entry.name), 'icon', 10);
+  }
+
+  async function manifest(file) {
     const bytes = await read(file, limits.manifestBytes);
     if (!bytes) return;
     let data;
     try { data = JSON.parse(bytes.toString('utf8')); } catch { return; }
     if (!data || typeof data !== 'object' || Array.isArray(data)) return;
     const directory = path.dirname(file);
-    const icons = packageFile ? [data.icon, data.build?.icon, data.build?.win?.icon, data.build?.mac?.icon, data.build?.linux?.icon, data.config?.forge?.packagerConfig?.icon] : Array.isArray(data.icons) ? data.icons.map(icon => icon?.src) : [];
-    for (const target of icons) {
-      const icon = localImage(root, directory, target);
-      if (!icon) continue;
-      if (path.extname(icon)) add(icon, 'icon', 0);
-      else for (const extension of ['.png', '.ico', '.jpg', '.webp']) add(icon + extension, 'icon', 0);
-    }
-    if (packageFile && typeof data.build?.directories?.buildResources === 'string') {
-      const resources = localImage(root, directory, data.build.directories.buildResources);
-      if (resources) for (const name of ['icon.png', 'icon.ico', 'logo.png']) add(path.join(resources, name), 'icon', 1);
-    }
+    for (const icon of Array.isArray(data.icons) ? data.icons : []) addTarget(directory, icon?.src, 0);
   }
 
   async function readme(file, depth) {
@@ -221,18 +232,24 @@ async function listProjectImageCandidates(folder, thumbnail, limits = LIMITS) {
     if (bytes) for (const target of readmeImages(bytes.toString('utf8'))) add(localImage(root, path.dirname(file), target), 'readme', 20 + depth);
   }
 
-  async function scan(directory, depth, projectRoot = false) {
+  async function scan(directory, depth, projectRoot = false, projectName = path.basename(root)) {
     if (depth > limits.depth) return;
     const listing = await list(directory);
+    if (projectRoot) await projectIcons(directory, { readText, list, addTarget, resourceIcons, add });
     for (const entry of listing) {
       if (!entry.isFile()) continue;
       const file = path.join(directory, entry.name), name = entry.name.toLowerCase();
-      if (name === 'package.json' && projectRoot) await manifest(file, true);
-      else if (name === 'manifest.webmanifest' || name === 'manifest.json') await manifest(file);
+      if (name === 'manifest.webmanifest' || name === 'manifest.json') await manifest(file);
+      else if (/\.(?:rc|csproj)$/.test(name)) {
+        const text = await readText(file);
+        if (text) for (const target of nativeIcons(file, text)) addTarget(directory, target);
+      }
       else if (README.test(entry.name)) await readme(file, depth);
-      else if (RASTER.test(name)) {
-        const icon = ICON.test(path.parse(name).name);
-        add(file, icon ? 'icon' : 'asset', (icon ? 10 : /screenshot|preview|demo|overview|hero/.test(name) ? 30 : 40) + depth);
+      else if (IMAGE.test(name)) {
+        const base = path.parse(name).name, parent = path.basename(directory).toLowerCase();
+        const icon = ICON.test(base) || /^icons?$/.test(parent) && ['app', 'icon', 'logo', projectName.toLowerCase()].includes(base)
+          || parent === 'appicon.appiconset' || parent === 'icons' && path.basename(path.dirname(directory)).toLowerCase() === 'src-tauri';
+        add(file, icon ? 'icon' : 'asset', icon ? 10 : (/screenshot|preview|demo|overview|hero/.test(name) ? 30 : 40) + depth);
       }
     }
     for (const entry of listing) {
@@ -242,30 +259,45 @@ async function listProjectImageCandidates(folder, thumbnail, limits = LIMITS) {
         if (depth + 1 >= limits.depth) continue;
         for (const app of await list(child)) {
           if (!visibleDirectory(app) || projects >= limits.projects) continue;
-          projects++; await scan(path.join(child, app.name), depth + 2, true);
+          projects++; await scan(path.join(child, app.name), depth + 2, true, app.name);
         }
       } else if (projectRoot && name === 'src') {
         if (depth + 1 >= limits.depth) continue;
-        for (const asset of await list(child)) if (visibleDirectory(asset) && ASSETS.has(asset.name.toLowerCase())) await scan(path.join(child, asset.name), depth + 2);
-      } else if (!projectRoot || ASSETS.has(name)) await scan(child, depth + 1);
+        for (const asset of await list(child)) {
+          if (asset.isFile() && /\.(?:rc|csproj)$/i.test(asset.name)) {
+            const text = await readText(path.join(child, asset.name));
+            if (text) for (const target of nativeIcons(asset.name, text)) addTarget(child, target);
+          } else if (visibleDirectory(asset) && ASSETS.has(asset.name.toLowerCase())) await scan(path.join(child, asset.name), depth + 2, false, projectName);
+        }
+      } else if (!projectRoot || ASSETS.has(name) || name.endsWith('.xcassets')) await scan(child, depth + 1, false, projectName);
     }
   }
 
   await scan(root, 0, true);
-  const ranked = [...found.values()].sort((a, b) => a.rank - b.rank || compare(a.file, b.file));
+  // Inspect icon dimensions before sorting; reuse these bounded reads when making snapshots.
+  const ranked = [...found.values()];
+  for (const candidate of ranked) {
+    candidate.depth = path.relative(root, candidate.file).split(path.sep).length;
+    if (candidate.source !== 'icon') continue;
+    candidate.bytes = await read(candidate.file, /\.svg$/i.test(candidate.file) ? Math.min(limits.imageBytes, SVG_MAX_BYTES) : limits.imageBytes);
+    const size = candidate.bytes && projectImageDimensions(candidate.bytes, 'icon');
+    candidate.size = /\.svg$/i.test(candidate.file) ? Infinity : size?.width === size?.height ? size?.width || 0 : 0;
+  }
+  ranked.sort((a, b) => a.rank - b.rank || a.depth - b.depth || (b.size || 0) - (a.size || 0) || b.variant - a.variant || compare(a.file, b.file));
   const candidates = [], content = new Set(), pictures = new Set();
   let attempts = 0, icons = 0;
   for (const candidate of ranked) {
     if (candidates.length >= limits.candidates || attempts >= limits.thumbnails) break;
     if (candidate.source === 'icon' && icons >= 2) continue;
-    const bytes = await read(candidate.file, limits.imageBytes);
+    const svg = /\.svg$/i.test(candidate.file);
+    const bytes = candidate.source === 'icon' ? candidate.bytes : await read(candidate.file, svg ? Math.min(limits.imageBytes, SVG_MAX_BYTES) : limits.imageBytes);
     if (!bytes) continue;
     const digest = hash(bytes);
     if (content.has(digest)) continue;
     content.add(digest); attempts++;
     let image;
-    try { image = await thumbnail(bytes, candidate.source); } catch { continue; }
-    if (typeof image !== 'string' || image.length > 200_000 || !DATA_IMAGE.test(image) || pictures.has(image)) continue;
+    try { image = svg ? sanitizeProjectSvg(bytes) : await thumbnail(bytes, candidate.source); } catch { continue; }
+    if (typeof image !== 'string' || image.length > 200_000 || !svg && !DATA_IMAGE.test(image) || pictures.has(image)) continue;
     pictures.add(image); if (candidate.source === 'icon') icons++;
     candidates.push({ path: path.relative(root, candidate.file).split(path.sep).join('/'), source: candidate.source, image });
   }

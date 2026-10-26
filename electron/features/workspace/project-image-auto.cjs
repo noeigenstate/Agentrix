@@ -8,7 +8,7 @@ function createProjectImageAuto({ getProject, listCandidates, setProjectImage, b
     queue = queue.then(() => new Promise(resolve => setImmediate(resolve))).then(async () => {
       const current = getProject(id);
       if (!eligible(current) || current.path !== path) return;
-      const image = (await listCandidates(path)).candidates[0]?.image;
+      const image = (await listCandidates(path)).candidates.find(candidate => candidate.source === 'icon')?.image;
       const latest = getProject(id);
       if (!image || !eligible(latest) || latest.path !== path) return;
       setProjectImage(id, image, 'auto'); broadcast();

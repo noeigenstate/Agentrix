@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const { WorkspaceStore } = require('../electron/state.cjs');
 const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
 const { registerWorkspaceIpc } = require('../electron/features/workspace/ipc.cjs');
+const { sanitizeProjectSvg, SVG_MAX_BYTES } = require('../electron/project-svg.cjs');
 
 const webp = 'data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==';
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQ0AAAAASUVORK5CYII=';
@@ -16,6 +17,16 @@ const invalidImages = [null, undefined, 42, {}, 'https://example.com/project.png
   'data:image/png;base64,', 'data:image/png;base64,!!==', 'data:image/png;base64,YWJj',
   'data:image/png;base64,PHN2Zz4=', webp.replace('image/webp', 'image/png'), webp.slice(0, -1),
   `data:image/png;base64,${'A'.repeat(200_000)}`];
+
+const svgUrl = text => `data:image/svg+xml;base64,${Buffer.from(text).toString('base64')}`;
+const svg = sanitizeProjectSvg(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 24"><path fill="currentColor" d="M0 0h48v24z"/></svg>'));
+invalidImages.push(...[
+  '<svg onload="alert(1)"/>', '<svg><script>alert(1)</script></svg>', '<svg><foreignObject/></svg>',
+  '<svg><image href="https://example.com/image.png"/></svg>', '<svg><image href="data:image/png;base64,YWJj"/></svg>',
+  '<!DOCTYPE svg [<!ENTITY x "value">]><svg>&x;</svg>', '<svg><style>@import "https://example.com/a.css";</style></svg>',
+  '<html><svg/></html>', '<svg fill="currentColor"/>', '<svg>' + ' '.repeat(SVG_MAX_BYTES) + '</svg>',
+].map(svgUrl));
+invalidImages.push('data:image/svg+xml;base64,' + Buffer.concat([Buffer.from('<svg>'), Buffer.from([0xff]), Buffer.from('</svg>')]).toString('base64'));
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-project-image-'));
@@ -37,7 +48,7 @@ test('projects without a picture preserve the original workspace format', t => {
 
 test('a project picture persists and clearing it keeps a number-mode opt-out', t => {
   const { store, file, project } = fixture(t);
-  for (const image of [webp, png, jpeg]) {
+  for (const image of [webp, png, jpeg, svg]) {
     store.setProjectImage(project.id, image);
     assert.equal(new WorkspaceStore(file).projects[0].image, image);
     assert.equal(new WorkspaceStore(file).projects[0].imageMode, 'custom');
@@ -153,6 +164,13 @@ test('the secured preload API saves then broadcasts and returns rejected mutatio
   assert.equal(project.imageMode, 'auto'); assert.equal(project.image, png); assert.equal(broadcasts, 3);
   assert.deepEqual(await bridge.setProjectImage(project.id, '', 'auto'), { ok: true, value: undefined });
   assert.equal(new WorkspaceStore(file).projects[0].imageMode, 'auto'); assert.equal(project.image, undefined); assert.equal(broadcasts, 4);
+  const originalSvg = svgUrl('<svg viewBox="0 0 48 24"><path fill="currentColor" d="M0 0h48v24z"/></svg>');
+  assert.deepEqual(await bridge.setProjectImage(project.id, originalSvg, 'custom'), { ok: true, value: undefined });
+  assert.equal(project.image, sanitizeProjectSvg(originalSvg)); assert.match(project.image, /^data:image\/svg\+xml;base64,/);
+  assert.equal(new WorkspaceStore(file).projects[0].image, project.image); assert.equal(broadcasts, 5);
+  const before = project.image;
+  assert.equal((await bridge.setProjectImage(project.id, svgUrl('<svg onload="alert(1)"/>'), 'custom')).ok, false);
+  assert.equal(project.image, before); assert.equal(broadcasts, 5);
 });
 
 test('public state adds a picture without changing the projected terminal or project state', t => {

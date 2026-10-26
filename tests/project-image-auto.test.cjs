@@ -55,6 +55,16 @@ test('discovery yields before starting and uses one queue for startup and newly 
   assert.deepEqual(f.calls, ['/projects/first', '/projects/second', '/projects/added']); assert.equal(maximum, 1); assert.equal(f.broadcasts(), 3);
 });
 
+test('automatic choice accepts only icon sources and a project with only photos keeps its number', async () => {
+  const photos = local('photos'), logo = local('logo');
+  const f = fixture([photos, logo], async folder => ({ candidates: [
+    { path: 'docs/screenshot.png', source: 'readme', image: webp }, { path: 'img/dog.png', source: 'asset', image: webp },
+    ...(folder.endsWith('logo') ? [{ path: 'build/icon.png', source: 'icon', image: png }] : []),
+  ] }));
+  await f.auto.enqueue(photos); await f.auto.enqueue(logo);
+  assert.deepEqual(f.saved, [['logo', png, 'auto']]); assert.equal(photos.image, undefined); assert.equal(f.broadcasts(), 1);
+});
+
 for (const change of ['custom', 'number', 'removed', 'path']) {
   test('a late scan cannot replace a project changed to ' + change, async () => {
     const project = local('late'), gate = deferred(), started = deferred();

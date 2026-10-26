@@ -63,7 +63,7 @@ test('README references, collapsed references, shortcut references and HTML img 
   assert.deepEqual(paths(await scan()), [...names].sort());
 });
 
-test('remote, SVG, data, absolute and escaping README paths never reach the thumbnail callback', async t => {
+test('remote, hostile SVG, data, absolute and escaping README paths never reach the thumbnail callback', async t => {
   const { root, put, scan } = fixture(t); put('../outside.png', 'outside'); put('docs/ok.png');
   put('README.md', [
     '![Remote](https://example.com/a.png)', '![Protocol relative](//example.com/a.png)', '![Data](data:image/png;base64,YWJj)',

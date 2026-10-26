@@ -12,6 +12,7 @@
 .project-image-name { margin: 4px 0 24px; color: var(--grey-muted); font-size: 14px; overflow-wrap: anywhere; }
 .project-image-preview { display: grid; place-items: center; width: 128px; height: 128px; margin: 0 auto; border: 1px solid var(--grey-line); border-radius: 8px; overflow: hidden; }
 .project-image-preview img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.project-image[src^="data:image/svg+xml;"], .project-image-preview img[src^="data:image/svg+xml;"] { object-fit: contain; }
 .project-image-number { color: var(--grey-muted); font: 600 32px var(--font-mono); }
 .project-image-note { margin: 16px 0; color: var(--grey-muted); font-size: 14px; line-height: 1.6; }
 .project-image-options { display: flex; flex-wrap: wrap; gap: 8px; }

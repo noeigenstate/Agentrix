@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { normalizeSSH } = require('./ssh-config.cjs');
+const { sanitizeProjectSvg } = require('./project-svg.cjs');
 const { MODELS: VOICE_MODELS, DEFAULT_MODEL: DEFAULT_VOICE_MODEL } = require('./voice.cjs');
 
 // Local folders once opened as projects, newest first, so a removed project can be added again in one click.
@@ -50,8 +51,9 @@ function cleanShortcuts(input) {
   return Object.fromEntries(SHORTCUT_ACTIONS.filter(action => typeof input[action] === 'string' && SHORTCUT.test(input[action])).map(action => [action, input[action]]));
 }
 
-// Project pictures use the same bounded data URLs as avatars; never retain external paths or SVG content.
+// Persist only bounded raster snapshots or canonical static SVGs, never external paths.
 function validProjectImage(input) {
+  if (typeof input === 'string' && input.startsWith('data:image/svg+xml;')) return sanitizeProjectSvg(input) === input;
   if (typeof input !== 'string' || input.length > AVATAR_MAX_LENGTH || !AVATAR_URL.test(input)) return false;
   const [type, data] = input.slice(5).split(';base64,');
   const bytes = Buffer.from(data, 'base64');
@@ -203,7 +205,7 @@ class WorkspaceStore {
     const project = this.projects.find(item => item.id === id);
     if (!project) throw new Error('项目不存在。');
     if (!PROJECT_IMAGE_MODES.has(mode) || mode === 'number' && image !== '' || mode === 'custom' && !image) throw new Error('无效的项目图片模式。');
-    if (image !== '' && !validProjectImage(image)) throw new Error('请选择有效的 WebP、PNG 或 JPEG 项目图片（不超过 150 KB）。');
+    if (image !== '' && !validProjectImage(image)) throw new Error('请选择有效的项目图片：WebP、PNG、JPEG 不超过 150 KB，静态 SVG 不超过 100 KB。');
     if ((project.image || '') === image && project.imageMode === mode) return;
     const previous = project.image, previousMode = project.imageMode;
     if (image) project.image = image;

@@ -84,12 +84,35 @@ test('a rejected save leaves the draft visible, shows the backend error, and per
 
 test('unsupported and oversized files leave the saved preview untouched without decoding or persisting', async t => {
   const h = fixture(t, { image });
-  for (const file of [{ type: 'image/svg+xml', size: 24 }, { type: 'image/png', size: 10 * 1024 * 1024 + 1 }]) {
+  for (const file of [{ type: 'image/tiff', size: 24 }, { type: 'image/png', size: 10 * 1024 * 1024 + 1 }, { type: 'image/svg+xml', size: 100 * 1024 + 1 }]) {
     await h.pick(file);
     assert.equal(nodes(h.render()).find(node => node.type === 'img').props.src, image);
     assert.ok(nodes(h.render()).some(node => node.props.role === 'alert'));
   }
   assert.deepEqual(h.decoded, []); assert.deepEqual(h.calls, []);
+});
+
+test('manual SVG files retain their original bytes for main validation and never use the raster decoder', async t => {
+  for (const type of ['image/svg+xml', '']) {
+    const text = '<svg viewBox="0 0 48 24"><title>图标</title><path fill="currentColor" d="M0 0h48v24z"/></svg>';
+    const bytes = Uint8Array.from(Buffer.from(text)), h = fixture(t);
+    const input = nodes(h.render()).find(node => node.type === 'input');
+    assert.ok(input.props.accept.includes('image/svg+xml') && input.props.accept.includes('.svg'));
+    await h.pick({ type, name: 'app.svg', size: bytes.length, arrayBuffer: async () => bytes.buffer });
+    const expected = 'data:image/svg+xml;base64,' + Buffer.from(text).toString('base64');
+    assert.equal(nodes(h.render()).find(node => node.type === 'img').props.src, expected);
+    assert.deepEqual(h.decoded, []); h.submit(); await tick();
+    assert.deepEqual(h.calls, [['project-1', expected, 'custom']]);
+  }
+});
+
+test('main refusal of a hostile manual SVG uses the existing dialog error and preserves the saved project', async t => {
+  const h = fixture(t, { image, save: () => ({ ok: false, error: 'Static SVG required' }) });
+  const bytes = Uint8Array.from(Buffer.from('<svg onload="alert(1)"/>'));
+  await h.pick({ type: 'image/svg+xml', name: 'bad.svg', size: bytes.length, arrayBuffer: async () => bytes.buffer });
+  h.submit(); await tick();
+  assert.equal(nodes(h.render()).find(node => node.props.role === 'alert').props.children, 'Static SVG required');
+  assert.equal(h.closed(), 0); assert.equal(h.project.image, image); assert.deepEqual(h.decoded, []);
 });
 
 test('a newer file wins over an older decode and a decode completing after cancel is ignored', async t => {
@@ -235,7 +258,7 @@ test('restoring an empty automatic project explicitly opts into numbering', asyn
   assert.deepEqual(h.calls, [['project-1', '', 'number']]);
 });
 
-test('automatic selection refetches candidates and stages only the first ranked result until save', async t => {
+test('automatic selection refetches candidates and stages only the first ranked icon until save', async t => {
   const first = candidate('public/icon.png'), second = candidate('docs/screenshot.png', 'readme', 'second-image');
   const h = fixture(t, { image, scan: () => listing([first, second]) });
   h.render(); await tick(); h.button('重新自动选择').props.onClick(); await tick();
@@ -248,6 +271,14 @@ test('automatic selection with no candidates permits a mode-only save from numbe
   const h = fixture(t, { mode: 'number' }); h.render(); await tick();
   h.button('重新自动选择').props.onClick(); await tick();
   assert.equal(preview(h).type, 'span'); assert.equal(h.button('保存').props.disabled, false);
+  h.submit(); await tick(); assert.deepEqual(h.calls, [['project-1', '', 'auto']]);
+});
+
+test('automatic reselection ignores screenshots and assets but leaves them available for manual choice', async t => {
+  const choices = [candidate('docs/demo.png', 'readme'), candidate('img/dog.png', 'asset')];
+  const h = fixture(t, { image, mode: 'custom', scan: () => listing(choices) });
+  h.render(); await tick(); h.button('重新自动选择').props.onClick(); await tick();
+  assert.equal(preview(h).type, 'span'); assert.equal(candidateButtons(h).length, 2);
   h.submit(); await tick(); assert.deepEqual(h.calls, [['project-1', '', 'auto']]);
 });
 
@@ -288,7 +319,7 @@ test('failed or invalid choices do not freeze an untouched preview against later
     });
     h.render(); await tick();
     if (failure === 'automatic') { h.button('重新自动选择').props.onClick(); await tick(); }
-    else await h.pick({ type: failure === 'invalid-file' ? 'image/svg+xml' : 'image/png', size: 24 });
+    else await h.pick({ type: failure === 'invalid-file' ? 'image/tiff' : 'image/png', size: 24 });
     assert.ok(nodes(h.render()).some(node => node.props.role === 'alert'));
     h.project.image = image; h.project.imageMode = 'auto'; h.render();
     assert.equal(preview(h).props.src, image); assert.equal(h.button('保存').props.disabled, true);

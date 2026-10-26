@@ -12,11 +12,14 @@ import { waitFor } from './wait.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
 const output = await testRun('project-image-candidates'), profile = path.join(output, 'profile'), home = path.join(output, 'home');
-const projects = ['图标与效果图', '文档与素材', '纯代码项目', '多图素材', '构建图标', '远程项目'].map((name, i) => ({ id: randomUUID(), name,
+const projects = ['图标与效果图', '文档与素材', '纯代码项目', '多图素材', '构建图标', '远程项目', 'SVG 应用图标'].map((name, i) => ({ id: randomUUID(), name,
   path: i === 5 ? '/srv/fixture' : path.join(output, 'project-' + i),
   ...(i === 5 ? { kind: 'ssh', ssh: { host: 'fixture', configFile: null } } : { kind: 'local' }), restore: { terminal: false, codex: false }
 }));
-for (const dir of [profile, home, ...projects.slice(0, 5).map(project => project.path)]) await fs.mkdir(dir, { recursive: true });
+for (const dir of [profile, home, ...projects.filter(project => project.kind === 'local').map(project => project.path)]) await fs.mkdir(dir, { recursive: true });
+const svgIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 24"><path fill="currentColor" d="M0 0h48v24H0z"/></svg>';
+await fs.mkdir(path.join(projects[6].path, 'icons'));
+await fs.writeFile(path.join(projects[6].path, 'icons/app.svg'), svgIcon);
 for (const project of projects.slice(0, 2)) {
   for (const dir of ['public', 'docs/images', 'assets']) await fs.mkdir(path.join(project.path, dir), { recursive: true });
   await fs.copyFile(path.join(root, 'assets/icon.png'), path.join(project.path, 'public/app-icon.png'));
@@ -58,6 +61,22 @@ const open = async i => {
 const cancel = async () => { await dialog().getByRole('button', { name: '取消', exact: true }).click(); await dialog().waitFor({ state: 'detached' }); };
 const save = async () => { const button = dialog().getByRole('button', { name: '保存', exact: true }); await button.scrollIntoViewIfNeeded(); await button.click(); await dialog().waitFor({ state: 'detached' }); };
 const screenshot = async name => { await dialog().screenshot({ path: path.join(output, name) }); report.screenshots.push(name); };
+const svgPixels = async (image, name, size) => {
+  const box = await image.boundingBox(); assert.equal(box.width, size); assert.equal(box.height, size);
+  assert.equal(await image.evaluate(node => getComputedStyle(node).objectFit), 'contain');
+  const png = await image.screenshot({ path: path.join(output, name) }); report.screenshots.push(name);
+  const pixels = await app.evaluate(({ nativeImage }, base64) => {
+    const image = nativeImage.createFromBuffer(Buffer.from(base64, 'base64')), { width, height } = image.getSize(), bitmap = image.toBitmap();
+    const rgb = (x, y) => [...bitmap.subarray((y * width + x) * 4, (y * width + x) * 4 + 3)];
+    let light = 0;
+    for (let at = 0; at < bitmap.length; at += 4) if (bitmap[at] >= 225 && bitmap[at + 1] >= 225 && bitmap[at + 2] >= 225) light++;
+    return { width, height, light, centre: rgb(Math.floor(width / 2), Math.floor(height / 2)), top: rgb(Math.floor(width / 2), 2) };
+  }, png.toString('base64'));
+  assert.ok(pixels.light >= size * size * 0.4, JSON.stringify(pixels));
+  assert.ok(pixels.centre.every(channel => channel >= 235 && channel <= 245), JSON.stringify(pixels));
+  assert.ok(pixels.top.every(channel => channel < 100), 'a non-square viewBox is contained, with dark space above');
+  return { slot: { width: box.width, height: box.height }, ...pixels };
+};
 const preferences = () => page.locator('.settings-paned');
 const row = i => preferences().locator(`[data-project-image-id="${projects[i].id}"]`);
 const thumbnailSettings = async () => {
@@ -77,15 +96,21 @@ const launch = async () => {
 const stop = async () => { if (!app) return; await app.evaluate(({ app }) => app.exit(0)).catch(() => {}); await app.close().catch(() => {}); app = null; };
 try {
   await launch();
-  for (const i of [0, 3, 4]) await waitFor(async () => (await state(i)).image && (await state(i)).imageMode === 'auto', 'default project thumbnail assigned');
+  for (const i of [0, 4, 6]) await waitFor(async () => (await state(i)).image && (await state(i)).imageMode === 'auto', 'default project thumbnail assigned');
   const available = await list(0); assert.ok(available.candidates.length >= 2 && available.candidates.length <= 6);
   assert.ok(available.candidates.some(candidate => candidate.source === 'icon') && available.candidates.some(candidate => candidate.source === 'readme'));
   const automatic = available.candidates[0].image;
   assert.equal(await page.locator('.project-image-dialog, .settings-paned').count(), 0);
   assert.equal((await state(1)).image, legacyCustom);
   assert.equal((await state(0)).image, automatic); assert.equal((await saved(0)).imageMode, 'auto');
-  assert.ok(!(await state(2)).image && !(await state(5)).image); assert.equal(networkRequests, 0);
-  report.checks.push('startup automatically fixes the highest-ranked local thumbnail; code-only and SSH projects retain numbers without network fetches');
+  assert.ok(!(await state(2)).image && !(await state(3)).image && !(await state(5)).image); assert.equal(networkRequests, 0);
+  report.checks.push('startup automatically picks only logos; code-only, generic asset and SSH projects retain numbers without network fetches');
+  const svgCandidates = await list(6);
+  assert.equal(svgCandidates.candidates[0].path, 'icons/app.svg'); assert.equal(svgCandidates.candidates[0].source, 'icon');
+  assert.match((await state(6)).image, /^data:image\/svg\+xml;base64,/);
+  assert.equal(Buffer.from((await state(6)).image.split(',')[1], 'base64').toString('utf8'), svgIcon.replace('currentColor', '#f0f0f0'));
+  report.svgHeader = await svgPixels(panel(6).locator('.panel-header .project-image'), 'svg-header-24.png', 24);
+  await panel(6).screenshot({ path: path.join(output, 'svg-card.png') }); report.screenshots.push('svg-card.png');
 
   await panel(0).getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await state(0)).shellReady, 'isolated shell ready');
@@ -99,6 +124,13 @@ try {
     const data = await page.evaluate(async id => (await window.agentrix.attachTerminal(id)).value.data, projects[0].id);
     assert.ok(stripVTControlCharacters(data).replace(/\s/g, '').includes('CANDIDATES_UNSENT_DRAFT'));
   };
+  await panel(0).locator('.xterm-helper-textarea').focus();
+  await page.keyboard.press('Control+Shift+ArrowLeft');
+  const svgSwitch = panel(6).locator('.panel-nav-hud .project-image'); await svgSwitch.waitFor();
+  report.svgSwitch = await svgPixels(svgSwitch, 'svg-switch-48.png', 48);
+  await panel(6).screenshot({ path: path.join(output, 'svg-switch-card.png') }); report.screenshots.push('svg-switch-card.png');
+  await unchanged();
+  report.checks.push('viewBox-only currentColor SVG becomes the automatic vector snapshot; 24px header and 48px switch pixels are light #f0f0f0 with contained proportions');
   await open(0);
   // The dialog looks for candidates after it opens.
   await waitFor(async () => await dialog().locator('.project-image-candidate').count() === available.candidates.length, 'candidates listed');
@@ -128,9 +160,23 @@ try {
     assert.ok(result.candidates.every(candidate => !path.isAbsolute(candidate.path) && !candidate.path.split('/').includes('..')));
     if (i === 4) assert.equal(result.candidates[0].source, 'icon');
     await open(i); await screenshot(i === 3 ? 'bounded-asset-candidates.png' : 'build-icon-candidates.png'); await cancel();
-    assert.equal((await state(i)).image, result.candidates[0].image); assert.equal((await state(i)).imageMode, 'auto');
+    if (i === 4) { assert.equal((await state(i)).image, result.candidates[0].image); assert.equal((await state(i)).imageMode, 'auto'); }
+    else { assert.ok(!(await state(i)).image); assert.equal(await panel(i).locator('.panel-index:visible').count(), 1); }
   }
   await open(2); await dialog().getByText(/没有找到/).waitFor(); await screenshot('code-only-empty.png'); await cancel();
+  await open(2);
+  await dialog().locator('input[type=file]').setInputFiles({ name: 'manual.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(svgIcon) });
+  await waitFor(async () => (await dialog().locator('.project-image-preview img').getAttribute('src').catch(() => ''))?.startsWith('data:image/svg+xml;base64,'), 'manual SVG preview');
+  await save(); assert.equal((await state(2)).image, (await state(6)).image); assert.equal((await state(2)).imageMode, 'custom');
+  await open(2); await screenshot('manual-svg-dialog.png');
+  await dialog().locator('input[type=file]').setInputFiles({ name: 'hostile.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg onload="alert(1)"/>') });
+  await waitFor(async () => (await dialog().locator('.project-image-preview img').getAttribute('src')) !== (await state(2)).image, 'hostile SVG staged');
+  await dialog().getByRole('button', { name: '保存', exact: true }).click();
+  await dialog().getByRole('alert').filter({ hasText: /静态 SVG/ }).waitFor();
+  assert.equal((await state(2)).image, (await state(6)).image); await cancel();
+  await open(2); await dialog().getByRole('button', { name: '恢复原样', exact: true }).click(); await save();
+  assert.ok(!(await state(2)).image);
+  report.checks.push('manual SVG stays SVG through main sanitization and persistence; hostile SVG is refused in the existing error area without replacing the saved image');
   assert.equal((await list(5)).unavailable, 'ssh');
   await open(5); await dialog().getByText(/远程项目暂不/).waitFor(); await cancel();
   report.checks.push('portable asset and build-icon fixtures use bounded relative candidates; legacy custom images remain fixed and SSH remains manual-only');

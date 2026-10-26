@@ -5,6 +5,9 @@ import { t } from '../../shared/i18n';
 import { AVATAR_MAX_BYTES, AVATAR_TYPES, avatarFromFile } from '../settings/avatar-image';
 import './project-image.css';
 
+const SVG_MAX_BYTES = 100 * 1024;
+const PROJECT_IMAGE_TYPES = [...AVATAR_TYPES, 'image/svg+xml', '.svg'];
+
 export function ProjectImageDialog({ project, index, onClose }: { project: Project; index: number; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -37,7 +40,7 @@ export function ProjectImageDialog({ project, index, onClose }: { project: Proje
       setRemote(result.value.unavailable === 'ssh');
       if (automatic && choice === request.current) {
         dirty.current = true;
-        setImage(result.value.candidates[0]?.image || ''); setMode('auto');
+        setImage(result.value.candidates.find(candidate => candidate.source === 'icon')?.image || ''); setMode('auto');
       }
     } catch { if (current === scanRequest.current) setScanError(t('未能查找项目图片，请重试')); }
     finally {
@@ -62,12 +65,17 @@ export function ProjectImageDialog({ project, index, onClose }: { project: Proje
   const pick = async (file: File | undefined) => {
     if (!file) return;
     const current = ++request.current;
-    if (!AVATAR_TYPES.includes(file.type) || file.size > AVATAR_MAX_BYTES) {
-      setProcessing(false); setError(t('请选择 10 MB 以内的 PNG、JPG、WebP 或 GIF 图片')); return;
+    const svg = file.type === 'image/svg+xml' || /\.svg$/i.test(file.name);
+    if (svg && file.size > SVG_MAX_BYTES) {
+      setProcessing(false); setError(t('请选择 100 KB 以内的静态 SVG 图片')); return;
+    }
+    if (!svg && (!AVATAR_TYPES.includes(file.type) || file.size > AVATAR_MAX_BYTES)) {
+      setProcessing(false); setError(t('请选择 10 MB 以内的 PNG、JPG、WebP、GIF 或 100 KB 以内的静态 SVG 图片')); return;
     }
     setProcessing(true); setError('');
     try {
-      const next = await avatarFromFile(file);
+      // Keep the original SVG bytes for main's UTF-8/static-picture validation; no canvas or DOM insertion.
+      const next = svg ? `data:image/svg+xml;base64,${btoa(Array.from(new Uint8Array(await file.arrayBuffer()), byte => String.fromCharCode(byte)).join(''))}` : await avatarFromFile(file);
       if (current === request.current) { dirty.current = true; setImage(next); setMode('custom'); }
     } catch { if (current === request.current) setError(t('这张图片无法读取')); }
     finally { if (current === request.current) setProcessing(false); }
@@ -93,9 +101,9 @@ export function ProjectImageDialog({ project, index, onClose }: { project: Proje
       <div className="project-image-preview" aria-label={t('项目图片预览')} data-audit-ignore>
         {image ? <img src={image} alt={t('项目图片预览')} draggable={false} data-audit-ignore /> : <span className="project-image-number">{String(index + 1).padStart(2, '0')}</span>}
       </div>
-      <p id={noteId} className="project-image-note">{t('图片只在本机处理，居中裁成正方形。GIF 仅使用首帧。保存后显示在卡片标题和切换提示中。')}</p>
+      <p id={noteId} className="project-image-note">{t('图片只在本机处理。SVG 保留矢量并完整显示；其他图片居中裁成正方形，GIF 仅使用首帧。保存后显示在卡片标题和切换提示中。')}</p>
       <div className="project-image-options">
-        <input ref={input} type="file" accept={AVATAR_TYPES.join(',')} hidden aria-label={t('上传项目图片')} disabled={saving || processing} onChange={event => { void pick(event.target.files?.[0]); event.target.value = ''; }} />
+        <input ref={input} type="file" accept={PROJECT_IMAGE_TYPES.join(',')} hidden aria-label={t('上传项目图片')} disabled={saving || processing} onChange={event => { void pick(event.target.files?.[0]); event.target.value = ''; }} />
         <button type="button" className="button secondary" disabled={saving || processing} onClick={() => input.current?.click()}>{processing ? t('正在处理图片…') : image ? t('更换图片') : t('选择图片')}</button>
         <button type="button" className="button secondary" disabled={saving || processing || scanning} onClick={() => void scan(true)}>{t('重新自动选择')}</button>
         <button type="button" className="button secondary" disabled={saving || processing || (!image && mode === 'number')} onClick={() => choose('', 'number')}>{t('恢复原样')}</button>
