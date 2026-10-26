@@ -105,8 +105,10 @@
 .new-work-bar { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--grey-muted); }
 .new-work-bar .voice-button { flex: none; margin-left: auto; width: 34px; height: 34px; border-radius: 8px; }
 /* Inside the composer the pickers are its own controls: no outline of their own, a fill step on hover and while open. */
-.new-work-select { flex: 0 1 auto; min-width: 120px; max-width: 200px; }
+.new-work-select { flex: 0 1 auto; min-width: 0; max-width: 200px; }
+/* Without an outline the picker hugs its name, so the caret sits right after it. */
 .new-work-input .new-work-select { border-color: transparent; }
+.new-work-input .new-work-select .select-value { flex: 0 1 auto; }
 .new-work-input .new-work-select:is(:hover:not(:disabled), [aria-expanded="true"]) { border-color: transparent; background: var(--grey-selected); }
 .new-work-select.is-agent { margin-left: auto; }
 .new-work-select.is-agent ~ .voice-button { margin-left: 0; }
