@@ -8,7 +8,8 @@
   --grey-hover: #2d2d2d; --grey-selected: #404040; --grey-strong: #f0f0f0; --grey-on-strong: #191919;
   --grey-line: #404040; --grey-focus: #ffffff;
   --grey-ink: #f0f0f0; --grey-muted: #a3a3a3; --grey-faint: #8c8c8c;
-  /* The agents' brand marks are the one deliberate colour in the chrome (sampled from the owner's reference). */
-  --agent-claude: #e4845c; --agent-codex: #4ff5bd;
+  /* The agents' official mark colours, the one deliberate colour in the chrome: Claude Code's coral; Codex's mark is a
+     #b1a7ff to #3941ff gradient, of which its middle blue reads as one colour on a dark tile. */
+  --agent-claude: #d97757; --agent-codex: #7a9dff;
   --select-value: #f3f4f6; --select-item: #e5e7eb; --select-caret: #9ca3af;
 }

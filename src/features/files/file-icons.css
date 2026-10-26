@@ -1,12 +1,25 @@
-/* File marks in one grey: a tile of the secondary grey with the mark cut out of it in the page grey; the type is told by the mark's shape, not a hue. */
-.fi { display: block; flex-shrink: 0; shape-rendering: geometricPrecision; overflow: visible; --fi: var(--grey-muted); --fi-mark: var(--grey-page); --fi-hl: var(--grey-page); }
+/* File and folder marks keep their type colours (content, like syntax colour); a mark is white unless its tile is light. */
+:root {
+  --fi-blue: #5a97ee; --fi-green: #4fb27a; --fi-yellow: #f0c24f; --fi-orange: #ee8f4b; --fi-red: #e0644f;
+  --fi-purple: #9a7bea; --fi-indigo: #6f7cf0; --fi-teal: #3fb7a2; --fi-cyan: #3fb8d4;
+  --fi-grey: #7d889a; --fi-slate: #7f98ba; --fi-dark: #3d4656; --fi-page: #8a97ab;
+  --fi-ink-dark: #3a2c05;
+}
+.fi { display: block; flex-shrink: 0; shape-rendering: geometricPrecision; overflow: visible; --fi-mark: #fff; --fi-hl: #fff; }
+.fi[data-tone="blue"] { --fi: var(--fi-blue); } .fi[data-tone="green"] { --fi: var(--fi-green); }
+.fi[data-tone="yellow"] { --fi: var(--fi-yellow); --fi-mark: var(--fi-ink-dark); } .fi[data-tone="orange"] { --fi: var(--fi-orange); }
+.fi[data-tone="red"] { --fi: var(--fi-red); } .fi[data-tone="purple"] { --fi: var(--fi-purple); }
+.fi[data-tone="indigo"] { --fi: var(--fi-indigo); } .fi[data-tone="teal"] { --fi: var(--fi-teal); }
+.fi[data-tone="cyan"] { --fi: var(--fi-cyan); } .fi[data-tone="grey"] { --fi: var(--fi-grey); }
+.fi[data-tone="slate"] { --fi: var(--fi-slate); } .fi[data-tone="dark"] { --fi: var(--fi-dark); }
+.fi[data-tone="page"] { --fi: var(--fi-page); }
 .fi-t { fill: var(--fi); } .fi-edge { stroke: var(--fi); stroke-width: 2; stroke-linejoin: round; }
 .fi-back { fill: var(--fi); opacity: .72; }
 .fi-hl { fill: var(--fi-hl); opacity: .3; }
 .fi-m { fill: none; stroke: var(--fi-mark); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .fi-m .f { fill: var(--fi-mark); stroke: none; }
 .fi-m .sq { stroke-linecap: butt; }
-.fi-m .fi-m2 { stroke: var(--fi-mark); }
+.fi-m .fi-m2 { stroke: #f4cf5c; }
 /* Folder marks are drawn a fifth larger, so their stroke is thinned to stay about 1 unit. */
 .fi-m.fi-fm { stroke-width: .85; }
 .fi-m.fi-thin { stroke-width: 1; }
