@@ -1,7 +1,8 @@
 /* The reading view: the agent's conversation laid out as a document over the terminal it belongs to. */
 /* The reading view's text is this share of the size each rule names (font sizes here and in the other reading styles). */
 :root { --reading-text: .85; }
-.reading-view { --reading-left: 20px; --reading-right: 20px; position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; min-height: 0; background: var(--grey-page); }
+.reading-view { --reading-left: 20px; --reading-right: 20px; position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; min-height: 0; background: var(--grey-pane); }
+.focus-mode .reading-view { background: var(--grey-page); }
 .terminal-split-body:has(> .reading-view) > .terminal-host { visibility: hidden; }
 .reading-scroll-area { position: relative; flex: 1; min-height: 0; display: flex; }
 .reading-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 14px calc(var(--reading-right) - 6px) 8px var(--reading-left); display: flex; flex-direction: column; font: 400 calc(13px * var(--reading-text))/1.7 var(--font-ui); color: var(--grey-ink); overscroll-behavior: contain; overflow-anchor: none; }

@@ -9,6 +9,7 @@ import { AgentsSettings } from '../agents/AgentsSettings';
 import { isMac, isLinux } from '../../shared/platform';
 import { TerminalFontSettings } from './TerminalFontSettings';
 import { UserAvatarSetting } from './UserAvatarSetting';
+import { ThemeSetting } from './ThemeSetting';
 import { Select } from '../../shared/Select';
 import { ProjectImagesSettings } from './ProjectImagesSettings';
 
@@ -23,7 +24,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, localShe
   const [projectImages, setProjectImages] = useState(false);
   // One category at a time: the sidebar chooses it and the pane beside it shows only that category.
   const sections = [
-    { id: 'appearance', title: t('外观'), hint: t('语言、材质与动画'), icon: <Palette size={17} /> },
+    { id: 'appearance', title: t('外观'), hint: t('主题、语言、材质与动画'), icon: <Palette size={17} /> },
     { id: 'notifications', title: t('提醒'), hint: t('系统通知与提示音'), icon: <Bell size={17} /> },
     { id: 'terminal', title: t('终端与编辑'), hint: t('终端、会话恢复与编辑器'), icon: <TerminalIcon size={17} /> },
     { id: 'agents', title: t('编码助手'), hint: t('Codex 与 Claude Code'), icon: <Robot size={17} /> },
@@ -51,6 +52,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, localShe
         <header className="settings-main-head"><h3>{projectImages ? t('项目缩略图') : current.title}</h3><p>{projectImages ? t('自动选择、固定图片与原有编号') : current.hint}</p></header>
         <div className="settings-pane" ref={pane}>
       <section className="settings-section" id="settings-appearance" aria-label={t('外观')} hidden={current.id !== 'appearance' || projectImages}>
+      <ThemeSetting theme={settings.theme} update={theme => update({ theme })} />
       <label className="setting-row"><span><Globe size={19} /><span><b>{t('语言')}</b><small>{t('界面与提示的语言')}</small></span></span><Select label={t('语言')} value={settings.language} onChange={value => update({ language: value as Settings['language'] })} options={[{ value: 'zh', label: '中文' }, { value: 'en', label: 'English' }]} /></label>
       <UserAvatarSetting avatar={settings.userAvatar} update={userAvatar => update({ userAvatar })} />
       <div className="setting-row" data-project-images-setting><span><ImageSquare size={19} /><span><b>{t('项目缩略图')}</b><small>{t('自动选择、固定图片与原有编号')}</small></span></span><button type="button" className="button secondary" data-project-images-open onClick={() => { setProjectImages(true); pane.current?.scrollTo({ top: 0 }); }}>{t('管理…')}</button></div>

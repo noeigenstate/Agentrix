@@ -72,7 +72,7 @@ try {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1600, 900));
   await page.waitForSelector('.project-panel');
-  assert.equal('theme' in (await state()).settings, false);
+  assert.equal((await state()).settings.theme, 'mono');
   for (let index = 0; index < 4; index++) {
     await panel(index).getByRole('button', { name: '只打开终端', exact: true }).click();
     await waitFor(async () => (await state()).projects[index].shellReady, 'native terminal ready');
@@ -159,8 +159,8 @@ try {
   await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await fs.appendFile(transcript, record('task_complete', 'visual-turn'));
   await waitFor(async () => panel(0).evaluate(node => node.classList.contains('attention-active')), 'a new completion lights its card');
-  // A finished round marks its card steadily: the white needs-you edge until it is viewed, never a breath.
-  assert.equal(await breathing(0), 0, 'a finished round does not breathe');
+  // A fresh finished round breathes the white needs-you edge (the ring's opacity only) for its first 9 s, then it stays steady until viewed.
+  assert.equal(await breathing(0), 1, 'a fresh finished round breathes its ring');
   const lit = await panel(0).evaluate(node => ({ edge: getComputedStyle(node.querySelector('.panel-signal')).boxShadow, dot: node.querySelector('.status-dot').getAnimations().length }));
   assert.deepEqual(lit, { edge: 'rgb(255, 255, 255) 0px 0px 0px 2px inset', dot: 0 }, `a steady white edge and a still dot: ${JSON.stringify(lit)}`);
   const text = await panel(0).locator('.xterm-rows').evaluate(node => ({ opacity: getComputedStyle(node).opacity, animation: getComputedStyle(node).animationName }));
@@ -170,7 +170,7 @@ try {
   // Rerender via settings changes and repeated lifecycle callbacks must not restart an old alert.
   await fs.appendFile(transcript, record('task_complete', 'visual-turn'));
   await page.evaluate(() => window.agentrix.settings({ fontSize: 16 }));
-  assert.equal(await breathing(0), 0); assert.equal((await state()).projects[0].lastCompletedAt, completed);
+  assert.equal(await breathing(0), 1); assert.equal((await state()).projects[0].lastCompletedAt, completed);
   await page.evaluate(id => window.agentrix.acknowledge(id), projects[0].id);
   await waitFor(async () => panel(0).evaluate(node => node.classList.contains('round-complete')), 'viewed automatic round becomes the steady grey edge');
   assert.equal(await breathing(0), 0);
@@ -184,12 +184,13 @@ try {
   assert.equal(await breathing(0), 0, 'working again stays steady');
   await fs.appendFile(transcript, record('task_complete', 'next-turn'));
   await waitFor(async () => panel(0).evaluate(node => node.classList.contains('attention-active')), 'the next finished turn lights its card');
-  // Whatever the motion setting and the system's preference, a finished card is lit steadily and never breathes.
+  // A fresh finished card breathes its ring only with motion on; "off" and "system" under reduced motion keep it a steady white ring.
   const setMotion = async mode => { await page.evaluate(mode => window.agentrix.settings({ focusAnimation: mode }), mode); await page.waitForFunction(mode => document.documentElement.dataset.motion === mode, mode); };
   for (const [preference, mode] of [['no-preference', 'smooth'], ['reduce', 'smooth'], ['reduce', 'system'], ['no-preference', 'off'], ['no-preference', 'smooth']]) {
     await page.emulateMedia({ reducedMotion: preference });
     await setMotion(mode);
-    assert.equal(await breathing(0), 0, `no breathing with ${mode} motion and ${preference}`);
+    const still = mode === 'off' || mode === 'system' && preference === 'reduce';
+    assert.equal(await breathing(0), still ? 0 : 1, `${still ? 'no breathing' : 'breathing'} with ${mode} motion and ${preference}`);
   }
   await page.screenshot({ path: path.join(output, 'finished-steady.png') });
   assert.deepEqual(errors, []);

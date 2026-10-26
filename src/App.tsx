@@ -11,6 +11,7 @@ import { pruneReadingCli } from './features/reading/reading-terminal';
 import { setReading } from './features/reading/reading-mode';
 import { useProjectFocusMotion } from './features/workspace/useProjectFocusMotion';
 import { applyMotion } from './shared/motion';
+import { applyTheme } from './shared/themes';
 import { setTerminalRenderer } from './features/terminal/terminal-renderer';
 import { terminalFontFamily } from './features/terminal/terminal-font';
 import { VoiceOverlay } from './features/voice/VoiceButton';
@@ -56,6 +57,7 @@ export function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   useLayoutEffect(() => { setUserAvatar(workspace?.settings.userAvatar ?? ''); }, [workspace?.settings.userAvatar]);
   useEffect(() => { applyMotion(workspace?.settings.focusAnimation || 'smooth'); }, [workspace?.settings.focusAnimation]);
+  useEffect(() => { applyTheme(workspace?.settings.theme); }, [workspace?.settings.theme]);
   // The surface (glass or solid) is a mode of the whole stylesheet, like the theme.
   useEffect(() => { const surface = workspace?.settings.surface || 'glass'; document.documentElement.dataset.surface = surface === 'glass' && workspace?.settings.glassBackground === 'desktop' && workspace?.desktopGlass?.active ? 'desktop-glass' : surface; }, [workspace?.settings.surface, workspace?.settings.glassBackground, workspace?.desktopGlass?.active]);
   useEffect(() => { document.documentElement.dataset.desktopGlassCompatibility = String(!!workspace?.desktopGlass?.compatibility && (!!workspace?.desktopGlass?.active || !!workspace?.desktopGlass?.failed)); }, [workspace?.desktopGlass?.compatibility, workspace?.desktopGlass?.active, workspace?.desktopGlass?.failed]);

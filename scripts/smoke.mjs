@@ -224,7 +224,8 @@ try {
   }));
   assert.equal(animation.panel, 'none', 'the reading surface never flashes');
   assert.ok(animation.lit, 'a finished turn lights its card');
-  assert.deepEqual(animation.lights.map(([name]) => name), ['none', 'none'], 'ring and dot stay steady after a finished turn: no breathing');
+  assert.deepEqual(animation.lights.map(([name]) => name), ['signal-breathe', 'none'], 'a fresh finished turn breathes its ring, never the dot');
+  assert.deepEqual(animation.lights[0].slice(1), ['2s', 'infinite'], 'the breath is a 2 s loop');
   console.log('PASS: parent lifecycle marks the card with the white needs-you edge; unrelated notify callbacks are ignored');
 
   const projectOrder = () => page.locator('.agentrix > .project-slot > .project-panel').evaluateAll(panels => panels.map(panel => panel.dataset.projectId));

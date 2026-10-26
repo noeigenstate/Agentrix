@@ -10,7 +10,7 @@ export const darkTerminalTheme: ITheme = {
   scrollbarSliderBackground: '#40404088', scrollbarSliderHoverBackground: '#8c8c8c88', scrollbarSliderActiveBackground: '#a3a3a3aa',
 };
 
-// The background stays clear: the card's #191919 well shows through. Regular and bold text share one contrast floor.
+// The background stays clear: the card's own #242424 body shows through (#191919 in focus mode). Regular and bold text share one contrast floor, which xterm applies against that grey.
 export const terminalOptions = { fontWeight: '400', fontWeightBold: '700', minimumContrastRatio: 4.5 } as const;
 
 export function terminalTheme(): ITheme {

@@ -113,3 +113,19 @@ dialog { color: var(--grey-ink); }
 .tour-bubble::before { content: ''; position: absolute; left: var(--tour-arrow); width: 12px; height: 12px; margin-left: -6px; background: var(--grey-pane); border: 1px solid var(--grey-line); border-right: 0; border-bottom: 0; display: none; }
 .tour-arrow-up::before { display: block; top: -7px; transform: rotate(45deg); }
 .tour-arrow-down::before { display: block; bottom: -7px; transform: rotate(225deg); }
+
+/* The theme picker: one tile per theme (radius 8, like a row); the chosen tile takes the selected fill and a white ring, the radio itself is hidden. */
+.theme-setting { display: flex; flex-wrap: wrap; gap: 12px; min-width: 0; margin: 0; padding: 16px 0; border: 0; border-bottom: 1px solid var(--grey-line); }
+.theme-setting legend { float: left; width: 100%; padding: 0; font-size: 13px; font-weight: 600; }
+.theme-option { display: flex; flex: 1 1 200px; align-items: center; gap: 12px; min-width: 0; max-width: 320px; padding: 8px; border-radius: 8px; background: var(--grey-row); cursor: pointer; }
+.theme-option:hover { background: var(--grey-hover); }
+.theme-option:has(input:checked) { background: var(--grey-selected); box-shadow: inset 0 0 0 1px var(--grey-focus); }
+.theme-option:has(input:focus-visible) { outline: 2px solid var(--grey-focus); outline-offset: 2px; }
+.theme-option input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.theme-preview { display: flex; flex: none; flex-direction: column; gap: 4px; width: 56px; height: 40px; padding: 4px; border: 1px solid var(--swatch-line); border-radius: 8px; background: var(--swatch-page); }
+.theme-preview i { display: block; border-radius: 0; background: var(--swatch-pane); }
+.theme-preview i:first-child { height: 4px; background: var(--swatch-line); }
+.theme-preview i:last-child { flex: 1; border-left: 8px solid var(--swatch-ink); }
+.theme-option-text { min-width: 0; }
+.theme-option-text b { display: block; font-size: 13px; font-weight: 600; }
+.theme-option-text small { display: block; margin-top: 4px; font-size: 12px; line-height: 20px; color: var(--grey-muted); }

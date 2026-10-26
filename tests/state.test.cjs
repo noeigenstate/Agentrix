@@ -158,32 +158,32 @@ test('corrupt workspace is copied aside before a new workspace can be saved', t 
   assert.equal(fs.readFileSync(path.join(directory, backups[0]), 'utf8'), '{ invalid');
 });
 
-test('new workspaces and settings have no theme choice', t => {
+test('new workspaces and settings start on the first theme', t => {
   const { store, file } = fixture(t);
-  assert.equal('theme' in store.settings, false);
-  assert.equal('theme' in cleanSettings(), false);
-  assert.equal('theme' in new WorkspaceStore(file).settings, false);
+  assert.equal(store.settings.theme, 'mono');
+  assert.equal(cleanSettings().theme, 'mono');
+  assert.equal(new WorkspaceStore(file).settings.theme, 'mono');
 });
 
-test('legacy theme values are discarded on load and subsequent settings updates', t => {
+test('legacy theme values fall back to the first theme on load and on settings updates', t => {
   const { file } = fixture(t);
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-  for (const theme of ['retired', 'catalina', '', null, 42, { id: 'retired' }]) {
+  for (const theme of ['retired', 'catalina', 'mono-amber', '', null, 42, { id: 'retired' }]) {
     fs.writeFileSync(file, JSON.stringify({ ...saved, settings: { ...saved.settings, theme, fontSize: 16 } }));
     const restored = new WorkspaceStore(file);
     assert.equal(restored.warning, null);
-    assert.equal('theme' in restored.settings, false);
+    assert.equal(restored.settings.theme, 'mono');
     assert.equal(restored.settings.fontSize, 16);
     assert.deepEqual(restored.projects.map(project => project.id), saved.projects.map(project => project.id));
     restored.updateSettings({ theme, fontSize: 14 });
-    assert.equal('theme' in new WorkspaceStore(file).settings, false);
-    assert.equal('theme' in JSON.parse(fs.readFileSync(file, 'utf8')).settings, false);
+    assert.equal(new WorkspaceStore(file).settings.theme, 'mono');
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).settings.theme, 'mono');
     assert.equal(restored.settings.fontSize, 14);
   }
 });
 
 test('settings reject invalid layout and font values', () => {
-  assert.deepEqual(cleanSettings({ columns: 999, fontSize: -2, notifications: 'yes', sound: false }), { startView: 'decisions', fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', focusAnimation: 'smooth', language: 'en', surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', shortcuts: {}, guideVersion: '', shell: 'powershell', notifications: true, sound: false, closeToTray: true, explorerCollapsed: false, restoreSessions: true, autoSave: true, activityPane: true, voiceModel: 'sensevoice' });
+  assert.deepEqual(cleanSettings({ columns: 999, fontSize: -2, notifications: 'yes', sound: false }), { startView: 'decisions', fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', focusAnimation: 'smooth', language: 'en', theme: 'mono', surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', shortcuts: {}, guideVersion: '', shell: 'powershell', notifications: true, sound: false, closeToTray: true, explorerCollapsed: false, restoreSessions: true, autoSave: true, activityPane: true, voiceModel: 'sensevoice' });
   // The spoken notice is gone: its old settings are dropped.
   const old = cleanSettings({ announce: true, announcePhrase: '{项目}', summary: { mode: 'local' } });
   assert.equal('announce' in old || 'announcePhrase' in old || 'summary' in old, false);
@@ -200,6 +200,8 @@ test('settings reject invalid layout and font values', () => {
   assert.deepEqual(cleanSettings({ shortcuts: { search: 'Ctrl+Shift+K', addProject: 'A', voice: 'Alt+V', overview: 'F6', settings: 'Ctrl+rm', nextProject: 'Ctrl+Tab', unknown: 'Ctrl+Q' } }).shortcuts, { search: 'Ctrl+Shift+K', voice: 'Alt+V', overview: 'F6', nextProject: 'Ctrl+Tab' }, 'only valid combinations for known actions are kept');
   assert.deepEqual(cleanSettings({ shortcuts: { projectAbove: 'Ctrl+Shift+Up', projectBelow: 'Shift+Down', previousProject: 'Alt+Left' } }).shortcuts, { projectAbove: 'Ctrl+Shift+Up', previousProject: 'Alt+Left' }, 'an arrow needs Ctrl or Alt with it');
   assert.equal(cleanSettings({ language: 'en' }).language, 'en');
+  for (const theme of [undefined, 'catalina', 'mono-amber', 7]) assert.equal(cleanSettings({ theme }).theme, 'mono');
+  assert.equal(cleanSettings({ theme: 'mono' }).theme, 'mono');
   assert.equal(cleanSettings({ focusAnimation: 'invalid' }).focusAnimation, 'smooth');
   assert.equal(cleanSettings({ focusAnimation: 'system' }).focusAnimation, 'system');
   assert.equal(cleanSettings({ focusAnimation: 'off' }).focusAnimation, 'off');

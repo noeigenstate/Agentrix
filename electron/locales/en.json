@@ -707,7 +707,7 @@
   "API 密钥格式不正确。": "That does not look like an API key.",
   "此系统无法加密保存密钥，未保存。": "This system cannot encrypt the key, so it was not saved.",
   "编码助手没有给出总结：可能未安装、未登录，或超过了 30 秒。": "The coding assistant gave no summary: it may not be installed or signed in, or it took over 30 seconds.",
-  "语言、材质与动画": "Language, surface and motion",
+  "主题、语言、材质与动画": "Theme, language, surface and motion",
   "系统通知与提示音": "System notifications and alert sound",
   "终端、会话恢复与编辑器": "Terminals, session restore and the editor",
   "Codex 与 Claude Code": "Codex and Claude Code",
@@ -1424,5 +1424,8 @@
   "重新自动选择": "Choose automatically again",
   "无效的项目图片模式。": "Invalid project image mode.",
   "管理…": "Manage…",
-  "返回外观": "Back to appearance"
+  "返回外观": "Back to appearance",
+  "主题": "Theme",
+  "黑底白字": "Black and white",
+  "黑色底，白色文字，只用灰阶": "Black background, white text, greys only"
 }

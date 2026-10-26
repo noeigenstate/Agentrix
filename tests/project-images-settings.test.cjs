@@ -79,7 +79,7 @@ function settingsDialogFixture(t, props = {}) {
   const components = {
     '../voice/VoiceButton': { VoiceModelSetting: empty }, '../shortcuts/ShortcutSettings': { ShortcutSettings: empty },
     '../agents/AgentsSettings': { AgentsSettings: empty }, './TerminalFontSettings': { TerminalFontSettings: empty },
-    './UserAvatarSetting': { UserAvatarSetting: Avatar }, './ProjectImagesSettings': { ProjectImagesSettings: List },
+    './UserAvatarSetting': { UserAvatarSetting: Avatar }, './ThemeSetting': { ThemeSetting: empty }, './ProjectImagesSettings': { ProjectImagesSettings: List },
   };
   mod.require = name => name === 'react' ? hooks : name === '@phosphor-icons/react' ? new Proxy({}, { get: () => empty })
     : name === '../../shared/i18n' ? { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (_match, key) => values[key]), currentLanguage: () => 'zh' }
