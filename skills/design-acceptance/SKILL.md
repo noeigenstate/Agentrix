@@ -48,7 +48,8 @@ PASS/FAIL with the screenshot and what was measured.
 
 - Six greys from the owner, one token set (`--grey-*` in `src/shared/styles/themes.css`): canvas #191919, panel #242424,
   input/hover #2D2D2D, border/selected #404040, secondary text #A3A3A3, primary text #F0F0F0. Derived: #8c8c8c quiet
-  state, #fff focus. Content keeps its colour (ANSI output, syntax, diff bands, images); chrome never does.
+  state, #fff focus. Content keeps its colour (ANSI output, syntax, diff bands, images); chrome never does, except
+  the Claude Code and Codex marks, which keep their brand colours (`--agent-claude`, `--agent-codex`).
 - Radii: 0 for layout regions, 16 for real cards, menus and dialogs, 12 for composers and dropdown triggers, 8 for
   buttons, rows and wells, pill for tags. Layout regions are separated by a grey step and spacing, not by cards.
 - No glass, wallpaper, glow or gradients. The one shadow is the dropdown menu's. State reads by fill step, ring, tag
