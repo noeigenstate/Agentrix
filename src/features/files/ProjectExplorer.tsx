@@ -5,7 +5,7 @@ import {
   GitBranch, LinkSimple, SidebarSimple, SpinnerGap, FilePlus, FolderPlus, Clipboard,
 } from '@phosphor-icons/react';
 import type { DirectoryListing, FileEntry, Project } from '../../shared/types';
-import { fileIcon, folderIcon } from './file-icons';
+import { fileIcon, folderIcon, isGeneratedFolder } from './file-icons';
 import { useExplorerFileActions } from './ExplorerFileActions';
 import { GitBadge, GitPanel, type GitOpenMode } from '../git/GitPanel';
 import { gitDecorations, gitMark, type GitDecoration } from '../git/git-status';
@@ -17,7 +17,7 @@ import { shortcut } from '../shortcuts/shortcuts';
 const gitTitle = (title: string) => title.split(' · ').map(part => t(part)).join(' · ');
 
 function FileIcon({ entry, open = false }: { entry: FileEntry; open?: boolean }) {
-  if (entry.kind === 'directory') return folderIcon(entry.name, open);
+  if (entry.kind === 'directory') return folderIcon(open);
   if (entry.kind === 'link') return <LinkSimple className="file-icon" size={15} />;
   return fileIcon(entry.name);
 }
@@ -60,6 +60,7 @@ type NodeProps = {
 function TreeNode(props: NodeProps) {
   const { projectId, entry, depth, expanded, revision, enabled, selectedFile, onToggle, onSelect, selected, choose, contextMenu } = props;
   const isDirectory = entry.kind === 'directory';
+  const generated = isDirectory && isGeneratedFolder(entry.name);
   const root = depth < 0;
   const open = isDirectory && (depth < 0 || expanded.has(entry.path));
   const [listing, setListing] = useState<DirectoryListing | null>(null);
@@ -104,7 +105,7 @@ function TreeNode(props: NodeProps) {
   useEffect(() => { if (lastRevision.current !== revision) { lastRevision.current = revision; requestRefresh.current?.(); } }, [revision]);
 
   return <div className="tree-node" data-directory-path={isDirectory ? entry.path : undefined}>
-    {!root && <button className={`tree-row ${selected.has(entry.path) || !selected.size && !isDirectory && selectedFile === entry.path ? 'file-selected' : ''}`}
+    {!root && <button className={`tree-row ${selected.has(entry.path) || !selected.size && !isDirectory && selectedFile === entry.path ? 'file-selected' : ''} ${generated ? 'is-generated' : ''}`}
       role="treeitem" aria-expanded={isDirectory ? open : undefined} aria-selected={selected.has(entry.path)}
       aria-level={depth + 1} aria-label={entry.name} title={`${entry.path || entry.name}${decoration ? ` · ${gitTitle(decoration.title)}` : ''}`} data-node-path={entry.path} data-node-kind={entry.kind} data-git-tone={decoration ? gitMark(decoration.code).tone : undefined}
       style={{ paddingLeft: indent(depth) }}

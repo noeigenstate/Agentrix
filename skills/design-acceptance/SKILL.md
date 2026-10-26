@@ -50,7 +50,8 @@ PASS/FAIL with the screenshot and what was measured.
   input/hover #2D2D2D, border/selected #404040, secondary text #A3A3A3, primary text #F0F0F0. Derived: #8c8c8c quiet
   state, #fff focus. Content keeps its colour (ANSI output, syntax, diff bands, images); chrome never does, except
   the Claude Code and Codex marks, which keep their official colours (`--agent-claude`, `--agent-codex`), and the file
-  and folder icons, whose type colours are content (`--fi-*` in file-icons.css).
+  icons: thin outline icons, one slate folder style, a type colour only for git, config, docs, code and media
+  (`--fi-*` in file-icons.css); generated folders (`node_modules`, `dist`...) are dimmed; selection is a row fill.
 - Radii: 0 for layout regions, 16 for real cards, menus and dialogs, 12 for composers and dropdown triggers, 8 for
   buttons, rows and wells, pill for tags. Layout regions are separated by a grey step and spacing, not by cards.
 - No glass, wallpaper, glow or gradients. The one shadow is the dropdown menu's. State reads by fill step, ring, tag

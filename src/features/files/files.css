@@ -30,6 +30,10 @@
 .tree-row:hover { background: var(--grey-hover); }
 .tree-row:focus-visible { outline-offset: -2px; }
 .tree-row.file-selected { background: var(--grey-selected); }
+.tree-row.file-selected .tree-filename { font-weight: 600; }
+/* Generated and vendored folders recede: dimmed icon, tertiary name. */
+.tree-row.is-generated .file-icon { opacity: .5; }
+.tree-row.is-generated .tree-filename { color: var(--grey-faint); }
 .tree-chevron { width: 12px; height: 16px; display: flex; align-items: center; flex-shrink: 0; color: var(--grey-muted); }
 .file-icon, .folder-icon { flex-shrink: 0; color: var(--grey-muted); }
 .tree-filename { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
