@@ -95,7 +95,7 @@ function sanitizeProjectSvg(input) {
     at = tag.lastIndex;
   }
   if (!root || stack.length) return null;
-  text = text.replace(/currentColor/gi, '#f0f0f0');
+  text = text.replace(/currentColor/gi, '#f2f2f2');
   // Encoded currentColor is safe but would remain black; reject it rather than rewriting XML attributes.
   if (/currentcolor/i.test(xmlText(text) || '')) return null;
   const sanitized = Buffer.from(text, 'utf8');

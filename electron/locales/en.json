@@ -1432,5 +1432,5 @@
   "返回外观": "Back to appearance",
   "主题": "Theme",
   "黑底白字": "Black and white",
-  "黑色底，白色文字，只用灰阶": "Black background, white text, greys only"
+  "黑色底，白色文字，灰阶为主，颜色只表示状态": "Black background, white text, mostly greys, colour only for state"
 }

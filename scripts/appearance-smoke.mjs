@@ -37,7 +37,7 @@ async function capture(name) {
   await fs.writeFile(path.join(output, name), bytes);
   if (name.endsWith('-solid.png')) {
     const pane = await app.evaluate(({ nativeImage }, encoded) => { const image = nativeImage.createFromBuffer(Buffer.from(encoded, 'base64')), size = image.getSize(), pixels = image.toBitmap(), offset = (Math.floor(size.height * .7) * size.width + Math.floor(size.width / 2)) * 4; return [pixels[offset + 2], pixels[offset + 1], pixels[offset]]; }, bytes.toString('base64'));
-    assert.deepEqual(pane, [36, 36, 36], 'screenshot must show the flat grey card');
+    assert.deepEqual(pane, [38, 38, 38], 'screenshot must show the flat grey card');
   }
 }
 try {
@@ -57,7 +57,7 @@ try {
     }
     const sample = await page.locator('.project-panel').evaluate(node => ({ ink: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor, opacity: getComputedStyle(node).opacity, backdrop: getComputedStyle(node).backdropFilter }));
     assert.equal(sample.opacity, '1'); if (mode.visual !== 'glass') assert.equal(sample.backdrop, 'none');
-    assert.equal(sample.ink, 'rgb(240, 240, 240)');
+    assert.equal(sample.ink, 'rgb(242, 242, 242)');
     assert.equal((await state()).projects[0].sessionId, session); assert.ok(await terminal.evaluate(node => node.isConnected));
     results.cases.push({ theme, renderer, mode: mode.visual, ...sample });
     if (mode.surface === 'solid' && renderer === 'dom') await capture('grey-solid.png');

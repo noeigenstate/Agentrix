@@ -54,12 +54,12 @@ async function checkContrast() {
             brightest = Math.max(brightest, .2126 * linear(pixels[p]) + .7152 * linear(pixels[p + 1]) + .0722 * linear(pixels[p + 2]));
           }
         }
-        // The terminal foreground is #f0f0f0: light ink, so its worst ground is the brightest one.
-        const ink = .2126 * linear(240) + .7152 * linear(240) + .0722 * linear(240);
+        // The terminal foreground is #f2f2f2: light ink, so its worst ground is the brightest one.
+        const ink = .2126 * linear(242) + .7152 * linear(242) + .0722 * linear(242);
         return (Math.max(ink, brightest) + .05) / (Math.min(ink, brightest) + .05);
       });
     }, { png: screenshot.toString('base64'), areas });
-    // The ground behind the text is the card's own #242424, so the ink clears 3:1 by a wide margin.
+    // The ground behind the text is the card's own #262626, so the ink clears 3:1 by a wide margin.
     console.log(`Grey ink contrast with the brightest ground per card: ${contrasts.map(value => value.toFixed(2)).join(', ')}`);
     assert.ok(contrasts.every(value => value >= 3), `white ink stays legible over the brightest ground: ${contrasts.map(value => value.toFixed(2)).join(', ')}`);
     await fs.writeFile(path.join(output, 'grey-contrast.json'), JSON.stringify(contrasts, null, 2));
@@ -108,7 +108,7 @@ try {
     });
     for (const sample of samples) {
       assert.deepEqual(sample, samples[0], `${mode}: working lights and reading surface stay steady`);
-      assert.equal(sample.edgeShadow, 'rgb(64, 64, 64) 0px 0px 0px 2px inset', `${mode}: the working edge is the 2px hairline grey`);
+      assert.equal(sample.edgeShadow, 'rgb(101, 184, 174) 0px 0px 0px 2px inset', `${mode}: the working edge is the 2px accent`);
       assert.equal(sample.text.opacity, '1'); assert.equal(sample.text.animation, 'none');
     }
     liveSamples.push({ mode, samples });
@@ -118,9 +118,9 @@ try {
   assert.equal(await breathing(1), 0, 'old unread completion stays quiet');
   assert.equal(await breathing(2), 0, 'ready shell stays quiet');
   await page.screenshot({ path: path.join(output, 'grey-working.png') });
-  // Every card is one flat #242424 pane with radius 16 (workspace.css): no blur, no shadow, no gradient, and the header band is no fill of its own.
+  // Every card is one flat #262626 pane with radius 16 (workspace.css): no blur, no shadow, no gradient, and the header band is no fill of its own.
   const pane = await panel(0).evaluate(node => { const style = getComputedStyle(node); return { filter: style.backdropFilter, color: style.backgroundColor, image: style.backgroundImage, shadow: style.boxShadow, radius: style.borderRadius }; });
-  assert.deepEqual(pane, { filter: 'none', color: 'rgb(36, 36, 36)', image: 'none', shadow: 'none', radius: '16px' }, `a card is one flat grey pane: ${JSON.stringify(pane)}`);
+  assert.deepEqual(pane, { filter: 'none', color: 'rgb(38, 38, 38)', image: 'none', shadow: 'none', radius: '16px' }, `a card is one flat grey pane: ${JSON.stringify(pane)}`);
   const inner = await panel(0).evaluate(node => [node.querySelector('.panel-header')].map(part => {
     const style = getComputedStyle(part);
     return { backdrop: style.backdropFilter, fill: style.backgroundColor, image: style.backgroundImage, shadow: style.boxShadow, margin: style.margin };
@@ -129,7 +129,7 @@ try {
   await page.screenshot({ path: path.join(output, `grey.png`) });
   assert.equal(await panel(0).locator('.status-badge').innerText(), '正在处理');
   const chips = await page.locator('.panel-index').evaluateAll(nodes => nodes.map(node => ({ background: getComputedStyle(node).backgroundColor, color: getComputedStyle(node).color, weight: getComputedStyle(node).fontWeight })));
-  assert.ok(chips.every(chip => chip.background === 'rgb(64, 64, 64)' && chip.color === 'rgb(240, 240, 240)' && chip.weight === '600'), `the number chips are one grey tag: ${JSON.stringify(chips)}`);
+  assert.ok(chips.every(chip => chip.background === 'rgb(56, 56, 56)' && chip.color === 'rgb(242, 242, 242)' && chip.weight === '600'), `the number chips are one grey tag: ${JSON.stringify(chips)}`);
   assert.equal(await breathing(2), 0, `Catalina: ready shell stays quiet`);
   await checkContrast();
   const cdp = await page.context().newCDPSession(page);
@@ -159,10 +159,10 @@ try {
   await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await fs.appendFile(transcript, record('task_complete', 'visual-turn'));
   await waitFor(async () => panel(0).evaluate(node => node.classList.contains('attention-active')), 'a new completion lights its card');
-  // A fresh finished round breathes the white needs-you edge (the ring's opacity only) for its first 9 s, then it stays steady until viewed.
+  // A fresh finished round breathes a white edge (the ring's opacity only) for its first 9 s, then it stays a steady success edge until viewed.
   assert.equal(await breathing(0), 1, 'a fresh finished round breathes its ring');
   const lit = await panel(0).evaluate(node => ({ edge: getComputedStyle(node.querySelector('.panel-signal')).boxShadow, dot: node.querySelector('.status-dot').getAnimations().length }));
-  assert.deepEqual(lit, { edge: 'rgb(255, 255, 255) 0px 0px 0px 2px inset', dot: 0 }, `a steady white edge and a still dot: ${JSON.stringify(lit)}`);
+  assert.deepEqual(lit, { edge: 'rgb(242, 242, 242) 0px 0px 0px 2px inset', dot: 0 }, `a white breathing edge and a still dot: ${JSON.stringify(lit)}`);
   const text = await panel(0).locator('.xterm-rows').evaluate(node => ({ opacity: getComputedStyle(node).opacity, animation: getComputedStyle(node).animationName }));
   assert.deepEqual(text, { opacity: '1', animation: 'none' }, 'terminal text itself never pulses');
   const completed = (await state()).projects[0].lastCompletedAt;
@@ -172,10 +172,10 @@ try {
   await page.evaluate(() => window.agentrix.settings({ fontSize: 16 }));
   assert.equal(await breathing(0), 1); assert.equal((await state()).projects[0].lastCompletedAt, completed);
   await page.evaluate(id => window.agentrix.acknowledge(id), projects[0].id);
-  await waitFor(async () => panel(0).evaluate(node => node.classList.contains('round-complete')), 'viewed automatic round becomes the steady grey edge');
+  await waitFor(async () => panel(0).evaluate(node => node.classList.contains('round-complete')), 'viewed automatic round becomes the steady success edge');
   assert.equal(await breathing(0), 0);
   assert.equal(await panel(0).locator('.status-badge').innerText(), '本轮已完成');
-  assert.equal(await panel(0).locator('.panel-signal').evaluate(node => getComputedStyle(node).boxShadow), 'rgb(163, 163, 163) 0px 0px 0px 2px inset');
+  assert.equal(await panel(0).locator('.panel-signal').evaluate(node => getComputedStyle(node).boxShadow), 'rgb(76, 175, 131) 0px 0px 0px 2px inset');
   await page.screenshot({ path: path.join(output, 'automatic-completion.png') });
   await panel(0).locator('.panel-terminal-area').click({ position: { x: 40, y: 50 } });
   assert.equal(await page.locator('.focus-mode').count(), 0, 'automatic green does not expand on terminal clicks');

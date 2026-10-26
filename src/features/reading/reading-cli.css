@@ -1,21 +1,21 @@
 /* The CLI sign-in card shares the reading view's glass surface. */
-.reading-cli-overlay { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, var(--grey-page) 70%, transparent); }
-.reading-cli-panel { display: flex; flex-direction: column; width: min(760px, 100%); max-height: min(78%, 680px); border: 1px solid var(--grey-line); border-radius: 16px; outline: none;
-  background: var(--grey-pane); overflow: hidden; }
-.reading-cli-head { display: flex; align-items: baseline; gap: 12px; padding: 12px 18px 10px; border-bottom: 1px solid var(--grey-line); }
-.reading-cli-head strong { flex: 1; color: var(--grey-ink); font: 600 calc(13px * var(--reading-text)) var(--font-mono); }
+.reading-cli-overlay { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, var(--bg-app) 70%, transparent); }
+.reading-cli-panel { display: flex; flex-direction: column; width: min(760px, 100%); max-height: min(78%, 680px); border: 1px solid var(--border); border-radius: 16px; outline: none;
+  background: var(--bg-card); overflow: hidden; }
+.reading-cli-head { display: flex; align-items: baseline; gap: 12px; padding: 12px 18px 10px; border-bottom: 1px solid var(--divider); }
+.reading-cli-head strong { flex: 1; color: var(--text-1); font: 600 calc(13px * var(--reading-text)) var(--font-mono); }
 .reading-cli-body { min-height: 0; padding: 14px 18px 16px; overflow: auto; }
 
 /* The CLI signing in: its words, the sign-in page to open, a one-time code, the field for what the browser gave back. */
 .reading-sign-in { width: min(620px, 100%); }
-.reading-sign-in .reading-cli-head strong { display: flex; align-items: center; gap: 8px; color: var(--grey-ink); font-family: var(--font-ui); }
-.reading-sign-in-body { display: flex; flex-direction: column; gap: 10px; font-size: calc(13.5px * var(--reading-text)); line-height: 1.6; color: var(--grey-ink); }
+.reading-sign-in .reading-cli-head strong { display: flex; align-items: center; gap: 8px; color: var(--text-1); font-family: var(--font-ui); }
+.reading-sign-in-body { display: flex; flex-direction: column; gap: 10px; font-size: calc(13.5px * var(--reading-text)); line-height: 1.6; color: var(--text-1); }
 .reading-sign-in-body p { margin: 0; overflow-wrap: anywhere; }
 .reading-sign-in-link, .reading-sign-in-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .reading-sign-in-actions { justify-content: flex-end; margin-top: 4px; }
 .reading-sign-in-link .button, .reading-sign-in-actions .button, .reading-sign-in-field .button { display: inline-flex; align-items: center; gap: 6px; }
 .reading-sign-in-code { display: flex; align-items: center; gap: 12px; }
-.reading-sign-in-code code { padding: 6px 14px; border-radius: 8px; font: 600 calc(22px * var(--reading-text))/1.3 var(--font-mono); letter-spacing: .08em; background: var(--grey-row); user-select: all; }
+.reading-sign-in-code code { padding: 6px 14px; border-radius: 8px; font: 600 calc(22px * var(--reading-text))/1.3 var(--font-mono); letter-spacing: .08em; background: var(--bg-input); user-select: all; }
 .reading-sign-in-field { display: flex; gap: 8px; }
-.reading-sign-in-field input { flex: 1; min-width: 0; height: 32px; padding: 0 12px; border: 1px solid var(--grey-line); border-radius: 8px; outline: none; font: 400 calc(13px * var(--reading-text)) var(--font-mono); color: var(--grey-ink); background: var(--grey-row); }
-.reading-sign-in-field input:focus { border-color: var(--grey-muted); }
+.reading-sign-in-field input { flex: 1; min-width: 0; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; outline: none; font: 400 calc(13px * var(--reading-text)) var(--font-mono); color: var(--text-1); background: var(--bg-input); }
+.reading-sign-in-field input:focus { border-color: var(--focus-ring); }

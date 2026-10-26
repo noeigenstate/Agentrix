@@ -1,16 +1,16 @@
 /* A file shown over the current view: a flat scrim and a large card (radius 16), the page or picture fills it. */
-.file-popup-overlay { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 40px 32px 32px; background: color-mix(in srgb, var(--grey-page) 80%, transparent); }
-.file-popup { display: flex; flex-direction: column; max-width: min(1280px, 100%); max-height: 100%; min-width: min(420px, 100%); border: 1px solid var(--grey-line); border-radius: 16px; outline: none; overflow: hidden; background: var(--grey-pane); }
+.file-popup-overlay { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 40px 32px 32px; background: color-mix(in srgb, var(--bg-app) 80%, transparent); }
+.file-popup { display: flex; flex-direction: column; max-width: min(1280px, 100%); max-height: 100%; min-width: min(420px, 100%); border: 1px solid var(--border); border-radius: 16px; outline: none; overflow: hidden; background: var(--bg-card); }
 /* A page, a document or code takes the room it needs to read; a picture or video is as large as itself, up to the whole window. */
 .file-popup.is-wide { width: min(1280px, 100%); height: 100%; }
 .file-popup.is-picture { max-width: 100%; }
-.file-popup-head { display: flex; align-items: center; gap: 12px; flex: none; padding: 8px 8px 8px 16px; border-bottom: 1px solid var(--grey-line); color: var(--grey-muted); }
-.file-popup-head strong { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 600 13px var(--font-ui); color: var(--grey-ink); }
+.file-popup-head { display: flex; align-items: center; gap: 12px; flex: none; padding: 8px 8px 8px 16px; border-bottom: 1px solid var(--divider); color: var(--text-2); }
+.file-popup-head strong { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 600 13px var(--font-ui); color: var(--text-1); }
 .file-popup-head small { font-size: 11px; }
 .file-popup-body { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
-.file-popup-pagination { flex: none; color: var(--grey-muted); border-color: var(--grey-line); }
-.file-popup-pagination input { color: var(--grey-ink); background: var(--grey-row); border-color: var(--grey-line); font: inherit; }
-.file-popup-picture { display: grid; place-items: center; min-height: 0; overflow: hidden; background: var(--grey-page); user-select: none; }
+.file-popup-pagination { flex: none; color: var(--text-3); border-color: var(--divider); }
+.file-popup-pagination input { color: var(--text-1); background: var(--bg-input); border-color: var(--border); font: inherit; }
+.file-popup-picture { display: grid; place-items: center; min-height: 0; overflow: hidden; background: var(--bg-app); user-select: none; }
 .file-popup-picture img { display: block; max-width: calc(100vw - 64px); max-height: calc(100vh - 124px); object-fit: contain; }
 .file-popup-picture.is-larger { cursor: zoom-in; }
 /* At its own size it fills the window and moves under the mouse; no scroll bars. */
@@ -18,13 +18,13 @@
 .file-popup-picture.is-full:active { cursor: grabbing; }
 .file-popup-picture.is-full img { flex: none; margin: auto; max-width: none; max-height: none; }
 @media (max-width: 640px) { .file-popup-picture img { max-width: calc(100vw - 32px); max-height: calc(100vh - 76px); } .file-popup-picture.is-full { width: calc(100vw - 32px); height: calc(100vh - 76px); } }
-.file-popup-video { display: grid; place-items: center; background: var(--grey-page); }
+.file-popup-video { display: grid; place-items: center; background: var(--bg-app); }
 .file-popup-video video { display: block; max-width: calc(100vw - 64px); max-height: calc(100vh - 124px); }
 .file-popup-document { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .file-popup-folder { display: flex; flex-direction: column; min-width: min(520px, calc(100vw - 64px)); max-height: calc(100vh - 124px); padding: 8px; overflow: auto; }
-.file-popup-folder button { display: flex; align-items: center; gap: 12px; height: 36px; padding: 0 12px; border: 0; border-radius: 8px; background: none; color: var(--grey-ink); font: 400 13px var(--font-ui); text-align: left; cursor: pointer; }
-.file-popup-folder button:hover, .file-popup-folder button:focus-visible { background: var(--grey-hover); }
-.file-popup-folder svg { flex: none; color: var(--grey-muted); }
-.file-popup-message { display: grid; place-items: center; gap: 12px; padding: 48px 32px; text-align: center; font-size: 13px; color: var(--grey-muted); }
+.file-popup-folder button { display: flex; align-items: center; gap: 12px; height: 36px; padding: 0 12px; border: 0; border-radius: 8px; background: none; color: var(--text-1); font: 400 13px var(--font-ui); text-align: left; cursor: pointer; }
+.file-popup-folder button:hover, .file-popup-folder button:focus-visible { background: var(--bg-hover); }
+.file-popup-folder svg { flex: none; color: var(--text-2); }
+.file-popup-message { display: grid; place-items: center; gap: 12px; padding: 48px 32px; text-align: center; font-size: 13px; color: var(--text-2); }
 .file-popup-message p { margin: 0; max-width: 420px; }
 @media (max-width: 640px) { .file-popup-overlay { padding: 16px; } }

@@ -1318,7 +1318,7 @@ if (!app.requestSingleInstanceLock()) {
     desktopGlassWindow = store.settings.surface === 'glass' && store.settings.glassBackground === 'desktop' && !!desktopGlassBackend;
     window = new BrowserWindow({
       width: 1500, height: 940, minWidth: 820, minHeight: 560,
-      title: t('Agentrix'), backgroundColor: '#101216',
+      title: t('Agentrix'), backgroundColor: '#181818',
       ...(desktopGlassWindow ? desktopGlassOptions(desktopGlassBackend) : {}),
       // macOS keeps its own window buttons over the title bar; Windows draws them in the page.
       ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden', trafficLightPosition: { x: 16, y: 12 } } : { frame: false }),
@@ -1327,7 +1327,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     if (desktopGlassWindow) {
       try { await applyDesktopGlass(window, runtimeDir, desktopGlassBackend); desktopGlassActive = true; }
-      catch { window.setBackgroundColor('#101216'); }
+      catch { window.setBackgroundColor('#181818'); }
     }
     if (process.platform === 'win32') window.setAppDetails({ appId: appUserModelId, appIconPath: shellIcon, appIconIndex: 0,
       relaunchCommand: app.isPackaged ? `"${process.execPath}"` : `"${process.execPath}" "${root}"`,

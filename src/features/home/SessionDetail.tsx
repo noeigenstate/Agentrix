@@ -28,7 +28,7 @@ export function SessionDetail({ item, now, onOpenProject, children }: { item: In
     <header className="session-head">
       <Icon size={20} className="session-icon" aria-hidden="true" />
       <h2 className="session-name">{name}</h2>
-      <span className={`decision-kind${item.group === 'working' ? ' is-work' : ''}`}>{sessionStateLabel(project, terminal)}</span>
+      <span className={`decision-kind${item.group === 'working' ? ' is-work' : terminal.codexActive && terminal.codexActivity === 'complete' ? ' is-done' : ''}`}>{sessionStateLabel(project, terminal)}</span>
       <button type="button" className="button secondary session-open" onClick={() => onOpenProject(project.id)}>{t('打开会话')}<ArrowUpRight size={16} /></button>
     </header>
     <p className="session-summary">{summary || t('这个项目还没有任务记录')}</p>

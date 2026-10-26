@@ -32,7 +32,7 @@ try {
     const show = page.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }); if (await show.isVisible()) await show.click();
     await page.locator('.reading-question-title, .reading-question-review').first().waitFor();
     const colors = await page.locator('.reading-question-title, .reading-question-review dd, .reading-question-input input').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color));
-    assert.ok(colors.length); assert.ok(colors.every(color => color === 'rgb(240, 240, 240)'), JSON.stringify({ file, theme, colors }));
+    assert.ok(colors.length); assert.ok(colors.every(color => color === 'rgb(242, 242, 242)'), JSON.stringify({ file, theme, colors }));
     assert.equal((await state()).projects[0].sessionId, session);
     await page.screenshot({ path: path.join(output, theme + '-' + file + '.png') }); results.push({ theme, file, colors });
     await fs.writeFile(release, 'done'); await waitFor(() => page.locator('.reading-question-title, .reading-question-review').count().then(count => count === 0), 'fixture returns to shell');

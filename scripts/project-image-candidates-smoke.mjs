@@ -108,7 +108,7 @@ try {
   const svgCandidates = await list(6);
   assert.equal(svgCandidates.candidates[0].path, 'icons/app.svg'); assert.equal(svgCandidates.candidates[0].source, 'icon');
   assert.match((await state(6)).image, /^data:image\/svg\+xml;base64,/);
-  assert.equal(Buffer.from((await state(6)).image.split(',')[1], 'base64').toString('utf8'), svgIcon.replace('currentColor', '#f0f0f0'));
+  assert.equal(Buffer.from((await state(6)).image.split(',')[1], 'base64').toString('utf8'), svgIcon.replace('currentColor', '#f2f2f2'));
   report.svgHeader = await svgPixels(panel(6).locator('.panel-header .project-image'), 'svg-header-24.png', 24);
   await panel(6).screenshot({ path: path.join(output, 'svg-card.png') }); report.screenshots.push('svg-card.png');
 
@@ -130,7 +130,7 @@ try {
   report.svgSwitch = await svgPixels(svgSwitch, 'svg-switch-48.png', 48);
   await panel(6).screenshot({ path: path.join(output, 'svg-switch-card.png') }); report.screenshots.push('svg-switch-card.png');
   await unchanged();
-  report.checks.push('viewBox-only currentColor SVG becomes the automatic vector snapshot; 24px header and 48px switch pixels are light #f0f0f0 with contained proportions');
+  report.checks.push('viewBox-only currentColor SVG becomes the automatic vector snapshot; 24px header and 48px switch pixels are light #f2f2f2 with contained proportions');
   await open(0);
   // The dialog looks for candidates after it opens.
   await waitFor(async () => await dialog().locator('.project-image-candidate').count() === available.candidates.length, 'candidates listed');

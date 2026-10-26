@@ -600,9 +600,9 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); }
   };
   // What the agent is doing, written at the end of the conversation the way its CLI writes it, never in a corner.
-  const status = screen.choice?.kind === 'question' ? <div className="reading-status" role="status">{t('等待你回答问题')}</div>
+  const status = screen.choice?.kind === 'question' ? <div className="reading-status is-waiting" role="status">{t('等待你回答问题')}</div>
     // Without a choice to answer here (one the reading view cannot lay out), the terminal is a click away.
-    : terminal.needsInput !== null ? <div className="reading-status" role="status"><span>{t('等待你确认：{message}', { message: terminal.needsInput })}</span>
+    : terminal.needsInput !== null ? <div className="reading-status is-waiting" role="status"><span>{t('等待你确认：{message}', { message: terminal.needsInput })}</span>
       {!screen.choice && <button type="button" className="text-button" onClick={onShowTerminal}>{t('切换到终端')}</button>}</div>
     : working || pending.some(prompt => prompt.sending) ? <WorkingLine key={terminal.sessionId} agent={terminal.agent === 'claude' ? 'claude' : 'codex'} label={terminal.action ? t('正在{step}', { step: actionText(terminal.action) }) : t('{agent} 正在思考', { agent })} />
     : null;

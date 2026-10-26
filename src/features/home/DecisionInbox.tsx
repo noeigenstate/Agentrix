@@ -65,7 +65,7 @@ export function DecisionInbox({ items, selectedId, now, onSelect }: { items: rea
               {line && <small>{line}</small>}
             </span>
             <span className="inbox-end">
-              {decision || group === 'working' ? <span className={`inbox-tag ${decision ? 'is-need' : 'is-work'}`}>{tag}</span> : terminal.codexActive && terminal.codexActivity === 'complete' && <span className="inbox-state">{tag}</span>}
+              {decision || group === 'working' ? <span className={`inbox-tag ${decision ? decision.kind === 'review' ? 'is-review' : 'is-need' : 'is-work'}`}>{tag}</span> : terminal.codexActive && terminal.codexActivity === 'complete' && <span className="inbox-state">{tag}</span>}
             </span>
           </div>;
         })}

@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react';
 import { t } from '../../shared/i18n';
 import { THEMES, type ThemeId } from '../../shared/themes';
 
-// One radio per theme; the preview is a mini window painted in the theme's own greys.
+// One radio per theme; the preview is a mini window painted in the theme's own colours.
 export function ThemeSetting({ theme, update }: { theme: ThemeId; update: (theme: ThemeId) => void }) {
   return <fieldset className="theme-setting">
     <legend>{t('主题')}</legend>

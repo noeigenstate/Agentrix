@@ -1,26 +1,26 @@
-/* The dictation window, in grey: a #242424 pane with a flat disc for the microphone, two rings that follow the voice level and bars either side
+/* The dictation window: a popup-coloured pane with a flat disc for the microphone, two rings that follow the voice level and bars either side
    that rise and fall with it. Below: the state, then the keys. Drawn at full size and scaled as a whole, so every proportion holds. */
 .voice-overlay-anchor { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; pointer-events: none; container-type: size; }
-.voice-overlay { zoom: .82; position: relative; width: 420px; max-width: calc(100% - 32px); display: flex; flex-direction: column; align-items: center; padding: 32px 24px 32px; border: 1px solid var(--grey-line); border-radius: 16px; color: var(--grey-ink); background: var(--grey-pane); pointer-events: none; }
+.voice-overlay { zoom: .82; position: relative; width: 420px; max-width: calc(100% - 32px); display: flex; flex-direction: column; align-items: center; padding: 32px 24px 32px; border: 1px solid var(--border); border-radius: 16px; color: var(--text-1); background: var(--bg-menu); pointer-events: none; }
 @container (max-width: 560px) or (max-height: 440px) { .voice-overlay { zoom: .62; } }
 .voice-stage { position: relative; width: 100%; height: 196px; display: grid; place-items: center; }
 .voice-halo { position: absolute; left: 50%; top: 50%; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
-.voice-halo.is-near { width: 154px; height: 154px; background: var(--grey-row); }
-.voice-halo.is-far { width: calc(186px + var(--voice-level, 0) * 14px); height: calc(186px + var(--voice-level, 0) * 14px); box-shadow: 0 0 0 1px var(--grey-line); }
-.voice-orb { position: relative; z-index: 1; width: 124px; height: 124px; border-radius: 50%; display: grid; place-items: center; color: var(--grey-ink); background: var(--grey-selected); }
+.voice-halo.is-near { width: 154px; height: 154px; background: var(--bg-input); }
+.voice-halo.is-far { width: calc(186px + var(--voice-level, 0) * 14px); height: calc(186px + var(--voice-level, 0) * 14px); box-shadow: 0 0 0 1px var(--border); }
+.voice-orb { position: relative; z-index: 1; width: 124px; height: 124px; border-radius: 50%; display: grid; place-items: center; color: var(--text-1); background: var(--bg-selected); }
 .voice-orb svg { position: relative; z-index: 1; width: 46px; height: 64px; }
-.voice-orb .loading-spinner { width: 42px; height: 42px; color: var(--grey-ink); }
+.voice-orb .loading-spinner { width: 42px; height: 42px; }
 .voice-wave { position: absolute; z-index: 2; top: 50%; display: flex; align-items: center; gap: 5px; height: 80px; transform: translateY(-50%); pointer-events: none; }
 .voice-wave.is-left { right: calc(50% + 80px); flex-direction: row-reverse; }
 .voice-wave.is-right { left: calc(50% + 80px); }
-.voice-wave i { display: block; width: 3px; height: var(--bar); border-radius: 2px; background: var(--grey-muted); transform: scaleY(calc(.45 + var(--voice-level, 0) * 1.1)); }
-.voice-wave i.is-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--grey-line); transform: none; }
+.voice-wave i { display: block; width: 3px; height: var(--bar); border-radius: 2px; background: var(--text-2); transform: scaleY(calc(.45 + var(--voice-level, 0) * 1.1)); }
+.voice-wave i.is-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--border); transform: none; }
 .voice-stage.is-busy .voice-wave { opacity: .4; }
-.voice-overlay .voice-title { margin-top: 8px; font-size: 20px; font-weight: 600; line-height: 28px; color: var(--grey-ink); }
-.voice-overlay-keys { display: flex; align-items: center; gap: 12px; margin-top: 20px; font-size: 13px; color: var(--grey-muted); }
-.voice-overlay-keys kbd { min-width: 0; padding: 4px 16px; border-radius: 8px; font: 600 13px var(--font-ui); color: var(--grey-ink); background: var(--grey-row); }
-.voice-overlay-keys .voice-keys-gap { width: 1px; height: 20px; margin: 0 12px; background: var(--grey-line); }
-/* The microphone button: it is the grey of its surroundings when a device is connected or busy, and a solid light disc while it records. */
-.voice-button.mic-missing { color: var(--grey-muted); }
-.voice-button.is-recording { color: var(--grey-on-strong); background: var(--grey-strong); }
-.voice-button.is-recording:hover { background: #ffffff; }
+.voice-overlay .voice-title { margin-top: 8px; font-size: 20px; font-weight: 600; line-height: 28px; color: var(--text-1); }
+.voice-overlay-keys { display: flex; align-items: center; gap: 12px; margin-top: 20px; font-size: 13px; color: var(--text-2); }
+.voice-overlay-keys kbd { min-width: 0; padding: 4px 16px; border-radius: 8px; font: 600 13px var(--font-ui); color: var(--text-1); background: var(--bg-input); }
+.voice-overlay-keys .voice-keys-gap { width: 1px; height: 20px; margin: 0 12px; background: var(--divider); }
+/* The microphone button: it takes its surroundings' colour when a device is connected or busy, and a solid light disc while it records. */
+.voice-button.mic-missing { color: var(--text-2); }
+.voice-button.is-recording { color: var(--button-primary-text); background: var(--button-primary); }
+.voice-button.is-recording:hover { background: var(--text-1); }

@@ -127,9 +127,9 @@ try {
   await waitFor(async () => (await page.locator(`.focus-mode [data-project-id="${firstCard}"].is-focused`).count()) === 1, 'Ctrl+Shift+Enter expands the current project');
   await page.keyboard.press('Control+Shift+Enter');
   await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
-  // The grey design: a card is one flat #242424 pane, with no blur.
+  // The grey design: a card is one flat card-coloured pane (#262626), with no blur.
   const material = await page.locator('.project-panel').first().evaluate(el => ({ filter: getComputedStyle(el).backdropFilter, background: getComputedStyle(el).backgroundColor }));
-  assert.deepEqual(material, { filter: 'none', background: 'rgb(36, 36, 36)' });
+  assert.deepEqual(material, { filter: 'none', background: 'rgb(38, 38, 38)' });
   console.log('PASS: desktop loads six real project folders');
 
   for (const [index, project] of projects.entries()) {

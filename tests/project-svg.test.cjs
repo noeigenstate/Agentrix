@@ -11,10 +11,10 @@ test('rayrea app.svg stays SVG with the card primary ink and canonical storage v
   const bytes = fs.readFileSync(path.join(__dirname, 'fixtures/project-images/rayrea-app.svg'));
   const result = sanitizeProjectSvg(bytes);
   assert.match(result, /^data:image\/svg\+xml;base64,/);
-  assert.equal(content(result), bytes.toString('utf8').replace(/currentColor/g, '#f0f0f0'));
+  assert.equal(content(result), bytes.toString('utf8').replace(/currentColor/g, '#f2f2f2'));
   assert.equal(sanitizeProjectSvg(result), result);
   assert.equal(content(sanitizeProjectSvg(svg('<svg viewBox="0 0 48 24"><path fill="CuRrEnTcOlOr" d="M0 0h48v24z"/></svg>'))),
-    '<svg viewBox="0 0 48 24"><path fill="#f0f0f0" d="M0 0h48v24z"/></svg>');
+    '<svg viewBox="0 0 48 24"><path fill="#f2f2f2" d="M0 0h48v24z"/></svg>');
 });
 
 test('static gradients, same-document references, XML declaration, comments and UTF-8 text are accepted', () => {
@@ -23,7 +23,7 @@ test('static gradients, same-document references, XML declaration, comments and 
     '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><defs><path id="part" d="M0 0"/></defs><use href="#part"/><use xlink:href="&#35;part"/></svg>',
     '<svg><defs><linearGradient id="ink"><stop stop-color="#fff"/></linearGradient></defs><path fill="url(#ink)" style="stroke: url(\'#ink\')"/></svg>',
     '<svg><style>.ink { fill: currentColor; }</style><g class="ink"/></svg>',
-  ]) assert.equal(content(sanitizeProjectSvg(svg(text))), text.replace(/currentColor/g, '#f0f0f0'));
+  ]) assert.equal(content(sanitizeProjectSvg(svg(text))), text.replace(/currentColor/g, '#f2f2f2'));
 });
 
 const rejected = {

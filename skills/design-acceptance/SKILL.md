@@ -20,7 +20,7 @@ Each is answered with numbers, not taste. Measure the app window's UI only: not 
 | 3 | Regular spacing | S1 padding/margin/gap off the scale {2,4,8,12,16,20,24,32,40,48,64} | 0 |
 | | | S2 distinct spacing values | ≤ 8 |
 | | | S3 repeated rows/cards | identical heights and gaps |
-| 4 | Restrained colour and material | C1 chromatic hue families (30° buckets, saturation ≥ 25%) | ≤ 3: needs-you, working, danger |
+| 4 | Restrained colour and material | C1 chromatic hue families (30° buckets, saturation ≥ 25%) | ≤ accent + 4 status + 2 agent marks |
 | | | C2 chromatic background area of the pane | ≤ 5% |
 | | | C3 backdrop-filters / box-shadows / surface alphas | ≤ 2 / ≤ 3 / ≤ 4 |
 | 5 | One product | P1 border radii | ≤ 4, from one set |
@@ -32,30 +32,61 @@ Each is answered with numbers, not taste. Measure the app window's UI only: not 
 
 ## Grayscale checklist (the owner's 灰度设计验收清单)
 
-Layout and hierarchy are accepted in grayscale before any colour work. Judge the page converted to grayscale (and the
+Layout and hierarchy are accepted in grayscale, even though the app now carries the accent and the status colours:
+colour is added on top of a design that already works without it. Judge the page converted to grayscale (and the
 blurred F3 shot), at the default size, a mid size (about 1100×720) and the minimum window size. Report each item
 PASS/FAIL with the screenshot and what was measured.
 
 1. 不看文字，只看排版，能找到最重要的操作区域: with text ignored, the primary action area stands out first.
 2. 所有卡片、输入框和按钮的圆角都有统一规则: radii of cards, inputs, selects, buttons, rows and tags come from one stated rule.
-3. 主文字、辅助文字、占位文字有明确的明暗差异: three clearly distinct grey levels, measured from pixels.
-4. 左侧列表的选中状态即使没有品牌色也能被识别: selection shows by fill and indicator, not hue.
+3. 主文字、辅助文字、占位文字有明确的明暗差异: the text levels (`--text-1`, `--text-2`, `--text-3`) are clearly distinct, measured from pixels.
+4. 左侧列表的选中状态即使没有品牌色也能被识别: selection shows by fill (`--bg-selected`) and indicator, not by hue.
 5. 输入框、下拉菜单、按钮的点击区域足够清晰: every control has visible bounds or a hover fill, at least 32px tall.
 6. 窗口缩小后不会出现布局拥挤或文字异常截断: no crowding or clipped controls; long text ends in a clean ellipsis.
 7. 所有边框都有必要，没有重复描边或过重的视觉轮廓: no double outlines (box plus inner field, card plus pane) or heavy strokes.
 
-## The accepted grey design (what new UI must match)
+## The accepted colour standard (what new UI must match)
 
-- Six greys from the owner, one token set (`--grey-*` in `src/shared/styles/themes.css`): canvas #191919, panel #242424,
-  input/hover #2D2D2D, border/selected #404040, secondary text #A3A3A3, primary text #F0F0F0. Derived: #8c8c8c quiet
-  state, #fff focus. Content keeps its colour (ANSI output, syntax, diff bands, images); chrome never does, except
-  the Claude Code and Codex marks, which keep their official colours (`--agent-claude`, `--agent-codex`), and the file
-  icons: thin outline icons, one slate folder style, a type colour only for git, config, docs, code and media
-  (`--fi-*` in file-icons.css); generated folders (`node_modules`, `dist`...) are dimmed; selection is a row fill.
+The owner's semantic colours, one token per role in `src/shared/styles/themes.css`. **New UI uses only these tokens**: never a
+grey picked from a scale, never a literal hex, and no alias that renames one. Each surface takes the token of its role.
+
+| Role | Token | HEX | Where |
+| --- | --- | --- | --- |
+| App background | `--bg-app` | #181818 | main workspace, empty canvas, wells that sink into it |
+| Top navigation bar | `--bg-titlebar` | #202020 | the title bar (38px) and the file tab strip |
+| Left sidebar | `--bg-sidebar` | #232323 | project and session lists, the explorer, Settings' categories, the docked activity pane |
+| Card | `--bg-card` | #262626 | project cards, agent tiles, task information, dialogs, activity and reading cards |
+| Input | `--bg-input` | #2D2D2D | the message composer, fields, chips and wells inside a card |
+| Popup | `--bg-menu` | #303030 | dropdowns, context menus, tooltips, popovers, toasts, floating panels |
+| Hover | `--bg-hover` | #343434 | row and button hover |
+| Selected | `--bg-selected` | #383838 | current project, nav item, selected rows |
+| Border | `--border` | #404040 | cards, controls, dropdowns |
+| Hover border | `--border-hover` | #595959 | a control's border on hover |
+| Divider | `--divider` | #333333 | between regions, hairlines, list dividers |
+| Primary text | `--text-1` | #F2F2F2 | headings, main content |
+| Secondary text | `--text-2` | #B5B5B5 | descriptions, secondary labels, placeholders |
+| Tertiary text | `--text-3` | #999999 | dates, times, counts, auxiliary information |
+| Disabled text | `--text-disabled` | #777777 | disabled states |
+| Primary button | `--button-primary` / `--button-primary-text` | #E5E5E5 / #181818 | the one main action; its hover is `--text-1` |
+| Focus ring | `--focus-ring` | #D0D0D0 | every `:focus-visible` ring, and only keyboard focus |
+| Brand accent | `--accent` | #65B8AE | key interactions and active state: checked boxes and switches, picked options, links, meters and progress, the active tab bar, spinners |
+| Success | `--success` | #4CAF83 | task complete: a finished round, a passed step |
+| Warning | `--warning` | #E5B45A | needs approval or attention: a decision waiting on you, a question |
+| Danger | `--danger` | #E47777 | execution failed |
+| Claude Code | `--agent-claude` | #D97757 | the agent's mark |
+| Codex | `--agent-codex` | #34D5A5 | Agentrix's own colour to tell the CLI apart |
+
+- Hue rule: **chrome is grey.** The only colour is the accent (key interactions, active state), the four status colours
+  (working = accent, finished = success, needs you = warning, failed = danger), the two agent marks, and the file-type icons
+  (`--fi-*` in file-icons.css, whose type colours are content). Content keeps its colour too (ANSI output, syntax, diff bands,
+  images). The accent is never the focus ring, the primary button or a selected background.
+- State keeps a non-hue cue next to its colour (ring, tag shape, dot shape), so it still reads in grayscale: working is a
+  filled tag and dot, finished a plain tag and a filled dot, finished-and-unseen an outlined tag and a hollow dot (its ring
+  breathes in white while fresh, then settles into success), failed a square dot.
 - Radii: 0 for layout regions, 16 for real cards, menus and dialogs, 12 for composers and dropdown triggers, 8 for
-  buttons, rows and wells, pill for tags. Layout regions are separated by a grey step and spacing, not by cards.
-- No glass, wallpaper, glow or gradients. The one shadow is the dropdown menu's. State reads by fill step, ring, tag
-  shape and dot shape, never by hue.
+  buttons, rows and wells, pill for tags. Layout regions are separated by a colour step, a divider and spacing, not by cards.
+- No glass, wallpaper, glow or gradients, and no tinted panels. The one shadow is the dropdown menu's. A state colour paints
+  a ring, a tag's text, a dot or an icon, never a panel.
 - Dropdowns use `src/shared/Select.tsx`, never a native `<select>` (its pop-up is drawn by the OS in system blue).
 - Native GUI checks drive it with `scripts/select-helper.mjs`.
 

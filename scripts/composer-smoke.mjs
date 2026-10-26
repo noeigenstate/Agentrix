@@ -99,7 +99,7 @@ try {
   await page.keyboard.press('Control+Shift+a'); await page.keyboard.press('Control+c');
   assert.ok((await page.evaluate(() => window.agentrix.readClipboard())).value.includes('第一行：透明输入与清晰文字'));
   await waitFor(async () => await terminal.locator('.xterm-decoration-top').count() > 0, 'selected cells rendered');
-  assert.ok(await terminal.locator('.xterm-decoration-top:not(.xterm-cursor-block)').evaluateAll(cells => cells.every(cell => getComputedStyle(cell).backgroundColor === 'rgb(64, 64, 64)')), 'selection keeps its opaque grey background (#404040)');
+  assert.ok(await terminal.locator('.xterm-decoration-top:not(.xterm-cursor-block)').evaluateAll(cells => cells.every(cell => getComputedStyle(cell).backgroundColor === 'rgb(56, 56, 56)')), 'selection keeps its opaque grey background (#383838)');
   await page.screenshot({ path: path.join(output, 'selection.png') }); await page.keyboard.press('Escape');
   await first.getByRole('button', { name: `全屏查看 ${projects[0].name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));

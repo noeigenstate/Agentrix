@@ -46,7 +46,7 @@ try {
   await page.evaluate(() => window.agentrix.settings({ glassTransparency: 75 }));
   await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--glass-alpha') === '0.25');
   const pane = await page.locator('.project-panel').first().evaluate(node => ({ opacity: getComputedStyle(node).opacity, backdrop: getComputedStyle(node).backdropFilter, fill: getComputedStyle(node).backgroundColor }));
-  assert.equal(pane.opacity, '1'); assert.equal(pane.backdrop, 'none'); assert.equal(pane.fill, 'rgb(36, 36, 36)', 'the card stays the opaque grey at any transparency'); await capture('native-more-transparent.png');
+  assert.equal(pane.opacity, '1'); assert.equal(pane.backdrop, 'none'); assert.equal(pane.fill, 'rgb(38, 38, 38)', 'the card stays the opaque grey at any transparency'); await capture('native-more-transparent.png');
   await page.evaluate(() => window.agentrix.settings({ terminalRenderer: 'gpu' })); await waitFor(() => page.locator('canvas').count().then(count => count > 0), 'GPU terminal'); assert.equal((await state()).projects[0].sessionId, session);
   await page.getByRole('button', { name: '工作台设置', exact: true }).click(); assert.equal(await page.getByRole('combobox', { name: '界面材质', exact: true }).getAttribute('data-value'), 'glass'); assert.equal(await page.getByRole('combobox', { name: '玻璃背景', exact: true }).getAttribute('data-value'), 'desktop'); await capture('settings.png'); await page.getByRole('button', { name: '完成', exact: true }).click();
   const before = await app.evaluate(() => globalThis.desktopGlassMain.getBounds());
@@ -56,7 +56,7 @@ try {
   await app.evaluate(() => { globalThis.desktopGlassMain.setFullScreen(false); globalThis.desktopGlassMain.setBounds({ x: 200, y: 120, width: 1500, height: 940 }); });
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).click(); await page.locator('.file-preview').waitFor();
   const cdp = await page.context().newCDPSession(page); await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }] });
-  assert.equal(await page.locator('.app-shell').evaluate(node => getComputedStyle(node).backgroundColor), 'rgb(25, 25, 25)'); await cdp.send('Emulation.setEmulatedMedia', { features: [] }); await cdp.detach();
+  assert.equal(await page.locator('.app-shell').evaluate(node => getComputedStyle(node).backgroundColor), 'rgb(24, 24, 24)'); await cdp.send('Emulation.setEmulatedMedia', { features: [] }); await cdp.detach();
   results.checks.push('material switches preserve terminal and draft; the opaque grey cards ignore the transparency setting; GPU, settings, resizing, expanded file view and reduced transparency work');
   assert.deepEqual(errors, []);
   await app.close(); app = null; await launch(); assert.ok((await state()).desktopGlass.active); assert.equal((await state()).settings.glassTransparency, 75);

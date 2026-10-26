@@ -41,7 +41,7 @@ async function launch() {
 }
 try {
   await launch();
-  assert.equal('theme' in (await state()).settings, false);
+  assert.equal((await state()).settings.theme, 'mono');
   const first = page.locator(`[data-project-id="${projects[0].id}"]`);
   await first.getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await state()).projects[0].shellReady, 'shell ready');
@@ -53,18 +53,18 @@ try {
   await first.locator('.terminal-host').evaluate(node => { globalThis.originalThemeTerminal = node; });
   await page.evaluate(id => window.agentrix.writeTerminal(id, "Write-Output 'PENDING_APPEARANCE_DRAFT'"), projects[0].id);
   await page.context().setOffline(true);
-  // The grey design has no wallpaper: the window is the one #191919 canvas, offline or not.
+  // The grey design has no wallpaper: the window is the one #181818 canvas, offline or not.
   const wallpaper = await page.evaluate(() => ({
     image: getComputedStyle(document.querySelector('.app-shell'), '::after').backgroundImage, ground: getComputedStyle(document.querySelector('.app-shell')).backgroundColor, online: navigator.onLine,
   }));
-  assert.equal(wallpaper.online, false); assert.equal(wallpaper.image, 'none'); assert.equal(wallpaper.ground, 'rgb(25, 25, 25)');
+  assert.equal(wallpaper.online, false); assert.equal(wallpaper.image, 'none'); assert.equal(wallpaper.ground, 'rgb(24, 24, 24)');
   wallpaperChecks.push(wallpaper);
   assert.equal((await state()).projects[0].sessionId, sessionId);
   assert.ok(await first.locator('.terminal-host').evaluate(node => node === globalThis.originalThemeTerminal));
   assert.deepEqual(await colors(), ansiColors);
-  // A card that needs you has the white 2px edge (no hue): the one strongest state in the grey design.
+  // A fresh finished round has the white 2px edge while it breathes (then a steady success edge until it is viewed).
   const signal = await page.locator(`[data-project-id="${projects[1].id}"] .panel-signal`).evaluate(node => getComputedStyle(node).boxShadow);
-  assert.equal(signal, 'rgb(255, 255, 255) 0px 0px 0px 2px inset');
+  assert.equal(signal, 'rgb(242, 242, 242) 0px 0px 0px 2px inset');
   await page.screenshot({ path: path.join(output, 'catalina-overview.png') });
   await fs.writeFile(path.join(output, 'wallpapers.json'), JSON.stringify(wallpaperChecks, null, 2));
   await page.context().setOffline(false);
@@ -125,7 +125,7 @@ try {
   await waitFor(async () => (await fs.readFile(path.join(ssh.project, 'docs/README.md'), 'utf8')) === '# SSH 保存成功', 'SSH Markdown edit saves');
   await app.close(); app = null;
   await launch();
-  assert.equal('theme' in (await state()).settings, false);
+  assert.equal((await state()).settings.theme, 'mono');
   await fs.writeFile(path.join(output, 'wallpapers.json'), JSON.stringify(wallpaperChecks, null, 2));
   console.log('PASS: the grey design preserves ANSI colors, the needs-you edge, terminal identity and drafts');
   console.log('PASS: automatic editing, local/SSH Markdown render and save, GFM, relative resources and links, and sanitized HTML');

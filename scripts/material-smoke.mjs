@@ -21,19 +21,21 @@ const state = async () => (await page.evaluate(() => window.agentrix.getState())
 const theme = 'grey';
 const errors = [], performanceSamples = [], materials = [], typography = [], edges = [];
 const layoutGap = 12;
-// Every card keeps the same gap to its neighbours, the title bar and the bottom of the window; the explorer is a band flush with the window's edges.
+// Every card keeps the same gap to its neighbours, the title bar and the bottom of the window. In an expanded project the explorer and the project are bands flush with the window's edges
+// (the activity pane docks to the right one); the project's own content keeps the gap inside it.
 async function checkGaps(mode) {
   const gaps = await page.evaluate(() => {
     const rect = selector => document.querySelector(selector)?.getBoundingClientRect();
     const slots = [...document.querySelectorAll('.project-slot')].filter(node => node.offsetParent).map(node => node.getBoundingClientRect());
-    const bar = rect('.titlebar'), foot = { top: innerHeight }, side = rect('.focus-sidebar');
+    const bar = rect('.titlebar'), foot = { top: innerHeight }, side = rect('.focus-sidebar'), area = [...document.querySelectorAll('.panel-terminal-area')].find(node => node.offsetParent)?.getBoundingClientRect();
     const left = Math.min(...slots.map(box => box.left));
     const measured = { top: Math.min(...slots.map(box => box.top)) - bar.bottom, bottom: foot.top - Math.max(...slots.map(box => box.bottom)), right: innerWidth - Math.max(...slots.map(box => box.right)) };
-    if (side) Object.assign(measured, { sideLeft: side.left, sideTop: side.top - bar.bottom, sideBottom: foot.top - side.bottom, sideToPanel: left - side.right });
+    if (side) Object.assign(measured, { sideLeft: side.left, sideTop: side.top - bar.bottom, sideBottom: foot.top - side.bottom, sideToPanel: left - side.right, contentTop: area.top - bar.bottom, contentLeft: area.left - side.right });
     else measured.left = left;
     return measured;
   });
-  for (const [name, value] of Object.entries(gaps)) { const expected = name.startsWith('side') && name !== 'sideToPanel' ? 0 : layoutGap; assert.ok(Math.abs(value - expected) <= 1, `${mode}: ${name} gap is ${value}px, expected ${expected}px`); }
+  const focused = 'sideLeft' in gaps;
+  for (const [name, value] of Object.entries(gaps)) { const expected = focused ? name.startsWith('content') ? layoutGap : 0 : layoutGap; assert.ok(Math.abs(value - expected) <= 1, `${mode}: ${name} gap is ${value}px, expected ${expected}px`); }
   edges.push({ mode, gaps });
 }
 async function checkEdges(mode) {

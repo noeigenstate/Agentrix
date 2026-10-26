@@ -1,6 +1,6 @@
-/* The app's chrome in grey: base, title bar, buttons, menus. The tokens are in themes.css; the workbench is in
+/* The app's chrome: base, title bar, buttons, menus. The tokens are in themes.css; the workbench is in
    workspace.css, the file views in files.css and Settings in settings.css. */
-:root { font-family: var(--font-ui); color: var(--grey-ink); background: var(--grey-page); font-synthesis: none; }
+:root { font-family: var(--font-ui); color: var(--text-1); background: var(--bg-app); font-synthesis: none; }
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
 body { font-size: 13px; font-weight: 400; }
@@ -8,46 +8,46 @@ button, input, select { font: inherit; }
 button { color: inherit; cursor: pointer; -webkit-app-region: no-drag; }
 button:disabled { opacity: .45; cursor: default; }
 button, input, select { -webkit-tap-highlight-color: transparent; }
-:is(button, select, input, textarea, [role="menuitem"], [role="treeitem"]):focus-visible { outline: 2px solid var(--grey-focus); outline-offset: 2px; }
-input { color: var(--grey-ink); }
-::selection { background: var(--grey-selected); }
+:is(button, select, input, textarea, [role="menuitem"], [role="treeitem"]):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+input { color: var(--text-1); }
+::selection { background: var(--bg-selected); }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-thumb { background: var(--grey-selected); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: var(--grey-faint); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
 ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
 h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
-.app-shell { display: flex; flex-direction: column; height: 100%; background: var(--grey-page); }
+.app-shell { display: flex; flex-direction: column; height: 100%; background: var(--bg-app); }
 .workspace-layout { position: relative; display: flex; flex: 1; min-height: 0; }
 /* One hairline under the title bar, drawn on the page so the bar and its top-right corner keep their exact geometry. */
-.workspace-layout::before { content: ''; position: absolute; z-index: 6; top: 0; left: 0; right: 0; height: 1px; background: var(--grey-row); pointer-events: none; }
-.main-workspace { position: relative; flex: 1; display: flex; min-width: 0; min-height: 0; flex-direction: column; background: var(--grey-page); }
+.workspace-layout::before { content: ''; position: absolute; z-index: 6; top: 0; left: 0; right: 0; height: 1px; background: var(--divider); pointer-events: none; }
+.main-workspace { position: relative; flex: 1; display: flex; min-width: 0; min-height: 0; flex-direction: column; background: var(--bg-app); }
 .main-workspace[inert] { visibility: hidden; }
 
-/* The title bar (38px) is one full-width bar on the canvas grey, the same in the decision page and the workbench; only the current
-   tab is filled, the group has no fill, the brand mark is an outline and the gear is a plain icon. */
-.titlebar { height: 38px; flex: 0 0 38px; display: flex; align-items: center; justify-content: space-between; overflow: hidden; background: var(--grey-page); user-select: none; -webkit-app-region: drag; }
-.titlebar-brand { flex-shrink: 0; display: flex; align-items: center; gap: 9px; padding-left: 16px; font-size: 13.5px; font-weight: 600; color: var(--grey-ink); }
+/* The title bar (38px) is one full-width bar in the title bar colour, the same in the decision page and the workbench; only the current
+   tab is filled, the group has no fill and the brand mark is an outline. */
+.titlebar { height: 38px; flex: 0 0 38px; display: flex; align-items: center; justify-content: space-between; overflow: hidden; background: var(--bg-titlebar); user-select: none; -webkit-app-region: drag; }
+.titlebar-brand { flex-shrink: 0; display: flex; align-items: center; gap: 9px; padding-left: 16px; font-size: 13.5px; font-weight: 600; color: var(--text-1); }
 .brand-mark { display: grid; grid-template-columns: repeat(2, 6px); gap: 2px; }
-.brand-mark i { width: 6px; height: 6px; border-radius: 1px; background: none; border: 1px solid var(--grey-muted); }
+.brand-mark i { width: 6px; height: 6px; border-radius: 1px; background: none; border: 1px solid var(--text-2); }
 .titlebar-space { flex: 1; min-width: 24px; }
 .titlebar-tools { display: flex; align-items: center; gap: 6px; margin-right: 8px; -webkit-app-region: no-drag; }
 .titlebar-tools input { -webkit-app-region: no-drag; }
-.titlebar-tools > .icon-button { width: 26px; height: 26px; border-radius: 999px; color: #f4f9ff; background: var(--grey-row); border: 1px solid var(--grey-line); }
-.titlebar-tools > .icon-button:hover { color: #f1f7ff; background: var(--grey-row); }
+.titlebar-tools > .icon-button { width: 26px; height: 26px; border-radius: 999px; color: var(--text-1); background: var(--bg-input); border: 1px solid var(--border); }
+.titlebar-tools > .icon-button:hover { border-color: var(--border-hover); background: var(--bg-hover); }
 .window-actions { flex-shrink: 0; display: flex; height: 100%; }
-.window-actions .icon-button { width: 42px; height: 100%; border-radius: 0; color: #f4f9ff; }
-.window-actions .icon-button:hover { color: #f1f7ff; background: #edfbff16; }
-.window-actions .window-close:hover { background: #bd3d49; color: #fff; }
-.workspace-summary { display: flex; align-items: center; gap: 12px; margin-left: 14px; overflow: hidden; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--grey-muted); -webkit-app-region: drag; }
+.window-actions .icon-button { width: 42px; height: 100%; border-radius: 0; color: var(--text-1); }
+.window-actions .icon-button:hover { background: var(--bg-hover); }
+.window-actions .window-close:hover { background: #bd3d49; color: var(--text-1); }
+.workspace-summary { display: flex; align-items: center; gap: 12px; margin-left: 14px; overflow: hidden; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-3); -webkit-app-region: drag; }
 .workspace-summary > span { display: inline-flex; align-items: center; gap: 6px; }
 @media (max-width: 900px) { .workspace-summary { display: none; } }
-.legend-red, .legend-green { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--grey-muted); }
+.legend-review, .legend-done { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
 .home-nav { display: flex; align-items: center; gap: 4px; margin-left: 18px; padding: 2px; -webkit-app-region: no-drag; }
-.home-nav button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: 8px; font: 600 13px var(--font-ui); color: var(--grey-muted); background: none; }
-.home-nav button:hover { color: var(--grey-ink); background: var(--grey-pane); }
-.home-nav button[aria-current="page"] { color: var(--grey-ink); background: var(--grey-row); }
-.home-nav-count { min-width: 18px; padding: 0 5px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 17px; text-align: center; color: var(--grey-on-strong); background: var(--grey-strong); }
-.home-nav :is(button):focus-visible, .titlebar-tools > .icon-button:focus-visible { outline: 2px solid var(--grey-focus); outline-offset: 2px; }
+.home-nav button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: 8px; font: 600 13px var(--font-ui); color: var(--text-2); background: none; }
+.home-nav button:hover { color: var(--text-1); background: var(--bg-hover); }
+.home-nav button[aria-current="page"] { color: var(--text-1); background: var(--bg-selected); }
+.home-nav-count { min-width: 18px; padding: 0 5px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 17px; text-align: center; color: var(--button-primary-text); background: var(--button-primary); }
+.home-nav :is(button):focus-visible, .titlebar-tools > .icon-button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 /* Full screen: the title bar slides up out of the way; touching the top edge (or tabbing into the bar) brings it back over the content. */
 .app-shell.titlebar-auto .titlebar { position: fixed; top: 0; left: 0; right: 0; z-index: 300; transform: translateY(-100%); }
 .app-shell.titlebar-auto .titlebar-reveal { position: fixed; top: 0; left: 0; right: 0; height: 4px; z-index: 299; }
@@ -57,52 +57,54 @@ h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 :root[data-platform="darwin"] .app-shell:not(.is-fullscreen) .titlebar-brand { padding-left: 86px; }
 :root[data-platform="darwin"] .titlebar-tools { margin-right: 14px; }
 
-/* Buttons: the primary action is the one solid light block, the rest a fill with a hairline; 32px high, radius 8. */
-.icon-button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--grey-muted); }
-.icon-button:hover { color: var(--grey-ink); background: var(--grey-hover); }
-.icon-button.is-active { color: var(--grey-ink); background: var(--grey-selected); }
-.button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 16px; border: 1px solid var(--grey-line); border-radius: 8px; font-size: 13px; line-height: 20px; font-weight: 600; white-space: nowrap; color: var(--grey-ink); background: var(--grey-row); }
-.button:hover:not(:disabled) { background: var(--grey-selected); }
-.button.primary { border-color: var(--grey-strong); color: var(--grey-on-strong); background: var(--grey-strong); }
-.button.primary:hover:not(:disabled) { background: #ffffff; }
+/* Buttons: the primary action is the one solid light block, the rest an input-coloured fill with a border; 32px high, radius 8. A toggle that is on takes the accent. */
+.icon-button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); }
+.icon-button:hover { color: var(--text-1); background: var(--bg-hover); }
+.icon-button.is-active { color: var(--accent); background: var(--bg-selected); }
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 16px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; line-height: 20px; font-weight: 600; white-space: nowrap; color: var(--text-1); background: var(--bg-input); }
+.button:hover:not(:disabled) { background: var(--bg-hover); }
+.button.primary { border-color: var(--button-primary); color: var(--button-primary-text); background: var(--button-primary); }
+/* The primary button's hover steps up to the primary text colour. */
+.button.primary:hover:not(:disabled) { border-color: var(--text-1); background: var(--text-1); }
 .button.small { padding: 0 12px; font-size: 12px; }
 .titlebar-tools .button { height: 28px; padding: 0 11px; gap: 6px; font-size: 12px; }
-.text-button { display: inline-flex; gap: 5px; align-items: center; padding: 4px 0; border: 0; background: transparent; font-size: 12px; color: var(--grey-muted); white-space: nowrap; }
-.text-button:hover:not(:disabled) { color: var(--grey-ink); }
-.danger-text { color: var(--grey-ink) !important; }
-.search-input { display: flex; gap: 8px; align-items: center; min-width: 130px; width: clamp(180px, 24vw, 320px); height: 28px; padding: 0 9px; border: 1px solid var(--grey-line); border-radius: 8px; color: var(--grey-muted); background: var(--grey-row); }
-.search-input:focus-within { border-color: var(--grey-muted); }
-.search-input input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: transparent; font-size: 12px; color: var(--grey-ink); }
-.search-input input::placeholder { color: var(--grey-muted); }
-kbd { padding: 1px 4px; border: 1px solid var(--grey-line); border-radius: 4px; font: 600 11px var(--font-ui); color: var(--grey-muted); white-space: nowrap; }
-.eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 1.5px; color: var(--grey-muted); }
+.text-button { display: inline-flex; gap: 5px; align-items: center; padding: 4px 0; border: 0; background: transparent; font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.text-button:hover:not(:disabled) { color: var(--text-1); }
+.danger-text { color: var(--danger) !important; }
+.search-input { display: flex; gap: 8px; align-items: center; min-width: 130px; width: clamp(180px, 24vw, 320px); height: 28px; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-2); background: var(--bg-input); }
+.search-input:focus-within { border-color: var(--focus-ring); }
+.search-input input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: transparent; font-size: 12px; color: var(--text-1); }
+.search-input input::placeholder { color: var(--text-2); }
+kbd { padding: 1px 4px; border: 1px solid var(--border); border-radius: 4px; font: 600 11px var(--font-ui); color: var(--text-3); white-space: nowrap; }
+.eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 1.5px; color: var(--text-2); }
 
-/* Menus and pop-ups: a pane one step above the surface, a hairline, radius 16; hover is a fill. */
-.dropdown { position: absolute; top: 36px; right: 0; z-index: 50; width: 182px; padding: 8px; border: 1px solid var(--grey-line); border-radius: 16px; background: var(--grey-row); }
-.dropdown button { display: flex; align-items: center; gap: 9px; width: 100%; height: 32px; padding: 0 12px; border: 0; border-radius: 8px; font-size: 12px; text-align: left; background: transparent; color: var(--grey-ink); }
-.dropdown button:hover { background: var(--grey-selected); }
-.menu-divider { height: 1px; margin: 4px 0; background: var(--grey-line); }
+/* Menus and pop-ups: the popup colour with a border, radius 16; hover is a fill. */
+.dropdown { position: absolute; top: 36px; right: 0; z-index: 50; width: 182px; padding: 8px; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-menu); }
+.dropdown button { display: flex; align-items: center; gap: 9px; width: 100%; height: 32px; padding: 0 12px; border: 0; border-radius: 8px; font-size: 12px; text-align: left; background: transparent; color: var(--text-1); }
+.dropdown button:hover { background: var(--bg-hover); }
+.menu-divider { height: 1px; margin: 4px 0; background: var(--divider); }
 .panel-menu { width: 224px; }
-.panel-menu .menu-shortcut { margin-left: auto; font-size: 11px; white-space: nowrap; color: var(--grey-muted); }
+.panel-menu .menu-shortcut { margin-left: auto; font-size: 11px; white-space: nowrap; color: var(--text-3); }
 .terminal-context-menu { position: fixed; z-index: 120; width: 218px; }
 .terminal-context-menu button { justify-content: space-between; }
-.terminal-context-menu button > span { font-size: 11px; color: var(--grey-muted); }
+.terminal-context-menu button > span { font-size: 11px; color: var(--text-3); }
 .terminal-context-menu button:disabled { cursor: default; }
 .explorer-context-menu { position: fixed; z-index: 130; width: 200px; min-width: 250px; max-height: calc(100vh - 16px); overflow-y: auto; }
-.explorer-context-menu button > span { margin-left: auto; font-size: 11px; color: var(--grey-muted); }
+.explorer-context-menu button > span { margin-left: auto; font-size: 11px; color: var(--text-3); }
 .explorer-context-menu button:disabled { opacity: .4; cursor: default; }
 
-/* Messages: one fill, the text in full ink; the icon says what it is. */
-.error-toast { position: fixed; z-index: 100; right: 22px; bottom: 48px; display: flex; align-items: center; gap: 12px; max-width: 520px; padding: 12px 12px 12px 16px; border: 1px solid var(--grey-line); border-radius: 16px; font-size: 12px; color: var(--grey-ink); background: var(--grey-pane); }
-.error-toast > svg { flex-shrink: 0; }
-.workspace-warning { display: flex; align-items: center; gap: 8px; padding: 8px 24px; font-size: 12px; color: var(--grey-ink); background: var(--grey-row); }
-.startup-message { display: flex; height: 100%; flex-direction: column; justify-content: center; align-items: center; gap: 16px; color: var(--grey-muted); }
+/* Messages: the popup colour, the text in primary ink; the icon says what it is. */
+.error-toast { position: fixed; z-index: 100; right: 22px; bottom: 48px; display: flex; align-items: center; gap: 12px; max-width: 520px; padding: 12px 12px 12px 16px; border: 1px solid var(--border); border-radius: 16px; font-size: 12px; color: var(--text-1); background: var(--bg-menu); }
+.error-toast > svg { flex-shrink: 0; color: var(--danger); }
+.workspace-warning { display: flex; align-items: center; gap: 8px; padding: 8px 24px; font-size: 12px; color: var(--text-1); background: var(--bg-card); }
+.startup-message { display: flex; height: 100%; flex-direction: column; justify-content: center; align-items: center; gap: 16px; color: var(--text-2); }
 .startup-message h1 { font-size: 21px; }
-.loading-spinner { animation: spinner-turn .85s linear infinite; flex-shrink: 0; }
+.loading-spinner { animation: spinner-turn .85s linear infinite; flex-shrink: 0; color: var(--accent); }
+.button.primary .loading-spinner { color: inherit; }
 @keyframes spinner-turn { to { transform: rotate(360deg); } }
 .user-avatar { display: block; border-radius: 50%; object-fit: cover; }
 .update-ready { position: relative; }
-.update-ready::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--grey-strong); box-shadow: 0 0 0 2px var(--grey-row); }
+.update-ready::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--text-1); box-shadow: 0 0 0 2px var(--bg-input); }
 /* Motion follows the app setting (src/shared/motion.ts): "off" always stops it, "system" follows Windows. Pseudo-elements are no part of :is(). */
 :root[data-motion="off"] *, :root[data-motion="off"] *::before, :root[data-motion="off"] *::after { animation: none !important; transition: none !important; }
 @media (prefers-reduced-motion: reduce) { :root[data-motion="system"] *, :root[data-motion="system"] *::before, :root[data-motion="system"] *::after { animation: none !important; transition: none !important; } }

@@ -18,9 +18,8 @@ export function Select({ value, options, onChange, label, className = '', disabl
   const trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLUListElement>(null), typed = useRef({ text: '', at: 0 });
   const id = useId();
   const selected = options.findIndex(option => option.value === value);
-  // A dialog is in the top layer: the menu must live inside it to be seen, and it sits one step above the dialog's own surface.
+  // A dialog is in the top layer: the menu must live inside it to be seen.
   const host = trigger.current?.closest('dialog') ?? document.body;
-  const raised = !!trigger.current?.closest('dialog, .decision-card');
 
   const close = (refocus: boolean) => { setOpen(false); if (refocus) trigger.current?.focus(); };
   const openMenu = () => { setActive(Math.max(0, options.findIndex(option => option.value === value && !option.disabled))); setOpen(true); };
@@ -79,7 +78,7 @@ export function Select({ value, options, onChange, label, className = '', disabl
       disabled={disabled} data-value={value} onClick={() => open ? close(false) : openMenu()} onKeyDown={onKeyDown}>
       {icon}<span className="select-value">{options[selected]?.label ?? ''}</span><CaretDown size={12} aria-hidden="true" />
     </button>
-    {open && createPortal(<ul ref={menu} id={id} role="listbox" aria-label={label} className={`select-menu${raised ? ' is-raised' : ''}`}
+    {open && createPortal(<ul ref={menu} id={id} role="listbox" aria-label={label} className="select-menu"
       style={{ left: place?.left, width: place?.width, top: place?.top, bottom: place?.bottom, maxHeight: place?.maxHeight, visibility: place ? undefined : 'hidden' }}>
       {options.map((option, index) => <li key={option.value} role="option" aria-selected={index === selected} aria-disabled={option.disabled || undefined} data-value={option.value} data-active={index === active}
         onPointerEnter={() => !option.disabled && setActive(index)} onPointerDown={event => event.preventDefault()} onClick={() => choose(index)}>{option.label}</li>)}

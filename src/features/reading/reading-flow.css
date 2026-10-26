@@ -1,9 +1,9 @@
 /* The main rail follows user and agent turns. Replies and tool groups keep their cards inside the agent's body;
    tools have a small branch mark, and their pills still open into the detailed tree. */
 .reading-view {
-  --flow-card: var(--grey-pane); --flow-line: var(--grey-line); --flow-inset: var(--grey-row);
-  --flow-ink: var(--grey-ink); --flow-muted: var(--grey-muted); --flow-faint: var(--grey-faint);
-  --flow-ok: var(--grey-ink); --flow-fail: var(--grey-ink); --flow-lead: var(--grey-muted); --flow-rail: var(--grey-line); --flow-step: var(--grey-muted);
+  --flow-card: var(--bg-card); --flow-line: var(--border); --flow-inset: var(--bg-input);
+  --flow-ink: var(--text-1); --flow-muted: var(--text-2); --flow-faint: var(--text-3);
+  --flow-ok: var(--success); --flow-fail: var(--danger); --flow-work: var(--accent); --flow-rail: var(--border); --flow-step: var(--text-2);
   --step-node: 28px; --step-gap: 10px; --step-lead: calc(var(--step-node) + var(--step-gap));
 }
 
@@ -16,20 +16,20 @@
 .reading-step:not(:has(~ .reading-step))::before { display: none; }
 /* The head line stands level with the node (28px): the speaker in the label style, the time small and muted beside it. */
 .reading-step-head { display: flex; align-items: center; gap: 8px; min-height: var(--step-node); }
-.reading-step-head > time, .reading-turn-item-body > time { font: 500 calc(11.5px * var(--reading-text))/1.4 var(--font-ui); color: var(--flow-muted); opacity: .8; font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* Each node a hollow ring in grey: you are the brightest, an agent the secondary grey, a step the hairline; the glyph tells which. */
+.reading-step-head > time, .reading-turn-item-body > time { font: 500 calc(11.5px * var(--reading-text))/1.4 var(--font-ui); color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Each node a hollow ring: you in primary text, an agent in its own mark colour, a step in secondary text; the glyph tells which. */
 .reading-node { --node-tint: var(--flow-step); position: relative; z-index: 1; display: grid; place-items: center; width: var(--step-node); height: var(--step-node); border-radius: 50%;
   color: var(--node-tint); box-shadow: inset 0 0 0 1.5px var(--node-tint); }
 .reading-node > svg { display: block; shape-rendering: geometricPrecision; }
-.reading-step.is-user .reading-node { --node-tint: var(--grey-ink); }
-.reading-step.is-claude .reading-node { --node-tint: var(--grey-muted); }
-.reading-step.is-codex .reading-node { --node-tint: var(--grey-muted); }
+.reading-step.is-user .reading-node { --node-tint: var(--text-1); }
+.reading-step.is-claude .reading-node { --node-tint: var(--agent-claude); }
+.reading-step.is-codex .reading-node { --node-tint: var(--agent-codex); }
 /* The official Blossom's 716-unit canvas includes its clear space: keep the full canvas inside the existing node.
    Codex uses its supplied white mark; Claude retains its official orange. */
 .reading-node > .agent-brand-codex { width: var(--step-node); height: var(--step-node); }
-/* A running node has the heavier ring; one that failed has it in full ink. */
+/* A running node has the heavier ring; one that failed has it in the danger colour. */
 .reading-step.is-running .reading-node { box-shadow: inset 0 0 0 2px var(--node-tint); }
-.reading-step.is-failed .reading-node { --node-tint: var(--grey-ink); box-shadow: inset 0 0 0 2px var(--grey-ink); }
+.reading-step.is-failed .reading-node { --node-tint: var(--flow-fail); box-shadow: inset 0 0 0 2px var(--node-tint); }
 /* The cards start at the node's right edge, 14px from the rail and nearer to it than the name label, which stays beside the node. */
 .reading-step-body > :is(.reading-user, .reading-turn) { margin-left: calc(var(--step-node) - var(--step-lead)); }
 .reading-step-body { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -41,7 +41,7 @@
 .reading-turn-tools { position: relative; min-width: 0; margin-left: 6px; display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 6px; }
 .reading-turn-tools::before { content: ''; position: absolute; left: 5.5px; top: 20px; bottom: 0; border-left: 1px solid var(--flow-line); }
 .reading-turn-mark { display: grid; place-items: center; height: 28px; color: var(--flow-step); }
-.reading-turn-tools.is-failed .reading-turn-mark { color: var(--flow-ink); }
+.reading-turn-tools.is-failed .reading-turn-mark { color: var(--flow-fail); }
 .reading-turn-tools .reading-turn-item-body { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 4px 10px; }
 .reading-turn-tools .reading-tools { min-width: 0; flex: 0 1 auto; }
 .reading-turn-tools .reading-tools.is-open { flex: 1 1 100%; }
@@ -64,17 +64,16 @@
 .reading-tools-head { display: inline-flex; align-self: flex-start; align-items: center; flex-wrap: wrap; gap: 6px 9px; min-width: 0; max-width: 100%; padding: 7px 14px 7px 12px; border: 0;
   border-radius: 999px; font: inherit; font-size: calc(13.5px * var(--reading-text)); color: var(--flow-ink); background: var(--flow-card); cursor: pointer; }
 .reading-tools.is-open .reading-tools-head { background: transparent; box-shadow: none; }
-.reading-tools-head:hover { background: var(--grey-hover); }
+.reading-tools-head:hover { background: var(--bg-hover); }
 .reading-tools-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.reading-tools-head em { font-style: normal; font-size: calc(12px * var(--reading-text)); color: var(--flow-ink); font-weight: 600; }
-.reading-tools-file { flex: none; max-width: min(160px, 100%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 8px; border-radius: 999px; font: 400 calc(12px * var(--reading-text))/1.6 var(--font-mono); color: var(--flow-ink); background: var(--grey-row); }
-.reading-tools-more { flex: none; font-size: calc(12px * var(--reading-text)); color: var(--flow-muted); }
-.reading-tools-lead { flex: none; color: var(--flow-lead); }
+.reading-tools-head em { font-style: normal; font-size: calc(12px * var(--reading-text)); color: var(--flow-fail); font-weight: 600; }
+.reading-tools-file { flex: none; max-width: min(160px, 100%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 8px; border-radius: 999px; font: 400 calc(12px * var(--reading-text))/1.6 var(--font-mono); color: var(--flow-ink); background: var(--bg-input); }
+.reading-tools-more { flex: none; font-size: calc(12px * var(--reading-text)); color: var(--flow-faint); }
 .reading-tools-caret { flex: none; color: var(--flow-muted); }
-.reading-step-state { flex: none; color: var(--flow-muted); }
-.reading-step-state.is-running { position: relative; display: grid; place-items: center; width: 17px; height: 17px; color: var(--flow-rail); }
+.reading-step-state { flex: none; color: var(--flow-ok); }
+.reading-step-state.is-running { position: relative; display: grid; place-items: center; width: 17px; height: 17px; color: var(--flow-work); }
 .reading-step-state.is-running::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.reading-step-state.is-failed { color: var(--flow-ink); }
+.reading-step-state.is-failed { color: var(--flow-fail); }
 /* The steps as a tree under the pill. */
 .reading-tools-tree { position: relative; display: flex; flex-direction: column; gap: 2px; margin: 0 0 0 22px; padding: 2px 14px 10px 18px; list-style: none; }
 .reading-tools-tree::before { content: ''; position: absolute; left: 0; top: 0; bottom: 22px; border-left: 1px solid var(--flow-line); }
@@ -84,7 +83,7 @@
 .reading-tools-tree li > code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 calc(12.5px * var(--reading-text))/1.6 var(--font-mono); color: var(--flow-ink); }
 .reading-tools-tree li > small { grid-column: 4; font-size: calc(11.5px * var(--reading-text)); color: var(--flow-faint); overflow-wrap: anywhere; }
 .reading-tool-icon { color: var(--flow-muted); }
-.reading-tools-tree li.is-failed > code { color: var(--flow-ink); font-weight: 600; }
+.reading-tools-tree li.is-failed > code { color: var(--flow-fail); font-weight: 600; }
 /* What the steps wrote (cards, a picture being drawn) sits under the pill or inside the opened card. */
 .reading-tools > :is(.file-cards, .reading-generating) { margin-left: 4px; }
 .reading-tools.is-open > :is(.file-cards, .reading-generating) { margin: 0 14px 12px; }

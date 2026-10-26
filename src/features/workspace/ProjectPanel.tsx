@@ -59,7 +59,7 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
   const roundComplete = isRoundComplete(project);
   // A new turn starts the edge and dot together; ordinary renders keep their clock.
   const signalKey = `${working ? 'working' : 'rest'}:${project.lastCompletedAt}`;
-  const badgeClass = `status-badge ${working ? 'blue' : roundComplete ? 'green' : project.unread ? 'red' : project.error ? 'amber' : ''}`;
+  const badgeClass = `status-badge ${working ? 'is-working' : roundComplete ? 'is-complete' : project.unread ? 'is-review' : project.error ? 'is-error' : ''}`;
   const meta = working ? '' : project.lastCompletedAt ? t('{time}完成', { time: relativeTime(project.lastCompletedAt, now) }) : '';
   const badge = <><span key={signalKey} className="status-dot" aria-hidden="true" /><span>{statusText(project)}</span></>;
   useEffect(() => {

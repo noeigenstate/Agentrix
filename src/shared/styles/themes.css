@@ -1,15 +1,16 @@
-/* The one token set of the app (the grey design). Surfaces from the page up: page (#191919, also the right side) < pane and card (#242424) < input
-   and row fill, hover (#2d2d2d) < selected and the hairline (#404040). One hairline; one ring for keyboard focus. Text: primary, secondary, placeholder
-   (the last is also the disabled grey). Radii: 0 for layout regions, 16 real cards, menus and dialogs, 12 the composer box and dropdown triggers,
-   8 buttons, pickers, rows and wells, the pill only for tags. The dropdowns carry the owner's own three text greys. */
+/* The one token set of the app, named by role. New UI uses these and nothing else; a grey is never picked from a scale.
+   Surfaces: app (canvas), titlebar, sidebar, card, input, menu (dropdowns, popovers, toasts), hover, selected. Lines: border (cards, controls), border-hover,
+   divider (between regions, hairlines). Text: 1 primary, 2 secondary, 3 tertiary, disabled. Buttons: the primary button, its text and the one ring for keyboard focus.
+   Colour is for meaning only: the accent marks key interactions and active state, success, warning and danger mark state, and the two agents keep their own marks.
+   Radii: 0 for layout regions, 16 real cards, menus and dialogs, 12 the composer box and dropdown triggers, 8 buttons, pickers, rows and wells, the pill only for tags. */
 :root {
   color-scheme: dark;
-  --grey-page: #191919; --grey-pane: #242424; --grey-card: #242424; --grey-row: #2d2d2d; --grey-sunken: #191919;
-  --grey-hover: #2d2d2d; --grey-selected: #404040; --grey-strong: #f0f0f0; --grey-on-strong: #191919;
-  --grey-line: #404040; --grey-focus: #ffffff;
-  --grey-ink: #f0f0f0; --grey-muted: #a3a3a3; --grey-faint: #8c8c8c;
-  /* The agents' official mark colours, the one deliberate colour in the chrome: Claude Code's coral; Codex's mark is a
-     #b1a7ff to #3941ff gradient, of which its middle blue reads as one colour on a dark tile. */
-  --agent-claude: #d97757; --agent-codex: #7a9dff;
-  --select-value: #f3f4f6; --select-item: #e5e7eb; --select-caret: #9ca3af;
+  --bg-app: #181818; --bg-titlebar: #202020; --bg-sidebar: #232323; --bg-card: #262626; --bg-input: #2d2d2d; --bg-menu: #303030;
+  --bg-hover: #343434; --bg-selected: #383838;
+  --border: #404040; --border-hover: #595959; --divider: #333333;
+  --text-1: #f2f2f2; --text-2: #b5b5b5; --text-3: #999999; --text-disabled: #777777;
+  --button-primary: #e5e5e5; --button-primary-text: #181818; --focus-ring: #d0d0d0;
+  --accent: #65b8ae; --success: #4caf83; --warning: #e5b45a; --danger: #e47777;
+  /* The agents' marks: Claude Code's coral, and the Codex colour Agentrix gives it to tell the two CLIs apart. */
+  --agent-claude: #d97757; --agent-codex: #34d5a5;
 }

@@ -1,9 +1,9 @@
-/* The cards of the model's route, running tasks, context and usage: #2d2d2d on the #242424 pane. A meter fills in the full ink; how full it is
-   is told by its number, and a nearly full one by a bold figure (there is no warming colour). */
+/* The cards of the model's route, running tasks, context and usage: card colour on the sidebar-coloured pane, which is docked to the main area's right edge. A meter
+   fills in the accent; how full it is is told by its number, and a filling one by a bold figure in the warning colour from 70%, the danger colour from 90%. */
 .activity-pane {
-  --flow-card: var(--grey-row); --flow-line: var(--grey-line); --flow-inset: var(--grey-pane);
-  --flow-ink: var(--grey-ink); --flow-muted: var(--grey-muted); --flow-faint: var(--grey-faint);
-  --flow-ok: var(--grey-ink); --flow-warm: var(--grey-ink); --flow-fail: var(--grey-ink);
+  --flow-card: var(--bg-card); --flow-line: var(--divider); --flow-inset: var(--bg-input);
+  --flow-ink: var(--text-1); --flow-muted: var(--text-2); --flow-faint: var(--text-3);
+  --flow-ok: var(--accent);
   gap: 12px; padding: 12px; overflow-y: auto; overscroll-behavior: contain;
 }
 .activity-card { flex: none; min-width: 0; border-radius: 16px; background: var(--flow-card); }
@@ -13,7 +13,7 @@
 /* Size to the prompts; a long queue scrolls inside its card. */
 .activity-tasks { display: flex; flex-direction: column; min-height: 0; max-height: 260px; padding-bottom: 10px; overflow: hidden; }
 .activity-tasks > .activity-card-title { display: flex; align-items: center; gap: 8px; flex: none; }
-.activity-task-count { padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 18px; color: var(--flow-ink); background: var(--grey-selected); font-variant-numeric: tabular-nums; }
+.activity-task-count { padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 18px; color: var(--flow-ink); background: var(--bg-selected); font-variant-numeric: tabular-nums; }
 .activity-prompts { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; align-content: start; gap: 6px; margin: 0; padding: 0 10px 4px; list-style: none;
  }
 .activity-prompts li { display: grid; gap: 4px; padding: 8px 12px; border-radius: 8px; background: var(--flow-inset); }
@@ -29,7 +29,7 @@
 .activity-route-steps li { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .activity-route-steps li > svg { flex: none; color: var(--flow-faint); }
 .activity-route-steps span { min-width: 0; padding: 3px 9px; border-radius: 999px; background: var(--flow-inset); font-size: 12px; line-height: 1.5; color: var(--flow-muted); overflow-wrap: anywhere; }
-.activity-route-steps .is-model span { font-weight: 600; color: var(--flow-ink); background: var(--grey-selected); }
+.activity-route-steps .is-model span { font-weight: 600; color: var(--flow-ink); background: var(--bg-selected); }
 .activity-note { margin: 0; padding: 8px 14px 12px; font-size: 11.5px; line-height: 1.6; color: var(--flow-faint); overflow-wrap: anywhere; }
 .activity-note + .activity-note { padding-top: 0; }
 .activity-route-calls { border-top: 1px solid var(--flow-line); margin: 0 14px; padding: 10px 0 4px; }
@@ -48,7 +48,7 @@
 :is(.activity-call-preparing, .activity-call-running, .activity-call-reviewing)::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .activity-call-preparing { color: var(--flow-faint); }
 .activity-call-preparing::before { background: none; box-shadow: inset 0 0 0 1px currentColor; }
-.activity-call-reviewing { color: var(--flow-warm); }
+.activity-call-reviewing { color: var(--flow-ok); }
 .activity-call-reviewing::after { content: ''; position: absolute; inset: 1px; border-radius: 50%; box-shadow: 0 0 0 1px currentColor; }
 
 /* A title with its figure at the right end, a big number, and a meter that warms as it fills. */
@@ -61,6 +61,8 @@
 .activity-meter i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--flow-ok); }
 .activity-context > .activity-meter { margin: 0 14px; }
 :is(.activity-percent, .activity-limit b):is(.is-warm, .is-high) { font-weight: 700; }
+:is(.activity-meter, .activity-percent, .activity-limit b).is-warm { --flow-ok: var(--warning); }
+:is(.activity-meter, .activity-percent, .activity-limit b).is-high { --flow-ok: var(--danger); }
 
 /* The plan's windows, then the tokens of the round and the conversation. */
 .activity-limits { display: grid; gap: 10px; padding: 0 14px 10px; }
@@ -85,21 +87,21 @@
 .activity-reset-note { grid-column: 1 / -1; margin: 0; font-size: 11px; line-height: 1.6; color: var(--flow-faint); }
 .activity-estop-wrap { display: grid; justify-items: center; gap: 8px; }
 .activity-estop { position: relative; display: block; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; }
-.activity-estop:focus-visible { outline: 2px solid var(--grey-focus); outline-offset: 4px; }
+.activity-estop:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 4px; }
 .activity-estop-hazard, .activity-estop-bezel { display: none; }
-.activity-estop-dome { position: absolute; inset: 0; display: grid; place-items: center; border-radius: 50%; color: var(--grey-on-strong); background: var(--grey-strong); }
+.activity-estop-dome { position: absolute; inset: 0; display: grid; place-items: center; border-radius: 50%; color: var(--button-primary-text); background: var(--button-primary); }
 .activity-estop-dome > b { font: 600 22px/1 var(--font-ui); font-variant-numeric: tabular-nums; }
-.activity-estop:hover:not(:disabled) .activity-estop-dome { background: #ffffff; }
+.activity-estop:hover:not(:disabled) .activity-estop-dome { background: var(--text-1); }
 .activity-estop[aria-disabled] { cursor: default; }
 .activity-estop:disabled { cursor: default; }
-.activity-estop:disabled .activity-estop-dome { color: var(--grey-faint); background: var(--grey-selected); }
+.activity-estop:disabled .activity-estop-dome { color: var(--text-disabled); background: var(--bg-selected); }
 .activity-estop-ring { position: absolute; left: -6px; top: -6px; width: 84px; height: 84px; transform: rotate(-90deg); overflow: visible; }
-.activity-estop-ring circle { fill: none; stroke: var(--grey-ink); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 100; stroke-dashoffset: 0; animation: activity-estop-run linear forwards; }
+.activity-estop-ring circle { fill: none; stroke: var(--text-1); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 100; stroke-dashoffset: 0; animation: activity-estop-run linear forwards; }
 @keyframes activity-estop-run { to { stroke-dashoffset: 100; } }
 .activity-estop-label { font-size: 12px; font-weight: 600; color: var(--flow-ink); }
 .activity-reset.is-counting .activity-estop-label { font-variant-numeric: tabular-nums; }
-.activity-reset-cancel { justify-self: end; height: 32px; padding: 0 16px; border: 1px solid var(--grey-line); border-radius: 8px; background: var(--grey-row); color: var(--flow-ink); font: 600 13px var(--font-ui); cursor: pointer; }
-.activity-reset-cancel:hover, .activity-reset-cancel:focus-visible { background: var(--grey-selected); outline: none; }
+.activity-reset-cancel { justify-self: end; height: 32px; padding: 0 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--flow-ink); font: 600 13px var(--font-ui); cursor: pointer; }
+.activity-reset-cancel:hover, .activity-reset-cancel:focus-visible { background: var(--bg-hover); outline: none; }
 
 /* Shorter windows tighten the cards to keep more of the pane in view. */
 @media (max-height: 960px) {

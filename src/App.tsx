@@ -313,8 +313,8 @@ export function App() {
         <button type="button" aria-current={shownView === 'workspace' ? 'page' : undefined} onClick={() => setView('workspace')}><CirclesFour size={16} />{t('工作台')}</button>
       </nav>
       {!!(unread || completed) && <div className="workspace-summary" role="status" aria-label={t('工作区概况')}>
-        {!!unread && <span className="summary-unread"><i className="legend-red" />{t('{count} 待查看', { count: unread })}</span>}
-        {!!completed && <span className="summary-complete"><i className="legend-green" />{t('{count} 本轮完成', { count: completed })}</span>}
+        {!!unread && <span className="summary-unread"><i className="legend-review" />{t('{count} 待查看', { count: unread })}</span>}
+        {!!completed && <span className="summary-complete"><i className="legend-done" />{t('{count} 本轮完成', { count: completed })}</span>}
       </div>}
       <div className="titlebar-space" />
       <div className="titlebar-tools">
