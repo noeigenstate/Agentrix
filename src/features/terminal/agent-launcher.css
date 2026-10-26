@@ -12,7 +12,7 @@
 .agent-launcher-agent:disabled { cursor: default; opacity: .7; }
 .agent-launcher-mark { grid-row: span 2; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 8px; font: 600 16px var(--font-mono); color: var(--agent); background: var(--bg-input); }
 .agent-launcher-agent.is-claude { --agent: var(--agent-claude); }
-.agent-launcher-agent.is-codex { --agent: var(--text-1); }
+.agent-launcher-agent.is-codex { --agent: var(--agent-codex); }
 .agent-launcher-agent.is-claude .agent-launcher-mark { font-size: 22px; }
 .agent-launcher-agent.is-codex .agent-launcher-mark { font-size: 14px; }
 .agent-launcher-agent b { font-size: 13px; font-weight: 600; }

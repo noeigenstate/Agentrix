@@ -26,10 +26,10 @@ export function SessionDetail({ item, now, onOpenProject, children }: { item: In
   const details = [agent, terminal.lastCompletedAt && t('上次完成 {time}', { time: relativeTime(terminal.lastCompletedAt, now) }), queued > 0 && t('{count} 条排队', { count: queued })].filter(Boolean).join(' · ');
   return <article className="decision-card session-detail" aria-label={project.name} title={details || undefined}>
     <header className="session-head">
-      <Icon size={20} className="session-icon" aria-hidden="true" />
+      <Icon size={18} className="session-icon" aria-hidden="true" />
       <h2 className="session-name">{name}</h2>
       <span className={`decision-kind${item.group === 'working' ? ' is-work' : terminal.codexActive && terminal.codexActivity === 'complete' ? ' is-done' : ''}`}>{sessionStateLabel(project, terminal)}</span>
-      <button type="button" className="button secondary session-open" onClick={() => onOpenProject(project.id)}>{t('打开会话')}<ArrowUpRight size={16} /></button>
+      <button type="button" className="text-button session-open" onClick={() => onOpenProject(project.id)}>{t('打开会话')}<ArrowUpRight size={14} /></button>
     </header>
     <p className="session-summary">{summary || t('这个项目还没有任务记录')}</p>
     {children && <hr className="session-divider" />}

@@ -66,6 +66,119 @@ function loadUI(name, overrides = {}) {
   return mod.exports;
 }
 
+function projectHeaderHarness(t) {
+  const previousWindow = globalThis.window, previousDocument = globalThis.document;
+  const slots = [], effects = [], listeners = new Map(), focused = [], started = [];
+  let cursor = 0;
+  const hooks = {
+    useState(initial) {
+      const index = cursor++;
+      if (!(index in slots)) slots[index] = initial;
+      return [slots[index], value => { slots[index] = value; }];
+    },
+    useRef(initial) { const index = cursor++; return slots[index] ??= { current: initial }; },
+    useEffect(callback, deps) {
+      const index = cursor++, previous = slots[index];
+      if (previous && deps.every((value, i) => Object.is(value, previous.deps[i]))) return;
+      effects.push(() => { previous?.cleanup?.(); slots[index] = { deps, cleanup: callback() }; });
+    },
+  };
+  globalThis.window = { innerWidth: 1600, agentrix: { startTerminal: id => { started.push(id); return Promise.resolve({ ok: true }); } } };
+  globalThis.document = {
+    addEventListener: (name, listener) => listeners.set(name, listener),
+    removeEventListener: (name, listener) => { if (listeners.get(name) === listener) listeners.delete(name); },
+  };
+  t.after(() => {
+    for (const slot of slots) slot?.cleanup?.();
+    globalThis.window = previousWindow; globalThis.document = previousDocument;
+  });
+  const view = { reading: true };
+  const { ProjectPanel } = loadUI('features/workspace/ProjectPanel.tsx', {
+    react: hooks,
+    './ProjectTerminals': { ProjectTerminals: () => null },
+    './ActivityPane': { ActivityPane: () => null },
+    './ProjectImageDialog': { ProjectImageDialog: () => null },
+    './IconButton': loadUI('shared/IconButton.tsx'),
+    './reading-mode': { useTerminalChoice: () => [], readingShown: () => view.reading, setReading: (_id, on) => { view.reading = on; } },
+    './voice-input': { useVoice: () => ({ recording: null }) },
+    './shortcuts': { shortcut: () => '' },
+    './time': { relativeTime: () => '' },
+    './i18n': { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (_, name) => values[name]) },
+  });
+  const props = {
+    project: { id: 'project', name: 'Example', path: '/example', branch: 'main', status: 'codex',
+      unread: 0, codexActive: true, codexActivity: 'unknown', agent: 'codex', error: null, lastCompletedAt: null,
+      terminals: [{ id: 'terminal', sessionId: 'session', status: 'codex', codexActive: true }] },
+    index: 0, hidden: false, focused: false, activityOpen: true, fontSize: 12, now: 0,
+    onFocus: id => focused.push(id), onAction: promise => promise, onError: assert.fail, onOpenLink() {}, onRevealProject() {},
+  };
+  const render = () => {
+    cursor = 0;
+    const root = ProjectPanel(props);
+    while (effects.length) effects.shift()();
+    return elements(root);
+  };
+  return { props, render, view, listeners, focused, started };
+}
+
+test('only a focused project with the activity toggle off omits the three header actions, at every window width', t => {
+  const h = projectHeaderHarness(t);
+  for (const width of [1600, 1000, 800]) for (const focused of [false, true]) for (const activityOpen of [false, true]) {
+    window.innerWidth = width;
+    Object.assign(h.props, { focused, activityOpen });
+    const nodes = h.render(), visible = !focused || activityOpen;
+    const label = `${width}px, focused=${focused}, activityOpen=${activityOpen}`;
+    assert.equal(nodes.some(node => node.props.className?.startsWith('status-badge')), visible, `status: ${label}`);
+    assert.equal(nodes.some(node => node.props.label === '切换到终端'), visible, `reading toggle: ${label}`);
+    assert.equal(nodes.some(node => node.props.className === 'panel-menu-anchor'), visible, `more menu: ${label}`);
+    assert.equal(nodes.find(node => node.props.className === 'panel-name').props.children[0].props.children, 'Example');
+  }
+  h.props.focused = true; h.props.activityOpen = true;
+  h.render().find(node => node.props.label === '切换到终端').props.onClick();
+  assert.equal(h.view.reading, false);
+  assert.ok(h.render().some(node => node.props.label === '阅读视图：按文档排版显示对话'));
+});
+
+test('the unread status button still opens a grid card with either activity toggle setting', t => {
+  const h = projectHeaderHarness(t);
+  h.props.project.unread = 1;
+  for (const activityOpen of [false, true]) {
+    h.props.activityOpen = activityOpen;
+    const button = h.render().find(node => node.props.className?.includes('status-button'));
+    assert.equal(button.type, 'button'); button.props.onClick();
+  }
+  assert.deepEqual(h.focused, ['project', 'project']);
+});
+
+test('a stopped single terminal can restart while the focused header actions are hidden', t => {
+  const h = projectHeaderHarness(t);
+  Object.assign(h.props, { focused: true, activityOpen: false });
+  for (const status of ['stopped', 'exited']) {
+    h.props.project.terminals[0].status = status;
+    const restart = h.render().find(node => node.props['aria-label'] === '重新启动');
+    assert.ok(restart); restart.props.onClick();
+  }
+  assert.deepEqual(h.started, ['terminal', 'terminal']);
+});
+
+test('hiding the header actions closes its open menu and removes the dismiss listener without reopening it later', t => {
+  const h = projectHeaderHarness(t);
+  h.props.activityOpen = false;
+  const openMenu = () => {
+    h.render().find(node => node.props.label === 'Example 的更多操作').props.onClick();
+    assert.ok(h.render().some(node => node.props.role === 'menu'));
+    assert.equal(h.listeners.size, 1);
+  };
+  const closedMenu = () => {
+    assert.equal(h.render().some(node => node.props.role === 'menu'), false);
+    assert.equal(h.listeners.size, 0);
+  };
+  openMenu(); h.props.focused = true; closedMenu();
+  h.props.activityOpen = true; closedMenu();
+  openMenu(); h.props.activityOpen = false; closedMenu();
+  h.props.activityOpen = true; closedMenu();
+});
+
 test('named timeline heads show their time even in the same minute as the previous step', () => {
   const { TimelineStep, stepTime } = loadUI('features/reading/Timeline.tsx');
   const at = new Date(2026, 9, 17, 16, 16, 20).getTime();

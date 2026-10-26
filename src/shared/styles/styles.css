@@ -60,11 +60,11 @@ h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 :root[data-platform="darwin"] .app-shell:not(.is-fullscreen) .titlebar-brand { margin-left: 78px; }
 :root[data-platform="darwin"] .titlebar-tools { margin-right: 14px; }
 
-/* Buttons: the primary action is the one solid light block, the rest an input-coloured fill with a border; 32px high, radius 8. A toggle that is on takes the primary text colour and the selected fill. */
+/* Buttons: the primary action is the one solid light block, the rest the control fill (white in the light theme) with a border; 32px high, radius 8, 14px text. A toggle that is on takes the primary text colour and the selected fill. */
 .icon-button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); }
 .icon-button:hover { color: var(--text-1); background: var(--bg-hover); }
 .icon-button.is-active { color: var(--text-1); background: var(--bg-selected); }
-.button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 16px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; line-height: 20px; font-weight: 600; white-space: nowrap; color: var(--text-1); background: var(--bg-input); }
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 16px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; line-height: 20px; font-weight: 600; white-space: nowrap; color: var(--text-1); background: var(--bg-control); }
 .button:hover:not(:disabled) { background: var(--bg-hover); }
 .button.primary { border-color: var(--button-primary); color: var(--button-primary-text); background: var(--button-primary); }
 /* The primary button's hover steps up to the primary text colour. */
@@ -74,7 +74,7 @@ h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 .text-button { display: inline-flex; gap: 5px; align-items: center; padding: 4px 0; border: 0; background: transparent; font-size: 12px; color: var(--text-2); white-space: nowrap; }
 .text-button:hover:not(:disabled) { color: var(--text-1); }
 .danger-text { color: var(--danger) !important; }
-.search-input { display: flex; gap: 8px; align-items: center; min-width: 130px; width: clamp(180px, 24vw, 320px); height: 28px; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-2); background: var(--bg-input); }
+.search-input { display: flex; gap: 8px; align-items: center; min-width: 130px; width: clamp(180px, 24vw, 320px); height: 32px; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-2); background: var(--bg-input); }
 .search-input:focus-within { border-color: var(--focus-ring); }
 .search-input input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: transparent; font-size: 12px; color: var(--text-1); }
 .search-input input::placeholder { color: var(--text-2); }

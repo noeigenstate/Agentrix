@@ -77,7 +77,7 @@
    and, small and over Remote Desktop, seems not to move. With motion off it stays ✻. Codex's dot pulses. */
 .reading-status.is-claude .reading-status-mark { color: var(--agent-claude); }
 .reading-status.is-claude .reading-status-mark::before { content: '✻'; animation: reading-mark-claude 1.2s step-end infinite; }
-.reading-status.is-codex .reading-status-mark { color: var(--text-1); animation: reading-mark-pulse 1.2s ease-in-out infinite; }
+.reading-status.is-codex .reading-status-mark { color: var(--agent-codex); animation: reading-mark-pulse 1.2s ease-in-out infinite; }
 @keyframes reading-mark-claude {
   0% { content: '·'; } 10% { content: '✢'; } 20% { content: '✳'; } 30% { content: '✶'; } 40% { content: '✻'; } 50% { content: '✽'; }
   60% { content: '✻'; } 70% { content: '✶'; } 80% { content: '✳'; } 90% { content: '✢'; }

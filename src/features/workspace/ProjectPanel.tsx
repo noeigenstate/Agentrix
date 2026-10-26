@@ -50,6 +50,8 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
   const first = project.terminals[0];
   const currentTerminal = project.terminals.find(item => item.id === activeTerminalId) || first;
   const multiple = project.terminals.length > 1;
+  // A narrow window hides the pane in CSS; only its title-bar toggle hides these actions.
+  const showHeaderActions = !focused || activityOpen;
   const hasTerminal = !!first.sessionId;
   const stopped = first.status === 'stopped' || first.status === 'exited';
   const addTerminal = async () => { const id = await onAction(api.addTerminal(project.id)); if (id) setActiveTerminalId(id); };
@@ -64,10 +66,11 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
   const badge = <><span key={signalKey} className="status-dot" aria-hidden="true" /><span>{statusText(project)}</span></>;
   useEffect(() => {
     if (!menuOpen) return;
+    if (!showHeaderActions) { setMenuOpen(false); return; }
     const dismiss = (event: PointerEvent) => { if (!menu.current?.contains(event.target as Node)) setMenuOpen(false); };
     document.addEventListener('pointerdown', dismiss);
     return () => document.removeEventListener('pointerdown', dismiss);
-  }, [menuOpen]);
+  }, [menuOpen, showHeaderActions]);
   const action = (callback: () => void) => { setMenuOpen(false); callback(); };
   const showActivity = focused && activityOpen;
   // Reading view or raw terminal, for the terminal in use.
@@ -93,12 +96,12 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
         {project.kind === 'ssh' && <small className="ssh-project-label"><Globe size={11} />{project.ssh?.host}</small>}
       </button>
       {!!meta && <span className="panel-meta" title={project.path}>{meta}</span>}
-      {!!project.unread && !focused && !working
+      {showHeaderActions && (!!project.unread && !focused && !working
         ? <button type="button" className={`${badgeClass} status-button`} title={statusText(project)} onClick={() => onFocus(project.id)} aria-label={t('查看 {name} 的完成结果', { name: project.name })}>{badge}</button>
-        : <span className={badgeClass} title={statusText(project)}>{badge}</span>}
+        : <span className={badgeClass} title={statusText(project)}>{badge}</span>)}
       {!multiple && stopped && hasTerminal && <button className="text-button panel-action" aria-label={t('重新启动')} onClick={() => onAction(api.startTerminal(first.id))}><Play size={12} weight="fill" /><span>{t('重启')}</span></button>}
-      {currentTerminal.sessionId && currentTerminal.codexActive && <IconButton label={readingOn ? t('切换到终端') : t('阅读视图：按文档排版显示对话')} className={readingOn ? 'is-active' : ''} onClick={() => setReading(currentTerminal.id, !readingOn)}>{readingOn ? <TerminalIcon size={16} /> : <Article size={16} />}</IconButton>}
-      <div className="panel-menu-anchor" ref={menu}>
+      {showHeaderActions && currentTerminal.sessionId && currentTerminal.codexActive && <IconButton label={readingOn ? t('切换到终端') : t('阅读视图：按文档排版显示对话')} className={readingOn ? 'is-active' : ''} onClick={() => setReading(currentTerminal.id, !readingOn)}>{readingOn ? <TerminalIcon size={16} /> : <Article size={16} />}</IconButton>}
+      {showHeaderActions && <div className="panel-menu-anchor" ref={menu}>
         <IconButton label={t('{name} 的更多操作', { name: project.name })} onClick={() => setMenuOpen(!menuOpen)}><DotsThree size={20} weight="bold" /></IconButton>
         {menuOpen && <div className="dropdown panel-menu" role="menu">
           {!focused && <button role="menuitem" onClick={() => action(() => onFocus(project.id))}><ArrowsOutSimple size={16} />{t('全屏查看')}</button>}
@@ -111,7 +114,7 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
           <div className="menu-divider" />
           <button role="menuitem" className="danger-text" onClick={() => action(() => { onAction(api.removeProject(project.id)); })}><X size={16} />{t('移除项目')}<span className="menu-shortcut" aria-hidden="true">{shortcut('removeProject')}</span></button>
         </div>}
-      </div>
+      </div>}
     </header>
     {imageOpen && <ProjectImageDialog project={project} index={index} onClose={() => setImageOpen(false)} />}
     <ProjectTerminals project={project} focused={focused} fontSize={fontSize} activeId={activeTerminalId} setActiveId={setActiveTerminalId} onAction={onAction} onError={onError} onOpenLink={onOpenLink} />

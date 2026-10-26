@@ -6,6 +6,12 @@ export type InboxItem = { id: string; group: Group; project: Project; terminal: 
 
 export const isWorking = (terminal: ProjectTerminal) => terminal.codexActive && terminal.codexActivity === 'working';
 
+// A project's detail keeps its own target, even when its SSH agent must first be started in the terminal.
+export function newWorkProjects(projects: readonly Project[], selectedProjectId?: string): Project[] {
+  return projects.filter(project => selectedProjectId !== undefined ? project.id === selectedProjectId
+    : project.kind !== 'ssh' || project.terminals[0]?.codexActive);
+}
+
 // What the inbox lists, by urgency: every decision (already in the order it matters), then the sessions with nothing
 // to decide, the working ones first. A session that waits on a decision is listed by its decision only.
 export function inboxItems(projects: readonly Project[], decisions: readonly Decision[]): InboxItem[] {

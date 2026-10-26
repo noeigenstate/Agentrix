@@ -1,18 +1,18 @@
 /* The home page (decisions and sessions) lies over the workbench, which keeps running under them, hidden. Layout, information and hierarchy
    are grey; colour is for state only (the tags and rows below) and a picked option takes the primary text colour. No shadow, no blur, no gradient,
    no translucency, no motion; decorative icons are left out. One set of tokens serves every part of the page: radii 8 / 12 / 16 / pill,
-   type 20 / 16 / 13 / 12 / 11 in weights 400 / 600, spacing 4 / 8 / 12 / 16 / 24, buttons 32px high. */
+   type 20 / 16 / 14 / 13 / 12 in weights 400 / 600 (the owner's scale: page title 20, names, group heads and buttons 14, body 13, helper lines and tags 12), spacing 4 / 8 / 12 / 16 / 24, buttons 32px high. */
 .home-layer {
   position: absolute; inset: 0; z-index: 4; overflow: auto; background: var(--bg-app);
 }
 .home-page { width: min(1440px, 100%); margin: 0 auto; padding: 24px; color: var(--text-1); font-size: 13px; }
-.home-head h1 { margin: 0; padding: 0 12px; font-size: 16px; font-weight: 600; line-height: 24px; }
+.home-head h1 { margin: 0; padding: 0 12px; font-size: 20px; font-weight: 600; line-height: 28px; }
 .home-counts { margin: 4px 0 0; padding: 0 12px; font-size: 12px; line-height: 16px; color: var(--text-3); }
-.home-notice { display: flex; align-items: center; gap: 8px; margin: 12px 12px 0; padding: 8px 12px; border-radius: 8px; font-size: 12px; color: var(--text-1); background: var(--bg-card); }
+.home-notice { display: flex; align-items: center; gap: 8px; margin: 12px 12px 0; padding: 8px 12px; border-radius: 8px; font-size: 13px; color: var(--text-1); background: var(--bg-card); }
 
 /* The tags: one shape for a decision's kind, its mode, and a session's state. Needs-you is outlined in the warning colour, a finished round to review
    outlined in success, working filled and in the running colour, a finished session plain success, the rest neutral; never a solid light block, so the card's one primary button stays the strongest thing. */
-.inbox-tag, .decision-kind, .decision-mode { display: inline-flex; flex: none; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 20px; white-space: nowrap; color: var(--text-2); background: var(--bg-input); }
+.inbox-tag, .decision-kind, .decision-mode { display: inline-flex; flex: none; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 20px; white-space: nowrap; color: var(--text-2); background: var(--bg-input); }
 /* Without the colour the shapes still tell them apart: what needs you or waits for review is outlined, what is working is filled, the rest is plain. */
 :is(.inbox-tag, .decision-kind):is(.is-need, .is-review), .decision-card:not(.session-detail) .decision-kind { color: var(--warning); background: none; border: 1px solid currentColor; line-height: 18px; }
 :is(.inbox-tag, .decision-kind).is-review, .decision-card.is-review .decision-kind { color: var(--success); }
@@ -20,19 +20,20 @@
 .decision-kind.is-done { color: var(--success); }
 
 /* The inbox: one list by urgency, no icon chips; a row is the name, what it is on (only when it is on something) and its state. A row
-   with nothing to say under its name is compact, 40px; the rest are 52px. The selected row takes the selected fill (on the sidebar colour)
-   with its name in primary text, while the others are names in secondary text. */
+   with nothing to say under its name is compact, 44px; the rest are 56px. Names are 14px in primary text; the selected row takes the selected fill
+   (on the sidebar colour) and a short bar at its left edge. */
 .home-inbox { display: flex; flex-direction: column; min-height: 0; padding: 24px 12px 12px; border-right: 1px solid var(--divider); }
 .inbox-list { flex: 1; min-height: 0; margin-top: 8px; overflow: auto; scrollbar-width: thin; outline: none; }
-.inbox-group { margin: 0; padding: 16px 12px 4px; font-size: 12px; font-weight: 600; line-height: 16px; color: var(--text-2); }
-.inbox-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; height: 52px; padding: 0 12px; border-radius: 8px; cursor: pointer; }
-.inbox-row.is-compact { height: 40px; }
+.inbox-group { margin: 0; padding: 24px 12px 8px; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--text-2); }
+.inbox-group:first-child { padding-top: 8px; }
+.inbox-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; height: 56px; padding: 0 12px; border-radius: 8px; cursor: pointer; }
+.inbox-row.is-compact { height: 44px; }
 .inbox-row:hover { background: var(--bg-hover); }
 .inbox-row[aria-selected="true"] { background: var(--bg-selected); }
-.inbox-row[aria-selected="true"] .inbox-text b { color: var(--text-1); }
+.inbox-row[aria-selected="true"]::before { content: ""; position: absolute; left: 4px; top: 30%; bottom: 30%; width: 3px; border-radius: 2px; background: var(--select-bar); }
 .inbox-list:focus-visible .inbox-row[aria-selected="true"] { box-shadow: inset 0 0 0 2px var(--focus-ring); }
 .inbox-text { display: grid; min-width: 0; }
-.inbox-text b { overflow: hidden; color: var(--text-2); text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; line-height: 20px; }
+.inbox-text b { overflow: hidden; color: var(--text-1); text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; line-height: 20px; }
 .inbox-end { display: grid; place-items: center end; }
 .inbox-state { font-size: 12px; line-height: 16px; white-space: nowrap; color: var(--success); }
 .inbox-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; color: var(--text-2); }
@@ -48,27 +49,26 @@
 /* The empty state is one column: the headline and the composer share a width and an axis, 32px apart (8 + the column gap 16 + the box's 8). */
 .home-empty { width: min(672px, 100%); text-align: center; }
 .home-empty h2 { margin: 0; font-size: 20px; font-weight: 600; line-height: 28px; }
-.home-empty p { margin: 4px 0 0; font-size: 13px; line-height: 20px; color: var(--text-2); }
+.home-empty p { margin: 4px 0 0; font-size: 14px; line-height: 20px; color: var(--text-2); }
 
-/* A decision (or a session) in full: a fixed header, the title, a body that scrolls and a fixed bar of actions. */
-.decision-card { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; margin: 0; border-radius: 16px; overflow: hidden; background: var(--bg-card); }
+/* A decision (or a session) in full: a fixed header, the title, a body that scrolls and a bar of actions. The card is as tall as its content; only when the column is too short does it shrink, the body scrolling and the bar staying visible. */
+.decision-card { display: flex; flex: 0 1 auto; flex-direction: column; min-height: 0; margin: 0; border-radius: 16px; overflow: hidden; background: var(--bg-card); }
 /* A session with nothing to decide is one compact row: tile, name and state over a one-line summary, and the way in. */
 .decision-card.session-detail { display: block; flex: none; padding: 24px; overflow: visible; }
 .session-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .session-icon { flex: none; color: var(--text-2); }
-.session-name { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; font-weight: 600; line-height: 28px; }
-.session-summary { margin: 8px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 20px; color: var(--text-2); }
-.session-divider { height: 0; margin: 24px 0; border: 0; border-top: 1px solid var(--divider); }
-.home-layer .session-open { display: inline-flex; flex: none; align-items: center; gap: 4px; margin-left: auto; }
+.session-name { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 600; line-height: 24px; }
+.session-summary { margin: 12px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 20px; color: var(--text-2); }
+.session-divider { height: 0; margin: 16px 0; border: 0; border-top: 1px solid var(--divider); }
+.home-layer .session-open { flex: none; margin-left: auto; font-size: 13px; }
 /* The composer inside the session card: no pane of its own, a 16px heading, the box under it. */
 .new-work.is-inline { padding: 0; }
 .new-work.is-inline > h3 { font-size: 16px; line-height: 24px; }
 .new-work.is-inline .new-work-input { margin-top: 12px; }
-.new-work.is-inline textarea { min-height: 60px; }
 .decision-card-head { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 8px; padding: 24px 24px 0; }
-.decision-source { font-size: 12px; color: var(--text-3); }
+.decision-source { font-size: 12px; color: var(--text-2); }
 .decision-title { flex: none; margin: 0; padding: 16px 24px 0; font-size: 20px; font-weight: 600; line-height: 28px; overflow-wrap: anywhere; }
-.review-submission { margin-left: 8px; vertical-align: middle; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 20px; display: inline-flex; align-items: center; color: var(--text-1); border: 1px solid var(--text-1); line-height: 18px; }
+.review-submission { margin-left: 8px; vertical-align: middle; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 20px; display: inline-flex; align-items: center; color: var(--text-1); border: 1px solid var(--text-1); line-height: 18px; }
 .decision-body { flex: 1 1 auto; min-height: 0; padding: 16px 24px; overflow: auto; scrollbar-width: thin; user-select: text; }
 .decision-why { margin: 0 0 12px; font-size: 13px; line-height: 20px; color: var(--text-2); }
 .decision-evidence { margin: 0 0 16px; padding: 12px; border-radius: 8px; font: 12px/20px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-1); background: var(--bg-app); }
@@ -78,7 +78,7 @@
 .decision-option.is-picked { background: var(--bg-selected); outline: 2px solid var(--text-1); outline-offset: -2px; }
 .decision-option input { margin: 2px 0 0; accent-color: var(--text-1); }
 .decision-option span { display: grid; gap: 4px; min-width: 0; }
-.decision-option b { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.decision-option b { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
 .decision-option small { font-size: 12px; color: var(--text-2); }
 .decision-options-readonly { margin: 0 0 12px; padding-left: 24px; font-size: 12px; line-height: 20px; color: var(--text-2); }
 .decision-options-readonly small { display: block; font-size: 12px; color: var(--text-3); }
@@ -92,11 +92,11 @@
 
 /* What next: a heading, a box of two lines with the microphone in it, and a footer of choices and the start button. */
 .new-work { display: flex; flex: none; flex-direction: column; padding: 16px 0 0; }
-.new-work > h3 { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--text-1); }
+.new-work > h3 { margin: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--text-1); }
 /* One bordered box: the text on top, and along its bottom edge the project (left) and the agent, microphone and send (right). */
 .new-work-input { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding: 12px; border-radius: 12px; background: var(--bg-input); border: 1px solid var(--border); }
 .new-work-input:has(textarea:focus-visible) { border-color: var(--focus-ring); }
-.new-work textarea { display: block; width: 100%; min-height: 40px; padding: 0; border: 0; resize: none; font: 13px/20px var(--font-ui); color: var(--text-1); background: none; outline: none; }
+.new-work textarea { display: block; width: 100%; min-height: 44px; padding: 0; border: 0; resize: none; font: 14px/22px var(--font-ui); color: var(--text-1); background: none; outline: none; }
 /* The box's own ring is the focus mark of its field and pickers: the app's outline would draw a second one around them. */
 .new-work :is(textarea):focus-visible { outline: none; }
 /* Every other focusable thing on the page: one ring, from the focus token, only for the keyboard. */
@@ -104,17 +104,23 @@
 .home-layer .inbox-list:focus-visible { outline: none; }
 .new-work textarea::placeholder { color: var(--text-2); }
 .new-work-bar { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--text-3); }
-.new-work-bar .voice-button { flex: none; margin-left: auto; width: 34px; height: 34px; border-radius: 8px; }
+.new-work-bar .voice-button { flex: none; margin-left: auto; width: 32px; height: 32px; border-radius: 8px; }
+/* A project's own composer has only that project to send to: a quiet label, not a faded dropdown. */
+.new-work-project { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 200px; padding: 0 4px; font-size: 14px; color: var(--text-2); }
+.new-work-project svg { flex: none; }
+.new-work-project span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Inside the composer the pickers are its own controls: no outline of their own, a fill step on hover and while open. */
 .new-work-select { flex: 0 1 auto; min-width: 0; max-width: 200px; }
 /* Without an outline the picker hugs its name, so the caret sits right after it. */
-.new-work-input .new-work-select { border-color: transparent; }
+.new-work-input .new-work-select { border-color: transparent; background: transparent; }
 .new-work-input .new-work-select .select-value { flex: 0 1 auto; }
 .new-work-input .new-work-select:is(:hover:not(:disabled), [aria-expanded="true"]) { border-color: transparent; background: var(--bg-hover); }
 .new-work-select.is-agent { margin-left: auto; }
 .new-work-select.is-agent ~ .voice-button { margin-left: 0; }
 .new-work-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.home-layer .new-work-start { display: grid; place-items: center; flex: none; width: 34px; height: 34px; padding: 0; }
+.home-layer .new-work-start { display: grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; }
+/* Nothing to send yet: a quiet grey square, not a faded button; it turns primary with the first word. */
+.home-layer .new-work-start:not(.primary) { border-color: transparent; opacity: 1; color: var(--text-2); background: var(--bg-selected); }
 .home-right.is-empty .new-work { width: min(672px, 100%); padding: 0; }
 .home-right.is-empty .new-work > h3 { display: none; }
 
@@ -123,6 +129,8 @@
   .decision-home { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; height: auto; }
   .home-inbox { max-height: 320px; }
   .home-right { min-height: 560px; padding: 16px; }
+  /* The page scrolls here, so a long decision gets a height of its own: its body scrolls and the bar of actions stays in view. */
+  .decision-card:not(.session-detail) { max-height: 70vh; }
 }
 
 
@@ -130,9 +138,9 @@
 
 /* Work handed in, graded like homework: what was asked, the agent's account, what it made, how it was checked, what
    changed, your notes from last time, and the call. */
-.review-block { margin-top: 16px; }
+.review-block { margin-top: 24px; }
 .review-block:first-child { margin-top: 0; }
-.review-block h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.review-block h4 { margin: 0 0 8px; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--text-1); }
 .review-goal { margin: 0; padding: 12px; border-radius: 8px; font-size: 13px; line-height: 20px; background: var(--bg-input); white-space: pre-wrap; overflow-wrap: anywhere; }
 .review-reply { font-size: 13px; line-height: 20px; }
 .review-reply.is-folded { max-height: 260px; overflow: hidden; }
@@ -144,9 +152,9 @@
 .review-checks li.is-failed > svg, .review-checks li.is-failed > span { color: var(--danger); font-weight: 600; }
 .review-unverified { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 12px; border-radius: 8px; font-size: 13px; color: var(--text-1); background: var(--bg-input); }
 .review-files li { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
-.review-file-status { flex: none; min-width: 48px; padding: 0 8px; border-radius: 8px; font-size: 11px; line-height: 20px; text-align: center; color: var(--text-2); background: var(--bg-input); }
+.review-file-status { flex: none; min-width: 48px; padding: 0 8px; border-radius: 8px; font-size: 12px; line-height: 20px; text-align: center; color: var(--text-2); background: var(--bg-input); }
 .review-files .text-button { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--font-mono); }
-.review-more, .review-note { margin: 8px 0 0; font-size: 12px; color: var(--text-3); }
+.review-more, .review-note { margin: 8px 0 0; font-size: 12px; color: var(--text-2); }
 .review-last-note { padding: 12px; border-radius: 8px; background: var(--bg-input); border-left: 2px solid var(--text-1); }
 .review-last-note h4 { color: var(--text-1); }
 .review-last-note p { margin: 0; font-size: 13px; line-height: 20px; white-space: pre-wrap; }
@@ -173,7 +181,7 @@
 .review-delivery { display: grid; gap: 8px; }
 .review-delivery-part { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; padding: 12px; border-radius: 8px; background: var(--bg-input); }
 .review-delivery-step { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; font-size: 12px; font-weight: 600; color: var(--text-1); background: var(--bg-selected); }
-.review-delivery-part h4 { margin: 4px 0; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.review-delivery-part h4 { margin: 2px 0 4px; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--text-1); }
 .review-delivery-part .reading-markdown, .review-delivery-part p { margin: 0; font-size: 13px; line-height: 20px; }
 .review-delivery ~ .review-block .review-reply.is-folded { max-height: 120px; }
 

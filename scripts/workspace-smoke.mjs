@@ -199,6 +199,8 @@ try {
   console.log('PASS: compact explorer, create/rename/delete, native Explorer copy-out and clipboard paste-in');
   if (await page.getByRole('button', { name: '返回终端', exact: true }).count()) await page.getByRole('button', { name: '返回终端', exact: true }).click();
   // Voice input is in the card's ⋯ menu; while it records, the microphone over the card shows it.
+  const showActivity = page.getByRole('button', { name: '显示活动栏：它正在做什么', exact: true });
+  if (await showActivity.count()) await showActivity.click();
   assert.equal(await page.locator('.panel-header .voice-button').count(), 0, 'the card header has no microphone of its own');
   const voiceItem = async name => { await page.locator('.project-panel.is-focused').getByRole('button', { name: `${project.name} 的更多操作`, exact: true }).click(); await page.getByRole('menuitem', { name, exact: false }).click(); };
   const recording = () => page.locator('.voice-overlay .voice-stage.is-recording');

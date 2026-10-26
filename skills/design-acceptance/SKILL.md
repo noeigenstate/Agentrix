@@ -74,16 +74,17 @@ focus) overrides some tokens, shown in brackets, see below.
 | Primary button | `--button-primary` / `--button-primary-text` | #E5E5E5 / #181818 | the one main action; its hover is `--text-1` |
 | Focus ring | `--focus-ring` | #D0D0D0 | every `:focus-visible` ring, and only keyboard focus |
 | Claude Code | `--agent-claude` | #D97757 | its brand icon |
+| Codex | `--agent-codex` | #34D5A5 (light #0D8F6A) | its mark and status dot, to tell the CLI apart |
 | Succeeded | `--success` | #70BFA4 | command done, check passed, a finished round's tag and dot (never a card edge) |
 | Running | `--running` | #78A8CC | tasks in progress: a working card's edge, tag and dot, the reading view's running dot |
 | Needs approval | `--warning` | #D8AE67 | only where something waits for the owner's decision |
 | Failed | `--danger` | #DE7878 | errors and failures |
 | Usage | `--usage` | #68B8AE | progress bars and usage meters |
 
-- Hue rule: **everything is neutral grey except these six**: Claude's brand icon, succeeded, running, needs approval, failed, usage.
+- Hue rule: **everything is neutral grey except these seven**: Claude's brand icon, Codex's mark, succeeded, running, needs approval, failed, usage.
   There is no accent and no "key interaction" colour: a checked switch or checkbox, a picked option or tile, the active file tab,
-  a toggled icon button, the guide's current dot and a spinner take `--text-1` or `--text-2`; a link is underlined. Codex's mark is
-  monochrome (`--text-1`). Not coloured by these rules: file-type icons (`--fi-*` in file-icons.css, content), ANSI output, syntax,
+  a toggled icon button, the guide's current dot and a spinner take `--text-1` or `--text-2`; a link is underlined. Codex's mark and
+  status dot take `--agent-codex`. Not coloured by these rules: file-type icons (`--fi-*` in file-icons.css, content), ANSI output, syntax,
   diff bands, images. **One owner exception:** list bullets and numbers in the reading view are `--usage`.
 - Colour goes on icons and indicators (a check, a cross, a dot, a ring, a bar), never on a pill, a card or a panel background: a
   command pill is a grey pill with grey text, and only its check is green, its cross red, its running dot blue. A state colour paints a
@@ -125,6 +126,8 @@ focus) overrides some tokens, shown in brackets, see below.
 Title bar 40 · explorer rows 30 to 32 with 13px text · message body 13 to 14px on a 1.5 to 1.6 line · message container radius 12 · tool
 pill 28 high (its 18px icon centred on it) · chat padding 24 left and right (16 in a card narrower than 480px) · right pane padding 16 ·
 composer 48 to 56 high and growing, radius 12 · default border 1px `--border` (#424242).
+
+Type scale (the owner's, both themes): page title 20 to 22 / 600; project name, group head and button text 14 / 600 (names in `--text-1`, group heads in `--text-2`); body 13 to 14 / 400; helper line 12 / 400 in `--text-2` or `--text-3`; status tag 12 / 600 (Windows has no real 500, so 600). Hierarchy comes from size, contrast and spacing, not from heavier weights. Controls: 32 high, 1px `--border`, radius 8 (composers 12); secondary buttons and dropdown triggers use `--bg-control` (white in light), inputs `--bg-input`.
 
 ## Definitions (so a hand count and the script agree)
 

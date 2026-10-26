@@ -50,13 +50,13 @@ test('light terminals use transparent white for contrast correction and readable
   const switchTheme = themeDocument(t); switchTheme('light');
   const theme = terminalTheme();
   assert.equal(theme.background, '#ffffff00');
-  assert.equal(theme.foreground, '#181818'); assert.equal(theme.cursor, '#181818');
-  assert.equal(theme.selectionBackground, '#dedede');
-  assert.deepEqual([theme.scrollbarSliderBackground, theme.scrollbarSliderHoverBackground, theme.scrollbarSliderActiveBackground], ['#d0d0d088', '#b0b0b088', '#b0b0b0cc']);
-  assert.equal(theme.white, '#6e6e6e'); assert.equal(theme.brightWhite, '#5e5e5e');
-  assert.deepEqual(terminalDecorationColors(), { bullet: '#5e5e5e', heading: '#181818' });
+  assert.equal(theme.foreground, '#202124'); assert.equal(theme.cursor, '#202124');
+  assert.equal(theme.selectionBackground, '#e7e9ec');
+  assert.deepEqual([theme.scrollbarSliderBackground, theme.scrollbarSliderHoverBackground, theme.scrollbarSliderActiveBackground], ['#e0e3e888', '#c9cdd488', '#c9cdd4cc']);
+  assert.equal(theme.white, '#6e6e6e'); assert.equal(theme.brightWhite, '#666d78');
+  assert.deepEqual(terminalDecorationColors(), { bullet: '#666d78', heading: '#202124' });
   for (const name of ansi) {
-    const ratio = (luminance('#f5f5f5') + 0.05) / (luminance(theme[name]) + 0.05);
+    const ratio = (luminance('#f7f8fa') + 0.05) / (luminance(theme[name]) + 0.05);
     assert.ok(ratio >= 4.5, `${name} ${theme[name]}: ${ratio.toFixed(2)}:1`);
   }
   theme.red = '#ffffff'; assert.notEqual(terminalTheme().red, theme.red);
@@ -81,8 +81,8 @@ test('open terminals and existing decorations switch themes without output or re
   await new Promise(resolve => setTimeout(resolve, 180));
   assert.deepEqual(decorations.map(item => item.foregroundColor), ['#f2f2f2', '#b5b5b5']);
   switchTheme('light');
-  assert.equal(terminal.options.theme.foreground, '#181818');
-  assert.deepEqual(decorations.slice(-2).map(item => item.foregroundColor), ['#181818', '#5e5e5e']);
+  assert.equal(terminal.options.theme.foreground, '#202124');
+  assert.deepEqual(decorations.slice(-2).map(item => item.foregroundColor), ['#202124', '#666d78']);
   assert.ok(decorations.slice(0, 2).every(item => item.disposed));
   switchTheme('mono');
   assert.equal(terminal.options.theme.foreground, '#f2f2f2');

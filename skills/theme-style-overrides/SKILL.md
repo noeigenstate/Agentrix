@@ -20,3 +20,7 @@ so a change made only in `src/features/<feature>/*.css` can do nothing at all.
 - Verify in the app, not by reading CSS: in a desktop probe read
   `getComputedStyle(element).fontSize` on an isolated profile (`AGENTRIX_DATA_DIR`), and take a screenshot in the
   Catalina theme.
+
+## Light theme principle
+
+The light theme speaks the dark theme's visual language, it is not its colours inverted: borders and dividers are lighter than instinct says (`#E0E3E8`, `#ECEEF0`), text is never lightened to match (`#202124`, `#626A75`).

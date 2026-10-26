@@ -213,6 +213,8 @@ try {
   assert.ok(rawFrames.some(frame => frame.splits.some(split => split.xtermVisible)), 'the detector sees a raw terminal');
   assert.ok(results.at(-1).terminalPixelFrames > 0, 'the compositor detector sees the magenta terminal marker');
   assert.equal(await terminal(projects[0].id).locator('.reading-view').count(), 0, 'manual raw choice survives focus');
+  const showActivity = page.getByRole('button', { name: '显示活动栏：它正在做什么', exact: true });
+  if (await showActivity.count()) await showActivity.click();
   await panel(0).locator('.panel-header').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
   for (const [mode, reduced] of [['off', 'no-preference'], ['system', 'reduce'], ['system', 'no-preference'], ['smooth', 'reduce']]) {
     await grid();

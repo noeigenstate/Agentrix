@@ -7,8 +7,8 @@
   gap: 20px; padding: 16px; overflow-y: auto; overscroll-behavior: contain;
 }
 .activity-card { flex: none; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.activity-card-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
-.activity-note { margin: 0; font-size: 11px; line-height: 16px; color: var(--flow-faint); overflow-wrap: anywhere; }
+.activity-card-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
+.activity-note { margin: 0; font-size: 12px; line-height: 16px; color: var(--flow-faint); overflow-wrap: anywhere; }
 .activity-empty { margin: 0; font-size: 12px; line-height: 18px; color: var(--flow-muted); }
 
 /* The task being worked on, and those waiting their turn. */
@@ -19,7 +19,7 @@
 .activity-prompts { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; align-content: start; gap: 12px; margin: 0; padding: 0; list-style: none; }
 .activity-prompts li { display: grid; gap: 2px; }
 .activity-prompts li p { margin: 0; font-size: 13px; line-height: 20px; color: var(--flow-ink); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.activity-prompt-state { display: flex; align-items: center; gap: 6px; font-size: 11px; line-height: 16px; color: var(--flow-faint); }
+.activity-prompt-state { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; color: var(--flow-faint); }
 .activity-prompts li.is-working .activity-prompt-state { font-size: 12px; font-weight: 600; color: var(--running); }
 .activity-prompts li.is-working .activity-prompt-state svg { width: 14px; height: 14px; color: var(--running); }
 .activity-task-quiet { min-height: 0; overflow-y: auto; margin: 0; font-size: 12px; line-height: 18px; color: var(--flow-muted); overflow-wrap: anywhere; }

@@ -102,11 +102,16 @@ try {
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await checkEdges('focused');
   const focusedLayout = await checkGaps('focused');
+  await first.getByRole('button', { name: `${projects[0].name} 的更多操作`, exact: true }).click();
+  await first.getByRole('menu').waitFor();
   await page.getByRole('button', { name: '隐藏活动栏', exact: true }).click();
   await first.locator('.activity-pane').waitFor({ state: 'detached' });
+  assert.equal(await first.locator('.status-badge, .panel-header > .icon-button, .panel-menu-anchor').count(), 0, 'the focused header actions disappear with the activity pane');
   assert.deepEqual(await checkGaps('focused without activity'), focusedLayout, 'hiding the activity pane leaves the header and content at the same height');
   await page.getByRole('button', { name: '显示活动栏：它正在做什么', exact: true }).click();
   await first.locator('.activity-pane').waitFor();
+  assert.equal(await first.locator('.status-badge, .panel-menu-anchor').count(), 2, 'the focused header actions return with the activity pane');
+  assert.equal(await first.getByRole('menu').count(), 0, 'the more menu stays closed when the activity pane returns');
   assert.deepEqual(await checkGaps('focused with activity'), focusedLayout, 'opening the activity pane leaves the header and content at the same height');
   await first.getByRole('button', { name: `${projects[0].name} 的更多操作`, exact: true }).click(); await first.getByRole('menuitem', { name: '新建终端并分屏', exact: true }).click();
   await waitFor(async () => (await state()).projects[0].terminals.length === 2 && (await state()).projects[0].terminals.every(terminal => terminal.shellReady), 'split terminals ready');

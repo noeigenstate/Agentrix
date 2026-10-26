@@ -1,6 +1,6 @@
-/* The shared dropdown. Trigger: the input fill with a border, 34px, radius 12. Menu: as wide as the trigger, the popup colour wherever it opens,
+/* The shared dropdown. Trigger: the control fill (white in light) with a border, 32px, radius 8, the same as a secondary button. Menu: as wide as the trigger, the popup colour wherever it opens,
    with the one soft shadow in the app. */
-.select-trigger { display: inline-flex; align-items: center; gap: 8px; box-sizing: border-box; min-width: 0; height: 34px; padding: 0 10px 0 12px; border: 1px solid var(--border); border-radius: 12px; font: 13px var(--font-ui); text-align: left; color: var(--text-1); background: var(--bg-input); cursor: pointer; }
+.select-trigger { display: inline-flex; align-items: center; gap: 8px; box-sizing: border-box; min-width: 0; height: 32px; padding: 0 10px 0 12px; border: 1px solid var(--border); border-radius: 8px; font: 14px var(--font-ui); text-align: left; color: var(--text-1); background: var(--bg-control); cursor: pointer; }
 .select-trigger:hover:not(:disabled), .select-trigger[aria-expanded="true"] { border-color: var(--border-hover); }
 .select-trigger:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .select-trigger:disabled { opacity: .5; cursor: default; }

@@ -27,7 +27,7 @@
 .reading-node > svg { display: block; shape-rendering: geometricPrecision; }
 .reading-step.is-user .reading-node { --node-tint: var(--text-1); }
 .reading-step.is-claude .reading-node { --node-tint: var(--agent-claude); }
-.reading-step.is-codex .reading-node { --node-tint: var(--text-2); background: var(--bg-input); }
+.reading-step.is-codex .reading-node { --node-tint: var(--agent-codex); background: var(--bg-input); }
 /* The official Blossom's 716-unit canvas includes its clear space: keep the full canvas inside the existing node.
    Codex uses its supplied white mark; Claude retains its official orange. */
 .reading-node > .agent-brand-codex { width: var(--step-node); height: var(--step-node); }

@@ -4,7 +4,7 @@ import type { Project, Result } from '../../shared/types';
 import type { Decision } from './decisions';
 import { DecisionCard } from './DecisionCard';
 import { DecisionInbox } from './DecisionInbox';
-import { inboxItems, isWorking } from './inbox-items';
+import { inboxItems, isWorking, newWorkProjects } from './inbox-items';
 import { SessionDetail } from './SessionDetail';
 import { acceptedToday } from './ReviewCard';
 import { sendToAgent, untilAtPrompt } from './send-to-agent';
@@ -52,7 +52,7 @@ export function DecisionHome({ projects, decisions, snoozed, onOpenProject, onOp
       </div> : selected.decision
         ? <DecisionCard decision={selected.decision} now={now} onOpen={onOpenDecision} onDone={setNotice} onError={onError} />
         : <SessionDetail item={selected} now={now} onOpenProject={onOpenProject}>
-          <NewWork inCard projects={projects} takeFocus={false} onAction={onAction} onDone={setNotice} onError={onError} />
+          <NewWork key={selected.project.id} inCard projects={projects} selectedProjectId={selected.project.id} takeFocus={false} onAction={onAction} onDone={setNotice} onError={onError} />
         </SessionDetail>}
       {!(selected && !selected.decision) && <NewWork projects={projects} takeFocus={!selected} onAction={onAction} onDone={setNotice} onError={onError} />}
     </div>
@@ -65,19 +65,20 @@ const AGENT_OPTIONS = [{ value: 'claude', label: 'Claude Code' }, { value: 'code
 // "What next": a goal sent to a project's agent from here, without leaving the page. One that runs gets it at once (it
 // queues it while it works); otherwise the chosen agent is started first and gets it when its input is ready. Its
 // progress then shows in the session list beside it and its work comes back as a card.
-function NewWork({ projects, takeFocus, inCard, onAction, onDone, onError }: {
-  projects: readonly Project[]; takeFocus: boolean; inCard?: boolean;
+function NewWork({ projects, selectedProjectId, takeFocus, inCard, onAction, onDone, onError }: {
+  projects: readonly Project[]; selectedProjectId?: string; takeFocus: boolean; inCard?: boolean;
   onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>; onDone: (message: string) => void; onError: (message: string) => void;
 }) {
-  const local = useMemo(() => projects.filter(project => project.kind !== 'ssh' || project.terminals[0]?.codexActive), [projects]);
-  const [text, setText] = useState(''), [projectId, setProjectId] = useState(''), [agent, setAgent] = useState<'claude' | 'codex'>('claude'), [busy, setBusy] = useState(false);
-  const project = local.find(item => item.id === projectId) ?? local[0], terminal = project?.terminals[0];
+  const choices = useMemo(() => newWorkProjects(projects, selectedProjectId), [projects, selectedProjectId]);
+  const [text, setText] = useState(''), [projectId, setProjectId] = useState(selectedProjectId ?? ''), [agent, setAgent] = useState<'claude' | 'codex'>('claude'), [busy, setBusy] = useState(false);
+  const project = choices.find(item => item.id === projectId) ?? choices[0], terminal = project?.terminals[0];
+  const sshUnavailable = project?.kind === 'ssh' && !terminal?.codexActive;
   // Dictation (its microphone or the voice shortcut) puts the words where the cursor is; Enter only puts them in, since
   // the project to send to is chosen below once there is something to send.
   const box = useRef<HTMLTextAreaElement>(null);
   useDictatedBox(VOICE_TARGET, box, setText);
   // With nothing to decide the page's one job is this box, so it takes the focus.
-  useEffect(() => { if (takeFocus) box.current?.focus({ preventScroll: true }); }, [takeFocus, local.length]);
+  useEffect(() => { if (takeFocus) box.current?.focus({ preventScroll: true }); }, [takeFocus, choices.length]);
   // Pictures pasted here go as files: the agent may not run yet to take them from the clipboard, so each is saved and
   // its path sent with the goal for the agent to look at.
   const [images, setImages] = useState<{ blob: Blob; preview: string }[]>([]);
@@ -92,7 +93,7 @@ function NewWork({ projects, takeFocus, inCard, onAction, onDone, onError }: {
   };
   const start = async () => {
     let goal = text.trim();
-    if ((!goal && !images.length) || !project || !terminal || busy) return;
+    if ((!goal && !images.length) || !project || !terminal || busy || sshUnavailable) return;
     const kind = terminal.codexActive ? (terminal.agent === 'codex' ? 'codex' : 'claude') : agent, name = kind === 'codex' ? 'Codex' : 'Claude Code';
     setBusy(true);
     try {
@@ -120,7 +121,7 @@ function NewWork({ projects, takeFocus, inCard, onAction, onDone, onError }: {
       setText(''); setImages([]); onDone(t('已交给「{project}」的 {agent}，它的进展会出现在下面。', { project: project.name, agent: name }));
     } catch (error) { onError(String(error)); } finally { setBusy(false); }
   };
-  if (!local.length) return null;
+  if (!choices.length) return null;
   const empty = !text.trim() && !images.length;
   return <section className={`home-pane new-work${inCard ? ' is-inline' : ''}`} aria-label={t('新任务')}>
     <h3>{inCard ? t('接下来要做什么？') : t('告诉 Agentrix 接下来要做什么')}</h3>
@@ -133,11 +134,12 @@ function NewWork({ projects, takeFocus, inCard, onAction, onDone, onError }: {
         <button type="button" aria-label={t('移除这张图片')} onClick={() => setImages(list => list.filter((_, at) => at !== index))}><X size={12} weight="bold" /></button>
       </span>)}</div>}
       <div className="new-work-bar">
-        <Select className="new-work-select" label={t('项目')} icon={inCard ? <FolderSimple size={16} aria-hidden="true" /> : undefined} value={project?.id ?? ''} onChange={setProjectId} options={local.map(item => ({ value: item.id, label: item.name }))} />
-        {!empty && <span className="new-work-note">{terminal?.codexActive ? t('直接发给它，不离开这一页') : t('先启动助手，准备好就发给它')}</span>}
-        {terminal && !terminal.codexActive && <Select className="new-work-select is-agent" label={t('助手')} value={agent} onChange={value => setAgent(value as 'claude' | 'codex')} options={AGENT_OPTIONS} />}
+        {selectedProjectId ? <span className="new-work-project" title={project?.name}><FolderSimple size={16} aria-hidden="true" /><span>{project?.name}</span></span>
+          : <Select className="new-work-select" label={t('项目')} value={project?.id ?? ''} onChange={setProjectId} options={choices.map(item => ({ value: item.id, label: item.name }))} />}
+        {(sshUnavailable || !empty) && <span className="new-work-note">{sshUnavailable ? t('SSH 项目请先启动终端，再在终端里运行助手。') : terminal?.codexActive ? t('直接发给它，不离开这一页') : t('先启动助手，准备好就发给它')}</span>}
+        {terminal && !terminal.codexActive && !sshUnavailable && <Select className="new-work-select is-agent" label={t('助手')} value={agent} onChange={value => setAgent(value as 'claude' | 'codex')} options={AGENT_OPTIONS} />}
         <VoiceButton terminalId={VOICE_TARGET} sessionId={null} name={t('新任务')} size={16} onError={onError} />
-        <button type="button" className={`button ${empty ? 'secondary' : 'primary'} new-work-start`} title={t('开始 (Ctrl + Enter)')} aria-label={t('开始 (Ctrl + Enter)')} disabled={busy || empty} onClick={() => void start()}>{busy ? <CircleNotch size={16} className="loading-spinner" /> : <ArrowUp size={16} weight="bold" />}</button>
+        <button type="button" className={`button ${empty ? 'secondary' : 'primary'} new-work-start`} title={t('开始 (Ctrl + Enter)')} aria-label={t('开始 (Ctrl + Enter)')} disabled={busy || empty || sshUnavailable} onClick={() => void start()}>{busy ? <CircleNotch size={16} className="loading-spinner" /> : <ArrowUp size={16} weight="bold" />}</button>
       </div>
     </div>
   </section>;

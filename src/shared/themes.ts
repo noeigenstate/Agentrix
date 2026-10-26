@@ -3,7 +3,7 @@
 // so it stays right whichever theme is active. electron/state.cjs lists the same ids when it sanitizes settings.
 export const THEMES = [
   { id: 'mono', name: '黑底白字', description: '黑色底，白色文字，灰阶为主，颜色只表示状态', swatch: { page: '#181818', pane: '#262626', line: '#404040', ink: '#f2f2f2' } },
-  { id: 'light', name: '白底黑字', description: '白色底，黑色文字，灰阶为主，颜色只表示状态', swatch: { page: '#ffffff', pane: '#f5f5f5', line: '#d0d0d0', ink: '#181818' } },
+  { id: 'light', name: '白底黑字', description: '白色底，黑色文字，灰阶为主，颜色只表示状态', swatch: { page: '#ffffff', pane: '#f7f7f8', line: '#e0e3e8', ink: '#202124' } },
 ] as const;
 
 export type ThemeId = typeof THEMES[number]['id'];
