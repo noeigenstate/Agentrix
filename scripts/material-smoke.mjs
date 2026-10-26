@@ -24,19 +24,23 @@ const layoutGap = 12;
 // Every card keeps the same gap to its neighbours, the title bar and the bottom of the window. In an expanded project the explorer and the project are bands flush with the window's edges
 // (the activity pane docks to the right one); the project's own content keeps the gap inside it.
 async function checkGaps(mode) {
-  const gaps = await page.evaluate(() => {
+  const { gaps, ...layout } = await page.evaluate(() => {
     const rect = selector => document.querySelector(selector)?.getBoundingClientRect();
     const slots = [...document.querySelectorAll('.project-slot')].filter(node => node.offsetParent).map(node => node.getBoundingClientRect());
-    const bar = rect('.titlebar'), foot = { top: innerHeight }, side = rect('.focus-sidebar'), area = [...document.querySelectorAll('.panel-terminal-area')].find(node => node.offsetParent)?.getBoundingClientRect();
+    const bar = rect('.titlebar'), foot = { top: innerHeight }, side = rect('.focus-sidebar'), header = rect('.project-panel.is-focused .panel-header'), area = [...document.querySelectorAll('.panel-terminal-area')].find(node => node.offsetParent)?.getBoundingClientRect();
     const left = Math.min(...slots.map(box => box.left));
     const measured = { top: Math.min(...slots.map(box => box.top)) - bar.bottom, bottom: foot.top - Math.max(...slots.map(box => box.bottom)), right: innerWidth - Math.max(...slots.map(box => box.right)) };
-    if (side) Object.assign(measured, { sideLeft: side.left, sideTop: side.top - bar.bottom, sideBottom: foot.top - side.bottom, sideToPanel: left - side.right, contentTop: area.top - bar.bottom, contentLeft: area.left - side.right });
+    if (side) Object.assign(measured, { sideLeft: side.left, sideTop: side.top - bar.bottom, sideBottom: foot.top - side.bottom, sideToPanel: left - side.right, headerTop: header.top - bar.bottom, headerToContent: area.top - header.bottom, contentLeft: area.left - side.right });
     else measured.left = left;
-    return measured;
+    return { gaps: measured, headerTop: header?.top, headerBottom: header?.bottom, contentTop: area?.top };
   });
   const focused = 'sideLeft' in gaps;
-  for (const [name, value] of Object.entries(gaps)) { const expected = focused ? name.startsWith('content') ? layoutGap : 0 : layoutGap; assert.ok(Math.abs(value - expected) <= 1, `${mode}: ${name} gap is ${value}px, expected ${expected}px`); }
-  edges.push({ mode, gaps });
+  for (const [name, value] of Object.entries(gaps)) {
+    const expected = !focused || name === 'headerTop' || name === 'contentLeft' ? layoutGap : 0;
+    assert.ok(Math.abs(value - expected) <= 1, `${mode}: ${name} gap is ${value}px, expected ${expected}px`);
+  }
+  edges.push({ mode, gaps, ...layout });
+  return layout;
 }
 async function checkEdges(mode) {
   const rects = await page.evaluate(() => {
@@ -97,7 +101,13 @@ try {
   await first.getByRole('button', { name: `全屏查看 ${projects[0].name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await checkEdges('focused');
-  await checkGaps('focused');
+  const focusedLayout = await checkGaps('focused');
+  await page.getByRole('button', { name: '隐藏活动栏', exact: true }).click();
+  await first.locator('.activity-pane').waitFor({ state: 'detached' });
+  assert.deepEqual(await checkGaps('focused without activity'), focusedLayout, 'hiding the activity pane leaves the header and content at the same height');
+  await page.getByRole('button', { name: '显示活动栏：它正在做什么', exact: true }).click();
+  await first.locator('.activity-pane').waitFor();
+  assert.deepEqual(await checkGaps('focused with activity'), focusedLayout, 'opening the activity pane leaves the header and content at the same height');
   await first.getByRole('button', { name: `${projects[0].name} 的更多操作`, exact: true }).click(); await first.getByRole('menuitem', { name: '新建终端并分屏', exact: true }).click();
   await waitFor(async () => (await state()).projects[0].terminals.length === 2 && (await state()).projects[0].terminals.every(terminal => terminal.shellReady), 'split terminals ready');
   const sample = 'PLAIN  中文字体更亮更清晰\r\n\x1b[1mBOLD   重点文字\x1b[0m\r\n\x1b[2mDIM_DEFAULT  Working / background task\x1b[0m\r\n\x1b[2;31mDIM_RED\x1b[0m\r\n\x1b[2;32mDIM_GREEN\x1b[0m\r\n\x1b[2;38;5;45mDIM_256\x1b[0m\r\n\x1b[2;38;2;130;180;220mDIM_RGB\x1b[0m\r\n\x1b[7mINVERSE\x1b[0m\r\n\x1b[2;7mDIM_INVERSE\x1b[0m\r\n';

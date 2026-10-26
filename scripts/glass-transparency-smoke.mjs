@@ -8,6 +8,7 @@ import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
 import { testRun } from './test-output.mjs';
 import { pick, picked } from './select-helper.mjs';
+import { openSettings } from './app-menu-helper.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url), output = await testRun('glass-transparency');
@@ -65,7 +66,7 @@ try {
   assert.ok((await page.evaluate(id => window.agentrix.attachTerminal(id), project.id)).value.data.includes('TRANSPARENCY_DRAFT_PRESERVED'));
   await page.evaluate(id => window.agentrix.writeTerminal(id, '\x03'), project.id);
   await settings({ glassTransparency: null });
-  await page.getByRole('button', { name: '工作台设置', exact: true }).click();
+  await openSettings(page);
   await pick(page, page.getByRole('combobox', { name: '玻璃透明度模式', exact: true }), 'custom');
   await page.getByRole('slider', { name: '背景透明度', exact: true }).fill('63');
   await waitFor(async () => (await state()).settings.glassTransparency === 63, 'slider saved');

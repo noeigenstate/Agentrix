@@ -154,7 +154,7 @@ function claudeQueue(log, record) {
   dropQueued(log, index, cancelled);
 }
 
-function receivedPrompt(log, entry, { inOrder = false, fromQueue = false } = {}) {
+function receivedPrompt(log, entry, { inOrder = false, fromQueue = false, queueOnly = false } = {}) {
   if (!log.received.has(entry.id)) {
     log.received.add(entry.id);
     if (log.received.size > 1000) log.received.delete(log.received.values().next().value);
@@ -169,10 +169,10 @@ function receivedPrompt(log, entry, { inOrder = false, fromQueue = false } = {})
       if (index >= 0) { noteDelivery(log, log.queue[index], true); dropQueued(log, index); }
     }
   }
-  log.put(entry, inOrder);
+  if (!queueOnly) log.put(entry, inOrder);
 }
 
-function claudeConversation(log, record, cwd) {
+function claudeConversation(log, record, cwd, { queueOnly = false } = {}) {
   if (record?.type === 'queue-operation') { if (!record.isSidechain) claudeQueue(log, record); return; }
   if (claudeOwnRecord(record)) return;
   const queued = record?.type === 'attachment' && record.attachment?.type === 'queued_command' ? record.attachment : null;
@@ -181,7 +181,7 @@ function claudeConversation(log, record, cwd) {
     if (original === null) return;
     const text = promptCommand(original) || clean(original);
     const entry = withImages({ id: `u:${record.uuid || record.timestamp}`, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original }, queued.prompt);
-    if (text || entry.images) receivedPrompt(log, entry, { fromQueue: true });
+    if (text || entry.images) receivedPrompt(log, entry, { fromQueue: true, queueOnly });
     return;
   }
   if (!record || record.isSidechain || !record.message || record.isMeta) return;
@@ -196,7 +196,7 @@ function claudeConversation(log, record, cwd) {
     const text = promptCommand(original) || clean(original);
     const entry = withImages({ id: `u:${base}`, at, role: 'user', text: bounded(text), original }, content);
     // A conversation's first prompt, which Claude Code writes after the reply to it, goes before that reply.
-    if (text || entry.images) receivedPrompt(log, entry, { inOrder: record.parentUuid === null });
+    if (text || entry.images) receivedPrompt(log, entry, { inOrder: record.parentUuid === null, queueOnly });
     return;
   }
   if (record.type !== 'assistant' || !Array.isArray(content)) return;

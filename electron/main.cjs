@@ -67,6 +67,7 @@ const { createEventServer } = require('./events.cjs');
 const { ProjectGit } = require('./project-git.cjs');
 const { acceptShellEvent, SubmissionTracker, PromptMarkers, InputGate, isTerminalResponse } = require('./terminal-input.cjs');
 const { PromptQueue, promptText, promptSummary: summarizeTask } = require('./prompt-queue.cjs');
+const { CompletionWork } = require('./completion-work.cjs');
 const { createTerminalEnvironment } = require('./terminal-env.cjs');
 const { adoptSystemProxy } = require('./system-proxy.cjs');
 const { PreviewResources, resourceResponse } = require('./preview-resources.cjs');
@@ -405,13 +406,25 @@ function followClaude(project, s, event) {
     const onHistory = ready => {
       if (ready) s.conversation.endHistory();
       else { s.conversation.beginHistory(); s.actions.reset(); s.conversation.reset(); s.usage?.reset(); }
+      if (!ready && s.completionWork?.reset()) store.expectCompletion(project.id, false);
+      if (s.completionWork) s.completionWork.reading = !ready;
       usageHistory(s, ready);
     };
-    s.claudeTranscript = remote ? { filename: file } : new TranscriptTail(file, { onHistory });
+    s.activitySnapshot = null;
+    s.claudeTranscript = remote ? { filename: file } : new TranscriptTail(file, { onHistory, onWorkRecord: record => onRecord({ ...record, workOnly: true }) });
     s.activityMonitor?.stop();
     const tail = s.claudeTranscript;
     const onRecord = record => {
       if (sessions.get(s.terminalId) !== s || s.claudeTranscript !== tail) return;
+      s.completionWork?.record(record, 'claude', remote ? s.activityClockOffset || 0 : 0);
+      if (record.workOnly) {
+        if (['queue-operation', 'user', 'attachment'].includes(record.type)) claudeConversation(s.conversation, record, project.path, { queueOnly: true });
+        return;
+      }
+      const turn = s.completionWork?.turn;
+      if (turn && turn.updatedAt >= Math.max(s.activitySince || 0, s.activityInputAt || 0, s.activitySnapshot?.updatedAt || 0)) {
+        s.activitySnapshot = { ...turn, threadId: s.claudeSessionId };
+      }
       claudeConversation(s.conversation, record, project.path); describeActions(s, project.path, claudeRecord(s.actions, record, project.path));
       noteSettings(s, 'claude', record);
     };
@@ -421,12 +434,19 @@ function followClaude(project, s, event) {
       if (value.reset) onHistory(false);
       for (const record of Array.isArray(value.records) ? value.records : []) { try { onRecord(record); } catch { } }
       if (value.historyDone) onHistory(true);
-      return null;
+      if (s.completionWork) s.completionWork.reading = !value.historyDone;
+      if (s.completionWork && value.completionUncertain) s.completionWork.uncertain = true;
+      return s.activitySnapshot && { ...s.activitySnapshot, workVersion: s.completionWork?.version, transcriptRead: true };
     };
     s.activityMonitor = monitorActivity(async () => {
       if (remote) return s.terminal.request('claude-status', { path: file, since }).then(remoteStatus);
-      await tail.read(onRecord); return null;
-    }, () => {}, { interval: () => readEvery(s), watch: () => remote ? null : tail.filename });
+      await tail.read(onRecord);
+      if (s.completionWork) {
+        s.completionWork.reading = tail.historyPending || tail.offset < tail.fileSize || tail.buffer.length > 0;
+        s.completionWork.uncertain ||= tail.workHistory?.uncertain;
+      }
+      return s.activitySnapshot && { ...s.activitySnapshot, workVersion: s.completionWork?.version, transcriptRead: true };
+    }, snapshot => applyActivity(project, s, snapshot), { interval: () => readEvery(s), watch: () => remote ? null : tail.filename });
   } else void s.activityMonitor?.poll();
 }
 
@@ -587,6 +607,16 @@ function applyActivity(project, s, snapshot) {
   // Resumed history and a slow response from before a new submission
   // must not make newly running work look complete.
   if (snapshot.updatedAt < Math.max(s.activitySince, s.activityInputAt)) return;
+  s.activitySnapshot = snapshot;
+  if (['complete', 'interrupted'].includes(snapshot.state)) {
+    s.completionWork?.end(snapshot.updatedAt);
+    s.promptQueue.finish?.(snapshot.updatedAt);
+  }
+  const queued = s.promptQueue.list?.().some(item => item.state === 'queued') || !!s.conversation?.queue?.length;
+  const state = s.completionWork?.state(snapshot, { queued })
+    || (queued && snapshot.state === 'complete' ? 'working' : snapshot.state);
+  if (snapshot.state === 'interrupted' || state === 'interrupted') store.expectCompletion(project.id, false);
+  snapshot = { ...snapshot, state };
   s.rootThreadId = snapshot.threadId;
   s.approval?.context('activity', [snapshot.threadId, snapshot.turnId, snapshot.state]);
   // Keep the last prompt that named work; bare continuations and background callbacks cannot replace it.
@@ -598,18 +628,21 @@ function applyActivity(project, s, snapshot) {
     s.claudeActivitySnapshot = snapshot;
     if (['complete', 'interrupted'].includes(snapshot.state)) {
       // The last poll may still add tool calls. Settle both views afterward, unless another round has started.
-      void Promise.resolve(s.activityMonitor?.poll()).then(() => {
+      const settle = () => {
         if (sessions.get(s.terminalId) === s && s.codexActive && s.agent === 'claude' && s.claudeActivitySnapshot === snapshot && s.codexActivity !== 'working' && !(s.activityInputAt > snapshot.updatedAt)) {
           s.actions.settle(); s.conversation.settle();
         }
-      });
+      };
+      if (snapshot.transcriptRead || !s.activityMonitor) settle();
+      else void Promise.resolve(s.activityMonitor.poll()).then(settle);
     }
   }
-  if (['complete', 'interrupted'].includes(snapshot.state) && (s.agent === 'claude' || project.kind === 'ssh' || s.native)) s.promptQueue.finish(snapshot.updatedAt);
   if (snapshot.state === 'complete' && snapshot.turnId) {
     s.lastCompletedAt = snapshot.updatedAt;
-    if (store.complete(project.id, `${snapshot.threadId}:${snapshot.turnId}`, snapshot.updatedAt)) notifyCompletion(project);
-  } else if (snapshot.state === 'interrupted') store.expectCompletion(project.id, false);
+    const allComplete = [...sessions.values()].filter(item => item.projectId === project.id || item.terminalId === project.id)
+      .every(item => !item.codexActive || item.codexActivity === 'complete');
+    if (allComplete && store.complete(project.id, `${snapshot.threadId}:${snapshot.turnId}`, snapshot.updatedAt)) notifyCompletion(project);
+  }
   // The round that ended joins the folder's permanent memory (project-memory.cjs), here or over SSH alike. Claude's
   // transcript is read a moment later, when its last reply has arrived.
   if (['complete', 'interrupted'].includes(snapshot.state) && snapshot.threadId) {
@@ -641,7 +674,7 @@ function claudeActivity(project, s, event) {
     // UserPromptSubmit is actual input, unlike a polled working snapshot or a Stop callback.
     if (s.claudePromptEventId !== event.eventId) {
       s.claudePromptEventId = event.eventId;
-      store.expectCompletion(project.id);
+      if (promptText(event.prompt) !== null) { s.completionWork?.begin(); store.expectCompletion(project.id); }
     }
   } else if (event.state === 'complete' && s.claudeLocalCommand) { s.claudeLocalCommand = false; return; }
   s.needsInput = null;
@@ -649,7 +682,15 @@ function claudeActivity(project, s, event) {
   // Remember the conversation and whether its turn is still open, so a restart can resume it and continue.
   store.setRestore(s.terminalId, { threadId: event.sessionId, interrupted: event.state === 'working' });
   followClaude(project, s, event);
-  applyActivity(project, s, { threadId: event.sessionId, turnId: event.state === 'complete' ? turnId : null, state: event.state, updatedAt: Date.now(), prompt: typeof event.prompt === 'string' ? event.prompt.slice(0, 2000) : undefined });
+  const snapshot = { threadId: event.sessionId, turnId: event.state === 'complete' ? turnId : null, state: event.state, updatedAt: Date.now(), prompt: typeof event.prompt === 'string' ? event.prompt.slice(0, 2000) : undefined };
+  // Stop can beat the last tool-result write. Read it before granting a completion,
+  // and let a newer turn/input win if it started while the read was in flight.
+  if (event.state === 'complete' && s.activityMonitor) {
+    const promptEvent = s.claudePromptEventId;
+    void Promise.resolve(s.activityMonitor.poll()).then(() => {
+      if (s.agent === 'claude' && (!s.claudeSessionId || s.claudeSessionId === event.sessionId) && s.claudePromptEventId === promptEvent && !(s.activitySnapshot?.updatedAt > snapshot.updatedAt)) applyActivity(project, s, { ...snapshot, transcriptRead: true });
+    }).catch(() => {});
+  } else applyActivity(project, s, snapshot);
 }
 
 function onEvent(event) {
@@ -664,7 +705,8 @@ function onEvent(event) {
     s.needsInput = null; s.agentCommand = null; stopUsageAccount(s);
     s.claudeResumeId = null; s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
     s.activityMonitor?.stop(); s.activityMonitor = null;
-    s.codexActive = false; s.codexActivity = 'unknown'; s.reportedThreadId = null; s.promptQueue.reset();
+    s.codexActive = false; s.codexActivity = 'unknown'; s.reportedThreadId = null; s.promptQueue.reset(); s.activitySnapshot = null;
+    if (s.completionWork?.reset()) store.expectCompletion(project.id, false);
     s.ready = event.type === 'shell-prompt';
     s.inputDirty = false;
     s.status = 'shell';
@@ -701,6 +743,7 @@ function onEvent(event) {
     s.error = null;
     s.submissions.reset();
     s.codexActivity = 'unknown'; s.activitySince = Date.now(); s.activityInputAt = 0;
+    s.activitySnapshot = null; s.completionWork?.reset();
     s.activityPromptAt = 0; s.claudePromptEventId = null;
     s.activityClockOffset = Number.isFinite(event.sentAt) ? s.activitySince - event.sentAt : 0;
     if (!keepClaudeHistory) { s.actions.reset(); s.conversation.reset(); s.claudeTranscript = null; s.claudeSessionId = null; }
@@ -727,11 +770,15 @@ function onEvent(event) {
       if (ready) s.conversation.endHistory();
       else {
         s.conversation.beginHistory(); s.actions.reset(); s.conversation.reset(); s.usage?.reset();
+        if (s.completionWork?.reset()) store.expectCompletion(project.id, false);
         s.usage?.resetScope(); s.bindUsageAccount?.();
       }
+      if (s.completionWork) s.completionWork.reading = !ready;
       usageHistory(s, ready);
     };
     const onRecord = record => {
+      s.completionWork?.record(record, 'codex', project.kind === 'ssh' ? s.activityClockOffset || 0 : 0);
+      if (record.workOnly) return;
       codexConversation(s.conversation, record, event.cwd || project.path); describeActions(s, event.cwd || project.path, codexRecord(s.actions, record, event.cwd || project.path));
       noteSettings(s, 'codex', record);
       if (record?.type === 'event_msg' && ['task_complete', 'turn_completed', 'turn_aborted', 'turn_interrupted'].includes(record.payload?.type)) s.promptQueue.finish(Date.parse(record.timestamp) || Date.now());
@@ -742,11 +789,20 @@ function onEvent(event) {
       if (value.reset) onHistory(false);
       for (const record of Array.isArray(value.records) ? value.records : []) { try { onRecord(record); } catch { } }
       if (value.historyDone) onHistory(true);
+      if (s.completionWork) s.completionWork.reading = !value.historyDone;
+      if (s.completionWork && value.completionUncertain) s.completionWork.uncertain = true;
       return value.snapshot;
     };
-    const reader = project.kind === 'ssh' ? null : new CodexActivityReader(event.cwd || project.path, event.codexHome || s.codexHome, s.activitySince, { threadId: () => s.reportedThreadId, requireBinding: () => (project.terminals?.length || 0) > 0, onHistory, onRecord });
+    const reader = project.kind === 'ssh' ? null : new CodexActivityReader(event.cwd || project.path, event.codexHome || s.codexHome, s.activitySince, { threadId: () => s.reportedThreadId, requireBinding: () => (project.terminals?.length || 0) > 0, onHistory, onRecord, onWorkRecord: record => s.completionWork?.record(record, 'codex') });
     s.activityMonitor = monitorActivity(
-      () => reader ? reader.read() : project.terminals?.length && !s.reportedThreadId ? Promise.resolve(null) : s.terminal.request('codex-status', { since: remoteSince, threadId: s.reportedThreadId }).then(remoteStatus),
+      async () => {
+        const snapshot = await (reader ? reader.read() : project.terminals?.length && !s.reportedThreadId ? null : s.terminal.request('codex-status', { since: remoteSince, threadId: s.reportedThreadId }).then(remoteStatus));
+        if (s.completionWork && reader) {
+          s.completionWork.reading = reader.historyPending || reader.offset < reader.fileSize || reader.buffer.length > 0;
+          s.completionWork.uncertain ||= reader.workHistory?.uncertain;
+        }
+        return snapshot && { ...snapshot, workVersion: s.completionWork?.version };
+      },
       snapshot => {
         if (!reader) snapshot = { ...snapshot, updatedAt: snapshot.updatedAt + s.activitySince - remoteSince };
         applyActivity(project, s, snapshot);
@@ -760,6 +816,8 @@ function onEvent(event) {
     s.needsInput = null; s.agentCommand = null; stopUsageAccount(s);
     s.claudeResumeId = null; s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
     s.activityMonitor?.stop(); s.activityMonitor = null; s.codexActivity = 'unknown';
+    if (s.completionWork?.reset()) store.expectCompletion(project.id, false);
+    s.activitySnapshot = null;
     s.ready = false;
     s.codexActive = false;
     s.status = 'shell';
@@ -887,9 +945,20 @@ const memoryFolder = (project, s) => project.kind === 'ssh' ? `ssh://${project.s
 function nativeSessionEvent(id, sessionId, message) {
   const s = sessions.get(id); if (!s || s.sessionId !== sessionId || !s.native) return;
   const project = findProject(id), at = Date.now(), p = message.params;
+  const thread = message.method === 'thread/started' ? p?.thread?.id : null;
+  if (thread && s.completionWork?.find(thread)) return;
+  const next = s.nativeMode === 'claude-sdk' ? message.type === 'system' && message.subtype === 'init' && message.session_id : thread;
+  const previous = s.nativeMode === 'claude-sdk' ? s.claudeSessionId : s.reportedThreadId;
+  if (next && previous && next !== previous) {
+    if (s.completionWork?.reset()) store.expectCompletion(project.id, false);
+    s.promptQueue.reset(); s.activitySnapshot = null; s.codexActivity = 'unknown';
+  }
+  s.completionWork?.native(message, s.agent, at, s.reportedThreadId);
+  if (s.nativeMode !== 'claude-sdk' && s.reportedThreadId && p?.threadId && p.threadId !== s.reportedThreadId) return;
   const add = (role, text, entryId) => {
     if (typeof text !== 'string' || !text) return;
-    if (role === 'user' && promptText(text) === null) return;
+    // Native user-item replays must retain the original prompt's input watermark.
+    if (role === 'user' && (promptText(text) === null || entryId && s.conversation.list.some(entry => entry.id === entryId))) return;
     s.conversation.put({ id: entryId || randomUUID(), at, role, text: text.slice(0, 20000), original: text });
     if (s.nativeMode === 'claude-sdk') {
       s.nativeMessages = [...s.nativeMessages, { role, text: text.slice(0, 20000) }].slice(-100);
@@ -898,6 +967,7 @@ function nativeSessionEvent(id, sessionId, message) {
   };
   if (message.type === 'managed-ready') { s.nativeReady = true; scheduleState(); }
   if (message.type === 'managed-prompt' && promptText(message.text) !== null) {
+    s.completionWork?.begin();
     add('user', message.text);
     const task = summarizeTask(message.text, { spoken: true });
     if (task) { s.lastTask = task; s.lastTaskSummary = summarizeTask(message.text); s.lastTaskTitle = message.text; }
@@ -919,9 +989,10 @@ function nativeSessionEvent(id, sessionId, message) {
     if (item.type === 'agentMessage') add('assistant', item.text, item.id);
     if (item.type === 'userMessage') add('user', item.content?.filter(part => part.type === 'text').map(part => part.text).join('\n'), item.id);
   }
-  if (message.method === 'turn/started') { store.expectCompletion(project.id); s.activityInputAt = at; }
   if (['turn/started', 'turn/completed', 'turn/interrupted'].includes(message.method) && p?.threadId && p?.turn?.id) {
-    applyActivity(project, s, { threadId: p.threadId, turnId: p.turn.id, state: message.method === 'turn/started' ? 'working' : p.turn.status === 'interrupted' || p.turn.status === 'failed' ? 'interrupted' : 'complete', updatedAt: at });
+    // Advance the stale-snapshot guard for the parent, without arming idle or child turns.
+    if (message.method === 'turn/started') s.activityInputAt = at;
+    applyActivity(project, s, { threadId: p.threadId, turnId: p.turn.id, state: message.method === 'turn/started' ? 'working' : message.method === 'turn/interrupted' || p.turn.status === 'interrupted' || p.turn.status === 'failed' ? 'interrupted' : 'complete', updatedAt: at });
   }
 }
 
@@ -995,7 +1066,17 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     if (!isTerminalResponse(data)) s.approval.invalidate();
     terminal.write(data);
   }, { shellOwnsInput: () => !s.codexActive });
-  s.promptQueue = new PromptQueue(() => { if (sessions.get(id) === s) scheduleState(); });
+  const refreshCompletion = () => {
+    if (sessions.get(id) === s && s.codexActive && s.activitySnapshot) applyActivity(project, s, s.activitySnapshot);
+  };
+  s.completionWork = new CompletionWork({ changed: refreshCompletion });
+  s.promptQueue = new PromptQueue(() => {
+    if (sessions.get(id) !== s) return;
+    scheduleState();
+    // Queue receipt/cancellation/expiry can change a deferred completion even if
+    // no new lifecycle snapshot arrives. This never arms another notification.
+    if (s.activitySnapshot?.state === 'complete') queueMicrotask(refreshCompletion);
+  });
   // A prompt the agent's own record shows it received is being worked on. History read when a session is
   // resumed is older than the agent's start and is left out.
   s.conversation = new ConversationLog(change => {
@@ -1013,6 +1094,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
       const at = entry.at + (s.activityClockOffset || 0);
       if (s.agent === 'codex' && !localCommand && at >= Math.max(s.activitySince || 0, s.activityInputAt || 0) && at > Math.max(s.activityPromptAt || 0, s.lastCompletedAt || 0)) {
         s.activityPromptAt = at;
+        s.completionWork?.begin(at);
         store.expectCompletion(project.id);
       }
     }
@@ -1058,6 +1140,8 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     stopUsageAccount(s);
     s.status = 'exited'; s.ready = false; s.codexActive = false;
     s.activityMonitor?.stop(); s.activityMonitor = null; s.codexActivity = 'unknown';
+    if (s.completionWork.reset()) store.expectCompletion(project.id, false);
+    s.activitySnapshot = null;
     restorePlans.delete(id);
     if (terminal.error || exitCode) s.error = terminal.error || t('终端已退出（代码 {code}）。', { code: exitCode });
     if (!quitting && !exitCode) store.setRestore(id, { terminal: false, codex: false });
@@ -1076,7 +1160,7 @@ function disposeTerminal(id) {
   stopUsageAccount(s);
   clearTimeout(s.flushTimer); clearTimeout(s.actionTimer); clearTimeout(s.conversationTimer);
   for (const timer of s.submissionPolls || []) clearTimeout(timer);
-  s.activityMonitor?.stop(); s.gate.dispose(); s.promptQueue.reset();
+  s.activityMonitor?.stop(); s.gate.dispose(); s.promptQueue.reset(); s.completionWork?.reset();
   try { s.terminal.kill(); } catch { }
   if (s.bootstrapFile) fs.rmSync(s.bootstrapFile, { force: true });
 }

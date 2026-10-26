@@ -6,6 +6,7 @@ const os = require('node:os');
 const vm = require('node:vm');
 const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
 const { CodexAccountUsage, accountResult } = require('../electron/features/agents/codex-account-usage.cjs');
+const { promptText } = require('../electron/prompt-queue.cjs');
 
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const section = (from, to) => main.slice(main.indexOf(from), main.indexOf(to));
@@ -35,7 +36,7 @@ function watcherFs(existsSync = () => true) {
 function runtime(overrides = {}) {
   const sessions = overrides.sessions || new Map([['one', session('one')]]);
   const context = vm.createContext({
-    UsageMeter, sessions, process, path, Date, setTimeout, clearTimeout, setInterval, clearInterval,
+    UsageMeter, promptText, sessions, process, path, Date, setTimeout, clearTimeout, setInterval, clearInterval,
     fs: watcherFs().fs, quitting: false, scheduleState() {},
     store: { projects: [{ id: 'local', kind: 'local' }, { id: 'remote', kind: 'ssh' }], settings: {}, expectCompletion: () => assert.fail('background usage must not rearm completion'), setRestore() {} },
     claudeAccountFiles: () => [path.join(os.tmpdir(), 'usage-cache', '.claude.json'), path.join(os.tmpdir(), 'usage-cache', '.codepulse', 'claude-quota.json')],

@@ -131,6 +131,7 @@ function activityHarness(t, f) {
   h.store.complete = () => false;
   Object.assign(h.context, {
     summarizeTask: () => '', isLocalAgentCommand: () => false, notifyCompletion() {},
+    promptText: require('../electron/prompt-queue.cjs').promptText,
     memoryFolder: () => f.cwd, roundsOf: () => [], remember: async () => {},
     setTimeout: () => ({ unref() {} }),
   });
@@ -302,6 +303,7 @@ test('both Claude followers load a large session window and clear old consumers 
   h.context.skillDescription = async name => { described.push(name); return 'Recent skill description'; };
   vm.runInContext(main.slice(main.indexOf('function describeActions('), main.indexOf('// Claude Code writes each tool call')), h.context);
   assert.equal(await h.context.followClaudeSession(h.project, h.s, 'large'), true);
+  for (let count = 0; h.s.claudeTranscript.historyPending && count < 8; count++) await h.s.activityMonitor.poll();
   assert.equal(h.s.claudeTranscript.historyPending, false);
   assert.deepEqual(h.s.conversation.snapshot().filter(entry => entry.text).map(entry => entry.text), ['Recent answer']);
   assert.deepEqual(described, ['recent-skill'], 'only in-window skill calls reach describeActions');
@@ -317,6 +319,7 @@ test('both Claude followers load a large session window and clear old consumers 
     + JSON.stringify({ type: 'assistant', uuid: 'new', message: { content: [{ type: 'tool_use', id: 'new-tool', name: 'Read', input: { file_path: 'new.txt' } }] } }) + '\n');
   await h.s.activityMonitor.poll();
   assert.equal(h.resets(), 2);
+  for (let count = 0; h.s.claudeTranscript.historyPending && count < 8; count++) await h.s.activityMonitor.poll();
   assert.equal(h.s.lastTask, 'Previous task', 'history callbacks preserve the task remembered from live hooks, including continue prompts');
   assert.deepEqual(h.s.conversation.snapshot().map(entry => entry.role), ['tool']);
   assert.deepEqual(h.s.actions.list.map(action => action.id), ['new-tool']);
@@ -350,6 +353,28 @@ test('following a different session replaces history, and invalid ids or closed 
   assert.equal(await h.context.followClaudeSession(h.project, h.s, 'first'), false);
   h.sessions.delete('terminal');
   assert.equal(await h.context.followClaudeSession(h.project, h.s, 'first'), false);
+});
+
+test('SessionStart after clear/resume and process exit retire old background work without success or rearming', async t => {
+  const { CompletionWork } = require('../electron/completion-work.cjs');
+  const f = await fixture(t), h = activityHarness(t, f), changes = [];
+  for (const id of ['first', 'cleared', 'resumed']) await f.write(id, []);
+  h.s.completionWork = new CompletionWork(); t.after(() => h.s.completionWork.reset());
+  h.store.expectCompletion = (_id, value = true) => changes.push(value);
+  h.store.complete = () => assert.fail('switching a session cannot grant completion');
+  const bind = async id => {
+    h.context.claudeActivity(h.project, h.s, { state: 'session', sessionId: id, eventId: `${id}:start`, transcriptPath: path.join(f.folder, `${id}.jsonl`) });
+    await h.s.activityMonitor.poll();
+  };
+  await bind('first'); h.s.completionWork.start('old', Date.now());
+  await bind('first'); assert.equal(h.s.completionWork.tasks.size, 1, 'same-session hooks keep outstanding tasks');
+  await bind('cleared'); assert.equal(h.s.completionWork.tasks.size, 0);
+  h.s.completionWork.start('cleared-worker', Date.now());
+  await bind('resumed'); assert.equal(h.s.completionWork.tasks.size, 0);
+  h.s.completionWork.start('resumed-worker', Date.now());
+  h.context.onEvent({ projectId: h.s.terminalId, sessionKey: h.s.sessionKey, type: 'codex-exited', exitCode: 0 });
+  assert.equal(h.s.completionWork.tasks.size, 0); assert.equal(h.s.codexActive, false); assert.equal(h.s.activitySnapshot, null);
+  assert.deepEqual(changes, [false, false, false]);
 });
 
 test('session IPC lists Codex conversations its own way and only follows active local Claude terminals', async t => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowsOutSimple, Play, Plus, Terminal as TerminalIcon, DotsThree, GitBranch, X, FolderOpen, ArrowCounterClockwise, Info, Globe, ListChecks, Article, ImageSquare, Microphone } from '@phosphor-icons/react';
+import { ArrowsOutSimple, Play, Plus, Terminal as TerminalIcon, DotsThree, GitBranch, X, FolderOpen, ArrowCounterClockwise, Info, Globe, Article, ImageSquare, Microphone } from '@phosphor-icons/react';
 import type { Project, Result } from '../../shared/types';
 import { ProjectTerminals } from '../terminal/ProjectTerminals';
 import { ActivityPane } from '../agents/ActivityPane';
@@ -32,11 +32,11 @@ export function isRoundComplete(project: Project) {
   return project.codexActive && project.codexActivity === 'complete' && !project.unread && !project.error;
 }
 
-export function ProjectPanel({ project, index, hidden, focused, navTarget, navPosition, fontSize, now, activityOpen, onToggleActivity, onFocus, onAction, onError, onOpenLink, onRevealProject, dragging, dropTarget }: {
+export function ProjectPanel({ project, index, hidden, focused, navTarget, navPosition, fontSize, now, activityOpen, onFocus, onAction, onError, onOpenLink, onRevealProject, dragging, dropTarget }: {
   project: Project; index: number; hidden: boolean; focused: boolean; fontSize: number; now: number;
   navTarget?: number; navPosition?: string;
-  // The activity pane (what the agent is doing, step by step) shows beside the terminal of an expanded project.
-  activityOpen: boolean; onToggleActivity: () => void;
+  // The activity pane (what the agent is doing, step by step) shows beside the terminal of an expanded project; its toggle is in the title bar.
+  activityOpen: boolean;
   onFocus: (id: string) => void;
   onAction: <T>(promise: Promise<Result<T>>) => Promise<T | undefined>; onError: (message: string) => void;
   onOpenLink: (id: string, target: string) => void;
@@ -98,7 +98,6 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
         : <span className={badgeClass} title={statusText(project)}>{badge}</span>}
       {!multiple && stopped && hasTerminal && <button className="text-button panel-action" aria-label={t('重新启动')} onClick={() => onAction(api.startTerminal(first.id))}><Play size={12} weight="fill" /><span>{t('重启')}</span></button>}
       {currentTerminal.sessionId && currentTerminal.codexActive && <IconButton label={readingOn ? t('切换到终端') : t('阅读视图：按文档排版显示对话')} className={readingOn ? 'is-active' : ''} onClick={() => setReading(currentTerminal.id, !readingOn)}>{readingOn ? <TerminalIcon size={16} /> : <Article size={16} />}</IconButton>}
-      {focused && <IconButton label={activityOpen ? t('隐藏活动栏') : t('显示活动栏：它正在做什么')} className={activityOpen ? 'is-active' : ''} onClick={onToggleActivity}><ListChecks size={16} /></IconButton>}
       <div className="panel-menu-anchor" ref={menu}>
         <IconButton label={t('{name} 的更多操作', { name: project.name })} onClick={() => setMenuOpen(!menuOpen)}><DotsThree size={20} weight="bold" /></IconButton>
         {menuOpen && <div className="dropdown panel-menu" role="menu">

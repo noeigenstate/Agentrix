@@ -89,11 +89,14 @@ Agentrix opens on **Decide**: everything across your projects that needs your ca
 
 <img src="docs/images/overview.jpg" alt="Overview: six projects; working cards glow blue, finished ones pink, viewed ones green; Codex and Claude Code side by side" width="100%" />
 
-- 🔵 **Blue**: working, leave it be
-- 🩷 **Breathing pink, a notification**: this round is done and waiting for you
-- 🟢 **Green**: seen, ready for the next instruction
+- 🔵 **Blue edge**: working, leave it be
+- ⚪ **Breathing white glow, a notification**: all work is done and waiting for you
+- ✓ **No glow or edge**: seen, marked “Round complete”, ready for the next instruction
+- 🔴 **Red edge**: an error; check the terminal output
 
-State comes from the rounds Codex and Claude Code record themselves, not from guessing how long the terminal has been quiet: a sub-agent finishing doesn't count, a command exiting doesn't count; only the end of the main round does, and each instruction alerts once. Drag cards to reorder, expand one from its header and shrink it back without losing the session or an unsent draft, and split a project into several terminals.
+The white glow fades inward from the edges about every 2.5 seconds until viewed, with no outline. Viewing the card or sending a new instruction in its terminal clears the glow. A project in focus mode draws no edge.
+
+State comes from the rounds Codex and Claude Code record themselves, not from guessing how long the terminal has been quiet: the card waits for the main round, every background subagent and command it started, queued messages and work in every other project terminal to finish. One step or subagent finishing alone doesn't count, and each instruction alerts once. Drag cards to reorder, expand one from its header and shrink it back without losing the session or an unsent draft, and split a project into several terminals.
 
 ### 📖 The terminal, laid out again
 
@@ -147,7 +150,7 @@ New installs default to English. Choose 中文 under **Settings → Appearance �
 
 1. **Install** the build for your system from [Releases](https://github.com/noeigenstate/Agentrix/releases/latest) (below).
 2. **Add projects** with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd>: pick one or more folders, or an SSH project.
-3. **Give instructions**: pick Claude Code or Codex on the card, continuing this folder's last conversation or starting fresh; the first time, a popup walks you through signing in. Say what to do and get on with something else. Come back when it turns pink.
+3. **Give instructions**: pick Claude Code or Codex on the card, continuing this folder's last conversation or starting fresh; the first time, a popup walks you through signing in. Say what to do and get on with something else. Come back when its white glow pulses.
 
 | System | Download | Notes |
 | --- | --- | --- |

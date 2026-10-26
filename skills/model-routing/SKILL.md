@@ -54,5 +54,9 @@ A brief it can act on alone:
 - Before sending a task out: pin down the requirement, and pick from concepts with the owner when the look is open.
 - After it comes back: read every diff, open every screenshot, and run the checks Codex cannot (the app, the desktop
   suites, real-CLI probes with isolated profiles and a local stand-in API).
+- Workers that may launch Electron at the same time each wrap every launch in `withGuiLock` from `scripts/gui-lock.mjs`. The lead
+  wraps its whole run of suites in it too.
+- When a suite fails, run it against the last commit in a `git worktree` (junction its `node_modules` to the repo's) to tell a
+  regression from an old failure. Remove the junction with `rmdir` before removing the worktree.
 - Release only when the owner asks.
 - Take over a task only when its worker failed, or when it is one quick lookup that is faster than writing a brief.

@@ -1,6 +1,6 @@
 import { setUserAvatar } from './shared/UserAvatar';
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import { SquaresFour, FolderSimplePlus, MagnifyingGlass, X, Minus, Square, GearSix, CheckCircle, Info, Circle, Tray, CirclesFour } from '@phosphor-icons/react';
+import { SquaresFour, FolderSimplePlus, MagnifyingGlass, X, Minus, Square, ListChecks, CheckCircle, Info, Circle, Tray, CirclesFour } from '@phosphor-icons/react';
 import type { AgentsState, AppUpdateState, Project, ProjectLocation, Result, Settings, SSHAuthPrompt, Workspace } from './shared/types';
 import { ProjectSwitchHud } from './features/workspace/ProjectSwitchHud';
 import { ProjectExplorer } from './features/files/ProjectExplorer';
@@ -21,6 +21,7 @@ import { gridColumns, gridNeighbor } from './features/workspace/grid-navigation'
 import { quickDictation } from './features/voice/voice-input';
 import { UsageGuide } from './features/guide/UsageGuide';
 import { GuideTour } from './features/guide/GuideTour';
+import { AppMenu } from './features/titlebar/AppMenu';
 import { IconButton } from './shared/IconButton';
 import { showPopup, usePopup } from './features/files/file-popup';
 import { ProjectPanel, isRoundComplete } from './features/workspace/ProjectPanel';
@@ -303,11 +304,13 @@ export function App() {
   const switchProject = projectSwitch && projectRecords.get(projectSwitch.id);
   const switchPosition = projectSwitch ? navigation.current.indexOf(projectSwitch.id) + 1 : 0;
   const setPreference = (patch: Partial<Settings>) => { perform(api.settings(patch)); };
+  const installUpdate = () => { perform(api.installUpdate()); };
 
   return <div ref={focusMotionRoot} className={`app-shell ${focusedId ? 'focus-mode' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${fullScreen && workspace.autoHideTitlebar ? 'titlebar-auto' : ''}`} style={{ '--terminal-font-size': `${settings.fontSize}px` } as CSSProperties}>
     {fullScreen && workspace.autoHideTitlebar && <div className="titlebar-reveal" aria-hidden="true" />}
     <div className="titlebar">
-      <div className="titlebar-brand"><span className="brand-mark"><i /><i /><i /><i /></span><span>Agentrix</span></div>
+      <AppMenu fullScreen={fullScreen} canReturn={shownView !== 'workspace' || !!focusedId} updateReady={updates?.status === 'ready'}
+        onAddProject={() => setAddOpen(true)} onReturn={returnToGrid} onFullScreen={() => api.toggleFullScreen()} onSettings={() => setSettingsOpen(true)} onInstallUpdate={installUpdate} />
       <nav className="home-nav" aria-label={t('页面')}>
         <button type="button" aria-current={shownView === 'decisions' ? 'page' : undefined} title={t('回到决策 · {key}', { key: shortcut('decisions') })} onClick={() => setView('decisions')}><Tray size={16} />{t('决策')}{decisions.length > 0 && <span className="home-nav-count" aria-label={t('{count} 件待决定', { count: decisions.length })}>{decisions.length}</span>}</button>
         <button type="button" aria-current={shownView === 'workspace' ? 'page' : undefined} onClick={() => setView('workspace')}><CirclesFour size={16} />{t('工作台')}</button>
@@ -318,10 +321,10 @@ export function App() {
       </div>}
       <div className="titlebar-space" />
       <div className="titlebar-tools">
-        {/* Search and add project open from their shortcuts (Ctrl+Shift+F and Ctrl+Shift+N by default, configurable);
-            the search box shows while in use. */}
+        {/* Search opens from its shortcut (Ctrl+Shift+F by default, configurable) and shows while in use. Settings and adding a project are in
+            the app menu; with a project open, the activity pane's toggle sits here, where the pane is also hidden below 1001px (workspace.css). */}
         {!focusedId && (searchOpen || query) && <div className="search-input"><MagnifyingGlass size={15} /><input ref={queryInput} placeholder={t('搜索项目或路径…')} aria-label={t('搜索项目')} value={query} onChange={e => setQuery(e.target.value)} onBlur={() => { if (!query) setSearchOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); } }} />{query ? <IconButton label={t('清除搜索')} onClick={() => setQuery('')}><X size={13} /></IconButton> : <kbd>{shortcut('search')}</kbd>}</div>}
-        <IconButton label={t('工作台设置')} className={updates?.status === 'ready' ? 'update-ready' : ''} onClick={() => setSettingsOpen(true)}><GearSix size={16} /></IconButton>
+        {shownView === 'workspace' && focus && !previewFile && <IconButton label={settings.activityPane ? t('隐藏活动栏') : t('显示活动栏：它正在做什么')} className={`activity-toggle ${settings.activityPane ? 'is-active' : ''}`} onClick={() => setPreference({ activityPane: !settings.activityPane })}><ListChecks size={16} /></IconButton>}
       </div>
       <div className="window-actions"><IconButton label={t('最小化')} onClick={() => api.minimize()}><Minus size={16} /></IconButton><IconButton label={t('最大化或还原')} onClick={() => api.maximize()}><Square size={12} /></IconButton><IconButton label={t('关闭窗口')} className="window-close" onClick={() => api.close()}><X size={17} /></IconButton></div>
     </div>
@@ -345,7 +348,7 @@ export function App() {
             <span className="eyebrow">{t('你的多项目工作台')}</span><h2>{t('每个项目，一个方框。')}</h2><p>{t('添加项目目录，在独立终端里运行 Codex 或 Claude Code。')}<br />{t('方框亮起时，点击全屏查看，再继续下一轮。')}</p>
             <p className="agents-empty-note">{t('需要已安装 Codex CLI 或 Claude Code；可在设置的「编码助手」里一键安装。')}</p>
             <button className="button primary" onClick={() => setAddOpen(true)}><FolderSimplePlus size={18} />{t('添加第一个项目')}</button>
-            <div className="empty-hints"><span><Circle weight="fill" size={7} />{t('白色边框 · 等待查看')}</span><span><CheckCircle weight="fill" size={12} />{t('灰色边框 · 本轮完成')}</span></div>
+            <div className="empty-hints"><span><Circle weight="fill" size={7} />{t('白色呼吸光 · 等待查看')}</span><span><CheckCircle weight="fill" size={12} />{t('不发光 · 已查看')}</span></div>
           </div> : <>
             {!focusedId && !visible.length && <div className="no-results"><MagnifyingGlass size={30} weight="light" /><h2>{t('没有找到匹配项目')}</h2><p>{t('试试其他项目名称或目录。')}</p><button className="button secondary small" onClick={() => setQuery('')}>{t('重置搜索')}</button></div>}
             <div className={`agentrix ${reorder.drag ? 'is-reordering' : ''}`} onPointerDown={reorder.onPointerDown} onClickCapture={reorder.onClickCapture} style={{ '--columns': columns, '--rows': rows, display: !focusedId && !visible.length ? 'none' : undefined } as CSSProperties}>
@@ -353,7 +356,7 @@ export function App() {
                 hidden={focusedId ? focusedId !== project.id : !visibleIds.has(project.id)} focused={focusedId === project.id && !previewFile}
                 navTarget={projectSwitch?.id === project.id ? projectSwitch.sequence : undefined}
                 navPosition={projectSwitch?.id === project.id && switchPosition > 0 ? t('{position} / {total}', { position: switchPosition, total: navigation.current.length }) : undefined}
-                fontSize={settings.fontSize} now={now} activityOpen={settings.activityPane} onToggleActivity={() => setPreference({ activityPane: !settings.activityPane })} onFocus={focusProject} onAction={perform} onError={reportError} onOpenLink={openLinkInPopup} onRevealProject={revealProject}
+                fontSize={settings.fontSize} now={now} activityOpen={settings.activityPane} onFocus={focusProject} onAction={perform} onError={reportError} onOpenLink={openLinkInPopup} onRevealProject={revealProject}
                 dragging={reorder.drag?.id === project.id} /> </div>)}
               {reorder.drag && <div className="reorder-hint" role="status">{t('拖动项目排序 · 松开完成')}<span>{t('Esc 取消')}</span></div>}
             </div>
@@ -368,7 +371,7 @@ export function App() {
     {error && <div className="error-toast" role="alert"><Info size={18} /><span>{error}</span><IconButton label={t('关闭提示')} onClick={() => setError(null)}><X size={16} /></IconButton></div>}
     {guide === 'tour' && <GuideTour projects={projects} focusedId={focusedId} withAdd={tourWithAdd.current} onClose={() => { setGuide(null); if (settings.guideVersion !== workspace.version) setPreference({ guideVersion: workspace.version }); }} />}
     {guide && guide !== 'tour' && <UsageGuide version={workspace.version} start={guide} onTour={startTour} onClose={() => { setGuide(null); if (settings.guideVersion !== workspace.version) setPreference({ guideVersion: workspace.version }); }} />}
-    {settingsOpen && <SettingsDialog settings={settings} projects={workspace.projects} desktopGlass={workspace.desktopGlass} localShell={workspace.localShell ?? null} agents={agents} onAgents={setAgents} initialSection={settingsSection} updates={updates} onGuide={() => { setSettingsOpen(false); setSettingsSection('appearance'); startTour(); }} onCheckUpdate={() => { perform(api.checkForUpdates()); }} onInstallUpdate={() => { perform(api.installUpdate()); }} onDownloadPage={() => { perform(api.openDownloadPage()); }} close={() => { setSettingsOpen(false); setSettingsSection('appearance'); }} update={setPreference} quit={() => perform(api.quit())} />}
+    {settingsOpen && <SettingsDialog settings={settings} projects={workspace.projects} desktopGlass={workspace.desktopGlass} localShell={workspace.localShell ?? null} agents={agents} onAgents={setAgents} initialSection={settingsSection} updates={updates} onGuide={() => { setSettingsOpen(false); setSettingsSection('appearance'); startTour(); }} onCheckUpdate={() => { perform(api.checkForUpdates()); }} onInstallUpdate={installUpdate} onDownloadPage={() => { perform(api.openDownloadPage()); }} close={() => { setSettingsOpen(false); setSettingsSection('appearance'); }} update={setPreference} quit={() => perform(api.quit())} />}
     {addOpen && <AddProjectDialog onClose={() => setAddOpen(false)} onAdded={() => setQuery('')} onError={reportError} />}
     {sshAuth[0] && <SSHAuthDialog key={sshAuth[0].id} request={sshAuth[0]} />}
     <VoiceOverlay />

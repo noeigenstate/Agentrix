@@ -170,6 +170,8 @@ def compact_claude_record(record):
     """The messages, tool calls, results and settings the other computer needs, with the model route, context and token
     usage kept for the activity pane. Pictures and outputs stay here."""
     if not isinstance(record, dict) or record.get("isSidechain"): return None
+    if record.get("type") == "system" and record.get("subtype") == "stop_hook_summary":
+        return {key: record[key] for key in ("type", "subtype", "timestamp", "uuid") if key in record}
     provenance = prompt_provenance(record)
     # A message Claude queued while it worked, and when it took it up: the reading view marks the message as waiting.
     if record.get("type") == "queue-operation":
@@ -202,6 +204,12 @@ def compact_claude_record(record):
     else: return None
     kept = {**provenance, **{key: record.get(key) for key in ("type", "uuid", "parentUuid", "timestamp", "cwd", "sessionId", "effort") if key in record}}
     kept["message"] = {"role": message.get("role"), "content": parts}
+    if "stop_reason" in message: kept["message"]["stop_reason"] = message["stop_reason"]
+    result = record.get("toolUseResult")
+    if isinstance(result, dict):
+        work = {key: result[key] for key in ("backgroundTaskId", "agentId", "isAsync", "status") if key in result}
+        if isinstance(result.get("task"), dict): work["task"] = {key: result["task"][key] for key in ("task_id", "status") if key in result["task"]}
+        if work: kept["toolUseResult"] = work
     if isinstance(message.get("model"), str): kept["message"]["model"] = message["model"]
     if isinstance(message.get("id"), str): kept["message"]["id"] = message["id"]
     usage = message.get("usage") or {}
@@ -318,6 +326,30 @@ def record_time(text):
 def clip(value, limit=RECORD_TEXT_LIMIT):
     return value[:limit] if isinstance(value, str) else value
 
+def completion_output(value):
+    """Keep task/session identities and terminal statuses, never command output or worker replies."""
+    texts = [value] if isinstance(value, str) else [part.get("text", "") for part in value or [] if isinstance(part, dict)]
+    kept = []
+    for text in texts:
+        for line in text.splitlines():
+            if re.fullmatch(r"Script running with cell ID [\w-]+|Process running with session ID \d+|Session ID: \d+|Process exited with code -?\d+", line):
+                kept.append(line)
+            try: item = json.loads(line)
+            except (ValueError, TypeError): continue
+            if not isinstance(item, dict): continue
+            fields = {key: item[key] for key in ("agent_id", "task_name", "session_id", "exit_code") if isinstance(item.get(key), (str, int))}
+            if isinstance(item.get("agents"), list):
+                fields["agents"] = []
+                for entry in item["agents"]:
+                    if not isinstance(entry, dict): continue
+                    status = entry.get("agent_status")
+                    if isinstance(status, dict): status = {key: True for key in status}
+                    fields["agents"].append({"agent_name": entry.get("agent_name"), "agent_status": status})
+            if isinstance(item.get("status"), dict):
+                fields["status"] = {key: {status: True for status in state if status in ("completed", "complete", "failed", "killed", "stopped", "errored", "shutdown", "idle", "not_found")} for key, state in item["status"].items() if isinstance(state, dict)}
+            if fields: kept.append(json.dumps(fields))
+    return "\n".join(kept)
+
 def compact_record(record):
     """What the reading view and the activity pane on the other computer take from one rollout record, small: the
     conversation's messages, the tools called and which call finished. The model route, context and token usage are
@@ -363,7 +395,16 @@ def compact_record(record):
             content = [{"type": "text", "text": clip(part.get("text"))} for part in item.get("content") or [] if isinstance(part, dict) and isinstance(part.get("text"), str)]
             return {"type": kind, "timestamp": at, "payload": {"type": "item_completed", "item": {"type": item.get("type"), "id": item.get("id"), "content": content}}}
         return {"type": kind, "timestamp": at, "payload": {key: clip(value) for key, value in payload.items() if key in ("type", "turn_id", "message")}}
-    if kind == "response_item" and payload.get("type") in TOOL_OUTPUTS: return {"type": kind, "timestamp": at, "payload": {"type": payload.get("type"), "call_id": payload.get("call_id")}}
+    if kind == "response_item" and payload.get("type") == "agent_message":
+        content = payload.get("content")
+        body = content if isinstance(content, str) else "\n".join(part.get("text", "") for part in content or [] if isinstance(part, dict))
+        if not re.search(r"^Message Type: FINAL_ANSWER\s*$", body, re.M): return None
+        return {"type": kind, "timestamp": at, "payload": {"type": "agent_message", "author": payload.get("author"), "content": "\n".join(body.splitlines()[:3])}}
+    if kind == "response_item" and payload.get("type") in TOOL_OUTPUTS:
+        kept = {"type": payload.get("type"), "call_id": payload.get("call_id")}
+        work = completion_output(payload.get("output"))
+        if work: kept["output"] = work
+        return {"type": kind, "timestamp": at, "payload": kept}
     if kind == "response_item" and payload.get("type") in TOOL_CALLS:
         return {"type": kind, "timestamp": at, "payload": {key: clip(value) for key, value in payload.items() if key in ("type", "name", "call_id", "id", "input", "arguments", "action")}}
     return None
@@ -374,7 +415,33 @@ def take_records(reader):
     while reader.outbox and (not batch or size + len(json.dumps(reader.outbox[0], ensure_ascii=True)) <= RECORDS_BUDGET):
         record = reader.outbox.pop(0); size += len(json.dumps(record, ensure_ascii=True)); batch.append(record)
     reset, reader.reset = reader.reset, False
-    return {"records": batch, "reset": reset, "historyDone": bool(reader.filename) and not reader.history_pending and not reader.outbox}
+    result = {"records": batch, "reset": reset, "historyDone": bool(reader.filename) and not reader.history_pending and not reader.outbox}
+    if getattr(getattr(reader, "work_history", None), "uncertain", False): result["completionUncertain"] = True
+    return result
+
+class CompletionHistory:
+    def __init__(self, end):
+        self.end, self.offset, self.buffer = end, 0, b""
+        self.done, self.skipping, self.uncertain = not end, False, False
+
+    def read(self, source, receive):
+        source.seek(self.offset)
+        limit = self.offset + LIVE_READ_LIMIT
+        while not self.done and self.offset < limit:
+            chunk = source.read(min(65536, limit - self.offset))
+            if not chunk: return False
+            self.offset += len(chunk); self.buffer += chunk
+            while b"\n" in self.buffer:
+                line, self.buffer = self.buffer.split(b"\n", 1)
+                if not self.skipping:
+                    try: receive(json.loads(line))
+                    except (ValueError, UnicodeError, TypeError): self.uncertain = True
+                self.skipping = False
+                if self.offset - len(self.buffer) > self.end:
+                    self.done = True; break
+            if len(self.buffer) > 16 * 1024 * 1024:
+                self.buffer, self.skipping, self.uncertain = b"", True, True
+        return self.done
 
 class ClaudeTranscriptReader:
     """Follow the transcript named by Claude's hooks, with bounded history and the same response budget as Codex."""
@@ -392,9 +459,15 @@ class ClaudeTranscriptReader:
             size, identity = info.st_size, (info.st_dev, info.st_ino)
             if self.file_identity != identity or size < self.file_size:
                 self.offset, self.skipping = transcript_window(size)
+                self.work_history = CompletionHistory(self.offset)
                 self.buffer, self.history_pending = b"", True
                 self.outbox, self.reset = [], True
             self.file_identity, self.file_size = identity, size
+            def work_record(record):
+                kept = compact_claude_record(record)
+                if kept is not None:
+                    kept["workOnly"] = True; self.outbox.append(kept)
+            if not self.work_history.read(source, work_record): return
             source.seek(self.offset)
             end = size if self.history_pending else min(size, self.offset + LIVE_READ_LIMIT)
             while self.offset < end:
@@ -461,12 +534,15 @@ class CodexActivityReader:
                 return
             except (OSError, ValueError, TypeError): pass
 
-    def record(self, record):
+    def record(self, record, work_only=False):
         compact = compact_record(record)
         if compact is not None:
+            if work_only: compact["workOnly"] = True
             self.outbox.append(compact)
-            if len(self.outbox) > 20000: del self.outbox[:len(self.outbox) - 20000]
-        if record.get("type") != "event_msg": return
+            if len(self.outbox) > 20000:
+                del self.outbox[:len(self.outbox) - 20000]
+                if getattr(self, "work_history", None): self.work_history.uncertain = True
+        if work_only or record.get("type") != "event_msg": return
         item = record.get("payload", {})
         kind, turn = item.get("type"), item.get("turn_id")
         updated = record_time(record.get("timestamp"))
@@ -484,10 +560,12 @@ class CodexActivityReader:
             size, identity = stat.st_size, (stat.st_dev, stat.st_ino)
             if self.file_identity != identity or size < self.file_size:
                 self.offset, self.skipping = transcript_window(size)
+                self.work_history = CompletionHistory(self.offset)
                 self.buffer, self.history_pending = b"", True
                 self.snapshot.update(turnId=None, state="unknown", updatedAt=0)
                 self.outbox, self.reset = [], True
             self.file_identity, self.file_size = identity, size
+            if not self.work_history.read(source, lambda record: self.record(record, True)): return None
             source.seek(self.offset)
             end = size if self.history_pending else min(size, self.offset + LIVE_READ_LIMIT)
             while self.offset < end:

@@ -263,7 +263,7 @@ test('queued ordinary input still invalidates observation epochs at InputGate re
   const h = backend('codex'), s = h.s;
   const context = vm.createContext({ s, id: 'aba', sessions: new Map([['aba', s]]), terminal: s.terminal, InputGate, isTerminalResponse });
   const start = main.indexOf('  s.gate = new InputGate(');
-  vm.runInContext(main.slice(start, main.indexOf('  s.promptQueue =', start)), context);
+  vm.runInContext(main.slice(start, main.indexOf('  const refreshCompletion =', start)), context);
   s.gate.afterPrompt('queued-input'); const before = s.approval.stamp();
   assert.deepEqual(h.send('\r', before), terminalOnly);
   s.gate.release(); assert.equal(s.approval.matches(before), false);

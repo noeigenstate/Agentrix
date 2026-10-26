@@ -7,10 +7,11 @@ const vm = require('node:vm');
 const { WorkspaceStore } = require('../electron/state.cjs');
 const { SubmissionTracker } = require('../electron/terminal-input.cjs');
 const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs');
-const { ConversationLog, codexConversation } = require('../electron/conversation.cjs');
-const { PromptQueue } = require('../electron/prompt-queue.cjs');
+const { ConversationLog, claudeConversation, codexConversation } = require('../electron/conversation.cjs');
+const { PromptQueue, promptText } = require('../electron/prompt-queue.cjs');
 const { resumeCommand, claudeResumeCommand } = require('../electron/session-restore.cjs');
 const { isLocalAgentCommand } = require('../electron/agent-commands.cjs');
+const { CompletionWork, LOST_WORK_TIMEOUT } = require('../electron/completion-work.cjs');
 
 const main = syncFs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 async function harness(t, kind = 'local', agent = 'codex') {
@@ -21,11 +22,17 @@ async function harness(t, kind = 'local', agent = 'codex') {
   const store = new WorkspaceStore(path.join(directory, 'workspace.json'));
   const project = store.add(directory).project; project.kind = kind;
   const s = { terminalId: project.id, projectId: project.id, agent, codexActive: true, status: 'running',
-    activitySince: 1000, activityInputAt: 0, promptQueue: new PromptQueue(), submissions: new SubmissionTracker(),
+    activitySince: 1000, activityInputAt: 0, submissions: new SubmissionTracker(),
     actions: { settle() {} }, gate: { input() {} } };
   const sessions = new Map([[s.terminalId, s]]);
-  let now = 2000, alerts = 0;
-  const context = vm.createContext({ sessions, store, summarizeTask: () => '', isLocalAgentCommand,
+  let now = 2000, alerts = 0, armings = 0;
+  const expectCompletion = store.expectCompletion.bind(store);
+  store.expectCompletion = (id, expected = true) => {
+    const armed = project.completionArmed;
+    expectCompletion(id, expected);
+    if (!armed && project.completionArmed) armings++;
+  };
+  const context = vm.createContext({ sessions, store, summarizeTask: () => '', isLocalAgentCommand, promptText,
     notifyCompletion: () => alerts++, broadcast() {}, publishConversation() {},
     memoryFolder: () => directory, memoryDir: () => directory, roundsOf: () => [], remember: async () => {},
     setTimeout: () => ({ unref() {} }), scrubProjectSkills: async () => {},
@@ -33,9 +40,16 @@ async function harness(t, kind = 'local', agent = 'codex') {
     restorePlans: new Map(), Date: class extends Date { static now() { return now; } },
   });
   vm.runInContext(main.slice(main.indexOf('function applyActivity('), main.indexOf('function onEvent(')), context);
+  Object.assign(context, { findProject: () => project, scheduleState() {}, randomUUID: require('node:crypto').randomUUID,
+    s, project, id: s.terminalId, PromptQueue, CompletionWork, queueMicrotask });
+  vm.runInContext(main.slice(main.indexOf('function nativeSessionEvent('), main.indexOf('function startTerminal(')), context);
+  const setup = main.indexOf('  const refreshCompletion = () => {');
+  vm.runInContext(main.slice(setup, main.indexOf('  // A prompt the agent', setup)), context);
+  s.completionWork.now = s.promptQueue.now = () => now;
+  t.after(() => { s.codexActive = false; s.promptQueue.reset(); s.completionWork.reset(); });
   vm.runInContext(main.slice(main.indexOf('async function resumeAfterPrompt('), main.indexOf('function remoteFor(')), context);
   // Use the actual terminal's conversation callback, including its input/history filter.
-  context.s = s; context.project = project; context.ConversationLog = ConversationLog;
+  context.ConversationLog = ConversationLog;
   const start = main.indexOf('  s.conversation = new ConversationLog(');
   vm.runInContext(main.slice(start, main.indexOf('\n  sessions.set(id, s);', start)), context);
   const listeners = {};
@@ -44,17 +58,354 @@ async function harness(t, kind = 'local', agent = 'codex') {
     acknowledgeProject: id => store.acknowledge(id), expectCompletion: id => store.expectCompletion(id),
     scheduleState() {}, pollAfterSubmission() {}, applyActivity: context.applyActivity, now: () => now,
   });
-  return { project, s, store, sessions, context, alerts: () => alerts, now: value => { now = value; },
+  return { project, s, store, sessions, context, alerts: () => alerts, armings: () => armings, now: value => { now = value; },
     write: text => listeners['terminal:write'](s.terminalId, text),
     apply: (state, turnId, updatedAt = now) => context.applyActivity(project, s, { state, turnId, threadId: 'thread', updatedAt }),
-    user: (text, at = now) => codexConversation(s.conversation, { type: 'event_msg', timestamp: new Date(at).toISOString(), payload: { type: 'user_message', message: text } }),
+    user: (text, at = now) => agent === 'claude'
+      ? claudeConversation(s.conversation, { type: 'user', uuid: `user-${at}`, timestamp: new Date(at).toISOString(), message: { content: text } })
+      : codexConversation(s.conversation, { type: 'event_msg', timestamp: new Date(at).toISOString(), payload: { type: 'user_message', message: text } }),
   };
 }
+
+const stamp = at => new Date(at).toISOString();
+const background = (name, id, at) => ({ type: 'assistant', timestamp: stamp(at), message: { content: [
+  { type: 'tool_use', name, id, input: { run_in_background: 'true' } },
+] } });
+const taskNotice = (id, at, type = 'queue-operation') => ({ type, operation: 'enqueue', timestamp: stamp(at),
+  ...(type === 'user' ? { message: { content: `<task-notification><task-id>${id}</task-id><status>completed</status></task-notification>` } }
+    : { content: `<task-notification><task-id>${id}</task-id><status>completed</status></task-notification>` }),
+});
+
+test('a running Claude dev server lets its session card complete and cannot rearm it after acknowledgment', async t => {
+  for (const native of [false, true]) {
+    const h = await harness(t, 'local', 'claude'), { s } = h;
+    if (native) Object.assign(s, { native: {}, nativeMode: 'claude-sdk', sessionId: 'generation', nativeMessages: [] });
+    const record = { ...background('Bash', 'dev', 2050), message: { content: [
+      { type: 'tool_use', name: 'Bash', id: 'dev', input: { command: 'cd /work/app && npm run dev', run_in_background: true } },
+    ] } };
+    if (native) h.context.nativeSessionEvent(s.terminalId, s.sessionId, { type: 'managed-prompt', text: 'Fix the app' });
+    else { h.write('Fix the app\r'); h.user('Fix the app'); }
+    s.completionWork.record(record, 'claude');
+    s.completionWork.record({ type: 'user', timestamp: stamp(2070), toolUseResult: { backgroundTaskId: 'server' },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'dev' }] } }, 'claude');
+    if (native) {
+      h.now(2080); h.context.nativeSessionEvent(s.terminalId, s.sessionId, { type: 'system', subtype: 'task_started', tool_use_id: 'dev', task_id: 'server' });
+    }
+    h.apply('complete', 'parent', 2100);
+    assert.equal(s.codexActivity, 'complete'); assert.equal(h.project.unread, 1); assert.equal(h.alerts(), 1);
+    h.store.acknowledge(h.project.id);
+    h.now(2050 + 2 * LOST_WORK_TIMEOUT); h.apply('complete', 'parent', 2100);
+    assert.equal(s.codexActivity, 'complete'); assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 1);
+    s.completionWork.record(taskNotice('server', 2200), 'claude'); h.apply('complete', 'background', 2300);
+    assert.equal(s.codexActivity, 'complete'); assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 1);
+  }
+});
+
+test('Claude completion waits for every background agent and command and the notification review turn', async t => {
+  for (const kind of ['local', 'ssh']) {
+    const h = await harness(t, kind, 'claude'), work = h.s.completionWork;
+    h.write('finish all work\r'); h.user('finish all work', 2000);
+    for (const [name, id] of [['Agent', 'agent'], ['Bash', 'shell']]) work.record(background(name, id, 2050), 'claude');
+    h.apply('complete', 'main-stop', 2100);
+    assert.equal(h.s.codexActivity, 'working'); assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
+    work.record(taskNotice('agent', 2200), 'claude'); h.apply('complete', 'main-stop', 2100);
+    assert.equal(h.s.codexActivity, 'working'); assert.equal(h.alerts(), 0);
+    work.record(taskNotice('shell', 2300), 'claude'); h.apply('complete', 'main-stop', 2100);
+    assert.equal(h.s.codexActivity, 'working', 'completed tasks still have queued notification work');
+    for (const id of ['agent', 'shell']) work.record(taskNotice(id, 2400, 'user'), 'claude');
+    h.apply('complete', 'main-stop', 2100);
+    assert.equal(h.s.codexActivity, 'working', 'delivery starts the parent review, not project completion');
+    work.record({ type: 'assistant', uuid: 'review-stop', timestamp: stamp(2500), message: { stop_reason: 'end_turn', content: [] } }, 'claude');
+    h.apply('complete', 'review-stop', 2500);
+    assert.equal(h.s.codexActivity, 'complete'); assert.equal(h.project.unread, 1); assert.equal(h.alerts(), 1);
+    h.store.acknowledge(h.project.id);
+    work.record(taskNotice('shell', 2600), 'claude'); work.record(taskNotice('shell', 2700, 'user'), 'claude');
+    work.end(2800); h.apply('complete', 'late-review', 2800);
+    assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 1, 'background callbacks never rearm completion');
+  }
+});
+
+test('queued terminal submissions block the gap between turns without consuming the project alert', async t => {
+  const h = await harness(t);
+  h.write('first task\r'); h.user('first task', 2050);
+  h.now(2100); h.write('queued task\r');
+  h.apply('complete', 'first', 2200);
+  assert.equal(h.s.codexActivity, 'working'); assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
+  h.user('queued task', 2300); h.apply('complete', 'first', 2200);
+  assert.equal(h.s.codexActivity, 'working'); assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
+  h.apply('complete', 'second', 2400);
+  assert.equal(h.s.codexActivity, 'complete'); assert.equal(h.project.unread, 1); assert.equal(h.alerts(), 1);
+});
+
+for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) {
+  test(`${agent} ${kind} drops an unrecorded typed answer after grace and grants the deferred completion once`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const h = await harness(t, kind, agent), { s, project } = h;
+    h.write('Finish the task\r'); h.user('Finish the task'); h.apply('working', 'parent', 2050);
+    h.now(2100); h.write('Use the suggested option\r');
+    assert.equal(s.promptQueue.items.at(-1).expires, Infinity, 'an answer waits while its round is running');
+    h.now(2200); h.apply('complete', 'parent', 2200);
+    await Promise.resolve();
+    assert.equal(s.codexActivity, 'working'); assert.equal(project.unread, 0); assert.equal(h.alerts(), 0);
+    assert.equal(project.completionArmed, true); assert.equal(h.armings(), 1);
+    assert.equal(s.activitySnapshot.state, 'complete', 'the same parent completion is deferred');
+    assert.deepEqual(s.promptQueue.list().map(item => item.text), ['Use the suggested option']);
+
+    const grace = s.promptQueue.grace;
+    h.now(2200 + grace - 1); t.mock.timers.tick(grace - 1);
+    await Promise.resolve();
+    assert.equal(s.codexActivity, 'working'); assert.equal(project.unread, 0); assert.equal(h.alerts(), 0);
+    // The queue timer has a 10 ms margin. No new lifecycle event grants this completion.
+    h.now(2200 + grace + 10); t.mock.timers.tick(11);
+    await Promise.resolve();
+    assert.equal(s.codexActivity, 'complete'); assert.deepEqual(s.promptQueue.list(), []);
+    assert.equal(project.unread, 1); assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1);
+    assert.equal(project.lastCompletedAt, 2200); assert.equal(project.completionArmed, false);
+
+    s.promptQueue.changed(); s.completionWork.changed(); h.apply('complete', 'parent', 2200);
+    await Promise.resolve();
+    assert.equal(project.unread, 1); assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1);
+    h.store.acknowledge(project.id);
+    s.promptQueue.changed(); s.completionWork.changed();
+    h.apply('working', 'background', 2300); h.apply('complete', 'background', 2400);
+    await Promise.resolve();
+    assert.equal(s.codexActivity, 'complete'); assert.equal(project.unread, 0);
+    assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1); assert.equal(project.completionArmed, false);
+  });
+}
+
+test('a terminal cannot consume unread or notify until all other project terminals complete', async t => {
+  const h = await harness(t);
+  const id = h.store.addTerminal(h.project.id);
+  const other = { ...h.s, terminalId: id, codexActivity: 'working', promptQueue: new PromptQueue(), completionWork: new CompletionWork() };
+  h.sessions.set(id, other); t.after(() => other.completionWork.reset());
+  h.write('parallel work\r'); h.user('parallel work', 2050); h.apply('complete', 'first', 2200);
+  assert.equal(h.s.codexActivity, 'complete'); assert.equal(h.project.unread, 0); assert.equal(h.project.lastCompletedAt, null);
+  assert.equal(h.project.completionArmed, true); assert.equal(h.alerts(), 0);
+  h.context.applyActivity(h.project, other, { state: 'complete', threadId: 'other', turnId: 'last', updatedAt: 2300 });
+  assert.equal(h.project.unread, 1); assert.equal(h.project.lastCompletedAt, 2300); assert.equal(h.alerts(), 1);
+});
+
+test('Codex parent completion waits for child handbacks and review while leftover shell sessions remain open', async t => {
+  const { CodexActivityReader } = require('../electron/codex-activity.cjs');
+  const h = await harness(t), reader = new CodexActivityReader(h.project.path, undefined, 1000, {
+    onRecord(record) { h.s.completionWork.record(record, 'codex'); codexConversation(h.s.conversation, record); },
+  });
+  reader.snapshot = { threadId: 'parent', turnId: null, state: 'unknown', updatedAt: 0 };
+  const feed = (type, payload, at) => reader.record({ type, timestamp: stamp(at), payload });
+  const apply = () => h.context.applyActivity(h.project, h.s, reader.snapshot);
+  h.write('complete every subtask\r');
+  feed('event_msg', { type: 'task_started', turn_id: 'first' }, 2050);
+  feed('event_msg', { type: 'user_message', message: 'complete every subtask' }, 2050);
+  feed('response_item', { type: 'function_call', name: 'spawn_agent', call_id: 'spawn', arguments: '{"task_name":"child"}' }, 2100);
+  feed('response_item', { type: 'function_call_output', call_id: 'spawn', output: '{"task_name":"/root/child"}' }, 2150);
+  feed('response_item', { type: 'custom_tool_call', name: 'exec', call_id: 'shell', input: 'text(await tools.exec_command({cmd:"check"}))' }, 2200);
+  feed('response_item', { type: 'custom_tool_call_output', call_id: 'shell', output: [
+    { type: 'input_text', text: 'Script completed\nOutput:\n' },
+    { type: 'input_text', text: '{"session_id":77717,"wall_time_seconds":10,"output":"running"}' },
+  ] }, 2250);
+  feed('event_msg', { type: 'task_complete', turn_id: 'first' }, 2300); apply();
+  assert.equal(h.s.codexActivity, 'working'); assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
+  feed('response_item', { type: 'agent_message', author: '/root/child', content: [{ type: 'input_text', text: 'Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/child\nPayload:\nDone' }] }, 2400); apply();
+  assert.equal(h.s.codexActivity, 'working', 'the parent still owes its child-result review');
+  feed('event_msg', { type: 'task_started', turn_id: 'review' }, 2450);
+  feed('response_item', { type: 'custom_tool_call', name: 'exec', call_id: 'poll', input: 'text(await tools.write_stdin({session_id:77717}))' }, 2500);
+  feed('response_item', { type: 'custom_tool_call_output', call_id: 'poll', output: [{ type: 'input_text', text: '{"session_id":77717,"wall_time_seconds":1,"output":"running"}' }] }, 2550);
+  apply(); assert.equal(h.s.codexActivity, 'working'); assert.equal(h.alerts(), 0);
+  feed('event_msg', { type: 'task_complete', turn_id: 'review' }, 2600); apply();
+  assert.equal(h.s.codexActivity, 'complete'); assert.equal(h.project.unread, 1); assert.equal(h.alerts(), 1);
+});
+
+test('a lost background task times out to interrupted without unread, success notification or callback rearming', async t => {
+  const h = await harness(t, 'local', 'claude');
+  h.write('check background work\r'); h.user('check background work');
+  h.s.completionWork.record(background('Agent', 'lost', 2050), 'claude');
+  h.apply('complete', 'stop', 2100);
+  assert.equal(h.s.codexActivity, 'working'); assert.equal(h.project.completionArmed, true);
+  h.now(2050 + LOST_WORK_TIMEOUT - 1); h.apply('complete', 'stop', 2100);
+  assert.equal(h.s.codexActivity, 'working'); assert.equal(h.alerts(), 0);
+  h.now(2050 + LOST_WORK_TIMEOUT);
+  h.apply('complete', 'stop', 2100);
+  assert.equal(h.s.codexActivity, 'interrupted'); assert.equal(h.project.completionArmed, false);
+  assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
+  h.s.completionWork.record(taskNotice('lost', 2200), 'claude');
+  h.apply('complete', 'late-stop', 2300);
+  assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
+});
+
+test('native real prompts arm once, notify once, and reject older complete snapshots in both modes', async t => {
+  for (const agent of ['claude', 'codex']) {
+    const h = await harness(t, 'local', agent), { s } = h;
+    Object.assign(s, { native: {}, nativeMode: agent === 'claude' ? 'claude-sdk' : 'codex-native', sessionId: 'generation', nativeMessages: [], reportedThreadId: 'parent' });
+    const event = (message, at) => { h.now(at); h.context.nativeSessionEvent(s.terminalId, s.sessionId, message); };
+    const prompt = (id, at) => {
+      if (agent === 'claude') event({ type: 'managed-prompt', text: `Work on ${id}` }, at);
+      else {
+        // The app-server's received user item also covers recalled prompts invisible to the key tracker.
+        event({ method: 'turn/started', params: { threadId: 'parent', turn: { id } } }, at);
+        assert.equal(s.activityInputAt, at);
+        event({ method: 'item/completed', params: { threadId: 'parent', item: { type: 'userMessage', id: `input-${id}`, content: [{ type: 'text', text: `Work on ${id}` }] } } }, at + 10);
+      }
+    };
+    const end = (id, at) => event(agent === 'claude' ? { type: 'result', uuid: id }
+      : { method: 'turn/completed', params: { threadId: 'parent', turn: { id, status: 'completed' } } }, at);
+    prompt('first', 2000);
+    assert.equal(h.armings(), 1); assert.equal(h.project.completionArmed, true);
+    end('first', 2100); end('first', 2110);
+    assert.equal(h.alerts(), 1); assert.equal(h.project.unread, 1);
+    h.store.acknowledge(h.project.id);
+    prompt('second', 2200);
+    const snapshot = s.activitySnapshot;
+    h.apply('complete', 'stale-first', 2150);
+    assert.equal(s.activitySnapshot, snapshot); assert.equal(s.codexActivity, 'working');
+    assert.equal(h.alerts(), 1); assert.equal(h.project.completionArmed, true); assert.equal(h.armings(), 2);
+    if (agent === 'codex') {
+      s.completionWork.start('child', 2220);
+      event({ method: 'turn/started', params: { threadId: 'child', turn: { id: 'child-turn' } } }, 2230);
+      event({ method: 'turn/completed', params: { threadId: 'child', turn: { id: 'child-turn', status: 'completed' } } }, 2240);
+      assert.equal(s.activityInputAt, 2200, 'child events cannot advance the parent watermark');
+    }
+    end('second', 2300);
+    assert.equal(h.alerts(), 2); assert.equal(h.project.unread, 1); assert.equal(h.armings(), 2);
+    h.store.acknowledge(h.project.id);
+    if (agent === 'codex') {
+      event({ method: 'item/completed', params: { threadId: 'parent', item: { type: 'userMessage', id: 'input-second', content: [{ type: 'text', text: 'Work on second' }] } } }, 2400);
+      s.completionWork.start('callback-child', 2410);
+      event({ method: 'turn/started', params: { threadId: 'callback-child', turn: { id: 'child-idle' } } }, 2420);
+      event({ method: 'turn/completed', params: { threadId: 'callback-child', turn: { id: 'child-idle', status: 'completed' } } }, 2430);
+      assert.equal(h.project.completionArmed, false, 'child callbacks after acknowledgment cannot arm an alert');
+      event({ method: 'turn/started', params: { threadId: 'parent', turn: { id: 'idle' } } }, 2450);
+    }
+    end('background', 2500);
+    assert.equal(h.armings(), 2); assert.equal(h.alerts(), 2); assert.equal(h.project.unread, 0);
+  }
+});
+
+test('native Codex command executions alone cannot defer an ended parent or trigger the fallback', async t => {
+  const h = await harness(t), { s } = h;
+  Object.assign(s, { native: {}, nativeMode: 'codex-native', sessionId: 'generation', reportedThreadId: 'parent' });
+  h.write('Run the check\r'); h.user('Run the check');
+  const event = message => h.context.nativeSessionEvent(s.terminalId, s.sessionId, message);
+  h.now(2050); event({ method: 'turn/started', params: { threadId: 'parent', turn: { id: 'turn' } } });
+  h.now(2070); event({ method: 'item/started', params: { threadId: 'parent', item: { type: 'commandExecution', id: 'shell', status: 'inProgress', command: 'node' } } });
+  h.now(2100); event({ method: 'turn/completed', params: { threadId: 'parent', turn: { id: 'turn', status: 'completed' } } });
+  assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 1); assert.equal(s.completionWork.timer, null);
+  h.store.acknowledge(h.project.id);
+  h.now(2070 + 2 * LOST_WORK_TIMEOUT); h.apply('complete', 'turn', 2100);
+  assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 1); assert.equal(h.project.unread, 0);
+});
+
+test('actual managed Claude handlers wait for SDK tasks and their review, without rearming on background results', async t => {
+  const h = await harness(t, 'local', 'claude'), { s } = h;
+  Object.assign(s, { native: {}, nativeMode: 'claude-sdk', sessionId: 'generation', nativeMessages: [] });
+  const event = (message, at) => { h.now(at); h.context.nativeSessionEvent(s.terminalId, s.sessionId, message); };
+  event({ type: 'managed-prompt', text: 'Finish all SDK work' }, 2000);
+  event({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', id: 'tool', input: { run_in_background: true } }] } }, 2050);
+  event({ type: 'system', subtype: 'task_started', tool_use_id: 'tool', task_id: 'child' }, 2060);
+  assert.equal(s.completionWork.tasks.size, 1, 'SDK task and tool launch are the same worker');
+  event({ type: 'result', session_id: 'claude-session', uuid: 'parent' }, 2100);
+  assert.equal(s.codexActivity, 'working'); assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
+  event({ type: 'system', subtype: 'task_notification', task_id: 'child', status: 'completed' }, 2200);
+  assert.equal(s.completionWork.tasks.size, 0); assert.equal(s.codexActivity, 'working');
+  event({ type: 'result', uuid: 'review' }, 2300);
+  assert.equal(s.codexActivity, 'complete'); assert.equal(h.project.unread, 1); assert.equal(h.alerts(), 1);
+  h.store.acknowledge(h.project.id);
+  event({ type: 'system', subtype: 'task_started', task_id: 'callback' }, 2400);
+  event({ type: 'result', uuid: 'background-parent' }, 2500);
+  assert.equal(s.codexActivity, 'working');
+  event({ type: 'system', subtype: 'task_notification', task_id: 'callback', status: 'stopped' }, 2600);
+  event({ type: 'result', uuid: 'background-review' }, 2700);
+  assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 1); assert.equal(h.project.completionArmed, false);
+  h.context.nativeSessionEvent(s.terminalId, 'old-generation', { type: 'managed-prompt', text: 'stale input' });
+  assert.equal(h.project.completionArmed, false);
+});
+
+test('actual Codex native handlers wait for children but not leftover command items and keep idle turns disarmed', async t => {
+  const h = await harness(t), { s } = h;
+  Object.assign(s, { native: {}, nativeMode: 'codex-native', sessionId: 'generation' });
+  const event = (method, params, at) => { h.now(at); h.context.nativeSessionEvent(s.terminalId, s.sessionId, { method, params }); };
+  h.write('Finish all native work\r'); h.user('Finish all native work');
+  event('thread/started', { thread: { id: 'parent' } }, 2020);
+  event('turn/started', { threadId: 'parent', turn: { id: 'turn' } }, 2040);
+  const child = { type: 'collabAgentToolCall', id: 'spawn', tool: 'spawnAgent', receiverThreadIds: ['child'], agentsStates: { child: { status: 'running' } } };
+  event('item/started', { item: child }, 2050); event('item/completed', { item: child }, 2060);
+  event('item/started', { item: { type: 'commandExecution', id: 'command', status: 'inProgress' } }, 2070);
+  event('turn/completed', { threadId: 'parent', turn: { id: 'turn', status: 'completed' } }, 2100);
+  assert.equal(s.codexActivity, 'working'); assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
+  event('item/completed', { item: { ...child, id: 'wait', tool: 'wait', agentsStates: { child: { status: 'completed' } } } }, 2200);
+  assert.equal(s.codexActivity, 'working');
+  assert.equal(s.codexActivity, 'working', 'the parent still owes the child-result review');
+  event('turn/completed', { threadId: 'parent', turn: { id: 'review', status: 'completed' } }, 2350);
+  assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 1);
+  h.store.acknowledge(h.project.id);
+  event('turn/started', { threadId: 'parent', turn: { id: 'idle' } }, 2400);
+  event('turn/completed', { threadId: 'parent', turn: { id: 'idle', status: 'completed' } }, 2500);
+  assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 1); assert.equal(h.project.completionArmed, false);
+});
+
+test('native child turn completions cannot overwrite or finish the interactive parent turn', async t => {
+  const h = await harness(t), { s } = h;
+  Object.assign(s, { native: {}, nativeMode: 'codex-native', sessionId: 'generation', reportedThreadId: 'parent' });
+  const event = (method, threadId, turn, at) => { h.now(at); h.context.nativeSessionEvent(s.terminalId, s.sessionId, { method, params: { threadId, turn } }); };
+  h.write('Parent and child work\r'); h.user('Parent and child work');
+  event('turn/started', 'parent', { id: 'parent-turn' }, 2050);
+  s.completionWork.start('child', 2060);
+  event('turn/completed', 'child', { id: 'child-turn', status: 'completed' }, 2100);
+  assert.equal(s.rootThreadId, 'parent'); assert.equal(s.codexActivity, 'working'); assert.equal(h.alerts(), 0);
+  assert.equal(s.completionWork.tasks.size, 0);
+  event('turn/completed', 'parent', { id: 'parent-turn', status: 'completed' }, 2200);
+  assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 1);
+});
+
+test('native interruption without a repeated status field cancels completion, including while child work remains', async t => {
+  for (const child of [false, true]) {
+    const h = await harness(t), { s } = h;
+    Object.assign(s, { native: {}, nativeMode: 'codex-native', sessionId: 'generation', reportedThreadId: 'parent' });
+    h.write('Native work\r'); h.user('Native work');
+    if (child) s.completionWork.start('child', 2050);
+    h.context.nativeSessionEvent(s.terminalId, s.sessionId, { method: 'turn/interrupted', params: { threadId: 'parent', turn: { id: 'turn' } } });
+    assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 0);
+    s.completionWork.finish('child'); h.apply('complete', 'late', 2200);
+    assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
+  }
+});
+
+test('native clear/resume to a different Claude or Codex session retires old tasks and cannot announce restored history', async t => {
+  for (const agent of ['claude', 'codex']) {
+    const h = await harness(t, 'local', agent), { s } = h;
+    Object.assign(s, { native: {}, nativeMode: agent === 'claude' ? 'claude-sdk' : 'codex-native', sessionId: 'generation', nativeMessages: [],
+      claudeSessionId: 'old', reportedThreadId: 'old' });
+    h.write('Old work\r'); h.user('Old work'); s.completionWork.start('old-child', 2050); h.apply('complete', 'old-turn', 2100);
+    const event = message => h.context.nativeSessionEvent(s.terminalId, s.sessionId, message);
+    if (agent === 'claude') event({ type: 'system', subtype: 'init', session_id: 'new' });
+    else event({ method: 'thread/started', params: { thread: { id: 'new' } } });
+    assert.equal(s.completionWork.tasks.size, 0); assert.equal(s.activitySnapshot, null); assert.equal(h.project.completionArmed, false);
+    h.now(2200);
+    if (agent === 'claude') event({ type: 'result', session_id: 'new', uuid: 'restored' });
+    else event({ method: 'turn/completed', params: { threadId: 'new', turn: { id: 'restored', status: 'completed' } } });
+    assert.equal(h.alerts(), 0); assert.equal(h.project.unread, 0);
+  }
+});
+
+test('native process exit cancels its pending work and alert without waiting for the fallback', async t => {
+  const h = await harness(t, 'local', 'claude'), { s, context } = h;
+  let exited;
+  s.native = { registry: { close() {} } };
+  h.write('background work\r'); h.user('background work');
+  s.completionWork.start('pending-native-task', 2000); h.apply('complete', 'parent', 2100);
+  Object.assign(context, { id: s.terminalId, s, project: h.project, terminal: { onExit: callback => { exited = callback; } }, flush() {},
+    stopUsageAccount() {}, restorePlans: new Map(), quitting: false, bootstrapFile: null });
+  const start = main.indexOf('  terminal.onExit(({ exitCode }) => {');
+  vm.runInContext(main.slice(start, main.indexOf('  captureBranch(project);', start)), context);
+  exited({ exitCode: 0 });
+  assert.equal(s.completionWork.tasks.size, 0); assert.equal(s.completionWork.timer, null); assert.equal(s.activitySnapshot, null);
+  assert.equal(s.codexActive, false); assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 0);
+});
 
 test('actual activity + store alerts once per input, stays quiet after acknowledgment and automatically acknowledges next send', async t => {
   for (const kind of ['local', 'ssh']) for (const agent of ['codex', 'claude']) {
     const h = await harness(t, kind, agent);
-    h.write('first task\r');
+    h.write('first task\r'); h.user('first task');
     h.apply('working', null, 2100); h.apply('complete', 'first', 2200);
     assert.equal(h.alerts(), 1); assert.equal(h.project.unread, 1);
     h.store.acknowledge(h.project.id);
@@ -63,18 +414,18 @@ test('actual activity + store alerts once per input, stays quiet after acknowled
     h.apply('complete', 'background', 2400); // distinct background completion
     assert.equal(h.alerts(), 1); assert.equal(h.project.unread, 0); assert.equal(h.project.completionArmed, false);
     assert.ok(h.project.seenEvents.includes('thread:background'));
-    h.now(2500); h.write('second task\r'); h.apply('complete', 'second', 2600);
+    h.now(2500); h.write('second task\r'); h.user('second task'); h.apply('complete', 'second', 2600);
     assert.equal(h.alerts(), 2); assert.equal(h.project.unread, 1);
-    h.now(2700); h.write('third task\r');
+    h.now(2700); h.write('third task\r'); h.user('third task');
     assert.equal(h.project.unread, 0, 'real terminal IPC acknowledges the preceding result');
     h.apply('complete', 'second', 2600); // stale completion cannot consume third input
     assert.equal(h.project.completionArmed, true);
     h.apply('complete', 'third', 2800);
     assert.equal(h.alerts(), 3); assert.equal(h.project.unread, 1);
-    h.now(2900); h.write('interrupted task\r'); h.apply('interrupted', null, 3000);
+    h.now(2900); h.write('interrupted task\r'); h.user('interrupted task'); h.apply('interrupted', null, 3000);
     h.apply('complete', 'after-interruption', 3100);
     assert.equal(h.alerts(), 3); assert.equal(h.project.completionArmed, false);
-    h.now(3200); h.write('fresh task after interruption\r'); h.apply('complete', 'recovery', 3300);
+    h.now(3200); h.write('fresh task after interruption\r'); h.user('fresh task after interruption'); h.apply('complete', 'recovery', 3300);
     assert.equal(h.alerts(), 4); assert.equal(h.project.unread, 1);
     const persisted = JSON.parse(await fs.readFile(h.store.filename, 'utf8')).projects[0];
     assert.equal(persisted.completionArmed, false); assert.equal(persisted.unread, 1);

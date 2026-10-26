@@ -76,6 +76,8 @@ try {
   for (let index = 0; index < 4; index++) {
     await panel(index).getByRole('button', { name: '只打开终端', exact: true }).click();
     await waitFor(async () => (await state()).projects[index].shellReady, 'native terminal ready');
+    // Submitting a shell command acknowledges a restored unread completion.
+    if (index === 1) continue;
     await write(index, `Clear-Host; Write-Host 'Agentrix / ${names[index]}'; Write-Host ''; Write-Host '  项目、终端和输入草稿各自独立。'; Write-Host '  Ctrl + 鼠标左键打开文件与链接'; Write-Host ''; Write-Host '  PASS  ANSI colors and readable text' -ForegroundColor Green; Write-Host '  INFO  状态变更后继续工作' -ForegroundColor Cyan\r`);
     await waitFor(async () => panel(index).locator('.xterm-rows').innerText().then(text => text.includes('ANSI colors and readable text')), 'readable terminal output');
   }
@@ -115,7 +117,9 @@ try {
   }
   assert.equal(await breathing(0), 0, 'a working turn does not flash');
   await page.evaluate(() => document.activeElement?.blur()); await page.mouse.move(2, 2);
-  assert.equal(await breathing(1), 0, 'old unread completion stays quiet');
+  assert.equal((await state()).projects[1].unread, 1, 'the restored completion has not been acknowledged');
+  assert.equal(await panel(1).evaluate(node => node.classList.contains('has-unread') && !node.classList.contains('attention-active')), true, 'the old completion is unread beyond the fresh attention window');
+  assert.equal(await breathing(1), 1, 'an old unread completion keeps breathing until it is viewed');
   assert.equal(await breathing(2), 0, 'ready shell stays quiet');
   await page.screenshot({ path: path.join(output, 'grey-working.png') });
   // Every card is one flat #242424 pane with radius 16 (workspace.css): no blur, no shadow, no gradient, and the header band is no fill of its own.
@@ -159,10 +163,11 @@ try {
   await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await fs.appendFile(transcript, record('task_complete', 'visual-turn'));
   await waitFor(async () => panel(0).evaluate(node => node.classList.contains('attention-active')), 'a new completion lights its card');
-  // A fresh finished round breathes a white edge (the ring's opacity only) for its first 9 s, then it stays a steady success edge until viewed.
-  assert.equal(await breathing(0), 1, 'a fresh finished round breathes its ring');
+  // A finished round not yet seen breathes a white glow (its opacity only), a soft vignette from the edge inward with no hard line, until it is viewed.
+  assert.equal(await breathing(0), 1, 'a fresh finished round breathes its glow');
   const lit = await panel(0).evaluate(node => ({ edge: getComputedStyle(node.querySelector('.panel-signal')).boxShadow, dot: node.querySelector('.status-dot').getAnimations().length }));
-  assert.deepEqual(lit, { edge: 'rgb(242, 242, 242) 0px 0px 0px 2px inset', dot: 0 }, `a white breathing edge and a still dot: ${JSON.stringify(lit)}`);
+  assert.ok(lit.edge.endsWith(' 0px 0px 48px 8px inset') && !lit.edge.includes('rgb('), `a soft white glow, not a ring: ${lit.edge}`);
+  assert.equal(lit.dot, 0, 'the dot stays still');
   const text = await panel(0).locator('.xterm-rows').evaluate(node => ({ opacity: getComputedStyle(node).opacity, animation: getComputedStyle(node).animationName }));
   assert.deepEqual(text, { opacity: '1', animation: 'none' }, 'terminal text itself never pulses');
   const completed = (await state()).projects[0].lastCompletedAt;
@@ -172,19 +177,19 @@ try {
   await page.evaluate(() => window.agentrix.settings({ fontSize: 16 }));
   assert.equal(await breathing(0), 1); assert.equal((await state()).projects[0].lastCompletedAt, completed);
   await page.evaluate(id => window.agentrix.acknowledge(id), projects[0].id);
-  await waitFor(async () => panel(0).evaluate(node => node.classList.contains('round-complete')), 'viewed automatic round becomes the steady success edge');
+  await waitFor(async () => panel(0).evaluate(node => node.classList.contains('round-complete')), 'viewed automatic round becomes plain: no edge');
   assert.equal(await breathing(0), 0);
   assert.equal(await panel(0).locator('.status-badge').innerText(), '本轮已完成');
-  assert.equal(await panel(0).locator('.panel-signal').evaluate(node => getComputedStyle(node).boxShadow), 'rgb(112, 191, 164) 0px 0px 0px 2px inset');
+  assert.equal(await panel(0).locator('.panel-signal').evaluate(node => getComputedStyle(node).boxShadow), 'none', 'a round-complete card draws no edge');
   await page.screenshot({ path: path.join(output, 'automatic-completion.png') });
   await panel(0).locator('.panel-terminal-area').click({ position: { x: 40, y: 50 } });
-  assert.equal(await page.locator('.focus-mode').count(), 0, 'automatic green does not expand on terminal clicks');
+  assert.equal(await page.locator('.focus-mode').count(), 0, 'a finished card does not expand on terminal clicks');
   await fs.appendFile(transcript, record('task_started', 'next-turn') + submitted('继续验证下一轮任务完成后的提醒'));
   await waitFor(async () => panel(0).getAttribute('data-status').then(status => status === 'working'), 'a new submitted turn is working');
   assert.equal(await breathing(0), 0, 'working again stays steady');
   await fs.appendFile(transcript, record('task_complete', 'next-turn'));
   await waitFor(async () => panel(0).evaluate(node => node.classList.contains('attention-active')), 'the next finished turn lights its card');
-  // A fresh finished card breathes its ring only with motion on; "off" and "system" under reduced motion keep it a steady white ring.
+  // A finished card not yet seen breathes its glow only with motion on; "off" and "system" under reduced motion keep it a still glow.
   const setMotion = async mode => { await page.evaluate(mode => window.agentrix.settings({ focusAnimation: mode }), mode); await page.waitForFunction(mode => document.documentElement.dataset.motion === mode, mode); };
   for (const [preference, mode] of [['no-preference', 'smooth'], ['reduce', 'smooth'], ['reduce', 'system'], ['no-preference', 'off'], ['no-preference', 'smooth']]) {
     await page.emulateMedia({ reducedMotion: preference });
@@ -195,7 +200,7 @@ try {
   await page.screenshot({ path: path.join(output, 'finished-steady.png') });
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, liveSamples, compact, compactEdges, errors }, null, 2));
-  console.log(`PASS: steady grey working edge, ink contrast on the card grey, a steady white edge on completion, quiet idle, flat grey cards, high DPI, compact controls, explorer and preserved small-card input. Screenshots: ${output}`);
+  console.log(`PASS: steady grey working edge, ink contrast on the card grey, a breathing white glow until a completion is viewed and no edge after, quiet idle, flat grey cards, high DPI, compact controls, explorer and preserved small-card input. Screenshots: ${output}`);
 } catch (error) {
   console.error(error);
   if (page) {

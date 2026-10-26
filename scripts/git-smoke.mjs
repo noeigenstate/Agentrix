@@ -66,8 +66,8 @@ try {
   const appFile = page.getByRole('treeitem', { name: 'app.ts', exact: true });
   await waitFor(async () => (await appFile.getAttribute('data-git-tone')) === 'modified', 'file tree Git decorations');
   assert.equal(await page.getByRole('treeitem', { name: '待提交.txt', exact: true }).getAttribute('data-git-tone'), 'added');
-  assert.equal(await page.locator('.focus-sidebar').getByRole('button', { name: '工作台设置', exact: true }).count(), 0);
-  assert.ok(await page.locator('.titlebar').getByRole('button', { name: '工作台设置', exact: true }).isVisible());
+  assert.equal(await page.locator('.focus-sidebar').getByRole('button', { name: /设置/ }).count(), 0);
+  assert.ok(await page.locator('.titlebar').getByRole('button', { name: 'Agentrix', exact: true }).isVisible());
   await page.screenshot({ path: path.join(output, 'explorer-status.png') });
   // The editor marks the lines changed but not staged, as the working-tree list has them: app.ts has one.
   await appFile.click();

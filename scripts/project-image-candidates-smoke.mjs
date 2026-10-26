@@ -9,6 +9,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { _electron as electron } from 'playwright-core';
 import { testRun } from './test-output.mjs';
 import { waitFor } from './wait.mjs';
+import { chooseFromAppMenu } from './app-menu-helper.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
 const output = await testRun('project-image-candidates'), profile = path.join(output, 'profile'), home = path.join(output, 'home');
@@ -85,7 +86,7 @@ const thumbnailSettings = async () => {
   assert.equal(await preferences().locator('[data-settings-tab="appearance"]').getAttribute('aria-current'), 'page');
   await preferences().locator('[data-project-images-back]').waitFor();
 };
-const openSettings = async () => { await page.getByRole('button', { name: '工作台设置', exact: true }).click(); await preferences().locator('[data-settings-tab="appearance"]').click(); await thumbnailSettings(); };
+const openSettings = async () => { await chooseFromAppMenu(page, '设置'); await preferences().locator('[data-settings-tab="appearance"]').click(); await thumbnailSettings(); };
 const closeSettings = async () => { await preferences().getByRole('button', { name: '完成', exact: true }).click(); await preferences().waitFor({ state: 'detached' }); };
 const launch = async () => {
   app = await electron.launch({ executablePath: require('electron'), args: [root, '--force-device-scale-factor=1'], cwd: root, env, timeout: 30000 });

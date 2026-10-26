@@ -8,6 +8,7 @@ const { transcriptWindow, LIVE_READ_LIMIT, codexMetadata } = require('./transcri
 const { OversizedLine } = require('./oversized-record.cjs');
 const { sameThread } = require('./terminal-title.cjs');
 const { promptText } = require('./prompt-queue.cjs');
+const { CompletionHistory } = require('./completion-history.cjs');
 
 // Only interactive rollout files can own a project card. A child agent can
 // inherit notify, but its completion does not end the interactive parent turn.
@@ -79,6 +80,7 @@ class CodexActivityReader {
       if (this.fileIdentity !== identity || size < this.fileSize) {
         const rebinding = this.fileIdentity != null;
         Object.assign(this, transcriptWindow(size)); this.buffer = Buffer.alloc(0); this.oversized = null;
+        this.workHistory = this.options.onWorkRecord ? new CompletionHistory(this.offset) : null;
         this.snapshot = { threadId: this.snapshot.threadId, turnId: null, state: 'unknown', updatedAt: 0 };
         this.historyPending = true;
         if (rebinding) { this.options.onHistory?.(false); this.historyOpened = true; }
@@ -88,6 +90,7 @@ class CodexActivityReader {
         }
       }
       this.fileIdentity = identity; this.fileSize = size;
+      if (this.workHistory && !await this.workHistory.read(file, this.options.onWorkRecord)) return null;
       // Catch up the bounded history in one poll; live growth keeps its smaller budget.
       const end = this.historyPending ? size : Math.min(size, this.offset + LIVE_READ_LIMIT);
       while (this.offset < end) {

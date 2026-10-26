@@ -18,7 +18,7 @@ function handlers() {
     sessions: new Map([['t', session]]), store: { projects: [project], setRestore() { calls.restore++; },
       expectCompletion(id, expected = true) { assert.equal(id, project.id); calls.completion.push([id, expected]); project.completionArmed = expected; } }, quitting: false,
     broadcast() { calls.broadcast++; }, followClaude() { calls.follow++; }, applyActivity(_project, s, event) { calls.activity++; s.codexActivity = event.state; },
-    acceptShellEvent: () => true, resumeAfterPrompt: async () => {}, isLocalAgentCommand, t: text => text,
+    acceptShellEvent: () => true, resumeAfterPrompt: async () => {}, isLocalAgentCommand, promptText: require('../electron/prompt-queue.cjs').promptText, t: text => text,
   });
   // onEvent owns account-query cleanup on real agent/shell exit. Include that
   // legitimate dependency, with an observable subscription instead of a PTY.
@@ -60,7 +60,7 @@ test('Claude hook event identities conservatively invalidate old approval action
 });
 
 test('working and complete clear waiting without disposing usage; actual agent/shell exits clean up', () => {
-  for (const event of [{ state: 'working' }, { state: 'complete' }, { type: 'codex-exited', exitCode: 0 }, { type: 'shell-ready', cwd: '/project' }, { type: 'shell-prompt', cwd: '/project' }]) {
+  for (const event of [{ state: 'working', prompt: 'Actual task' }, { state: 'complete' }, { type: 'codex-exited', exitCode: 0 }, { type: 'shell-ready', cwd: '/project' }, { type: 'shell-prompt', cwd: '/project' }]) {
     const { session, calls, send } = handlers();
     const account = session.usageAccount, bind = session.bindUsageAccount;
     send({ state: 'attention', message: 'Approve tool' });

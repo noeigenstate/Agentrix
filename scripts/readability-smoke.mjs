@@ -7,6 +7,7 @@ import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
 import { testRun } from './test-output.mjs';
 import { pick, picked } from './select-helper.mjs';
+import { openSettings } from './app-menu-helper.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
 const { desktopGlassKind } = require('../electron/desktop-glass.cjs');
@@ -118,7 +119,7 @@ try {
   await cdp.detach();
   results.checks.push('actual Latin/CJK platform families recorded; GPU and DOM live changes; missing and empty families fall back to original fonts');
   await write("Write-Output 'READABILITY_UNSENT_DRAFT'");
-  await page.getByRole('button', { name: '工作台设置', exact: true }).click();
+  await openSettings(page);
   await pick(page, page.getByRole('combobox', { name: '终端字重', exact: true }), '600');
   const latinInput = page.getByLabel('终端西文字体', { exact: true }), chineseInput = page.getByLabel('终端中文字体', { exact: true });
   await latinInput.fill('Consolas'); await latinInput.press('Enter'); await chineseInput.fill('Noto Sans SC'); await chineseInput.press('Enter');

@@ -103,7 +103,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, localShe
           : updates.status === 'ready' ? <button className="button primary small" onClick={onInstallUpdate}>{t('重启并安装更新')}</button>
           : <button className="button secondary small" disabled={updates.status === 'checking' || updates.status === 'downloading'} onClick={onCheckUpdate}>{updates.status === 'error' ? t('重试更新') : t('检查更新')}</button>}</div>
       </section>}
-      <div className="settings-note"><Info size={15} /><p>{t('一轮结束时，方框边缘亮起白色边框等你查看；在终端里发送新指令也算已查看。灰色边框表示已查看的本轮完成。没有新指令时不会重复提醒。')}</p></div>
+      <div className="settings-note"><Info size={15} /><p>{t('主轮次、后台子代理与命令、排队消息和其他终端的工作都结束，方框才亮起白色呼吸光，直到查看；在终端发送新指令也算已查看。看过后不发光，没有新指令时不会重复提醒。')}</p></div>
       </section>
         </div>
         <div className="settings-main-foot"><button className="button primary" onClick={close}>{t('完成')}</button></div>

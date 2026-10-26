@@ -26,14 +26,16 @@ h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 /* The title bar (40px) is one full-width bar in the title bar colour, the same in the decision page and the workbench; only the current
    tab is filled, the group has no fill and the brand mark is an outline. */
 .titlebar { height: 40px; flex: 0 0 40px; display: flex; align-items: center; justify-content: space-between; overflow: hidden; background: var(--bg-titlebar); user-select: none; -webkit-app-region: drag; }
-.titlebar-brand { flex-shrink: 0; display: flex; align-items: center; gap: 9px; padding-left: 16px; font-size: 13.5px; font-weight: 600; color: var(--text-1); }
+/* The logo and title are the app menu's button, filled on hover and while the menu is open. Its 8px margin and padding keep the logo where the bar's
+   16px padding put it (86px beside macOS's window buttons), and the nav's margin is 8px less, so neither moves. */
+.titlebar-brand { flex-shrink: 0; display: flex; align-items: center; gap: 9px; height: 28px; margin-left: 8px; padding: 0 8px; border: 0; border-radius: 8px; font-size: 13.5px; font-weight: 600; color: var(--text-1); background: none; }
+.titlebar-brand:is(:hover, [aria-expanded="true"]) { background: var(--bg-hover); }
 .brand-mark { display: grid; grid-template-columns: repeat(2, 6px); gap: 2px; }
 .brand-mark i { width: 6px; height: 6px; border-radius: 1px; background: none; border: 1px solid var(--text-2); }
 .titlebar-space { flex: 1; min-width: 24px; }
 .titlebar-tools { display: flex; align-items: center; gap: 6px; margin-right: 8px; -webkit-app-region: no-drag; }
 .titlebar-tools input { -webkit-app-region: no-drag; }
-.titlebar-tools > .icon-button { width: 26px; height: 26px; border-radius: 999px; color: var(--text-1); background: var(--bg-input); border: 1px solid var(--border); }
-.titlebar-tools > .icon-button:hover { border-color: var(--border-hover); background: var(--bg-hover); }
+@media (max-width: 1000px) { .titlebar-tools .activity-toggle { display: none; } }
 .window-actions { flex-shrink: 0; display: flex; height: 100%; }
 .window-actions .icon-button { width: 42px; height: 100%; border-radius: 0; color: var(--text-1); }
 .window-actions .icon-button:hover { background: var(--bg-hover); }
@@ -42,19 +44,20 @@ h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 .workspace-summary > span { display: inline-flex; align-items: center; gap: 6px; }
 @media (max-width: 900px) { .workspace-summary { display: none; } }
 .legend-review, .legend-done { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
-.home-nav { display: flex; align-items: center; gap: 4px; margin-left: 18px; padding: 2px; -webkit-app-region: no-drag; }
+.home-nav { display: flex; align-items: center; gap: 4px; margin-left: 10px; padding: 2px; -webkit-app-region: no-drag; }
 .home-nav button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: 8px; font: 600 13px var(--font-ui); color: var(--text-2); background: none; }
 .home-nav button:hover { color: var(--text-1); background: var(--bg-hover); }
 .home-nav button[aria-current="page"] { color: var(--text-1); background: var(--bg-selected); }
 .home-nav-count { min-width: 18px; padding: 0 5px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 17px; text-align: center; color: var(--button-primary-text); background: var(--button-primary); }
-.home-nav :is(button):focus-visible, .titlebar-tools > .icon-button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-/* Full screen: the title bar slides up out of the way; touching the top edge (or tabbing into the bar) brings it back over the content. */
+.home-nav :is(button):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* Full screen: the title bar slides up out of the way; touching the top edge, tabbing into the bar or an open app menu (drawn on the page body) brings it back over the content.
+   Only keyboard focus counts: the focus a click leaves on a button would keep the bar down after the pointer has gone. */
 .app-shell.titlebar-auto .titlebar { position: fixed; top: 0; left: 0; right: 0; z-index: 300; transform: translateY(-100%); }
 .app-shell.titlebar-auto .titlebar-reveal { position: fixed; top: 0; left: 0; right: 0; height: 4px; z-index: 299; }
-.app-shell.titlebar-auto:has(.titlebar-reveal:hover, .titlebar:hover, .titlebar:focus-within) .titlebar { transform: none; }
+.app-shell.titlebar-auto:has(.titlebar-reveal:hover, .titlebar:hover, .titlebar :focus-visible, .titlebar-brand[aria-expanded="true"]) .titlebar { transform: none; }
 /* macOS draws its own window buttons at the left of the title bar (hidden in full screen), so the page's buttons go. */
 :root[data-platform="darwin"] .window-actions { display: none; }
-:root[data-platform="darwin"] .app-shell:not(.is-fullscreen) .titlebar-brand { padding-left: 86px; }
+:root[data-platform="darwin"] .app-shell:not(.is-fullscreen) .titlebar-brand { margin-left: 78px; }
 :root[data-platform="darwin"] .titlebar-tools { margin-right: 14px; }
 
 /* Buttons: the primary action is the one solid light block, the rest an input-coloured fill with a border; 32px high, radius 8. A toggle that is on takes the primary text colour and the selected fill. */
@@ -84,7 +87,11 @@ kbd { padding: 1px 4px; border: 1px solid var(--border); border-radius: 4px; fon
 .dropdown button:hover { background: var(--bg-hover); }
 .menu-divider { height: 1px; margin: 4px 0; background: var(--divider); }
 .panel-menu { width: 224px; }
-.panel-menu .menu-shortcut { margin-left: auto; font-size: 11px; white-space: nowrap; color: var(--text-3); }
+.dropdown .menu-shortcut { margin-left: auto; font-size: 11px; white-space: nowrap; color: var(--text-3); }
+/* The app menu hangs from the logo and title (AppMenu.tsx); it is drawn on the page body above everything, as wide as its longest row. */
+.app-menu { position: fixed; z-index: 500; width: max-content; min-width: 224px; }
+.app-menu button { white-space: nowrap; }
+.app-menu button:disabled:hover { background: transparent; }
 .terminal-context-menu { position: fixed; z-index: 120; width: 218px; }
 .terminal-context-menu button { justify-content: space-between; }
 .terminal-context-menu button > span { font-size: 11px; color: var(--text-3); }
@@ -104,7 +111,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--border); border-radius: 4px; fon
 @keyframes spinner-turn { to { transform: rotate(360deg); } }
 .user-avatar { display: block; border-radius: 50%; object-fit: cover; }
 .update-ready { position: relative; }
-.update-ready::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--text-1); box-shadow: 0 0 0 2px var(--bg-input); }
+.update-ready::after { content: ''; position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--text-1); }
 /* Motion follows the app setting (src/shared/motion.ts): "off" always stops it, "system" follows Windows. Pseudo-elements are no part of :is(). */
 :root[data-motion="off"] *, :root[data-motion="off"] *::before, :root[data-motion="off"] *::after { animation: none !important; transition: none !important; }
 @media (prefers-reduced-motion: reduce) { :root[data-motion="system"] *, :root[data-motion="system"] *::before, :root[data-motion="system"] *::after { animation: none !important; transition: none !important; } }

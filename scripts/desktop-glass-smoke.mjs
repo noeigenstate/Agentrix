@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
 import { testRun } from './test-output.mjs';
+import { openSettings } from './app-menu-helper.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
 const { desktopGlassKind } = require('../electron/desktop-glass.cjs'), backend = desktopGlassKind();
@@ -48,7 +49,7 @@ try {
   const pane = await page.locator('.project-panel').first().evaluate(node => ({ opacity: getComputedStyle(node).opacity, backdrop: getComputedStyle(node).backdropFilter, fill: getComputedStyle(node).backgroundColor }));
   assert.equal(pane.opacity, '1'); assert.equal(pane.backdrop, 'none'); assert.equal(pane.fill, 'rgb(36, 36, 36)', 'the card stays the opaque grey at any transparency'); await capture('native-more-transparent.png');
   await page.evaluate(() => window.agentrix.settings({ terminalRenderer: 'gpu' })); await waitFor(() => page.locator('canvas').count().then(count => count > 0), 'GPU terminal'); assert.equal((await state()).projects[0].sessionId, session);
-  await page.getByRole('button', { name: '工作台设置', exact: true }).click(); assert.equal(await page.getByRole('combobox', { name: '界面材质', exact: true }).getAttribute('data-value'), 'glass'); assert.equal(await page.getByRole('combobox', { name: '玻璃背景', exact: true }).getAttribute('data-value'), 'desktop'); await capture('settings.png'); await page.getByRole('button', { name: '完成', exact: true }).click();
+  await openSettings(page); assert.equal(await page.getByRole('combobox', { name: '界面材质', exact: true }).getAttribute('data-value'), 'glass'); assert.equal(await page.getByRole('combobox', { name: '玻璃背景', exact: true }).getAttribute('data-value'), 'desktop'); await capture('settings.png'); await page.getByRole('button', { name: '完成', exact: true }).click();
   const before = await app.evaluate(() => globalThis.desktopGlassMain.getBounds());
   await app.evaluate(() => globalThis.desktopGlassMain.setSize(1300, 820)); await page.waitForTimeout(100); assert.equal(await app.evaluate(() => globalThis.desktopGlassMain.getBounds().width), 1300); await app.evaluate((_electron, bounds) => globalThis.desktopGlassMain.setBounds(bounds), before);
   await app.evaluate(() => globalThis.desktopGlassMain.maximize()); await page.waitForTimeout(300); results.maximized = await app.evaluate(() => globalThis.desktopGlassMain.isMaximized()); await app.evaluate(() => globalThis.desktopGlassMain.unmaximize());
@@ -66,7 +67,7 @@ try {
   await page.evaluate(() => window.agentrix.settings({ surface: 'glass', glassBackground: 'desktop' }));
   await waitFor(async () => (await state()).desktopGlass.restart, 'restart requirement');
   assert.equal(await page.evaluate(() => document.documentElement.dataset.surface), 'glass');
-  await page.getByRole('button', { name: '工作台设置', exact: true }).click();
+  await openSettings(page);
   await page.getByText('重新打开应用后启用桌面磨玻璃；切换设置不会中断当前会话。', { exact: false }).waitFor();
   results.checks.push('ordinary windows retain the original material until the user reopens the app');
   console.log('PASS:', JSON.stringify(results));

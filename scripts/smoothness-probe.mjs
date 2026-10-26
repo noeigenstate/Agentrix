@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
+import { openSettings } from './app-menu-helper.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -138,11 +139,11 @@ try {
     for (let i = 0; i < 24; i++) { await page.mouse.wheel(0, -240); await sleep(30); }
     for (let i = 0; i < 24; i++) { await page.mouse.wheel(0, 240); await sleep(30); }
   }, 500);
-  await measure('activity-toggle', async () => { await focused.getByRole('button', { name: '隐藏活动栏', exact: true }).click(); await sleep(700); await focused.getByRole('button', { name: /显示活动栏/ }).click(); }, 700);
+  await measure('activity-toggle', async () => { await page.getByRole('button', { name: '隐藏活动栏', exact: true }).click(); await sleep(700); await page.getByRole('button', { name: /显示活动栏/ }).click(); }, 700);
   await measure('terminal-toggle', async () => { await focused.getByRole('button', { name: '切换到终端', exact: true }).click(); await sleep(700); await focused.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click(); }, 700);
   // Nothing done: what keeps repainting by itself (a light breathing, a spinner) shows here.
   await measure('idle', () => sleep(1400), 0);
-  await measure('settings', async () => { await page.getByRole('button', { name: '工作台设置', exact: true }).click(); await sleep(700); await page.keyboard.press('Escape'); }, 700);
+  await measure('settings', async () => { await openSettings(page); await sleep(700); await page.keyboard.press('Escape'); }, 700);
   await measure('restore', () => page.locator('.focus-sidebar').getByRole('button', { name: /总览/ }).first().click({ timeout: 3000 }), 1000);
   await measure('to-decisions', () => nav('决策').click(), 900);
   const janky = results.filter(result => result.dropped);

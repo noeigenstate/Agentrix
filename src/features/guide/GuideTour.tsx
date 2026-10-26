@@ -35,7 +35,7 @@ export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects:
     },
     {
       id: 'prompt', title: t('下达指令'), interactive: true,
-      body: [t('直接写下要做的事，按回车发送；按 {key} 可以用说的。', { key: shortcut('voice') }), t('这一轮做完，方框亮起白色边框并语音提醒，你不必盯着。')],
+      body: [t('直接写下要做的事，按回车发送；按 {key} 可以用说的。', { key: shortcut('voice') }), t('全部做完后，方框亮起白色呼吸光并语音提醒，你不必盯着。')],
       target: () => visible('.project-panel'), done: () => !!project?.codexActive && project.codexActivity === 'working',
     },
     {
@@ -45,8 +45,8 @@ export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects:
     },
     {
       id: 'settings', title: t('设置与更多'), interactive: false,
-      body: [t('这里是设置：主题、提醒、快捷键，以及一键安装 Codex 和 Claude Code。也能从这里再看一遍教程。'), t('按 {key} 添加更多项目。', { key: shortcut('addProject') })],
-      target: () => visible('.titlebar-tools > .icon-button'),
+      body: [t('标志和标题是应用菜单：新建项目、返回项目、全屏，以及设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）。'), t('按 {key} 添加更多项目。', { key: shortcut('addProject') })],
+      target: () => visible('.titlebar-brand'),
     },
   ];
   const [index, setIndex] = useState(0);

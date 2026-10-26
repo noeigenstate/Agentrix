@@ -12,6 +12,7 @@ import net from 'node:net';
 import { _electron as electron } from 'playwright-core';
 import { runDesktopTask } from '../tests/helpers/desktop-task-fixture.mjs';
 import { waitFor, terminalsSettled } from './wait.mjs';
+import { openSettings } from './app-menu-helper.mjs';
 
 const require = createRequire(import.meta.url);
 const exec = promisify(execFile);
@@ -224,9 +225,9 @@ try {
   }));
   assert.equal(animation.panel, 'none', 'the reading surface never flashes');
   assert.ok(animation.lit, 'a finished turn lights its card');
-  assert.deepEqual(animation.lights.map(([name]) => name), ['signal-breathe', 'none'], 'a fresh finished turn breathes its ring, never the dot');
-  assert.deepEqual(animation.lights[0].slice(1), ['2s', 'infinite'], 'the breath is a 2 s loop');
-  console.log('PASS: parent lifecycle marks the card with the white needs-you edge; unrelated notify callbacks are ignored');
+  assert.deepEqual(animation.lights.map(([name]) => name), ['signal-breathe', 'none'], 'a finished turn breathes its glow, never the dot');
+  assert.deepEqual(animation.lights[0].slice(1), ['2.5s', 'infinite'], 'the breath is a 2.5 s loop');
+  console.log('PASS: parent lifecycle marks the card with the white needs-you glow; unrelated notify callbacks are ignored');
 
   const projectOrder = () => page.locator('.agentrix > .project-slot > .project-panel').evaluateAll(panels => panels.map(panel => panel.dataset.projectId));
   const beginProjectDrag = async (sourceId, targetId) => {
@@ -572,7 +573,7 @@ try {
   await page.getByRole('button', { name: '清除搜索' }).click();
   await page.waitForSelector('.project-panel');
   await page.screenshot({ path: path.join(output, 'grid.png') });
-  await page.getByRole('button', { name: /设置/ }).click();
+  await openSettings(page);
   await page.waitForSelector('dialog[open]');
   // Settings show one category at a time; updates live under "更新与关于".
   await page.locator('.settings-nav').getByRole('button', { name: '更新与关于', exact: true }).click();
@@ -582,14 +583,15 @@ try {
   await page.screenshot({ path: path.join(output, 'settings.png') });
   await page.getByRole('button', { name: '完成', exact: true }).click();
   const idlePanel = page.locator(`[data-project-id="${projects[2].id}"]`);
-  await waitFor(async () => idlePanel.evaluate(element => !element.classList.contains('attention-active') && element.getAnimations({ subtree: true }).every(animation => animation.animationName !== 'signal-breathe')), 'completed idle project becomes quiet after its initial alert', 13000);
+  await waitFor(async () => idlePanel.evaluate(element => !element.classList.contains('attention-active')), 'completed idle project ends its initial alert', 13000);
   await complete('other-project-turn', target);
   const idleCompletedAt = (await page.evaluate(() => window.agentrix.getState())).value.projects[2].lastCompletedAt;
   await page.evaluate(id => window.agentrix.writeTerminal(id, '\x1b[I\x1b[O\x1b[1;1R'), projects[2].id);
   await complete('idle-background-turn', target, 'another-thread');
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[2].lastCompletedAt, idleCompletedAt);
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[2].unread, 1, 'same completed turn never repeats the notification');
-  assert.equal(await idlePanel.evaluate(element => element.getAnimations({ subtree: true }).some(animation => animation.animationName === 'signal-breathe')), false);
+  assert.equal(await idlePanel.evaluate(element => element.classList.contains('attention-active')), false, 'an idle background callback does not restart the alert');
+  assert.equal(await idlePanel.evaluate(element => element.getAnimations({ subtree: true }).some(animation => animation.animationName === 'signal-breathe')), true, 'an unread card keeps breathing until it is viewed');
   await page.evaluate(id => window.agentrix.writeTerminal(id, 'draft-only'), projects[2].id);
   await complete('draft-background-turn', target, 'yet-another-thread');
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[2].unread, 1, 'an unsubmitted draft does not rearm notifications');
@@ -607,7 +609,7 @@ try {
     await application.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 700), width);
     await waitFor(async () => page.evaluate(() => {
       const bar = document.querySelector('.titlebar').getBoundingClientRect();
-      return [...document.querySelectorAll('.titlebar-tools > *, .window-actions')].every(node => {
+      return [...document.querySelectorAll('.titlebar-brand, .titlebar-tools > *, .window-actions')].every(node => {
         const box = node.getBoundingClientRect();
         return box.top >= bar.top && box.bottom <= bar.bottom && box.left >= 0 && box.right <= innerWidth;
       }) && getComputedStyle(document.querySelector('.titlebar-tools')).webkitAppRegion === 'no-drag';
@@ -620,7 +622,7 @@ try {
   assert.equal(await page.getByRole('menuitem', { name: /继续开发|标记开发完成|VS Code/ }).count(), 0);
   assert.deepEqual(await page.evaluate(() => ['markDone', 'openInCode'].filter(key => key in window.agentrix)), []);
   await page.getByRole('button', { name: `${projects[0].name} 的更多操作`, exact: true }).click();
-  console.log('PASS: compact top titlebar, search, settings and 820–1600px windows');
+  console.log('PASS: compact top titlebar, search, app menu and 820–1600px windows');
 
   // A spoofed or stale session key cannot light an unrelated project's tile.
   await new Promise((resolve, reject) => {

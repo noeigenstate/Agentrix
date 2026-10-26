@@ -319,6 +319,7 @@ for (const [platform, shellKind] of [['win32', 'powershell'], ['linux', 'bash'],
     createNativeSession: value => { options = value; return terminal; }, scheduleState: noOp, nativeSessionEvent: noOp,
     TerminalTitleTracker: dummy, SubmissionTracker: dummy, ApprovalGuard: require('../electron/features/terminal/approval-guard.cjs').ApprovalGuard,
     ActionLog: dummy, InputGate: class { constructor(write) { this.input = write; } }, PromptQueue: dummy, ConversationLog: dummy,
+    CompletionWork: require('../electron/completion-work.cjs').CompletionWork,
     startupErrors: new Map(), captureBranch: noOp, broadcast: noOp, send: noOp, clearTimeout, setTimeout, isTerminalResponse: () => false,
     os: { homedir: () => 'unused' }, publishAction: noOp, publishConversation: noOp,
   });
@@ -348,7 +349,8 @@ for (const [platform, shellKind] of [['win32', 'powershell'], ['linux', 'bash'],
 
 function mainExitFixture(terminal, native = true) {
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const s = { native: native ? terminal : null, status: 'codex', ready: true, codexActive: true, error: null };
+  const s = { native: native ? terminal : null, status: 'codex', ready: true, codexActive: true, error: null,
+    completionWork: new (require('../electron/completion-work.cjs').CompletionWork)() };
   const sessions = new Map([['terminal', s]]), restores = [], calls = [];
   const context = vm.createContext({ terminal, s, sessions, id: 'terminal', bootstrapFile: null, quitting: false,
     flush: () => calls.push('flush'), stopUsageAccount: () => calls.push('stopUsage'), restorePlans: new Map([['terminal', {}]]),

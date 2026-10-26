@@ -128,26 +128,46 @@ try {
   await page.getByRole('button', { name: '显示活动栏：它正在做什么', exact: true }).click(); await pane.waitFor();
   await page.getByRole('button', { name: '返回总览', exact: true }).click(); await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await page.screenshot({ path: path.join(output, 'parent-running.png') });
-  // The round's prompt, as Codex records it; the spoken notice names this work.
-  await fs.appendFile(transcript, JSON.stringify({ type: 'event_msg', timestamp: new Date().toISOString(), payload: { type: 'user_message', message: '给登录页加上验证码。然后跑一下测试' } }) + '\n');
+  // The agent's own record confirms it took up this prompt in the current round.
+  await fs.appendFile(transcript, said('给登录页加上验证码。然后跑一下测试'));
   await waitFor(async () => (await state()).terminals[0].prompts.map(item => item.state).join() === 'working,working', 'the waiting prompt is taken up when Codex records it');
   await input('稍后补上文档\r');
   await waitFor(async () => (await state()).terminals[0].prompts.map(item => item.state).join() === 'working,working,queued', 'a prompt sent now waits for the next round');
   await fs.appendFile(transcript, record('task_complete', 'first')); await notify(thread, 'first');
-  await waitFor(async () => (await state()).unread === 1, 'parent completes');
-  await waitFor(async () => JSON.stringify((await state()).terminals[0].prompts.map(item => item.text)) === JSON.stringify(['稍后补上文档']), 'finished prompts leave the list; the waiting one stays');
+  const breathes = () => page.locator('.project-panel').evaluate(node => node.getAnimations({ subtree: true }).some(animation => animation.animationName === 'signal-breathe'));
+  await waitFor(async () => (await state()).terminals[0].prompts.map(item => `${item.state}:${item.text}`).join() === 'queued:稍后补上文档', 'finished prompts leave the list; the waiting one stays');
+  await notify(child, 'while-queued'); await notify(thread, 'first');
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  assert.equal((await state()).codexActivity, 'working', 'a queued prompt holds the project working after the first round ends');
+  assert.equal((await state()).unread, 0); assert.equal(await notices(), 0);
+  assert.equal(await breathes(), false, 'queued work cannot light a completion glow');
+  // Delivery is the agent's user-message record, not the earlier terminal submission.
+  // It keeps completion blocked until the round that takes it up ends.
+  await fs.appendFile(transcript, record('task_started', 'queued') + said('稍后补上文档'));
+  await waitFor(async () => (await state()).terminals[0].prompts.map(item => `${item.state}:${item.text}`).join() === 'working:稍后补上文档', 'the queued prompt is delivered to its own round');
+  assert.equal((await state()).codexActivity, 'working');
+  assert.equal((await state()).unread, 0); assert.equal(await notices(), 0);
+  await fs.appendFile(transcript, record('task_complete', 'queued')); await notify(thread, 'queued');
+  await waitFor(async () => (await state()).unread === 1, 'the queued prompt round completes the project');
+  assert.equal(await breathes(), true, 'a finished round not yet seen breathes a white glow');
+  assert.deepEqual((await state()).terminals[0].prompts, [], 'all delivered work has finished');
   assert.equal(await notices(), 1);
   await page.evaluate(id => window.agentrix.acknowledge(id), project.id);
-  await waitFor(async () => page.locator('.project-panel').evaluate(node => node.classList.contains('round-complete')), 'viewed automatic completion is steady green');
+  await waitFor(async () => page.locator('.project-panel').evaluate(node => node.classList.contains('round-complete')), 'viewed automatic completion becomes a plain round-complete card');
   assert.equal(await page.locator('.status-badge').innerText(), '本轮已完成');
-  assert.equal(await page.locator('.project-panel').evaluate(node => node.getAnimations({ subtree: true }).some(animation => animation.animationName === 'signal-breathe')), false);
-  await input('draft'); await notify(child, 'new-id'); await notify(thread, 'first');
+  assert.equal(await breathes(), false, 'a viewed card stops breathing');
+  assert.equal(await page.locator('.project-panel .panel-signal').evaluate(node => getComputedStyle(node).boxShadow), 'none', 'a round-complete card draws no edge');
+  const completed = (await state()).lastCompletedAt;
+  await input('draft'); await notify(child, 'new-id'); await notify(thread, 'first'); await notify(thread, 'queued');
+  await new Promise(resolve => setTimeout(resolve, 1200));
   assert.equal(await notices(), 1); assert.equal((await state()).codexActivity, 'complete');
+  assert.equal((await state()).unread, 0); assert.equal((await state()).lastCompletedAt, completed);
+  assert.equal(await breathes(), false, 'drafts, idle polls and duplicate callbacks do not rearm a viewed completion');
   await input('\x15'); await input('second instruction\r');
-  await fs.appendFile(transcript, record('task_started', 'second'));
-  await notify(thread, 'first');
+  await fs.appendFile(transcript, record('task_started', 'second') + said('second instruction'));
+  await notify(thread, 'queued');
   assert.equal((await state()).codexActivity, 'working'); assert.equal(await notices(), 1);
-  await fs.appendFile(transcript, record('task_complete', 'first'));
+  await fs.appendFile(transcript, record('task_complete', 'queued'));
   await new Promise(resolve => setTimeout(resolve, 1200));
   assert.equal((await state()).codexActivity, 'working');
   await fs.appendFile(transcript, record('task_complete', 'second')); await notify(thread, 'second');
@@ -155,9 +175,35 @@ try {
   assert.equal(await notices(), 2);
   await notify(child, 'yet-another-turn'); await notify(thread, 'second');
   assert.equal(await notices(), 2);
+  // A typed answer is never recorded as a new prompt. Its grace defers this round's completion.
+  await input('finish the answer scenario\r');
+  await fs.appendFile(transcript, record('task_started', 'answer') + said('finish the answer scenario'));
+  await waitFor(async () => (await state()).terminals[0].prompts.some(item => item.state === 'working' && item.text === 'finish the answer scenario'), 'answer scenario parent starts');
+  await input('Use the suggested option\r');
+  await fs.appendFile(transcript, record('task_complete', 'answer')); await notify(thread, 'answer');
+  const answerState = async () => {
+    const current = await state();
+    assert.notEqual(current.codexActivity, 'interrupted', 'expiring an answer cannot interrupt completed work');
+    assert.doesNotMatch(await page.locator('.status-badge').innerText(), /已中断/);
+    return current;
+  };
+  await waitFor(async () => {
+    const current = await answerState();
+    return current.codexActivity === 'working' && current.terminals[0].prompts.map(item => `${item.state}:${item.text}`).join() === 'queued:Use the suggested option';
+  }, 'an unrecorded answer holds completion during grace');
+  assert.equal((await state()).unread, 0); assert.equal(await notices(), 2);
+  await waitFor(async () => {
+    const current = await answerState();
+    return current.codexActivity === 'complete' && current.unread === 1 && await notices() === 3;
+  }, 'the answer expires and the same round completes once', 35000);
+  assert.deepEqual((await state()).terminals[0].prompts, []);
+  assert.equal(await breathes(), true, 'the deferred completion lights the project');
+  await page.evaluate(id => window.agentrix.acknowledge(id), project.id);
+  await notify(child, 'after-answer'); await notify(thread, 'answer');
+  assert.equal((await answerState()).unread, 0); assert.equal(await notices(), 3);
   await fs.appendFile(transcript, record('task_started', 'interrupted') + record('turn_aborted', 'interrupted'));
   await waitFor(async () => (await state()).codexActivity === 'interrupted', 'interruption is distinct from completion');
-  assert.equal(await notices(), 2);
+  assert.equal(await notices(), 3);
   assert.equal(await page.evaluate(() => window.spokenNotices.length), 0, 'completions are not spoken (spoken notices are removed for now)');
   console.log('PASS: real parent lifecycle owns working/completed/interrupted status; child and stale callbacks never finish the current task');
   await application.close(); application = null;

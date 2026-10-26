@@ -145,6 +145,76 @@ class RemoteFilesTest(unittest.TestCase):
         self.assertIsNone(first["parentUuid"]); self.assertIn("parentUuid", first)
         self.assertEqual(later["parentUuid"], "a")
 
+    def test_compaction_preserves_completion_identities_and_terminal_statuses_without_outputs(self):
+        for result in ({"isAsync": True, "agentId": "agent", "status": "async_launched"}, {"backgroundTaskId": "shell"},
+                       {"task": {"task_id": "shell", "status": "killed", "output": "private output"}}):
+            kept = remote.compact_claude_record({"type": "user", "toolUseResult": dict(result, output="private output"),
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "launch", "content": "private output"}]}})
+            self.assertNotIn("private output", json.dumps(kept))
+            self.assertEqual(kept["toolUseResult"].get("backgroundTaskId"), result.get("backgroundTaskId"))
+            if "task" in result: self.assertEqual(kept["toolUseResult"]["task"], {"task_id": "shell", "status": "killed"})
+        stop = remote.compact_claude_record({"type": "system", "subtype": "stop_hook_summary", "timestamp": "t", "uuid": "stop"})
+        self.assertEqual(stop["subtype"], "stop_hook_summary")
+        ended = remote.compact_claude_record({"type": "assistant", "message": {"content": [], "stop_reason": "end_turn"}})
+        self.assertEqual(ended["message"]["stop_reason"], "end_turn")
+        for value in ({"agent_id": "child", "output": "private output"}, {"session_id": 42, "output": "private output"},
+                      {"exit_code": 130, "output": "private output"}, {"status": {"child": {"completed": "private output"}}},
+                      {"agents": [{"agent_name": "child", "agent_status": {"completed": "private output"}}]}):
+            compact = remote.completion_output(json.dumps(value))
+            self.assertNotIn("private output", compact)
+            self.assertTrue(compact)
+        self.assertEqual(remote.completion_output("ordinary stdout"), "")
+
+    def test_completion_history_replays_the_record_skipped_at_an_exact_tail_boundary(self):
+        first = b'{"type":"system"}\n'
+        launch = b'{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","id":"boundary","input":{"run_in_background":true}}]}}\n'
+        history, received = remote.CompletionHistory(len(first)), []
+        self.assertTrue(history.read(io.BytesIO(first + launch), received.append))
+        self.assertEqual(received[-1]["message"]["content"][0]["id"], "boundary")
+
+    def test_completion_history_keeps_receipts_after_large_valid_outputs(self):
+        record = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "launch", "content": "x" * (2 * 1024 * 1024)}]},
+                  "toolUseResult": {"backgroundTaskId": "shell"}}
+        data = (json.dumps(record) + "\n").encode()
+        history, received = remote.CompletionHistory(len(data) - 1), []
+        self.assertTrue(history.read(io.BytesIO(data), lambda record: received.append(remote.compact_claude_record(record))))
+        self.assertFalse(history.uncertain); self.assertEqual(received[0]["toolUseResult"]["backgroundTaskId"], "shell")
+
+    def test_completion_replay_cannot_claim_success_if_the_record_budget_discards_an_old_launch(self):
+        reader = remote.CodexActivityReader(str(self.root), str(self.root), 1)
+        reader.work_history = remote.CompletionHistory(0)
+        for number in range(20001):
+            reader.record({"type": "response_item", "payload": {"type": "function_call", "call_id": str(number), "name": "test", "arguments": "{}"}}, True)
+        self.assertEqual(len(reader.outbox), 20000)
+        self.assertTrue(reader.take()["completionUncertain"])
+
+    def test_completion_history_recovers_launches_and_ends_before_the_remote_tail_for_both_agents(self):
+        def row(record): return (json.dumps(record) + "\n").encode()
+        padding = row({"padding": "x" * 8192})
+        for agent in ("claude", "codex"):
+            with self.subTest(agent=agent):
+                launch = {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "launch", "name": "Agent", "input": {"run_in_background": True}}]}} if agent == "claude" else {
+                    "type": "response_item", "payload": {"type": "function_call", "call_id": "launch", "name": "spawn_agent", "arguments": "{}"}}
+                end = {"type": "queue-operation", "operation": "enqueue", "content": "<task-notification><task-id>launch</task-id><status>stopped</status></task-notification>"} if agent == "claude" else {
+                    "type": "response_item", "payload": {"type": "function_call_output", "call_id": "launch", "output": '{"agent_id":"child"}'}}
+                if agent == "claude":
+                    filename = self.claude_file(); reader = remote.ClaudeTranscriptReader(str(filename), 1); compact = remote.compact_claude_record
+                else:
+                    home = Path(self.temp.name) / "history-codex"; (home / "sessions").mkdir(parents=True)
+                    identity = str(uuid.uuid4()); filename = home / "sessions" / ("rollout-" + identity + ".jsonl")
+                    reader = remote.CodexActivityReader(str(self.root), str(home), 1); compact = remote.compact_record
+                prefix = row(launch) + row(end)
+                if agent == "codex": prefix = row({"type": "session_meta", "payload": {"id": identity, "cwd": str(self.root), "source": "cli"}}) + prefix
+                filename.write_bytes(prefix + padding * ((remote.HISTORY_WINDOW + remote.LIVE_READ_LIMIT) // len(padding) + 2) + row({"type": "system"}))
+                received, done = [], False
+                for _ in range(10):
+                    reader.read(); status = reader.take(); received.extend(status["records"])
+                    if status["historyDone"]: done = True; break
+                self.assertTrue(done)
+                prefix_records = [record for record in received if record.get("workOnly")]
+                for expected in (compact(launch), compact(end)):
+                    self.assertIn(dict(expected, workOnly=True), prefix_records)
+
     def test_claude_queue_compaction_keeps_text_blocks_cancellations_and_provenance(self):
         content = [{"type": "text", "text": "Queued work"}, {"type": "image", "source": {"data": "hidden"}}]
         for operation in ("enqueue", "remove", "dequeue", "popAll", "popOne", "clear"):
@@ -195,6 +265,11 @@ class RemoteFilesTest(unittest.TestCase):
                              + row("recent") + row("a" * remote.RECORD_TEXT_LIMIT) * 20)
         status = self.worker.claude_status(str(filename), 1000)
         self.assertTrue(status["reset"]); self.assertFalse(status["historyDone"])
+        work_records = [record for record in status["records"] if record.get("workOnly")]
+        self.assertEqual(work_records[0]["message"]["content"], "excluded")
+        status = self.worker.claude_status(str(filename), 1000)
+        while not status["records"]: status = self.worker.claude_status(str(filename), 1000)
+        self.assertFalse(status["historyDone"])
         self.assertEqual(status["records"][0]["message"]["content"], "recent")
         self.assertLessEqual(len(json.dumps(status)), remote.RECORDS_BUDGET + 100)
         next_status = self.worker.claude_status(str(filename), 1000)
@@ -468,7 +543,9 @@ class RemoteFilesTest(unittest.TestCase):
         reader = remote.CodexActivityReader(str(self.root), str(home), 0, identity)
         seen = []
         original = reader.record
-        def record(value): seen.append(value); original(value)
+        def record(value, work_only=False):
+            if not work_only: seen.append(value)
+            original(value, work_only)
         reader.record = record
         self.assertEqual(reader.read()["state"], "unknown")
         self.assertFalse(reader.history_pending)
@@ -482,10 +559,14 @@ class RemoteFilesTest(unittest.TestCase):
         self.assertEqual(reader.read()["state"], "complete")
         # Shrink but remain larger than a window; the old turn must not survive.
         filename.write_bytes(meta + line({"padding": "x" * (remote.HISTORY_WINDOW + 1000)}) + complete)
-        self.assertEqual(reader.read()["state"], "unknown")
+        result = reader.read()
+        while result is None: result = reader.read()
+        self.assertEqual(result["state"], "unknown")
         filename.rename(filename.with_suffix(".old"))
         filename.write_bytes(meta + line({"padding": "x" * (remote.HISTORY_WINDOW + 2000)}) + event("task_started", "replacement"))
-        self.assertEqual(reader.read()["state"], "working")
+        result = reader.read()
+        while result is None: result = reader.read()
+        self.assertEqual(result["state"], "working")
         self.assertEqual(reader.snapshot["turnId"], "replacement")
 
     def test_large_unicode_pages_are_lossless(self):

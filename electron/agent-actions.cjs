@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { transcriptWindow, LIVE_READ_LIMIT } = require('./transcript-window.cjs');
+const { CompletionHistory } = require('./completion-history.cjs');
 const { ClaudeImageLine } = require('./oversized-record.cjs');
 const { messageText, ownMessage, promptText } = require('./prompt-queue.cjs');
 
@@ -225,9 +226,10 @@ class ActionLog {
 
 // Follows a growing JSON-lines file from where the last read stopped, a bounded amount per call.
 class TranscriptTail {
-  constructor(filename, { onHistory = () => {} } = {}) {
+  constructor(filename, { onHistory = () => {}, onWorkRecord = null } = {}) {
     this.filename = filename; this.offset = 0; this.buffer = Buffer.alloc(0); this.skipping = false; this.oversized = null;
     this.onHistory = onHistory; this.historyPending = true; onHistory(false);
+    this.onWorkRecord = onWorkRecord;
   }
   async read(onRecord) {
     let file; try { file = await fs.open(this.filename, 'r'); } catch { return; }
@@ -238,10 +240,12 @@ class TranscriptTail {
       if (this.fileIdentity !== identity || size < this.fileSize) {
         const rebinding = this.fileIdentity != null;
         Object.assign(this, transcriptWindow(size)); this.buffer = Buffer.alloc(0); this.oversized = null;
+        this.workHistory = this.onWorkRecord ? new CompletionHistory(this.offset) : null;
         this.historyPending = true;
         if (rebinding) this.onHistory(false);
       }
       this.fileIdentity = identity; this.fileSize = size;
+      if (this.workHistory && !await this.workHistory.read(file, this.onWorkRecord)) return;
       const end = this.historyPending ? size : Math.min(size, this.offset + LIVE_READ_LIMIT);
       while (this.offset < end) {
         const chunk = Buffer.alloc(Math.min(65536, end - this.offset));

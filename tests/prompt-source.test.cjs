@@ -350,7 +350,7 @@ test('main keeps the short lastTask and long card task across bare follow-ups in
   }
 });
 
-test('completion-smoke records complete exactly once with batched reads, early notify and a late received prompt', async t => {
+test('completion-smoke records defer the alert across queued work, batched reads, early notify and a late received prompt', async t => {
   const { monitorActivity } = require('../electron/codex-activity.cjs');
   for (const order of ['incremental', 'batched', 'late-prompt']) for (const notifyFirst of [false, true]) {
     const h = activityHarness(), { s, project, store, context } = h;
@@ -394,17 +394,23 @@ test('completion-smoke records complete exactly once with batched reads, early n
     assert.equal(project.completionArmed, true);
     pending.push(event('task_complete', 'first', 2500));
     if (notifyFirst) { notify('parent'); await poll(); } else { await poll(); notify('parent'); await poll(); }
-    assert.equal(project.unread, 1, `${order}, notifyFirst=${notifyFirst}`);
-    assert.equal(h.alerts(), 1); assert.equal(s.codexActivity, 'complete'); assert.equal(project.completionArmed, false);
-    assert.equal(s.lastCompletedAt, 2500); assert.deepEqual(project.seenEvents, ['parent:first']);
+    assert.equal(project.unread, 0, `${order}, notifyFirst=${notifyFirst}`);
+    assert.equal(h.alerts(), 0); assert.equal(s.codexActivity, 'working'); assert.equal(project.completionArmed, true);
+    assert.equal(s.lastCompletedAt, undefined); assert.deepEqual(project.seenEvents, []);
     assert.equal(s.activityPromptAt, order === 'incremental' ? 2300 : 2100);
     if (order === 'late-prompt') { pending.push(received); await poll(); }
     assert.deepEqual(s.promptQueue.list().map(item => item.text), ['稍后补上文档']);
     const watermark = s.activityPromptAt, arms = h.arms();
-    store.acknowledge(project.id);
     pending.push(received, codex('/model', 2600, {}, false), codex(injected[0][0], 2700, {}, false));
     await poll(); notify('parent'); notify('child'); await poll();
     assert.equal(s.activityPromptAt, watermark); assert.equal(h.arms(), arms);
+    assert.equal(project.unread, 0); assert.equal(h.alerts(), 0);
+    h.now(3000);
+    pending.push(event('task_started', 'second', 3000), codex('稍后补上文档', 3100, {}, false), event('task_complete', 'second', 3500));
+    await poll();
+    assert.equal(s.codexActivity, 'complete'); assert.equal(project.unread, 1); assert.equal(h.alerts(), 1);
+    assert.deepEqual(project.seenEvents, ['parent:second']);
+    store.acknowledge(project.id); notify('parent'); await poll();
     assert.equal(project.unread, 0); assert.equal(h.alerts(), 1);
   }
 });

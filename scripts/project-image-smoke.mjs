@@ -8,6 +8,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { _electron as electron } from 'playwright-core';
 import { testRun } from './test-output.mjs';
 import { waitFor, terminalsSettled } from './wait.mjs';
+import { openSettings } from './app-menu-helper.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
 const output = await testRun('project-image'), profile = path.join(output, 'profile'), home = path.join(output, 'home');
@@ -121,7 +122,7 @@ try {
   await unchanged();
   assert.equal(await panel(3).locator('.panel-index:visible').count(), 1);
   report.checks.push('local images save per project as bounded raster data, while an unconfigured project keeps its original number');
-  await page.getByRole('button', { name: '工作台设置', exact: true }).click();
+  await openSettings(page);
   const preferences = page.locator('.settings-paned');
   assert.equal(await preferences.locator('[data-settings-tab="project-images"]').count(), 0);
   await preferences.locator('[data-project-images-open]').click();

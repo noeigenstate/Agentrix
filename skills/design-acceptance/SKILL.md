@@ -74,7 +74,7 @@ focus) overrides some tokens, shown in brackets, see below.
 | Primary button | `--button-primary` / `--button-primary-text` | #E5E5E5 / #181818 | the one main action; its hover is `--text-1` |
 | Focus ring | `--focus-ring` | #D0D0D0 | every `:focus-visible` ring, and only keyboard focus |
 | Claude Code | `--agent-claude` | #D97757 | its brand icon |
-| Succeeded | `--success` | #70BFA4 | command done, check passed, a finished round |
+| Succeeded | `--success` | #70BFA4 | command done, check passed, a finished round's tag and dot (never a card edge) |
 | Running | `--running` | #78A8CC | tasks in progress: a working card's edge, tag and dot, the reading view's running dot |
 | Needs approval | `--warning` | #D8AE67 | only where something waits for the owner's decision |
 | Failed | `--danger` | #DE7878 | errors and failures |
@@ -89,12 +89,14 @@ focus) overrides some tokens, shown in brackets, see below.
   command pill is a grey pill with grey text, and only its check is green, its cross red, its running dot blue. A state colour paints a
   ring, a tag's text, a dot or an icon, never a panel. Warning and danger appear only for what is waiting or failed; usage meters do not warm.
 - State keeps a non-hue cue next to its colour (ring, tag shape, dot shape), so it still reads in grayscale: working is a
-  filled tag and dot, finished a plain tag and a filled dot, finished-and-unseen an outlined tag and a hollow dot (its ring
-  breathes in white while fresh, then settles into success), failed a square dot.
+  filled tag and dot, finished a plain tag and a filled dot with no edge, finished-and-unseen an outlined tag and a hollow dot
+  (its grid card breathes a white glow, a soft inset vignette from the edge inward with no hard line, until it is viewed), failed a
+  square dot. A project in focus draws no edge at all; its tag carries the state.
 - Radii: 0 for layout regions, 16 for project cards, menus and dialogs, 12 for message containers (your bubble, tool groups, code
   and error wells, file cards), composers and dropdown triggers, 8 for buttons, rows and small wells, pill for tags. Layout regions
   are separated by a colour step, a divider and spacing, not by cards.
-- No glass, wallpaper, glow or gradients, and no tinted panels. The one shadow is the dropdown menu's.
+- No glass, wallpaper or gradients, and no tinted panels. The only shadows are the dropdown menu's and, in the grid, the white inset glow
+  that breathes on a finished card not yet seen.
 - Dropdowns use `src/shared/Select.tsx`, never a native `<select>` (its pop-up is drawn by the OS in system blue).
 - Native GUI checks drive it with `scripts/select-helper.mjs`.
 
@@ -110,6 +112,10 @@ focus) overrides some tokens, shown in brackets, see below.
   it (`--flow-card`: the input colour on a card, the card colour in focus). The agent's plain reply has no card; code blocks, errors
   and file cards are wells (`--bg-app` with a divider edge, radius 12). The model tag over the composer hides while the activity pane,
   which shows the model route, is open.
+- Toggling a pane or a view never moves the header or the title bar: the activity pane runs from the title bar to the bottom, behind the header's
+  right cluster (status and buttons, which fit its 340px column), and the header and the output's top never move; only the output beside it narrows.
+- The title bar has no settings button: the app menu (new project, back to projects, full screen, Settings, and an update waiting to
+  install) opens from the logo and title at its left, and in a project the activity pane's toggle sits at its right.
 - The activity pane is a quiet status inspector: groups without cards or borders on the pane colour, a 13px title, 12px content, 11px
   notes, 20px between groups, 4 to 12px inside a group, 16px padding. The plan's first usage bar is `--usage`; every other meter is
   `--text-3` on the well.

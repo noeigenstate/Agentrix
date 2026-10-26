@@ -1,8 +1,8 @@
 /* The workbench: the project grid, a project card (and the one card in use), its terminals and the dialogs that add projects.
-   A card is a real card (card colour, radius 16) on the canvas; the terminal takes the card's own colour. Nothing glows, blurs or moves;
+   A card is a real card (card colour, radius 16) on the canvas; the terminal takes the card's own colour. Nothing blurs or moves, and only a finished card not yet seen glows;
    a card's state reads from its tag and its edge, by colour and by shape, so it also reads in grayscale:
-     working  running-colour 2px edge, filled tag, filled dot   |   round complete  success edge, plain tag, filled dot
-     finished, not yet seen  white breath while fresh, then a success edge, outlined tag, hollow dot   |   error  danger edge, plain tag, square dot. */
+     working  running-colour 2px edge, filled tag, filled dot   |   round complete  no edge, plain tag, filled dot
+     finished, not yet seen  white breath from the edge inward, outlined tag, hollow dot   |   error  danger edge, plain tag, square dot. */
 .grid-area { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
 /* An expanded project is the page itself: it runs to the edges of the main area, so the activity pane docks to them like the explorer on the left. */
 .focus-mode .grid-area { padding: 0; }
@@ -14,20 +14,20 @@
 .project-slot:has(> .focus-motion-panel) { z-index: 50; }
 .project-slot > .project-panel { height: 100%; }
 .project-slot.drag-placeholder::before { content: ''; position: absolute; inset: 0; border: 1px dashed var(--border-hover); border-radius: 16px; pointer-events: none; }
-.project-panel { --panel-header-height: 40px; position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; isolation: isolate; border-radius: 16px; background: var(--bg-card); }
+.project-panel { --panel-header-height: 40px; --panel-pad: 0px; --pane-top: calc(var(--panel-pad) + var(--panel-header-height)); position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; isolation: isolate; border-radius: 16px; background: var(--bg-card); }
 .project-panel:has(.panel-menu) { z-index: 20; }
-.focus-mode .project-panel { padding: 12px; border-radius: 0; background: var(--bg-app); }
+.focus-mode .project-panel { --panel-pad: 12px; padding: var(--panel-pad); border-radius: 0; background: var(--bg-app); }
 .project-slot > .project-panel.focus-motion-panel { position: fixed; left: 0; top: 0; width: var(--focus-width); height: var(--focus-height); margin: 0; transform-origin: 0 0; will-change: transform; animation: none; transition: none; }
 
-/* A card's state is its edge: the signal span is a 2px inset ring in the state's colour, none at rest. */
+/* A card's state is its edge: the signal span is a 2px inset ring in the state's colour (working, error) or a white breath (finished, not yet seen), none at rest. */
 .panel-signal { position: absolute; inset: 0; z-index: 3; border-radius: inherit; pointer-events: none; }
 .project-panel.is-working .panel-signal { box-shadow: inset 0 0 0 2px var(--running); }
-.project-panel:is(.round-complete, .has-unread:not(.round-complete)) .panel-signal { box-shadow: inset 0 0 0 2px var(--success); }
 .project-panel.has-error:not(.is-working, .has-unread) .panel-signal { box-shadow: inset 0 0 0 2px var(--danger); }
-.focus-mode .project-panel .panel-signal { box-shadow: none; }
-/* The ring is white and breathes while a finished round is fresh (attention-active, 9 s) and then settles into the steady success ring above. Only the ring's opacity moves, never the card or its terminal.
-   data-motion="off" and "system" with reduced motion stop it in styles.css. */
-.app-shell:not(.focus-mode) .project-panel.attention-active.has-unread:not(.round-complete):not(.focus-motion-panel):not(.drag-source) .panel-signal { box-shadow: inset 0 0 0 2px var(--text-1); animation: signal-breathe 2s ease-in-out infinite; }
+/* A project in focus draws no edge, whatever its state; display none cannot lose to the rings on specificity the way a box-shadow reset did. */
+.focus-mode .project-panel .panel-signal { display: none; }
+/* A finished round that has not been seen breathes a white glow, a soft vignette from the card's edge inward with no line. It stops when the card is viewed; a round-complete card draws nothing.
+   Only the glow's opacity moves, never the card or its terminal. data-motion="off" and "system" with reduced motion stop it in styles.css, leaving the glow still. */
+.app-shell:not(.focus-mode) .project-panel.has-unread:not(.focus-motion-panel, .drag-source) .panel-signal { box-shadow: inset 0 0 48px 8px rgb(from var(--text-1) r g b / .3); animation: signal-breathe 2.5s ease-in-out infinite; }
 @keyframes signal-breathe { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 .is-nav-target > .panel-nav-ring { position: absolute; inset: 0; z-index: 4; border-radius: inherit; pointer-events: none; box-shadow: inset 0 0 0 2px var(--focus-ring); }
 .project-switch-hud { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; pointer-events: none; }
@@ -67,25 +67,25 @@
 @container (max-width: 380px) { .panel-name small { display: none; } .panel-header { gap: 4px; padding-left: 8px; } .panel-header .icon-button, .panel-header .voice-button { width: 28px; } }
 @container (max-width: 300px) { .status-badge > span:not(.status-dot) { display: none; } .panel-index { display: none; } }
 /* An expanded project's number and name are already at the top of the sidebar beside it, so its header drops them and keeps only the
-   status and the buttons at the right. With the activity column open they sit at its top. With the sidebar collapsed to its rail the name stays. */
+   status and the buttons at the right. With the sidebar collapsed to its rail the name stays. The "finished N min ago" text goes in focus
+   in both states: the right cluster sits on the activity pane, and that text can push it past the pane's 340px edge. */
 .focus-mode:has(.focus-sidebar:not(.is-collapsed)) .project-panel .panel-header { justify-content: flex-end; }
 .focus-mode:has(.focus-sidebar:not(.is-collapsed)) .project-panel .panel-header :is(.panel-index, .panel-name) { display: none; }
-@media (min-width: 1001px) {
-  /* The activity pane is docked: it runs from the title bar to the window's bottom and from the main area to the window's right edge, so its panel has no right padding. */
-  .focus-mode .project-panel.has-activity { padding-right: 0; }
-  .focus-mode .project-panel.has-activity .activity-pane { top: 0; padding-top: calc(12px + var(--panel-header-height)); }
-  .focus-mode:has(.focus-sidebar:not(.is-collapsed)) .project-panel.has-activity .panel-header { position: absolute; top: 0; right: 0; width: 340px; }
-  .focus-mode:has(.focus-sidebar:not(.is-collapsed)) .project-panel.has-activity .activity-pane { padding-top: var(--panel-header-height); }
-}
+.focus-mode .panel-header .panel-meta { display: none; }
 
 /* The terminal takes the card's own colour (the app colour in the project in use, where the card is the whole page) and fills the rest of it; the card has no footer. */
 .panel-terminal-area { position: relative; z-index: 0; flex: 1; min-height: 0; overflow: hidden; isolation: isolate; background: var(--bg-card); }
 .focus-mode .panel-terminal-area { background: var(--bg-app); }
 .project-panel > :last-child { border-radius: 0 0 16px 16px; }
 .focus-mode .project-panel > :last-child { border-radius: 0; }
-.project-panel.has-activity .panel-terminal-area { margin-right: 340px; }
-.activity-pane { position: absolute; top: var(--panel-header-height); right: 0; bottom: 0; z-index: 1; display: flex; flex-direction: column; width: 340px; min-height: 0; border-left: 1px solid var(--divider); background: var(--bg-aside); }
-@media (max-width: 1000px) { .project-panel.has-activity .panel-terminal-area { margin-right: 0; } .activity-pane { display: none; } }
+/* The activity pane is docked to the panel's right edge and bottom, from where the output starts, and scrolls only inside its own box. The panel's ::before is the same
+   column above it, up to the title bar (same colour, same divider, ending exactly where the pane starts), so the header's right cluster sits on the pane's background in one
+   unbroken column. The header stays in flow above both (z-index 2, transparent): nothing paints over the output, and only the output narrows, to the divider. */
+.project-panel.has-activity .panel-terminal-area { margin-right: calc(340px - var(--panel-pad)); }
+.activity-pane, .project-panel.has-activity::before { position: absolute; right: 0; z-index: 1; box-sizing: border-box; width: 340px; border-left: 1px solid var(--divider); background: var(--bg-aside); }
+.activity-pane { top: var(--pane-top); bottom: 0; display: flex; flex-direction: column; min-height: 0; }
+.project-panel.has-activity::before { content: ''; top: 0; height: var(--pane-top); }
+@media (max-width: 1000px) { .project-panel.has-activity .panel-terminal-area { margin-right: 0; } .activity-pane, .project-panel.has-activity::before { display: none; } }
 .terminal-host { position: absolute; inset: 10px 7px 5px 11px; overflow: hidden; }
 .focus-mode .terminal-host { inset: 16px 12px 10px 18px; }
 .has-splits .terminal-host { inset: 8px 7px 4px 10px; }

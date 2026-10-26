@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
 import { pick, picked } from './select-helper.mjs';
+import { openSettings } from './app-menu-helper.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -190,7 +191,7 @@ try {
   await page.getByRole('button', { name: '返回总览', exact: true }).click(); await settled(false);
   console.log('PASS: default smooth zoom remains enabled when Windows reduces system animations');
 
-  await page.getByRole('button', { name: '工作台设置', exact: true }).click();
+  await openSettings(page);
   await page.getByLabel('界面动画', { exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(output, 'motion-settings.png') });
   await pick(page, page.getByLabel('界面动画', { exact: true }), 'system');
@@ -201,7 +202,7 @@ try {
   await landed(id); assert.deepEqual(errors, []);
   console.log('PASS: choosing follow-system respects reduced motion');
 
-  await page.getByRole('button', { name: '工作台设置', exact: true }).click();
+  await openSettings(page);
   await pick(page, page.getByLabel('界面动画', { exact: true }), 'off');
   await page.getByRole('button', { name: '完成', exact: true }).click();
   await page.emulateMedia({ reducedMotion: 'no-preference' });

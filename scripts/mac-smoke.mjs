@@ -46,7 +46,7 @@ try {
   // macOS draws the window buttons; the page leaves room for them and has none of its own.
   assert.equal(await page.evaluate(() => document.documentElement.dataset.platform), 'darwin');
   assert.equal(await page.locator('.window-actions').isVisible(), false, 'no page-drawn window buttons');
-  assert.equal(await page.locator('.titlebar-brand').evaluate(element => getComputedStyle(element).paddingLeft), '86px', 'room for the traffic lights');
+  assert.equal(await page.locator('.brand-mark').evaluate(element => element.getBoundingClientRect().left), 86, 'room for the traffic lights');
   await page.locator('.titlebar').screenshot({ path: path.join(output, 'titlebar.png') });
 
   await page.getByRole('button', { name: '只打开终端', exact: true }).click();

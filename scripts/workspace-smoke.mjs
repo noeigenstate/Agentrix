@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
 import { pick, picked } from './select-helper.mjs';
+import { chooseFromAppMenu, openSettings } from './app-menu-helper.mjs';
 const require = createRequire(import.meta.url), exec = promisify(execFile);
 const { fileClipboard } = require('../electron/file-clipboard.cjs');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -106,15 +107,15 @@ try {
   await tour.getByText('在方框里选择 Claude Code 或 Codex：有开发记录时可以接着上次继续，也可以开始新开发。').waitFor();
   assert.equal(await page.locator('.tour-shade').count(), 4, 'everything but the step\'s target is shaded');
   await page.screenshot({ path: path.join(output, 'guide-step.png') });
-  const gear = await page.locator('.titlebar-tools > .icon-button').boundingBox();
-  await page.mouse.click(gear.x + gear.width / 2, gear.y + gear.height / 2);
-  assert.equal(await page.locator('dialog.settings-dialog[open]').count(), 0, 'the rest of the window cannot be used during a step');
+  const brand = await page.locator('.titlebar-brand').boundingBox();
+  await page.mouse.click(brand.x + brand.width / 2, brand.y + brand.height / 2);
+  assert.equal(await page.locator('dialog.settings-dialog[open], [role="menu"]').count(), 0, 'the rest of the window cannot be used during a step');
   for (const title of ['下达指令', '放大查看', '设置与更多']) { await tour.getByRole('button', { name: '下一步', exact: true }).click(); await tour.getByRole('heading', { name: title, exact: true }).waitFor(); }
   const ring = await page.locator('.tour-ring').boundingBox();
-  assert.ok(ring.width < 80 && Math.abs(ring.x + ring.width / 2 - (gear.x + gear.width / 2)) < 4, 'the last step points at the settings button');
+  assert.ok(ring.width < brand.width + 20 && Math.abs(ring.x + ring.width / 2 - (brand.x + brand.width / 2)) < 4, 'the last step points at the app menu button');
   await page.screenshot({ path: path.join(output, 'guide-last-step.png') });
   await tour.getByRole('button', { name: '完成', exact: true }).click(); await tour.waitFor({ state: 'detached' });
-  await page.getByRole('button', { name: '工作台设置', exact: true }).click(); await page.getByRole('button', { name: '使用指南', exact: true }).click();
+  await openSettings(page); await page.getByRole('button', { name: '使用指南', exact: true }).click();
   await tour.waitFor(); await page.keyboard.press('Escape'); await tour.waitFor({ state: 'detached' });
   console.log('PASS: the usage guide opens on what is new after an update, pages through the steps and shortcuts, and reopens from settings');
   await page.getByRole('button', { name: '只打开终端', exact: true }).click();
@@ -291,11 +292,13 @@ try {
   console.log('PASS: shortcuts are recorded in settings, conflicts are refused, the new key works and defaults come back');
   // English mode: the window, settings, main-process messages and titles switch together, and back again.
   await page.evaluate(() => window.agentrix.settings({ language: 'en' }));
-  await page.getByRole('button', { name: 'Workspace settings', exact: true }).waitFor();
+  await page.locator('.titlebar').getByRole('button', { name: 'Agentrix', exact: true }).click();
+  for (const name of ['New project', 'Back to projects', 'Full screen', 'Settings']) await page.getByRole('menuitem', { name, exact: true }).waitFor();
+  await page.keyboard.press('Escape');
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'en');
   assert.equal(await page.locator('.status-badge').first().innerText(), 'Not started');
   assert.equal(await page.locator('.agent-launcher-title').innerText(), 'Pick an agent and start');
-  await page.getByRole('button', { name: 'Workspace settings', exact: true }).click();
+  await chooseFromAppMenu(page, 'Settings');
   await page.getByRole('heading', { name: 'Workspace settings', exact: true }).waitFor();
   assert.equal(await picked(page.getByRole('combobox', { name: 'Language', exact: true })), 'en');
   await page.screenshot({ path: path.join(output, 'settings-english.png') });
@@ -304,7 +307,9 @@ try {
   assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getTitle()), 'Agentrix');
   await page.screenshot({ path: path.join(output, 'grid-english.png') });
   await page.evaluate(() => window.agentrix.settings({ language: 'zh' }));
-  await page.getByRole('button', { name: '工作台设置', exact: true }).waitFor();
+  await page.locator('.titlebar').getByRole('button', { name: 'Agentrix', exact: true }).click();
+  await page.getByRole('menuitem', { name: '新建项目', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
   assert.equal(await page.locator('.status-badge').first().innerText(), '尚未启动');
   console.log('PASS: English mode translates the window, settings, main-process errors and titles, and switches back');
   console.log(`Screenshots: ${output}`);

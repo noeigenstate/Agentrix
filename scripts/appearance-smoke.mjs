@@ -7,6 +7,7 @@ import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
 import { testRun } from './test-output.mjs';
 import { pick, picked } from './select-helper.mjs';
+import { openSettings } from './app-menu-helper.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
 const { desktopGlassKind } = require('../electron/desktop-glass.cjs'), backend = desktopGlassKind();
@@ -65,7 +66,7 @@ try {
   await page.evaluate(() => window.agentrix.writeTerminal('appearance', "Write-Output 'APPEARANCE_UNSENT_DRAFT'"));
   await settings({ fontSize: 18, terminalFontWeight: 600, terminalFontFamily: 'Consolas', terminalCjkFontFamily: 'Noto Sans SC', surface: 'glass', glassBackground: backend ? 'desktop' : 'theme' });
   assert.equal((await state()).settings.fontSize, 18);
-  await page.getByRole('button', { name: '工作台设置', exact: true }).click();
+  await openSettings(page);
   await capture('grey-settings.png');
   const material = page.getByRole('combobox', { name: '界面材质', exact: true });
   await material.click(); assert.deepEqual(await page.locator('.select-menu [role="option"]').evaluateAll(options => options.map(option => option.dataset.value)), ['glass', 'solid']); await page.keyboard.press('Escape');
@@ -83,7 +84,7 @@ try {
   await page.getByRole('button', { name: '全屏查看 主题与字体', exact: true }).click(); await page.waitForFunction(() => !document.querySelector('[data-focus-motion]'));
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).click(); await page.locator('.file-preview').waitFor();
   assert.equal(await page.locator('.file-preview').evaluate(node => getComputedStyle(node).opacity), '1'); await page.getByRole('button', { name: '返回总览', exact: true }).click();
-  await settings({ language: 'en' }); await page.getByRole('button', { name: 'Workspace settings', exact: true }).click();
+  await settings({ language: 'en' }); await openSettings(page, 'Settings');
   await page.getByRole('combobox', { name: 'Glass background', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Done', exact: true }).click(); await settings({ language: 'zh' });
   await app.close(); app = null; await launch(); await page.waitForSelector('.project-panel'); assert.equal((await state()).settings.glassBackground, backend ? 'desktop' : 'theme');

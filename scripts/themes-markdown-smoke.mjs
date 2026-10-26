@@ -62,9 +62,9 @@ try {
   assert.equal((await state()).projects[0].sessionId, sessionId);
   assert.ok(await first.locator('.terminal-host').evaluate(node => node === globalThis.originalThemeTerminal));
   assert.deepEqual(await colors(), ansiColors);
-  // A fresh finished round has the white 2px edge while it breathes (then a steady success edge until it is viewed).
+  // A finished round not yet seen has the white glow, a soft inset vignette with no hard line, until it is viewed.
   const signal = await page.locator(`[data-project-id="${projects[1].id}"] .panel-signal`).evaluate(node => getComputedStyle(node).boxShadow);
-  assert.equal(signal, 'rgb(242, 242, 242) 0px 0px 0px 2px inset');
+  assert.ok(signal.endsWith(' 0px 0px 48px 8px inset') && !signal.includes('rgb('), `a soft white glow, not a ring: ${signal}`);
   await page.screenshot({ path: path.join(output, 'catalina-overview.png') });
   await fs.writeFile(path.join(output, 'wallpapers.json'), JSON.stringify(wallpaperChecks, null, 2));
   await page.context().setOffline(false);
