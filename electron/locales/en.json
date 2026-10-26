@@ -305,6 +305,8 @@
   "麦克风已连接 · 点击或按 {key} 说话": "Microphone connected · click or press {key} to talk",
   "语音输入 {name}": "Voice input {name}",
   "语音输入": "Voice input",
+  "结束录音并插入": "Stop and insert",
+  "全屏查看": "Expand",
   "正在聆听…": "Listening…",
   "正在识别并发送…": "Recognizing and sending…",
   "发送": "Send",

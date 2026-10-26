@@ -197,30 +197,31 @@ try {
   }
   console.log('PASS: compact explorer, create/rename/delete, native Explorer copy-out and clipboard paste-in');
   if (await page.getByRole('button', { name: '返回终端', exact: true }).count()) await page.getByRole('button', { name: '返回终端', exact: true }).click();
-  const microphone = page.getByRole('button', { name: `语音输入 ${project.name}`, exact: true });
-  await waitFor(async () => /mic-connected/.test(await microphone.getAttribute('class')), 'connected microphone shows the blue state');
+  // Voice input is in the card's ⋯ menu; while it records, the microphone over the card shows it.
+  assert.equal(await page.locator('.panel-header .voice-button').count(), 0, 'the card header has no microphone of its own');
+  const voiceItem = async name => { await page.locator('.project-panel.is-focused').getByRole('button', { name: `${project.name} 的更多操作`, exact: true }).click(); await page.getByRole('menuitem', { name, exact: false }).click(); };
+  const recording = () => page.locator('.voice-overlay .voice-stage.is-recording');
   assert.equal(await page.locator('dialog.voice-dialog').count(), 0);
-  await microphone.click();
-  await waitFor(async () => /is-recording/.test(await microphone.getAttribute('class')), 'first click starts recording in place');
-  assert.equal(await microphone.getAttribute('aria-pressed'), 'true');
+  await voiceItem('语音输入');
+  await recording().waitFor();
   await page.waitForTimeout(5500);
   await page.screenshot({ path: path.join(output, 'voice-recording.png') });
   await application.evaluate(() => { globalThis.voicePastes = []; });
-  await microphone.click();
+  await voiceItem('结束录音并插入');
   await waitFor(async () => application.evaluate(() => globalThis.voicePastes.some(item => /project folder/i.test(item.data))), 'second click inserts the text into the same terminal', 60000);
   assert.equal(await application.evaluate(() => globalThis.voicePastes.some(item => item.data === '\r')), false, 'dictation does not press Enter');
-  await waitFor(async () => !/is-recording|is-busy/.test(await microphone.getAttribute('class')), 'button returns to idle');
+  await page.locator('.voice-overlay').waitFor({ state: 'detached' });
   await page.screenshot({ path: path.join(output, 'voice-input.png') });
-  await microphone.click(); await page.keyboard.press('Escape');
-  await waitFor(async () => !/is-recording/.test(await microphone.getAttribute('class')), 'Escape cancels a recording without inserting');
-  console.log(`PASS: blue connected microphone, click to talk and click again to insert ${assets ? 'real SenseVoice recognition' : 'stubbed recognition'} into the terminal without submitting; Escape cancels`);
+  await voiceItem('语音输入'); await recording().waitFor(); await page.keyboard.press('Escape');
+  await page.locator('.voice-overlay').waitFor({ state: 'detached' });
+  console.log(`PASS: voice input from the card menu, choose it to talk and again to insert ${assets ? 'real SenseVoice recognition' : 'stubbed recognition'} into the terminal without submitting; Escape cancels`);
   // Ctrl+T: a microphone appears in the middle of the project card; Enter inserts the text and then sends it.
   await page.locator('.project-panel.is-focused .xterm-helper-textarea').first().focus();
   await application.evaluate(() => { globalThis.voicePastes = []; });
   await page.keyboard.press('Control+t');
   const overlay = page.locator('.voice-overlay');
   await overlay.waitFor();
-  await waitFor(async () => /is-recording/.test(await microphone.getAttribute('class')), 'Ctrl+T records the focused terminal');
+  await recording().waitFor();
   await overlay.evaluate(element => Promise.all(element.getAnimations().map(animation => animation.finished)));
   // Centred on the project card it types into, not on the window (the sidebar shifts the card right).
   const box = await overlay.boundingBox(), card = await page.locator('.project-panel.is-focused').boundingBox();

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowsOutSimple, Play, Plus, Terminal as TerminalIcon, DotsThree, GitBranch, X, FolderOpen, ArrowCounterClockwise, Info, Globe, ListChecks, Article, ImageSquare } from '@phosphor-icons/react';
+import { ArrowsOutSimple, Play, Plus, Terminal as TerminalIcon, DotsThree, GitBranch, X, FolderOpen, ArrowCounterClockwise, Info, Globe, ListChecks, Article, ImageSquare, Microphone } from '@phosphor-icons/react';
 import type { Project, Result } from '../../shared/types';
 import { ProjectTerminals } from '../terminal/ProjectTerminals';
 import { ActivityPane } from '../agents/ActivityPane';
 import { readingShown, setReading, useTerminalChoice } from '../reading/reading-mode';
-import { VoiceButton } from '../voice/VoiceButton';
+import { toggleDictation, useVoice } from '../voice/voice-input';
 import { t } from '../../shared/i18n';
 import { shortcut } from '../shortcuts/shortcuts';
 import { ProjectImageDialog } from './ProjectImageDialog';
@@ -72,6 +72,7 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
   const showActivity = focused && activityOpen;
   // Reading view or raw terminal, for the terminal in use.
   const readingOn = readingShown(currentTerminal, useTerminalChoice());
+  const recording = useVoice().recording === first.id;
   return <article
     className={`project-panel ${showActivity ? 'has-activity' : ''} ${project.unread && !working ? 'has-unread' : ''} ${freshCompletion ? 'attention-active' : ''} ${working ? 'is-working' : ''} ${roundComplete ? 'round-complete' : ''} ${focused ? 'is-focused' : ''} ${navTarget ? 'is-nav-target' : ''} ${project.error ? 'has-error' : ''} ${dragging ? 'drag-source' : ''} ${dropTarget ? 'drop-target' : ''}`}
     data-project-id={project.id} data-status={working ? 'working' : project.unread ? 'unread' : project.status}
@@ -86,7 +87,7 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
       if (!focused && event.button === 0 && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && !(event.target as Element).closest('button, [role="menu"]')) onFocus(project.id);
     }}>
       {project.image ? <><img className="project-image panel-project-image" src={project.image} alt="" draggable={false} data-audit-ignore /><span className="panel-index panel-project-image-fallback">{String(index + 1).padStart(2, '0')}</span></> : <span className="panel-index">{String(index + 1).padStart(2, '0')}</span>}
-      <button className="panel-name" onClick={() => !focused && onFocus(project.id)} title={project.kind === 'ssh' ? `${project.ssh?.host}:${project.path}` : project.path}>
+      <button className="panel-name" onClick={() => !focused && onFocus(project.id)} aria-label={focused ? undefined : t('全屏查看 {name}', { name: project.name })} title={project.kind === 'ssh' ? `${project.ssh?.host}:${project.path}` : project.path}>
         <span>{project.name}</span>
         {project.branch && <small><GitBranch size={11} />{project.branch}</small>}
         {project.kind === 'ssh' && <small className="ssh-project-label"><Globe size={11} />{project.ssh?.host}</small>}
@@ -96,13 +97,14 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
         ? <button type="button" className={`${badgeClass} status-button`} title={statusText(project)} onClick={() => onFocus(project.id)} aria-label={t('查看 {name} 的完成结果', { name: project.name })}>{badge}</button>
         : <span className={badgeClass} title={statusText(project)}>{badge}</span>}
       {!multiple && stopped && hasTerminal && <button className="text-button panel-action" aria-label={t('重新启动')} onClick={() => onAction(api.startTerminal(first.id))}><Play size={12} weight="fill" /><span>{t('重启')}</span></button>}
-      {!multiple && <VoiceButton terminalId={first.id} sessionId={first.sessionId} name={project.name} onError={onError} />}
       {currentTerminal.sessionId && currentTerminal.codexActive && <IconButton label={readingOn ? t('切换到终端') : t('阅读视图：按文档排版显示对话')} className={readingOn ? 'is-active' : ''} onClick={() => setReading(currentTerminal.id, !readingOn)}>{readingOn ? <TerminalIcon size={16} /> : <Article size={16} />}</IconButton>}
       {focused && <IconButton label={activityOpen ? t('隐藏活动栏') : t('显示活动栏：它正在做什么')} className={activityOpen ? 'is-active' : ''} onClick={onToggleActivity}><ListChecks size={16} /></IconButton>}
-      {!focused && <IconButton label={t('全屏查看 {name}', { name: project.name })} onClick={() => onFocus(project.id)}><ArrowsOutSimple size={16} /></IconButton>}
       <div className="panel-menu-anchor" ref={menu}>
         <IconButton label={t('{name} 的更多操作', { name: project.name })} onClick={() => setMenuOpen(!menuOpen)}><DotsThree size={20} weight="bold" /></IconButton>
         {menuOpen && <div className="dropdown panel-menu" role="menu">
+          {!focused && <button role="menuitem" onClick={() => action(() => onFocus(project.id))}><ArrowsOutSimple size={16} />{t('全屏查看')}</button>}
+          {/* While it records, the microphone over the card shows it; choosing this again inserts what was said. */}
+          {!multiple && <button role="menuitem" onClick={() => action(() => void toggleDictation(first.id, first.sessionId, onError, project.name))}><Microphone size={16} />{recording ? t('结束录音并插入') : t('语音输入')}<span className="menu-shortcut" aria-hidden="true">{shortcut('voice')}</span></button>}
           <button role="menuitem" onClick={() => action(() => void addTerminal())}><Plus size={16} />{t('新建终端并分屏')}<span className="menu-shortcut" aria-hidden="true">{shortcut('newTerminal')}</span></button>
           <button role="menuitem" onClick={() => action(() => onRevealProject(project.id))}><FolderOpen size={16} />{t('打开项目目录')}</button>
           <button role="menuitem" onClick={() => action(() => setImageOpen(true))}><ImageSquare size={16} />{t('项目图片…')}</button>
