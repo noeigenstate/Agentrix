@@ -31,7 +31,9 @@ h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 .titlebar-brand { flex-shrink: 0; display: flex; align-items: center; gap: 9px; height: 28px; margin-left: 8px; padding: 0 8px; border: 0; border-radius: 8px; font-size: 13.5px; font-weight: 600; color: var(--text-1); background: none; }
 .titlebar-brand:is(:hover, [aria-expanded="true"]) { background: var(--bg-hover); }
 .brand-mark { display: grid; grid-template-columns: repeat(2, 6px); gap: 2px; }
-.brand-mark i { width: 6px; height: 6px; border-radius: 1px; background: none; border: 1px solid var(--text-2); }
+/* The app icon's four squares: three in the nav's grey, the fourth its coral (deepened in light to 4.45:1 on the title bar). */
+.brand-mark i { width: 6px; height: 6px; border-radius: 1px; background: var(--text-2); }
+.brand-mark i:last-child { background: var(--brand-coral); }
 .titlebar-space { flex: 1; min-width: 24px; }
 .titlebar-tools { display: flex; align-items: center; gap: 6px; margin-right: 8px; -webkit-app-region: no-drag; }
 .titlebar-tools input { -webkit-app-region: no-drag; }
