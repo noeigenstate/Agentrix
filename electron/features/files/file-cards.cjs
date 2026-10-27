@@ -16,6 +16,15 @@ const checked = file => { if (typeof file !== 'string' || !file || file.length >
 // Text read from the start of a file, without the half of a character its last bytes may cut.
 const utf8 = buffer => buffer.toString('utf8').replace(/�+$/, '');
 
+async function readExcerpt(file, size, limit) {
+  const handle = await fs.open(file, 'r');
+  try {
+    const length = Math.min(limit, size);
+    const { buffer, bytesRead } = await handle.read(Buffer.alloc(length), 0, length, 0);
+    return utf8(buffer.subarray(0, bytesRead));
+  } finally { await handle.close(); }
+}
+
 // The file inside the project, as a path relative to its folder; anything outside it is refused.
 async function inside(project, file, cwd = project.path) {
   const absolute = path.resolve(localPath(cwd), localPath(checked(file)));
@@ -40,11 +49,7 @@ async function outsideDocument(previews, project, file, limit) {
   if (!path.isAbsolute(file)) throw new Error('只能预览 Markdown 文件。');
   const stat = await fs.stat(file).catch(() => null);
   if (!stat?.isFile()) throw new Error('找不到这个文件。');
-  const handle = await fs.open(file, 'r');
-  try {
-    const length = Math.min(limit, stat.size), { buffer, bytesRead } = await handle.read(Buffer.alloc(length), 0, length, 0);
-    return { text: utf8(buffer.subarray(0, bytesRead)), size: stat.size };
-  } finally { await handle.close(); }
+  return { text: await readExcerpt(file, stat.size, limit), size: stat.size };
 }
 
 // The whole of such a document for its popup (the first 2 MB of a larger one).
@@ -124,13 +129,7 @@ function createFileCards({ previews, capture, shrink = () => null, shrinkBytes =
     const { absolute, relative } = where;
     const stat = await fs.stat(absolute);
     if (!stat.isFile()) throw new Error('这个文件没有预览卡片。');
-    if (kind === 'markdown') {
-      const handle = await fs.open(absolute, 'r');
-      try {
-        const { buffer, bytesRead } = await handle.read(Buffer.alloc(Math.min(EXCERPT, stat.size)), 0, Math.min(EXCERPT, stat.size), 0);
-        return { kind, path: relative, excerpt: utf8(buffer.subarray(0, bytesRead)) };
-      } finally { await handle.close(); }
-    }
+    if (kind === 'markdown') return { kind, path: relative, excerpt: await readExcerpt(absolute, stat.size, EXCERPT) };
     if (kind === 'video') return { kind, path: relative, url: previews.open(project, relative, 'video', VIDEO_TYPES[path.extname(relative).toLowerCase()]).url };
     return { kind, path: relative, picture: await picture(`${project.path}|${absolute}|${stat.mtimeMs}|${stat.ctimeMs}|${stat.size}`, project, relative) };
   };

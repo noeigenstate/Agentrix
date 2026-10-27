@@ -66,7 +66,7 @@ export function Select({ value, options, onChange, label, className = '', disabl
   const typeAhead = (key: string) => {
     const now = Date.now(), text = (now - typed.current.at > 700 ? '' : typed.current.text) + key.toLowerCase();
     typed.current = { text, at: now };
-    const hit = options.findIndex(option => !option.disabled && String(typeof option.label === 'string' ? option.label : option.value).toLowerCase().startsWith(text));
+    const hit = options.findIndex(option => !option.disabled && (typeof option.label === 'string' ? option.label : option.value).toLowerCase().startsWith(text));
     if (hit >= 0) setActive(hit);
   };
 
@@ -75,12 +75,9 @@ export function Select({ value, options, onChange, label, className = '', disabl
       if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) { event.preventDefault(); openMenu(); }
       return;
     }
-    const last = options.length - 1;
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true); }
-    else if (event.key === 'ArrowDown') { event.preventDefault(); setActive(at => step(at, 1)); }
-    else if (event.key === 'ArrowUp') { event.preventDefault(); setActive(at => step(at, -1)); }
-    else if (event.key === 'Home') { event.preventDefault(); setActive(step(-1, 1)); }
-    else if (event.key === 'End') { event.preventDefault(); setActive(step(last + 1, -1)); }
+    else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setActive(at => step(at, event.key === 'ArrowDown' ? 1 : -1)); }
+    else if (event.key === 'Home' || event.key === 'End') { event.preventDefault(); setActive(event.key === 'Home' ? step(-1, 1) : step(options.length, -1)); }
     else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(active); }
     else if (event.key === 'Tab') setOpen(false);
     else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) typeAhead(event.key);

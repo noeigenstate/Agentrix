@@ -32,8 +32,8 @@ export function currentLanguage() { return language; }
 
 export function t(text: string, values?: Record<string, string | number>): string {
   if (language !== 'en') return values ? fill(text, values) : text;
-  if (Object.prototype.hasOwnProperty.call(dictionary, text)) return values ? fill(dictionary[text], values) : dictionary[text];
-  if (!values) {
+  if (Object.prototype.hasOwnProperty.call(dictionary, text)) text = dictionary[text];
+  else if (!values) {
     for (const { regex, names, template } of patterns) {
       const match = regex.exec(text);
       if (match) return fill(template, Object.fromEntries(names.map((name, index) => [name, t(match[index + 1])])));

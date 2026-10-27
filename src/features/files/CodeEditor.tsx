@@ -39,7 +39,10 @@ function EditorGutter({ view, text, diff }: { view: EditorView; text: string; di
   const { first, last } = visibleRows(view, count);
   return <div className="editor-gutter" aria-hidden="true" style={{ width: `calc(${Math.max(2, String(count).length)}ch + 30px)` }}>
     <div style={{ transform: `translateY(${view.padding + first * view.line - view.top}px)` }}>
-      {Array.from({ length: Math.max(0, last - first) }, (_, index) => first + index).map(line => <span key={line} className={`${line === view.caret ? 'is-current' : ''} ${marks.get(line) || ''}`} style={{ height: view.line }}>{line + 1}</span>)}
+      {Array.from({ length: Math.max(0, last - first) }, (_, index) => {
+        const line = first + index;
+        return <span key={line} className={`${line === view.caret ? 'is-current' : ''} ${marks.get(line) || ''}`} style={{ height: view.line }}>{line + 1}</span>;
+      })}
     </div>
   </div>;
 }
@@ -113,8 +116,7 @@ function useEditorFind(editor: RefObject<HTMLTextAreaElement | null>, text: stri
     return () => node.removeEventListener('keydown', key);
   });
   const keys = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter') { event.preventDefault(); step(event.shiftKey ? -1 : 1); }
-    else if (event.key === 'F3') { event.preventDefault(); step(event.shiftKey ? -1 : 1); }
+    if (event.key === 'Enter' || event.key === 'F3') { event.preventDefault(); step(event.shiftKey ? -1 : 1); }
     else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
     else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); input.current?.select(); }
   };

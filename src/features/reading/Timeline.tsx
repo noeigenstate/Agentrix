@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { ClaudeLogo } from '../agents/AgentBrandIcon.ts';
+import { ClaudeLogo, CodexLogo } from '../agents/AgentBrandIcon.ts';
 
 // Main rail nodes belong to user and agent turns. An agent's messages and tools live inside its body.
 // Named heads always show their time; child items show it when the minute changes.
@@ -41,3 +41,6 @@ export function AgentTurnItem({ at, kind, mark, showTime, state, children }: {
 
 // Compatibility for existing conversation imports; the mark is the official Claude vector.
 export const ClaudeSpark = ClaudeLogo;
+
+// The agent's mark on its replies' nodes.
+export const AgentMark = ({ agent }: { agent: 'claude' | 'codex' }) => agent === 'claude' ? <ClaudeSpark /> : <CodexLogo />;

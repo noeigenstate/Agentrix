@@ -65,6 +65,11 @@ function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {},
     process.stderr.on('data', () => {}); // do not expose diagnostics that may contain account/config data
     return process;
   };
+  const readStdout = receive => {
+    const lines = new JsonLines(receive, reason => finish(reason));
+    child.stdout.on('data', bytes => lines.push(bytes));
+    child.stdout.on('end', () => { lines.end(); finish('native-stream-ended'); });
+  };
   // Defer until the caller installed all terminal listeners and session binding.
   queueMicrotask(async () => {
     try {
@@ -72,7 +77,7 @@ function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {},
       if (mode === 'claude-sdk') {
         child = spawnCli(['--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--permission-prompt-tool', 'stdio', '--verbose']);
         const protocol = new ClaudeProtocol(registry), initializeId = `agentrix-initialize-${binding.sessionId}`;
-        const lines = new JsonLines(message => {
+        readStdout(message => {
           if (message.type === 'control_response') {
             if (!sdkReady && message.response?.request_id === initializeId && message.response.subtype === 'success') { sdkReady = true; clearTimeout(connectTimer); output('Claude SDK managed session. Use the managed Reading composer; terminal input is disabled.\r\n'); event({ type: 'managed-ready' }); changed(); }
             else finish('unexpected-control-response');
@@ -86,8 +91,7 @@ function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {},
             const text = message.message?.content?.filter(p => p.type === 'text' && typeof p.text === 'string').map(p => p.text).join('\n');
             if (text) output(text.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '') + '\r\n');
           }
-        }, reason => finish(reason));
-        child.stdout.on('data', bytes => lines.push(bytes)); child.stdout.on('end', () => { lines.end(); finish('native-stream-ended'); });
+        });
         write({ type: 'control_request', request_id: initializeId, request: { subtype: 'initialize', hooks: null } });
         return;
       }
@@ -106,14 +110,13 @@ function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {},
         if (ended || connected) { client.terminate(); return; }
         connected = true; socket = client; clearTimeout(connectTimer);
         child = spawnCli(['app-server', '--listen', 'stdio://']);
-        const lines = new JsonLines(message => {
+        readStdout(message => {
           if (protocol.server(message) && !ended) {
             if (client.bufferedAmount > MAX_BYTES) { finish('native-websocket-backpressure'); return; }
             client.send(JSON.stringify(message), error => { if (error) finish('native-websocket-write-error'); });
           }
           if (!ended) event(message);
-        }, reason => finish(reason));
-        child.stdout.on('data', bytes => lines.push(bytes)); child.stdout.on('end', () => { lines.end(); finish('native-stream-ended'); });
+        });
         client.on('message', (data, binary) => {
           try {
             if (binary) throw new Error();

@@ -80,12 +80,17 @@ function HunkView({ hunk, index, disabled, keepLabel, keepTitle, revertTitle, on
   hunk: GitHunk; index: number; disabled: boolean; keepLabel: string; keepTitle: string; revertTitle: string; onKeep: () => void; onRevert: () => void;
 }) {
   let oldLine = hunk.oldStart, newLine = hunk.newStart;
-  const removed = hunk.lines.filter(line => line.type === '-').length, added = hunk.lines.filter(line => line.type === '+').length;
+  let removed = 0, added = 0;
+  for (const line of hunk.lines) {
+    if (line.type === '-') removed++;
+    else if (line.type === '+') added++;
+  }
+  const title = t('第 {n} 处', { n: index + 1 });
   return <div className="git-hunk" role="listitem" aria-label={t('第 {n} 处更改', { n: index + 1 })}>
     <div className="git-hunk-bar">
-      <span title={hunk.header}>{t('第 {n} 处', { n: index + 1 })} · {t('原第 {line} 行起', { line: hunk.oldStart })} · <b className="git-added">+{added}</b> <b className="git-deleted">−{removed}</b></span>
-      <button type="button" className="git-hunk-action git-keep" disabled={disabled} title={keepTitle} aria-label={`${keepLabel} ${t('第 {n} 处', { n: index + 1 })}`} onClick={onKeep}><Check size={13} weight="bold" />{keepLabel}</button>
-      <button type="button" className="git-hunk-action git-revert" disabled={disabled} title={revertTitle} aria-label={`${t('还原')} ${t('第 {n} 处', { n: index + 1 })}`} onClick={onRevert}><ArrowCounterClockwise size={13} weight="bold" />{t('还原')}</button>
+      <span title={hunk.header}>{title} · {t('原第 {line} 行起', { line: hunk.oldStart })} · <b className="git-added">+{added}</b> <b className="git-deleted">−{removed}</b></span>
+      <button type="button" className="git-hunk-action git-keep" disabled={disabled} title={keepTitle} aria-label={`${keepLabel} ${title}`} onClick={onKeep}><Check size={13} weight="bold" />{keepLabel}</button>
+      <button type="button" className="git-hunk-action git-revert" disabled={disabled} title={revertTitle} aria-label={`${t('还原')} ${title}`} onClick={onRevert}><ArrowCounterClockwise size={13} weight="bold" />{t('还原')}</button>
     </div>
     <div className="git-hunk-lines">
       {hunk.lines.map((line, at) => {

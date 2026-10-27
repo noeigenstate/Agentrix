@@ -2,7 +2,10 @@ import type { AgentScreen, ScreenAgent } from '../agents/agent-screen-types.ts';
 import { codexDialog } from '../agents/agent-screen.ts';
 
 const rule = (row: string) => /^[─╌]{2,}$/.test(row.trim());
-const commandInputText = (text: string) => text.trim().startsWith('!') ? '!' + text.trim().slice(1).trimStart() : text.trim();
+const commandInputText = (text: string) => {
+  const trimmed = text.trim();
+  return trimmed.startsWith('!') ? '!' + trimmed.slice(1).trimStart() : trimmed;
+};
 const prompt = (agent: ScreenAgent, row: string) => {
   const shell = /^\s*!(?:\s+(.*))?$/.exec(row.replace(/\r$/, ''));
   if (shell) return '!' + (shell[1] ?? '').trim();

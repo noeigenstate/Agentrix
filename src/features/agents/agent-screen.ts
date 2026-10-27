@@ -43,7 +43,7 @@ export function codexDialog(rows: string[]): string[] | null {
   let top = hint;
   for (let index = hint - 1, empty = 0; index >= 0 && empty < 3; index--) {
     const part = rightPart(rows[index], Math.max(DIALOG_LEFT, left - 8));
-    if (part && part.column >= left - 8) { top = index; empty = 0; left = Math.min(left, part.column); }
+    if (part) { top = index; empty = 0; left = Math.min(left, part.column); }
     else empty++;
   }
   if (top === hint) return null;
@@ -223,7 +223,10 @@ function looseMenu(rows: string[]): ScreenChoice | null {
   for (let index = first; index < hintAt; index++) {
     const match = optionRow(rows[index]);
     if (match) options.push({ number: Number(match[3]), label: match[4].trim(), detail: '', selected: index === cursor, hotkey: null });
-    else if (under(rows[index]) && options.length) options[options.length - 1].detail = `${options[options.length - 1].detail} ${rows[index].trim()}`.trim();
+    else if (under(rows[index]) && options.length) {
+      const option = options[options.length - 1];
+      option.detail = `${option.detail} ${rows[index].trim()}`.trim();
+    }
   }
   if (options.length < 2 || options.some((option, index) => option.number !== options[0].number + index)) return null;
   let top = first - 1;
@@ -279,7 +282,7 @@ function parseChoice(agent: ScreenAgent, rows: string[]): ScreenChoice | null {
   const nextFilled = (from: number) => { while (from < rows.length && !rows[from].trim()) from++; return rows[from]; };
   let numberColumn = 0, hasDetail = false, end = firstOption, previous = 0;
   for (; end < rows.length; end++) {
-    const row = rows[end], match = optionRow(row);
+    const row = rows[end], text = row.trim(), match = optionRow(row);
     if (match) {
       const columns = match[4].trim().split(/\s{2,}/);
       numberColumn = match[1].length + match[2].length;
@@ -287,13 +290,13 @@ function parseChoice(agent: ScreenAgent, rows: string[]): ScreenChoice | null {
       options.push({ number: Number(match[3]), label: columns[0], detail: columns.slice(1).join(' '),
         selected: match[2].includes(agent === 'claude' ? '❯' : '›') || match[2].includes('>'), hotkey: null });
       previous = row.length;
-    } else if (!row.trim() && options.length && optionRow(nextFilled(end + 1) ?? '')) {
+    } else if (!text && options.length && optionRow(nextFilled(end + 1) ?? '')) {
       continue; // a blank row between options (Codex's sign-in choices)
-    } else if (row.trim() && !rule(row) && !hintRow(row) && !menuExtra(row) && !inputRow(agent, row) &&
+    } else if (text && !rule(row) && !hintRow(row) && !menuExtra(row) && !inputRow(agent, row) &&
         row.search(/\S/) > numberColumn && options.length) {
       const option = options[options.length - 1];
-      if (hasDetail || !wraps(previous)) { option.detail = `${option.detail} ${row.trim()}`.trim(); hasDetail = true; }
-      else option.label += ' ' + row.trim();
+      if (hasDetail || !wraps(previous)) { option.detail = `${option.detail} ${text}`.trim(); hasDetail = true; }
+      else option.label += ' ' + text;
       previous = row.length;
     } else break;
   }
@@ -378,8 +381,11 @@ export function parseAgentScreen(agent: ScreenAgent, rows: string[]): AgentScree
   const picker = agent === 'codex' ? parseResumePicker(normalized) : null;
   // A dialog Codex draws over its conversation asks on its own rows.
   const dialog = agent === 'codex' && !picker && overlay === 'none' ? codexDialog(normalized) : null;
+  let choice = picker;
+  if (!choice && overlay === 'none') {
+    choice = dialog ? parseChoice(agent, dialog)
+      : parseQuestion(agent, normalized) ?? parseChoice(agent, normalized) ?? (agent === 'claude' ? looseMenu(normalized) : null);
+  }
   return { banner: parseBanner(agent, normalized, status), status,
-    choice: picker ?? (overlay !== 'none' ? null : dialog ? parseChoice(agent, dialog)
-      : parseQuestion(agent, normalized) ?? parseChoice(agent, normalized) ?? (agent === 'claude' ? looseMenu(normalized) : null)),
-    overlay: picker ? 'none' : overlay };
+    choice, overlay: picker ? 'none' : overlay };
 }

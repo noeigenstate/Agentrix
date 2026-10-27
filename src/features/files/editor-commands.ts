@@ -122,8 +122,8 @@ export function toggleBlockComment(state: EditorState, syntax: Syntax, range = s
 
 // Tab: a selection over several lines indents them; otherwise the selection becomes indentation up to the next stop.
 export function tab(state: EditorState, syntax: Syntax): EditorState | null {
-  const unit = indentUnit(state.text, syntax);
   if (state.text.slice(state.start, state.end).includes('\n')) return indentLines(state, syntax);
+  const unit = indentUnit(state.text, syntax);
   const insert = unit === '\t' ? unit : ' '.repeat(unit.length - (state.start - lineStart(state.text, state.start)) % unit.length);
   return replace(state, state.start, state.end, insert);
 }
@@ -224,11 +224,11 @@ export function runEditorKey(event: KeyboardEvent, node: HTMLTextAreaElement, pa
   event.preventDefault();
   const old = node.value, next = command({ text: old, start: node.selectionStart, end: node.selectionEnd }, editorSyntax(path));
   if (!next) return true;
-  let head = 0, tail = 0;
-  const shortest = Math.min(old.length, next.text.length);
-  while (head < shortest && old[head] === next.text[head]) head++;
-  while (tail < shortest - head && old[old.length - 1 - tail] === next.text[next.text.length - 1 - tail]) tail++;
   if (old !== next.text) {
+    let head = 0, tail = 0;
+    const shortest = Math.min(old.length, next.text.length);
+    while (head < shortest && old[head] === next.text[head]) head++;
+    while (tail < shortest - head && old[old.length - 1 - tail] === next.text[next.text.length - 1 - tail]) tail++;
     const insert = next.text.slice(head, next.text.length - tail);
     node.setSelectionRange(head, old.length - tail);
     if (!document.execCommand(insert ? 'insertText' : 'delete', false, insert)) {

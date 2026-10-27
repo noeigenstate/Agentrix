@@ -57,19 +57,19 @@ export function DecisionCard({ decision, now, onOpen, onDone, onError }: {
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => { setPicked(null); setState('idle'); setLater(false); }, [decision.id, decision.choice?.approval?.stamp?.sessionId, decision.choice?.approval?.stamp?.revision]);
+  const title = decisionTitle(decision);
   const kind = <span className="decision-kind">{kindLabel(decision.kind)}</span>;
   const source = `${decision.projectName}${decision.multipleTerminals ? ` · ${decision.terminalTitle}` : ''} · ${AGENTS[decision.agent]} · ${waited(decision.since, now)}`;
-  if (decision.native) return <article className="decision-card is-approval" data-approval-mode="native" aria-label={decisionTitle(decision)}>
+  if (decision.native) return <article className="decision-card is-approval" data-approval-mode="native" aria-label={title}>
     <header className="decision-card-head">{kind}<span className="decision-mode">{decision.native.provider === 'claude' ? 'Claude SDK' : 'Codex'}</span><span className="decision-source">{source}</span></header>
-    <h2 className="decision-title">{decisionTitle(decision)}</h2>
+    <h2 className="decision-title">{title}</h2>
     <div className="decision-body"><NativeApprovalCard key={decision.native.token} request={decision.native} onOpen={() => onOpen(decision)} onError={onError} /></div>
   </article>;
   if (decision.kind === 'review') return <ReviewCard decision={decision} now={now} kind={kind} onOpen={onOpen} onDone={onDone} onError={onError} />;
   const options = decision.choice?.options ?? [];
   const terminalOnly = decision.kind === 'approval' || decision.choice?.kind === 'permission', copy = terminalApprovalCopy(currentLanguage());
   const send = async () => {
-    if (terminalOnly) return;
-    if (picked === null || state === 'sending') return;
+    if (terminalOnly || picked === null || state === 'sending') return;
     // The answer goes only to the choice it was picked for: read the screen again first.
     const rows = readScreen(decision.terminalId)?.rows;
     const current = rows ? parseAgentScreen(decision.agent, rows).choice : null;
@@ -81,22 +81,22 @@ export function DecisionCard({ decision, now, onOpen, onDone, onError }: {
     } catch (error) { if (alive.current) { setState('idle'); onError(error instanceof Error ? t(error.message) : String(error)); } }
   };
   const putOff = (minutes: number) => { snooze(decision.id, Date.now() + minutes * 60000); setLater(false); onDone(t('已暂缓，{time} 后再提醒；执行仍在等你。', { time: minutes < 60 ? t('{count} 分钟', { count: minutes }) : t('{count} 小时', { count: minutes / 60 }) })); };
-  return <article className={`decision-card is-${decision.kind}`} data-approval-mode={terminalOnly ? 'terminal-only' : undefined} aria-label={decisionTitle(decision)}>
+  return <article className={`decision-card is-${decision.kind}`} data-approval-mode={terminalOnly ? 'terminal-only' : undefined} aria-label={title}>
     <header className="decision-card-head">
       {kind}{terminalOnly && <span className="decision-mode">{t('终端模式')}</span>}
       <span className="decision-source">{source}</span>
     </header>
-    <h2 className="decision-title">{decisionTitle(decision)}</h2>
+    <h2 className="decision-title">{title}</h2>
     <div className="decision-body">
       {terminalOnly && <p className="decision-why" role="status">{copy.message}</p>}
       {decision.context.length > 0 && decision.kind !== 'question' && <pre className="decision-evidence">{decision.context.join('\n')}</pre>}
       {decision.kind === 'question' && decision.choice
         ? <div className="decision-question"><ReadingQuestion key={decision.id} choice={decision.choice} terminalId={decision.terminalId} onError={onError} /></div>
         : options.length > 0 && (terminalOnly
-          ? <ol className="decision-options-readonly" aria-label={decisionTitle(decision)}>
+          ? <ol className="decision-options-readonly" aria-label={title}>
             {options.map(option => <li key={option.number}>{option.label}{option.detail && <small>{option.detail}</small>}</li>)}
           </ol>
-          : <div className="decision-options" role="radiogroup" aria-label={decisionTitle(decision)}>
+          : <div className="decision-options" role="radiogroup" aria-label={title}>
             {options.map((option, index) => <label key={option.number} className={`decision-option ${picked === index ? 'is-picked' : ''}`}>
               <input type="radio" name={`decision-${decision.id}`} checked={picked === index} disabled={state === 'sending'} onChange={() => setPicked(index)} />
               <span><b>{option.label}</b>{option.detail && <small>{option.detail}</small>}</span>

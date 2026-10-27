@@ -69,7 +69,8 @@ export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects:
       const box = stepRef.current.target()?.getBoundingClientRect();
       setRect(current => {
         const value = box && box.width && box.height ? { top: Math.round(box.top), left: Math.round(box.left), width: Math.round(box.width), height: Math.round(box.height) } : null;
-        return JSON.stringify(current) === JSON.stringify(value) ? current : value;
+        return current?.top === value?.top && current?.left === value?.left
+          && current?.width === value?.width && current?.height === value?.height ? current : value;
       });
     };
     measureRef.current = measure; measure();

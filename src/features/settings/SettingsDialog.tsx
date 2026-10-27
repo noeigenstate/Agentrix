@@ -78,9 +78,10 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, localShe
       <div className="settings-note"><Info size={15} /><p>{t('主轮次、后台子代理与命令、排队消息和其他终端的工作都结束，方框才亮起白色呼吸光，直到查看；在终端发送新指令也算已查看。看过后不发光，没有新指令时不会重复提醒。')}</p></div>
       </section>
       <section className="settings-section" id="settings-terminal" aria-label={t('终端与编辑')} hidden={current.id !== 'terminal'}>
-      {!isMac && <label className="setting-row"><span><TerminalIcon size={19} /><span><b>{t('终端')}</b><small>{t('新开或重启的本地终端使用；SSH 项目始终使用 Bash')}</small></span></span>{localShell
-        ? <Select label={t('终端')} value={localShell.kind} onChange={value => update({ shell: value as Settings['shell'] })} options={[{ value: 'bash', label: 'Bash' }, { value: 'zsh', label: localShell.zsh ? 'zsh' : t('zsh（未安装）'), disabled: !localShell.zsh }]} />
-        : <Select label={t('终端')} value={settings.shell} onChange={value => update({ shell: value as Settings['shell'] })} options={[{ value: 'powershell', label: 'PowerShell' }, { value: 'cmd', label: t('命令提示符 (cmd)') }]} />}</label>}
+      {!isMac && <label className="setting-row"><span><TerminalIcon size={19} /><span><b>{t('终端')}</b><small>{t('新开或重启的本地终端使用；SSH 项目始终使用 Bash')}</small></span></span>
+        <Select label={t('终端')} value={localShell ? localShell.kind : settings.shell} onChange={value => update({ shell: value as Settings['shell'] })} options={localShell
+          ? [{ value: 'bash', label: 'Bash' }, { value: 'zsh', label: localShell.zsh ? 'zsh' : t('zsh（未安装）'), disabled: !localShell.zsh }]
+          : [{ value: 'powershell', label: 'PowerShell' }, { value: 'cmd', label: t('命令提示符 (cmd)') }]} /></label>}
       <label className="setting-row"><span><ArrowCounterClockwise size={19} /><span><b>{t('启动时恢复工作')}</b><small>{t('恢复 Codex 与 Claude Code 的最近会话，被中断的任务自动发送“继续”')}</small></span></span><input type="checkbox" checked={settings.restoreSessions} onChange={event => update({ restoreSessions: event.target.checked })} /></label>
       <label className="setting-row"><span><Monitor size={19} /><span><b>{t('关闭到托盘')}</b><small>{t('关闭窗口后，终端和任务继续运行')}</small></span></span><input type="checkbox" checked={settings.closeToTray} onChange={e => update({ closeToTray: e.target.checked })} /></label>
       <label className="setting-row"><span><FloppyDisk size={19} /><span><b>{t('自动保存')}</b><small>{t('停止输入约 1 秒后、切换文件或离开窗口时保存编辑中的文件；关闭后按 Ctrl+S 保存')}</small></span></span><input type="checkbox" checked={settings.autoSave} onChange={event => update({ autoSave: event.target.checked })} /></label>

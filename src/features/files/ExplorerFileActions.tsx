@@ -50,7 +50,12 @@ export function useExplorerFileActions(project: Project, changed: (directory?: s
   }, [menu]);
   useEffect(() => { if (!message) return; const timer = setTimeout(() => setMessage(''), 5000); return () => clearTimeout(timer); }, [message]);
   const unwrap = async <T,>(promise: Promise<Result<T>>) => { const result = await promise; if (!result.ok) throw new Error(result.error); return result.value; };
-  const run = async (operation: () => Promise<void>) => { setMenu(null); setMessage(''); try { await operation(); } catch (error) { setMessage(String((error as Error).message || error)); } finally { changed(); } };
+  const run = async (operation: () => Promise<void>, refresh = true) => {
+    setMenu(null); setMessage('');
+    try { await operation(); }
+    catch (error) { setMessage(String((error as Error).message || error)); }
+    finally { if (refresh) changed(); }
+  };
   const rows = () => [...(tree.current?.querySelectorAll<HTMLElement>('[data-node-path]') || [])];
   const entryFor = (path: string): FileEntry => {
     const row = rows().find(row => row.dataset.nodePath === path);
@@ -63,16 +68,12 @@ export function useExplorerFileActions(project: Project, changed: (directory?: s
   const folder = (entry: FileEntry) => entry.kind === 'directory' || !entry.path ? entry.path : parentOf(entry.path);
   const targets = (entry: FileEntry) => selected.includes(entry.path) ? selected : [entry.path];
   const copy = (paths: string[]) => run(async () => { const result = await unwrap(window.agentrix.copyEntries(project.id, paths)); if (!result.superseded) setMessage(t('已复制 {count} 项，可粘贴到其他位置', { count: result.count })); });
-  const copyPaths = async (paths: string[], format: 'absolute' | 'relative') => {
-    setMenu(null); setMessage('');
-    try { const result = await unwrap(window.agentrix.copyPaths(project.id, paths, format)); if (!result.superseded) setMessage(format === 'absolute' ? t('已复制绝对路径') : t('已复制相对路径')); }
-    catch (error) { setMessage(String((error as Error).message || error)); }
-  };
+  const copyPaths = (paths: string[], format: 'absolute' | 'relative') => run(async () => {
+    const result = await unwrap(window.agentrix.copyPaths(project.id, paths, format));
+    if (!result.superseded) setMessage(format === 'absolute' ? t('已复制绝对路径') : t('已复制相对路径'));
+  }, false);
   // In the file manager of this computer (a local project's only): the item selected in its folder.
-  const reveal = async (path: string) => {
-    setMenu(null); setMessage('');
-    try { await unwrap(window.agentrix.revealEntry(project.id, path)); } catch (error) { setMessage(String((error as Error).message || error)); }
-  };
+  const reveal = (path: string) => run(async () => { await unwrap(window.agentrix.revealEntry(project.id, path)); }, false);
   const paste = (directory: string) => run(async () => {
     const result = await unwrap(window.agentrix.pasteEntries(project.id, directory));
     setSelected(result.pasted); anchor.current = result.pasted[0] || directory;
@@ -113,8 +114,12 @@ export function useExplorerFileActions(project: Project, changed: (directory?: s
   const openCreate = (kind: 'file' | 'directory', entry = focused()) => { setMenu(null); setEdit({ kind, directory: folder(entry) }); };
   const save = async (name: string) => {
     if (!edit) return;
-    if (edit.kind === 'rename') { const result = await unwrap(window.agentrix.renameEntry(project.id, edit.entry!.path, name)); renamed(edit.entry!.path, result.path); setSelected([result.path]); anchor.current = result.path; }
-    else { const result = await unwrap(window.agentrix.createEntry(project.id, edit.directory, name, edit.kind)); setSelected([result.path]); anchor.current = result.path; if (edit.kind === 'file') select(result.path); }
+    const result = await unwrap(edit.kind === 'rename'
+      ? window.agentrix.renameEntry(project.id, edit.entry!.path, name)
+      : window.agentrix.createEntry(project.id, edit.directory, name, edit.kind));
+    if (edit.kind === 'rename') renamed(edit.entry!.path, result.path);
+    setSelected([result.path]); anchor.current = result.path;
+    if (edit.kind === 'file') select(result.path);
     changed(edit.directory);
   };
   const overlays = <>{menu && createPortal(<div ref={menuElement} className="dropdown explorer-context-menu" role="menu" aria-label={t('文件操作')} style={{ left: menu.x, top: menu.y }}>

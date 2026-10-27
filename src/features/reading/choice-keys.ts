@@ -33,7 +33,10 @@ export function choiceContent(choice: ScreenChoice): string {
 }
 
 export async function writeChoiceKeys(selected: number, target: number, write: (key: string) => void, active: () => boolean = () => true) {
-  const keys = choiceKeys(selected, target);
+  return writeKeys(choiceKeys(selected, target), write, active);
+}
+
+export async function writeKeys(keys: readonly string[], write: (key: string) => void, active: () => boolean = () => true) {
   for (let index = 0; index < keys.length; index++) {
     if (!active()) return;
     write(keys[index]);

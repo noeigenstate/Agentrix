@@ -144,11 +144,12 @@ function claudeQueue(log, record) {
   }
   if (!['remove', 'dequeue', 'popAll', 'popOne'].includes(record.operation) || original === null) return;
   const cancelled = ['popAll', 'popOne'].includes(record.operation) || ['cleared_on_cancel', 'dropped_by_hook'].includes(record.reason);
+  const key = promptKey(original);
   if (!cancelled) {
-    const received = log.deliveries.findIndex(entry => entry.received && promptKey(entry.original) === promptKey(original));
+    const received = log.deliveries.findIndex(entry => entry.received && promptKey(entry.original) === key);
     if (received >= 0) { log.deliveries.splice(received, 1); return; }
   }
-  const index = log.queue.findIndex(entry => promptKey(entry.original) === promptKey(original));
+  const index = log.queue.findIndex(entry => promptKey(entry.original) === key);
   if (index < 0) return;
   if (!cancelled) noteDelivery(log, log.queue[index], false);
   dropQueued(log, index, cancelled);
@@ -160,7 +161,8 @@ function receivedPrompt(log, entry, { inOrder = false, fromQueue = false, queueO
     if (log.received.size > 1000) log.received.delete(log.received.values().next().value);
     // queued_command proves receipt even when a slow hook puts enqueue's timestamp after the original send.
     // Other old replayed turns cannot take up a newer identical send; each receipt consumes one occurrence.
-    const matches = queued => (fromQueue || queued.at <= entry.at + 500) && promptKey(queued.original) === promptKey(entry.original);
+    const key = promptKey(entry.original);
+    const matches = queued => (fromQueue || queued.at <= entry.at + 500) && promptKey(queued.original) === key;
     const removed = log.deliveries.findIndex(queued => !queued.received && matches(queued));
     // A named removal and the user record are two reports of the same delivery, not two identical sends.
     if (removed >= 0) log.deliveries.splice(removed, 1);

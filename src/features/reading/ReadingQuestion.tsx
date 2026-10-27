@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { CaretLeft, CaretRight, Check, CircleNotch, PaperPlaneRight } from '@phosphor-icons/react';
 import type { ScreenChoice } from '../agents/agent-screen-types';
 import { questionCursor, questionKeys, type QuestionAction } from './question-keys';
-import { choiceContent } from './choice-keys';
+import { choiceContent, writeKeys } from './choice-keys';
 import { t } from '../../shared/i18n';
 
 // What the CLIs print in English for their own rows, in the window's words.
@@ -19,8 +19,9 @@ const placeholder = (label: string) => /^Type something\.?$/i.test(label);
 export function ReadingQuestion({ choice, terminalId, onError }: { choice: ScreenChoice; terminalId: string; onError: (message: string) => void }) {
   const question = choice.question!;
   const cursor = questionCursor(choice);
-  const answers = choice.options.map((option, index) => ({ option, index })).filter(({ option }) => option.role !== 'chat');
-  const chats = choice.options.map((option, index) => ({ option, index })).filter(({ option }) => option.role === 'chat');
+  const options = choice.options.map((option, index) => ({ option, index }));
+  const answers = options.filter(({ option }) => option.role !== 'chat');
+  const chats = options.filter(({ option }) => option.role === 'chat');
   const inputAt = choice.options.findIndex(option => option.role === 'input');
   const [highlight, setHighlight] = useState(() => 'option' in cursor && choice.options[cursor.option]?.role !== 'chat' ? cursor.option : answers[0]?.index ?? 0);
   const [pending, setPending] = useState<string | null>(null);
@@ -48,11 +49,7 @@ export function ReadingQuestion({ choice, terminalId, onError }: { choice: Scree
     sending.current = true; setPending(mark);
     if (document.activeElement !== field.current) card.current?.focus();
     try {
-      for (let index = 0; index < keys.length; index++) {
-        if (!active.current) return;
-        window.agentrix.writeTerminal(terminalId, keys[index]);
-        if (index < keys.length - 1) await new Promise(resolve => setTimeout(resolve, 25));
-      }
+      await writeKeys(keys, key => window.agentrix.writeTerminal(terminalId, key), () => active.current);
     } catch (error) {
       if (active.current) { setPending(null); onError(String(error)); }
     } finally { sending.current = false; }
@@ -70,6 +67,12 @@ export function ReadingQuestion({ choice, terminalId, onError }: { choice: Scree
     if (question.agent === 'claude') { if (inputAt >= 0) void act({ type: 'answer', option: inputAt, text }, 'text'); return; }
     if (text.trim()) void act({ type: 'answer', option: highlight, text }, 'text');
     else pick(highlight);
+  };
+  const fieldKeys = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing) return;
+    event.stopPropagation();
+    if (event.key === 'Enter') { event.preventDefault(); sendText(); }
+    else if (event.key === 'Escape') { event.preventDefault(); card.current?.focus(); }
   };
   const switchable = question.tabs.length > 1 || (question.position?.count ?? 1) > 1;
   const keys = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -114,12 +117,7 @@ export function ReadingQuestion({ choice, terminalId, onError }: { choice: Scree
         <span className="reading-question-mark">{question.multi ? option.checked && <Check size={11} weight="bold" /> : option.number}</span>
         <input ref={field} value={text} disabled={busy} placeholder={t('自己填写回答…')} aria-label={t('自己填写回答')}
           onChange={event => setText(event.target.value)} onFocus={() => setHighlight(index)}
-          onKeyDown={event => {
-            if (event.nativeEvent.isComposing) return;
-            event.stopPropagation();
-            if (event.key === 'Enter') { event.preventDefault(); sendText(); }
-            else if (event.key === 'Escape') { event.preventDefault(); card.current?.focus(); }
-          }} />
+          onKeyDown={fieldKeys} />
         <button type="button" className="icon-button" title={question.multi ? t('填入并勾选') : t('发送回答')} aria-label={question.multi ? t('填入并勾选') : t('发送回答')} disabled={busy || !text.trim()} onClick={sendText}>{pending === 'text' ? <CircleNotch size={13} className="loading-spinner" /> : <PaperPlaneRight size={13} weight="fill" />}</button>
       </div>
       : <button type="button" key={option.number} className={`reading-choice-option reading-question-option${option.selected ? ' is-cli-selected' : ''}${option.checked ? ' is-checked' : ''}`}
@@ -132,12 +130,7 @@ export function ReadingQuestion({ choice, terminalId, onError }: { choice: Scree
     {question.agent === 'codex' && <div className="reading-question-input is-notes">
       <input ref={field} value={text} disabled={busy} placeholder={t('补充说明（可选），按 Enter 随所选答案一起提交')} aria-label={t('补充说明')}
         onChange={event => setText(event.target.value)}
-        onKeyDown={event => {
-          if (event.nativeEvent.isComposing) return;
-          event.stopPropagation();
-          if (event.key === 'Enter') { event.preventDefault(); sendText(); }
-          else if (event.key === 'Escape') { event.preventDefault(); card.current?.focus(); }
-        }} />
+        onKeyDown={fieldKeys} />
       <button type="button" className="icon-button" title={t('提交')} aria-label={t('提交')} disabled={busy} onClick={sendText}>{pending === 'text' ? <CircleNotch size={13} className="loading-spinner" /> : <PaperPlaneRight size={13} weight="fill" />}</button>
     </div>}
     {(question.multi || chats.length > 0) && <div className="reading-question-actions">

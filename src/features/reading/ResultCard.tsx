@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowCounterClockwise, ArrowsOutSimple, CheckCircle, ChatCircle, CopySimple, DotsThree, DownloadSimple, FileText, PencilSimple, TerminalWindow, XCircle } from '@phosphor-icons/react';
-import type { GitChange } from '../../shared/types';
+import { ArrowCounterClockwise, ArrowsOutSimple, CheckCircle, ChatCircle, CopySimple, DotsThree, DownloadSimple, FileText, Globe, MagnifyingGlass, PencilSimple, Plugs, Robot, Sparkle, TerminalWindow, Wrench, XCircle, type Icon } from '@phosphor-icons/react';
+import type { ConversationEntry, GitChange } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import './result-card.css';
 import { showPopup } from '../files/file-popup';
 import { stepTime } from './Timeline';
+import { useNow } from './useNow.ts';
 import { changedFiles, elapsed, FALLBACK_TITLES, resultActions, type LatestResult, type ResultAction } from './result-round';
 
 const MENU_WIDTH = 224, MENU_GAP = 4, EDGE = 8, FILES_SHOWN = 5;
@@ -128,4 +129,51 @@ export function ResultActions({ result, projectId, remote, canSend, onContinue, 
     const label = t(ACTIONS[id].label);
     return <button key={id} type="button" className="result-button" disabled={disabled} title={disabled ? why(id) || label : label} aria-label={label} onClick={run[id]}>{ACTIONS[id].icon}<span>{label}</span></button>;
   })}</div>;
+}
+
+type ConversationEntryTool = NonNullable<ConversationEntry['tool']>;
+// What a group of steps did, by kind, in the order the kinds first came: "读取 2 个文件 · 运行 1 条命令".
+const GROUP_PARTS: Record<ConversationEntryTool['kind'], string> = {
+  read: '读取 {count} 个文件', edit: '编辑 {count} 个文件', command: '运行 {count} 条命令', search: '搜索 {count} 处', web: '访问 {count} 个网页',
+  skill: '使用 {count} 个技能', mcp: '调用 {count} 个 MCP 工具', agent: '派出 {count} 个子代理', other: '调用 {count} 个工具',
+};
+export const STEP_ICONS: Record<ConversationEntryTool['kind'], Icon> = { read: FileText, edit: PencilSimple, command: TerminalWindow, search: MagnifyingGlass, web: Globe, skill: Sparkle, mcp: Plugs, agent: Robot, other: Wrench };
+export function groupSummary(entries: readonly ConversationEntry[]) {
+  const counts = new Map<ConversationEntryTool['kind'], number>();
+  // An edit counts the files it changed (its target names them, "a、b"), every other step counts once.
+  for (const entry of entries) if (entry.tool) {
+    const files = entry.tool.kind === 'edit' ? Math.max(1, entry.tool.written?.length || entry.tool.target.split('、').filter(Boolean).length) : 1;
+    counts.set(entry.tool.kind, (counts.get(entry.tool.kind) || 0) + files);
+  }
+  return [...counts].map(([kind, count]) => t(GROUP_PARTS[kind], { count })).join(' · ');
+}
+
+// Where a generated picture will appear: a bar that keeps moving and the seconds so far, so a picture that takes
+// half a minute does not look stuck.
+// When each picture began to be drawn, by its step: the card is drawn again as the conversation grows.
+const drawingSince = new Map<string, number>();
+export function ImageProgress({ step }: { step: string }) {
+  if (!drawingSince.has(step)) { drawingSince.set(step, Date.now()); if (drawingSince.size > 20) drawingSince.delete(drawingSince.keys().next().value!); }
+  const since = drawingSince.get(step)!, now = useNow(Date.now);
+  return <div className="reading-generating" role="status">
+    <span className="reading-generating-bar" aria-hidden="true"><i /></span>
+    <span>{t('正在生成图片… {seconds} 秒', { seconds: Math.max(0, Math.floor((now - since) / 1000)) })}</span><small>{t('通常需要 20–40 秒')}</small>
+  </div>;
+}
+
+// A step's state: a dot sending out a soft ring while it runs (as its node on the line does), a check when it is done,
+// a cross when it failed.
+export function StepState({ running, failed, filled = false }: { running: boolean; failed: boolean; filled?: boolean }) {
+  if (running) return <span className="reading-step-state is-running" role="img" aria-label={t('进行中')} />;
+  return failed ? <XCircle size={17} weight="fill" className="reading-step-state is-failed" aria-label={t('失败')} />
+    : <CheckCircle size={17} weight={filled ? 'fill' : 'regular'} className="reading-step-state" aria-label={t('已完成')} />;
+}
+
+// The agent at work, as its CLI shows it: a live mark, what it is doing, how long the round has run and how to stop it.
+export function WorkingLine({ agent, label }: { agent: 'claude' | 'codex'; label: string }) {
+  const [started] = useState(() => Date.now()), now = useNow(started);
+  return <div className={`reading-status is-working is-${agent}`} role="status">
+    <i className="reading-status-mark" aria-hidden="true">{agent === 'claude' ? null : '•'}</i>
+    <span>{label}…</span><small>{t('（{seconds} 秒 · Esc 中断）', { seconds: Math.floor((now - started) / 1000) })}</small>
+  </div>;
 }

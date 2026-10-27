@@ -59,9 +59,9 @@ function remember(dir, folder, rounds) {
     const known = new Map((await readArchive(dir, folder)).map(round => [round.key, round]));
     let changed = 0;
     for (const round of rounds) {
-      const old = known.get(round.key);
-      if (old && JSON.stringify(old) === JSON.stringify({ ...old, ...round })) continue;
-      known.set(round.key, { ...old, ...round }); changed++;
+      const old = known.get(round.key), merged = { ...old, ...round };
+      if (old && JSON.stringify(old) === JSON.stringify(merged)) continue;
+      known.set(round.key, merged); changed++;
     }
     if (!changed) return 0;
     await fs.mkdir(dir, { recursive: true });

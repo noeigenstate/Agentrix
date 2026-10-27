@@ -30,12 +30,11 @@ export class MicrophoneCapture {
         if (event.data.flushed) { this.recording = false; this.flushed?.(); this.flushed = null; return; }
         const { samples, level } = event.data as { samples: Float32Array; level: number };
         onLevel(level);
-        if (this.recording) {
-          const maximum = (this.context?.sampleRate || 48000) * 300;
-          const part = samples.subarray(0, Math.max(0, maximum - this.count));
-          if (part.length) { this.chunks.push(part); this.count += part.length; if (level > .003) this.hasVoice = true; }
-          if (this.count >= maximum) this.onLimit?.();
-        }
+        if (!this.recording) return;
+        const maximum = (this.context?.sampleRate || 48000) * 300;
+        const part = samples.subarray(0, Math.max(0, maximum - this.count));
+        if (part.length) { this.chunks.push(part); this.count += part.length; if (level > .003) this.hasVoice = true; }
+        if (this.count >= maximum) this.onLimit?.();
       };
       const source = this.context.createMediaStreamSource(this.stream), silent = this.context.createGain();
       silent.gain.value = 0; source.connect(this.node); this.node.connect(silent); silent.connect(this.context.destination);

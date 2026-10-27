@@ -75,7 +75,14 @@ export function gpuRenderer(terminal: Terminal) {
   keepDomSelectionCleared(terminal);
   keepTerminalContrast(terminal);
   let gpu: IDisposable | null = null, wanted = false, retries = 0, timer = 0;
-  const attach = () => { timer = 0; if (wanted && !gpu) gpu = attachGpuRenderer(terminal, () => { gpu = null; if (wanted && retries++ < 3) timer = window.setTimeout(attach, 2000); }); };
+  const attach = () => {
+    timer = 0;
+    if (!wanted || gpu) return;
+    gpu = attachGpuRenderer(terminal, () => {
+      gpu = null;
+      if (wanted && retries++ < 3) timer = window.setTimeout(attach, 2000);
+    });
+  };
   return {
     set(enabled: boolean) { wanted = enabled; clearTimeout(timer); timer = 0; if (enabled) attach(); else { gpu?.dispose(); gpu = null; } },
     dispose() { wanted = false; clearTimeout(timer); gpu?.dispose(); gpu = null; },

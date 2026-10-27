@@ -50,9 +50,9 @@ function claudeQuestion(rows: string[]): ScreenChoice | null {
     const title = rows[index]?.trim() ?? '';
     const options: ScreenOption[] = [];
     for (index++; index <= end; index++) {
-      const match = option.exec(rows[index]);
-      if (!match) { if (rows[index].trim() && !/^Enter to/i.test(rows[index].trim())) return null; continue; }
-      options.push(finish(draftOption(match, 'answer', '❯')));
+      const match = option.exec(rows[index]), text = rows[index].trim();
+      if (match) options.push(finish(draftOption(match, 'answer', '❯')));
+      else if (text && !/^Enter to/i.test(text)) return null;
     }
     if (!title || options.length < 2) return null;
     return { kind: 'question', title, context: [], options, hint: null, question: question('claude', { tabs: shownTabs, review }) };
@@ -83,9 +83,9 @@ function claudeQuestion(rows: string[]): ScreenChoice | null {
   }
   if (!hint || !title.length) return null;
   const answers = options.filter(item => item.role === 'answer');
-  // The last option above the rule takes an own answer ("Type something.").
-  if (answers.length) answers[answers.length - 1].role = 'input';
   if (!answers.length) return null;
+  // The last option above the rule takes an own answer ("Type something.").
+  answers[answers.length - 1].role = 'input';
   return {
     kind: 'question', title: title.join(' '), context: [], options: options.map(finish), hint,
     question: question('claude', { tabs: shownTabs, multi, submit: multi ? submit ?? { selected: false } : null }),

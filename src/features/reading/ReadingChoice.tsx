@@ -18,25 +18,26 @@ export function ReadingChoice({ choice, terminalId, onShowTerminal, onError }: {
     const timer = setTimeout(() => { sending.current = false; setPending(null); }, 2500);
     return () => clearTimeout(timer);
   }, [pending]);
+  const fail = (error: unknown) => {
+    if (!active.current) return;
+    sending.current = false; setPending(null);
+    onError(error instanceof Error ? t(error.message) : String(error));
+  };
   const choose = async (index: number) => {
     if (choice.kind === 'permission' || latest.current.kind === 'permission') return;
     if (sending.current || !latest.current.options[index]) return;
     sending.current = true; card.current?.focus(); setHighlight(index); setPending(index);
     try {
       await writeChoiceKeys(selectedChoiceIndex(latest.current), index, key => window.agentrix.writeTerminal(terminalId, key), () => active.current);
-    } catch (error) {
-      if (active.current) { sending.current = false; setPending(null); onError(error instanceof Error ? t(error.message) : String(error)); }
-    }
+    } catch (error) { fail(error); }
   };
-  const cancel = async () => {
+  const cancel = () => {
     if (choice.kind === 'permission' || latest.current.kind === 'permission') return;
     if (sending.current) return;
     sending.current = true; card.current?.focus(); setPending('cancel');
     try {
       window.agentrix.writeTerminal(terminalId, '\x1b');
-    } catch (error) {
-      if (active.current) { sending.current = false; setPending(null); onError(error instanceof Error ? t(error.message) : String(error)); }
-    }
+    } catch (error) { fail(error); }
   };
   const terminalOnly = choice.kind === 'permission', copy = terminalApprovalCopy(currentLanguage());
   const keys = (event: KeyboardEvent<HTMLDivElement>) => {

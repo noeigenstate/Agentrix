@@ -12,7 +12,7 @@ class TerminalTitleTracker {
     let match, end = 0;
     while ((match = pattern.exec(this.buffer))) {
       const value = match[1].trim();
-      if (/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(value)) ids.push(value);
+      if (wholeThread(value)) ids.push(value);
       else {
         const cut = /^([a-f\d]{8}-[a-f\d-]{8,27})(?:\.\.\.|…)$/i.exec(value);
         if (cut) ids.push(cut[1]);

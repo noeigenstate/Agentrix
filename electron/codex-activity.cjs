@@ -5,7 +5,7 @@ const os = require('node:os');
 const { interactiveSession } = require('./session-restore.cjs');
 const { rolloutFiles, sessionMeta } = require('./session-files.cjs');
 const { transcriptWindow, LIVE_READ_LIMIT, codexMetadata } = require('./transcript-window.cjs');
-const { OversizedLine } = require('./oversized-record.cjs');
+const { readTranscriptChunk } = require('./oversized-record.cjs');
 const { sameThread } = require('./terminal-title.cjs');
 const { promptText } = require('./prompt-queue.cjs');
 const { CompletionHistory } = require('./completion-history.cjs');
@@ -98,20 +98,7 @@ class CodexActivityReader {
         const { bytesRead } = await file.read(chunk, 0, chunk.length, this.offset);
         if (!bytesRead) break;
         this.offset += bytesRead;
-        this.buffer = Buffer.concat([this.buffer, chunk.subarray(0, bytesRead)]);
-        let newline;
-        while ((newline = this.buffer.indexOf(10)) !== -1) {
-          const line = this.buffer.subarray(0, newline); this.buffer = this.buffer.subarray(newline + 1);
-          // An oversized line ends here: a generated picture's record is rebuilt from its two ends.
-          const oversized = this.oversized ?? (!this.skipping && line.length > 1024 * 1024 ? new OversizedLine(Buffer.alloc(0)) : null);
-          if (oversized) { oversized.add(line); const record = oversized.record(); if (record) this.record(record); }
-          else if (!this.skipping) { try { this.record(JSON.parse(line.toString('utf8'))); } catch {} }
-          this.skipping = false; this.oversized = null;
-        }
-        if (this.buffer.length > 1024 * 1024) {
-          if (this.oversized) this.oversized.add(this.buffer); else if (!this.skipping) this.oversized = new OversizedLine(this.buffer);
-          this.buffer = Buffer.alloc(0); this.skipping = true;
-        }
+        readTranscriptChunk(this, chunk.subarray(0, bytesRead), record => this.record(record));
       }
       if (this.historyPending && this.offset >= size) { this.historyPending = false; this.historyOpened = false; this.options.onHistory?.(true); }
       return this.offset >= size ? { ...this.snapshot } : null;

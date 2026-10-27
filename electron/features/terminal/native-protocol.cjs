@@ -35,14 +35,13 @@ class JsonLines {
       for (const piece of text.split(/(?<=\n)/)) {
         this.buffer += piece;
         if (Buffer.byteLength(this.buffer) > this.limit) throw new Error('oversized-json');
-        if (this.buffer.endsWith('\n')) {
-          const line = this.buffer.trim(); this.buffer = '';
-          if (!line) continue;
-          const value = JSON.parse(line);
-          if (!object(value)) throw new Error('invalid-json-envelope');
-          this.message(value);
-          if (this.closed) return;
-        }
+        if (!this.buffer.endsWith('\n')) continue;
+        const line = this.buffer.trim(); this.buffer = '';
+        if (!line) continue;
+        const value = JSON.parse(line);
+        if (!object(value)) throw new Error('invalid-json-envelope');
+        this.message(value);
+        if (this.closed) return;
       }
     } catch { this.closed = true; this.fail('malformed-native-stream'); }
   }

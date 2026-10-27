@@ -28,18 +28,28 @@ export function FilePopup({ target, onError }: { target: PopupTarget; onError: (
   useEffect(() => {
     let live = true, previewId: string | null = null;
     const release = () => { const id = previewId; previewId = null; if (id) void window.agentrix.closePreview(id).catch(() => {}); };
-    const read: Promise<Shown> = target.kind === 'picture' ? Promise.resolve({ kind: 'picture' as const, url: target.src })
-      : target.kind === 'image'
-      ? window.agentrix.agentImage(target.path).then(result => result.ok ? { kind: 'picture' as const, url: result.value.url } : { kind: 'error' as const, message: result.error })
-      : target.kind === 'folder'
-      ? window.agentrix.listDirectory(target.projectId, target.path).then(result => result.ok ? { kind: 'folder' as const, listing: result.value } : { kind: 'error' as const, message: result.error })
-      : target.kind === 'document'
-      ? window.agentrix.agentDocument(target.projectId, target.path).then(result => result.ok ? { kind: 'document' as const, content: result.value.truncated ? `${result.value.content}\n\n…` : result.value.content } : { kind: 'error' as const, message: result.error })
-      : window.agentrix.readFile(target.projectId, target.path, pageIndex).then(result => {
-        if (!result.ok) return { kind: 'error' as const, message: result.error };
-        if ('previewId' in result.value) previewId = result.value.previewId;
-        return { kind: 'preview' as const, preview: result.value };
-      });
+    let read: Promise<Shown>;
+    switch (target.kind) {
+      case 'picture':
+        read = Promise.resolve({ kind: 'picture', url: target.src });
+        break;
+      case 'image':
+        read = window.agentrix.agentImage(target.path).then(result => result.ok ? { kind: 'picture', url: result.value.url } : { kind: 'error', message: result.error });
+        break;
+      case 'folder':
+        read = window.agentrix.listDirectory(target.projectId, target.path).then(result => result.ok ? { kind: 'folder', listing: result.value } : { kind: 'error', message: result.error });
+        break;
+      case 'document':
+        read = window.agentrix.agentDocument(target.projectId, target.path).then(result => result.ok ? { kind: 'document', content: result.value.truncated ? `${result.value.content}\n\n…` : result.value.content } : { kind: 'error', message: result.error });
+        break;
+      case 'file':
+        read = window.agentrix.readFile(target.projectId, target.path, pageIndex).then(result => {
+          if (!result.ok) return { kind: 'error', message: result.error };
+          if ('previewId' in result.value) previewId = result.value.previewId;
+          return { kind: 'preview', preview: result.value };
+        });
+        break;
+    }
     void read.catch(() => ({ kind: 'error' as const, message: '无法预览此文件。' })).then(value => {
       if (live) setLoaded({ target, page: pageIndex, value }); else release();
     });

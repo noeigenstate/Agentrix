@@ -20,9 +20,10 @@ export function TextContent({ content }: { content: string }) {
   }, []);
   const first = Math.max(0, Math.floor((scroll.top - 16) / 22) - 8);
   const last = Math.min(lines.length, first + Math.ceil(scroll.height / 22) + 20);
+  const visible = lines.slice(first, last);
   return <div className="file-code-scroll" ref={viewport} onScroll={event => { const top = event.currentTarget.scrollTop; setScroll(value => ({ ...value, top })); }}>
-    <div className="file-code-page" style={{ height: lines.length * 22 + 44, minWidth: Math.min(width, 2000) * 7.3 + 90 }}>
-      <div className="file-code" style={{ top: first * 22 }}><div className="line-numbers" aria-hidden="true">{lines.slice(first, last).map((_, index) => <span key={first + index}>{first + index + 1}</span>)}</div><pre tabIndex={0} aria-label={t('文件文本内容')}><code>{lines.slice(first, last).join('\n') || ' '}</code></pre></div>
+    <div className="file-code-page" style={{ height: lines.length * 22 + 44, minWidth: width * 7.3 + 90 }}>
+      <div className="file-code" style={{ top: first * 22 }}><div className="line-numbers" aria-hidden="true">{visible.map((_, index) => <span key={first + index}>{first + index + 1}</span>)}</div><pre tabIndex={0} aria-label={t('文件文本内容')}><code>{visible.join('\n') || ' '}</code></pre></div>
     </div>
   </div>;
 }
@@ -71,7 +72,8 @@ export function FilePreview({ projectId, filePath, autoSave, onClose, onError, r
   const textPage = preview?.kind === 'text' || preview?.kind === 'html' || preview?.kind === 'markdown' ? preview.page : null;
   const markdown = preview?.kind === 'markdown';
   const showingText = preview?.kind === 'text' || markdown || (preview?.kind === 'html' && (mode === 'source' || editing));
-  const dirty = editing && draft !== (text || '').replace(/\r\n/g, '\n');
+  const savedText = useMemo(() => (text || '').replace(/\r\n/g, '\n'), [text]);
+  const dirty = editing && draft !== savedText;
   // Git: lines changed in the working tree but not staged, as the Git sidebar lists them (read again after
   // each save), and conflicts left in the text.
   const [diff, setDiff] = useState<GitDiff | null>(null);
@@ -99,11 +101,12 @@ export function FilePreview({ projectId, filePath, autoSave, onClose, onError, r
         session.preview = result.value;
         if ('previewId' in result.value) session.resources.add(result.value.previewId);
         setLoaded({ key, result });
-        if ('content' in result.value && session.draft === sent) {
-          session.draft = result.value.content.replace(/\r\n/g, '\n');
+        const saved = 'content' in result.value ? result.value.content.replace(/\r\n/g, '\n') : null;
+        if (saved !== null && session.draft === sent) {
+          session.draft = saved;
           setDraft(session.draft);
         }
-        dirtyRef.current = 'content' in result.value && session.draft !== result.value.content.replace(/\r\n/g, '\n');
+        dirtyRef.current = saved !== null && session.draft !== saved;
         if (!dirtyRef.current) {
           window.agentrix.editorDirty(false);
           setSaveMessage(session.flush ? t('已保存') : t('已自动保存')); return true;
@@ -153,7 +156,7 @@ export function FilePreview({ projectId, filePath, autoSave, onClose, onError, r
   }, [registerGuard]);
   useEffect(() => { window.agentrix.editorDirty(dirty || saving || writing, projectId, filePath); }, [dirty, saving, writing, projectId, filePath]);
   const navigate = async (action: () => void) => { if (await guard.current() && currentSession()) { setEditing(false); setSaveMessage(''); action(); } };
-  const beginEditing = () => { if (text === null) return; if (!editing) setDraft(text.replace(/\r\n/g, '\n')); setEditing(true); setMode('source'); setSaveMessage(''); requestAnimationFrame(() => editor.current?.focus()); };
+  const beginEditing = () => { if (text === null) return; if (!editing) setDraft(savedText); setEditing(true); setMode('source'); setSaveMessage(''); requestAnimationFrame(() => editor.current?.focus()); };
 
   useEffect(() => { setImageError(false); setVideoError(false); }, [previewUrl]);
   useEffect(() => {
@@ -184,18 +187,19 @@ export function FilePreview({ projectId, filePath, autoSave, onClose, onError, r
     let active = true;
     setLoading(true); setSaving(false); setWriting(false); setEditing(false);
     window.agentrix.readFile(projectId, filePath, pageIndex).then(result => {
-      if (active) {
-        session.preview = result.ok ? result.value : null;
-        if (result.ok && 'previewId' in result.value) session.resources.add(result.value.previewId);
-        setLoaded({ key, result }); setSaveMessage('');
-        if (result.ok && 'content' in result.value) {
-          session.draft = result.value.content.replace(/\r\n/g, '\n'); setDraft(session.draft);
-          const editable = result.value.kind !== 'html' || modeRef.current === 'source';
-          setEditing(editable);
-          if (editable && result.value.kind !== 'markdown') setMode('source');
-        } else setEditing(false);
+      if (!active) {
+        if (result.ok && 'previewId' in result.value) void window.agentrix.closePreview(result.value.previewId).catch(() => {});
+        return;
       }
-      else if (result.ok && 'previewId' in result.value) window.agentrix.closePreview(result.value.previewId).catch(() => {});
+      session.preview = result.ok ? result.value : null;
+      if (result.ok && 'previewId' in result.value) session.resources.add(result.value.previewId);
+      setLoaded({ key, result }); setSaveMessage('');
+      if (result.ok && 'content' in result.value) {
+        session.draft = result.value.content.replace(/\r\n/g, '\n'); setDraft(session.draft);
+        const editable = result.value.kind !== 'html' || modeRef.current === 'source';
+        setEditing(editable);
+        if (editable && result.value.kind !== 'markdown') setMode('source');
+      } else setEditing(false);
     }).catch(err => { if (active) setLoaded({ key, result: { ok: false, error: String(err.message || err) } }); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -212,7 +216,7 @@ export function FilePreview({ projectId, filePath, autoSave, onClose, onError, r
     if (!document.execCommand(replacement ? 'insertText' : 'delete', false, replacement)) setDraft(node.value.slice(0, from) + replacement + node.value.slice(to));
   };
   const editorField = <CodeEditor editor={editor} text={draft} diff={diff} onResolve={resolve}><textarea ref={editor} className="file-text-editor" aria-label={t('文件编辑器')} value={draft} spellCheck={false} wrap="off" disabled={saving}
-    onChange={event => { session.draft = event.target.value; dirtyRef.current = session.draft !== (text || '').replace(/\r\n/g, '\n'); setDraft(session.draft); setSaveMessage(''); }} onFocus={() => { window.agentrix.terminalFocus(projectId, false); window.agentrix.fileTreeFocus(projectId, false); }}
+    onChange={event => { session.draft = event.target.value; dirtyRef.current = session.draft !== savedText; setDraft(session.draft); setSaveMessage(''); }} onFocus={() => { window.agentrix.terminalFocus(projectId, false); window.agentrix.fileTreeFocus(projectId, false); }}
     onKeyDown={event => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); event.stopPropagation(); void save(); }
       else runEditorKey(event.nativeEvent, event.currentTarget, filePath);
@@ -250,9 +254,9 @@ export function FilePreview({ projectId, filePath, autoSave, onClose, onError, r
       </div>}
       {preview?.kind === 'html' && <div className="preview-mode"><button className="preview-option" aria-pressed={mode === 'preview' && !editing} onClick={() => void navigate(() => setMode('preview'))}>{t('页面')}</button><button className="preview-option" aria-pressed={mode === 'source' || editing} onClick={beginEditing}>{t('源码')}</button></div>}
       {markdown && <div className="preview-mode"><button className="preview-option" aria-pressed={mode === 'source'} onClick={beginEditing}>{t('编辑')}</button><button className="preview-option" aria-pressed={mode === 'preview'} onClick={() => setMode('preview')}>{t('预览')}</button></div>}
-      {text !== null && (!editing ? !markdown && preview?.kind !== 'html' && <button className="preview-option editor-action" disabled={loading} onClick={beginEditing}><PencilSimple size={15} />{textPage && textPage.count > 1 ? t('编辑当前段') : t('编辑')}</button> : null)}
+      {text !== null && !editing && !markdown && preview?.kind !== 'html' && <button className="preview-option editor-action" disabled={loading} onClick={beginEditing}><PencilSimple size={15} />{textPage && textPage.count > 1 ? t('编辑当前段') : t('编辑')}</button>}
       {!editing && <button className="icon-button" disabled={saving} title={t('刷新文件')} aria-label={t('刷新文件')} onClick={() => void navigate(() => setRevision(r => r + 1))}><ArrowClockwise size={16} /></button>}
-      {text !== null && !editing && <button className="icon-button" title={textPage && textPage.count > 1 ? t('复制当前页内容') : t('复制文件内容')} aria-label={textPage && textPage.count > 1 ? t('复制当前页内容') : t('复制文件内容')} onClick={async () => { const result = await window.agentrix.copy(editing ? draft : text); if (!result.ok) onError(result.error); }}><Copy size={16} /></button>}
+      {text !== null && !editing && <button className="icon-button" title={textPage && textPage.count > 1 ? t('复制当前页内容') : t('复制文件内容')} aria-label={textPage && textPage.count > 1 ? t('复制当前页内容') : t('复制文件内容')} onClick={async () => { const result = await window.agentrix.copy(text); if (!result.ok) onError(result.error); }}><Copy size={16} /></button>}
     </div></div>
     {body}
     {saveMessage && <div className={`editor-message ${saveMessage === t('已保存') || saveMessage === t('已自动保存') ? '' : 'editor-error'}`} role="status">{saveMessage}</div>}

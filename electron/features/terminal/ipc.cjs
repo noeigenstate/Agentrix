@@ -34,41 +34,41 @@ function registerTerminalIpc({ handle, listen, findProject, getSession, hasSessi
   function writeTerminal(id, data, answer = false) {
     if (typeof data !== 'string' || data.length > 1024 * 1024) return;
     const s = getSession(id);
-    if (s?.nativeMode === 'claude-sdk') return; // Managed prompts have a distinct structured IPC; keys cannot arm a round.
-    if (s && !isTerminalResponse(data)) s.approval?.invalidate();
-    if (s && s.status !== 'exited' && answer === true) { s.gate.input(data); return; }
-    if (s && s.status !== 'exited') {
-      const submitted = s.submissions.write(data);
-      // A line of unknown text (arrows, then Enter) is as often a choice in a menu (Codex's update prompt, a /model
-      // picker) as a prompt recalled from history: the agent's own records report a round it really starts.
-      const prompts = s.submissions.sent.filter(text => text && !isLocalCommand(text));
-      if (submitted && s.codexActive) for (const text of prompts) s.promptQueue.submit(text, s.codexActivity === 'working');
-      // Sending a new prompt means the last result has been read: clear the unviewed state before the next round.
-      if (submitted && getProjectById(s.projectId)?.unread) { acknowledgeProject(s.projectId); scheduleState(); }
-      if (prompts.length && s.codexActive) {
-        expectCompletion(s.projectId);
-        s.codexActivity = 'working'; s.activityInputAt = now();
-        scheduleState();
-      }
-      // Escape on its own interrupts a working Claude Code turn. It runs no hook then, writes nothing to its transcript
-      // and only puts the prompt back in its input, so this key is the only sign the round has ended. While Claude asks
-      // something (a permission or a question), Escape only answers it and the round may go on.
-      if (data === '\x1b' && s.codexActive && s.agent === 'claude' && s.codexActivity === 'working' && !s.needsInput) {
-        const project = getProjectById(s.projectId);
-        if (project) applyActivity(project, s, { threadId: s.claudeSessionId, turnId: null, state: 'interrupted', updatedAt: now() });
-      }
-      // Claude runs no hook once its permission prompt is answered, so the key that answers it ends the waiting notice:
-      // Enter, a number or Escape, typed in the terminal. Otherwise the notice
-      // (and the reading view's switch to the terminal) would last until the round ends.
-      else if (s.needsInput && s.codexActive && s.agent === 'claude' && /^(?:\r|\x1b|[1-9])$/.test(data)) { s.needsInput = null; scheduleState(); }
-      if (!s.codexActive && !isTerminalResponse(data)) {
-        const wasReady = s.ready && !s.inputDirty;
-        s.inputDirty = true; if (data.includes('\r') || data.includes('\n')) s.ready = false;
-        if (wasReady) scheduleState();
-      }
-      s.gate.input(data);
-      if (submitted && s.codexActive) pollAfterSubmission(s, () => getSession(id) === s);
+    if (!s || s.nativeMode === 'claude-sdk') return; // Managed prompts have a distinct structured IPC; keys cannot arm a round.
+    const response = isTerminalResponse(data);
+    if (!response) s.approval?.invalidate();
+    if (s.status === 'exited') return;
+    if (answer === true) { s.gate.input(data); return; }
+    const submitted = s.submissions.write(data);
+    // A line of unknown text (arrows, then Enter) is as often a choice in a menu (Codex's update prompt, a /model
+    // picker) as a prompt recalled from history: the agent's own records report a round it really starts.
+    const prompts = s.submissions.sent.filter(text => text && !isLocalCommand(text));
+    if (submitted && s.codexActive) for (const text of prompts) s.promptQueue.submit(text, s.codexActivity === 'working');
+    // Sending a new prompt means the last result has been read: clear the unviewed state before the next round.
+    if (submitted && getProjectById(s.projectId)?.unread) { acknowledgeProject(s.projectId); scheduleState(); }
+    if (prompts.length && s.codexActive) {
+      expectCompletion(s.projectId);
+      s.codexActivity = 'working'; s.activityInputAt = now();
+      scheduleState();
     }
+    // Escape on its own interrupts a working Claude Code turn. It runs no hook then, writes nothing to its transcript
+    // and only puts the prompt back in its input, so this key is the only sign the round has ended. While Claude asks
+    // something (a permission or a question), Escape only answers it and the round may go on.
+    if (data === '\x1b' && s.codexActive && s.agent === 'claude' && s.codexActivity === 'working' && !s.needsInput) {
+      const project = getProjectById(s.projectId);
+      if (project) applyActivity(project, s, { threadId: s.claudeSessionId, turnId: null, state: 'interrupted', updatedAt: now() });
+    }
+    // Claude runs no hook once its permission prompt is answered, so the key that answers it ends the waiting notice:
+    // Enter, a number or Escape, typed in the terminal. Otherwise the notice
+    // (and the reading view's switch to the terminal) would last until the round ends.
+    else if (s.needsInput && s.codexActive && s.agent === 'claude' && /^(?:\r|\x1b|[1-9])$/.test(data)) { s.needsInput = null; scheduleState(); }
+    if (!s.codexActive && !response) {
+      const wasReady = s.ready && !s.inputDirty;
+      s.inputDirty = true; if (data.includes('\r') || data.includes('\n')) s.ready = false;
+      if (wasReady) scheduleState();
+    }
+    s.gate.input(data);
+    if (submitted && s.codexActive) pollAfterSubmission(s, () => getSession(id) === s);
   }
   listen('terminal:write', writeTerminal);
   listen('terminal:resize', (id, cols, rows) => {

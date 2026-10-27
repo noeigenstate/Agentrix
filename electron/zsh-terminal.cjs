@@ -48,8 +48,9 @@ function bashArguments(integrationDir) { return ['--rcfile', path.posix.join(int
 // (zsh when $SHELL is zsh and zsh is installed), else Bash.
 function linuxShell(choice, { env = process.env, find = findShell } = {}) {
   const zsh = find('zsh', { platform: 'linux', env }), bash = find('bash', { platform: 'linux', env }) || '/bin/bash';
-  const kind = choice === 'zsh' || choice === 'bash' ? choice : path.posix.basename(String(env.SHELL || '')) === 'zsh' ? 'zsh' : 'bash';
-  return { ...(kind === 'zsh' && zsh ? { kind: 'zsh', file: zsh } : { kind: 'bash', file: bash }), zsh: !!zsh };
+  const kind = choice === 'zsh' || choice === 'bash' ? choice : path.posix.basename(String(env.SHELL || ''));
+  const useZsh = kind === 'zsh' && !!zsh;
+  return { kind: useZsh ? 'zsh' : 'bash', file: useZsh ? zsh : bash, zsh: !!zsh };
 }
 
 // Programs started from an AppImage get its folders in PATH, LD_LIBRARY_PATH and the XDG and GSettings

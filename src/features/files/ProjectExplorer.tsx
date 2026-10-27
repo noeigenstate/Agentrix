@@ -62,7 +62,7 @@ function TreeNode(props: NodeProps) {
   const { projectId, entry, depth, expanded, revision, enabled, selectedFile, hideNoise, onToggle, onSelect, selected, choose, contextMenu } = props;
   const isDirectory = entry.kind === 'directory';
   const root = depth < 0;
-  const open = isDirectory && (depth < 0 || expanded.has(entry.path));
+  const open = isDirectory && (root || expanded.has(entry.path));
   const [listing, setListing] = useState<DirectoryListing | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -111,7 +111,7 @@ function TreeNode(props: NodeProps) {
       role="treeitem" aria-expanded={isDirectory ? open : undefined} aria-selected={selected.has(entry.path)}
       aria-level={depth + 1} aria-label={entry.name} title={`${entry.path || entry.name}${decoration ? ` · ${gitTitle(decoration.title)}` : ''}`} data-node-path={entry.path} data-node-kind={entry.kind} data-git-tone={decoration ? gitMark(decoration.code).tone : undefined}
       style={{ paddingLeft: indent(depth) }}
-      onClick={event => { if (!choose(entry, event)) { if (isDirectory) onToggle(entry.path); else onSelect(entry.path); } }}
+      onClick={event => { if (choose(entry, event)) return; if (isDirectory) onToggle(entry.path); else onSelect(entry.path); }}
       onContextMenu={event => contextMenu(entry, event)}
       onKeyDown={event => navigateTree(event, open, isDirectory, () => onToggle(entry.path))}>
       <span className="tree-chevron">{isDirectory && (open ? <CaretDown size={12} /> : <CaretRight size={12} />)}</span>
@@ -125,7 +125,7 @@ function TreeNode(props: NodeProps) {
         {listing?.entries.filter(child => !hidden(child)).map(child => <TreeNode key={child.path} {...props} entry={child} depth={depth + 1} />)}
         {listing && !listing.entries.length && <div className="tree-placeholder" style={{ paddingLeft: indent(depth + 1) + 36 }}>{t('空文件夹')}</div>}
         {!listing && !loading && <div className="tree-placeholder" style={{ paddingLeft: indent(depth + 1) + 36 }}>{t('正在读取目录…')}</div>}
-        {listing?.nextOffset !== null && listing?.nextOffset !== undefined && <button className="tree-load-more" disabled={loading} onClick={() => setPages(p => p + 1)} style={{ marginLeft: indent(depth + 1) + 18 }}>{t('加载更多（{shown} / {total}）', { shown: listing.entries.length, total: listing.total })}</button>}
+        {listing?.nextOffset != null && <button className="tree-load-more" disabled={loading} onClick={() => setPages(p => p + 1)} style={{ marginLeft: indent(depth + 1) + 18 }}>{t('加载更多（{shown} / {total}）', { shown: listing.entries.length, total: listing.total })}</button>}
       </>}
     </div>}
   </div>;
@@ -171,7 +171,7 @@ export function ProjectExplorer({ project, collapsed, hideNoise, expandedPaths, 
       {/* Collapsed, the rail keeps only the two panes; the title bar's 工作台 and the overview shortcut still lead back. */}
       {!collapsed && <button className="explorer-back" onClick={onReturn} title={t('返回总览 · {key}', { key: shortcut('overview') })} aria-label={t('返回总览')}><CaretLeft size={14} weight="bold" /><span>{t('总览')}</span></button>}
       {/* Collapsed, the rail offers the two panes themselves; each opens the sidebar again (as does the shortcut). */}
-      {!collapsed && <button className="icon-button sidebar-toggle" onClick={onCollapse} title={collapsed ? t('展开目录栏 · {key}', { key: shortcut('explorer') }) : t('收起目录栏 · {key}', { key: shortcut('explorer') })} aria-label={collapsed ? t('展开目录栏') : t('收起目录栏')} aria-expanded={!collapsed}><SidebarSimple size={17} /></button>}
+      {!collapsed && <button className="icon-button sidebar-toggle" onClick={onCollapse} title={t('收起目录栏 · {key}', { key: shortcut('explorer') })} aria-label={t('收起目录栏')} aria-expanded={!collapsed}><SidebarSimple size={17} /></button>}
     </div>
     {collapsed && <div className="explorer-rail">
       <button className="icon-button" onClick={() => openGit(false)} title={t('文件')} aria-label={t('资源管理器')}><Folder size={18} /></button>

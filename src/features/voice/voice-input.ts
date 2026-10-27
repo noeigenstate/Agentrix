@@ -84,11 +84,6 @@ function microphoneMessage(error: unknown) {
   return t(String((error as Error)?.message || error));
 }
 
-function modelMessage(model: VoiceState | null) {
-  if (model?.phase === 'downloading') return t('语音模型正在下载（{percent}%），完成后即可使用。', { percent: model.percent });
-  return t('语音模型开始下载，完成后即可使用。');
-}
-
 function focusTerminal(id: string) {
   document.querySelector<HTMLTextAreaElement>(`[data-terminal-id="${CSS.escape(id)}"] .xterm-helper-textarea`)?.focus();
 }
@@ -124,8 +119,9 @@ export async function toggleDictation(id: string, sessionId: string | null, onEr
   if (!sessionId && !composers.has(id)) return onError(t('请先启动终端，再使用语音输入。'));
   if (snapshot.microphone === false) { void refreshMicrophone(); return onError(t('未检测到麦克风，请连接后重试。')); }
   if (!snapshot.model?.ready) {
-    if (snapshot.model?.phase !== 'downloading') void window.agentrix.prepareVoice();
-    return onError(modelMessage(snapshot.model));
+    if (snapshot.model?.phase === 'downloading') return onError(t('语音模型正在下载（{percent}%），完成后即可使用。', { percent: snapshot.model.percent }));
+    void window.agentrix.prepareVoice();
+    return onError(t('语音模型开始下载，完成后即可使用。'));
   }
   // Recording counts from the keypress or click, so an Escape while the microphone is still opening cancels it.
   const pending = { id, sessionId: sessionId ?? '', onError };
@@ -155,14 +151,15 @@ const shown = (element: HTMLElement | null | undefined) => element?.getClientRec
 // the only terminal on screen.
 function terminalTarget() {
   const byId = (id: string | null) => id ? shown(document.querySelector<HTMLElement>(`[data-terminal-id="${CSS.escape(id)}"]`)) : null;
-  const visible = [...document.querySelectorAll<HTMLElement>('[data-terminal-id]')].filter(element => shown(element));
   const box = (element: HTMLElement | null | undefined) => element && composers.has(element.dataset.voiceTarget!) ? shown(element) : null;
-  return shown(document.activeElement?.closest<HTMLElement>('[data-terminal-id]'))
+  const preferred = shown(document.activeElement?.closest<HTMLElement>('[data-terminal-id]'))
     || box(document.activeElement?.closest<HTMLElement>('[data-voice-target]'))
     || [...document.querySelectorAll<HTMLElement>('[data-voice-target]')].find(element => box(element))
     || shown(document.querySelector<HTMLElement>('.project-panel.is-focused .is-active-terminal'))
-    || byId(lastTerminal)
-    || (visible.length === 1 ? visible[0] : null);
+    || byId(lastTerminal);
+  if (preferred) return preferred;
+  const visible = [...document.querySelectorAll<HTMLElement>('[data-terminal-id]')].filter(element => shown(element));
+  return visible.length === 1 ? visible[0] : null;
 }
 
 // Ctrl+T starts talking to the current terminal; pressing it again works like Enter and sends the text.

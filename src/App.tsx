@@ -1,5 +1,4 @@
-import { setUserAvatar } from './shared/UserAvatar';
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { SquaresFour, FolderSimplePlus, MagnifyingGlass, X, Minus, Square, ListChecks, CheckCircle, Info, Circle, Stamp, CirclesFour } from '@phosphor-icons/react';
 import type { AgentsState, AppUpdateState, Project, ProjectLocation, Result, Settings, SSHAuthPrompt, Workspace } from './shared/types';
 import { ProjectSwitchHud } from './features/workspace/ProjectSwitchHud';
@@ -10,10 +9,7 @@ import { useProjectReorder } from './features/workspace/useProjectReorder';
 import { pruneReadingCli } from './features/reading/reading-terminal';
 import { setReading } from './features/reading/reading-mode';
 import { useProjectFocusMotion } from './features/workspace/useProjectFocusMotion';
-import { applyMotion } from './shared/motion';
-import { applyTheme } from './shared/themes';
-import { setTerminalRenderer } from './features/terminal/terminal-renderer';
-import { terminalFontFamily } from './features/terminal/terminal-font';
+import { useWorkspaceAppearance } from './features/workspace/useWorkspaceAppearance';
 import { VoiceOverlay } from './features/voice/VoiceButton';
 import { applyLanguage, t } from './shared/i18n';
 import { actionFor, applyShortcuts, editingKeyInField, shortcut } from './features/shortcuts/shortcuts';
@@ -56,21 +52,7 @@ const NO_PROJECTS: Project[] = [];
 
 export function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  useLayoutEffect(() => { setUserAvatar(workspace?.settings.userAvatar ?? ''); }, [workspace?.settings.userAvatar]);
-  useEffect(() => { applyMotion(workspace?.settings.focusAnimation || 'smooth'); }, [workspace?.settings.focusAnimation]);
-  useEffect(() => { applyTheme(workspace?.settings.theme); }, [workspace?.settings.theme]);
-  // The surface (glass or solid) is a mode of the whole stylesheet, like the theme.
-  useEffect(() => { const surface = workspace?.settings.surface || 'glass'; document.documentElement.dataset.surface = surface === 'glass' && workspace?.settings.glassBackground === 'desktop' && workspace?.desktopGlass?.active ? 'desktop-glass' : surface; }, [workspace?.settings.surface, workspace?.settings.glassBackground, workspace?.desktopGlass?.active]);
-  useEffect(() => { document.documentElement.dataset.desktopGlassCompatibility = String(!!workspace?.desktopGlass?.compatibility && (!!workspace?.desktopGlass?.active || !!workspace?.desktopGlass?.failed)); }, [workspace?.desktopGlass?.compatibility, workspace?.desktopGlass?.active, workspace?.desktopGlass?.failed]);
-  useEffect(() => {
-    const value = workspace?.settings.glassTransparency;
-    document.documentElement.dataset.glassTransparency = value == null ? 'theme' : 'custom';
-    if (workspace?.settings.surface !== 'solid' && value != null) document.documentElement.style.setProperty('--glass-alpha', String(1 - value / 100));
-    else document.documentElement.style.removeProperty('--glass-alpha');
-  }, [workspace?.settings.glassTransparency, workspace?.settings.surface]);
-  useEffect(() => { setTerminalRenderer(workspace?.settings.terminalRenderer || 'gpu'); }, [workspace?.settings.terminalRenderer]);
-  useEffect(() => { document.documentElement.dataset.terminalWeight = String(workspace?.settings.terminalFontWeight || 400); }, [workspace?.settings.terminalFontWeight]);
-  useEffect(() => { document.documentElement.dataset.terminalFontFamily = terminalFontFamily(workspace?.settings.terminalFontFamily, workspace?.settings.terminalCjkFontFamily); }, [workspace?.settings.terminalFontFamily, workspace?.settings.terminalCjkFontFamily]);
+  useWorkspaceAppearance(workspace);
   const [agents, setAgents] = useState<AgentsState | null>(null);
   // Native full screen (F11, or an expanded project): the title bar gets out of the way.
   const [fullScreen, setFullScreen] = useState(false);
@@ -139,12 +121,12 @@ export function App() {
     if (!result || result.kind === 'external' || !await focusProject(id)) return;
     if (result.kind === 'file') {
       setPreviewFile({ projectId: id, path: result.path });
-    } else {
-      const parts = result.path.split('/').filter(Boolean);
-      const directories = ['', ...parts.map((_, index) => parts.slice(0, index + 1).join('/'))];
-      setExpandedByProject(value => ({ ...value, [id]: [...new Set([...(value[id] || []), ...directories])] }));
-      await perform(api.settings({ explorerCollapsed: false }));
+      return;
     }
+    const parts = result.path.split('/').filter(Boolean);
+    const directories = ['', ...parts.map((_, index) => parts.slice(0, index + 1).join('/'))];
+    setExpandedByProject(value => ({ ...value, [id]: [...new Set([...(value[id] || []), ...directories])] }));
+    await perform(api.settings({ explorerCollapsed: false }));
   }, [perform, focusProject]);
   const openTerminalLink = useCallback(async (id: string, target: string) => {
     await showProjectLocation(id, await perform(api.openLink(id, target)));
@@ -168,7 +150,6 @@ export function App() {
     pruneReadingCli(new Set(live.map(terminal => JSON.stringify([terminal.id, terminal.sessionId]))));
   }, [workspace]);
 
-  const settingsRef = useRef<Settings | null>(null); settingsRef.current = workspace?.settings || null;
   // Project order for next/previous (set each render), and the current card even if focus fails.
   const navigation = useRef<string[]>([]);
   const lastProject = useRef<string | null>(null);
@@ -274,7 +255,11 @@ export function App() {
   }, [decisions, shownView, workspace]);
   useEffect(() => api?.onDecisionShow(() => setView('decisions')), []);
   // Under a home page the workbench keeps running but takes no keys: a terminal behind it must not get what is typed.
-  useEffect(() => { if (shownView !== 'workspace') (document.activeElement as HTMLElement | null)?.closest('.main-workspace, .focus-sidebar') && (document.activeElement as HTMLElement).blur(); }, [shownView]);
+  useEffect(() => {
+    if (shownView === 'workspace') return;
+    const active = document.activeElement as HTMLElement | null;
+    if (active?.closest('.main-workspace, .focus-sidebar')) active.blur();
+  }, [shownView]);
   const openDecision = useCallback((decision: Decision) => {
     void focusProject(decision.projectId).then(accepted => {
       if (!accepted || (decision.kind !== 'approval' && decision.choice?.kind !== 'permission')) return;
@@ -292,7 +277,7 @@ export function App() {
   const projectRecords = new Map(projects.map(project => [project.id, project]));
   const orderedProjects = reorder.order ? reorder.order.flatMap(id => projectRecords.get(id) || []) : projects;
   const normalizedQuery = query.toLowerCase();
-  const visible = projects.filter(p => !normalizedQuery || `${p.name} ${p.path} ${p.ssh?.host || ''}`.toLowerCase().includes(normalizedQuery));
+  const visible = normalizedQuery ? projects.filter(p => `${p.name} ${p.path} ${p.ssh?.host || ''}`.toLowerCase().includes(normalizedQuery)) : projects;
   const visibleIds = new Set(visible.map(p => p.id));
   const columns = gridColumns(visible.length);
   const rows = Math.max(1, Math.ceil(visible.length / columns));
@@ -302,6 +287,7 @@ export function App() {
   const switchPosition = projectSwitch ? navigation.current.indexOf(projectSwitch.id) + 1 : 0;
   const setPreference = (patch: Partial<Settings>) => { perform(api.settings(patch)); };
   const installUpdate = () => { perform(api.installUpdate()); };
+  const closeGuide = () => { setGuide(null); if (settings.guideVersion !== workspace.version) setPreference({ guideVersion: workspace.version }); };
 
   return <div ref={focusMotionRoot} className={`app-shell ${focusedId ? 'focus-mode' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${fullScreen && workspace.autoHideTitlebar ? 'titlebar-auto' : ''}`} style={{ '--terminal-font-size': `${settings.fontSize}px` } as CSSProperties}>
     {fullScreen && workspace.autoHideTitlebar && <div className="titlebar-reveal" aria-hidden="true" />}
@@ -345,12 +331,15 @@ export function App() {
           </div> : <>
             {!focusedId && !visible.length && <div className="no-results"><MagnifyingGlass size={30} weight="light" /><h2>{t('没有找到匹配项目')}</h2><p>{t('试试其他项目名称或目录。')}</p><button className="button secondary small" onClick={() => setQuery('')}>{t('重置搜索')}</button></div>}
             <div className={`agentrix ${reorder.drag ? 'is-reordering' : ''}`} onPointerDown={reorder.onPointerDown} onClickCapture={reorder.onClickCapture} style={{ '--columns': columns, '--rows': rows, display: !focusedId && !visible.length ? 'none' : undefined } as CSSProperties}>
-              {orderedProjects.map((project, index) => <div key={project.id} className={`project-slot ${reorder.drag?.id === project.id ? 'drag-placeholder' : ''}`} data-project-slot={project.id} style={{ display: focusedId ? focusedId !== project.id ? 'none' : undefined : !visibleIds.has(project.id) ? 'none' : undefined }}><ProjectPanel project={project} index={index}
-                hidden={focusedId ? focusedId !== project.id : !visibleIds.has(project.id)} focused={focusedId === project.id && !previewFile}
-                navTarget={projectSwitch?.id === project.id ? projectSwitch.sequence : undefined}
-                navPosition={projectSwitch?.id === project.id && switchPosition > 0 ? t('{position} / {total}', { position: switchPosition, total: navigation.current.length }) : undefined}
-                fontSize={settings.fontSize} now={now} activityOpen={settings.activityPane} onFocus={focusProject} onAction={perform} onError={reportError} onOpenLink={openLinkInPopup} onRevealProject={revealProject}
-                dragging={reorder.drag?.id === project.id} /> </div>)}
+              {orderedProjects.map((project, index) => {
+                const hidden = focusedId ? focusedId !== project.id : !visibleIds.has(project.id);
+                return <div key={project.id} className={`project-slot ${reorder.drag?.id === project.id ? 'drag-placeholder' : ''}`} data-project-slot={project.id} style={{ display: hidden ? 'none' : undefined }}><ProjectPanel project={project} index={index}
+                  hidden={hidden} focused={focusedId === project.id && !previewFile}
+                  navTarget={projectSwitch?.id === project.id ? projectSwitch.sequence : undefined}
+                  navPosition={projectSwitch?.id === project.id && switchPosition > 0 ? t('{position} / {total}', { position: switchPosition, total: navigation.current.length }) : undefined}
+                  fontSize={settings.fontSize} now={now} activityOpen={settings.activityPane} onFocus={focusProject} onAction={perform} onError={reportError} onOpenLink={openLinkInPopup} onRevealProject={revealProject}
+                  dragging={reorder.drag?.id === project.id} /> </div>;
+              })}
               {reorder.drag && <div className="reorder-hint" role="status">{t('拖动项目排序 · 松开完成')}<span>{t('Esc 取消')}</span></div>}
             </div>
           </>}
@@ -362,8 +351,8 @@ export function App() {
     </div>
     {popup && <Suspense fallback={null}><FilePopup target={popup} onError={reportError} /></Suspense>}
     {error && <div className="error-toast" role="alert"><Info size={18} /><span>{error}</span><IconButton label={t('关闭提示')} onClick={() => setError(null)}><X size={16} /></IconButton></div>}
-    {guide === 'tour' && <GuideTour projects={projects} focusedId={focusedId} withAdd={tourWithAdd.current} onClose={() => { setGuide(null); if (settings.guideVersion !== workspace.version) setPreference({ guideVersion: workspace.version }); }} />}
-    {guide && guide !== 'tour' && <UsageGuide version={workspace.version} start={guide} onTour={startTour} onClose={() => { setGuide(null); if (settings.guideVersion !== workspace.version) setPreference({ guideVersion: workspace.version }); }} />}
+    {guide === 'tour' && <GuideTour projects={projects} focusedId={focusedId} withAdd={tourWithAdd.current} onClose={closeGuide} />}
+    {guide && guide !== 'tour' && <UsageGuide version={workspace.version} start={guide} onTour={startTour} onClose={closeGuide} />}
     {settingsOpen && <SettingsDialog settings={settings} projects={workspace.projects} desktopGlass={workspace.desktopGlass} localShell={workspace.localShell ?? null} agents={agents} onAgents={setAgents} initialSection={settingsSection} updates={updates} onGuide={() => { setSettingsOpen(false); setSettingsSection('appearance'); startTour(); }} onCheckUpdate={() => { perform(api.checkForUpdates()); }} onInstallUpdate={installUpdate} onDownloadPage={() => { perform(api.openDownloadPage()); }} close={() => { setSettingsOpen(false); setSettingsSection('appearance'); }} update={setPreference} quit={() => perform(api.quit())} />}
     {addOpen && <AddProjectDialog onClose={() => setAddOpen(false)} onAdded={() => setQuery('')} onError={reportError} />}
     {sshAuth[0] && <SSHAuthDialog key={sshAuth[0].id} request={sshAuth[0]} />}

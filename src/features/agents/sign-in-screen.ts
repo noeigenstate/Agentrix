@@ -47,7 +47,7 @@ export function signInScreen(agent: ScreenAgent, rows: readonly string[]): SignI
     if (found && !url) {
       // A long link wraps onto the rows under it: they hold nothing but link characters.
       url = found[0];
-      while (index + 1 < body.length && urlChars.test(body[index + 1].trim()) && body[index + 1].trim()) url += body[++index].trim();
+      while (index + 1 < body.length && urlChars.test(body[index + 1].trim())) url += body[++index].trim();
       const before = trimmed.slice(0, found.index).trim();
       if (before) lines.push(before);
       continue;

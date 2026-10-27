@@ -159,6 +159,21 @@ def json_records(filename, history_window=False):
             try: yield json.loads(line)
             except (ValueError, UnicodeError): continue
 
+def first_record(filename):
+    records = json_records(filename)
+    try: return next(records, {})
+    finally: records.close()
+
+def rollout_files(home, thread_id=None):
+    for folder, dirs, entries in os.walk(os.path.join(home, "sessions")):
+        dirs[:] = [name for name in dirs if not os.path.islink(os.path.join(folder, name))]
+        for name in entries:
+            if not (name.startswith("rollout-") and name.endswith(".jsonl")): continue
+            if thread_id and thread_id.lower() not in name.lower(): continue
+            filename = os.path.join(folder, name)
+            try: yield os.stat(filename).st_mtime, filename
+            except OSError: pass
+
 def prompt_provenance(record):
     kept = {key: record[key] for key in ("isMeta", "isCompactSummary", "isVisibleInTranscriptOnly", "queueTranscriptOnly", "promptSource", "turnOrigin", "humanTurn", "commandMode") if key in record}
     if isinstance(record.get("origin"), dict) and isinstance(record["origin"].get("kind"), str):
@@ -223,13 +238,7 @@ def history_records(root, codex_home, claude_home, per_agent=4, budget=1200 * 10
     """The folder's latest conversations with Codex and Claude Code, compacted, for the development memory kept on the
     other computer (electron/features/agents/project-memory.cjs): the newest first, each from the end of its file."""
     found, size = {"codex": [], "claude": []}, 0
-    rollouts = []
-    for folder, dirs, entries in os.walk(os.path.join(codex_home, "sessions")):
-        dirs[:] = [name for name in dirs if not os.path.islink(os.path.join(folder, name))]
-        for name in entries:
-            if name.startswith("rollout-") and name.endswith(".jsonl"):
-                try: rollouts.append((os.stat(os.path.join(folder, name)).st_mtime, os.path.join(folder, name)))
-                except OSError: pass
+    rollouts = list(rollout_files(codex_home))
     claude_folder = os.path.join(claude_home, "projects", re.sub(r"[^A-Za-z0-9]", "-", root))
     transcripts = []
     try:
@@ -255,10 +264,7 @@ def history_records(root, codex_home, claude_home, per_agent=4, budget=1200 * 10
             found[agent].append({"id": identity, "records": records})
     for _, filename in sorted(rollouts, reverse=True)[:3000]:
         if len(found["codex"]) >= per_agent or size >= budget: break
-        try:
-            rows = json_records(filename)
-            try: first = next(rows, {})
-            finally: rows.close()
+        try: first = first_record(filename)
         except (OSError, ValueError): continue
         meta = first.get("payload", {}) if first.get("type") == "session_meta" else {}
         if meta.get("source", "cli") not in ("cli", "vscode") or os.path.realpath(meta.get("cwd", "")) != os.path.realpath(root): continue
@@ -269,20 +275,9 @@ def history_records(root, codex_home, claude_home, per_agent=4, budget=1200 * 10
     return found
 
 def recent_session(root, codex_home, thread_id=None):
-    directory = os.path.join(codex_home, "sessions")
-    candidates = []
-    for current, dirs, files in os.walk(directory):
-        dirs[:] = [name for name in dirs if not os.path.islink(os.path.join(current, name))]
-        for name in files:
-            if name.startswith("rollout-") and name.endswith(".jsonl"):
-                filename = os.path.join(current, name)
-                try: candidates.append((os.stat(filename).st_mtime, filename))
-                except OSError: pass
-    for modified, filename in sorted(candidates, reverse=True):
+    for modified, filename in sorted(rollout_files(codex_home), reverse=True):
         try:
-            records = json_records(filename)
-            try: meta = next(records, {})
-            finally: records.close()
+            meta = first_record(filename)
             payload = meta.get("payload", {})
             source = payload.get("source", "cli")
             if meta.get("type") != "session_meta" or source not in ("cli", "vscode") or os.path.realpath(payload.get("cwd", "")) != root: continue
@@ -419,6 +414,23 @@ def take_records(reader):
     if getattr(getattr(reader, "work_history", None), "uncertain", False): result["completionUncertain"] = True
     return result
 
+def read_transcript(reader, source, size, receive):
+    source.seek(reader.offset)
+    end = size if reader.history_pending else min(size, reader.offset + LIVE_READ_LIMIT)
+    while reader.offset < end:
+        chunk = source.read(min(65536, end - reader.offset))
+        if not chunk: break
+        reader.offset += len(chunk)
+        reader.buffer += chunk
+        while b"\n" in reader.buffer:
+            line, reader.buffer = reader.buffer.split(b"\n", 1)
+            if not reader.skipping and len(line) <= 1024 * 1024:
+                try: receive(json.loads(line))
+                except (ValueError, UnicodeError, TypeError): pass
+            reader.skipping = False
+        if len(reader.buffer) > 1024 * 1024: reader.buffer, reader.skipping = b"", True
+    if reader.offset >= size: reader.history_pending = False
+
 class CompletionHistory:
     def __init__(self, end):
         self.end, self.offset, self.buffer = end, 0, b""
@@ -451,6 +463,12 @@ class ClaudeTranscriptReader:
         self.file_identity, self.file_size, self.history_pending = None, 0, True
         self.outbox, self.reset = [], True
 
+    def record(self, record, work_only=False):
+        kept = compact_claude_record(record)
+        if kept is not None:
+            if work_only: kept["workOnly"] = True
+            self.outbox.append(kept)
+
     def read(self):
         try: source = open(self.filename, "rb")
         except FileNotFoundError: return
@@ -463,28 +481,8 @@ class ClaudeTranscriptReader:
                 self.buffer, self.history_pending = b"", True
                 self.outbox, self.reset = [], True
             self.file_identity, self.file_size = identity, size
-            def work_record(record):
-                kept = compact_claude_record(record)
-                if kept is not None:
-                    kept["workOnly"] = True; self.outbox.append(kept)
-            if not self.work_history.read(source, work_record): return
-            source.seek(self.offset)
-            end = size if self.history_pending else min(size, self.offset + LIVE_READ_LIMIT)
-            while self.offset < end:
-                chunk = source.read(min(65536, end - self.offset))
-                if not chunk: break
-                self.offset += len(chunk)
-                self.buffer += chunk
-                while b"\n" in self.buffer:
-                    line, self.buffer = self.buffer.split(b"\n", 1)
-                    if not self.skipping and len(line) <= 1024 * 1024:
-                        try:
-                            record = compact_claude_record(json.loads(line))
-                            if record is not None: self.outbox.append(record)
-                        except (ValueError, UnicodeError, TypeError): pass
-                    self.skipping = False
-                if len(self.buffer) > 1024 * 1024: self.buffer, self.skipping = b"", True
-            if self.offset >= size: self.history_pending = False
+            if not self.work_history.read(source, lambda record: self.record(record, True)): return
+            read_transcript(self, source, size, self.record)
 
     def take(self): return take_records(self)
 
@@ -506,22 +504,13 @@ class CodexActivityReader:
         if time.monotonic() < self.next_discovery: return
         self.next_discovery = time.monotonic() + 2
         candidates = []
-        for current, dirs, files in os.walk(os.path.join(self.home, "sessions")):
-            dirs[:] = [name for name in dirs if not os.path.islink(os.path.join(current, name))]
-            for name in files:
-                if not (name.startswith("rollout-") and name.endswith(".jsonl")): continue
-                if self.thread_id and self.thread_id.lower() not in name.lower(): continue
-                filename = os.path.join(current, name)
-                try:
-                    modified = os.stat(filename).st_mtime * 1000
-                    if self.thread_id or modified >= self.since - 2000: candidates.append((modified, filename))
-                except OSError: pass
+        for modified, filename in rollout_files(self.home, self.thread_id):
+            modified *= 1000
+            if self.thread_id or modified >= self.since - 2000: candidates.append((modified, filename))
         for _, filename in sorted(candidates, reverse=True):
             if filename == self.filename: return
             try:
-                rows = json_records(filename)
-                try: record = next(rows, {})
-                finally: rows.close()
+                record = first_record(filename)
                 meta = record.get("payload", {})
                 if record.get("type") != "session_meta" or meta.get("source", "cli") not in ("cli", "vscode"): continue
                 if os.path.realpath(meta.get("cwd", "")) != os.path.realpath(self.root) or not re.fullmatch(r"[a-fA-F0-9-]{36}", meta.get("id", "")): continue
@@ -566,21 +555,7 @@ class CodexActivityReader:
                 self.outbox, self.reset = [], True
             self.file_identity, self.file_size = identity, size
             if not self.work_history.read(source, lambda record: self.record(record, True)): return None
-            source.seek(self.offset)
-            end = size if self.history_pending else min(size, self.offset + LIVE_READ_LIMIT)
-            while self.offset < end:
-                chunk = source.read(min(65536, end - self.offset))
-                if not chunk: break
-                self.offset += len(chunk)
-                self.buffer += chunk
-                while b"\n" in self.buffer:
-                    line, self.buffer = self.buffer.split(b"\n", 1)
-                    if not self.skipping and len(line) <= 1024 * 1024:
-                        try: self.record(json.loads(line))
-                        except (ValueError, UnicodeError, TypeError): pass
-                    self.skipping = False
-                if len(self.buffer) > 1024 * 1024: self.buffer, self.skipping = b"", True
-            if self.offset >= size: self.history_pending = False
+            read_transcript(self, source, size, self.record)
             return dict(self.snapshot) if self.offset >= size else None
 
 class Worker:

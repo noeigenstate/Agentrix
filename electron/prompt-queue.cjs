@@ -15,7 +15,10 @@ const clean = text => String(text || '').replace(/\s+/g, ' ').trim();
 const MACHINE = /^\s*(?:<(?:task-notification|agent-message|teammate[_-]message|subagent[_-](?:message|notification)|system-reminder|local-command-(?:caveat|stdout|stderr)|environment_context|user_instructions|system_instructions|developer_instructions|user-prompt-submit-hook|send_user_message_question_reply|turn_aborted|tool[_-](?:result|response))\b|#\s*AGENTS\.md instructions\b|\[Subagent hand-back\])/i;
 const messageText = content => typeof content === 'string' ? content : Array.isArray(content) ? content.filter(block => typeof block?.text === 'string').map(block => block.text).join('\n') : '';
 // Match the complete prompt, not its bounded display/summary. The CLIs expand pasted tags and image marks.
-const promptKey = content => clean(messageText(content).replace(/<\/?pasted_content\b[^>]*>\n?/g, '').replace(/\[Image #\d+\]\s?/g, '')) || clean(messageText(content));
+const promptKey = content => {
+  const text = messageText(content);
+  return clean(text.replace(/<\/?pasted_content\b[^>]*>\n?/g, '').replace(/\[Image #\d+\]\s?/g, '')) || clean(text);
+};
 const ownMessage = text => /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(text) || text.trimStart().startsWith('This session is being continued from a previous conversation');
 const promptCommand = text => /^\s*<command-name>\s*(\/[^<\s]+)\s*<\/command-name>/.exec(text)?.[1] || /^\s*(\/[\w:-]+)(?=\s|$)/.exec(text)?.[1] || '';
 const omitPath = text => text.endsWith('.') ? ' .' : ' ';
@@ -109,8 +112,8 @@ class PromptQueue {
       }
       return;
     }
-    const waiting = this.items.filter(item => item.state === 'queued');
-    const item = waiting.find(candidate => promptKey(candidate.text) === promptKey(value)) || waiting[0];
+    const waiting = this.items.filter(item => item.state === 'queued'), key = promptKey(value);
+    const item = waiting.find(candidate => promptKey(candidate.text) === key) || waiting[0];
     const summary = promptSummary(value);
     if (!this.task || at >= this.task.at) {
       // A bare continuation starts a round but keeps the work named by the preceding request or delivery.
@@ -130,7 +133,8 @@ class PromptQueue {
   }
   // Esc can return a queued send to the CLI's input. It is no longer submitted work.
   cancel(text, at = this.now()) {
-    const index = this.items.findIndex(item => item.state === 'queued' && item.at <= at + 500 && promptKey(item.text) === promptKey(text));
+    const key = promptKey(text);
+    const index = this.items.findIndex(item => item.state === 'queued' && item.at <= at + 500 && promptKey(item.text) === key);
     if (index < 0) return;
     this.items.splice(index, 1); this.schedule(); this.changed();
   }

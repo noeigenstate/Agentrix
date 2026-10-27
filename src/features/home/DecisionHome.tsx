@@ -6,7 +6,7 @@ import { DecisionCard } from './DecisionCard';
 import { DecisionInbox } from './DecisionInbox';
 import { inboxItems, newWorkProjects } from './inbox-items';
 import { SessionLine } from './SessionLine';
-import { acceptedToday } from './ReviewCard';
+import { acceptedToday } from './review-history';
 import { sendToAgent, untilAtPrompt } from './send-to-agent';
 import { dataUrl, thumbnail } from '../reading/image-thumbnail';
 import { VoiceButton } from '../voice/VoiceButton';

@@ -178,7 +178,13 @@ class ProjectGit {
       const raw = project.kind === 'ssh'
         ? await this.remote(project.id).request('git', { action, value })
         : await readGitRaw(project.path, action, value);
-      return action === 'status' ? parseStatus(raw) : action === 'history' ? parseHistory(raw, value) : action === 'files' ? parseFiles(raw) : action === 'diff' ? parseDiff(raw) : { applied: raw.repository };
+      switch (action) {
+        case 'status': return parseStatus(raw);
+        case 'history': return parseHistory(raw, value);
+        case 'files': return parseFiles(raw);
+        case 'diff': return parseDiff(raw);
+        default: return { applied: raw.repository };
+      }
     })();
     this.pending.set(key, task);
     try { return await task; } finally { if (this.pending.get(key) === task) this.pending.delete(key); }

@@ -22,8 +22,7 @@ export function sessionStateLabel(project: Project, terminal: ProjectTerminal) {
 function brief(decision: Decision) {
   if (decision.kind === 'approval') return decision.context.map(line => line.trim()).filter(Boolean).at(-1) ?? t('它要先得到你的批准才能继续');
   if (decision.kind === 'question') return t('{count} 个选项，等你回答', { count: decision.choice?.options.length ?? 0 });
-  if (trustsFolder(decision)) return trustedFolder(decision) ?? (decision.choice?.options ?? []).map(option => option.label).join(' / ');
-  if (decision.kind === 'choice') return (decision.choice?.options ?? []).map(option => option.label).join(' / ');
+  if (decision.kind === 'choice') return (trustsFolder(decision) ? trustedFolder(decision) : null) ?? (decision.choice?.options ?? []).map(option => option.label).join(' / ');
   if (decision.kind === 'signin') return t('登录之后它才能开始工作');
   if (decision.kind === 'attention') return t('打开它的终端看看它在问什么');
   const { submission, notes } = reviewHistory(decision.projectId);
@@ -50,11 +49,9 @@ export function DecisionInbox({ items, selectedId, now, onSelect }: { items: rea
     if (next) onSelect(next.id);
   };
   // With one group the page header already names the list; labels only tell several groups apart.
-  const groups = GROUPS.filter(([group]) => items.some(item => item.group === group));
+  const groups = GROUPS.map(([group, label]) => ({ group, label, rows: items.filter(item => item.group === group) })).filter(({ rows }) => rows.length);
   return <div ref={list} className="inbox-list" role="listbox" aria-label={t('待决定的事')} tabIndex={0} aria-activedescendant={selectedId ? `inbox-${selectedId}` : undefined} onKeyDown={keys}>
-    {groups.map(([group, label]) => {
-      const rows = items.filter(item => item.group === group);
-      return <div key={group} role="group" aria-label={t(label)}>
+    {groups.map(({ group, label, rows }) => <div key={group} role="group" aria-label={t(label)}>
         {groups.length > 1 && <h4 className="inbox-group">{t(label)} · {rows.length}</h4>}
         {rows.map(item => {
           const { decision, project, terminal } = item;
@@ -71,7 +68,6 @@ export function DecisionInbox({ items, selectedId, now, onSelect }: { items: rea
             </span>
           </div>;
         })}
-      </div>;
-    })}
+      </div>)}
   </div>;
 }

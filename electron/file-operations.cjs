@@ -143,17 +143,20 @@ class FileOperations {
         if (listing.nextOffset !== null && !(Number.isInteger(listing.nextOffset) && listing.nextOffset > offset)) throw new Error('远程目录列表异常，已停止下载。');
         offset = listing.nextOffset;
       } while (offset !== null);
-    } else if (meta.file) {
-      update(`正在下载：${path.posix.basename(relative)}`);
-      const file = await fs.open(destination, 'wx');
-      try {
-        for (let offset = 0; offset < meta.size;) {
-          check(); const bytes = Buffer.from(await connection.request('read', { path: relative, offset, length: Math.min(256 * 1024, meta.size - offset) }), 'base64');
-          if (!bytes.length || bytes.length > Math.min(256 * 1024, meta.size - offset)) throw new Error('远程文件已变化，请重试。');
-          await file.writeFile(bytes); offset += bytes.length;
-        }
-      } finally { await file.close(); }
-    } else throw new Error('只能复制普通文件或文件夹。');
+      return;
+    }
+    if (!meta.file) throw new Error('只能复制普通文件或文件夹。');
+    update(`正在下载：${path.posix.basename(relative)}`);
+    const file = await fs.open(destination, 'wx');
+    try {
+      for (let offset = 0; offset < meta.size;) {
+        check();
+        const length = Math.min(256 * 1024, meta.size - offset);
+        const bytes = Buffer.from(await connection.request('read', { path: relative, offset, length }), 'base64');
+        if (!bytes.length || bytes.length > length) throw new Error('远程文件已变化，请重试。');
+        await file.writeFile(bytes); offset += bytes.length;
+      }
+    } finally { await file.close(); }
   }
   async paste(project, directory) {
     cleanRelative(directory, true);
@@ -164,22 +167,23 @@ class FileOperations {
       for (const source of sources) {
         check(); if (typeof source !== 'string' || !path.isAbsolute(source)) throw new Error('无效的剪贴板文件。');
         const name = cleanName(path.basename(source)); update(`正在粘贴：${name}`);
-        if (project.kind === 'ssh') pasted.push(await this.upload(this.remote(project.id), source, directory, name, update, check));
-        else {
-          const parent = await directoryPath(project, directory);
-          const info = await fs.lstat(source);
-          if (info.isDirectory() && inside(await fs.realpath(source), parent)) throw new Error('不能把文件夹复制到它自身内部。');
-          const targetName = await unusedName(parent, name);
-          const staging = path.join(parent, `.agentrix-copy-${randomUUID()}`);
-          try {
-            await fs.cp(source, staging, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true, filter: () => { check(); return true; } });
-            check();
-            const target = path.join(parent, targetName);
-            try { await fs.lstat(target); throw new Error('目标文件已存在，请重试。'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-            await this.move(staging, target);
-            pasted.push(path.posix.join(directory, targetName));
-          } finally { if (path.dirname(path.resolve(staging)) === parent) await fs.rm(staging, { recursive: true, force: true }); }
+        if (project.kind === 'ssh') {
+          pasted.push(await this.upload(this.remote(project.id), source, directory, name, update, check));
+          continue;
         }
+        const parent = await directoryPath(project, directory);
+        const info = await fs.lstat(source);
+        if (info.isDirectory() && inside(await fs.realpath(source), parent)) throw new Error('不能把文件夹复制到它自身内部。');
+        const targetName = await unusedName(parent, name);
+        const staging = path.join(parent, `.agentrix-copy-${randomUUID()}`);
+        try {
+          await fs.cp(source, staging, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true, filter: () => { check(); return true; } });
+          check();
+          const target = path.join(parent, targetName);
+          try { await fs.lstat(target); throw new Error('目标文件已存在，请重试。'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+          await this.move(staging, target);
+          pasted.push(path.posix.join(directory, targetName));
+        } finally { if (path.dirname(path.resolve(staging)) === parent) await fs.rm(staging, { recursive: true, force: true }); }
       }
       return { pasted };
     });

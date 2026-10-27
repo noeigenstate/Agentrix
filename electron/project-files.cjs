@@ -1,9 +1,8 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { TextDecoder } = require('node:util');
+const { TextDecoder, promisify } = require('node:util');
 const { randomUUID } = require('node:crypto');
 const { execFile } = require('node:child_process');
-const { promisify } = require('node:util');
 const { gitEnvironment } = require('./project-git.cjs');
 
 const exec = promisify(execFile);
@@ -67,7 +66,7 @@ async function findFiles(project, query = '') {
   for (const entry of entries) {
     const name = entry.path.toLowerCase(), basename = name.slice(name.lastIndexOf('/') + 1);
     let at = 0;
-    for (let index = 0; index < name.length; index++) { if (name[index] === needle[at]) at++; }
+    for (let index = 0; index < name.length && at < needle.length; index++) { if (name[index] === needle[at]) at++; }
     if (at !== needle.length) continue;
     const rank = basename.startsWith(needle) ? 0 : basename.includes(needle) ? 1 : name.includes(needle) ? 2 : 3;
     ranked.push({ entry, rank });
@@ -138,8 +137,7 @@ async function readProjectFile(project, relativePath, pageIndex = 0) {
     const imageType = imageTypeFromBytes(signature) || IMAGE_TYPES[extension];
     if (imageType) return { ...base, kind: 'image', mimeType: imageType };
     if (VIDEO_TYPES[extension]) return { ...base, kind: 'video', mimeType: VIDEO_TYPES[extension] };
-    const prefix = Buffer.alloc(3);
-    await handle.read(prefix, 0, prefix.length, 0);
+    const prefix = signature.subarray(0, 3);
     let encoding = 'utf-8';
     let bom = 0;
     if (prefix[0] === 0xff && prefix[1] === 0xfe) { encoding = 'utf-16le'; bom = 2; }
@@ -199,8 +197,8 @@ async function saveProjectFile(project, relativePath, pageIndex, revision, conte
     if (fileRevision(stat) !== revision) throw new Error('文件已变化，请刷新后重新编辑。');
     // Textareas normalize line endings; retain the source file's convention.
     const normalized = preview.content.includes('\r\n') ? content.replace(/\r?\n/g, '\r\n') : content;
-    let bytes = Buffer.from(normalized, preview.page.encoding === 'utf-8' ? 'utf8' : 'utf16le');
-    if (preview.page.encoding === 'utf-16be') bytes = bytes.swap16();
+    const bytes = Buffer.from(normalized, preview.page.encoding === 'utf-8' ? 'utf8' : 'utf16le');
+    if (preview.page.encoding === 'utf-16be') bytes.swap16();
     destination = await fs.open(temporary, 'wx', stat.mode);
     const copyRange = async (start, end) => {
       const buffer = Buffer.alloc(65536);

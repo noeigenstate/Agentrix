@@ -59,7 +59,8 @@ function useCardBox(terminalId: string | null) {
       const card = document.querySelector(`[data-terminal-id="${CSS.escape(terminalId)}"]`)?.closest('.project-panel');
       const rect = card?.getBoundingClientRect();
       const next = rect?.width ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null;
-      setBox(current => current && next && Object.keys(next).every(key => current[key as keyof Box] === next[key as keyof Box]) ? current : next);
+      setBox(current => current && next && current.left === next.left && current.top === next.top
+        && current.width === next.width && current.height === next.height ? current : next);
       frame = requestAnimationFrame(track);
     };
     track();

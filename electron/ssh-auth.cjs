@@ -15,7 +15,10 @@ class SSHAuthServer {
     return { AGENTRIX_ASKPASS_URL: this.url, AGENTRIX_ASKPASS_TOKEN: token, AGENTRIX_ASKPASS_ID: id };
   }
   getPending() { return [...this.pending.values()].map(({ prompt }) => prompt); }
-  hasPending(connectionId) { return [...this.pending.values()].some(item => item.connectionId === connectionId); }
+  hasPending(connectionId) {
+    for (const item of this.pending.values()) if (item.connectionId === connectionId) return true;
+    return false;
+  }
   notify() { this.onChange(this.getPending()); }
   handle(request, response) {
     if (request.method !== 'POST' || request.url !== '/askpass') { response.writeHead(404).end(); return; }

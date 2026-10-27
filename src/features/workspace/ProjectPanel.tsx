@@ -63,7 +63,8 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
   const signalKey = `${working ? 'working' : 'rest'}:${project.lastCompletedAt}`;
   const badgeClass = `status-badge ${working ? 'is-working' : roundComplete ? 'is-complete' : project.unread ? 'is-review' : project.error ? 'is-error' : ''}`;
   const meta = working ? '' : project.lastCompletedAt ? t('{time}完成', { time: relativeTime(project.lastCompletedAt, now) }) : '';
-  const badge = <><span key={signalKey} className="status-dot" aria-hidden="true" /><span>{statusText(project)}</span></>;
+  const status = statusText(project);
+  const badge = <><span key={signalKey} className="status-dot" aria-hidden="true" /><span>{status}</span></>;
   useEffect(() => {
     if (!menuOpen) return;
     if (!showHeaderActions) { setMenuOpen(false); return; }
@@ -97,8 +98,8 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
       </button>
       {!!meta && <span className="panel-meta" title={project.path}>{meta}</span>}
       {showHeaderActions && (!!project.unread && !focused && !working
-        ? <button type="button" className={`${badgeClass} status-button`} title={statusText(project)} onClick={() => onFocus(project.id)} aria-label={t('查看 {name} 的完成结果', { name: project.name })}>{badge}</button>
-        : <span className={badgeClass} title={statusText(project)}>{badge}</span>)}
+        ? <button type="button" className={`${badgeClass} status-button`} title={status} onClick={() => onFocus(project.id)} aria-label={t('查看 {name} 的完成结果', { name: project.name })}>{badge}</button>
+        : <span className={badgeClass} title={status}>{badge}</span>)}
       {!multiple && stopped && hasTerminal && <button className="text-button panel-action" aria-label={t('重新启动')} onClick={() => onAction(api.startTerminal(first.id))}><Play size={12} weight="fill" /><span>{t('重启')}</span></button>}
       {showHeaderActions && currentTerminal.sessionId && currentTerminal.codexActive && <IconButton label={readingOn ? t('切换到终端') : t('阅读视图：按文档排版显示对话')} className={readingOn ? 'is-active' : ''} onClick={() => setReading(currentTerminal.id, !readingOn)}>{readingOn ? <TerminalIcon size={16} /> : <Article size={16} />}</IconButton>}
       {showHeaderActions && <div className="panel-menu-anchor" ref={menu}>

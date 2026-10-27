@@ -184,7 +184,11 @@ async function downloadRuntime(runtime, directory, fetcher, signal, progress) {
 
 function validateAudio(value) {
   const bytes = Buffer.from(value instanceof ArrayBuffer ? new Uint8Array(value) : value);
-  if (bytes.length < 44 || bytes.length > 20 * 1024 * 1024 || bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.readUInt32LE(4) !== bytes.length - 8 || bytes.toString('ascii', 8, 12) !== 'WAVE' || bytes.toString('ascii', 12, 16) !== 'fmt ' || bytes.readUInt32LE(16) !== 16 || bytes.readUInt16LE(20) !== 1 || bytes.readUInt16LE(22) !== 1 || bytes.readUInt32LE(24) !== 16000 || bytes.readUInt32LE(28) !== 32000 || bytes.readUInt16LE(32) !== 2 || bytes.readUInt16LE(34) !== 16 || bytes.toString('ascii', 36, 40) !== 'data' || bytes.readUInt32LE(40) !== bytes.length - 44 || (bytes.length - 44) % 2) throw new Error('录音数据无效，请重新录制。');
+  if (bytes.length < 44 || bytes.length > 20 * 1024 * 1024 ||
+    bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.readUInt32LE(4) !== bytes.length - 8 || bytes.toString('ascii', 8, 12) !== 'WAVE' ||
+    bytes.toString('ascii', 12, 16) !== 'fmt ' || bytes.readUInt32LE(16) !== 16 || bytes.readUInt16LE(20) !== 1 || bytes.readUInt16LE(22) !== 1 ||
+    bytes.readUInt32LE(24) !== 16000 || bytes.readUInt32LE(28) !== 32000 || bytes.readUInt16LE(32) !== 2 || bytes.readUInt16LE(34) !== 16 ||
+    bytes.toString('ascii', 36, 40) !== 'data' || bytes.readUInt32LE(40) !== bytes.length - 44 || (bytes.length - 44) % 2) throw new Error('录音数据无效，请重新录制。');
   if (bytes.length - 44 < 16000) throw new Error('录音太短，请说完后再停止。');
   return bytes;
 }
@@ -263,16 +267,17 @@ class VoiceManager {
     const promise = (async () => {
       try {
         const total = downloadBytes(id, this.runtime);
+        const progress = count => this.set(id, { percent: Math.floor(count / total * 100) });
         if (!this.runtimeReady) {
-          await downloadRuntime(this.runtime, this.runtimeDirectory, this.fetcher, controller.signal, count => this.set(id, { percent: Math.floor(count / total * 100) }));
+          await downloadRuntime(this.runtime, this.runtimeDirectory, this.fetcher, controller.signal, progress);
           this.engineDirectory = this.runtimeDirectory;
           this.runtimeReady = true;
           await this.readyModels();
         }
         let completed = this.runtime.size;
-        this.set(id, { percent: Math.floor(completed / total * 100) });
+        progress(completed);
         for (const file of MODELS[id].files) {
-          await downloadAsset(file, this.file(id, file.name), this.fetcher, controller.signal, count => this.set(id, { percent: Math.floor((completed + count) / total * 100) }));
+          await downloadAsset(file, this.file(id, file.name), this.fetcher, controller.signal, count => progress(completed + count));
           completed += file.size;
         }
         this.set(id, { phase: 'ready', percent: 100, error: null });
@@ -292,12 +297,13 @@ class VoiceManager {
     if (this.download && this.download.id !== id) this.download.controller.abort();
     void this.prepare(id).catch(() => {});
   }
+  releaseWorker() { const worker = this.worker; this.worker = null; void worker?.terminate(); }
   engine() {
     this.rest();
     const id = this.active();
     if (this.worker && this.workerModel === id) return this.worker;
     // A different model is now in use; the previous one has no recognition pending (transcribe runs one at a time).
-    const previous = this.worker; this.worker = null; void previous?.terminate();
+    this.releaseWorker();
     const threads = Math.min(4, Math.max(1, os.availableParallelism() - 2));
     const worker = this.worker = new Worker(this.workerFile, { workerData: { model: MODELS[id].config(name => this.file(id, name)), threads, runtimeDirectory: this.engineDirectory } });
     this.workerModel = id;
@@ -321,7 +327,7 @@ class VoiceManager {
     clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
       if (this.requests.size) { this.rest(); return; }
-      const worker = this.worker; this.worker = null; void worker?.terminate();
+      this.releaseWorker();
     }, this.idle);
     this.idleTimer.unref?.();
   }
@@ -354,7 +360,7 @@ class VoiceManager {
     this.download?.controller.abort(); clearTimeout(this.idleTimer);
     for (const { reject } of this.requests.values()) reject(new Error('识别已取消。'));
     this.requests.clear();
-    const worker = this.worker; this.worker = null; void worker?.terminate();
+    this.releaseWorker();
   }
 }
 module.exports = { VoiceManager, MODELS, DEFAULT_MODEL, RUNTIME_VERSION, RUNTIMES, downloadBytes, digest, downloadAsset, downloadRuntime, extractTarball, validateAudio, samplesFromWav };

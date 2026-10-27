@@ -5,13 +5,15 @@ import type { ConversationEntry, GitChange } from '../../shared/types';
 export const CHECKS = new Set(['运行测试', '检查类型', '构建项目', '检查代码格式']);
 
 type Round = { goal: string; reply: string; written: string[] };
-const lastWhere = <T,>(items: readonly T[], test: (item: T) => unknown) => items.slice().reverse().find(test);
+function lastWhere<T>(items: readonly T[], test: (item: T) => unknown): T | undefined {
+  for (let index = items.length - 1; index >= 0; index--) if (test(items[index])) return items[index];
+}
 // The last thing you asked: an answer you gave the agent's question and a message still queued do not start a round.
 function startOf(entries: readonly ConversationEntry[]) {
   for (let index = entries.length - 1; index >= 0; index--) if (entries[index].role === 'user' && !entries[index].answer && !entries[index].queued) return index;
   return -1;
 }
-const writtenBy = (round: readonly ConversationEntry[]) => [...new Set(round.flatMap(entry => entry.tool?.done && !entry.tool.failed ? entry.tool.written ?? [] : []))];
+export const writtenBy = (round: readonly ConversationEntry[]) => [...new Set(round.flatMap(entry => entry.tool?.done && !entry.tool.failed ? entry.tool.written ?? [] : []))];
 const replyOf = (round: readonly ConversationEntry[]) => lastWhere(round, entry => entry.role === 'assistant' && entry.text);
 
 // What the round did, from the agent's own conversation: the last thing you asked, the answer it ended on, and the
@@ -47,8 +49,9 @@ export function latestResult(entries: readonly ConversationEntry[], { idle, inte
   const round = entries.slice(start + 1), last = round.at(-1);
   if (!last) return null;
   const tools = round.filter(entry => entry.tool);
+  const reply = replyOf(round);
   const base = {
-    request: entries[start].text ?? '', startedAt: entries[start].at, endedAt: last.at, reply: replyOf(round)?.text ?? '', written: writtenBy(round),
+    request: entries[start].text ?? '', startedAt: entries[start].at, endedAt: last.at, reply: reply?.text ?? '', written: writtenBy(round),
     checks: tools.filter(entry => entry.tool!.kind === 'command' && entry.tool!.phrase && CHECKS.has(entry.tool!.phrase))
       .map(({ id, tool }) => ({ id, phrase: tool!.phrase!, target: tool!.target, done: tool!.done, failed: tool!.failed })),
   };
@@ -57,7 +60,6 @@ export function latestResult(entries: readonly ConversationEntry[], { idle, inte
   const drawn = lastWhere(round, entry => entry.generated && entry.images?.[0]);
   if (drawn) return { ...base, kind: 'picture', anchor: drawn.id, picture: drawn.generated!, failure: '' };
   if (base.written.length) return { ...base, kind: 'code', anchor: last.id, picture: null, failure: '' };
-  const reply = replyOf(round);
   return reply ? { ...base, kind: 'text', anchor: reply.id, picture: null, failure: '' } : null;
 }
 
@@ -82,8 +84,12 @@ export function resultActions(result: LatestResult, { remote, canSend }: { remot
 export function changedFiles(written: readonly string[], changes: readonly GitChange[] | null) {
   const slashed = (path: string) => path.replace(/\\/g, '/');
   return written.map(path => {
-    const change = changes?.find(item => slashed(path) === slashed(item.path) || slashed(path).endsWith(`/${slashed(item.path)}`));
-    return { path, name: slashed(path).split('/').pop() || path, state: change ? changeLabel(change) : null };
+    const normalized = slashed(path);
+    const change = changes?.find(item => {
+      const relative = slashed(item.path);
+      return normalized === relative || normalized.endsWith(`/${relative}`);
+    });
+    return { path, name: normalized.split('/').pop() || path, state: change ? changeLabel(change) : null };
   });
 }
 

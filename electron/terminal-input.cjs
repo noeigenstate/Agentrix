@@ -18,8 +18,12 @@ function isLocalCommand(text) {
 const TEXT_LIMIT = 4000;
 class SubmissionTracker {
   constructor() { this.reset(); this.sent = []; }
-  reset() { this.characters = 0; this.hasText = false; this.history = false; this.pasting = false; this.escape = ''; this.mouseBytes = 0; this.text = ''; }
-  type(character) { if (this.text.length < TEXT_LIMIT) this.text += character; }
+  reset() { this.clearLine(); this.pasting = false; this.escape = ''; this.mouseBytes = 0; }
+  clearLine() { this.characters = 0; this.hasText = false; this.history = false; this.text = ''; }
+  type(character) {
+    if (character >= ' ') { this.characters++; this.hasText ||= /\S/.test(character); }
+    if (this.text.length < TEXT_LIMIT) this.text += character;
+  }
   write(data) {
     let submitted = false;
     this.sent = [];
@@ -28,7 +32,7 @@ class SubmissionTracker {
     if (this.escape === '\x1b' && !/^[[\]PO\r]/.test(data)) this.escape = '';
     const enter = () => {
       if (this.hasText || this.history) { submitted = true; this.sent.push(this.history ? '' : this.text.trim()); }
-      this.characters = 0; this.hasText = false; this.history = false; this.text = '';
+      this.clearLine();
     };
     for (const character of data) {
       if (this.mouseBytes) { this.mouseBytes--; continue; }
@@ -56,12 +60,12 @@ class SubmissionTracker {
         this.escape = ''; continue;
       }
       if (character === '\x1b') { this.escape = character; continue; }
-      if (this.pasting) { if (character >= ' ') { this.characters++; this.hasText ||= /\S/.test(character); this.type(character); } else if (character === '\r' || character === '\n') this.type('\n'); continue; }
+      if (this.pasting) { if (character >= ' ') this.type(character); else if (character === '\r' || character === '\n') this.type('\n'); continue; }
       if (character === '\r') enter();
       else if (character === '\n') this.type('\n');
-      else if (character === '\x03' || character === '\x15') { this.characters = 0; this.hasText = false; this.history = false; this.text = ''; }
+      else if (character === '\x03' || character === '\x15') this.clearLine();
       else if (character === '\x7f' || character === '\b') { this.characters = Math.max(0, this.characters - 1); if (!this.characters) this.hasText = false; this.text = Array.from(this.text).slice(0, -1).join(''); }
-      else if (character >= ' ') { this.characters++; this.hasText ||= /\S/.test(character); this.type(character); }
+      else if (character >= ' ') this.type(character);
     }
     return submitted;
   }

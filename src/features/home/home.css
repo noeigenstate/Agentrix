@@ -55,7 +55,7 @@
 .decision-card-head { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 8px; padding: 24px 24px 0; }
 .decision-source { font-size: 12px; color: var(--text-2); }
 .decision-title { flex: none; margin: 0; padding: 16px 24px 0; font-size: 20px; font-weight: 600; line-height: 28px; overflow-wrap: anywhere; }
-.review-submission { margin-left: 8px; vertical-align: middle; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 20px; display: inline-flex; align-items: center; color: var(--text-1); border: 1px solid var(--text-1); line-height: 18px; }
+.review-submission { margin-left: 8px; vertical-align: middle; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; color: var(--text-1); border: 1px solid var(--text-1); line-height: 18px; }
 .decision-body { flex: 1 1 auto; min-height: 0; padding: 16px 24px; overflow: auto; scrollbar-width: thin; user-select: text; }
 .decision-why { margin: 0 0 12px; font-size: 13px; line-height: 20px; color: var(--text-2); }
 .decision-evidence { margin: 0 0 16px; padding: 12px; border-radius: 8px; font: 12px/20px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-1); background: var(--bg-app); }

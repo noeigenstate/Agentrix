@@ -46,18 +46,18 @@ export function agentExited(terminal: ProjectTerminal) {
 // One handoff per permission notice; a manual toggle cancels its return trip.
 export function syncReading(terminal: ProjectTerminal) {
   agentExited(terminal);
-  if (terminal.needsInput !== null && terminal.codexActive) {
-    if (inputSeen.has(terminal.id)) return;
-    inputSeen.add(terminal.id);
-    if (choices.has(terminal.id) || !readingShown(terminal, snapshot)) return;
-    handoffs.set(terminal.id, setTimeout(() => {
-      handoffs.delete(terminal.id);
-      if (!inputSeen.has(terminal.id) || choices.has(terminal.id) || !readingShown(terminal, snapshot)) return;
-      automatic.add(terminal.id); setReading(terminal.id, false, true);
-    }, READING_HANDOFF_DELAY));
-  } else {
+  if (terminal.needsInput === null || !terminal.codexActive) {
     cancelHandoff(terminal.id);
     inputSeen.delete(terminal.id);
     if (automatic.delete(terminal.id) && terminals.has(terminal.id)) setReading(terminal.id, true, true);
+    return;
   }
+  if (inputSeen.has(terminal.id)) return;
+  inputSeen.add(terminal.id);
+  if (choices.has(terminal.id) || !readingShown(terminal, snapshot)) return;
+  handoffs.set(terminal.id, setTimeout(() => {
+    handoffs.delete(terminal.id);
+    if (!inputSeen.has(terminal.id) || choices.has(terminal.id) || !readingShown(terminal, snapshot)) return;
+    automatic.add(terminal.id); setReading(terminal.id, false, true);
+  }, READING_HANDOFF_DELAY));
 }

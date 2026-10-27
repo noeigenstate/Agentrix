@@ -114,23 +114,33 @@ class RemoteConnection {
   emitExit(code) { if (!this.exited) { this.exited = true; this.events.emit('exit', { exitCode: code }); } }
   receive(message) {
     if (this.closed) return;
-    if (message.type === 'ready') {
-      if (typeof message.info?.root !== 'string' || !message.info.root.startsWith('/')) { this.fail(new Error('远程目录无效。')); return; }
-      clearInterval(this.connectTimer);
-      this.connected = true; this.info = message.info;
-      this.resolveReady(message.info); this.onReady?.(message.info);
-      if (this.dimensions) this.send({ op: 'resize', ...this.dimensions });
-    } else if (message.type === 'data' && typeof message.data === 'string') {
-      this.events.emit('data', this.terminalDecoder.write(Buffer.from(message.data, 'base64')));
-    } else if (message.type === 'event' && message.event && typeof message.event === 'object') this.onEvent?.(message.event);
-    else if (message.type === 'exit') this.emitExit(Number.isInteger(message.code) ? message.code : 1);
-    else if (message.type === 'error') this.fail(new Error(String(message.error || '远程连接失败。')));
-    else if (message.type === 'response') {
-      const request = this.pending.get(message.id);
-      if (!request) return;
-      this.pending.delete(message.id); clearTimeout(request.timer);
-      if (message.ok === true) request.resolve(message.value);
-      else request.reject(new Error(String(message.error || '远程请求失败。')));
+    switch (message.type) {
+      case 'ready':
+        if (typeof message.info?.root !== 'string' || !message.info.root.startsWith('/')) { this.fail(new Error('远程目录无效。')); return; }
+        clearInterval(this.connectTimer);
+        this.connected = true; this.info = message.info;
+        this.resolveReady(message.info); this.onReady?.(message.info);
+        if (this.dimensions) this.send({ op: 'resize', ...this.dimensions });
+        return;
+      case 'data':
+        if (typeof message.data === 'string') this.events.emit('data', this.terminalDecoder.write(Buffer.from(message.data, 'base64')));
+        return;
+      case 'event':
+        if (message.event && typeof message.event === 'object') this.onEvent?.(message.event);
+        return;
+      case 'exit':
+        this.emitExit(Number.isInteger(message.code) ? message.code : 1);
+        return;
+      case 'error':
+        this.fail(new Error(String(message.error || '远程连接失败。')));
+        return;
+      case 'response': {
+        const request = this.pending.get(message.id);
+        if (!request) return;
+        this.pending.delete(message.id); clearTimeout(request.timer);
+        if (message.ok === true) request.resolve(message.value);
+        else request.reject(new Error(String(message.error || '远程请求失败。')));
+      }
     }
   }
   send(message) {

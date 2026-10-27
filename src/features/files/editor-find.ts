@@ -6,8 +6,9 @@ const LIMIT = 10000;
 export function findMatches(text: string, query: string, matchCase: boolean): Match[] {
   if (!query) return [];
   // Ignoring case compares lower-case copies; a text whose lower case changes its length (a dotted İ) keeps its case.
-  const fold = !matchCase && text.toLowerCase().length === text.length;
-  const haystack = fold ? text.toLowerCase() : text, needle = fold ? query.toLowerCase() : query;
+  const lower = matchCase ? text : text.toLowerCase();
+  const fold = !matchCase && lower.length === text.length;
+  const haystack = fold ? lower : text, needle = fold ? query.toLowerCase() : query;
   const found: Match[] = [];
   for (let at = haystack.indexOf(needle); at !== -1 && found.length < LIMIT; at = haystack.indexOf(needle, at + needle.length)) found.push({ start: at, end: at + needle.length });
   return found;

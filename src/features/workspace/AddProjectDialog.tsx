@@ -46,30 +46,12 @@ export function AddProjectDialog({ onClose, onAdded, onError }: { onClose: () =>
     dialog.current?.showModal();
     window.agentrix.getSSHInfo().then(result => { if (result.ok) setInfo(result.value); }).catch(() => {});
   }, []);
-  const add = async () => {
+  const add = async (request: () => Promise<Result<string | string[]>>) => {
     setBusy(true); setError('');
     try {
-      const result = kind === 'local' ? await window.agentrix.addProjects() : await window.agentrix.addSSHProject({ host, path: folder, name });
+      const result = await request();
       if (!result.ok) { setError(result.error); return; }
       if (typeof result.value === 'string' || result.value.length) { onAdded(); onClose(); }
-    } catch (error) { const message = String(error); setError(message); onError(message); }
-    finally { setBusy(false); }
-  };
-  const openRecent = async (item: RecentProject) => {
-    setBusy(true); setError('');
-    try {
-      const result = await window.agentrix.addRecentProject(item.path);
-      if (!result.ok) { setError(result.error); return; }
-      onAdded(); onClose();
-    } catch (error) { const message = String(error); setError(message); onError(message); }
-    finally { setBusy(false); }
-  };
-  const openSSH = async (item: RecentSSH) => {
-    setBusy(true); setError('');
-    try {
-      const result = await window.agentrix.addSSHProject({ host: item.host, path: item.path, name: item.name });
-      if (!result.ok) { setError(result.error); return; }
-      onAdded(); onClose();
     } catch (error) { const message = String(error); setError(message); onError(message); }
     finally { setBusy(false); }
   };
@@ -80,14 +62,14 @@ export function AddProjectDialog({ onClose, onAdded, onError }: { onClose: () =>
     setFolder(value);
   };
   return <dialog className="settings-dialog project-dialog" ref={dialog} onCancel={onClose} onClick={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-    <form className="dialog-content" onSubmit={event => { event.preventDefault(); void add(); }}>
+    <form className="dialog-content" onSubmit={event => { event.preventDefault(); void add(() => kind === 'local' ? window.agentrix.addProjects() : window.agentrix.addSSHProject({ host, path: folder, name })); }}>
       <div className="dialog-heading"><h2>{t('添加项目')}</h2><button type="button" className="icon-button" aria-label={t('关闭添加项目')} onClick={onClose}><X size={18} /></button></div>
       <div className="project-kind-selector">
         <button type="button" aria-pressed={kind === 'local'} onClick={() => { setKind('local'); setError(''); }}><FolderSimple size={22} /><span><b>{t('本地项目')}</b><small>{t('这台电脑上的文件夹')}</small></span></button>
         <button type="button" aria-pressed={kind === 'ssh'} onClick={() => { setKind('ssh'); setError(''); }}><Globe size={22} /><span><b>{t('SSH 远程项目')}</b><small>{t('Linux 服务器上的项目')}</small></span></button>
       </div>
       {kind === 'local' ? <><p className="project-add-note">{t('选择一个或多个目录，每个项目会打开独立终端。')}</p>
-        <RecentList<RecentProject> key="local" label={t('最近的项目')} icon={<FolderSimple size={17} />} busy={busy} onOpen={item => void openRecent(item)} onError={setError}
+        <RecentList<RecentProject> key="local" label={t('最近的项目')} icon={<FolderSimple size={17} />} busy={busy} onOpen={item => void add(() => window.agentrix.addRecentProject(item.path))} onError={setError}
           load={() => window.agentrix.getRecentProjects()} forget={item => window.agentrix.forgetRecentProject(item.path)} clear={() => window.agentrix.clearRecentProjects()}
           view={item => ({ key: item.path, name: item.name, detail: item.exists ? item.path : t('文件夹不存在 · {path}', { path: item.path }), at: item.lastOpenedAt, missing: !item.exists, title: item.exists ? t('添加 {path}', { path: item.path }) : t('文件夹已不存在') })} /></> : <><div className="remote-project-fields">
         <label>{t('SSH 主机')}<input autoComplete="off" list="ssh-hosts" aria-label={t('SSH 主机')} placeholder={t('主机别名或 user@hostname')} value={host} onChange={event => setHost(event.target.value)} required /></label>
@@ -97,7 +79,7 @@ export function AddProjectDialog({ onClose, onAdded, onError }: { onClose: () =>
         <p className="project-add-note">{t('沿用 SSH 配置里的端口、密钥和跳板机。远端需要 Python 3、Bash；Codex 在远端运行。')}</p>
         {info?.configExists && <p className="ssh-config-path" title={info.configFile}>{t('SSH 配置：{file}', { file: info.configFile })}</p>}
       </div>
-        <RecentList<RecentSSH> key="ssh" label={t('最近的连接')} icon={<Globe size={17} />} busy={busy} onOpen={item => void openSSH(item)} onError={setError}
+        <RecentList<RecentSSH> key="ssh" label={t('最近的连接')} icon={<Globe size={17} />} busy={busy} onOpen={item => void add(() => window.agentrix.addSSHProject({ host: item.host, path: item.path, name: item.name }))} onError={setError}
           load={() => window.agentrix.getRecentSSH()} forget={item => window.agentrix.forgetRecentSSH(item.host, item.path)} clear={() => window.agentrix.clearRecentSSH()}
           view={item => ({ key: `${item.host}\n${item.path}`, name: item.name, detail: `${item.host}:${item.path}`, at: item.lastOpenedAt, title: t('连接 {target}', { target: `${item.host}:${item.path}` }) })} /></>}
       {error && <p className="form-error" role="alert">{error}</p>}

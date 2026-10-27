@@ -16,8 +16,8 @@ function codexCall(command, cwd) {
   const separator = word => /^(?:&&|\|\||[;&|\n])$/.test(word);
   const start = words.findIndex((word, i) => {
     if (!/(?:^|[\\/])codex(?:\.exe|\.cmd)?$/i.test(word) || words[i + 1] !== 'exec') return false;
-    const before = words.slice(0, i), boundary = tokens.slice(0, i).findLastIndex(separator);
-    return before.slice(boundary + 1).every(prefix => /^(?:env|nohup|exec)$|^\w+=/.test(prefix));
+    const boundary = tokens.slice(0, i).findLastIndex(separator);
+    return words.slice(boundary + 1, i).every(prefix => /^(?:env|nohup|exec)$|^\w+=/.test(prefix));
   });
   if (start < 0) return null;
   const variables = new Map(cwd ? [['PWD', cwd]] : []);
@@ -170,36 +170,35 @@ class AgentCalls {
     if (!this.folder && !this.calls.get(id)?.log) return;
     clearTimeout(this.timer); this.timer = null;
     this.pending.add(id);
-    if (!this.work) {
-      const calls = this.calls, pending = this.pending, folder = this.folder;
-      this.work = Promise.resolve().then(async () => {
-        while (pending.size && this.calls === calls) {
-          const ids = new Set(pending); pending.clear();
-          await this.readModels(folder, ids, calls);
+    if (this.work) return;
+    const calls = this.calls, pending = this.pending, folder = this.folder;
+    this.work = Promise.resolve().then(async () => {
+      while (pending.size && this.calls === calls) {
+        const ids = new Set(pending); pending.clear();
+        await this.readModels(folder, ids, calls);
+        if (this.calls !== calls) return;
+        for (const id of ids) {
+          const call = calls.get(id);
+          if (!call || call.reviewed) continue;
+          const filename = call.prompt; call.prompt = null;
+          const prompt = filename ? await readText(filename, 4096, true) : null;
           if (this.calls !== calls) return;
-          for (const id of ids) {
-            const call = calls.get(id);
-            if (!call || call.reviewed) continue;
-            const filename = call.prompt; call.prompt = null;
-            const prompt = filename ? await readText(filename, 4096, true) : null;
-            if (this.calls !== calls) return;
-            if (call.reviewed) continue;
-            if (prompt !== null) {
-              const heading = /^[ \t]{0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/m.exec(prompt.replace(/^\uFEFF/, ''))?.[1];
-              const title = heading?.replace(/^Task\s+[\w-]+(?:\s*\([^)]*\))?\s*[:：]\s*/i, '').trim() || call.title;
-              const role = /\bread[- ]only\b|只读/i.test([heading, ...prompt.split(/\r?\n/, 20)].join('\n')) ? '调查' : '执行';
-              if (title !== call.title || role !== call.role) { call.title = title; call.role = role; this.changed(); }
-            }
-            if (!call.preparing || call.done || call.agent !== 'Codex') continue;
-            const body = await readText(call.log);
-            if (this.calls !== calls) return;
-            if (call.done || call.reviewed) continue;
-            // Plain exec logs echo a header and prompt; a reply, reasoning or tool invocation starts model work.
-            if (body === null || /(?:^|\n)(?:codex|thinking|exec|tool [^\r\n]+|apply_patch)\r?\n[^\r\n]/.test(body.replace(/\x1b\[[0-9;]*m/g, ''))) { call.preparing = false; this.changed(); }
+          if (call.reviewed) continue;
+          if (prompt !== null) {
+            const heading = /^[ \t]{0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/m.exec(prompt.replace(/^\uFEFF/, ''))?.[1];
+            const title = heading?.replace(/^Task\s+[\w-]+(?:\s*\([^)]*\))?\s*[:：]\s*/i, '').trim() || call.title;
+            const role = /\bread[- ]only\b|只读/i.test([heading, ...prompt.split(/\r?\n/, 20)].join('\n')) ? '调查' : '执行';
+            if (title !== call.title || role !== call.role) { call.title = title; call.role = role; this.changed(); }
           }
+          if (!call.preparing || call.done || call.agent !== 'Codex') continue;
+          const body = await readText(call.log);
+          if (this.calls !== calls) return;
+          if (call.done || call.reviewed) continue;
+          // Plain exec logs echo a header and prompt; a reply, reasoning or tool invocation starts model work.
+          if (body === null || /(?:^|\n)(?:codex|thinking|exec|tool [^\r\n]+|apply_patch)\r?\n[^\r\n]/.test(body.replace(/\x1b\[[0-9;]*m/g, ''))) { call.preparing = false; this.changed(); }
         }
-      }).catch(() => {}).finally(() => { if (this.calls === calls) { this.work = null; this.schedule(); } });
-    }
+      }
+    }).catch(() => {}).finally(() => { if (this.calls === calls) { this.work = null; this.schedule(); } });
   }
   async readModels(folder, ids, calls) {
     ids = new Set([...ids].filter(id => calls.get(id)?.agent === 'Claude Code' && !calls.get(id).reviewed));

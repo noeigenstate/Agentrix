@@ -18,9 +18,13 @@ export function newWorkProjects(projects: readonly Project[], selectedProjectId?
 // to decide, the working ones first. A session that waits on a decision is listed by its decision only.
 export function inboxItems(projects: readonly Project[], decisions: readonly Decision[]): InboxItem[] {
   const terminals = projects.flatMap(project => project.terminals.map(terminal => ({ project, terminal })));
+  const byTerminal = new Map<string, (typeof terminals)[number]>();
+  for (const item of terminals) {
+    if (!byTerminal.has(item.terminal.id)) byTerminal.set(item.terminal.id, item);
+  }
   const waiting = new Set(decisions.map(decision => decision.terminalId));
   const decide = decisions.flatMap(decision => {
-    const found = terminals.find(({ terminal }) => terminal.id === decision.terminalId);
+    const found = byTerminal.get(decision.terminalId);
     return found ? [{ id: decision.id, group: 'decide' as const, ...found, decision }] : [];
   });
   const sessions = terminals.filter(({ terminal }) => !waiting.has(terminal.id))

@@ -27,6 +27,7 @@ async function rolloutSummary(filename) {
     const stat = await file.stat(), buffer = Buffer.alloc(Math.min(stat.size, READ_BUDGET));
     const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
     const complete = bytesRead < stat.size ? buffer.subarray(0, Math.max(0, buffer.lastIndexOf(10, bytesRead - 1) + 1)) : buffer.subarray(0, bytesRead);
+    const hasCompletedMessages = complete.includes('"item_completed"');
     let title = '', messages = 0;
     for (const line of complete.toString('utf8').split('\n')) {
       let record; try { record = JSON.parse(line); } catch { continue; }
@@ -35,8 +36,7 @@ async function rolloutSummary(filename) {
       const user = payload.type === 'user_message' || (payload.type === 'item_completed' && item.type === 'UserMessage');
       const agent = payload.type === 'agent_message' || (payload.type === 'item_completed' && item.type === 'AgentMessage');
       // Newer Codex reports a message both ways; the completed item is the one counted.
-      if ((user || agent) && payload.type === 'item_completed') messages++;
-      else if ((user || agent) && !complete.includes('"item_completed"')) messages++;
+      if ((user || agent) && (payload.type === 'item_completed' || !hasCompletedMessages)) messages++;
       if (!title && user) {
         const text = typeof payload.message === 'string' ? payload.message
           : (Array.isArray(item.content) ? item.content.map(part => typeof part?.text === 'string' ? part.text : '').join(' ') : '');

@@ -1,10 +1,9 @@
-import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { readingMarked } from './markdown-escape';
 import createDOMPurify from 'dompurify';
-import { ArrowDown, CaretDown, CaretUp, CheckCircle, FileText, Globe, Image as ImageIcon, MagnifyingGlass, PaperPlaneRight, PencilSimple, Plugs, Robot, Sparkle, Stop, TerminalWindow, Wrench, X, XCircle, type Icon } from '@phosphor-icons/react';
+import { ArrowDown, CaretDown, CaretUp, Image as ImageIcon, PaperPlaneRight, Stop, X } from '@phosphor-icons/react';
 import type { AgentCommand, ConversationEntry, ProjectTerminal } from '../../shared/types';
 import { actionText, stepVerb } from '../agents/action-text';
-import { CodexLogo } from '../agents/AgentBrandIcon.ts';
 import { dictateInto } from '../voice/voice-input';
 import { createDictationSend } from './dictation-send';
 import { readScreen, useScreen } from '../terminal/terminal-screen';
@@ -34,19 +33,21 @@ import './reading-flow.css';
 import { currentLanguage, t } from '../../shared/i18n';
 import { UserAvatar } from '../../shared/UserAvatar';
 import { useMentions } from './useMentions';
-import { parseMarkdown, parsedMarkdown } from './markdown-parse';
+import { QUICK, useLongMarkdown } from './useLongMarkdown.ts';
 import { MentionPalette } from './MentionPalette';
 import { isTypedCommand, pendingPromptCards, sameMessage, type PendingPrompt } from './pending-prompts';
 import { usePendingPrompts } from './usePendingPrompts';
 import { PendingPromptEntries, UserImages, UserMessage } from './PendingPromptEntries';
-import { AgentTurnItem, ClaudeSpark, stepTime, TimelineStep } from './Timeline';
-import { ResultActions, ResultFiles, ResultStatus } from './ResultCard';
-import { latestResult } from './result-round';
+import { AgentMark, AgentTurnItem, stepTime, TimelineStep } from './Timeline';
+import { groupSummary, ImageProgress, ResultActions, ResultFiles, ResultStatus, STEP_ICONS, StepState, WorkingLine } from './ResultCard';
+import { latestResult, writtenBy } from './result-round';
 import { AgentCommandRun } from './AgentCommandRun';
 import { FileCards, previewable } from './FileCards';
 import { replyFiles } from './reply-files';
 import { onComposerPrefill } from './composer-prefill';
 import { showPopup } from '../files/file-popup';
+
+export { groupSummary } from './ResultCard';
 
 const purifier = createDOMPurify(window);
 // Switching to the CLI unmounts the composer; sent messages still belong to that terminal.
@@ -90,37 +91,12 @@ function finish(parsed: string, nested = false): string {
 }
 
 const safely = (make: () => string) => { try { return make(); } catch { return null; } };
-// Short answers are parsed here at once. A long one is parsed in a worker (markdown-parse): until it is ready the
-// previous version stays (an answer still streaming) or the text shows plain, and a parse that takes too long leaves
-// it plain rather than freezing the window. One parse per answer runs at a time, always of its latest text.
-const QUICK = 4000;
 export function Markdown({ text }: { text: string }) {
   const language = currentLanguage(), short = text.length <= QUICK;
   const quick = useMemo(() => short ? safely(() => finish(readingMarked.parse(text) as string)) : undefined, [text, language, short]);
-  const [long, setLong] = useState<{ text: string; parsed: string | null } | null>(() => {
-    const parsed = short ? undefined : parsedMarkdown(text);
-    return parsed === undefined ? null : { text, parsed };
-  });
-  const target = useRef(text), pumping = useRef(false), alive = useRef(true);
-  target.current = text;
-  useEffect(() => () => { alive.current = false; }, []);
-  useEffect(() => {
-    if (short || pumping.current) return;
-    pumping.current = true;
-    void (async () => {
-      let value = target.current;
-      while (alive.current) {
-        const parsed = await parseMarkdown(value);
-        if (!alive.current) break;
-        setLong({ text: value, parsed });
-        if (target.current === value || target.current.length <= QUICK) break;
-        value = target.current;
-      }
-      pumping.current = false;
-    })();
-  }, [text, short]);
-  const html = useMemo(() => short ? quick : long?.parsed == null ? null : safely(() => finish(long.parsed!)), [short, quick, long, language]);
-  if (html == null || (!short && long?.parsed === null && long.text === text)) return <p className="reading-plain">{text}</p>;
+  const long = useLongMarkdown(text, short);
+  const html = useMemo(() => short ? quick : long == null ? null : safely(() => finish(long)), [short, quick, long, language]);
+  if (html == null) return <p className="reading-plain">{text}</p>;
   return <div className="reading-markdown" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
@@ -163,39 +139,6 @@ function AssistantReply({ entry, agent, projectId, result = false, onError }: { 
       {named.length > 0 && <FileCards projectId={projectId} files={named} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet />}
       {!result && picture}</div>;
 }
-// The agent's mark on its replies' nodes.
-const AgentMark = ({ agent }: { agent: 'claude' | 'codex' }) => agent === 'claude' ? <ClaudeSpark /> : <CodexLogo />;
-
-// Where a generated picture will appear: a bar that keeps moving and the seconds so far, so a picture that takes
-// half a minute does not look stuck.
-// When each picture began to be drawn, by its step: the card is drawn again as the conversation grows.
-const drawingSince = new Map<string, number>();
-function ImageProgress({ step }: { step: string }) {
-  if (!drawingSince.has(step)) { drawingSince.set(step, Date.now()); if (drawingSince.size > 20) drawingSince.delete(drawingSince.keys().next().value!); }
-  const since = drawingSince.get(step)!, [now, setNow] = useState(() => Date.now());
-  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
-  return <div className="reading-generating" role="status">
-    <span className="reading-generating-bar" aria-hidden="true"><i /></span>
-    <span>{t('正在生成图片… {seconds} 秒', { seconds: Math.max(0, Math.floor((now - since) / 1000)) })}</span><small>{t('通常需要 20–40 秒')}</small>
-  </div>;
-}
-
-type ConversationEntryTool = NonNullable<ConversationEntry['tool']>;
-// What a group of steps did, by kind, in the order the kinds first came: "读取 2 个文件 · 运行 1 条命令".
-const GROUP_PARTS: Record<ConversationEntryTool['kind'], string> = {
-  read: '读取 {count} 个文件', edit: '编辑 {count} 个文件', command: '运行 {count} 条命令', search: '搜索 {count} 处', web: '访问 {count} 个网页',
-  skill: '使用 {count} 个技能', mcp: '调用 {count} 个 MCP 工具', agent: '派出 {count} 个子代理', other: '调用 {count} 个工具',
-};
-const STEP_ICONS: Record<ConversationEntryTool['kind'], Icon> = { read: FileText, edit: PencilSimple, command: TerminalWindow, search: MagnifyingGlass, web: Globe, skill: Sparkle, mcp: Plugs, agent: Robot, other: Wrench };
-export function groupSummary(entries: readonly ConversationEntry[]) {
-  const counts = new Map<ConversationEntryTool['kind'], number>();
-  // An edit counts the files it changed (its target names them, "a、b"), every other step counts once.
-  for (const entry of entries) if (entry.tool) {
-    const files = entry.tool.kind === 'edit' ? Math.max(1, entry.tool.written?.length || entry.tool.target.split('、').filter(Boolean).length) : 1;
-    counts.set(entry.tool.kind, (counts.get(entry.tool.kind) || 0) + files);
-  }
-  return [...counts].map(([kind, count]) => t(GROUP_PARTS[kind], { count })).join(' · ');
-}
 
 function ToolGroup({ entries, live, projectId, onError }: { entries: ConversationEntry[]; live: boolean; projectId: string; onError: (message: string) => void }) {
   const running = entries.some(entry => !entry.tool?.done);
@@ -205,7 +148,7 @@ function ToolGroup({ entries, live, projectId, onError }: { entries: Conversatio
   // A picture being generated: Codex reports no progress, so the wait is shown as such, with the time it has taken.
   const drawing = entries.find(entry => !entry.tool?.done && /image_?gen/i.test(`${entry.tool?.tool} ${entry.tool?.target}`));
   // The documents, pages and videos these steps finished writing, each once.
-  const files = useMemo(() => [...new Set(entries.flatMap(entry => entry.tool?.done && !entry.tool.failed ? entry.tool.written ?? [] : []))].filter(previewable), [entries]);
+  const files = useMemo(() => writtenBy(entries).filter(previewable), [entries]);
   // The files its edits changed, by name, a few of them on the pill itself.
   const edited = useMemo(() => [...new Set(entries.flatMap(entry => entry.tool?.kind === 'edit' ? entry.tool.written?.length ? entry.tool.written : entry.tool.target.split('、') : []))]
     .map(file => file.split(/[\\/]/).pop() || file).filter(Boolean), [entries]);
@@ -230,33 +173,17 @@ function ToolGroup({ entries, live, projectId, onError }: { entries: Conversatio
     {files.length > 0 && <FileCards projectId={projectId} files={files} renderMarkdown={text => <Markdown text={text} />} onError={onError} />}
   </div>;
 }
-// A step's state: a dot sending out a soft ring while it runs (as its node on the line does), a check when it is done,
-// a cross when it failed.
-function StepState({ running, failed, filled = false }: { running: boolean; failed: boolean; filled?: boolean }) {
-  if (running) return <span className="reading-step-state is-running" role="img" aria-label={t('进行中')} />;
-  return failed ? <XCircle size={17} weight="fill" className="reading-step-state is-failed" aria-label={t('失败')} />
-    : <CheckCircle size={17} weight={filled ? 'fill' : 'regular'} className="reading-step-state" aria-label={t('已完成')} />;
-}
 
 // The agent's conversation laid out for reading: your prompts, its answers as Markdown with copyable code,
 // and its tool calls folded between them. The real terminal stays underneath; what is written here goes to
 // it, and the toggle in the card header switches back to it at any time. autoFocus: the card is expanded and
 // this is its terminal in use, so the message box takes the keyboard (never a small card's).
-// The agent at work, as its CLI shows it: a live mark, what it is doing, how long the round has run and how to stop it.
-function WorkingLine({ agent, label }: { agent: 'claude' | 'codex'; label: string }) {
-  const [started] = useState(() => Date.now()), [now, setNow] = useState(started);
-  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
-  return <div className={`reading-status is-working is-${agent}`} role="status">
-    <i className="reading-status-mark" aria-hidden="true">{agent === 'claude' ? null : '•'}</i>
-    <span>{label}…</span><small>{t('（{seconds} 秒 · Esc 中断）', { seconds: Math.floor((now - started) / 1000) })}</small>
-  </div>;
-}
-
 export function ReadingView(props: Parameters<typeof LegacyReadingView>[0]) {
   return props.terminal.nativeMode === 'claude-sdk' ? <ManagedSession key={props.terminal.sessionId} terminal={props.terminal} onError={props.onError} /> : <LegacyReadingView {...props} />;
 }
 
 function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, active = true, onShowTerminal, onError, onOpenLink }: { projectId: string; terminal: ProjectTerminal; remote?: boolean; autoFocus: boolean; active?: boolean; onShowTerminal: () => void; onError: (message: string) => void; onOpenLink: (target: string) => void }) {
+  const kind = terminal.agent === 'claude' ? 'claude' : 'codex';
   const conversationEntries = useReadingConversation(terminal.id, terminal.sessionId);
   const [hidden, setHidden] = useState(() => cleared.get(conversationKey(terminal.id, terminal.sessionId)));
   useEffect(() => { setHidden(cleared.get(conversationKey(terminal.id, terminal.sessionId))); }, [terminal.id, terminal.sessionId]);
@@ -275,22 +202,23 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
   const sendCounter = useRef(0);
   const visibleScreen = useScreen(terminal.id);
   const screen = useMemo(() => {
-    const agent = terminal.agent === 'claude' ? 'claude' : 'codex';
-    const parsed = parseAgentScreen(agent, visibleScreen?.rows ?? []);
-    return { ...parsed, choice: bindApproval(parsed.choice, agent, visibleScreen) };
+    const parsed = parseAgentScreen(kind, visibleScreen?.rows ?? []);
+    return { ...parsed, choice: bindApproval(parsed.choice, kind, visibleScreen) };
   }, [terminal.agent, visibleScreen]);
   // The CLI signing in before its input exists (a link to open, a code to paste): a popup, never a stuck welcome.
-  const signIn = useMemo(() => {
-    const kind = terminal.agent === 'claude' ? 'claude' : 'codex';
-    return terminal.codexActive && visibleScreen && !screen.choice && !hasCliInput(kind, visibleScreen.rows, screen) ? signInScreen(kind, visibleScreen.rows) : null;
-  }, [terminal.agent, terminal.codexActive, visibleScreen, screen]);
+  const signIn = useMemo(() => terminal.codexActive && visibleScreen && !screen.choice && !hasCliInput(kind, visibleScreen.rows, screen) ? signInScreen(kind, visibleScreen.rows) : null,
+    [terminal.agent, terminal.codexActive, visibleScreen, screen]);
   const choiceKey = screen.choice ? `${terminal.sessionId}:${screen.choice.approval?.instance ?? ''}:${choiceIdentity(screen.choice)}` : null;
   const [sessionsOpen, setSessionsOpen] = useState(false);
   useEffect(() => { setSessionsOpen(false); }, [terminal.id, terminal.sessionId, terminal.agent]);
   const welcomeIsStarting = useWelcomeStarting(terminal.agentStartedAt, screen);
-  const hasChoice = screen.choice !== null || sessionsOpen, choiceVisible = useRef(hasChoice); choiceVisible.current = hasChoice;
+  const hasChoice = screen.choice !== null || sessionsOpen, choiceVisible = useRef(hasChoice);
   const mounted = useRef(true);
   const choiceHost = useRef<HTMLDivElement>(null), restoreComposer = useRef(false), wasChoice = useRef(false), typingAtChoice = useRef(false);
+  const focusChoice = () => { restoreComposer.current = true; };
+  const blurChoice = (event: FocusEvent<HTMLDivElement>) => {
+    if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) restoreComposer.current = false;
+  };
   const [draft, setDraft] = useState('');
   const [sendingSoon, setSendingSoon] = useState(false);
   const [commands, setCommands] = useState<AgentCommand[]>([]), [requested, setRequested] = useState(false);
@@ -439,20 +367,20 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
       return;
     }
     // A closed popup can leave the CLI's dialog open. Looking is harmless; guessing a close key is not.
-    const agentKind = terminal.agent === 'claude' ? 'claude' : 'codex', rows = readScreen(terminal.id)?.rows ?? [];
-    const parsed = parseAgentScreen(agentKind, rows);
-    if (!hasCliInput(agentKind, rows, parsed) || cliDialogShown(agentKind, rows, parsed)) { setTerminalPopup({ command: '' }); return; }
+    const rows = readScreen(terminal.id)?.rows ?? [];
+    const parsed = parseAgentScreen(kind, rows);
+    if (!hasCliInput(kind, rows, parsed) || cliDialogShown(kind, rows, parsed)) { setTerminalPopup({ command: '' }); return; }
     if (inputBlocked) return;
     const pendingId = text ? echo(text, attached) : null;
     if (pendingId) toBottom();
-    const left = text && !attached.length ? inputDraft(agentKind) : '';
+    const left = text && !attached.length ? inputDraft(kind) : '';
     if (own) { edit(''); setImages([]); setServerPictures([]); }
     if (left && sameMessage(text, left)) {
-      toBottom(); window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(agentKind, text, owner);
+      toBottom(); window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(kind, text, owner);
       remember(); return;
     }
-    if (left && pending.some(prompt => sameMessage(prompt.text, left))) { window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(agentKind, left, owner); }
-    else if (left && !IMAGE_PLACEHOLDER.test(left)) await clearInput(agentKind, owner);
+    if (left && pending.some(prompt => sameMessage(prompt.text, left))) { window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(kind, left, owner); }
+    else if (left && !IMAGE_PLACEHOLDER.test(left)) await clearInput(kind, owner);
     if (!ownsSend(owner)) return;
     if (text) {
       const pasted = await window.agentrix.pasteTerminal(terminal.id, text, terminal.sessionId);
@@ -468,7 +396,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     if (text) await new Promise(resolve => setTimeout(resolve, 400));
     if (!ownsSend(owner) || choiceVisible.current) return;
     window.agentrix.writeTerminal(terminal.id, '\r');
-    if (text) await submitted(agentKind, text, owner);
+    if (text) await submitted(kind, text, owner);
   };
   // What is typed in the CLI's own input right now.
   const inputDraft = (agent: 'claude' | 'codex') => { const current = readScreen(terminal.id); return current ? cliInputDraft(agent, current.rows, parseAgentScreen(agent, current.rows)) : ''; };
@@ -539,19 +467,21 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
   const pasteImage = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     const owner = sendCounter.current;
     const data = event.clipboardData;
-    if (data.getData('text/plain') || ![...data.items].some(item => item.kind === 'file' && item.type.startsWith('image/'))) return;
+    if (data.getData('text/plain')) return;
+    const item = [...data.items].find(item => item.kind === 'file' && item.type.startsWith('image/'));
+    if (!item) return;
     event.preventDefault();
     if (!terminal.codexActive || !terminal.sessionId) { onError(t('启动 Codex 或 Claude Code 后才能粘贴图片。')); return; }
     // The first picture goes into a clean input: text left there (a prompt Claude put back after an interrupt) would be
     // sent with this message, and once pictures are in it Ctrl+U would take them too. One of ours still waiting stays.
-    const agentKind = terminal.agent === 'claude' ? 'claude' : 'codex', left = !images.length && !remote ? inputDraft(agentKind) : '';
+    const left = !images.length && !remote ? inputDraft(kind) : '';
     const clearFirst = !!left && !IMAGE_PLACEHOLDER.test(left) && !pending.some(prompt => sameMessage(prompt.text, left));
     // The clipboard is read during the event; clearing the input and pressing the paste key follow it.
-    const cleared = clearFirst ? clearInput(agentKind, owner) : Promise.resolve();
+    const cleared = clearFirst ? clearInput(kind, owner) : Promise.resolve();
     // Over SSH the CLI cannot reach this computer's clipboard: the picture goes over as a file on that computer, whose
     // path joins the message when it is sent (serverPictures).
     if (remote) {
-      const file = [...data.items].find(item => item.kind === 'file' && item.type.startsWith('image/'))?.getAsFile();
+      const file = item.getAsFile();
       if (!file) return;
       void file.arrayBuffer().then(bytes => window.agentrix.saveImage(terminal.id, bytes, file.type)).then(saved => {
         if (!ownsSend(owner)) return;
@@ -567,7 +497,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     else window.agentrix.writeTerminal(terminal.id, pasteKey);
     // The agent takes the picture from the clipboard; a copy is kept here to show in the message, small (a 4K
     // screenshot decoded at full size costs tens of megabytes per copy).
-    const file = [...data.items].find(item => item.kind === 'file' && item.type.startsWith('image/'))?.getAsFile();
+    const file = item.getAsFile();
     if (!file) return;
     if (file.size > 25 * 1024 * 1024) { onError(t('图片太大（超过 25 MB），请压缩后再粘贴。')); return; }
     // A picture this window cannot decode still went to the agent: it is listed as it came.
@@ -623,14 +553,13 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); }
   };
   // What the agent is doing, written at the end of the conversation the way its CLI writes it, never in a corner.
+  const statusRunning = working || pending.some(prompt => prompt.sending);
   const status = screen.choice?.kind === 'question' ? <div className="reading-status is-waiting" role="status">{t('等待你回答问题')}</div>
     // Without a choice to answer here (one the reading view cannot lay out), the terminal is a click away.
     : terminal.needsInput !== null ? <div className="reading-status is-waiting" role="status"><span>{t('等待你确认：{message}', { message: terminal.needsInput })}</span>
       {!screen.choice && <button type="button" className="text-button" onClick={onShowTerminal}>{t('切换到终端')}</button>}</div>
-    : working || pending.some(prompt => prompt.sending) ? <WorkingLine key={terminal.sessionId} agent={terminal.agent === 'claude' ? 'claude' : 'codex'} label={terminal.action ? t('正在{step}', { step: actionText(terminal.action) }) : t('{agent} 正在思考', { agent })} />
+    : statusRunning ? <WorkingLine key={terminal.sessionId} agent={kind} label={terminal.action ? t('正在{step}', { step: actionText(terminal.action) }) : t('{agent} 正在思考', { agent })} />
     : null;
-  const kind = terminal.agent === 'claude' ? 'claude' : 'codex';
-  const statusRunning = working || pending.some(prompt => prompt.sending);
   // The latest round once it has ended gets its status above the result and its actions under it; nothing while the agent
   // works or waits, and nothing for earlier rounds.
   const settled = !status && !statusRunning && terminal.codexActive && !cards.prompts.length && !hasChoice, interrupted = terminal.codexActivity === 'interrupted';
@@ -645,12 +574,15 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     <ResultActions result={result} projectId={projectId} remote={remote} canSend={!inputBlocked && !!terminal.sessionId} onContinue={continueWith} onRetry={() => void send(result.request, false)} onError={onError} />
   </>;
   // The newest round is the one after your last message; earlier ones keep their words but speak more quietly.
-  const lastTurn = (kind: 'user' | 'agent') => turns.map(turn => turn.kind).lastIndexOf(kind);
-  const latestUser = lastTurn('user'), latestAgent = lastTurn('agent') > latestUser ? lastTurn('agent') : -1;
+  let latestUser = -1, latestAgent = -1;
+  for (let index = turns.length - 1; index >= 0; index--) {
+    if (turns[index].kind === 'user') { latestUser = index; break; }
+    if (latestAgent < 0) latestAgent = index;
+  }
   let body: ReactNode, statusInTurn = false;
   // A run of the CLI that is no conversation (codex update): what it does and what it prints, no message box.
-  if (terminal.agentCommand) body = <AgentCommandRun agent={terminal.agent === 'claude' ? 'claude' : 'codex'} command={terminal.agentCommand} rows={visibleScreen?.rows ?? []} onShowTerminal={onShowTerminal} />;
-  else if (!entries.length && !cards.prompts.length) body = <ReadingWelcome agent={terminal.agent === 'claude' ? 'claude' : 'codex'} commands={commands} complete={complete} disabled={inputBlocked}
+  if (terminal.agentCommand) body = <AgentCommandRun agent={kind} command={terminal.agentCommand} rows={visibleScreen?.rows ?? []} onShowTerminal={onShowTerminal} />;
+  else if (!entries.length && !cards.prompts.length) body = <ReadingWelcome agent={kind} commands={commands} complete={complete} disabled={inputBlocked}
     screen={screen} starting={welcomeIsStarting} />;
   else {
     body = <>
@@ -707,7 +639,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     <div className="reading-scroll-area">
       <div className="reading-scroll" ref={scroller} tabIndex={0}><div className="reading-content" ref={content} style={{ visibility: entries.length && !ready ? 'hidden' : undefined }}>{body}<PendingPromptEntries prompts={cards.prompts} queued={queued} undelivered={undelivered} onResend={resend} onDiscard={prompt => cancelEcho(prompt.id)} />
         {status && !statusInTurn && <TimelineStep at={pending.at(-1)?.at ?? entries.at(-1)?.at} kind="agent" who={agent} state={statusRunning ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}</div></div>
-      {terminalPopup === null && signIn && <ReadingSignIn agent={terminal.agent === 'claude' ? 'claude' : 'codex'} screen={signIn} terminalId={terminal.id} projectId={projectId} onError={onError} />}
+      {terminalPopup === null && signIn && <ReadingSignIn agent={kind} screen={signIn} terminalId={terminal.id} projectId={projectId} onError={onError} />}
       {!stuck && <div className="reading-latest">
         {unseen > 0 && <span className="reading-unseen" role="status">{t('{count} 条新消息', { count: unseen })}</span>}
         <button type="button" className="icon-button reading-jump" title={t('跳到最新消息')} aria-label={t('跳到最新消息')} onClick={() => toBottom('smooth')}><ArrowDown size={18} /></button>
@@ -717,14 +649,10 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     {attachedCount > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: attachedCount })}<UserImages images={shownImages} />
       <button type="button" className="reading-attachments-remove" onClick={removeImages} title={t('移除图片')} aria-label={t('移除图片')}><X size={12} weight="bold" /></button></div>}
     {terminal.nativeApprovals?.map(request => <NativeApprovalCard key={request.token} request={request} onError={onError} />)}
-    {screen.choice && !(screen.choice.kind === 'permission' && terminal.nativeApprovals?.length) && !sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={() => { restoreComposer.current = true; }} onBlurCapture={event => {
-      if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) restoreComposer.current = false;
-    }}>{screen.choice.kind === 'question'
+    {screen.choice && !(screen.choice.kind === 'permission' && terminal.nativeApprovals?.length) && !sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}>{screen.choice.kind === 'question'
       ? <ReadingQuestion key={choiceKey} choice={screen.choice} terminalId={terminal.id} onError={onError} />
-      : <ReadingChoice key={choiceKey} choice={screen.choice} terminalId={terminal.id} agent={terminal.agent === 'claude' ? 'claude' : 'codex'} onShowTerminal={onShowTerminal} onError={onError} />}</div>}
-    {sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={() => { restoreComposer.current = true; }} onBlurCapture={event => {
-      if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) restoreComposer.current = false;
-    }}><ReadingSessions key={`${terminal.id}-${terminal.sessionId}`} terminalId={terminal.id} agent={terminal.agent === 'codex' ? 'codex' : 'claude'} onError={onError} onClose={() => setSessionsOpen(false)} onSent={text => {
+      : <ReadingChoice key={choiceKey} choice={screen.choice} terminalId={terminal.id} agent={kind} onShowTerminal={onShowTerminal} onError={onError} />}</div>}
+    {sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}><ReadingSessions key={`${terminal.id}-${terminal.sessionId}`} terminalId={terminal.id} agent={terminal.agent === 'codex' ? 'codex' : 'claude'} onError={onError} onClose={() => setSessionsOpen(false)} onSent={text => {
       history.set(terminal.id, [...(history.get(terminal.id) || []), text].slice(-50)); setImages([]); toBottom();
     }} /></div>}
     {/* The command list is part of the page, above the message box, not a popup over the conversation. */}

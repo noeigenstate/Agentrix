@@ -233,11 +233,12 @@ function PromptList({ terminal }: { terminal: ProjectTerminal }) {
     return <p className="activity-task-quiet" title={terminal.taskTitle || text}>{text}</p>;
   }
   return <ol className="activity-prompts" aria-label={t('提示')}>
-    {prompts.map(prompt => prompt.state === 'working'
-      ? <li key={prompt.id} className="is-working" title={prompt.text}>
-        <span className="activity-prompt-state"><CircleNotch size={20} weight="bold" className="loading-spinner" aria-hidden="true" />{t('正在处理')}</span>
+    {prompts.map(prompt => {
+      const working = prompt.state === 'working';
+      return <li key={prompt.id} className={working ? 'is-working' : undefined} title={prompt.text}>
+        <span className="activity-prompt-state">{working && <CircleNotch size={20} weight="bold" className="loading-spinner" aria-hidden="true" />}{t(working ? '正在处理' : '排队中')}</span>
         <p>{prompt.summary}</p>
-      </li>
-      : <li key={prompt.id} title={prompt.text}><span className="activity-prompt-state">{t('排队中')}</span><p>{prompt.summary}</p></li>)}
+      </li>;
+    })}
   </ol>;
 }

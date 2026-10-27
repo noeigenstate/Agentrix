@@ -11,8 +11,20 @@ import { t } from '../../shared/i18n';
 
 function label(terminal: ProjectTerminal) {
   if (terminal.error) return t('需要检查');
-  if (terminal.codexActive) return terminal.codexActivity === 'working' ? t('正在处理') : terminal.codexActivity === 'complete' ? t('本轮已完成') : terminal.codexActivity === 'interrupted' ? t('已中断') : t('{agent} 会话中', { agent: terminal.agent === 'claude' ? 'Claude' : 'Codex' });
-  return terminal.status === 'starting' ? t('正在启动') : terminal.status === 'shell' ? t('终端就绪') : terminal.status === 'exited' ? t('已退出') : t('尚未启动');
+  if (terminal.codexActive) {
+    switch (terminal.codexActivity) {
+      case 'working': return t('正在处理');
+      case 'complete': return t('本轮已完成');
+      case 'interrupted': return t('已中断');
+      default: return t('{agent} 会话中', { agent: terminal.agent === 'claude' ? 'Claude' : 'Codex' });
+    }
+  }
+  switch (terminal.status) {
+    case 'starting': return t('正在启动');
+    case 'shell': return t('终端就绪');
+    case 'exited': return t('已退出');
+    default: return t('尚未启动');
+  }
 }
 
 export function ProjectTerminals({ project, focused, fontSize, activeId, setActiveId, onAction, onError, onOpenLink }: {

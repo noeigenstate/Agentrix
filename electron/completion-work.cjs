@@ -50,7 +50,9 @@ class CompletionWork {
   }
   find(id) {
     if (typeof id !== 'string') return undefined;
-    return [...this.tasks].find(([key, task]) => key === id || task.id === id || task.id?.endsWith(`/${id}`) || id.endsWith(`/${task.id}`))?.[0];
+    for (const [key, task] of this.tasks) {
+      if (key === id || task.id === id || task.id?.endsWith(`/${id}`) || id.endsWith(`/${task.id}`)) return key;
+    }
   }
   start(key, at, id = key) {
     if (key) this.tasks.set(key, { id, startedAt: this.tasks.get(key)?.startedAt ?? at });
@@ -112,9 +114,9 @@ class CompletionWork {
     let delivered = false;
     for (const [notice] of (queued || ['user', 'attachment'].includes(record.type) ? text : '').matchAll(/<task-notification>[\s\S]*?<\/task-notification>/g)) {
       const tag = name => new RegExp(`<${name}>\\s*([^<]+?)\\s*</${name}>`).exec(notice)?.[1];
-      const id = tag('task-id') || tag('tool-use-id');
-      if (!id || !finished(tag('status')) || this.services.has(tag('task-id')) || this.services.has(tag('tool-use-id'))) continue;
-      this.finish(tag('tool-use-id')); this.finish(tag('task-id'));
+      const taskId = tag('task-id'), toolUseId = tag('tool-use-id'), id = taskId || toolUseId;
+      if (!id || !finished(tag('status')) || this.services.has(taskId) || this.services.has(toolUseId)) continue;
+      this.finish(toolUseId); this.finish(taskId);
       if (queued && record.operation === 'enqueue') this.notifications.add(id);
       // A dequeue is anonymous and cannot prove which of several messages was
       // selected. Receipt, or a named delivery, starts the parent's review.
@@ -212,19 +214,17 @@ class CompletionWork {
       return;
     }
     const item = message.params?.item;
-    if (item && ['item/started', 'item/completed'].includes(message.method)) {
+    // Native commands, like legacy shells, cannot resume the parent after its turn ends.
+    if (item?.type === 'collabAgentToolCall' && ['item/started', 'item/completed'].includes(message.method)) {
       const ended = message.method === 'item/completed';
-      // Native commands, like legacy shells, cannot resume the parent after its turn ends.
-      if (item.type === 'collabAgentToolCall') {
-        const key = `native:${item.id}`;
-        if (!ended && ['spawnAgent', 'sendInput', 'resumeAgent'].includes(item.tool)) this.start(key, at);
-        if (ended) this.finish(key);
-        for (const id of item.receiverThreadIds || []) {
-          const status = item.agentsStates?.[id]?.status;
-          if (item.tool === 'closeAgent' || finished(status)) {
-            if (this.finish(id)) this.reviewAt = Math.max(this.reviewAt, at);
-          } else if (['spawnAgent', 'sendInput', 'resumeAgent'].includes(item.tool)) this.start(id, at);
-        }
+      const key = `native:${item.id}`, startsWork = ['spawnAgent', 'sendInput', 'resumeAgent'].includes(item.tool);
+      if (!ended && startsWork) this.start(key, at);
+      if (ended) this.finish(key);
+      for (const id of item.receiverThreadIds || []) {
+        const status = item.agentsStates?.[id]?.status;
+        if (item.tool === 'closeAgent' || finished(status)) {
+          if (this.finish(id)) this.reviewAt = Math.max(this.reviewAt, at);
+        } else if (startsWork) this.start(id, at);
       }
     }
     if (['turn/completed', 'turn/interrupted'].includes(message.method)) this.end(at);

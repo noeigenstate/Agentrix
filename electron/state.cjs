@@ -33,6 +33,15 @@ function cleanSSHHistory(input) {
 // left unfinished. Only non-default values are stored.
 const agentFields = restore => ({ ...(restore?.agent === 'claude' ? { agent: 'claude' } : {}), ...(restore?.interrupted === true ? { interrupted: true } : {}) });
 
+function cleanRestore(input, kind) {
+  return {
+    terminal: input?.terminal === true, codex: input?.codex === true,
+    cwd: typeof input?.cwd === 'string' && (kind === 'ssh' ? input.cwd.startsWith('/') : path.isAbsolute(input.cwd)) ? input.cwd : null,
+    ...(/^[a-f\d-]{36}$/i.test(input?.threadId || '') ? { threadId: input.threadId } : {}),
+    ...agentFields(input),
+  };
+}
+
 // Where the window opens: the decisions to make (the home page) or the grid of projects. Isolated test profiles
 // open on the grid they exercise unless they ask for the home page.
 const DEFAULT_START = process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST_HOME !== '1' ? 'workspace' : 'decisions';
@@ -118,25 +127,22 @@ class WorkspaceStore {
       }).map(p => {
         const image = validProjectImage(p.image) ? p.image : '';
         const imageMode = PROJECT_IMAGE_MODES.has(p.imageMode) && (p.imageMode !== 'custom' || image) ? p.imageMode : null;
-        const project = {
-        id: p.id, name: String(p.name || path.basename(p.path)).slice(0, 120), path: p.path,
-        kind: p.kind === 'ssh' ? 'ssh' : 'local',
-        ...(image && imageMode !== 'number' ? { image } : {}),
-        ...(imageMode ? { imageMode } : {}),
-        ...(p.kind === 'ssh' ? { ssh: { host: p.ssh.host, configFile: p.ssh.configFile || null } } : {}),
-        primaryTerminalClosed: p.primaryTerminalClosed === true,
-        restore: p.restore && typeof p.restore === 'object' ? { terminal: p.restore.terminal === true, codex: p.restore.codex === true, cwd: typeof p.restore.cwd === 'string' && (p.kind === 'ssh' ? p.restore.cwd.startsWith('/') : path.isAbsolute(p.restore.cwd)) ? p.restore.cwd : null, ...(/^[a-f\d-]{36}$/i.test(p.restore.threadId || '') ? { threadId: p.restore.threadId } : {}), ...agentFields(p.restore) } : null,
-        terminals: Array.isArray(p.terminals) ? p.terminals.filter(item => item && /^[a-f\d-]{36}$/i.test(item.id || '')).map(item => ({ id: item.id, restore: { terminal: item.restore?.terminal === true, codex: item.restore?.codex === true,
-          cwd: typeof item.restore?.cwd === 'string' && (p.kind === 'ssh' ? item.restore.cwd.startsWith('/') : path.isAbsolute(item.restore.cwd)) ? item.restore.cwd : null,
-          ...(/^[a-f\d-]{36}$/i.test(item.restore?.threadId || '') ? { threadId: item.restore.threadId } : {}), ...agentFields(item.restore) } })) : [],
-        unread: Number.isSafeInteger(p.unread) && p.unread > 0 ? p.unread : 0,
-        lastCompletedAt: typeof p.lastCompletedAt === 'number' ? p.lastCompletedAt : null,
-        completionArmed: p.completionArmed === true,
-        seenEvents: Array.isArray(p.seenEvents) ? p.seenEvents.filter(x => typeof x === 'string').slice(-128) : [],
-        // The order its terminals were dragged into, when they were (ids it no longer has are ignored).
-        ...(Array.isArray(p.terminalOrder) ? { terminalOrder: p.terminalOrder.filter(id => typeof id === 'string' && /^[a-f\d-]{36}$/i.test(id)).slice(0, 64) } : {}),
+        return {
+          id: p.id, name: String(p.name || path.basename(p.path)).slice(0, 120), path: p.path,
+          kind: p.kind === 'ssh' ? 'ssh' : 'local',
+          ...(image && imageMode !== 'number' ? { image } : {}),
+          ...(imageMode ? { imageMode } : {}),
+          ...(p.kind === 'ssh' ? { ssh: { host: p.ssh.host, configFile: p.ssh.configFile || null } } : {}),
+          primaryTerminalClosed: p.primaryTerminalClosed === true,
+          restore: p.restore && typeof p.restore === 'object' ? cleanRestore(p.restore, p.kind) : null,
+          terminals: Array.isArray(p.terminals) ? p.terminals.filter(item => item && /^[a-f\d-]{36}$/i.test(item.id || '')).map(item => ({ id: item.id, restore: cleanRestore(item.restore, p.kind) })) : [],
+          unread: Number.isSafeInteger(p.unread) && p.unread > 0 ? p.unread : 0,
+          lastCompletedAt: typeof p.lastCompletedAt === 'number' ? p.lastCompletedAt : null,
+          completionArmed: p.completionArmed === true,
+          seenEvents: Array.isArray(p.seenEvents) ? p.seenEvents.filter(x => typeof x === 'string').slice(-128) : [],
+          // The order its terminals were dragged into, when they were (ids it no longer has are ignored).
+          ...(Array.isArray(p.terminalOrder) ? { terminalOrder: p.terminalOrder.filter(id => typeof id === 'string' && /^[a-f\d-]{36}$/i.test(id)).slice(0, 64) } : {}),
         };
-        return project;
       });
       this.settings = cleanSettings(value.settings);
       this.history = cleanHistory(value.history);
@@ -273,8 +279,8 @@ class WorkspaceStore {
   }
 
   reorderProjects(ids) {
-    if (!Array.isArray(ids) || ids.length !== this.projects.length || new Set(ids).size !== ids.length || ids.some(id => typeof id !== 'string' || !this.projects.some(project => project.id === id))) throw new Error('项目列表已变化，请重新拖动排序。');
     const records = new Map(this.projects.map(project => [project.id, project]));
+    if (!Array.isArray(ids) || ids.length !== this.projects.length || new Set(ids).size !== ids.length || ids.some(id => typeof id !== 'string' || !records.has(id))) throw new Error('项目列表已变化，请重新拖动排序。');
     this.projects = ids.map(id => records.get(id));
     this.save();
   }

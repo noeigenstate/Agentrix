@@ -3,7 +3,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { transcriptWindow, LIVE_READ_LIMIT } = require('./transcript-window.cjs');
 const { CompletionHistory } = require('./completion-history.cjs');
-const { ClaudeImageLine } = require('./oversized-record.cjs');
+const { ClaudeImageLine, readTranscriptChunk } = require('./oversized-record.cjs');
 const { messageText, ownMessage, promptText } = require('./prompt-queue.cjs');
 
 // What an agent is doing, step by step: each tool it calls becomes one action the window can show
@@ -252,19 +252,7 @@ class TranscriptTail {
         const { bytesRead } = await file.read(chunk, 0, chunk.length, this.offset);
         if (!bytesRead) break;
         this.offset += bytesRead;
-        this.buffer = Buffer.concat([this.buffer, chunk.subarray(0, bytesRead)]);
-        let newline;
-        while ((newline = this.buffer.indexOf(10)) !== -1) {
-          const line = this.buffer.subarray(0, newline); this.buffer = this.buffer.subarray(newline + 1);
-          const oversized = this.oversized ?? (!this.skipping && line.length > 1024 * 1024 ? new ClaudeImageLine(Buffer.alloc(0)) : null);
-          if (oversized) { oversized.add(line); const record = oversized.record(); if (record) onRecord(record); }
-          else if (!this.skipping) { try { onRecord(JSON.parse(line.toString('utf8'))); } catch { } }
-          this.skipping = false; this.oversized = null;
-        }
-        if (this.buffer.length > 1024 * 1024) {
-          if (this.oversized) this.oversized.add(this.buffer); else if (!this.skipping) this.oversized = new ClaudeImageLine(this.buffer);
-          this.buffer = Buffer.alloc(0); this.skipping = true;
-        }
+        readTranscriptChunk(this, chunk.subarray(0, bytesRead), onRecord, ClaudeImageLine);
       }
       if (this.historyPending && this.offset >= size) { this.historyPending = false; this.onHistory(true); }
     } finally { await file.close(); }

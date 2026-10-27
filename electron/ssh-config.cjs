@@ -19,13 +19,14 @@ function expandHome(value, home = os.homedir()) {
 }
 
 function readSSHSettings({ home = os.homedir(), settingsFile, platform = process.platform } = {}) {
-  if (process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST_SSH_CONFIG && !settingsFile) return { configFile: process.env.AGENTRIX_TEST_SSH_CONFIG, sshPath: platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/OpenSSH/ssh.exe') : 'ssh', source: 'test' };
+  const defaultSshPath = platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/OpenSSH/ssh.exe') : 'ssh';
+  if (process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST_SSH_CONFIG && !settingsFile) return { configFile: process.env.AGENTRIX_TEST_SSH_CONFIG, sshPath: defaultSshPath, source: 'test' };
   const preferences = settingsFile || (platform === 'win32' ? path.join(process.env.APPDATA || path.join(home, 'AppData/Roaming'), 'Code/User/settings.json') : path.join(home, '.config/Code/User/settings.json'));
   let settings = {};
   try { settings = parse(fs.readFileSync(preferences, 'utf8')) || {}; } catch { }
   const configured = typeof settings['remote.SSH.configFile'] === 'string' ? settings['remote.SSH.configFile'] : '';
   const configFile = configured ? path.resolve(expandHome(configured, home)) : path.join(home, '.ssh/config');
-  const sshPath = typeof settings['remote.SSH.path'] === 'string' && settings['remote.SSH.path'] ? expandHome(settings['remote.SSH.path'], home) : (platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/OpenSSH/ssh.exe') : 'ssh');
+  const sshPath = typeof settings['remote.SSH.path'] === 'string' && settings['remote.SSH.path'] ? expandHome(settings['remote.SSH.path'], home) : defaultSshPath;
   return { configFile, sshPath, source: configured ? 'vscode' : 'default' };
 }
 
@@ -50,7 +51,9 @@ function listSSHHosts(filename, home = os.homedir()) {
         for (const host of values) if (!/[*!?]/.test(host)) {
           try { hosts.add(normalizeSSH({ host, path: '~' }).host); } catch { }
         }
-      } else for (const value of values) {
+        continue;
+      }
+      for (const value of values) {
         const expanded = expandHome(value, home);
         const pattern = path.isAbsolute(expanded) ? expanded : path.resolve(sshDirectory, expanded);
         try { for (const include of fs.globSync(pattern.replace(/\\/g, '/'))) visit(include, depth + 1); } catch { }

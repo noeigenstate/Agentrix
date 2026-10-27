@@ -18,7 +18,7 @@ function look(terminalId: string, agent: Agent) {
 // waits on a choice or a question, its keys belong to that: nothing is sent. Gives an error, or null once sent.
 export async function sendToAgent(terminalId: string, sessionId: string, agent: Agent, text: string): Promise<string | null> {
   const state = await window.agentrix.getState?.();
-  const managed = state?.ok ? state.value.projects.flatMap(project => project.terminals).find(terminal => terminal.id === terminalId && terminal.sessionId === sessionId && terminal.nativeMode === 'claude-sdk') : null;
+  const managed = state?.ok && state.value.projects.some(project => project.terminals.some(terminal => terminal.id === terminalId && terminal.sessionId === sessionId && terminal.nativeMode === 'claude-sdk'));
   if (managed) {
     const result = await window.agentrix.managedPrompt(terminalId, sessionId, text);
     return result.ok ? null : result.error;

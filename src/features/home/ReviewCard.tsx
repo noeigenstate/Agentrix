@@ -12,8 +12,10 @@ import { parseDelivery } from './delivery';
 import { showPopup } from '../files/file-popup';
 import { VoiceButton } from '../voice/VoiceButton';
 import { useDictatedBox } from '../voice/voice-input';
-import { passed, reviewHistory, sentBack } from './review-history';
+import { passed, recordAccepted, reviewHistory, sentBack } from './review-history';
 import { t } from '../../shared/i18n';
+
+export { acceptedToday } from './review-history';
 
 // Anything the agent says about its checks beyond the steps it ran (CHECKS) is its own word, shown as such.
 const SELF_REPORT = /测试(?:全部)?通过|tests? (?:all )?pass|all tests passed|构建成功|build succeeded/i;
@@ -65,10 +67,12 @@ export function ReviewCard({ decision, now, kind, onOpen, onDone, onError }: {
       onDone(t('已打回「{project}」，批语已发给它，改完会再交上来。', { project: decision.projectName }));
     } catch (error) { onError(String(error)); } finally { setBusy(false); }
   };
-  const replyLong = round.reply.length > 900, delivery = useMemo(() => parseDelivery(round.reply), [round.reply]);
-  return <article className="decision-card is-review" aria-label={decisionTitle(decision)}>
+  const delivery = useMemo(() => parseDelivery(round.reply), [round.reply]);
+  const foldReply = !!delivery || round.reply.length > 900;
+  const title = decisionTitle(decision);
+  return <article className="decision-card is-review" aria-label={title}>
     <header className="decision-card-head">{kind}<span className="decision-source">{decision.projectName}{decision.multipleTerminals ? ` · ${decision.terminalTitle}` : ''} · {decision.agent === 'claude' ? 'Claude Code' : 'Codex'} · {t('交付于 {time}', { time: waited(decision.since, now).replace(/^等了 /, '') })}</span></header>
-    <h2 className="decision-title">{decisionTitle(decision)}{history.submission > 1 && <span className="review-submission">{t('第 {count} 次提交', { count: history.submission })}</span>}</h2>
+    <h2 className="decision-title">{title}{history.submission > 1 && <span className="review-submission">{t('第 {count} 次提交', { count: history.submission })}</span>}</h2>
     <div className="decision-body">
       {lastNote && <section className="review-block review-last-note"><h4>{t('你上次的批语')}</h4><p>{lastNote.text}</p>
         {history.notes.length > 1 && <small>{t('之前还打回过 {count} 次', { count: history.notes.length - 1 })}</small>}</section>}
@@ -81,8 +85,8 @@ export function ReviewCard({ decision, now, kind, onOpen, onDone, onError }: {
             <div><h4>{t(part.label)}</h4><Markdown text={part.text} /></div></div>)}
         </section> : round.reply && <p className="review-unverified">{t('它没有按“问题、原因、结果”写交付摘要，下面是它的原话。')}</p>}
         <section className="review-block"><h4>{delivery ? t('完整交付说明') : t('它的交付说明')}</h4>
-          {round.reply ? <div className={`review-reply ${(delivery || replyLong) && !fullReply ? 'is-folded' : ''}`}><Markdown text={round.reply} /></div> : <p className="decision-why">{t('这一轮没有留下说明。')}</p>}
-          {(delivery || replyLong) && round.reply && <button type="button" className="text-button" onClick={() => setFullReply(!fullReply)}>{fullReply ? t('收起') : t('展开全文')}</button>}
+          {round.reply ? <div className={`review-reply ${foldReply && !fullReply ? 'is-folded' : ''}`}><Markdown text={round.reply} /></div> : <p className="decision-why">{t('这一轮没有留下说明。')}</p>}
+          {foldReply && round.reply && <button type="button" className="text-button" onClick={() => setFullReply(!fullReply)}>{fullReply ? t('收起') : t('展开全文')}</button>}
         </section>
         {made.length > 0 && <section className="review-block"><h4>{t('产出物')}</h4><FileCards projectId={decision.projectId} files={made} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet /></section>}
         <section className="review-block"><h4>{t('验证')}</h4>
@@ -116,16 +120,4 @@ export function ReviewCard({ decision, now, kind, onOpen, onDone, onError }: {
       <button type="button" className="button secondary" onClick={() => onOpen(decision)}>{t('在工作台查看')}</button>
     </footer>
   </article>;
-}
-
-// Deliveries accepted today, kept in this window's storage for the home page's line about the day.
-const ACCEPTED_KEY = 'agentrix.decisions.accepted';
-function recordAccepted() {
-  try {
-    const today = new Date().toDateString(), list = (JSON.parse(localStorage.getItem(ACCEPTED_KEY) || '[]') as number[]).filter(at => new Date(at).toDateString() === today);
-    localStorage.setItem(ACCEPTED_KEY, JSON.stringify([...list, Date.now()]));
-  } catch { /* the count is a convenience */ }
-}
-export function acceptedToday() {
-  try { const today = new Date().toDateString(); return (JSON.parse(localStorage.getItem(ACCEPTED_KEY) || '[]') as number[]).filter(at => new Date(at).toDateString() === today).length; } catch { return 0; }
 }

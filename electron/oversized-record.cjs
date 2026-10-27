@@ -81,4 +81,22 @@ class OversizedLine {
   record() { return oversizedRecord(this.head, this.tail); }
 }
 
-module.exports = { OversizedLine, oversizedRecord, ClaudeImageLine, IMAGE_LIMIT };
+// Both live readers retain the same byte boundary state; only their oversized record format differs.
+function readTranscriptChunk(reader, chunk, onRecord, Line = OversizedLine) {
+  reader.buffer = Buffer.concat([reader.buffer, chunk]);
+  let newline;
+  while ((newline = reader.buffer.indexOf(10)) !== -1) {
+    const line = reader.buffer.subarray(0, newline); reader.buffer = reader.buffer.subarray(newline + 1);
+    // An oversized line ends here: a generated picture's record is rebuilt from its two ends.
+    const oversized = reader.oversized ?? (!reader.skipping && line.length > 1024 * 1024 ? new Line(Buffer.alloc(0)) : null);
+    if (oversized) { oversized.add(line); const record = oversized.record(); if (record) onRecord(record); }
+    else if (!reader.skipping) { try { onRecord(JSON.parse(line.toString('utf8'))); } catch { } }
+    reader.skipping = false; reader.oversized = null;
+  }
+  if (reader.buffer.length > 1024 * 1024) {
+    if (reader.oversized) reader.oversized.add(reader.buffer); else if (!reader.skipping) reader.oversized = new Line(reader.buffer);
+    reader.buffer = Buffer.alloc(0); reader.skipping = true;
+  }
+}
+
+module.exports = { OversizedLine, oversizedRecord, ClaudeImageLine, IMAGE_LIMIT, readTranscriptChunk };

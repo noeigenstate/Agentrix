@@ -50,9 +50,10 @@ class AgentsManager {
         child.once('close', code => finish(timedOut ? this.t('安装超时，请重试。') : code === 0 ? '' : this.t('安装失败。')));
         timer = setTimeout(() => {
           timedOut = true;
+          const stop = () => { child.kill(); finish(this.t('安装超时，请重试。')); };
           // Killing only cmd.exe leaves npm running, so stop its process tree before releasing the lock.
-          if (this.platform === 'win32' && child.pid) execFile('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }, () => { child.kill(); finish(this.t('安装超时，请重试。')); });
-          else { child.kill(); finish(this.t('安装超时，请重试。')); }
+          if (this.platform === 'win32' && child.pid) execFile('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }, stop);
+          else stop();
         }, this.timeout);
       } catch (error) { finish(`${this.t('安装失败。')} ${error.message}`); }
     });

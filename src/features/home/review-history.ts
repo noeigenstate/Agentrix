@@ -21,3 +21,16 @@ export function sentBack(projectId: string, task: string | undefined, text: stri
   write(projectId, { task: history.task || task, notes: [...history.notes, { at: Date.now(), text }].slice(-20) });
 }
 export function passed(projectId: string) { write(projectId, { notes: [] }); }
+
+// Deliveries accepted today, kept in this window's storage for the home page's line about the day.
+const ACCEPTED_KEY = 'agentrix.decisions.accepted';
+function acceptedDates() {
+  const today = new Date().toDateString();
+  return (JSON.parse(localStorage.getItem(ACCEPTED_KEY) || '[]') as number[]).filter(at => new Date(at).toDateString() === today);
+}
+export function recordAccepted() {
+  try { localStorage.setItem(ACCEPTED_KEY, JSON.stringify([...acceptedDates(), Date.now()])); } catch { /* the count is a convenience */ }
+}
+export function acceptedToday() {
+  try { return acceptedDates().length; } catch { return 0; }
+}

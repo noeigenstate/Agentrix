@@ -9,13 +9,13 @@ import { styleTerminal } from './terminal-styling';
 import { terminalOptions, terminalTheme } from './terminal-theme';
 import { gpuRenderer, setTerminalWeight, terminalRenderer, useTerminalRenderer } from './terminal-renderer';
 import { terminalFontFamily } from './terminal-font';
-
-// The terminal text weight chosen in Settings, which App writes on the document; 400 when none is chosen.
-const chosenWeight = () => Number(document.documentElement.dataset.terminalWeight) || Number(terminalOptions.fontWeight);
 import { registerScreen, writeScreen } from './terminal-screen';
 import '@xterm/xterm/css/xterm.css';
 import { t } from '../../shared/i18n';
 import { isMac, isWindows } from '../../shared/platform';
+
+// The terminal text weight chosen in Settings, which App writes on the document; 400 when none is chosen.
+const chosenWeight = () => Number(document.documentElement.dataset.terminalWeight) || Number(terminalOptions.fontWeight);
 
 export function TerminalPane({ id, sessionId, fontSize, onError, focused, onOpenLink, remote = false }: {
   id: string; sessionId: string | null; fontSize: number; focused: boolean; onError: (message: string) => void;
@@ -48,12 +48,13 @@ export function TerminalPane({ id, sessionId, fontSize, onError, focused, onOpen
   const copyAll = () => {
     const terminal = term.current;
     if (!terminal) return;
+    const buffer = terminal.buffer.active;
     const rows: string[] = [];
-    for (let index = 0; index < terminal.buffer.active.length; index++) {
-      const line = terminal.buffer.active.getLine(index);
+    for (let index = 0; index < buffer.length; index++) {
+      const line = buffer.getLine(index);
       if (!line) continue;
       // Keep spaces at a soft wrap; trimming every visual row changes commands.
-      const text = line.translateToString(!terminal.buffer.active.getLine(index + 1)?.isWrapped);
+      const text = line.translateToString(!buffer.getLine(index + 1)?.isWrapped);
       if (line.isWrapped && rows.length) rows[rows.length - 1] += text;
       else rows.push(text);
     }
@@ -173,25 +174,19 @@ export function TerminalPane({ id, sessionId, fontSize, onError, focused, onOpen
         return false;
       }
       // macOS: ⌘C copies, ⌘V pastes and ⌘A selects all; Control keys all go to the program (Control+C interrupts).
-      if (isMac) {
-        if (!event.metaKey || event.ctrlKey || event.altKey) return true;
-        if (event.code === 'KeyC') { event.preventDefault(); const selection = terminal.getSelection(); if (selection) void copy(selection); return false; }
-        if (event.code === 'KeyV') { event.preventDefault(); void paste(); return false; }
-        if (event.code === 'KeyA') { event.preventDefault(); terminal.selectAll(); return false; }
-        return true;
-      }
-      if (event.ctrlKey && !event.altKey && event.code === 'KeyC' && (event.shiftKey || terminal.hasSelection())) {
-        event.preventDefault();
+      const commandKey = isMac ? event.metaKey && !event.ctrlKey && !event.altKey : event.ctrlKey && !event.altKey;
+      const copyKey = commandKey && event.code === 'KeyC' && (isMac || event.shiftKey || terminal.hasSelection());
+      const pasteKey = (commandKey && event.code === 'KeyV') || (!isMac && event.shiftKey && event.code === 'Insert');
+      const selectKey = event.code === 'KeyA' && (isMac ? commandKey : event.ctrlKey && event.shiftKey);
+      // Ctrl+C without a selection still interrupts the command.
+      if (!copyKey && !pasteKey && !selectKey) return true;
+      event.preventDefault();
+      if (copyKey) {
         const selection = terminal.getSelection();
         if (selection) void copy(selection);
-        return false;
-      }
-      if ((event.ctrlKey && !event.altKey && event.code === 'KeyV') || (event.shiftKey && event.code === 'Insert')) {
-        event.preventDefault(); void paste(); return false;
-      }
-      if (event.ctrlKey && event.shiftKey && event.code === 'KeyA') { event.preventDefault(); terminal.selectAll(); return false; }
-      // Ctrl+C without a selection still interrupts the command.
-      return true;
+      } else if (pasteKey) void paste();
+      else terminal.selectAll();
+      return false;
     });
     const focusIn = () => window.agentrix.terminalFocus(id, true);
     const focusOut = () => window.agentrix.terminalFocus(id, false);
@@ -227,10 +222,10 @@ export function TerminalPane({ id, sessionId, fontSize, onError, focused, onOpen
   useEffect(() => { gpu.current?.set(renderer === 'gpu'); }, [renderer]);
 
   useEffect(() => {
-    if (term.current) {
-      term.current.options.fontSize = fontSize;
-      if (host.current?.clientWidth && term.current) fitTerminal(term.current);
-    }
+    const terminal = term.current;
+    if (!terminal) return;
+    terminal.options.fontSize = fontSize;
+    if (host.current?.clientWidth) fitTerminal(terminal);
   }, [fontSize]);
   useEffect(() => {
     if (focused && sessionId) {

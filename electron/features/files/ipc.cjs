@@ -7,7 +7,10 @@ const { resolveTerminalLink } = require('../../terminal-links.cjs');
 function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperations, clipboardWrites, clipboard, previewResources, affectsEditor, allowEditorClose, shell, getActiveFileTree, setActiveFileTree, setActiveTerminal, send }) {
   const fileSaves = new Set();
   let fileProgress = null;
-  handle('project:directory', (id, relativePath = '', offset = 0) => findProject(id).kind === 'ssh' ? remoteFor(id).request('directory', { path: relativePath, offset }) : listDirectory(findProject(id), relativePath, offset));
+  handle('project:directory', (id, relativePath = '', offset = 0) => {
+    const project = findProject(id);
+    return project.kind === 'ssh' ? remoteFor(id).request('directory', { path: relativePath, offset }) : listDirectory(project, relativePath, offset);
+  });
   handle('project:findFiles', (projectId, query) => findFiles(findProject(projectId), query));
   handle('project:create-entry', (id, directory, name, kind) => fileOperations.create(findProject(id), directory, name, kind));
   handle('project:rename-entry', async (id, relative, name) => {
@@ -54,6 +57,10 @@ function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperatio
     } finally { fileSaves.delete(key); }
   }
   handle('project:save-file', saveFile);
+  async function openPath(filename) {
+    const error = await shell.openPath(filename);
+    if (error) throw new Error(error);
+  }
   async function openProjectLink(id, target) {
     const project = findProject(id);
     if (project.kind === 'ssh' && !/^(https?:\/\/|www\.)/i.test(target)) {
@@ -61,33 +68,35 @@ function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperatio
       let value = String(target);
       if (/^file:\/\//i.test(value)) value = decodeURIComponent(new URL(value).pathname);
       else if (/^[a-z][a-z\d+.-]*:/i.test(value) && !/:[0-9]+(?::[0-9]+)?$/.test(value)) throw new Error('只支持网页链接和远程项目内文件。');
-      for (const candidate of new Set([value, value.replace(/(?::\d+(?::\d+)?|#L\d+(?:C\d+)?)$/, '')])) {
+      const withoutPosition = value.replace(/(?::\d+(?::\d+)?|#L\d+(?:C\d+)?)$/, '');
+      for (const candidate of new Set([value, withoutPosition])) {
         const relative = path.posix.relative(remote.info.root, path.posix.resolve(remote.info.root, candidate));
         if (relative === '..' || relative.startsWith('../')) throw new Error('该链接指向远程项目目录之外。');
         try {
           const stat = await remote.request('stat', { path: relative });
           if (stat.directory) return { kind: 'directory', path: stat.realPath === '.' ? '' : stat.realPath };
           return { kind: 'file', path: relative };
-        } catch (error) { if (candidate === value.replace(/(?::\d+(?::\d+)?|#L\d+(?:C\d+)?)$/, '')) throw error; }
+        } catch (error) { if (candidate === withoutPosition) throw error; }
       }
     }
-    const link = await resolveTerminalLink(findProject(id), target);
+    const link = await resolveTerminalLink(project, target);
     if (link.kind === 'external') { await shell.openExternal(link.url); return { kind: 'external' }; }
-    if (link.kind === 'directory') { const error = await shell.openPath(link.path); if (error) throw new Error(error); return { kind: 'external' }; }
+    if (link.kind === 'directory') { await openPath(link.path); return { kind: 'external' }; }
     return link;
   }
   handle('project:open-link', openProjectLink);
   async function openVideo(id, relativePath) {
-    if (findProject(id).kind === 'ssh') throw new Error('远程视频请使用内置播放器，或先下载到本机再用系统播放器打开。');
-    const resolved = await resolveProjectPath(findProject(id), relativePath);
+    const project = findProject(id);
+    if (project.kind === 'ssh') throw new Error('远程视频请使用内置播放器，或先下载到本机再用系统播放器打开。');
+    const resolved = await resolveProjectPath(project, relativePath);
     if (!VIDEO_TYPES[path.extname(resolved).toLowerCase()] || !(await fs.promises.stat(resolved)).isFile()) throw new Error('请选择一个视频文件。');
-    const error = await shell.openPath(resolved); if (error) throw new Error(error);
+    await openPath(resolved);
   }
   handle('project:open-video', openVideo);
   async function revealProject(id) {
     const project = findProject(id);
     if (project.kind === 'ssh') return { kind: 'directory', path: '' };
-    const error = await shell.openPath(project.path); if (error) throw new Error(error);
+    await openPath(project.path);
     return { kind: 'external' };
   }
   handle('project:reveal', revealProject);
@@ -95,7 +104,7 @@ function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperatio
   async function revealEntry(id, relativePath) {
     const project = findProject(id);
     if (project.kind === 'ssh') throw new Error('远程项目的文件在服务器上，本机没有它的位置。');
-    if (!relativePath) { const error = await shell.openPath(project.path); if (error) throw new Error(error); return; }
+    if (!relativePath) { await openPath(project.path); return; }
     shell.showItemInFolder(await resolveProjectPath(project, relativePath));
   }
   handle('project:reveal-entry', revealEntry);

@@ -14,8 +14,9 @@ const transcriptMatches = (message: string, record: string, original?: string) =
   // The producer retains the full original beside its 20,000-character display. Shared prefixes cannot identify
   // distinct long sends. Keep the legacy prefix fallback only for records without that original.
   if (bounded && original !== undefined) record = original.replace(/<\/?pasted_content\b[^>]*>\n?/g, '').replace(/\[Image #\d+\]\s?/g, '').trim();
-  return normalizePrompt(message) === normalizePrompt(record)
-    || (bounded && original === undefined && normalizePrompt(message).startsWith(normalizePrompt(record.slice(0, 20000))));
+  const normalized = normalizePrompt(message);
+  return normalized === normalizePrompt(record)
+    || (bounded && original === undefined && normalized.startsWith(normalizePrompt(record.slice(0, 20000))));
 };
 
 // Pair queue records and renderer echoes one-to-one. Raw-terminal sends and reloads have no echo;
