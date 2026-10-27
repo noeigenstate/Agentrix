@@ -320,8 +320,8 @@ try {
   const panel = page.locator(`[data-project-id="${projects[0].id}"]`);
   const sessionBefore = (await page.evaluate(() => window.agentrix.getState())).value.projects[0].sessionId;
   await panel.getByRole('button', { name: `查看 ${projects[0].name} 的完成结果` }).click();
-  await page.waitForSelector('.focus-mode');
-  await waitFor(async () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen()), 'native fullscreen');
+  await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen()), false, 'opening a red tile expands the project inside the window');
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[0].unread, 0);
   await page.getByRole('treeitem', { name: 'src', exact: true }).waitFor();
   assert.equal(await page.locator('.focus-toolbar').count(), 0, 'old top toolbar removed');
@@ -554,7 +554,7 @@ try {
   await runDesktopTask(page, projects[0], path.join(output, 'codex-home'), 'turn-2', waitFor);
   await complete('turn-2');
   await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].unread === 1, 'second round red');
-  console.log('PASS: red tile opens native fullscreen, marks viewed, returns without restarting terminal, and next turn lights red');
+  console.log('PASS: red tile expands inside the window without native fullscreen, marks viewed, returns without restarting terminal, and next turn lights red');
 
   await panel.getByRole('button', { name: `查看 ${projects[0].name} 的完成结果` }).click();
   await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].unread === 0, 'viewing acknowledges the automatic completion');

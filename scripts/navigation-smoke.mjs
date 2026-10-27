@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
 import { waitFor, terminalsSettled } from './wait.mjs';
+import { chooseFromAppMenu } from './app-menu-helper.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { createSSHFixture } = require('../tests/helpers/ssh-fixture.cjs');
@@ -202,11 +203,22 @@ try {
   const rejected = await page.evaluate(id => window.agentrix.openLink(id, 'vscode://file/example'), remote.id); assert.equal(rejected.ok, false);
   await page.evaluate(id => window.agentrix.openLink(id, 'https://example.com/docs'), local.id);
   assert.deepEqual(await app.evaluate(() => globalThis.navigationOpened), [local.path, 'https://example.com/docs']);
-  // F11 puts the whole window in full screen and back, whatever view is open.
-  const fullScreen = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen()), before = await fullScreen();
-  await page.keyboard.press('F11'); await waitFor(async () => await fullScreen() !== before, 'F11 toggles full screen');
-  await page.keyboard.press('F11'); await waitFor(async () => await fullScreen() === before, 'F11 toggles full screen back');
+  const fullScreen = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen());
+  assert.equal(await fullScreen(), false, 'project navigation stays windowed until the user chooses fullscreen');
+  for (const enabled of [true, false]) {
+    await page.keyboard.press('F11'); await waitFor(async () => await fullScreen() === enabled, 'F11 toggles full screen');
+    await page.getByRole('button', { name: '返回总览', exact: true }).click(); await settled(false);
+    assert.equal(await fullScreen(), enabled, 'returning to the overview preserves the user fullscreen choice');
+    await second.getByRole('button', { name: `全屏查看 ${remote.name}`, exact: true }).click(); await settled(true);
+    assert.equal(await fullScreen(), enabled, 'opening a project preserves the user fullscreen choice');
+  }
+  for (const [label, enabled] of [['全屏', true], ['退出全屏', false]]) {
+    await page.mouse.move(80, 1);
+    await chooseFromAppMenu(page, label);
+    await waitFor(async () => await fullScreen() === enabled, 'app menu toggles full screen');
+  }
   assert.deepEqual(errors, []);
+  console.log('PASS: project entry and return preserve F11 fullscreen; the app menu still enters and exits fullscreen');
   console.log(`PASS: project shortcuts cycle reading/terminal/card focus with renewed ring and HUD in both views; removed sidebar/manual-finish/VS Code actions, local folder/browser retained, SSH root/nested/symlink/Markdown directories stay internal (terminal links in a popup, never the project page) and protect drafts. Screenshots: ${output}`);
 } catch (error) { if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {}); throw error; }
 finally { if (app) await app.close(); await ssh.close(); }

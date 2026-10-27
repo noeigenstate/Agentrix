@@ -53,12 +53,14 @@ try {
   const before = await app.evaluate(() => globalThis.desktopGlassMain.getBounds());
   await app.evaluate(() => globalThis.desktopGlassMain.setSize(1300, 820)); await page.waitForTimeout(100); assert.equal(await app.evaluate(() => globalThis.desktopGlassMain.getBounds().width), 1300); await app.evaluate((_electron, bounds) => globalThis.desktopGlassMain.setBounds(bounds), before);
   await app.evaluate(() => globalThis.desktopGlassMain.maximize()); await page.waitForTimeout(300); results.maximized = await app.evaluate(() => globalThis.desktopGlassMain.isMaximized()); await app.evaluate(() => globalThis.desktopGlassMain.unmaximize());
-  await page.getByRole('button', { name: '全屏查看 清晰文字', exact: true }).click(); await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]')); await page.waitForTimeout(100); results.fullScreen = await app.evaluate(() => globalThis.desktopGlassMain.isFullScreen());
-  await app.evaluate(() => { globalThis.desktopGlassMain.setFullScreen(false); globalThis.desktopGlassMain.setBounds({ x: 200, y: 120, width: 1500, height: 940 }); });
+  await page.getByRole('button', { name: '全屏查看 清晰文字', exact: true }).click(); await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  results.fullScreen = await app.evaluate(() => globalThis.desktopGlassMain.isFullScreen());
+  assert.equal(results.fullScreen, false, 'expanding a project keeps desktop glass windowed');
+  await app.evaluate(() => globalThis.desktopGlassMain.setBounds({ x: 200, y: 120, width: 1500, height: 940 }));
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).click(); await page.locator('.file-preview').waitFor();
   const cdp = await page.context().newCDPSession(page); await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }] });
   assert.equal(await page.locator('.app-shell').evaluate(node => getComputedStyle(node).backgroundColor), 'rgb(24, 24, 24)'); await cdp.send('Emulation.setEmulatedMedia', { features: [] }); await cdp.detach();
-  results.checks.push('material switches preserve terminal and draft; the opaque grey cards ignore the transparency setting; GPU, settings, resizing, expanded file view and reduced transparency work');
+  results.checks.push('material switches preserve terminal and draft; the opaque grey cards ignore the transparency setting; GPU, settings, resizing, windowed project expansion, file view and reduced transparency work');
   assert.deepEqual(errors, []);
   await app.close(); app = null; await launch(); assert.ok((await state()).desktopGlass.active); assert.equal((await state()).settings.glassTransparency, 75);
   results.checks.push('desktop glass and panel transparency survive restart');

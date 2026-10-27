@@ -114,6 +114,5 @@ contextBridge.exposeInMainWorld('agentrix', {
   followAgentSession: (id, sessionId) => ipcRenderer.invoke('terminal:followAgentSession', id, sessionId),
   onTerminalConversation: callback => listen('terminal:conversation', callback),
   close: () => ipcRenderer.send('window:close'),
-  focusMode: enabled => ipcRenderer.send('window:focus-mode', enabled),
   quit: () => ipcRenderer.invoke('app:quit'),
 });

@@ -131,11 +131,10 @@ export function App() {
     setView('workspace');
     setPreviewFile(null);
     setFocusedId(id);
-    api.focusMode(true);
     perform(api.acknowledge(id));
     return true;
   }, [perform, setFocusedId, allowNavigation]);
-  const returnToGrid = useCallback(async () => { if (!await allowNavigation()) return; setView('workspace'); setFocusedId(null); setPreviewFile(null); api.focusMode(false); }, [setFocusedId, allowNavigation]);
+  const returnToGrid = useCallback(async () => { if (!await allowNavigation()) return; setView('workspace'); setFocusedId(null); setPreviewFile(null); }, [setFocusedId, allowNavigation]);
   const showProjectLocation = useCallback(async (id: string, result: ProjectLocation | undefined) => {
     if (!result || result.kind === 'external' || !await focusProject(id)) return;
     if (result.kind === 'file') {

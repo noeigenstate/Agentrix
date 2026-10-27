@@ -240,21 +240,19 @@ test('terminal registrar flushes attach, validates paste and resize, and changes
   h.listeners.get('terminal:focus')('other', false); assert.equal(active, 't'); h.listeners.get('terminal:focus')('t', false); assert.equal(active, null);
 });
 
-test('window IPC reads the live window and preserves shortcut fullscreen across focus mode', () => {
-  for (const platform of ['win32', 'darwin']) {
-    const h = handlers(), calls = []; let fullscreen = false, maximized = false;
-    let window = { isFullScreen: () => fullscreen, setFullScreen: value => { fullscreen = value; calls.push(value); },
-      isMaximized: () => maximized, maximize: () => { maximized = true; }, unmaximize: () => { maximized = false; } };
-    require('../electron/app/window-ipc.cjs').registerWindowIpc({ ...h, platform, getWindow: () => window, requestQuit: () => 'quit' });
-    h.listeners.get('window:maximize')(); assert.equal(maximized, true); h.listeners.get('window:maximize')(); assert.equal(maximized, false);
-    h.listeners.get('window:fullscreen')(); assert.equal(fullscreen, true);
-    h.listeners.get('window:focus-mode')(false); assert.equal(fullscreen, true);
-    h.listeners.get('window:fullscreen')(); assert.equal(fullscreen, false);
-    h.listeners.get('window:focus-mode')(true); assert.equal(fullscreen, platform !== 'darwin');
-    h.listeners.get('window:focus-mode')(false); assert.equal(fullscreen, false);
-    const count = calls.length; h.listeners.get('window:focus-mode')('true'); assert.equal(calls.length, count);
-    window = { isFullScreen: () => true, minimize: () => calls.push('new window') };
-    h.listeners.get('window:minimize')(); assert.equal(calls.at(-1), 'new window');
-    assert.equal(h.handles.get('window:is-fullscreen')(), true); assert.equal(h.handles.get('app:quit')(), 'quit');
-  }
+test('window IPC toggles and reports fullscreen and reads the live window', () => {
+  const h = handlers(), calls = []; let fullscreen = false, maximized = false;
+  let window = { isFullScreen: () => fullscreen, setFullScreen: value => { fullscreen = value; calls.push(value); },
+    isMaximized: () => maximized, maximize: () => { maximized = true; }, unmaximize: () => { maximized = false; } };
+  require('../electron/app/window-ipc.cjs').registerWindowIpc({ ...h, getWindow: () => window, requestQuit: () => 'quit' });
+  h.listeners.get('window:maximize')(); assert.equal(maximized, true); h.listeners.get('window:maximize')(); assert.equal(maximized, false);
+  assert.equal(h.handles.get('window:is-fullscreen')(), false);
+  h.listeners.get('window:fullscreen')(); assert.equal(fullscreen, true); assert.equal(h.handles.get('window:is-fullscreen')(), true);
+  h.listeners.get('window:fullscreen')(); assert.equal(fullscreen, false); assert.equal(h.handles.get('window:is-fullscreen')(), false);
+  assert.deepEqual(calls, [true, false]);
+  window = { isFullScreen: () => true, setFullScreen: value => calls.push(value), minimize: () => calls.push('new window') };
+  h.listeners.get('window:minimize')(); assert.equal(calls.at(-1), 'new window');
+  assert.equal(h.handles.get('window:is-fullscreen')(), true);
+  h.listeners.get('window:fullscreen')(); assert.equal(calls.at(-1), false);
+  assert.equal(h.handles.get('app:quit')(), 'quit');
 });

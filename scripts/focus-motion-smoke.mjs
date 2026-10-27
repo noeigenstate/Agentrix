@@ -99,11 +99,13 @@ try {
     const box = panel.getBoundingClientRect();
     return { width: box.width, height: box.height, targetWidth: panel.offsetWidth, targetHeight: panel.offsetHeight };
   });
-  assert.ok(mid.width > original.width + 5 && mid.width < mid.targetWidth - 5, 'opening has intermediate widths between the card and fullscreen');
+  assert.ok(mid.width > original.width + 5 && mid.width < mid.targetWidth - 5, 'opening has intermediate widths between the card and expanded project');
   assert.ok(mid.height > original.height + 5 && mid.height < mid.targetHeight - 5, 'opening has intermediate heights');
   await page.screenshot({ path: path.join(output, 'expanding.png') });
   await panel.evaluate(panel => panel.getAnimations().forEach(animation => animation.play()));
   await settled(true); await landed(id);
+  assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen()), false, 'project expansion keeps the native window windowed');
+  assert.deepEqual(await page.evaluate(() => ({ width: innerWidth, height: innerHeight })), overviewViewport, 'expansion preserves the window viewport');
   await page.screenshot({ path: path.join(output, 'focused.png') });
   assert.ok(await panel.evaluate(panel => panel.querySelector('.terminal-host') === globalThis.motionTerminal));
   const full = await panel.boundingBox();
@@ -120,7 +122,7 @@ try {
     return { width: box.width, targetWidth: panel.offsetWidth, right: box.right, bottom: box.bottom, viewportWidth: innerWidth, viewportHeight: innerHeight };
   });
   assert.ok(shrinking.width > shrinking.targetWidth + 5 && shrinking.width < full.width - 5, 'return shrinks continuously into the grid');
-  assert.ok(shrinking.right <= shrinking.viewportWidth + 1 && shrinking.bottom <= shrinking.viewportHeight + 1, 'the whole shrinking card remains inside the smaller native window');
+  assert.ok(shrinking.right <= shrinking.viewportWidth + 1 && shrinking.bottom <= shrinking.viewportHeight + 1, 'the whole shrinking card remains inside the native window');
   await page.screenshot({ path: path.join(output, 'returning.png') });
   await panel.evaluate(panel => panel.getAnimations().forEach(animation => animation.play()));
   await settled(false); await landed(id);
