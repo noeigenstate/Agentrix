@@ -116,8 +116,13 @@ class CompletionWork {
       const tag = name => new RegExp(`<${name}>\\s*([^<]+?)\\s*</${name}>`).exec(notice)?.[1];
       const taskId = tag('task-id'), toolUseId = tag('tool-use-id'), id = taskId || toolUseId;
       if (!id || !finished(tag('status')) || this.services.has(taskId) || this.services.has(toolUseId)) continue;
+      const tracked = this.find(toolUseId) || this.find(taskId);
       this.finish(toolUseId); this.finish(taskId);
-      if (queued && record.operation === 'enqueue') this.notifications.add(id);
+      if (queued && record.operation === 'enqueue') {
+        // Historical or duplicate receipts may never be delivered. Only an
+        // outstanding job creates queued review; actual delivery still starts it below.
+        if (tracked) this.notifications.add(id);
+      }
       // A dequeue is anonymous and cannot prove which of several messages was
       // selected. Receipt, or a named delivery, starts the parent's review.
       else if (!queued || ['remove', 'popOne', 'popAll'].includes(record.operation)) {

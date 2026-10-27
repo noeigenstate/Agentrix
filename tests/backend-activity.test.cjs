@@ -12,6 +12,8 @@ const { PromptQueue, promptText } = require('../electron/prompt-queue.cjs');
 const { resumeCommand, claudeResumeCommand } = require('../electron/session-restore.cjs');
 const { isLocalAgentCommand } = require('../electron/agent-commands.cjs');
 const { CompletionWork, LOST_WORK_TIMEOUT } = require('../electron/completion-work.cjs');
+const { CodexActivityReader, monitorActivity } = require('../electron/codex-activity.cjs');
+const { TranscriptTail } = require('../electron/agent-actions.cjs');
 
 const main = syncFs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 async function harness(t, kind = 'local', agent = 'codex') {
@@ -76,6 +78,60 @@ const taskNotice = (id, at, type = 'queue-operation') => ({ type, operation: 'en
     : { content: `<task-notification><task-id>${id}</task-id><status>completed</status></task-notification>` }),
 });
 
+// Drive the real local/SSH reader callbacks and monitor deduplication without Electron.
+async function activityFeed(t, h) {
+  const { s, project, context } = h, remote = project.kind === 'ssh';
+  const home = path.join(project.path, 'activity-home'), thread = '00000000-0000-4000-8000-000000000001';
+  const file = s.agent === 'claude' ? path.join(home, 'session.jsonl') : path.join(home, 'sessions', `rollout-${thread}.jsonl`);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, '');
+  s.activityClockOffset = remote ? 100000 : 0;
+  const timestamp = at => stamp(at - s.activityClockOffset), records = [];
+  const reader = new CodexActivityReader(project.path, home, 1000);
+  reader.snapshot = { threadId: thread, turnId: null, state: 'unknown', updatedAt: 0 };
+  let changes = 0;
+  const append = async record => {
+    if (remote) { records.push(record); reader.record(record); }
+    else await fs.appendFile(file, `${JSON.stringify(record)}\n`);
+  };
+  s.actions.reset = () => {};
+  s.terminal = { request: async () => ({ records: records.splice(0), snapshot: reader.snapshot, historyDone: true }) };
+  Object.assign(context, {
+    path, TranscriptTail, CodexActivityReader, claudeConversation, codexConversation,
+    claudeConfigDir: () => home, claudeRecord: () => [], codexRecord: () => [],
+    describeActions() {}, noteSettings() {}, usageHistory() {}, readEvery: () => 1000,
+    monitorActivity: (read, changed, options) => monitorActivity(read, snapshot => { changes++; changed(snapshot); }, { ...options, watch: null }),
+  });
+  if (s.agent === 'claude') {
+    vm.runInContext(main.slice(main.indexOf('function followClaude('), main.indexOf('// Workspace broadcasts')), context);
+    context.followClaude(project, s, { sessionId: 'session', transcriptPath: remote ? '/srv/claude/projects/session.jsonl' : file, sentAt: 1000 - s.activityClockOffset });
+  } else {
+    await append({ type: 'session_meta', timestamp: timestamp(1000), payload: { id: thread, cwd: project.path, source: 'cli' } });
+    await append({ type: 'event_msg', timestamp: timestamp(1900), payload: { type: 'task_started', turn_id: 'parent' } });
+    context.event = { cwd: project.path, codexHome: home, sentAt: 1000 - s.activityClockOffset };
+    const start = main.indexOf('    const remoteSince =');
+    vm.runInContext(main.slice(start, main.indexOf('    // Unread completion', start)), context);
+  }
+  t.after(() => s.activityMonitor.stop());
+  await s.activityMonitor.poll();
+  return {
+    changes: () => changes,
+    poll: () => s.activityMonitor.poll(),
+    user: async (text, at) => {
+      await append(s.agent === 'claude'
+        ? { type: 'user', uuid: `user-${at}`, timestamp: timestamp(at), message: { content: text } }
+        : { type: 'event_msg', timestamp: timestamp(at), payload: { type: 'user_message', message: text } });
+      await s.activityMonitor.poll();
+    },
+    complete: async at => {
+      await append(s.agent === 'claude'
+        ? { type: 'assistant', uuid: 'parent', timestamp: timestamp(at), message: { stop_reason: 'end_turn', content: [] } }
+        : { type: 'event_msg', timestamp: timestamp(at), payload: { type: 'task_complete', turn_id: 'parent' } });
+      await s.activityMonitor.poll();
+    },
+  };
+}
+
 test('a running Claude dev server lets its session card complete and cannot rearm it after acknowledgment', async t => {
   for (const native of [false, true]) {
     const h = await harness(t, 'local', 'claude'), { s } = h;
@@ -125,6 +181,36 @@ test('Claude completion waits for every background agent and command and the not
   }
 });
 
+test('Claude orphan receipts and stopped services leave the badge state complete without rearming alerts', async t => {
+  for (const kind of ['local', 'ssh']) {
+    const h = await harness(t, kind, 'claude'), { s } = h, work = s.completionWork;
+    const orphan = { ...taskNotice('old-shell', 1900), content: '<task-notification>\n<task-id>old-shell</task-id>\n<tool-use-id>old-launch</tool-use-id>\n<status>killed</status>\n<summary>Previous shell was stopped</summary>\n</task-notification>' };
+    work.record({ type: 'system', subtype: 'compact_boundary', timestamp: stamp(1850) }, 'claude');
+    work.record(orphan, 'claude');
+    const service = { ...background('Bash', 'dev', 1920), message: { content: [
+      { type: 'tool_use', name: 'Bash', id: 'dev', input: { command: 'cd /work/app && AGENTRIX_DATA_DIR=/scratch/profile AGENTRIX_TEST_HOME=1 npm run dev', run_in_background: true } },
+    ] } };
+    work.record(service, 'claude');
+    work.record({ type: 'user', timestamp: stamp(1930), toolUseResult: { backgroundTaskId: 'server' },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'dev' }] } }, 'claude');
+    const stopped = { ...taskNotice('server', 1940), content: '<task-notification>\n<task-id>server</task-id>\n<tool-use-id>dev</tool-use-id>\n<status>stopped</status>\n<summary>Previous shell did not finish before the session ended</summary>\n</task-notification>' };
+    work.record(stopped, 'claude');
+    work.record({ type: 'queue-operation', operation: 'dequeue', timestamp: stamp(1950) }, 'claude');
+    work.record({ type: 'user', timestamp: stamp(1960), message: { content: stopped.content } }, 'claude');
+    h.write('Finish the task\r'); h.user('Finish the task');
+    work.record({ type: 'assistant', uuid: 'done', timestamp: stamp(2100), message: { stop_reason: 'end_turn', content: [] } }, 'claude');
+    h.apply('complete', 'done', 2100);
+    assert.equal(work.tasks.size, 0); assert.equal(work.notifications.size, 0);
+    assert.equal(s.codexActivity, 'complete'); assert.equal(h.project.unread, 1);
+    assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1);
+    h.store.acknowledge(h.project.id);
+    work.record({ ...orphan, timestamp: stamp(2200) }, 'claude');
+    work.changed(); h.apply('complete', 'idle', 2300);
+    assert.equal(s.codexActivity, 'complete'); assert.equal(h.project.unread, 0);
+    assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1);
+  }
+});
+
 test('queued terminal submissions block the gap between turns without consuming the project alert', async t => {
   const h = await harness(t);
   h.write('first task\r'); h.user('first task', 2050);
@@ -137,8 +223,8 @@ test('queued terminal submissions block the gap between turns without consuming 
   assert.equal(h.s.codexActivity, 'complete'); assert.equal(h.project.unread, 1); assert.equal(h.alerts(), 1);
 });
 
-for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) {
-  test(`${agent} ${kind} drops an unrecorded typed answer after grace and grants the deferred completion once`, async t => {
+for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) for (const readAtExpiry of [false, true]) {
+  test(`${agent} ${kind} drops an unrecorded typed answer after grace and grants the deferred completion once${readAtExpiry ? ' despite a state read at expiry' : ''}`, async t => {
     t.mock.timers.enable({ apis: ['setTimeout'] });
     const h = await harness(t, kind, agent), { s, project } = h;
     h.write('Finish the task\r'); h.user('Finish the task'); h.apply('working', 'parent', 2050);
@@ -155,8 +241,12 @@ for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) {
     h.now(2200 + grace - 1); t.mock.timers.tick(grace - 1);
     await Promise.resolve();
     assert.equal(s.codexActivity, 'working'); assert.equal(project.unread, 0); assert.equal(h.alerts(), 0);
+    if (readAtExpiry) {
+      h.now(2200 + grace); t.mock.timers.tick(1);
+      assert.deepEqual(s.promptQueue.list(), [], 'a state read prunes the answer before the expiry timer fires');
+    }
     // The queue timer has a 10 ms margin. No new lifecycle event grants this completion.
-    h.now(2200 + grace + 10); t.mock.timers.tick(11);
+    h.now(2200 + grace + 10); t.mock.timers.tick(readAtExpiry ? 10 : 11);
     await Promise.resolve();
     assert.equal(s.codexActivity, 'complete'); assert.deepEqual(s.promptQueue.list(), []);
     assert.equal(project.unread, 1); assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1);
@@ -171,6 +261,62 @@ for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) {
     await Promise.resolve();
     assert.equal(s.codexActivity, 'complete'); assert.equal(project.unread, 0);
     assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1); assert.equal(project.completionArmed, false);
+  });
+}
+
+for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) for (const completionAt of [2099, 2200]) for (const readAtExpiry of [false, true]) {
+  test(`${agent} ${kind} replays a deduplicated completion ${completionAt < 2100 ? 'before' : 'after'} the handled answer only when it expires${readAtExpiry ? ' in a state read' : ''}`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const h = await harness(t, kind, agent), { s, project } = h, feed = await activityFeed(t, h);
+    h.write('Finish the task\r'); await feed.user('Finish the task', 2000);
+    h.now(2100); h.write('Use the suggested option\r');
+    h.now(2200); await feed.complete(completionAt);
+    assert.equal(s.activityRawSnapshot.state, 'complete'); assert.equal(s.activityRawSnapshot.updatedAt, completionAt);
+    assert.equal(s.activityInputAt, 2100); assert.equal(s.codexActivity, 'working');
+    assert.equal(project.unread, 0); assert.equal(h.alerts(), 0); assert.equal(h.armings(), 1);
+    assert.deepEqual(s.promptQueue.list().map(item => item.text), ['Use the suggested option']);
+    const changes = feed.changes();
+    await feed.poll();
+    assert.equal(feed.changes(), changes, 'an identical poll cannot rescue the rejected completion');
+
+    const grace = s.promptQueue.grace;
+    h.now(2200 + grace - 1); t.mock.timers.tick(grace - 1); await Promise.resolve();
+    assert.equal(s.codexActivity, 'working'); assert.equal(project.unread, 0); assert.equal(h.alerts(), 0);
+    if (readAtExpiry) {
+      h.now(2200 + grace); t.mock.timers.tick(1);
+      assert.deepEqual(s.promptQueue.list(), []);
+    }
+    h.now(2200 + grace + 10); t.mock.timers.tick(readAtExpiry ? 10 : 11); await Promise.resolve();
+    assert.equal(s.activityInputAt, 2000, 'only the unrecorded answer loses its input guard');
+    assert.equal(s.codexActivity, 'complete'); assert.deepEqual(s.promptQueue.list(), []);
+    assert.equal(project.unread, 1); assert.equal(project.lastCompletedAt, completionAt);
+    assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1); assert.equal(project.completionArmed, false);
+    await feed.poll(); s.promptQueue.changed(); s.completionWork.changed(); await Promise.resolve();
+    assert.equal(feed.changes(), changes); assert.equal(project.unread, 1); assert.equal(h.alerts(), 1);
+    h.store.acknowledge(project.id);
+    t.mock.timers.tick(grace + 10); await feed.poll(); await Promise.resolve();
+    assert.equal(project.unread, 0); assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1);
+  });
+}
+
+for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) for (const completionAt of [2099, 2200]) {
+  test(`${agent} ${kind} preserves a recorded new prompt's guard when an unrecorded answer after completion at ${completionAt} expires`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const h = await harness(t, kind, agent), { s, project } = h, feed = await activityFeed(t, h);
+    h.write('Finish the task\r'); await feed.user('Finish the task', 2000);
+    h.now(2100); h.write('Use the suggested option\r');
+    h.now(2200); await feed.complete(completionAt);
+    h.now(2300); h.write('A real new task\r'); await feed.user('A real new task', 2299);
+    assert.equal(s.activityConfirmedInputAt, 2300, 'receipt preserves the handled input time even if the transcript timestamp is older');
+    h.now(2200 + s.promptQueue.grace + 10); t.mock.timers.tick(s.promptQueue.grace + 10);
+    await Promise.resolve();
+    assert.equal(s.activityInputAt, 2300); assert.equal(s.codexActivity, 'working');
+    assert.deepEqual(s.promptQueue.list().map(item => item.text), ['A real new task']);
+    assert.equal(project.unread, 0); assert.equal(h.alerts(), 0); assert.equal(h.armings(), 1); assert.equal(project.completionArmed, true);
+    h.apply('complete', 'parent', completionAt); s.promptQueue.changed(); s.completionWork.changed(); await Promise.resolve();
+    assert.equal(s.codexActivity, 'working'); assert.equal(project.unread, 0); assert.equal(h.alerts(), 0);
+    h.apply('complete', 'new-task', 2400);
+    assert.equal(s.codexActivity, 'complete'); assert.equal(project.unread, 1); assert.equal(h.alerts(), 1);
   });
 }
 

@@ -151,6 +151,24 @@ test('the unread status button still opens a grid card with either activity togg
   assert.deepEqual(h.focused, ['project', 'project']);
 });
 
+test('the project badge follows the work gate for orphan receipts and genuinely open jobs', t => {
+  const { CompletionWork } = require('../electron/completion-work.cjs');
+  const work = new CompletionWork({ now: () => 2000 }), h = projectHeaderHarness(t);
+  t.after(() => work.reset());
+  h.props.project.agent = 'claude';
+  const record = value => work.record({ timestamp: new Date(2000).toISOString(), ...value }, 'claude');
+  const badge = () => {
+    h.props.project.codexActivity = work.state({ state: 'complete' });
+    return renderToStaticMarkup(h.render().find(node => node.props.className?.startsWith('status-badge')));
+  };
+  record({ type: 'queue-operation', operation: 'enqueue', content: '<task-notification><task-id>old-shell</task-id><tool-use-id>old-launch</tool-use-id><status>killed</status></task-notification>' });
+  assert.match(badge(), /status-badge is-complete/); assert.match(badge(), /本轮已完成/);
+  h.props.project.unread = 1;
+  assert.match(badge(), /status-badge is-review/); assert.match(badge(), /等待你查看/);
+  record({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', id: 'job', input: { command: 'npm test', run_in_background: true } }] } });
+  assert.match(badge(), /status-badge is-working/); assert.match(badge(), /正在处理/);
+});
+
 test('a stopped single terminal can restart while the focused header actions are hidden', t => {
   const h = projectHeaderHarness(t);
   Object.assign(h.props, { focused: true, activityOpen: false });
@@ -1317,6 +1335,7 @@ test('the reading view keeps two vertical lines: the avatars and the reply text 
   assert.ok(flow.includes('.reading-step-body > .reading-turn { margin-left: calc(var(--reading-inset) - var(--step-lead) - var(--turn-pad)); }'));
   assert.ok(flow.includes('.reading-assistant { padding: 0 16px 0 var(--turn-pad);'));
   assert.ok(flow.includes('.reading-turn-tools { position: relative; min-width: 0; padding-left: var(--turn-pad); }'), 'the pill starts on the content edge');
+  assert.ok(flow.includes(".reading-turn-tools:has(.reading-tools.is-open)::before {") && !flow.includes('.reading-turn-tools::before {'), 'the rail below the tools icon only shows while the group is open');
   assert.match(flow, /\.reading-turn-mark \{ position: absolute; left: calc\(var\(--step-node\) \/ -2 - var\(--turn-icon\) \/ 2\);/, 'the tools icon is centred on the avatars axis');
   assert.ok(flow.includes('.reading-turn > .reading-status { margin-left: var(--turn-pad); }'));
   assert.ok(flow.includes('.reading-step-body > .reading-status { margin-left: calc(var(--reading-inset) - var(--step-lead)); }'));

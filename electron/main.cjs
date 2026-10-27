@@ -347,7 +347,7 @@ function followClaude(project, s, event) {
       if (s.completionWork) s.completionWork.reading = !ready;
       usageHistory(s, ready);
     };
-    s.activitySnapshot = null;
+    s.activitySnapshot = s.activityRawSnapshot = null;
     s.claudeTranscript = remote ? { filename: file } : new TranscriptTail(file, { onHistory, onWorkRecord: record => onRecord({ ...record, workOnly: true }) });
     s.activityMonitor?.stop();
     const tail = s.claudeTranscript;
@@ -359,8 +359,8 @@ function followClaude(project, s, event) {
         return;
       }
       const turn = s.completionWork?.turn;
-      if (turn && turn.updatedAt >= Math.max(s.activitySince || 0, s.activityInputAt || 0, s.activitySnapshot?.updatedAt || 0)) {
-        s.activitySnapshot = { ...turn, threadId: s.claudeSessionId };
+      if (turn && turn.updatedAt >= Math.max(s.activitySince || 0, s.activityRawSnapshot?.updatedAt || 0)) {
+        s.activityRawSnapshot = { ...turn, threadId: s.claudeSessionId };
       }
       claudeConversation(s.conversation, record, project.path); describeActions(s, project.path, claudeRecord(s.actions, record, project.path));
       noteSettings(s, 'claude', record);
@@ -373,7 +373,7 @@ function followClaude(project, s, event) {
       if (value.historyDone) onHistory(true);
       if (s.completionWork) s.completionWork.reading = !value.historyDone;
       if (s.completionWork && value.completionUncertain) s.completionWork.uncertain = true;
-      return s.activitySnapshot && { ...s.activitySnapshot, workVersion: s.completionWork?.version, transcriptRead: true };
+      return s.activityRawSnapshot && { ...s.activityRawSnapshot, workVersion: s.completionWork?.version, transcriptRead: true };
     };
     s.activityMonitor = monitorActivity(async () => {
       if (remote) return s.terminal.request('claude-status', { path: file, since }).then(remoteStatus);
@@ -382,7 +382,7 @@ function followClaude(project, s, event) {
         s.completionWork.reading = tail.historyPending || tail.offset < tail.fileSize || tail.buffer.length > 0;
         s.completionWork.uncertain ||= tail.workHistory?.uncertain;
       }
-      return s.activitySnapshot && { ...s.activitySnapshot, workVersion: s.completionWork?.version, transcriptRead: true };
+      return s.activityRawSnapshot && { ...s.activityRawSnapshot, workVersion: s.completionWork?.version, transcriptRead: true };
     }, snapshot => applyActivity(project, s, snapshot), { interval: () => readEvery(s), watch: () => remote ? null : tail.filename });
   } else void s.activityMonitor?.poll();
 }
@@ -541,14 +541,18 @@ async function followClaudeSession(project, s, id) {
 // One place turns an agent's turn state into lights and completion alerts, for Codex and Claude alike.
 function applyActivity(project, s, snapshot) {
   if (sessions.get(s.terminalId) !== s || !s.codexActive) return;
-  // Resumed history and a slow response from before a new submission
-  // must not make newly running work look complete.
-  if (snapshot.updatedAt < Math.max(s.activitySince, s.activityInputAt)) return;
-  s.activitySnapshot = snapshot;
+  if (snapshot.updatedAt < (s.activitySince || 0)) return;
+  // Readers deduplicate snapshots. Retain even a completion hidden by provisional
+  // input so that expiring that submission can replay it without another record.
+  if (snapshot.updatedAt >= (s.activityRawSnapshot?.updatedAt || 0)) s.activityRawSnapshot = snapshot;
   if (['complete', 'interrupted'].includes(snapshot.state)) {
     s.completionWork?.end(snapshot.updatedAt);
     s.promptQueue.finish?.(snapshot.updatedAt);
   }
+  // Resumed history and a slow response from before a new submission
+  // must not make newly running work look complete.
+  if (snapshot.updatedAt < (s.activityInputAt || 0)) return;
+  s.activitySnapshot = snapshot;
   const queued = s.promptQueue.list?.().some(item => item.state === 'queued') || !!s.conversation?.queue?.length;
   const state = s.completionWork?.state(snapshot, { queued })
     || (queued && snapshot.state === 'complete' ? 'working' : snapshot.state);
@@ -611,7 +615,11 @@ function claudeActivity(project, s, event) {
     // UserPromptSubmit is actual input, unlike a polled working snapshot or a Stop callback.
     if (s.claudePromptEventId !== event.eventId) {
       s.claudePromptEventId = event.eventId;
-      if (promptText(event.prompt) !== null) { s.completionWork?.begin(); store.expectCompletion(project.id); }
+      if (promptText(event.prompt) !== null) {
+        s.activityConfirmedInputAt = Math.max(s.activityConfirmedInputAt || 0, Date.now());
+        s.activityInputAt = Math.max(s.activityInputAt || 0, s.activityConfirmedInputAt);
+        s.completionWork?.begin(); store.expectCompletion(project.id);
+      }
     }
   } else if (event.state === 'complete' && s.claudeLocalCommand) { s.claudeLocalCommand = false; return; }
   s.needsInput = null;
@@ -625,7 +633,7 @@ function claudeActivity(project, s, event) {
   if (event.state === 'complete' && s.activityMonitor) {
     const promptEvent = s.claudePromptEventId;
     void Promise.resolve(s.activityMonitor.poll()).then(() => {
-      if (s.agent === 'claude' && (!s.claudeSessionId || s.claudeSessionId === event.sessionId) && s.claudePromptEventId === promptEvent && !(s.activitySnapshot?.updatedAt > snapshot.updatedAt)) applyActivity(project, s, { ...snapshot, transcriptRead: true });
+      if (s.agent === 'claude' && (!s.claudeSessionId || s.claudeSessionId === event.sessionId) && s.claudePromptEventId === promptEvent && !(s.activityRawSnapshot?.updatedAt > snapshot.updatedAt)) applyActivity(project, s, { ...snapshot, transcriptRead: true });
     }).catch(() => {});
   } else applyActivity(project, s, snapshot);
 }
@@ -642,7 +650,7 @@ function onEvent(event) {
     s.needsInput = null; s.agentCommand = null; stopUsageAccount(s);
     s.claudeResumeId = null; s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
     s.activityMonitor?.stop(); s.activityMonitor = null;
-    s.codexActive = false; s.codexActivity = 'unknown'; s.reportedThreadId = null; s.promptQueue.reset(); s.activitySnapshot = null;
+    s.codexActive = false; s.codexActivity = 'unknown'; s.reportedThreadId = null; s.promptQueue.reset(); s.activitySnapshot = s.activityRawSnapshot = null;
     if (s.completionWork?.reset()) store.expectCompletion(project.id, false);
     s.ready = event.type === 'shell-prompt';
     s.inputDirty = false;
@@ -679,8 +687,8 @@ function onEvent(event) {
     s.status = 'codex';
     s.error = null;
     s.submissions.reset();
-    s.codexActivity = 'unknown'; s.activitySince = Date.now(); s.activityInputAt = 0;
-    s.activitySnapshot = null; s.completionWork?.reset();
+    s.codexActivity = 'unknown'; s.activitySince = Date.now(); s.activityInputAt = s.activityConfirmedInputAt = 0;
+    s.activitySnapshot = s.activityRawSnapshot = null; s.completionWork?.reset();
     s.activityPromptAt = 0; s.claudePromptEventId = null;
     s.activityClockOffset = Number.isFinite(event.sentAt) ? s.activitySince - event.sentAt : 0;
     if (!keepClaudeHistory) { s.actions.reset(); s.conversation.reset(); s.claudeTranscript = null; s.claudeSessionId = null; }
@@ -718,7 +726,10 @@ function onEvent(event) {
       if (record.workOnly) return;
       codexConversation(s.conversation, record, event.cwd || project.path); describeActions(s, event.cwd || project.path, codexRecord(s.actions, record, event.cwd || project.path));
       noteSettings(s, 'codex', record);
-      if (record?.type === 'event_msg' && ['task_complete', 'turn_completed', 'turn_aborted', 'turn_interrupted'].includes(record.payload?.type)) s.promptQueue.finish(Date.parse(record.timestamp) || Date.now());
+      if (record?.type === 'event_msg' && ['task_complete', 'turn_completed', 'turn_aborted', 'turn_interrupted'].includes(record.payload?.type)) {
+        const at = Date.parse(record.timestamp);
+        s.promptQueue.finish(Number.isFinite(at) ? at + (s.activityClockOffset || 0) : Date.now());
+      }
     };
     const remoteStatus = value => {
       if (!value || typeof value !== 'object' || !('snapshot' in value)) return value;
@@ -754,7 +765,7 @@ function onEvent(event) {
     s.claudeResumeId = null; s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
     s.activityMonitor?.stop(); s.activityMonitor = null; s.codexActivity = 'unknown';
     if (s.completionWork?.reset()) store.expectCompletion(project.id, false);
-    s.activitySnapshot = null;
+    s.activitySnapshot = s.activityRawSnapshot = null;
     s.ready = false;
     s.codexActive = false;
     s.status = 'shell';
@@ -854,7 +865,7 @@ function nativeSessionEvent(id, sessionId, message) {
   const previous = s.nativeMode === 'claude-sdk' ? s.claudeSessionId : s.reportedThreadId;
   if (next && previous && next !== previous) {
     if (s.completionWork?.reset()) store.expectCompletion(project.id, false);
-    s.promptQueue.reset(); s.activitySnapshot = null; s.codexActivity = 'unknown';
+    s.promptQueue.reset(); s.activitySnapshot = s.activityRawSnapshot = null; s.codexActivity = 'unknown';
   }
   s.completionWork?.native(message, s.agent, at, s.reportedThreadId);
   if (s.nativeMode !== 'claude-sdk' && s.reportedThreadId && p?.threadId && p.threadId !== s.reportedThreadId) return;
@@ -874,7 +885,7 @@ function nativeSessionEvent(id, sessionId, message) {
     add('user', message.text);
     const task = summarizeTask(message.text, { spoken: true });
     if (task) { s.lastTask = task; s.lastTaskSummary = summarizeTask(message.text); s.lastTaskTitle = message.text; }
-    s.activityInputAt = at;
+    s.activityInputAt = s.activityConfirmedInputAt = at;
     s.codexActivity = 'working'; store.expectCompletion(project.id); scheduleState();
   }
   if (s.nativeMode === 'claude-sdk') {
@@ -894,7 +905,7 @@ function nativeSessionEvent(id, sessionId, message) {
   }
   if (['turn/started', 'turn/completed', 'turn/interrupted'].includes(message.method) && p?.threadId && p?.turn?.id) {
     // Advance the stale-snapshot guard for the parent, without arming idle or child turns.
-    if (message.method === 'turn/started') s.activityInputAt = at;
+    if (message.method === 'turn/started') s.activityInputAt = s.activityConfirmedInputAt = at;
     applyActivity(project, s, { threadId: p.threadId, turnId: p.turn.id, state: message.method === 'turn/started' ? 'working' : message.method === 'turn/interrupted' || p.turn.status === 'interrupted' || p.turn.status === 'failed' ? 'interrupted' : 'complete', updatedAt: at });
   }
 }
@@ -970,9 +981,18 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     if (sessions.get(id) === s && s.codexActive && s.activitySnapshot) applyActivity(project, s, s.activitySnapshot);
   };
   s.completionWork = new CompletionWork({ changed: refreshCompletion });
-  s.promptQueue = new PromptQueue(() => {
+  s.promptQueue = new PromptQueue(expired => {
     if (sessions.get(id) !== s) return;
     scheduleState();
+    if (expired?.length) {
+      // Release only the expired submissions' provisional guard. Received prompts
+      // and submissions still waiting must continue to reject older completions.
+      s.activityInputAt = Math.max(s.activityConfirmedInputAt || 0, ...s.promptQueue.items.map(item => item.at));
+      queueMicrotask(() => {
+        if (s.activityRawSnapshot) applyActivity(project, s, s.activityRawSnapshot);
+      });
+      return;
+    }
     // Queue receipt/cancellation/expiry can change a deferred completion even if
     // no new lifecycle snapshot arrives. This never arms another notification.
     if (s.activitySnapshot?.state === 'complete') queueMicrotask(refreshCompletion);
@@ -982,16 +1002,22 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   s.conversation = new ConversationLog(change => {
     publishConversation(s, change);
     const entry = change.entry;
-    if (entry?.cancelled) s.promptQueue.cancel(entry.original ?? entry.text, entry.at);
-    if (entry?.role === 'assistant' && s.codexActive) s.promptQueue.reply(entry);
+    const at = entry?.at + (s.activityClockOffset || 0);
+    if (entry?.cancelled) s.promptQueue.cancel(entry.original ?? entry.text, at);
+    if (entry?.role === 'assistant' && s.codexActive) s.promptQueue.reply({ ...entry, at });
     // An answer to the agent's own question is not a prompt: it goes on with the round it answered.
     if (entry?.role === 'user' && !entry.answer && !entry.queued && s.codexActive) {
       const localCommand = isLocalAgentCommand(s.agent, entry.text);
-      if (entry.at >= (s.activitySince || 0) - 1000) s.promptQueue.start(entry.original ?? entry.text, entry.at, entry.id, localCommand);
+      if (at >= (s.activitySince || 0) - 1000) {
+        const inputAt = s.promptQueue.start(entry.original ?? entry.text, at, entry.id, localCommand);
+        if (inputAt !== undefined && !s.native) {
+          s.activityConfirmedInputAt = Math.max(s.activityConfirmedInputAt || 0, inputAt);
+          s.activityInputAt = Math.max(s.activityInputAt || 0, s.activityConfirmedInputAt);
+        }
+      }
       // Recalled prompts, custom slash commands and command-line prompts are not always visible to the key
       // tracker. Codex's received user message confirms them. A time watermark excludes history and replays;
       // working/completion snapshots alone can never grant another alert. Claude has UserPromptSubmit hooks.
-      const at = entry.at + (s.activityClockOffset || 0);
       if (s.agent === 'codex' && !localCommand && at >= Math.max(s.activitySince || 0, s.activityInputAt || 0) && at > Math.max(s.activityPromptAt || 0, s.lastCompletedAt || 0)) {
         s.activityPromptAt = at;
         s.completionWork?.begin(at);
@@ -1023,7 +1049,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
         s.reportedThreadId = threadId;
         s.approval.context('terminal-title', threadId);
         // A title cut short names the session only by how its id begins: the whole id is kept once its record is found.
-        if (s.codexActive) { s.codexActivity = 'unknown'; s.activityInputAt = 0; if (wholeThread(threadId)) store.setRestore(id, { threadId }); void s.activityMonitor?.poll(); }
+        if (s.codexActive) { s.codexActivity = 'unknown'; s.activityInputAt = s.activityConfirmedInputAt = 0; if (wholeThread(threadId)) store.setRestore(id, { threadId }); void s.activityMonitor?.poll(); }
       }
     }
     s.usageAccount?.output(data);
@@ -1041,7 +1067,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     s.status = 'exited'; s.ready = false; s.codexActive = false;
     s.activityMonitor?.stop(); s.activityMonitor = null; s.codexActivity = 'unknown';
     if (s.completionWork.reset()) store.expectCompletion(project.id, false);
-    s.activitySnapshot = null;
+    s.activitySnapshot = s.activityRawSnapshot = null;
     restorePlans.delete(id);
     if (terminal.error || exitCode) s.error = terminal.error || t('终端已退出（代码 {code}）。', { code: exitCode });
     if (!quitting && !exitCode) store.setRestore(id, { terminal: false, codex: false });

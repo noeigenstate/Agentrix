@@ -51,8 +51,8 @@
 .reading-turn-message { min-width: 0; }
 .reading-turn-message > .reading-turn-item-body > time { padding-left: var(--turn-pad); }
 .reading-turn-tools { position: relative; min-width: 0; padding-left: var(--turn-pad); }
-/* The tools' icon and its rail sit on the avatars' axis, to the left of the turn; the pill starts on the content edge. */
-.reading-turn-tools::before { content: ''; position: absolute; left: calc(var(--step-node) / -2 - .5px); top: calc((var(--pill-h) + var(--turn-icon)) / 2); bottom: 0; border-left: 1px solid var(--flow-line); }
+/* The tools' icon and its rail sit on the avatars' axis, to the left of the turn; the pill starts on the content edge. The rail only joins an opened group's tree: a collapsed one is its icon alone. */
+.reading-turn-tools:has(.reading-tools.is-open)::before { content: ''; position: absolute; left: calc(var(--step-node) / -2 - .5px); top: calc((var(--pill-h) + var(--turn-icon)) / 2); bottom: 0; border-left: 1px solid var(--flow-line); }
 .reading-turn-mark { position: absolute; left: calc(var(--step-node) / -2 - var(--turn-icon) / 2); top: 0; width: var(--turn-icon); display: grid; place-items: center; height: var(--pill-h); color: var(--flow-step); }
 .reading-turn-mark > svg { width: var(--turn-icon); height: var(--turn-icon); }
 .reading-turn-tools .reading-turn-item-body { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 4px 10px; }

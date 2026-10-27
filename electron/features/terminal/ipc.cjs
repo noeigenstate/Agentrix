@@ -43,12 +43,14 @@ function registerTerminalIpc({ handle, listen, findProject, getSession, hasSessi
     // A line of unknown text (arrows, then Enter) is as often a choice in a menu (Codex's update prompt, a /model
     // picker) as a prompt recalled from history: the agent's own records report a round it really starts.
     const prompts = s.submissions.sent.filter(text => text && !isLocalCommand(text));
-    if (submitted && s.codexActive) for (const text of prompts) s.promptQueue.submit(text, s.codexActivity === 'working');
+    const at = now();
+    if (submitted && s.codexActive) for (const text of prompts) s.promptQueue.submit(text, s.codexActivity === 'working', at);
     // Sending a new prompt means the last result has been read: clear the unviewed state before the next round.
     if (submitted && getProjectById(s.projectId)?.unread) { acknowledgeProject(s.projectId); scheduleState(); }
     if (prompts.length && s.codexActive) {
       expectCompletion(s.projectId);
-      s.codexActivity = 'working'; s.activityInputAt = now();
+      s.activityConfirmedInputAt ??= s.activityInputAt || 0;
+      s.codexActivity = 'working'; s.activityInputAt = at;
       scheduleState();
     }
     // Escape on its own interrupts a working Claude Code turn. It runs no hook then, writes nothing to its transcript
