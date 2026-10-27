@@ -15,25 +15,32 @@
 .explorer-title { min-width: 0; margin: 4px 8px 8px; padding: 8px 12px; border-radius: 8px; background: var(--bg-card); }
 .explorer-title h2 { margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--text-1); }
 .explorer-path { display: block; margin-top: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--text-3); user-select: text; }
-.explorer-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 0 8px 8px; }
-.explorer-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); font-size: 12px; font-weight: 600; }
+.explorer-bar { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; margin: 0 8px 8px; }
+.explorer-tabs { display: flex; gap: 4px; min-width: 0; }
+.explorer-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); font-size: 12px; font-weight: 600; }
 .explorer-tabs button:hover { color: var(--text-1); background: var(--bg-hover); }
 .explorer-tabs button[aria-pressed="true"] { color: var(--text-1); background: var(--bg-selected); }
 .explorer-tab-count { min-width: 18px; padding: 0 5px; border-radius: 999px; font: 400 11px/16px var(--font-mono); font-variant-numeric: tabular-nums; background: var(--bg-input); }
-.explorer-tools { display: flex; justify-content: flex-end; gap: 4px; padding: 0 8px 4px; }
+/* The actions share the tabs' row, so they need no row of their own: quiet until the pointer is over the header, tabs or actions, or focus is inside them. A touch screen has no hover, so they stay shown. */
+.explorer-tools { display: flex; flex-shrink: 0; gap: 2px; opacity: 0; }
+.explorer-tools .icon-button { width: 28px; }
+.explorer-more { position: relative; }
+.explorer-more-menu { width: 224px; }
+.explorer-content:has(.explorer-title:hover, .explorer-bar:hover) .explorer-tools,
+.explorer-tools:focus-within { opacity: 1; }
+@media (hover: none) { .explorer-tools { opacity: 1; } }
 .explorer-rail { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 8px; }
 .explorer-rail .icon-button { position: relative; width: 36px; height: 36px; }
 .rail-dot { position: absolute; top: 7px; right: 7px; width: 6px; height: 6px; border-radius: 50%; background: var(--text-1); }
 .sidebar-toggle { width: 32px; height: 32px; }
 .file-tree { min-height: 0; flex: 1; overflow: auto; padding: 4px 8px 20px; user-select: none; }
-.tree-row { display: flex; gap: 6px; align-items: center; width: 100%; height: 32px; padding: 0 12px 0 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-1); font-size: 13px; text-align: left; }
+.tree-row { display: flex; gap: 6px; align-items: center; width: 100%; height: 28px; padding: 0 12px 0 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-1); font-size: 13px; text-align: left; }
 .tree-row:hover { background: var(--bg-hover); }
 .tree-row:focus-visible { outline-offset: -2px; }
 .tree-row.file-selected { background: var(--bg-selected); }
-.tree-row.file-selected .tree-filename { font-weight: 600; }
-/* Generated and vendored folders recede: dimmed icon, tertiary name. */
-.tree-row.is-generated .file-icon { opacity: .5; }
-.tree-row.is-generated .tree-filename { color: var(--text-3); }
+/* Caches, tool state, temp files and lock files recede: dimmed icon, tertiary name (entry-noise.ts). */
+.tree-row.is-quiet .file-icon { opacity: .5; }
+.tree-row.is-quiet .tree-filename { color: var(--text-3); }
 .tree-chevron { width: 12px; height: 16px; display: flex; align-items: center; flex-shrink: 0; color: var(--text-2); }
 .file-icon, .folder-icon { flex-shrink: 0; color: var(--text-2); }
 .tree-filename { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

@@ -535,7 +535,7 @@ try {
   assert.ok(await page.locator('.focus-sidebar').getByRole('button', { name: 'Git 历史', exact: true }).isVisible());
   await page.keyboard.press('Control+b');
   await page.getByRole('treeitem', { name: 'panel.tsx', exact: true }).waitFor();
-  await page.getByRole('button', { name: '折叠所有文件夹', exact: true }).click();
+  await page.getByRole('button', { name: '更多文件操作', exact: true }).click(); await page.getByRole('menuitem', { name: '折叠所有文件夹', exact: true }).click();
   await waitFor(async () => await page.getByRole('treeitem', { name: 'src', exact: true }).getAttribute('aria-expanded') === 'false', 'collapse nested folders');
   await fs.writeFile(path.join(projects[0].path, 'new-file.txt'), 'directory refresh');
   await page.getByRole('button', { name: '刷新项目目录', exact: true }).click();

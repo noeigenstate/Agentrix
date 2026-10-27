@@ -15,9 +15,6 @@ const draw = ([Shape, tone]: Glyph) => <Shape className="file-icon" size={16} ar
 
 export const folderIcon = (open: boolean) => draw([open ? FolderOpen : Folder, 'slate']);
 
-// Generated or vendored folders are dimmed by the explorer row (icon and name).
-export const isGeneratedFolder = (name: string) => /^(node_modules|dist|build|out|release|coverage|\.test-output)$/i.test(name);
-
 const config: Glyph = [BracketsCurly, 'yellow'];
 const code: Glyph = [FileCode];
 

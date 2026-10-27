@@ -36,7 +36,7 @@ const agentFields = restore => ({ ...(restore?.agent === 'claude' ? { agent: 'cl
 // Where the window opens: the decisions to make (the home page) or the grid of projects. Isolated test profiles
 // open on the grid they exercise unless they ask for the home page.
 const DEFAULT_START = process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST_HOME !== '1' ? 'workspace' : 'decisions';
-const defaults = { startView: DEFAULT_START, surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', autoSave: true, activityPane: true, notifications: true, sound: true, language: 'en', theme: 'mono', shortcuts: {}, guideVersion: '', shell: 'powershell', closeToTray: true, explorerCollapsed: false, fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', restoreSessions: true, focusAnimation: 'smooth', voiceModel: DEFAULT_VOICE_MODEL };
+const defaults = { startView: DEFAULT_START, surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', autoSave: true, activityPane: true, notifications: true, sound: true, language: 'en', theme: 'mono', shortcuts: {}, guideVersion: '', shell: 'powershell', closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', restoreSessions: true, focusAnimation: 'smooth', voiceModel: DEFAULT_VOICE_MODEL };
 
 // Keyboard shortcuts the user changed, by action; defaults live in the window (src/features/shortcuts/shortcuts.ts).
 // "Ctrl+Shift+F": Ctrl, Alt and Shift in that order, then one letter, digit, F-key or punctuation key.
@@ -93,7 +93,7 @@ function cleanSettings(input = {}) {
     // The app version whose usage guide was last shown; a newer version shows it again.
     guideVersion: typeof input.guideVersion === 'string' && /^\d+\.\d+\.\d+(-[\w.-]+)?$/.test(input.guideVersion) ? input.guideVersion : '',
     // Spoken completion phrase; empty uses the built-in phrases. {项目} or {project} is the project name.
-    ...Object.fromEntries(['notifications', 'sound', 'closeToTray', 'explorerCollapsed', 'restoreSessions', 'autoSave', 'activityPane'].map(key => [key, typeof input[key] === 'boolean' ? input[key] : defaults[key]])),
+    ...Object.fromEntries(['notifications', 'sound', 'closeToTray', 'explorerCollapsed', 'hideTreeNoise', 'restoreSessions', 'autoSave', 'activityPane'].map(key => [key, typeof input[key] === 'boolean' ? input[key] : defaults[key]])),
   };
 }
 

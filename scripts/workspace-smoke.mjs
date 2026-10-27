@@ -167,7 +167,7 @@ try {
   assert.equal(await fs.readFile(path.join(project.path, 'external - 副本.txt'), 'utf8'), 'PASTE_IN_CONTENT');
   assert.equal(await fs.readFile(path.join(project.path, 'external.txt'), 'utf8'), 'PASTE_IN_CONTENT', 'paste preserves the existing file');
   await page.getByRole('treeitem', { name: '目标目录', exact: true }).click();
-  await page.getByRole('button', { name: '粘贴文件', exact: true }).click();
+  await page.getByRole('button', { name: '更多文件操作', exact: true }).click(); await page.getByRole('menuitem', { name: '粘贴文件', exact: true }).click();
   await waitFor(async () => { try { return await fs.readFile(path.join(project.path, '目标目录/外部文件夹/nested.txt'), 'utf8') === 'NESTED_PASTE_CONTENT'; } catch { return false; } }, 'toolbar pastes into the selected directory');
   await filesFinished();
   await tree.click({ position: blank, button: 'right' });

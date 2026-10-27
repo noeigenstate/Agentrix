@@ -270,6 +270,8 @@
   "粘贴到选中目录 · Ctrl+V": "Paste into the selected folder · Ctrl+V",
   "刷新项目目录": "Refresh project folder",
   "折叠所有文件夹": "Collapse all folders",
+  "隐藏缓存和临时文件": "Hide caches and temp files",
+  "更多文件操作": "More file actions",
   "{name} 的文件目录": "Files of {name}",
   "已退出": "Exited",
   "重启此终端": "Restart this terminal",

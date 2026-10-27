@@ -329,7 +329,7 @@ export function App() {
       <div className="window-actions"><IconButton label={t('最小化')} onClick={() => api.minimize()}><Minus size={16} /></IconButton><IconButton label={t('最大化或还原')} onClick={() => api.maximize()}><Square size={12} /></IconButton><IconButton label={t('关闭窗口')} className="window-close" onClick={() => api.close()}><X size={17} /></IconButton></div>
     </div>
     <div className="workspace-layout">
-      {focus && <ProjectExplorer key={focus.id} project={focus} collapsed={settings.explorerCollapsed}
+      {focus && <ProjectExplorer key={focus.id} project={focus} collapsed={settings.explorerCollapsed} hideNoise={settings.hideTreeNoise} onHideNoiseChange={hideTreeNoise => setPreference({ hideTreeNoise })}
         onFilesRemoved={paths => setPreviewFile(current => current?.projectId === focus.id && paths.some(path => current.path === path || current.path.startsWith(path + '/')) ? null : current)}
         onPathRenamed={(oldPath, newPath) => setPreviewFile(current => current?.projectId === focus.id && (current.path === oldPath || current.path.startsWith(oldPath + '/')) ? { projectId: focus.id, path: newPath + current.path.slice(oldPath.length) } : current)}
         expandedPaths={expandedByProject[focus.id] ?? ['']} selectedFile={previewFile?.projectId === focus.id ? previewFile.path : null} changeRevision={changeRevision}
