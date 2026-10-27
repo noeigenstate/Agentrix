@@ -134,7 +134,9 @@ Title bar 40 · explorer rows 30 to 32 with 13px text · message body 13 to 14px
 pill 28 high (its 18px icon centred on it) · chat padding 24 left and right (16 in a card narrower than 480px) · right pane padding 16 ·
 composer 48 to 56 high and growing, radius 12 · default border 1px `--border` (#424242).
 
-Type scale (the owner's, both themes): page title 20 to 22 / 600; project name, group head and button text 14 / 600 (names in `--text-1`, group heads in `--text-2`); body 13 to 14 / 400; helper line 12 / 400 in `--text-2` or `--text-3`; status tag 12 / 600 (Windows has no real 500, so 600). Hierarchy comes from size, contrast and spacing, not from heavier weights. Controls: 32 high, 1px `--border`, radius 8 (composers 12); secondary buttons and dropdown triggers use `--bg-control` (white in light), inputs `--bg-input`.
+Type scale (the owner's, both themes): page title 20 to 22 / 600; project name, group head and button text 14 / 600 (names in `--text-1`, group heads in `--text-2`); body 13 to 14 / 400; helper line 12 / 400 in `--text-2` or `--text-3`; status tag 11 to 12 / 600 (Windows has no real 500, so 600). Hierarchy comes from size, contrast and spacing, not from heavier weights. Controls: 32 high, 1px `--border`, radius 8 (composers 12); secondary buttons and dropdown triggers use `--bg-control` (white in light), inputs `--bg-input`.
+
+One spec at every width (the owner's 多工作区一致性): a component (the launcher tiles and mode switch, the composer, the panel header buttons) keeps the same radius, font, icon size, box and hover feedback in a 300px grid card, a wide card and focus mode. When space runs out, hide a label, ellipsize or wrap the row; never shrink a control or let its text wrap inside it. Check by measuring computed styles at 1/2/4/6 projects in 1600x1000 and 1000x700 windows plus focus mode.
 
 ## Definitions (so a hand count and the script agree)
 
