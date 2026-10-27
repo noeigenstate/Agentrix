@@ -168,7 +168,8 @@ export function ProjectExplorer({ project, collapsed, hideNoise, expandedPaths, 
   const changes = git.status?.total || 0;
   return <aside className={`focus-sidebar ${collapsed ? 'is-collapsed' : ''}`} aria-label={t('项目侧边栏')}>
     <div className="explorer-navigation">
-      <button className="explorer-back" onClick={onReturn} title={t('返回总览 · {key}', { key: shortcut('overview') })} aria-label={t('返回总览')}><CaretLeft size={14} weight="bold" /><span>{t('总览')}</span></button>
+      {/* Collapsed, the rail keeps only the two panes; the title bar's 工作台 and the overview shortcut still lead back. */}
+      {!collapsed && <button className="explorer-back" onClick={onReturn} title={t('返回总览 · {key}', { key: shortcut('overview') })} aria-label={t('返回总览')}><CaretLeft size={14} weight="bold" /><span>{t('总览')}</span></button>}
       {/* Collapsed, the rail offers the two panes themselves; each opens the sidebar again (as does the shortcut). */}
       {!collapsed && <button className="icon-button sidebar-toggle" onClick={onCollapse} title={collapsed ? t('展开目录栏 · {key}', { key: shortcut('explorer') }) : t('收起目录栏 · {key}', { key: shortcut('explorer') })} aria-label={collapsed ? t('展开目录栏') : t('收起目录栏')} aria-expanded={!collapsed}><SidebarSimple size={17} /></button>}
     </div>
