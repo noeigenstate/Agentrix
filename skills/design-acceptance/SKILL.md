@@ -77,7 +77,7 @@ focus) overrides some tokens, shown in brackets, see below.
 | Codex | `--agent-codex` | #34D5A5 (light #0D8F6A) | its mark and status dot, to tell the CLI apart |
 | Agentrix logo | `--brand-coral` | #EF7681 (light #CC3F52) | the fourth square of the title-bar logo only (the other three `--text-2`) |
 | Succeeded | `--success` | #70BFA4 | command done, check passed, a finished round's tag and dot (never a card edge) |
-| Running | `--running` | #78A8CC | tasks in progress: a working card's edge, tag and dot, the reading view's running dot |
+| Running | `--running` | #78A8CC | tasks in progress: a working card's tag and dot (no edge), the reading view's running dot |
 | Needs approval | `--warning` | #D8AE67 | only where something waits for the owner's decision |
 | Failed | `--danger` | #DE7878 | errors and failures |
 | Usage | `--usage` | #68B8AE | progress bars and usage meters |

@@ -11,7 +11,7 @@ The owner's rule: one task or subagent finishing never lights the card; the whol
 - A grid card that is finished and not yet seen breathes a white glow from its edge inward. The glow has no line and no coloured ring.
 - A viewed round draws nothing.
 - Focus mode draws no edge at all.
-- Working (blue) and error (red) edges stay.
+- Only the error (red) edge stays; a working card draws no edge (its tag and dot carry the state).
 
 **Finished means all of these** (`electron/completion-work.cjs`, the gate in `main.cjs` `applyActivity`):
 - The parent's turn has ended.

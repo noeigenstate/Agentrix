@@ -19,9 +19,8 @@
 .focus-mode .project-panel { --panel-pad: 12px; padding: var(--panel-pad); border-radius: 0; background: var(--bg-app); }
 .project-slot > .project-panel.focus-motion-panel { position: fixed; left: 0; top: 0; width: var(--focus-width); height: var(--focus-height); margin: 0; transform-origin: 0 0; will-change: transform; animation: none; transition: none; }
 
-/* A card's state is its edge: the signal span is a 2px inset ring in the state's colour (working, error) or a white breath (finished, not yet seen), none at rest. */
+/* A card's state is its edge: the signal span is a 2px inset ring in the error colour or a white breath (finished, not yet seen), none at rest; a working card draws no edge. */
 .panel-signal { position: absolute; inset: 0; z-index: 3; border-radius: inherit; pointer-events: none; }
-.project-panel.is-working .panel-signal { box-shadow: inset 0 0 0 2px var(--running); }
 .project-panel.has-error:not(.is-working, .has-unread) .panel-signal { box-shadow: inset 0 0 0 2px var(--danger); }
 /* A project in focus draws no edge, whatever its state; display none cannot lose to the rings on specificity the way a box-shadow reset did. */
 .focus-mode .project-panel .panel-signal { display: none; }

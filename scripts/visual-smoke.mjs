@@ -94,7 +94,7 @@ try {
   await page.evaluate(() => document.activeElement?.blur()); await page.mouse.move(2, 2);
   assert.equal(await page.locator('.panel-edge-light').count(), 0, 'old decorative strips are removed');
   assert.equal(await panel(0).evaluate(node => getComputedStyle(node).animationName), 'none', 'the text surface is not animated');
-  // A working turn has a steady hairline-grey 2px edge. Nothing flashes until completion.
+  // A working turn draws no edge, steadily. Nothing flashes until completion.
   const liveSamples = [];
   for (const mode of ['normal', 'hover', 'input-focus']) {
     if (mode === 'hover') await panel(0).locator('.panel-header').hover();
@@ -110,7 +110,7 @@ try {
     });
     for (const sample of samples) {
       assert.deepEqual(sample, samples[0], `${mode}: working lights and reading surface stay steady`);
-      assert.equal(sample.edgeShadow, 'rgb(120, 168, 204) 0px 0px 0px 2px inset', `${mode}: the working edge is the 2px running blue`);
+      assert.equal(sample.edgeShadow, 'none', `${mode}: a working card draws no edge`);
       assert.equal(sample.text.opacity, '1'); assert.equal(sample.text.animation, 'none');
     }
     liveSamples.push({ mode, samples });
@@ -200,7 +200,7 @@ try {
   await page.screenshot({ path: path.join(output, 'finished-steady.png') });
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, liveSamples, compact, compactEdges, errors }, null, 2));
-  console.log(`PASS: steady grey working edge, ink contrast on the card grey, a breathing white glow until a completion is viewed and no edge after, quiet idle, flat grey cards, high DPI, compact controls, explorer and preserved small-card input. Screenshots: ${output}`);
+  console.log(`PASS: no working edge, ink contrast on the card grey, a breathing white glow until a completion is viewed and no edge after, quiet idle, flat grey cards, high DPI, compact controls, explorer and preserved small-card input. Screenshots: ${output}`);
 } catch (error) {
   console.error(error);
   if (page) {
