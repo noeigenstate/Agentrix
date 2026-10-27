@@ -76,7 +76,7 @@ try {
   assert.ok(await page.getByRole('combobox', { name: '玻璃透明度模式', exact: true }).isDisabled());
   assert.equal((await state()).settings.glassTransparency, 63);
   await pick(page, page.getByRole('combobox', { name: '界面材质', exact: true }), 'glass');
-  await page.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByRole('button', { name: '关闭设置', exact: true }).click();
   await page.getByRole('button', { name: '全屏查看 透明度预览', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('.focus-motion-panel'));
   await app.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; window.setFullScreen(false); window.setContentSize(1500, 920); });

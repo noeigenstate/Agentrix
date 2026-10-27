@@ -87,7 +87,7 @@ const thumbnailSettings = async () => {
   await preferences().locator('[data-project-images-back]').waitFor();
 };
 const openSettings = async () => { await chooseFromAppMenu(page, '设置'); await preferences().locator('[data-settings-tab="appearance"]').click(); await thumbnailSettings(); };
-const closeSettings = async () => { await preferences().getByRole('button', { name: '完成', exact: true }).click(); await preferences().waitFor({ state: 'detached' }); };
+const closeSettings = async () => { await preferences().getByRole('button', { name: '关闭设置', exact: true }).click(); await preferences().waitFor({ state: 'detached' }); };
 const launch = async () => {
   app = await electron.launch({ executablePath: require('electron'), args: [root, '--force-device-scale-factor=1'], cwd: root, env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', error => report.errors.push(error.message));
@@ -109,7 +109,7 @@ try {
   const svgCandidates = await list(6);
   assert.equal(svgCandidates.candidates[0].path, 'icons/app.svg'); assert.equal(svgCandidates.candidates[0].source, 'icon');
   assert.match((await state(6)).image, /^data:image\/svg\+xml;base64,/);
-  assert.equal(Buffer.from((await state(6)).image.split(',')[1], 'base64').toString('utf8'), svgIcon.replace('currentColor', '#f2f2f2'));
+  assert.equal(Buffer.from((await state(6)).image.split(',')[1], 'base64').toString('utf8'), svgIcon.replace('currentColor', 'var(--agentrix-project-ink, #f2f2f2)'));
   report.svgHeader = await svgPixels(panel(6).locator('.panel-header .project-image'), 'svg-header-24.png', 24);
   await panel(6).screenshot({ path: path.join(output, 'svg-card.png') }); report.screenshots.push('svg-card.png');
 

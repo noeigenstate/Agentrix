@@ -26,7 +26,7 @@ dialog { color: var(--text-1); }
 .settings-note svg { flex-shrink: 0; margin-top: 3px; }
 .settings-note p { margin: 0; font-size: 12px; line-height: 20px; }
 .settings-section { scroll-margin-top: var(--settings-nav-offset, 100px); }
-.settings-section h3 { margin: 20px 0 8px; font-size: 12px; font-weight: 600; }
+.settings-section h3 { margin: 20px 0 8px; font-size: 14px; font-weight: 600; }
 .agent-setting .setting-row { padding: 12px 0 8px; border-bottom: 0; }
 .agent-command { display: block; padding-bottom: 12px; border-bottom: 1px solid var(--divider); font: 11px/1.7 var(--font-mono); overflow-wrap: anywhere; color: var(--text-2); }
 .agents-node { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; font-size: 12px; }
@@ -50,14 +50,7 @@ dialog { color: var(--text-1); }
 .shortcut-note { margin: 12px 0 0; font-size: 12px; color: var(--text-2); }
 
 /* Updates, spoken summaries, the voice model. */
-.update-section { padding: 16px 0 0; }
-.update-heading { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
-.update-heading b { font-weight: 600; }
-.update-heading > span { font-size: 11px; color: var(--text-3); }
-.settings-section .update-heading h3 { margin: 20px 0 8px; }
-.update-section p { margin: 8px 0 12px; font-size: 12px; line-height: 20px; color: var(--text-2); }
-.update-section progress, .voice-model-setting progress { display: block; width: 100%; height: 6px; margin-bottom: 16px; accent-color: var(--text-1); }
-.update-actions { display: flex; justify-content: flex-end; }
+.update-module progress, .voice-model-setting progress { display: block; width: 100%; height: 6px; accent-color: var(--text-1); }
 .voice-model-setting { display: flex; flex: none; align-items: center; gap: 12px; min-width: 0; }
 .voice-model-setting .select-trigger { width: 300px; max-width: 100%; }
 .voice-model-status { font-size: 12px; white-space: nowrap; color: var(--text-2); }
@@ -75,8 +68,8 @@ dialog { color: var(--text-1); }
 .user-avatar-preview { width: 34px; height: 34px; flex: none; }
 
 /* Settings as two panes: the categories on the left, the chosen one on the right. The dialog keeps one size, so moving between categories never makes it jump. */
-.settings-dialog.settings-paned { width: min(860px, calc(100vw - 40px)); max-width: none; height: min(640px, calc(100vh - 40px)); max-height: none; overflow: hidden; }
-.settings-shell { display: grid; grid-template-columns: 216px minmax(0, 1fr); height: 100%; }
+.settings-dialog.settings-paned { width: min(1120px, calc(100vw - 40px)); max-width: none; height: min(760px, calc(100vh - 40px)); max-height: none; overflow: hidden; }
+.settings-shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); height: 100%; }
 .settings-sidebar { display: flex; flex-direction: column; min-height: 0; padding: 24px 12px 16px; border-right: 1px solid var(--divider); background: var(--bg-sidebar); }
 .settings-brand { padding: 0 12px 16px; }
 .settings-brand h2 { margin: 4px 0 0; font-size: 16px; font-weight: 600; }
@@ -88,12 +81,16 @@ dialog { color: var(--text-1); }
 .settings-sidebar-footer { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: auto; padding: 12px 4px 0; border-top: 1px solid var(--divider); }
 .settings-sidebar-footer .text-button { display: inline-flex; align-items: center; gap: 8px; padding: 8px 8px; font-size: 12px; }
 .settings-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.settings-main-head { padding: 24px 32px 12px; border-bottom: 1px solid var(--divider); }
-.settings-main-head h3 { margin: 0; font-size: 20px; font-weight: 600; }
-.settings-main-head p { margin: 4px 0 0; font-size: 12px; color: var(--text-2); }
-.settings-pane { flex: 1; min-height: 0; overflow: auto; padding: 8px 32px 16px; }
+.settings-main-head { position: relative; display: flex; flex: none; flex-direction: column; justify-content: center; box-sizing: border-box; height: 100px; padding: 0 80px 0 40px; border-bottom: 1px solid var(--divider); }
+.settings-main-head h3 { margin: 0; font-size: 24px; font-weight: 600; line-height: 32px; }
+.settings-main-head p { margin: 4px 0 0; font-size: 13px; line-height: 20px; color: var(--text-2); }
+.settings-close { position: absolute; top: 16px; right: 24px; }
+.settings-pane { flex: 1; min-height: 0; overflow: auto; padding: 8px 40px 32px; }
+.settings-pane > * { max-width: 800px; margin-inline: auto; }
+/* Buttons in Settings are 36px (the app's own are 32); the categories' rows already are. */
+.settings-paned .button { height: 36px; }
 .settings-pane > .settings-section:first-child > .setting-row:first-child { margin-top: 8px; }
-.settings-main-foot { display: flex; justify-content: flex-end; padding: 12px 32px 16px; border-top: 1px solid var(--divider); }
+@media (max-width: 900px) { .settings-shell { grid-template-columns: 216px minmax(0, 1fr); } .settings-main-head, .settings-pane { padding-inline: 24px; } .settings-main-head { padding-right: 64px; } }
 @media (max-width: 640px) {
   .settings-shell { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
   .settings-sidebar { padding: 16px 12px 8px; border-right: 0; }
@@ -130,3 +127,48 @@ dialog { color: var(--text-1); }
 .theme-option-text { min-width: 0; }
 .theme-option-text b { display: block; font-size: 14px; font-weight: 600; }
 .theme-option-text small { display: block; margin-top: 4px; font-size: 12px; line-height: 20px; color: var(--text-2); }
+
+/* 更新与关于: one product module (the app's tile, name, version and distribution, then the update block), then two list rows with chevrons. Cards are radius 12 on the input colour with the border. */
+.about-page { display: flex; flex-direction: column; gap: 16px; padding-top: 24px; }
+.about-page > .text-button { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; }
+.about-product, .about-rows { border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); }
+.about-product { display: flex; flex-direction: column; gap: 16px; padding: 20px; }
+.about-product-head { display: flex; align-items: center; gap: 16px; }
+.about-tile { display: grid; flex: none; place-items: center; width: 48px; height: 48px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); }
+.about-tile .brand-mark { grid-template-columns: repeat(2, 10px); gap: 4px; }
+.about-tile .brand-mark i { width: 10px; height: 10px; border-radius: 2px; }
+.about-product-name { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.about-product-name b { font-size: 16px; font-weight: 600; }
+.about-product-name small { font-size: 13px; color: var(--text-2); }
+.about-chip { flex: none; padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--text-2); background: var(--bg-card); }
+.update-module { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); }
+.update-module-title { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.update-module-title svg { color: var(--text-2); }
+.update-module p { margin: 0; font-size: 13px; line-height: 20px; color: var(--text-2); }
+.update-module .button svg { flex: none; }
+.about-rows { display: flex; flex-direction: column; }
+.about-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 16px 20px; border: 0; border-bottom: 1px solid var(--divider); border-radius: 0; text-align: left; color: var(--text-1); background: transparent; }
+.about-row:last-child { border-bottom: 0; }
+.about-row:first-child { border-radius: 12px 12px 0 0; }
+.about-row:last-child { border-radius: 0 0 12px 12px; }
+.about-row:hover { background: var(--bg-hover); }
+.about-row > svg { flex: none; color: var(--text-2); }
+.about-row > span { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.about-row b { font-size: 14px; font-weight: 600; }
+.about-row small { font-size: 13px; color: var(--text-2); }
+.about-heading { display: flex; align-items: baseline; gap: 12px; margin: 0; font-size: 18px; font-weight: 600; }
+.about-heading span { font-size: 13px; font-weight: 400; color: var(--text-2); }
+.about-notes { margin: 0; padding: 0 0 0 20px; font-size: 14px; line-height: 24px; }
+.about-notes li + li { margin-top: 8px; }
+.about-facts { margin: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); }
+.about-facts > div { display: flex; justify-content: space-between; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--divider); font-size: 13px; }
+.about-facts > div:last-child { border-bottom: 0; }
+.about-facts dt { color: var(--text-2); }
+.about-facts dd { margin: 0; }
+.about-links { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); }
+.about-link { display: flex; align-items: center; justify-content: space-between; width: 100%; height: 44px; padding: 0 20px; border: 0; border-bottom: 1px solid var(--divider); font-size: 13px; text-align: left; color: var(--text-1); background: transparent; }
+.about-link:last-child { border-bottom: 0; }
+.about-link:hover { background: var(--bg-hover); }
+.about-link svg { color: var(--text-2); }
+.about-page > .about-link { height: 36px; align-self: flex-start; width: auto; gap: 8px; padding: 0; border: 0; }
+.update-heading { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }

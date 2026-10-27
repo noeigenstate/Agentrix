@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('agentrix', {
   checkForUpdates: () => ipcRenderer.invoke('updates:check'),
   installUpdate: () => ipcRenderer.invoke('updates:install'),
   openDownloadPage: () => ipcRenderer.invoke('updates:download-page'),
+  openProjectPage: page => ipcRenderer.invoke('updates:open-page', page),
   onUpdateState: callback => listen('updates:changed', callback),
   addProjects: () => ipcRenderer.invoke('workspace:add'),
   getRecentProjects:() => ipcRenderer.invoke('workspace:recent'),

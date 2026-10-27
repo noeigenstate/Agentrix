@@ -76,7 +76,7 @@ try {
   assert.equal((await state()).settings.fontSize, 18); assert.equal((await state()).settings.terminalFontWeight, 600);
   assert.equal((await state()).settings.notifications, false); assert.equal((await state()).settings.restoreSessions, false); assert.deepEqual((await state()).settings.shortcuts, { search: 'Ctrl+K' });
   assert.equal((await state()).projects[0].sessionId, session);
-  await page.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByRole('button', { name: '关闭设置', exact: true }).click();
   assert.ok((await page.evaluate(() => window.agentrix.attachTerminal('appearance'))).value.data.includes('APPEARANCE_UNSENT_DRAFT')); await page.evaluate(() => window.agentrix.writeTerminal('appearance', '\x03'));
   const marker = path.join(output, 'after-font-change.done').replaceAll("'", "''");
   await page.evaluate(command => window.agentrix.writeTerminal('appearance', command), "[System.IO.File]::WriteAllText('" + marker + "','ok')\r");
@@ -86,7 +86,7 @@ try {
   assert.equal(await page.locator('.file-preview').evaluate(node => getComputedStyle(node).opacity), '1'); await page.getByRole('button', { name: '返回总览', exact: true }).click();
   await settings({ language: 'en' }); await openSettings(page, 'Settings');
   await page.getByRole('combobox', { name: 'Glass background', exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Done', exact: true }).click(); await settings({ language: 'zh' });
+  await page.getByRole('button', { name: 'Close settings', exact: true }).click(); await settings({ language: 'zh' });
   await app.close(); app = null; await launch(); await page.waitForSelector('.project-panel'); assert.equal((await state()).settings.glassBackground, backend ? 'desktop' : 'theme');
   assert.deepEqual(fontRequests, [], 'installed fonts must not trigger font downloads'); assert.deepEqual(errors, []);
   results.checks = ['grey design × renderers × linked materials', 'native/theme background selection remembered through solid mode', 'truecolor program surfaces preserved', 'font, session, host and draft preserved', 'file preview on the grey canvas', 'English settings', 'restart and no font downloads'];

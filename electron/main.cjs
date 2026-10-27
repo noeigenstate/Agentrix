@@ -75,7 +75,7 @@ const { createTerminalEnvironment } = require('./terminal-env.cjs');
 const { adoptSystemProxy } = require('./system-proxy.cjs');
 const { PreviewResources, resourceResponse } = require('./preview-resources.cjs');
 const { createFileCards, isImageFile, documentText } = require('./features/files/file-cards.cjs');
-const { UpdateManager, isInstalledBuild } = require('./updates.cjs');
+const { UpdateManager, isInstalledBuild, distributionOf } = require('./updates.cjs');
 const { getSSHInfo } = require('./ssh-config.cjs');
 const { SSHAuthServer } = require('./ssh-auth.cjs');
 const { RemoteConnection } = require('./remote-connection.cjs');
@@ -1399,7 +1399,7 @@ if (!app.requestSingleInstanceLock()) {
     sshAuth = await new SSHAuthServer(queue => send('ssh:auth-changed', queue)).start();
     updateManager = new UpdateManager({
       updater: isInstalledBuild(app.isPackaged, process.execPath) ? require('electron-updater').autoUpdater : null,
-      version: app.getVersion(), onChange: state => {
+      version: app.getVersion(), distribution: distributionOf({ isPackaged: app.isPackaged, platform: process.platform, installed }), onChange: state => {
         updatesIpc?.onStateChange(state);
         send('updates:changed', state);
       },

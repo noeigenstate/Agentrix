@@ -581,7 +581,7 @@ try {
   assert.equal((await page.evaluate(() => window.agentrix.getUpdateState())).value.supported, false, 'unpacked and development builds cannot install over an installed app');
   assert.equal((await page.evaluate(() => window.agentrix.installUpdate())).ok, false, 'installing before a verified download is rejected');
   await page.screenshot({ path: path.join(output, 'settings.png') });
-  await page.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByRole('button', { name: '关闭设置', exact: true }).click();
   const idlePanel = page.locator(`[data-project-id="${projects[2].id}"]`);
   await waitFor(async () => idlePanel.evaluate(element => !element.classList.contains('attention-active')), 'completed idle project ends its initial alert', 13000);
   await complete('other-project-turn', target);

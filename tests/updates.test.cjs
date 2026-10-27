@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { UpdateManager, isInstalledBuild } = require('../electron/updates.cjs');
+const { UpdateManager, isInstalledBuild, distributionOf } = require('../electron/updates.cjs');
 
 function fakeUpdater() {
   const updater = new EventEmitter();
@@ -16,6 +16,16 @@ test('only an installed build with an uninstaller enables automatic updates', ()
   assert.equal(isInstalledBuild(false, 'C:\\app\\Agentrix.exe', () => true), false);
   assert.equal(isInstalledBuild(true, 'C:\\app\\Agentrix.exe', () => false), false);
   assert.equal(isInstalledBuild(true, 'C:\\app\\Agentrix.exe', candidate => candidate.endsWith('Uninstall Agentrix.exe')), true);
+});
+
+test('the distribution is told from how the app runs, and only an installed Windows build can update itself', () => {
+  assert.equal(distributionOf({ isPackaged: false, platform: 'win32', installed: false }), 'development');
+  assert.equal(distributionOf({ isPackaged: false, platform: 'darwin', installed: false }), 'development');
+  assert.equal(distributionOf({ isPackaged: true, platform: 'win32', installed: true }), 'installed');
+  assert.equal(distributionOf({ isPackaged: true, platform: 'win32', installed: false }), 'portable');
+  assert.equal(distributionOf({ isPackaged: true, platform: 'darwin', installed: false }), 'macos');
+  assert.equal(distributionOf({ isPackaged: true, platform: 'linux', installed: false }), 'linux');
+  assert.equal(new UpdateManager({ updater: null, version: '1.0.0', distribution: 'portable' }).getState().distribution, 'portable');
 });
 
 test('portable builds never check, download, or install updates', async () => {

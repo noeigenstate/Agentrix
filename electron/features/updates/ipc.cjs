@@ -3,6 +3,12 @@ function registerUpdatesIpc({ handle, updateManager, openExternal, getWindow, di
   handle('updates:state', () => updateManager.getState());
   handle('updates:check', () => updateManager.check());
   handle('updates:download-page', () => openExternal('https://github.com/noeigenstate/Agentrix/releases/latest'));
+  // The About page's links: the renderer names a page, never a URL.
+  const pages = { releases: 'releases', docs: '#readme', license: 'blob/main/LICENSE', notices: 'blob/main/assets/THIRD-PARTY-NOTICES.txt', repository: '' };
+  handle('updates:open-page', page => {
+    if (!Object.hasOwn(pages, page)) throw new Error('未知的页面。');
+    return openExternal(`https://github.com/noeigenstate/Agentrix/${pages[page]}`);
+  });
   async function installUpdate() {
     if (installingUpdate) return false;
     if (!updateManager.canInstall()) throw new Error('更新尚未下载完成。');

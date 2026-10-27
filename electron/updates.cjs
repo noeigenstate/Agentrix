@@ -5,11 +5,21 @@ function isInstalledBuild(isPackaged, executablePath, exists = fs.existsSync) {
   return !!isPackaged && exists(path.join(path.dirname(executablePath), 'Uninstall Agentrix.exe'));
 }
 
+// How this copy of the app was distributed, for the update page: a run from source (`npm run dev`), a Windows build with
+// the installer's uninstaller beside it (installed, the only one that updates itself), a Windows build without it (the unpacked
+// folder or a zip: portable), or a packaged macOS / Linux build.
+function distributionOf({ isPackaged, platform, installed }) {
+  if (!isPackaged) return 'development';
+  if (platform === 'darwin') return 'macos';
+  if (platform !== 'win32') return 'linux';
+  return installed ? 'installed' : 'portable';
+}
+
 class UpdateManager {
-  constructor({ updater, version, onChange = () => {} }) {
+  constructor({ updater, version, distribution = 'portable', onChange = () => {} }) {
     this.updater = updater;
     this.onChange = onChange;
-    this.state = { supported: !!updater, currentVersion: version, status: updater ? 'idle' : 'unavailable', version: null, percent: 0, error: null };
+    this.state = { supported: !!updater, currentVersion: version, distribution, status: updater ? 'idle' : 'unavailable', version: null, percent: 0, error: null };
     this.request = null;
     this.disposed = false;
     if (!updater) return;
@@ -61,4 +71,4 @@ class UpdateManager {
   dispose() { this.disposed = true; clearTimeout(this.initialTimer); clearInterval(this.interval); }
 }
 
-module.exports = { UpdateManager, isInstalledBuild };
+module.exports = { UpdateManager, isInstalledBuild, distributionOf };

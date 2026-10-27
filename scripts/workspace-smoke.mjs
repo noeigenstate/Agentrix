@@ -279,7 +279,7 @@ try {
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('dialog[open]').count(), 1, 'Escape while recording cancels the recording, not the dialog');
   assert.deepEqual((await page.evaluate(() => window.agentrix.getState())).value.settings.shortcuts, { search: 'Ctrl+Shift+K' });
-  await page.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByRole('button', { name: '关闭设置', exact: true }).click();
   await page.keyboard.press('Control+Shift+F');
   assert.equal(await page.getByRole('textbox', { name: '搜索项目', exact: true }).count(), 0, 'the old key no longer searches');
   await page.keyboard.press('Control+Shift+K');
@@ -290,7 +290,7 @@ try {
   await page.getByRole('button', { name: '恢复默认', exact: true }).click();
   await waitFor(async () => (await searchKey.innerText()) === 'Ctrl+Shift+F', 'restore defaults');
   assert.deepEqual((await page.evaluate(() => window.agentrix.getState())).value.settings.shortcuts, {});
-  await page.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByRole('button', { name: '关闭设置', exact: true }).click();
   console.log('PASS: shortcuts are recorded in settings, conflicts are refused, the new key works and defaults come back');
   // English mode: the window, settings, main-process messages and titles switch together, and back again.
   await page.evaluate(() => window.agentrix.settings({ language: 'en' }));
@@ -304,7 +304,7 @@ try {
   await page.getByRole('heading', { name: 'Workspace settings', exact: true }).waitFor();
   assert.equal(await picked(page.getByRole('combobox', { name: 'Language', exact: true })), 'en');
   await page.screenshot({ path: path.join(output, 'settings-english.png') });
-  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.getByRole('button', { name: 'Close settings', exact: true }).click();
   assert.equal((await page.evaluate(() => window.agentrix.addRecentProject('C:\\missing-folder'))).error, 'This project is not in the recent list. Choose the folder again.', 'main-process errors arrive in English');
   assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getTitle()), 'Agentrix');
   await page.screenshot({ path: path.join(output, 'grid-english.png') });

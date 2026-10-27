@@ -130,7 +130,7 @@ try {
     await page.waitForFunction(value => document.documentElement.style.getPropertyValue('--glass-alpha') === String(1 - value / 100), value);
     assert.equal(await page.locator('.project-panel').evaluate(node => getComputedStyle(node).opacity), '1');
   }
-  await page.getByRole('button', { name: '完成', exact: true }).click(); assert.equal((await state()).projects[0].sessionId, session);
+  await page.getByRole('button', { name: '关闭设置', exact: true }).click(); assert.equal((await state()).projects[0].sessionId, session);
   assert.ok((await page.evaluate(() => window.agentrix.attachTerminal('readability'))).value.data.includes('READABILITY_UNSENT_DRAFT'));
   const host = await page.locator('.xterm').elementHandle(); await page.evaluate(() => window.agentrix.settings({ terminalFontWeight: 500 })); await page.waitForFunction(() => document.documentElement.dataset.terminalWeight === '500');
   assert.ok(await host.evaluate(node => node.isConnected), 'weight change must preserve the terminal host');

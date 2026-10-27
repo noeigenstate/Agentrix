@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, House, ArrowsOutSimple, Terminal as TerminalIcon, Power, ArrowCounterClockwise, Monitor, Cpu, Info, SpeakerHigh, Globe, Microphone, BookOpen, FloppyDisk, Palette, Robot, Keyboard, ImageSquare, ArrowLeft } from '@phosphor-icons/react';
+import { Bell, House, ArrowsOutSimple, Terminal as TerminalIcon, Power, ArrowCounterClockwise, Monitor, Cpu, Info, SpeakerHigh, Globe, Microphone, BookOpen, FloppyDisk, Palette, Robot, Keyboard, ImageSquare, ArrowLeft, X } from '@phosphor-icons/react';
 import type { AgentsState, AppUpdateState, Project, Settings, Workspace } from '../../shared/types';
 import { VoiceModelSetting } from '../voice/VoiceButton';
 import { currentLanguage, t } from '../../shared/i18n';
 import { shortcut } from '../shortcuts/shortcuts';
 import { ShortcutSettings } from '../shortcuts/ShortcutSettings';
 import { AgentsSettings } from '../agents/AgentsSettings';
-import { isMac, isLinux } from '../../shared/platform';
+import { isMac } from '../../shared/platform';
 import { TerminalFontSettings } from './TerminalFontSettings';
 import { UserAvatarSetting } from './UserAvatarSetting';
 import { ThemeSetting } from './ThemeSetting';
 import { Select } from '../../shared/Select';
 import { ProjectImagesSettings } from './ProjectImagesSettings';
+import { AboutSettings } from './AboutSettings';
 
 export function SettingsDialog({ settings, projects = [], desktopGlass, localShell, agents, onAgents, initialSection, updates, onCheckUpdate, onInstallUpdate, onDownloadPage, onGuide, close, update, quit }: {
   localShell: Workspace['localShell']; agents: AgentsState | null; onAgents: (state: AgentsState) => void; initialSection: string;
@@ -29,7 +30,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, localShe
     { id: 'terminal', title: t('终端与编辑'), hint: t('终端、会话恢复与编辑器'), icon: <TerminalIcon size={17} /> },
     { id: 'agents', title: t('编码助手'), hint: t('Codex 与 Claude Code'), icon: <Robot size={17} /> },
     { id: 'shortcuts', title: t('键盘快捷键'), hint: t('查看和修改快捷键'), icon: <Keyboard size={17} /> },
-    { id: 'about', title: t('更新与关于'), hint: t('版本与更新'), icon: <Info size={17} /> },
+    { id: 'about', title: t('更新与关于'), hint: t('版本信息、应用更新与相关资源'), icon: <Info size={17} /> },
   ];
   const current = sections.find(section => section.id === activeSection) || sections[0];
   const choose = (id: string) => { setProjectImages(false); setActiveSection(id); pane.current?.scrollTo({ top: 0 }); };
@@ -44,12 +45,12 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, localShe
   return <dialog className="settings-dialog settings-paned" ref={dialog} onCancel={close} onClick={event => { if (event.target === event.currentTarget) close(); }}>
     <div className="settings-shell">
       <aside className="settings-sidebar">
-        <div className="settings-brand"><span className="eyebrow">PREFERENCES</span><h2>{t('工作台设置')}</h2></div>
+        <div className="settings-brand"><span className="eyebrow">{t('设置')}</span><h2>{t('工作台设置')}</h2></div>
         <nav className="settings-nav" aria-label={t('设置分类')} onKeyDown={navKeys}>{sections.map(section => <button type="button" key={section.id} data-settings-tab={section.id} aria-controls={section.id === 'appearance' && projectImages ? 'settings-project-images' : `settings-${section.id}`} aria-current={current.id === section.id ? 'page' : undefined} onClick={() => choose(section.id)}>{section.icon}<span>{section.title}</span></button>)}</nav>
         <div className="settings-sidebar-footer"><button className="text-button" onClick={onGuide}><BookOpen size={15} />{t('使用指南')}</button><button className="text-button danger-text" onClick={quit}><Power size={15} />{t('退出应用')}</button></div>
       </aside>
       <div className="settings-main">
-        <header className="settings-main-head"><h3>{projectImages ? t('项目缩略图') : current.title}</h3><p>{projectImages ? t('自动选择、固定图片与原有编号') : current.hint}</p></header>
+        <header className="settings-main-head"><h3>{projectImages ? t('项目缩略图') : current.title}</h3><p>{projectImages ? t('自动选择、固定图片与原有编号') : current.hint}</p><button type="button" className="icon-button settings-close" aria-label={t('关闭设置')} title={t('关闭设置')} onClick={close}><X size={18} /></button></header>
         <div className="settings-pane" ref={pane}>
       <section className="settings-section" id="settings-appearance" aria-label={t('外观')} hidden={current.id !== 'appearance' || projectImages}>
       <ThemeSetting theme={settings.theme} update={theme => update({ theme })} />
@@ -74,6 +75,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, localShe
       <section className="settings-section" id="settings-notifications" aria-label={t('提醒')} hidden={current.id !== 'notifications'}>
       <label className="setting-row"><span><Bell size={19} /><span><b>{t('桌面通知')}</b><small>{t('一轮结束时发送系统通知')}</small></span></span><input type="checkbox" checked={settings.notifications} onChange={e => update({ notifications: e.target.checked })} /></label>
       <label className="setting-row"><span><SpeakerHigh size={19} /><span><b>{t('通知声音')}</b><small>{t('播放系统默认提示音')}</small></span></span><input type="checkbox" checked={settings.sound} onChange={e => update({ sound: e.target.checked })} /></label>
+      <div className="settings-note"><Info size={15} /><p>{t('主轮次、后台子代理与命令、排队消息和其他终端的工作都结束，方框才亮起白色呼吸光，直到查看；在终端发送新指令也算已查看。看过后不发光，没有新指令时不会重复提醒。')}</p></div>
       </section>
       <section className="settings-section" id="settings-terminal" aria-label={t('终端与编辑')} hidden={current.id !== 'terminal'}>
       {!isMac && <label className="setting-row"><span><TerminalIcon size={19} /><span><b>{t('终端')}</b><small>{t('新开或重启的本地终端使用；SSH 项目始终使用 Bash')}</small></span></span>{localShell
@@ -89,24 +91,9 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, localShe
       </section>
       {current.id === 'shortcuts' && <ShortcutSettings settings={settings} update={update} />}
       <section className="settings-section" id="settings-about" aria-label={t('更新与关于')} hidden={current.id !== 'about'}>
-      {updates && <section className="update-section" aria-label={t('应用更新')}>
-        <div className="update-heading"><b>{t('应用更新')}</b><span>{t('当前版本 v{version}', { version: updates.currentVersion })}</span></div>
-        <p role="status">{updates.status === 'unavailable' ? isMac ? t('macOS 版不会自动更新。再次运行安装命令，即可更新到最新版本。') : isLinux ? t('Linux 版不会自动更新。在下载页面获取新版本的 AppImage 或压缩包。') : t('当前为便携版或开发版。安装 Windows 版后，即可自动检查和下载更新。')
-          : updates.status === 'checking' ? t('正在检查更新…')
-          : updates.status === 'current' ? t('当前已是最新版本。')
-          : updates.status === 'downloading' ? t('正在下载 v{version} · {percent}%', { version: updates.version || '', percent: updates.percent })
-          : updates.status === 'ready' ? t('v{version} 已下载，可在方便时重启安装。', { version: updates.version || '' })
-          : updates.status === 'error' ? t(updates.error || '') : t('启动后自动检查更新，并在后台下载新版本。')}</p>
-        {updates.status === 'downloading' && <progress aria-label={t('更新下载进度')} max={100} value={updates.percent} />}
-        <div className="update-actions">{!updates.supported
-          ? <button className="button secondary small" onClick={onDownloadPage}>{isMac || isLinux ? t('打开下载页面') : t('下载 Windows 安装版')}</button>
-          : updates.status === 'ready' ? <button className="button primary small" onClick={onInstallUpdate}>{t('重启并安装更新')}</button>
-          : <button className="button secondary small" disabled={updates.status === 'checking' || updates.status === 'downloading'} onClick={onCheckUpdate}>{updates.status === 'error' ? t('重试更新') : t('检查更新')}</button>}</div>
-      </section>}
-      <div className="settings-note"><Info size={15} /><p>{t('主轮次、后台子代理与命令、排队消息和其他终端的工作都结束，方框才亮起白色呼吸光，直到查看；在终端发送新指令也算已查看。看过后不发光，没有新指令时不会重复提醒。')}</p></div>
+      <AboutSettings updates={updates} onCheck={onCheckUpdate} onInstall={onInstallUpdate} onDownloadPage={onDownloadPage} />
       </section>
         </div>
-        <div className="settings-main-foot"><button className="button primary" onClick={close}>{t('完成')}</button></div>
       </div>
     </div>
   </dialog>;

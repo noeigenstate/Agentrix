@@ -70,7 +70,8 @@ export type GitHunk = { header: string; oldStart: number; oldLines: number; newS
 export type GitDiff = { repository: boolean; binary: boolean; text: boolean; added: number; removed: number; hunks: GitHunk[]; patch: string };
 export type GitCommitFiles = { files: { path: string; status: string; originalPath: string | null }[]; total: number; truncated: boolean };
 type TextPage = { index: number; count: number; byteStart: number; byteEnd: number; encoding: string };
-export type AppUpdateState = { supported: boolean; currentVersion: string; status: 'unavailable' | 'idle' | 'checking' | 'current' | 'downloading' | 'ready' | 'error'; version: string | null; percent: number; error: string | null };
+export type Distribution = 'development' | 'installed' | 'portable' | 'macos' | 'linux';
+export type AppUpdateState = { supported: boolean; currentVersion: string; distribution: Distribution; status: 'unavailable' | 'idle' | 'checking' | 'current' | 'downloading' | 'ready' | 'error'; version: string | null; percent: number; error: string | null };
 export type AgentsState = { codex: { installed: boolean }; claude: { installed: boolean }; npm: boolean; installing: 'codex' | 'claude' | null; message: string; error: string };
 export type FilePreview = { path: string; name: string; size: number; modifiedAt: number; revision: string } & (
   { kind: 'text'; content: string; page: TextPage } | { kind: 'unsupported'; reason: string }
@@ -87,6 +88,7 @@ type Bridge = {
   checkForUpdates(): Promise<Result<AppUpdateState>>;
   installUpdate(): Promise<Result<boolean>>;
   openDownloadPage(): Promise<Result<void>>;
+  openProjectPage(page: 'releases' | 'docs' | 'license' | 'notices' | 'repository'): Promise<Result<void>>;
   onUpdateState(callback: (state: AppUpdateState) => void): () => void;
   addProjects(): Promise<Result<string[]>>;
   getRecentProjects(): Promise<Result<RecentProject[]>>;

@@ -147,7 +147,7 @@ try {
   assert.equal(await preferences.locator('[data-project-images-back]').isVisible(), false);
   await preferences.locator('[data-project-images-open]').click();
   assert.equal(await rows.count(), projects.length);
-  await preferences.getByRole('button', { name: '完成', exact: true }).click();
+  await preferences.getByRole('button', { name: '关闭设置', exact: true }).click();
   await preferences.waitFor({ state: 'detached' }); await unchanged();
   report.checks.push('Appearance thumbnail manager lists all projects; child cancellation, Back to appearance and category switching preserve settings and terminal');
   await open(0);

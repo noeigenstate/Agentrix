@@ -37,6 +37,17 @@ test('updates latch precedes editor confirmation and resets on cancellation and 
   assert.deepEqual(calls, ['editor', 'editor', 'terminals', 'editor', 'terminals', 'install', 'editor', 'terminals', 'install', 'editor']);
 });
 
+test('the About page opens only the named project pages', () => {
+  const h = handlers(), opened = [];
+  require('../electron/features/updates/ipc.cjs').registerUpdatesIpc({ ...h, updateManager: {}, openExternal: url => opened.push(url) });
+  const open = h.handles.get('updates:open-page');
+  open('releases'); open('repository');
+  assert.deepEqual(opened, ['https://github.com/noeigenstate/Agentrix/releases', 'https://github.com/noeigenstate/Agentrix/']);
+  assert.throws(() => open('https://example.com'), /未知/);
+  assert.throws(() => open('toString'), /未知/);
+  assert.equal(opened.length, 2);
+});
+
 test('git registrar preserves detached labels, option coercion and editor cancellation', async () => {
   const h = handlers(), calls = [];
   require('../electron/features/git/ipc.cjs').registerGitIpc({ ...h, findProject: id => ({ id }),
