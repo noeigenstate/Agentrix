@@ -35,7 +35,7 @@
 .reading-step.is-running .reading-node { box-shadow: inset 0 0 0 2px var(--node-tint); }
 .reading-step.is-failed .reading-node { --node-tint: var(--flow-fail); box-shadow: inset 0 0 0 2px var(--node-tint); }
 /* The cards start at the node's right edge, 14px from the rail and nearer to it than the name label, which stays beside the node. */
-.reading-step-body > :is(.reading-user, .reading-turn) { margin-left: calc(var(--step-node) - var(--step-lead)); }
+.reading-step-body > .reading-turn { margin-left: calc(var(--step-node) - var(--step-lead)); }
 .reading-step-body { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .reading-step-label { font-size: calc(13.5px * var(--reading-text)); font-weight: 600; color: var(--flow-ink); }
 /* Child content shares the reply's width; only tool groups take a modest inset, never another avatar column. */
@@ -52,8 +52,16 @@
 .reading-turn-tools .reading-turn-item-body > time { padding-top: 6px; }
 .reading-step .reading-status { margin: 5px 0 0; flex-wrap: wrap; }
 .reading-step .reading-status-mark { display: none; }
-/* Your message: a card beside its person. */
-.reading-user { align-self: stretch; display: flex; flex-direction: column; gap: 4px; padding: 10px 16px;
+/* You are on the right, as in a chat: the avatar at the column's right edge, the name and time to its left, the message under them hugging its text (at most 72 characters or 72% of the column wide, whichever is more, so
+   a long message wraps at a readable measure, and never wider than the column). The agent's steps stay at the left on the rail; the rail joins agent steps only and passes no node or stub for yours. */
+.reading-step.is-user { grid-template-columns: minmax(0, 1fr) var(--step-node); }
+.reading-step.is-user > .reading-node { grid-column: 2; grid-row: 1; }
+.reading-step.is-user > .reading-step-body { grid-column: 1; grid-row: 1; align-items: flex-end; }
+.reading-step.is-user::before, .reading-step:has(+ .reading-step.is-user)::before { display: none; }
+.reading-step.is-user .reading-step-head { flex-direction: row-reverse; }
+.reading-step-body > .reading-user { box-sizing: border-box; width: fit-content; max-width: min(calc(100% + var(--step-lead)), max(72ch, 72cqw)); margin: 0 calc(-1 * var(--step-lead)) 0 0; }
+/* Your message: a card hugging its content. */
+.reading-user { display: flex; flex-direction: column; gap: 4px; padding: 10px 16px;
   border-radius: 12px; background: var(--flow-card); }
 .reading-user > p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--flow-ink); }
 

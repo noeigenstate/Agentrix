@@ -1,14 +1,14 @@
 /* The reading view: the agent's conversation laid out as a document over the terminal it belongs to. */
 /* The reading view's text is this share of the size each rule names (font sizes here and in the other reading styles). */
 :root { --reading-text: 1; }
-.reading-view { --reading-left: 24px; --reading-right: 24px; position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; min-height: 0; background: var(--bg-card); }
+.reading-view { --reading-left: 24px; --reading-right: 24px; --reading-gutter: 6px; position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; min-height: 0; background: var(--bg-card); }
 .focus-mode .reading-view { background: var(--bg-app); }
 /* Reserve the reading surface from the shell's first frame, before the agent's startup event arrives. */
 .terminal-split-body[data-reading="true"] { background: var(--bg-card); }
 .focus-mode .terminal-split-body[data-reading="true"] { background: var(--bg-app); }
 .terminal-split-body[data-reading="true"] > .terminal-host { visibility: hidden; }
 .reading-scroll-area { position: relative; flex: 1; min-height: 0; display: flex; }
-.reading-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 14px calc(var(--reading-right) - 6px) 8px var(--reading-left); display: flex; flex-direction: column; font: 400 calc(13px * var(--reading-text))/1.7 var(--font-ui); color: var(--text-1); overscroll-behavior: contain; overflow-anchor: none; }
+.reading-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 14px var(--reading-right) 8px var(--reading-left); display: flex; flex-direction: column; font: 400 calc(13px * var(--reading-text))/1.7 var(--font-ui); color: var(--text-1); overscroll-behavior: contain; overflow-anchor: none; }
 .reading-content { flex: 1 0 auto; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .reading-earlier.text-button { align-self: center; flex: none; font-size: calc(12px * var(--reading-text)); }
 .reading-latest { position: absolute; right: 18px; bottom: 12px; display: flex; align-items: center; gap: 8px; }
@@ -106,7 +106,7 @@
 .reading-composer textarea:disabled { opacity: .5; }
 
 /* Native CLI prompts remain above the input until the CLI dismisses them. */
-.reading-choice-host { flex: 0 1 auto; min-height: 0; margin: 0 var(--reading-right) 8px var(--reading-left); overflow: auto; }
+.reading-choice-host { flex: 0 1 auto; min-height: 0; margin: 0 calc(var(--reading-right) + var(--reading-gutter)) 8px var(--reading-left); overflow: auto; }
 .reading-choice { --choice-accent: var(--warning); padding: 12px; border-radius: 12px; background: var(--bg-card); border: 1px solid var(--border); box-shadow: inset 2px 0 0 var(--choice-accent); max-height: min(45vh, 380px); overflow: auto; color: var(--text-1); font-size: calc(12px * var(--reading-text)); }
 .reading-choice:focus-visible { outline: 1px solid var(--choice-accent); outline-offset: -1px; }
 .reading-choice-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 7px; }
@@ -185,11 +185,11 @@
 .reading-command-run p { margin: 0; font-size: calc(13px * var(--reading-text)); color: var(--text-2); }
 .reading-command-run > .text-button { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; }
 
-/* The reading view's sizes: body text at 13px (14px in a focused project) on a 1.6 line, the cards 14px apart, 24px to the sides (16px in a card narrower than 480px), the composer and the command list on the same left and right edges. */
+/* The reading view's sizes: body text at 13px (14px in a focused project) on a 1.6 line, the cards 14px apart, 24px to the sides of the column, measured inside the 6px scrollbar gutter on the right (16px in a card narrower than 480px), the composer and the command list on the same left and right edges. */
 .reading-scroll { font: 400 calc(13px * var(--reading-text))/1.6 var(--font-ui); }
 .focus-mode .reading-scroll { font-size: calc(14px * var(--reading-text)); padding-top: 18px; padding-bottom: 12px; }
 @container (max-width: 480px) { .reading-view { --reading-left: 16px; --reading-right: 16px; } }
 .reading-content { gap: 14px; }
-.reading-composer { margin: 4px var(--reading-right) 16px var(--reading-left); }
+.reading-composer { margin: 4px calc(var(--reading-right) + var(--reading-gutter)) 16px var(--reading-left); }
 .focus-mode .reading-composer { margin-bottom: 20px; }
-.reading-commands.is-inline { margin: 4px var(--reading-right) 4px var(--reading-left); }
+.reading-commands.is-inline { margin: 4px calc(var(--reading-right) + var(--reading-gutter)) 4px var(--reading-left); }
