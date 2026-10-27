@@ -297,7 +297,7 @@ test('production startup/state/preload/UI path is connected; legacy permission e
   assert.match(read('electron/main.cjs'), /registerNativeIpc\(/); assert.match(read('electron/preload.cjs'), /terminal:native-approval/);
   assert.match(read('src/features/reading/ReadingView.tsx'), /terminal\.nativeApprovals\?\.map/);
   assert.match(read('src/features/home/decisions.ts'), /for \(const native of terminal\.nativeApprovals\)/);
-  assert.match(read('src/features/terminal/AgentLauncher.tsx'), /Claude SDK \(managed\)/);
+  assert.match(read('src/features/terminal/AgentLauncher.tsx'), /Claude SDK（托管）/);
   assert.match(read('electron/features/terminal/ipc.cjs'), /handle\('terminal:approval', \(\) => \(\{ mode: 'terminal-only'/);
   assert.throws(() => resolveCli('codex', { PATH: '' }));
 });

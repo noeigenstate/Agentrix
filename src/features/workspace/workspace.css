@@ -64,7 +64,7 @@
 .status-badge.is-error { color: var(--danger); }
 .status-badge.is-error .status-dot { border-radius: 2px; }
 @container (max-width: 460px) { .panel-meta, .panel-action > span { display: none; } }
-@container (max-width: 380px) { .panel-name small { display: none; } .panel-header { gap: 4px; padding-left: 8px; } .panel-header .icon-button, .panel-header .voice-button { width: 28px; } }
+@container (max-width: 380px) { .panel-name small { display: none; } .panel-header { gap: 4px; padding-left: 8px; } }
 @container (max-width: 300px) { .status-badge > span:not(.status-dot) { display: none; } .panel-index { display: none; } }
 /* An expanded project's number and name are already at the top of the sidebar beside it, so its header drops them and keeps only the
    status and the buttons at the right. With the sidebar collapsed to its rail the name stays. The "finished N min ago" text goes in focus

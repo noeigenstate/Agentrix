@@ -61,13 +61,13 @@ export function AgentLauncher({ terminalId, onAction }: {
   return <div className="agent-launcher">
     <p className="agent-launcher-title">{t('选择助手，开始开发')}</p>
     <div className="agent-launcher-mode" role="radiogroup" aria-label={t('开发方式')}>
-      <button type="button" role="radio" aria-checked={chosen === 'native'} onClick={() => setMode('native')}>Native approvals</button>
+      <button type="button" role="radio" aria-checked={chosen === 'native'} onClick={() => setMode('native')}>{t('原生审批')}</button>
       <button type="button" role="radio" aria-checked={chosen === 'new'} onClick={() => setMode('new')}>{t('开始新开发')}</button>
       <button type="button" role="radio" aria-checked={chosen === 'continue'} disabled={!known} title={history && !known ? t('这个文件夹还没有开发记录') : undefined} onClick={() => setMode('continue')}>{t('继承开发历史')}</button>
     </div>
     <div className="agent-launcher-agents">{AGENTS.map(({ agent, name, mark }) => <button type="button" key={agent} className={`agent-launcher-agent is-${agent}${missing(agent) ? ' is-missing' : ''}`} disabled={!!starting || !!agents?.installing} onClick={() => void start(agent)}>
       <span className="agent-launcher-mark" aria-hidden="true" data-audit-ignore>{starting === agent || agents?.installing === agent ? <CircleNotch size={16} className="loading-spinner" /> : mark}</span>
-      <b>{chosen === 'native' && agent === 'claude' ? 'Claude SDK (managed)' : name}</b><small>{note(agent)}</small>
+      <b>{chosen === 'native' && agent === 'claude' ? t('Claude SDK（托管）') : name}</b><small>{note(agent)}</small>
     </button>)}</div>
     {agents?.error && <p className="agent-launcher-error" role="alert">{agents.error}</p>}
     <div className="agent-launcher-more">
