@@ -103,11 +103,15 @@ async function createSSHFixture({ password = false, unknownHost = false, nativeW
     // How many SSH connections started a worker.
     get workers() { return workers; },
     async close() {
-      for (const child of children) child.kill();
+      const stopped = [...children].map(child => new Promise(resolve => {
+        child.once('close', resolve);
+        child.kill();
+      }));
       for (const connection of connections) connection.end();
-      await new Promise(resolve => server.close(resolve));
+      await Promise.all([...stopped, new Promise(resolve => server.close(resolve))]);
       if (!path.resolve(directory).startsWith(prefix)) throw new Error('Unsafe test cleanup path');
-      await fs.rm(directory, { recursive: true, force: true });
+      // The PTY shell can finish flushing history just after its worker exits.
+      await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     },
   };
 }

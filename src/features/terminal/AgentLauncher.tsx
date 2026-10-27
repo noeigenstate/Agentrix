@@ -58,7 +58,7 @@ export function AgentLauncher({ terminalId, onAction }: {
     const last = history[agent];
     return last ? t('接着上次的对话 · {time}', { time: relativeTime(last.at, Date.now()) }) : t('没有它的开发记录，将重新开始');
   };
-  return <div className="agent-launcher">
+  return <div className="agent-launcher"><div className="agent-launcher-body">
     <p className="agent-launcher-title">{t('选择助手，开始开发')}</p>
     <div className="agent-launcher-mode" role="radiogroup" aria-label={t('开发方式')}>
       <button type="button" role="radio" aria-checked={chosen === 'native'} onClick={() => setMode('native')}>{t('原生审批')}</button>
@@ -73,5 +73,5 @@ export function AgentLauncher({ terminalId, onAction }: {
     <div className="agent-launcher-more">
       <button type="button" className="text-button" disabled={!!starting} onClick={() => void start('terminal')}><TerminalIcon size={13} />{t('只打开终端')}</button>
     </div>
-  </div>;
+  </div></div>;
 }
