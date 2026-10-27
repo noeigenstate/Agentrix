@@ -15,9 +15,9 @@
 .inbox-tag, .decision-kind, .decision-mode { display: inline-flex; flex: none; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 20px; white-space: nowrap; color: var(--text-2); background: var(--bg-input); }
 /* Without the colour the shapes still tell them apart: what needs you or waits for review is outlined, what is working is filled, the rest is plain. */
 :is(.inbox-tag, .decision-kind):is(.is-need, .is-review), .decision-card:not(.session-detail) .decision-kind { color: var(--warning); background: none; border: 1px solid currentColor; line-height: 18px; }
-:is(.inbox-tag, .decision-kind).is-review, .decision-card.is-review .decision-kind { color: var(--success); }
+:is(.inbox-tag, .decision-kind).is-review, .decision-card.is-review .decision-kind { color: var(--success-text); border-color: var(--success); }
 :is(.inbox-tag, .decision-kind).is-work { color: var(--running); background: var(--bg-selected); }
-.decision-kind.is-done { color: var(--success); }
+.decision-kind.is-done { color: var(--success-text); }
 
 /* The inbox: one list by urgency, no icon chips; a row is the name, what it is on (only when it is on something) and its state. A row
    with nothing to say under its name is compact, 44px; the rest are 56px. Names are 14px in primary text; the selected row takes the selected fill
@@ -35,7 +35,7 @@
 .inbox-text { display: grid; min-width: 0; }
 .inbox-text b { overflow: hidden; color: var(--text-1); text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; line-height: 20px; }
 .inbox-end { display: grid; place-items: center end; }
-.inbox-state { font-size: 12px; line-height: 16px; white-space: nowrap; color: var(--success); }
+.inbox-state { font-size: 12px; line-height: 16px; white-space: nowrap; color: var(--success-text); }
 .inbox-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; color: var(--text-2); }
 
 /* The right column: the selected decision (or session) fills it; what-next is docked under it. */

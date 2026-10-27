@@ -84,9 +84,11 @@ focus) overrides some tokens, shown in brackets, see below.
 
 Light theme 白底黑字 (the owner's values, one line each; a white panel on a light canvas, the borders and the ink as below):
 - Canvas `--bg-app` #F8F9FB (behind the grid cards and the decision page); panels that carry content stay white: `--bg-card` #FFFFFF, a focused project, menus (`--bg-menu` #FFFFFF).
-- Title bar and sidebar `--bg-titlebar` / `--bg-sidebar` #F7F7F8; input `--bg-input` #F7F8FA; hover `--bg-hover` #F3F5F7; selected `--bg-selected` #E9EBEF.
-- Border `--border` #E2E6EB; active border `--border-hover` #A8B7C9 (an active, hovered or focused-input control's edge, 2:1, never the keyboard focus ring); divider `--divider` #ECEDF0.
-- Text `--text-1` #20242A (also `--button-primary`); `--text-2` #626B77; `--text-3` #636B77 (4.5:1 on the canvas, hover and selected); `--text-disabled` #9AA1AB; `--focus-ring` #3C4043.
+- Title bar `--bg-titlebar` #F7F7F8; sidebar `--bg-sidebar` #F7F8FA; input `--bg-input` #FAFAFB (a field only, told by its border; a quiet well takes the hover grey); hover `--bg-hover` #F3F5F7, which is also the user's message and a tool group (`--flow-card`) in every layout; selected `--bg-selected` #E9EBEF.
+- Border `--border` #E4E7EB; active border `--border-hover` #A8B7C9 (an active, hovered or focused-input control's edge, 2:1, never the keyboard focus ring); divider `--divider` #ECEDF0.
+- Text `--text-1` #24272D (also `--button-primary`); `--text-2` #69717D (4.5:1 on white, canvas, sidebar, input and hover; 4.1:1 on a selected row, so helper lines on a selected row take `--text-1`); `--text-3` #636B77 (4.5:1 on the selected row); `--text-disabled` #9AA1AB; `--focus-ring` #3C4043.
+- Success: `--success` #438F73 on dots, icons and outlines; success as text is `--success-text` #37745E (4.5:1 on every light surface; in dark it is `--success`).
+- Colour rule: the CLI brand colours and the file-type colours are on icons only; no coloured fill on a message container, a sidebar, the activity pane or a card (diff and conflict bands in the editor are content).
 - The one card shadow in light: a grid card under the pointer gets `0 4px 12px rgb(0 0 0 / .05)`, background and border unchanged; none while dragged, in the focus motion or in focus mode.
 
 - Hue rule: **everything is neutral grey except these seven**: Claude's brand icon, Codex's mark, succeeded, running, needs approval, failed, usage.

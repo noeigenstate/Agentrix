@@ -10,7 +10,7 @@
   --border: #424242; --border-hover: #595959; --divider: #333333;
   --text-1: #f2f2f2; --text-2: #b5b5b5; --text-3: #999999; --text-disabled: #777777;
   --button-primary: #e5e5e5; --button-primary-text: #181818; --focus-ring: #d0d0d0;
-  --success: #70bfa4; --running: #78a8cc; --warning: #d8ae67; --danger: #de7878; --usage: #68b8ae;
+  --success: #70bfa4; --success-text: var(--success); --running: #78a8cc; --warning: #d8ae67; --danger: #de7878; --usage: #68b8ae;
   /* The two agents' own colours, on their marks and status dots only: Claude Code's brand orange and Codex's green; and the app icon's coral, on the logo's fourth square only. */
   --agent-claude: #d97757; --agent-codex: #34d5a5; --brand-coral: #ef7681;
   /* The short bar at the left of a selected list row. */
@@ -28,16 +28,17 @@
 .workspace-layout:not(:has(> .home-layer)) :is(.dropdown, .editor-find, .reading-commands, .reading-terminal-popup) { --bg-hover: var(--bg-selected); }
 
 /* 白底黑字: the light theme (id "light" in src/shared/themes.ts).
-   The owner's greys, a light canvas under white panels (L*): card and menu 100 (white panels carry the content), app 97.9 (the canvas behind the cards: #f8f9fb), titlebar and sidebar 97.3, input 97.6, hover 96.4 (#f3f5f7), selected 93 (#e9ebef).
-   Borders #e2e6eb, active border #a8b7c9, ink #20242a, secondary text #626b77. The tertiary text is #636b77, one step from the secondary, the lightest grey that stays 4.5:1 on the selected row.
+   The owner's greys, a light canvas under white panels (L*): card and menu 100 (white panels carry the content), app 97.9 (the canvas behind the cards: #f8f9fb), titlebar 97.3, sidebar #f7f8fa, input #fafafb (a field is told by its border, not its fill), hover and the user's message #f3f5f7, selected 93 (#e9ebef).
+   Borders #e4e7eb, active border #a8b7c9, ink #24272d, secondary text #69717d (4.5:1 on white, the canvas, the sidebar, the input and hover; 4.1:1 on the selected row). The tertiary text is #636b77: 4.5:1 on the selected row, and a hair darker than the secondary.
+   Success is #438f73 on marks and outlines (3.9:1 on white); success as text is --success-text #37745e (4.6:1 on the selected row). Brand and file-type colours are on icons only; a fill on a message container or a sidebar is always grey.
    Every token keeps its role. Colour is still only on icons and indicators; the five semantic colours are the dark theme's hues, darkened to 4.5:1 or more on every surface. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg-app: #f8f9fb; --bg-titlebar: #f7f7f8; --bg-sidebar: #f7f7f8; --bg-card: #ffffff; --bg-input: #f7f8fa; --bg-control: #ffffff; --bg-menu: #ffffff;
-  --bg-hover: #f3f5f7; --bg-selected: #e9ebef; --border: #e2e6eb; --border-hover: #a8b7c9; --divider: #ecedf0;
-  --text-1: #20242a; --text-2: #626b77; --text-3: #636b77; --text-disabled: #9aa1ab;
-  --button-primary: #20242a; --button-primary-text: #ffffff; --focus-ring: #3c4043;
-  --success: #186f57; --running: #386687; --warning: #825b05; --danger: #a34346; --usage: #136e66;
+  --bg-app: #f8f9fb; --bg-titlebar: #f7f7f8; --bg-sidebar: #f7f8fa; --bg-card: #ffffff; --bg-input: #fafafb; --bg-control: #ffffff; --bg-menu: #ffffff;
+  --bg-hover: #f3f5f7; --bg-selected: #e9ebef; --border: #e4e7eb; --border-hover: #a8b7c9; --divider: #ecedf0;
+  --text-1: #24272d; --text-2: #69717d; --text-3: #636b77; --text-disabled: #9aa1ab;
+  --button-primary: #24272d; --button-primary-text: #ffffff; --focus-ring: #3c4043;
+  --success: #438f73; --success-text: #37745e; --running: #386687; --warning: #825b05; --danger: #a34346; --usage: #136e66;
   /* Claude Code keeps its brand #d97757 (3.1:1 on white). Codex's green is darkened to 4.1:1 on white as an icon colour; --select-bar is the dark ink of a selected row's bar. */
   --agent-codex: #0d8f6a; --select-bar: #4a4f57; --brand-coral: #cc3f52;
   /* --bg-aside and --bg-aside-well follow --bg-sidebar and --bg-input outside the workbench, as in the dark theme; --agent-claude stays #d97757 (the brand colour). */
@@ -49,7 +50,7 @@
 /* The workbench. This block must restate every token the dark block sets on .workspace-layout (app, sidebar, aside, well, card, input, hover, selected, divider):
    a rule on the layout beats the value inherited from :root, so a token left out here would keep its dark value inside the workbench. */
 :root[data-theme="light"] .workspace-layout:not(:has(> .home-layer)) {
-  --bg-app: #f8f9fb; --bg-sidebar: #f7f7f8; --bg-aside: #fafafb; --bg-aside-well: #f3f4f6; --bg-card: #ffffff; --bg-input: #f7f8fa; --bg-control: #ffffff; --bg-hover: #f3f5f7; --bg-selected: #e9ebef; --divider: #ecedf0;
+  --bg-app: #f8f9fb; --bg-sidebar: #f7f8fa; --bg-aside: #fafafb; --bg-aside-well: #f3f4f6; --bg-card: #ffffff; --bg-input: #fafafb; --bg-control: #ffffff; --bg-hover: #f3f5f7; --bg-selected: #e9ebef; --divider: #ecedf0;
 }
 
 /* --bg-app is the canvas, and a surface that carries content is a white panel on it: inside a focused project (the reading view, terminal area, editor, previews, code) and inside a decision card
@@ -59,16 +60,28 @@
 /* The grid card under the pointer lifts with the one soft shadow of the light theme. Not while dragged, during the focus motion, or in focus mode; the completion glow is an inset shadow on a child and sits inside it. */
 :root[data-theme="light"] .app-shell:not(.focus-mode) .project-panel:hover:not(.focus-motion-panel, .drag-source) { box-shadow: 0 4px 12px rgb(0 0 0 / .05); }
 
-/* The main canvas is #f8f9fb and carries no grey slab: a card (grid project, decision detail) is white and set off by a 1px border, and the one grey operation area on it is the
-   input (#f7f8fa, bordered). The card colour is now white, so the places that used it as a quiet well take the input colour, and a focused project's message cards (which were
-   the card colour on the app colour) step to the input colour with a hover-grey inset. */
+/* The main canvas is #f8f9fb and carries no grey slab: a card (grid project, decision detail) is white and set off by a 1px border, and the grey operation area on it is the
+   input (#fafafb, bordered by #e4e7eb). The input colour is a field's and nothing else: a quiet well (a code block, a tag, a goal, a file card, a theme option) takes the hover grey #f3f5f7,
+   which is also the user's message and a tool group in every layout (--flow-card), with the selected grey for the chips inside them. A hovered well steps to the selected grey. */
 :root[data-theme="light"] .app-shell:not(.focus-mode) .project-panel, :root[data-theme="light"] .home-layer .decision-card { box-sizing: border-box; border: 1px solid var(--border); }
-:root[data-theme="light"] .focus-mode .reading-view { --flow-card: var(--bg-input); --flow-inset: var(--bg-hover); }
-:root[data-theme="light"] :is(.markdown-body blockquote, .markdown-body pre, .markdown-body th, .git-diff-note, .editor-message, .workspace-warning, .home-notice) { background: var(--bg-input); }
+:root[data-theme="light"] .reading-view { --flow-card: var(--bg-hover); --flow-inset: var(--bg-selected); }
+:root[data-theme="light"] .reading-tools-head:hover { background: var(--bg-selected); }
+:root[data-theme="light"] :is(.markdown-body blockquote, .markdown-body pre, .markdown-body th, .git-diff-note, .editor-message, .workspace-warning, .home-notice) { background: var(--bg-hover); }
+/* The wells that paint --bg-input take the hover grey here by redefining the token for themselves, so their own hover, picked and answered states keep working. */
+:root[data-theme="light"] :is(.inbox-tag, .decision-kind, .decision-mode, .decision-option, .review-goal, .review-checks li, .review-unverified, .review-file-status, .review-last-note, .review-delivery-part, .file-card-name,
+  .reading-sign-in-code code, .reading-jump.icon-button, .reading-unseen, .reading-markdown :not(pre) > code, .reading-markdown th, .reading-question-tab, .reading-question-review > div, .reading-generating-bar,
+  .voice-halo.is-near, .voice-overlay-keys kbd, .theme-option, .panel-name small, .panel-error, .explorer-tab-count, .git-hunk-bar, .markdown-body :not(pre) > code) { --bg-input: var(--bg-hover); }
+:root[data-theme="light"] :is(.decision-option, .file-card-name, .theme-option, .reading-jump.icon-button):hover { --bg-hover: var(--bg-selected); }
 
 /* The completion glow of a finished, not yet seen grid card: the same inset vignette from the edge inward, no line, now in ink: --text-1 at 0.22 alpha
    (the dark theme's white at .3 would be invisible on white). Same selector as the rule in workspace.css, behind the theme attribute. */
 :root[data-theme="light"] .app-shell:not(.focus-mode) .project-panel.has-unread:not(.focus-motion-panel, .drag-source) .panel-signal { box-shadow: inset 0 0 48px 8px rgb(from var(--text-1) r g b / 0.22); }
+
+:root[data-theme="light"] :is(.inbox-row[aria-selected="true"] small, .home-layer .new-work-start:not(.primary)) { color: var(--text-1); }
+/* The secondary text is 4.1:1 on the selected grey, so a helper line or a label on a selected row is primary text. */
+/* Success as text is --success-text (#37745e, 4.5:1 on every light surface); its dot and outline stay --success (#438f73). workspace.css's state tag takes it here. */
+:root[data-theme="light"] :is(.status-badge.is-complete, .status-badge.is-review) { color: var(--success-text); }
+:root[data-theme="light"] :is(.status-badge.is-complete, .status-badge.is-review) .status-dot { color: var(--success); }
 
 /* Colours that live outside the tokens, each restated for the light surfaces. */
 /* styles.css: the window's close button hover is red; its glyph must stay white. */
@@ -99,8 +112,8 @@
 :root[data-theme="light"] .conflict-current { background: #1a7f3722; }
 :root[data-theme="light"] .conflict-incoming { background: #0969da22; }
 :root[data-theme="light"] .conflict-base { background: #6e778122; }
-:root[data-theme="light"] .conflict-marker { background: #20242a12; }
+:root[data-theme="light"] .conflict-marker { background: #24272d12; }
 :root[data-theme="light"] .conflict-marker.current { background: #1a7f3740; }
 :root[data-theme="light"] .conflict-marker.incoming { background: #0969da40; }
-:root[data-theme="light"] .find-bands i { background: #20242a14; }
-:root[data-theme="light"] .find-bands i.is-current { background: #20242a29; }
+:root[data-theme="light"] .find-bands i { background: #24272d14; }
+:root[data-theme="light"] .find-bands i.is-current { background: #24272d29; }

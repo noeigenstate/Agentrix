@@ -62,7 +62,7 @@ test('Codex follows the selected theme while keeping its official geometry', t =
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
   t.after(() => { if (descriptor) Object.defineProperty(globalThis, 'document', descriptor); else delete globalThis.document; });
   globalThis.document = { documentElement: { dataset: {} } };
-  for (const [theme, ink] of [['light', '#20242a'], ['mono', '#ffffff']]) {
+  for (const [theme, ink] of [['light', '#24272d'], ['mono', '#ffffff']]) {
     document.documentElement.dataset.theme = theme;
     const html = renderToStaticMarkup(React.createElement(CodexLogo));
     assert.match(html, new RegExp(`color="${ink}"`));

@@ -23,4 +23,4 @@ so a change made only in `src/features/<feature>/*.css` can do nothing at all.
 
 ## Light theme principle
 
-The light theme speaks the dark theme's visual language, it is not its colours inverted: borders and dividers are lighter than instinct says (`#E2E6EB`, `#ECEDF0`), text is never lightened to match (`#20242A`, `#626B77`).
+The light theme speaks the dark theme's visual language, it is not its colours inverted: borders and dividers are lighter than instinct says (`#E4E7EB`, `#ECEDF0`), text is never lightened to match (`#24272D`, `#69717D`).
