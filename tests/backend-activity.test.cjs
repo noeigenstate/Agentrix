@@ -79,14 +79,15 @@ const taskNotice = (id, at, type = 'queue-operation') => ({ type, operation: 'en
 });
 
 // Drive the real local/SSH reader callbacks and monitor deduplication without Electron.
-async function activityFeed(t, h) {
+async function activityFeed(t, h, { clockOffset = h.project.kind === 'ssh' ? 100000 : 0, initialTurn = true } = {}) {
   const { s, project, context } = h, remote = project.kind === 'ssh';
   const home = path.join(project.path, 'activity-home'), thread = '00000000-0000-4000-8000-000000000001';
   const file = s.agent === 'claude' ? path.join(home, 'session.jsonl') : path.join(home, 'sessions', `rollout-${thread}.jsonl`);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, '');
-  s.activityClockOffset = remote ? 100000 : 0;
-  const timestamp = at => stamp(at - s.activityClockOffset), records = [];
+  s.activityClockOffset = clockOffset;
+  // Local transcripts share the main clock; only SSH records come from another clock.
+  const timestamp = at => stamp(at - (remote ? clockOffset : 0)), records = [];
   const reader = new CodexActivityReader(project.path, home, 1000);
   reader.snapshot = { threadId: thread, turnId: null, state: 'unknown', updatedAt: 0 };
   let changes = 0;
@@ -107,7 +108,7 @@ async function activityFeed(t, h) {
     context.followClaude(project, s, { sessionId: 'session', transcriptPath: remote ? '/srv/claude/projects/session.jsonl' : file, sentAt: 1000 - s.activityClockOffset });
   } else {
     await append({ type: 'session_meta', timestamp: timestamp(1000), payload: { id: thread, cwd: project.path, source: 'cli' } });
-    await append({ type: 'event_msg', timestamp: timestamp(1900), payload: { type: 'task_started', turn_id: 'parent' } });
+    if (initialTurn) await append({ type: 'event_msg', timestamp: timestamp(1900), payload: { type: 'task_started', turn_id: 'parent' } });
     context.event = { cwd: project.path, codexHome: home, sentAt: 1000 - s.activityClockOffset };
     const start = main.indexOf('    const remoteSince =');
     vm.runInContext(main.slice(start, main.indexOf('    // Unread completion', start)), context);
@@ -117,16 +118,17 @@ async function activityFeed(t, h) {
   return {
     changes: () => changes,
     poll: () => s.activityMonitor.poll(),
+    start: (at, turnId = 'parent') => append({ type: 'event_msg', timestamp: timestamp(at), payload: { type: 'task_started', turn_id: turnId } }),
     user: async (text, at) => {
       await append(s.agent === 'claude'
         ? { type: 'user', uuid: `user-${at}`, timestamp: timestamp(at), message: { content: text } }
         : { type: 'event_msg', timestamp: timestamp(at), payload: { type: 'user_message', message: text } });
       await s.activityMonitor.poll();
     },
-    complete: async at => {
+    complete: async (at, turnId = 'parent') => {
       await append(s.agent === 'claude'
-        ? { type: 'assistant', uuid: 'parent', timestamp: timestamp(at), message: { stop_reason: 'end_turn', content: [] } }
-        : { type: 'event_msg', timestamp: timestamp(at), payload: { type: 'task_complete', turn_id: 'parent' } });
+        ? { type: 'assistant', uuid: turnId, timestamp: timestamp(at), message: { stop_reason: 'end_turn', content: [] } }
+        : { type: 'event_msg', timestamp: timestamp(at), payload: { type: 'task_complete', turn_id: turnId } });
       await s.activityMonitor.poll();
     },
   };
@@ -264,10 +266,52 @@ for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) fo
   });
 }
 
-for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) for (const completionAt of [2099, 2200]) for (const readAtExpiry of [false, true]) {
-  test(`${agent} ${kind} replays a deduplicated completion ${completionAt < 2100 ? 'before' : 'after'} the handled answer only when it expires${readAtExpiry ? ' in a state read' : ''}`, async t => {
+for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) for (const clockOffset of [kind === 'ssh' ? 100000 : 0, 2000, -2000]) {
+  test(`${agent} ${kind} publishes working and completes each round once with clock offset ${clockOffset} ms`, async t => {
     t.mock.timers.enable({ apis: ['setTimeout'] });
-    const h = await harness(t, kind, agent), { s, project } = h, feed = await activityFeed(t, h);
+    const h = await harness(t, kind, agent), { s, project } = h, feed = await activityFeed(t, h, { clockOffset, initialTurn: false });
+    for (const [at, turnId] of [[1000000, 'first'], [1001000, 'next']]) {
+      if (agent === 'codex') await feed.start(at, turnId);
+      h.now(at); await feed.user(`Finish the ${turnId} task`, at);
+      assert.equal(s.codexActivity, 'working', `snapshot ${s.activityRawSnapshot?.updatedAt}, input guard ${s.activityInputAt}`);
+      assert.equal(s.activitySnapshot.state, 'working'); assert.equal(s.activitySnapshot.updatedAt, at);
+      assert.equal(s.activityInputAt, at); assert.equal(s.activityConfirmedInputAt, at);
+      assert.deepEqual(s.promptQueue.list().map(item => [item.state, item.at]), [['working', at]]);
+      // Claude's prompt hook can arrive after the transcript; only it arms a CLI round without typed input.
+      if (agent === 'claude') h.context.claudeActivity(project, s, { state: 'working', sessionId: 'session', eventId: `session:${turnId}`, prompt: `Finish the ${turnId} task` });
+      h.now(at + 100); await feed.complete(at + 100, turnId);
+      const count = turnId === 'first' ? 1 : 2;
+      assert.equal(s.codexActivity, 'complete'); assert.deepEqual(s.promptQueue.list(), []);
+      assert.equal(s.promptQueue.finishedAt, at + 100); assert.equal(project.lastCompletedAt, at + 100);
+      assert.equal(project.unread, 1); assert.equal(h.alerts(), count); assert.equal(h.armings(), count);
+      h.store.acknowledge(project.id);
+      await feed.poll(); s.promptQueue.changed(); s.completionWork.changed(); await Promise.resolve();
+      assert.equal(project.unread, 0); assert.equal(project.completionArmed, false);
+      assert.equal(h.alerts(), count); assert.equal(h.armings(), count);
+    }
+  });
+}
+
+for (const kind of ['local', 'ssh']) {
+  test(`Codex ${kind} publishes working when the prompt is recorded a millisecond after task_started`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const h = await harness(t, kind), { s } = h, feed = await activityFeed(t, h, { initialTurn: false });
+    await feed.start(1000000);
+    h.now(1000001); await feed.user('Finish the task', 1000001);
+    assert.equal(s.codexActivity, 'working', `snapshot ${s.activityRawSnapshot?.updatedAt}, input guard ${s.activityInputAt}`);
+    assert.equal(s.activitySnapshot.updatedAt, 1000001); assert.equal(s.activityInputAt, 1000001);
+    await feed.complete(1000000);
+    assert.equal(s.codexActivity, 'working'); assert.equal(s.activitySnapshot.state, 'working');
+    assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
+    h.now(1000100); await feed.complete(1000100);
+    assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 1);
+  });
+}
+
+for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) for (const clockOffset of [kind === 'ssh' ? 100000 : 0, 2500, -2500]) for (const completionAt of [2099, 2200]) for (const readAtExpiry of [false, true]) {
+  test(`${agent} ${kind} replays a deduplicated completion ${completionAt < 2100 ? 'before' : 'after'} the handled answer only when it expires${readAtExpiry ? ' in a state read' : ''} with clock offset ${clockOffset} ms`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const h = await harness(t, kind, agent), { s, project } = h, feed = await activityFeed(t, h, { clockOffset });
     h.write('Finish the task\r'); await feed.user('Finish the task', 2000);
     h.now(2100); h.write('Use the suggested option\r');
     h.now(2200); await feed.complete(completionAt);
@@ -299,10 +343,10 @@ for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) fo
   });
 }
 
-for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) for (const completionAt of [2099, 2200]) {
-  test(`${agent} ${kind} preserves a recorded new prompt's guard when an unrecorded answer after completion at ${completionAt} expires`, async t => {
+for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) for (const clockOffset of [kind === 'ssh' ? 100000 : 0, 2500, -2500]) for (const completionAt of [2099, 2200]) {
+  test(`${agent} ${kind} preserves a recorded new prompt's guard when an unrecorded answer after completion at ${completionAt} expires with clock offset ${clockOffset} ms`, async t => {
     t.mock.timers.enable({ apis: ['setTimeout'] });
-    const h = await harness(t, kind, agent), { s, project } = h, feed = await activityFeed(t, h);
+    const h = await harness(t, kind, agent), { s, project } = h, feed = await activityFeed(t, h, { clockOffset });
     h.write('Finish the task\r'); await feed.user('Finish the task', 2000);
     h.now(2100); h.write('Use the suggested option\r');
     h.now(2200); await feed.complete(completionAt);

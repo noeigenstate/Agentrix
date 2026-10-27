@@ -727,8 +727,8 @@ function onEvent(event) {
       codexConversation(s.conversation, record, event.cwd || project.path); describeActions(s, event.cwd || project.path, codexRecord(s.actions, record, event.cwd || project.path));
       noteSettings(s, 'codex', record);
       if (record?.type === 'event_msg' && ['task_complete', 'turn_completed', 'turn_aborted', 'turn_interrupted'].includes(record.payload?.type)) {
-        const at = Date.parse(record.timestamp);
-        s.promptQueue.finish(Number.isFinite(at) ? at + (s.activityClockOffset || 0) : Date.now());
+        const at = Date.parse(record.timestamp) + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0);
+        s.promptQueue.finish(Number.isFinite(at) ? at : Date.now());
       }
     };
     const remoteStatus = value => {
@@ -753,6 +753,8 @@ function onEvent(event) {
       },
       snapshot => {
         if (!reader) snapshot = { ...snapshot, updatedAt: snapshot.updatedAt + s.activitySince - remoteSince };
+        // Codex can record the received prompt after task_started for the same open turn.
+        if (snapshot.state === 'working' && s.activityPromptAt > snapshot.updatedAt) snapshot = { ...snapshot, updatedAt: s.activityPromptAt };
         applyActivity(project, s, snapshot);
       },
       // A rollout here is read as it is written; over SSH the server is asked more often while the agent works.
@@ -1002,7 +1004,8 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   s.conversation = new ConversationLog(change => {
     publishConversation(s, change);
     const entry = change.entry;
-    const at = entry?.at + (s.activityClockOffset || 0);
+    // Local transcripts already use the main clock; the hook offset includes delivery latency.
+    const at = entry?.at + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0);
     if (entry?.cancelled) s.promptQueue.cancel(entry.original ?? entry.text, at);
     if (entry?.role === 'assistant' && s.codexActive) s.promptQueue.reply({ ...entry, at });
     // An answer to the agent's own question is not a prompt: it goes on with the round it answered.
