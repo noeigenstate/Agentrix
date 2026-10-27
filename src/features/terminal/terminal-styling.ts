@@ -1,6 +1,6 @@
 import type { IDecoration, IDisposable, IMarker, Terminal } from '@xterm/xterm';
-import { subscribeTheme } from '../../shared/themes.ts';
-import { terminalDecorationColors, terminalTheme } from './terminal-theme.ts';
+import { currentTheme, subscribeTheme } from '../../shared/themes.ts';
+import { terminalColorReply, terminalDecorationColors, terminalTheme } from './terminal-theme.ts';
 
 // A light touch of the reading view inside the real terminal. Claude Code and Codex print Markdown already
 // rendered: no "##", no backticks are left, only attributes. So the visible rows are read for those:
@@ -64,6 +64,13 @@ export function styleTerminal(terminal: Terminal): IDisposable {
   };
   const later = () => { if (!timer && !disposed) timer = window.setTimeout(scan, 160); };
   const subscriptions = [terminal.onWriteParsed(later), terminal.onScroll(later), terminal.onResize(later)];
+  // Reply through the normal PTY input path, for every renderer. The clear canvas must advertise the
+  // light card's actual RGB; other OSC commands and the dark theme keep xterm's native behaviour.
+  for (const slot of [10, 11] as const) subscriptions.push(terminal.parser.registerOscHandler(slot, data => {
+    if (currentTheme() !== 'light' || data !== '?') return false;
+    terminal.input(terminalColorReply(slot), false);
+    return true;
+  }));
   const unsubscribeTheme = subscribeTheme(() => {
     terminal.options.theme = terminalTheme();
     clearTimeout(timer); scan();

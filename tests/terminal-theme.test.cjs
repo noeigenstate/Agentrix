@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { terminalTheme, terminalOptions, terminalDecorationColors } = require('../src/features/terminal/terminal-theme.ts');
+const { terminalTheme, terminalOptions, terminalColorReply, terminalDecorationColors } = require('../src/features/terminal/terminal-theme.ts');
 const { applyTheme } = require('../src/shared/themes.ts');
 const { styleTerminal } = require('../src/features/terminal/terminal-styling.ts');
 
@@ -50,11 +50,11 @@ test('light terminals use transparent white for contrast correction and readable
   const switchTheme = themeDocument(t); switchTheme('light');
   const theme = terminalTheme();
   assert.equal(theme.background, '#ffffff00');
-  assert.equal(theme.foreground, '#20242a'); assert.equal(theme.cursor, '#20242a');
+  assert.equal(theme.foreground, '#24272d'); assert.equal(theme.cursor, '#24272d');
   assert.equal(theme.selectionBackground, '#e9ebef');
-  assert.deepEqual([theme.scrollbarSliderBackground, theme.scrollbarSliderHoverBackground, theme.scrollbarSliderActiveBackground], ['#e2e6eb88', '#a8b7c988', '#a8b7c9cc']);
+  assert.deepEqual([theme.scrollbarSliderBackground, theme.scrollbarSliderHoverBackground, theme.scrollbarSliderActiveBackground], ['#e4e7eb88', '#a8b7c988', '#a8b7c9cc']);
   assert.equal(theme.white, '#6e6e6e'); assert.equal(theme.brightWhite, '#636b77');
-  assert.deepEqual(terminalDecorationColors(), { bullet: '#636b77', heading: '#20242a' });
+  assert.deepEqual(terminalDecorationColors(), { bullet: '#636b77', heading: '#24272d' });
   for (const name of ansi) {
     const ratio = (luminance('#f7f8fa') + 0.05) / (luminance(theme[name]) + 0.05);
     assert.ok(ratio >= 4.5, `${name} ${theme[name]}: ${ratio.toFixed(2)}:1`);
@@ -63,8 +63,19 @@ test('light terminals use transparent white for contrast correction and readable
   switchTheme('mono'); assert.equal(terminalTheme().background, '#00000000');
 });
 
+test('default-colour replies report the palette RGB with opaque 16-bit channels in either theme', t => {
+  const switchTheme = themeDocument(t);
+  assert.equal(terminalColorReply(10), '\x1b]10;rgb:f2f2/f2f2/f2f2\x1b\\');
+  assert.equal(terminalColorReply(11), '\x1b]11;rgb:0000/0000/0000\x1b\\');
+  switchTheme('light');
+  assert.equal(terminalColorReply(10), '\x1b]10;rgb:2424/2727/2d2d\x1b\\');
+  assert.equal(terminalColorReply(11), '\x1b]11;rgb:ffff/ffff/ffff\x1b\\');
+  assert.equal(terminalTheme().background, '#ffffff00', 'reporting white never makes the canvas opaque');
+});
+
 test('open terminals and existing decorations switch themes without output or recreation, then unsubscribe', async t => {
   const switchTheme = themeDocument(t), decorations = [], markers = [], events = [];
+  const handlers = new Map(), replies = [];
   const lines = ['', 'Heading', '• item'].map((text, row) => ({
     isWrapped: false, translateToString: () => text,
     getCell: col => ({ getWidth: () => 1, getChars: () => text[col] || '', isBold: () => row === 1, isFgDefault: () => true }),
@@ -74,23 +85,32 @@ test('open terminals and existing decorations switch themes without output or re
   const terminal = {
     options: { theme: terminalTheme(), fontSize: 12 }, rows: 3, cols: 12, buffer: { active: buffer },
     onWriteParsed: subscribe, onScroll: subscribe, onResize: subscribe,
+    parser: { registerOscHandler(slot, handler) { handlers.set(slot, handler); return { dispose() { handlers.delete(slot); } }; } },
+    input(data, userInput) { replies.push({ data, userInput }); },
     registerMarker() { const marker = { isDisposed: false, dispose() { this.isDisposed = true; } }; markers.push(marker); return marker; },
     registerDecoration(options) { const decoration = { ...options, dispose() { this.disposed = true; } }; decorations.push(decoration); return decoration; },
   };
   const styling = styleTerminal(terminal); t.after(() => styling.dispose());
   await new Promise(resolve => setTimeout(resolve, 180));
   assert.deepEqual(decorations.map(item => item.foregroundColor), ['#f2f2f2', '#b5b5b5']);
+  assert.equal(handlers.get(11)('?'), false, 'dark queries retain xterm behaviour');
   switchTheme('light');
-  assert.equal(terminal.options.theme.foreground, '#20242a');
-  assert.deepEqual(decorations.slice(-2).map(item => item.foregroundColor), ['#20242a', '#636b77']);
+  assert.equal(terminal.options.theme.foreground, '#24272d');
+  assert.deepEqual(decorations.slice(-2).map(item => item.foregroundColor), ['#24272d', '#636b77']);
   assert.ok(decorations.slice(0, 2).every(item => item.disposed));
+  assert.equal(handlers.get(10)('?'), true); assert.equal(handlers.get(11)('?'), true);
+  assert.deepEqual(replies, [{ data: terminalColorReply(10), userInput: false }, { data: terminalColorReply(11), userInput: false }]);
+  for (const payload of ['#123456', 'rgb:ffff/ffff/ffff', '', '?;?']) assert.equal(handlers.get(10)(payload), false, 'other OSC commands keep xterm handling');
   switchTheme('mono');
   assert.equal(terminal.options.theme.foreground, '#f2f2f2');
   assert.deepEqual(decorations.slice(-2).map(item => item.foregroundColor), ['#f2f2f2', '#b5b5b5']);
   assert.equal(terminal.buffer.active, buffer); assert.equal(terminal.options.fontSize, 12);
+  assert.equal(handlers.get(10)('?'), false); assert.equal(handlers.get(11)('?'), false);
+  assert.equal(replies.length, 2, 'switching themes never sends unsolicited input');
   styling.dispose();
   const lastTheme = terminal.options.theme, count = decorations.length;
   switchTheme('light');
   assert.equal(terminal.options.theme, lastTheme); assert.equal(decorations.length, count);
   assert.ok(markers.every(marker => marker.isDisposed)); assert.ok(events.every(event => event.disposed));
+  assert.equal(handlers.size, 0, 'colour handlers are disposed with the terminal');
 });

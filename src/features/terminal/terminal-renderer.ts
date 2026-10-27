@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import type { IDisposable, Terminal } from '@xterm/xterm';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { keepDomSelectionCleared } from './terminal-selection';
+import { keepTerminalContrast } from './terminal-contrast';
 
 // Which renderer draws the terminals. The GPU renderer (WebGL) draws text from a glyph atlas: a working agent
 // redraws its screen ten times a second, and with the DOM renderer every redraw is rows of HTML to lay out
@@ -55,7 +56,7 @@ function keepDefaultBackgroundClear(addon: WebglAddon) {
 function attachGpuRenderer(terminal: Terminal, lost: () => void): IDisposable | null {
   if (active >= GPU_LIMIT) return null;
   let addon: WebglAddon;
-  try { addon = new WebglAddon(); terminal.loadAddon(addon); keepDefaultBackgroundClear(addon); } catch { return null; }
+  try { addon = new WebglAddon(); terminal.loadAddon(addon); keepDefaultBackgroundClear(addon); keepTerminalContrast(terminal); } catch { return null; }
   active++;
   // WebGL rasterizes glyphs over the transparent background, where their antialiased edges add up to visibly heavier
   // strokes than the DOM renderer draws at the same weight. A slightly lighter weight of the variable terminal font
@@ -72,6 +73,7 @@ function attachGpuRenderer(terminal: Terminal, lost: () => void): IDisposable | 
 // it takes the window a moment, and answers the terminal owes the shell must not wait behind that.
 export function gpuRenderer(terminal: Terminal) {
   keepDomSelectionCleared(terminal);
+  keepTerminalContrast(terminal);
   let gpu: IDisposable | null = null, wanted = false, retries = 0, timer = 0;
   const attach = () => { timer = 0; if (wanted && !gpu) gpu = attachGpuRenderer(terminal, () => { gpu = null; if (wanted && retries++ < 3) timer = window.setTimeout(attach, 2000); }); };
   return {
