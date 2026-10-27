@@ -1206,3 +1206,18 @@ test('switching to a terminal in another small card closes the popup without res
   listeners.get('focusin')({ target: target('B') }); assert.deepEqual(closes, [false]);
   cleanups.shift()(); assert.equal(restored, 1);
 });
+
+test('a generated picture shows its prompt as a two-line summary and a toggle appears only when the summary is cut off', () => {
+  const view = fs.readFileSync(path.join(__dirname, '../src/features/reading/ReadingView.tsx'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading.css'), 'utf8');
+  const figure = view.slice(view.indexOf('function GeneratedImage'), view.indexOf('// A reply card inside'));
+  assert.ok(figure.includes('element.scrollHeight > element.clientHeight'), 'the clamp is measured');
+  assert.ok(figure.includes('new ResizeObserver(measure)'), 'and measured again when the card changes width');
+  assert.ok(figure.includes('(clipped || expanded)'), 'the toggle shows only for a cut-off or an expanded prompt');
+  assert.ok(figure.includes('aria-expanded={expanded} aria-controls={captionId}'));
+  assert.doesNotMatch(figure, /figcaption[^>]*title=/, 'no tooltip: the expansion replaces it');
+  const caption = css.split(/\r?\n/).find(line => line.startsWith('.reading-generated figcaption {'));
+  for (const part of ['-webkit-line-clamp: 2', 'font-size: calc(13px * var(--reading-text))', 'line-height: 1.6', 'color: var(--text-2)']) assert.ok(caption.includes(part), part);
+  assert.ok(css.includes('.reading-generated figcaption.is-expanded { display: block; overflow: visible; white-space: pre-wrap; }'));
+  assert.equal(en['展开提示词'], 'Show prompt'); assert.equal(en['收起'], 'Collapse');
+});

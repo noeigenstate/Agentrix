@@ -852,6 +852,7 @@
   "命令输出": "Command output",
   "展开": "Expand",
   "收起": "Collapse",
+  "展开提示词": "Show prompt",
   "标准 · 速度快": "Standard · fast",
   "高精度 · 中英混合": "High accuracy · mixed Chinese and English",
   "下载中 {percent}%，完成前继续使用 {model}": "Downloading {percent}%; {model} is used until then",

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { readingMarked } from './markdown-escape';
 import createDOMPurify from 'dompurify';
 import { ArrowDown, CaretDown, CaretUp, CheckCircle, FileText, Globe, Image as ImageIcon, MagnifyingGlass, PaperPlaneRight, PencilSimple, Plugs, Robot, Sparkle, Stop, TerminalWindow, Wrench, X, XCircle, type Icon } from '@phosphor-icons/react';
@@ -122,12 +122,29 @@ export function Markdown({ text }: { text: string }) {
   return <div className="reading-markdown" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-// A picture the agent generated, shown where it answered; a click shows it full size in a popup.
+// A picture the agent generated, shown where it answered; a click shows it full size in a popup. Its prompt is a two-line summary
+// under it; when the summary is cut off, a text toggle shows the whole prompt (not remembered).
 function GeneratedImage({ src, path, prompt }: { src: string; path: string; prompt: string }) {
   const open = () => showPopup({ kind: 'image', path });
+  const [expanded, setExpanded] = useState(false);
+  const [clipped, setClipped] = useState(false);
+  const caption = useRef<HTMLElement>(null);
+  const captionId = useId();
+  useEffect(() => {
+    const element = caption.current;
+    if (!element || expanded) return;
+    const measure = () => setClipped(element.scrollHeight > element.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [prompt, expanded]);
   return <figure className="reading-generated">
-    <button type="button" title={t('打开原图')} aria-label={t('打开原图')} onClick={open}><img src={src} alt={prompt || t('生成的图片')} /></button>
-    {prompt && <figcaption title={prompt}>{prompt}</figcaption>}
+    <button type="button" className="reading-generated-picture" title={t('打开原图')} aria-label={t('打开原图')} onClick={open}><img src={src} alt={prompt || t('生成的图片')} /></button>
+    {prompt && <figcaption id={captionId} ref={caption} className={expanded ? 'is-expanded' : undefined}>{prompt}</figcaption>}
+    {prompt && (clipped || expanded) && <button type="button" className="reading-generated-toggle" aria-expanded={expanded} aria-controls={captionId} onClick={() => setExpanded(!expanded)}>
+      {expanded ? t('收起') : t('展开提示词')}{expanded ? <CaretUp size={12} aria-hidden="true" /> : <CaretDown size={12} aria-hidden="true" />}
+    </button>}
   </figure>;
 }
 
