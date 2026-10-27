@@ -96,6 +96,16 @@
   .focus-mode .project-panel.has-activity .panel-name { flex: 0 1 auto; max-width: calc(100% - 332px); margin-right: auto; }
 }
 @media (max-width: 1000px) { .project-panel.has-activity .panel-terminal-area { margin-right: 0; } .activity-pane, .project-panel.has-activity::before { display: none; } }
+/* With the explorer showing, the header holds nothing over the conversation (the project's name and image are in the explorer; with the pane open its cluster is on the pane strip, with the
+   pane closed there is none): the reading view runs up under it to the panel's top, so a scrolling conversation is never cut off below an empty band. The header lets clicks through to it,
+   except on its own controls. Where the pane is hidden by CSS the cluster is in the header, and the band stays. */
+.focus-mode:has(.focus-sidebar:not(.is-collapsed)) .project-panel:not(.has-activity):has(.reading-view) .panel-terminal-area { margin-top: calc(-1 * var(--pane-top)); }
+.focus-mode:has(.focus-sidebar:not(.is-collapsed)) .project-panel:not(.has-activity):has(.reading-view) .panel-header { pointer-events: none; }
+@media (min-width: 1001px) {
+  .focus-mode:has(.focus-sidebar:not(.is-collapsed)) .project-panel.has-activity:has(.reading-view) .panel-terminal-area { margin-top: calc(-1 * var(--pane-top)); }
+  .focus-mode:has(.focus-sidebar:not(.is-collapsed)) .project-panel.has-activity:has(.reading-view) .panel-header { pointer-events: none; }
+}
+.focus-mode .project-panel:has(.reading-view) .panel-header > * { pointer-events: auto; }
 .terminal-host { position: absolute; inset: 10px 7px 5px 11px; overflow: hidden; }
 .focus-mode .terminal-host { inset: 16px 12px 10px 18px; }
 .has-splits .terminal-host { inset: 8px 7px 4px 10px; }
