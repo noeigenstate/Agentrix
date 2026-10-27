@@ -11,6 +11,6 @@ body { text-rendering: optimizeLegibility; font-kerning: normal; font-optical-si
 h1, h2, h3 { letter-spacing: .1px; }
 code, kbd, pre, samp { font-family: var(--font-mono); }
 /* Counters, times and sizes keep their width as digits change. */
-.panel-index, .panel-meta, .workspace-summary, .file-preview-footer, .git-branch > span, .explorer-tab-count, .zoom-label, .guide-keys kbd { font-variant-numeric: tabular-nums; }
+.panel-index, .panel-meta, .file-preview-footer, .git-branch > span, .explorer-tab-count, .zoom-label, .guide-keys kbd { font-variant-numeric: tabular-nums; }
 /* Long Chinese explanations read better with a little more leading than labels need. */
 .setting-row small, .settings-note p, .guide-body, .activity-empty, .agents-intro, .tour-bubble p { line-height: 1.65; }

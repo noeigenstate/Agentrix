@@ -24,7 +24,7 @@ import { GuideTour } from './features/guide/GuideTour';
 import { AppMenu } from './features/titlebar/AppMenu';
 import { IconButton } from './shared/IconButton';
 import { showPopup, usePopup } from './features/files/file-popup';
-import { ProjectPanel, isRoundComplete } from './features/workspace/ProjectPanel';
+import { ProjectPanel } from './features/workspace/ProjectPanel';
 import { SettingsDialog } from './features/settings/SettingsDialog';
 import { DecisionHome } from './features/home/DecisionHome';
 import { useDecisions, type Decision } from './features/home/decisions';
@@ -292,8 +292,6 @@ export function App() {
   applyShortcuts(settings.shortcuts);
   const projectRecords = new Map(projects.map(project => [project.id, project]));
   const orderedProjects = reorder.order ? reorder.order.flatMap(id => projectRecords.get(id) || []) : projects;
-  const unread = projects.filter(p => p.unread > 0).length;
-  const completed = projects.filter(isRoundComplete).length;
   const normalizedQuery = query.toLowerCase();
   const visible = projects.filter(p => !normalizedQuery || `${p.name} ${p.path} ${p.ssh?.host || ''}`.toLowerCase().includes(normalizedQuery));
   const visibleIds = new Set(visible.map(p => p.id));
@@ -315,10 +313,6 @@ export function App() {
         <button type="button" aria-current={shownView === 'decisions' ? 'page' : undefined} title={t('回到决策 · {key}', { key: shortcut('decisions') })} onClick={() => setView('decisions')}><Stamp size={16} />{t('决策')}{decisions.length > 0 && <span className="home-nav-count" aria-label={t('{count} 件待决定', { count: decisions.length })}>{decisions.length}</span>}</button>
         <button type="button" aria-current={shownView === 'workspace' ? 'page' : undefined} onClick={() => setView('workspace')}><CirclesFour size={16} />{t('工作台')}</button>
       </nav>
-      {!!(unread || completed) && <div className="workspace-summary" role="status" aria-label={t('工作区概况')}>
-        {!!unread && <span className="summary-unread"><i className="legend-review" />{t('{count} 待查看', { count: unread })}</span>}
-        {!!completed && <span className="summary-complete"><i className="legend-done" />{t('{count} 本轮完成', { count: completed })}</span>}
-      </div>}
       <div className="titlebar-space" />
       <div className="titlebar-tools">
         {/* Search opens from its shortcut (Ctrl+Shift+F by default, configurable) and shows while in use. Settings and adding a project are in

@@ -28,7 +28,7 @@ function statusText(project: Project) {
 
 function agentName(agent: Project['agent']) { return agent === 'claude' ? 'Claude' : 'Codex'; }
 
-export function isRoundComplete(project: Project) {
+function isRoundComplete(project: Project) {
   return project.codexActive && project.codexActivity === 'complete' && !project.unread && !project.error;
 }
 

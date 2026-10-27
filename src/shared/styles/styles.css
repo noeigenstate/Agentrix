@@ -42,10 +42,6 @@ h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 .window-actions .icon-button { width: 42px; height: 100%; border-radius: 0; color: var(--text-1); }
 .window-actions .icon-button:hover { background: var(--bg-hover); }
 .window-actions .window-close:hover { background: #bd3d49; color: var(--text-1); }
-.workspace-summary { display: flex; align-items: center; gap: 12px; margin-left: 14px; overflow: hidden; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-3); -webkit-app-region: drag; }
-.workspace-summary > span { display: inline-flex; align-items: center; gap: 6px; }
-@media (max-width: 900px) { .workspace-summary { display: none; } }
-.legend-review, .legend-done { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
 .home-nav { display: flex; align-items: center; gap: 4px; margin-left: 10px; padding: 2px; -webkit-app-region: no-drag; }
 .home-nav button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: 8px; font: 600 13px var(--font-ui); color: var(--text-2); background: none; }
 .home-nav button:hover { color: var(--text-1); background: var(--bg-hover); }
