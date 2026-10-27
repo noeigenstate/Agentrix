@@ -9,4 +9,4 @@ seeking in Electron. They contain no user media and require no network access.
 
 `preview-large.png` is the former generated sky-and-canopy background (1672×941,
 about 3 MB), retained only to test large PNG previews. It is not bundled as an
-application wallpaper. Its original generation prompt is in docs/background-art.md.
+application wallpaper.

@@ -1,14 +1,16 @@
 ---
 name: cli-screen-capture
-description: When a Claude Code or Codex update changes a screen the reading view parses (a picker, a dialog, the footer, a slider), capture the real screen in isolation and turn it into a parser fixture before changing the parser.
+description: When a Claude Code or Codex update changes a screen the reading view parses (a picker, a dialog, the footer, an input box), capture the real screen in isolation and turn it into a parser fixture before changing the parser.
 ---
 
 # Capturing a CLI screen for the reading view's parsers
 
-The reading view understands the CLIs by reading their terminal screens (`src/features/agents/agent-screen.ts`,
-`src/features/reading/cli-panel.ts`, `cli-render.ts`, `sign-in-screen.ts`). A CLI update that moves one row breaks
-it quietly: a popup that never opens, a sign-in card that stays, chrome shown as command output. Fix it from the real
-screen, never from a screenshot or memory.
+The reading view parses CLI state in `src/features/agents/agent-screen.ts`,
+`src/features/agents/sign-in-screen.ts` and `src/features/reading/cli-panel.ts`. Interactive slash and shell commands
+use the live terminal popup (`src/features/reading/ReadingTerminalPopup.tsx` and `src/features/reading/reading-terminal.ts`)
+instead of reformatting captured rows. A CLI update that moves one row can still break state detection: a choice card
+that never opens, a sign-in card that stays, or an input mistaken for a dialog. Fix the parser from real terminal rows,
+never from a screenshot or memory.
 
 ## Steps
 
@@ -24,7 +26,7 @@ screen, never from a screenshot or memory.
    - Claude Code: run it in `<repo>/.test-output/slash-live-project` (already trusted), only local commands, and leave
      dialogs with Esc so no setting changes.
    - Send only navigation keys (Tab, arrows, Esc, Ctrl+C); never Enter on a list of real sessions.
-3. Save the rows as `tests/fixtures/screens/<agent>-<what>.txt` with personal paths replaced (`~\work\demo-app`), and add
+3. Save the rows as `tests/fixtures/screens/<agent>-<what>.txt` with personal paths replaced (`<project-root>`), and add
    its full expectation to the `expected` table in `tests/agent-screen.test.cjs` (every fixture must have one).
 4. Change the parser, run `npm test`, then confirm against the live CLI with the probe or `scripts/slash-live.mjs`.
 
@@ -107,9 +109,9 @@ An approval only shows after the model asks for a tool. Never use the real sign-
   - `/plugins` puts its view in the input's place: its list's cursor row (`› No marketplace plugins…`) looks like the
     input, and its hints (`←/→ tabs · enter details · esc close`) look like a footer. Codex's real input has its
     footer right under it, and the prompt Codex pins to its top row has none.
-- Sweep every interactive command, not just the one reported: send each from the reading view, watch it for five
-  seconds, close it with Esc and classify it as picker card / popup content / still spinning. The spinning ones and
-  any popup showing old conversation are the bugs.
+- Sweep every interactive command, not just the one reported: send each from the reading view and confirm its live
+  terminal popup opens promptly and stays interactive. Inspect any separately parsed choice or sign-in card too.
+  Use Esc only when the CLI shows it as the dialog's cancel key; use the popup's close button to dismiss the popup.
 - `/usage` needs a ChatGPT sign-in. A made-up sign-in pointed at a local stand-in got as far as Codex's workspace
   routing:
   - `/wham/accounts/check` needs `accounts` (a list), `account_ordering`, `default_account_id` and an HTTPS
