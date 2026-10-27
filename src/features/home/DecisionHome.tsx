@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from 'react';
-import { ArrowUp, CircleNotch, FolderSimple, X } from '@phosphor-icons/react';
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from 'react';
+import { ArrowUp, CircleNotch, FolderSimple, Keyboard, Paperclip, X } from '@phosphor-icons/react';
 import type { Project, Result } from '../../shared/types';
 import type { Decision } from './decisions';
 import { DecisionCard } from './DecisionCard';
 import { DecisionInbox } from './DecisionInbox';
-import { inboxItems, isWorking, newWorkProjects } from './inbox-items';
-import { SessionDetail } from './SessionDetail';
+import { inboxItems, newWorkProjects } from './inbox-items';
+import { SessionLine } from './SessionLine';
 import { acceptedToday } from './ReviewCard';
 import { sendToAgent, untilAtPrompt } from './send-to-agent';
 import { dataUrl, thumbnail } from '../reading/image-thumbnail';
@@ -29,10 +29,15 @@ export function DecisionHome({ projects, decisions, snoozed, onOpenProject, onOp
   const [notice, setNotice] = useState('');
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 5000); return () => clearTimeout(timer); }, [notice]);
   const items = useMemo(() => inboxItems(projects, decisions), [projects, decisions]);
-  // A pick that is gone (a decision answered, or a session that now has one) falls back to the most urgent decision.
+  // A pick that is gone (a decision answered, or a session that now has one) falls back to the most urgent decision, and with
+  // nothing to decide to the first project: the page always has a project picked, the one the box on it sends to.
   const [picked, setPicked] = useState<string | null>(null);
-  const selected = items.find(item => item.id === picked) ?? items.find(item => item.decision);
-  const working = items.filter(({ terminal }) => isWorking(terminal)).length;
+  const selected = items.find(item => item.id === picked) ?? items.find(item => item.decision) ?? items[0];
+  // The box's project picker picks the same row the list does.
+  const pickProject = (projectId: string) => {
+    const row = items.find(item => item.project.id === projectId && !item.decision) ?? items.find(item => item.project.id === projectId);
+    if (row) setPicked(row.id);
+  };
   const accepted = useMemo(() => acceptedToday(), [decisions]);
   const headline = decisions.length ? t('{count} 件事需要你决定', { count: decisions.length }) : t('项目');
   const summary = [accepted > 0 && t('今天已接受 {count} 项交付', { count: accepted }), snoozed > 0 && t('{count} 件已暂缓', { count: snoozed })].filter(Boolean).join(' · ');
@@ -45,16 +50,16 @@ export function DecisionHome({ projects, decisions, snoozed, onOpenProject, onOp
       {notice && <p className="home-notice" role="status">{notice}</p>}
       <DecisionInbox items={items} selectedId={selected?.id ?? null} now={now} onSelect={setPicked} />
     </section>
-    <div className={`home-right${selected ? '' : ' is-empty'}`}>
+    <div className={`home-right${selected?.decision ? '' : ' is-stage'}`}>
       {!selected ? <div className="home-empty">
-        <h2>{working > 0 ? t('现在没有需要你处理的事') : t('接下来想创造什么？')}</h2>
-        <p>{working > 0 ? t('{count} 个会话正在工作', { count: working }) : t('描述一个目标，选择项目后开始。')}</p>
+        <h2>{t('接下来想创造什么？')}</h2>
+        <p>{t('描述一个目标，选择项目后开始。')}</p>
       </div> : selected.decision
-        ? <DecisionCard decision={selected.decision} now={now} onOpen={onOpenDecision} onDone={setNotice} onError={onError} />
-        : <SessionDetail item={selected} now={now} onOpenProject={onOpenProject}>
-          <NewWork key={selected.project.id} inCard projects={projects} selectedProjectId={selected.project.id} takeFocus={false} onAction={onAction} onDone={setNotice} onError={onError} />
-        </SessionDetail>}
-      {!(selected && !selected.decision) && <NewWork projects={projects} takeFocus={!selected} onAction={onAction} onDone={setNotice} onError={onError} />}
+        ? <><DecisionCard decision={selected.decision} now={now} onOpen={onOpenDecision} onDone={setNotice} onError={onError} />
+          <NewWork projects={projects} onAction={onAction} onDone={setNotice} onError={onError} /></>
+        : <NewWork stage projects={projects} selectedProjectId={selected.project.id} takeFocus={picked === null} onPickProject={pickProject} onAction={onAction} onDone={setNotice} onError={onError}>
+          <SessionLine item={selected} now={now} onOpenProject={onOpenProject} />
+        </NewWork>}
     </div>
   </div>;
 }
@@ -65,31 +70,37 @@ const AGENT_OPTIONS = [{ value: 'claude', label: 'Claude Code' }, { value: 'code
 // "What next": a goal sent to a project's agent from here, without leaving the page. One that runs gets it at once (it
 // queues it while it works); otherwise the chosen agent is started first and gets it when its input is ready. Its
 // progress then shows in the session list beside it and its work comes back as a card.
-function NewWork({ projects, selectedProjectId, takeFocus, inCard, onAction, onDone, onError }: {
-  projects: readonly Project[]; selectedProjectId?: string; takeFocus: boolean; inCard?: boolean;
-  onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>; onDone: (message: string) => void; onError: (message: string) => void;
+// stage: the page's one job (nothing to decide): the guide, the box and its hint in the middle, the project it sends to
+// being the one picked in the list. Otherwise the box is docked under a decision's card, with a project picker of its own.
+function NewWork({ projects, selectedProjectId, stage = false, takeFocus = false, onPickProject, onAction, onDone, onError, children }: {
+  projects: readonly Project[]; selectedProjectId?: string; stage?: boolean; takeFocus?: boolean; onPickProject?: (projectId: string) => void;
+  onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>; onDone: (message: string) => void; onError: (message: string) => void; children?: ReactNode;
 }) {
   const choices = useMemo(() => newWorkProjects(projects, selectedProjectId), [projects, selectedProjectId]);
-  const [text, setText] = useState(''), [projectId, setProjectId] = useState(selectedProjectId ?? ''), [agent, setAgent] = useState<'claude' | 'codex'>('claude'), [busy, setBusy] = useState(false);
-  const project = choices.find(item => item.id === projectId) ?? choices[0], terminal = project?.terminals[0];
+  const [text, setText] = useState(''), [dockProject, setDockProject] = useState(''), [agent, setAgent] = useState<'claude' | 'codex'>('claude'), [busy, setBusy] = useState(false);
+  const project = choices.find(item => item.id === (selectedProjectId ?? dockProject)) ?? choices[0], terminal = project?.terminals[0];
+  const pickProject = (id: string) => selectedProjectId === undefined ? setDockProject(id) : onPickProject?.(id);
   const sshUnavailable = project?.kind === 'ssh' && !terminal?.codexActive;
   // Dictation (its microphone or the voice shortcut) puts the words where the cursor is; Enter only puts them in, since
   // the project to send to is chosen below once there is something to send.
   const box = useRef<HTMLTextAreaElement>(null);
   useDictatedBox(VOICE_TARGET, box, setText);
-  // With nothing to decide the page's one job is this box, so it takes the focus.
-  useEffect(() => { if (takeFocus) box.current?.focus({ preventScroll: true }); }, [takeFocus, choices.length]);
+  // On arriving with nothing picked the page's one job is this box, so it takes the focus; once a row is picked the list keeps it for the arrow keys.
+  useEffect(() => { if (takeFocus) box.current?.focus({ preventScroll: true }); }, [takeFocus]);
   // Pictures pasted here go as files: the agent may not run yet to take them from the clipboard, so each is saved and
   // its path sent with the goal for the agent to look at.
   const [images, setImages] = useState<{ blob: Blob; preview: string }[]>([]);
-  const paste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = [...event.clipboardData.items].filter(item => item.kind === 'file' && item.type.startsWith('image/')).map(item => item.getAsFile()).filter((file): file is File => !!file);
-    if (!files.length || event.clipboardData.getData('text/plain')) return;
-    event.preventDefault();
+  const picker = useRef<HTMLInputElement>(null);
+  const addImages = (files: readonly File[]) => {
     for (const file of files) {
       if (file.size > 25 * 1024 * 1024) { onError(t('图片太大（超过 25 MB），请压缩后再粘贴。')); continue; }
       void thumbnail(file).catch(() => dataUrl(file)).then(preview => setImages(list => [...list, { blob: file, preview }].slice(-6))).catch(() => onError(t('无法读取这张图片。')));
     }
+  };
+  const paste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = [...event.clipboardData.items].filter(item => item.kind === 'file' && item.type.startsWith('image/')).map(item => item.getAsFile()).filter((file): file is File => !!file);
+    if (!files.length || event.clipboardData.getData('text/plain')) return;
+    event.preventDefault(); addImages(files);
   };
   const start = async () => {
     let goal = text.trim();
@@ -123,24 +134,29 @@ function NewWork({ projects, selectedProjectId, takeFocus, inCard, onAction, onD
   };
   if (!choices.length) return null;
   const empty = !text.trim() && !images.length;
-  return <section className={`home-pane new-work${inCard ? ' is-inline' : ''}`} aria-label={t('新任务')}>
-    <h3>{inCard ? t('接下来要做什么？') : t('告诉 Agentrix 接下来要做什么')}</h3>
+  return <section className={`home-pane new-work${stage ? ' is-stage' : ''}`} aria-label={t('新任务')}>
+    {stage ? <><h2 className="new-work-title">{t('接下来想创造什么？')}</h2><p className="new-work-sub">{t('描述一个想法，让 Agentrix 帮你实现。')}</p></> : <h3>{t('告诉 Agentrix 接下来要做什么')}</h3>}
     <div className="new-work-input" data-voice-target={VOICE_TARGET} aria-label={t('新任务')}>
-      <textarea ref={box} value={text} rows={2} placeholder={inCard ? t('描述目标、提出问题，或粘贴截图…') : t('描述要做的事，比如“给登录页加上验证码”；可以直接粘贴截图')} onChange={event => setText(event.target.value)} onPaste={paste}
-        onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void start(); } }} />
+      <textarea ref={box} value={text} rows={2} placeholder={stage ? t('描述你想构建的功能、修复的问题，或粘贴截图…') : t('描述要做的事，比如“给登录页加上验证码”；可以直接粘贴截图')} onChange={event => setText(event.target.value)} onPaste={paste}
+        onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void start(); } }} />
       {images.length > 0 && <div className="new-work-images" role="list" aria-label={t('附图')}>{images.map((image, index) => <span key={index} role="listitem">
         <button type="button" className="new-work-zoom" title={t('点击放大')} aria-label={t('放大 {name}', { name: t('附加的图片 {n}', { n: index + 1 }) })}
           onClick={() => showPopup({ kind: 'picture', src: image.preview, path: t('附加的图片 {n}', { n: index + 1 }) })}><img src={image.preview} alt={t('附加的图片 {n}', { n: index + 1 })} /></button>
         <button type="button" aria-label={t('移除这张图片')} onClick={() => setImages(list => list.filter((_, at) => at !== index))}><X size={12} weight="bold" /></button>
       </span>)}</div>}
       <div className="new-work-bar">
-        {selectedProjectId ? <span className="new-work-project" title={project?.name}><FolderSimple size={16} aria-hidden="true" /><span>{project?.name}</span></span>
-          : <Select className="new-work-select" label={t('项目')} value={project?.id ?? ''} onChange={setProjectId} options={choices.map(item => ({ value: item.id, label: item.name }))} />}
+        <Select className="new-work-select" label={t('项目')} icon={<FolderSimple size={16} aria-hidden="true" />} value={project?.id ?? ''} onChange={pickProject} options={choices.map(item => ({ value: item.id, label: item.name }))} />
         {(sshUnavailable || !empty) && <span className="new-work-note">{sshUnavailable ? t('SSH 项目请先启动终端，再在终端里运行助手。') : terminal?.codexActive ? t('直接发给它，不离开这一页') : t('先启动助手，准备好就发给它')}</span>}
-        {terminal && !terminal.codexActive && !sshUnavailable && <Select className="new-work-select is-agent" label={t('助手')} value={agent} onChange={value => setAgent(value as 'claude' | 'codex')} options={AGENT_OPTIONS} />}
-        <VoiceButton terminalId={VOICE_TARGET} sessionId={null} name={t('新任务')} size={16} onError={onError} />
-        <button type="button" className={`button ${empty ? 'secondary' : 'primary'} new-work-start`} title={t('开始 (Ctrl + Enter)')} aria-label={t('开始 (Ctrl + Enter)')} disabled={busy || empty || sshUnavailable} onClick={() => void start()}>{busy ? <CircleNotch size={16} className="loading-spinner" /> : <ArrowUp size={16} weight="bold" />}</button>
+        <span className="new-work-tools">
+          {terminal && !terminal.codexActive && !sshUnavailable && <Select className="new-work-select is-agent" label={t('助手')} value={agent} onChange={value => setAgent(value as 'claude' | 'codex')} options={AGENT_OPTIONS} />}
+          <button type="button" className="icon-button new-work-attach" title={t('添加图片')} aria-label={t('添加图片')} onClick={() => picker.current?.click()}><Paperclip size={16} /></button>
+          <input ref={picker} type="file" accept="image/*" multiple hidden onChange={event => { addImages([...(event.target.files ?? [])]); event.target.value = ''; }} />
+          <VoiceButton terminalId={VOICE_TARGET} sessionId={null} name={t('新任务')} size={16} onError={onError} />
+          <button type="button" className={`button ${empty ? 'secondary' : 'primary'} new-work-start`} title={t('开始 (Enter)')} aria-label={t('开始 (Enter)')} disabled={busy || empty || sshUnavailable} onClick={() => void start()}>{busy ? <CircleNotch size={16} className="loading-spinner" /> : <ArrowUp size={16} weight="bold" />}</button>
+        </span>
       </div>
     </div>
+    {stage && <p className="new-work-hint"><Keyboard size={14} aria-hidden="true" />{t('输入需求后按 Enter 开始')}</p>}
+    {children}
   </section>;
 }

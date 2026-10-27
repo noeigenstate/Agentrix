@@ -58,14 +58,16 @@ export function DecisionInbox({ items, selectedId, now, onSelect }: { items: rea
         {groups.length > 1 && <h4 className="inbox-group">{t(label)} · {rows.length}</h4>}
         {rows.map(item => {
           const { decision, project, terminal } = item;
-          const tag = decision ? kindLabel(decision.kind) : sessionStateLabel(project, terminal), line = decision ? `${waited(decision.since, now)} · ${brief(decision)}` : sessionLine(item);
-          return <div key={item.id} id={`inbox-${item.id}`} data-item-id={item.id} role="option" aria-selected={item.id === selectedId} className={`inbox-row${line ? '' : ' is-compact'}`} onClick={() => { onSelect(item.id); list.current?.focus({ preventScroll: true }); }}>
+          // An idle session is a plain name in the list; only the picked one says where it stands.
+          const tag = decision ? kindLabel(decision.kind) : sessionStateLabel(project, terminal);
+          const line = decision ? `${waited(decision.since, now)} · ${brief(decision)}` : group === 'working' ? sessionLine(item) : item.id === selectedId ? tag : '';
+          return <div key={item.id} id={`inbox-${item.id}`} data-item-id={item.id} role="option" aria-selected={item.id === selectedId} className={`inbox-row${line ? '' : ' is-compact'}${decision ? ' has-decision' : ''}`} onClick={() => { onSelect(item.id); list.current?.focus({ preventScroll: true }); }}>
             <span className="inbox-text">
               <b>{project.name}{project.terminals.length > 1 ? ` · ${terminal.title}` : ''}</b>
               {line && <small>{line}</small>}
             </span>
             <span className="inbox-end">
-              {decision || group === 'working' ? <span className={`inbox-tag ${decision ? decision.kind === 'review' ? 'is-review' : 'is-need' : 'is-work'}`}>{tag}</span> : terminal.codexActive && terminal.codexActivity === 'complete' && <span className="inbox-state">{tag}</span>}
+              {(decision || group === 'working') && <span className={`inbox-tag ${decision ? decision.kind === 'review' ? 'is-review' : 'is-need' : 'is-work'}`}>{tag}</span>}
             </span>
           </div>;
         })}

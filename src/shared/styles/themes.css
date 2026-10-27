@@ -77,7 +77,11 @@
    (the dark theme's white at .3 would be invisible on white). Same selector as the rule in workspace.css, behind the theme attribute. */
 :root[data-theme="light"] .app-shell:not(.focus-mode) .project-panel.has-unread:not(.focus-motion-panel, .drag-source) .panel-signal { box-shadow: inset 0 0 48px 8px rgb(from var(--text-1) r g b / 0.22); }
 
-:root[data-theme="light"] :is(.inbox-row[aria-selected="true"] small, .home-layer .new-work-start:not(.primary)) { color: var(--text-1); }
+:root[data-theme="light"] .inbox-row[aria-selected="true"] small { color: var(--text-1); }
+/* The box on the decision page (the owner's values): its border #cbd5e1 (soft, against the white box), the brand blue #5686c4 for its focused border and its send button once there is
+   text (3.75:1 on white and for a white icon on it), the 0 4px 18px shadow. Dark keeps the token border, no shadow, and the same blue, which is 4.1:1 on the card. */
+.home-layer { --compose-border: var(--border); --compose-shadow: none; --compose-accent: #5686c4; --compose-accent-hover: #4a77b4; --compose-accent-press: #3f6aa3; }
+:root[data-theme="light"] .home-layer { --compose-border: #cbd5e1; --compose-shadow: 0 4px 18px rgb(20 30 50 / .04); }
 /* The secondary text is 4.1:1 on the selected grey, so a helper line or a label on a selected row is primary text. */
 /* Success as text is --success-text (#37745e, 4.5:1 on every light surface); its dot and outline stay --success (#438f73). workspace.css's state tag takes it here. */
 :root[data-theme="light"] :is(.status-badge.is-complete, .status-badge.is-review) { color: var(--success-text); }

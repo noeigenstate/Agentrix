@@ -25,18 +25,19 @@ test('only a live agent that is mid-round counts as working', () => {
   assert.equal(isWorking(terminal('x', { codexActivity: 'complete' })), false);
 });
 
-test('a detail composer targets its selected project instead of the first local project', () => {
+test('the box offers every local project, whichever is picked, and the picked one stays among them', () => {
   const first = project('生图', [terminal('first')]), selected = project('rayrea', [terminal('rayrea', { codexActive: false })]);
-  assert.deepEqual(newWorkProjects([first, selected], selected.id), [selected]);
-  assert.deepEqual(newWorkProjects([first, selected], first.id), [first]);
+  assert.deepEqual(newWorkProjects([first, selected], selected.id), [first, selected]);
+  assert.deepEqual(newWorkProjects([first, selected], first.id), [first, selected]);
 });
 
-test('a stopped SSH project remains the only target in its own detail', () => {
+test('a stopped SSH project, once picked, stays the only target of the box', () => {
   const local = project('local', [terminal('local')]);
   const remote = { ...project('remote', [terminal('remote', { codexActive: false, sessionId: null })]), kind: 'ssh' };
   assert.deepEqual(newWorkProjects([local, remote], remote.id), [remote]);
   assert.deepEqual(newWorkProjects([remote], remote.id), [remote]);
-  assert.deepEqual(newWorkProjects([local, remote], 'removed'), []);
+  assert.deepEqual(newWorkProjects([local, remote], 'removed'), [local], 'a pick that is gone leaves the projects the box can send to');
+  assert.deepEqual(newWorkProjects([local, remote]), [local]);
 });
 
 test('the standalone composer still offers local projects and SSH projects with a running agent', () => {

@@ -6,10 +6,12 @@ export type InboxItem = { id: string; group: Group; project: Project; terminal: 
 
 export const isWorking = (terminal: ProjectTerminal) => terminal.codexActive && terminal.codexActivity === 'working';
 
-// A project's detail keeps its own target, even when its SSH agent must first be started in the terminal.
+// The projects the box can send to: local ones and SSH ones with a running agent. The picked project is the one exception: a stopped
+// SSH project stays the box's only target (its send is disabled, with the reason), so it is never silently swapped for another.
 export function newWorkProjects(projects: readonly Project[], selectedProjectId?: string): Project[] {
-  return projects.filter(project => selectedProjectId !== undefined ? project.id === selectedProjectId
-    : project.kind !== 'ssh' || project.terminals[0]?.codexActive);
+  const pickable = (project: Project) => project.kind !== 'ssh' || !!project.terminals[0]?.codexActive;
+  const selected = projects.find(project => project.id === selectedProjectId);
+  return selected && !pickable(selected) ? [selected] : projects.filter(pickable);
 }
 
 // What the inbox lists, by urgency: every decision (already in the order it matters), then the sessions with nothing
