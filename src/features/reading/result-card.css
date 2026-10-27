@@ -1,0 +1,51 @@
+/* The latest finished round: a status row above its result and a row of quiet buttons under it. No card, no border: they start on the reply text's edge (--turn-pad)
+   and end on the composer's right edge (--reading-inset), so the round's result reads as the focus by its size and its place, not by a frame. */
+.result-status, .result-evidence, .result-actions { box-sizing: border-box; padding-left: var(--turn-pad); padding-right: var(--reading-inset); }
+.reading-turn-item-body:has(> .result-status), .result-block { display: flex; flex-direction: column; gap: 12px; }
+.reading-turn-item-body:has(> .result-status) > time { padding-left: var(--turn-pad); }
+
+/* Level 1: what was done. */
+.result-status { container-type: inline-size; display: grid; grid-template-columns: 20px minmax(0, 1fr) 32px; column-gap: 12px; align-items: start; }
+.result-state { margin-top: 2px; color: var(--success); }
+.result-status.is-failed .result-state { color: var(--danger); }
+.result-heading { min-width: 0; }
+.result-title { display: flex; min-width: 0; margin: 0; font: 600 calc(16px * var(--reading-text))/24px var(--font-ui); color: var(--text-1); white-space: nowrap; }
+.result-title > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.result-title > b { flex: none; font-weight: inherit; }
+.result-sub { margin: 2px 0 0; font: 400 calc(12px * var(--reading-text))/18px var(--font-ui); color: var(--text-2); }
+.result-more { position: relative; top: -4px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--text-2); cursor: pointer; }
+.result-more:hover, .result-more[aria-expanded="true"] { background: var(--bg-hover); color: var(--text-1); }
+@container (max-width: 300px) { .result-took { display: none; } }
+.result-menu { position: fixed; z-index: 500; width: 224px; }
+.result-menu button { white-space: nowrap; }
+
+/* Level 2 of a round that wrote files: the files and the checks it ran, plain rows. */
+.result-evidence { display: flex; flex-direction: column; gap: 12px; }
+.result-list-head { margin: 0 0 4px; font: 400 calc(12px * var(--reading-text))/18px var(--font-ui); color: var(--text-2); }
+.result-list { margin: 0; padding: 0; list-style: none; }
+.result-list li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; column-gap: 8px; min-height: 28px; font-size: calc(13px * var(--reading-text)); }
+.result-list li > svg { color: var(--text-3); }
+.result-list li > svg.result-check { color: var(--success); }
+.result-list li.is-failed > svg.result-check { color: var(--danger); }
+.result-file { min-width: 0; padding: 0; border: 0; background: none; font: 400 calc(13px * var(--reading-text))/1.4 var(--font-ui); color: var(--text-1); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.result-file:hover { text-decoration: underline; }
+.result-check-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-1); }
+.result-check-name small { margin-left: 8px; font-size: calc(12px * var(--reading-text)); color: var(--text-3); }
+.result-state-text { font-size: calc(12px * var(--reading-text)); color: var(--text-2); white-space: nowrap; }
+.result-more-files { margin: 0 0 0 24px; font-size: calc(12px * var(--reading-text)); color: var(--text-3); }
+
+/* Level 3: what next. Secondary buttons (32 high, radius 8, 14px), icon-only with a tooltip where the row cannot hold their words (240px for two, 340px for three). */
+.result-actions { container-type: inline-size; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.result-button { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-control); color: var(--text-2);
+  font: 600 calc(14px * var(--reading-text))/1 var(--font-ui); white-space: nowrap; cursor: pointer; }
+.result-button:hover:not(:disabled) { border-color: var(--border-hover); background: var(--bg-hover); color: var(--text-1); }
+.result-button:disabled { color: var(--text-disabled); cursor: default; }
+.result-button > svg { flex: none; }
+@container (max-width: 240px) { .result-button { justify-content: center; width: 32px; padding: 0; } .result-button > span { display: none; } }
+@container (max-width: 340px) { .result-actions[data-count="3"] .result-button { justify-content: center; width: 32px; padding: 0; } .result-actions[data-count="3"] .result-button > span { display: none; } }
+
+/* The latest picture is larger, rounded like the other results, with the agent's sentence under it and its prompt after. */
+.reading-generated.is-result { max-width: min(100%, 560px); margin: 0; }
+.reading-generated.is-result .reading-generated-picture { border-radius: 12px; }
+.reading-generated.is-result > :is(.reading-markdown, .reading-plain) { margin: 12px 0 0; }
+.reading-generated.is-result figcaption { margin-top: 8px; }

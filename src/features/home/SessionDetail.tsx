@@ -3,7 +3,7 @@ import { ArrowUpRight, FolderSimple, HardDrives, TerminalWindow } from '@phospho
 import type { ConversationEntry } from '../../shared/types';
 import { sessionStateLabel } from './DecisionInbox';
 import { sessionTask, type InboxItem } from './inbox-items';
-import { lastRound } from './ReviewCard';
+import { lastRound } from '../reading/result-round';
 import { relativeTime } from '../../shared/time';
 import { t } from '../../shared/i18n';
 

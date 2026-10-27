@@ -98,7 +98,7 @@
 .reading-composer:focus-within { border-color: var(--focus-ring); }
 .reading-composer textarea { flex: 1; min-width: 0; max-height: 140px; field-sizing: content; resize: none; border: 0; outline: 0; padding: 5px 0; background: transparent; color: var(--text-1); font: 400 calc(14px * var(--reading-text))/1.5 var(--font-ui); }
 .reading-composer textarea::placeholder { color: var(--text-2); }
-.reading-attachments { display: flex; align-items: center; gap: 6px; margin: 0 14px 6px; font-size: calc(12px * var(--reading-text)); color: var(--text-2); }
+.reading-attachments { display: flex; align-items: center; gap: 6px; margin: 0 var(--reading-edge-right) 6px var(--reading-edge-left); font-size: calc(12px * var(--reading-text)); color: var(--text-2); }
 .reading-composer .icon-button { flex: none; width: 32px; height: 32px; border-radius: 8px; }
 .reading-send:not(:disabled) { color: var(--button-primary-text); background: var(--button-primary); }
 .has-splits .reading-view { --reading-left: calc(20px + var(--reading-em)); --reading-right: calc(20px + var(--reading-em)); }
@@ -165,9 +165,9 @@
 .reading-generated-picture { display: block; padding: 0; border: 0; border-radius: 8px; background: none; cursor: zoom-in; overflow: hidden; }
 .reading-generated img { display: block; width: 100%; height: auto; max-height: 520px; object-fit: contain; }
 .reading-generated :is(.reading-generated-picture, .reading-generated-toggle):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.reading-generated figcaption { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 10px; font-size: calc(13px * var(--reading-text)); line-height: 1.6; color: var(--text-2); overflow-wrap: anywhere; }
+.reading-generated figcaption { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 10px; font-size: calc(12px * var(--reading-text)); line-height: 1.5; color: var(--text-3); overflow-wrap: anywhere; }
 .reading-generated figcaption.is-expanded { display: block; overflow: visible; white-space: pre-wrap; }
-.reading-generated-toggle { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 0; border: 0; border-radius: 4px; background: none; font: 600 calc(12px * var(--reading-text))/1.5 var(--font-ui); color: var(--text-2); cursor: pointer; }
+.reading-generated-toggle { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 0; border: 0; border-radius: 4px; background: none; font: 600 calc(12px * var(--reading-text))/1.5 var(--font-ui); color: var(--text-3); cursor: pointer; }
 .reading-generated-toggle:hover { color: var(--text-1); }
 
 /* A picture on its way: an indeterminate bar, the seconds so far and how long it usually takes. */
@@ -191,8 +191,14 @@
 .reading-scroll { font: 400 calc(13px * var(--reading-text))/1.6 var(--font-ui); }
 .focus-mode .reading-scroll { font-size: calc(14px * var(--reading-text)); padding-top: 18px; padding-bottom: 12px; }
 /* In a card narrower than 480px the sides are 16px + 1em, and the composer and your messages sit on the avatars' edges: the 44px reply inset would leave a 165px composer in a 317px card. */
-@container (max-width: 480px) { .reading-view { --reading-left: calc(16px + var(--reading-em)); --reading-right: calc(16px + var(--reading-em)); --reading-inset: 0px; } }
-.reading-content { gap: 14px; }
+@container (max-width: 480px) {
+  .reading-view { --reading-left: calc(16px + var(--reading-em)); --reading-right: calc(16px + var(--reading-em)); --reading-inset: 0px; --turn-pad: 0px; }
+  /* With one edge, the avatars' rail and the tools' icon have no column to stand in. */
+  .reading-step::before, .reading-turn-tools::before, .reading-turn-mark { display: none; }
+}
+/* Rounds are told apart by space, not by borders or cards: 32px between one round and the next (its user message), 16px from your message to the agent's turn. */
+.reading-content { gap: 16px; }
+.reading-step.is-user:not(:first-child) { margin-top: 16px; }
 .reading-composer { margin: 4px var(--reading-edge-right) 16px var(--reading-edge-left); }
 .focus-mode .reading-composer { margin-bottom: 20px; }
 .reading-commands.is-inline { margin: 4px var(--reading-edge-right) 4px var(--reading-edge-left); }

@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { readingMarked } from './markdown-escape';
 import createDOMPurify from 'dompurify';
 import { ArrowDown, CaretDown, CaretUp, CheckCircle, FileText, Globe, Image as ImageIcon, MagnifyingGlass, PaperPlaneRight, PencilSimple, Plugs, Robot, Sparkle, Stop, TerminalWindow, Wrench, X, XCircle, type Icon } from '@phosphor-icons/react';
@@ -40,6 +40,8 @@ import { isTypedCommand, pendingPromptCards, sameMessage, type PendingPrompt } f
 import { usePendingPrompts } from './usePendingPrompts';
 import { PendingPromptEntries, UserImages, UserMessage } from './PendingPromptEntries';
 import { AgentTurnItem, ClaudeSpark, stepTime, TimelineStep } from './Timeline';
+import { ResultActions, ResultFiles, ResultStatus } from './ResultCard';
+import { latestResult } from './result-round';
 import { AgentCommandRun } from './AgentCommandRun';
 import { FileCards, previewable } from './FileCards';
 import { replyFiles } from './reply-files';
@@ -123,8 +125,9 @@ export function Markdown({ text }: { text: string }) {
 }
 
 // A picture the agent generated, shown where it answered; a click shows it full size in a popup. Its prompt is a two-line summary
-// under it; when the summary is cut off, a text toggle shows the whole prompt (not remembered).
-function GeneratedImage({ src, path, prompt }: { src: string; path: string; prompt: string }) {
+// under it; when the summary is cut off, a text toggle shows the whole prompt (not remembered). The latest result's picture
+// is larger and carries the agent's one-sentence reply (children) between itself and its prompt.
+function GeneratedImage({ src, path, prompt, result = false, children }: { src: string; path: string; prompt: string; result?: boolean; children?: ReactNode }) {
   const open = () => showPopup({ kind: 'image', path });
   const [expanded, setExpanded] = useState(false);
   const [clipped, setClipped] = useState(false);
@@ -139,8 +142,9 @@ function GeneratedImage({ src, path, prompt }: { src: string; path: string; prom
     observer.observe(element);
     return () => observer.disconnect();
   }, [prompt, expanded]);
-  return <figure className="reading-generated">
+  return <figure className={`reading-generated${result ? ' is-result' : ''}`}>
     <button type="button" className="reading-generated-picture" title={t('打开原图')} aria-label={t('打开原图')} onClick={open}><img src={src} alt={prompt || t('生成的图片')} /></button>
+    {children}
     {prompt && <figcaption id={captionId} ref={caption} className={expanded ? 'is-expanded' : undefined}>{prompt}</figcaption>}
     {prompt && (clipped || expanded) && <button type="button" className="reading-generated-toggle" aria-expanded={expanded} aria-controls={captionId} onClick={() => setExpanded(!expanded)}>
       {expanded ? t('收起') : t('展开提示词')}{expanded ? <CaretUp size={12} aria-hidden="true" /> : <CaretDown size={12} aria-hidden="true" />}
@@ -150,11 +154,14 @@ function GeneratedImage({ src, path, prompt }: { src: string; path: string; prom
 
 // A reply card inside its agent's turn, with the local pictures, pages and videos it names shown under it
 // (the agents are told they can show one this way: reading-note.cjs).
-function AssistantReply({ entry, agent, projectId, onError }: { entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; onError: (message: string) => void }) {
+function AssistantReply({ entry, agent, projectId, result = false, onError }: { entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; result?: boolean; onError: (message: string) => void }) {
   const named = useMemo(() => entry.text ? replyFiles(entry.text) : [], [entry.text]);
-  return <div className={`reading-assistant is-${agent}`}>{entry.text ? <Markdown text={entry.text} /> : null}
+  const words = entry.text ? <Markdown text={entry.text} /> : null;
+  // The latest result shows its picture first with the words under it; anywhere else the words come first.
+  const picture = entry.generated && entry.images?.[0] ? <GeneratedImage src={entry.images[0]} {...entry.generated} result={result}>{result && words}</GeneratedImage> : null;
+  return <div className={`reading-assistant is-${agent}`}>{result && picture}{!(result && picture) && words}
       {named.length > 0 && <FileCards projectId={projectId} files={named} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet />}
-      {entry.generated && entry.images?.[0] && <GeneratedImage src={entry.images[0]} {...entry.generated} />}</div>;
+      {!result && picture}</div>;
 }
 // The agent's mark on its replies' nodes.
 const AgentMark = ({ agent }: { agent: 'claude' | 'codex' }) => agent === 'claude' ? <ClaudeSpark /> : <CodexLogo />;
@@ -624,6 +631,22 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     : null;
   const kind = terminal.agent === 'claude' ? 'claude' : 'codex';
   const statusRunning = working || pending.some(prompt => prompt.sending);
+  // The latest round once it has ended gets its status above the result and its actions under it; nothing while the agent
+  // works or waits, and nothing for earlier rounds.
+  const settled = !status && !statusRunning && terminal.codexActive && !cards.prompts.length && !hasChoice, interrupted = terminal.codexActivity === 'interrupted';
+  const result = useMemo(() => latestResult(entries, { idle: settled, interrupted }), [entries, settled, interrupted]);
+  const continueWith = (prefill?: string) => {
+    if (prefill && !draft.trim()) { caret.current = prefill.length; edit(prefill); }
+    input.current?.focus();
+  };
+  const resultStatus = result && <ResultStatus result={result} taskTitle={terminal.taskTitle} onShowTerminal={onShowTerminal} onError={onError} />;
+  const resultActions = result && <>
+    {result.kind === 'code' && <ResultFiles result={result} projectId={projectId} />}
+    <ResultActions result={result} projectId={projectId} remote={remote} canSend={!inputBlocked && !!terminal.sessionId} onContinue={continueWith} onRetry={() => void send(result.request, false)} onError={onError} />
+  </>;
+  // The newest round is the one after your last message; earlier ones keep their words but speak more quietly.
+  const lastTurn = (kind: 'user' | 'agent') => turns.map(turn => turn.kind).lastIndexOf(kind);
+  const latestUser = lastTurn('user'), latestAgent = lastTurn('agent') > latestUser ? lastTurn('agent') : -1;
   let body: ReactNode, statusInTurn = false;
   // A run of the CLI that is no conversation (codex update): what it does and what it prints, no message box.
   if (terminal.agentCommand) body = <AgentCommandRun agent={terminal.agent === 'claude' ? 'claude' : 'codex'} command={terminal.agentCommand} rows={visibleScreen?.rows ?? []} onShowTerminal={onShowTerminal} />;
@@ -634,7 +657,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
       {tail.earlier > 0 && <button type="button" className="text-button reading-earlier" onClick={tail.showEarlier}>{t('显示更早的对话（{count}）', { count: tail.earlier })}</button>}
       {turns.map((turn, index) => {
         if (turn.kind === 'user') {
-          return <TimelineStep key={turn.entry.id} at={turn.entry.at} kind="user" who={t('你')} mark={<UserAvatar />}>
+          return <TimelineStep key={turn.entry.id} at={turn.entry.at} kind="user" who={t('你')} latest={index === latestUser} mark={<UserAvatar />}>
             <div className={`reading-user${turn.entry.answer ? ' is-answer' : ''}`}>
               {turn.entry.answer && <span className="reading-user-label">{t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} /></div>
           </TimelineStep>;
@@ -644,7 +667,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
         const tools = turn.blocks.flatMap(block => block.kind === 'tools' ? block.entries : []);
         const state = (liveStatus && statusRunning) || tools.some(entry => !entry.tool?.done) ? 'running' : tools.some(entry => entry.tool?.failed) ? 'failed' : null;
         let shownTime = stepTime(turn.at);
-        return <TimelineStep key={turn.id} at={turn.at} kind="agent" agent={kind} who={agent} state={state} mark={<AgentMark agent={kind} />}>
+        return <TimelineStep key={turn.id} at={turn.at} kind="agent" agent={kind} who={agent} state={state} latest={index === latestAgent} mark={<AgentMark agent={kind} />}>
           <div className="reading-turn">
             {turn.blocks.map(block => {
               const at = block.kind === 'tools' ? block.entries[0]?.at : block.entry.at, time = stepTime(at), showTime = time !== shownTime;
@@ -652,12 +675,19 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
               if (block.kind === 'tools') {
                 const Lead = STEP_ICONS[block.entries[0]?.tool?.kind ?? 'other'];
                 const state = block.entries.some(entry => !entry.tool?.done) ? 'running' : block.entries.some(entry => entry.tool?.failed) ? 'failed' : null;
-                return <AgentTurnItem key={block.id} at={at} showTime={showTime} kind="tools" state={state} mark={<Lead size={12} weight="bold" />}>
-                  <ToolGroup entries={block.entries} live={block === tail.visible.at(-1)} projectId={projectId} onError={onError} />
-                </AgentTurnItem>;
+                return <Fragment key={block.id}>
+                  <AgentTurnItem at={at} showTime={showTime} kind="tools" state={state} mark={<Lead size={12} weight="bold" />}>
+                    <ToolGroup entries={block.entries} live={block === tail.visible.at(-1)} projectId={projectId} onError={onError} />
+                  </AgentTurnItem>
+                  {index === latestAgent && block.entries.some(entry => entry.id === result?.anchor) && <div className="result-block">{resultStatus}{resultActions}</div>}
+                </Fragment>;
               }
-              return <AgentTurnItem key={block.entry.id} at={at} showTime={showTime} kind="message">
-                <AssistantReply entry={block.entry} agent={kind} projectId={projectId} onError={onError} />
+              const holdsResult = index === latestAgent && block.entry.id === result?.anchor;
+              // The status row says when the round ended: the result's own entry needs no stamp of its own.
+              return <AgentTurnItem key={block.entry.id} at={at} showTime={showTime && !holdsResult} kind="message">
+                {holdsResult && resultStatus}
+                <AssistantReply entry={block.entry} agent={kind} projectId={projectId} result={holdsResult} onError={onError} />
+                {holdsResult && resultActions}
               </AgentTurnItem>;
             })}
             {liveStatus}
@@ -703,7 +733,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     </div>)}</div>}
     <div className={`reading-composer${sendingSoon ? ' is-sending-soon' : ''}`} style={terminal.agentCommand ? { display: 'none' } : undefined}>
       <MentionPalette mentions={mentions} />
-      <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} aria-expanded={palette || mentions.open} aria-controls={palette ? listId : mentions.open ? mentions.listId : undefined} aria-activedescendant={palette && selected ? optionId(selection) : mentions.open && mentions.files[mentions.selection] ? mentions.optionId(mentions.selection) : undefined} placeholder={terminal.codexActive ? t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }) : t('输入命令，Enter 发送')} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
+      <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} aria-expanded={palette || mentions.open} aria-controls={palette ? listId : mentions.open ? mentions.listId : undefined} aria-activedescendant={palette && selected ? optionId(selection) : mentions.open && mentions.files[mentions.selection] ? mentions.optionId(mentions.selection) : undefined} placeholder={result ? t('继续修改，或描述下一步…') : terminal.codexActive ? t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }) : t('输入命令，Enter 发送')} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
         onCompositionStart={() => dictationSend.cancel()} onFocus={() => window.agentrix.terminalFocus(terminal.id, false)} />
       {working && <button type="button" className="icon-button" disabled={inputBlocked} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={interrupt}><Stop size={15} weight="fill" /></button>}
       <button type="button" className="icon-button reading-send" title={t('发送')} aria-label={t('发送')} disabled={inputBlocked || (!draft.trim() && !attachedCount) || !terminal.sessionId} onClick={() => void send()}><PaperPlaneRight size={15} weight="fill" /></button>

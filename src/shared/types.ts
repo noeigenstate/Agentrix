@@ -152,6 +152,8 @@ type Bridge = {
   attachTerminal(id: string): Promise<Result<TerminalSnapshot>>;
   terminalCommands(id: string): Promise<Result<AgentCommand[]>>;
   agentImage(file: string): Promise<Result<{ url: string; width: number; height: number }>>;
+  // A copy of a generated picture to where the reader picks in a save dialog: the path written, null when dismissed.
+  saveImageAs(file: string): Promise<Result<string | null>>;
   agentDocument(projectId: string, file: string): Promise<Result<{ content: string; truncated: boolean }>>;
   saveImage(terminalId: string, bytes: ArrayBuffer, type: string): Promise<Result<string>>;
   clipboardImage(terminalId: string): Promise<Result<string | null>>;

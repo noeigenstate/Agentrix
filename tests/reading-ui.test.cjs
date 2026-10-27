@@ -49,6 +49,8 @@ function loadUI(name, overrides = {}) {
     if (key === './NativeApprovalCard') return { NativeApprovalCard: () => null };
     if (key === './ManagedSession') return { ManagedSession: () => null };
     if (key === './Timeline') return loadUI('features/reading/Timeline.tsx');
+    if (key === './ResultCard') return loadUI('features/reading/ResultCard.tsx');
+    if (key === './result-round') return require('../src/features/reading/result-round.ts');
     if (key === './typing') return require('../src/features/reading/typing.ts');
     if (key === './composer-prefill') return require('../src/features/reading/composer-prefill.ts');
     if (key === './image-thumbnail') return require('../src/features/reading/image-thumbnail.ts');
@@ -812,7 +814,7 @@ test('live thinking and confirmation stay inside the latest agent, including a t
   state.entries = [readingTool('failed only', 13, { failed: true })];
   state.terminal.codexActivity = 'idle'; state.terminal.needsInput = null;
   sections = timelineSections(render());
-  assert.equal(sections.length, 1); assert.match(sections[0], /class="reading-step is-agent is-codex is-failed"/);
+  assert.equal(sections.length, 1); assert.match(sections[0], /class="reading-step is-agent is-codex is-failed is-latest"/);
   assert.match(sections[0], /reading-turn-tools is-failed/); assert.match(sections[0], /aria-expanded="false"/);
   assert.doesNotMatch(sections[0], /reading-tools-tree|role="status"/);
 });
@@ -868,7 +870,7 @@ test('a queue receipt removes the stale card and keeps message order, while a wi
   feed({ type: 'queue-operation', operation: 'enqueue', content: 'WITHDRAWN_SEND' });
   feed({ type: 'queue-operation', operation: 'popAll', content: 'WITHDRAWN_SEND' });
   const { state, render } = readingHarness(t, log.list);
-  state.terminal.agent = 'claude'; state.terminal.codexActivity = 'idle';
+  state.terminal.agent = 'claude'; state.terminal.codexActivity = 'idle'; state.terminal.taskTitle = 'A task';
   const html = render();
   assert.doesNotMatch(html, /is-queued|WITHDRAWN_SEND/);
   assert.equal((html.match(/TAKEN_UP_WITHOUT_REMOVE/g) || []).length, 1);
@@ -1217,7 +1219,117 @@ test('a generated picture shows its prompt as a two-line summary and a toggle ap
   assert.ok(figure.includes('aria-expanded={expanded} aria-controls={captionId}'));
   assert.doesNotMatch(figure, /figcaption[^>]*title=/, 'no tooltip: the expansion replaces it');
   const caption = css.split(/\r?\n/).find(line => line.startsWith('.reading-generated figcaption {'));
-  for (const part of ['-webkit-line-clamp: 2', 'font-size: calc(13px * var(--reading-text))', 'line-height: 1.6', 'color: var(--text-2)']) assert.ok(caption.includes(part), part);
+  for (const part of ['-webkit-line-clamp: 2', 'font-size: calc(12px * var(--reading-text))', 'line-height: 1.5', 'color: var(--text-3)']) assert.ok(caption.includes(part), part);
   assert.ok(css.includes('.reading-generated figcaption.is-expanded { display: block; overflow: visible; white-space: pre-wrap; }'));
   assert.equal(en['展开提示词'], 'Show prompt'); assert.equal(en['收起'], 'Collapse');
+});
+
+const { latestResult, resultActions, FALLBACK_TITLES, changedFiles, elapsed, lastRound } = require('../src/features/reading/result-round.ts');
+const roundPicture = (id, minute) => readingEntry(id, 'assistant', minute, { text: 'drawn', images: ['data:image/png;base64,AA'], generated: { path: '/home/.codex/generated_images/t/one.png', prompt: 'a prompt' } });
+const roundEdit = (id, minute, written = ['/p/a.ts']) => readingTool(id, minute, { kind: 'edit', tool: 'apply_patch', written });
+const idle = { idle: true, interrupted: false };
+
+test('the latest round is detected from the entries: a picture, files, a text answer, a failure, nothing while it works', () => {
+  const ask = readingEntry('u', 'user', 1, { text: 'draw it' });
+  assert.equal(latestResult([], idle), null);
+  assert.equal(latestResult([ask], idle), null, 'a message with no answer yet has no result');
+  assert.equal(latestResult([ask, roundPicture('g', 3)], { idle: false, interrupted: false }), null, 'nothing while the agent works or waits');
+  const picture = latestResult([ask, readingEntry('a', 'assistant', 2, { text: 'on it' }), roundPicture('g', 3), readingEntry('z', 'assistant', 4, { text: 'both done' })], idle);
+  assert.equal(picture.kind, 'picture'); assert.equal(picture.anchor, 'g'); assert.equal(picture.picture.prompt, 'a prompt'); assert.equal(picture.reply, 'both done');
+  const code = latestResult([ask, roundEdit('e', 2, ['/p/a.ts', '/p/b.ts']), readingTool('t', 3, { phrase: '运行测试' }), readingTool('x', 3, { phrase: '运行 1 条命令' }), readingEntry('z', 'assistant', 4, { text: 'done' })], idle);
+  assert.equal(code.kind, 'code'); assert.equal(code.anchor, 'z'); assert.deepEqual(code.written, ['/p/a.ts', '/p/b.ts']);
+  assert.deepEqual(code.checks.map(check => check.id), ['t'], 'only the steps that check work count');
+  const text = latestResult([ask, readingTool('r', 2, { kind: 'read' }), readingEntry('z', 'assistant', 4, { text: 'answer' })], idle);
+  assert.equal(text.kind, 'text'); assert.equal(text.anchor, 'z');
+  assert.equal(latestResult([ask, readingTool('r', 2, { kind: 'read' })], idle), null, 'no reply, picture or file: nothing to hand in');
+  const failed = latestResult([ask, roundEdit('e', 2), readingTool('npm test', 3, { failed: true })], idle);
+  assert.equal(failed.kind, 'failed'); assert.equal(failed.failure, 'npm test');
+  assert.equal(latestResult([ask, readingEntry('z', 'assistant', 4, { text: 'half' })], { idle: true, interrupted: true }).kind, 'failed', 'an interrupted round');
+});
+
+test('only your last message starts the round: an answer to a question and a queued message do not', () => {
+  const entries = [readingEntry('u1', 'user', 1, { text: 'first' }), readingEntry('a1', 'assistant', 2, { text: 'old reply' }), readingEntry('u2', 'user', 3, { text: 'build it' }),
+    readingEntry('q', 'user', 4, { text: 'yes', answer: true }), roundEdit('e', 5), readingEntry('z', 'assistant', 6, { text: 'built' }), readingEntry('w', 'user', 7, { text: 'later', queued: true })];
+  const result = latestResult(entries, idle);
+  assert.equal(result.request, 'build it'); assert.equal(result.kind, 'code');
+  assert.equal(lastRound(entries).goal, 'build it');
+});
+
+test('the buttons under a result depend on its kind, a remote picture and whether the agent can be sent to', () => {
+  const ask = readingEntry('u', 'user', 1, { text: 'draw' });
+  const ids = (result, options) => resultActions(result, options).map(action => `${action.id}${action.disabled ? '!' : ''}`);
+  const picture = latestResult([ask, roundPicture('g', 2)], idle);
+  assert.deepEqual(ids(picture, { remote: false, canSend: true }), ['enlarge', 'save', 'continue']);
+  assert.deepEqual(ids(picture, { remote: true, canSend: true }), ['enlarge', 'save!', 'continue'], 'a picture on another computer cannot be saved here');
+  assert.deepEqual(ids(latestResult([ask, roundEdit('e', 2), readingEntry('z', 'assistant', 3, { text: 'ok' })], idle), { remote: false, canSend: true }), ['open', 'continue']);
+  assert.deepEqual(ids(latestResult([ask, readingEntry('z', 'assistant', 3, { text: 'ok' })], idle), { remote: false, canSend: true }), ['ask', 'copy']);
+  const failed = latestResult([ask, readingTool('npm test', 2, { failed: true })], idle);
+  assert.deepEqual(ids(failed, { remote: false, canSend: true }), ['retry', 'continue']);
+  assert.deepEqual(ids(failed, { remote: false, canSend: false }), ['retry!', 'continue'], 'a retry waits for the agent to sit at its input');
+});
+
+test('the title, the files and the duration of a round come from data it already has', () => {
+  assert.deepEqual(Object.keys(FALLBACK_TITLES), ['picture', 'code', 'text', 'failed'], 'a task without a title of its own is named by what the round did');
+  for (const title of Object.values(FALLBACK_TITLES)) assert.ok(title in en, `${title} has an English translation`);
+  const git = [{ path: 'src/a.ts', index: ' ', worktree: 'M', untracked: false }, { path: 'src/new.ts', index: ' ', worktree: '?', untracked: true }];
+  assert.deepEqual(changedFiles(['C:\\p\\src\\a.ts', 'C:\\p\\src\\new.ts', 'C:\\p\\other.md'], git).map(file => [file.name, file.state]), [['a.ts', '修改'], ['new.ts', '新文件'], ['other.md', null]]);
+  assert.deepEqual(changedFiles(['/p/a.ts'], null).map(file => file.state), [null], 'without a repository the state is left out');
+  assert.deepEqual(elapsed(0, 190000), { hours: 0, minutes: 3, seconds: 10 }); assert.deepEqual(elapsed(0, 3900000), { hours: 1, minutes: 5, seconds: 0 });
+});
+
+test('the latest round alone carries the status row and the actions, and the composer invites the next step', t => {
+  const entries = [readingEntry('u1', 'user', 1, { text: 'first' }), roundPicture('g1', 2), readingEntry('u2', 'user', 5, { text: 'build it' }), roundEdit('e', 6), readingEntry('z', 'assistant', 7, { text: 'built it' })];
+  const { state, render } = readingHarness(t, entries);
+  state.terminal.taskTitle = 'Build it';
+  let html = render();
+  assert.equal((html.match(/class="result-status/g) || []).length, 1, 'one status row, for the latest round only');
+  assert.match(html, /Build it<\/span><b> · Done<\/b>/); assert.match(html, /placeholder="Keep editing, or describe the next step…"/);
+  assert.equal((html.match(/class="result-actions"/g) || []).length, 1);
+  assert.match(html, /<div class="reading-turn-item-body"><div class="result-status/, 'the result entry has no time stamp of its own: the status row says when it ended');
+  assert.match(html, /aria-label="Open file"[^>]*>[\s\S]*aria-label="Keep editing"/);
+  assert.equal((html.match(/is-latest/g) || []).length, 2, 'the last user step and the last agent step are the latest');
+  assert.ok(html.indexOf('result-status') < html.indexOf('built it') && html.indexOf('built it') < html.indexOf('result-actions'), 'the reply sits between them, never repeated');
+  state.terminal.codexActivity = 'working';
+  html = render();
+  assert.doesNotMatch(html, /result-status|result-actions/, 'no card while the agent works');
+  assert.doesNotMatch(html, /placeholder="Keep editing/);
+  state.terminal.codexActivity = 'idle'; state.pending = [{ id: 'p', text: 'next', at: 99, sending: false }];
+  assert.doesNotMatch(render(), /result-status/, 'nor once the next message is sent');
+});
+
+test('a picture result shows the picture first, then its sentence and its prompt, and the earlier pictures keep their order', t => {
+  const { state, render } = readingHarness(t, [readingEntry('u1', 'user', 1, { text: 'one' }), roundPicture('g1', 2), readingEntry('u2', 'user', 5, { text: 'two' }), roundPicture('g2', 6)]);
+  const html = render(), [earlier, latest] = html.split(/(?=<div class="reading-step is-agent)/).slice(1);
+  assert.ok(earlier.indexOf('drawn') < earlier.indexOf('<figure'), 'an earlier round keeps its words before the picture');
+  assert.match(latest, /reading-generated is-result/);
+  assert.ok(latest.indexOf('<img') < latest.indexOf('drawn') && latest.indexOf('drawn') < latest.indexOf('<figcaption'), 'picture, sentence, prompt');
+  assert.ok(latest.indexOf('<figcaption') < latest.indexOf('result-actions'));
+  state.terminal.codexActivity = 'interrupted';
+  assert.match(render(), /Interrupted/);
+});
+
+test('the reading view keeps two vertical lines: the avatars and the reply text edge, which the composer and every row share', () => {
+  const flow = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading-flow.css'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading.css'), 'utf8');
+  const card = fs.readFileSync(path.join(__dirname, '../src/features/reading/result-card.css'), 'utf8');
+  const narrow = css.slice(css.indexOf('@container (max-width: 480px)'));
+  assert.match(narrow, /--reading-inset: 0px; --turn-pad: 0px;/, 'in a card narrower than 480px the content edge is the avatars edge');
+  assert.ok(flow.includes('.reading-step-body > .reading-turn { margin-left: calc(var(--reading-inset) - var(--step-lead) - var(--turn-pad)); }'));
+  assert.ok(flow.includes('.reading-assistant { padding: 0 16px 0 var(--turn-pad);'));
+  assert.ok(flow.includes('.reading-turn-tools { position: relative; min-width: 0; padding-left: var(--turn-pad); }'), 'the pill starts on the content edge');
+  assert.match(flow, /\.reading-turn-mark \{ position: absolute; left: calc\(var\(--step-node\) \/ -2 - var\(--turn-icon\) \/ 2\);/, 'the tools icon is centred on the avatars axis');
+  assert.ok(flow.includes('.reading-turn > .reading-status { margin-left: var(--turn-pad); }'));
+  assert.ok(flow.includes('.reading-step-body > .reading-status { margin-left: calc(var(--reading-inset) - var(--step-lead)); }'));
+  assert.ok(css.includes('.reading-composer { margin: 4px var(--reading-edge-right) 16px var(--reading-edge-left); }'));
+  assert.ok(css.includes('.reading-attachments { display: flex; align-items: center; gap: 6px; margin: 0 var(--reading-edge-right) 6px var(--reading-edge-left);'));
+  assert.ok(card.includes('.result-status, .result-evidence, .result-actions { box-sizing: border-box; padding-left: var(--turn-pad); padding-right: var(--reading-inset); }'));
+  assert.ok(css.includes('.reading-content { gap: 16px; }') && css.includes('.reading-step.is-user:not(:first-child) { margin-top: 16px; }'), 'rounds are told apart by space');
+});
+
+test('the save-as channel is registered in the main process, the preload and the types', () => {
+  const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  assert.match(read('electron/main.cjs'), /handle\('agent:saveImageAs'[\s\S]*isGeneratedImage\(file\)[\s\S]*showSaveDialog[\s\S]*copyFile/);
+  assert.match(read('electron/preload.cjs'), /saveImageAs: file => ipcRenderer\.invoke\('agent:saveImageAs', file\)/);
+  assert.match(read('src/shared/types.ts'), /saveImageAs\(file: string\): Promise<Result<string \| null>>/);
+  for (const text of ['保存图片', '继续修改', '继续追问', '重试', '查看大图', '{time} 完成', '继续修改，或描述下一步…']) assert.ok(text in en, `${text} has an English translation`);
 });

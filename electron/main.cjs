@@ -27,6 +27,7 @@ const codexAccounts = new CodexAccountUsage();
 const { agentCommand } = require('./features/agents/agent-command.cjs');
 const { scrubSkills } = require('./features/agents/skill-privacy.cjs');
 const { setThumbnailer, isGeneratedImage } = require('./conversation.cjs');
+const { saveDialogOptions, saveTarget } = require('./image-save.cjs');
 const { registerVoiceIpc } = require('./features/voice/ipc.cjs');
 const { createIpcAdapter } = require('./shared/ipc.cjs');
 const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage, Notification, clipboard, shell, protocol, safeStorage, session: electronSession, net: electronNet } = require('electron');
@@ -1283,6 +1284,16 @@ function registerIpc() {
     if (image.isEmpty()) throw new Error('无法读取这张图片。');
     const { width, height } = image.getSize();
     return { url: width > 2400 ? `data:image/jpeg;base64,${image.resize({ width: 2400, quality: 'best' }).toJPEG(90).toString('base64')}` : image.toDataURL(), width, height };
+  });
+  // The result card's 「保存图片」: a copy of the picture Codex generated on this computer, to where the reader picks. Null when the
+  // dialog is dismissed. A picture an SSH project's agent drew stays on that computer; the card does not offer this for it.
+  handle('agent:saveImageAs', async file => {
+    if (!isGeneratedImage(file) || !fs.statSync(file, { throwIfNoEntry: false })?.isFile()) throw new Error('只能保存本机上生成的图片。');
+    const picked = await dialog.showSaveDialog(window, saveDialogOptions(file, app.getPath('pictures'), t('图片')));
+    if (picked.canceled || !picked.filePath) return null;
+    const target = saveTarget(picked.filePath, file);
+    await fs.promises.copyFile(file, target);
+    return target;
   });
   // A Markdown file an agent wrote outside the project (its memory, a note in a temporary folder), whole, for its popup:
   // only Markdown, read where the project is (this computer, or the SSH computer through its worker).

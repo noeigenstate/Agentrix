@@ -6,6 +6,7 @@ import { decisionTitle, waited } from './DecisionCard';
 import { Markdown } from '../reading/ReadingView';
 import { FileCards, previewable } from '../reading/FileCards';
 import { replyFiles } from '../reading/reply-files';
+import { CHECKS, changeLabel, lastRound } from '../reading/result-round';
 import { atPrompt, sendToAgent } from './send-to-agent';
 import { parseDelivery } from './delivery';
 import { showPopup } from '../files/file-popup';
@@ -14,24 +15,8 @@ import { useDictatedBox } from '../voice/voice-input';
 import { passed, reviewHistory, sentBack } from './review-history';
 import { t } from '../../shared/i18n';
 
-// The steps that check work: what was run, and whether it passed. Anything else the agent says about its checks is
-// its own word, shown as such.
-const CHECKS = new Set(['运行测试', '检查类型', '构建项目', '检查代码格式']);
+// Anything the agent says about its checks beyond the steps it ran (CHECKS) is its own word, shown as such.
 const SELF_REPORT = /测试(?:全部)?通过|tests? (?:all )?pass|all tests passed|构建成功|build succeeded/i;
-type Round = { goal: string; reply: string; written: string[] };
-
-// What the round did, from the agent's own conversation: the last thing you asked, the answer it ended on, and the
-// files its steps wrote.
-export function lastRound(entries: readonly ConversationEntry[]): Round {
-  let start = -1;
-  for (let index = entries.length - 1; index >= 0; index--) if (entries[index].role === 'user' && !entries[index].answer && !entries[index].queued) { start = index; break; }
-  const round = entries.slice(start + 1);
-  const reply = [...round].reverse().find(entry => entry.role === 'assistant' && entry.text)?.text ?? '';
-  const written = [...new Set(round.flatMap(entry => entry.tool?.done && !entry.tool.failed ? entry.tool.written ?? [] : []))];
-  return { goal: start >= 0 ? entries[start].text ?? '' : '', reply, written };
-}
-const STATUS: Record<string, string> = { M: '修改', A: '新增', D: '删除', R: '重命名', C: '复制', U: '冲突', '?': '新文件' };
-const status = (change: GitStatus['files'][number]) => change.untracked ? STATUS['?'] : STATUS[(change.worktree.trim() || change.index.trim())[0]] ?? change.worktree;
 
 // A round's work handed in: what was asked, what the agent says it did, what changed, what it made and how it was
 // checked, then your call. Accepting records that you looked at it; it never commits, merges or pushes anything.
@@ -109,7 +94,7 @@ export function ReviewCard({ decision, now, kind, onOpen, onDone, onError }: {
         </section>
         {git && <section className="review-block"><h4>{git.total ? t('改动 · 工作区 {count} 个文件', { count: git.total }) : t('改动')}</h4>
           {git.total ? <ul className="review-files">{git.files.slice(0, 8).map(change => <li key={change.path}>
-            <span className="review-file-status">{status(change)}</span>
+            <span className="review-file-status">{changeLabel(change)}</span>
             <button type="button" className="text-button" title={change.path} onClick={() => showPopup({ kind: 'file', projectId: decision.projectId, path: change.path })}>{change.path}</button>
           </li>)}</ul> : <p className="decision-why">{t('工作区没有未提交的改动。')}</p>}
           {git.total > 8 && <p className="review-more">{t('还有 {count} 个文件，在工作台的 Git 里查看。', { count: git.total - 8 })}</p>}
