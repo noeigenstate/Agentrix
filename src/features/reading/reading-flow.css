@@ -59,7 +59,7 @@
 .reading-step.is-user > .reading-step-body { grid-column: 1; grid-row: 1; align-items: flex-end; }
 .reading-step.is-user::before, .reading-step:has(+ .reading-step.is-user)::before { display: none; }
 .reading-step.is-user .reading-step-head { flex-direction: row-reverse; }
-.reading-step-body > .reading-user { box-sizing: border-box; width: fit-content; max-width: min(calc(100% + var(--step-lead)), max(72ch, 72cqw)); margin: 0 calc(-1 * var(--step-lead)) 0 0; }
+.reading-step-body > .reading-user { box-sizing: border-box; width: fit-content; max-width: min(calc(100% + var(--step-lead) - var(--reading-inset)), max(72ch, 72cqw)); margin: 0 calc(var(--reading-inset) - var(--step-lead)) 0 0; }
 /* Your message: a card hugging its content. */
 .reading-user { display: flex; flex-direction: column; gap: 4px; padding: 10px 16px;
   border-radius: 12px; background: var(--flow-card); }
