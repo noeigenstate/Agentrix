@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const { cleanupTerminal } = require('./helpers/terminal-cleanup.cjs');
 const { createEventServer } = require('../electron/events.cjs');
 const { createTerminalEnvironment } = require('../electron/terminal-env.cjs');
 // The real text: Markdown, backticks and an exclamation mark pass through the wrappers untouched.
@@ -133,9 +134,9 @@ test('a real Bash terminal keeps the user start-up files and reports prompts, Co
   delete source.LANG; delete source.LC_ALL; delete source.LC_CTYPE; delete source.CODEX_HOME; delete source.PROMPT_COMMAND;
   const env = shellEnvironment(createTerminalEnvironment(source, ''), { socket: server.address, projectId: 'project', sessionKey: 'key', node: process.execPath, helper, startDir: project, locale: 'C.UTF-8' });
   const terminal = pty.spawn(findShell('bash'), bashArguments(integrationDir), { name: 'xterm-256color', cols: 120, rows: 30, cwd: project, env });
+  cleanupTerminal(t, terminal);
   let output = '';
   terminal.onData(data => { output += data; });
-  t.after(() => { try { terminal.kill(); } catch { } });
   const type = text => terminal.write(text + '\r');
   const waitEvent = (predicate, what) => eventually(() => events.find(predicate), () => `${what}\n--- terminal output ---\n${output}`);
   const readLog = name => eventually(() => { try { return fs.readFileSync(path.join(log, name), 'utf8').trim(); } catch { return null; } }, name);

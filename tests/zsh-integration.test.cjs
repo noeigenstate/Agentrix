@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const { cleanupTerminal } = require('./helpers/terminal-cleanup.cjs');
 const { createEventServer, socketAddress } = require('../electron/events.cjs');
 const { createTerminalEnvironment } = require('../electron/terminal-env.cjs');
 // The real text: Markdown, backticks and an exclamation mark pass through the wrappers untouched.
@@ -113,9 +114,9 @@ test('a real zsh terminal keeps the user start-up files and reports prompts, Cod
   delete source.ZDOTDIR; delete source.LANG; delete source.LC_ALL; delete source.LC_CTYPE; delete source.CODEX_HOME;
   const env = zshEnvironment(createTerminalEnvironment(source, ''), { folder, socket: server.address, projectId: 'project', sessionKey: 'key', node: process.execPath, helper, startDir: project, locale: 'en_US.UTF-8' });
   const terminal = pty.spawn(zsh, ['-l', '-i'], { name: 'xterm-256color', cols: 120, rows: 30, cwd: project, env });
+  cleanupTerminal(t, terminal);
   let output = '';
   terminal.onData(data => { output += data; });
-  t.after(() => { try { terminal.kill(); } catch { } });
   const type = text => terminal.write(text + '\r');
   const waitEvent = (predicate, what) => eventually(() => events.find(predicate), () => `${what}\n--- terminal output ---\n${output}`);
 
