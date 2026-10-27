@@ -546,11 +546,15 @@ jobs:
 
           ## Changes in $RELEASE_VERSION
 
-          - Native approvals are opt-in at assistant launch; ordinary and SSH sessions remain terminal-only for approvals.
-          - Codex retains its real interactive terminal UI through an experimental remote connection for native approvals.
-          - Claude managed sessions support conversations and tool approvals, without interactive terminal commands, session resume or terminal input.
-          - Approval cards show the command first, followed by operation details, and explain failures.
-          - Fix stale approval cards potentially confirming a new request when displayed content changes and then returns to the same text.
+          - A beta: a new light theme and a reworked reading view, 决策 page and Settings. Installed copies do not update to it automatically.
+          - A new light theme, 白底黑字, with one set of colours, type sizes and button and input styles.
+          - The 决策 page centres the new-task box: press Enter to start, and the send button turns blue once you type.
+          - The reading view is a chat: your messages on the right, the conversation centred with equal margins.
+          - The latest result shows its status above it and next steps below (view, save picture, continue); older rounds' details are quieter.
+          - A generated picture's prompt shows as a two-line summary that you can expand.
+          - A tidier file tree: caches and temp files are dimmed and can be hidden, and the actions appear on hover.
+          - Settings redesigned: it shows whether this is the portable, development or installed build, the update state at a glance, plus a changelog and an About page.
+          - Fainter terminal text is easier to read in the light theme; the title bar has a new logo and 决策 icon.
 
           Commit: $GITHUB_SHA
           Build: https://github.com/$GH_REPO/actions/runs/$GITHUB_RUN_ID

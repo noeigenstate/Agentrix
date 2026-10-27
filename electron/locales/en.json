@@ -1503,5 +1503,13 @@
   "描述你想构建的功能、修复的问题，或粘贴截图…": "Describe a feature to build, a problem to fix, or paste a screenshot…",
   "输入需求后按 Enter 开始": "Press Enter after describing what you need",
   "开始 (Enter)": "Start (Enter)",
-  "添加图片": "Add pictures"
+  "添加图片": "Add pictures",
+  "新增「白底黑字」浅色主题，并统一了配色、字号和按钮、输入框的样式。": "A new light theme, 白底黑字, with one set of colours, type sizes and button and input styles.",
+  "决策页的新任务输入框居中显示，按 Enter 开始，输入后发送按钮变蓝。": "The 决策 page centres the new-task box: press Enter to start, and the send button turns blue once you type.",
+  "阅读视图改为聊天布局：你的消息在右侧，对话区域居中，左右边距一致。": "The reading view is a chat: your messages on the right, the conversation centred with equal margins.",
+  "最新一轮的成果上方显示任务状态，下方提供查看大图、保存图片、继续修改等操作；历史记录的辅助信息更淡。": "The latest result shows its status above it and next steps below (view, save picture, continue); older rounds' details are quieter.",
+  "生成图片的提示词默认只显示两行摘要，可以展开查看全文。": "A generated picture's prompt shows as a two-line summary that you can expand.",
+  "文件树更紧凑：缓存和临时文件变淡并可隐藏，操作按钮在鼠标悬停时出现。": "A tidier file tree: caches and temp files are dimmed and can be hidden, and the actions appear on hover.",
+  "设置窗口重做：显示便携版、开发版或已安装版本，更新状态一目了然，并新增更新日志和关于页面。": "Settings redesigned: it shows whether this is the portable, development or installed build, the update state at a glance, plus a changelog and an About page.",
+  "浅色主题下终端里的次要文字更清楚；标题栏换用新的标志和「决策」图标。": "Fainter terminal text is easier to read in the light theme; the title bar has a new logo and 决策 icon."
 }
