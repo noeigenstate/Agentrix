@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowCounterClockwise, CaretRight, CircleNotch } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, CaretRight, CheckCircle, CircleNotch } from '@phosphor-icons/react';
 import type { AgentTokens, AgentUsage, ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { modelName } from '../reading/model-name';
@@ -227,7 +227,9 @@ function resetTime(at: number) {
 function PromptList({ terminal }: { terminal: ProjectTerminal }) {
   const prompts = terminal.prompts || [];
   if (!prompts.length) {
-    const text = !terminal.codexActive ? t('还没有开始任务') : terminal.codexActivity === 'complete' && terminal.task ? t('已完成：{task}', { task: terminal.task }) : terminal.task || t('没有待处理的提示');
+    const finished = terminal.codexActive && terminal.codexActivity === 'complete' && !!terminal.task;
+    const text = !terminal.codexActive ? t('还没有开始任务') : finished ? t('已完成：{task}', { task: terminal.task }) : terminal.task || t('没有待处理的提示');
+    if (finished) return <p className="activity-task-done" title={terminal.taskTitle || text}><CheckCircle size={14} weight="fill" aria-hidden="true" />{text}</p>;
     return <p className="activity-task-quiet" title={terminal.taskTitle || text}>{text}</p>;
   }
   return <ol className="activity-prompts" aria-label={t('提示')}>

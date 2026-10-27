@@ -57,7 +57,6 @@
 .activity-meter { position: relative; display: block; height: 6px; border-radius: 999px; overflow: hidden; background: var(--flow-inset); }
 .activity-meter.is-expired { opacity: .5; }
 .activity-meter i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--flow-faint); }
-.activity-limit:first-child .activity-meter i { background: var(--usage); }
 
 /* The plan's windows, then the tokens of the round and the conversation. */
 .activity-limits { display: grid; gap: 12px; }
@@ -96,3 +95,14 @@
 .activity-reset-note { flex-basis: 100%; margin: 0; font-size: 11px; line-height: 16px; color: var(--flow-faint); }
 .activity-reset-cancel { margin-left: auto; height: 28px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: none; color: var(--flow-ink); font: 600 12px var(--font-ui); cursor: pointer; }
 .activity-reset-cancel:hover, .activity-reset-cancel:focus-visible { background: var(--bg-hover); outline: none; }
+
+/* The task leads: a finished round reads in the primary ink with a success mark. The route, context and usage are secondary: smaller titles in the secondary ink, quieter figures,
+   thin meters and a tighter stack; nothing is removed. */
+.activity-task-done { display: flex; align-items: flex-start; gap: 6px; margin: 0; font-size: 13px; line-height: 20px; color: var(--flow-ink); overflow-wrap: anywhere; }
+.activity-task-done svg { flex: none; margin-top: 3px; color: var(--success); }
+:is(.activity-route, .activity-context, .activity-usage) .activity-card-title { font-size: 13px; color: var(--flow-muted); }
+.activity-context, .activity-usage { gap: 4px; }
+.activity-context .activity-percent, .activity-context .activity-figure b, .activity-limit b, .activity-token-row dd b { color: var(--flow-muted); }
+.activity-context .activity-figure, .activity-limit, .activity-token-row dt, .activity-token-row dd { font-size: 11px; line-height: 16px; }
+.activity-context .activity-meter, .activity-usage .activity-meter { height: 4px; }
+.activity-limits { gap: 8px; }
