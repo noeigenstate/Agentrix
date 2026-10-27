@@ -40,7 +40,6 @@ import { isTypedCommand, pendingPromptCards, sameMessage, type PendingPrompt } f
 import { usePendingPrompts } from './usePendingPrompts';
 import { PendingPromptEntries, UserImages, UserMessage } from './PendingPromptEntries';
 import { AgentTurnItem, ClaudeSpark, stepTime, TimelineStep } from './Timeline';
-import { AgentSettingsTag } from './AgentSettingsTag';
 import { AgentCommandRun } from './AgentCommandRun';
 import { FileCards, previewable } from './FileCards';
 import { replyFiles } from './reply-files';
@@ -686,7 +685,6 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
         <code>{command.name}</code><span>{command.source === 'builtin' ? t(command.description) : command.description}</span>{command.source !== 'builtin' && <small>{command.source === 'project' ? t('项目') : command.source === 'user' ? t('用户') : t('技能')}</small>}
     </div>)}</div>}
     <div className={`reading-composer${sendingSoon ? ' is-sending-soon' : ''}`} style={terminal.agentCommand ? { display: 'none' } : undefined}>
-      {terminal.codexActive && <AgentSettingsTag settings={terminal.agentSettings} status={screen.status} />}
       <MentionPalette mentions={mentions} />
       <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} aria-expanded={palette || mentions.open} aria-controls={palette ? listId : mentions.open ? mentions.listId : undefined} aria-activedescendant={palette && selected ? optionId(selection) : mentions.open && mentions.files[mentions.selection] ? mentions.optionId(mentions.selection) : undefined} placeholder={terminal.codexActive ? t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }) : t('输入命令，Enter 发送')} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
         onCompositionStart={() => dictationSend.cancel()} onFocus={() => window.agentrix.terminalFocus(terminal.id, false)} />

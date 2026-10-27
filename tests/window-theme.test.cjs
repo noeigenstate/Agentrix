@@ -30,11 +30,11 @@ function fixture(t, theme, glass = false) {
 }
 
 test('window construction uses the saved theme and live updates use sanitized settings', t => {
-  for (const [theme, background] of [['mono', '#181818'], ['light', '#ffffff']]) {
+  for (const [theme, background] of [['mono', '#181818'], ['light', '#f8f9fb']]) {
     const context = fixture(t, theme);
     assert.equal(context.window.options.backgroundColor, background);
     context.updateStoreSettings({ theme: 'light' });
-    assert.deepEqual(context.window.backgrounds, theme === 'light' ? [] : ['#ffffff']);
+    assert.deepEqual(context.window.backgrounds, theme === 'light' ? [] : ['#f8f9fb']);
     context.updateStoreSettings({ fontSize: 14 });
     context.updateStoreSettings({ theme: 'mono' });
     assert.equal(context.window.backgrounds.at(-1), '#181818');
@@ -57,5 +57,5 @@ test('active desktop glass keeps transparency and failed glass uses the saved th
   context.applyDesktopGlass = async () => { throw new Error('Backdrop unavailable'); };
   const glassEnd = main.indexOf("    if (process.platform === 'win32') window.setAppDetails", glassStart);
   await vm.runInContext(`(async () => { ${main.slice(glassStart, glassEnd)} })()`, context);
-  assert.deepEqual(context.window.backgrounds, ['#ffffff']);
+  assert.deepEqual(context.window.backgrounds, ['#f8f9fb']);
 });

@@ -13,13 +13,13 @@ export const darkTerminalTheme: ITheme = {
 
 export const lightTerminalTheme: ITheme = {
   // Transparent white keeps xterm's contrast correction anchored to the light card's RGB.
-  background: '#ffffff00', foreground: '#202124', cursor: '#202124',
-  selectionBackground: '#e7e9ec', black: '#202124', red: '#a12622',
+  background: '#ffffff00', foreground: '#20242a', cursor: '#20242a',
+  selectionBackground: '#e9ebef', black: '#20242a', red: '#a12622',
   green: '#176b35', yellow: '#805900', blue: '#1b57a6', magenta: '#843a9c',
-  cyan: '#006b78', white: '#6e6e6e', brightBlack: '#666d78', brightRed: '#b02b2b',
+  cyan: '#006b78', white: '#6e6e6e', brightBlack: '#636b77', brightRed: '#b02b2b',
   brightGreen: '#21733c', brightYellow: '#8a6200', brightBlue: '#2563b5',
-  brightMagenta: '#9340a8', brightCyan: '#087484', brightWhite: '#666d78',
-  scrollbarSliderBackground: '#e0e3e888', scrollbarSliderHoverBackground: '#c9cdd488', scrollbarSliderActiveBackground: '#c9cdd4cc',
+  brightMagenta: '#9340a8', brightCyan: '#087484', brightWhite: '#636b77',
+  scrollbarSliderBackground: '#e2e6eb88', scrollbarSliderHoverBackground: '#a8b7c988', scrollbarSliderActiveBackground: '#a8b7c9cc',
 };
 
 // The colours are the tokens' values (xterm takes literals, not CSS variables): text-1, selected, and the border and hover border for the scrollbar. The background stays clear: the card's own
@@ -31,5 +31,5 @@ export function terminalTheme(): ITheme {
 }
 
 export function terminalDecorationColors() {
-  return currentTheme() === 'light' ? { bullet: '#666d78', heading: '#202124' } : { bullet: '#b5b5b5', heading: '#f2f2f2' };
+  return currentTheme() === 'light' ? { bullet: '#636b77', heading: '#20242a' } : { bullet: '#b5b5b5', heading: '#f2f2f2' };
 }

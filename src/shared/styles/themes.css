@@ -28,14 +28,15 @@
 .workspace-layout:not(:has(> .home-layer)) :is(.dropdown, .editor-find, .reading-commands, .reading-terminal-popup) { --bg-hover: var(--bg-selected); }
 
 /* 白底黑字: the light theme (id "light" in src/shared/themes.ts).
-   The base is the brightest surface and each step is a little darker (dark goes lighter): app 100, card 96.5, input 93.7, hover 91.3, selected 88.5 (L*).
+   The owner's greys, a light canvas under white panels (L*): card and menu 100 (white panels carry the content), app 97.9 (the canvas behind the cards: #f8f9fb), titlebar and sidebar 97.3, input 97.6, hover 96.4 (#f3f5f7), selected 93 (#e9ebef).
+   Borders #e2e6eb, active border #a8b7c9, ink #20242a, secondary text #626b77. The tertiary text is #636b77, one step from the secondary, the lightest grey that stays 4.5:1 on the selected row.
    Every token keeps its role. Colour is still only on icons and indicators; the five semantic colours are the dark theme's hues, darkened to 4.5:1 or more on every surface. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg-app: #ffffff; --bg-titlebar: #f7f7f8; --bg-sidebar: #f7f7f8; --bg-card: #ffffff; --bg-input: #f7f8fa; --bg-control: #ffffff; --bg-menu: #ffffff;
-  --bg-hover: #f0f1f3; --bg-selected: #e7e9ec; --border: #e0e3e8; --border-hover: #c9cdd4; --divider: #ecedf0;
-  --text-1: #202124; --text-2: #626a75; --text-3: #666d78; --text-disabled: #9aa1ab;
-  --button-primary: #202124; --button-primary-text: #ffffff; --focus-ring: #3c4043;
+  --bg-app: #f8f9fb; --bg-titlebar: #f7f7f8; --bg-sidebar: #f7f7f8; --bg-card: #ffffff; --bg-input: #f7f8fa; --bg-control: #ffffff; --bg-menu: #ffffff;
+  --bg-hover: #f3f5f7; --bg-selected: #e9ebef; --border: #e2e6eb; --border-hover: #a8b7c9; --divider: #ecedf0;
+  --text-1: #20242a; --text-2: #626b77; --text-3: #636b77; --text-disabled: #9aa1ab;
+  --button-primary: #20242a; --button-primary-text: #ffffff; --focus-ring: #3c4043;
   --success: #186f57; --running: #386687; --warning: #825b05; --danger: #a34346; --usage: #136e66;
   /* Claude Code keeps its brand #d97757 (3.1:1 on white). Codex's green is darkened to 4.1:1 on white as an icon colour; --select-bar is the dark ink of a selected row's bar. */
   --agent-codex: #0d8f6a; --select-bar: #4a4f57;
@@ -48,10 +49,17 @@
 /* The workbench. This block must restate every token the dark block sets on .workspace-layout (app, sidebar, aside, well, card, input, hover, selected, divider):
    a rule on the layout beats the value inherited from :root, so a token left out here would keep its dark value inside the workbench. */
 :root[data-theme="light"] .workspace-layout:not(:has(> .home-layer)) {
-  --bg-app: #ffffff; --bg-sidebar: #f7f7f8; --bg-aside: #fafafb; --bg-aside-well: #f3f4f6; --bg-card: #ffffff; --bg-input: #f7f8fa; --bg-control: #ffffff; --bg-hover: #f0f1f3; --bg-selected: #e7e9ec; --divider: #ecedf0;
+  --bg-app: #f8f9fb; --bg-sidebar: #f7f7f8; --bg-aside: #fafafb; --bg-aside-well: #f3f4f6; --bg-card: #ffffff; --bg-input: #f7f8fa; --bg-control: #ffffff; --bg-hover: #f3f5f7; --bg-selected: #e9ebef; --divider: #ecedf0;
 }
 
-/* The main canvas is white and carries no grey slab: a card (grid project, decision detail) is white and set off by a 1px border, and the one grey operation area on it is the
+/* --bg-app is the canvas, and a surface that carries content is a white panel on it: inside a focused project (the reading view, terminal area, editor, previews, code) and inside a decision card
+   (its evidence well), --bg-app is the card colour, so those keep their white. */
+:root[data-theme="light"] :is(.focus-mode .project-panel, .home-layer .decision-card) { --bg-app: var(--bg-card); }
+
+/* The grid card under the pointer lifts with the one soft shadow of the light theme. Not while dragged, during the focus motion, or in focus mode; the completion glow is an inset shadow on a child and sits inside it. */
+:root[data-theme="light"] .app-shell:not(.focus-mode) .project-panel:hover:not(.focus-motion-panel, .drag-source) { box-shadow: 0 4px 12px rgb(0 0 0 / .05); }
+
+/* The main canvas is #f8f9fb and carries no grey slab: a card (grid project, decision detail) is white and set off by a 1px border, and the one grey operation area on it is the
    input (#f7f8fa, bordered). The card colour is now white, so the places that used it as a quiet well take the input colour, and a focused project's message cards (which were
    the card colour on the app colour) step to the input colour with a hover-grey inset. */
 :root[data-theme="light"] .app-shell:not(.focus-mode) .project-panel, :root[data-theme="light"] .home-layer .decision-card { box-sizing: border-box; border: 1px solid var(--border); }
@@ -91,8 +99,8 @@
 :root[data-theme="light"] .conflict-current { background: #1a7f3722; }
 :root[data-theme="light"] .conflict-incoming { background: #0969da22; }
 :root[data-theme="light"] .conflict-base { background: #6e778122; }
-:root[data-theme="light"] .conflict-marker { background: #20212412; }
+:root[data-theme="light"] .conflict-marker { background: #20242a12; }
 :root[data-theme="light"] .conflict-marker.current { background: #1a7f3740; }
 :root[data-theme="light"] .conflict-marker.incoming { background: #0969da40; }
-:root[data-theme="light"] .find-bands i { background: #20212414; }
-:root[data-theme="light"] .find-bands i.is-current { background: #20212429; }
+:root[data-theme="light"] .find-bands i { background: #20242a14; }
+:root[data-theme="light"] .find-bands i.is-current { background: #20242a29; }

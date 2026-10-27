@@ -12,7 +12,7 @@ export function CodexLogo({ size = 16 }: BrandIconProps = {}) {
     className: 'agent-brand-icon agent-brand-codex', width: size, height: size,
     viewBox: marks.openai.viewBox, preserveAspectRatio: 'xMidYMid meet',
     // The reading node inherits secondary ink; retain the original white mark in mono.
-    color: theme === 'light' ? '#202124' : '#ffffff', fill: 'none', 'aria-hidden': true, focusable: false,
+    color: theme === 'light' ? '#20242a' : '#ffffff', fill: 'none', 'aria-hidden': true, focusable: false,
   }, createElement('path', { d: marks.openai.path, fill: 'currentColor' }));
 }
 

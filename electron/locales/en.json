@@ -1225,7 +1225,6 @@
   "思考 {effort}": "effort {effort}",
   "快速模式": "fast mode",
   "普通模式": "standard mode",
-  "当前模型、思考深度和速度模式": "The model, effort and speed mode in use",
   "只能预览 Markdown 文件。": "Only Markdown files can be shown here.",
   "找不到这个文件。": "This file could not be found.",
   "开始新会话": "Start a new one",

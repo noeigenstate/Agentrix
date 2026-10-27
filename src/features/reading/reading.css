@@ -97,11 +97,6 @@
 .reading-composer:focus-within { border-color: var(--focus-ring); }
 .reading-composer textarea { flex: 1; min-width: 0; max-height: 140px; field-sizing: content; resize: none; border: 0; outline: 0; padding: 5px 0; background: transparent; color: var(--text-1); font: 400 calc(14px * var(--reading-text))/1.5 var(--font-ui); }
 .reading-composer textarea::placeholder { color: var(--text-2); }
-/* The model, effort and speed the agent runs with, on the message box's top edge at its right end. */
-.reading-agent-settings { position: absolute; top: -9px; right: 14px; z-index: 1; display: inline-flex; align-items: center; gap: 4px; max-width: calc(100% - 28px); height: 18px; padding: 0 8px; border-radius: 999px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 600 calc(11px * var(--reading-text))/18px var(--font-ui); color: var(--text-3); background: var(--bg-card); border: 1px solid var(--border); }
-.reading-agent-settings.is-fast svg { flex: none; color: var(--text-1); }
-/* The model route is in the activity pane beside the conversation, so the tag goes while that pane shows (it is hidden below 1001px, where the tag stays). */
-@media (min-width: 1001px) { .project-panel.has-activity .reading-agent-settings { display: none; } }
 .reading-attachments { display: flex; align-items: center; gap: 6px; margin: 0 14px 6px; font-size: calc(12px * var(--reading-text)); color: var(--text-2); }
 .reading-composer .icon-button { flex: none; width: 32px; height: 32px; border-radius: 8px; }
 .reading-send:not(:disabled) { color: var(--button-primary-text); background: var(--button-primary); }
@@ -195,4 +190,3 @@
 .reading-composer { margin: 4px var(--reading-right) 16px var(--reading-left); }
 .focus-mode .reading-composer { margin-bottom: 20px; }
 .reading-commands.is-inline { margin: 4px var(--reading-right) 4px var(--reading-left); }
-.reading-agent-settings { right: 18px; }

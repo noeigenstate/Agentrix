@@ -46,7 +46,6 @@ function loadUI(name, overrides = {}) {
     if (key === './ReadingTerminalPopup') return { ReadingTerminalPopup: function ReadingTerminalPopup() { return null; } };
     if (key === './ReadingSignIn') return { ReadingSignIn: () => null };
     if (key === './AgentCommandRun') return { AgentCommandRun: () => null };
-    if (key === './AgentSettingsTag') return { AgentSettingsTag: () => null };
     if (key === './NativeApprovalCard') return { NativeApprovalCard: () => null };
     if (key === './ManagedSession') return { ManagedSession: () => null };
     if (key === './Timeline') return loadUI('features/reading/Timeline.tsx');

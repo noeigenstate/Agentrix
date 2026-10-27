@@ -81,6 +81,13 @@ focus) overrides some tokens, shown in brackets, see below.
 | Failed | `--danger` | #DE7878 | errors and failures |
 | Usage | `--usage` | #68B8AE | progress bars and usage meters |
 
+Light theme 白底黑字 (the owner's values, one line each; a white panel on a light canvas, the borders and the ink as below):
+- Canvas `--bg-app` #F8F9FB (behind the grid cards and the decision page); panels that carry content stay white: `--bg-card` #FFFFFF, a focused project, menus (`--bg-menu` #FFFFFF).
+- Title bar and sidebar `--bg-titlebar` / `--bg-sidebar` #F7F7F8; input `--bg-input` #F7F8FA; hover `--bg-hover` #F3F5F7; selected `--bg-selected` #E9EBEF.
+- Border `--border` #E2E6EB; active border `--border-hover` #A8B7C9 (an active, hovered or focused-input control's edge, 2:1, never the keyboard focus ring); divider `--divider` #ECEDF0.
+- Text `--text-1` #20242A (also `--button-primary`); `--text-2` #626B77; `--text-3` #636B77 (4.5:1 on the canvas, hover and selected); `--text-disabled` #9AA1AB; `--focus-ring` #3C4043.
+- The one card shadow in light: a grid card under the pointer gets `0 4px 12px rgb(0 0 0 / .05)`, background and border unchanged; none while dragged, in the focus motion or in focus mode.
+
 - Hue rule: **everything is neutral grey except these seven**: Claude's brand icon, Codex's mark, succeeded, running, needs approval, failed, usage.
   There is no accent and no "key interaction" colour: a checked switch or checkbox, a picked option or tile, the active file tab,
   a toggled icon button, the guide's current dot and a spinner take `--text-1` or `--text-2`; a link is underlined. Codex's mark and
@@ -96,8 +103,8 @@ focus) overrides some tokens, shown in brackets, see below.
 - Radii: 0 for layout regions, 16 for project cards, menus and dialogs, 12 for message containers (your bubble, tool groups, code
   and error wells, file cards), composers and dropdown triggers, 8 for buttons, rows and small wells, pill for tags. Layout regions
   are separated by a colour step, a divider and spacing, not by cards.
-- No glass, wallpaper or gradients, and no tinted panels. The only shadows are the dropdown menu's and, in the grid, the white inset glow
-  that breathes on a finished card not yet seen.
+- No glass, wallpaper or gradients, and no tinted panels. The only shadows are the dropdown menu's, in the grid the white inset glow
+  that breathes on a finished card not yet seen, and, in light, the hover shadow of a grid card.
 - Dropdowns use `src/shared/Select.tsx`, never a native `<select>` (its pop-up is drawn by the OS in system blue).
 - Native GUI checks drive it with `scripts/select-helper.mjs`.
 

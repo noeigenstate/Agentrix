@@ -124,7 +124,7 @@ const t = (text, values) => translate(store?.settings.language, text, values);
 let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
-function windowBackgroundColor() { return store.settings.theme === 'light' ? '#ffffff' : '#181818'; }
+function windowBackgroundColor() { return store.settings.theme === 'light' ? '#f8f9fb' : '#181818'; }
 function updateStoreSettings(patch) {
   const theme = store.settings.theme;
   store.updateSettings(patch);
