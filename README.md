@@ -75,7 +75,7 @@ flowchart LR
 
 ### 🧭 Decide first, then dive in
 
-<img src="docs/images/decisions.jpg" alt="Decide page with project sessions and a decision card" width="100%" />
+<img src="docs/images/decisions.jpg" alt="Decide page with session statuses and a command awaiting confirmation in its source terminal" width="100%" />
 
 Agentrix opens on **Decide** by default. Select a project from the session list; when no decision is selected, a centred new-task composer shows above a short summary of that session's recent round. Type a goal, paste a screenshot or dictate, then press Enter to start. It sends to the running agent or starts the chosen local agent first; an SSH agent must already be running. The summary's Open session action opens the project. Decide · Workbench in the title bar switch at any time; Workbench is the project grid.
 
@@ -89,7 +89,7 @@ Select a decision to see its request and source. Screen-derived permission cards
 
 ### 🧩 Direct every project from one screen
 
-<img src="docs/images/overview.jpg" alt="Project grid with agent sessions" width="100%" />
+<img src="docs/images/overview.jpg" alt="Workbench grid with Codex and Claude Code sessions working, awaiting review with a white inward glow, and completed" width="100%" />
 
 Workbench cards show only terminals running Codex or Claude Code. Plain shells keep running and appear when you expand the project. Without an agent, a local card shows the launcher and an SSH card shows its empty state; if shells are running, **N terminals running · Click to expand** opens them.
 
@@ -106,7 +106,7 @@ Drag cards by their headers to reorder. The header, waiting-status action or exp
 
 ### 📖 The terminal, laid out again
 
-<img src="docs/images/reading-view.jpg" alt="Reading view with conversation, file previews and the activity pane" width="100%" />
+<img src="docs/images/reading-view.jpg" alt="Expanded Codex reading view with an image preview, title-bar Terminal/Reading switch, model route, tasks, context and usage limits" width="100%" />
 
 In an expanded project, use **Terminal | Reading** in the title bar to switch a Claude Code or Codex conversation to the **reading view**: a centred chat column with equal side margins, your messages on the right and the agent's replies on the left. Your avatar and the official agent logos fill their timeline nodes without decorative coloured rings. Replies support headings, lists, tables and code blocks with a Copy button. Commands and tool calls fold into groups with summaries and changed-file names. The latest finished round shows its status above the result. Code results show the checks run, without a changed-file list. Relevant actions appear below: open a file, view or save a picture, copy an answer, continue or retry. Saving a generated picture is unavailable over SSH; retry is available only when the agent can accept a new prompt. The box at the bottom sends to the same session.
 
