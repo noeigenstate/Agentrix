@@ -13,15 +13,23 @@
 
 /* The task being worked on, and those waiting their turn. */
 /* Size to the prompts; a long queue scrolls inside its group. */
-.activity-tasks { min-height: 0; max-height: 260px; overflow: hidden; }
+.activity-tasks { min-height: 0; max-height: 260px; overflow: hidden; margin: 0 -8px; padding: 0 8px; }
 .activity-tasks > .activity-card-title { display: flex; align-items: baseline; gap: 8px; flex: none; }
 .activity-task-count { font-size: 12px; font-weight: 400; color: var(--flow-faint); font-variant-numeric: tabular-nums; }
-.activity-prompts { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; align-content: start; gap: 12px; margin: 0; padding: 0; list-style: none; }
-.activity-prompts li { display: grid; gap: 2px; }
-.activity-prompts li p { margin: 0; font-size: 13px; line-height: 20px; color: var(--flow-ink); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.activity-prompt-state { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; color: var(--flow-faint); }
-.activity-prompts li.is-working .activity-prompt-state { font-size: 12px; font-weight: 600; color: var(--running); }
-.activity-prompts li.is-working .activity-prompt-state svg { width: 14px; height: 14px; color: var(--running); }
+/* Each task is a 32px row on a 16 | text | time grid, rows touching: the icon is the state (the spinner the only colour; a queued task an empty circle, a finished one its check),
+   the task is one line with an ellipsis, the time is quiet at the right. The hover fill reaches 8px past the text, into the group's own padding, so the left edge never moves. */
+.activity-prompts { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; align-content: start; margin: 0 -8px; padding: 0 8px; list-style: none; }
+.activity-prompts li { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; height: 32px; }
+.activity-prompts li::before { content: ''; position: absolute; inset: 0 -8px; border-radius: 8px; }
+.activity-prompts li:hover::before { background: var(--bg-hover); }
+.activity-prompts li > * { position: relative; }
+.activity-prompts li p { margin: 0; overflow: hidden; font-size: 13px; line-height: 20px; color: var(--flow-ink); text-overflow: ellipsis; white-space: nowrap; }
+.activity-prompts li time { font-size: 12px; line-height: 16px; color: var(--flow-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.activity-prompt-state { display: grid; place-items: center; width: 16px; height: 16px; color: var(--flow-faint); }
+.activity-prompt-state .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.activity-prompt-state svg { color: inherit; }
+.activity-prompts li.is-working .activity-prompt-state { color: var(--running); }
+.activity-prompts li.is-done .activity-prompt-state { color: var(--success); }
 .activity-task-quiet { min-height: 0; overflow-y: auto; margin: 0; font-size: 12px; line-height: 18px; color: var(--flow-muted); overflow-wrap: anywhere; }
 
 /* Agent › service › model, then how the model runs. */
@@ -98,8 +106,6 @@
 
 /* The task leads: a finished round reads in the primary ink with a success mark. The route, context and usage are secondary: smaller titles in the secondary ink, quieter figures,
    thin meters and a tighter stack; nothing is removed. */
-.activity-task-done { display: flex; align-items: flex-start; gap: 6px; margin: 0; font-size: 13px; line-height: 20px; color: var(--flow-ink); overflow-wrap: anywhere; }
-.activity-task-done svg { flex: none; margin-top: 3px; color: var(--success); }
 :is(.activity-route, .activity-context, .activity-usage) .activity-card-title { font-size: 13px; color: var(--flow-muted); }
 .activity-context, .activity-usage { gap: 4px; }
 .activity-context .activity-percent, .activity-context .activity-figure b, .activity-limit b, .activity-token-row dd b { color: var(--flow-muted); }

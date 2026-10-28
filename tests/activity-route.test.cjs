@@ -17,6 +17,7 @@ function activityMarkup(calls, language = 'zh', terminal = {}) {
     if (name.endsWith('.css')) return {};
     if (name === '../../shared/i18n') return { t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
     if (name === '../reading/model-name') return require('../src/features/reading/model-name.ts');
+    if (name === '../reading/useNow') return require('../src/features/reading/useNow.ts');
     if (name === '../terminal/terminal-screen') return { readScreen: () => null, subscribeScreen: () => () => {} };
     if (name === '../home/send-to-agent') return { sendToAgent: () => { throw new Error('render must not send input'); } };
     if (name === './reset-count') return require('../src/features/agents/reset-count.ts');
@@ -255,10 +256,38 @@ test('task cards display source summaries and retain the complete original only 
     { id: 'queued', text: '```js\nconst synthetic = 1;\n```', summary: '（代码）', state: 'queued' },
   ] });
   assert.match(html, /<p>Please fix the button\.<\/p>/); assert.match(html, /<p>（代码）<\/p>/);
-  assert.ok(html.includes('title="Please fix the button.\n&lt;pasted_content id=&quot;1&quot;&gt;Synthetic hidden details.&lt;/pasted_content&gt;"'));
+  assert.ok(html.includes('title="Please fix the button.\n&lt;pasted_content id=&quot;1&quot;&gt;Synthetic hidden details.&lt;/pasted_content&gt;'+String.fromCharCode(10)+'正在处理"'));
   assert.doesNotMatch(html.replace(/title="[^"]*"/g, ''), /pasted_content|Synthetic hidden details|const synthetic/);
   const completed = activityMarkup([], 'zh', { codexActivity: 'complete', task: '按钮现在可以正常点击。', taskTitle: original });
   assert.match(completed, /已完成：按钮现在可以正常点击。/); assert.ok(completed.includes('title="Please fix the button.'));
   const command = activityMarkup([], 'zh', { codexActivity: 'unknown', task: '/model', taskTitle: '<command-name>/model</command-name>' });
   assert.match(command, />\/model<\/p>/); assert.doesNotMatch(command.replace(/title="[^"]*"/g, ''), /command-name/);
+});
+
+test('each task is a 32px row: its state icon, the task on one line, a clock at the right and the state in the hover', () => {
+  const now = Date.now();
+  const html = activityMarkup([], 'zh', { prompts: [
+    { id: 'a', text: 'first task', summary: 'first task', state: 'working', at: now - 134000 },
+    { id: 'b', text: 'second task', summary: 'second task', state: 'queued', at: now - 12000 },
+    { id: 'c', text: 'no start', summary: 'no start', state: 'queued' },
+  ] });
+  assert.equal((html.match(/<time>/g) || []).length, 3, 'one row per task');
+  assert.match(html, /class="is-working" title="first task\n正在处理 · 2:1\d"/);
+  assert.match(html, /title="second task\n排队中 · 0:\d\d"/);
+  assert.ok(html.includes('title="no start\n排队中"') && html.includes('<time></time>'), 'a task with no start time shows no clock');
+  assert.match(html, /<span class="activity-prompt-state">.*?<span class="sr-only">正在处理<\/span><\/span><p>first task<\/p><time>2:1\d<\/time>/);
+  const done = activityMarkup([], 'zh', { codexActivity: 'complete', task: '按钮可以点了。', taskTitle: '原始提示', lastCompletedAt: Date.now() });
+  assert.match(done, /<li class="is-done" title="原始提示\n已完成 · \d\d:\d\d">/);
+  assert.match(done, /<p>已完成：按钮可以点了。<\/p>/);
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
+  const row = css.split(/\r?\n/).find(line => line.startsWith('.activity-prompts li {'));
+  for (const part of ['grid-template-columns: 16px minmax(0, 1fr) auto', 'column-gap: 8px', 'height: 32px']) assert.ok(row.includes(part), part);
+  assert.ok(css.includes('.activity-prompts li::before { content: \'\'; position: absolute; inset: 0 -8px; border-radius: 8px; }'), 'the hover reaches 8px past the text');
+  assert.match(css, /\.activity-prompts li p \{[^}]*text-overflow: ellipsis; white-space: nowrap/);
+  assert.match(css, /\.activity-prompts li time \{[^}]*font-size: 12px[^}]*var\(--flow-faint\)[^}]*tabular-nums/);
+});
+
+test('the clock reads m:ss and h:mm:ss', () => {
+  const { elapsedClock } = (() => { const filename = path.join(__dirname, '../src/features/agents/ActivityPane.tsx'); const source = fs.readFileSync(filename, 'utf8').split(/\r?\n/).join(String.fromCharCode(10)); const body = /export function elapsedClock[\s\S]*?\n}\n/.exec(source)[0].replace('export ', ''); return new Function(`${ts.transpileModule(body, { compilerOptions: { module: ts.ModuleKind.None } }).outputText}\nreturn { elapsedClock };`)(); })();
+  assert.deepEqual([0, 999, 9000, 134000, 3600000, 3909000, -5].map(elapsedClock), ['0:00', '0:00', '0:09', '2:14', '1:00:00', '1:05:09', '0:00']);
 });

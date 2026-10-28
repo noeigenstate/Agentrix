@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { ArrowCounterClockwise, CaretRight, CheckCircle, CircleNotch } from '@phosphor-icons/react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { ArrowCounterClockwise, CaretRight, CheckCircle, Circle, CircleNotch } from '@phosphor-icons/react';
 import type { AgentTokens, AgentUsage, ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { modelName } from '../reading/model-name';
+import { useNow } from '../reading/useNow';
 import { readScreen, subscribeScreen } from '../terminal/terminal-screen';
 import { sendToAgent } from '../home/send-to-agent';
 import { codexResetCount, codexResetsSaid } from './reset-count';
@@ -222,23 +223,46 @@ function resetTime(at: number) {
   return date.toLocaleString([], today ? { hour: '2-digit', minute: '2-digit', hour12: false } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+// How long a prompt has been going, as a clock: 2:14, or 1:05:09 past the hour.
+export function elapsedClock(ms: number) {
+  const total = Math.max(0, Math.floor(ms / 1000)), hours = Math.floor(total / 3600), minutes = Math.floor(total % 3600 / 60), seconds = String(total % 60).padStart(2, '0');
+  return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}` : `${minutes}:${seconds}`;
+}
+
+// One task as a 32px row: its state's icon, the task on one line, and the time at the right. The row's tooltip is the whole prompt and its state.
+function TaskRow({ icon, state, text, title, time, className }: { icon: ReactNode; state: string; text: string; title: string; time: string; className?: string }) {
+  return <li className={className} title={`${title}
+${state}${time ? ` · ${time}` : ''}`}>
+    <span className="activity-prompt-state">{icon}<span className="sr-only">{state}</span></span>
+    <p>{text}</p>
+    <time>{time}</time>
+  </li>;
+}
+
 // The prompts sent and not finished: the one being worked on first, then those waiting their turn. A prompt
-// leaves the list when the round that worked on it ends.
-function PromptList({ terminal }: { terminal: ProjectTerminal }) {
-  const prompts = terminal.prompts || [];
-  if (!prompts.length) {
-    const finished = terminal.codexActive && terminal.codexActivity === 'complete' && !!terminal.task;
-    const text = !terminal.codexActive ? t('还没有开始任务') : finished ? t('已完成：{task}', { task: terminal.task }) : terminal.task || t('没有待处理的提示');
-    if (finished) return <p className="activity-task-done" title={terminal.taskTitle || text}><CheckCircle size={14} weight="fill" aria-hidden="true" />{text}</p>;
-    return <p className="activity-task-quiet" title={terminal.taskTitle || text}>{text}</p>;
-  }
+// leaves the list when the round that worked on it ends. One clock ticks for the whole list.
+function PromptRows({ prompts }: { prompts: ProjectTerminal['prompts'] }) {
+  const now = useNow(Date.now);
   return <ol className="activity-prompts" aria-label={t('提示')}>
     {prompts.map(prompt => {
       const working = prompt.state === 'working';
-      return <li key={prompt.id} className={working ? 'is-working' : undefined} title={prompt.text}>
-        <span className="activity-prompt-state">{working && <CircleNotch size={20} weight="bold" className="loading-spinner" aria-hidden="true" />}{t(working ? '正在处理' : '排队中')}</span>
-        <p>{prompt.summary}</p>
-      </li>;
+      return <TaskRow key={prompt.id} className={working ? 'is-working' : undefined} state={t(working ? '正在处理' : '排队中')} text={prompt.summary} title={prompt.text} time={prompt.at ? elapsedClock(now - prompt.at) : ''}
+        icon={working ? <CircleNotch size={14} weight="bold" className="loading-spinner" aria-hidden="true" /> : <Circle size={14} aria-hidden="true" />} />;
     })}
   </ol>;
+}
+
+function PromptList({ terminal }: { terminal: ProjectTerminal }) {
+  const prompts = terminal.prompts || [];
+  if (prompts.length) return <PromptRows prompts={prompts} />;
+  const finished = terminal.codexActive && terminal.codexActivity === 'complete' && !!terminal.task;
+  if (finished) {
+    // With the queue empty only the round that just ended is left: the same row, its check and the time it ended.
+    return <ol className="activity-prompts" aria-label={t('提示')}>
+      <TaskRow className="is-done" state={t('已完成')} text={t('已完成：{task}', { task: terminal.task })} title={terminal.taskTitle || terminal.task}
+        time={terminal.lastCompletedAt ? resetTime(terminal.lastCompletedAt) : ''} icon={<CheckCircle size={14} weight="fill" aria-hidden="true" />} />
+    </ol>;
+  }
+  const text = !terminal.codexActive ? t('还没有开始任务') : terminal.task || t('没有待处理的提示');
+  return <p className="activity-task-quiet" title={terminal.taskTitle || text}>{text}</p>;
 }

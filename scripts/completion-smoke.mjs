@@ -48,6 +48,8 @@ async function launch() {
   // Codex is started by typing it at the prompt, as a user does; there is no launch button.
   await input('codex\r');
   await waitFor(async () => (await state()).codexActive, 'offline Codex fixture');
+  await page.getByRole('button', { name: '返回总览', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
 }
 try {
   await launch();
@@ -95,9 +97,11 @@ try {
   const before = await routeTop();
   await input('给登录页加上验证码。然后跑一下测试\r');
   const prompts = () => overview.locator('.activity-prompts li').evaluateAll(items => items.map(item => `${item.classList.contains('is-working') ? 'working' : 'queued'}:${item.querySelector('p').textContent}`));
-  // Each prompt shows its first sentence; the whole text is its hover title.
+  // Each prompt shows its first sentence; the hover retains the whole text before its state and clock.
   await waitFor(async () => JSON.stringify(await prompts()) === JSON.stringify(['working:first instruction', 'queued:给登录页加上验证码。']), 'prompt list shows the working and the waiting prompt');
-  assert.equal(await overview.locator('.activity-prompts li').nth(1).getAttribute('title'), '给登录页加上验证码。然后跑一下测试');
+  const queuedTitle = await overview.locator('.activity-prompts li').nth(1).getAttribute('title');
+  assert.equal(queuedTitle.slice(0, queuedTitle.lastIndexOf('\n')), '给登录页加上验证码。然后跑一下测试');
+  assert.match(queuedTitle.slice(queuedTitle.lastIndexOf('\n') + 1), /^排队中 · \d+:\d{2}(?::\d{2})?$/);
   assert.equal(await overview.locator('.activity-progress').count(), 0, 'task cards show state without an invented progress bar');
   assert.equal(await overview.locator('li.is-working .activity-prompt-state').innerText(), '正在处理');
   assert.equal(await routeTop(), before, 'a second prompt leaves the cards under the task list where they were');
