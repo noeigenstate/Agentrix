@@ -1,4 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
+// Pending reads outlive explorer mounts so remounts and FilePopup share the same IPC request.
+const pendingDirectoryReads = new Map();
 const listen = (channel, callback) => {
   const listener = (_event, data) => callback(data);
   ipcRenderer.on(channel, listener);
@@ -37,7 +39,13 @@ contextBridge.exposeInMainWorld('agentrix', {
   reorderTerminals: (projectId, ids) => ipcRenderer.invoke('workspace:reorder-terminals', projectId, ids),
   acknowledge: id => ipcRenderer.invoke('workspace:acknowledge', id),
   settings: patch => ipcRenderer.invoke('workspace:settings', patch),
-  listDirectory: (id, relativePath = '', offset = 0) => ipcRenderer.invoke('project:directory', id, relativePath, offset),
+  listDirectory: (id, relativePath = '', offset = 0) => {
+    const key = JSON.stringify([id, relativePath, offset]);
+    if (pendingDirectoryReads.has(key)) return pendingDirectoryReads.get(key);
+    const read = ipcRenderer.invoke('project:directory', id, relativePath, offset).finally(() => pendingDirectoryReads.delete(key));
+    pendingDirectoryReads.set(key, read);
+    return read;
+  },
   findFiles: (projectId, query) => ipcRenderer.invoke('project:findFiles', projectId, query),
   gitStatus: id => ipcRenderer.invoke('project:git-status', id),
   gitHistory: (id, offset = 0) => ipcRenderer.invoke('project:git-history', id, offset),
