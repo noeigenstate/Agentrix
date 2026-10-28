@@ -205,7 +205,7 @@ try {
   report.checks.push('restore original removes only the picture and returns the original number, without restarting the terminal');
   const added = await page.evaluate(id => window.agentrix.addTerminal(id), projects[0].id);
   assert.ok(added.ok);
-  await waitFor(() => panel(0).locator('.terminal-split-header').count().then(count => count === 2), 'two terminal splits');
+  await waitFor(() => panel(0).locator('.terminal-split-tools').count().then(count => count === 2), 'two terminal splits');
   await open(0); await dialog().getByRole('button', { name: '取消', exact: true }).click(); await unchanged();
   report.checks.push('editing project identity also preserves the first terminal when the card has multiple splits');
   for (const zoom of [1, 1.5, 2]) {

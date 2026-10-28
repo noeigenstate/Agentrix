@@ -58,7 +58,7 @@ try {
     await page.locator(`[data-project-id="${project.id}"]`).getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
     await sleep(600);
     const card = page.locator(`[data-project-id="${project.id}"]`);
-    if (!await card.locator('.reading-view').count()) await card.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click().catch(() => {});
+    if (!await card.locator('.reading-view').count()) await page.locator('.titlebar-tools').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click().catch(() => {});
     await sleep(2500);
     const times = [];
     for (let n = 1; n <= 6; n++) {

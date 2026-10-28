@@ -37,6 +37,13 @@ h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 .titlebar-space { flex: 1; min-width: 24px; }
 .titlebar-tools { display: flex; align-items: center; gap: 6px; margin-right: 8px; -webkit-app-region: no-drag; }
 .titlebar-tools input { -webkit-app-region: no-drag; }
+/* The terminal / reading switch of the project in focus: both modes shown in a bordered well, the one in use selected; 28px like the other title-bar controls. Narrow windows keep the icons. */
+.mode-switch { display: inline-flex; padding: 1px; gap: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); }
+.mode-switch button { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border: 0; border-radius: 8px; font: 600 12px var(--font-ui); color: var(--text-2); background: none; white-space: nowrap; }
+.mode-switch button:hover { color: var(--text-1); }
+.mode-switch button[aria-pressed="true"] { color: var(--text-1); background: var(--bg-selected); }
+.mode-switch button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+@media (max-width: 1100px) { .mode-switch button { padding: 0 8px; } .mode-switch button span { display: none; } }
 @media (max-width: 1000px) { .titlebar-tools .activity-toggle { display: none; } }
 .window-actions { flex-shrink: 0; display: flex; height: 100%; }
 .window-actions .icon-button { width: 42px; height: 100%; border-radius: 0; color: var(--text-1); }

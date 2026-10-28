@@ -95,8 +95,15 @@ test('Codex inherits its own ink, and a running node is a heavier ring with no a
     .map(([, selector, body]) => ({ selector: selector.trim(), fill: body.match(/\bfill\s*:\s*([^;]+)/)[1].trim() }));
   assert.deepEqual(fillRules, []);
   assert.match(renderToStaticMarkup(React.createElement(CodexLogo)), /fill="currentColor"/);
-  assert.match(css, /\.reading-node > \.agent-brand-codex \{ width: var\(--step-node\); height: var\(--step-node\); \}/);
+  // The marks fill their node like the user's picture does: the Blossom's canvas (half clear space) is larger than the node, the Claude spark nearly its size.
+  assert.match(css, /\.reading-node > \.agent-brand-codex \{ width: 44px; height: 44px; \}/);
+  assert.match(css, /\.reading-node > \.agent-brand-claude \{ width: 26px; height: 26px; \}/);
+  assert.match(css, /\.reading-node > \.user-avatar \{ width: 100%; height: 100%; \}/);
   assert.doesNotMatch(css, /reading-spark|spark-bloom|agent-brand-[^{]+\{[^}]*\b(?:animation|transform):/);
-  assert.match(css, /\.reading-step\.is-running \.reading-node \{ box-shadow: inset 0 0 0 2px var\(--node-tint\); \}/);
+  // Only a generic step's node has a ring (heavier while it runs); you and the agents have none, except in the danger colour once failed.
+  assert.match(css, /\.reading-step:not\(\.is-user, \.is-claude, \.is-codex\) \.reading-node \{ box-shadow: inset 0 0 0 1\.5px var\(--node-tint\); \}/);
+  assert.match(css, /\.reading-step\.is-running:not\(\.is-user, \.is-claude, \.is-codex\) \.reading-node \{ box-shadow: inset 0 0 0 2px var\(--node-tint\); \}/);
+  assert.match(css, /\.reading-step\.is-failed \.reading-node \{ --node-tint: var\(--flow-fail\); box-shadow: inset 0 0 0 2px var\(--node-tint\); \}/);
+  assert.doesNotMatch(/\.reading-node \{[^}]*\}/.exec(css)[0], /box-shadow/, 'the base node has no ring');
   assert.doesNotMatch(css, /@keyframes|animation:/);
 });

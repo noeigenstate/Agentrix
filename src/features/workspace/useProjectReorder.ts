@@ -21,12 +21,12 @@ const PROJECTS: ReorderTarget = {
   },
   area: container => container.closest<HTMLElement>('.grid-area')!,
 };
-// A project's terminal splits, picked up by their title bar; they scroll in their own area.
+// A project's terminal splits, picked up by the grip in their corner; they scroll in their own area.
 export const TERMINAL_SPLITS: ReorderTarget = {
   slots: ':scope > [data-terminal-slot]', slotId: slot => slot.dataset.terminalSlot!,
   item: target => {
-    const header = target.closest<HTMLElement>('.terminal-split-header'), split = header?.closest<HTMLElement>('[data-terminal-id]');
-    return header && split && !target.closest('button') ? { element: split, id: split.dataset.terminalId! } : null;
+    const grip = target.closest<HTMLElement>('.terminal-split-grip'), split = grip?.closest<HTMLElement>('[data-terminal-id]');
+    return grip && split ? { element: split, id: split.dataset.terminalId! } : null;
   },
   area: container => container,
 };

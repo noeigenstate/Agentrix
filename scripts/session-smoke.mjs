@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
+import { setMode } from './mode-switch.mjs';
 
 const require = createRequire(import.meta.url);
 const { createSSHFixture } = require('../tests/helpers/ssh-fixture.cjs');
@@ -124,9 +125,9 @@ try {
   await launch(); await verifyResume();
   console.log('PASS: real application restart retains and restores coding state');
   const panel = page.locator(`[data-project-id="${projects[0].id}"]`);
-  // A running agent's conversation shows as a document by default; the header toggle shows the terminal itself.
+  // A running agent's conversation shows as a document by default; the title-bar switch shows the terminal itself.
   await panel.locator('.reading-view').waitFor();
-  await panel.locator('button[title="切换到终端"]').click();
+  await setMode(page, projects[0].name, 'terminal');
   assert.equal(await page.locator('.focus-mode').count(), 0, 'switching to the terminal keeps the small card');
   await waitFor(async () => panel.locator('.xterm-rows').innerText().then(text => text.includes('RESTORE_FIXTURE_READY')), 'rendered terminal text');
 

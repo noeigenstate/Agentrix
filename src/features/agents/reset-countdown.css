@@ -1,0 +1,23 @@
+/* The countdown before a limit reset: the whole window veiled at 72% of the canvas colour (over the title bar too, which no longer drags), a ring of 240px with the seconds in it,
+   its text, a focused 32px cancel and the hint, all neutral grey; the last seconds take the warning colour. One tick a second; the ring drains linearly between ticks. */
+.reset-countdown { position: fixed; inset: 0; z-index: 400; display: grid; place-items: center; background: color-mix(in srgb, var(--bg-app) 72%, transparent); -webkit-app-region: no-drag; }
+.reset-countdown-stack { display: grid; justify-items: center; gap: 24px; }
+.reset-countdown-ring { position: relative; display: grid; place-items: center; width: 240px; height: 240px; --ring-ink: var(--text-1); }
+.reset-countdown.is-warning .reset-countdown-ring { --ring-ink: var(--warning); }
+.reset-countdown-ring svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+.reset-countdown-track, .reset-countdown-arc { fill: none; stroke-width: 6; }
+.reset-countdown-track { stroke: var(--border); }
+.reset-countdown-arc { stroke: var(--ring-ink); stroke-linecap: round; stroke-dasharray: 628.32; stroke-dashoffset: var(--ring-now); transition: stroke-dashoffset 1s linear; }
+.reset-countdown.is-draining .reset-countdown-arc { stroke-dashoffset: var(--ring-next); }
+.reset-countdown-number { font: 600 104px/1 var(--font-ui); letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--ring-ink); }
+.reset-countdown-unit { position: absolute; bottom: 52px; font: 400 14px/20px var(--font-ui); color: var(--text-2); }
+.reset-countdown-title { margin: 0; font: 600 16px/24px var(--font-ui); color: var(--text-1); }
+.reset-countdown-cancel { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); color: var(--text-1); font: 600 14px/20px var(--font-ui); cursor: pointer; }
+.reset-countdown-cancel:hover { background: var(--bg-hover); }
+.reset-countdown-cancel:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.reset-countdown-hint { display: flex; align-items: center; gap: 8px; font: 400 12px/16px var(--font-ui); color: var(--text-3); }
+.reset-countdown-hint kbd { padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-input); font: 600 11px/18px var(--font-ui); color: var(--text-2); }
+.reset-countdown-announce { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* Without motion (the setting off, or the system's reduced motion) the ring steps with the number instead of draining toward the next one. */
+:root[data-motion="off"] .reset-countdown.is-draining .reset-countdown-arc { stroke-dashoffset: var(--ring-now); }
+@media (prefers-reduced-motion: reduce) { :root[data-motion="system"] .reset-countdown-arc { transition: none; } :root[data-motion="system"] .reset-countdown.is-draining .reset-countdown-arc { stroke-dashoffset: var(--ring-now); } }

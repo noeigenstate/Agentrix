@@ -190,9 +190,9 @@ for (const agent of agents) {
     check(agent, 'leave and return', 'returned to the reading view', await composer.isVisible().catch(() => false));
 
     await terminal.locator('.reading-scroll').evaluate(node => { node.scrollTop = 0; });
-    await card.locator('.panel-header').getByRole('button', { name: '切换到终端', exact: true }).click();
+    await page.locator('.titlebar-tools').getByRole('button', { name: '切换到终端', exact: true }).click();
     await sleep(1500);
-    await card.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
+    await page.locator('.titlebar-tools').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
     await composer.waitFor({ state: 'visible' }); await sleep(1500);
     check(agent, 'switch views', 'conversation kept after switching', (await readingText()).includes('MARK-4'));
     check(agent, 'switch views', 'back on the latest message', await terminal.locator('.reading-scroll').evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight < 40));

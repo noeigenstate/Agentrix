@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
+import { setMode } from './mode-switch.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -70,8 +71,7 @@ async function prompt(name, title) {
   await waitFor(async () => (await rows()).some(row => title.test(row)), `${name}: the prompt`, 160);
   await sleep(1200);
   await fs.writeFile(path.join(output, `rows-${name}.json`), JSON.stringify(await rows(), null, 1));
-  const toReading = card.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true });
-  if (await toReading.count()) await toReading.first().click();
+  if (!await card.locator('.reading-view').count()) await setMode(page, project.name, 'reading');
   const choice = card.locator('.reading-choice');
   await choice.waitFor({ timeout: 5000 }).catch(() => {});
   assert.ok(await choice.count(), `${name}: the reading view shows the prompt as a choice`);

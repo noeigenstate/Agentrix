@@ -24,7 +24,7 @@ try {
   for (const [agent, file] of [['codex', 'codex-question'], ['claude', 'claude-question-multi'], ['claude', 'claude-question-review'], ['claude', 'claude-question-typed']]) {
     await write("function global:prompt { 'question-fixture> ' }; Send-AgentrixEvent 'codex-started' -Agent '" + agent + "'\r");
     await waitFor(async () => (await state()).projects[0].codexActive && (await state()).projects[0].agent === agent, 'authenticated question fixture');
-    const raw = page.locator('.panel-header').getByRole('button', { name: '切换到终端', exact: true }); if (await raw.isVisible()) await raw.click();
+    const raw = page.locator('.titlebar-tools').getByRole('button', { name: '切换到终端', exact: true }); if (await raw.isVisible()) await raw.click();
     const content = (await fs.readFile(path.join(root, 'tests/fixtures/questions', file + '.txt'), 'utf8')).replace(/\r?\n/g, '\r\n'), encoded = Buffer.from(content).toString('base64');
     const release = path.join(output, file + '.done').replaceAll("'", "''");
     await write("Clear-Host; [Console]::Write([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encoded + "'))); while (-not (Test-Path -LiteralPath '" + release + "')) { Start-Sleep -Milliseconds 50 }\r");

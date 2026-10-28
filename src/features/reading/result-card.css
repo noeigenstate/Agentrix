@@ -19,7 +19,7 @@
 .result-menu { position: fixed; z-index: 500; width: 224px; }
 .result-menu button { white-space: nowrap; }
 
-/* Level 2 of a round that wrote files: the files and the checks it ran, plain rows. */
+/* Level 2 of a round that wrote files: the checks it ran, plain rows. */
 .result-evidence { display: flex; flex-direction: column; gap: 12px; }
 .result-list-head { margin: 0 0 4px; font: 400 calc(12px * var(--reading-text))/18px var(--font-ui); color: var(--text-2); }
 .result-list { margin: 0; padding: 0; list-style: none; }
@@ -27,12 +27,9 @@
 .result-list li > svg { color: var(--text-3); }
 .result-list li > svg.result-check { color: var(--success); }
 .result-list li.is-failed > svg.result-check { color: var(--danger); }
-.result-file { min-width: 0; padding: 0; border: 0; background: none; font: 400 calc(13px * var(--reading-text))/1.4 var(--font-ui); color: var(--text-1); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-.result-file:hover { text-decoration: underline; }
 .result-check-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-1); }
 .result-check-name small { margin-left: 8px; font-size: calc(12px * var(--reading-text)); color: var(--text-3); }
 .result-state-text { font-size: calc(12px * var(--reading-text)); color: var(--text-2); white-space: nowrap; }
-.result-more-files { margin: 0 0 0 24px; font-size: calc(12px * var(--reading-text)); color: var(--text-3); }
 
 /* Level 3: what next. Secondary buttons (32 high, radius 8, 14px), icon-only with a tooltip where the row cannot hold their words (240px for two, 340px for three). */
 .result-actions { container-type: inline-size; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }

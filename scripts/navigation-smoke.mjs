@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
 import { waitFor, terminalsSettled } from './wait.mjs';
 import { chooseFromAppMenu } from './app-menu-helper.mjs';
+import { setMode } from './mode-switch.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { createSSHFixture } = require('../tests/helpers/ssh-fixture.cjs');
@@ -95,7 +96,7 @@ try {
     connection.receive({ type: 'event', event: { ...event, type: 'codex-started', sequence: event.sequence + 1, agent: 'claude', cwd: connection.project.path } });
   });
   await waitFor(async () => (await state()).projects.find(project => project.id === remote.id).codexActive, 'visible SSH fixture agent');
-  await second.getByRole('button', { name: '切换到终端', exact: true }).click();
+  await page.locator('.titlebar-tools').getByRole('button', { name: '切换到终端', exact: true }).click();
   await page.getByRole('button', { name: '返回总览', exact: true }).click(); await settled(false);
   // Cycle all four cards, including a live reading view whose hidden xterm cannot take focus.
   for (const project of [legacy, closed]) {
@@ -104,7 +105,7 @@ try {
     await waitFor(async () => (await state()).projects.find(item => item.id === project.id).shellReady, 'navigation shell ready');
     await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'AGENT_FIXTURE> ' }; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), terminalId);
     await waitFor(async () => (await state()).projects.find(item => item.id === project.id).codexActive, 'visible navigation fixture agent');
-    await page.locator(`[data-project-id="${project.id}"]`).getByRole('button', { name: '切换到终端', exact: true }).click();
+    await setMode(page, project.name, 'terminal');
   }
   const hiddenShell = (await state()).projects.find(project => project.id === local.id).terminals[0].id;
   const agentId = (await page.evaluate(id => window.agentrix.addTerminal(id), local.id)).value;
@@ -115,9 +116,9 @@ try {
   await agent.locator('.reading-composer textarea').waitFor();
   assert.equal(await first.locator(`[data-terminal-id="${hiddenShell}"]`).isVisible(), false, 'the ordinary shell stays hidden beside the visible reading agent');
   assert.equal(await first.locator('.terminal-split:visible').count(), 1);
-  await first.getByRole('button', { name: '切换到终端', exact: true }).click();
-  await waitFor(async () => !await agent.locator('.reading-view').count(), 'the header toggles the visible agent rather than the hidden shell');
-  await first.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
+  await setMode(page, local.name, 'terminal', { terminalId: agentId });
+  await waitFor(async () => !await agent.locator('.reading-view').count(), 'the title-bar switch toggles the picked visible agent rather than the hidden shell');
+  await setMode(page, local.name, 'reading', { terminalId: agentId });
   await agent.locator('.reading-composer textarea').waitFor();
   const order = [legacy, closed, remote, local], hud = page.locator('.project-switch-hud');
   assert.equal(await hud.getAttribute('aria-live'), 'polite');

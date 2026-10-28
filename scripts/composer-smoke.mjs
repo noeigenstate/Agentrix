@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
+import { setMode } from './mode-switch.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = await testRun('composer'), profile = path.join(output, 'profile'), home = path.join(output, 'codex-home');
@@ -56,10 +57,9 @@ try {
   await waitFor(async () => (await state()).projects[0].terminals.length === 2 && (await state()).projects[0].terminals.every(terminal => terminal.shellReady), 'independent split ready');
   controlId = (await state()).projects[0].terminals[1].id;
   const terminal = page.locator(`[data-terminal-id="${projects[0].id}"]`), control = page.locator(`[data-terminal-id="${controlId}"]`);
-  // The card header's toggle acts on the split in use: select the split, then switch it to the raw terminal.
+  // The title-bar switch acts on the split in use: select the split, then switch it to the raw terminal.
   const showTerminal = async split => {
-    await split.locator('.reading-scroll').click();
-    await page.locator(`[data-project-id="${projects[0].id}"] .panel-header`).getByRole('button', { name: '切换到终端', exact: true }).click();
+    await setMode(page, projects[0].name, 'terminal', { terminalId: await split.getAttribute('data-terminal-id') });
     await split.locator('.reading-view').waitFor({ state: 'detached' });
   };
   const fixture = '\x1b[48;2;30;30;30mDARK_SURFACE\x1b[0m\r\n\x1b[48;2;69;31;29mDIFF_RED\x1b[0m\r\n\x1b[48;2;29;60;35mDIFF_GREEN\x1b[0m\r\n\x1b[41mANSI_RED\x1b[0m\r\n\x1b[7mINVERSE\x1b[0m\r\n';
@@ -121,7 +121,7 @@ try {
   await waitFor(async () => terminal.locator('.xterm-rows').innerText().then(text => text.includes('Ask Codex to do anything')), 'cleared draft restores placeholder');
   await composerSample(terminal, 'cleared');
   await terminal.locator('.xterm').evaluate(node => { globalThis.composerXterm = node; });
-  await first.locator('.panel-header').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
+  await setMode(page, projects[0].name, 'reading');
   const reader = terminal.locator('.reading-composer textarea'), popup = terminal.locator('.reading-terminal-popup');
   await reader.fill('/status'); await reader.press('Enter'); await popup.waitFor();
   assert.ok(await popup.locator('.xterm').evaluate(node => node === globalThis.composerXterm), 'the reading popup moves the real terminal');
@@ -145,7 +145,7 @@ try {
   await reader.click();
   await page.evaluate(id => window.dispatchEvent(new CustomEvent('agentrix:command', { detail: { terminalId: id, text: '/status' }, cancelable: true })), projects[0].id);
   await popup.waitFor();
-  await first.locator('.panel-header').getByRole('button', { name: '切换到终端', exact: true }).click();
+  await page.locator('.titlebar-tools').getByRole('button', { name: '切换到终端', exact: true }).click();
   await popup.waitFor({ state: 'detached' });
   assert.ok(await terminal.locator('.terminal-host > .xterm').evaluate(node => node === globalThis.composerXterm), 'leaving reading restores the same terminal');
   await page.getByRole('button', { name: '返回总览', exact: true }).click();

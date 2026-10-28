@@ -1,32 +1,14 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ArrowCounterClockwise, Play, Terminal as TerminalIcon, X } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, DotsSixVertical, Play, Terminal as TerminalIcon, X } from '@phosphor-icons/react';
 import { AgentLauncher } from './AgentLauncher';
 import { TerminalPane } from './TerminalPane';
-import { visibleTerminals } from './terminal-visibility.ts';
+import { terminalInUse, visibleTerminals } from './terminal-visibility.ts';
 import { ReadingView } from '../reading/ReadingView';
 import { readingShown, setReading, syncReading, useTerminalChoice } from '../reading/reading-mode';
-import { VoiceButton } from '../voice/VoiceButton';
 import { TERMINAL_SPLITS, useReorder } from '../workspace/useProjectReorder';
-import type { Project, ProjectTerminal, Result } from '../../shared/types';
+import type { Project, Result } from '../../shared/types';
 import { t } from '../../shared/i18n';
 
-function label(terminal: ProjectTerminal) {
-  if (terminal.error) return t('需要检查');
-  if (terminal.codexActive) {
-    switch (terminal.codexActivity) {
-      case 'working': return t('正在处理');
-      case 'complete': return t('本轮已完成');
-      case 'interrupted': return t('已中断');
-      default: return t('{agent} 会话中', { agent: terminal.agent === 'claude' ? 'Claude' : 'Codex' });
-    }
-  }
-  switch (terminal.status) {
-    case 'starting': return t('正在启动');
-    case 'shell': return t('终端就绪');
-    case 'exited': return t('已退出');
-    default: return t('尚未启动');
-  }
-}
 
 export function ProjectTerminals({ project, focused, fontSize, activeId, setActiveId, onExpand, onAction, onError, onOpenLink }: {
   project: Project; focused: boolean; fontSize: number; activeId: string | null; setActiveId: (id: string) => void; onExpand: () => void;
@@ -41,7 +23,7 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
   const multiple = visible.length > 1;
   const columns = Math.min(Math.max(1, Math.ceil(Math.sqrt(visible.length))), width < 600 ? 1 : width < 1150 ? 2 : 3);
   const rows = Math.max(1, Math.ceil(visible.length / columns));
-  const selected = visible.find(item => item.id === activeId)?.id ?? visible[0]?.id ?? null;
+  const selected = terminalInUse(visible, activeId)?.id ?? null;
   const launcherTerminal = terminals.find(terminal => !terminal.sessionId || terminal.status === 'exited') ?? terminals[0];
   const runningCount = terminals.filter(terminal => terminal.sessionId && terminal.status !== 'exited' && terminal.status !== 'stopped').length;
   const openTerminal = (id: string) => { setActiveId(id); if (!focused) onExpand(); };
@@ -52,7 +34,7 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
     const observer = new ResizeObserver(() => setWidth(node.clientWidth));
     observer.observe(node); return () => observer.disconnect();
   }, []);
-  // The splits are dragged by their title bar to another place, the way project cards are on the grid; each keeps its
+  // The splits are dragged by their grip to another place, the way project cards are on the grid; each keeps its
   // terminal, and the order is saved for the project.
   const reorder = useReorder(multiple, project.id, terminals.map(terminal => terminal.id), ids => onAction(window.agentrix.reorderTerminals(project.id, ids)), TERMINAL_SPLITS);
   const records = new Map(terminals.map(terminal => [terminal.id, terminal]));
@@ -72,10 +54,12 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
       const name = `${project.name} ${terminal.title}`;
       return <div key={terminal.id} className={`terminal-slot ${reorder.drag?.id === terminal.id ? 'drag-placeholder' : ''}`} data-terminal-slot={terminal.id} style={{ display: visibleIds.has(terminal.id) ? undefined : 'none' }}>
       <section className={`terminal-split ${selected === terminal.id ? 'is-active-terminal' : ''} ${reorder.drag?.id === terminal.id ? 'drag-source' : ''} ${reorder.drag?.targetId === terminal.id ? 'drop-target' : ''}`} data-terminal-id={terminal.id} data-session-id={terminal.sessionId || ''} data-codex-active={terminal.codexActive} aria-label={name} onPointerDownCapture={() => setActiveId(terminal.id)} onFocusCapture={() => setActiveId(terminal.id)}>
-        {multiple && <header className="terminal-split-header"><span>{terminal.title}</span><span className={`split-status ${terminal.codexActivity === 'working' ? 'working' : terminal.codexActivity === 'complete' ? 'complete' : ''}`}>{label(terminal)}</span>
+        {/* Only with several splits, and only while the pointer or the keyboard is in one: its drag grip (splits are reordered by it), restart and close, in its corner. */}
+        {multiple && <div className="terminal-split-tools">
+          <span className="terminal-split-grip" title={t('拖动调整顺序')} aria-hidden="true"><DotsSixVertical size={14} /></span>
           <button className="icon-button" title={t('重启此终端')} aria-label={t('重启 {name}', { name })} onClick={() => void onAction(window.agentrix.restartTerminal(terminal.id))}><ArrowCounterClockwise size={13} /></button>
           <button className="icon-button" title={t('关闭此终端')} aria-label={t('关闭 {name}', { name })} onClick={() => void onAction(window.agentrix.closeTerminal(terminal.id))}><X size={13} /></button>
-        </header>}
+        </div>}
         <div className="terminal-split-body" data-reading={reading || !!terminal.agentStarting}>
           {reading && <ReadingView projectId={project.id} terminal={terminal} remote={project.kind === 'ssh'} autoFocus={focused && selected === terminal.id} active={selected === terminal.id} onShowTerminal={() => setReading(terminal.id, false)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />}
           {terminal.sessionId ? <TerminalPane id={terminal.id} sessionId={terminal.sessionId} fontSize={fontSize} focused={focused && selected === terminal.id && !reading && !terminal.agentStarting} onError={onError} onOpenLink={(_id, target) => onOpenLink(project.id, target)} remote={project.kind === 'ssh'} />
@@ -83,11 +67,7 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
             : project.kind !== 'ssh' ? <AgentLauncher terminalId={terminal.id} projectId={project.id} onAction={onAction} onOpenTerminal={openTerminal} />
             : sshEmpty(terminal.id)}
         </div>
-        {multiple && <footer className="terminal-split-footer"><span>{terminal.error ? t(terminal.error) : project.kind === 'ssh' ? 'SSH' : terminal.shell === 'cmd' ? t('命令提示符') : terminal.shell === 'zsh' ? 'zsh' : terminal.shell === 'bash' ? 'Bash' : 'PowerShell'}</span><div>
-          <VoiceButton terminalId={terminal.id} sessionId={terminal.sessionId} name={name} size={13} onError={onError} />
-          {stopped && terminal.sessionId && <button className="text-button" onClick={() => void onAction(window.agentrix.startTerminal(terminal.id))}>{t('重新启动')}</button>}
-          {terminal.codexActive && <span className="session-label">{terminal.agent === 'claude' ? 'CLAUDE' : 'CODEX'}</span>}
-        </div></footer>}
+        {multiple && stopped && terminal.sessionId && <button className="button secondary small terminal-split-restart" onClick={() => void onAction(window.agentrix.startTerminal(terminal.id))}>{t('重新启动')}</button>}
       </section></div>;
     })}
     {!focused && !visible.length && (project.kind === 'ssh' ? sshEmpty(launcherTerminal.id, runningCount)

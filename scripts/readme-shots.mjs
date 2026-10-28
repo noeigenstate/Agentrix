@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
+import { setMode } from './mode-switch.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -148,7 +149,7 @@ try {
   await rollout(5, [meta(5), event('task_started', { turn_id: 't5' }), message('user', 'u5', '清理 db-01 30 天前的归档日志'), message('agent', 'a5', '先确认归档目录的大小，再删掉 30 天前的文件。')]);
   await waitFor(async () => (await state(5)).terminals?.[0]?.sessionId || (await state(5)).codexActivity === 'working', 'ops session');
   // The docs site's Claude Code has no transcript in this demo: its card shows the terminal.
-  await panel(3).locator('.panel-header').getByRole('button', { name: '切换到终端', exact: true }).click();
+  await setMode(page, projects[3].name, 'terminal');
   await page.evaluate(id => window.agentrix.acknowledge(id), projects[2].id);
   await waitFor(async () => (await state(2)).unread === 0, 'dashboard viewed');
   await page.evaluate(() => document.activeElement?.blur()); await page.mouse.move(800, 2);

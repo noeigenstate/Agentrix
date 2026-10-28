@@ -83,12 +83,14 @@ try {
   const text = selector => pane.locator(selector).evaluateAll(nodes => nodes.map(node => node.textContent.replace(/\s+/g, ' ').trim()));
   await waitFor(async () => (await text('.activity-route-steps li')).join(' > ') === 'Codex > OpenAI > GPT-6.1-Sol', 'the route names the agent, the service and the model');
   assert.deepEqual(await text('.activity-route .activity-note'), ['思考 high'], 'the route says how the model runs');
-  await waitFor(async () => (await text('.activity-context .activity-figure')).join() === '314k / 828k tokens', 'the context shows how full the window is');
-  assert.deepEqual(await text('.activity-context .activity-percent'), ['38%']);
-  assert.deepEqual(await text('.activity-limit > span:first-child'), ['5 小时额度', '每周额度'], 'the plan windows are named by their length');
+  await waitFor(async () => (await text('.activity-context .activity-metric > small')).join() === '共 828k tokens · 还可容纳 514k', 'the context shows how full the window is');
+  assert.deepEqual(await text('.activity-context .activity-metric-label'), ['上下文长度'], 'the context title is the label of its meter line');
+  assert.deepEqual(await text('.activity-context .activity-metric > b'), ['38%']);
+  assert.deepEqual(await text('.activity-limit > .activity-metric-label'), ['5 小时额度', '每周额度'], 'the plan windows are named by their length');
   assert.deepEqual(await text('.activity-limit > b'), ['34%', '92%']);
-  assert.deepEqual(await text('.activity-token-row dt'), ['本轮', '本次对话']);
-  assert.deepEqual(await text('.activity-token-row small'), ['输入 320k · 缓存命中 91% · 输出 4.2k', '输入 320k · 缓存命中 91% · 输出 4.2k']);
+  assert.deepEqual(await pane.locator('.activity-limit').evaluateAll(nodes => nodes.map(node => node.classList.contains('is-warn'))), [false, true], 'only the window from 90% takes the warning colour');
+  assert.deepEqual(await text('.activity-usage .activity-tokens > .activity-metric-label'), ['本轮', '本次对话']);
+  assert.deepEqual(await text('.activity-usage .activity-tokens > small'), ['输入 320k · 缓存命中 91% · 输出 4.2k', '输入 320k · 缓存命中 91% · 输出 4.2k']);
   // The overview lists the prompts: the one being worked on, then one sent while it works. The card's size is fixed:
   // more prompts never push the model route and the usage down.
   // Measured once the panel has finished opening: while it flies in it is still scaled a little, every top a pixel off.
@@ -105,9 +107,9 @@ try {
   assert.equal(await overview.locator('.activity-progress').count(), 0, 'task cards show state without an invented progress bar');
   assert.equal(await overview.locator('li.is-working .activity-prompt-state').innerText(), '正在处理');
   assert.equal(await routeTop(), before, 'a second prompt leaves the cards under the task list where they were');
-  assert.deepEqual(await text('.activity-task-count'), ['2'], 'the title counts the prompts');
+  assert.deepEqual(await text('.activity-tasks .activity-count'), ['2'], 'the title counts the prompts');
   await page.waitForFunction(() => !document.querySelector('[data-focus-motion]')); await page.screenshot({ path: path.join(output, 'activity-pane.png') });
-  // While Codex runs, its conversation shows as a document by default; the header toggle shows the terminal.
+  // While Codex runs, its conversation shows as a document by default; the title-bar switch shows the terminal.
   const reading = page.locator('.project-panel .reading-view');
   assert.ok(await reading.isVisible(), 'the reading view is the default while the agent runs');
   // An image pasted into the message box goes to Codex on its own paste key and is announced above the box.
@@ -121,11 +123,11 @@ try {
   await page.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click(); await reading.waitFor();
   // Each count Codex writes updates the figures.
   await fs.appendFile(transcript, tokens(used(400000, 360000, 5000), used(80000, 70000, 800)));
-  await waitFor(async () => (await text('.activity-token-row dd')).join() === '405k tokens,405k tokens', 'a later count updates the tokens');
-  assert.deepEqual(await text('.activity-context .activity-figure'), ['81k / 828k tokens']);
+  await waitFor(async () => (await text('.activity-usage .activity-tokens > small')).join() === '输入 400k · 缓存命中 90% · 输出 5k,输入 400k · 缓存命中 90% · 输出 5k', 'a later count updates the tokens');
+  assert.deepEqual(await text('.activity-context .activity-metric > small'), ['共 828k tokens · 还可容纳 748k']);
   const overflow = await pane.evaluate(node => {
     const right = node.getBoundingClientRect().right + 1;
-    return [...node.querySelectorAll('.activity-card, .activity-prompts, .activity-route-steps li, .activity-limit, .activity-token-row')].filter(item => item.getBoundingClientRect().right > right).map(item => item.className);
+    return [...node.querySelectorAll('.activity-card, .activity-prompts, .activity-route-steps li, .activity-metric, .activity-call-rows li')].filter(item => item.getBoundingClientRect().right > right).map(item => item.className);
   });
   assert.deepEqual(overflow, [], 'nothing in the activity pane reaches past its edge');
   await page.getByRole('button', { name: '隐藏活动栏', exact: true }).click(); await waitFor(async () => !await pane.count(), 'activity pane can be hidden');

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowsOutSimple, Play, Plus, Terminal as TerminalIcon, DotsThree, GitBranch, X, FolderOpen, ArrowCounterClockwise, Info, Globe, Article, ImageSquare, Microphone } from '@phosphor-icons/react';
+import { ArrowsOutSimple, Play, Plus, DotsThree, GitBranch, X, FolderOpen, ArrowCounterClockwise, Info, Globe, ImageSquare, Microphone } from '@phosphor-icons/react';
 import type { Project, Result } from '../../shared/types';
 import { ProjectTerminals } from '../terminal/ProjectTerminals';
-import { visibleTerminals } from '../terminal/terminal-visibility.ts';
+import { terminalInUse, visibleTerminals } from '../terminal/terminal-visibility.ts';
+import { setActiveTerminal, useActiveTerminal } from '../terminal/active-terminal';
 import { ActivityPane } from '../agents/ActivityPane';
-import { readingShown, setReading, useTerminalChoice } from '../reading/reading-mode';
 import { toggleDictation, useVoice } from '../voice/voice-input';
 import { t } from '../../shared/i18n';
 import { shortcut } from '../shortcuts/shortcuts';
@@ -47,16 +47,16 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
   const [menuOpen, setMenuOpen] = useState(false);
   const [imageOpen, setImageOpen] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
-  const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
+  const activeTerminalId = useActiveTerminal(project.id);
   const terminals = visibleTerminals(project.terminals, focused);
   const first = terminals[0];
-  const currentTerminal = terminals.find(item => item.id === activeTerminalId) || first;
+  const currentTerminal = terminalInUse(terminals, activeTerminalId);
   const multiple = terminals.length > 1;
   // A narrow window hides the pane in CSS; only its title-bar toggle hides these actions.
   const showHeaderActions = !focused || activityOpen;
   const hasTerminal = !!first?.sessionId;
   const stopped = first?.status === 'stopped' || first?.status === 'exited';
-  const addTerminal = async () => { const id = await onAction(api.addTerminal(project.id)); if (id) { setActiveTerminalId(id); if (!focused) onFocus(project.id); } };
+  const addTerminal = async () => { const id = await onAction(api.addTerminal(project.id)); if (id) { setActiveTerminal(project.id, id); if (!focused) onFocus(project.id); } };
   const completionAge = project.lastCompletedAt === null ? Infinity : Date.now() - project.lastCompletedAt;
   const working = project.codexActive && project.codexActivity === 'working';
   const freshCompletion = !!project.unread && !working && completionAge >= 0 && completionAge < 9000;
@@ -76,9 +76,6 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
   }, [menuOpen, showHeaderActions]);
   const action = (callback: () => void) => { setMenuOpen(false); callback(); };
   const showActivity = focused && activityOpen;
-  // Reading view or raw terminal, for the terminal in use.
-  const raw = useTerminalChoice();
-  const readingOn = !!currentTerminal && readingShown(currentTerminal, raw);
   const recording = useVoice().recording === currentTerminal?.id;
   return <article
     className={`project-panel ${showActivity ? 'has-activity' : ''} ${project.unread && !working ? 'has-unread' : ''} ${freshCompletion ? 'attention-active' : ''} ${working ? 'is-working' : ''} ${roundComplete ? 'round-complete' : ''} ${focused ? 'is-focused' : ''} ${navTarget ? 'is-nav-target' : ''} ${project.error ? 'has-error' : ''} ${dragging ? 'drag-source' : ''} ${dropTarget ? 'drop-target' : ''}`}
@@ -104,13 +101,12 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
         ? <button type="button" className={`${badgeClass} status-button`} title={status} onClick={() => onFocus(project.id)} aria-label={t('查看 {name} 的完成结果', { name: project.name })}>{badge}</button>
         : <span className={badgeClass} title={status}>{badge}</span>)}
       {!multiple && stopped && hasTerminal && <button className="text-button panel-action" aria-label={t('重新启动')} onClick={() => onAction(api.startTerminal(first.id))}><Play size={12} weight="fill" /><span>{t('重启')}</span></button>}
-      {showHeaderActions && currentTerminal?.sessionId && currentTerminal.codexActive && <IconButton label={readingOn ? t('切换到终端') : t('阅读视图：按文档排版显示对话')} className={readingOn ? 'is-active' : ''} onClick={() => setReading(currentTerminal.id, !readingOn)}>{readingOn ? <TerminalIcon size={16} /> : <Article size={16} />}</IconButton>}
       {showHeaderActions && <div className="panel-menu-anchor" ref={menu}>
         <IconButton label={t('{name} 的更多操作', { name: project.name })} onClick={() => setMenuOpen(!menuOpen)}><DotsThree size={20} weight="bold" /></IconButton>
         {menuOpen && <div className="dropdown panel-menu" role="menu">
           {!focused && <button role="menuitem" onClick={() => action(() => onFocus(project.id))}><ArrowsOutSimple size={16} />{t('全屏查看')}</button>}
           {/* While it records, the microphone over the card shows it; choosing this again inserts what was said. */}
-          {!multiple && currentTerminal && <button role="menuitem" onClick={() => action(() => void toggleDictation(currentTerminal.id, currentTerminal.sessionId, onError, project.name))}><Microphone size={16} />{recording ? t('结束录音并插入') : t('语音输入')}<span className="menu-shortcut" aria-hidden="true">{shortcut('voice')}</span></button>}
+          {currentTerminal && <button role="menuitem" onClick={() => action(() => void toggleDictation(currentTerminal.id, currentTerminal.sessionId, onError, project.name))}><Microphone size={16} />{recording ? t('结束录音并插入') : t('语音输入')}<span className="menu-shortcut" aria-hidden="true">{shortcut('voice')}</span></button>}
           <button role="menuitem" onClick={() => action(() => void addTerminal())}><Plus size={16} />{t('新建终端并分屏')}<span className="menu-shortcut" aria-hidden="true">{shortcut('newTerminal')}</span></button>
           <button role="menuitem" onClick={() => action(() => onRevealProject(project.id))}><FolderOpen size={16} />{t('打开项目目录')}</button>
           <button role="menuitem" onClick={() => action(() => setImageOpen(true))}><ImageSquare size={16} />{t('项目图片…')}</button>
@@ -121,7 +117,7 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
       </div>}
     </header>
     {imageOpen && <ProjectImageDialog project={project} index={index} onClose={() => setImageOpen(false)} />}
-    <ProjectTerminals project={project} focused={focused} fontSize={fontSize} activeId={activeTerminalId} setActiveId={setActiveTerminalId} onExpand={() => onFocus(project.id)} onAction={onAction} onError={onError} onOpenLink={onOpenLink} />
+    <ProjectTerminals project={project} focused={focused} fontSize={fontSize} activeId={activeTerminalId} setActiveId={id => setActiveTerminal(project.id, id)} onExpand={() => onFocus(project.id)} onAction={onAction} onError={onError} onOpenLink={onOpenLink} />
     {showActivity && <ActivityPane terminal={currentTerminal} />}
     {project.error && <div className="panel-error"><Info size={13} /><span>{t(project.error)}</span></div>}
   </article>;

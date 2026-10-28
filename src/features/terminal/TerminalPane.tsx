@@ -229,7 +229,12 @@ export function TerminalPane({ id, sessionId, fontSize, onError, focused, onOpen
   }, [fontSize]);
   useEffect(() => {
     if (focused && sessionId) {
-      const frame = requestAnimationFrame(() => { if (term.current) { fitTerminal(term.current); term.current.focus(); } });
+      const frame = requestAnimationFrame(() => {
+        if (!term.current) return;
+        fitTerminal(term.current);
+        // Selecting a split through its controls must leave the keyboard on that control.
+        if (!host.current?.closest('.terminal-split')?.contains(document.activeElement)) term.current.focus();
+      });
       return () => cancelAnimationFrame(frame);
     }
   }, [focused, sessionId]);

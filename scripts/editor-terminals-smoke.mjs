@@ -205,6 +205,8 @@ try {
     await waitFor(async () => { const receipt = JSON.parse(await fs.readFile(path.join(codexHome, 'sessions', `${thread}-receipt.json`), 'utf8')); return receipt.args.includes('resume') && receipt.args.includes(thread); }, 'exact conversation resumed');
   }
   const secondSession = (await state()).terminals[1].sessionId;
+  // A split's close button shows in its corner while the pointer is over it.
+  await page.locator(`section.terminal-split[aria-label="${project.name} 终端 1"]`).hover();
   await page.getByRole('button', { name: `关闭 ${project.name} 终端 1`, exact: true }).click();
   await waitFor(async () => (await state()).terminals.length === 1, 'close one split');
   assert.equal((await state()).terminals[0].sessionId, secondSession);
@@ -224,6 +226,26 @@ try {
   await page.getByRole('textbox', { name: '文件编辑器', exact: true }).fill('saved over SSH\n远程编辑'); await page.keyboard.press('Control+s');
   await waitFor(async () => (await fs.readFile(path.join(ssh.project, 'remote.txt'), 'utf8')).includes('远程编辑'), 'SSH editor save');
   await page.getByRole('button', { name: '返回终端', exact: true }).click();
+  const remoteFirst = page.locator('section.terminal-split[aria-label="SSH 分屏验证 终端 1"]');
+  const remoteRestart = remoteFirst.getByRole('button', { name: '重启 SSH 分屏验证 终端 1', exact: true });
+  const remoteClose = remoteFirst.getByRole('button', { name: '关闭 SSH 分屏验证 终端 1', exact: true });
+  await page.locator('section.terminal-split[aria-label="SSH 分屏验证 终端 2"] .xterm-helper-textarea').focus();
+  await waitFor(async () => remoteFirst.evaluate(node => !node.classList.contains('is-active-terminal')), 'the first SSH split starts inactive');
+  await page.mouse.move(8, 8);
+  await page.getByRole('button', { name: 'SSH 分屏验证 的更多操作', exact: true }).focus();
+  await waitFor(async () => remoteFirst.locator('.terminal-split-tools').evaluate(node => getComputedStyle(node).pointerEvents === 'none'), 'split tools hide without hover or focus');
+  await page.keyboard.press('Tab');
+  // Let the split's delayed terminal autofocus run before checking that the button keeps the keyboard.
+  await page.waitForTimeout(200);
+  assert.equal(await remoteRestart.evaluate(node => document.activeElement === node), true, 'Tab reaches and retains the inactive split restart button');
+  await page.keyboard.press('Tab');
+  assert.equal(await remoteClose.evaluate(node => document.activeElement === node), true, 'Tab reaches the split close button');
+  await waitFor(async () => remoteFirst.locator('.terminal-split-tools').evaluate(node => getComputedStyle(node).pointerEvents === 'auto' && getComputedStyle(node).opacity === '1'), 'keyboard focus reveals split tools');
+  await page.keyboard.press('Shift+Tab');
+  assert.equal(await remoteRestart.evaluate(node => document.activeElement === node), true, 'Shift+Tab returns to the split restart button');
+  await page.getByRole('button', { name: 'SSH 分屏验证 的更多操作', exact: true }).focus();
+  await waitFor(async () => remoteFirst.locator('.terminal-split-tools').evaluate(node => getComputedStyle(node).pointerEvents === 'none'), 'split tools hide again before pointer close');
+  await page.locator('section.terminal-split[aria-label="SSH 分屏验证 终端 1"]').hover();
   await page.getByRole('button', { name: '关闭 SSH 分屏验证 终端 1', exact: true }).click();
   await waitFor(async () => (await remoteState()).terminals.length === 1, 'one SSH terminal closes');
   assert.equal((await remoteState()).terminals[0].sessionId, remoteSecond);

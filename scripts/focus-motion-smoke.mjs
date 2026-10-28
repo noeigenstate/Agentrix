@@ -76,7 +76,7 @@ try {
   await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'PS ' + (Get-Location).Path + '> ' }; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), id);
   await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects.find(project => project.id === id).codexActive, 'authenticated agent fixture');
   await panel.locator('.reading-view').waitFor();
-  await panel.locator('.panel-header').getByRole('button', { name: '切换到终端', exact: true }).click();
+  await page.locator('.titlebar-tools').getByRole('button', { name: '切换到终端', exact: true }).click();
   await panel.locator('.reading-view').waitFor({ state: 'detached' });
   await page.getByRole('button', { name: '返回总览', exact: true }).click();
   await settled(false); await terminalsSettled(page);

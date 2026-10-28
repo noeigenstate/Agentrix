@@ -131,7 +131,7 @@ try {
   }, 400);
   await measure('expand', () => page.locator(`[data-project-id="${projects[3].id}"]`).getByRole('button', { name: `全屏查看 ${projects[3].name}`, exact: true }).click(), 1100);
   const focused = page.locator(`[data-project-id="${projects[3].id}"]`);
-  if (!await focused.locator('.reading-view').count()) await focused.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click().catch(() => {});
+  if (!await focused.locator('.reading-view').count()) await page.locator('.titlebar-tools').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click().catch(() => {});
   await sleep(800);
   await measure('reading-scroll', async () => {
     const view = await focused.locator('.reading-scroll').boundingBox();
@@ -140,7 +140,7 @@ try {
     for (let i = 0; i < 24; i++) { await page.mouse.wheel(0, 240); await sleep(30); }
   }, 500);
   await measure('activity-toggle', async () => { await page.getByRole('button', { name: '隐藏活动栏', exact: true }).click(); await sleep(700); await page.getByRole('button', { name: /显示活动栏/ }).click(); }, 700);
-  await measure('terminal-toggle', async () => { await focused.getByRole('button', { name: '切换到终端', exact: true }).click(); await sleep(700); await focused.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click(); }, 700);
+  await measure('terminal-toggle', async () => { await page.locator('.titlebar-tools').getByRole('button', { name: '切换到终端', exact: true }).click(); await sleep(700); await page.locator('.titlebar-tools').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click(); }, 700);
   // Nothing done: what keeps repainting by itself (a light breathing, a spinner) shows here.
   await measure('idle', () => sleep(1400), 0);
   await measure('settings', async () => { await openSettings(page); await sleep(700); await page.keyboard.press('Escape'); }, 700);

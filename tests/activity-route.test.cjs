@@ -8,8 +8,9 @@ const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 const en = require('../electron/locales/en.json');
 
-function activityMarkup(calls, language = 'zh', terminal = {}) {
-  const filename = path.join(__dirname, '../src/features/agents/ActivityPane.tsx');
+// A component of the agents folder compiled with its imports stubbed (the language, the icons, the portal), for static rendering.
+function loadAgentsFile(basename, language = 'zh') {
+  const filename = path.join(__dirname, '../src/features/agents', basename);
   const mod = new Module(filename, module);
   mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
   const original = mod.require.bind(mod);
@@ -20,54 +21,63 @@ function activityMarkup(calls, language = 'zh', terminal = {}) {
     if (name === '../reading/useNow') return require('../src/features/reading/useNow.ts');
     if (name === '../terminal/terminal-screen') return { readScreen: () => null, subscribeScreen: () => () => {} };
     if (name === '../home/send-to-agent') return { sendToAgent: () => { throw new Error('render must not send input'); } };
+    if (name === './AgentBrandIcon') return require('../src/features/agents/AgentBrandIcon.ts');
     if (name === './reset-count') return require('../src/features/agents/reset-count.ts');
+    if (name === './ResetCountdown') return loadAgentsFile('ResetCountdown.tsx', language);
+    if (name === 'react-dom') return { createPortal: children => children };
     if (name === '@phosphor-icons/react') return new Proxy({}, { get: () => () => React.createElement('svg') });
     return original(name);
   };
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
-  return renderToStaticMarkup(React.createElement(mod.exports.ActivityPane, { terminal: {
+  return mod.exports;
+}
+function activityMarkup(calls, language = 'zh', terminal = {}) {
+  const { ActivityPane } = loadAgentsFile('ActivityPane.tsx', language);
+  return renderToStaticMarkup(React.createElement(ActivityPane, { terminal: {
     id: 'placeholder', agent: 'claude', codexActive: true, prompts: [], agentSettings: { model: 'claude-opus-5-5', effort: 'xhigh', fast: false },
     agentUsage: { provider: 'Anthropic', limits: [], calls },
     ...terminal,
   } }));
 }
 
-test('the activity route hides empty calls and shows active counts, tasks and each state in both languages', () => {
+test('the models group hides empty calls and lists each model with its calls, their states and the how-it-runs in both languages', () => {
   const empty = activityMarkup([]);
   assert.ok(empty.includes('Opus 5.5'));
   assert.ok(!empty.includes('调用的模型'));
-  assert.ok(!activityMarkup(undefined).includes('activity-route-calls'));
+  assert.ok(!activityMarkup(undefined).includes('activity-calls'));
   const calls = [
-    { agent: 'Claude Code', provider: 'Anthropic', model: 'claude-sonnet-5-5', effort: null, fast: null, preparing: 0, running: 1, reviewing: 1, tasks: ['Polish <card>', 'Check spacing'], items: [] },
-    { agent: 'Codex', provider: 'OpenAI', model: 'gpt-6.1-sol', effort: 'max', fast: true, preparing: 2, running: 3, reviewing: 1, tasks: ['parser.md'], items: [] },
+    { agent: 'Claude Code', provider: 'Anthropic', model: 'claude-sonnet-5-5', effort: null, fast: null, preparing: 0, running: 1, reviewing: 1, tasks: [], items: [{ state: 'running', role: '执行', title: 'Polish <card>' }, { state: 'reviewing', role: '审核', title: 'Check spacing' }] },
+    { agent: 'Codex', provider: 'OpenAI', model: 'gpt-6.1-sol', effort: 'max', fast: true, preparing: 1, running: 2, reviewing: 0, tasks: [], items: [{ state: 'preparing', role: '准备', title: 'parser.md' }, { state: 'running', role: '执行', title: 'one' }, { state: 'running', role: '执行', title: 'two' }] },
   ];
   const html = activityMarkup(calls);
-  const plain = html.replace(/<[^>]*>/g, '');
-  for (const text of ['调用的模型', 'Sonnet 5.5', 'GPT-6.1-Sol', '子代理 ×2 · 1 个运行中 · 1 个审核中', 'Codex 子任务 ×6 · 2 个正在准备 · 3 个运行中 · 1 个审核中 · 思考 max · 快速']) assert.ok(plain.includes(text), text);
-  assert.ok(html.includes('title="Polish &lt;card&gt;\nCheck spacing"'));
-  for (const [state, count] of [['preparing', 1], ['running', 2], ['reviewing', 2]]) assert.equal((html.match(new RegExp(`class="activity-call-${state}"`, 'g')) || []).length, count);
-  assert.doesNotMatch(plain, /0 个/);
-  const english = activityMarkup(calls, 'en').replace(/<[^>]*>/g, '');
-  for (const text of ['Models called', 'Subagents ×2 · 1 running · 1 reviewing', 'Codex subtasks ×6 · 2 preparing · 3 running · 1 reviewing · effort max · Fast']) assert.ok(english.includes(text), text);
+  const section = /<section class="activity-card activity-calls"[\s\S]*?<\/section>/.exec(html)[0], plain = section.replace(/<[^>]*>/g, '|');
+  for (const text of ['调用的模型', 'Sonnet 5.5', 'Anthropic', 'GPT-6.1-Sol', 'OpenAI', 'max · 快速', '运行中', '审核中', '准备中']) assert.ok(plain.includes(text), text);
+  assert.ok(section.includes('<span class="activity-count">5</span>'), 'the heading counts every call');
+  assert.ok(html.indexOf('activity-route"') < html.indexOf('activity-calls"') && html.indexOf('activity-calls"') < html.indexOf('activity-tasks"'), 'route, models, then tasks');
+  assert.ok(section.includes('title="Polish &lt;card&gt;"'));
+  assert.match(section, /agent-brand-claude/); assert.match(section, /agent-brand-codex/);
+  for (const [state, count] of [['preparing', 1], ['running', 3], ['reviewing', 1]]) assert.equal((section.match(new RegExp(`<li class="is-${state}"`, 'g')) || []).length, count);
+  const english = activityMarkup(calls, 'en').replace(/<[^>]*>/g, '|');
+  for (const text of ['Models called', 'Running', 'Reviewing', 'Preparing', 'max · Fast']) assert.ok(english.includes(text), text);
 });
 
-test('a single preparing or reviewing group uses its own dot and reviewed routes disappear', () => {
-  for (const state of ['preparing', 'reviewing']) {
-    const html = activityMarkup([{ agent: 'Codex', model: 'gpt-6.1-sol', provider: null, effort: null, fast: null, preparing: 0, running: 0, reviewing: 0, [state]: 1, tasks: [], items: [] }], 'en');
-    assert.match(html, new RegExp(`class="activity-call-${state}"`));
-    assert.ok(html.replace(/<[^>]*>/g, '').includes(`Codex subtasks ×1 · 1 ${state}`));
-    assert.doesNotMatch(html, /activity-call-running|0 preparing|0 reviewing|0 running/);
+test('a single preparing or reviewing call shows its own state and reviewed routes disappear', () => {
+  for (const [state, word] of [['preparing', 'Preparing'], ['reviewing', 'Reviewing']]) {
+    const html = activityMarkup([{ agent: 'Codex', model: 'gpt-6.1-sol', provider: null, effort: null, fast: null, preparing: 0, running: 0, reviewing: 0, [state]: 1, tasks: [], items: [{ state, role: '执行', title: 'one task' }] }], 'en');
+    assert.match(html, new RegExp(`<li class="is-${state}"`));
+    assert.ok(html.replace(/<[^>]*>/g, '|').includes(word));
+    assert.doesNotMatch(html, /class="is-running"/);
   }
   const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
   const calls = new AgentCalls();
   calls.apply({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', id: 'a', input: { model: 'sonnet', description: 'Check layout' } }] } });
   calls.apply({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'a', content: 'Checked' }] } });
-  assert.match(activityMarkup(calls.snapshot()), /activity-call-reviewing/);
+  assert.match(activityMarkup(calls.snapshot()), /class="is-reviewing"/);
   calls.apply({ type: 'system', subtype: 'stop_hook_summary', hookCount: 1 });
-  assert.doesNotMatch(activityMarkup(calls.snapshot()), /activity-route-calls|Check layout|调用的模型/);
+  assert.doesNotMatch(activityMarkup(calls.snapshot()), /activity-calls|Check layout|调用的模型/);
 });
 
-test('called models show four ordered role and title rows with state dots, full hovers and localized overflow', () => {
+test('called models show four ordered role and title rows with state icons and words, full hovers and localized overflow', () => {
   const long = 'Inspect <parser> ' + 'and preserve every detail '.repeat(20);
   const items = [
     { state: 'preparing', role: '调查', title: long },
@@ -80,19 +90,20 @@ test('called models show four ordered role and title rows with state dots, full 
   const call = { agent: 'Codex', provider: 'OpenAI', model: 'gpt-6.1-sol', effort: null, fast: null, preparing: 1, running: 4, reviewing: 1, tasks: [], items };
   for (const language of ['zh', 'en']) {
     const html = activityMarkup([call], language);
-    const rows = /<ol class="activity-call-items">([\s\S]*?)<\/ol>/.exec(html)[1];
-    const plain = rows.replace(/<[^>]*>/g, '');
-    assert.equal((rows.match(/<li title=/g) || []).length, 4);
+    const rows = /<ul class="activity-call-rows">([\s\S]*?)<\/ul>/.exec(html)[1];
+    const plain = rows.replace(/<[^>]*>/g, ' ');
+    assert.equal((rows.match(/<li class="is-/g) || []).length, 4);
     assert.ok(rows.includes(`title="${long.replace('<parser>', '&lt;parser&gt;')}"`));
     assert.ok(plain.indexOf('Inspect') < plain.indexOf('Implement parser'));
     assert.ok(plain.indexOf('Implement parser') < plain.indexOf('Plan the checks'));
     assert.ok(plain.indexOf('Plan the checks') < plain.indexOf('Custom task'));
-    for (const role of language === 'en' ? ['Investigate', 'Execute', 'Plan', 'custom-worker'] : ['调查', '执行', '规划', 'custom-worker']) assert.ok(plain.includes(`${role} ·`));
-    for (const state of ['preparing', 'running', 'reviewing']) assert.ok(rows.includes(`class="activity-call-${state}"`));
+    for (const role of language === 'en' ? ['Investigate', 'Execute', 'Plan', 'custom-worker'] : ['调查', '执行', '规划', 'custom-worker']) assert.ok(plain.includes(role));
+    for (const state of ['preparing', 'running', 'reviewing']) assert.ok(rows.includes(`<li class="is-${state}"`));
     assert.ok(plain.includes(language === 'en' ? '+2 more' : '+2 个'));
     assert.doesNotMatch(plain, /Older task|Oldest task/);
     assert.doesNotMatch(activityMarkup([{ ...call, items: items.slice(0, 4) }], language), /activity-call-more/);
-    for (const [role, translated] of [['搜索', 'Search'], ['通用', 'General'], ['分身', 'Fork']]) assert.ok(activityMarkup([{ ...call, items: [{ ...items[0], role }] }], 'en').includes(`${translated} ·`));
+    assert.ok(html.includes('<span class="activity-count">6</span>'), 'the heading counts the calls, shown or folded');
+    for (const [role, translated] of [['搜索', 'Search'], ['通用', 'General'], ['分身', 'Fork']]) assert.ok(activityMarkup([{ ...call, items: [{ ...items[0], role }] }], 'en').includes(`>${translated}<`));
   }
 });
 
@@ -109,7 +120,8 @@ test("Claude's usage keeps plan limits, tokens and their source without reset co
         : ['5 小时额度', '每周额度', '本轮', '本次对话', `额度来自 ${source}，`];
       for (const label of labels) assert.ok(html.includes(label), label);
       assert.ok(html.includes(`aria-valuenow="${percent}"`)); assert.match(html, /aria-valuenow="84"/);
-      assert.equal((html.match(/class="activity-token-row"/g) || []).length, 2);
+      assert.equal((html.match(/class="activity-metric activity-tokens" title=/g) || []).length, 2);
+      assert.equal((html.match(/is-warn/g) || []).length, percent >= 90 ? 1 : 0, 'only a window from 90% takes the warning colour');
       // The window's own reset time stays; only the reset control goes.
       assert.equal((html.match(/<small>[^<]*(?:重置|Resets)/gi) || []).length, 2);
       assert.doesNotMatch(html, /activity-reset|activity-estop|重置额度|limit-reset/i);
@@ -129,7 +141,7 @@ test('expired limits show an empty muted bar and waiting text without a stale pe
       const html = activityMarkup([], language, { agent, agentUsage: {
         limits: [{ minutes: 300, percent: 81.34, resetsAt: past }, { minutes: 10080, percent: 92.1, resetsAt: past }], limitsAt: now - 60000,
       } });
-      const limits = [...html.matchAll(/<div class="activity-limit">([\s\S]*?)<\/div>/g)];
+      const limits = [...html.matchAll(/<div class="activity-metric activity-limit">([\s\S]*?)<\/div>/g)];
       assert.equal(limits.length, 2);
       for (const [, limit] of limits) {
         assert.ok(limit.includes(language === 'en' ? 'Reset, waiting for an update' : '已重置，等待更新'));
@@ -168,7 +180,7 @@ test('unknown round and conversation totals explain earlier history when context
       assert.equal(html.includes(roundNote), round === null);
       assert.equal(html.includes(totalNote), total === null);
       assert.ok(!html.includes(first));
-      assert.equal((html.match(/class="activity-token-row"/g) || []).length, Number(!!round) + Number(!!total));
+      assert.equal((html.match(/class="activity-metric activity-tokens" title=/g) || []).length, Number(!!round) + Number(!!total));
     }
     const empty = activityMarkup([], language, { agentUsage: { limits: [], context: null, round: null, total: null } });
     assert.ok(empty.includes(first));
@@ -188,11 +200,11 @@ test('hover titles give exact token counts, one-decimal limit percentages and th
         round: { input: 1230010, cached: 456789, output: 98765 }, total: { input: 123456789, cached: 90123456, output: 2000000 },
       } };
       const html = activityMarkup([], language, terminal);
-      assert.ok(html.includes('class="activity-figure" title="1,230,010 / 2,000,000 tokens"'));
+      assert.ok(html.includes('class="activity-metric activity-figure" title="1,230,010 / 2,000,000 tokens"'));
       const titles = language === 'en'
         ? ['1,328,775 tokens · Input 1,230,010 · Cache read 456,789 · Output 98,765', '125,456,789 tokens · Input 123,456,789 · Cache read 90,123,456 · Output 2,000,000']
         : ['1,328,775 tokens · 输入 1,230,010 · 缓存命中 456,789 · 输出 98,765', '125,456,789 tokens · 输入 123,456,789 · 缓存命中 90,123,456 · 输出 2,000,000'];
-      for (const title of titles) assert.ok(html.includes(`class="activity-token-row" title="${title}"`), title);
+      for (const title of titles) assert.ok(html.includes(`class="activity-metric activity-tokens" title="${title}"`), title);
       assert.ok(html.includes(`title="83.3% · ${language === 'en' ? `Updated ${time}` : `${time} 更新`}"`));
       assert.match(html, />83%</); assert.match(html, /aria-valuenow="83"/);
       terminal.agentUsage.limitsAt = null;
@@ -207,16 +219,16 @@ test('Codex reset count arrives automatically, shows zero and bounded query stat
   } });
   assert.match(render('ready', 2), /<small>剩余 2 次<\/small>/);
   const zero = render('ready', 0);
-  assert.match(zero, /<small>剩余 0 次<\/small>/); assert.match(zero, /<button[^>]*disabled/);
+  assert.match(zero, /<small>已用完<\/small>/); assert.match(zero, /<button[^>]*disabled/); assert.doesNotMatch(zero, /剩余 0 次/, 'none left is told apart from not knowing');
+  // Not knowing: a short status in the row's right-hand slot, the whole sentence (then the click's explanation) in the row's hover.
+  const status = html => /<small>([^<]*)<\/small><\/button>/.exec(html)[1], hover = html => /class="activity-reset-row activity-estop" title="([^"]*)"/.exec(html)[1];
   const loading = render('loading');
-  assert.match(loading, /正在查询剩余次数…/);
+  assert.equal(status(loading), '查询中…'); assert.match(hover(loading), /^正在查询剩余次数…\n点击后有 10 秒可以取消/);
   assert.doesNotMatch(loading, /<button[^>]*disabled/);
-  assert.match(loading, /点击后有 10 秒可以取消/);
-  assert.doesNotMatch(loading, /剩余次数在 \/usage 里显示/);
-  assert.match(render('error', null, 'timeout'), /查询失败，将自动重试/);
-  assert.match(render('unavailable', null, 'remote'), /远程账号暂不支持后台查询/);
-  assert.match(render('unavailable', null, 'provider'), /当前接口不提供重置次数/);
-  assert.match(render('unavailable', null, 'unsupported'), /当前账号或 Codex 版本未提供次数，将自动重试/);
+  const cases = [[render('error', null, 'timeout'), '查询失败', '查询失败，将自动重试'], [render('unavailable', null, 'remote'), '暂不支持', '远程账号暂不支持后台查询'],
+    [render('unavailable', null, 'provider'), '暂不支持', '当前接口不提供重置次数'], [render('unavailable', null, 'scope'), '无法确认', '无法确认账号环境，暂不能查询'],
+    [render('unavailable', null, 'unsupported'), '次数未知', '当前账号或 Codex 版本未提供次数，将自动重试']];
+  for (const [html, short, full] of cases) { assert.equal(status(html), short); assert.ok(hover(html).startsWith(full + '\n'), full); assert.doesNotMatch(/<div class="activity-reset">[\s\S]*?<\/div>/.exec(html)[0], /activity-note/, 'no separate status line'); }
 });
 
 test('working task keeps its real status, spinner and text, with no fake progress or dead theme overrides', () => {
@@ -236,17 +248,22 @@ test('working task keeps its real status, spinner and text, with no fake progres
   assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8'), /activity-progress/);
 });
 
-test('inactive terminal keeps its empty card above tasks, whose height is bounded with internal scrolling', () => {
+test('inactive terminal keeps its empty card above tasks; the pane shows no scrollbar and its two lists scroll inside their own windows', () => {
   const html = activityMarkup([], 'en', { codexActive: false });
   assert.ok(html.indexOf('activity-empty') < html.indexOf('activity-tasks'));
   assert.ok(html.includes('No task yet'));
   assert.doesNotMatch(html, /activity-route|activity-context|activity-usage/);
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
-  const tasks = /\.activity-tasks\s*\{([^}]+)\}/.exec(css)[1];
-  assert.match(tasks, /max-height:\s*\d+px/);
-  assert.doesNotMatch(tasks, /flex:\s*1|min-height:\s*(?:96|120)px/);
-  assert.match(css, /\.activity-prompts\s*\{[^}]*overflow-y:\s*auto/);
-  assert.match(css, /\.activity-call-title\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap/);
+  // The pane shows no scrollbar; the fixed groups keep their height, the two lists share the rest and scroll under their own titles.
+  assert.match(/\.activity-pane \{[^}]*\}/.exec(css)[0], /scrollbar-width: none/);
+  const sections = /\.activity-calls, \.activity-tasks \{([^}]+)\}/.exec(css)[1];
+  assert.match(sections, /flex: 0 1 auto; min-height: 60px/);
+  assert.doesNotMatch(css, /max-height/);
+  assert.match(css, /\.activity-card \{ flex: none;/, 'the route, context and usage never shrink');
+  const list = /\.activity-prompts, \.activity-call-groups \{([^}]+)\}/.exec(css)[1];
+  for (const part of ['flex: 0 1 auto', 'min-height: 0', 'overflow-y: auto', 'scrollbar-gutter: stable', 'mask-image', 'animation-timeline: scroll(self)']) assert.ok(list.includes(part), part);
+  assert.match(css, /@keyframes activity-fade/);
+  assert.match(css, /\.activity-call-rows\) li p \{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis; white-space: nowrap/);
 });
 
 test('task cards display source summaries and retain the complete original only in their hovers', () => {
@@ -280,14 +297,102 @@ test('each task is a 32px row: its state icon, the task on one line, a clock at 
   assert.match(done, /<li class="is-done" title="原始提示\n已完成 · \d\d:\d\d">/);
   assert.match(done, /<p>已完成：按钮可以点了。<\/p>/);
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
-  const row = css.split(/\r?\n/).find(line => line.startsWith('.activity-prompts li {'));
+  const row = css.split(/\r?\n/).find(line => line.startsWith(':is(.activity-prompts, .activity-call-rows) li {'));
   for (const part of ['grid-template-columns: 16px minmax(0, 1fr) auto', 'column-gap: 8px', 'height: 32px']) assert.ok(row.includes(part), part);
-  assert.ok(css.includes('.activity-prompts li::before { content: \'\'; position: absolute; inset: 0 -8px; border-radius: 8px; }'), 'the hover reaches 8px past the text');
-  assert.match(css, /\.activity-prompts li p \{[^}]*text-overflow: ellipsis; white-space: nowrap/);
-  assert.match(css, /\.activity-prompts li time \{[^}]*font-size: 12px[^}]*var\(--flow-faint\)[^}]*tabular-nums/);
+  assert.ok(css.includes(':is(.activity-prompts, .activity-call-rows) li::before { content: \'\'; position: absolute; inset: 0 -8px; border-radius: 8px; }'), 'the hover reaches 8px past the text');
+  assert.match(css, /\.activity-call-rows\) li p \{[^}]*text-overflow: ellipsis; white-space: nowrap/);
+  assert.match(css, /li :is\(time, \.activity-row-end\) \{[^}]*font-size: 12px[^}]*var\(--flow-faint\)[^}]*tabular-nums/);
 });
 
 test('the clock reads m:ss and h:mm:ss', () => {
   const { elapsedClock } = (() => { const filename = path.join(__dirname, '../src/features/agents/ActivityPane.tsx'); const source = fs.readFileSync(filename, 'utf8').split(/\r?\n/).join(String.fromCharCode(10)); const body = /export function elapsedClock[\s\S]*?\n}\n/.exec(source)[0].replace('export ', ''); return new Function(`${ts.transpileModule(body, { compilerOptions: { module: ts.ModuleKind.None } }).outputText}\nreturn { elapsedClock };`)(); })();
   assert.deepEqual([0, 999, 9000, 134000, 3600000, 3909000, -5].map(elapsedClock), ['0:00', '0:00', '0:09', '2:14', '1:00:00', '1:05:09', '0:00']);
+});
+
+test('metrics are label | meter | figure blocks: one number format, a warning colour only from 90% and a dash for an unknown window', () => {
+  const metric = html => /<div class="activity-metric[^"]*"[^>]*>[\s\S]*?<\/div>/.exec(html)[0];
+  const at = used => activityMarkup([], 'zh', { agentUsage: { limits: [], context: { used, window: 1000000 }, round: { input: 186000, cached: 0, output: 2000 }, total: { input: 2300000, cached: 0, output: 80000 } } });
+  assert.doesNotMatch(metric(at(894999)), /is-warn/);
+  assert.match(metric(at(900000)), /activity-metric is-warn activity-figure/);
+  const full = at(930000);
+  assert.ok(full.includes('>93%<') && full.includes('共 1M tokens · 还可容纳 70k') && !full.includes('<b>930k</b>'), 'the note stands alone: no figure beside the meter');
+  assert.ok(/<section class="activity-card activity-context"[^>]*><div class="activity-metric is-warn activity-figure"[^>]*><span class="activity-metric-label">上下文长度<\/span><span class="activity-meter"/.test(full), 'the title is the label of the meter line, on the limit rows grid, with no separate heading');
+  const tokenRows = [...full.matchAll(/<div class="activity-metric activity-tokens"[^>]*>[\s\S]*?<\/div>/g)].map(match => match[0]);
+  assert.equal(tokenRows.length, 2);
+  for (const row of tokenRows) assert.doesNotMatch(row, /<b|role="meter"/, 'a token row is its label and its breakdown on one line: no total, no meter');
+  assert.ok(tokenRows[0].endsWith('<span class="activity-metric-label">本轮</span><small>输入 186k · 输出 2k</small></div>'));
+  assert.ok(tokenRows[1].endsWith('<span class="activity-metric-label">本次对话</span><small>输入 2.3M · 输出 80k</small></div>'));
+  const unknown = activityMarkup([], 'zh', { agentUsage: { limits: [], context: { used: 4200, window: 0 }, round: null, total: null } });
+  assert.ok(unknown.includes('>—</b>') && unknown.includes('已用 4.2k tokens，窗口大小未知'));
+  assert.doesNotMatch(unknown, /0%|还可容纳 0|role="meter"/);
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
+  assert.match(css, /\.activity-metric \{[^}]*grid-template-columns: 88px minmax\(0, 1fr\) 48px; grid-template-rows: 32px/);
+  assert.ok(css.includes('.activity-metric.activity-tokens > small { grid-area: 1 / 2 / auto / -1;'), 'the breakdown starts in the meters column, on the label line');
+  assert.match(css, /\.activity-metric\.is-warn > b \{ color: var\(--warning\); \}/);
+  assert.match(css, /\.activity-metric\.is-warn \.activity-meter i \{ background: var\(--warning\); \}/);
+  // The context and the usage have no headings and share one 8px list, so the gap before the first limit equals the gap between blocks.
+  assert.doesNotMatch(full, /<h4[^>]*>用量<\/h4>/);
+  assert.match(full, /<div class="activity-gauges"><section class="activity-card activity-context"[^>]*><div class="activity-metric[^>]*>[\s\S]*?<\/section><section class="activity-card activity-usage" aria-label="用量">/);
+  assert.match(css, /\.activity-gauges \{[^}]*gap: 8px/);
+});
+
+test('the reset action is a 32px row on the task grid and keeps unknown, failed and zero counts apart', () => {
+  const render = (resets, resetQuery) => activityMarkup([], 'zh', { agent: 'codex', agentUsage: { limits: [], resets, resetQuery } });
+  const row = /<button[^>]*class="activity-reset-row activity-estop"[\s\S]*?<\/button>/.exec(render({ left: 2, total: null }, { state: 'ready' }))[0];
+  assert.ok(row.indexOf('activity-row-icon') < row.indexOf('activity-reset-label') && row.indexOf('activity-reset-label') < row.indexOf('<small>剩余 2 次</small>'));
+  assert.match(render({ left: 0, total: null }, { state: 'ready' }), /<small>已用完<\/small>/);
+  assert.doesNotMatch(/<button[^>]*activity-estop[\s\S]*?<\/button>/.exec(render(null, { state: 'error', reason: 'timeout' }))[0], /剩余/, 'an unknown count is not shown as a number');
+  assert.match(/<button[^>]*activity-estop[\s\S]*?<\/button>/.exec(render(null, { state: 'error', reason: 'timeout' }))[0], /<span class="activity-reset-label">重置额度<\/span><small>查询失败<\/small>/, 'the status is on the row itself');
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
+  assert.match(css, /\.activity-reset-row \{[^}]*grid-template-columns: 16px max-content minmax\(0, 1fr\); column-gap: 8px;[^}]*height: 32px/);
+  assert.match(css, /\.activity-reset-label \{[^}]*white-space: nowrap; \}/, 'the label is never cut');
+  assert.doesNotMatch(/\.activity-reset-label \{[^}]*\}/.exec(css)[0], /text-overflow/);
+  assert.match(css, /\.activity-reset-row small \{[^}]*text-align: right; text-overflow: ellipsis;[^}]*font-size: 12px;[^}]*white-space: nowrap/, 'the slot is right-aligned like the other figures and gives way first');
+  assert.match(css, /\.activity-reset > \.activity-note \{ padding-left: 24px; \}/, 'a note after a run starts under the label');
+});
+
+test('the reset countdown is one large overlay: a draining ring with the seconds, its text, cancel and the hint, warning only in the last seconds, with no per-second announcement', t => {
+  const previous = globalThis.document; globalThis.document = { body: {} };
+  t.after(() => { if (previous) globalThis.document = previous; else delete globalThis.document; });
+  const { CountdownView, ResetCountdown } = loadAgentsFile('ResetCountdown.tsx');
+  const view = count => renderToStaticMarkup(React.createElement(CountdownView, { count, total: 10, armed: false, announcement: '', onCancel() {} }));
+  const html = view(7);
+  assert.match(html, /role="timer" aria-label="7 秒后重置额度"/);
+  assert.match(html, /<span class="reset-countdown-number">7<\/span><span class="reset-countdown-unit">秒<\/span>/);
+  for (const text of ['秒后重置 Codex 额度', '取消', '<kbd>Esc</kbd>', '或点击空白处取消']) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /is-warning|立即重置|<ol|<li/, 'only the ring, the text, cancel and the hint');
+  assert.doesNotMatch(view(4), /is-warning/); assert.match(view(3), /is-warning/); assert.match(view(1), /is-warning/);
+  // The ring is full at 10 and drains to the next second's share: --ring-now is where this second starts, --ring-next where it ends.
+  const circumference = 2 * Math.PI * 100, [now, next] = /--ring-now:([\d.]+);--ring-next:([\d.]+)/.exec(html).slice(1).map(Number);
+  assert.ok(Math.abs(now - circumference * 0.3) < 0.01 && Math.abs(next - circumference * 0.4) < 0.01);
+  // Only the start and 5 seconds are announced.
+  const announced = (count, language) => /<span class="reset-countdown-announce" role="status">([^<]*)<\/span>/.exec(renderToStaticMarkup(React.createElement(loadAgentsFile('ResetCountdown.tsx', language).ResetCountdown, { count, total: 10, onCancel() {} })))[1];
+  assert.deepEqual([10, 9, 6, 5, 4, 1].map(count => announced(count, 'zh')), ['10 秒后重置额度', '', '', '还剩 5 秒', '', '']);
+  assert.deepEqual([10, 5, 4].map(count => announced(count, 'en')), ['Resetting the limit in 10 s', '5 seconds left', '']);
+  assert.ok(typeof ResetCountdown === 'function');
+  for (const key of ['秒', '秒后重置 Codex 额度', '或点击空白处取消', '还剩 {seconds} 秒', '倒计时中…']) assert.ok(en[key], key);
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/reset-countdown.css'), 'utf8');
+  assert.match(css, /\.reset-countdown \{ position: fixed; inset: 0; z-index: 400;[^}]*72%[^}]*-webkit-app-region: no-drag/, 'over the whole window, title bar included, at 72% of the canvas colour');
+  assert.match(css, /\.reset-countdown-ring \{[^}]*width: 240px; height: 240px/);
+  assert.match(css, /\.reset-countdown-number \{ font: 600 104px/);
+  assert.match(css, /\.reset-countdown-cancel \{[^}]*height: 32px/);
+  assert.match(css, /\.reset-countdown\.is-warning \.reset-countdown-ring \{ --ring-ink: var\(--warning\); \}/);
+  assert.match(css, /transition: stroke-dashoffset 1s linear/);
+  assert.match(css, /:root\[data-motion="off"\] \.reset-countdown\.is-draining[^}]*var\(--ring-now\)/, 'without motion the ring steps with the number');
+  assert.match(css, /prefers-reduced-motion: reduce\)[^]*data-motion="system"[^]*var\(--ring-now\)/);
+  assert.doesNotMatch(css, /animation|bounce|scale\(/);
+});
+
+test('the reset row stays the trigger: it never turns into a countdown row, and the old row countdown is gone', () => {
+  const html = activityMarkup([], 'zh', { agent: 'codex', agentUsage: { limits: [], resets: { left: 2, total: null }, resetQuery: { state: 'ready' } } });
+  assert.match(html, /<button type="button" class="activity-reset-row activity-estop" title="点击后有 10 秒可以取消，然后由 Codex 自己完成重置"><span class="activity-row-icon">[\s\S]*?<\/span><span class="activity-reset-label">重置额度<\/span><small>剩余 2 次<\/small><\/button>/);
+  assert.doesNotMatch(html, /reset-countdown|role="timer"|倒计时中/, 'nothing counts before the click');
+  const source = fs.readFileSync(path.join(__dirname, '../src/features/agents/ActivityPane.tsx'), 'utf8');
+  assert.ok(source.includes("status = counting ? t('倒计时中…')"), 'while it counts the row says so quietly, in the same slot');
+  assert.ok(source.includes('disabled={counting ||'), 'and cannot start a second countdown');
+  assert.ok(source.includes('{!!count && <ResetCountdown count={count} total={COUNTDOWN} onCancel={() => setCount(null)} />}'));
+  assert.doesNotMatch(source, /activity-reset-cancel|is-counting|'\{seconds\} 秒后重置'/);
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
+  assert.doesNotMatch(css, /activity-reset-cancel|is-counting/);
+  assert.ok(!('{seconds} 秒后重置' in en), 'the old row label is gone from the translations');
 });

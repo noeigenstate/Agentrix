@@ -19,6 +19,7 @@ import { UsageGuide } from './features/guide/UsageGuide';
 import { GuideTour } from './features/guide/GuideTour';
 import { AppMenu } from './features/titlebar/AppMenu';
 import { IconButton } from './shared/IconButton';
+import { ModeSwitch } from './features/reading/ModeSwitch';
 import { showPopup, usePopup } from './features/files/file-popup';
 import { ProjectPanel } from './features/workspace/ProjectPanel';
 import { SettingsDialog } from './features/settings/SettingsDialog';
@@ -308,6 +309,7 @@ export function App() {
         {/* Search opens from its shortcut (Ctrl+Shift+F by default, configurable) and shows while in use. Settings and adding a project are in
             the app menu; with a project open, the activity pane's toggle sits here, where the pane is also hidden below 1001px (workspace.css). */}
         {!focusedId && (searchOpen || query) && <div className="search-input"><MagnifyingGlass size={15} /><input ref={queryInput} placeholder={t('搜索项目或路径…')} aria-label={t('搜索项目')} value={query} onChange={e => setQuery(e.target.value)} onBlur={() => { if (!query) setSearchOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); } }} />{query ? <IconButton label={t('清除搜索')} onClick={() => setQuery('')}><X size={13} /></IconButton> : <kbd>{shortcut('search')}</kbd>}</div>}
+        {shownView === 'workspace' && focus && !previewFile && <ModeSwitch project={focus} />}
         {shownView === 'workspace' && focus && !previewFile && <IconButton label={settings.activityPane ? t('隐藏活动栏') : t('显示活动栏：它正在做什么')} className={`activity-toggle ${settings.activityPane ? 'is-active' : ''}`} onClick={() => setPreference({ activityPane: !settings.activityPane })}><ListChecks size={16} /></IconButton>}
       </div>
       <div className="window-actions"><IconButton label={t('最小化')} onClick={() => api.minimize()}><Minus size={16} /></IconButton><IconButton label={t('最大化或还原')} onClick={() => api.maximize()}><Square size={12} /></IconButton><IconButton label={t('关闭窗口')} className="window-close" onClick={() => api.close()}><X size={17} /></IconButton></div>

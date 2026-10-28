@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { _electron as electron } from 'playwright-core';
 import { testRun } from './test-output.mjs';
 import { waitFor } from './wait.mjs';
+import { setMode } from './mode-switch.mjs';
 
 const root = path.resolve(fileURLToPath(new URL('../', import.meta.url))), require = createRequire(import.meta.url);
 const recordOnly = process.argv.includes('--record');
@@ -204,23 +205,23 @@ try {
   await agent(splitId, 'claude');
   assert.equal(await page.locator('.focus-mode').count(), 0, 'adding the authenticated split keeps the project in overview');
   for (const id of [projects[0].id, splitId]) {
-    await sample(`split-overview-${id === splitId ? 'claude' : 'codex'}`, [projects[0].id, splitId], () => terminal(id).locator('.terminal-split-header > span').first().click());
+    await sample(`split-overview-${id === splitId ? 'claude' : 'codex'}`, [projects[0].id, splitId], () => terminal(id).dispatchEvent('pointerdown'));
     assert.match(await terminal(id).getAttribute('class'), /is-active-terminal/);
     assert.equal(await page.locator('.focus-mode').count(), 0, 'selecting an overview split does not expand the project');
   }
   await sample('split-expand', [projects[0].id, splitId], () => panel(0).locator('.panel-name').click());
-  await sample('split-focus-codex', [projects[0].id, splitId], () => terminal(projects[0].id).locator('.terminal-split-header > span').first().click());
-  await sample('split-focus-claude', [projects[0].id, splitId], () => terminal(splitId).locator('.terminal-split-header > span').first().click());
+  await sample('split-focus-codex', [projects[0].id, splitId], () => terminal(projects[0].id).dispatchEvent('pointerdown'));
+  await sample('split-focus-claude', [projects[0].id, splitId], () => terminal(splitId).dispatchEvent('pointerdown'));
   await grid();
   await terminal(projects[0].id).locator('.reading-composer textarea').click();
-  await panel(0).locator('.panel-header').getByRole('button', { name: '切换到终端', exact: true }).click();
+  await setMode(page, projects[0].name, 'terminal');
   const rawFrames = await sample('raw-positive-control', [projects[0].id], () => panel(0).locator('.panel-name').click(), { raw: true });
   assert.ok(rawFrames.some(frame => frame.splits.some(split => split.xtermVisible)), 'the detector sees a raw terminal');
   assert.ok(results.at(-1).terminalPixelFrames > 0, 'the compositor detector sees the magenta terminal marker');
   assert.equal(await terminal(projects[0].id).locator('.reading-view').count(), 0, 'manual raw choice survives focus');
   const showActivity = page.getByRole('button', { name: '显示活动栏：它正在做什么', exact: true });
   if (await showActivity.count()) await showActivity.click();
-  await panel(0).locator('.panel-header').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
+  await setMode(page, projects[0].name, 'reading');
   for (const [mode, reduced] of [['off', 'no-preference'], ['system', 'reduce'], ['system', 'no-preference'], ['smooth', 'reduce']]) {
     await grid();
     await page.evaluate(mode => window.agentrix.settings({ focusAnimation: mode }), mode);

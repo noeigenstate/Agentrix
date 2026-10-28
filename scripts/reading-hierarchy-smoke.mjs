@@ -53,10 +53,10 @@ try {
   await waitFor(async () => (await state()).shellReady, 'isolated shell ready');
   await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'hierarchy-fixture> ' }; Send-AgentrixEvent 'codex-started'\r"), project.id);
   await waitFor(async () => (await state()).codexActive, 'fixture agent active');
-  if (!await card.locator('.reading-view').count()) await card.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
-  await card.locator('.reading-tools-head').first().waitFor();
   if (!await page.locator('.focus-mode').count()) await card.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  if (!await card.locator('.reading-view').count()) await page.locator('.titlebar-tools').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
+  await card.locator('.reading-tools-head').first().waitFor();
   const reader = card.locator('.reading-scroll');
   const geometry = async () => reader.evaluate(node => {
     const tools = [...node.querySelectorAll('.reading-tools')];

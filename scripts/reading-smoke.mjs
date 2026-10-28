@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
 import { waitFor, terminalsSettled } from './wait.mjs';
+import { setMode } from './mode-switch.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
@@ -61,8 +62,8 @@ try {
   const composer = terminal.locator('.reading-composer textarea'), palette = terminal.getByRole('listbox');
   const reading = () => composer.waitFor({ state: 'visible' });
   const raw = () => composer.waitFor({ state: 'detached' });
-  const showReading = async () => { await card.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click(); await reading(); };
-  const showRaw = async () => { await card.locator('.panel-header').getByRole('button', { name: '切换到终端', exact: true }).click(); await raw(); };
+  const showReading = async () => { await setMode(page, project.name, 'reading', { terminalId }); await reading(); };
+  const showRaw = async () => { await setMode(page, project.name, 'terminal', { terminalId }); await raw(); };
   // A normal shell prompt reports the agent's exit. Keep this fixture active without launching a CLI, and let
   // PowerShell read at the cursor the idle frame supplies. A truly empty return invokes PowerShell's PS> fallback,
   // so return one blank that overwrites the frame's blank after ❯ instead of drawing a second prompt below it.

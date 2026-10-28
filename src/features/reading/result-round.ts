@@ -24,7 +24,7 @@ export function lastRound(entries: readonly ConversationEntry[]): Round {
 }
 
 const STATE: Record<string, string> = { M: '修改', A: '新增', D: '删除', R: '重命名', C: '复制', U: '冲突', '?': '新文件' };
-// A changed file's state in Git, the way the review card and the result card name it.
+// A changed file's state in Git, the way the review card names it.
 export const changeLabel = (change: Pick<GitChange, 'untracked' | 'index' | 'worktree'>) =>
   change.untracked ? STATE['?'] : STATE[(change.worktree.trim() || change.index.trim())[0]] ?? change.worktree;
 
@@ -77,20 +77,6 @@ export function resultActions(result: LatestResult, { remote, canSend }: { remot
     case 'text': return [action('ask'), action('copy')];
     case 'failed': return [action('retry', !canSend || !result.request), action('continue')];
   }
-}
-
-// The files a round wrote with their state in Git, matched by path (Git's are relative to the repository). Without a
-// repository the state is left out.
-export function changedFiles(written: readonly string[], changes: readonly GitChange[] | null) {
-  const slashed = (path: string) => path.replace(/\\/g, '/');
-  return written.map(path => {
-    const normalized = slashed(path);
-    const change = changes?.find(item => {
-      const relative = slashed(item.path);
-      return normalized === relative || normalized.endsWith(`/${relative}`);
-    });
-    return { path, name: normalized.split('/').pop() || path, state: change ? changeLabel(change) : null };
-  });
 }
 
 // How long the round took, as the parts the label is written from.

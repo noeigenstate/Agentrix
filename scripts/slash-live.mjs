@@ -91,7 +91,7 @@ async function settle(agent, startup = false) {
     } else if (s.codexActive && !v.composer) {
       // Handed off to the raw terminal for a prompt: take its default, then return to reading.
       await write('\r'); await sleep(800);
-      const back = card.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true });
+      const back = page.locator('.titlebar-tools').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true });
       if (await visible(back)) await back.click();
     }
     await sleep(700);

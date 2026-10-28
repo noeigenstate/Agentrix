@@ -96,14 +96,13 @@ function projectHeaderHarness(t) {
     for (const slot of slots) slot?.cleanup?.();
     globalThis.window = previousWindow; globalThis.document = previousDocument;
   });
-  const view = { reading: true };
   const { ProjectPanel } = loadUI('features/workspace/ProjectPanel.tsx', {
     react: hooks,
     './ProjectTerminals': { ProjectTerminals: () => null },
     './ActivityPane': { ActivityPane: () => null },
     './ProjectImageDialog': { ProjectImageDialog: () => null },
     './IconButton': loadUI('shared/IconButton.tsx'),
-    './reading-mode': { useTerminalChoice: () => [], readingShown: () => view.reading, setReading: (_id, on) => { view.reading = on; } },
+    './active-terminal': { useActiveTerminal: () => null, setActiveTerminal() {} },
     './voice-input': { useVoice: () => ({ recording: null }) },
     './shortcuts': { shortcut: () => '' },
     './time': { relativeTime: () => '' },
@@ -122,10 +121,10 @@ function projectHeaderHarness(t) {
     while (effects.length) effects.shift()();
     return elements(root);
   };
-  return { props, render, view, listeners, focused, started };
+  return { props, render, listeners, focused, started };
 }
 
-test('only a focused project with the activity toggle off omits the three header actions, at every window width', t => {
+test('only a focused project with the activity toggle off omits the header actions, at every window width, and no card header has a mode toggle', t => {
   const h = projectHeaderHarness(t);
   for (const width of [1600, 1000, 800]) for (const focused of [false, true]) for (const activityOpen of [false, true]) {
     window.innerWidth = width;
@@ -133,14 +132,11 @@ test('only a focused project with the activity toggle off omits the three header
     const nodes = h.render(), visible = !focused || activityOpen;
     const label = `${width}px, focused=${focused}, activityOpen=${activityOpen}`;
     assert.equal(nodes.some(node => node.props.className?.startsWith('status-badge')), visible, `status: ${label}`);
-    assert.equal(nodes.some(node => node.props.label === '切换到终端'), visible, `reading toggle: ${label}`);
+    // The terminal / reading switch is in the title bar of the expanded project (ModeSwitch), never in a card header.
+    assert.equal(nodes.some(node => node.props.label === '切换到终端' || node.props.label === '阅读视图：按文档排版显示对话'), false, `no mode toggle: ${label}`);
     assert.equal(nodes.some(node => node.props.className === 'panel-menu-anchor'), visible, `more menu: ${label}`);
     assert.equal(nodes.find(node => node.props.className === 'panel-name').props.children[0].props.children, 'Example');
   }
-  h.props.focused = true; h.props.activityOpen = true;
-  h.render().find(node => node.props.label === '切换到终端').props.onClick();
-  assert.equal(h.view.reading, false);
-  assert.ok(h.render().some(node => node.props.label === '阅读视图：按文档排版显示对话'));
 });
 
 test('the unread status button still opens a grid card with either activity toggle setting', t => {
@@ -1245,7 +1241,7 @@ test('a generated picture shows its prompt as a two-line summary and a toggle ap
   assert.equal(en['展开提示词'], 'Show prompt'); assert.equal(en['收起'], 'Collapse');
 });
 
-const { latestResult, resultActions, FALLBACK_TITLES, changedFiles, elapsed, lastRound } = require('../src/features/reading/result-round.ts');
+const { latestResult, resultActions, FALLBACK_TITLES, elapsed, lastRound } = require('../src/features/reading/result-round.ts');
 const roundPicture = (id, minute) => readingEntry(id, 'assistant', minute, { text: 'drawn', images: ['data:image/png;base64,AA'], generated: { path: '/home/.codex/generated_images/t/one.png', prompt: 'a prompt' } });
 const roundEdit = (id, minute, written = ['/p/a.ts']) => readingTool(id, minute, { kind: 'edit', tool: 'apply_patch', written });
 const idle = { idle: true, interrupted: false };
@@ -1289,12 +1285,9 @@ test('the buttons under a result depend on its kind, a remote picture and whethe
   assert.deepEqual(ids(failed, { remote: false, canSend: false }), ['retry!', 'continue'], 'a retry waits for the agent to sit at its input');
 });
 
-test('the title, the files and the duration of a round come from data it already has', () => {
+test('the title and the duration of a round come from data it already has', () => {
   assert.deepEqual(Object.keys(FALLBACK_TITLES), ['picture', 'code', 'text', 'failed'], 'a task without a title of its own is named by what the round did');
   for (const title of Object.values(FALLBACK_TITLES)) assert.ok(title in en, `${title} has an English translation`);
-  const git = [{ path: 'src/a.ts', index: ' ', worktree: 'M', untracked: false }, { path: 'src/new.ts', index: ' ', worktree: '?', untracked: true }];
-  assert.deepEqual(changedFiles(['C:\\p\\src\\a.ts', 'C:\\p\\src\\new.ts', 'C:\\p\\other.md'], git).map(file => [file.name, file.state]), [['a.ts', '修改'], ['new.ts', '新文件'], ['other.md', null]]);
-  assert.deepEqual(changedFiles(['/p/a.ts'], null).map(file => file.state), [null], 'without a repository the state is left out');
   assert.deepEqual(elapsed(0, 190000), { hours: 0, minutes: 3, seconds: 10 }); assert.deepEqual(elapsed(0, 3900000), { hours: 1, minutes: 5, seconds: 0 });
 });
 

@@ -127,7 +127,7 @@
 .panel-error > svg { flex: none; color: var(--danger); }
 .panel-error span { min-width: 0; }
 
-/* Split terminals: divided by 1px, each with a thin title and status bar; the selected one has the brighter bars. */
+/* Split terminals: divided by 1px, with no bars. The split in use has a thin inner edge; a small cluster (drag grip, restart, close) shows in its corner while the pointer or the keyboard is in it. */
 .terminal-grid { display: grid; grid-template-columns: repeat(var(--terminal-columns), minmax(0, 1fr)); grid-template-rows: repeat(var(--terminal-rows), minmax(0, 1fr)); }
 .terminal-grid.has-splits { gap: 1px; padding: 0; overflow: auto; grid-template-rows: repeat(var(--terminal-rows), minmax(170px, 1fr)); background: var(--divider); }
 .terminal-split { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-card); }
@@ -135,17 +135,14 @@
 .terminal-slot { position: relative; display: flex; min-width: 0; min-height: 0; }
 .terminal-slot > .terminal-split { flex: 1; }
 .terminal-split-body { position: relative; flex: 1; min-height: 0; overflow: hidden; }
-.terminal-split-header, .terminal-split-footer { display: flex; align-items: center; gap: 8px; flex-shrink: 0; min-height: 32px; padding: 0 10px; font-size: 11px; color: var(--text-2); background: var(--bg-card); }
-.terminal-split-header > span:first-child { color: var(--text-1); }
-.terminal-split-header .icon-button, .terminal-split-footer .icon-button { width: 28px; height: 28px; }
-.terminal-split-footer { justify-content: space-between; }
-.terminal-split-footer > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.terminal-split-footer > div { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.split-status { margin-left: auto; font-size: 11px; color: var(--text-2); }
-.split-status.working { color: var(--text-1); font-weight: 600; }
-.split-status.complete { color: var(--text-1); }
-.has-splits .is-active-terminal > :is(.terminal-split-header, .terminal-split-footer) { background: var(--bg-selected); }
-.has-splits .terminal-split-header { cursor: grab; touch-action: none; user-select: none; }
+.has-splits .is-active-terminal::after { content: ''; position: absolute; inset: 0; z-index: 2; box-shadow: inset 0 0 0 1px var(--border-hover); pointer-events: none; }
+.terminal-split-tools { position: absolute; top: 6px; right: 16px; z-index: 3; display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 8px; background: color-mix(in srgb, var(--bg-card) 88%, transparent); opacity: 0; pointer-events: none; transition: opacity .12s linear; }
+.focus-mode .terminal-split-tools { background: color-mix(in srgb, var(--bg-app) 88%, transparent); }
+.terminal-split:hover .terminal-split-tools, .terminal-split:focus-within .terminal-split-tools { opacity: 1; pointer-events: auto; }
+.terminal-split-tools .icon-button { width: 24px; height: 24px; }
+.terminal-split-grip { display: grid; place-items: center; width: 20px; height: 24px; color: var(--text-3); cursor: grab; touch-action: none; user-select: none; }
+.terminal-split-grip:hover { color: var(--text-1); }
+.terminal-split-restart { position: absolute; left: 50%; bottom: 16px; z-index: 3; transform: translateX(-50%); }
 .terminal-tab { display: flex; gap: 8px; align-items: center; padding: 0 16px; border: 0; border-right: 1px solid var(--divider); font-size: 12px; color: var(--text-2); background: transparent; }
 .terminal-tab:hover { color: var(--text-1); background: var(--bg-hover); }
 

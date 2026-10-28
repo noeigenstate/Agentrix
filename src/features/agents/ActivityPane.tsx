@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowCounterClockwise, CaretRight, CheckCircle, Circle, CircleNotch } from '@phosphor-icons/react';
-import type { AgentTokens, AgentUsage, ProjectTerminal } from '../../shared/types';
+import { ArrowCounterClockwise, CaretRight, CheckCircle, Circle, CircleNotch, Record as RecordDot } from '@phosphor-icons/react';
+import type { AgentCall, AgentTokens, AgentUsage, ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { modelName } from '../reading/model-name';
 import { useNow } from '../reading/useNow';
 import { readScreen, subscribeScreen } from '../terminal/terminal-screen';
 import { sendToAgent } from '../home/send-to-agent';
+import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
+import { ResetCountdown } from './ResetCountdown';
 import { codexResetCount, codexResetsSaid } from './reset-count';
 import './activity-pane.css';
 
@@ -18,20 +20,22 @@ export function tokenCount(value: number) {
 const exactCount = (value: number) => value.toLocaleString('en-US');
 const percentOf = (part: number, whole: number) => whole > 0 ? Math.min(100, Math.round(part / whole * 100)) : 0;
 
-// Beside an expanded project's terminal: the model route, running tasks, context and usage.
+// Beside an expanded project's terminal: the model route, the models it called, running tasks, context and usage.
 export function ActivityPane({ terminal }: { terminal: ProjectTerminal }) {
+  const calls = terminal.agentUsage?.calls;
   return <aside className="activity-pane" aria-label={t('活动')}>
     {terminal.codexActive ? <RouteCard terminal={terminal} /> : <section className="activity-card">
       <p className="activity-empty">{t('在终端里启动 Codex 或 Claude Code 后，这里显示它的模型路由、上下文长度和用量。')}</p>
     </section>}
+    {terminal.codexActive && !!calls?.length && <CallsCard calls={calls} />}
     <section className="activity-card activity-tasks" aria-label={t('正在处理的任务')}>
-      <h4 className="activity-card-title">{t('正在处理的任务')}{(terminal.prompts?.length ?? 0) > 1 && <span className="activity-task-count">{terminal.prompts.length}</span>}</h4>
+      <h4 className="activity-card-title">{t('正在处理的任务')}{(terminal.prompts?.length ?? 0) > 1 && <span className="activity-count">{terminal.prompts.length}</span>}</h4>
       <PromptList terminal={terminal} />
     </section>
-    {terminal.codexActive && <>
+    {terminal.codexActive && <div className="activity-gauges">
       <ContextCard usage={terminal.agentUsage} />
       <UsageCard usage={terminal.agentUsage} terminal={terminal} />
-    </>}
+    </div>}
   </aside>;
 }
 
@@ -53,43 +57,69 @@ function RouteCard({ terminal }: { terminal: ProjectTerminal }) {
       </li>)}
     </ol>
     <p className="activity-note">{settings?.model ? how || t('按默认设置运行') : t('第一次回复后显示模型。')}</p>
-    {!!terminal.agentUsage?.calls?.length && <div className="activity-route-calls">
-      <h5>{t('调用的模型')}</h5>
-      {terminal.agentUsage.calls.map(call => <div className="activity-route-call" key={JSON.stringify([call.agent, call.provider, call.model, call.effort, call.fast])} title={call.tasks.join('\n')}>
-        <ol className="activity-route-steps">
-          {[call.agent, ...(call.provider ? [call.provider] : []), modelName(call.model)].map((label, index, route) => <li key={index} className={index === route.length - 1 ? 'is-model' : ''}>
-            {index > 0 && <CaretRight size={10} weight="bold" aria-hidden="true" />}<span>{label}</span>
-          </li>)}
-        </ol>
-        <p className="activity-note">
-          {t(call.agent === 'Codex' ? 'Codex 子任务 ×{count}' : '子代理 ×{count}', { count: call.preparing + call.running + call.reviewing })}
-          {call.preparing > 0 && <> · <span className="activity-call-state"><i className="activity-call-preparing" aria-hidden="true" />{t('{count} 个正在准备', { count: call.preparing })}</span></>}
-          {call.running > 0 && <> · <span className="activity-call-state"><i className="activity-call-running" aria-hidden="true" />{t('{count} 个运行中', { count: call.running })}</span></>}
-          {call.reviewing > 0 && <> · <span className="activity-call-state"><i className="activity-call-reviewing" aria-hidden="true" />{t('{count} 个审核中', { count: call.reviewing })}</span></>}
-          {call.effort && <> · {t('思考 {effort}', { effort: call.effort })}</>}{call.fast != null && <> · {call.fast ? t('快速') : t('普通模式')}</>}
-        </p>
-        <ol className="activity-call-items">
-          {call.items.slice(0, 4).map((item, index) => <li key={index} title={item.title}>
-            <i className={`activity-call-${item.state}`} aria-hidden="true" /><span className="activity-call-role">{t(item.role)} ·</span><span className="activity-call-title">{item.title}</span>
-          </li>)}
-          {call.items.length > 4 && <li className="activity-call-more">{t('+{count} 个', { count: call.items.length - 4 })}</li>}
-        </ol>
-      </div>)}
-    </div>}
   </section>;
 }
 
-// The context the conversation fills now, out of the model's window.
+// A call's state: the icon in the row's 16px box and the word at its right. Running is the one colour (the spinner).
+const CALL_STATES = {
+  preparing: { word: '准备中', icon: <Circle size={14} aria-hidden="true" /> },
+  running: { word: '运行中', icon: <CircleNotch size={14} weight="bold" className="loading-spinner" aria-hidden="true" /> },
+  reviewing: { word: '审核中', icon: <RecordDot size={14} aria-hidden="true" /> },
+} as const;
+const MAX_CALL_ITEMS = 4;
+
+// The models the agent called: per model one row (its mark, name and service; how it runs at the right), then a row for each of its calls
+// (the state's icon, the role and what it does, the state in words). The heading counts every call; a model's calls past the fourth fold into "+N".
+function CallsCard({ calls }: { calls: AgentCall[] }) {
+  return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
+    <h4 className="activity-card-title">{t('调用的模型')}<span className="activity-count">{calls.reduce((sum, call) => sum + call.items.length, 0)}</span></h4>
+    <ul className="activity-call-groups">
+      {calls.map(call => {
+        const Mark = call.agent === 'Codex' ? CodexLogo : ClaudeLogo, name = modelName(call.model);
+        const how = [call.effort, call.fast != null && (call.fast ? t('快速') : t('普通模式'))].filter(Boolean).join(' · ');
+        return <li key={JSON.stringify([call.agent, call.provider, call.model, call.effort, call.fast])}>
+          <ul className="activity-call-rows">
+            <li className="activity-call-head" title={[call.agent, call.provider, name].filter(Boolean).join(' / ')}>
+              <span className="activity-row-icon"><Mark size={16} /></span>
+              <p><b>{name}</b>{call.provider && <span className="activity-call-provider">{call.provider}</span>}</p>
+              <span className="activity-row-end">{how}</span>
+            </li>
+            {call.items.slice(0, MAX_CALL_ITEMS).map((item, index) => <li key={index} className={`is-${item.state}`} title={item.title}>
+              <span className="activity-row-icon">{CALL_STATES[item.state].icon}</span>
+              <p><span className="activity-call-role">{t(item.role)}</span>{item.title}</p>
+              <span className="activity-row-end">{t(CALL_STATES[item.state].word)}</span>
+            </li>)}
+            {call.items.length > MAX_CALL_ITEMS && <li className="activity-call-more"><span /><p>{t('+{count} 个', { count: call.items.length - MAX_CALL_ITEMS })}</p></li>}
+          </ul>
+        </li>;
+      })}
+    </ul>
+  </section>;
+}
+
+// One metric on an 88 | meter | 48 grid: a label, an optional meter, the figure in the pane's one right-hand number column, and a caption under the meter.
+// The meter's fill is neutral; from 90% it, and the figure, take the warning colour.
+function Metric({ label, value, valueTitle, percent, meterLabel, note, title, className }: {
+  label: ReactNode; value?: string; valueTitle?: string; percent?: number | null; meterLabel?: string; note?: string; title?: string; className?: string;
+}) {
+  return <div className={`activity-metric${percent != null && percent >= 90 ? ' is-warn' : ''}${className ? ` ${className}` : ''}`} title={title}>
+    <span className="activity-metric-label">{label}</span>
+    {percent !== undefined && <Meter percent={percent} label={meterLabel ?? ''} />}
+    {value && <b title={valueTitle}>{value}</b>}
+    {note && <small>{note}</small>}
+  </div>;
+}
+
+// The context the conversation fills now, out of the model's window, as a metric block like the plan's limits (the title is its label). A window that is not known shows "—", not 0%.
 function ContextCard({ usage }: { usage: AgentUsage | null | undefined }) {
-  const context = usage?.context;
+  const context = usage?.context, windowKnown = !!context && context.window > 0;
   const percent = context ? percentOf(context.used, context.window) : 0;
   return <section className="activity-card activity-context" aria-label={t('上下文长度')}>
-    <header className="activity-card-head"><h4 className="activity-card-title">{t('上下文长度')}</h4>{context && <b className="activity-percent">{percent}%</b>}</header>
-    {context ? <>
-      <p className="activity-figure" title={`${exactCount(context.used)} / ${exactCount(context.window)} tokens`}><b>{tokenCount(context.used)}</b><span> / {tokenCount(context.window)} tokens</span></p>
-      <Meter percent={percent} label={t('上下文已用 {percent}%', { percent })} />
-      <p className="activity-note">{t('还可容纳 {count} tokens', { count: tokenCount(Math.max(0, context.window - context.used)) })}</p>
-    </> : <p className="activity-note">{t('第一次回复后显示。')}</p>}
+    {context ? <Metric className="activity-figure" label={t('上下文长度')} percent={windowKnown ? percent : undefined} value={windowKnown ? `${percent}%` : '—'}
+      meterLabel={t('上下文已用 {percent}%', { percent })} title={`${exactCount(context.used)} / ${exactCount(context.window)} tokens`}
+      note={windowKnown ? t('共 {window} tokens · 还可容纳 {count}', { window: tokenCount(context.window), count: tokenCount(Math.max(0, context.window - context.used)) })
+        : t('已用 {count} tokens，窗口大小未知', { count: tokenCount(context.used) })} />
+      : <Metric label={t('上下文长度')} note={t('第一次回复后显示。')} />}
   </section>;
 }
 
@@ -101,21 +131,17 @@ function UsageCard({ usage, terminal }: { usage: AgentUsage | null | undefined; 
   // App's five-second clock rerenders this pane even when the usage snapshot is unchanged.
   const now = Date.now(), updated = usage?.limitsAt != null ? t('{time} 更新', { time: resetTime(usage.limitsAt) }) : null;
   return <section className="activity-card activity-usage" aria-label={t('用量')}>
-    <h4 className="activity-card-title">{t('用量')}</h4>
-    {!!limits.length && <div className="activity-limits">
+    {(limits.length > 0 || known.length > 0) && <div className="activity-metrics">
       {limits.map(limit => {
         const name = limitName(limit.minutes), expired = limit.resetsAt != null && limit.resetsAt <= now;
         const label = expired ? t('已重置，等待更新') : t('{name}已用 {percent}%', { name, percent: Math.round(limit.percent) });
-        return <div key={limit.minutes ?? 0} className="activity-limit">
-          <span>{name}</span>{!expired && <b title={[`${limit.percent.toFixed(1)}%`, updated].filter(Boolean).join(' · ')}>{Math.round(limit.percent)}%</b>}
-          <Meter percent={expired ? null : limit.percent} label={label} />
-          {expired ? <small>{label}</small> : limit.resetsAt != null && <small>{t('{time} 重置', { time: resetTime(limit.resetsAt) })}</small>}
-        </div>;
+        return <Metric key={limit.minutes ?? 0} className="activity-limit" label={name} percent={expired ? null : limit.percent} meterLabel={label}
+          value={expired ? undefined : `${Math.round(limit.percent)}%`} valueTitle={[`${limit.percent.toFixed(1)}%`, updated].filter(Boolean).join(' · ')}
+          note={expired ? label : limit.resetsAt != null ? t('{time} 重置', { time: resetTime(limit.resetsAt) }) : undefined} />;
       })}
+      {known.map(([label, tokens]) => <TokenMetric key={label} label={label} tokens={tokens!} />)}
     </div>}
-    {known.length ? <dl className="activity-tokens">
-      {known.map(([label, tokens]) => <TokenRow key={label} label={label} tokens={tokens!} />)}
-    </dl> : !usage?.context && <p className="activity-note">{t('第一次回复后显示。')}</p>}
+    {!known.length && !usage?.context && <p className="activity-note">{t('第一次回复后显示。')}</p>}
     {usage?.context && !usage.round && <p className="activity-note">{t('本轮从更早的记录开始，暂无法统计。')}</p>}
     {usage?.context && !usage.total && <p className="activity-note">{t('本次对话的总量在更早的记录里。')}</p>}
     {!claude && <ResetQuota key={`${terminal.id}:${terminal.sessionId}:${terminal.agentStartedAt}`} terminal={terminal} />}
@@ -141,20 +167,24 @@ function useResetsSaid(terminal: ProjectTerminal) {
   return said;
 }
 
-// Using one of the plan's limit resets is costly and never happens at once: a click starts a ten-second countdown that
-// the reader can cancel at any moment, and only then does Codex get /usage as a typed command, where it asks which
-// reset to use and to confirm. Agentrix itself never calls a reset. Closing the pane or switching terminals cancels
-// the countdown.
+// Using one of the plan's limit resets is costly and never happens at once: a click starts a ten-second countdown, shown
+// large over the whole window, that the reader can cancel at any moment, and only then does Codex get /usage as a typed
+// command, where it asks which reset to use and to confirm. Agentrix itself never calls a reset. Closing the pane or
+// switching terminals (or the agent stopping) unmounts this and so cancels the countdown.
 const COUNTDOWN = 10;
+// Why the number of resets is not known: a short form for the row's right-hand slot (which must leave the label whole) and the whole sentence for its hover.
+function queryStatus(query: AgentUsage['resetQuery']) {
+  if (query?.state === 'loading') return { short: t('查询中…'), full: t('正在查询剩余次数…') };
+  if (query?.reason === 'remote') return { short: t('暂不支持'), full: t('远程账号暂不支持后台查询') };
+  if (query?.reason === 'provider') return { short: t('暂不支持'), full: t('当前接口不提供重置次数') };
+  if (query?.reason === 'scope') return { short: t('无法确认'), full: t('无法确认账号环境，暂不能查询') };
+  if (query?.state === 'error') return { short: t('查询失败'), full: t('查询失败，将自动重试') };
+  return { short: t('次数未知'), full: t('当前账号或 Codex 版本未提供次数，将自动重试') };
+}
 function ResetQuota({ terminal }: { terminal: ProjectTerminal }) {
-  const left = codexResetCount(terminal.agentUsage, useResetsSaid(terminal)), query = terminal.agentUsage?.resetQuery;
-  const queryNote = query?.state === 'loading' ? t('正在查询剩余次数…')
-    : query?.reason === 'remote' ? t('远程账号暂不支持后台查询')
-    : query?.reason === 'provider' ? t('当前接口不提供重置次数')
-    : query?.reason === 'scope' ? t('无法确认账号环境，暂不能查询')
-    : query?.state === 'error' ? t('查询失败，将自动重试') : t('当前账号或 Codex 版本未提供次数，将自动重试');
+  const left = codexResetCount(terminal.agentUsage, useResetsSaid(terminal)), unknown = queryStatus(terminal.agentUsage?.resetQuery);
   const [count, setCount] = useState<number | null>(null), [note, setNote] = useState<string | null>(null);
-  const cancelButton = useRef<HTMLButtonElement>(null), fired = useRef(false);
+  const row = useRef<HTMLButtonElement>(null), counted = useRef(false), fired = useRef(false);
   const command = '/usage';
   useEffect(() => {
     if (count === null) return;
@@ -163,7 +193,8 @@ function ResetQuota({ terminal }: { terminal: ProjectTerminal }) {
     const timer = window.setTimeout(() => setCount(count - 1), 1000);
     return () => clearTimeout(timer);
   }, [count]);
-  useEffect(() => { if (count === COUNTDOWN) cancelButton.current?.focus(); }, [count]);
+  // Whatever ends the countdown, focus goes back to the row that started it.
+  useEffect(() => { if (count === null && counted.current) row.current?.focus(); counted.current = count !== null; }, [count]);
   useEffect(() => { if (!note) return; const timer = window.setTimeout(() => setNote(null), 8000); return () => clearTimeout(timer); }, [note]);
   const run = async () => {
     // A reading view of this terminal takes it as its own composer would (its popup shows what the agent answers);
@@ -172,36 +203,25 @@ function ResetQuota({ terminal }: { terminal: ProjectTerminal }) {
     const failed = window.dispatchEvent(event) && terminal.sessionId ? await sendToAgent(terminal.id, terminal.sessionId, 'codex', command) : null;
     setNote(failed ?? t('已打开 Codex 的 /usage，在那里选择要用的重置并确认。'));
   };
-  // A small round button. Counting down, the seconds take its place, a ring runs out around it and the way out sits at the end.
-  const counting = count !== null, none = left === 0;
+  // A 32px row on the task grid: the icon, the label and, in the right-hand slot, how many resets are left, or why that is not known, or that it is counting down. The countdown itself is the overlay.
+  const counting = count !== null, status = counting ? t('倒计时中…') : left === 0 ? t('已用完') : left !== null ? t('剩余 {count} 次', { count: left }) : unknown.short;
   const start = () => { fired.current = false; setNote(null); setCount(COUNTDOWN); };
-  return <div className={`activity-reset${counting ? ' is-counting' : ''}`} role={counting ? 'timer' : undefined} aria-live={counting ? 'polite' : undefined}
-    onKeyDown={event => { if (counting && event.key === 'Escape') { event.stopPropagation(); setCount(null); } }}>
-    <div className="activity-estop-wrap">
-      <button type="button" className="activity-estop" disabled={!counting && (none || !terminal.codexActive)} aria-disabled={counting || undefined}
-        aria-label={counting ? t('{seconds} 秒后重置额度', { seconds: count }) : t('重置额度')}
-        title={counting ? undefined : t('点击后有 10 秒可以取消，然后由 {agent} 自己完成重置', { agent: 'Codex' })}
-        onClick={counting ? undefined : start}>
-        <span className="activity-estop-hazard" aria-hidden="true" />
-        <span className="activity-estop-bezel" aria-hidden="true" />
-        <span className="activity-estop-dome">{counting ? <b>{count}</b> : <ArrowCounterClockwise size={24} weight="bold" aria-hidden="true" />}</span>
-        {counting && <svg className="activity-estop-ring" viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="47" pathLength={100} style={{ animationDuration: `${COUNTDOWN}s` }} /></svg>}
-      </button>
-      <span className="activity-estop-label">{counting ? t('{seconds} 秒后重置', { seconds: count }) : t('重置额度')}</span>
-    </div>
-    {counting ? <button ref={cancelButton} type="button" className="activity-reset-cancel" onClick={() => setCount(null)}>{t('取消')}</button>
-      : <small>{left === null ? queryNote : t('剩余 {count} 次', { count: left })}</small>}
-    {note && <p className="activity-reset-note" role="status">{note}</p>}
+  return <div className="activity-reset">
+    <button ref={row} type="button" className="activity-reset-row activity-estop" disabled={counting || left === 0 || !terminal.codexActive}
+      title={[left === null && unknown.full, t('点击后有 10 秒可以取消，然后由 {agent} 自己完成重置', { agent: 'Codex' })].filter(Boolean).join('\n')} onClick={start}>
+      <span className="activity-row-icon"><ArrowCounterClockwise size={14} aria-hidden="true" /></span>
+      <span className="activity-reset-label">{t('重置额度')}</span>
+      <small>{status}</small>
+    </button>
+    {note && <p className="activity-note" role="status">{note}</p>}
+    {!!count && <ResetCountdown count={count} total={COUNTDOWN} onCancel={() => setCount(null)} />}
   </div>;
 }
 
-function TokenRow({ label, tokens }: { label: string; tokens: AgentTokens }) {
+function TokenMetric({ label, tokens }: { label: string; tokens: AgentTokens }) {
   const parts = [t('输入 {count}', { count: tokenCount(tokens.input) }), tokens.input > 0 && tokens.cached > 0 && t('缓存命中 {percent}%', { percent: percentOf(tokens.cached, tokens.input) }), t('输出 {count}', { count: tokenCount(tokens.output) })].filter(Boolean);
   const title = [`${exactCount(tokens.input + tokens.output)} tokens`, t('输入 {count}', { count: exactCount(tokens.input) }), t('缓存命中 {count}', { count: exactCount(tokens.cached) }), t('输出 {count}', { count: exactCount(tokens.output) })].join(' · ');
-  return <div className="activity-token-row" title={title}>
-    <dt>{label}</dt><dd><b>{tokenCount(tokens.input + tokens.output)}</b> tokens</dd>
-    <small>{parts.join(' · ')}</small>
-  </div>;
+  return <Metric className="activity-tokens" label={label} title={title} note={parts.join(' · ')} />;
 }
 
 function Meter({ percent, label }: { percent: number | null; label: string }) {

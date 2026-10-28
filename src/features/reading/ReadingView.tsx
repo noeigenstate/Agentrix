@@ -39,7 +39,7 @@ import { isTypedCommand, pendingPromptCards, sameMessage, type PendingPrompt } f
 import { usePendingPrompts } from './usePendingPrompts';
 import { PendingPromptEntries, UserImages, UserMessage } from './PendingPromptEntries';
 import { AgentMark, AgentTurnItem, stepTime, TimelineStep } from './Timeline';
-import { groupSummary, ImageProgress, ResultActions, ResultFiles, ResultStatus, StepState, WorkingLine } from './ResultCard';
+import { groupSummary, ImageProgress, ResultActions, ResultChecks, ResultStatus, StepState, WorkingLine } from './ResultCard';
 import { latestResult, writtenBy } from './result-round';
 import { AgentCommandRun } from './AgentCommandRun';
 import { FileCards, previewable } from './FileCards';
@@ -576,7 +576,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
   };
   const resultStatus = result && <ResultStatus result={result} taskTitle={terminal.taskTitle} onShowTerminal={onShowTerminal} onError={onError} />;
   const resultActions = result && <>
-    {result.kind === 'code' && <ResultFiles result={result} projectId={projectId} />}
+    {result.kind === 'code' && <ResultChecks result={result} />}
     <ResultActions result={result} projectId={projectId} remote={remote} canSend={!inputBlocked && !!terminal.sessionId} onContinue={continueWith} onRetry={() => void send(result.request, false)} onError={onError} />
   </>;
   // The newest round is the one after your last message; earlier ones keep their words but speak more quietly.

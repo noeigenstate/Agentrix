@@ -24,6 +24,7 @@ function loadUI(name, overrides = {}) {
     if (key === '@phosphor-icons/react') return new Proxy({}, { get: () => () => React.createElement('svg') });
     if (key === 'i18n') return { t: translate };
     if (key === 'time') return { relativeTime: () => '' };
+    if (key === 'active-terminal') return { useActiveTerminal: () => null, setActiveTerminal() {} };
     if (key === 'reading-mode') return { useTerminalChoice: () => [], syncReading() {}, readingShown: item => !!item.sessionId && item.codexActive };
     if (key === 'ReadingView') return { ReadingView: () => null };
     if (key === 'VoiceButton') return { VoiceButton: () => null };
@@ -59,7 +60,7 @@ test('a single visible agent fills the card while hidden shell panes remain rend
   assert.match(card, /data-terminal-slot="shell" style="display:none"/);
   assert.match(card, /data-pane="shell"/);
   assert.match(card, /is-active-terminal[^>]*data-terminal-id="codex"/);
-  assert.doesNotMatch(card, /has-splits|agent-launcher|terminal-split-header/);
+  assert.doesNotMatch(card, /has-splits|agent-launcher|terminal-split-tools/);
   const expanded = renderToStaticMarkup(React.createElement(ProjectTerminals, { ...props, focused: true }));
   assert.match(expanded, /has-splits/); assert.doesNotMatch(expanded, /display:none/);
   assert.match(expanded, /is-active-terminal[^>]*data-terminal-id="shell"/);
@@ -280,21 +281,64 @@ test('a user-typed SSH agent becomes visible while plain PTY panes stay mounted'
   }
 });
 
-test('card reading, restart and voice actions target the visible agent even when the stored active terminal is a shell', t => {
+test('card restart and voice actions target the visible agent even when the stored active terminal is a shell', t => {
   const previous = globalThis.window, calls = [];
   t.after(() => { if (previous) globalThis.window = previous; else delete globalThis.window; });
   globalThis.window = { agentrix: { restartTerminal: async id => { calls.push(['restart', id]); return { ok: true }; } } };
   let stateIndex = 0;
   const { ProjectPanel } = loadUI('workspace/ProjectPanel.tsx', {
-    react: { useState: initial => [[true, false, 'shell'][stateIndex++] ?? initial, () => {}], useRef: current => ({ current }), useEffect() {} },
+    react: { useState: initial => [[true, false][stateIndex++] ?? initial, () => {}], useRef: current => ({ current }), useEffect() {} },
+    'active-terminal': { useActiveTerminal: () => 'shell', setActiveTerminal() {} },
     ProjectTerminals: { ProjectTerminals: () => null }, ActivityPane: { ActivityPane: () => null }, ProjectImageDialog: { ProjectImageDialog: () => null },
     IconButton: { IconButton: () => null }, shortcuts: { shortcut: () => '' },
     'voice-input': { useVoice: () => ({ recording: null }), toggleDictation: (id, session) => calls.push(['voice', id, session]) },
-    'reading-mode': { useTerminalChoice: () => [], readingShown: () => true, setReading: id => calls.push(['reading', id]) },
   });
   const tree = ProjectPanel({ project: { id: 'p', name: 'Project', status: 'codex', codexActive: true, codexActivity: 'working', lastCompletedAt: null, terminals: [terminal('shell'), terminal('agent', { codexActive: true })] }, focused: false, onAction: async promise => (await promise).value });
-  elements(tree).find(node => node.props?.label === '切换到终端').props.onClick();
+  assert.ok(!elements(tree).some(node => node.props?.label === '切换到终端' || node.props?.label === '阅读视图：按文档排版显示对话'), 'the card header has no mode toggle');
   const menuItem = text => elements(tree).find(node => node.props?.role === 'menuitem' && React.Children.toArray(node.props.children).includes(text));
   menuItem('重启当前终端').props.onClick(); menuItem('语音输入').props.onClick();
-  assert.deepEqual(calls, [['reading', 'agent'], ['restart', 'agent'], ['voice', 'agent', 'session-agent']]);
+  assert.deepEqual(calls, [['restart', 'agent'], ['voice', 'agent', 'session-agent']]);
+});
+
+test('the title bar switch shows both modes for the terminal in use, selects the current one and acts on that terminal', () => {
+  const calls = [];
+  let picked = null, raw = [];
+  const { ModeSwitch } = loadUI('reading/ModeSwitch.tsx', {
+    'active-terminal': { useActiveTerminal: () => picked },
+    'reading-mode': { useTerminalChoice: () => raw, readingShown: (item, hidden) => !!item.sessionId && item.codexActive && !hidden.includes(item.id), setReading: (id, on) => calls.push([id, on]) },
+  });
+  const project = { id: 'p', terminals: [terminal('shell'), terminal('agent', { codexActive: true })] };
+  const buttons = () => elements(ModeSwitch({ project })).filter(node => node.type === 'button');
+  // The terminal in use of the expanded project is the one picked, else the first: a plain shell has no switch (only an agent session has two modes).
+  assert.equal(ModeSwitch({ project }), null);
+  picked = 'shell';
+  assert.equal(ModeSwitch({ project }), null);
+  picked = 'agent';
+  assert.deepEqual(buttons().map(node => [node.props['aria-label'], node.props['aria-pressed']]), [['切换到终端', false], ['阅读视图：按文档排版显示对话', true]]);
+  assert.deepEqual(buttons().map(node => node.props.title), ['切换到终端', '阅读视图：按文档排版显示对话']);
+  buttons()[0].props.onClick(); buttons()[1].props.onClick();
+  assert.deepEqual(calls, [['agent', false], ['agent', true]], 'each button sets its own mode, never toggles');
+  raw = ['agent'];
+  assert.deepEqual(buttons().map(node => node.props['aria-pressed']), [true, false]);
+});
+
+test('splits have no title or status bars: a corner cluster (grip, restart, close), a restart over a stopped body, and the grip is what reorders them', () => {
+  const { ProjectTerminals } = loadUI('terminal/ProjectTerminals.tsx', { AgentLauncher: { AgentLauncher: () => React.createElement('div', { className: 'agent-launcher' }) } });
+  const props = { project: { id: 'p', name: 'Project', kind: 'local', terminals: [terminal('shell', { title: '终端 1' }), terminal('codex', { title: '终端 2', codexActive: true, agent: 'codex' }), terminal('old', { title: '终端 3', status: 'exited' })] },
+    activeId: 'shell', fontSize: 14, setActiveId() {}, onExpand() {}, focused: true };
+  const html = renderToStaticMarkup(React.createElement(ProjectTerminals, props));
+  assert.doesNotMatch(html, /terminal-split-header|terminal-split-footer|split-status|session-label|PowerShell|CODEX/, 'no bars, no status text, no shell or agent label');
+  assert.equal((html.match(/class="terminal-split-tools"/g) || []).length, 3, 'one cluster in each split');
+  for (const name of ['重启 Project 终端 1', '关闭 Project 终端 2']) assert.ok(html.includes(`aria-label="${name}"`), name);
+  assert.equal((html.match(/class="button secondary small terminal-split-restart"/g) || []).length, 1, 'only the stopped split has the restart over its body');
+  const single = renderToStaticMarkup(React.createElement(ProjectTerminals, { ...props, project: { ...props.project, terminals: [props.project.terminals[1]] } }));
+  assert.doesNotMatch(single, /terminal-split-tools|terminal-split-restart/, 'a lone terminal has neither (its header already restarts it)');
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/workspace/workspace.css'), 'utf8');
+  assert.doesNotMatch(css, /terminal-split-header|terminal-split-footer|split-status/);
+  assert.match(css, /\.terminal-split-tools \{[^}]*position: absolute;[^}]*opacity: 0; pointer-events: none;/, 'hidden until hover, and then out of the way of the pointer');
+  assert.match(css, /\.terminal-split:hover \.terminal-split-tools, \.terminal-split:focus-within \.terminal-split-tools \{ opacity: 1; pointer-events: auto; \}/, 'shown by the pointer or by keyboard focus');
+  const { TERMINAL_SPLITS } = loadUI('workspace/useProjectReorder.ts', { motion: {} });
+  const split = { dataset: { terminalId: 'codex' } }, grip = { closest: selector => selector === '[data-terminal-id]' ? split : null };
+  assert.deepEqual(TERMINAL_SPLITS.item({ closest: selector => selector === '.terminal-split-grip' ? grip : null }), { element: split, id: 'codex' });
+  assert.equal(TERMINAL_SPLITS.item({ closest: () => null }), null, 'only the grip picks a split up');
 });

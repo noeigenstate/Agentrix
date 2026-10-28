@@ -11,6 +11,7 @@ import { _electron as electron } from 'playwright-core';
 import { waitFor, terminalsSettled } from './wait.mjs';
 import { pick, picked } from './select-helper.mjs';
 import { chooseFromAppMenu, openSettings } from './app-menu-helper.mjs';
+import { setMode } from './mode-switch.mjs';
 const require = createRequire(import.meta.url), exec = promisify(execFile);
 const { fileClipboard } = require('../electron/file-clipboard.cjs');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -173,7 +174,7 @@ try {
   assert.equal(await shell.isVisible(), false); assert.equal(await agent.isVisible(), true);
   assert.equal(await panel.locator('.terminal-grid.has-splits').count(), 0, 'the only visible agent fills the card');
   assert.equal(await panel.locator('.agent-launcher:visible').count(), 0);
-  await panel.getByRole('button', { name: '切换到终端', exact: true }).click();
+  await setMode(page, project.name, 'terminal', { terminalId: agentId });
   await waitFor(async () => (await agent.locator('.xterm-rows').innerText()).includes('RESTORE_FIXTURE_READY'), 'fixture CLI is rendered');
   const agentHost = await agent.locator('.terminal-host .xterm').elementHandle();
   await agent.locator('.terminal-split-body').click({ position: { x: 30, y: 40 } });
@@ -215,6 +216,7 @@ try {
   assert.equal(await agent.isVisible(), true);
   await expand(); await write(agentId, '\x03');
   await waitFor(async () => (await projectState()).terminals.every(terminal => !terminal.codexActive && terminal.shellReady), 'typed fixture exits');
+  await agent.hover();
   await agent.getByRole('button', { name: `关闭 ${project.name} ${(await projectState()).terminals.find(terminal => terminal.id === agentId).title}`, exact: true }).click();
   await waitFor(async () => (await projectState()).terminals.length === 1, 'only the original shell remains');
   await page.evaluate(() => window.agentrix.settings({ fontSize: 12 })); await terminalsSettled(page);

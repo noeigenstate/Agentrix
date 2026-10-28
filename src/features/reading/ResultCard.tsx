@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowCounterClockwise, ArrowsOutSimple, CheckCircle, ChatCircle, CopySimple, DotsThree, DownloadSimple, FileText, PencilSimple, TerminalWindow, XCircle } from '@phosphor-icons/react';
-import type { ConversationEntry, GitChange } from '../../shared/types';
+import type { ConversationEntry } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import './result-card.css';
 import { showPopup } from '../files/file-popup';
 import { stepTime } from './Timeline';
 import { useNow } from './useNow.ts';
-import { changedFiles, elapsed, FALLBACK_TITLES, resultActions, type LatestResult, type ResultAction } from './result-round';
-import { pathTooltip } from './reading-paths';
+import { elapsed, FALLBACK_TITLES, resultActions, type LatestResult, type ResultAction } from './result-round';
 import { PathText } from './PathText';
 import { markdownTitle } from './markdown-escape';
 
-const MENU_WIDTH = 224, MENU_GAP = 4, EDGE = 8, FILES_SHOWN = 5;
+const MENU_WIDTH = 224, MENU_GAP = 4, EDGE = 8;
 
 // How long the round took: "40 秒", "3 分 10 秒", "1 小时 5 分".
 function took(result: LatestResult) {
@@ -80,31 +79,17 @@ export function ResultStatus({ result, taskTitle, onShowTerminal, onError }: { r
   </div>;
 }
 
-// Level 2 of a round that wrote files: which files and what Git calls them (read once as the card appears, never per
-// render), and the checks the round actually ran. No line counts: Git does not give them without a diff per file.
-export function ResultFiles({ result, projectId }: { result: LatestResult; projectId: string }) {
-  const [changes, setChanges] = useState<GitChange[] | null>(null);
-  useEffect(() => {
-    let live = true;
-    void window.agentrix.gitStatus(projectId).then(status => { if (live && status.ok && status.value.repository) setChanges(status.value.files); }).catch(() => {});
-    return () => { live = false; };
-  }, [projectId, result.anchor]);
-  const files = changedFiles(result.written, changes);
+// Level 2 of a round that wrote files: the checks the round actually ran.
+export function ResultChecks({ result }: { result: LatestResult }) {
+  if (!result.checks.length) return null;
   return <div className="result-evidence">
-    <div><p className="result-list-head">{t('改动 {count} 个文件', { count: files.length })}</p>
-      <ul className="result-list">{files.slice(0, FILES_SHOWN).map(file => <li key={file.path}>
-        <button type="button" className="result-file" data-reading-path={file.path} title={`${file.path}\n${pathTooltip()}`} onClick={() => showPopup({ kind: 'file', projectId, path: file.path })}>{file.name}</button>
-        {file.state && <span className="result-state-text">{t(file.state)}</span>}
-      </li>)}</ul>
-      {files.length > FILES_SHOWN && <p className="result-more-files">{t('还有 {count} 个文件', { count: files.length - FILES_SHOWN })}</p>}
-    </div>
-    {result.checks.length > 0 && <div><p className="result-list-head">{t('验证')}</p>
+    <div><p className="result-list-head">{t('验证')}</p>
       <ul className="result-list">{result.checks.map(check => <li key={check.id} className={check.failed ? 'is-failed' : 'is-passed'}>
         {check.failed ? <XCircle size={16} className="result-check" aria-hidden="true" /> : <CheckCircle size={16} className="result-check" aria-hidden="true" />}
         <span className="result-check-name">{t(check.phrase)}<small><PathText text={check.target} /></small></span>
         <span className="result-state-text">{check.failed ? t('失败') : t('通过')}</span>
       </li>)}</ul>
-    </div>}
+    </div>
   </div>;
 }
 
