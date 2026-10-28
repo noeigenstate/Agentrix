@@ -211,6 +211,46 @@ test('every terminal notification status retires its task; archived API requests
   }
 });
 
+test('untracked historical notifications cannot hold completion, but delivery still starts parent review', t => {
+  for (const status of ['completed', 'failed', 'killed', 'stopped']) {
+    const h = fixture(t), { work } = h;
+    const content = `<task-notification>\n<task-id>old-shell</task-id>\n<tool-use-id>old-launch</tool-use-id>\n<status>${status}</status>\n<summary>Previous shell ended</summary>\n</task-notification>`;
+    h.claude({ type: 'system', subtype: 'compact_boundary' }, 1900);
+    h.claude({ type: 'queue-operation', operation: 'enqueue', content });
+    h.claude({ type: 'queue-operation', operation: 'dequeue' }, 2050);
+    h.claude({ type: 'system', subtype: 'stop_hook_summary' }, 2100);
+    assert.equal(work.tasks.size, 0);
+    assert.equal(work.notifications.size, 0, 'an orphan receipt cannot invent pending work');
+    assert.equal(work.state(work.turn), 'complete');
+    assert.equal(work.timer, null);
+    h.claude({ type: 'user', isMeta: true, message: { content: `Context\n${content}\nMore context` } }, 2200);
+    assert.equal(work.state(complete), 'working', 'an actually delivered result still needs review');
+    h.claude({ type: 'system', subtype: 'stop_hook_summary' }, 2300);
+    assert.equal(work.state(work.turn), 'complete');
+  }
+});
+
+test('orphan and repeated receipts preserve tracked work and its queued parent review across compaction', t => {
+  const h = fixture(t), { work } = h;
+  h.claude(tool('Bash', 'launch', { command: 'npm test', run_in_background: true }));
+  h.claude(result('launch', { backgroundTaskId: 'shell' }));
+  h.claude({ type: 'system', subtype: 'compact_boundary' }, 2050);
+  h.claude(notice('old-shell', 'enqueue', 'killed'), 2100);
+  h.claude({ type: 'system', subtype: 'stop_hook_summary' }, 2200);
+  assert.equal(work.tasks.size, 1); assert.equal(work.state(work.turn), 'working');
+  h.claude(notice('shell'), 2300);
+  h.claude(notice('shell'), 2400);
+  assert.equal(work.tasks.size, 0); assert.deepEqual([...work.notifications], ['shell']);
+  h.claude({ type: 'queue-operation', operation: 'dequeue' }, 2500);
+  assert.equal(work.state(work.turn), 'working', 'anonymous dequeue cannot consume a tracked review');
+  h.claude({ type: 'user', message: { content: notice('shell').content } }, 2600);
+  assert.equal(work.state(work.turn), 'working');
+  h.claude({ type: 'system', subtype: 'stop_hook_summary' }, 2700);
+  assert.equal(work.state(work.turn), 'complete');
+  h.claude(notice('shell'), 2800);
+  assert.equal(work.state(work.turn), 'complete', 'a late duplicate cannot recreate a finished review');
+});
+
 test('Codex shell sessions and yielded cells do not hold completion or start a lost-work timer', t => {
   const h = fixture(t), { work } = h;
   h.codex({ type: 'custom_tool_call', name: 'exec', call_id: 'launch', input: 'two commands' });

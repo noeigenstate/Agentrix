@@ -11,7 +11,7 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { _electron as electron } from 'playwright-core';
-import { waitFor } from './wait.mjs';
+import { waitFor, timeoutScale } from './wait.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -105,9 +105,16 @@ try {
   throw error;
 } finally {
   if (application) {
-    if (savedClipboard !== null) await application.evaluate(({ clipboard }, text) => clipboard.writeText(text), savedClipboard).catch(() => {});
-    // Quitting asks about running terminals; the check answers "quit".
-    await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }).catch(() => {});
-    await application.close().catch(() => application.process().kill());
+    const shutdown = (async () => {
+      if (savedClipboard !== null) await application.evaluate(({ clipboard }, text) => clipboard.writeText(text), savedClipboard).catch(() => {});
+      // Quitting asks about running terminals; the check answers "quit".
+      await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }).catch(() => {});
+      await application.close().catch(() => application.process().kill());
+    })();
+    // A shutdown that never settles must not hold the CI step until its timeout once the checks above have run.
+    let timer;
+    const quit = await Promise.race([shutdown.then(() => true), new Promise(resolve => { timer = setTimeout(resolve, 30000 * timeoutScale, false); })]);
+    clearTimeout(timer);
+    if (!quit) { console.log('::warning::the app did not quit in time; killing it'); application.process().kill('SIGKILL'); }
   }
 }

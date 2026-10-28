@@ -100,6 +100,7 @@ class PromptQueue {
     this.schedule(); this.changed();
   }
   // The agent's record shows a message it received; id makes a record read twice count once.
+  // Return its confirmed input time, preserving a submission handled after the record's timestamp.
   start(text, at = this.now(), id = '', localCommand = false) {
     const value = promptText(text);
     if (value === null || (id && this.seen.has(id))) return;
@@ -114,6 +115,7 @@ class PromptQueue {
     }
     const waiting = this.items.filter(item => item.state === 'queued'), key = promptKey(value);
     const item = waiting.find(candidate => promptKey(candidate.text) === key) || waiting[0];
+    const inputAt = Math.max(at, item?.at || 0);
     const summary = promptSummary(value);
     if (!this.task || at >= this.task.at) {
       // A bare continuation starts a round but keeps the work named by the preceding request or delivery.
@@ -123,13 +125,14 @@ class PromptQueue {
       if (this.task.endedAt !== null) this.completeTask();
     }
     // A message from a round that has already ended (its record was read after the round's end was reported).
-    if (at <= this.finishedAt) { if (item) { this.items.splice(this.items.indexOf(item), 1); this.schedule(); } this.changed(); return; }
+    if (at <= this.finishedAt) { if (item) { this.items.splice(this.items.indexOf(item), 1); this.schedule(); } this.changed(); return inputAt; }
     const itemSummary = summary || promptSummary(value, { keepFollowUp: true });
     if (item) Object.assign(item, { text: value, summary: itemSummary, state: 'working', started: at, expires: Infinity });
     else this.items.push({ id: `p${++this.count}`, text: value, summary: itemSummary, state: 'working', at, started: at, expires: Infinity });
     // Working prompts come first, in the order the agent took them up.
     this.items.sort((a, b) => (a.state === 'working' ? 0 : 1) - (b.state === 'working' ? 0 : 1) || (a.started ?? a.at) - (b.started ?? b.at));
     this.changed();
+    return inputAt;
   }
   // Esc can return a queued send to the CLI's input. It is no longer submitted work.
   cancel(text, at = this.now()) {
@@ -162,15 +165,16 @@ class PromptQueue {
     this.task.title = summary ? this.lastReply.text : this.task.text;
   }
   prune() {
-    const now = this.now(), before = this.items.length;
+    const now = this.now(), expired = this.items.filter(item => item.expires <= now);
     this.items = this.items.filter(item => item.expires > now);
-    return this.items.length !== before;
+    // A state read can reach expiry before the timer; it must release deferred completion too.
+    if (expired.length) this.changed(expired);
   }
   schedule() {
     clearTimeout(this.timer); this.timer = null;
     const next = Math.min(...this.items.map(item => item.expires));
     if (!Number.isFinite(next)) return;
-    this.timer = setTimeout(() => { this.timer = null; if (this.prune()) this.changed(); this.schedule(); }, Math.max(50, next - this.now() + 10));
+    this.timer = setTimeout(() => { this.timer = null; this.prune(); this.schedule(); }, Math.max(50, next - this.now() + 10));
     this.timer.unref?.();
   }
 }

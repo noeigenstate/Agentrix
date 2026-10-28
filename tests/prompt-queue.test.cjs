@@ -38,6 +38,41 @@ test('the record decides the text, commands are not prompts, and a line never ta
   assert.deepEqual(view(q), ['working:what was really sent'], 'an answer to a question is dropped after a while');
 });
 
+test('a state read at the grace deadline cannot consume the expiry notification', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  let changes = 0;
+  const q = new PromptQueue(() => changes++);
+  t.after(() => q.reset());
+  q.submit('Use the suggested option', true);
+  q.finish();
+  assert.equal(changes, 1);
+  t.mock.timers.tick(q.grace - 1);
+  assert.deepEqual(view(q), ['queued:Use the suggested option']);
+  assert.equal(changes, 1);
+  t.mock.timers.tick(1);
+  // publicState reads the queue before its timer's 10 ms margin has passed.
+  assert.deepEqual(q.list(), []);
+  assert.equal(changes, 2, 'the expiry itself must notify even when a read prunes it first');
+  t.mock.timers.tick(10);
+  assert.equal(q.timer, null);
+  assert.equal(changes, 2, 'the timer cannot notify the same expiry twice');
+  t.mock.timers.tick(q.grace);
+  assert.deepEqual(q.list(), []); assert.equal(changes, 2);
+});
+
+test('reset cancels an outstanding grace timer without a later expiry callback', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  let changes = 0;
+  const q = new PromptQueue(() => changes++);
+  t.after(() => q.reset());
+  q.submit('Use the suggested option', false);
+  assert.notEqual(q.timer, null);
+  q.reset();
+  assert.equal(q.timer, null); assert.equal(changes, 2);
+  t.mock.timers.tick(q.grace + 10);
+  assert.deepEqual(q.list(), []); assert.equal(changes, 2);
+});
+
 test('a message read after its round already ended does not linger as working', () => {
   const { q } = queue();
   q.submit('修复按钮', false, 1000);
