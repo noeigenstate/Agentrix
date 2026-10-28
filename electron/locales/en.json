@@ -1538,5 +1538,12 @@
   "查询失败": "Query failed",
   "次数未知": "Unknown",
   "已用完": "None left",
-  "拖动调整顺序": "Drag to reorder"
+  "拖动调整顺序": "Drag to reorder",
+  "工作台的小卡片只显示正在运行 Codex 或 Claude Code 的终端；普通终端照常运行，展开项目就能看到。": "Workbench cards show only terminals running Codex or Claude Code; plain shells keep running and appear when you expand the project.",
+  "活动栏重新排版：上下文和用量对齐成一列，活动栏本身不再滚动，调用的模型和任务在各自的窗口里滚动。": "The activity pane is laid out again: context and usage line up in one column, the pane itself no longer scrolls, and the called models and tasks scroll in their own windows.",
+  "终端和阅读视图的切换移到了展开项目后的标题栏。": "The switch between the terminal and the reading view is now in the title bar of an expanded project.",
+  "Codex 重置额度改为在窗口中间显示大的倒计时，按取消、Esc 或点击空白处都能取消。": "Resetting Codex limits now shows a large countdown in the middle of the window; cancel it with the button, Esc or a click outside.",
+  "多个终端分屏时不再有上下两条栏；关闭和重启在鼠标移到终端上时出现在右上角。": "Split terminals no longer have bars above and below; close and restart appear in the top-right corner when you point at a terminal.",
+  "阅读视图里的头像和官方标志去掉了彩色圆环；Claude 额度恢复后自动续跑的提示不再显示成你的排队消息。": "Avatars and official logos in the reading view no longer have a coloured ring, and Claude's automatic continuation after a usage reset no longer shows as your queued message.",
+  "活动栏里的额度会随 Codex 和 Claude Code 的最新记录自动更新，不再停在旧的数字上。": "Limits in the activity pane now follow the latest records of Codex and Claude Code instead of staying on old figures."
 }
