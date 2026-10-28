@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
-import { waitFor } from './wait.mjs';
+import { waitFor, terminalsSettled } from './wait.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
@@ -30,11 +30,11 @@ for (const directory of [profile, home, claudeHome, path.join(project.path, '.cl
 await fs.writeFile(path.join(project.path, '.claude/commands/fix-issue.md'), '---\ndescription: 修复问题\n---\nFix issue $ARGUMENTS.\n');
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false, language: 'zh' } }));
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: home, CLAUDE_CONFIG_DIR: claudeHome }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
-const packaged = process.argv.includes('--packaged'), errors = [], checks = [];
-let app, page;
-const state = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals[0];
-const write = data => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: project.id, data });
-const physicalRows = () => page.locator(`[data-terminal-id="${project.id}"] .xterm-rows > div`).evaluateAll(nodes => nodes.map(node => node.textContent.replace(/\u00a0/g, ' ').trimEnd()));
+const packaged = process.argv.includes('--packaged'), errors = [], checks = [], commandTargets = [];
+let app, page, terminalId = project.id;
+const state = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals.find(terminal => terminal.id === terminalId);
+const write = data => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: terminalId, data });
+const physicalRows = () => page.locator(`[data-terminal-id="${terminalId}"] .xterm-rows > div`).evaluateAll(nodes => nodes.map(node => node.textContent.replace(/\u00a0/g, ' ').trimEnd()));
 // xterm reports focus separately when the card switches views, and answers the CLI's cursor queries when the popup refits it.
 const writes = () => app.evaluate(() => globalThis.voicePastes.filter(item => !['\x1b[I', '\x1b[O'].includes(item.data) && !/^\x1b\[\d+;\d+R$/.test(item.data)));
 const resetWrites = () => app.evaluate(() => { globalThis.voicePastes = []; });
@@ -49,14 +49,20 @@ try {
     BrowserWindow.getAllWindows()[0].webContents.setBackgroundThrottling(false);
   });
   await page.waitForSelector('.project-panel');
-  const card = page.locator(`[data-project-id="${project.id}"]`), terminal = page.locator(`[data-terminal-id="${project.id}"]`);
+  const card = page.locator(`[data-project-id="${project.id}"]`), plain = page.locator(`[data-terminal-id="${project.id}"]`);
+  await card.getByRole('button', { name: '只打开终端', exact: true }).click();
+  await waitFor(async () => (await state()).shellReady, 'isolated plain PowerShell ready');
+  const plainSession = (await state()).sessionId;
+  await plain.locator('.xterm').evaluate(node => { globalThis.readingPlainXterm = node; });
+  const added = await page.evaluate(id => window.agentrix.addTerminal(id), project.id);
+  assert.ok(added.ok); terminalId = added.value;
+  await waitFor(async () => (await state()).shellReady, 'isolated agent fixture PowerShell ready');
+  const terminal = page.locator(`[data-terminal-id="${terminalId}"]`);
   const composer = terminal.locator('.reading-composer textarea'), palette = terminal.getByRole('listbox');
   const reading = () => composer.waitFor({ state: 'visible' });
   const raw = () => composer.waitFor({ state: 'detached' });
   const showReading = async () => { await card.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click(); await reading(); };
   const showRaw = async () => { await card.locator('.panel-header').getByRole('button', { name: '切换到终端', exact: true }).click(); await raw(); };
-  await card.getByRole('button', { name: '只打开终端', exact: true }).click();
-  await waitFor(async () => (await state()).shellReady, 'isolated PowerShell ready');
   // A normal shell prompt reports the agent's exit. Keep this fixture active without launching a CLI, and let
   // PowerShell read at the cursor the idle frame supplies. A truly empty return invokes PowerShell's PS> fallback,
   // so return one blank that overwrites the frame's blank after ❯ instead of drawing a second prompt below it.
@@ -67,6 +73,19 @@ try {
   const idle = "Clear-Host; Show-ReadingFixtureInput\r";
   const renderIdle = async label => { await write(idle); await waitForFixtureIdle(physicalRows, label); };
   await renderIdle('initial idle');
+  // Leave the first plain shell selected before it becomes hidden, so header actions must choose the visible agent.
+  await plain.locator('.xterm-helper-textarea').focus();
+  assert.match(await plain.getAttribute('class'), /is-active-terminal/);
+  await page.getByRole('button', { name: '返回总览', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  await terminalsSettled(page);
+  assert.equal(await plain.isVisible(), false, 'the first plain shell is hidden in the grid');
+  assert.equal(await terminal.isVisible(), true, 'the second, agent-marked terminal is visible in the grid');
+  assert.match(await terminal.getAttribute('class'), /is-active-terminal/);
+  await showRaw(); await showReading();
+  assert.equal(await plain.locator('.reading-view').count(), 0, 'header reading actions leave the hidden plain shell alone');
+  assert.ok(await plain.locator('.xterm').evaluate(node => node === globalThis.readingPlainXterm), 'the hidden shell stays mounted');
+  await waitForFixtureIdle(physicalRows, 'overview idle');
   await terminal.locator('.xterm').evaluate(node => { globalThis.readingXterm = node; });
   const popup = terminal.locator('.reading-terminal-popup');
   const closePopup = async (backdrop = false) => {
@@ -84,8 +103,14 @@ try {
     assert.ok(await popup.locator('.xterm').evaluate(node => node === globalThis.readingXterm));
     assert.ok(await popup.evaluate(node => node.contains(document.activeElement)), 'the live CLI owns keyboard focus');
     await waitFor(async () => (await writes()).some(item => item.data === '\r'), `${label} submitted`);
+    const sent = await writes();
+    assert.ok(sent.length > 0 && sent.every(item => item.id === terminalId), `${label}: command input targets only the visible agent terminal`);
+    commandTargets.push({ label, terminalId, writes: sent });
     await waitForFixtureIdle(physicalRows, label);
-    assert.ok((await physicalRows()).some(row => row.includes('CommandNotFoundException')), `${label}: the real terminal shows the shell error`);
+    assert.ok((await physicalRows()).some(row => row.includes('CommandNotFoundException')), `${label}: the agent stand-in executes the slash command in its real PowerShell`);
+    const hidden = (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals.find(item => item.id === project.id);
+    assert.equal(hidden.sessionId, plainSession, 'the hidden plain shell keeps its running session');
+    assert.equal(hidden.codexActive, false, 'the separate plain shell never becomes the agent fixture');
     await closePopup();
     await waitFor(async () => await composer.isEnabled(), `${label} returned to the reading view`);
   };
@@ -167,7 +192,7 @@ try {
   await closePopup(true);
   checks.push('slash and shell commands use the same live xterm; Escape stays in the CLI and closing sends nothing');
   await composer.fill('keep this draft'); await resetWrites();
-  await page.evaluate(id => window.dispatchEvent(new CustomEvent('agentrix:command', { detail: { terminalId: id, text: '/status' }, cancelable: true })), project.id);
+  await page.evaluate(id => window.dispatchEvent(new CustomEvent('agentrix:command', { detail: { terminalId: id, text: '/status' }, cancelable: true })), terminalId);
   await settled('external /status', '/status');
   assert.equal(await composer.inputValue(), 'keep this draft');
   await write("Clear-Host; Write-Host 'Settings'; Write-Host 'Esc to close'; Start-Sleep -Seconds 4\r");
@@ -326,7 +351,7 @@ try {
   await write('\x03'); await asked.waitFor({ state: 'detached', timeout: 10000 });
   checks.push('a card that comes while someone writes never takes the keyboard');
   assert.deepEqual(errors, []);
-  await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, checks, errors }, null, 2));
+  await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, checks, errors, targeting: { plainTerminalId: project.id, plainSession, agentTerminalId: terminalId, commandTargets } }, null, 2));
   console.log(`PASS: reading palette, typed slash/shell commands, CLI keys, history and permission handoff. Evidence: ${output}`);
 } catch (error) {
   if (page && !page.isClosed()) {
@@ -337,15 +362,17 @@ try {
       console.error('Reading fixture terminal rows:', JSON.stringify(rows));
     }).catch(() => {});
     await writes().then(sent => console.error('Reading fixture writes:', JSON.stringify(sent))).catch(() => {});
-    await fs.writeFile(path.join(output, 'failure.json'), JSON.stringify({ checks, errors, state: await state(), writes: await writes() }, null, 2)).catch(() => {});
+    await fs.writeFile(path.join(output, 'failure.json'), JSON.stringify({ checks, errors, terminalId, state: await state(), writes: await writes(), commandTargets }, null, 2)).catch(() => {});
   }
   throw error;
 } finally {
   if (app) {
     try {
       if (page && !page.isClosed()) {
-        await write('\x03exit\r');
-        await waitFor(async () => (await state()).status === 'exited', 'isolated test shell exits');
+        for (const terminal of (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals) {
+          await page.evaluate(id => window.agentrix.writeTerminal(id, '\x03exit\r'), terminal.id);
+        }
+        await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals.every(terminal => terminal.status === 'exited'), 'isolated test shells exit');
       }
     } finally { await app.close(); }
   }

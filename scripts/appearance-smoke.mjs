@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
-import { waitFor } from './wait.mjs';
+import { waitFor, terminalsSettled } from './wait.mjs';
 import { testRun } from './test-output.mjs';
 import { pick, picked } from './select-helper.mjs';
 import { openSettings } from './app-menu-helper.mjs';
@@ -32,13 +32,29 @@ async function settings(patch) {
   await waitFor(async () => { const saved = (await state()).settings; return Object.entries(patch).every(([key, value]) => saved[key] === value); }, 'settings stored'); await page.waitForTimeout(120);
 }
 async function capture(name) {
+  const solidCard = name.endsWith('-solid.png'), expanded = solidCard && await page.locator('.focus-mode').count() > 0;
+  if (expanded) {
+    await page.getByRole('button', { name: '返回总览', exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  }
   await app.evaluate(() => { appearanceWindow.show(); appearanceWindow.focus(); });
   await page.waitForTimeout(300);
+  const surface = solidCard ? await page.locator('.panel-terminal-area').evaluate(node => {
+    const box = node.getBoundingClientRect();
+    return { background: getComputedStyle(node).backgroundColor, x: (box.left + 8) / innerWidth, y: (box.top + box.height * .7) / innerHeight };
+  }) : null;
   const bytes = await page.screenshot({ animations: 'disabled', timeout: 15000 });
   await fs.writeFile(path.join(output, name), bytes);
-  if (name.endsWith('-solid.png')) {
-    const pane = await app.evaluate(({ nativeImage }, encoded) => { const image = nativeImage.createFromBuffer(Buffer.from(encoded, 'base64')), size = image.getSize(), pixels = image.toBitmap(), offset = (Math.floor(size.height * .7) * size.width + Math.floor(size.width / 2)) * 4; return [pixels[offset + 2], pixels[offset + 1], pixels[offset]]; }, bytes.toString('base64'));
+  if (surface) {
+    assert.equal(surface.background, 'rgb(36, 36, 36)', 'the sampled surface belongs to the overview card');
+    const pane = await app.evaluate(({ nativeImage }, { encoded, x, y }) => { const image = nativeImage.createFromBuffer(Buffer.from(encoded, 'base64')), size = image.getSize(), pixels = image.toBitmap(), offset = (Math.floor(size.height * y) * size.width + Math.floor(size.width * x)) * 4; return [pixels[offset + 2], pixels[offset + 1], pixels[offset]]; }, { encoded: bytes.toString('base64'), ...surface });
     assert.deepEqual(pane, [36, 36, 36], 'screenshot must show the flat grey card');
+    results.cardSurface = { ...surface, pixels: pane };
+  }
+  if (expanded) {
+    await page.locator('.project-panel .panel-name').click();
+    await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+    await terminalsSettled(page);
   }
 }
 try {
@@ -81,7 +97,7 @@ try {
   const marker = path.join(output, 'after-font-change.done').replaceAll("'", "''");
   await page.evaluate(command => window.agentrix.writeTerminal('appearance', command), "[System.IO.File]::WriteAllText('" + marker + "','ok')\r");
   await waitFor(() => fs.access(path.join(output, 'after-font-change.done')).then(() => true, () => false), 'typing works after font and grid reflow');
-  await page.getByRole('button', { name: '全屏查看 主题与字体', exact: true }).click(); await page.waitForFunction(() => !document.querySelector('[data-focus-motion]'));
+  await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).click(); await page.locator('.file-preview').waitFor();
   assert.equal(await page.locator('.file-preview').evaluate(node => getComputedStyle(node).opacity), '1'); await page.getByRole('button', { name: '返回总览', exact: true }).click();
   await settings({ language: 'en' }); await openSettings(page, 'Settings');

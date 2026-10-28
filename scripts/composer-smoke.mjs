@@ -79,6 +79,10 @@ try {
   await showTerminal(terminal);
   await waitFor(async () => terminal.locator('.xterm-rows').innerText().then(text => text.includes('Ask Codex to do anything')), 'real offline Codex input prompt');
   assert.deepEqual(await cellBackgrounds(), original, 'another shell in the same project keeps all ANSI backgrounds');
+  await page.getByRole('button', { name: '返回总览', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  assert.equal(await terminal.isVisible(), true, 'the real Codex terminal is visible in the small card');
+  assert.equal(await control.isVisible(), false, 'the independent plain shell stays hidden in the small card');
   const sessions = (await state()).projects[0].terminals.map(terminal => terminal.sessionId);
   await terminal.locator('.terminal-host').evaluate(node => { globalThis.composerTerminal = node; });
   await composerSample(terminal, 'catalina');
@@ -98,6 +102,7 @@ try {
   await page.screenshot({ path: path.join(output, 'multiline-small.png') });
   await page.keyboard.press('Control+Shift+a'); await page.keyboard.press('Control+c');
   assert.ok((await page.evaluate(() => window.agentrix.readClipboard())).value.includes('第一行：透明输入与清晰文字'));
+  assert.equal(await page.locator('.focus-mode').count(), 0, 'selecting and copying in the small card stays small');
   await waitFor(async () => await terminal.locator('.xterm-decoration-top').count() > 0, 'selected cells rendered');
   assert.ok(await terminal.locator('.xterm-decoration-top:not(.xterm-cursor-block)').evaluateAll(cells => cells.every(cell => getComputedStyle(cell).backgroundColor === 'rgb(56, 56, 56)')), 'selection keeps its opaque grey background (#383838)');
   await page.screenshot({ path: path.join(output, 'selection.png') }); await page.keyboard.press('Escape');
@@ -128,6 +133,9 @@ try {
   assert.equal(await page.locator('.focus-mode').count(), 0, 'popup terminal interaction never expands the card');
   await popup.getByRole('button', { name: '关闭', exact: true }).click(); await popup.waitFor({ state: 'detached' });
   assert.ok(await terminal.locator('.terminal-split-body > .terminal-host > .xterm').evaluate(node => node === globalThis.composerXterm));
+  // The plain-shell control is available in the expanded project; the preceding popup checks ran in the grid.
+  await first.locator('.panel-name').click();
+  await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await reader.fill('preserved reading draft');
   await page.evaluate(id => window.dispatchEvent(new CustomEvent('agentrix:command', { detail: { terminalId: id, text: '/status' }, cancelable: true })), projects[0].id);
   await popup.waitFor();
@@ -140,6 +148,8 @@ try {
   await first.locator('.panel-header').getByRole('button', { name: '切换到终端', exact: true }).click();
   await popup.waitFor({ state: 'detached' });
   assert.ok(await terminal.locator('.terminal-host > .xterm').evaluate(node => node === globalThis.composerXterm), 'leaving reading restores the same terminal');
+  await page.getByRole('button', { name: '返回总览', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   samples.push({ label: 'reading-terminal-popup', sameTerminal: true, closesOnTerminalSwitch: true, closesOnLeavingReading: true });
   // An authenticated native fixture covers the same surface in output/history,
   // alongside backgrounds that must remain colored in an active Codex terminal.

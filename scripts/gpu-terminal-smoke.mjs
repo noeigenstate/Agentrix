@@ -9,14 +9,14 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
-import { waitFor } from './wait.mjs';
+import { waitFor, terminalsSettled } from './wait.mjs';
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = await testRun('gpu-terminal'), dataDir = path.join(output, 'profile');
 const project = { id: randomUUID(), name: 'GPU terminal', path: path.join(output, 'project'), kind: 'local', restore: { terminal: false, codex: false } };
 await fs.mkdir(project.path, { recursive: true }); await fs.mkdir(dataDir, { recursive: true });
 await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', notifications: false, sound: false, announce: false, closeToTray: false, restoreSessions: false, guideVersion: '9.9.9' } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, CLAUDE_CONFIG_DIR: path.join(output, 'claude-home') }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const packaged = process.argv.includes('--packaged');
 const application = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'), args: packaged ? [] : [root], cwd: root, env, timeout: 30000 });
 const errors = [];
@@ -30,7 +30,16 @@ try {
   await page.getByRole('button', { name: '只打开终端', exact: true }).click();
   const state = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0];
   await waitFor(async () => (await state()).shellReady, 'shell ready');
-  const host = page.locator('.terminal-host').first();
+  // Ordinary shell prompts clear agent state; this fixture keeps its agent visible while commands run.
+  await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'AGENT_FIXTURE> ' }; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), project.id);
+  await waitFor(async () => (await state()).codexActive, 'GPU fixture agent active');
+  await page.getByRole('button', { name: '切换到终端', exact: true }).click();
+  await page.getByRole('button', { name: '返回总览', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  await terminalsSettled(page);
+  const host = page.locator('.terminal-split[data-codex-active="true"]:visible .terminal-host');
+  await host.waitFor();
+  assert.equal(await page.locator('.focus-mode').count(), 0, 'GPU interaction starts on a small agent card');
   const screen = () => page.evaluate(id => window.agentrix.attachTerminal(id).then(result => result.value.data), project.id);
 
   // Drawn on the GPU: a WebGL canvas and no rows of HTML.
@@ -88,6 +97,7 @@ try {
   await host.click({ position: { x: 120, y: 60 } });
   await page.keyboard.type('Write-Output ("STILL" + "_LIVE")'); await page.keyboard.press('Enter');
   await waitFor(async () => (await screen()).includes('STILL_LIVE\r\n'), 'the session kept running through the switches');
+  assert.equal((await state()).codexActive, true, 'ordinary commands keep the fixture agent visible');
   assert.ok(await countPixels(true) > 400, 'text is drawn again on the GPU');
   assert.deepEqual(errors, []);
   console.log('PASS: GPU terminal renderer draws, types, selects and copies, and switches renderers without losing the session');

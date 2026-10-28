@@ -58,10 +58,9 @@ try {
   const card = page.locator(`[data-project-id="${project.id}"]`);
   await card.getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await state()).projects[0].shellReady, 'terminal ready');
+  await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await page.evaluate(id => window.agentrix.writeTerminal(id, "Write-Output 'GIT_DRAFT_STAYS'"), project.id);
   const session = (await state()).projects[0].sessionId;
-  await card.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await page.getByRole('treeitem', { name: 'src', exact: true }).click();
   const appFile = page.getByRole('treeitem', { name: 'app.ts', exact: true });
   await waitFor(async () => (await appFile.getAttribute('data-git-tone')) === 'modified', 'file tree Git decorations');

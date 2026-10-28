@@ -27,7 +27,7 @@ for (const directory of [projects[0].path, ssh.project]) {
 }
 // These checks read the terminal's rows as HTML, so the compatible (DOM) renderer draws them; gpu-terminal-smoke covers the GPU one.
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { language: 'zh', terminalRenderer: 'dom', autoSave: false, notifications: false, restoreSessions: false, closeToTray: false } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: profile, AGENTRIX_TEST_SSH_CONFIG: ssh.configFile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+const env = { ...process.env, AGENTRIX_DATA_DIR: profile, AGENTRIX_TEST_SSH_CONFIG: ssh.configFile, CLAUDE_CONFIG_DIR: path.join(output, 'claude-home') }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const packaged = process.argv.includes('--packaged');
 let app, page;
 const wallpaperChecks = [];
@@ -45,6 +45,12 @@ try {
   const first = page.locator(`[data-project-id="${projects[0].id}"]`);
   await first.getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await state()).projects[0].shellReady, 'shell ready');
+  // Keep a visible agent terminal on the overview while its PowerShell fixture prints ANSI output.
+  await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'AGENT_FIXTURE> ' }; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), projects[0].id);
+  await waitFor(async () => (await state()).projects[0].codexActive, 'appearance fixture agent active');
+  await first.getByRole('button', { name: '切换到终端', exact: true }).click();
+  await page.getByRole('button', { name: '返回总览', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   const sessionId = (await state()).projects[0].sessionId;
   await page.evaluate(id => window.agentrix.writeTerminal(id, "Write-Host (([string][char]27) + '[31mRED ' + ([string][char]27) + '[32mGREEN ' + ([string][char]27) + '[34mBLUE' + ([string][char]27) + '[0m')\r"), projects[0].id);
   await waitFor(async () => first.locator('.xterm-rows > div').evaluateAll(rows => rows.some(row => row.textContent.trim() === 'RED GREEN BLUE')), 'ANSI colors');

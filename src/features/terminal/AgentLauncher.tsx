@@ -9,11 +9,12 @@ type Agent = 'claude' | 'codex';
 type History = Record<Agent, { id: string; at: number } | null>;
 const AGENTS: { agent: Agent; name: string; mark: string }[] = [{ agent: 'claude', name: 'Claude Code', mark: '✻' }, { agent: 'codex', name: 'Codex', mark: '>_' }];
 
-// A project with no terminal yet: pick the agent to work with, fresh or continuing this folder's latest conversation
+// A project with no agent on the card: pick the agent to work with, fresh or continuing this folder's latest conversation
 // with it. An agent not installed yet is installed by the same click (Node.js first, when even npm is missing), then
 // started. A plain terminal (for other CLIs) stays one click away.
-export function AgentLauncher({ terminalId, onAction }: {
-  terminalId: string; onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>;
+export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal, runningCount = 0, onExpand }: {
+  terminalId: string; projectId: string; onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>;
+  onOpenTerminal: (id: string) => void; runningCount?: number; onExpand?: () => void;
 }) {
   const [history, setHistory] = useState<History | null>(null);
   const [mode, setMode] = useState<'new' | 'continue' | 'native' | null>(null);
@@ -36,16 +37,29 @@ export function AgentLauncher({ terminalId, onAction }: {
     return () => { active = false; };
   }, [terminalId]);
   const known = !!history && !!(history.claude || history.codex), chosen = mode ?? 'new';
+  const prepareAgentTerminal = async () => {
+    const state = await onAction(window.agentrix.getState());
+    const terminal = state?.projects.find(project => project.id === projectId)?.terminals.find(terminal => terminal.id === terminalId);
+    if (!terminal) return;
+    if (!terminal.sessionId || terminal.status === 'exited') return terminalId;
+    return onAction(window.agentrix.addTerminal(projectId, false));
+  };
   const start = async (what: Agent | 'terminal') => {
     if (starting) return;
     setStarting(what);
     // Once started, the terminal (or the reading view) takes this card's place; a failure leaves it to try again.
-    if (what === 'terminal') await onAction(window.agentrix.startTerminal(terminalId));
+    if (what === 'terminal') {
+      await onAction(window.agentrix.startTerminal(terminalId));
+      onOpenTerminal(terminalId);
+    }
     else if (missing(what) && !agents?.npm) await onAction(window.agentrix.openNode());
     else {
       const installed = missing(what) ? await onAction(window.agentrix.installAgent(what)) : agents;
       if (installed) setAgents(installed);
-      if (installed?.[what].installed) await onAction(window.agentrix.agentLaunch(terminalId, what, chosen));
+      if (installed?.[what].installed) {
+        const id = await prepareAgentTerminal();
+        if (id) await onAction(window.agentrix.agentLaunch(id, what, chosen));
+      }
     }
     setStarting(null);
   };
@@ -73,5 +87,6 @@ export function AgentLauncher({ terminalId, onAction }: {
     <div className="agent-launcher-more">
       <button type="button" className="text-button" disabled={!!starting} onClick={() => void start('terminal')}><TerminalIcon size={13} />{t('只打开终端')}</button>
     </div>
+    {runningCount > 0 && <button type="button" className="text-button agent-launcher-running" onClick={onExpand}>{t('{count} 个终端运行中 · 点击展开', { count: runningCount })}</button>}
   </div></div>;
 }

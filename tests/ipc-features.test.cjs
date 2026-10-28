@@ -247,6 +247,65 @@ test('workspace removal asks the editor first and preserves cleanup order', asyn
   calls.length = 0; assert.equal(await remove('p', true), true); assert.deepEqual(calls[1], ['p', '移除', true, true]);
 });
 
+function terminalAddition({ running = true, terminals = [], fail = false } = {}) {
+  const h = handlers(), calls = [], project = { id: 'p', terminals: [...terminals] };
+  require('../electron/features/terminal/ipc.cjs').registerTerminalIpc({ ...h,
+    findProject: () => project, hasSession: () => running,
+    addTerminal: id => { assert.equal(id, 'p'); project.terminals.push({ id: 'new' }); calls.push('add'); return 'new'; },
+    startTerminal: id => { calls.push(['start', id]); if (fail) throw new Error('start failed'); },
+    removeTerminal: id => { calls.push(['remove', id]); project.terminals = project.terminals.filter(terminal => terminal.id !== id); },
+    broadcast: () => calls.push('broadcast'),
+  });
+  return { add: h.handles.get('terminal:add'), calls, project };
+}
+
+test('terminal add starts the new terminal when start is omitted or true', () => {
+  for (const args of [[], [undefined], [true]]) {
+    const h = terminalAddition();
+    assert.equal(h.add('p', ...args), 'new');
+    assert.deepEqual(h.project.terminals, [{ id: 'new' }]);
+    assert.deepEqual(h.calls, ['add', ['start', 'new']]);
+  }
+});
+
+test('terminal add rejects invalid start flags before mutations, PTY starts or broadcasts', () => {
+  for (const options of [{}, { running: false }, { running: false, terminals: [{ id: 'existing' }] }]) {
+    for (const start of [null, 0, 1, NaN, '', 'true', 'false', {}, [], { start: false }]) {
+      const h = terminalAddition(options), before = structuredClone(h.project);
+      assert.throws(() => h.add('p', start), /无效的终端启动选项/);
+      assert.deepEqual(h.project, before);
+      assert.deepEqual(h.calls, [], 'invalid input must not add/remove records, start a PTY or broadcast');
+    }
+  }
+});
+
+test('terminal reservation returns and broadcasts the new record without starting a PTY', () => {
+  for (const options of [{}, { running: false, terminals: [{ id: 'existing' }] }]) {
+    const h = terminalAddition(options);
+    assert.equal(h.add('p', false), 'new');
+    assert.deepEqual(h.project.terminals, [...(options.terminals ?? []), { id: 'new' }]);
+    assert.deepEqual(h.calls, ['add', 'broadcast']);
+  }
+});
+
+test('terminal add reuses a primary placeholder with no running session, starting only when requested', () => {
+  for (const start of [undefined, true, false]) {
+    const h = terminalAddition({ running: false });
+    assert.equal(h.add('p', start), 'p');
+    assert.deepEqual(h.project.terminals, []);
+    assert.deepEqual(h.calls, start !== false ? [['start', 'p']] : ['broadcast']);
+  }
+});
+
+test('terminal add rolls back a failed new start and never removes the primary placeholder on failure', () => {
+  for (const running of [true, false]) {
+    const h = terminalAddition({ running, fail: true });
+    assert.throws(() => h.add('p'), /start failed/);
+    assert.deepEqual(h.project.terminals, []);
+    assert.deepEqual(h.calls, running ? ['add', ['start', 'new'], ['remove', 'new']] : [['start', 'p']]);
+  }
+});
+
 test('terminal registrar flushes attach, validates paste and resize, and changes focus ownership', () => {
   const h = handlers(), calls = []; let active = null, fileTree = 'p';
   const session = { status: 'shell', sessionId: 'session', seq: 0, chunks: ['data'], flush: () => { calls.push('flush'); session.seq++; }, terminal: { resize: (...args) => calls.push(args) } };

@@ -8,7 +8,7 @@ const SCROLLBAR_WIDTH = 14;
 
 export function fitTerminal(terminal: Terminal) {
   const element = terminal.element, parent = element?.parentElement;
-  if (!element || !parent) return;
+  if (!element || !parent || parent.clientWidth <= 20 || parent.clientHeight <= 20) return;
   const core = (terminal as unknown as { _core: Core })._core;
   const cell = core._renderService.dimensions.css.cell;
   if (!cell.width || !cell.height) return;

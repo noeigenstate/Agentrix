@@ -34,7 +34,7 @@ const api = window.agentrix;
 // A terminal added by shortcut appears after the next state update; focus it once its input exists.
 function focusTerminalWhenReady(id: string, tries = 60) {
   const input = document.querySelector<HTMLElement>(`[data-terminal-id="${CSS.escape(id)}"] .xterm-helper-textarea`);
-  if (input) input.focus(); else if (tries > 0) requestAnimationFrame(() => focusTerminalWhenReady(id, tries - 1));
+  if (input?.getClientRects().length) input.focus(); else if (tries > 0) requestAnimationFrame(() => focusTerminalWhenReady(id, tries - 1));
 }
 
 // A reading view hides xterm's input. Check each focus attempt before falling back.
@@ -42,6 +42,7 @@ function focusOverviewProject(id: string) {
   const panel = document.querySelector<HTMLElement>(`[data-project-id="${CSS.escape(id)}"]`);
   if (!panel) return;
   for (const target of [...panel.querySelectorAll<HTMLElement>('.reading-composer textarea'), ...panel.querySelectorAll<HTMLElement>('.xterm-helper-textarea'), panel]) {
+    if (!target.getClientRects().length) continue;
     target.focus({ preventScroll: true });
     if (document.activeElement === target) break;
   }
@@ -209,7 +210,11 @@ export function App() {
         // A new split in the current project, ready to type in.
         const id = currentProject();
         if (!id) { reportError(t('先点一下要分屏的项目，再按 {key}。', { key: shortcut('newTerminal') })); return; }
-        void perform(api.addTerminal(id)).then(terminal => { if (terminal) focusTerminalWhenReady(terminal); });
+        void (async () => {
+          if (!focusedId && !await focusProject(id)) return;
+          const terminal = await perform(api.addTerminal(id));
+          if (terminal) focusTerminalWhenReady(terminal);
+        })();
       }
       else if (action === 'removeProject') {
         const id = currentProject();

@@ -1521,5 +1521,6 @@
   "后台任务全部结束后，项目右上角不再一直显示「正在处理」。": "Once all background work has ended, a project's badge no longer stays on 正在处理.",
   "在阅读视图里按住 Ctrl（macOS 上是 ⌘）点击文件路径，会在文件管理器中显示这个文件；点击文件夹路径会直接打开文件夹。": "In the reading view, Ctrl+click (⌘+click on macOS) a file path to show the file in your file manager; a folder path opens the folder.",
   "命令组和展开后的每一步不再显示类型图标，「改动」列表也去掉了文件图标。": "Command groups and their opened steps no longer show type icons, and the 改动 list drops its file icons.",
-  "语音输入弹窗的音量波形、跟着卡片移动的弹窗和拖动排序项目都更流畅了。": "The voice popup's level meter, popups that follow a moving card, and dragging projects to reorder them are smoother."
+  "语音输入弹窗的音量波形、跟着卡片移动的弹窗和拖动排序项目都更流畅了。": "The voice popup's level meter, popups that follow a moving card, and dragging projects to reorder them are smoother.",
+  "{count} 个终端运行中 · 点击展开": "{count} terminals running · Click to expand"
 }

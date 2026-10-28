@@ -66,7 +66,7 @@ async function sample(name, ids, action, { raw = false } = {}) {
   await page.evaluate(({ ids, raw, duration }) => {
     const original = ids.map(id => {
       const split = document.querySelector(`[data-terminal-id="${id}"]`);
-      return { id, reading: split.querySelector('.reading-view'), xterm: split.querySelector('.xterm') };
+      return { id, reading: split?.querySelector('.reading-view'), xterm: split?.querySelector('.xterm') };
     });
     const start = performance.now();
     window.readingFocusFrames = [];
@@ -161,9 +161,12 @@ try {
   });
   await page.waitForSelector('.project-panel');
   for (const [index, kind] of ['codex', 'claude'].entries()) {
+    await grid();
     await panel(index).getByRole('button', { name: '只打开终端', exact: true }).click();
     await agent(projects[index].id, kind);
   }
+  await grid();
+  for (const index of [0, 1]) assert.equal(await terminal(projects[index].id).locator('.reading-view').isVisible(), true, 'the agent document is visible in its overview card');
   await page.screenshot({ path: path.join(output, 'overview.png') });
   for (const index of [0, 1]) {
     const id = projects[index].id, kind = index ? 'claude' : 'codex';
@@ -199,9 +202,11 @@ try {
   const splitState = (await state()).projects[0].terminals.find(item => item.id === splitId);
   if (!splitState?.sessionId) await page.evaluate(id => window.agentrix.startTerminal(id), splitId);
   await agent(splitId, 'claude');
+  assert.equal(await page.locator('.focus-mode').count(), 0, 'adding the authenticated split keeps the project in overview');
   for (const id of [projects[0].id, splitId]) {
     await sample(`split-overview-${id === splitId ? 'claude' : 'codex'}`, [projects[0].id, splitId], () => terminal(id).locator('.terminal-split-header > span').first().click());
     assert.match(await terminal(id).getAttribute('class'), /is-active-terminal/);
+    assert.equal(await page.locator('.focus-mode').count(), 0, 'selecting an overview split does not expand the project');
   }
   await sample('split-expand', [projects[0].id, splitId], () => panel(0).locator('.panel-name').click());
   await sample('split-focus-codex', [projects[0].id, splitId], () => terminal(projects[0].id).locator('.terminal-split-header > span').first().click());
@@ -226,7 +231,8 @@ try {
   }
   if (process.argv.includes('--startup')) for (const [offset, kind] of ['codex', 'claude'].entries()) {
     await grid(); const index = offset + 2, id = projects[index].id;
-    await sample(`startup-${kind}`, [id], () => panel(index).getByRole('button', { name: new RegExp(`^${kind === 'codex' ? 'Codex' : 'Claude Code'}`) }).click());
+    const frames = await sample(`startup-${kind}`, [id], () => panel(index).getByRole('button', { name: new RegExp(`^${kind === 'codex' ? 'Codex' : 'Claude Code'}`) }).click());
+    assert.ok(frames.some(frame => frame.splits.some(split => split.readingShown && split.readingVisible)), `${kind} startup captures the visible agent document`);
     await waitFor(async () => (await state()).projects[index].terminals[0].codexActive, `${kind} fake CLI starts`);
   }
   assert.deepEqual(errors, []);

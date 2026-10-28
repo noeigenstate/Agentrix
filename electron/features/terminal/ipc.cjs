@@ -3,12 +3,15 @@ const { approvalStamp } = require('./approval-guard.cjs');
 
 function registerTerminalIpc({ handle, listen, findProject, getSession, hasSession, startTerminal, addTerminal, removeTerminal, confirmTerminalClose, forgetRestorePlan, disposeTerminal, clearStartupError, broadcast, getProjectById, acknowledgeProject, expectCompletion, scheduleState, applyActivity, pollAfterSubmission, send, getActiveTerminal, setActiveTerminal, setActiveFileTree, now = () => Date.now(), platform = process.platform }) {
   handle('terminal:start', startTerminal);
-  handle('terminal:add', id => {
+  handle('terminal:add', (id, start = true) => {
+    if (typeof start !== 'boolean') throw new Error('无效的终端启动选项。');
     const project = findProject(id);
-    if (!hasSession(project.id) && !project.terminals?.length) { startTerminal(project.id); return project.id; }
-    const terminalId = addTerminal(project.id);
-    try { startTerminal(terminalId); return terminalId; }
-    catch (error) { removeTerminal(terminalId); throw error; }
+    const primary = !hasSession(project.id) && !project.terminals?.length;
+    const terminalId = primary ? project.id : addTerminal(project.id);
+    try {
+      if (start) startTerminal(terminalId); else broadcast();
+      return terminalId;
+    } catch (error) { if (!primary) removeTerminal(terminalId); throw error; }
   });
   handle('terminal:close', async id => {
     if (!await confirmTerminalClose(id, '关闭')) return false;

@@ -75,7 +75,7 @@ contextBridge.exposeInMainWorld('agentrix', {
   openVideo: (id, relativePath) => ipcRenderer.invoke('project:open-video', id, relativePath),
   revealProject: id => ipcRenderer.invoke('project:reveal', id),
   startTerminal: id => ipcRenderer.invoke('terminal:start', id),
-  addTerminal: id => ipcRenderer.invoke('terminal:add', id),
+  addTerminal: (id, start) => ipcRenderer.invoke('terminal:add', id, start),
   closeTerminal: id => ipcRenderer.invoke('terminal:close', id),
   restartTerminal: id => ipcRenderer.invoke('terminal:restart', id),
   attachTerminal: id => ipcRenderer.invoke('terminal:attach', id),

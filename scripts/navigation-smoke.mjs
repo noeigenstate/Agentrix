@@ -27,7 +27,7 @@ await fs.writeFile(path.join(ssh.project, 'README.md'), '# 远程文件\n\n[查�
 // A regular shell at the end proves startup restoration actually ran after any legacy entries.
 // These checks read the terminal's rows as HTML, so the compatible (DOM) renderer draws them; gpu-terminal-smoke covers the GPU one.
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [legacy, closed, remote, local], settings: { language: 'zh', terminalRenderer: 'dom', autoSave: false, notifications: false, restoreSessions: true, closeToTray: false } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: profile, AGENTRIX_TEST_SSH_CONFIG: ssh.configFile, AGENTRIX_TEST_RESTORE: '1', CODEX_HOME: path.join(output, 'codex-home') }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+const env = { ...process.env, AGENTRIX_DATA_DIR: profile, AGENTRIX_TEST_SSH_CONFIG: ssh.configFile, AGENTRIX_TEST_RESTORE: '1', CODEX_HOME: path.join(output, 'codex-home'), CLAUDE_CONFIG_DIR: path.join(output, 'claude-home') }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const packaged = process.argv.includes('--packaged'); let app, page;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
 const settled = focused => page.waitForFunction(focused => !!document.querySelector('.focus-mode') === focused && !document.querySelector('[data-focus-motion]'), focused);
@@ -35,11 +35,19 @@ const errors = [];
 try {
   app = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'), args: packaged ? [] : [root], cwd: root, env });
   page = await app.firstWindow(); page.on('pageerror', error => errors.push(error.message));
-  await app.evaluate(({ shell, dialog }) => {
+  await app.evaluate(({ app, shell, dialog }) => {
     globalThis.navigationOpened = []; globalThis.editorCloseReply = 2;
     shell.openPath = async target => { globalThis.navigationOpened.push(target); return ''; };
     shell.openExternal = async target => { globalThis.navigationOpened.push(target); };
     dialog.showMessageBox = async (_window, options) => ({ response: options.title === '未保存的修改' ? globalThis.editorCloseReply : 1 });
+    // The Windows SSH fixture echoes input; retain its authenticated prompt to seed an agent lifecycle below.
+    const require = process.getBuiltinModule('module').createRequire(process.getBuiltinModule('path').join(app.getAppPath(), 'package.json'));
+    const { RemoteConnection } = require('./electron/remote-connection.cjs');
+    const receive = RemoteConnection.prototype.receive;
+    RemoteConnection.prototype.receive = function(message) {
+      receive.call(this, message);
+      if (message.type === 'event' && message.event?.type === 'shell-prompt') globalThis.navigationSSH = { connection: this, event: message.event };
+    };
   });
   await page.waitForSelector('.project-panel');
   await waitFor(async () => (await state()).projects.find(project => project.id === local.id).shellReady, 'ordinary shell restores while legacy-finished terminals remain stopped');
@@ -82,21 +90,42 @@ try {
   await second.getByRole('button', { name: '启动终端', exact: true }).click();
   await waitFor(async () => (await state()).projects.find(project => project.id === remote.id).shellReady, 'real SSH transport ready');
   const sessionId = (await state()).projects.find(project => project.id === remote.id).sessionId;
+  await app.evaluate(() => {
+    const { connection, event } = globalThis.navigationSSH;
+    connection.receive({ type: 'event', event: { ...event, type: 'codex-started', sequence: event.sequence + 1, agent: 'claude', cwd: connection.project.path } });
+  });
+  await waitFor(async () => (await state()).projects.find(project => project.id === remote.id).codexActive, 'visible SSH fixture agent');
+  await second.getByRole('button', { name: '切换到终端', exact: true }).click();
+  await page.getByRole('button', { name: '返回总览', exact: true }).click(); await settled(false);
   // Cycle all four cards, including a live reading view whose hidden xterm cannot take focus.
   for (const project of [legacy, closed]) {
-    await page.locator(`[data-project-id="${project.id}"]`).getByRole('button', { name: '只打开终端', exact: true }).click();
+    const terminalId = (await state()).projects.find(item => item.id === project.id).terminals[0].id;
+    await page.evaluate(id => window.agentrix.startTerminal(id), terminalId);
     await waitFor(async () => (await state()).projects.find(item => item.id === project.id).shellReady, 'navigation shell ready');
+    await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'AGENT_FIXTURE> ' }; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), terminalId);
+    await waitFor(async () => (await state()).projects.find(item => item.id === project.id).codexActive, 'visible navigation fixture agent');
+    await page.locator(`[data-project-id="${project.id}"]`).getByRole('button', { name: '切换到终端', exact: true }).click();
   }
-  await page.evaluate(id => window.agentrix.writeTerminal(id, "Send-AgentrixEvent 'codex-started'; Start-Sleep 3600\r"), local.id);
-  await waitFor(async () => (await state()).projects.find(project => project.id === local.id).codexActive, 'navigation fake agent session');
-  await first.locator('.reading-composer textarea').waitFor();
+  const hiddenShell = (await state()).projects.find(project => project.id === local.id).terminals[0].id;
+  const agentId = (await page.evaluate(id => window.agentrix.addTerminal(id), local.id)).value;
+  await waitFor(async () => (await state()).projects.find(project => project.id === local.id).terminals.find(terminal => terminal.id === agentId)?.shellReady, 'navigation agent shell ready');
+  await page.evaluate(id => window.agentrix.writeTerminal(id, "Send-AgentrixEvent 'codex-started' -Agent 'codex'; Start-Sleep 3600\r"), agentId);
+  await waitFor(async () => (await state()).projects.find(project => project.id === local.id).terminals.find(terminal => terminal.id === agentId)?.codexActive, 'navigation fake agent session');
+  const agent = first.locator(`[data-terminal-id="${agentId}"]`);
+  await agent.locator('.reading-composer textarea').waitFor();
+  assert.equal(await first.locator(`[data-terminal-id="${hiddenShell}"]`).isVisible(), false, 'the ordinary shell stays hidden beside the visible reading agent');
+  assert.equal(await first.locator('.terminal-split:visible').count(), 1);
+  await first.getByRole('button', { name: '切换到终端', exact: true }).click();
+  await waitFor(async () => !await agent.locator('.reading-view').count(), 'the header toggles the visible agent rather than the hidden shell');
+  await first.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
+  await agent.locator('.reading-composer textarea').waitFor();
   const order = [legacy, closed, remote, local], hud = page.locator('.project-switch-hud');
   assert.equal(await hud.getAttribute('aria-live'), 'polite');
   const assertSwitch = async (project, overview = true, input = project === local ? '.reading-composer textarea' : '.xterm-helper-textarea') => {
     const panel = page.locator(`[data-project-id="${project.id}"]`), position = order.indexOf(project) + 1;
     await page.waitForFunction(({ id, overview, input }) => {
       const panel = document.querySelector(`[data-project-id="${id}"]`);
-      return panel?.classList.contains('is-nav-target') && (!overview || (input ? document.activeElement?.matches(input) && panel.contains(document.activeElement) : document.activeElement === panel));
+      return panel?.classList.contains('is-nav-target') && (!overview || (input ? document.activeElement?.matches(input) && document.activeElement.getClientRects().length && panel.contains(document.activeElement) : document.activeElement === panel));
     }, { id: project.id, overview, input });
     assert.equal(await page.locator('.project-panel.is-nav-target').count(), 1);
     assert.equal(await hud.locator('.project-switch-name').textContent(), project.name);
@@ -111,7 +140,9 @@ try {
     if (overview) assert.equal(await page.locator('.focus-mode').count(), 0, 'shortcut focus never expands a small card');
     else assert.equal(await panel.isVisible(), true);
   };
-  await second.locator('.xterm-helper-textarea').focus();
+  // An empty xterm can give its helper textarea zero width; visibility belongs to its terminal host.
+  const remoteInput = second.locator('.terminal-host:visible .xterm-helper-textarea');
+  await remoteInput.focus();
   for (const project of [local, legacy, closed, remote]) { await page.keyboard.press('Control+Shift+ArrowRight'); await assertSwitch(project); }
   for (const project of [closed, legacy, local, remote]) { await page.keyboard.press('Control+Shift+ArrowLeft'); await assertSwitch(project); }
   await page.keyboard.press('Control+Shift+ArrowRight'); await page.waitForTimeout(350); await page.screenshot({ path: path.join(output, 'project-switch-overview.png') }); await page.keyboard.press('Control+Shift+ArrowLeft'); await assertSwitch(remote);
@@ -127,12 +158,12 @@ try {
   assert.deepEqual(await page.evaluate(id => window.agentrix.closeTerminal(id), closedTerminal), { ok: true, value: true });
   await page.locator(`[data-project-id="${closed.id}"] .xterm-helper-textarea`).waitFor({ state: 'detached' });
   await page.keyboard.press('Control+Shift+ArrowLeft'); await assertSwitch(closed, true, null);
-  await second.locator('.xterm-helper-textarea').focus();
+  await remoteInput.focus();
   await page.evaluate(id => { document.querySelector(`[data-project-id="${id}"]`).focus = () => {}; }, closed.id);
   try {
     await page.keyboard.press('Control+Shift+ArrowLeft');
     await assertSwitch(closed, false);
-    assert.equal(await second.locator('.xterm-helper-textarea').evaluate(node => document.activeElement === node), true);
+    assert.equal(await remoteInput.evaluate(node => document.activeElement === node), true);
     await page.keyboard.press('Control+Shift+ArrowLeft'); await assertSwitch(legacy);
   } finally { await page.evaluate(id => { delete document.querySelector(`[data-project-id="${id}"]`).focus; }, closed.id); }
   // Turning off motion leaves a static blue ring, and repeated presses renew the feedback timer.

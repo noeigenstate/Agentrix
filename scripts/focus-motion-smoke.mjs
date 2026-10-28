@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
-import { waitFor } from './wait.mjs';
+import { waitFor, terminalsSettled } from './wait.mjs';
 import { pick, picked } from './select-helper.mjs';
 import { openSettings } from './app-menu-helper.mjs';
 
@@ -44,6 +44,19 @@ async function landed(id) {
   });
   assert.ok(gap < 2, `panel must land in its layout slot, gap=${gap}`);
 }
+// Hold the two sampled flights as they start; a busy runner can otherwise miss the transition before polling.
+async function holdMotion(panel) {
+  await panel.evaluate(panel => {
+    panel.animate = function(keyframes, options) {
+      const animation = Element.prototype.animate.call(this, keyframes, options);
+      animation.pause();
+      return animation;
+    };
+  });
+}
+async function playMotion(panel) {
+  await panel.evaluate(panel => { delete panel.animate; panel.getAnimations().forEach(animation => animation.play()); });
+}
 try {
   application = await electron.launch({ executablePath: actualExecutable || (packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron')), args: actualExecutable || packaged ? [] : [root], cwd: root, env, timeout: 30000 });
   page = await application.firstWindow(); page.on('pageerror', error => errors.push(error.message));
@@ -59,6 +72,15 @@ try {
   const id = projects.at(-1).id, panel = page.locator(`[data-project-id="${id}"]`);
   await panel.getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects.find(project => project.id === id).shellReady, 'initial PowerShell prompt');
+  // Keep the real PowerShell editor active as an offline agent terminal, including after each submitted command.
+  await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'PS ' + (Get-Location).Path + '> ' }; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), id);
+  await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects.find(project => project.id === id).codexActive, 'authenticated agent fixture');
+  await panel.locator('.reading-view').waitFor();
+  await panel.locator('.panel-header').getByRole('button', { name: '切换到终端', exact: true }).click();
+  await panel.locator('.reading-view').waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: '返回总览', exact: true }).click();
+  await settled(false); await terminalsSettled(page);
+  assert.equal(await panel.locator('.terminal-split').isVisible(), true, 'the agent terminal is visible before the small-card input checks');
   await panel.locator('.panel-terminal-area').click({ position: { x: 36, y: 95 } });
   await page.keyboard.type("[IO.File]::WriteAllText('first-line.txt', 'FIRST')");
   await page.keyboard.press('Shift+Enter');
@@ -67,7 +89,8 @@ try {
   assert.equal(await page.locator('.focus-mode').count(), 0);
   await page.keyboard.press('Enter');
   await waitFor(async () => fs.access(path.join(projects.at(-1).path, 'second-line.txt')).then(() => true, () => false), 'both submitted PowerShell lines execute');
-  await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects.find(project => project.id === id).shellReady, 'PowerShell prompt after multiline input');
+  await waitFor(async () => panel.locator('.xterm-rows > div').allTextContents().then(rows => rows.join('').replace(/\s/g, '').endsWith(`PS${projects.at(-1).path}>`.replace(/\s/g, ''))), 'PowerShell prompt after multiline input');
+  assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects.find(project => project.id === id).codexActive, true, 'the fixture remains an agent after multiline execution');
   assert.equal(await fs.readFile(path.join(projects.at(-1).path, 'first-line.txt'), 'utf8'), 'FIRST');
   assert.equal(await fs.readFile(path.join(projects.at(-1).path, 'second-line.txt'), 'utf8'), 'SECOND');
   console.log('PASS: real PowerShell edits two lines with Shift+Enter and executes both only after Enter');
@@ -91,24 +114,26 @@ try {
   const original = await panel.boundingBox();
   const overviewViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   await page.screenshot({ path: path.join(output, 'overview.png') });
+  await holdMotion(panel);
   await panel.locator('.panel-header').click({ position: { x: 8, y: 8 } });
   await page.waitForSelector('[data-focus-motion="opening"] .focus-motion-panel');
   const mid = await panel.evaluate(panel => {
     const animation = panel.getAnimations().find(animation => animation.effect.getKeyframes().some(frame => frame.transform));
-    animation.pause(); animation.currentTime = Number(animation.effect.getTiming().duration) * .35;
+    animation.currentTime = Number(animation.effect.getTiming().duration) * .35;
     const box = panel.getBoundingClientRect();
     return { width: box.width, height: box.height, targetWidth: panel.offsetWidth, targetHeight: panel.offsetHeight };
   });
   assert.ok(mid.width > original.width + 5 && mid.width < mid.targetWidth - 5, 'opening has intermediate widths between the card and expanded project');
   assert.ok(mid.height > original.height + 5 && mid.height < mid.targetHeight - 5, 'opening has intermediate heights');
   await page.screenshot({ path: path.join(output, 'expanding.png') });
-  await panel.evaluate(panel => panel.getAnimations().forEach(animation => animation.play()));
+  await playMotion(panel);
   await settled(true); await landed(id);
   assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen()), false, 'project expansion keeps the native window windowed');
   assert.deepEqual(await page.evaluate(() => ({ width: innerWidth, height: innerHeight })), overviewViewport, 'expansion preserves the window viewport');
   await page.screenshot({ path: path.join(output, 'focused.png') });
   assert.ok(await panel.evaluate(panel => panel.querySelector('.terminal-host') === globalThis.motionTerminal));
   const full = await panel.boundingBox();
+  await holdMotion(panel);
   await page.getByRole('button', { name: '返回总览', exact: true }).click();
   await page.waitForSelector('[data-focus-motion="closing"] .focus-motion-panel');
   await page.waitForFunction(({ id, viewport }) => {
@@ -117,14 +142,14 @@ try {
   }, { id, viewport: overviewViewport });
   const shrinking = await panel.evaluate(panel => {
     const animation = panel.getAnimations().find(animation => animation.effect.getKeyframes().some(frame => frame.transform));
-    animation.pause(); animation.currentTime = Number(animation.effect.getTiming().duration) * .35;
+    animation.currentTime = Number(animation.effect.getTiming().duration) * .35;
     const box = panel.getBoundingClientRect();
     return { width: box.width, targetWidth: panel.offsetWidth, right: box.right, bottom: box.bottom, viewportWidth: innerWidth, viewportHeight: innerHeight };
   });
   assert.ok(shrinking.width > shrinking.targetWidth + 5 && shrinking.width < full.width - 5, 'return shrinks continuously into the grid');
   assert.ok(shrinking.right <= shrinking.viewportWidth + 1 && shrinking.bottom <= shrinking.viewportHeight + 1, 'the whole shrinking card remains inside the native window');
   await page.screenshot({ path: path.join(output, 'returning.png') });
-  await panel.evaluate(panel => panel.getAnimations().forEach(animation => animation.play()));
+  await playMotion(panel);
   await settled(false); await landed(id);
   assert.ok(await panel.evaluate(panel => panel.querySelector('.terminal-host') === globalThis.motionTerminal));
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects.find(project => project.id === id).sessionId, sessionId);

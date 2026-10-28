@@ -149,7 +149,7 @@ type Bridge = {
   openVideo(id: string, relativePath: string): Promise<Result<void>>;
   revealProject(id: string): Promise<Result<ProjectLocation>>;
   startTerminal(id: string): Promise<Result<void>>;
-  addTerminal(id: string): Promise<Result<string>>;
+  addTerminal(id: string, start?: boolean): Promise<Result<string>>;
   closeTerminal(id: string): Promise<Result<boolean>>;
   restartTerminal(id: string): Promise<Result<boolean>>;
   attachTerminal(id: string): Promise<Result<TerminalSnapshot>>;

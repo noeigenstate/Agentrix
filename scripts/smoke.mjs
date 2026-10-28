@@ -145,7 +145,9 @@ try {
       return hit === button || button.contains(hit);
     }), 'the actual start button must receive pointer input');
     await startButton.click();
-    if (index === 0) await page.getByRole('button', { name: '返回总览', exact: true }).click();
+    await page.waitForSelector('.focus-mode');
+    await page.getByRole('button', { name: '返回总览', exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector('[data-focus-motion]'));
   }
   await waitFor(async () => {
     const result = await page.evaluate(() => window.agentrix.getState());
@@ -153,6 +155,8 @@ try {
   }, 'six PowerShell terminals ready');
   console.log('PASS: real button clicks start six ConPTY terminals in grid and fullscreen views');
 
+  await page.locator(`[data-project-id="${projects[0].id}"] .panel-name`).click();
+  await page.waitForFunction(() => !document.querySelector('[data-focus-motion]'));
   const colorProof = path.join(projects[0].path, 'color-env.json');
   await page.evaluate(id => window.agentrix.writeTerminal(id, "[IO.File]::WriteAllText((Join-Path (Get-Location).Path 'color-env.json'), (@{NoColor=$env:NO_COLOR;DisableColors=$env:NODE_DISABLE_COLORS;ForceColor=$env:FORCE_COLOR;Term=$env:TERM;ColorTerm=$env:COLORTERM} | ConvertTo-Json -Compress))\r"), projects[0].id);
   await waitFor(async () => { try { return !!JSON.parse(await fs.readFile(colorProof, 'utf8')); } catch { return false; } }, 'color environment proof');
@@ -198,6 +202,8 @@ try {
   }, 'Codex parses notification config without losing Windows argument quotes');
   await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[1].shellReady, 'Codex config check returns prompt');
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[1].error, null);
+  await page.getByRole('button', { name: '返回总览', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('[data-focus-motion]'));
 
   const runtime = (await fs.readdir(dataDir)).find(name => name.startsWith('runtime-'));
   const bootstraps = [];

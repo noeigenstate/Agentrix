@@ -19,7 +19,7 @@ for (const directory of [profile, path.join(home, 'sessions'), ...projects.map(p
 await fs.writeFile(path.join(projects[0].path, 'README.md'), '# 清晰的工作区\n\n保留文字、代码和状态的层次。\n');
 // These checks read the terminal's rows as HTML, so the compatible (DOM) renderer draws them; gpu-terminal-smoke covers the GPU one.
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { language: 'zh', terminalRenderer: 'dom', notifications: false, sound: false, closeToTray: false, restoreSessions: false, fontSize: 14 } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: home }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: home, CLAUDE_CONFIG_DIR: path.join(output, 'claude-home') }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const packaged = process.argv.includes('--packaged');
 let app, page;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
@@ -74,19 +74,25 @@ try {
   await page.waitForSelector('.project-panel');
   assert.equal((await state()).settings.theme, 'mono');
   for (let index = 0; index < 4; index++) {
-    await panel(index).getByRole('button', { name: '只打开终端', exact: true }).click();
+    // Seed native sessions without expanding/acknowledging the restored unread card.
+    await page.evaluate(id => window.agentrix.startTerminal(id), projects[index].id);
     await waitFor(async () => (await state()).projects[index].shellReady, 'native terminal ready');
     // Submitting a shell command acknowledges a restored unread completion.
     if (index === 1) continue;
-    await write(index, `Clear-Host; Write-Host 'Agentrix / ${names[index]}'; Write-Host ''; Write-Host '  项目、终端和输入草稿各自独立。'; Write-Host '  Ctrl + 鼠标左键打开文件与链接'; Write-Host ''; Write-Host '  PASS  ANSI colors and readable text' -ForegroundColor Green; Write-Host '  INFO  状态变更后继续工作' -ForegroundColor Cyan\r`);
+    await write(index, `function global:prompt { 'AGENT_FIXTURE> ' }; Clear-Host; Write-Host 'Agentrix / ${names[index]}'; Write-Host ''; Write-Host '  项目、终端和输入草稿各自独立。'; Write-Host '  Ctrl + 鼠标左键打开文件与链接'; Write-Host ''; Write-Host '  PASS  ANSI colors and readable text' -ForegroundColor Green; Write-Host '  INFO  状态变更后继续工作' -ForegroundColor Cyan; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r`);
+    await waitFor(async () => (await state()).projects[index].codexActive, 'visible visual fixture agent');
+    await panel(index).getByRole('button', { name: '切换到终端', exact: true }).click();
     await waitFor(async () => panel(index).locator('.xterm-rows').innerText().then(text => text.includes('ANSI colors and readable text')), 'readable terminal output');
   }
+  assert.equal(await page.locator('.focus-mode').count(), 0, 'visual grid checks start in overview');
   const thread = randomUUID(), transcript = path.join(home, 'sessions', `rollout-${thread}.jsonl`);
   const record = (type, turn) => JSON.stringify({ type: 'event_msg', timestamp: new Date().toISOString(), payload: { type, turn_id: turn } }) + '\n';
   const submitted = message => JSON.stringify({ type: 'event_msg', timestamp: new Date().toISOString(), payload: { type: 'user_message', message } }) + '\n';
   const quote = value => "'" + value.replaceAll("'", "''") + "'";
-  await write(0, `Clear-Host; Write-Host 'Agentrix / 界面开发'; Write-Host ''; Write-Host '  正在处理：验证独立项目的任务状态' -ForegroundColor Cyan; Write-Host '  背景任务运行中，可操作其他窗口。'; Write-Host ''; Send-AgentrixEvent 'codex-started'; for ($pgVisual=0; $pgVisual -lt 2400 -and -not (Test-Path -LiteralPath ${quote(doneFile)}); $pgVisual++) { Start-Sleep -Milliseconds 100 }; Send-AgentrixEvent 'codex-exited'\r`);
-  await waitFor(async () => (await state()).projects[0].codexActive, 'offline task active');
+  await panel(0).getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
+  // This blocking task restores shell events so cleanup can observe its return to PowerShell.
+  await write(0, `function global:prompt { Send-AgentrixEvent 'shell-prompt'; 'PS> ' }; Clear-Host; Write-Host 'Agentrix / 界面开发'; Write-Host ''; Write-Host '  正在处理：验证独立项目的任务状态' -ForegroundColor Cyan; Write-Host '  背景任务运行中，可操作其他窗口。'; Write-Host ''; Send-AgentrixEvent 'codex-started' -Agent 'codex'; for ($pgVisual=0; $pgVisual -lt 2400 -and -not (Test-Path -LiteralPath ${quote(doneFile)}); $pgVisual++) { Start-Sleep -Milliseconds 100 }; Send-AgentrixEvent 'codex-exited'\r`);
+  await waitFor(async () => { const project = (await state()).projects[0]; return project.codexActive && project.agent === 'codex'; }, 'offline task active');
   // The running agent's conversation shows as a document by default; these checks are about the terminal surface.
   await panel(0).locator('button[title="切换到终端"]').click();
   await fs.writeFile(transcript, JSON.stringify({ type: 'session_meta', payload: { id: thread, cwd: projects[0].path, source: 'cli' } }) + '\n' + record('task_started', 'visual-turn') + submitted('验证独立项目的任务状态'));

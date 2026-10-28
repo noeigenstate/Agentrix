@@ -77,7 +77,6 @@ try {
     assert.ok(visible.includes(`INDEPENDENT_${index}`));
     assert.ok(!visible.includes(`INDEPENDENT_${1 - index}`));
   }
-  await page.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   assert.equal(await page.locator('.terminal-split').count(), 2);
   const boxes = await page.locator('.terminal-split').evaluateAll(nodes => nodes.map(node => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }));
@@ -217,7 +216,7 @@ try {
   await page.getByRole('button', { name: 'SSH 分屏验证 的更多操作', exact: true }).click(); await page.getByRole('menuitem', { name: '新建终端并分屏', exact: true }).click();
   await waitFor(async () => (await remoteState()).terminals.length === 2 && (await remoteState()).terminals.every(item => item.shellReady), 'two independent SSH terminals');
   const remoteSecond = (await remoteState()).terminals[1].sessionId;
-  await page.getByRole('button', { name: '全屏查看 SSH 分屏验证', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await page.getByRole('treeitem', { name: 'remote.txt', exact: true }).click({ button: 'right' });
   await page.getByRole('menuitem', { name: /^复制绝对路径/ }).click(); clipboardOwner = '/srv/fixture/remote.txt';
   assert.equal(await application.evaluate(({ clipboard }) => clipboard.readText()), clipboardOwner);
