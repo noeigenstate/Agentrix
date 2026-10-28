@@ -19,7 +19,9 @@ const promptKey = content => {
   const text = messageText(content);
   return clean(text.replace(/<\/?pasted_content\b[^>]*>\n?/g, '').replace(/\[Image #\d+\]\s?/g, '')) || clean(text);
 };
-const ownMessage = text => /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(text) || text.trimStart().startsWith('This session is being continued from a previous conversation');
+// The reset enqueue has no provenance; Claude marks only its later user-role receipt as automatic.
+const USAGE_RESET = 'Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.';
+const ownMessage = text => clean(text) === USAGE_RESET || /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(text) || text.trimStart().startsWith('This session is being continued from a previous conversation');
 const promptCommand = text => /^\s*<command-name>\s*(\/[^<\s]+)\s*<\/command-name>/.exec(text)?.[1] || /^\s*(\/[\w:-]+)(?=\s|$)/.exec(text)?.[1] || '';
 const omitPath = text => text.endsWith('.') ? ' .' : ' ';
 
@@ -99,6 +101,16 @@ class PromptQueue {
     this.items.push({ id: `p${++this.count}`, text: value, summary: promptSummary(value, { keepFollowUp: true }), state: 'queued', at, expires: working ? Infinity : at + this.grace });
     this.schedule(); this.changed();
   }
+  // The transcript confirms acceptance. Recorded work waits for its own receipt, without the unrecorded grace.
+  enqueue(text, at, id) {
+    const value = promptText(text);
+    if (value === null || NOT_A_PROMPT.test(value.trim()) || !id || this.seen.has(id) || this.items.some(item => item.recordId === id)) return;
+    const key = promptKey(value);
+    const item = this.items.find(item => item.state === 'queued' && !item.recordId && item.at <= at + 500 && promptKey(item.text) === key);
+    if (item) Object.assign(item, { recordId: id, expires: Infinity });
+    else this.items.push({ id: `p${++this.count}`, recordId: id, text: value, summary: promptSummary(value, { keepFollowUp: true }), state: 'queued', at, expires: Infinity });
+    this.schedule(); this.changed();
+  }
   // The agent's record shows a message it received; id makes a record read twice count once.
   // Return its confirmed input time, preserving a submission handled after the record's timestamp.
   start(text, at = this.now(), id = '', localCommand = false) {
@@ -113,41 +125,45 @@ class PromptQueue {
       }
       return;
     }
-    const waiting = this.items.filter(item => item.state === 'queued'), key = promptKey(value);
-    const item = waiting.find(candidate => promptKey(candidate.text) === key) || waiting[0];
+    const waiting = this.items.filter(item => item.state === 'queued' && (item.recordId ? item.recordId === id : item.at <= at + 500)), key = promptKey(value);
+    const item = waiting.find(candidate => id && candidate.recordId === id) || waiting.find(candidate => promptKey(candidate.text) === key) || waiting[0];
     const inputAt = Math.max(at, item?.at || 0);
     const summary = promptSummary(value);
     if (!this.task || at >= this.task.at) {
       // A bare continuation starts a round but keeps the work named by the preceding request or delivery.
       const requestSummary = summary || this.task?.summary || '', title = summary ? value : this.task?.title || '';
-      this.task = { text: title, title, summary: requestSummary, requestSummary, at, endedAt: at <= this.finishedAt ? this.finishedAt : null };
+      this.task = { id, text: title, title, summary: requestSummary, requestSummary, at, endedAt: at <= this.finishedAt ? this.finishedAt : null };
       if (this.lastReply?.at < at) this.lastReply = null;
       if (this.task.endedAt !== null) this.completeTask();
     }
     // A message from a round that has already ended (its record was read after the round's end was reported).
     if (at <= this.finishedAt) { if (item) { this.items.splice(this.items.indexOf(item), 1); this.schedule(); } this.changed(); return inputAt; }
     const itemSummary = summary || promptSummary(value, { keepFollowUp: true });
-    if (item) Object.assign(item, { text: value, summary: itemSummary, state: 'working', started: at, expires: Infinity });
-    else this.items.push({ id: `p${++this.count}`, text: value, summary: itemSummary, state: 'working', at, started: at, expires: Infinity });
+    if (item) Object.assign(item, { recordId: id, text: value, summary: itemSummary, state: 'working', started: at, expires: Infinity });
+    else this.items.push({ id: `p${++this.count}`, recordId: id, text: value, summary: itemSummary, state: 'working', at, started: at, expires: Infinity });
     // Working prompts come first, in the order the agent took them up.
     this.items.sort((a, b) => (a.state === 'working' ? 0 : 1) - (b.state === 'working' ? 0 : 1) || (a.started ?? a.at) - (b.started ?? b.at));
     this.changed();
     return inputAt;
   }
   // Esc can return a queued send to the CLI's input. It is no longer submitted work.
-  cancel(text, at = this.now()) {
+  // Later provenance can retract a received machine message by its record identity too.
+  cancel(text, at = this.now(), id = '') {
     const key = promptKey(text);
-    const index = this.items.findIndex(item => item.state === 'queued' && item.at <= at + 500 && promptKey(item.text) === key);
-    if (index < 0) return;
-    this.items.splice(index, 1); this.schedule(); this.changed();
+    const index = this.items.findIndex(item => id ? item.recordId === id : item.state === 'queued' && item.at <= at + 500 && promptKey(item.text) === key);
+    const task = id && this.task?.id === id;
+    if (index < 0 && !task) return;
+    if (index >= 0) this.items.splice(index, 1);
+    if (task) { this.task = null; this.lastReply = null; }
+    this.schedule(); this.changed();
   }
   // A round ended at this time: the prompts it took up are done. A prompt taken up later belongs to the next
-  // round. Waiting ones are sent next by the agent, so they get a short while to be taken up.
+  // round. Only submissions the transcript has not recorded get a short while to be taken up.
   finish(at = this.now()) {
     const before = this.items.length;
     this.finishedAt = Math.max(this.finishedAt, at);
     this.items = this.items.filter(item => item.state !== 'working' || item.started > at);
-    for (const item of this.items) if (item.state === 'queued') item.expires = Math.min(item.expires, this.now() + this.grace);
+    for (const item of this.items) if (item.state === 'queued' && !item.recordId) item.expires = Math.min(item.expires, this.now() + this.grace);
     const completed = this.task && this.task.at <= at && this.task.endedAt === null;
     if (completed) { this.task.endedAt = at; this.completeTask(); }
     this.schedule();

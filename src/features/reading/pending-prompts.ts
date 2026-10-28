@@ -2,13 +2,16 @@
 export const PENDING_PROMPT_TIMEOUT = 20_000;
 // The reading view keeps 400 entries; the user records seen are bounded well above that.
 const SEEN_LIMIT = 1000;
-type UserRecord = { id: string; role: string; text?: string; original?: string; at?: number; queued?: boolean; cancelled?: boolean; images?: string[] };
+type UserRecord = { id: string; role: string; text?: string; original?: string; at?: number; receivedAt?: number; queued?: boolean; cancelled?: boolean; images?: string[] };
 export type PendingPrompt = { id: string; role: 'user'; text: string; at: number; sending: boolean; images?: string[] };
 export type PendingPrompts = { sessionId: string | null; prompts: readonly PendingPrompt[]; seen: readonly string[] };
 
 export const normalizePrompt = (text: string) => text.trim().replace(/\s+/g, ' ');
 
-const timely = (prompt: { at: number }, record: UserRecord) => record.at === undefined || record.at >= prompt.at - 500;
+const timely = (prompt: { at: number }, record: UserRecord) => {
+  const at = record.receivedAt ?? record.at;
+  return at === undefined || at >= prompt.at - 500;
+};
 const transcriptMatches = (message: string, record: string, original?: string) => {
   const bounded = record.length === 20003 && record.endsWith('\n\n…');
   // The producer retains the full original beside its 20,000-character display. Shared prefixes cannot identify

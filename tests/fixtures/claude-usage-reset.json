@@ -1,0 +1,64 @@
+{
+  "description": "Evidence-derived records only. All identities, dates, paths and unrelated content replaced; noncausal fields omitted. Synthetic real-user scenarios are added in tests, not here.",
+  "evidenceLines": [
+    2932,
+    2933,
+    2935,
+    2943
+  ],
+  "records": [
+    {
+      "type": "queue-operation",
+      "operation": "enqueue",
+      "timestamp": "2026-01-01T00:00:00.000Z",
+      "sessionId": "00000000-0000-4000-8000-000000000001",
+      "content": "Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete."
+    },
+    {
+      "type": "queue-operation",
+      "operation": "dequeue",
+      "timestamp": "2026-01-01T00:00:00.059Z",
+      "sessionId": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-01-01T00:00:00.108Z",
+      "sessionId": "00000000-0000-4000-8000-000000000001",
+      "uuid": "00000000-0000-4000-8000-000000000002",
+      "parentUuid": "00000000-0000-4000-8000-000000000003",
+      "promptId": "00000000-0000-4000-8000-000000000004",
+      "cwd": "<home>/project",
+      "isSidechain": false,
+      "isMeta": true,
+      "queueSkipSlashCommands": true,
+      "promptSource": "system",
+      "turnOrigin": "auto_continuation",
+      "origin": {
+        "kind": "auto-continuation"
+      },
+      "message": {
+        "role": "user",
+        "content": "Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete."
+      }
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-01-01T00:00:08.215Z",
+      "sessionId": "00000000-0000-4000-8000-000000000001",
+      "uuid": "00000000-0000-4000-8000-000000000005",
+      "parentUuid": "00000000-0000-4000-8000-000000000006",
+      "cwd": "<home>/project",
+      "isSidechain": false,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Neutral reply."
+          }
+        ],
+        "stop_reason": "tool_use"
+      }
+    }
+  ]
+}

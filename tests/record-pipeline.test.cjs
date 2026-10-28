@@ -167,8 +167,8 @@ test("Claude Code's queue marks a message sent while it works until it takes it 
   // Taken up within the turn: the remove names it, and the record that follows is the message itself.
   changes.length = 0;
   queue('remove', '[Image #27]很多时候信息会显示发送中', '2026-10-16T06:22:45.424Z');
-  assert.deepEqual(log.list.map(entry => entry.text), ['second message']);
-  assert.ok(changes.some(change => change.reset), 'the window gets the list without it');
+  assert.deepEqual(log.list.map(entry => [entry.text, entry.queued]), [['second message', true], ['很多时候信息会显示发送中', false]]);
+  assert.ok(changes.some(change => change.entry && !change.entry.queued), 'the window receives its accepted user receipt');
   claudeConversation(log, { type: 'attachment', uuid: 'a1', timestamp: '2026-10-16T06:22:32.000Z', attachment: { type: 'queued_command', commandMode: 'prompt', prompt: '[Image #27]很多时候信息会显示发送中' } });
   // A priority-selected dequeue names nothing; the following user record identifies what was taken up.
   queue('dequeue', undefined, '2026-10-16T06:23:00.000Z');

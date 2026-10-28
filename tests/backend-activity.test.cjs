@@ -225,6 +225,97 @@ test('queued terminal submissions block the gap between turns without consuming 
   assert.equal(h.s.codexActivity, 'complete'); assert.equal(h.project.unread, 1); assert.equal(h.alerts(), 1);
 });
 
+for (const kind of ['local', 'ssh']) for (const injectReset of [false, true]) {
+  test(`Claude ${kind} named handoff completes accepted queued work once${injectReset ? ' alongside the real reset sequence' : ''}`, async t => {
+    const h = await harness(t, kind, 'claude'), { s, project } = h;
+    const fixture = require('./fixtures/claude-usage-reset.json');
+    const offset = kind === 'ssh' ? 100000 : 0;
+    s.activityClockOffset = offset;
+    const record = (value, at) => {
+      const row = { ...value, timestamp: stamp(at - offset) };
+      s.completionWork.record(row, 'claude', offset);
+      claudeConversation(s.conversation, row);
+    };
+    const automatic = at => fixture.records.slice(0, 3).forEach((row, index) => record(row, at + index));
+    h.write('First task\r'); record({ type: 'user', uuid: 'first', message: { content: 'First task' } }, 2050);
+    h.apply('working', null, 2050);
+    h.now(2100); h.write('Real queued follow-up\r');
+    record({ type: 'queue-operation', operation: 'enqueue', content: 'Real queued follow-up' }, 2101);
+    if (injectReset) automatic(2120);
+    h.apply('complete', 'first-stop', 2200);
+    assert.equal(s.codexActivity, 'working'); assert.equal(h.alerts(), 0);
+    assert.deepEqual(s.promptQueue.list().map(item => [item.text, item.state]), [['Real queued follow-up', 'queued']]);
+    h.now(23000);
+    assert.equal(s.promptQueue.list().length, 1, 'accepted queue entries survive the unrecorded submission grace');
+    h.apply('complete', 'first-stop', 2200);
+    assert.equal(h.alerts(), 0);
+    record({ type: 'queue-operation', operation: 'remove', content: 'Real queued follow-up', reason: 'absorbed_mid_turn' }, 23100);
+    assert.equal(s.conversation.queue.length, 0);
+    assert.equal(s.conversation.list.find(entry => entry.text === 'Real queued follow-up').at, 2101 - offset, 'the reading entry retains its send time');
+    assert.deepEqual(s.promptQueue.list().map(item => item.state), ['working']);
+    assert.equal(s.activityConfirmedInputAt, 23100, 'the handoff guards its own round using the main clock');
+    h.apply('complete', 'first-stop', 2200);
+    assert.equal(s.promptQueue.list().length, 1, 'an older completed round cannot consume this handoff');
+    record({ type: 'assistant', uuid: 'last', message: { content: [], stop_reason: 'end_turn' } }, 23200);
+    h.apply('complete', 'last', 23200);
+    assert.equal(s.codexActivity, 'complete'); assert.equal(s.promptQueue.list().length, 0);
+    assert.equal(project.unread, 1); assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1);
+    h.store.acknowledge(project.id);
+    if (injectReset) automatic(23300);
+    s.promptQueue.changed(); s.completionWork.changed();
+    h.apply('working', 'background', 23400); h.apply('complete', 'background', 23500);
+    await Promise.resolve();
+    assert.equal(project.unread, 0); assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1);
+  });
+}
+
+for (const kind of ['local', 'ssh']) for (const flags of [{ isMeta: true }, { isCompactSummary: true }, { isVisibleInTranscriptOnly: true }]) for (const markedRemoval of [false, true]) {
+  test(`review: Claude ${kind} ${markedRemoval ? 'withdraws a marked removal' : 'retracts a promoted receipt'} with ${Object.keys(flags)[0]} without consuming a real identical send or rearming`, async t => {
+    const h = await harness(t, kind, 'claude'), { s, project } = h, text = 'Automatic neutral message';
+    const offset = kind === 'ssh' ? 100000 : 0;
+    s.activityClockOffset = offset;
+    const record = (row, at, queueOnly = false) => {
+      const value = { ...row, timestamp: stamp(at - offset) };
+      s.completionWork.record(value, 'claude', offset);
+      claudeConversation(s.conversation, value, undefined, { queueOnly });
+      return value;
+    };
+    h.write('First real request\r'); record({ type: 'user', uuid: 'first', message: { content: 'First real request' } }, 2050);
+    h.apply('working', null, 2050);
+    record({ type: 'queue-operation', operation: 'enqueue', content: text }, 2100);
+    record({ type: 'queue-operation', operation: 'remove', content: text, ...(markedRemoval ? flags : {}) }, 2150);
+    h.now(2160); h.write(`${text}\r`);
+    record({ type: 'queue-operation', operation: 'enqueue', content: text }, 2161);
+    const actualId = s.conversation.queue[0].id;
+    record({ type: 'user', uuid: 'automatic', message: { content: text }, ...flags }, 2180);
+    assert.deepEqual(s.conversation.list.filter(entry => !entry.queued).map(entry => entry.text), ['First real request']);
+    assert.equal(s.conversation.queue[0].id, actualId);
+    assert.deepEqual(s.promptQueue.list().map(entry => [entry.text, entry.state]), [['First real request', 'working'], [text, 'queued']]);
+    assert.notEqual(s.promptQueue.task?.text, text, 'the automatic task title is also withdrawn');
+    record({ type: 'assistant', uuid: 'first-end', message: { content: [], stop_reason: 'end_turn' } }, 2200);
+    h.apply('complete', 'first-end', 2200);
+    assert.equal(h.alerts(), 0); assert.equal(h.armings(), 1);
+    record({ type: 'queue-operation', operation: 'remove', content: text }, 2300);
+    const accepted = record({ type: 'user', uuid: 'real-queued', promptSource: 'queued', message: { content: text } }, 2250, true);
+    claudeConversation(s.conversation, accepted);
+    assert.equal(s.conversation.list.find(entry => entry.id === actualId).receivedAt, 2300 - offset);
+    assert.equal(s.activityConfirmedInputAt, 2300);
+    h.apply('complete', 'old-end', 2290);
+    assert.deepEqual(s.promptQueue.list().map(entry => entry.state), ['working']);
+    record({ type: 'assistant', uuid: 'real-end', message: { content: [], stop_reason: 'end_turn' } }, 2400);
+    h.apply('complete', 'real-end', 2400);
+    assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1); assert.equal(project.unread, 1);
+    h.store.acknowledge(project.id);
+    s.promptQueue.changed(); s.completionWork.changed(); h.apply('working', 'background', 2450); h.apply('complete', 'background', 2500);
+    await Promise.resolve();
+    assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1); assert.equal(project.unread, 0);
+    h.now(2600); h.write('Another real request\r'); record({ type: 'user', uuid: 'next-real', message: { content: 'Another real request' } }, 2650);
+    record({ type: 'assistant', uuid: 'next-end', message: { content: [], stop_reason: 'end_turn' } }, 2700);
+    h.apply('complete', 'next-end', 2700);
+    assert.equal(h.alerts(), 2); assert.equal(h.armings(), 2); assert.equal(project.unread, 1);
+  });
+}
+
 for (const agent of ['claude', 'codex']) for (const kind of ['local', 'ssh']) for (const readAtExpiry of [false, true]) {
   test(`${agent} ${kind} drops an unrecorded typed answer after grace and grants the deferred completion once${readAtExpiry ? ' despite a state read at expiry' : ''}`, async t => {
     t.mock.timers.enable({ apis: ['setTimeout'] });

@@ -66,7 +66,7 @@ class ConversationLog {
   // cwd: the folder Codex works in (its session's and each turn's), which relative file paths in its steps start from.
   constructor(changed = () => {}, limit = 400) {
     this.changed = changed; this.limit = limit; this.list = []; this.cwd = null;
-    this.queue = []; this.queueCount = 0; this.received = new Set(); this.deliveries = [];
+    this.queue = []; this.queueCount = 0; this.received = new Map(); this.deliveries = [];
   }
   // Records still feed activity tracking during replay, but reading snapshots wait for the file tail.
   beginHistory() { this.loading = true; }
@@ -115,20 +115,20 @@ class ConversationLog {
 
 function dropQueued(log, index, cancelled = false) {
   const [entry] = log.queue.splice(index, 1);
-  // Keep an invisible withdrawal receipt so the renderer cancels its echo rather than automatically resending it.
+  // A hidden receipt stops withdrawn or historical accepted sends from being automatically retried.
   if (cancelled) log.put({ ...entry, cancelled: true });
   else log.drop(entry.id);
 }
 
 // Removal and receipt can be written in either order. Keep just the unpaired signal, without retaining pictures.
-function noteDelivery(log, { original, at }, received) {
-  log.deliveries.push({ original, at, received });
+function noteDelivery(log, { id, original, at, receivedAt, ignored }, received) {
+  log.deliveries.push({ id, original, at, receivedAt, ignored, received });
   if (log.deliveries.length > 1000) log.deliveries.shift();
 }
 
 // Anonymous dequeues do not identify a message: Claude selects by priority and the history tail may omit earlier
 // enqueues. Only a named removal or the actual user/queued_command receipt can retire a particular queued card.
-function claudeQueue(log, record) {
+function claudeQueue(log, record, queueOnly) {
   const original = promptText(record.content, record), text = original === null ? '' : clean(original);
   if (record.operation === 'enqueue') {
     // A slash command or shell line sent while it works is not a message (the reading view's isTypedCommand).
@@ -142,66 +142,100 @@ function claudeQueue(log, record) {
     while (log.queue.length) dropQueued(log, 0, true);
     return;
   }
-  if (!['remove', 'dequeue', 'popAll', 'popOne'].includes(record.operation) || original === null) return;
+  if (!['remove', 'dequeue', 'popAll', 'popOne'].includes(record.operation)) return;
+  if (original === null) {
+    receivedPrompt(log, { id: `q:${record.operation}:${record.timestamp}`, at: Date.parse(record.timestamp) || Date.now(), original: messageText(record.content) }, { ignored: true, fromRemoval: true });
+    return;
+  }
   const cancelled = ['popAll', 'popOne'].includes(record.operation) || ['cleared_on_cancel', 'dropped_by_hook'].includes(record.reason);
   const key = promptKey(original);
   if (!cancelled) {
     const received = log.deliveries.findIndex(entry => entry.received && promptKey(entry.original) === key);
     if (received >= 0) { log.deliveries.splice(received, 1); return; }
   }
-  const index = log.queue.findIndex(entry => promptKey(entry.original) === key);
+  const at = Date.parse(record.timestamp) || Date.now();
+  const index = log.queue.findIndex(entry => entry.at <= at && promptKey(entry.original) === key);
   if (index < 0) return;
-  if (!cancelled) noteDelivery(log, log.queue[index], false);
-  dropQueued(log, index, cancelled);
+  if (cancelled) { dropQueued(log, index, true); return; }
+  const [entry] = log.queue.splice(index, 1);
+  const receipt = { ...entry, receivedAt: Math.max(at, entry.at), queued: false };
+  noteDelivery(log, receipt, false);
+  // The named handoff is already a receipt, even when Claude never writes a user message afterward.
+  // Keep its identity so that a later user record updates it without taking up another queued send.
+  // A prefix receipt acknowledges the send without replaying a user turn outside the display window.
+  if (queueOnly) log.put({ ...entry, cancelled: true });
+  else { log.drop(entry.id); log.put(receipt); }
 }
 
-function receivedPrompt(log, entry, { inOrder = false, fromQueue = false, queueOnly = false } = {}) {
-  if (!log.received.has(entry.id)) {
-    log.received.add(entry.id);
-    if (log.received.size > 1000) log.received.delete(log.received.values().next().value);
-    // queued_command proves receipt even when a slow hook puts enqueue's timestamp after the original send.
-    // Other old replayed turns cannot take up a newer identical send; each receipt consumes one occurrence.
+function receivedPrompt(log, entry, { inOrder = false, fromQueue = false, queueOnly = false, ignored = false, fromRemoval = false } = {}) {
+  let receipt = log.received.get(entry.id);
+  const replay = !!receipt;
+  if (!receipt) {
+    // A queued receipt may predate enqueue logging. Unrelated old turns still need the timestamp guard.
     const key = promptKey(entry.original);
     const matches = queued => (fromQueue || queued.at <= entry.at + 500) && promptKey(queued.original) === key;
-    const removed = log.deliveries.findIndex(queued => !queued.received && matches(queued));
-    // A named removal and the user record are two reports of the same delivery, not two identical sends.
-    if (removed >= 0) log.deliveries.splice(removed, 1);
-    else {
-      const index = log.queue.findIndex(matches);
-      if (index >= 0) { noteDelivery(log, log.queue[index], true); dropQueued(log, index); }
+    // Pair the already-promoted handoff first, so a later identical send stays queued.
+    const removed = log.deliveries.findIndex(queued => queued.received === fromRemoval && matches(queued));
+    const index = removed < 0 ? log.queue.findIndex(matches) : -1;
+    const source = removed >= 0 ? log.deliveries.splice(removed, 1)[0] : index >= 0 ? log.queue[index] : entry;
+    receipt = { id: source.id, at: source.at, receivedAt: Math.max(entry.receivedAt ?? entry.at, source.receivedAt ?? source.at), paired: removed >= 0 || index >= 0, ignored: source.ignored };
+    if (index >= 0) {
+      noteDelivery(log, { ...source, receivedAt: receipt.receivedAt, ignored }, !fromRemoval);
+      if (ignored) log.queue.splice(index, 1);
+      else dropQueued(log, index, queueOnly);
     }
+    log.received.set(entry.id, receipt);
+    if (log.received.size > 1000) log.received.delete(log.received.keys().next().value);
   }
-  if (!queueOnly) log.put(entry, inOrder);
+  entry = { ...entry, id: receipt.id, receivedAt: receipt.receivedAt };
+  const previous = log.list.find(item => item.id === receipt.id);
+  if (ignored || receipt.ignored) {
+    if (!receipt.ignored && (receipt.paired || replay)) {
+      log.put({ ...previous, ...entry, at: previous?.at ?? receipt.at, role: 'user', text: previous?.text ?? bounded(clean(entry.original)), queued: true, cancelled: true });
+    }
+    receipt.ignored = true;
+    for (const delivery of log.deliveries) if (delivery.id === receipt.id) delivery.ignored = true;
+    return;
+  }
+  // A workOnly observation consumes once; its later full observation must still publish the same entry.
+  if (!queueOnly) { if (previous?.queued) log.drop(entry.id); log.put(entry, inOrder); }
 }
 
 function claudeConversation(log, record, cwd, { queueOnly = false } = {}) {
-  if (record?.type === 'queue-operation') { if (!record.isSidechain) claudeQueue(log, record); return; }
-  if (claudeOwnRecord(record)) return;
+  if (record?.type === 'queue-operation') { if (!record.isSidechain) claudeQueue(log, record, queueOnly); return; }
+  if (!record || record.isSidechain) return;
   const queued = record?.type === 'attachment' && record.attachment?.type === 'queued_command' ? record.attachment : null;
   if (queued && !record.isSidechain) {
     const original = promptText(queued.prompt, { ...record, ...queued });
-    if (original === null) return;
+    if (original === null) {
+      receivedPrompt(log, { id: `u:${record.uuid || record.timestamp}`, at: Date.parse(record.timestamp) || Date.now(), original: messageText(queued.prompt) }, { ignored: true });
+      return;
+    }
     const text = promptCommand(original) || clean(original);
     const entry = withImages({ id: `u:${record.uuid || record.timestamp}`, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original }, queued.prompt);
     if (text || entry.images) receivedPrompt(log, entry, { fromQueue: true, queueOnly });
     return;
   }
-  if (!record || record.isSidechain || !record.message || record.isMeta) return;
+  if (!record.message || record.isMeta && record.type !== 'user') return;
   const content = record.message.content, at = Date.parse(record.timestamp) || Date.now(), base = String(record.uuid || at);
   if (record.type === 'user') {
     if (Array.isArray(content) && content.some(block => block.type === 'tool_result')) {
+      if (record.isMeta || claudeOwnRecord(record)) return;
       for (const block of content) if (block.type === 'tool_result') log.finish(String(block.tool_use_id || ''), block.is_error === true);
       return;
     }
     const original = promptText(content, record);
-    if (original === null) return;
+    if (original === null) {
+      receivedPrompt(log, { id: `u:${base}`, at, original: messageText(content) }, { ignored: true });
+      return;
+    }
     const text = promptCommand(original) || clean(original);
     const entry = withImages({ id: `u:${base}`, at, role: 'user', text: bounded(text), original }, content);
     // A conversation's first prompt, which Claude Code writes after the reply to it, goes before that reply.
-    if (text || entry.images) receivedPrompt(log, entry, { inOrder: record.parentUuid === null, queueOnly });
+    if (text || entry.images) receivedPrompt(log, entry, { inOrder: record.parentUuid === null, fromQueue: record.promptSource === 'queued', queueOnly });
     return;
   }
-  if (record.type !== 'assistant' || !Array.isArray(content)) return;
+  if (claudeOwnRecord(record) || record.type !== 'assistant' || !Array.isArray(content)) return;
   const original = messageText(content);
   content.forEach((block, index) => {
     const text = block.type === 'text' ? clean(block.text) : '';

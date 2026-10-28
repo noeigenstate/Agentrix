@@ -132,7 +132,7 @@ class CompletionWork {
         }
       }
     }
-    const prompt = promptText(record.attachment?.prompt ?? content, record);
+    const prompt = promptText(record.attachment?.prompt ?? content, record.attachment ? { ...record, ...record.attachment } : record);
     const humanDelivery = (record.type === 'user' || record.attachment?.type === 'queued_command') && prompt !== null && !/^\s*[\/!#<]/.test(prompt);
     const handoff = queued && ['remove', 'dequeue'].includes(record.operation) && promptText(record.content, record) !== null
       && !['cleared_on_cancel', 'dropped_by_hook'].includes(record.reason);

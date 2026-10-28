@@ -60,10 +60,10 @@ test('a tail starting mid-queue leaves the visible waiting prompt until its own 
   h.user('still waiting', 1400); assert.deepEqual(queued(h.log), []);
 });
 
-test('a late old user record, compaction and tool results do not acknowledge a newer identical send', () => {
+test('a late old user record, old compaction and tool results do not acknowledge a newer identical send', () => {
   const h = harness();
   h.queue('enqueue', 'same', 5000); h.user('same', 1000, 'old');
-  h.feed({ type: 'user', isCompactSummary: true, timestamp: stamp(5100), message: { content: 'same' } });
+  h.feed({ type: 'user', isCompactSummary: true, timestamp: stamp(1000), message: { content: 'same' } });
   h.feed({ type: 'user', timestamp: stamp(5200), message: { content: [{ type: 'tool_result', tool_use_id: 'tool', content: 'same' }] } });
   assert.deepEqual(queued(h.log), ['same']);
   h.user('same', 5300); assert.deepEqual(queued(h.log), []);

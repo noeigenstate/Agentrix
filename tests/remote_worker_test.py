@@ -226,6 +226,23 @@ class RemoteFilesTest(unittest.TestCase):
         kept = remote.compact_claude_record({"type": "user", "turnOrigin": "peer", "message": {"content": "Peer text"}})
         self.assertEqual(kept["turnOrigin"], "peer")
 
+    def test_claude_usage_reset_fixture_preserves_machine_provenance_in_status_and_history(self):
+        fixture = json.loads((MODULE_PATH.parent.parent / "tests" / "fixtures" / "claude-usage-reset.json").read_text(encoding="utf-8"))
+        records = fixture["records"]
+        kept = [remote.compact_claude_record(record) for record in records]
+        self.assertEqual(kept[0]["content"], records[0]["content"])
+        self.assertNotIn("content", kept[1])
+        for key in ("isMeta", "origin", "promptSource", "turnOrigin"):
+            self.assertEqual(kept[2][key], records[2][key])
+        filename = self.claude_file()
+        filename.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        status = self.worker.claude_status(str(filename), 1000)
+        self.assertEqual(status["records"], kept)
+        history = remote.history_records("/srv/project", str(self.root / "absent-codex"), self.worker.claude_home)
+        historical = history["claude"][0]["records"]
+        self.assertFalse(any(record["type"] == "queue-operation" for record in historical))
+        self.assertEqual(historical[0], kept[2])
+
     def test_claude_status_resets_on_replacement_truncation_or_new_run(self):
         filename = self.claude_file()
         def row(text): return json.dumps({"type": "user", "message": {"content": text}}) + "\n"

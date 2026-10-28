@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+const { messageText, promptText } = require('./prompt-queue.cjs');
 
 const SESSION_ID = /^[\w-]{1,100}$/;
 const READ_BUDGET = 256 * 1024;
@@ -30,11 +31,8 @@ async function findClaudeSession(cwd, id, home = claudeConfigDir()) {
 }
 
 function promptTitle(record) {
-  if (record?.type !== 'user' || record.isMeta || record.isSidechain) return '';
-  const content = record.message?.content;
-  if (Array.isArray(content) && content.some(block => block?.type === 'tool_result')) return '';
-  const text = (typeof content === 'string' ? content : Array.isArray(content)
-    ? content.filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n') : '').trim();
+  if (record?.type !== 'user' || promptText(record.message?.content, record) === null) return '';
+  const text = messageText(record.message?.content).trim();
   if (!text || /<(?:command-|local-command-)[^>]*>/i.test(text) || /^(?:\[?Caveat:|\[?local.command caveat)/i.test(text)) return '';
   return Array.from(text.replace(/\s+/g, ' ')).slice(0, 120).join('');
 }

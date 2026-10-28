@@ -610,12 +610,13 @@ function claudeActivity(project, s, event) {
   // Claude Code runs its prompt hooks for some local slash commands (/context, /doctor, /compact) too. They open a screen
   // or print a line and no round follows, so they neither start a round nor end one; the card would stay "working".
   if (event.state === 'working') {
+    if (typeof event.prompt === 'string' && promptText(event.prompt, event) === null) return;
     s.claudeLocalCommand = typeof event.prompt === 'string' && isLocalAgentCommand('claude', event.prompt);
     if (s.claudeLocalCommand) return;
     // UserPromptSubmit is actual input, unlike a polled working snapshot or a Stop callback.
     if (s.claudePromptEventId !== event.eventId) {
       s.claudePromptEventId = event.eventId;
-      if (promptText(event.prompt) !== null) {
+      if (promptText(event.prompt, event) !== null) {
         s.activityConfirmedInputAt = Math.max(s.activityConfirmedInputAt || 0, Date.now());
         s.activityInputAt = Math.max(s.activityInputAt || 0, s.activityConfirmedInputAt);
         s.completionWork?.begin(); store.expectCompletion(project.id);
@@ -871,10 +872,10 @@ function nativeSessionEvent(id, sessionId, message) {
   }
   s.completionWork?.native(message, s.agent, at, s.reportedThreadId);
   if (s.nativeMode !== 'claude-sdk' && s.reportedThreadId && p?.threadId && p.threadId !== s.reportedThreadId) return;
-  const add = (role, text, entryId) => {
+  const add = (role, text, entryId, provenance = message) => {
     if (typeof text !== 'string' || !text) return;
     // Native user-item replays must retain the original prompt's input watermark.
-    if (role === 'user' && (promptText(text) === null || entryId && s.conversation.list.some(entry => entry.id === entryId))) return;
+    if (role === 'user' && (promptText(text, provenance) === null || entryId && s.conversation.list.some(entry => entry.id === entryId))) return;
     s.conversation.put({ id: entryId || randomUUID(), at, role, text: text.slice(0, 20000), original: text });
     if (s.nativeMode === 'claude-sdk') {
       s.nativeMessages = [...s.nativeMessages, { role, text: text.slice(0, 20000) }].slice(-100);
@@ -882,7 +883,7 @@ function nativeSessionEvent(id, sessionId, message) {
     }
   };
   if (message.type === 'managed-ready') { s.nativeReady = true; scheduleState(); }
-  if (message.type === 'managed-prompt' && promptText(message.text) !== null) {
+  if (message.type === 'managed-prompt' && promptText(message.text, message) !== null) {
     s.completionWork?.begin();
     add('user', message.text);
     const task = summarizeTask(message.text, { spoken: true });
@@ -903,7 +904,7 @@ function nativeSessionEvent(id, sessionId, message) {
   if (message.method === 'item/completed' && p?.item) {
     const item = p.item;
     if (item.type === 'agentMessage') add('assistant', item.text, item.id);
-    if (item.type === 'userMessage') add('user', item.content?.filter(part => part.type === 'text').map(part => part.text).join('\n'), item.id);
+    if (item.type === 'userMessage') add('user', item.content?.filter(part => part.type === 'text').map(part => part.text).join('\n'), item.id, { ...message, ...p, ...item });
   }
   if (['turn/started', 'turn/completed', 'turn/interrupted'].includes(message.method) && p?.threadId && p?.turn?.id) {
     // Advance the stale-snapshot guard for the parent, without arming idle or child turns.
@@ -1005,8 +1006,9 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     publishConversation(s, change);
     const entry = change.entry;
     // Local transcripts already use the main clock; the hook offset includes delivery latency.
-    const at = entry?.at + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0);
-    if (entry?.cancelled) s.promptQueue.cancel(entry.original ?? entry.text, at);
+    const at = (entry?.receivedAt ?? entry?.at) + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0);
+    if (entry?.cancelled) s.promptQueue.cancel(entry.original ?? entry.text, at, entry.id);
+    else if (entry?.role === 'user' && entry.queued && s.codexActive && at >= (s.activitySince || 0) - 1000) s.promptQueue.enqueue(entry.original ?? entry.text, at, entry.id);
     if (entry?.role === 'assistant' && s.codexActive) s.promptQueue.reply({ ...entry, at });
     // An answer to the agent's own question is not a prompt: it goes on with the round it answered.
     if (entry?.role === 'user' && !entry.answer && !entry.queued && s.codexActive) {

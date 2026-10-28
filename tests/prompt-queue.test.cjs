@@ -60,6 +60,24 @@ test('a state read at the grace deadline cannot consume the expiry notification'
   assert.deepEqual(q.list(), []); assert.equal(changes, 2);
 });
 
+test('recorded queued prompts keep their original submissions beyond grace until their own receipts', t => {
+  const { q, at } = queue();
+  t.after(() => q.reset());
+  q.start('First task', 1000, 'first');
+  q.submit('same', true, 1100); q.submit('same', true, 1200);
+  q.enqueue('same', 1150, 'queue-first'); q.enqueue('same', 1250, 'queue-second');
+  q.enqueue('same', 1150, 'queue-first');
+  assert.deepEqual(q.list().map(item => item.at), [1000, 1100, 1200], 'recording and replay cannot duplicate the local submissions or rewrite their times');
+  q.finish(2000); at(30000);
+  assert.deepEqual(view(q), ['queued:same', 'queued:same'], 'recorded messages do not use the never-recorded expiry');
+  q.start('same', 30100, 'queue-first'); q.finish(30050);
+  assert.deepEqual(view(q), ['working:same', 'queued:same']);
+  q.finish(30200); q.enqueue('same', 1150, 'queue-first');
+  assert.deepEqual(view(q), ['queued:same'], 'a completed receipt cannot be replayed into new work');
+  q.start('same', 30300, 'queue-second'); q.finish(30400);
+  assert.deepEqual(view(q), []);
+});
+
 test('reset cancels an outstanding grace timer without a later expiry callback', t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
   let changes = 0;

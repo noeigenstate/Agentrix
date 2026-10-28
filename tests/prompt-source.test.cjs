@@ -126,7 +126,8 @@ test('Claude queued notifications and hand-backs never consume a human queue ite
     assert.deepEqual(log.list, []);
   }
   feed('enqueue', '[Image #1] Human\nrequest.', 1500); feed('remove', 'Human\nrequest.', 1600);
-  assert.deepEqual(log.list, [], 'normal queue matching retains its marker cleanup');
+  assert.deepEqual(log.queue, [], 'normal queue matching retains its marker cleanup');
+  assert.deepEqual(log.list.map(entry => [entry.text, entry.queued]), [['Human\nrequest.', false]], 'a named handoff retains its user receipt');
 });
 
 test('slash commands are shown as the command while their original wrapper remains available', () => {
@@ -347,6 +348,23 @@ test('main keeps the short lastTask and long card task across bare follow-ups in
     s.promptQueue.reset();
     assert.equal(card().task, cardSummary, 'the snapshot fallback also uses the longer card sentence');
     assert.equal(card().taskTitle, request);
+  }
+});
+
+test('native input and Claude hooks retain explicit machine provenance before creating tasks or arming completion', () => {
+  const reset = require('./fixtures/claude-usage-reset.json').records[0].content;
+  for (const mode of ['claude-native', 'codex-native']) {
+    const h = activityHarness(mode), { s, project, context } = h;
+    if (mode === 'claude-native') s.nativeMode = 'claude-sdk';
+    for (const [text, flags] of [[reset, {}], ['Neutral automatic continuation.', { isMeta: true }], ['Neutral automatic continuation.', { origin: { kind: 'auto-continuation' }, promptSource: 'system' }]]) {
+      context.nativeSessionEvent(s.terminalId, s.sessionId, { type: 'managed-prompt', text, ...flags });
+      if (mode === 'codex-native') context.nativeSessionEvent(s.terminalId, s.sessionId, { method: 'item/completed', params: { item: { type: 'userMessage', id: `machine-${text.length}`, content: [{ type: 'text', text }], ...flags } } });
+      else context.claudeActivity(project, s, { state: 'working', sessionId: 'session', eventId: `session:machine-${text.length}`, prompt: text, ...flags });
+    }
+    assert.deepEqual(s.conversation.list, []);
+    assert.deepEqual(s.promptQueue.list(), []);
+    assert.equal(s.lastTask, undefined); assert.equal(s.lastTaskTitle, undefined);
+    assert.equal(h.arms(), 0); assert.equal(h.alerts(), 0);
   }
 });
 

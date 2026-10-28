@@ -55,7 +55,7 @@ try {
   await waitFor(async () => (await state()).codexActive, 'fixture agent active');
   if (!await card.locator('.reading-view').count()) await card.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
   await card.locator('.reading-tools-head').first().waitFor();
-  await card.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
+  if (!await page.locator('.focus-mode').count()) await card.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   const reader = card.locator('.reading-scroll');
   const geometry = async () => reader.evaluate(node => {
