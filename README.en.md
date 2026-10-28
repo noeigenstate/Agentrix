@@ -31,11 +31,11 @@
 <table>
   <tr>
     <td width="33%" valign="top"><h3>🧭 Decide first</h3>Approvals, questions, choices, sign-ins and rounds to review on one page. Screen-derived permission cards open the source terminal; supported questions and choices have their own answer controls.</td>
-    <td width="33%" valign="top"><h3>🧩 Many at once</h3>Every project is a card with a real terminal. A Working label and dot show activity; an inward breathing glow marks work waiting for review. One completion alert per instruction.</td>
+    <td width="33%" valign="top"><h3>🧩 Many at once</h3>Grid cards show Codex and Claude Code sessions. A Working label and dot show activity; an inward breathing glow marks work waiting for review. One completion alert per instruction.</td>
     <td width="33%" valign="top"><h3>📖 Read the conversation</h3>A centred chat column: your messages on the right, the agent on the left, commands in collapsible groups. Pictures, pages and videos appear with the answer.</td>
   </tr>
   <tr>
-    <td valign="top"><h3>📊 Usage at a glance</h3>The activity pane shows the model route, context and the 5-hour and weekly limits. Reset limit opens Codex's own <code>/usage</code> after a cancellable 10-second countdown; you confirm the reset there.</td>
+    <td valign="top"><h3>📊 Usage at a glance</h3>The activity pane shows the model route, context and automatically updated 5-hour and weekly limits. Reset limit opens Codex's own <code>/usage</code> after a cancellable 10-second countdown; you confirm the reset there.</td>
     <td valign="top"><h3>✅ Keep what matters</h3>Review changes hunk by hunk the way Git shows them: keep what you want, revert the rest, no <code>git add -p</code> to remember.</td>
     <td valign="top"><h3>🎙️ Just say it</h3><kbd>Ctrl</kbd>+<kbd>T</kbd>, talk, Enter. Recognition runs offline on your machine; audio never leaves it.</td>
   </tr>
@@ -89,7 +89,9 @@ Select a decision to see its request and source. Screen-derived permission cards
 
 ### 🧩 Direct every project from one screen
 
-<img src="docs/images/overview.jpg" alt="Project grid with Codex and Claude Code sessions side by side" width="100%" />
+<img src="docs/images/overview.jpg" alt="Project grid with agent sessions" width="100%" />
+
+Workbench cards show only terminals running Codex or Claude Code. Plain shells keep running and appear when you expand the project. Without an agent, a local card shows the launcher and an SSH card shows its empty state; if shells are running, **N terminals running · Click to expand** opens them.
 
 - ● **Working label and dot in the header**: work is in progress, with no coloured card edge
 - ⚪ **Inward breathing glow and a notification**: the round's work has finished and awaits your review
@@ -106,23 +108,23 @@ Drag cards by their headers to reorder. The header, waiting-status action or exp
 
 <img src="docs/images/reading-view.jpg" alt="Reading view with conversation, file previews and the activity pane" width="100%" />
 
-Switch a Claude Code or Codex conversation to the **reading view**: a centred chat column with equal side margins, your messages on the right and the agent's replies on the left. Replies support headings, lists, tables and code blocks with a Copy button. Commands and tool calls fold into groups with summaries and changed-file names. The latest finished round shows its status above the result and relevant actions below: open a file, view or save a picture, copy an answer, continue or retry. Saving a generated picture is unavailable over SSH; retry is available only when the agent can accept a new prompt. The box at the bottom sends to the same session, and its real terminal stays one click away.
+In an expanded project, use **Terminal | Reading** in the title bar to switch a Claude Code or Codex conversation to the **reading view**: a centred chat column with equal side margins, your messages on the right and the agent's replies on the left. Your avatar and the official agent logos fill their timeline nodes without decorative coloured rings. Replies support headings, lists, tables and code blocks with a Copy button. Commands and tool calls fold into groups with summaries and changed-file names. The latest finished round shows its status above the result. Code results show the checks run, without a changed-file list. Relevant actions appear below: open a file, view or save a picture, copy an answer, continue or retry. Saving a generated picture is unavailable over SSH; retry is available only when the agent can accept a new prompt. The box at the bottom sends to the same session.
 
 - **What it made is in the answer.** Supported pictures, web pages, videos and Markdown an agent writes or names appear with its answer; an ordinary click opens the preview in a popup over the current view (Esc closes it). Generated pictures show a two-line prompt summary that you can expand.
 - **Reveal a path.** In Reading, Ctrl+click a local file path (Command+click on macOS) to select the file in the system file manager; directories open there. Relative paths use the project root; existing absolute paths can be outside it. Missing paths report an error; SSH paths cannot be revealed locally. Ordinary links and previews for supported files stay in-app.
 - **The real CLI is a popup away.** Sending a slash command or `!` shell command opens the same live terminal over the reading view. Work in it directly; Esc stays with the CLI, and the close button or backdrop returns to reading without closing the CLI’s dialog. Type `/` for every command, `@` to mention a project file; `/resume` keeps the local session picker.
 - **Questions and confirmations become cards.** Permission prompts become informative cards with an Open terminal action; pickers like `/model` and questions from Claude Code (AskUserQuestion) and Codex (Plan mode) remain interactive cards; what the agent is doing is written at the end of the conversation, as in its CLI, with a timer and Esc to interrupt.
-- **Keep talking while it works.** A message sent mid-round is marked *delivered and queued*: the agent reads it once the current step is done, and it is never sent twice or taken for undelivered.
+- **Keep talking while it works.** A message sent mid-round is marked *delivered and queued*: the agent reads it once the current step is done, and it is never sent twice or taken for undelivered. Claude's automatic continuation after a usage reset does not appear as your queued message.
 
-The **activity pane** starts with the model route (agent › service › model, with the reasoning effort and speed mode, and every model it calls on its behalf, such as Sonnet 5.5 subagents or Codex GPT-6.1-Sol runs, with counts for preparing, running and reviewing calls; each call disappears when its review round ends), the context length (used / window) and usage: tokens this round and this conversation, and the 5-hour and weekly limits (Codex's from its session records, Claude Code's from its own cached `/usage`, or CodePulse's record when that is fresher). Codex also shows when each limit resets. Running and queued tasks are last, at the bottom of the pane.
+The **activity pane** starts with the model route (agent › service › model, with reasoning effort and speed mode). Called models follow, grouped by model (such as Sonnet 5.5 subagents or Codex GPT-6.1-Sol runs) with compact one-line calls marked Preparing, Running or Reviewing; each call disappears when its review round ends. Running and queued tasks come next in their own one-line rows. Each list scrolls within its own area. Below are aligned meters for context length, the 5-hour limit and the weekly limit, then one-line **This round** and **This conversation** token breakdowns for input, cache hits and output. There is no Usage heading or column of token totals. Limits update automatically from the latest Codex records and Claude Code's cached `/usage`, or CodePulse's record when that is fresher. Each limit shows its reset time when known.
 
-The Codex usage card has a **Reset limit** button: a click starts a 10-second countdown that *Cancel* or Esc stops at any time; only then does Codex open `/usage`, where you pick a reset and confirm. Agentrix itself never calls a reset. Supported local official Codex accounts supply the remaining reset count through a separate read-only app-server query. Local wrappers check the complete launch arguments: flag-free launches, `resume`, `-m`/`--model` and `-c`/`--config` overrides limited to `model`, `model_reasoning_effort` and `service_tier` (including fast mode) are supported. Unproven profiles, account/provider overrides, relevant environment overrides and home changes remain explicitly unavailable. Unknown, failed and unsupported reads stay distinct from zero. Remote, custom-provider and ambiguous launch scopes never borrow the local account’s count.
+Codex's **Reset limit** row shows the remaining reset count or query status inline. Clicking it opens a large, centred 10-second countdown; *Cancel*, Esc or a click outside cancels it. At zero, Codex's own `/usage` opens, where you pick a reset and confirm. Agentrix itself never calls a reset. Supported local official Codex accounts supply the remaining reset count through a separate read-only app-server query. Local wrappers check the complete launch arguments: flag-free launches, `resume`, `-m`/`--model` and `-c`/`--config` overrides limited to `model`, `model_reasoning_effort` and `service_tier` (including fast mode) are supported. Unproven profiles, account/provider overrides, relevant environment overrides and home changes remain explicitly unavailable. Unknown, failed and unsupported reads stay distinct from zero. Remote, custom-provider and ambiguous launch scopes never borrow the local account’s count.
 
-> The reading view currently supports **Claude Code** and **Codex**. OpenCode, Gemini CLI and other command-line agents run as usual in the card's terminal.
+> The reading view currently supports **Claude Code** and **Codex**. OpenCode, Gemini CLI and other command-line agents run as usual in an expanded project's terminals.
 
 ### ✅ Keep only what matters
 
-<img src="docs/images/git-review.jpg" alt="Git review: each change shown as git does, removed lines in red, added lines in green, each hunk kept or reverted on its own" width="100%" />
+<img src="docs/images/git-review.jpg" alt="Git review with removed lines in red, added lines in green, each hunk kept or reverted on its own" width="100%" />
 
 When a round ends, open a changed file from the Git tab and see it the way `git diff` does. **Decide each hunk on its own**: keep it (stage it) or revert it; unstage what you staged, bring back a deleted file.
 
@@ -130,7 +132,7 @@ When a round ends, open a changed file from the Git tab and see it the way `git 
 
 <img src="docs/images/voice.jpg" alt="Voice input overlay with a microphone and sound-level display" width="100%" />
 
-Press <kbd>Ctrl</kbd>+<kbd>T</kbd> and talk to the current terminal; Enter sends. Recognition runs offline on your machine, **audio never leaves it**, and no API key is needed; a high-accuracy model for mixed Chinese and English is available.
+Choose **Voice input** in the project's **⋯** menu to talk to the selected terminal split, or press <kbd>Ctrl</kbd>+<kbd>T</kbd>; Enter sends. Recognition runs offline on your machine, **audio never leaves it**, and no API key is needed; a high-accuracy model for mixed Chinese and English is available.
 
 In the Decide composer or review feedback box, Enter inserts the recognised words so you can review them before sending.
 
@@ -144,7 +146,7 @@ In the Decide composer or review feedback box, Enter inserts the recognised word
 - **Pick up where you left off**: terminals and Codex / Claude Code sessions come back on start, and an interrupted task carries on.
 - **SSH projects**: reuse your VS Code Remote-SSH hosts; terminals, files, Git and previews all run over SSH, and pages and pictures made on a machine on your network preview too.
 - **Files at hand**: a compact folder tree with dimmed, hideable cache files, an auto-saving editor (VS Code's editing keys, <kbd>Ctrl</kbd>+<kbd>F</kbd> to find), and image, web page, video and Markdown previews. A local file's context menu reveals its location. In the terminal, <kbd>Ctrl</kbd>+click (<kbd>⌘</kbd>+click on macOS) a supported project file link for a popup preview; HTTP/HTTPS links open in the browser and recognised local directory links open in the file manager. SSH files preview within the remote project; remote directory links open an in-app folder view. Missing or unsupported files show a message. An enlarged picture fits the window; click for its original size and drag to pan.
-- **Splits you drag**: several terminals for one project side by side, with dividers you drag to resize.
+- **Splits you drag**: several terminals for one project side by side, with no header or footer bars. Hover or keyboard focus reveals a drag grip, restart and close in the top-right corner; use the grip to reorder splits.
 - **Clear to read**: choose **Black and white** (dark, default) or **Black on white** (light) in Settings → Appearance. Both use solid grayscale surfaces, with no wallpaper picker. Font size, terminal fonts and text weight remain adjustable.
 - **Project thumbnails**: automatically pick a local project image and keep it fixed; change it or restore numbered cards in [Appearance settings](docs/project-images.md).
 - **Version and updates in Settings**: Updates and about identifies the version and build (installed, portable, development, macOS or Linux), and shows the current update state with the available check, retry, download-page or restart-and-install action. Changelog and About have their own pages. The title bar uses the app's four-square logo and a stamp icon for Decide.
@@ -217,7 +219,7 @@ The terminals are the same; the difference is that Agentrix **knows what state e
 <details>
 <summary><strong>Does Reset limit reset anything by itself?</strong></summary>
 
-No. A Codex reset spends one of the plan's few, so the button first counts down 10 seconds that you can cancel at any time; even then it only opens Codex's `/usage`, where you choose and confirm the reset. Agentrix calls no reset service and never sends that command unless you clicked.
+No. A Codex reset spends one of the plan's few, so clicking the row opens a 10-second countdown you can cancel with its button, Esc or a click outside; even then it only opens Codex's `/usage`, where you choose and confirm the reset. Agentrix calls no reset service and never sends that command unless you clicked.
 
 </details>
 
