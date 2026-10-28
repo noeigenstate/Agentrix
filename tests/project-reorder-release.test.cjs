@@ -15,7 +15,8 @@ const reordered = ['b', 'c', 'a', 'd', 'e', 'f'];
 // Execute the real hook and its registered handlers. Only its host (hooks, DOM rectangles,
 // event delivery and animation clock) is simulated; insertion and finish logic come from source.
 function fixture(initial = reordered, { deferCommit = false } = {}) {
-  let workspace = [...initial], hook, cursor = 0, sequence = 0, effects = [];
+  let workspace = [...initial], hook, cursor = 0, sequence = 0, effects = [], clock = 0, reduced = false, motionChange;
+  let styleWrites = 0;
   const values = [], dependencies = [], frames = new Map(), timers = new Map(), animations = [];
   const commits = [], pendingCommits = [], captured = new Set();
   const host = () => {
@@ -32,8 +33,8 @@ function fixture(initial = reordered, { deferCommit = false } = {}) {
   const order = () => hook?.order || workspace;
   const animate = (keyframes, options) => {
     let finish;
-    const animation = { keyframes, options, finished: new Promise(resolve => { finish = resolve; }), finish,
-      cancel() { this.canceled = true; finish(); } };
+    const animation = { keyframes, options, playState: 'running', finished: new Promise(resolve => { finish = resolve; }),
+      finish() { this.playState = 'finished'; finish(); }, cancel() { this.canceled = true; this.playState = 'idle'; finish(); } };
     animations.push(animation);
     return animation;
   };
@@ -46,7 +47,7 @@ function fixture(initial = reordered, { deferCommit = false } = {}) {
     getClientRects() { return [this.getBoundingClientRect()]; }, animate,
   }]));
   const panels = Object.fromEntries(initial.map(id => [id, {
-    dataset: { projectId: id }, style: { setProperty() {} },
+    dataset: { projectId: id }, style: { setProperty() { styleWrites++; } },
     getBoundingClientRect: () => slots[id].getBoundingClientRect(), animate,
   }]));
   const area = { scrollTop: 0, getBoundingClientRect: () => rect(20, 40, 1244, 592) };
@@ -76,7 +77,7 @@ function fixture(initial = reordered, { deferCommit = false } = {}) {
     require(name) {
       if (name === 'react') return react;
       if (name === 'react-dom') return { flushSync(fn) { fn(); render(); } };
-      if (name === '../../shared/motion') return { motionReduced: () => false };
+      if (name === '../../shared/motion') return { motionReduced: () => reduced, observeMotion(fn) { motionChange = fn; return () => {}; } };
       throw new Error(`Unexpected hook dependency: ${name}`);
     },
   }, { filename });
@@ -105,12 +106,14 @@ function fixture(initial = reordered, { deferCommit = false } = {}) {
     render();
   };
   const activate = () => { for (const [id, fn] of [...timers]) { timers.delete(id); fn(); } render(); };
-  const frame = () => { render(); for (const [id, fn] of [...frames]) { frames.delete(id); fn(); } render(); };
+  const frame = (elapsed = 1000 / 60) => { clock += elapsed; render(); for (const [id, fn] of [...frames]) { frames.delete(id); fn(clock); } render(); };
   const flushPromises = () => new Promise(resolve => setImmediate(resolve));
   const finishLanding = async () => { for (const animation of animations) animation.finish(); await flushPromises(); render(); };
   return {
     down, activate, frame, finishLanding,
-    move(index, overrides) { document.dispatch('pointermove', { ...point(index), ...overrides }); },
+    // A delivered movement is observed after its display frame; queueMove models coalesced input within one frame.
+    move(index, overrides) { document.dispatch('pointermove', { ...point(index), ...overrides }); frame(); },
+    queueMove(index, overrides) { document.dispatch('pointermove', { ...point(index), ...overrides }); },
     release(index, overrides) { document.dispatch('pointerup', { ...point(index), ...overrides }); },
     releaseHandler: () => document.handlers('pointerup')[0],
     callRelease(fn, index, overrides) { fn(pointer({ ...point(index), ...overrides })); render(); },
@@ -124,6 +127,8 @@ function fixture(initial = reordered, { deferCommit = false } = {}) {
     resolveCommit() { assert.equal(pendingCommits.length, 1); pendingCommits.shift()(); },
     get drag() { return hook.drag; }, get order() { return Array.from(order()); }, get workspace() { return [...workspace]; },
     get commits() { return commits; }, get captured() { return captured.size; },
+    get styleWrites() { return styleWrites; }, get scrollTop() { return area.scrollTop; }, get animations() { return animations; },
+    motionOff() { reduced = true; motionChange(); render(); },
   };
 }
 
@@ -231,5 +236,37 @@ test('terminal and toolbar pointer interactions do not pick up project cards or 
     const f = fixture(); f.down('a', kind); f.activate(); f.release(0);
     assert.equal(f.drag, null); assert.equal(f.captured, 0); assert.equal(f.commits.length, 0);
     assert.equal(f.click().prevented, false);
+  }
+});
+
+test('pointer motion is coalesced into one transform update per display frame', () => {
+  const f = fixture(); f.down(); f.activate();
+  const before = f.styleWrites;
+  f.queueMove(1); f.queueMove(0); f.queueMove(1);
+  assert.equal(f.styleWrites, before); assert.deepEqual(f.order, reordered);
+  f.frame();
+  assert.equal(f.styleWrites - before, 2);
+  assert.deepEqual(f.order, ['b', 'a', 'c', 'd', 'e', 'f']);
+  f.cancel('blur');
+});
+
+test('switching motion off settles an in-flight reorder and its landing without bypassing persistence', async () => {
+  const f = fixture(reordered, { deferCommit: true }); f.down(); f.activate(); f.move(1);
+  assert.ok(f.animations.some(animation => animation.playState === 'running'));
+  f.release(0); f.frame(); f.motionOff();
+  assert.ok(f.animations.every(animation => animation.playState !== 'running'));
+  await f.finishLanding(); assert.ok(f.drag, 'persistence still owns the floating card');
+  f.resolveCommit(); await f.finishLanding();
+  assert.equal(f.drag, null); assert.deepEqual(f.workspace, original);
+  f.motionOff(); assert.ok(f.animations.every(animation => animation.playState !== 'running'), 'cancelled landings never restart');
+});
+
+test('edge auto-scroll has the same speed on remote and high-refresh displays', () => {
+  for (const hz of [32, 60, 144]) {
+    const f = fixture(); f.down(); f.activate(); f.queueMove(2, { clientY: 630 }); f.frame();
+    const before = f.scrollTop;
+    for (let i = 0; i < hz; i++) f.frame(1000 / hz);
+    assert.ok(Math.abs(f.scrollTop - before - 720) < 1e-8, `${hz} Hz`);
+    f.cancel('blur');
   }
 });

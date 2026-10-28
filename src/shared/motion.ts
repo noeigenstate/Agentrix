@@ -9,3 +9,12 @@ export function motionReduced() {
   const mode = document.documentElement.dataset.motion;
   return mode === 'off' || mode === 'system' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
+
+// CSS stops its own animations; imperative motion also has to react while it is running.
+export function observeMotion(change: () => void) {
+  const observer = new MutationObserver(change);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-motion'] });
+  const preference = matchMedia('(prefers-reduced-motion: reduce)');
+  preference.addEventListener('change', change);
+  return () => { observer.disconnect(); preference.removeEventListener('change', change); };
+}

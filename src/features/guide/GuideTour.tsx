@@ -1,9 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Project } from '../../shared/types';
 import { shortcut } from '../shortcuts/shortcuts';
 import { t } from '../../shared/i18n';
-
-type Rect = { top: number; left: number; width: number; height: number };
+import { observeBounds, type Bounds } from '../../shared/observeBounds';
 type Step = {
   id: string; title: string; body: string[];
   // The part of the window this step is about; everything else is dimmed and cannot be used.
@@ -51,34 +50,61 @@ export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects:
   ];
   const [index, setIndex] = useState(0);
   const step = steps[Math.min(index, steps.length - 1)], last = index >= steps.length - 1;
-  const [rect, setRect] = useState<Rect | null>(null);
+  const [hasTarget, setHasTarget] = useState(false);
   const [paused, setPaused] = useState(false);
-  const bubble = useRef<HTMLDivElement>(null);
-  const [bubbleHeight, setBubbleHeight] = useState(190);
+  const bubble = useRef<HTMLDivElement>(null), ring = useRef<HTMLDivElement>(null);
+  const shades = useRef<(HTMLDivElement | null)[]>([]);
   const next = () => { if (last) onClose(); else setIndex(value => value + 1); };
 
-  // The window changes under the tutorial (a project appears, a card expands), so the target is measured
-  // again a few times a second. A dialog the step opened (the folder picker, SSH sign-in) takes over until it closes.
+  // Follow a moving target at display refresh without rendering or remeasuring the text on each frame.
+  // A dialog the step opened (the folder picker, SSH sign-in) takes over until it closes.
   const stepRef = useRef(step); stepRef.current = step;
-  const measureRef = useRef(() => {});
-  // A new step points somewhere else at once, not at the next tick.
-  useLayoutEffect(() => { measureRef.current(); }, [index]);
-  useEffect(() => {
-    const measure = () => {
-      setPaused(!!document.querySelector('dialog[open]'));
-      const box = stepRef.current.target()?.getBoundingClientRect();
-      setRect(current => {
-        const value = box && box.width && box.height ? { top: Math.round(box.top), left: Math.round(box.left), width: Math.round(box.width), height: Math.round(box.height) } : null;
-        return current?.top === value?.top && current?.left === value?.left
-          && current?.width === value?.width && current?.height === value?.height ? current : value;
-      });
+  useLayoutEffect(() => {
+    const node = bubble.current;
+    if (!node) return;
+    let rect: Bounds | null = null, bubbleHeight = node.offsetHeight;
+    let wasPaused: boolean | undefined, hadTarget: boolean | undefined;
+    const position = () => {
+      const width = window.innerWidth, height = window.innerHeight, pad = 6, bubbleWidth = 340;
+      const hole = rect && {
+        top: Math.max(0, Math.round(rect.top) - pad), left: Math.max(0, Math.round(rect.left) - pad),
+        right: Math.min(width, Math.round(rect.left) + Math.round(rect.width) + pad),
+        bottom: Math.min(height, Math.round(rect.top) + Math.round(rect.height) + pad),
+      };
+      let top = height / 2 - bubbleHeight / 2, left = width / 2 - bubbleWidth / 2, arrow = '';
+      if (hole) {
+        // Large targets keep the bubble inside their upper right corner; small targets point from below/above.
+        const large = hole.bottom - hole.top > height * .45;
+        left = Math.min(Math.max(12, large ? hole.right - bubbleWidth - 18 : (hole.left + hole.right) / 2 - bubbleWidth / 2), width - bubbleWidth - 12);
+        if (large) top = Math.min(hole.top + 62, height - bubbleHeight - 12);
+        else if (hole.bottom + 14 + bubbleHeight <= height) { top = hole.bottom + 14; arrow = 'tour-arrow-up'; }
+        else { top = Math.max(12, hole.top - 14 - bubbleHeight); arrow = 'tour-arrow-down'; }
+        const boxes = [[0, 0, width, hole.top], [0, hole.top, hole.left, hole.bottom - hole.top],
+          [hole.right, hole.top, width - hole.right, hole.bottom - hole.top], [0, hole.bottom, width, height - hole.bottom],
+          [hole.left, hole.top, hole.right - hole.left, hole.bottom - hole.top]];
+        for (const [index, element] of [...shades.current, ring.current].entries()) {
+          if (!element) continue;
+          const [x, y, w, h] = boxes[index];
+          if (element === ring.current) Object.assign(element.style, { left: '0px', top: '0px', width: `${w}px`, height: `${h}px`, transform: `translate3d(${x}px, ${y}px, 0)` });
+          else element.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${w}, ${h})`;
+        }
+      }
+      node.style.transform = `translate3d(${left}px, ${top}px, 0)`;
+      node.style.setProperty('--tour-arrow', `${hole ? Math.min(Math.max(20, (hole.left + hole.right) / 2 - left), bubbleWidth - 20) : 0}px`);
+      node.classList.toggle('tour-arrow-up', arrow === 'tour-arrow-up'); node.classList.toggle('tour-arrow-down', arrow === 'tour-arrow-down');
     };
-    measureRef.current = measure; measure();
-    const timer = setInterval(measure, 200);
-    window.addEventListener('resize', measure);
-    return () => { clearInterval(timer); window.removeEventListener('resize', measure); };
-  }, []);
-  useLayoutEffect(() => { if (bubble.current) setBubbleHeight(bubble.current.offsetHeight); }, [index, rect, paused]);
+    const stop = observeBounds(() => {
+      const nowPaused = !!document.querySelector('dialog[open]');
+      if (wasPaused !== nowPaused) { wasPaused = nowPaused; setPaused(nowPaused); }
+      return stepRef.current.target();
+    }, box => {
+      rect = box; position();
+      if (hadTarget !== !!box) { hadTarget = !!box; setHasTarget(!!box); }
+    });
+    const resize = new ResizeObserver(() => { bubbleHeight = node.offsetHeight; position(); });
+    resize.observe(node);
+    return () => { stop(); resize.disconnect(); };
+  }, [index]);
   // What the step asks for has happened: move on.
   const done = step.done?.() === true;
   useEffect(() => { if (done) { const timer = setTimeout(next, 500); return () => clearTimeout(timer); } }, [done, index]);
@@ -87,7 +113,7 @@ export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects:
     if (paused || !['start', 'prompt'].includes(step.id)) return;
     const timer = setTimeout(() => visible('.project-panel .xterm-helper-textarea')?.focus(), 150);
     return () => clearTimeout(timer);
-  }, [step.id, paused, !!rect]);
+  }, [step.id, paused, hasTarget]);
   // Keys reach only the step's target and the bubble; Escape leaves the tutorial.
   useEffect(() => {
     const keys = (event: KeyboardEvent) => {
@@ -101,30 +127,12 @@ export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects:
     return () => window.removeEventListener('keydown', keys, true);
   }, [onClose]);
 
-  if (paused) return null;
-  const width = window.innerWidth, height = window.innerHeight, pad = 6;
-  const hole = rect && { top: Math.max(0, rect.top - pad), left: Math.max(0, rect.left - pad), right: Math.min(width, rect.left + rect.width + pad), bottom: Math.min(height, rect.top + rect.height + pad) };
-  // A small target gets the bubble under it (or above when there is no room); a large one, such as the
-  // terminal, keeps the bubble inside its upper right corner so what is typed stays in view.
-  const bubbleWidth = 340;
-  let place: CSSProperties = { top: height / 2 - bubbleHeight / 2, left: width / 2 - bubbleWidth / 2 }, arrow = '';
-  if (hole) {
-    const large = hole.bottom - hole.top > height * .45;
-    const left = Math.min(Math.max(12, large ? hole.right - bubbleWidth - 18 : (hole.left + hole.right) / 2 - bubbleWidth / 2), width - bubbleWidth - 12);
-    if (large) place = { top: Math.min(hole.top + 62, height - bubbleHeight - 12), left };
-    else if (hole.bottom + 14 + bubbleHeight <= height) { place = { top: hole.bottom + 14, left }; arrow = 'tour-arrow-up'; }
-    else { place = { top: Math.max(12, hole.top - 14 - bubbleHeight), left }; arrow = 'tour-arrow-down'; }
-  }
-  const arrowLeft = hole ? Math.min(Math.max(20, (hole.left + hole.right) / 2 - (place.left as number)), bubbleWidth - 20) : 0;
-  return <div className="tour-layer" aria-live="polite">
-    {hole ? <>
-      <div className="tour-shade" style={{ top: 0, left: 0, width, height: hole.top }} />
-      <div className="tour-shade" style={{ top: hole.top, left: 0, width: hole.left, height: hole.bottom - hole.top }} />
-      <div className="tour-shade" style={{ top: hole.top, left: hole.right, width: width - hole.right, height: hole.bottom - hole.top }} />
-      <div className="tour-shade" style={{ top: hole.bottom, left: 0, width, height: height - hole.bottom }} />
-      <div className={`tour-ring ${step.interactive ? '' : 'tour-blocked'}`} style={{ top: hole.top, left: hole.left, width: hole.right - hole.left, height: hole.bottom - hole.top }} />
-    </> : <div className="tour-shade" style={{ inset: 0 }} />}
-    <div className={`tour-bubble ${arrow}`} ref={bubble} role="dialog" aria-label={t('操作教程')} style={{ ...place, width: bubbleWidth, '--tour-arrow': `${arrowLeft}px` } as CSSProperties}>
+  return <div className="tour-layer" aria-live="polite" style={{ visibility: paused ? 'hidden' : undefined }}>
+    {Array.from({ length: 4 }, (_, index) => <div key={index} ref={node => { shades.current[index] = node; }} className={hasTarget ? 'tour-shade' : undefined}
+      style={{ left: 0, top: 0, width: 1, height: 1, transformOrigin: '0 0', display: hasTarget ? undefined : 'none' }} />)}
+    <div ref={ring} className={`tour-ring ${step.interactive ? '' : 'tour-blocked'}`} style={{ display: hasTarget ? undefined : 'none' }} />
+    {!hasTarget && <div className="tour-shade" style={{ inset: 0 }} />}
+    <div className="tour-bubble" ref={bubble} role="dialog" aria-label={t('操作教程')} style={{ top: 0, left: 0, width: 340 }}>
       <span className="eyebrow">{t('操作教程')} · {Math.min(index, steps.length - 1) + 1} / {steps.length}</span>
       <h3>{step.title}</h3>
       {step.body.map(line => <p key={line}>{line}</p>)}

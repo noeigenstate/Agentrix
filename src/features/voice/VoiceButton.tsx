@@ -1,10 +1,13 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useLayoutEffect, useRef, type CSSProperties } from 'react';
 import { Microphone, SpinnerGap } from '@phosphor-icons/react';
-import { toggleDictation, useVoice } from './voice-input';
+import { getVoiceLevel, toggleDictation, useVoice } from './voice-input';
+import { easeVoiceLevel } from './voice-level';
 import './voice-overlay.css';
 import { t } from '../../shared/i18n';
 import { shortcut } from '../shortcuts/shortcuts';
 import { Select } from '../../shared/Select';
+import { motionReduced, observeMotion } from '../../shared/motion';
+import { observeBounds } from '../../shared/observeBounds';
 
 // What each recognizer is for, shown with its name and download size.
 const VOICE_MODEL_KINDS: Record<string, string> = { sensevoice: '标准 · 速度快', qwen3: '高精度 · 中英混合' };
@@ -40,33 +43,51 @@ export function VoiceButton({ terminalId, sessionId, name, size = 14, onError }:
     : t('麦克风已连接 · 点击或按 {key} 说话', { key: shortcut('voice') });
   const tone = recording ? 'is-recording' : busy ? 'is-busy' : voice.microphone === false ? 'mic-missing' : voice.microphone ? 'mic-connected' : '';
   return <button type="button" className={`icon-button voice-button ${tone}`} title={status} aria-label={t('语音输入 {name}', { name })} aria-pressed={recording}
-    style={{ '--voice-level': voice.level.toFixed(2) } as CSSProperties}
     onClick={event => { event.stopPropagation(); void toggleDictation(terminalId, sessionId, onError, name); }}>
     {busy ? <SpinnerGap className="loading-spinner" size={size} /> : <Microphone size={size} weight={recording ? 'fill' : 'regular'} />}
   </button>;
 }
 
-type Box = { left: number; top: number; width: number; height: number };
-
-// The project card holding this terminal, tracked every frame while shown so the microphone stays
-// centred on it through focus animations, window resizes and grid changes.
+// Move the anchor directly: following a moving card must not render the wave or announce its status again.
 function useCardBox(terminalId: string | null) {
-  const [box, setBox] = useState<Box | null>(null);
-  useEffect(() => {
-    if (!terminalId) { setBox(null); return; }
-    let frame = 0;
-    const track = () => {
-      const card = document.querySelector(`[data-terminal-id="${CSS.escape(terminalId)}"]`)?.closest('.project-panel');
-      const rect = card?.getBoundingClientRect();
-      const next = rect?.width ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null;
-      setBox(current => current && next && current.left === next.left && current.top === next.top
-        && current.width === next.width && current.height === next.height ? current : next);
-      frame = requestAnimationFrame(track);
-    };
-    track();
-    return () => cancelAnimationFrame(frame);
+  const anchor = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const node = anchor.current;
+    if (!terminalId || !node) return;
+    return observeBounds(() => document.querySelector(`[data-terminal-id="${CSS.escape(terminalId)}"]`)?.closest('.project-panel'), box => {
+      const styles = { width: box ? `${box.width}px` : '', height: box ? `${box.height}px` : '',
+        transform: box ? `translate3d(${box.left}px, ${box.top}px, 0)` : '' };
+      for (const [key, value] of Object.entries(styles)) {
+        if (node.style.getPropertyValue(key) !== value) node.style.setProperty(key, value);
+      }
+    });
   }, [terminalId]);
-  return box;
+  return anchor;
+}
+
+function useVoiceLevel(recording: string | null) {
+  const stage = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const node = stage.current;
+    if (!node || !recording) return;
+    let frame = 0, level = 0, last: number | null = null;
+    const tick = (now: number) => {
+      level = easeVoiceLevel(level, getVoiceLevel(), last === null ? 0 : now - last); last = now;
+      const value = level.toFixed(4);
+      if (node.style.getPropertyValue('--voice-level') !== value) node.style.setProperty('--voice-level', value);
+      frame = requestAnimationFrame(tick);
+    };
+    const sync = () => {
+      const active = !motionReduced();
+      if (active && frame) return;
+      cancelAnimationFrame(frame); frame = 0; level = 0; last = null;
+      node.style.removeProperty('--voice-level');
+      if (active) frame = requestAnimationFrame(tick);
+    };
+    const stop = observeMotion(sync); sync();
+    return () => { stop(); cancelAnimationFrame(frame); node.style.removeProperty('--voice-level'); };
+  }, [recording]);
+  return stage;
 }
 
 // The bars of one side of the sound wave, from the sphere outward: their heights in px. Short by the sphere, rising to a peak, then lower, then dots.
@@ -92,12 +113,13 @@ function MicrophoneGlyph() {
 // The voice shortcut itself is handled with the other app shortcuts in App.
 export function VoiceOverlay() {
   const voice = useVoice();
-  const box = useCardBox(voice.recording || voice.busy);
+  const anchor = useCardBox(voice.recording || voice.busy);
   const recording = !!voice.recording;
+  const stage = useVoiceLevel(voice.recording);
   if (!recording && !voice.busy) return null;
   // Without a visible card (for example, while a file preview covers it) the window centre is used.
-  return <div className="voice-overlay-anchor" style={box || undefined}><div className="voice-overlay" role="status" aria-live="polite" aria-label={t('语音输入')}>
-    <div className={`voice-stage ${recording ? 'is-recording' : 'is-busy'}`} style={{ '--voice-level': voice.level.toFixed(2) } as CSSProperties} aria-hidden="true">
+  return <div className="voice-overlay-anchor" ref={anchor}><div className="voice-overlay" role="status" aria-live="polite" aria-label={t('语音输入')}>
+    <div className={`voice-stage ${recording ? 'is-recording' : 'is-busy'}`} ref={stage} aria-hidden="true">
       <Wave side="left" /><Wave side="right" />
       <i className="voice-halo is-far" /><i className="voice-halo is-near" />
       <div className={`voice-orb ${recording ? 'is-recording' : 'is-busy'}`}>{recording ? <MicrophoneGlyph /> : <SpinnerGap className="loading-spinner" />}</div>

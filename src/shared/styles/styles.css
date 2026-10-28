@@ -111,8 +111,8 @@ kbd { padding: 1px 4px; border: 1px solid var(--border); border-radius: 4px; fon
 .update-ready { position: relative; }
 .update-ready::after { content: ''; position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--text-1); }
 /* Motion follows the app setting (src/shared/motion.ts): "off" always stops it, "system" follows Windows. Pseudo-elements are no part of :is(). */
-:root[data-motion="off"] *, :root[data-motion="off"] *::before, :root[data-motion="off"] *::after { animation: none !important; transition: none !important; }
-@media (prefers-reduced-motion: reduce) { :root[data-motion="system"] *, :root[data-motion="system"] *::before, :root[data-motion="system"] *::after { animation: none !important; transition: none !important; } }
+:root[data-motion="off"] *, :root[data-motion="off"] *::before, :root[data-motion="off"] *::after { animation: none !important; transition: none !important; will-change: auto !important; }
+@media (prefers-reduced-motion: reduce) { :root[data-motion="system"] *, :root[data-motion="system"] *::before, :root[data-motion="system"] *::after { animation: none !important; transition: none !important; will-change: auto !important; } }
 
 /* Opaque colour cursors avoid the stock monochrome I-beam's XOR rendering over
    a Windows compatibility window. It stays transparent when its surface changes;

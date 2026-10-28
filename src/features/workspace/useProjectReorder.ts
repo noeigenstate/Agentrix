@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
 import { flushSync } from 'react-dom';
-import { motionReduced } from '../../shared/motion';
+import { motionReduced, observeMotion } from '../../shared/motion';
 
 type Drag = { id: string; targetId: string | null };
 type Rect = { left: number; top: number };
@@ -47,6 +47,9 @@ export function useReorder(enabled: boolean, context: string, ids: string[], onR
   const idsKey = [...ids].sort().join('\0');
   useEffect(() => { cancel.current?.(); }, [enabled, context, idsKey]);
   useEffect(() => () => { cancel.current?.(); animations.current.forEach(animation => animation.cancel()); }, []);
+  useEffect(() => observeMotion(() => {
+    if (motionReduced()) animations.current.forEach(animation => { if (animation.playState !== 'idle') animation.finish(); });
+  }), []);
 
   // Animate the existing slots to their new layout. Terminals keep their nodes,
   // buffers and dimensions; only the surrounding slots move.
@@ -54,14 +57,18 @@ export function useReorder(enabled: boolean, context: string, ids: string[], onR
     animations.current.forEach(animation => animation.cancel()); animations.current = [];
     const grid = gridRef.current;
     if (!grid || motionReduced()) { before.current.clear(); return; }
+    const moves: { slot: HTMLElement; dx: number; dy: number }[] = [];
     for (const slot of grid.querySelectorAll<HTMLElement>(target.slots)) {
       const previous = before.current.get(target.slotId(slot));
       if (!previous || target.slotId(slot) === drag?.id || !slot.getClientRects().length) continue;
       const next = slot.getBoundingClientRect();
       const dx = previous.left - next.left, dy = previous.top - next.top;
       if (Math.abs(dx) + Math.abs(dy) < 1) continue;
-      animations.current.push(slot.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' }], { duration: 250, easing: 'cubic-bezier(.2,.85,.25,1)' }));
+      moves.push({ slot, dx, dy });
     }
+    for (const { slot, dx, dy } of moves) animations.current.push(slot.animate([
+      { transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' },
+    ], { duration: 250, easing: 'cubic-bezier(.2,.85,.25,1)' }));
     before.current.clear();
   }, [order]);
 
@@ -77,7 +84,8 @@ export function useReorder(enabled: boolean, context: string, ids: string[], onR
     const pointerId = event.pointerId;
     const origin = panel.getBoundingClientRect();
     const startX = event.clientX, startY = event.clientY;
-    let x = startX, y = startY, active = false, ended = false, settling = false, frame = 0;
+    let x = startX, y = startY, active = false, ended = false, settling = false, dirty = false, frame = 0;
+    let lastFrame: number | null = null;
     let draft = [...ids]; let landing: Animation | undefined; let lastIndex = ids.indexOf(sourceId);
     const slots = () => [...grid.querySelectorAll<HTMLElement>(target.slots)];
     const snapshot = () => { before.current = new Map(slots().filter(slot => slot.getClientRects().length).map(slot => [target.slotId(slot), slot.getBoundingClientRect()])); };
@@ -92,28 +100,32 @@ export function useReorder(enabled: boolean, context: string, ids: string[], onR
       return found ? target.slotId(found) : null;
     };
     const update = () => {
+      const targetId = hit();
+      const index = targetId ? slots().findIndex(slot => target.slotId(slot) === targetId) : -1;
+      let next: string[] | null = null;
+      if (index !== lastIndex && targetId && targetId !== sourceId) {
+        const from = draft.indexOf(sourceId), to = draft.indexOf(targetId);
+        if (from >= 0 && to >= 0 && from !== to) {
+          next = [...draft]; next.splice(from, 1); next.splice(to, 0, sourceId); snapshot();
+        }
+      }
+      lastIndex = index;
+      // Finish all hit-testing and FLIP reads before invalidating styles or React's layout.
       panel.style.setProperty('--drag-x', `${x - startX}px`);
       panel.style.setProperty('--drag-y', `${y - startY}px`);
-      const targetId = hit();
-      if (!targetId) { lastIndex = -1; return; }
-      const index = slots().findIndex(slot => target.slotId(slot) === targetId);
-      if (index === lastIndex) return;
-      lastIndex = index;
-      if (targetId === sourceId) return;
-      const from = draft.indexOf(sourceId), to = draft.indexOf(targetId);
-      if (from < 0 || to < 0 || from === to) return;
-      const next = [...draft]; next.splice(from, 1); next.splice(to, 0, sourceId);
-      snapshot(); draft = next; setOrder(next); setDrag({ id: sourceId, targetId });
+      if (next) { draft = next; setOrder(next); setDrag({ id: sourceId, targetId }); }
+      return targetId;
     };
-    const scroll = () => {
+    const scroll = (now: number) => {
       if (ended || !active || settling) return;
       const box = area.getBoundingClientRect();
+      const elapsed = lastFrame === null ? 1000 / 60 : Math.min(50, Math.max(0, now - lastFrame)); lastFrame = now;
+      const old = area.scrollTop;
       if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) {
         const direction = y < box.top + 42 ? -1 : y > box.bottom - 42 ? 1 : 0;
-        const old = area.scrollTop;
-        if (direction) area.scrollTop += direction * 12;
-        if (old !== area.scrollTop) update();
+        if (direction) area.scrollTop += direction * .72 * elapsed;
       }
+      if (dirty || old !== area.scrollTop) { update(); dirty = false; }
       frame = requestAnimationFrame(scroll);
     };
     const activate = () => {
@@ -138,7 +150,7 @@ export function useReorder(enabled: boolean, context: string, ids: string[], onR
       if (event.pointerId !== pointerId || settling) return;
       x = event.clientX; y = event.clientY;
       if (!active && Math.hypot(x - startX, y - startY) >= 6) activate();
-      if (active) { event.preventDefault(); update(); }
+      if (active) { event.preventDefault(); dirty = true; }
     };
     const detach = () => {
       window.clearTimeout(timer); cancelAnimationFrame(frame);
@@ -148,14 +160,18 @@ export function useReorder(enabled: boolean, context: string, ids: string[], onR
     };
     // The card must leave its floating position (drag state) in the same frame its landing transform is
     // dropped; cancelling first would paint one frame back at the origin, a visible jump after release.
-    const clear = () => { ended = true; cancel.current = null; flushSync(() => { setDrag(null); setOrder(null); }); landing?.cancel(); };
+    const clear = () => {
+      ended = true; cancel.current = null;
+      animations.current = animations.current.filter(animation => animation !== landing);
+      flushSync(() => { setDrag(null); setOrder(null); }); landing?.cancel();
+    };
     const finish = (save: boolean) => {
       if (ended || settling) return;
       detach();
       if (!active) { clear(); return; }
       settling = true;
       const changed = draft.some((id, index) => id !== ids[index]);
-      const persist = save && !!hit() && changed;
+      const persist = save && changed;
       if (!persist) { snapshot(); draft = [...ids]; setOrder(draft); }
       requestAnimationFrame(() => {
         if (ended) return;
@@ -164,6 +180,7 @@ export function useReorder(enabled: boolean, context: string, ids: string[], onR
         const home = slot.getBoundingClientRect();
         const reduced = motionReduced();
         landing = panel.animate([{ transform: getComputedStyle(panel).transform }, { transform: `translate3d(${home.left - origin.left}px, ${home.top - origin.top}px, 0) scale(1)` }], { duration: reduced ? 0 : 170, easing: 'cubic-bezier(.2,.85,.25,1)', fill: 'forwards' });
+        animations.current.push(landing);
         Promise.all([landing.finished.catch(() => {}), persist ? commit.current(draft) : Promise.resolve()]).finally(() => { if (!ended) clear(); });
       });
     };
@@ -171,8 +188,8 @@ export function useReorder(enabled: boolean, context: string, ids: string[], onR
       if (event.pointerId !== pointerId || ended || settling) return;
       x = event.clientX; y = event.clientY;
       // The release can arrive at a new cell without a final pointermove (for example, coalesced input).
-      if (active) update();
-      finish(true);
+      const over = active ? update() : null;
+      finish(!!over);
     };
     const canceled = (event: globalThis.PointerEvent) => { if (event.pointerId === pointerId) finish(false); };
     const abort = () => { detach(); clear(); };

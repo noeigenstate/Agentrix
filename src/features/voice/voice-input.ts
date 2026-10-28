@@ -9,8 +9,11 @@ import { isMac, isLinux } from '../../shared/platform';
 // and every terminal's microphone button reflecting the same device and model state.
 // label names the terminal being dictated to; sending marks a recognition that will press Enter; sends: Enter sends
 // what was said (a box that only takes the words, such as the decision page's, has Enter insert them instead).
-type VoiceSnapshot = { microphone: boolean | null; model: VoiceState | null; recording: string | null; busy: string | null; level: number; label: string | null; sending: boolean; sends: boolean };
-let snapshot: VoiceSnapshot = { microphone: null, model: null, recording: null, busy: null, level: 0, label: null, sending: false, sends: true };
+type VoiceSnapshot = { microphone: boolean | null; model: VoiceState | null; recording: string | null; busy: string | null; label: string | null; sending: boolean; sends: boolean };
+let snapshot: VoiceSnapshot = { microphone: null, model: null, recording: null, busy: null, label: null, sending: false, sends: true };
+// Audio messages update the meter without notifying React's voice-state subscribers.
+let measuredLevel = 0;
+export function getVoiceLevel() { return measuredLevel; }
 const listeners = new Set<() => void>();
 const set = (patch: Partial<VoiceSnapshot>) => { snapshot = { ...snapshot, ...patch }; listeners.forEach(listener => listener()); };
 
@@ -89,13 +92,13 @@ function focusTerminal(id: string) {
 }
 
 async function cancelDictation() {
-  target = null; await capture.close(); set({ recording: null, level: 0, label: null });
+  target = null; measuredLevel = 0; await capture.close(); set({ recording: null, label: null });
 }
 
 // submit: press Enter after inserting, so the text is sent as the next prompt.
 async function finish(submit = false) {
   const current = target; if (!current) return;
-  target = null; set({ recording: null, busy: current.id, sending: submit && snapshot.sends, level: 0 });
+  target = null; measuredLevel = 0; set({ recording: null, busy: current.id, sending: submit && snapshot.sends });
   try {
     const wav = await capture.stopRecording(); await capture.close();
     const text = await window.agentrix.transcribe(wav);
@@ -125,10 +128,12 @@ export async function toggleDictation(id: string, sessionId: string | null, onEr
   }
   // Recording counts from the keypress or click, so an Escape while the microphone is still opening cancels it.
   const pending = { id, sessionId: sessionId ?? '', onError };
-  target = pending; set({ recording: id, label: label || null, sends: composers.get(id)?.sends ?? true });
+  target = pending; measuredLevel = 0; set({ recording: id, label: label || null, sends: composers.get(id)?.sends ?? true });
   // The recognizer is released after a few idle minutes; load it again while the user is speaking.
   void window.agentrix.warmVoice();
-  const opened = opening.then(() => target === pending ? capture.open('', level => set({ level: Math.min(1, level * 5) })) : undefined);
+  const opened = opening.then(() => target === pending ? capture.open('', level => {
+    if (target === pending) measuredLevel = Math.min(1, level * 5);
+  }) : undefined);
   opening = opened.catch(() => {});
   try {
     await opened;
@@ -138,7 +143,7 @@ export async function toggleDictation(id: string, sessionId: string | null, onEr
     capture.startRecording();
     set({ microphone: true });
   } catch (error) {
-    if (target === pending) { target = null; set({ recording: null, level: 0, label: null }); }
+    if (target === pending) { target = null; measuredLevel = 0; set({ recording: null, label: null }); }
     if (!target) await capture.close();
     onError(microphoneMessage(error)); void refreshMicrophone();
   }

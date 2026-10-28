@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { motionReduced, observeMotion } from '../../shared/motion';
 
 type Bounds = { left: number; top: number; width: number; height: number };
 type Flight = { id: string; from: Bounds; opening: boolean };
@@ -41,7 +42,6 @@ export function useProjectFocusMotion(mode: 'smooth' | 'system' | 'off') {
     const slot = panel?.parentElement;
     if (!panel || !slot || !slot.getClientRects().length || getComputedStyle(panel).visibility === 'hidden') return;
 
-    const reduced = matchMedia('(prefers-reduced-motion: reduce)');
     const duration = flight.opening ? 720 : 560;
     const deadline = performance.now() + duration;
     let animation: Animation | null = null;
@@ -56,7 +56,7 @@ export function useProjectFocusMotion(mode: 'smooth' | 'system' | 'off') {
       finished = true;
       observer.disconnect();
       window.removeEventListener('resize', retarget);
-      reduced.removeEventListener('change', onPreference);
+      stopMotion();
       animation?.cancel();
       supporting.forEach(item => item.cancel());
       panel.classList.remove('focus-motion-panel');
@@ -97,14 +97,13 @@ export function useProjectFocusMotion(mode: 'smooth' | 'system' | 'off') {
       // visible zoom and turn the remaining motion into an abrupt snap.
       animate(panel.getBoundingClientRect(), Math.max(flight.opening ? 380 : 280, deadline - performance.now()));
     };
-    const onPreference = () => { if (mode === 'system' && reduced.matches) clear(); };
     const observer = new ResizeObserver(retarget);
+    const stopMotion = observeMotion(() => { if (motionReduced()) clear(); });
     stop.current = clear;
     animate(flight.from, duration);
     if (finished) return;
     observer.observe(slot);
     window.addEventListener('resize', retarget);
-    reduced.addEventListener('change', onPreference);
     if (flight.opening) {
       const sidebar = shell.querySelector('.focus-sidebar');
       if (sidebar) supporting.push(sidebar.animate([
