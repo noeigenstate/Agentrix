@@ -30,12 +30,12 @@
 
 <table>
   <tr>
-    <td width="33%" valign="top"><h3>🧭 Decide first</h3>Everything across your projects that needs your call on one page: approvals, questions, choices, sign-ins, rounds to review. Permission cards open the source terminal for confirmation; other answers go only when you confirm them.</td>
-    <td width="33%" valign="top"><h3>🧩 Many at once</h3>Every project is a card with a real terminal. Codex and Claude Code work at the same time: 🔵 working, 🩷 done and waiting, 🟢 seen, one alert per round.</td>
-    <td width="33%" valign="top"><h3>📖 Terminal as a timeline</h3>The conversation as a timeline: each prompt, answer and group of tool calls a node; pictures, pages and videos show right in the answer.</td>
+    <td width="33%" valign="top"><h3>🧭 Decide first</h3>Approvals, questions, choices, sign-ins and rounds to review on one page. Screen-derived permission cards open the source terminal; supported questions and choices have their own answer controls.</td>
+    <td width="33%" valign="top"><h3>🧩 Many at once</h3>Every project is a card with a real terminal. A Working label and dot show activity; an inward breathing glow marks work waiting for review. One completion alert per instruction.</td>
+    <td width="33%" valign="top"><h3>📖 Read the conversation</h3>A centred chat column: your messages on the right, the agent on the left, commands in collapsible groups. Pictures, pages and videos appear with the answer.</td>
   </tr>
   <tr>
-    <td valign="top"><h3>📊 Usage at a glance</h3>The activity pane shows the model route, how much context is left and the 5-hour and weekly limits; Codex can reset its limits after a 10-second countdown you can cancel.</td>
+    <td valign="top"><h3>📊 Usage at a glance</h3>The activity pane shows the model route, context and the 5-hour and weekly limits. Reset limit opens Codex's own <code>/usage</code> after a cancellable 10-second countdown; you confirm the reset there.</td>
     <td valign="top"><h3>✅ Keep what matters</h3>Review changes hunk by hunk the way Git shows them: keep what you want, revert the rest, no <code>git add -p</code> to remember.</td>
     <td valign="top"><h3>🎙️ Just say it</h3><kbd>Ctrl</kbd>+<kbd>T</kbd>, talk, Enter. Recognition runs offline on your machine; audio never leaves it.</td>
   </tr>
@@ -66,7 +66,7 @@ flowchart LR
   grid --> a2["Claude Code · project B"]
   grid --> a3["… more projects / SSH"]
   a1 & a2 & a3 -->|"session records"| sense{{"aware of every round"}}
-  sense -->|"🔵 working · 🩷 waiting · 🟢 seen"| grid
+  sense -->|"Working label · glow until viewed · Round complete"| grid
   sense -->|"laid out again"| read["📖 Reading view<br/>answers · pictures · pages · changes"]
   read -->|"a glance, your call"| you
 ```
@@ -75,9 +75,11 @@ flowchart LR
 
 ### 🧭 Decide first, then dive in
 
-<img src="docs/images/decisions.jpg" alt="Decide: a card asks to approve running ./cleanup-archive.ps1 -Host db-01 -Days 30, with the payments round waiting for review under it; a column on the right lists what every session is doing" width="100%" />
+<img src="docs/images/decisions.jpg" alt="Decide page with project sessions and a decision card" width="100%" />
 
-Agentrix opens on **Decide**: everything across your projects that needs your call, as a stack of cards — approvals, questions, choices, sign-ins, and rounds of work handed in for review — each titled by what it would do ("Run a command: ./cleanup-archive.ps1 …") with the command itself. Permission cards show the request and open its source terminal for confirmation; other answers are sent only when you confirm them. You can put it off or open the source. A column beside it shows what every session is doing and waiting on, and the box below tells Agentrix what to do next (paste a screenshot into it too). Decide · Workbench in the title bar switch at any time: the workbench is the project grid.
+Agentrix opens on **Decide** by default. Select a project from the session list; when no decision is selected, a centred new-task composer shows above a short summary of that session's recent round. Type a goal, paste a screenshot or dictate, then press Enter to start. It sends to the running agent or starts the chosen local agent first; an SSH agent must already be running. The summary's Open session action opens the project. Decide · Workbench in the title bar switch at any time; Workbench is the project grid.
+
+Select a decision to see its request and source. Screen-derived permission cards open the terminal for approval; choice cards confirm the selected answer, and question cards use the CLI's answer controls. You can open the source or put a request off while execution waits. Review cards show the round's reply, files and recorded checks: Pass acknowledges that round, and Send back with notes sends your feedback as the next instruction. Passing does not commit, merge or push changes.
 
 **Native approvals (opt-in):** Select **Native approvals** in the new-session launcher. Codex keeps its real TUI through an owned, authenticated loopback app-server connection (experimental remote transport). Reading and Decide show requests issued on that connection and respond with the original typed JSON-RPC request ID. Command and file approvals offer Allow once, Deny and Cancel turn when supported; permission requests grant exactly the requested permissions for the current turn or deny them. Session-wide grants and policy amendments are unavailable from cards.
 
@@ -87,24 +89,27 @@ Agentrix opens on **Decide**: everything across your projects that needs your ca
 
 ### 🧩 Direct every project from one screen
 
-<img src="docs/images/overview.jpg" alt="Overview: six projects; working cards glow blue, finished ones pink, viewed ones green; Codex and Claude Code side by side" width="100%" />
+<img src="docs/images/overview.jpg" alt="Project grid with Codex and Claude Code sessions side by side" width="100%" />
 
-- 🔵 **Blue edge**: working, leave it be
-- ⚪ **Breathing white glow, a notification**: all work is done and waiting for you
+- ● **Working label and dot in the header**: work is in progress, with no coloured card edge
+- ⚪ **Inward breathing glow and a notification**: the round's work has finished and awaits your review
 - ✓ **No glow or edge**: seen, marked “Round complete”, ready for the next instruction
 - 🔴 **Red edge**: an error; check the terminal output
 
-The white glow fades inward from the edges about every 2.5 seconds until viewed, with no outline. Viewing the card or sending a new instruction in its terminal clears the glow. A project in focus mode draws no edge.
+The glow is white in the dark theme and dark in the light theme. It fades inward from the edges about every 2.5 seconds until viewed, with no coloured completion border. Opening the project or sending a new instruction in its terminal clears it. A project in focus mode draws no state edge.
 
-State comes from the rounds Codex and Claude Code record themselves, not from guessing how long the terminal has been quiet: the card waits for the main round, every background subagent and command it started, queued messages and work in every other project terminal to finish. One step or subagent finishing alone doesn't count, and each instruction alerts once. Drag cards to reorder, expand one from its header and shrink it back without losing the session or an unsent draft, and split a project into several terminals.
+State comes from the rounds Codex and Claude Code record themselves: the card waits for the main round, tracked background subagents and commands, queued messages and other active agent terminals in the project to finish. Persistent servers and watchers do not count as pending work. One step finishing alone does not count. The same round will not alert again without a new instruction.
+
+Drag cards by their headers to reorder. The header, waiting-status action or explicit expand action opens a project inside the current window; F11 controls native full screen separately. Typing, selecting and copying inside a small terminal keep the card small. Shrinking a project preserves its session and unsent draft; one project can hold several terminal splits.
 
 ### 📖 The terminal, laid out again
 
-<img src="docs/images/reading-view.jpg" alt="Reading view: the conversation as a timeline, each prompt, answer and group of tool calls a node on the line, the design mock the answer mentions shown in its card; the activity pane on the right shows the model route, context and usage" width="100%" />
+<img src="docs/images/reading-view.jpg" alt="Reading view with conversation, file previews and the activity pane" width="100%" />
 
-Switch any Claude Code or Codex conversation to the **reading view**: a timeline where your prompts, its answers and each group of tool calls are nodes on a line, each time after the name ("You 18:39"), the avatars, cards and message box in one column with equal margins left and right. The nodes are hollow rings in the colour of who is speaking (blue you, an orange spark Claude, white Codex, cyan a step), and a running one never spins: Claude's spark blooms and draws back like its own ✻, other steps send out soft rings. Headings, lists, tables and code blocks with a Copy button sit on frosted cards, tool calls fold into a pill naming the files they changed, and an item hops when the pointer passes over it. The box at the bottom writes straight into the real terminal underneath, and the terminal is one click away.
+Switch a Claude Code or Codex conversation to the **reading view**: a centred chat column with equal side margins, your messages on the right and the agent's replies on the left. Replies support headings, lists, tables and code blocks with a Copy button. Commands and tool calls fold into groups with summaries and changed-file names. The latest finished round shows its status above the result and relevant actions below: open a file, view or save a picture, copy an answer, continue or retry. Saving a generated picture is unavailable over SSH; retry is available only when the agent can accept a new prompt. The box at the bottom sends to the same session, and its real terminal stays one click away.
 
-- **What it made is in the answer.** Pictures, web pages, videos and Markdown an agent writes or names appear under its answer; a click opens the full picture, page or document in a popup over the current view (Esc closes it), never jumping into the project page or another program. Agentrix tells the agents so when it starts them, so they show you an image instead of saying a terminal can only show text.
+- **What it made is in the answer.** Supported pictures, web pages, videos and Markdown an agent writes or names appear with its answer; an ordinary click opens the preview in a popup over the current view (Esc closes it). Generated pictures show a two-line prompt summary that you can expand.
+- **Reveal a path.** In Reading, Ctrl+click a local file path (Command+click on macOS) to select the file in the system file manager; directories open there. Relative paths use the project root; existing absolute paths can be outside it. Missing paths report an error; SSH paths cannot be revealed locally. Ordinary links and previews for supported files stay in-app.
 - **The real CLI is a popup away.** Sending a slash command or `!` shell command opens the same live terminal over the reading view. Work in it directly; Esc stays with the CLI, and the close button or backdrop returns to reading without closing the CLI’s dialog. Type `/` for every command, `@` to mention a project file; `/resume` keeps the local session picker.
 - **Questions and confirmations become cards.** Permission prompts become informative cards with an Open terminal action; pickers like `/model` and questions from Claude Code (AskUserQuestion) and Codex (Plan mode) remain interactive cards; what the agent is doing is written at the end of the conversation, as in its CLI, with a timer and Esc to interrupt.
 - **Keep talking while it works.** A message sent mid-round is marked *delivered and queued*: the agent reads it once the current step is done, and it is never sent twice or taken for undelivered.
@@ -123,9 +128,11 @@ When a round ends, open a changed file from the Git tab and see it the way `git 
 
 ### 🎙️ Speak, and it listens
 
-<img src="docs/images/voice.jpg" alt="Voice input: a navy glass microphone window in the middle of the card, with sound waves that follow your voice" width="100%" />
+<img src="docs/images/voice.jpg" alt="Voice input overlay with a microphone and sound-level display" width="100%" />
 
 Press <kbd>Ctrl</kbd>+<kbd>T</kbd> and talk to the current terminal; Enter sends. Recognition runs offline on your machine, **audio never leaves it**, and no API key is needed; a high-accuracy model for mixed Chinese and English is available.
+
+In the Decide composer or review feedback box, Enter inserts the recognised words so you can review them before sending.
 
 ### 🔑 From install to sign-in, all in the window
 
@@ -136,31 +143,37 @@ Press <kbd>Ctrl</kbd>+<kbd>T</kbd> and talk to the current terminal; Enter sends
 
 - **Pick up where you left off**: terminals and Codex / Claude Code sessions come back on start, and an interrupted task carries on.
 - **SSH projects**: reuse your VS Code Remote-SSH hosts; terminals, files, Git and previews all run over SSH, and pages and pictures made on a machine on your network preview too.
-- **Files at hand**: a folder tree, an auto-saving editor (VS Code's editing keys, <kbd>Ctrl</kbd>+<kbd>F</kbd> to find), previews of images, web pages, video and Markdown, and a right-click to open a file's location; <kbd>Ctrl</kbd>+click (<kbd>⌘</kbd>+click on macOS) a path in the terminal to open it in a popup; an enlarged picture fits the window, a click shows it at its own size to drag around.
+- **Files at hand**: a compact folder tree with dimmed, hideable cache files, an auto-saving editor (VS Code's editing keys, <kbd>Ctrl</kbd>+<kbd>F</kbd> to find), and image, web page, video and Markdown previews. A local file's context menu reveals its location. In the terminal, <kbd>Ctrl</kbd>+click (<kbd>⌘</kbd>+click on macOS) a supported project file link for a popup preview; HTTP/HTTPS links open in the browser and recognised local directory links open in the file manager. SSH files preview within the remote project; remote directory links open an in-app folder view. Missing or unsupported files show a message. An enlarged picture fits the window; click for its original size and drag to pan.
 - **Splits you drag**: several terminals for one project side by side, with dividers you drag to resize.
-- **Clear to read**: dark frosted glass with white text over a wallpaper at its own brightness; switch to the **solid** surface for the sharpest text. The appearance is fixed to **Island Dusk (Catalina)**; glass transparency, font size and terminal fonts remain adjustable.
+- **Clear to read**: choose **Black and white** (dark, default) or **Black on white** (light) in Settings → Appearance. Both use solid grayscale surfaces, with no wallpaper picker. Font size, terminal fonts and text weight remain adjustable.
 - **Project thumbnails**: automatically pick a local project image and keep it fixed; change it or restore numbered cards in [Appearance settings](docs/project-images.md).
-- **English and Chinese, remappable shortcuts, automatic updates on Windows**, and a guided tour the first time you open it.
+- **Version and updates in Settings**: Updates and about identifies the version and build (installed, portable, development, macOS or Linux), and shows the current update state with the available check, retry, download-page or restart-and-install action. Changelog and About have their own pages. The title bar uses the app's four-square logo and a stamp icon for Decide.
+- **English and Chinese, remappable shortcuts, updates for installed Windows copies**, and a guided tour the first time you open it.
 
 ## 📦 Get started
 
 New installs default to English. Choose 中文 under **Settings → Appearance → Language** to switch to Chinese; existing language preferences are kept.
 
-**You need:** Windows 10 / 11 x64, an Apple silicon Mac (macOS 12 or later), or a 64-bit Linux desktop (x64 / arm64). [Codex CLI](https://github.com/openai/codex) or [Claude Code](https://docs.anthropic.com/claude-code) can be installed with one click from a project's card.
+**You need:** Windows 10 / 11 x64, an Apple silicon Mac (macOS 12 or later), or a 64-bit Linux desktop (x64 / arm64). Install [Codex CLI](https://github.com/openai/codex) or [Claude Code](https://docs.anthropic.com/claude-code) and make it available on PATH. The local one-click installer needs Node.js and npm; it links to the Node.js download if npm is missing. Sign in to the agent before submitting work.
 
 1. **Install** the build for your system from [Releases](https://github.com/noeigenstate/Agentrix/releases/latest) (below).
 2. **Add projects** with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd>: pick one or more folders, or an SSH project.
-3. **Give instructions**: pick Claude Code or Codex on the card, continuing this folder's last conversation or starting fresh; the first time, a popup walks you through signing in. Say what to do and get on with something else. Come back when its white glow pulses.
+3. **Give instructions**: pick Claude Code or Codex on the card, continuing this folder's last conversation or starting fresh; the first time, a popup walks you through signing in. Say what to do and get on with something else. Come back when its completion glow pulses.
 
 | System | Download | Notes |
 | --- | --- | --- |
-| **Windows** | `Agentrix-Setup-<version>-x64.exe` | Updates itself |
-| **macOS** | Run the command below in Terminal | The same command installs and updates; the app is signed ad hoc, not notarized |
-| **Linux** | `Agentrix-<version>-linux-<arch>.AppImage` | `chmod +x` and run; a `.tar.xz` is also available |
+| **Windows x64** | `Agentrix-Setup-<version>-x64.exe` | Installed copies check and download stable updates; restart to install when ready |
+| **macOS arm64** | `Agentrix-<version>-mac-arm64.dmg` / `Agentrix-<version>-mac-arm64.zip`, or the command below | Signed ad hoc, not notarized; rerun the command to update |
+| **Linux x64** | `Agentrix-<version>-linux-x86_64.AppImage` / `Agentrix-<version>-linux-x64.tar.xz` | Make the AppImage executable, or unpack the archive and run `./agentrix`; update manually |
+| **Linux arm64** | `Agentrix-<version>-linux-arm64.AppImage` / `Agentrix-<version>-linux-arm64.tar.xz` | Same steps as Linux x64; update manually |
+
+Windows portable folders and development builds do not update themselves; Settings identifies the distribution and explains the available update action. The build configuration produces a Windows installer, with no separate portable executable.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | bash
 ```
+
+The macOS command downloads the latest published ZIP and verifies its SHA-256 checksum before installing. A DMG downloaded in a browser may need **Open Anyway** in **System Settings → Privacy & Security** on first launch.
 
 A specific version, manual installs, and terminal and shortcut details for macOS and Linux are in the [usage guide](docs/usage.md#安装细节) (Chinese).
 
@@ -172,13 +185,15 @@ A specific version, manual installs, and terminal and shortcut details for macOS
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> | Add projects |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> | Expand or restore the current project |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> | Back to the overview |
-| <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | Next / previous project |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> | Back to Decide |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>→</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>←</kbd> | Project to the right / left in the grid; small cards stay small |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>↑</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>↓</kbd> | Project above / below in the grid; small cards stay small |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | New terminal in the current project, split |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> | Remove the current project (its files stay) |
-| <kbd>Ctrl</kbd>+<kbd>T</kbd> | Voice input; Enter sends, Esc cancels |
-| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | Search projects |
-| <kbd>Ctrl</kbd>+<kbd>B</kbd> | Show or hide the folder sidebar |
-| <kbd>F11</kbd> | Full screen |
+| <kbd>Ctrl</kbd>+<kbd>T</kbd> | Voice input; Enter sends to a terminal or inserts into a task/feedback box, Esc cancels |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | Search projects in the overview |
+| <kbd>Ctrl</kbd>+<kbd>B</kbd> | Show or hide the folder sidebar in an expanded project |
+| <kbd>F11</kbd> | Toggle native window full screen |
 | <kbd>Ctrl</kbd>+<kbd>,</kbd> | Settings |
 
 </details>
@@ -188,7 +203,7 @@ A specific version, manual installs, and terminal and shortcut details for macOS
 <details>
 <summary><strong>Is my code or data uploaded?</strong></summary>
 
-Agentrix itself **collects nothing and sends no analytics**. It only contacts GitHub (update checks) and Hugging Face or its mirror (the first download of the offline speech recognition model). Codex and Claude Code talk to their own services exactly as they do in any terminal.
+Agentrix itself **collects nothing and sends no analytics**. It uses GitHub for update checks, Hugging Face or its mirror to download offline speech recognition models, and npm for optional agent installation. Codex and Claude Code talk to their own services exactly as they do in any terminal.
 
 </details>
 
@@ -234,7 +249,7 @@ npm run test:desktop   # real desktop interaction tests
 npm run dist           # Windows installer (dist:mac on macOS, dist:linux on Linux)
 ```
 
-Electron · React · TypeScript · xterm.js · node-pty. Every release passes the unit tests, packaged desktop tests and a Linux SSH integration test first. Screenshots come from `scripts/readme-shots.mjs` on demonstration projects; the film is rendered frame by frame from `scripts/promo/`.
+Electron · React · TypeScript · xterm.js · node-pty. The release workflow runs unit tests, packaged desktop checks and Linux SSH integration before publishing. Screenshots come from `scripts/readme-shots.mjs` on demonstration projects; the film is rendered frame by frame from `scripts/promo/`.
 
 ## 📄 License
 
