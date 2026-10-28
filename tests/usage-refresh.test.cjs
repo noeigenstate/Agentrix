@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const vm = require('node:vm');
-const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
+const { UsageMeter, claudeAccount } = require('../electron/features/agents/agent-usage.cjs');
+const { CodexActivityReader, monitorActivity } = require('../electron/codex-activity.cjs');
 const { CodexAccountUsage, accountResult } = require('../electron/features/agents/codex-account-usage.cjs');
 const { promptText } = require('../electron/prompt-queue.cjs');
 
@@ -35,6 +36,10 @@ function watcherFs(existsSync = () => true) {
 
 function runtime(overrides = {}) {
   const sessions = overrides.sessions || new Map([['one', session('one')]]);
+  const terminalIds = project => {
+    const ids = [...sessions.values()].filter(s => s.projectId === project.id).map(s => s.terminalId);
+    return ids.length ? ids : [project.id];
+  };
   const context = vm.createContext({
     UsageMeter, promptText, sessions, process, path, Date, setTimeout, clearTimeout, setInterval, clearInterval,
     fs: watcherFs().fs, quitting: false, scheduleState() {},
@@ -43,21 +48,124 @@ function runtime(overrides = {}) {
     claudeAccount: async () => account(), agentSettings: previous => previous,
     codexProvider: async () => id => id, claudeProvider: async () => 'Anthropic', claudeConfigDir: () => '',
     followClaude() {}, applyActivity() {}, broadcast() {}, isLocalAgentCommand: (_agent, text) => text.startsWith('/'),
-    terminalIds: project => [...sessions.values()].filter(s => s.projectId === project.id).map(s => s.terminalId),
-    shownTerminalIds: project => [...sessions.values()].filter(s => s.projectId === project.id).map(s => s.terminalId),
+    terminalIds, shownTerminalIds: terminalIds,
     localShell: () => ({ kind: 'pwsh' }), t: value => value, getBranch: () => '', startupErrors: new Map(),
     desktopGlassBackend: null, desktopGlassActive: false, desktopGlassWindow: false, app: { getVersion: () => 'test' },
     ...overrides,
   });
   // Run the real main-process functions without requiring Electron or creating a terminal.
   const api = vm.runInContext(`${accounts}\n${notes}\n${historyUsage}\n${lifecycle}\n${hooks}\n${events}\n${state}\n({
-    refreshClaudeAccounts, stopUsageAccount, disposeClaudeAccounts, scheduleUsageRollover, noteSettings, claudeActivity, onEvent, publicState,
+    refreshClaudeAccounts, startUsage, stopUsageAccount, disposeClaudeAccounts, scheduleUsageRollover, noteSettings, usageHistory, claudeActivity, onEvent, publicState,
     resources: () => ({ claudeAccountTimer, claudeAccountSoon, claudeAccountPending, claudeAccountWatchers, usageRolloverTimer, usageRolloverAt })
   })`, context);
   api.history = (s, agent) => vm.runInContext(`s => { ${histories[agent === 'claude' ? 0 : 1]}; return onHistory; }`, context)(s);
   api.close = () => { context.quitting = true; api.disposeClaudeAccounts(); api.scheduleUsageRollover(); };
   return api;
 }
+
+const fixtures = path.join(__dirname, 'fixtures/usage-refresh');
+
+test('an open Codex rollout pushes new and out-of-order limit records without any lifecycle change', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-rollout-'));
+  fs.mkdirSync(path.join(root, 'sessions'));
+  const records = fs.readFileSync(path.join(fixtures, 'codex.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  records[0].payload.cwd = root;
+  const file = path.join(root, 'sessions', `rollout-${records[0].payload.id}.jsonl`);
+  const line = record => JSON.stringify(record) + '\n';
+  fs.writeFileSync(file, records.slice(0, 3).map(line).join(''));
+  const s = session('one', 'codex'); let updated, states = 0;
+  const api = runtime({ sessions: new Map([['one', s]]), scheduleState() { ++states; updated?.(); } });
+  const shown = () => api.publicState().projects[0].terminals[0].agentUsage;
+  const reader = new CodexActivityReader(root, root, 0, {
+    onRecord: record => api.noteSettings(s, 'codex', record), onHistory: ready => api.usageHistory(s, ready),
+  });
+  let activityChanges = 0;
+  const monitor = monitorActivity(() => reader.read(), () => ++activityChanges, { interval: 1000, watch: () => reader.filename });
+  const writer = await fs.promises.open(file, 'a');
+  t.after(async () => { monitor.stop(); await writer.close(); api.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  await monitor.poll();
+  assert.equal(shown().limits[0].percent, 1);
+  const activityBefore = activityChanges, stateBefore = states;
+  const pushed = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('new rollout limits did not reach public state within 2.5 seconds')), 2500);
+    updated = () => { if (shown().limits[0].percent === 2) { clearTimeout(timer); resolve(); } };
+  });
+  await writer.write(line(records[3])); await pushed;
+  assert.equal(shown().limitsAt, Date.parse(records[3].timestamp));
+  assert.ok(states > stateBefore, 'usage schedules its own IPC state push');
+  assert.equal(activityChanges, activityBefore, 'an unchanged turn snapshot never drops a usage update');
+  await writer.write(line(records[2])); await monitor.poll();
+  assert.equal(shown().limits[0].percent, 2);
+  assert.equal(shown().limitsAt, Date.parse(records[3].timestamp));
+});
+
+test('Claude watches cache/statusline fixtures promptly and retains a slower fallback for missed events', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 1793176219000 });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-claude-'));
+  const own = path.join(root, '.claude.json'), pulse = path.join(root, 'claude-quota.json');
+  fs.copyFileSync(path.join(fixtures, 'claude.json'), own);
+  const s = session('one'); let publishes = 0;
+  const watched = watcherFs();
+  const api = runtime({ sessions: new Map([['one', s]]), claudeAccountFiles: () => [own, pulse],
+    fs: watched.fs, claudeAccount: () => claudeAccount(own, pulse), scheduleState: () => ++publishes });
+  t.after(() => { api.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  await api.refreshClaudeAccounts();
+  assert.equal(s.usage.snapshot().limitsFrom, 'Claude Code');
+  fs.copyFileSync(path.join(fixtures, 'codepulse.json'), pulse);
+  t.mock.timers.tick(2000);
+  assert.equal(api.resources().claudeAccountPending, null, 'idle accounts do not reread the full files every two seconds');
+  watched.watchers[0].callback('rename', path.basename(pulse));
+  t.mock.timers.tick(25);
+  await api.resources().claudeAccountPending;
+  const shown = api.publicState().projects[0].terminals[0].agentUsage;
+  assert.deepEqual([...shown.limits].map(limit => limit.percent), [33, 22]);
+  assert.equal(shown.limitsFrom, 'CodePulse'); assert.equal(shown.limitsAt, 1793176218563);
+  assert.equal(publishes, 2);
+  fs.unlinkSync(pulse); // A transient replacement must not let the older Claude cache win.
+  t.mock.timers.tick(27975); await api.resources().claudeAccountPending;
+  assert.equal(s.usage.snapshot().limitsAt, shown.limitsAt); assert.equal(publishes, 2);
+});
+
+test('rollout limits publish during history without exposing partial conversation totals', t => {
+  const s = session('one', 'codex'); let publishes = 0;
+  const api = runtime({ sessions: new Map([['one', s]]), scheduleState: () => ++publishes });
+  t.after(() => api.close());
+  api.usageHistory(s, false);
+  const records = fs.readFileSync(path.join(fixtures, 'codex.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  for (const record of records.slice(2)) api.noteSettings(s, 'codex', { ...record, payload: {
+    ...record.payload, info: { total_token_usage: { input_tokens: 100, output_tokens: 10 } },
+  } });
+  const shown = api.publicState().projects[0].terminals[0].agentUsage;
+  assert.equal(shown.total, null);
+  assert.equal(shown.limits[0].percent, 2);
+  assert.equal(publishes, 2);
+  assert.equal(api.resources().usageRolloverAt, 1793774184000);
+});
+
+test('new account limits reach the pane during slow history while conversation totals stay held', async t => {
+  for (const agent of ['codex', 'claude']) {
+    const s = session('one', agent); let publishes = 0;
+    const at = 2000;
+    const service = new CodexAccountUsage({ scope: async () => null, read: async () => accountResult({
+      rateLimits: { primary: { usedPercent: 33, windowDurationMins: 300, resetsAt: 300 } },
+    }, at) });
+    const api = runtime({ sessions: new Map([['one', s]]), codexAccounts: service,
+      scheduleState: () => ++publishes, claudeAccount: async () => account(at, 33, 300000) });
+    t.after(() => { api.close(); service.dispose(); });
+    // Exercise the production account callback as well as public-state serialization.
+    api.startUsage({ kind: 'local', path: os.tmpdir() }, s, { accountLaunch: 'model-only-v1', codexHome: path.join(os.tmpdir(), 'fake-usage-home') });
+    if (agent === 'codex') {
+      s.usage.providerId = 'openai'; s.usage.scopeCwd = os.tmpdir(); s.bindUsageAccount();
+    }
+    api.usageHistory(s, false);
+    s.usage.total = { input: 100, cached: 0, output: 10 };
+    await api.refreshClaudeAccounts(); await flush();
+    const shown = api.publicState().projects[0].terminals[0].agentUsage;
+    assert.equal(shown.total, null);
+    assert.equal(shown.limitsAt, at); assert.equal(shown.limits[0].percent, 33);
+    assert.ok(publishes > 0);
+  }
+});
 
 test('one Claude account read updates every local meter and publishes once', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 100000 });

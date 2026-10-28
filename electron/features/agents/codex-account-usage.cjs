@@ -59,7 +59,7 @@ function stopChild(child) {
 function readCodexAccount({ env = process.env, cwd, codexHome, signal, timeout = 8000,
   executable, launch = spawn, stop = stopChild } = {}) {
   return new Promise(resolve => {
-    let child, timer, done = false, pending = '', bytes = 0, stage = 1;
+    let child, timer, limitsReadAt, done = false, pending = '', bytes = 0, stage = 1;
     const finish = value => {
       if (done) return;
       done = true; clearTimeout(timer); signal?.removeEventListener('abort', abort);
@@ -90,9 +90,11 @@ function readCodexAccount({ env = process.env, cwd, codexHome, signal, timeout =
         if (stage === 1) {
           stage = 2;
           write({ method: 'initialized' });
+          // A reply delayed in transit must not supersede a rollout written after this read began.
+          limitsReadAt = Date.now();
           write({ id: 2, method: 'account/rateLimits/read', params: { excludeResetCreditDetails: true } });
         } else {
-          try { finish(accountResult(message.result)); } catch { fail('query'); }
+          try { finish(accountResult(message.result, limitsReadAt)); } catch { fail('query'); }
         }
       }
     };
@@ -312,7 +314,8 @@ class CodexAccountUsage {
       if (!entry.listeners.size) return;
       if (invalidated) { this.refresh(entry, true); return; }
       publish(value);
-      const failed = value.resetQuery.state !== 'ready';
+      // Older accounts can report limits without the optional reset-credit counter.
+      const failed = value.resetQuery.state !== 'ready' && !value.limits?.length;
       entry.failures = failed ? entry.failures + 1 : 0;
       const delay = failed ? Math.min(300000, this.interval * 2 ** Math.min(entry.failures, 4)) : this.interval;
       entry.retryAt = failed ? Date.now() + delay : 0;

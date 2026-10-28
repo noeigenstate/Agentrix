@@ -28,6 +28,11 @@ const waitForFixtureIdle = async (readRows, label) => {
 const output = await testRun('reading'), profile = path.join(output, 'profile'), home = path.join(output, 'codex-home'), claudeHome = path.join(output, 'claude-home');
 const project = { id: randomUUID(), name: '阅读命令', path: path.join(output, 'project'), restore: { terminal: false, codex: false } };
 for (const directory of [profile, home, claudeHome, path.join(project.path, '.claude/commands')]) await fs.mkdir(directory, { recursive: true });
+const usageFile = path.join(claudeHome, '.claude.json');
+const cachedUsage = JSON.parse(await fs.readFile(path.join(root, 'tests/fixtures/usage-refresh/claude.json'), 'utf8'));
+cachedUsage.cachedUsageUtilization.fetchedAtMs = Date.now();
+for (const window of Object.values(cachedUsage.cachedUsageUtilization.utilization)) window.resets_at = new Date(Date.now() + 86400000).toISOString();
+await fs.writeFile(usageFile, JSON.stringify(cachedUsage));
 await fs.writeFile(path.join(project.path, '.claude/commands/fix-issue.md'), '---\ndescription: 修复问题\n---\nFix issue $ARGUMENTS.\n');
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false, language: 'zh' } }));
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: home, CLAUDE_CONFIG_DIR: claudeHome }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
@@ -70,6 +75,23 @@ try {
   const fixturePrompt = ". '" + path.join(root, 'scripts/reading-smoke-fixture.ps1').replace(/'/g, "''") + "'";
   await write(fixturePrompt + "; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r");
   await waitFor(async () => (await state()).codexActive && (await state()).agent === 'claude', 'authenticated Claude fixture');
+  await showReading(); // The activity pane follows the selected split; the first plain shell is still selected.
+  const pane = page.locator('.activity-pane'); await pane.waitFor();
+  const limitValues = () => pane.locator('.activity-limit > b').allTextContents();
+  await waitFor(async () => (await limitValues()).join() === '5%,15%', 'Claude cache reaches the activity pane', 4000);
+  const newerUsage = structuredClone(cachedUsage);
+  newerUsage.cachedUsageUtilization.fetchedAtMs = Date.now();
+  newerUsage.cachedUsageUtilization.utilization.five_hour.utilization = 34;
+  newerUsage.cachedUsageUtilization.utilization.seven_day.utilization = 23;
+  const replacement = usageFile + '.tmp';
+  await fs.writeFile(replacement, JSON.stringify(newerUsage)); await fs.rename(replacement, usageFile);
+  await waitFor(async () => (await limitValues()).join() === '34%,23%', 'Claude cache replacement pushes limits without /usage or a hook', 4000);
+  assert.match(await pane.innerText(), /额度来自 Claude Code，/);
+  await fs.writeFile(usageFile, JSON.stringify(cachedUsage));
+  await new Promise(resolve => setTimeout(resolve, 2300));
+  assert.deepEqual(await limitValues(), ['34%', '23%'], 'an older Claude cache cannot roll the pane back');
+  assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[0].unread, 0);
+  checks.push('Claude limits: cache replacement pushes to the activity pane without /usage; older snapshots lose and background reads never rearm completion');
   // Draw the stand-in CLI's input; the popup shows its actual xterm output.
   const idle = "Clear-Host; Show-ReadingFixtureInput\r";
   const renderIdle = async label => { await write(idle); await waitForFixtureIdle(physicalRows, label); };

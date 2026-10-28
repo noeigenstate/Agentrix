@@ -32,6 +32,7 @@ const errors = [];
 async function settled(focused) {
   await page.waitForFunction(expected => !document.querySelector('.focus-motion-panel') && !!document.querySelector('.focus-mode') === expected, focused);
   await page.waitForFunction(() => !document.querySelector('[data-focus-motion]'));
+  await terminalsSettled(page);
 }
 async function landed(id) {
   const gap = await page.locator(`[data-project-id="${id}"]`).evaluate(panel => {
@@ -44,12 +45,12 @@ async function landed(id) {
   });
   assert.ok(gap < 2, `panel must land in its layout slot, gap=${gap}`);
 }
-// Hold the two sampled flights as they start; a busy runner can otherwise miss the transition before polling.
+// Hold only the sampled focus flights. Pausing a header drag's landing would strand the card before the next click.
 async function holdMotion(panel) {
   await panel.evaluate(panel => {
     panel.animate = function(keyframes, options) {
       const animation = Element.prototype.animate.call(this, keyframes, options);
-      animation.pause();
+      if (this.classList.contains('focus-motion-panel')) animation.pause();
       return animation;
     };
   });
@@ -79,7 +80,7 @@ try {
   await page.locator('.titlebar-tools').getByRole('button', { name: '切换到终端', exact: true }).click();
   await panel.locator('.reading-view').waitFor({ state: 'detached' });
   await page.getByRole('button', { name: '返回总览', exact: true }).click();
-  await settled(false); await terminalsSettled(page);
+  await settled(false);
   assert.equal(await panel.locator('.terminal-split').isVisible(), true, 'the agent terminal is visible before the small-card input checks');
   await panel.locator('.panel-terminal-area').click({ position: { x: 36, y: 95 } });
   await page.keyboard.type("[IO.File]::WriteAllText('first-line.txt', 'FIRST')");
@@ -114,8 +115,18 @@ try {
   const original = await panel.boundingBox();
   const overviewViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   await page.screenshot({ path: path.join(output, 'overview.png') });
+  await terminalsSettled(page);
   await holdMotion(panel);
-  await panel.locator('.panel-header').click({ position: { x: 8, y: 8 } });
+  const header = panel.locator('.panel-header');
+  // A slow mouse-up can cross the header's 260 ms drag threshold. Exercise that path with the sampler installed:
+  // its landing must finish naturally, leaving a stable card for the actual pointer-opening assertion.
+  await header.hover({ position: { x: 8, y: 8 } }); await page.mouse.down();
+  await page.waitForFunction(id => document.querySelector(`[data-project-id="${id}"]`).classList.contains('drag-source'), id);
+  await page.mouse.up();
+  await page.waitForFunction(() => !document.querySelector('.is-reordering'));
+  await settled(false); await landed(id);
+  console.log('PASS: a held header finishes its drag landing while focus sampling is armed');
+  await header.click({ position: { x: 8, y: 8 } });
   await page.waitForSelector('[data-focus-motion="opening"] .focus-motion-panel');
   const mid = await panel.evaluate(panel => {
     const animation = panel.getAnimations().find(animation => animation.effect.getKeyframes().some(frame => frame.transform));

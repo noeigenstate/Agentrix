@@ -1,0 +1,7 @@
+{
+  "updatedAt": 1793176218563,
+  "rate_limits": {
+    "five_hour": { "used_percent": 33, "resets_at": 1793184600 },
+    "seven_day": { "used_percent": 22, "resets_at": 1793628000 }
+  }
+}

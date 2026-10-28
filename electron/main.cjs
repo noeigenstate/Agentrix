@@ -144,7 +144,7 @@ function publicState() {
           // The model, effort and fast mode its records show, above the reading view's message box.
           agentSettings: s?.codexActive ? s.agentSettings || null : null,
           // The service its model is reached through, the context it fills and the tokens it took, for the activity pane.
-          agentUsage: s?.codexActive && s.usage ? s.usageHistory || s.usage.snapshot() : null,
+          agentUsage: s?.codexActive && s.usage ? s.usage.snapshot(s.usageHistory) : null,
           // A run of the CLI that is no conversation (update, --version, login), for the reading view to say so.
           agentCommand: s?.codexActive ? s.agentCommand || null : null,
           codexActivity: s?.codexActivity || 'unknown', needsInput: s?.needsInput?.message || null, shellReady: !!s?.ready && !s?.inputDirty, codexAvailable: s?.codexAvailable ?? null,
@@ -314,7 +314,8 @@ const readEvery = s => s.codexActivity === 'working' ? 250 : 1000;
 function noteSettings(s, agent, record) {
   const next = agentSettings(s.agentSettings || null, agent, record);
   if (next !== (s.agentSettings || null)) { s.agentSettings = next; scheduleState(); }
-  if (s.usage?.apply(record) && !s.usageHistory) { scheduleState(); scheduleUsageRollover(); }
+  const limits = s.usage?.limits;
+  if (s.usage?.apply(record) && (!s.usageHistory || s.usage.limits !== limits)) { scheduleState(); scheduleUsageRollover(); }
   if (agent === 'codex' && record?.type === 'session_meta') s.bindUsageAccount?.();
   if (agent === 'codex' && !s.usageHistory && record?.type === 'event_msg') {
     if (record.payload?.type === 'token_count') s.usageAccount?.refresh(30000);
@@ -409,7 +410,7 @@ function startUsage(project, s, event) {
       s.usageAccount = codexAccounts.watch({ codexHome: event.codexHome || s.codexHome, cwd: event.cwd || project.path,
         recordedCwd: usage.scopeCwd, env: s.usageEnv || process.env, provider: usage.providerId,
         remote: project.kind === 'ssh', accountLaunch: event.accountLaunch }, account => {
-        if (s.usage === usage && s.codexActive && sessions.get(s.terminalId) === s) { usage.codexAccount(account); if (!s.usageHistory) scheduleState(); scheduleUsageRollover(); }
+        if (s.usage === usage && s.codexActive && sessions.get(s.terminalId) === s) { usage.codexAccount(account); scheduleState(); scheduleUsageRollover(); }
       });
     };
     s.bindUsageAccount();
@@ -481,6 +482,7 @@ async function refreshClaudeAccounts() {
   if (claudeAccountSoon) clearTimeout(claudeAccountSoon);
   claudeAccountSoon = null;
   watchClaudeAccounts();
+  // Folder watchers deliver live updates; this slower local-file fallback repairs missed events and watcher errors.
   claudeAccountTimer ??= setInterval(() => void refreshClaudeAccounts(), 30000);
   claudeAccountTimer.unref?.();
   if (claudeAccountPending) { claudeAccountQueued = true; return claudeAccountPending; }
@@ -488,7 +490,7 @@ async function refreshClaudeAccounts() {
   const pending = claudeAccountPending = Promise.resolve().then(() => claudeAccount()).then(account => {
     if (generation !== claudeAccountGeneration) return;
     let changed = false;
-    for (const s of localClaudeMeters()) if (s.usage.account(account) && !s.usageHistory) changed = true;
+    for (const s of localClaudeMeters()) if (s.usage.account(account)) changed = true;
     if (changed) { scheduleState(); scheduleUsageRollover(); }
   }).finally(() => {
     if (claudeAccountPending !== pending) return;
@@ -504,7 +506,7 @@ function scheduleUsageRollover(skip) {
   let next = Infinity;
   if (!quitting) for (const s of sessions.values()) {
     if (s === skip || !s.codexActive || store.projects.find(p => p.id === s.projectId)?.kind === 'ssh') continue;
-    for (const limit of s.usageHistory?.limits || s.usage?.limits || []) {
+    for (const limit of s.usage?.limits || []) {
       if (Number.isFinite(limit.resetsAt) && limit.resetsAt > now) next = Math.min(next, limit.resetsAt);
     }
   }

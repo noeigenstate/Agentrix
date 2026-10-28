@@ -37,8 +37,9 @@ rl.on('line', line => {
     process.stdout.write(JSON.stringify({ id: 2, error: { code: mode === 'old' ? -32601 : -32000, message: 'private diagnostic' } }) + '\n'); return;
   }
   process.stdout.write('{"method":"account/rateLimits/updated","params":{}}\n{"id":99,"result":{}}\n');
-  const response = JSON.stringify({ id: 2, result: { accountId: 'must-not-escape', rateLimits: {},
-    rateLimitResetCredits: mode === 'null' ? null : { availableCount: Number(mode), credits: null } } }) + '\n';
+  const response = JSON.stringify({ id: 2, result: { accountId: 'must-not-escape',
+    rateLimits: mode === 'limits' ? { primary: { usedPercent: 80, windowDurationMins: 300 } } : {},
+    rateLimitResetCredits: mode === 'null' || mode === 'limits' ? null : { availableCount: Number(mode), credits: null } } }) + '\n';
   process.stdout.write(response.slice(0, 17));
   setTimeout(() => process.stdout.write(response.slice(17)), 5);
 });
@@ -101,6 +102,42 @@ test('valid account limits survive missing reset credits without inventing a res
   }
   assert.equal(accountResult(null).resets, null);
   assert.equal(accountResult({ rateLimits: { primary: { usedPercent: 'bad' } } }).limits, undefined);
+});
+
+test('an account response delayed past a newer rollout keeps the request observation time', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 100000 });
+  const meter = new UsageMeter('codex');
+  const result = await fakeRead(t, 'limits', { onUsage() {
+    t.mock.timers.tick(1000);
+    meter.apply({ type: 'event_msg', timestamp: new Date().toISOString(), payload: {
+      type: 'token_count', info: null, rate_limits: { primary: { used_percent: 24, window_minutes: 300 } },
+    } });
+  } });
+  assert.equal(result.at, 100000);
+  meter.codexAccount(result);
+  assert.equal(meter.snapshot().limitsAt, 101000);
+  assert.equal(meter.snapshot().limits[0].percent, 24, 'the late response cannot roll back live limits');
+});
+
+test('valid limits without reset credits keep the existing 30-second account cadence', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  let reads = 0;
+  const meter = new UsageMeter('codex');
+  const service = new CodexAccountUsage({ scope: async () => null, read: async () => accountResult({
+    rateLimits: { primary: { usedPercent: ++reads, windowDurationMins: 300 } },
+  }) });
+  t.after(() => service.dispose());
+  service.watch(options, value => meter.codexAccount(value));
+  await flush();
+  for (let i = 1; i <= 6; i++) {
+    assert.equal(reads, i);
+    assert.equal(meter.snapshot().limits[0].percent, i);
+    assert.equal(meter.snapshot().resets, null);
+    assert.equal(meter.snapshot().resetQuery.reason, 'unsupported');
+    t.mock.timers.tick(29999); await flush(); assert.equal(reads, i);
+    t.mock.timers.tick(1); await flush();
+  }
+  assert.equal(reads, 7);
 });
 
 test('null/old protocol is unsupported, never zero; errors, exits, malformed and oversized output are bounded', async t => {

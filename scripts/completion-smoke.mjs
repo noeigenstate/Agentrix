@@ -89,6 +89,23 @@ try {
   assert.deepEqual(await text('.activity-limit > .activity-metric-label'), ['5 小时额度', '每周额度'], 'the plan windows are named by their length');
   assert.deepEqual(await text('.activity-limit > b'), ['34%', '92%']);
   assert.deepEqual(await pane.locator('.activity-limit').evaluateAll(nodes => nodes.map(node => node.classList.contains('is-warn'))), [false, true], 'only the window from 90% takes the warning colour');
+  const limitsOnly = (at, percent, reset = resets) => JSON.stringify({ type: 'event_msg', timestamp: new Date(at).toISOString(), payload: {
+    type: 'token_count', info: null, rate_limits: {
+      primary: { used_percent: percent, window_minutes: 300, resets_at: reset },
+      secondary: { used_percent: 93, window_minutes: 10080, resets_at: resets },
+    },
+  } }) + '\n';
+  const observed = Date.now();
+  await fs.appendFile(transcript, limitsOnly(observed, 35));
+  await waitFor(async () => (await text('.activity-limit > b')).join() === '35%,93%', 'limits-only append reaches the pane while the turn stays open', 4000);
+  await fs.appendFile(transcript, limitsOnly(observed - 60000, 80));
+  await waitFor(async () => (await state()).terminals[0].agentUsage.limitsAt === observed, 'older limits cannot replace the live snapshot');
+  assert.equal((await state()).codexActivity, 'working'); assert.equal(await notices(), 0);
+  await fs.appendFile(transcript, limitsOnly(Date.now(), 35, Math.floor(Date.now() / 1000) + 2));
+  await waitFor(async () => (await text('.activity-limit > small')).includes('已重置，等待更新'), 'a passed reset expires without another agent record', 8000);
+  await fs.appendFile(transcript, limitsOnly(Date.now(), 36));
+  await waitFor(async () => (await text('.activity-limit > b')).join() === '36%,93%', 'fresh limits replace the expired window', 4000);
+  console.log('PASS: open rollout pushes limits-only updates; older records lose; reset expiry waits for fresh data without completion notices');
   assert.deepEqual(await text('.activity-usage .activity-tokens > .activity-metric-label'), ['本轮', '本次对话']);
   assert.deepEqual(await text('.activity-usage .activity-tokens > small'), ['输入 320k · 缓存命中 91% · 输出 4.2k', '输入 320k · 缓存命中 91% · 输出 4.2k']);
   // The overview lists the prompts: the one being worked on, then one sent while it works. The card's size is fixed:
@@ -164,11 +181,13 @@ try {
   assert.equal(await breathes(), false, 'a viewed card stops breathing');
   assert.equal(await page.locator('.project-panel .panel-signal').evaluate(node => getComputedStyle(node).boxShadow), 'none', 'a round-complete card draws no edge');
   const completed = (await state()).lastCompletedAt;
+  await fs.appendFile(transcript, limitsOnly(Date.now(), 37));
+  await waitFor(async () => (await state()).terminals[0].agentUsage.limits[0].percent === 37, 'background limits refresh after acknowledging completion', 4000);
   await input('draft'); await notify(child, 'new-id'); await notify(thread, 'first'); await notify(thread, 'queued');
   await new Promise(resolve => setTimeout(resolve, 1200));
   assert.equal(await notices(), 1); assert.equal((await state()).codexActivity, 'complete');
   assert.equal((await state()).unread, 0); assert.equal((await state()).lastCompletedAt, completed);
-  assert.equal(await breathes(), false, 'drafts, idle polls and duplicate callbacks do not rearm a viewed completion');
+  assert.equal(await breathes(), false, 'limits refreshes, drafts, idle polls and duplicate callbacks do not rearm a viewed completion');
   await input('\x15'); await input('second instruction\r');
   await fs.appendFile(transcript, record('task_started', 'second') + said('second instruction'));
   await notify(thread, 'queued');

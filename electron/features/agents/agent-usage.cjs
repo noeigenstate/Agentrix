@@ -62,7 +62,13 @@ class UsageMeter {
     this.resetQuery = { state: 'unavailable', reason: 'scope' };
   }
   // What the pane shows.
-  snapshot() { const provider = this.providerId ? this.names(this.providerId) : this.provider; return { provider, context: this.context, round: this.round, total: this.total, limits: this.limits, limitsAt: this.limitsAt, limitsFrom: this.limitsFrom ?? null, resets: this.resets, ...(this.resetQuery ? { resetQuery: this.resetQuery } : {}), calls: this.calls.snapshot(provider) }; }
+  snapshot(history = null) {
+    const provider = this.providerId ? this.names(this.providerId) : this.provider;
+    // History holds conversation totals, never a newer account observation.
+    return { ...(history || { provider, context: this.context, round: this.round, total: this.total, calls: this.calls.snapshot(provider) }),
+      limits: this.limits, limitsAt: this.limitsAt, limitsFrom: this.limitsFrom ?? null, resets: this.resets,
+      ...(this.resetQuery ? { resetQuery: this.resetQuery } : {}) };
+  }
   // Whether this record changed what the pane shows.
   apply(record) {
     if (!record || typeof record !== 'object') return false;
