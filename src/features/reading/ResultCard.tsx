@@ -10,6 +10,7 @@ import { useNow } from './useNow.ts';
 import { changedFiles, elapsed, FALLBACK_TITLES, resultActions, type LatestResult, type ResultAction } from './result-round';
 import { pathTooltip } from './reading-paths';
 import { PathText } from './PathText';
+import { markdownTitle } from './markdown-escape';
 
 const MENU_WIDTH = 224, MENU_GAP = 4, EDGE = 8, FILES_SHOWN = 5;
 
@@ -57,7 +58,9 @@ function ResultMenu({ items }: { items: { icon: ReactNode; label: string; run: (
 
 // Level 1, above the result: the round is done (or stopped), what it was, when it ended and how long it took.
 export function ResultStatus({ result, taskTitle, onShowTerminal, onError }: { result: LatestResult; taskTitle: string | undefined; onShowTerminal: () => void; onError: (message: string) => void }) {
-  const failed = result.kind === 'failed', label = failed ? result.failure ? t('失败') : t('已中断') : t('已完成'), title = taskTitle?.trim() || t(FALLBACK_TITLES[result.kind]);
+  const failed = result.kind === 'failed', label = failed ? result.failure ? t('失败') : t('已中断') : t('已完成');
+  const selected = markdownTitle(taskTitle ?? '');
+  const title = selected && selected.toLowerCase() !== markdownTitle(result.request).toLowerCase() ? selected : t(FALLBACK_TITLES[result.kind]);
   const copy = (text: string) => () => { void window.agentrix.copy(text).then(copied => { if (!copied.ok) onError(copied.error); }); };
   const item = (icon: ReactNode, text: string, run: () => void) => ({ icon, label: text, run });
   const items = {

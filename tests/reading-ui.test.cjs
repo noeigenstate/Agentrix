@@ -1298,13 +1298,94 @@ test('the title, the files and the duration of a round come from data it already
   assert.deepEqual(elapsed(0, 190000), { hours: 0, minutes: 3, seconds: 10 }); assert.deepEqual(elapsed(0, 3900000), { hours: 1, minutes: 5, seconds: 0 });
 });
 
+const { ResultStatus } = loadUI('features/reading/ResultCard.tsx');
+function assertResultHeading(result, taskTitle, expected, label = 'Done') {
+  const heading = elements(ResultStatus({ result, taskTitle, onShowTerminal() {}, onError() {} })).find(node => node.type === 'h3');
+  assert.equal(heading.props.children[0].props.children, expected, 'the visible title is plain text');
+  assert.equal(heading.props.title, `${expected} · ${label}`, 'the tooltip uses the same complete title');
+  assert.equal(renderToStaticMarkup(heading).match(/title="([^"]*)"/)[1], `${expected} · ${label}`, 'the native HTML title attribute');
+}
+
+test('a reply stored as the task title contributes only its opening sentence to the result heading and native tooltip', t => {
+  const { PromptQueue } = require('../electron/prompt-queue.cjs');
+  const request = 'Explain why the updater download failed.';
+  const reply = [
+    'The update check worked but the download failed. Your copy is **0.8.0**, which still has the old u…',
+    '',
+    '**How the update works:**',
+    '1. **Check:** Ask `api.github.com` for the latest release.',
+    '2. **Download:** Fetch the installer from `github.com` and `objects.githubusercontent.com`.',
+    '3. **Install:** Restart after the download finishes.',
+    '',
+    '| Host | Without proxy | With proxy |',
+    '|---|---|---|',
+    '| `api.github.com` | **Works** | Works |',
+    '| `github.com` | Fails | Works |',
+    '| `objects.githubusercontent.com` | Fails | Works |',
+    '',
+    '【交付】',
+    '问题：The update check succeeded but the installer download failed.',
+    '原因：The release API and the installer use different hosts.',
+    '结果：The proxy must cover all download hosts.',
+  ].join('\n');
+  const queue = new PromptQueue();
+  queue.start(request, 1000); queue.reply({ at: 1500, text: reply }); queue.finish(2000);
+  assert.equal(queue.task.title, reply, 'the queue hands the whole delivery reply to terminal.taskTitle');
+  const entries = [readingEntry('u', 'user', 1, { text: request }), readingEntry('a', 'assistant', 2, { text: reply })];
+  const result = latestResult(entries, idle), expected = 'The update check worked but the download failed.';
+  assert.equal(result.reply, reply, 'the reply itself remains complete');
+  assertResultHeading(result, queue.task.title, expected);
+  const { state, render } = readingHarness(t, entries);
+  state.terminal.taskTitle = queue.task.title;
+  const html = render(), heading = html.match(/<h3 class="result-title"[\s\S]*?<\/h3>/)[0];
+  assert.equal(heading, `<h3 class="result-title" title="${expected} · Done"><span>${expected}</span><b> · Done</b></h3>`);
+  assert.doesNotMatch(heading, /Your copy|How the update works|api\.github\.com|\*\*|\| Host|\|---/);
+  assert.ok(html.includes('Your copy is **0.8.0**'), 'the reply body is still shown below the heading');
+});
+
+test('result titles remove inline Markdown and block markers before selecting the first sentence or line', () => {
+  const result = latestResult([readingEntry('u', 'user', 1, { text: 'Explain the outcome.' }), readingEntry('a', 'assistant', 2, { text: 'Complete reply.' })], idle);
+  for (const [source, expected] of [
+    ['**Fixed** the *updater* with _retries_ and __checks__. More details.', 'Fixed the updater with retries and checks.'],
+    ['## [**Read** the _release notes_](https://example.com/release). Body follows.', 'Read the release notes.'],
+    ['1. **Retry** `github.com` with [the proxy](https://example.com/proxy). Next step.', 'Retry github.com with the proxy.'],
+    ['- *Download* from ``objects.githubusercontent.com``', 'Download from objects.githubusercontent.com'],
+    ['+ **Install** the update\nThe following line is the body.', 'Install the update'],
+    ['> ### **How the update works:**\n1. **Check** the host.', 'How the update works:'],
+    ['\n\t **Update**   `0.8.0`\t from `host_name`\r\nBody on the next line.', 'Update 0.8.0 from host_name'],
+    ['**部署完成**。后面是详细说明。', '部署完成。'],
+    ['**Ready**? More details.', 'Ready?'],
+    ['**Done**! More details.', 'Done!'],
+  ]) assertResultHeading(result, source, expected);
+});
+
+test('a long result title stays complete in the visible text and native tooltip', () => {
+  const expected = `Updated ${Array.from({ length: 60 }, (_, index) => `component ${index}`).join(', ')} successfully.`;
+  const result = latestResult([readingEntry('u', 'user', 1, { text: 'Update the components.' }), readingEntry('a', 'assistant', 2, { text: 'Done.' })], idle);
+  assert.ok(expected.length > 600);
+  assertResultHeading(result, `**${expected}** The rest of the reply stays out of the title.\n| Host | Without proxy |`, expected);
+});
+
+test('missing, empty Markdown and copied request titles use the round kind fallback', () => {
+  const { PromptQueue } = require('../electron/prompt-queue.cjs');
+  const request = 'Fix the updater. Then check the download.', reply = '**Done.** This reply has no delivery block.';
+  const queue = new PromptQueue();
+  queue.start(request, 1000); queue.reply({ at: 1500, text: reply }); queue.finish(2000);
+  assert.equal(queue.task.title, request, 'without a delivery summary, the upstream title is still the user message');
+  const result = latestResult([readingEntry('u', 'user', 1, { text: request }), readingEntry('a', 'assistant', 2, { text: reply })], idle);
+  for (const kind of Object.keys(FALLBACK_TITLES)) for (const source of [undefined, '', ' \r\n ', '***', queue.task.title, '# **FIX THE UPDATER.**\nOther details.']) {
+    assertResultHeading({ ...result, kind }, source, en[FALLBACK_TITLES[kind]], kind === 'failed' ? 'Interrupted' : 'Done');
+  }
+  assertResultHeading({ ...result, kind: 'failed', failure: 'download failed' }, undefined, en[FALLBACK_TITLES.failed], 'Failed');
+});
+
 test('the latest round alone carries the status row and the actions, and the composer invites the next step', t => {
   const entries = [readingEntry('u1', 'user', 1, { text: 'first' }), roundPicture('g1', 2), readingEntry('u2', 'user', 5, { text: 'build it' }), roundEdit('e', 6), readingEntry('z', 'assistant', 7, { text: 'built it' })];
   const { state, render } = readingHarness(t, entries);
-  state.terminal.taskTitle = 'Build it';
+  state.terminal.taskTitle = 'Built the app';
   let html = render();
   assert.equal((html.match(/class="result-status/g) || []).length, 1, 'one status row, for the latest round only');
-  assert.match(html, /Build it<\/span><b> · Done<\/b>/); assert.match(html, /placeholder="Keep editing, or describe the next step…"/);
+  assert.match(html, /Built the app<\/span><b> · Done<\/b>/); assert.match(html, /placeholder="Keep editing, or describe the next step…"/);
   assert.equal((html.match(/class="result-actions"/g) || []).length, 1);
   assert.match(html, /<div class="reading-turn-item-body"><div class="result-status/, 'the result entry has no time stamp of its own: the status row says when it ended');
   assert.match(html, /aria-label="Open file"[^>]*>[\s\S]*aria-label="Keep editing"/);

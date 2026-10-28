@@ -1,4 +1,4 @@
-import { Marked, Tokenizer } from 'marked';
+import { Marked, Tokenizer, type Token } from 'marked';
 import { findPathCandidates } from '../terminal/terminal-links.ts';
 
 // The reading view's own Markdown parser. What looks like HTML in an agent's answer is text: "<title>", "git clone
@@ -23,3 +23,14 @@ export const readingMarked = new Marked({ async: false, gfm: true, breaks: true,
     return token;
   },
 } });
+
+// A title keeps its opening sentence or line in full; the card's CSS handles the visible ellipsis.
+export function markdownTitle(text: string) {
+  const plain = (tokens: Token[]): string => tokens.map(token => {
+    if ('tokens' in token && token.tokens) return plain(token.tokens);
+    if (token.type === 'list') return plain(token.items);
+    return 'text' in token ? token.text : '';
+  }).join('');
+  return plain(readingMarked.lexer(text.trim().split(/[\r\n]/, 1)[0]))
+    .split(/(?<=[。！？!?])|(?<=\.)(?=\s|$)/u, 1)[0].replace(/\s+/g, ' ').trim();
+}
