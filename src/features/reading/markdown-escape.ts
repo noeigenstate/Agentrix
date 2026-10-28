@@ -1,4 +1,4 @@
-import { Marked } from 'marked';
+import { Marked, Tokenizer } from 'marked';
 import { findPathCandidates } from '../terminal/terminal-links.ts';
 
 // The reading view's own Markdown parser. What looks like HTML in an agent's answer is text: "<title>", "git clone
@@ -13,5 +13,13 @@ export const readingMarked = new Marked({ async: false, gfm: true, breaks: true,
     if (!source.startsWith('\\')) return false;
     const link = findPathCandidates(source)[0];
     return link?.start === 0 ? { type: 'escape', raw: source.slice(0, link.end), text: escape(link.target) } : false;
+  },
+  link(source) {
+    const token = Tokenizer.prototype.link.call(this, source);
+    if (token?.type !== 'link') return token;
+    // Link destinations are unescaped inside marked, bypassing escape() above (e.g. \.test-output).
+    const href = this.rules.inline.link.exec(token.raw)?.[2].trim().replace(this.rules.other.hrefBrackets, '$1');
+    if (href && /^(?:[a-z]:[\\/]|\\\\)/i.test(href)) token.href = href;
+    return token;
   },
 } });

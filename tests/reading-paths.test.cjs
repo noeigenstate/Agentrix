@@ -6,8 +6,10 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
+const { Marked } = require('marked');
 const { hookHarness } = require('./helpers/hook-harness.cjs');
 const { translate } = require('../electron/i18n.cjs');
+const { resolveRevealPathText } = require('../electron/terminal-links.cjs');
 const { readingMarked } = require('../src/features/reading/markdown-escape.ts');
 
 function load(name, platform = { isMac: false, isWindows: true }) {
@@ -33,6 +35,8 @@ test('both reading Markdown parsers retain UNC and Windows path backslashes whil
     assert.ok(readingMarked.parse(`结果：\`${text}\`。`).includes(`<code>${text}</code>`), text);
   }
   assert.match(readingMarked.parse('[文件](src/App.tsx:142) **粗体** \\*普通星号\\*'), /<a href="src\/App.tsx:142">文件<\/a> <strong>粗体<\/strong> \*普通星号\*/);
+  const ordinaryLinks = '[relative](docs/guide\\_draft.md "a \\"title\\"") [web](https://example.com/a\\(b\\).html)';
+  assert.equal(readingMarked.parse(ordinaryLinks), new Marked({ async: false, gfm: true, breaks: true }).parse(ordinaryLinks));
   assert.doesNotMatch(readingMarked.parse('<img src=x onerror=alert(1)>'), /<img\b/);
 });
 
@@ -53,18 +57,25 @@ test('path affordances name the native modifier and file manager in each platfor
   assert.equal(load('reading-paths.ts', { isMac: false, isWindows: false }).pathTooltip(), 'Ctrl+click to show in the file manager');
 });
 
-test('Markdown link reveal decodes spaces and Windows separators, retaining plain-click hrefs and file URLs', t => {
+test('Markdown link reveal preserves Windows punctuation separators through parsing, decoding and resolution', t => {
   const previousDocument = globalThis.document, previousFilter = globalThis.NodeFilter;
   globalThis.document = { createTreeWalker: () => ({ nextNode: () => false }) }; globalThis.NodeFilter = { SHOW_TEXT: 4 };
   t.after(() => {
     if (previousDocument === undefined) delete globalThis.document; else globalThis.document = previousDocument;
     if (previousFilter === undefined) delete globalThis.NodeFilter; else globalThis.NodeFilter = previousFilter;
   });
-  const hrefs = ['reveal%20results/guide.html:142', 'C:%5Cwork%20space%5Cguide.png:142', 'file:///tmp/a%2520b.png', 'https://example.com/a.png', 'javascript:alert(1)'];
+  const paths = ['reveal results/guide.html:142', 'C:\\work space\\guide.png:142',
+    'C:\\work\\.test-output\\project\\reveal results\\guide-whats-new.html',
+    'C:\\_work\\[draft]\\guide.html', '\\\\server\\share\\.results\\guide.html', 'file:///tmp/a%2520b.png'];
+  const hrefs = [...paths, 'https://example.com/a.png', 'javascript:alert(1)']
+    .map(target => readingMarked.parse(`[file](<${target}>)`).match(/href="([^"]+)"/)[1]);
   const links = hrefs.map(href => ({ getAttribute: () => href, dataset: {} }));
   load('reading-paths.ts').markReadingPaths({ querySelectorAll: () => links });
-  assert.deepEqual(links.map(link => link.dataset.readingPath), ['reveal results/guide.html:142', 'C:\\work space\\guide.png:142', 'file:///tmp/a%2520b.png', undefined, undefined]);
+  assert.deepEqual(links.map(link => link.dataset.readingPath), [...paths, undefined, undefined]);
   assert.deepEqual(links.map(link => link.getAttribute('href')), hrefs, 'the existing plain-click URL is untouched');
+  for (const index of [2, 3, 4]) {
+    assert.equal(resolveRevealPathText('C:\\work', links[index].dataset.readingPath, 'C:\\Users\\owner', 'win32'), paths[index]);
+  }
 });
 
 test('modifier capture reveals paths, preserves plain click and selection, and reports IPC errors through the usual callback', async t => {
