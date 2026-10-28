@@ -174,10 +174,12 @@ test('JSON exec logs bind from thread.started; log rebinding and final drain pre
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { home, calls } = await workspace(t);
   const first = await execFiles(home, execId, null, `{"type":"thread.started","thread_id":"${execId}"}\n{"type":"item.started","item":{"type":"reasoning"}}\n`);
-  calls.apply(launchExec('json', home, first.logfile)); await calls.work;
-  assert.deepEqual(calls.snapshot()[0].rate, expected(75, 3000, 1, 4));
+  // Both rollouts exist before the first listing: a file created later reaches the shared listing through the
+  // folder watcher, which macOS reports with a delay.
   const records = await jsonFixture('codex-exec-token-rate.jsonl'); records[2].payload.model = 'gpt-6-astra';
   const second = await execFiles(home, otherId, records.slice(0, 4));
+  calls.apply(launchExec('json', home, first.logfile)); await calls.work;
+  assert.deepEqual(calls.snapshot()[0].rate, expected(75, 3000, 1, 4));
   await fs.rename(first.logfile, first.logfile + '.old');
   await fs.writeFile(first.logfile, `{"type":"thread.started","thread_id":"${otherId}"}\n`);
   t.mock.timers.tick(1000); await calls.work;
