@@ -18,7 +18,7 @@
 .activity-calls:has(.activity-call-rows li:nth-child(2)), .activity-tasks:has(.activity-prompts li:nth-child(2)) { min-height: 92px; }
 .activity-tasks:has(.activity-task-quiet) { min-height: 0; }
 .activity-card-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
-:is(.activity-route, .activity-calls) .activity-card-title { font-size: 13px; color: var(--flow-muted); }
+:is(.activity-main, .activity-calls) .activity-card-title { font-size: 13px; color: var(--flow-muted); }
 :is(.activity-tasks, .activity-calls) > .activity-card-title { display: flex; align-items: baseline; gap: 8px; flex: none; }
 .activity-count { font-size: 12px; font-weight: 400; color: var(--flow-faint); font-variant-numeric: tabular-nums; }
 .activity-note { margin: 0; font-size: 12px; line-height: 16px; color: var(--flow-faint); overflow-wrap: anywhere; }
@@ -51,14 +51,21 @@
 .activity-prompts li.is-done .activity-prompt-state { color: var(--success); }
 .activity-task-quiet { min-height: 0; overflow-y: auto; margin: 0; font-size: 12px; line-height: 18px; color: var(--flow-muted); overflow-wrap: anywhere; }
 
-/* Agent › service › model, then how the model runs. */
-.activity-route-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 4px; margin: 0; padding: 0; list-style: none; }
-.activity-route-steps li { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.activity-route-steps li > svg { flex: none; color: var(--flow-faint); }
-.activity-route-steps span { min-width: 0; padding: 2px 10px; border-radius: 999px; background: var(--flow-inset); font-size: 12px; line-height: 20px; color: var(--flow-muted); overflow-wrap: anywhere; }
-.activity-route-steps .is-model span { font-weight: 600; color: var(--flow-ink); }
 
 /* A called model: its name leads (its service after it), its calls follow in the secondary ink; the part of a call before its subject is the role. */
+/* A head's name, service and tag share one line: the name keeps its room, the service gives way first, the tag never; the rate is a fixed 80px column at the right. */
+.activity-call-rows li.activity-call-head p { display: flex; align-items: baseline; }
+.activity-call-head p > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-call-head p > b { flex: 0 1 auto; }
+.activity-call-head p > .activity-call-provider { flex: 0 100 auto; }
+.activity-call-head p > .activity-call-tag { flex: none; margin-left: 8px; font-size: 12px; font-weight: 400; color: var(--flow-faint); }
+.activity-call-rows li .activity-rate { min-width: 80px; text-align: right; }
+.activity-call-rows li .activity-rate.is-live { color: var(--flow-ink); }
+/* How the model runs, under its head, in the text column. */
+.activity-call-rows li.activity-call-note { height: 24px; }
+.activity-call-rows li.activity-call-note p { font-size: 12px; line-height: 16px; color: var(--flow-faint); }
+.activity-call-rows li.activity-call-note:hover::before { background: none; }
+.activity-call-rows li.is-idle p { color: var(--flow-faint); }
 .activity-call-head p b { font-weight: 600; }
 .activity-call-rows li:not(.activity-call-head) p { color: var(--flow-muted); }
 .activity-call-provider, .activity-call-role { font-size: 12px; font-weight: 400; color: var(--flow-faint); }

@@ -23,6 +23,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { UsageMeter, claudeWindow, claudeProvider, claudeProviderName, codexProviderName } = require('../electron/features/agents/agent-usage.cjs');
+const { emptyRate } = require('../electron/features/agents/token-rate.cjs');
 
 const replay = (meter, records) => { for (const record of records) meter.apply(record); return meter.snapshot(); };
 const event = payload => ({ type: 'event_msg', payload });
@@ -40,7 +41,7 @@ test("Codex's route, context, round, conversation and plan limits come from its 
   assert.deepEqual(first, {
     provider: 'OpenAI', context: { used: 18804, window: 828400 },
     round: { input: 18562, cached: 13056, output: 242 }, total: { input: 18562, cached: 13056, output: 242 },
-    limits: [{ minutes: 300, percent: 34, resetsAt: 1792000000000 }, { minutes: 10080, percent: 18, resetsAt: 1792472784000 }], limitsAt: null, limitsFrom: 'Codex', resets: null, calls: [],
+    limits: [{ minutes: 300, percent: 34, resetsAt: 1792000000000 }, { minutes: 10080, percent: 18, resetsAt: 1792472784000 }], limitsAt: null, limitsFrom: 'Codex', resets: null, calls: [], model: null, rate: emptyRate(false),
   });
   // The next round counts from where the conversation stood; the context is the last call's size.
   const second = replay(meter, [event({ type: 'task_started', turn_id: '2' }), tokenCount(usage(60000, 50000, 1000), usage(40000, 36000, 700))]);
@@ -53,7 +54,7 @@ test("Codex's route, context, round, conversation and plan limits come from its 
   assert.deepEqual(meter.snapshot().limits, [{ minutes: 300, percent: 40, resetsAt: null }]);
   // Another conversation cannot borrow a provider from the preceding conversation.
   meter.apply({ type: 'session_meta', payload: { id: 'b' } });
-  assert.deepEqual(meter.snapshot(), { provider: null, context: null, round: null, total: null, limits: [{ minutes: 300, percent: 40, resetsAt: null }], limitsAt: null, limitsFrom: 'Codex', resets: null, calls: [] });
+  assert.deepEqual(meter.snapshot(), { provider: null, context: null, round: null, total: null, limits: [{ minutes: 300, percent: 40, resetsAt: null }], limitsAt: null, limitsFrom: 'Codex', resets: null, calls: [], model: null, rate: emptyRate(false) });
   // Records that say nothing about usage change nothing.
   assert.equal(meter.apply({ type: 'response_item', payload: { type: 'message' } }), false);
   assert.equal(meter.apply(event({ type: 'agent_message', message: 'hi' })), false);
@@ -119,7 +120,7 @@ test("Claude's replies count once each, however many pieces they are written in"
   const reply = (id, model, input, written, read, output, extra = {}) => ({ type: 'assistant', ...extra, message: { id, model, usage: { input_tokens: input, cache_creation_input_tokens: written, cache_read_input_tokens: read, output_tokens: output, service_tier: 'standard' } } });
   // Before any prompt is read, the round is unknown but the context is not.
   meter.apply(reply('m0', 'claude-opus-5-5', 5, 100, 1000, 20));
-  assert.deepEqual(meter.snapshot(), { provider: 'Anthropic', context: { used: 1125, window: 1000000 }, round: null, total: null, limits: [], limitsAt: null, limitsFrom: null, resets: null, calls: [] });
+  assert.deepEqual(meter.snapshot(), { provider: 'Anthropic', context: { used: 1125, window: 1000000 }, round: null, total: null, limits: [], limitsAt: null, limitsFrom: null, resets: null, calls: [], model: 'claude-opus-5-5', rate: emptyRate(false) });
   const snapshot = replay(meter, [
     { type: 'user', message: { content: 'fix the login page' } },
     reply('m1', 'claude-opus-5-5', 10, 2000, 30000, 4),

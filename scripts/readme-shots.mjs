@@ -251,8 +251,8 @@ background:radial-gradient(circle at 20% 15%,#ff7ab6 0,transparent 42%),radial-g
     const modes = page.locator('.titlebar-tools').getByRole('group', { name: '显示方式', exact: true });
     assert.deepEqual(await modes.locator('button span').allTextContents(), ['终端', '阅读']);
     assert.equal(await modes.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).getAttribute('aria-pressed'), 'true');
-    await activity.getByRole('region', { name: '模型路由', exact: true }).waitFor();
-    await waitFor(() => activity.locator('.activity-route-steps').innerText().then(text => text.includes('Codex') && text.includes('OpenAI') && text.includes('GPT-6.1-Sol')), 'Codex model route');
+    await activity.getByRole('region', { name: '主模型', exact: true }).waitFor();
+    await waitFor(() => activity.locator('.activity-main').innerText().then(text => text.includes('OpenAI') && text.includes('GPT-6.1-Sol')), 'Codex main model');
     await activity.locator('.activity-prompts li.is-working').waitFor();
     assert.ok((await activity.locator('.activity-prompts').innerText()).includes('结算页接入优惠券'));
     await waitFor(() => activity.locator('.activity-limit > b').allTextContents().then(values => values.join() === '23%,41%'), '5-hour and weekly limits from token_count');

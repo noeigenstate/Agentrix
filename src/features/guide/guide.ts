@@ -1,5 +1,7 @@
 // What the usage guide lists for this release; it opens here after an update.
 export const WHATS_NEW: string[] = [
+  "活动栏顶部改为「主模型」：显示主 Agent 实际在用的模型、它此刻正在做的步骤，以及实时的平均速率（xx token/s）。",
+  "「调用的模型」里每组都标明「子代理」，并显示各自的 token/s；子代理和主模型的记录分开计算，互不混入。",
   "Claude 终端运行时，活动栏的 Claude 额度会自己更新，不用再输入 /usage；查询不往终端输入任何内容，不打断正在运行的项目。",
   "任务做完立即从「正在处理的任务」里移除；后台通知触发的回复不再让旧任务一直挂着。",
   "「调用的模型」能显示在后台运行的 Codex 调用，跑完后才转入审核。",

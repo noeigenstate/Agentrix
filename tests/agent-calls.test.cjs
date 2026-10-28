@@ -95,8 +95,8 @@ test('foreground Agent and Codex runs finish on tool_result and replay never dou
   assert.equal(meter.apply(agent), false);
   meter.apply(use('b', 'Bash', { command, description: 'Implement parser' }));
   assert.deepEqual(meter.snapshot().calls, [
-    { agent: 'Claude Code', provider: 'Anthropic', model: 'sonnet', effort: null, fast: null, preparing: 0, running: 1, reviewing: 0, tasks: ['Polish the card'], items: [{ state: 'running', role: '通用', title: 'Polish the card' }] },
-    { agent: 'Codex', provider: 'OpenAI', model: 'gpt-6.1-sol', effort: 'high', fast: true, preparing: 0, running: 1, reviewing: 0, tasks: ['Implement parser'], items: [{ state: 'running', role: '执行', title: 'prompt.md' }] },
+    { agent: 'Claude Code', provider: 'Anthropic', model: 'sonnet', effort: null, fast: null, preparing: 0, running: 1, reviewing: 0, tasks: ['Polish the card'], items: [{ state: 'running', role: '通用', title: 'Polish the card' }], rate: null },
+    { agent: 'Codex', provider: 'OpenAI', model: 'gpt-6.1-sol', effort: 'high', fast: true, preparing: 0, running: 1, reviewing: 0, tasks: ['Implement parser'], items: [{ state: 'running', role: '执行', title: 'prompt.md' }], rate: null },
   ]);
   meter.apply(result('a', { resolvedModel: 'claude-sonnet-5-5' }));
   meter.apply(result('b'));
@@ -221,7 +221,7 @@ test('routes group by every route field, keep the latest five tasks and inherit 
     meter.apply(use(`a${i}`, 'Agent', { model: 'claude-sonnet-5-5', description: `Task ${i}` }));
     if (i < 6) meter.apply(result(`a${i}`));
   }
-  assert.deepEqual(meter.snapshot().calls[0], { agent: 'Claude Code', provider: 'relay.example', model: 'claude-sonnet-5-5', effort: null, fast: null, preparing: 0, running: 1, reviewing: 6, tasks: ['Task 2', 'Task 3', 'Task 4', 'Task 5', 'Task 6'], items: Array.from({ length: 7 }, (_, i) => ({ state: i ? 'reviewing' : 'running', role: '通用', title: `Task ${6 - i}` })) });
+  assert.deepEqual(meter.snapshot().calls[0], { agent: 'Claude Code', provider: 'relay.example', model: 'claude-sonnet-5-5', effort: null, fast: null, preparing: 0, running: 1, reviewing: 6, tasks: ['Task 2', 'Task 3', 'Task 4', 'Task 5', 'Task 6'], items: Array.from({ length: 7 }, (_, i) => ({ state: i ? 'reviewing' : 'running', role: '通用', title: `Task ${6 - i}` })), rate: null });
   for (const [id, suffix] of [['b', ''], ['c', ''], ['d', ' -c model_reasoning_effort=low'], ['e', ' -c service_tier=standard'], ['f', ' -c model_provider=azure'], ['g', ' -m gpt-6-astra']]) {
     meter.apply(use(id, 'Bash', { command: command.replace(/ - < .*$/, '') + suffix }));
   }
@@ -245,7 +245,7 @@ test('sidechains, request blobs, unrelated tools and orphan results do not creat
   assert.deepEqual(calls.snapshot()[0].tasks, ['prompt.md']);
 });
 
-test('small meta matches toolUseId and bounded subagent tail resolves the model, stopping preparing checks', async t => {
+test('small meta matches toolUseId and incremental subagent reads resolve the model while continuing checks', async t => {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-calls-'));
   t.after(() => fs.rm(folder, { recursive: true, force: true }));
   let changes = 0;
@@ -261,7 +261,7 @@ test('small meta matches toolUseId and bounded subagent tail resolves the model,
   await meter.calls.work;
   assert.equal(meter.snapshot().calls[0].model, 'claude-sonnet-5-5');
   assert.equal(changes, 1);
-  assert.equal(meter.calls.timer, null);
+  assert.ok(meter.calls.timer);
   await fs.appendFile(file, reply('claude-haiku-5-5'));
   assert.equal(meter.snapshot().calls[0].model, 'claude-sonnet-5-5', 'no read until another related record arrives');
   meter.apply(notice('a'));
@@ -476,7 +476,7 @@ test('background and foreground subagents start at their first assistant record 
     await fs.appendFile(file, JSON.stringify({ type: 'assistant', isSidechain: true, message: { model: 'claude-sonnet-5-5', content: [{ type: 'tool_use', name: 'Read', id: 'inspect', input: { file_path: 'AGENTS.md' } }] } }) + '\n');
     t.mock.timers.tick(2500); await calls.work;
     assert.deepEqual(states(calls), [[0, 1, 0]]);
-    assert.equal(calls.snapshot()[0].model, 'claude-sonnet-5-5'); assert.equal(calls.timer, null);
+    assert.equal(calls.snapshot()[0].model, 'claude-sonnet-5-5'); assert.ok(calls.timer);
     calls.apply(background ? notice(id, status, true) : result(id, { agentId: id, resolvedModel: 'claude-sonnet-5-5' }));
     await calls.work;
     assert.deepEqual(states(calls), [[0, 0, 1]]); assert.equal(calls.timer, null);

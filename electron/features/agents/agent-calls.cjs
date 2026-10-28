@@ -1,6 +1,10 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { claudePrompt, resolvePath } = require('../../agent-actions.cjs');
+const os = require('node:os');
+const { claudePrompt, resolvePath, TranscriptTail } = require('../../agent-actions.cjs');
+const { rolloutFiles, sessionMeta } = require('../../session-files.cjs');
+const { codexMetadata } = require('../../transcript-window.cjs');
+const { TokenRates, emptyRate } = require('./token-rate.cjs');
 
 const text = value => typeof value === 'string' ? value : '';
 const short = value => text(value).replace(/\s+/g, ' ').trim().slice(0, 240);
@@ -79,21 +83,22 @@ function codexCall(command, cwd) {
   return { model, effort, fast, provider, task, log, prompt };
 }
 
-// Bound reads: prompt titles need the beginning; transcripts and logs need a tail without a cut first line.
-async function readText(filename, limit = 256 * 1024, head = false) {
+// Brief headings need only the beginning, read once.
+async function readPrompt(filename) {
   let file;
   try {
     file = await fs.open(filename, 'r');
-    const { size } = await file.stat(), offset = head ? 0 : Math.max(0, size - limit), buffer = Buffer.alloc(Math.min(size, limit));
-    const { bytesRead } = await file.read(buffer, 0, buffer.length, offset);
-    const body = buffer.subarray(0, bytesRead).toString('utf8');
-    return offset ? body.slice(body.includes('\n') ? body.indexOf('\n') + 1 : body.length) : body;
+    const buffer = Buffer.alloc(Math.min((await file.stat()).size, 4096));
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead).toString('utf8');
   } catch { return null; } finally { await file?.close(); }
 }
 
 class AgentCalls {
-  constructor({ changed = () => {}, names = id => id === 'openai' ? 'OpenAI' : id } = {}) {
-    this.changed = changed; this.names = names; this.folder = null; this.reset();
+  constructor({ changed = () => {}, names = id => id === 'openai' ? 'OpenAI' : id, local = true, codexHome } = {}) {
+    this.changed = changed; this.names = names; this.local = local; this.folder = null;
+    this.directory = path.join(codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions');
+    this.reset();
   }
   reset() { clearTimeout(this.timer); this.timer = null; this.calls = new Map(); this.polls = new Map(); this.meta = new Map(); this.pending = new Set(); this.work = null; }
   setFolder(folder) { if (folder !== this.folder) { this.reset(); this.folder = folder; } }
@@ -103,8 +108,13 @@ class AgentCalls {
       if (call.reviewed) continue;
       const route = { agent: call.agent, provider: call.agent === 'Claude Code' ? provider ?? null : this.names(call.provider), model: call.model, effort: call.effort, fast: call.fast };
       const key = JSON.stringify(route);
-      if (!groups.has(key)) groups.set(key, { ...route, preparing: 0, running: 0, reviewing: 0, tasks: [], items: [] });
+      if (!groups.has(key)) groups.set(key, { ...route, preparing: 0, running: 0, reviewing: 0, tasks: [], items: [], rate: emptyRate(false) });
       const group = groups.get(key);
+      if (!call.rate) group.rate = null;
+      else if (group.rate) {
+        group.rate.outputTokens += call.rate.outputTokens; group.rate.activeMs += call.rate.activeMs; group.rate.samples += call.rate.samples;
+        group.rate.updatedAt = Math.max(group.rate.updatedAt, call.rate.updatedAt); group.rate.partial ||= call.rate.partial;
+      }
       const state = call.done ? 'reviewing' : call.preparing ? 'preparing' : 'running';
       group[state]++;
       group.items.push({ state, role: call.role, title: call.title });
@@ -127,16 +137,16 @@ class AgentCalls {
       if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && !this.calls.has(block.id)) {
         const input = block.input || {}, codex = block.name === 'Bash' ? codexCall(input.command, record.cwd) : null;
         if (block.name !== 'Agent' && !codex) continue;
+        const model = codex?.model || text(input.model) || 'default';
         this.calls.set(block.id, {
           agent: codex ? 'Codex' : 'Claude Code', provider: codex?.provider ?? null,
-          model: codex?.model || text(input.model) || text(record.message?.model) || 'default',
-          resolved: text(input.model).startsWith('claude-'),
+          model, requestedModel: model, rate: null,
           effort: codex?.effort ?? null, fast: codex?.fast ?? null,
           task: short(input.description || block.description || codex?.task || input.subagent_type || block.name),
           title: text(codex?.task || input.description || block.description || input.subagent_type || block.name).replace(/\s+/g, ' ').trim(),
           role: codex ? '执行' : agentRoles.get(input.subagent_type) || text(input.subagent_type) || '通用',
-          prompt: this.folder ? codex?.prompt : null,
-          background: enabled(input.run_in_background), done: false, preparing: codex ? !!codex.log : !!this.folder, log: codex?.log,
+          prompt: this.local && this.folder ? codex?.prompt : null,
+          background: enabled(input.run_in_background), done: false, preparing: this.local && (codex ? !!codex.log : !!this.folder), log: codex?.log,
         });
         this.refresh(block.id);
         changed = true;
@@ -156,7 +166,11 @@ class AgentCalls {
         if (call.agent === 'Codex' && typeof result.backgroundTaskId === 'string' && result.backgroundTaskId) call.backgroundTaskId = result.backgroundTaskId;
         if ((block.is_error || !call.background) && !call.done) { call.done = true; call.finishedAt = at; changed = true; }
         if (call.agent === 'Claude Code') {
-          if (typeof result.resolvedModel === 'string' && result.resolvedModel) { changed ||= call.model !== result.resolvedModel; call.model = result.resolvedModel; call.resolved = true; }
+          if (typeof result.resolvedModel === 'string' && result.resolvedModel) {
+            call.resultModel = result.resolvedModel;
+            const model = call.meter?.model || result.resolvedModel;
+            changed ||= call.model !== model; call.model = model;
+          }
           if (typeof result.agentId === 'string' && /^[\w-]+$/.test(result.agentId)) call.agentId = result.agentId;
           this.refresh(block.tool_use_id);
         }
@@ -179,7 +193,6 @@ class AgentCalls {
         if (queued && record.operation === 'remove' && !call.done) continue;
         if (!call.done) {
           call.done = true; call.finishedAt = at; call.pendingReview = queued; changed = true;
-          if (call.agent === 'Claude Code') this.refresh(id);
         }
         if (call.pendingReview && (!queued || record.operation === 'remove')) { call.pendingReview = false; call.finishedAt = at; }
       }
@@ -192,24 +205,30 @@ class AgentCalls {
         call.reviewed = true; changed = true;
       }
     }
+    for (const [id, call] of this.calls) if (call.done && !call.drained) this.refresh(id);
     this.schedule();
     return changed;
   }
-  // Only preparing calls need a quiet-lead check; generation identity cancels even an already queued callback.
+  follows(call) {
+    return this.local && (this.folder || call.log) && (call.done ? !call.drained : !call.reviewed &&
+      (call.agent === 'Claude Code' ? !!this.folder : !!call.log && (call.preparing || call.threadId || !call.headerDone)));
+  }
+  // Follow running workers too; generation identity cancels even an already queued callback.
   schedule() {
-    if (![...this.calls.values()].some(call => call.preparing && !call.done && !call.reviewed)) { clearTimeout(this.timer); this.timer = null; return; }
+    const active = [...this.calls.values()].filter(call => this.follows(call));
+    if (!active.length) { clearTimeout(this.timer); this.timer = null; return; }
     if (this.timer || this.work) return;
     const calls = this.calls;
     this.timer = setTimeout(() => {
       if (this.calls !== calls) return;
       this.timer = null;
-      for (const [id, call] of calls) if (call.preparing && !call.done && !call.reviewed) this.refresh(id);
-    }, 2500);
+      for (const [id, call] of calls) if (this.follows(call)) this.refresh(id);
+    }, active.some(call => !call.preparing) ? 1000 : 2500);
     this.timer.unref();
   }
-  // Batch related history records; once discovered, preparing checks read just the worker's file.
+  // Batch related history records; bound workers retain offsets and partial lines.
   refresh(id) {
-    if (!this.folder && !this.calls.get(id)?.log) return;
+    if (!this.local || !this.folder && !this.calls.get(id)?.log) return;
     clearTimeout(this.timer); this.timer = null;
     this.pending.add(id);
     if (this.work) return;
@@ -217,33 +236,54 @@ class AgentCalls {
     this.work = Promise.resolve().then(async () => {
       while (pending.size && this.calls === calls) {
         const ids = new Set(pending); pending.clear();
+        const before = new Map([...ids].map(id => [id, this.signature(calls.get(id))]));
         await this.readModels(folder, ids, calls);
         if (this.calls !== calls) return;
         for (const id of ids) {
           const call = calls.get(id);
-          if (!call || call.reviewed) continue;
+          if (!call) continue;
           const filename = call.prompt; call.prompt = null;
-          const prompt = filename ? await readText(filename, 4096, true) : null;
+          const prompt = filename ? await readPrompt(filename) : null;
           if (this.calls !== calls) return;
-          if (call.reviewed) continue;
           if (prompt !== null) {
             const heading = /^[ \t]{0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/m.exec(prompt.replace(/^\uFEFF/, ''))?.[1];
             const title = heading?.replace(/^Task\s+[\w-]+(?:\s*\([^)]*\))?\s*[:：]\s*/i, '').trim() || call.title;
             const role = /\bread[- ]only\b|只读/i.test([heading, ...prompt.split(/\r?\n/, 20)].join('\n')) ? '调查' : '执行';
-            if (title !== call.title || role !== call.role) { call.title = title; call.role = role; this.changed(); }
+            call.title = title; call.role = role;
           }
-          if (!call.preparing || call.done || call.agent !== 'Codex') continue;
-          const body = await readText(call.log);
+          if (call.agent === 'Codex') await this.readExec(call, calls);
           if (this.calls !== calls) return;
-          if (call.done || call.reviewed) continue;
-          // Plain exec logs echo a header and prompt; a reply, reasoning or tool invocation starts model work.
-          if (body === null || /(?:^|\n)(?:codex|thinking|exec|tool [^\r\n]+|apply_patch)\r?\n[^\r\n]/.test(body.replace(/\x1b\[[0-9;]*m/g, ''))) { call.preparing = false; this.changed(); }
+          if (call.done && (!call.rate || call.reader.offset >= call.reader.fileSize)) call.drained = true;
         }
+        if ([...ids].some(id => !calls.get(id)?.reviewed && before.get(id) !== this.signature(calls.get(id)))) this.changed();
       }
     }).catch(() => {}).finally(() => { if (this.calls === calls) { this.work = null; this.schedule(); } });
   }
+  signature(call) { return JSON.stringify(call && [call.model, call.preparing, call.title, call.role, call.rate]); }
+  bind(call, filename) {
+    if (call.reader?.filename === filename) return;
+    call.model = call.resultModel || call.requestedModel; call.rate = null; call.verified = false;
+    call.meter = new TokenRates(call.agent === 'Codex' ? 'codex' : 'claude', { sidechain: true });
+    call.reader = filename ? new TranscriptTail(filename, { onReset: async (partial, file) => {
+      call.meter.reset(partial);
+      call.verified = call.agent === 'Claude Code' || !!await codexMetadata(file, call.threadId, 'exec');
+    } }) : null;
+  }
+  async readWorker(call, filename, calls, meta = null) {
+    this.bind(call, filename);
+    if (!call.reader) { call.model = call.resultModel || text(meta?.model) || call.requestedModel; return; }
+    const readable = await call.reader.read(record => {
+      if (this.calls !== calls || !call.verified) return;
+      if (call.agent === 'Codex' && record.type === 'session_meta' && (record.payload?.id !== call.threadId || record.payload?.source !== 'exec')) { call.verified = false; return; }
+      call.meter.apply(record);
+      if (record.type === 'assistant' || record.type === 'token_usage_record') call.preparing = false;
+    }).catch(() => false);
+    if (this.calls !== calls) return;
+    call.rate = readable && call.verified ? call.meter.snapshot() : null;
+    call.model = call.meter.model || call.resultModel || text(meta?.model) || call.requestedModel;
+  }
   async readModels(folder, ids, calls) {
-    ids = new Set([...ids].filter(id => calls.get(id)?.agent === 'Claude Code' && !calls.get(id).reviewed));
+    ids = new Set([...ids].filter(id => calls.get(id)?.agent === 'Claude Code'));
     if (!folder || !ids.size) return;
     const files = [...ids].some(id => !calls.get(id).filename) ? await fs.readdir(folder).catch(() => []) : [...ids].map(id => path.basename(calls.get(id).filename).replace(/\.jsonl$/, '.meta.json'));
     if (this.calls !== calls) return;
@@ -259,24 +299,90 @@ class AgentCalls {
         if (this.calls !== calls) return;
         this.meta.set(filename, entry);
       }
-      if (ids.has(entry.value?.toolUseId)) matches.set(entry.value.toolUseId, { ...entry.value, filename: filename.replace(/\.meta\.json$/, '.jsonl') });
+      if (ids.has(entry.value?.toolUseId)) {
+        const id = entry.value.toolUseId;
+        if (!matches.has(id)) matches.set(id, { ...entry.value, filename: filename.replace(/\.meta\.json$/, '.jsonl') });
+        else matches.set(id, null);
+      }
     }
     for (const id of ids) {
       const call = calls.get(id), meta = matches.get(id);
-      const filename = call?.filename || meta?.filename || (call?.agentId && path.join(folder, `agent-${call.agentId}.jsonl`));
-      if (!call || call.reviewed || !filename || this.calls !== calls) continue;
-      call.filename = filename;
-      const records = (await readText(filename) || '').split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+      const filename = matches.has(id) && !meta ? null : meta?.filename || (call?.agentId && path.join(folder, `agent-${call.agentId}.jsonl`)) || call?.filename;
+      if (!call || this.calls !== calls) continue;
+      call.filename = filename || null;
+      await this.readWorker(call, call.filename, calls, meta);
       if (this.calls !== calls || this.folder !== folder) return;
-      let changed = false;
-      if (call.preparing && !call.done && records.some(record => record.type === 'assistant')) { call.preparing = false; changed = true; }
-      const model = records.findLast(record => record.type === 'assistant' && record.message?.model && record.message.model !== '<synthetic>')?.message.model;
-      // A full id from the transcript outranks the alias in meta. Don't replace a resolved id with an alias.
-      const next = model || (typeof meta?.model === 'string' && (!call.resolved || meta.model.startsWith('claude-')) ? meta.model : null);
-      if (model || (typeof next === 'string' && next.startsWith('claude-'))) call.resolved = true;
-      if (typeof next === 'string' && next && next !== call.model) { call.model = next; changed = true; }
-      if (changed && !call.reviewed) this.changed();
     }
+  }
+  async readLog(call, calls) {
+    let file;
+    try {
+      file = await fs.open(call.log, 'r');
+      const stat = await file.stat({ bigint: true }), size = Number(stat.size), identity = `${stat.dev}:${stat.ino}`;
+      if (call.logIdentity !== identity || size < call.logSize) {
+        call.logIdentity = identity; call.logOffset = 0; call.logBuffer = ''; call.logTail = ''; call.logSkipping = false; call.headerDone = false; call.plainLog = false;
+        call.plainIds = new Set(); call.jsonIds = new Set(); call.threadId = null;
+        this.bind(call, null);
+      }
+      call.logSize = size;
+      const accept = chunk => {
+        const body = (call.logTail + chunk.toString('utf8')).replace(/\x1b\[[0-9;]*m/g, '');
+        const working = /(?:^|\n)(?:codex|thinking|exec|tool [^\r\n]+|apply_patch)\r?\n[^\r\n]/.test(body);
+        call.logTail = body.slice(-1024);
+        const lines = (call.logBuffer + chunk.toString('utf8')).split('\n'); call.logBuffer = lines.pop();
+        for (const raw of lines) {
+          if (call.logSkipping) { call.logSkipping = false; continue; }
+          const line = raw.replace(/\x1b\[[0-9;]*m/g, '').trim();
+          const id = !call.headerDone && /^session id:\s*([a-f\d-]{36})$/i.exec(line)?.[1];
+          if (id && call.plainIds.size < 2) call.plainIds.add(id);
+          if (line === 'user') { call.headerDone = true; call.plainLog = true; }
+          if (/^OpenAI Codex\b/.test(line)) call.plainLog = true;
+          if (call.plainLog) continue;
+          try {
+            const item = JSON.parse(line);
+            if (item.type === 'thread.started' && /^[a-f\d-]{36}$/i.test(item.thread_id) && call.jsonIds.size < 2) call.jsonIds.add(item.thread_id);
+            if (['item.started', 'item.completed'].includes(item.type)) { call.preparing = false; call.headerDone = true; }
+          } catch { }
+        }
+        if (call.logBuffer.length > 4096) { call.logBuffer = ''; call.logSkipping = true; }
+        if (working) { call.preparing = false; call.headerDone = true; }
+      };
+      // The ID is in the header; old output needs only a bounded initial tail for the preparing state.
+      if (!call.logOffset && size > 256 * 1024) {
+        const head = Buffer.alloc(4096), { bytesRead } = await file.read(head, 0, head.length, 0);
+        accept(head.subarray(0, bytesRead)); call.logBuffer = ''; call.logSkipping = true; call.logOffset = size - 256 * 1024;
+      }
+      const end = Math.min(size, call.logOffset + 4 * 1024 * 1024);
+      while (call.logOffset < end) {
+        const chunk = Buffer.alloc(Math.min(65536, end - call.logOffset));
+        const { bytesRead } = await file.read(chunk, 0, chunk.length, call.logOffset);
+        if (this.calls !== calls) return;
+        if (!bytesRead) break;
+        call.logOffset += bytesRead; accept(chunk.subarray(0, bytesRead));
+      }
+      const ids = call.plainIds.size ? call.plainIds : call.jsonIds;
+      call.threadId = ids.size === 1 ? [...ids][0] : null;
+    } catch { call.preparing = false; call.headerDone = true; call.threadId = null; }
+    finally { await file?.close(); }
+  }
+  async readExec(call, calls) {
+    if (!call.log) return;
+    await this.readLog(call, calls);
+    if (this.calls !== calls) return;
+    const conflicts = call.threadId ? [...calls.values()].filter(other => other !== call && other.threadId === call.threadId) : [];
+    if (!call.threadId || conflicts.length) {
+      for (const other of conflicts) this.bind(other, null);
+      this.bind(call, null); return;
+    }
+    const candidates = (await rolloutFiles(this.directory)).filter(item => item.name.includes(call.threadId));
+    const matches = [];
+    for (const item of candidates) {
+      const meta = await sessionMeta(item.filename).catch(() => null);
+      if (this.calls !== calls) return;
+      if (meta?.id === call.threadId && meta.source === 'exec') matches.push(item.filename);
+    }
+    if (this.calls !== calls) return;
+    await this.readWorker(call, matches.length === 1 ? matches[0] : null, calls);
   }
 }
 

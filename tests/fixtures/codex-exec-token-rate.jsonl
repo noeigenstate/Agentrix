@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-01-01T00:00:00.000Z","payload":{"id":"22222222-2222-4222-8222-222222222222","cwd":"<repo>","source":"exec","model_provider":"openai"}}
+{"type":"event_msg","timestamp":"2026-01-01T00:00:00.000Z","payload":{"type":"task_started","turn_id":"exec-turn"}}
+{"type":"turn_context","timestamp":"2026-01-01T00:00:00.000Z","payload":{"model":"gpt-6.1-terra"}}
+{"type":"event_msg","timestamp":"2026-01-01T00:00:01.000Z","payload":{"type":"user_message","message":"Inspect the placeholder worker task."}}
+{"type":"token_usage_record","timestamp":"2026-01-01T00:00:04.000Z","payload":{"response_id":"exec-response","turn_id":"exec-turn","usage":{"output_tokens":75,"reasoning_output_tokens":25},"thread_token_usage":{"output_tokens":75}}}
+{"type":"event_msg","timestamp":"2026-01-01T00:00:08.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"output_tokens":75},"last_token_usage":{"output_tokens":75}}}}

@@ -81,8 +81,8 @@ try {
   await fs.appendFile(transcript, JSON.stringify({ type: 'turn_context', timestamp: new Date().toISOString(), payload: { cwd: project.path, model: 'gpt-6.1-sol', effort: 'high' } }) + '\n'
     + tokens(used(320000, 290000, 4200), used(310000, 300000, 4200), { primary: { used_percent: 34, window_minutes: 300, resets_at: resets }, secondary: { used_percent: 92, window_minutes: 10080, resets_at: resets } }));
   const text = selector => pane.locator(selector).evaluateAll(nodes => nodes.map(node => node.textContent.replace(/\s+/g, ' ').trim()));
-  await waitFor(async () => (await text('.activity-route-steps li')).join(' > ') === 'Codex > OpenAI > GPT-6.1-Sol', 'the route names the agent, the service and the model');
-  assert.deepEqual(await text('.activity-route .activity-note'), ['思考 high'], 'the route says how the model runs');
+  await waitFor(async () => (await text('.activity-main .activity-call-head p')).join() === 'GPT-6.1-SolOpenAI', 'the main model section names the model and its service');
+  assert.deepEqual(await text('.activity-main .activity-call-note p'), ['思考 high'], 'the main model section says how the model runs');
   await waitFor(async () => (await text('.activity-context .activity-metric > small')).join() === '共 828k tokens · 还可容纳 514k', 'the context shows how full the window is');
   assert.deepEqual(await text('.activity-context .activity-metric-label'), ['上下文长度'], 'the context title is the label of its meter line');
   assert.deepEqual(await text('.activity-context .activity-metric > b'), ['38%']);
@@ -111,7 +111,7 @@ try {
   // The overview lists the prompts: the one being worked on, then one sent while it works. The card's size is fixed:
   // more prompts never push the model route and the usage down.
   // Measured once the panel has finished opening: while it flies in it is still scaled a little, every top a pixel off.
-  const routeTop = () => pane.locator('.activity-route').evaluate(node => Math.round(node.getBoundingClientRect().top));
+  const routeTop = () => pane.locator('.activity-main').evaluate(node => Math.round(node.getBoundingClientRect().top));
   await page.waitForFunction(() => !document.querySelector('[data-focus-motion]'));
   const before = await routeTop();
   await input('给登录页加上验证码。然后跑一下测试\r');
@@ -144,7 +144,7 @@ try {
   assert.deepEqual(await text('.activity-context .activity-metric > small'), ['共 828k tokens · 还可容纳 748k']);
   const overflow = await pane.evaluate(node => {
     const right = node.getBoundingClientRect().right + 1;
-    return [...node.querySelectorAll('.activity-card, .activity-prompts, .activity-route-steps li, .activity-metric, .activity-call-rows li')].filter(item => item.getBoundingClientRect().right > right).map(item => item.className);
+    return [...node.querySelectorAll('.activity-card, .activity-prompts, .activity-metric, .activity-call-rows li')].filter(item => item.getBoundingClientRect().right > right).map(item => item.className);
   });
   assert.deepEqual(overflow, [], 'nothing in the activity pane reaches past its edge');
   await page.getByRole('button', { name: '隐藏活动栏', exact: true }).click(); await waitFor(async () => !await pane.count(), 'activity pane can be hidden');

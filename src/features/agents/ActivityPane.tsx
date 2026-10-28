@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowCounterClockwise, CaretRight, Circle, CircleNotch, Record as RecordDot } from '@phosphor-icons/react';
-import type { AgentCall, AgentTokens, AgentUsage, ProjectTerminal } from '../../shared/types';
+import { ArrowCounterClockwise, Circle, CircleNotch, Record as RecordDot } from '@phosphor-icons/react';
+import type { AgentCall, AgentTokens, AgentUsage, ProjectTerminal, TokenRate } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { modelName } from '../reading/model-name';
 import { useNow } from '../reading/useNow';
 import { readScreen, subscribeScreen } from '../terminal/terminal-screen';
 import { sendToAgent } from '../home/send-to-agent';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
+import { actionText } from './action-text';
 import { ResetCountdown } from './ResetCountdown';
 import { codexResetCount, codexResetsSaid } from './reset-count';
 import './activity-pane.css';
@@ -20,11 +21,11 @@ export function tokenCount(value: number) {
 const exactCount = (value: number) => value.toLocaleString('en-US');
 const percentOf = (part: number, whole: number) => whole > 0 ? Math.min(100, Math.round(part / whole * 100)) : 0;
 
-// Beside an expanded project's terminal: the model route, the models it called, running tasks, context and usage.
+// Beside an expanded project's terminal: the main model, the sub-agents it called, running tasks, context and usage.
 export function ActivityPane({ terminal }: { terminal: ProjectTerminal }) {
   const calls = terminal.agentUsage?.calls;
   return <aside className="activity-pane" aria-label={t('活动')}>
-    {terminal.codexActive ? <RouteCard terminal={terminal} /> : <section className="activity-card">
+    {terminal.codexActive ? <MainCard terminal={terminal} /> : <section className="activity-card">
       <p className="activity-empty">{t('在终端里启动 Codex 或 Claude Code 后，这里显示它的模型路由、上下文长度和用量。')}</p>
     </section>}
     {terminal.codexActive && !!calls?.length && <CallsCard calls={calls} />}
@@ -39,24 +40,47 @@ export function ActivityPane({ terminal }: { terminal: ProjectTerminal }) {
   </aside>;
 }
 
-// Agent › service › model, and how the model runs: its effort and whether fast mode is on.
-function RouteCard({ terminal }: { terminal: ProjectTerminal }) {
-  const settings = terminal.agentSettings, provider = terminal.agentUsage?.provider;
-  const steps = [
-    { label: terminal.agent === 'claude' ? 'Claude Code' : 'Codex', title: t('代理') },
-    ...(provider ? [{ label: provider, title: t('接口') }] : []),
-    ...(settings?.model ? [{ label: modelName(settings.model), title: t('模型'), model: true }] : []),
-  ];
+// How fast a model writes, at the right end of its head: the average over its recent replies (output tokens per second of the time it spent writing). The column is a fixed width, so
+// a figure arriving or changing moves nothing. Not yet a finished reply: waiting. Records that cannot be read: a dash, and the tooltip says so.
+function Rate({ rate }: { rate: TokenRate | null | undefined }) {
+  const partial = rate?.partial ? '\n' + t('（部分记录）') : '';
+  if (rate && rate.samples > 0 && rate.activeMs > 0) {
+    const title = t('平均输出速率：最近 {samples} 条回复，共 {tokens} token，用时 {seconds} 秒', { samples: rate.samples, tokens: exactCount(rate.outputTokens), seconds: (rate.activeMs / 1000).toFixed(1) }) + partial;
+    return <span className="activity-row-end activity-rate is-live" title={title}>{Math.round(1000 * rate.outputTokens / rate.activeMs)} token/s</span>;
+  }
+  if (rate) return <span className="activity-row-end activity-rate" title={t('还没有完成一条回复，暂时没有速率。') + partial}>{t('等待中')}</span>;
+  return <span className="activity-row-end activity-rate" title={t('这个模型的记录在这里读不到，所以没有速率。')}>— token/s</span>;
+}
+
+// A head row: the model's mark, its name and service (the service gives way first when the pane is narrow), an optional tag, and its rate.
+function ModelHead({ Mark, name, provider, tag, title, rate }: { Mark: typeof ClaudeLogo; name: string; provider: string | null | undefined; tag?: string; title: string; rate: TokenRate | null | undefined }) {
+  return <li className="activity-call-head" title={title}>
+    <span className="activity-row-icon"><Mark size={16} /></span>
+    <p><b>{name}</b>{provider && <span className="activity-call-provider">{provider}</span>}{tag && <span className="activity-call-tag">{tag}</span>}</p>
+    <Rate rate={rate} />
+  </li>;
+}
+
+// The main agent: its model as its latest reply records it (the configured one only until there is a reply, or in the tooltip when they differ), how it runs, its rate, and the step
+// it is on right now. That row spins only while a step is under way and the agent is working; otherwise it says in words what the agent is doing, never a step that has finished.
+function MainCard({ terminal }: { terminal: ProjectTerminal }) {
+  const usage = terminal.agentUsage, settings = terminal.agentSettings, agent = terminal.agent === 'claude' ? 'Claude Code' : 'Codex';
+  const actual = usage?.model || null, configured = settings?.model || null, model = actual ?? configured, name = model ? modelName(model) : agent;
   const how = [settings?.effort && t('思考 {effort}', { effort: settings.effort === 'default' ? t('默认') : settings.effort }),
     settings?.fast != null && (settings.fast ? t('快速模式') : t('普通模式'))].filter(Boolean).join(' · ');
-  return <section className="activity-card activity-route" aria-label={t('模型路由')}>
-    <h4 className="activity-card-title">{t('模型路由')}</h4>
-    <ol className="activity-route-steps">
-      {steps.map((step, index) => <li key={step.title} className={step.model ? 'is-model' : ''} title={t('{name}：{value}', { name: step.title, value: step.label })}>
-        {index > 0 && <CaretRight size={12} weight="bold" aria-hidden="true" />}<span>{step.label}</span>
-      </li>)}
-    </ol>
-    <p className="activity-note">{settings?.model ? how || t('按默认设置运行') : t('第一次回复后显示模型。')}</p>
+  const title = [[agent, usage?.provider, model && name].filter(Boolean).join(' / '),
+    actual && configured && actual !== configured && t('设置为 {configured}，实际回复来自 {actual}', { configured: modelName(configured), actual: name })].filter(Boolean).join('\n');
+  const action = terminal.action, running = !!action && !action.done && terminal.codexActivity === 'working';
+  const state = terminal.codexActivity === 'working' ? t('正在处理') : terminal.codexActivity === 'complete' ? t('本轮已完成') : terminal.codexActivity === 'interrupted' ? t('已中断') : t('等待下一步');
+  return <section className="activity-card activity-main" aria-label={t('主模型')}>
+    <h4 className="activity-card-title">{t('主模型')}</h4>
+    <ul className="activity-call-rows">
+      <ModelHead Mark={terminal.agent === 'claude' ? ClaudeLogo : CodexLogo} name={name} provider={usage?.provider} title={title} rate={usage?.rate} />
+      <li className="activity-call-note"><span /><p>{model ? how || t('按默认设置运行') : t('第一次回复后显示模型。')}</p><span /></li>
+      {running ? <li className="is-running" title={action.detail || action.target}>
+        <span className="activity-row-icon">{CALL_STATES.running.icon}</span><p><span className="activity-call-role">{t('正在')}</span>{actionText(action)}</p><span />
+      </li> : <li className="is-idle"><span className="activity-row-icon"><Circle size={14} aria-hidden="true" /></span><p>{state}</p><span /></li>}
+    </ul>
   </section>;
 }
 
@@ -68,7 +92,7 @@ const CALL_STATES = {
 } as const;
 const MAX_CALL_ITEMS = 4;
 
-// The models the agent called: per model one row (its mark, name and service; how it runs at the right), then a row for each of its calls
+// The sub-agents the agent called (everything in the calls is a worker it spawned, so every group is tagged as one): per model one head (its mark, name, service and rate), how it runs under it, then a row for each of its calls
 // (the state's icon, the role and what it does, the state in words). The heading counts every call; a model's calls past the fourth fold into "+N".
 function CallsCard({ calls }: { calls: AgentCall[] }) {
   return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
@@ -79,11 +103,8 @@ function CallsCard({ calls }: { calls: AgentCall[] }) {
         const how = [call.effort, call.fast != null && (call.fast ? t('快速') : t('普通模式'))].filter(Boolean).join(' · ');
         return <li key={JSON.stringify([call.agent, call.provider, call.model, call.effort, call.fast])}>
           <ul className="activity-call-rows">
-            <li className="activity-call-head" title={[call.agent, call.provider, name].filter(Boolean).join(' / ')}>
-              <span className="activity-row-icon"><Mark size={16} /></span>
-              <p><b>{name}</b>{call.provider && <span className="activity-call-provider">{call.provider}</span>}</p>
-              <span className="activity-row-end">{how}</span>
-            </li>
+            <ModelHead Mark={Mark} name={name} provider={call.provider} tag={t('子代理')} title={[[call.agent, call.provider, name].filter(Boolean).join(' / '), t('子代理')].join('\n')} rate={call.rate} />
+            {how && <li className="activity-call-note"><span /><p>{how}</p><span /></li>}
             {call.items.slice(0, MAX_CALL_ITEMS).map((item, index) => <li key={index} className={`is-${item.state}`} title={item.title}>
               <span className="activity-row-icon">{CALL_STATES[item.state].icon}</span>
               <p><span className="activity-call-role">{t(item.role)}</span>{item.title}</p>

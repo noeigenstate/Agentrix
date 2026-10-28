@@ -1551,5 +1551,16 @@
   "任务做完立即从「正在处理的任务」里移除；后台通知触发的回复不再让旧任务一直挂着。": "A finished task leaves Tasks in progress at once, and replies triggered by background notifications no longer keep old tasks listed.",
   "「调用的模型」能显示在后台运行的 Codex 调用，跑完后才转入审核。": "Models called now shows Codex calls running in the background, moving them to Reviewing only once they finish.",
   "阅读视图里完成的结果标题不再带「· 已完成」；失败和中断照常标明。": "Finished result titles in the reading view no longer end in \"· Done\"; failed and interrupted results are still marked.",
-  "用快捷键切换项目时不再出现重点色边框。": "Switching projects with a shortcut no longer draws an accent border."
+  "用快捷键切换项目时不再出现重点色边框。": "Switching projects with a shortcut no longer draws an accent border.",
+  "主模型": "Main model",
+  "正在": "Now",
+  "等待下一步": "Waiting for the next step",
+  "等待中": "Waiting",
+  "设置为 {configured}，实际回复来自 {actual}": "Set to {configured}; the replies come from {actual}",
+  "这个模型的记录在这里读不到，所以没有速率。": "This model's records cannot be read here, so there is no rate.",
+  "还没有完成一条回复，暂时没有速率。": "No reply has finished yet, so there is no rate.",
+  "（部分记录）": " (partial records)",
+  "平均输出速率：最近 {samples} 条回复，共 {tokens} token，用时 {seconds} 秒": "Average output rate over the last {samples} replies: {tokens} tokens in {seconds} s",
+  "活动栏顶部改为「主模型」：显示主 Agent 实际在用的模型、它此刻正在做的步骤，以及实时的平均速率（xx token/s）。": "The top of the activity pane is now Main model: the model the main agent actually uses, the step it is on right now, and its live average speed in token/s.",
+  "「调用的模型」里每组都标明「子代理」，并显示各自的 token/s；子代理和主模型的记录分开计算，互不混入。": "Each group under Models called is tagged Subagent and shows its own token/s; subagent and main-model records are counted separately and never mixed."
 }

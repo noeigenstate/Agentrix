@@ -90,3 +90,8 @@ description: Publish a new Agentrix version — bump, update notes, the full loc
    change that makes a card's content taller (the agent launcher, a wrapping control) can push a button out of its card
    there while every local default-size run passes. Before tagging, run a temporary copy of `scripts/smoke.mjs` that calls
    `unmaximize()` and `setContentSize(1024, 768)` right after `firstWindow()` (check `innerWidth` is 1024), then delete it.
+26. **A smoke that passes and never exits.** A step that printed its assertions and then hung until the 35-minute job
+   limit was stuck in `app.close()`, which Playwright waits on with no deadline (and `retry.mjs` waits on its child).
+   Close through a bounded teardown, as `scripts/material-teardown.mjs` does: race `app.close()` against
+   `15s × timeoutScale`, then kill only that smoke's Electron process tree and fail, so the retry runs. Print PASS only
+   after the app has exited.

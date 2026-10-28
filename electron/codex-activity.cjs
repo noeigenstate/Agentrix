@@ -88,6 +88,7 @@ class CodexActivityReader {
           const meta = await codexMetadata(file, this.snapshot.threadId);
           this.options.onRecord?.(meta || { type: 'session_meta', payload: {} });
         }
+        this.options.onReset?.(this.offset > 0);
       }
       this.fileIdentity = identity; this.fileSize = size;
       if (this.workHistory && !await this.workHistory.read(file, this.options.onWorkRecord)) return null;

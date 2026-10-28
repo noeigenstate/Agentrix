@@ -354,7 +354,7 @@ function followClaude(project, s, event) {
       usageHistory(s, ready);
     };
     s.activitySnapshot = s.activityRawSnapshot = null;
-    s.claudeTranscript = remote ? { filename: file } : new TranscriptTail(file, { onHistory, onWorkRecord: record => onRecord({ ...record, workOnly: true }) });
+    s.claudeTranscript = remote ? { filename: file } : new TranscriptTail(file, { onHistory, onReset: partial => { if (s.usage?.rates) s.usage.rates.partial = partial; }, onWorkRecord: record => onRecord({ ...record, workOnly: true }) });
     s.activityMonitor?.stop();
     const tail = s.claudeTranscript;
     const onRecord = record => {
@@ -409,7 +409,8 @@ function usageHistory(s, ready) {
 function startUsage(project, s, event) {
   stopUsageAccount(s);
   s.usageCwd = event.cwd || project.path;
-  const usage = s.usage = new UsageMeter(s.agent, { changed: () => { if (s.usage === usage && !s.usageHistory) scheduleState(); } });
+  const usage = s.usage = new UsageMeter(s.agent, { rates: project.kind !== 'ssh', codexHome: event.codexHome || s.codexHome,
+    changed: () => { if (s.usage === usage && !s.usageHistory) scheduleState(); } });
   if (s.agent === 'codex') {
     let binding;
     s.bindUsageAccount = () => {
@@ -757,7 +758,7 @@ function onEvent(event) {
       if (s.completionWork && value.completionUncertain) s.completionWork.uncertain = true;
       return value.snapshot;
     };
-    const reader = project.kind === 'ssh' ? null : new CodexActivityReader(event.cwd || project.path, event.codexHome || s.codexHome, s.activitySince, { threadId: () => s.reportedThreadId, requireBinding: () => (project.terminals?.length || 0) > 0, onHistory, onRecord, onWorkRecord: record => s.completionWork?.record(record, 'codex') });
+    const reader = project.kind === 'ssh' ? null : new CodexActivityReader(event.cwd || project.path, event.codexHome || s.codexHome, s.activitySince, { threadId: () => s.reportedThreadId, requireBinding: () => (project.terminals?.length || 0) > 0, onHistory, onReset: partial => { if (s.usage?.rates) s.usage.rates.partial = partial; }, onRecord, onWorkRecord: record => s.completionWork?.record(record, 'codex') });
     s.activityMonitor = monitorActivity(
       async () => {
         const snapshot = await (reader ? reader.read() : project.terminals?.length && !s.reportedThreadId ? null : s.terminal.request('codex-status', { since: remoteSince, threadId: s.reportedThreadId }).then(remoteStatus));

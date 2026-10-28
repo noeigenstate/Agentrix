@@ -24,6 +24,7 @@ function loadAgentsFile(basename, language = 'zh') {
     if (name === './AgentBrandIcon') return require('../src/features/agents/AgentBrandIcon.ts');
     if (name === './reset-count') return require('../src/features/agents/reset-count.ts');
     if (name === './ResetCountdown') return loadAgentsFile('ResetCountdown.tsx', language);
+    if (name === './action-text') return loadAgentsFile('action-text.ts', language);
     if (name === 'react-dom') return { createPortal: children => children };
     if (name === '@phosphor-icons/react') return new Proxy({}, { get: () => () => React.createElement('svg') });
     return original(name);
@@ -53,7 +54,7 @@ test('the models group hides empty calls and lists each model with its calls, th
   const section = /<section class="activity-card activity-calls"[\s\S]*?<\/section>/.exec(html)[0], plain = section.replace(/<[^>]*>/g, '|');
   for (const text of ['调用的模型', 'Sonnet 5.5', 'Anthropic', 'GPT-6.1-Sol', 'OpenAI', 'max · 快速', '运行中', '审核中', '准备中']) assert.ok(plain.includes(text), text);
   assert.ok(section.includes('<span class="activity-count">5</span>'), 'the heading counts every call');
-  assert.ok(html.indexOf('activity-route"') < html.indexOf('activity-calls"') && html.indexOf('activity-calls"') < html.indexOf('activity-tasks"'), 'route, models, then tasks');
+  assert.ok(html.indexOf('activity-main"') < html.indexOf('activity-calls"') && html.indexOf('activity-calls"') < html.indexOf('activity-tasks"'), 'route, models, then tasks');
   assert.ok(section.includes('title="Polish &lt;card&gt;"'));
   assert.match(section, /agent-brand-claude/); assert.match(section, /agent-brand-codex/);
   for (const [state, count] of [['preparing', 1], ['running', 3], ['reviewing', 1]]) assert.equal((section.match(new RegExp(`<li class="is-${state}"`, 'g')) || []).length, count);
@@ -90,7 +91,7 @@ test('called models show four ordered role and title rows with state icons and w
   const call = { agent: 'Codex', provider: 'OpenAI', model: 'gpt-6.1-sol', effort: null, fast: null, preparing: 1, running: 4, reviewing: 1, tasks: [], items };
   for (const language of ['zh', 'en']) {
     const html = activityMarkup([call], language);
-    const rows = /<ul class="activity-call-rows">([\s\S]*?)<\/ul>/.exec(html)[1];
+    const rows = /<section class="activity-card activity-calls"[\s\S]*?<ul class="activity-call-rows">([\s\S]*?)<\/ul>/.exec(html)[1];
     const plain = rows.replace(/<[^>]*>/g, ' ');
     assert.equal((rows.match(/<li class="is-/g) || []).length, 4);
     assert.ok(rows.includes(`title="${long.replace('<parser>', '&lt;parser&gt;')}"`));
@@ -240,7 +241,7 @@ test('working task keeps its real status, spinner and text, with no fake progres
     agentUsage: { provider: 'OpenAI', context: { used: 25000, window: 100000 },
       limits: [{ minutes: 300, percent: 60 }], resets: { left: 2 }, resetQuery: { state: 'ready' } },
   });
-  const positions = ['activity-route"', 'activity-tasks"', 'activity-context"', 'activity-usage"'].map(name => html.indexOf(name));
+  const positions = ['activity-main"', 'activity-tasks"', 'activity-context"', 'activity-usage"'].map(name => html.indexOf(name));
   assert.ok(positions.every((position, i) => position >= 0 && (!i || position > positions[i - 1])), 'route, tasks, context, then usage/reset controls');
   const usage = html.slice(positions[3]);
   assert.match(usage, /activity-estop/); assert.match(usage, /剩余 2 次/);
@@ -255,7 +256,7 @@ test('inactive terminal keeps its empty card above tasks; the pane shows no scro
   const html = activityMarkup([], 'en', { codexActive: false });
   assert.ok(html.indexOf('activity-empty') < html.indexOf('activity-tasks'));
   assert.ok(html.includes('No task yet'));
-  assert.doesNotMatch(html, /activity-route|activity-context|activity-usage/);
+  assert.doesNotMatch(html, /activity-main|activity-context|activity-usage/);
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
   // The pane shows no scrollbar; the fixed groups keep their height, the two lists share the rest and scroll under their own titles.
   assert.match(/\.activity-pane \{[^}]*\}/.exec(css)[0], /scrollbar-width: none/);
@@ -403,4 +404,67 @@ test('the reset row stays the trigger: it never turns into a countdown row, and 
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
   assert.doesNotMatch(css, /activity-reset-cancel|is-counting/);
   assert.ok(!('{seconds} 秒后重置' in en), 'the old row label is gone from the translations');
+});
+
+test('the main model section: the model its latest reply records (the setting only until there is one), its rate, and the step it is on, never borrowed from a prompt or a sub-agent', () => {
+  const main = html => /<section class="activity-card activity-main"[\s\S]*?<\/section>/.exec(html)[0], head = html => /<li class="activity-call-head" title="([^"]*)"><span class="activity-row-icon">[\s\S]*?<\/span><p><b>([^<]*)<\/b>/.exec(main(html)).slice(1);
+  const usage = extra => ({ provider: 'Anthropic', limits: [], calls: [], ...extra });
+  const html = activityMarkup([], 'zh', { agentUsage: usage({ model: 'claude-sonnet-5-5' }) });
+  assert.match(html, /<section class="activity-card activity-main" aria-label="主模型"><h4 class="activity-card-title">主模型<\/h4>/);
+  assert.deepEqual(head(html), ['Claude Code / Anthropic / Sonnet 5.5\n设置为 Opus 5.5，实际回复来自 Sonnet 5.5', 'Sonnet 5.5'], 'the reply wins over the setting, and the tooltip says so');
+  assert.deepEqual(head(activityMarkup([], 'zh', { agentUsage: usage({ model: 'claude-opus-5-5' }) })), ['Claude Code / Anthropic / Opus 5.5', 'Opus 5.5'], 'no remark when they agree');
+  assert.deepEqual(head(activityMarkup([], 'zh', { agentUsage: usage({}) })), ['Claude Code / Anthropic / Opus 5.5', 'Opus 5.5'], 'the setting stands in until a reply records the model');
+  const waiting = activityMarkup([], 'zh', { agentSettings: null, agentUsage: usage({}) });
+  assert.deepEqual(head(waiting), ['Claude Code / Anthropic', 'Claude Code']); assert.ok(main(waiting).includes('第一次回复后显示模型。'));
+  assert.ok(main(html).includes('<p>思考 xhigh · 普通模式</p>'), 'how it runs, under the head');
+  assert.doesNotMatch(main(html), /activity-call-tag|子代理/, 'the main agent is not a sub-agent');
+  // The rate: average output speed; waiting before a finished reply; a dash when the records cannot be read (the tooltip says so).
+  const rate = value => /<span class="activity-row-end activity-rate( is-live)?" title="([^"]*)">([^<]*)<\/span>/.exec(main(activityMarkup([], 'zh', { agentUsage: usage({ rate: value }) }))).slice(1);
+  assert.deepEqual(rate({ outputTokens: 900, activeMs: 10000, samples: 3, updatedAt: 1, partial: false }), [' is-live', '平均输出速率：最近 3 条回复，共 900 token，用时 10.0 秒', '90 token/s']);
+  assert.deepEqual(rate({ outputTokens: 1234, activeMs: 9800, samples: 2, updatedAt: 1, partial: true })[1], '平均输出速率：最近 2 条回复，共 1,234 token，用时 9.8 秒\n（部分记录）');
+  assert.deepEqual(rate({ outputTokens: 0, activeMs: 0, samples: 0, updatedAt: 1, partial: false }), [undefined, '还没有完成一条回复，暂时没有速率。', '等待中']);
+  assert.deepEqual(rate(null), [undefined, '这个模型的记录在这里读不到，所以没有速率。', '— token/s']);
+  assert.deepEqual(rate(undefined), [undefined, '这个模型的记录在这里读不到，所以没有速率。', '— token/s']);
+  assert.equal(rate({ outputTokens: 7, activeMs: 3000, samples: 1, updatedAt: 1, partial: false })[2], '2 token/s');
+  const english = activityMarkup([], 'en', { agentUsage: usage({ rate: { outputTokens: 900, activeMs: 10000, samples: 3, updatedAt: 1, partial: true } }) });
+  assert.ok(english.includes('title="Average output rate over the last 3 replies: 900 tokens in 10.0 s (partial records)"'.replace(' (partial', '\n (partial')));
+  assert.ok(main(activityMarkup([], 'en', { agentUsage: usage({}) })).includes('>Main model<'));
+});
+
+test('the main row shows the step under way and spins only while the agent works; a finished or missing step shows the agent state, never a prompt or a sub-agent title', () => {
+  const step = (action, codexActivity) => /<section class="activity-card activity-main"[\s\S]*?<\/section>/.exec(activityMarkup([{ agent: 'Codex', model: 'gpt-6.1-sol', provider: 'OpenAI', effort: null, fast: null, preparing: 0, running: 1, reviewing: 0, tasks: [], items: [{ state: 'running', role: '执行', title: 'SUB TITLE' }] }], 'zh',
+    { action, codexActivity, prompts: [{ id: 'p', text: 'PROMPT TEXT', summary: 'PROMPT TEXT', state: 'working' }] }))[0];
+  const edit = { kind: 'edit', tool: 'Edit', target: 'src/features/agents/ActivityPane.tsx', detail: '', done: false };
+  const running = step(edit, 'working');
+  assert.match(running, /<li class="is-running" title="src\/features\/agents\/ActivityPane\.tsx">[\s\S]*?<span class="activity-call-role">正在<\/span>修改 ActivityPane\.tsx<\/p>/);
+  for (const html of [running, step({ ...edit, done: true }, 'working'), step(null, 'working')]) assert.doesNotMatch(html, /PROMPT TEXT|SUB TITLE/, 'only the main agent\'s own step');
+  const finished = step({ ...edit, done: true }, 'working');
+  assert.doesNotMatch(finished, /is-running|loading-spinner|ActivityPane/, 'a done step is not shown as running');
+  assert.match(finished, /<li class="is-idle"><span class="activity-row-icon">[\s\S]*?<\/span><p>正在处理<\/p>/);
+  assert.doesNotMatch(step(edit, 'complete'), /is-running|loading-spinner|ActivityPane/, 'a running step of an agent that is not working is stale');
+  assert.match(step(edit, 'complete'), /<p>本轮已完成<\/p>/);
+  assert.match(step(null, 'interrupted'), /<p>已中断<\/p>/);
+  assert.match(step(null, 'unknown'), /<p>等待下一步<\/p>/);
+  assert.equal((step(edit, 'working').match(/<li/g) || []).length, (step(null, 'unknown').match(/<li/g) || []).length, 'the same rows with or without a step: nothing jumps');
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
+  assert.match(css, /\.activity-call-rows li \.activity-rate \{ min-width: 80px; text-align: right; \}/, 'a fixed column for the rate');
+  assert.doesNotMatch(css, /activity-route/, 'the route chips are gone');
+});
+
+test('every group of called models is a sub-agent: tagged, with its own rate, its effort under its head, its calls exactly as given and never merged', () => {
+  const call = (model, extra = {}) => ({ agent: 'Claude Code', provider: 'Anthropic', model, effort: null, fast: null, preparing: 0, running: 1, reviewing: 0, tasks: [], items: [{ state: 'running', role: '执行', title: `${model} work` }], ...extra });
+  const html = activityMarkup([call('claude-opus-5-5', { rate: { outputTokens: 480, activeMs: 10000, samples: 2, updatedAt: 1, partial: false }, effort: 'high' }),
+    call('claude-sonnet-5-5'), call('claude-sonnet-5-5', { effort: 'max', fast: true, rate: null })], 'zh', { agentUsage: { provider: 'Anthropic', limits: [], model: 'claude-opus-5-5', calls: [] } });
+  const calls = /<section class="activity-card activity-calls"[\s\S]*?<\/section>/.exec(activityMarkup([call('claude-opus-5-5', { rate: { outputTokens: 480, activeMs: 10000, samples: 2, updatedAt: 1, partial: false }, effort: 'high' }),
+    call('claude-sonnet-5-5'), call('claude-sonnet-5-5', { effort: 'max', fast: true, rate: null })]))[0];
+  assert.ok(html.includes('主模型'));
+  assert.equal((calls.match(/<span class="activity-call-tag">子代理<\/span>/g) || []).length, 3, 'every group is a sub-agent, even one on the main model');
+  assert.equal((calls.match(/class="activity-call-head"/g) || []).length, 3, 'three groups, none merged');
+  assert.deepEqual([...calls.matchAll(/<span class="activity-row-end activity-rate[^"]*" title="[^"]*">([^<]*)<\/span>/g)].map(match => match[1]), ['48 token/s', '— token/s', '— token/s'], 'each group has its own rate');
+  assert.ok(calls.includes('<li class="activity-call-note"><span></span><p>high</p><span></span></li>') && calls.includes('<p>max · 快速</p>'), 'effort and speed under the head, not at its end');
+  assert.equal((calls.match(/class="activity-call-note"/g) || []).length, 2, 'no note when a group has neither');
+  assert.deepEqual([...calls.matchAll(/<\/span>(claude-[a-z0-9-]+ work)<\/p>/g)].map(match => match[1]), ['claude-opus-5-5 work', 'claude-sonnet-5-5 work', 'claude-sonnet-5-5 work'], 'calls as given');
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
+  assert.match(css, /\.activity-call-head p > \.activity-call-provider \{ flex: 0 100 auto; \}/, 'the service gives way first');
+  assert.match(css, /\.activity-call-head p > \.activity-call-tag \{ flex: none;/, 'the tag never does');
 });

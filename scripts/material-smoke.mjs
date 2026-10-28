@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
+import { closeMaterialApp } from './material-teardown.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = await testRun('material'), profile = path.join(output, 'profile');
@@ -173,6 +174,7 @@ try {
   await cdp.send('Emulation.setEmulatedMedia', { features: [] }); await cdp.detach();
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, performanceSamples, materials, typography, edges, errors }, null, 2));
-  console.log(`PASS: 6/16 flat grey cards with six streaming PTYs, split ANSI/selection/cursor, opaque surfaces under reduced transparency. Evidence: ${output}`);
+  console.log(`Material assertions passed; closing isolated Electron PID ${app.process().pid}. Evidence: ${output}`);
 } catch (error) { if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {}); throw error; }
-finally { if (app) await app.close(); }
+finally { if (app) await closeMaterialApp(app); }
+console.log(`PASS: 6/16 flat grey cards with six streaming PTYs, split ANSI/selection/cursor, opaque surfaces under reduced transparency. Evidence: ${output}`);

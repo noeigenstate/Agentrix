@@ -3,6 +3,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { claudePrompt } = require('../../agent-actions.cjs');
 const { AgentCalls } = require('./agent-calls.cjs');
+const { TokenRates } = require('./token-rate.cjs');
 const { DIRECT_USAGE_FRESH_MS } = require('./claude-account-usage.cjs');
 
 // What an agent spends, as its own records tell it, for the activity pane: the service its model is reached through,
@@ -27,10 +28,11 @@ const claudeWindow = (model, used) => LARGE_WINDOW.test(model || '') || used > 2
 // provider: Claude's, known when it starts. Codex names its own in each conversation's first record; names turns that
 // id into what the pane shows.
 class UsageMeter {
-  constructor(agent, { provider = null, names = codexProviderName, changed = () => {} } = {}) {
+  constructor(agent, { provider = null, names = codexProviderName, changed = () => {}, rates = true, codexHome } = {}) {
     this.agent = agent; this.provider = provider; this.names = names; this.providerId = null; this.limits = [];
     this.resets = null; this.limitsAt = null; this.claudeDirect = null;
-    this.calls = new AgentCalls({ changed, names: id => this.names(id) });
+    this.rates = new TokenRates(agent); this.readRates = rates; this.mainCodex = true;
+    this.calls = new AgentCalls({ changed, names: id => this.names(id), local: rates, codexHome });
     this.reset();
   }
   // Claude's plan limits from the read-only account query or the existing local caches.
@@ -66,7 +68,7 @@ class UsageMeter {
     return true;
   }
   // Another conversation starts over; the provider and the plan's limits stay.
-  reset() { this.context = null; this.round = null; this.total = null; this.roundStart = null; this.replies = new Map(); this.calls.reset(); }
+  reset() { this.context = null; this.round = null; this.total = null; this.roundStart = null; this.replies = new Map(); this.rates.reset(); this.calls.reset(); }
   resetScope() {
     this.providerId = null; this.scopeCwd = null; this.resets = null;
     this.limits = []; this.limitsAt = null; this.limitsFrom = null; this.claudeDirect = null;
@@ -76,16 +78,24 @@ class UsageMeter {
   snapshot(history = null) {
     const provider = this.providerId ? this.names(this.providerId) : this.provider;
     // History holds conversation totals, never a newer account observation.
-    return { ...(history || { provider, context: this.context, round: this.round, total: this.total, calls: this.calls.snapshot(provider) }),
+    return { ...(history || { provider, context: this.context, round: this.round, total: this.total, calls: this.calls.snapshot(provider),
+      model: this.rates.model, rate: this.readRates ? this.rates.snapshot() : null }),
       limits: this.limits, limitsAt: this.limitsAt, limitsFrom: this.limitsFrom ?? null, resets: this.resets,
       ...(this.resetQuery ? { resetQuery: this.resetQuery } : {}) };
   }
   // Whether this record changed what the pane shows.
   apply(record) {
     if (!record || typeof record !== 'object') return false;
-    if (this.agent !== 'claude') return this.codex(record);
+    if (this.agent !== 'claude') {
+      if (record.type === 'session_meta') this.mainCodex = record.payload?.source !== 'exec';
+      if (!this.mainCodex) return false;
+      const changed = this.codex(record);
+      return this.rates.apply(record) || changed;
+    }
+    if (record.isSidechain) return false;
     const callsChanged = this.calls.apply(record);
-    return this.claude(record) || callsChanged;
+    const rateChanged = this.rates.apply(record);
+    return this.claude(record) || callsChanged || rateChanged;
   }
   claude(record) {
     if (record.isSidechain) return false;

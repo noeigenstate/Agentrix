@@ -3,6 +3,7 @@ dist/
 release/
 .test-output/
 *.log
+!tests/fixtures/codex-exec-token-rate.log
 docs/overview.png
 docs/project-view.png
 test-results/
