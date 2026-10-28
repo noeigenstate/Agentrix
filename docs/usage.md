@@ -124,9 +124,9 @@ SSH 项目的目录菜单、终端目录链接和 Markdown 目录链接都进入
 - **活动栏**：展开项目后显示在终端右侧。点击标题栏上的列表按钮收起或展开，选择会被记住；窗口较窄时自动隐藏。多个分屏终端时显示当前选中的那个。从上到下依次是：
   - **模型路由**：代理 › 接口 › 模型，下面是思考强度和快速/普通模式。接口取自 Codex 记录里的 `model_provider`（自定义的服务显示 `config.toml` 里它的 `base_url` 主机名），Claude Code 则看它设置里的 `ANTHROPIC_BASE_URL`、Bedrock、Vertex 等开关；远程项目的 Claude Code 不显示接口。
   - **调用的模型**：按模型分组，组首显示官方标志、模型和接口；每次调用各占一行，显示角色、任务及「准备中」「运行中」或「审核中」。标题计数包含全部调用，每组超过四项时显示「+N 个」；审核轮结束后移除对应调用。
-  - **正在处理的任务**：正在处理的提示在前，排队中的在后；每项一行，左边是状态图标，中间是任务，右边是经过时间。长文字省略，悬停可看全文。队列清空后，可显示刚完成的一轮及其完成时间。
+  - **正在处理的任务**：正在处理的提示在前，排队中的在后；每项一行，左边是状态图标，中间是任务，右边是经过时间。长文字省略，悬停可看全文。一轮结束后这一项立即移除；后台通知触发的回复不算作任务。
   - **上下文长度**：与下方额度行对齐，显示已用比例、窗口大小和剩余容量；悬停可看精确 token 数量。窗口大小未知时显示「—」，达到 90% 时以警示色提示。
-  - **5 小时额度、每周额度**：与上下文行共用对齐的进度条和数字列，已知重置时间显示在下方。额度自动取最新记录：Codex 来自会话记录和支持的本地账号查询，Claude Code 来自它为 `/usage` 缓存的数据，装了 CodePulse 时取更新的一份。恢复历史不会盖住更新的账号额度。记录或缓存变化、额度窗口重置时会自动刷新；窗口已重置但尚未取得新数据时显示「已重置，等待更新」。悬停额度百分比可看一位小数和更新时间；Claude Code 还显示来源和更新时间。
+  - **5 小时额度、每周额度**：与上下文行共用对齐的进度条和数字列，已知重置时间显示在下方。额度自动取最新记录：Codex 来自会话记录和支持的本地账号查询，Claude Code 在有本地 Claude 终端运行时由 Agentrix 直接查询账号额度（最多每分钟一次，只读本机登录凭据，不往终端输入任何内容），查询不到时用它为 `/usage` 缓存的数据，装了 CodePulse 时取更新的一份。恢复历史不会盖住更新的账号额度。记录或缓存变化、额度窗口重置时会自动刷新；窗口已重置但尚未取得新数据时显示「已重置，等待更新」。悬停额度百分比可看一位小数和更新时间；Claude Code 还显示来源和更新时间。
   - **本轮、本次对话**：各占一行，列出输入、缓存命中比例（有缓存时）和输出；不显示 token 总数，也没有单独的「用量」标题。悬停对应行可看精确数量。Claude Code 的「本次对话」从第一条提示算起，很长的对话只读取最近一段记录；本轮起点或对话开头不在记录里时，会说明暂无法统计。
   - **重置额度（仅 Codex）**：同一行显示剩余次数或查询状态；支持的本地官方账号通过独立的只读 app-server 查询并自动刷新。未知、失败和不支持会单独提示，不会当成 0。点击后窗口中央出现大的 10 秒倒计时，点「取消」、按 Esc 或点击空白处都能取消；归零才打开 Codex 自己的 `/usage`，在里面选择要用的重置并确认。Agentrix 自己不调用重置。次数为 0 时不可点；关闭活动栏、切换终端或助手退出也会取消倒计时。
 
@@ -246,20 +246,20 @@ curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/
 
 可以在管道后的 `bash` 前设置这些变量；以下指定版本示例需等对应 Release 发布后再使用：
 
-- `AGENTRIX_VERSION=1.3.11`：安装指定版本。
+- `AGENTRIX_VERSION=1.3.12`：安装指定版本。
 - `AGENTRIX_INSTALL_DIR=~/Applications`：指定安装目录。
 - `AGENTRIX_OPEN=0`：安装后不打开应用。
 
-例如，安装 1.3.11：
+例如，安装 1.3.12：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | AGENTRIX_VERSION=1.3.11 bash
+curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | AGENTRIX_VERSION=1.3.12 bash
 ```
 
 如果已经下载了 ZIP，也可以用本地的安装脚本安装：
 
 ```bash
-bash install-macos.sh ~/Downloads/Agentrix-1.3.11-mac-arm64.zip
+bash install-macos.sh ~/Downloads/Agentrix-1.3.12-mac-arm64.zip
 ```
 
 应用使用临时签名（ad-hoc），没有 Apple Developer ID，也未经过 Apple 公证。如果用浏览器下载 DMG，再将应用拖到「应用程序」，首次打开时 macOS 会提示「无法验证开发者」。在「系统设置 › 隐私与安全性」中点一次「仍要打开」，或运行：

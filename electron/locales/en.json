@@ -1546,5 +1546,10 @@
   "Codex 重置额度改为在窗口中间显示大的倒计时，按取消、Esc 或点击空白处都能取消。": "Resetting Codex limits now shows a large countdown in the middle of the window; cancel it with the button, Esc or a click outside.",
   "多个终端分屏时不再有上下两条栏；关闭和重启在鼠标移到终端上时出现在右上角。": "Split terminals no longer have bars above and below; close and restart appear in the top-right corner when you point at a terminal.",
   "阅读视图里的头像和官方标志去掉了彩色圆环；Claude 额度恢复后自动续跑的提示不再显示成你的排队消息。": "Avatars and official logos in the reading view no longer have a coloured ring, and Claude's automatic continuation after a usage reset no longer shows as your queued message.",
-  "活动栏里的额度会随 Codex 和 Claude Code 的最新记录自动更新，不再停在旧的数字上。": "Limits in the activity pane now follow the latest records of Codex and Claude Code instead of staying on old figures."
+  "活动栏里的额度会随 Codex 和 Claude Code 的最新记录自动更新，不再停在旧的数字上。": "Limits in the activity pane now follow the latest records of Codex and Claude Code instead of staying on old figures.",
+  "Claude 终端运行时，活动栏的 Claude 额度会自己更新，不用再输入 /usage；查询不往终端输入任何内容，不打断正在运行的项目。": "While a Claude terminal runs, the Claude limits in the activity pane update by themselves without typing /usage; the query types nothing into any terminal and never interrupts a running project.",
+  "任务做完立即从「正在处理的任务」里移除；后台通知触发的回复不再让旧任务一直挂着。": "A finished task leaves Tasks in progress at once, and replies triggered by background notifications no longer keep old tasks listed.",
+  "「调用的模型」能显示在后台运行的 Codex 调用，跑完后才转入审核。": "Models called now shows Codex calls running in the background, moving them to Reviewing only once they finish.",
+  "阅读视图里完成的结果标题不再带「· 已完成」；失败和中断照常标明。": "Finished result titles in the reading view no longer end in \"· Done\"; failed and interrupted results are still marked.",
+  "用快捷键切换项目时不再出现重点色边框。": "Switching projects with a shortcut no longer draws an accent border."
 }
