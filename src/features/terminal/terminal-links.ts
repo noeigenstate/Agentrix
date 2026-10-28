@@ -2,19 +2,21 @@ import type { IBuffer, IBufferCellPosition, ILinkProvider, Terminal } from '@xte
 
 type LinkCandidate = { start: number; end: number; target: string };
 
-export function findLinkCandidates(text: string): LinkCandidate[] {
+export function findLinkCandidates(text: string, includeDirectories = false): LinkCandidate[] {
   const links: LinkCandidate[] = [];
   const add = (start: number, end: number, target: string) => {
     if (target.length > 4096 || links.some(link => start < link.end && end > link.start)) return;
     links.push({ start, end, target });
   };
-  const looksLikeLink = (value: string) => /^(?:https?:\/\/|file:\/\/|www\.)/i.test(value) || /\.[a-z][a-z\d]{0,15}(?::\d+(?::\d+)?|#L\d+(?:C\d+)?)?$/i.test(value);
+  const looksLikeLink = (value: string) => /^(?:https?:\/\/|file:\/\/|www\.)/i.test(value) || /\.[a-z][a-z\d]{0,15}(?::\d+(?::\d+)?|#L\d+(?:C\d+)?)?$/i.test(value)
+    || includeDirectories && (/[\\/]/.test(value) || /^(?:\.{1,2}|~|[\p{L}_][\p{L}\p{N}_.-]*)$/u.test(value));
   for (const match of text.matchAll(/\[[^\]\r\n]+\]\(((?:[^()\r\n]|\([^()\r\n]*\))+)\)/g)) {
     const target = match[1].replace(/^<|>$/g, '');
     if (looksLikeLink(target)) add(match.index, match.index + match[0].length, target);
   }
-  for (const match of text.matchAll(/(["'`])([^\r\n]+?)\1/g)) {
-    if (looksLikeLink(match[2])) add(match.index + 1, match.index + match[0].length - 1, match[2]);
+  for (const match of text.matchAll(/(["'`])([^\r\n]+?)\1|[“「‘]([^\r\n]+?)[”」’]/g)) {
+    const target = match[2] ?? match[3];
+    if (looksLikeLink(target)) add(match.index + 1, match.index + match[0].length - 1, target);
   }
   for (const match of text.matchAll(/(?:https?:\/\/|file:\/\/|www\.)[^\s<>"'`，。；！？]+/gi)) {
     let target = match[0].replace(/[.,;，。；]+$/, '');
@@ -26,13 +28,25 @@ export function findLinkCandidates(text: string): LinkCandidate[] {
   // Codex renders file references as "label (relative/path.html)". Treat the
   // surrounding punctuation as a delimiter, including paths containing spaces.
   const pathCharacter = /[\p{L}\p{N}_~%$+&=./\\-]/u;
-  for (const match of text.matchAll(/\(((?:[^()\r\n]|\([^()\r\n]*\))+)\)|\[([^\[\]\r\n]+)\]/g)) {
-    const target = match[1] ?? match[2];
+  for (const match of text.matchAll(/\(((?:[^()\r\n]|\([^()\r\n]*\))+)\)|\[([^\[\]\r\n]+)\]|（([^（）\r\n]+)）/g)) {
+    const target = match[1] ?? match[2] ?? match[3];
     // Parentheses and brackets may also be part of a directory or filename.
-    if (pathCharacter.test(text[match.index - 1] || '') || pathCharacter.test(text[match.index + match[0].length] || '')) continue;
+    if (match[3] === undefined && (pathCharacter.test(text[match.index - 1] || '') || pathCharacter.test(text[match.index + match[0].length] || ''))) continue;
     if (looksLikeLink(target)) add(match.index + 1, match.index + match[0].length - 1, target);
   }
-  const files = /(?:[a-z]:[\\/]|[\\/])?(?:[\p{L}\p{N}_.@~%$+&=()[\]-]+[\\/])*[\p{L}\p{N}_@~%$+&=()[\].-]+\.[a-z][a-z\d]{0,15}(?::\d+(?::\d+)?|#L\d+(?:C\d+)?)?/giu;
+  // The reading view also reveals directories. Keep one detector for both views, and let explicit roots win over
+  // the filename fallback (in particular, retain both leading slashes of a UNC path).
+  if (includeDirectories) {
+    const paths = /(?:[a-z]:[\\/]|[\\/]{2}|~[\\/]|\.{1,2}[\\/]|[\\/]|[a-z\d_@][\p{L}\p{N}_.@~%$+&=()[\]-]*[\\/])(?:[\p{L}\p{N}_.@~%$+&=()[\]-]+[\\/])*[\p{L}\p{N}_.@~%$+&=()[\]-]*(?::\d+(?::\d+)?|#L\d+(?:C\d+)?)?/giu;
+    for (const match of text.matchAll(paths)) {
+      let target = match[0].replace(/[.,;]+$/, '');
+      for (const [open, close] of [['(', ')'], ['[', ']']]) {
+        while (target.endsWith(close) && target.split(close).length > target.split(open).length) target = target.slice(0, -1);
+      }
+      if (target.length > 1 || target === '/') add(match.index, match.index + target.length, target);
+    }
+  }
+  const files = /(?:[a-z]:[\\/]|[\\/]{2}|[\\/])?(?:[\p{L}\p{N}_.@~%$+&=()[\]-]+[\\/])*[\p{L}\p{N}_@~%$+&=()[\].-]+\.[a-z][a-z\d]{0,15}(?::\d+(?::\d+)?|#L\d+(?:C\d+)?)?/giu;
   for (const match of text.matchAll(files)) {
     let target = match[0], start = match.index;
     const closing: Record<string, string> = { '(': ')', '[': ']' };
@@ -42,6 +56,14 @@ export function findLinkCandidates(text: string): LinkCandidate[] {
     add(start, match.index + match[0].length, target);
   }
   return links.sort((a, b) => a.start - b.start);
+}
+
+export function findPathCandidates(text: string, literal = false) {
+  // Inline code has already lost its backticks after Markdown parsing; retain its path-with-spaces boundary.
+  const offset = literal && !/[`\r\n]/.test(text) ? 1 : 0;
+  return findLinkCandidates(offset ? `\`${text}\`` : text, true)
+    .filter(link => !/^(?:https?:\/\/|www\.)/i.test(link.target))
+    .map(link => ({ ...link, start: link.start - offset, end: link.end - offset }));
 }
 
 // Each UTF-16 index maps to an actual terminal cell, including wide Chinese

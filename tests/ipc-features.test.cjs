@@ -159,6 +159,38 @@ test('remote file links validate the root and try line-suffix removal in order',
   await assert.rejects(open('p', 'javascript:bad'), /只支持网页链接/);
 });
 
+test('reading path reveal selects existing files, opens folders, permits outside results and reports errors without opening files', async t => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), { pathToFileURL } = require('node:url');
+  const prefix = path.join(os.tmpdir(), 'agentrix-reading-reveal-'), directory = fs.mkdtempSync(prefix);
+  t.after(() => { assert.ok(path.resolve(directory).startsWith(prefix)); fs.rmSync(directory, { recursive: true, force: true }); });
+  const root = path.join(directory, 'project'), file = path.join(root, 'docs', '中文 file.md'), outside = path.join(directory, 'outside.png');
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'file'); fs.writeFileSync(outside, 'image');
+  const h = handlers(), shown = [], opened = [];
+  let project = { id: 'p', kind: 'local', path: root }, openError = '';
+  require('../electron/features/files/ipc.cjs').registerFilesIpc({ ...h, findProject: () => project,
+    shell: { showItemInFolder: target => shown.push(target), openPath: async target => { opened.push(target); return openError; } },
+    remoteFor: () => { throw new Error('must not contact SSH'); },
+  });
+  const reveal = h.handles.get('project:reveal-path');
+  await reveal('p', '["docs/中文 file.md:142:3"]。');
+  await reveal('p', pathToFileURL(file).href);
+  await reveal('p', '(../outside.png:2)');
+  await reveal('p', file.replaceAll(path.sep, path.sep === '/' ? '\\' : '/'));
+  await reveal('p', 'docs'); await reveal('p', '.');
+  assert.deepEqual(shown, [file, file, outside, file]);
+  assert.deepEqual(opened, [path.dirname(file), root], 'openPath is used only for directories');
+  for (const target of ['missing.txt:1:2', 'docs/absent', 'docs/中文 file.md/child']) await assert.rejects(reveal('p', target), /未找到此路径/);
+  for (const target of [undefined, null, {}, [], 42, '', ' ', 'x'.repeat(4097), 'bad\0path', 'line\nfile', 'javascript:alert(1)', 'https://example.com/a.txt', 'powershell:bad']) await assert.rejects(reveal('p', target), /无效/);
+  for (const id of [undefined, null, {}, 42, '', 'x'.repeat(257), 'bad\0id']) await assert.rejects(reveal(id, 'docs'), /无效的项目/);
+  assert.equal(shown.length, 4); assert.equal(opened.length, 2);
+  openError = 'file manager failed';
+  await assert.rejects(reveal('p', 'docs'), /file manager failed/);
+  project = { id: 'p', kind: 'ssh', path: '/remote' };
+  const before = [shown.length, opened.length];
+  for (const target of ['/remote/result.png', 'docs/report.md', 'C:\\local\\report.md', file]) await assert.rejects(reveal('p', target), /本机没有它的位置/);
+  assert.deepEqual([shown.length, opened.length], before, 'remote output never resolves against this computer');
+});
+
 test('SSH registrar starts absent or exited projects and preserves configuration and error order', () => {
   const h = handlers(), calls = []; let session;
   require('../electron/features/ssh/ipc.cjs').registerSshIpc({ ...h,

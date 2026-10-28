@@ -6,9 +6,9 @@
   --flow-ink: var(--text-1); --flow-muted: var(--text-2); --flow-faint: var(--text-3);
   --flow-ok: var(--success); --flow-fail: var(--danger); --flow-work: var(--running); --flow-rail: var(--border); --flow-step: var(--text-2);
   --step-node: 28px; --step-gap: 10px; --step-lead: calc(var(--step-node) + var(--step-gap));
-  /* A tool step's glyph, and the height of its pill (2 × 4px padding and one 20px line) that the glyph is centred on. */
-  --turn-icon: 18px; --pill-h: 28px;
-  /* Two vertical lines: the avatars' (their left edge, and the axis the rails and turn icons sit on) and the content edge, which is the reply text's left edge
+  /* The height of a tool pill (2 × 4px padding and one 20px line). */
+  --pill-h: 28px;
+  /* Two vertical lines: the avatars' (their left edge, and the axis the step rails sit on) and the content edge, which is the reply text's left edge
      and the composer's: the agent's words, its name, tool groups, status lines, pictures, the result rows. --turn-pad is what the turn's children add to the turn's own
      left to reach it (the 44px reply inset less the node, 0 in a card narrower than 480px, where the content edge is the avatars'). */
   --turn-pad: 16px;
@@ -51,10 +51,7 @@
 .reading-turn-message { min-width: 0; }
 .reading-turn-message > .reading-turn-item-body > time { padding-left: var(--turn-pad); }
 .reading-turn-tools { position: relative; min-width: 0; padding-left: var(--turn-pad); }
-/* The tools' icon and its rail sit on the avatars' axis, to the left of the turn; the pill starts on the content edge. */
-.reading-turn-tools::before { content: ''; position: absolute; left: calc(var(--step-node) / -2 - .5px); top: calc((var(--pill-h) + var(--turn-icon)) / 2); bottom: 0; border-left: 1px solid var(--flow-line); }
-.reading-turn-mark { position: absolute; left: calc(var(--step-node) / -2 - var(--turn-icon) / 2); top: 0; width: var(--turn-icon); display: grid; place-items: center; height: var(--pill-h); color: var(--flow-step); }
-.reading-turn-mark > svg { width: var(--turn-icon); height: var(--turn-icon); }
+/* A tool group is its pill alone, starting on the content edge: no icon or rail on the avatars' axis. */
 .reading-turn-tools .reading-turn-item-body { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 4px 10px; }
 .reading-turn-tools .reading-tools { min-width: 0; flex: 0 1 auto; }
 .reading-turn-tools .reading-tools.is-open { flex: 1 1 100%; }
@@ -101,12 +98,11 @@
 /* The steps as a tree under the pill. */
 .reading-tools-tree { position: relative; display: flex; flex-direction: column; gap: 2px; margin: 0 0 0 22px; padding: 2px 14px 10px 18px; list-style: none; }
 .reading-tools-tree::before { content: ''; position: absolute; left: 0; top: 0; bottom: 22px; border-left: 1px solid var(--flow-line); }
-.reading-tools-tree li { position: relative; display: grid; grid-template-columns: auto auto auto minmax(0, 1fr); align-items: center; column-gap: 10px; padding: 3px 0; font-size: calc(12px * var(--reading-text)); }
+.reading-tools-tree li { position: relative; display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; column-gap: 10px; padding: 3px 0; font-size: calc(12px * var(--reading-text)); }
 .reading-tools-tree li::before { content: ''; position: absolute; left: -18px; top: 50%; width: 12px; border-top: 1px solid var(--flow-line); }
 .reading-tools-tree li > b { font-weight: 500; color: var(--flow-muted); white-space: nowrap; }
 .reading-tools-tree li > code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 calc(12px * var(--reading-text))/1.6 var(--font-mono); color: var(--flow-muted); }
-.reading-tools-tree li > small { grid-column: 4; font-size: calc(11.5px * var(--reading-text)); color: var(--flow-faint); overflow-wrap: anywhere; }
-.reading-tool-icon { color: var(--flow-muted); }
+.reading-tools-tree li > small { grid-column: 3; font-size: calc(11.5px * var(--reading-text)); color: var(--flow-faint); overflow-wrap: anywhere; }
 .reading-tools-tree li.is-failed { padding: 6px 10px; border-radius: 12px; background: var(--bg-app); }
 .reading-tools-tree li.is-failed > code { font-weight: 600; }
 /* What the steps wrote (cards, a picture being drawn) sits under the pill or inside the opened card. */

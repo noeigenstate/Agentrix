@@ -46,6 +46,8 @@
 .reading-markdown :not(pre) > code { padding: 1px 6px; border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: 500 .88em var(--font-mono); white-space: break-spaces; }
 .reading-markdown strong { color: var(--text-1); font-weight: 700; }
 .reading-markdown a { color: var(--text-1); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.reading-view [data-reading-path] { user-select: text; }
+.reading-view[data-reveal-modifier] [data-reading-path]:hover { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .reading-markdown blockquote { margin: 8px 0; padding: 2px 12px; border-left: 2px solid var(--border); color: var(--text-2); }
 .reading-markdown hr { border: 0; border-top: 1px solid var(--divider); margin: 12px 0; }
 /* A table reads at the size of the text around it: smaller, its cells were too small to read. */
@@ -194,7 +196,7 @@
 @container (max-width: 480px) {
   .reading-view { --reading-left: calc(16px + var(--reading-em)); --reading-right: calc(16px + var(--reading-em)); --reading-inset: 0px; --turn-pad: 0px; }
   /* With one edge, the avatars' rail and the tools' icon have no column to stand in. */
-  .reading-step::before, .reading-turn-tools::before, .reading-turn-mark { display: none; }
+  .reading-step::before { display: none; }
 }
 /* Rounds are told apart by space, not by borders or cards: 32px between one round and the next (its user message), 16px from your message to the agent's turn. */
 .reading-content { gap: 16px; }

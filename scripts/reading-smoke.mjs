@@ -253,6 +253,60 @@ try {
   assert.equal(await terminal.locator('.reading-user', { hasText: 'GUI_STILL_WAITING' }).count(), 0);
   await page.screenshot({ path: path.join(output, 'queue-receipt.png') });
   checks.push('transcript receipt clears stale queue status, anonymous dequeue preserves waiting work, popAll withdraws it, and message order stays intact');
+  // Exercise the real transcript -> Markdown -> preload -> main handler. Intercept shell calls so no file manager
+  // or user file opens during the suite, and leave the existing plain-click preview behavior observable.
+  const revealFolder = path.join(project.path, 'reveal results'), revealFile = path.join(revealFolder, 'guide-whats-new.html');
+  await fs.mkdir(revealFolder); await fs.writeFile(revealFile, '<!doctype html><title>Reveal fixture</title><p>The plain click still previews this document.</p>');
+  const absoluteFile = path.join(output, 'outside-result.txt'); await fs.writeFile(absoluteFile, 'outside project');
+  await app.evaluate(({ shell }) => {
+    globalThis.readingReveals = []; globalThis.readingFolderOpens = [];
+    globalThis.originalReadingShowItem = shell.showItemInFolder; globalThis.originalReadingOpenPath = shell.openPath;
+    shell.showItemInFolder = target => { globalThis.readingReveals.push(target); };
+    shell.openPath = async target => { globalThis.readingFolderOpens.push(target); return ''; };
+  });
+  try {
+    await queueRows([{ type: 'assistant', uuid: 'reveal-reply', message: { content: [{ type: 'text', text:
+      `文件：\`${revealFile}:142:3\`。目录：\`${revealFolder}\`。\n[阅读结果](<reveal results/guide-whats-new.html:142>)\n[绝对结果](<${revealFile}>)\n文件卡：\`${revealFile}\`。\n外部结果：\`${absoluteFile}\`。\n缺失：\`missing-reading-path.txt\`。`,
+    }] } }]);
+    const reply = terminal.locator('.reading-assistant').filter({ hasText: '外部结果：' });
+    const filePath = reply.locator('[data-reading-path]').filter({ hasText: `${revealFile}:142:3` });
+    await filePath.waitFor();
+    assert.match(await filePath.getAttribute('title'), /Ctrl\+点击|⌘\+点击/);
+    await filePath.click();
+    assert.deepEqual(await app.evaluate(() => globalThis.readingReveals), [], 'plain output clicks do not reveal');
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await page.keyboard.down(modifier); await filePath.hover();
+    assert.deepEqual(await filePath.evaluate(node => ({ cursor: getComputedStyle(node).cursor, underline: getComputedStyle(node).textDecorationLine })), { cursor: 'pointer', underline: 'underline' });
+    await page.keyboard.up(modifier);
+    const revealed = () => app.evaluate(() => globalThis.readingReveals);
+    await filePath.click({ modifiers: [modifier] });
+    await waitFor(async () => (await revealed()).length === 1, 'Ctrl/Cmd click reaches showItemInFolder');
+    assert.equal((await revealed())[0], revealFile);
+    assert.equal(await page.locator('.file-popup-overlay').count(), 0, 'modifier click does not also preview');
+    const folderPath = reply.locator('[data-reading-path]').filter({ hasText: revealFolder }).filter({ hasNotText: 'guide-whats-new' });
+    await folderPath.click({ modifiers: [modifier] });
+    await waitFor(async () => (await app.evaluate(() => globalThis.readingFolderOpens)).includes(revealFolder), 'folder opens through shell.openPath');
+    const link = reply.getByRole('link', { name: '阅读结果', exact: true });
+    await link.click({ modifiers: [modifier] });
+    await waitFor(async () => (await revealed()).length === 2, 'relative Markdown link resolves through the project root');
+    assert.equal((await revealed())[1], revealFile);
+    await reply.getByRole('link', { name: '绝对结果', exact: true }).click({ modifiers: [modifier] });
+    await waitFor(async () => (await revealed()).length === 3, 'absolute Markdown link retains encoded drive separators');
+    assert.equal((await revealed())[2], revealFile);
+    await reply.locator('[data-reading-path]').filter({ hasText: absoluteFile }).click({ modifiers: [modifier] });
+    await waitFor(async () => (await revealed()).includes(absoluteFile), 'absolute result outside project is revealed');
+    const name = reply.locator('.file-card-name').filter({ hasText: 'guide-whats-new.html' }).first();
+    await name.waitFor(); await name.click({ modifiers: [modifier] });
+    await waitFor(async () => (await revealed()).length === 5, 'file-card modifier click reveals instead of previewing');
+    await name.click(); await page.locator('.file-popup-overlay').waitFor();
+    await page.keyboard.press('Escape'); await page.locator('.file-popup-overlay').waitFor({ state: 'detached' });
+    await reply.locator('[data-reading-path]').filter({ hasText: 'missing-reading-path.txt' }).click({ modifiers: [modifier] });
+    await page.getByText('未找到此路径。', { exact: true }).waitFor();
+    assert.equal(await page.locator('.focus-mode').count(), 0, 'path interactions keep the project card small');
+    checks.push('reading paths: native tooltip/underline, files, folders, relative links, outside results, file cards, preserved plain preview and missing-path toast');
+  } finally {
+    await app.evaluate(({ shell }) => { shell.showItemInFolder = globalThis.originalReadingShowItem; shell.openPath = globalThis.originalReadingOpenPath; });
+  }
   await write("Send-AgentrixEvent 'codex-started' -Agent 'codex'\r");
   await waitFor(async () => (await state()).agent === 'codex', 'fixture agent changes');
   await composer.fill('/a'); await composer.fill('/');

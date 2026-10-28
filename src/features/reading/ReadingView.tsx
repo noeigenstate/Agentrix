@@ -39,13 +39,16 @@ import { isTypedCommand, pendingPromptCards, sameMessage, type PendingPrompt } f
 import { usePendingPrompts } from './usePendingPrompts';
 import { PendingPromptEntries, UserImages, UserMessage } from './PendingPromptEntries';
 import { AgentMark, AgentTurnItem, stepTime, TimelineStep } from './Timeline';
-import { groupSummary, ImageProgress, ResultActions, ResultFiles, ResultStatus, STEP_ICONS, StepState, WorkingLine } from './ResultCard';
+import { groupSummary, ImageProgress, ResultActions, ResultFiles, ResultStatus, StepState, WorkingLine } from './ResultCard';
 import { latestResult, writtenBy } from './result-round';
 import { AgentCommandRun } from './AgentCommandRun';
 import { FileCards, previewable } from './FileCards';
 import { replyFiles } from './reply-files';
 import { onComposerPrefill } from './composer-prefill';
 import { showPopup } from '../files/file-popup';
+import { markReadingPaths } from './reading-paths';
+import { PathText } from './PathText';
+import { useReadingPaths } from './useReadingPaths';
 
 export { groupSummary } from './ResultCard';
 
@@ -67,6 +70,8 @@ function finish(parsed: string, nested = false): string {
   const html = purifier.sanitize(parsed, {
     ALLOWED_TAGS: ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'ul', 'ol', 'li', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a', 'hr', 'br', 'em', 'strong', 's', 'del', 'input', 'kbd'],
     ALLOWED_ATTR: ['href', 'class', 'type', 'checked', 'disabled', 'start', 'align'], ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false,
+    // Preserve file/drive references as well as DOMPurify's usual safe links; scripts remain disallowed.
+    ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|file|mailto|tel|callto|sms|cid|xmpp|matrix):|[a-z]:(?:[\\/]|%5c|%2f)|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
   });
   const root = document.createElement('div'); root.innerHTML = html;
   for (const box of root.querySelectorAll('input')) { box.type = 'checkbox'; box.disabled = true; }
@@ -87,6 +92,7 @@ function finish(parsed: string, nested = false): string {
     bar.insertBefore(toggle, bar.querySelector('[data-copy-code]'));
     frame.classList.add('is-document'); frame.insertBefore(doc, pre);
   }
+  markReadingPaths(root);
   return root.innerHTML;
 }
 
@@ -96,7 +102,7 @@ export function Markdown({ text }: { text: string }) {
   const quick = useMemo(() => short ? safely(() => finish(readingMarked.parse(text) as string)) : undefined, [text, language, short]);
   const long = useLongMarkdown(text, short);
   const html = useMemo(() => short ? quick : long == null ? null : safely(() => finish(long)), [short, quick, long, language]);
-  if (html == null) return <p className="reading-plain">{text}</p>;
+  if (html == null) return <p className="reading-plain"><PathText text={text} /></p>;
   return <div className="reading-markdown" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
@@ -157,16 +163,15 @@ function ToolGroup({ entries, live, projectId, onError }: { entries: Conversatio
       <StepState running={running} failed={failed > 0} />
       <span>{groupSummary(entries)}</span>
       {failed > 0 && <em>{t('{count} 个失败', { count: failed })}</em>}
-      {edited.slice(0, 3).map(file => <code key={file} className="reading-tools-file">{file}</code>)}
+      {edited.slice(0, 3).map(file => <code key={file} className="reading-tools-file"><PathText text={file} literal /></code>)}
       {edited.length > 3 && <small className="reading-tools-more">+{edited.length - 3}</small>}
       {shown ? <CaretUp size={13} weight="bold" className="reading-tools-caret" /> : <CaretDown size={13} weight="bold" className="reading-tools-caret" />}
     </button>
     {shown && <ul className="reading-tools-tree">{entries.map(entry => {
-      const tool = entry.tool!, Step = STEP_ICONS[tool.kind];
+      const tool = entry.tool!;
       return <li key={entry.id} className={`${tool.done ? '' : 'is-running'} ${tool.failed ? 'is-failed' : ''} reading-tool-${tool.kind}`}>
         <StepState running={!tool.done} failed={tool.failed} filled />
-        <Step size={16} className="reading-tool-icon" />
-        <b>{stepVerb(tool)}</b><code title={tool.target}>{tool.target}</code>{tool.detail && <small>{tool.detail}</small>}
+        <b>{stepVerb(tool)}</b><code title={tool.target}><PathText text={tool.target} literal={tool.kind === 'read' || tool.kind === 'edit'} /></code>{tool.detail && <small><PathText text={tool.detail} /></small>}
       </li>;
     })}</ul>}
     {drawing && <ImageProgress step={drawing.id} />}
@@ -179,10 +184,11 @@ function ToolGroup({ entries, live, projectId, onError }: { entries: Conversatio
 // it, and the toggle in the card header switches back to it at any time. autoFocus: the card is expanded and
 // this is its terminal in use, so the message box takes the keyboard (never a small card's).
 export function ReadingView(props: Parameters<typeof LegacyReadingView>[0]) {
-  return props.terminal.nativeMode === 'claude-sdk' ? <ManagedSession key={props.terminal.sessionId} terminal={props.terminal} onError={props.onError} /> : <LegacyReadingView {...props} />;
+  return props.terminal.nativeMode === 'claude-sdk' ? <ManagedSession key={props.terminal.sessionId} projectId={props.projectId} terminal={props.terminal} onError={props.onError} /> : <LegacyReadingView {...props} />;
 }
 
 function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, active = true, onShowTerminal, onError, onOpenLink }: { projectId: string; terminal: ProjectTerminal; remote?: boolean; autoFocus: boolean; active?: boolean; onShowTerminal: () => void; onError: (message: string) => void; onOpenLink: (target: string) => void }) {
+  const pathLinks = useReadingPaths(projectId, onError);
   const kind = terminal.agent === 'claude' ? 'claude' : 'codex';
   const conversationEntries = useReadingConversation(terminal.id, terminal.sessionId);
   const [hidden, setHidden] = useState(() => cleared.get(conversationKey(terminal.id, terminal.sessionId)));
@@ -605,10 +611,9 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
               const at = block.kind === 'tools' ? block.entries[0]?.at : block.entry.at, time = stepTime(at), showTime = time !== shownTime;
               shownTime = time;
               if (block.kind === 'tools') {
-                const Lead = STEP_ICONS[block.entries[0]?.tool?.kind ?? 'other'];
                 const state = block.entries.some(entry => !entry.tool?.done) ? 'running' : block.entries.some(entry => entry.tool?.failed) ? 'failed' : null;
                 return <Fragment key={block.id}>
-                  <AgentTurnItem at={at} showTime={showTime} kind="tools" state={state} mark={<Lead size={12} weight="bold" />}>
+                  <AgentTurnItem at={at} showTime={showTime} kind="tools" state={state}>
                     <ToolGroup entries={block.entries} live={block === tail.visible.at(-1)} projectId={projectId} onError={onError} />
                   </AgentTurnItem>
                   {index === latestAgent && block.entries.some(entry => entry.id === result?.anchor) && <div className="result-block">{resultStatus}{resultActions}</div>}
@@ -628,7 +633,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
       })}
     </>;
   }
-  return <div className="reading-view" onClick={event => {
+  return <div className="reading-view" {...pathLinks} onClick={event => {
     const button = (event.target as Element).closest<HTMLButtonElement>('[data-copy-code]');
     const toggle = (event.target as Element).closest<HTMLButtonElement>('[data-code-source]');
     if (toggle) { const source = toggle.closest('.reading-code')!.classList.toggle('is-source'); toggle.textContent = t(source ? '预览' : '源码'); return; }

@@ -231,6 +231,7 @@ test('card and name clicks show only resolved paths in the popup, including earl
   mod.require = name => name === 'react' ? { useEffect: () => {}, useRef: () => ({ current: null }), useState: initial => [states[index++] ?? initial, () => {}] }
     : name === '@phosphor-icons/react' ? { FileHtml: () => null, FileText: () => null, FilmStrip: () => null, Image: () => null }
     : name.endsWith('/file-popup') ? { showPopup: target => opened.push(target) }
+    : name === './reading-paths' ? { pathTooltip: () => 'Ctrl+click to show in File Explorer' }
     : name.endsWith('/i18n') ? { t: value => value } : name.endsWith('.css') ? {} : originalRequire(name);
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
   const previous = global.window; t.after(() => { global.window = previous; });

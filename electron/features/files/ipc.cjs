@@ -2,7 +2,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { findFiles, listDirectory, readProjectFile, saveProjectFile, resolveProjectPath, VIDEO_TYPES } = require('../../project-files.cjs');
 const { projectPaths } = require('../../project-paths.cjs');
-const { resolveTerminalLink } = require('../../terminal-links.cjs');
+const { resolveTerminalLink, resolveRevealPath } = require('../../terminal-links.cjs');
 
 function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperations, clipboardWrites, clipboard, previewResources, affectsEditor, allowEditorClose, shell, getActiveFileTree, setActiveFileTree, setActiveTerminal, send }) {
   const fileSaves = new Set();
@@ -108,6 +108,15 @@ function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperatio
     shell.showItemInFolder(await resolveProjectPath(project, relativePath));
   }
   handle('project:reveal-entry', revealEntry);
+  handle('project:reveal-path', async (id, target) => {
+    if (typeof id !== 'string' || !id || id.length > 256 || /[\x00-\x1f\x7f]/.test(id)) throw new Error('无效的项目。');
+    if (typeof target !== 'string' || !target.trim() || target.length > 4096 || /[\x00-\x1f\x7f]/.test(target)) throw new Error('无效的链接。');
+    const project = findProject(id);
+    if (project.kind === 'ssh') throw new Error('远程项目的文件在服务器上，本机没有它的位置。');
+    const entry = await resolveRevealPath(project, target);
+    if (entry.directory) await openPath(entry.path);
+    else shell.showItemInFolder(entry.path);
+  });
   function setProgress(value) { fileProgress = value; send('files:progress', value); }
   return { setProgress };
 }

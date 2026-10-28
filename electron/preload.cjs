@@ -51,6 +51,7 @@ contextBridge.exposeInMainWorld('agentrix', {
   copyEntries: (id, paths) => ipcRenderer.invoke('project:copy-entries', id, paths),
   copyPaths: (id, paths, format) => ipcRenderer.invoke('project:copy-paths', id, paths, format),
   revealEntry: (id, path) => ipcRenderer.invoke('project:reveal-entry', id, path),
+  revealPath: (id, path) => ipcRenderer.invoke('project:reveal-path', id, path),
   pasteEntries: (id, directory) => ipcRenderer.invoke('project:paste-entries', id, directory),
   fileTreeFocus: (id, focused) => ipcRenderer.send('files:focus', id, focused),
   getFileProgress: () => ipcRenderer.invoke('files:progress'),

@@ -24,13 +24,12 @@ export function TimelineStep({ at, kind, mark, who, showTime = true, state, agen
   </div>;
 }
 
-export function AgentTurnItem({ at, kind, mark, showTime, state, children }: {
-  at: number | null | undefined; kind: 'message' | 'tools'; mark?: ReactNode; showTime: boolean;
+export function AgentTurnItem({ at, kind, showTime, state, children }: {
+  at: number | null | undefined; kind: 'message' | 'tools'; showTime: boolean;
   state?: 'running' | 'failed' | null; children: ReactNode;
 }) {
   const time = showTime ? stepTime(at) : '';
   return <div className={`reading-turn-${kind}${state ? ` is-${state}` : ''}`}>
-    {kind === 'tools' && <span className="reading-turn-mark" aria-hidden="true">{mark}</span>}
     <div className="reading-turn-item-body">
       {kind === 'message' && time && <time dateTime={at ? new Date(at).toISOString() : undefined}>{time}</time>}
       {children}

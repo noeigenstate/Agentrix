@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowCounterClockwise, ArrowsOutSimple, CheckCircle, ChatCircle, CopySimple, DotsThree, DownloadSimple, FileText, Globe, MagnifyingGlass, PencilSimple, Plugs, Robot, Sparkle, TerminalWindow, Wrench, XCircle, type Icon } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, ArrowsOutSimple, CheckCircle, ChatCircle, CopySimple, DotsThree, DownloadSimple, FileText, PencilSimple, TerminalWindow, XCircle } from '@phosphor-icons/react';
 import type { ConversationEntry, GitChange } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import './result-card.css';
@@ -8,6 +8,8 @@ import { showPopup } from '../files/file-popup';
 import { stepTime } from './Timeline';
 import { useNow } from './useNow.ts';
 import { changedFiles, elapsed, FALLBACK_TITLES, resultActions, type LatestResult, type ResultAction } from './result-round';
+import { pathTooltip } from './reading-paths';
+import { PathText } from './PathText';
 
 const MENU_WIDTH = 224, MENU_GAP = 4, EDGE = 8, FILES_SHOWN = 5;
 
@@ -88,8 +90,7 @@ export function ResultFiles({ result, projectId }: { result: LatestResult; proje
   return <div className="result-evidence">
     <div><p className="result-list-head">{t('改动 {count} 个文件', { count: files.length })}</p>
       <ul className="result-list">{files.slice(0, FILES_SHOWN).map(file => <li key={file.path}>
-        <FileText size={16} aria-hidden="true" />
-        <button type="button" className="result-file" title={file.path} onClick={() => showPopup({ kind: 'file', projectId, path: file.path })}>{file.name}</button>
+        <button type="button" className="result-file" data-reading-path={file.path} title={`${file.path}\n${pathTooltip()}`} onClick={() => showPopup({ kind: 'file', projectId, path: file.path })}>{file.name}</button>
         {file.state && <span className="result-state-text">{t(file.state)}</span>}
       </li>)}</ul>
       {files.length > FILES_SHOWN && <p className="result-more-files">{t('还有 {count} 个文件', { count: files.length - FILES_SHOWN })}</p>}
@@ -97,7 +98,7 @@ export function ResultFiles({ result, projectId }: { result: LatestResult; proje
     {result.checks.length > 0 && <div><p className="result-list-head">{t('验证')}</p>
       <ul className="result-list">{result.checks.map(check => <li key={check.id} className={check.failed ? 'is-failed' : 'is-passed'}>
         {check.failed ? <XCircle size={16} className="result-check" aria-hidden="true" /> : <CheckCircle size={16} className="result-check" aria-hidden="true" />}
-        <span className="result-check-name">{t(check.phrase)}<small>{check.target}</small></span>
+        <span className="result-check-name">{t(check.phrase)}<small><PathText text={check.target} /></small></span>
         <span className="result-state-text">{check.failed ? t('失败') : t('通过')}</span>
       </li>)}</ul>
     </div>}
@@ -137,7 +138,6 @@ const GROUP_PARTS: Record<ConversationEntryTool['kind'], string> = {
   read: '读取 {count} 个文件', edit: '编辑 {count} 个文件', command: '运行 {count} 条命令', search: '搜索 {count} 处', web: '访问 {count} 个网页',
   skill: '使用 {count} 个技能', mcp: '调用 {count} 个 MCP 工具', agent: '派出 {count} 个子代理', other: '调用 {count} 个工具',
 };
-export const STEP_ICONS: Record<ConversationEntryTool['kind'], Icon> = { read: FileText, edit: PencilSimple, command: TerminalWindow, search: MagnifyingGlass, web: Globe, skill: Sparkle, mcp: Plugs, agent: Robot, other: Wrench };
 export function groupSummary(entries: readonly ConversationEntry[]) {
   const counts = new Map<ConversationEntryTool['kind'], number>();
   // An edit counts the files it changed (its target names them, "a、b"), every other step counts once.

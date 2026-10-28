@@ -4,8 +4,63 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { findLinkCandidates, readLogicalLine } = require('../src/features/terminal/terminal-links.ts');
-const { resolveTerminalLink } = require('../electron/terminal-links.cjs');
+const { findLinkCandidates, findPathCandidates, readLogicalLine } = require('../src/features/terminal/terminal-links.ts');
+const { resolveTerminalLink, resolveRevealPathText } = require('../electron/terminal-links.cjs');
+
+test('reading paths reuse terminal links, include folders and UNC, and retain exact selectable ranges', () => {
+  for (const [text, targets] of [
+    ['路径：C:\\项目\\guide-whats-new.png:142:3。', ['C:\\项目\\guide-whats-new.png:142:3']],
+    ['请查看src/App.tsx:142，再继续。', ['src/App.tsx:142']],
+    ['目录 /tmp/results、~/docs/、src/features/ 和 .\\output\\', ['/tmp/results', '~/docs/', 'src/features/', '.\\output\\']],
+    ['\\\\server\\share\\文档\\', ['\\\\server\\share\\文档\\']],
+    ['//server/share/文档/', ['//server/share/文档/']],
+    ['[src/App.tsx:142] 和（./src/App.tsx:142:8）', ['src/App.tsx:142', './src/App.tsx:142:8']],
+    ['查看 (art/中文 报告.html) 和 `C:\\项目 空格\\art\\report.html`', ['art/中文 报告.html', 'C:\\项目 空格\\art\\report.html']],
+    ['("docs/output/") 与 (art/报告_(最终).html)', ['docs/output/', 'art/报告_(最终).html']],
+    ['“C:\\项目 空格\\art\\report.html” 和（./文档/中文 报告.md）', ['C:\\项目 空格\\art\\report.html', './文档/中文 报告.md']],
+    ['[文件夹](src/features/) https://example.com/a.txt www.example.com', ['src/features/']],
+  ]) {
+    const links = findPathCandidates(text);
+    assert.deepEqual(links.map(link => link.target), targets, text);
+    for (const link of links) {
+      // A Markdown label's hit area spans the reference; every other hit area is exactly the written path.
+      if (!text.slice(link.start, link.end).startsWith('[文件夹]')) assert.equal(text.slice(link.start, link.end), link.target, text);
+    }
+  }
+});
+
+test('reveal path text resolves Windows, UNC, POSIX, home and relative paths without presentation or positions', () => {
+  for (const [target, expected] of [
+    ['"C:\\项目 空格\\guide-whats-new.png:142:8"。', 'C:\\项目 空格\\guide-whats-new.png'],
+    ['[src/App.tsx:142]', 'C:\\work\\repo\\src\\App.tsx'],
+    ['"C:\\项目\\report.md":142:8', 'C:\\项目\\report.md'],
+    ['（.\\docs\\报告_(最终).md:12:2），', 'C:\\work\\repo\\docs\\报告_(最终).md'],
+    ['\\\\server\\share\\dir\\', '\\\\server\\share\\dir'],
+    ['//server/share/dir', '\\\\server\\share\\dir'],
+    ['~/Desktop/result.png', 'C:\\Users\\owner\\Desktop\\result.png'],
+    ['../outside.txt', 'C:\\work\\outside.txt'],
+  ]) assert.equal(resolveRevealPathText('C:\\work\\repo', target, 'C:\\Users\\owner', 'win32'), expected, target);
+  for (const [target, expected] of [
+    ['`/tmp/报告.md:12:3`;', '/tmp/报告.md'],
+    ['`src/App.tsx`:142:8', '/work/repo/src/App.tsx'],
+    ['「~/Documents/result.png」', '/home/owner/Documents/result.png'],
+    ['[src/App.tsx#L142C8]', '/work/repo/src/App.tsx'],
+    ['.\\docs\\report.md:2', '/work/repo/docs/report.md'],
+    ['../outside.txt', '/work/outside.txt'],
+    ['(.)', '/work/repo'],
+    ['(./folder/name_(final).md).', '/work/repo/folder/name_(final).md'],
+  ]) assert.equal(resolveRevealPathText('/work/repo', target, '/home/owner', 'linux'), expected, target);
+  for (const target of [null, 42, {}, '', ' ', 'x'.repeat(4097), 'bad\0path', 'a\nb', 'javascript:alert(1)', 'https://example.com/a', 'vscode://a']) {
+    assert.throws(() => resolveRevealPathText('/work/repo', target), /无效/, String(target));
+  }
+  assert.throws(() => resolveRevealPathText('/work/repo', 'C:\\remote\\file', '/home/owner', 'linux'), /无效/);
+});
+
+test('inline-code boundaries preserve full paths containing spaces after Markdown removes its backticks', () => {
+  for (const text of ['C:\\项目 空格\\guide-whats-new.png:142:3', '/tmp/中文 报告/result.png', 'reports/中文 报告.md', 'src/features/', 'docs', 'LICENSE', '.', '..', '~']) {
+    assert.deepEqual(findPathCandidates(text, true), [{ start: 0, end: text.length, target: text }]);
+  }
+});
 
 test('terminal links include URLs, Markdown, quoted paths and file line references', () => {
   const values = findLinkCandidates('网页 https://example.com/report_(final)?x=1。 [报告](reports/中文 报告.html) `C:\\项目 空格\\截图.png` src/App.tsx:42:3 www.example.org');
