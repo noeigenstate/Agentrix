@@ -167,11 +167,11 @@ try {
     assert.equal(await remoteInput.evaluate(node => document.activeElement === node), true);
     await page.keyboard.press('Control+Shift+ArrowLeft'); await assertSwitch(legacy);
   } finally { await page.evaluate(id => { delete document.querySelector(`[data-project-id="${id}"]`).focus; }, closed.id); }
-  // Turning off motion leaves a static blue ring, and repeated presses renew the feedback timer.
+  // Turning off motion leaves the landing HUD static, and repeated presses renew the feedback timer.
   const motion = await page.evaluate(() => document.documentElement.dataset.motion);
   await page.evaluate(() => { document.documentElement.dataset.motion = 'off'; });
   await page.keyboard.press('Control+Shift+ArrowLeft'); await assertSwitch(local);
-  assert.equal(await first.locator('.panel-nav-ring').evaluate(node => getComputedStyle(node).animationName), 'none');
+  assert.equal(await first.locator('.panel-nav-hud').evaluate(node => getComputedStyle(node).animationName), 'none');
   await page.waitForTimeout(700);
   await page.keyboard.press('Control+Shift+ArrowRight'); await assertSwitch(legacy);
   await page.waitForTimeout(700);

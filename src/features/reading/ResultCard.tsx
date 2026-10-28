@@ -69,10 +69,10 @@ export function ResultStatus({ result, taskTitle, onShowTerminal, onError }: { r
     failed: [result.failure && item(<CopySimple size={16} />, t('复制错误信息'), copy(result.failure)), item(<TerminalWindow size={16} />, t('在终端中查看'), onShowTerminal)],
   }[result.kind].flatMap(entry => entry ? [entry] : []);
   const Icon = failed ? XCircle : CheckCircle;
-  return <div className={`result-status${failed ? ' is-failed' : ''}`} role="status">
+  return <div className={`result-status${failed ? ' is-failed' : ''}`} role="status" aria-label={label}>
     <Icon size={20} weight="fill" className="result-state" aria-hidden="true" />
     <div className="result-heading">
-      <h3 className="result-title" title={`${title} · ${label}`}><span>{title}</span><b>{` · ${label}`}</b></h3>
+      <h3 className="result-title" title={failed ? `${title} · ${label}` : title}><span>{title}</span>{failed && <b>{` · ${label}`}</b>}</h3>
       <p className="result-sub">{failed ? (result.failure ? t('{time} 失败', { time: stepTime(result.endedAt) }) : t('{time} 中断', { time: stepTime(result.endedAt) })) : t('{time} 完成', { time: stepTime(result.endedAt) })}<span className="result-took">{` · ${t('用时 {span}', { span: took(result) })}`}</span></p>
     </div>
     <ResultMenu items={items} />

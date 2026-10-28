@@ -110,14 +110,16 @@ test('called models show four ordered role and title rows with state icons and w
 test("Claude's usage keeps plan limits, tokens and their source without reset controls or text", () => {
   const now = Date.now();
   for (const language of ['zh', 'en']) {
-    for (const [source, percent] of [['Claude Code', 6], ['CodePulse', 100]]) {
+    for (const [source, percent] of [['Claude Code', 6], ['CodePulse', 100], ['Claude', 12]]) {
       const html = activityMarkup([], language, { agentUsage: {
         limits: [{ minutes: 300, percent, resetsAt: now + 3600000 }, { minutes: 10080, percent: 84, resetsAt: now + 86400000 }],
         limitsAt: now, limitsFrom: source,
         round: { input: 1200, cached: 600, output: 30 }, total: { input: 2400, cached: 1200, output: 60 },
       } });
-      const labels = language === 'en' ? ['5-hour limit', 'Weekly limit', 'This round', 'This conversation', `Limits from ${source}, updated`]
-        : ['5 小时额度', '每周额度', '本轮', '本次对话', `额度来自 ${source}，`];
+      const note = source === 'CodePulse' ? language === 'en' ? 'Limits from a CodePulse status record, written' : '额度来自 CodePulse 状态记录，'
+        : language === 'en' ? `Limits from ${source}, updated` : `额度来自 ${source}，`;
+      const labels = language === 'en' ? ['5-hour limit', 'Weekly limit', 'This round', 'This conversation', note]
+        : ['5 小时额度', '每周额度', '本轮', '本次对话', note];
       for (const label of labels) assert.ok(html.includes(label), label);
       assert.ok(html.includes(`aria-valuenow="${percent}"`)); assert.match(html, /aria-valuenow="84"/);
       assert.equal((html.match(/class="activity-metric activity-tokens" title=/g) || []).length, 2);
@@ -127,7 +129,8 @@ test("Claude's usage keeps plan limits, tokens and their source without reset co
       assert.doesNotMatch(html, /activity-reset|activity-estop|重置额度|limit-reset/i);
     }
     const empty = activityMarkup([], language);
-    assert.ok(empty.includes(language === 'en' ? 'type /usage in the terminal to see them.' : '在终端输入 /usage 查看。'));
+    assert.ok(empty.includes(language === 'en' ? 'Plan limits are currently unavailable.' : '账号额度暂不可用。'));
+    assert.doesNotMatch(empty, /\/usage/);
     assert.doesNotMatch(empty, /activity-reset|activity-estop|重置|reset/i);
   }
 });
@@ -276,9 +279,13 @@ test('task cards display source summaries and retain the complete original only 
   assert.ok(html.includes('title="Please fix the button.\n&lt;pasted_content id=&quot;1&quot;&gt;Synthetic hidden details.&lt;/pasted_content&gt;'+String.fromCharCode(10)+'正在处理"'));
   assert.doesNotMatch(html.replace(/title="[^"]*"/g, ''), /pasted_content|Synthetic hidden details|const synthetic/);
   const completed = activityMarkup([], 'zh', { codexActivity: 'complete', task: '按钮现在可以正常点击。', taskTitle: original });
-  assert.match(completed, /已完成：按钮现在可以正常点击。/); assert.ok(completed.includes('title="Please fix the button.'));
-  const command = activityMarkup([], 'zh', { codexActivity: 'unknown', task: '/model', taskTitle: '<command-name>/model</command-name>' });
+  assert.match(completed, /<p class="activity-task-quiet">没有待处理的提示<\/p>/);
+  assert.doesNotMatch(completed, /activity-prompts|is-done|按钮现在可以正常点击|Please fix the button|pasted_content/);
+  const command = activityMarkup([], 'zh', { prompts: [
+    { id: 'command', text: '<command-name>/model</command-name>', summary: '/model', state: 'working' },
+  ] });
   assert.match(command, />\/model<\/p>/); assert.doesNotMatch(command.replace(/title="[^"]*"/g, ''), /command-name/);
+  assert.ok(command.includes('title="&lt;command-name&gt;/model&lt;/command-name&gt;\n正在处理"'));
 });
 
 test('each task is a 32px row: its state icon, the task on one line, a clock at the right and the state in the hover', () => {
@@ -293,9 +300,10 @@ test('each task is a 32px row: its state icon, the task on one line, a clock at 
   assert.match(html, /title="second task\n排队中 · 0:\d\d"/);
   assert.ok(html.includes('title="no start\n排队中"') && html.includes('<time></time>'), 'a task with no start time shows no clock');
   assert.match(html, /<span class="activity-prompt-state">.*?<span class="sr-only">正在处理<\/span><\/span><p>first task<\/p><time>2:1\d<\/time>/);
+  assert.match(html, /<span class="activity-prompt-state"><svg><\/svg><span class="sr-only">排队中<\/span><\/span><p>second task<\/p><time>0:\d\d<\/time>/);
   const done = activityMarkup([], 'zh', { codexActivity: 'complete', task: '按钮可以点了。', taskTitle: '原始提示', lastCompletedAt: Date.now() });
-  assert.match(done, /<li class="is-done" title="原始提示\n已完成 · \d\d:\d\d">/);
-  assert.match(done, /<p>已完成：按钮可以点了。<\/p>/);
+  assert.match(done, /<p class="activity-task-quiet">没有待处理的提示<\/p>/);
+  assert.doesNotMatch(done, /activity-prompts|is-done|按钮可以点了|原始提示|<time>/);
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
   const row = css.split(/\r?\n/).find(line => line.startsWith(':is(.activity-prompts, .activity-call-rows) li {'));
   for (const part of ['grid-template-columns: 16px minmax(0, 1fr) auto', 'column-gap: 8px', 'height: 32px']) assert.ok(row.includes(part), part);

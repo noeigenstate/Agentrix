@@ -3,6 +3,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { claudePrompt } = require('../../agent-actions.cjs');
 const { AgentCalls } = require('./agent-calls.cjs');
+const { DIRECT_USAGE_FRESH_MS } = require('./claude-account-usage.cjs');
 
 // What an agent spends, as its own records tell it, for the activity pane: the service its model is reached through,
 // how full the context window is, the tokens this round and this conversation took and, for Codex, how much of the
@@ -28,14 +29,22 @@ const claudeWindow = (model, used) => LARGE_WINDOW.test(model || '') || used > 2
 class UsageMeter {
   constructor(agent, { provider = null, names = codexProviderName, changed = () => {} } = {}) {
     this.agent = agent; this.provider = provider; this.names = names; this.providerId = null; this.limits = [];
-    this.resets = null; this.limitsAt = null;
+    this.resets = null; this.limitsAt = null; this.claudeDirect = null;
     this.calls = new AgentCalls({ changed, names: id => this.names(id) });
     this.reset();
   }
-  // Claude's plan limits, as Claude Code last fetched them for its own /usage (claudeAccount). Whether
-  // that changed what the pane shows.
-  account(account) {
-    return this.agent === 'claude' && !!account && this.observeLimits(account.limits, account.at, account.source);
+  // Claude's plan limits from the read-only account query or the existing local caches.
+  account(account, direct = null) {
+    if (this.agent !== 'claude') return false;
+    const now = Date.now();
+    for (const candidate of [account, direct]) {
+      if (candidate?.source === 'Claude' && Array.isArray(candidate.limits) && candidate.limits.length && Number.isFinite(candidate.at) && candidate.at <= now &&
+        candidate.at > (this.claudeDirect?.at ?? -Infinity)) this.claudeDirect = candidate;
+    }
+    // A cache read started before a GET can finish afterward. Keep the current
+    // direct observation as its comparison point, even when a newer cache wins.
+    if (freshClaudeUsage(this.claudeDirect, now)) account = selectClaudeAccount(account?.source === 'Claude Code' ? account : null, null, this.claudeDirect, now);
+    return !!account && this.observeLimits(account.limits, account.at, account.source);
   }
   // Sanitized official Codex account read. Null/unavailable never means zero.
   codexAccount(account) {
@@ -48,7 +57,9 @@ class UsageMeter {
     if (!Array.isArray(limits) || !limits.length) return false;
     at = Number.isFinite(at) ? at : null;
     // An undated cache or replay cannot prove it is newer than a dated observation.
-    if (this.limitsAt != null && (at == null || at < this.limitsAt)) return false;
+    const observed = this.agent === 'claude' && this.limitsFrom === 'CodePulse' && freshClaudeUsage(this.claudeDirect) &&
+      ['Claude', 'Claude Code'].includes(source) && at != null && at >= this.claudeDirect.at;
+    if (!observed && this.limitsAt != null && (at == null || at < this.limitsAt)) return false;
     if (at === this.limitsAt && source === (this.limitsFrom ?? null) && limits.length === this.limits.length &&
       limits.every((value, i) => value.minutes === this.limits[i].minutes && value.percent === this.limits[i].percent && value.resetsAt === this.limits[i].resetsAt)) return false;
     this.limits = limits; this.limitsAt = at; this.limitsFrom = source;
@@ -58,7 +69,7 @@ class UsageMeter {
   reset() { this.context = null; this.round = null; this.total = null; this.roundStart = null; this.replies = new Map(); this.calls.reset(); }
   resetScope() {
     this.providerId = null; this.scopeCwd = null; this.resets = null;
-    this.limits = []; this.limitsAt = null; this.limitsFrom = null;
+    this.limits = []; this.limitsAt = null; this.limitsFrom = null; this.claudeDirect = null;
     this.resetQuery = { state: 'unavailable', reason: 'scope' };
   }
   // What the pane shows.
@@ -183,8 +194,7 @@ function claudeAccountFrom(state) {
   const limits = [window(usage.five_hour, 300), window(usage.seven_day, 10080)].filter(Boolean);
   return { limits, at: Number.isFinite(cached?.fetchedAtMs) ? cached.fetchedAtMs : null, source: 'Claude Code' };
 }
-// CodePulse (a status line for Claude Code) writes the limits Claude Code hands its status line each time it redraws,
-// fresher than Claude Code's own cache: { updatedAt, rate_limits: { five_hour, seven_day: { used_percent, resets_at } } }.
+// CodePulse's updatedAt dates a status-line write, not the underlying usage observation.
 // It watches the Claude Code of the usual config folder: a Claude given its own CLAUDE_CONFIG_DIR is another setup.
 const codePulseFile = () => process.env.CLAUDE_CONFIG_DIR ? null : path.join(os.homedir(), '.codepulse', 'claude-quota.json');
 const claudeAccountFiles = () => [claudeState(), codePulseFile()].filter(Boolean);
@@ -196,12 +206,20 @@ function codePulseLimits(quota) {
   const list = [window(limits.five_hour, 300), window(limits.seven_day, 10080)].filter(Boolean);
   return list.length ? { limits: list, at: quota.updatedAt, source: 'CodePulse' } : null;
 }
-// The newer of the two for the limits.
-async function claudeAccount(file = claudeState(), pulse = codePulseFile()) {
+function freshClaudeUsage(account, now = Date.now()) {
+  return account?.source === 'Claude' && Number.isFinite(account.at) && account.at <= now && now - account.at < DIRECT_USAGE_FRESH_MS;
+}
+function selectClaudeAccount(own, pulse, direct, now = Date.now()) {
+  // Redrawing a stale status line must not displace a recent GET. Claude's own
+  // fetchedAtMs really is an observation, so a newer one can still win.
+  if (freshClaudeUsage(direct, now)) return own?.limits?.length && own.at > direct.at ? own : direct;
+  return [own, pulse, direct].filter(account => account?.limits?.length).reduce((latest, account) =>
+    !latest || (account.at ?? 0) > (latest.at ?? 0) ? account : latest, null);
+}
+async function claudeAccount(file = claudeState(), pulse = codePulseFile(), direct = null) {
   const read = async name => { try { return name ? JSON.parse(await fs.readFile(name, 'utf8')) : null; } catch { return null; } };
   const [state, quota] = await Promise.all([read(file), read(pulse)]);
-  const own = claudeAccountFrom(state), fresher = codePulseLimits(quota);
-  return !fresher || (own?.at ?? 0) >= fresher.at ? own : fresher;
+  return selectClaudeAccount(claudeAccountFrom(state), codePulseLimits(quota), direct);
 }
 
-module.exports = { UsageMeter, claudeWindow, claudeProvider, claudeProviderName, codexProvider, codexProviderName, claudeAccount, claudeAccountFrom, claudeAccountFiles, codePulseLimits };
+module.exports = { UsageMeter, claudeWindow, claudeProvider, claudeProviderName, codexProvider, codexProviderName, claudeAccount, claudeAccountFrom, claudeAccountFiles, codePulseLimits, selectClaudeAccount };

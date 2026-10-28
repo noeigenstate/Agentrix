@@ -114,6 +114,7 @@ function mainHarness(t, f) {
     claudeConfigDir: () => f.home, findClaudeSession: (cwd, id) => findClaudeSession(cwd, id, f.home),
     describeActions() {}, broadcast() {}, scheduleState() {}, acceptShellEvent: () => true, noteSettings() {}, readEvery: () => 1000,
     ...require('../electron/features/agents/agent-usage.cjs'), claudeAccount: async () => null, setInterval: (run, ms) => setInterval(run, ms).unref(), clearInterval, agentCommand: require('../electron/features/agents/agent-command.cjs').agentCommand,
+    claudeAccounts: { account: null, setActive() {}, refresh() {} },
     quitting: false, Date, claudeResumeCommand, restorePlans: new Map(), agentCommand, sshHandoff: async () => false,
     // The handoff of earlier work is written on start (handoff.cjs, tested on its own).
     writeHandoff: async () => false, handoffFile: id => path.join(f.home, 'handoff', `${id}.md`), memoryDir: () => path.join(f.home, 'memory'), scrubProjectSkills: async () => [],

@@ -139,6 +139,37 @@ class RemoteFilesTest(unittest.TestCase):
         self.assertEqual(kept, {"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-16T06:21:51.207Z", "content": "hi"})
         self.assertEqual(remote.compact_claude_record({"type": "queue-operation", "operation": "dequeue", "timestamp": "t"}), {"type": "queue-operation", "operation": "dequeue", "timestamp": "t"})
 
+    def test_real_claude_user_round_keeps_stops_queue_shapes_and_provenance_over_ssh(self):
+        fixture = json.loads((MODULE_PATH.parent.parent / "tests" / "fixtures" / "claude-user-round-background.json").read_text(encoding="utf-8"))
+        records = fixture["records"]
+        pairs = [(record, remote.compact_claude_record(record)) for record in records]
+        pairs = [(record, kept) for record, kept in pairs if kept is not None]
+        for record, kept in pairs:
+            self.assertEqual(kept.get("timestamp"), record.get("timestamp"))
+            self.assertEqual(kept.get("message", {}).get("stop_reason"), record.get("message", {}).get("stop_reason"))
+            for key in ("isMeta", "promptSource", "turnOrigin"):
+                if key in record: self.assertEqual(kept[key], record[key])
+            if "origin" in record: self.assertEqual(kept["origin"]["kind"], record["origin"]["kind"])
+            if record["type"] == "queue-operation":
+                self.assertEqual(kept.get("content"), record.get("content"))
+                self.assertEqual(kept["operation"], record["operation"])
+        self.assertEqual(sum(record.get("subtype") == "stop_hook_summary" for _, record in pairs), 3)
+        script = r'''
+const assert = require('node:assert/strict');
+const { CompletionWork } = require('./electron/completion-work.cjs');
+const pairs = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const trace = records => {
+  const work = new CompletionWork();
+  return records.map(record => {
+    work.record(record, 'claude', 100000);
+    return { turn: work.turn, endedAt: work.endedAt, reviewAt: work.reviewAt,
+      tasks: [...work.tasks], notifications: [...work.notifications] };
+  });
+};
+assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair[1])));
+'''
+        subprocess.run(["node", "-e", script], input=json.dumps(pairs), text=True, check=True, cwd=MODULE_PATH.parent.parent)
+
     def test_claude_compaction_keeps_whether_a_prompt_starts_the_conversation(self):
         first = remote.compact_claude_record({"type": "user", "parentUuid": None, "uuid": "a", "message": {"role": "user", "content": "hi"}})
         later = remote.compact_claude_record({"type": "user", "parentUuid": "a", "uuid": "b", "message": {"role": "user", "content": "more"}})

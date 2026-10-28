@@ -196,6 +196,39 @@ test('producer-bounded long queued and accepted transcripts keep one echo and it
   assert.deepEqual(sync(state, log.list, Date.parse(timestamp)).prompts, []);
 });
 
+test('the real Claude user/background sequence acknowledges only user echoes and pairs queued sends one-to-one', () => {
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const fixture = require('./fixtures/claude-user-round-background.json'), log = new ConversationLog();
+  const atLine = line => fixture.records[fixture.sourceLines.indexOf(line)];
+  const prompt = atLine(16501), at = Date.parse(prompt.timestamp);
+  let state = add(createPendingPrompts('session'), 'original', prompt.message.content[0].text, at);
+  fixture.records.forEach((record, index) => {
+    if (fixture.sourceLines[index] > 16564) return;
+    claudeConversation(log, record);
+    state = sync(state, log.list, Date.parse(record.timestamp));
+  });
+  assert.deepEqual(pendingPromptCards(state.prompts, log.list).prompts, []);
+  assert.equal(log.list.filter(entry => entry.role === 'user').length, 1, 'metadata, notifications and tool results do not become user tasks');
+  const first = atLine(16608), second = atLine(16609), sent = Date.parse(first.timestamp);
+  state = add(state, 'echo-first', first.content, sent);
+  state = add(state, 'echo-repeat', first.content, sent + 90000);
+  for (const record of [first, second, { ...first, timestamp: new Date(sent + 90000).toISOString() }]) claudeConversation(log, record);
+  const cards = pendingPromptCards(state.prompts, log.list);
+  assert.deepEqual(cards.prompts.map(prompt => prompt.text), [first.content, second.content, first.content]);
+  assert.equal(cards.queuedIds.size, 3, 'raw-terminal sends keep their own cards and each echo pairs with only one enqueue');
+  claudeConversation(log, { type: 'queue-operation', operation: 'dequeue', timestamp: new Date(sent + 120000).toISOString() });
+  assert.equal(pendingPromptCards(state.prompts, log.list).queuedIds.size, 3);
+  for (const record of [
+    { type: 'queue-operation', operation: 'remove', reason: 'absorbed_mid_turn', content: first.content },
+    { type: 'user', uuid: 'accepted', promptSource: 'queued', message: { content: first.content } },
+  ]) {
+    claudeConversation(log, { timestamp: new Date(sent + 120001).toISOString(), ...record });
+    state = sync(state, log.list, sent + 120001);
+  }
+  assert.deepEqual(state.prompts.map(prompt => prompt.id), ['echo-repeat']);
+  assert.deepEqual(pendingPromptCards(state.prompts, log.list).prompts.map(prompt => prompt.text), [second.content, first.content]);
+});
+
 for (const accepted of [false, true]) test(`long prompts with the same displayed prefix pair the ${accepted ? 'receipt' : 'queue'} to the full original text`, () => {
   const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
   const log = new ConversationLog(), timestamp = '2026-10-17T01:00:00Z', at = Date.parse(timestamp), prefix = 'x'.repeat(20100);

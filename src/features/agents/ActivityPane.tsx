@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowCounterClockwise, CaretRight, CheckCircle, Circle, CircleNotch, Record as RecordDot } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, CaretRight, Circle, CircleNotch, Record as RecordDot } from '@phosphor-icons/react';
 import type { AgentCall, AgentTokens, AgentUsage, ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { modelName } from '../reading/model-name';
@@ -130,6 +130,9 @@ function UsageCard({ usage, terminal }: { usage: AgentUsage | null | undefined; 
   const known = rows.filter(([, tokens]) => tokens);
   // App's five-second clock rerenders this pane even when the usage snapshot is unchanged.
   const now = Date.now(), updated = usage?.limitsAt != null ? t('{time} 更新', { time: resetTime(usage.limitsAt) }) : null;
+  const limitNote = usage?.limitsAt == null ? t('账号额度暂不可用。') : usage.limitsFrom === 'CodePulse'
+    ? t('额度来自 CodePulse 状态记录，{time} 写入', { time: resetTime(usage.limitsAt) })
+    : t('额度来自 {source}，{time} 更新', { source: usage.limitsFrom || 'Claude Code', time: resetTime(usage.limitsAt) });
   return <section className="activity-card activity-usage" aria-label={t('用量')}>
     {(limits.length > 0 || known.length > 0) && <div className="activity-metrics">
       {limits.map(limit => {
@@ -145,7 +148,7 @@ function UsageCard({ usage, terminal }: { usage: AgentUsage | null | undefined; 
     {usage?.context && !usage.round && <p className="activity-note">{t('本轮从更早的记录开始，暂无法统计。')}</p>}
     {usage?.context && !usage.total && <p className="activity-note">{t('本次对话的总量在更早的记录里。')}</p>}
     {!claude && <ResetQuota key={`${terminal.id}:${terminal.sessionId}:${terminal.agentStartedAt}`} terminal={terminal} />}
-    {claude && <p className="activity-note">{usage?.limitsAt ? t('额度来自 {source}，{time} 更新', { source: usage.limitsFrom || 'Claude Code', time: resetTime(usage.limitsAt) }) : t('Claude Code 还没有获取账号额度；在终端输入 /usage 查看。')}</p>}
+    {claude && <p className="activity-note">{limitNote}</p>}
   </section>;
 }
 
@@ -275,14 +278,5 @@ function PromptRows({ prompts }: { prompts: ProjectTerminal['prompts'] }) {
 function PromptList({ terminal }: { terminal: ProjectTerminal }) {
   const prompts = terminal.prompts || [];
   if (prompts.length) return <PromptRows prompts={prompts} />;
-  const finished = terminal.codexActive && terminal.codexActivity === 'complete' && !!terminal.task;
-  if (finished) {
-    // With the queue empty only the round that just ended is left: the same row, its check and the time it ended.
-    return <ol className="activity-prompts" aria-label={t('提示')}>
-      <TaskRow className="is-done" state={t('已完成')} text={t('已完成：{task}', { task: terminal.task })} title={terminal.taskTitle || terminal.task}
-        time={terminal.lastCompletedAt ? resetTime(terminal.lastCompletedAt) : ''} icon={<CheckCircle size={14} weight="fill" aria-hidden="true" />} />
-    </ol>;
-  }
-  const text = !terminal.codexActive ? t('还没有开始任务') : terminal.task || t('没有待处理的提示');
-  return <p className="activity-task-quiet" title={terminal.taskTitle || text}>{text}</p>;
+  return <p className="activity-task-quiet">{t(terminal.codexActive ? '没有待处理的提示' : '还没有开始任务')}</p>;
 }

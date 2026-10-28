@@ -84,7 +84,6 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
     style={{ display: hidden ? 'none' : undefined }}
   >
     <span key={signalKey} className="panel-signal" aria-hidden="true" />
-    {navTarget && <span key={`nav:${navTarget}`} className="panel-nav-ring" aria-hidden="true" />}
     {/* Where next/previous project landed, over the card itself (the screen-reader announcement is ProjectSwitchHud). */}
     {navTarget && <div key={`hud:${navTarget}`} className="panel-nav-hud" aria-hidden="true">{project.image && <img className="project-image project-switch-image" src={project.image} alt="" draggable={false} data-audit-ignore />}<span className="project-switch-index">{String(index + 1).padStart(2, '0')}</span><b>{project.name}</b>{navPosition && <small>{navPosition}</small>}</div>}
     <header className="panel-header" title={focused ? undefined : t('点击标题栏放大，按住标题栏拖动排序')} onClick={event => {

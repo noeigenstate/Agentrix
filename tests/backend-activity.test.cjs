@@ -35,7 +35,7 @@ async function harness(t, kind = 'local', agent = 'codex') {
     if (!armed && project.completionArmed) armings++;
   };
   const context = vm.createContext({ sessions, store, summarizeTask: () => '', isLocalAgentCommand, promptText,
-    notifyCompletion: () => alerts++, broadcast() {}, publishConversation() {},
+    notifyCompletion: () => alerts++, broadcast() {}, publishConversation() {}, refreshClaudeAccounts() {},
     memoryFolder: () => directory, memoryDir: () => directory, roundsOf: () => [], remember: async () => {},
     setTimeout: () => ({ unref() {} }), scrubProjectSkills: async () => {},
     followClaude() {}, followClaudeSession: async () => {}, resumeCommand, claudeResumeCommand,
@@ -116,6 +116,7 @@ async function activityFeed(t, h, { clockOffset = h.project.kind === 'ssh' ? 100
   t.after(() => s.activityMonitor.stop());
   await s.activityMonitor.poll();
   return {
+    append,
     changes: () => changes,
     poll: () => s.activityMonitor.poll(),
     start: (at, turnId = 'parent') => append({ type: 'event_msg', timestamp: timestamp(at), payload: { type: 'task_started', turn_id: turnId } }),
@@ -133,6 +134,88 @@ async function activityFeed(t, h, { clockOffset = h.project.kind === 'ssh' ? 100
     },
   };
 }
+
+const userRoundFixture = require('./fixtures/claude-user-round-background.json');
+const recordedLine = line => userRoundFixture.records[userRoundFixture.sourceLines.indexOf(line)];
+
+for (const kind of ['local', 'ssh']) for (const order of ['prefixes', 'batched-background', 'late-user']) {
+  test(`Claude ${kind} real user round clears at its own end (${order}) while project completion waits for background work`, async t => {
+    const h = await harness(t, kind, 'claude'), { s } = h, offset = kind === 'ssh' ? 100000 : 0;
+    const prompt = recordedLine(16501), at = Date.parse(prompt.timestamp) + offset;
+    const prefixEnd = order === 'batched-background' ? 16541 : 16532;
+    s.activitySince = at - 1000; h.now(at);
+    const feed = await activityFeed(t, h, { clockOffset: offset });
+    h.write(`${prompt.message.content[0].text}\r`);
+    let prefix = userRoundFixture.records.filter((_, index) => userRoundFixture.sourceLines[index] <= prefixEnd);
+    if (order === 'late-user') prefix = [...prefix.filter(record => record !== prompt), prompt];
+    for (const record of prefix) await feed.append(record);
+    await feed.poll();
+    assert.deepEqual(s.promptQueue.list(), [], 'the first end_turn retires the user prompt even if the same poll ends in background work');
+    assert.equal(s.promptQueue.task.endedAt, Date.parse(recordedLine(16532).timestamp) + offset);
+    assert.equal(s.completionWork.tasks.size, order === 'batched-background' ? 1 : 2);
+    assert.equal(s.codexActivity, 'working', 'tracked background work still blocks the project alert');
+    assert.equal(h.alerts(), 0); assert.equal(h.project.completionArmed, true);
+    const rest = userRoundFixture.records.filter((_, index) => userRoundFixture.sourceLines[index] > prefixEnd && userRoundFixture.sourceLines[index] <= 16564);
+    for (const record of rest) {
+      h.now(Date.parse(record.timestamp) + offset);
+      await feed.append(record); await feed.poll();
+      assert.deepEqual(s.promptQueue.list(), [], 'notifications, their tools and system records cannot revive a completed user task');
+    }
+    assert.equal(s.codexActivity, 'complete'); assert.equal(s.completionWork.tasks.size, 0);
+    assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1); assert.equal(h.project.unread, 1);
+    h.store.acknowledge(h.project.id);
+    const later = Date.parse(recordedLine(16564).timestamp) + 1000;
+    for (const record of [
+      { ...recordedLine(16550), timestamp: stamp(later), uuid: 'later-notice' },
+      { type: 'user', timestamp: stamp(later + 1), uuid: 'later-reminder', isMeta: true, message: { content: '<system-reminder>Background context.</system-reminder>' } },
+      { ...recordedLine(16562), timestamp: stamp(later + 2), uuid: 'later-background-end' },
+    ]) {
+      h.now(Date.parse(record.timestamp) + offset);
+      await feed.append(record); await feed.poll();
+      assert.deepEqual(s.promptQueue.list(), []);
+    }
+    s.promptQueue.changed(); s.completionWork.changed(); await Promise.resolve();
+    assert.equal(s.codexActivity, 'complete'); assert.equal(h.project.unread, 0);
+    assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1);
+  });
+}
+
+for (const kind of ['local', 'ssh']) test(`Claude ${kind} real queued inputs survive round ends and anonymous dequeues, and named/actual receipts pair once`, async t => {
+  const h = await harness(t, kind, 'claude'), { s } = h, offset = kind === 'ssh' ? 100000 : 0;
+  const first = recordedLine(16608), second = recordedLine(16609), at = Date.parse(first.timestamp);
+  h.now(at + offset); s.activitySince = at + offset - 1000;
+  const feed = await activityFeed(t, h, { clockOffset: offset });
+  h.write(`${first.content}\r`);
+  for (const record of [first, second, { ...first, timestamp: stamp(at + 90000) }]) await feed.append(record);
+  await feed.poll();
+  assert.equal(s.promptQueue.list().length, 3, 'the transcript pairs its first enqueue with the terminal echo, leaving distinct sends');
+  h.now(at + offset + 120000); h.apply('complete', 'previous', at + offset - 1);
+  assert.deepEqual(s.promptQueue.list().map(item => item.state), ['queued', 'queued', 'queued']);
+  const record = async (value, when) => {
+    h.now(when + offset); await feed.append({ ...value, timestamp: stamp(when) }); await feed.poll();
+  };
+  await record({ type: 'queue-operation', operation: 'dequeue' }, at + 120001);
+  assert.equal(s.promptQueue.list().length, 3, 'an anonymous dequeue cannot select an arbitrary real input');
+  await record({ type: 'queue-operation', operation: 'remove', reason: 'absorbed_mid_turn', content: first.content }, at + 120002);
+  const accepted = s.promptQueue.list().find(item => item.state === 'working').id;
+  await record({ type: 'user', uuid: 'accepted-first', promptSource: 'queued', origin: { kind: 'human' }, message: { content: first.content } }, at + 120003);
+  assert.equal(s.promptQueue.list().find(item => item.state === 'working').id, accepted);
+  assert.deepEqual(s.promptQueue.list().map(item => item.state), ['working', 'queued', 'queued'], 'the later transcript echo does not consume the next identical send');
+  await feed.complete(at + offset + 120004, 'first');
+  assert.deepEqual(s.promptQueue.list().map(item => item.text), [second.content, first.content]);
+  assert.equal(h.alerts(), 0, 'the project still has recorded queued work');
+  await record({ type: 'queue-operation', operation: 'dequeue', content: second.content }, at + 120005);
+  await record({ type: 'user', uuid: 'accepted-second', promptSource: 'queued', message: { content: second.content } }, at + 120006);
+  await feed.complete(at + offset + 120007, 'second');
+  assert.deepEqual(s.promptQueue.list().map(item => item.text), [first.content]);
+  await record({ type: 'user', uuid: 'accepted-third', promptSource: 'queued', message: { content: first.content } }, at + 120008);
+  await feed.complete(at + offset + 120009, 'third');
+  assert.deepEqual(s.promptQueue.list(), []); assert.equal(s.conversation.queue.length, 0);
+  assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1);
+  h.store.acknowledge(h.project.id);
+  s.promptQueue.changed(); s.completionWork.changed(); await Promise.resolve();
+  assert.equal(h.alerts(), 1); assert.equal(h.project.unread, 0); assert.equal(h.project.completionArmed, false);
+});
 
 test('a running Claude dev server lets its session card complete and cannot rearm it after acknowledgment', async t => {
   for (const native of [false, true]) {

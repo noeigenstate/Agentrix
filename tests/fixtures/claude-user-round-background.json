@@ -1,0 +1,629 @@
+{
+  "description": "Sanitised Claude Code user round, its two later background notification rounds, and two real queued sends. Irrelevant records and later unrelated user turns omitted; original order and timestamps preserved.",
+  "source": "<home>/.claude/projects/<project>/session.jsonl",
+  "sourceLines": [
+    16483,
+    16489,
+    16501,
+    16502,
+    16524,
+    16530,
+    16532,
+    16533,
+    16534,
+    16535,
+    16536,
+    16537,
+    16541,
+    16542,
+    16544,
+    16545,
+    16546,
+    16547,
+    16548,
+    16549,
+    16550,
+    16558,
+    16559,
+    16561,
+    16562,
+    16563,
+    16564,
+    16608,
+    16609
+  ],
+  "records": [
+    {
+      "type": "assistant",
+      "timestamp": "2026-10-28T12:27:34.343Z",
+      "isSidechain": false,
+      "version": "2.1.312",
+      "uuid": "id-001",
+      "parentUuid": "id-002",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "assistant",
+        "type": "message",
+        "stop_reason": "tool_use",
+        "id": "id-004",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "id-005",
+            "name": "Bash",
+            "input": {
+              "command": "node check.cjs",
+              "description": "Check output",
+              "run_in_background": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-10-28T12:27:37.589Z",
+      "isSidechain": false,
+      "version": "2.1.312",
+      "uuid": "id-006",
+      "parentUuid": "id-001",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "promptId": "id-007",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "id-005",
+            "content": "Sanitised tool output.",
+            "is_error": false
+          }
+        ]
+      },
+      "toolUseResult": {
+        "stdout": "",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": false,
+        "backgroundTaskId": "id-008"
+      }
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-10-28T12:32:26.821Z",
+      "isSidechain": false,
+      "promptSource": "typed",
+      "turnOrigin": "human",
+      "turnPosition": {
+        "promptIndex": 154,
+        "turnIndex": 329
+      },
+      "version": "2.1.312",
+      "uuid": "id-009",
+      "parentUuid": "id-010",
+      "sessionId": "id-003",
+      "promptId": "id-011",
+      "cwd": "<home>/project",
+      "origin": {
+        "kind": "human"
+      },
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Remove ambiguous completion wording."
+          },
+          {
+            "type": "image",
+            "source": {
+              "type": "base64",
+              "media_type": "image/png",
+              "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aizsAAAAASUVORK5CYII="
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-10-28T12:32:26.821Z",
+      "isSidechain": false,
+      "isMeta": true,
+      "version": "2.1.312",
+      "uuid": "id-012",
+      "parentUuid": "id-009",
+      "sessionId": "id-003",
+      "promptId": "id-011",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "System reminder for this round."
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-10-28T12:32:49.985Z",
+      "isSidechain": false,
+      "version": "2.1.312",
+      "uuid": "id-013",
+      "parentUuid": "id-014",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "assistant",
+        "type": "message",
+        "stop_reason": "tool_use",
+        "id": "id-015",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "id-016",
+            "name": "Bash",
+            "input": {
+              "command": "node check.cjs",
+              "description": "Check output",
+              "run_in_background": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-10-28T12:32:51.815Z",
+      "isSidechain": false,
+      "version": "2.1.312",
+      "uuid": "id-017",
+      "parentUuid": "id-013",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "promptId": "id-011",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "id-016",
+            "content": "Sanitised tool output.",
+            "is_error": false
+          }
+        ]
+      },
+      "toolUseResult": {
+        "stdout": "",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": false,
+        "backgroundTaskId": "id-018"
+      }
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-10-28T12:32:56.505Z",
+      "isSidechain": false,
+      "version": "2.1.312",
+      "uuid": "id-019",
+      "parentUuid": "id-017",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "assistant",
+        "type": "message",
+        "stop_reason": "end_turn",
+        "id": "id-020",
+        "content": [
+          {
+            "type": "text",
+            "text": "Requested change delivered."
+          }
+        ]
+      }
+    },
+    {
+      "type": "system",
+      "timestamp": "2026-10-28T12:32:57.233Z",
+      "isSidechain": false,
+      "subtype": "stop_hook_summary",
+      "preventedContinuation": false,
+      "stopReason": "",
+      "hasOutput": false,
+      "version": "2.1.312",
+      "uuid": "id-021",
+      "parentUuid": "id-019",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "cwd": "<home>/project"
+    },
+    {
+      "type": "system",
+      "timestamp": "2026-10-28T12:32:57.239Z",
+      "isSidechain": false,
+      "isMeta": false,
+      "subtype": "turn_duration",
+      "durationMs": 30459,
+      "messageCount": 857,
+      "version": "2.1.312",
+      "uuid": "id-022",
+      "parentUuid": "id-021",
+      "sessionId": "id-003",
+      "cwd": "<home>/project"
+    },
+    {
+      "type": "queue-operation",
+      "timestamp": "2026-10-28T12:40:38.387Z",
+      "operation": "enqueue",
+      "sessionId": "id-003",
+      "content": "<task-notification>\n<task-id>id-018</task-id>\n<tool-use-id>id-016</tool-use-id>\n<output-file><home>/tasks/output.txt</output-file>\n<status>completed</status>\n<summary>Background check ended.</summary>\n</task-notification>"
+    },
+    {
+      "type": "queue-operation",
+      "timestamp": "2026-10-28T12:40:38.412Z",
+      "operation": "dequeue",
+      "sessionId": "id-003"
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-10-28T12:40:38.445Z",
+      "isSidechain": false,
+      "promptSource": "system",
+      "turnOrigin": "task_notification",
+      "turnPosition": {
+        "promptIndex": 154,
+        "turnIndex": 330
+      },
+      "queueSkipAttachments": true,
+      "version": "2.1.312",
+      "uuid": "id-023",
+      "parentUuid": "id-022",
+      "sessionId": "id-003",
+      "promptId": "id-024",
+      "cwd": "<home>/project",
+      "origin": {
+        "kind": "task-notification",
+        "producer": "session-task",
+        "runId": "id-025"
+      },
+      "message": {
+        "role": "user",
+        "content": "<task-notification>\n<task-id>id-018</task-id>\n<tool-use-id>id-016</tool-use-id>\n<output-file><home>/tasks/output.txt</output-file>\n<status>completed</status>\n<summary>Background check ended.</summary>\n</task-notification>"
+      }
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-10-28T12:40:44.314Z",
+      "isSidechain": false,
+      "version": "2.1.312",
+      "uuid": "id-026",
+      "parentUuid": "id-023",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "assistant",
+        "type": "message",
+        "stop_reason": "tool_use",
+        "id": "id-027",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "id-028",
+            "name": "Bash",
+            "input": {
+              "command": "node check.cjs",
+              "description": "Check output"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-10-28T12:40:46.816Z",
+      "isSidechain": false,
+      "version": "2.1.312",
+      "uuid": "id-029",
+      "parentUuid": "id-026",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "promptId": "id-024",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "id-028",
+            "content": "Sanitised tool output.",
+            "is_error": false
+          }
+        ]
+      },
+      "toolUseResult": {
+        "stdout": "",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": false
+      }
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-10-28T12:40:49.712Z",
+      "isSidechain": false,
+      "version": "2.1.312",
+      "uuid": "id-030",
+      "parentUuid": "id-029",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "assistant",
+        "type": "message",
+        "stop_reason": "end_turn",
+        "id": "id-031",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Background result considered.",
+            "signature": "sanitised-signature"
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-10-28T12:40:49.716Z",
+      "isSidechain": false,
+      "version": "2.1.312",
+      "uuid": "id-032",
+      "parentUuid": "id-030",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "assistant",
+        "type": "message",
+        "stop_reason": "end_turn",
+        "id": "id-031",
+        "content": [
+          {
+            "type": "text",
+            "text": "Background result reviewed."
+          }
+        ]
+      }
+    },
+    {
+      "type": "system",
+      "timestamp": "2026-10-28T12:40:50.334Z",
+      "isSidechain": false,
+      "subtype": "stop_hook_summary",
+      "preventedContinuation": false,
+      "stopReason": "",
+      "hasOutput": false,
+      "version": "2.1.312",
+      "uuid": "id-033",
+      "parentUuid": "id-032",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "cwd": "<home>/project"
+    },
+    {
+      "type": "system",
+      "timestamp": "2026-10-28T12:40:50.340Z",
+      "isSidechain": false,
+      "isMeta": false,
+      "subtype": "turn_duration",
+      "durationMs": 11925,
+      "messageCount": 864,
+      "version": "2.1.312",
+      "uuid": "id-034",
+      "parentUuid": "id-033",
+      "sessionId": "id-003",
+      "cwd": "<home>/project"
+    },
+    {
+      "type": "queue-operation",
+      "timestamp": "2026-10-28T12:45:42.837Z",
+      "operation": "enqueue",
+      "sessionId": "id-003",
+      "content": "<task-notification>\n<task-id>id-008</task-id>\n<tool-use-id>id-005</tool-use-id>\n<output-file><home>/tasks/output.txt</output-file>\n<status>completed</status>\n<summary>Background check ended.</summary>\n</task-notification>"
+    },
+    {
+      "type": "queue-operation",
+      "timestamp": "2026-10-28T12:45:42.858Z",
+      "operation": "dequeue",
+      "sessionId": "id-003"
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-10-28T12:45:42.886Z",
+      "isSidechain": false,
+      "promptSource": "system",
+      "turnOrigin": "task_notification",
+      "turnPosition": {
+        "promptIndex": 154,
+        "turnIndex": 331
+      },
+      "queueSkipAttachments": true,
+      "version": "2.1.312",
+      "uuid": "id-035",
+      "parentUuid": "id-034",
+      "sessionId": "id-003",
+      "promptId": "id-036",
+      "cwd": "<home>/project",
+      "origin": {
+        "kind": "task-notification",
+        "producer": "session-task",
+        "runId": "id-037"
+      },
+      "message": {
+        "role": "user",
+        "content": "<task-notification>\n<task-id>id-008</task-id>\n<tool-use-id>id-005</tool-use-id>\n<output-file><home>/tasks/output.txt</output-file>\n<status>completed</status>\n<summary>Background check ended.</summary>\n</task-notification>"
+      }
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-10-28T12:45:47.059Z",
+      "isSidechain": false,
+      "version": "2.1.312",
+      "uuid": "id-038",
+      "parentUuid": "id-035",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "assistant",
+        "type": "message",
+        "stop_reason": "tool_use",
+        "id": "id-039",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "id-040",
+            "name": "Bash",
+            "input": {
+              "command": "node check.cjs",
+              "description": "Check output"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-10-28T12:45:49.332Z",
+      "isSidechain": false,
+      "version": "2.1.312",
+      "uuid": "id-041",
+      "parentUuid": "id-038",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "promptId": "id-036",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "id-040",
+            "content": "Sanitised tool output.",
+            "is_error": false
+          }
+        ]
+      },
+      "toolUseResult": {
+        "stdout": "",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": false
+      }
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-10-28T12:45:54.806Z",
+      "isSidechain": false,
+      "version": "2.1.312",
+      "uuid": "id-042",
+      "parentUuid": "id-041",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "assistant",
+        "type": "message",
+        "stop_reason": "end_turn",
+        "id": "id-043",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Background result considered.",
+            "signature": "sanitised-signature"
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-10-28T12:45:54.812Z",
+      "isSidechain": false,
+      "version": "2.1.312",
+      "uuid": "id-044",
+      "parentUuid": "id-042",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "cwd": "<home>/project",
+      "message": {
+        "role": "assistant",
+        "type": "message",
+        "stop_reason": "end_turn",
+        "id": "id-043",
+        "content": [
+          {
+            "type": "text",
+            "text": "Background result reviewed."
+          }
+        ]
+      }
+    },
+    {
+      "type": "system",
+      "timestamp": "2026-10-28T12:45:55.421Z",
+      "isSidechain": false,
+      "subtype": "stop_hook_summary",
+      "preventedContinuation": false,
+      "stopReason": "",
+      "hasOutput": false,
+      "version": "2.1.312",
+      "uuid": "id-045",
+      "parentUuid": "id-044",
+      "sessionId": "id-003",
+      "session_id": "id-003",
+      "cwd": "<home>/project"
+    },
+    {
+      "type": "system",
+      "timestamp": "2026-10-28T12:45:55.429Z",
+      "isSidechain": false,
+      "isMeta": false,
+      "subtype": "turn_duration",
+      "durationMs": 12568,
+      "messageCount": 871,
+      "version": "2.1.312",
+      "uuid": "id-046",
+      "parentUuid": "id-045",
+      "sessionId": "id-003",
+      "cwd": "<home>/project"
+    },
+    {
+      "type": "queue-operation",
+      "timestamp": "2026-10-28T12:59:05.107Z",
+      "operation": "enqueue",
+      "sessionId": "id-003",
+      "content": "Queued real follow-up A."
+    },
+    {
+      "type": "queue-operation",
+      "timestamp": "2026-10-28T13:00:22.735Z",
+      "operation": "enqueue",
+      "sessionId": "id-003",
+      "content": "Queued real follow-up B."
+    }
+  ]
+}

@@ -23,6 +23,12 @@ async function fixture(t) {
   return { folder, calls };
 }
 
+async function heredocFixture(home) {
+  // Minimal real launches/receipts; completion events in tests are synthetic.
+  const body = await fs.readFile(path.join(__dirname, 'fixtures/agent-calls-heredoc.jsonl'), 'utf8');
+  return body.trim().split('\n').map(line => JSON.parse(line.replaceAll('<home>', home.replace(/\\/g, '/'))));
+}
+
 test('Codex shell flags preserve the route, prompt filename and resolved stdin path', () => {
   assert.deepEqual(codexCall(command), { model: 'gpt-6.1-sol', effort: 'high', fast: true, provider: 'openai', task: 'prompt.md', log: null, prompt: path.resolve('<home>/scratch/prompt.md') });
   assert.deepEqual(codexCall(`cd '<home>/repo' && "C:\\tools\\codex.cmd" exec --model=gpt-6.1-sol --config 'model_reasoning_effort="medium"' -c 'model_provider="azure"' --config=service_tier=standard`),
@@ -33,6 +39,53 @@ test('Codex shell flags preserve the route, prompt filename and resolved stdin p
   assert.equal(codexCall('echo codex exec -m gpt-6.1-sol'), null);
   assert.equal(codexCall(`printf '%s' 'codex exec -m gpt-6.1-sol'`), null);
   assert.equal(codexCall('cd <home>/repo&&codex exec -m gpt-6.1-sol\necho done').model, 'gpt-6.1-sol');
+});
+
+test('sanitised real heredoc launches keep Codex flags and redirected files after cd &&', async () => {
+  const records = await heredocFixture('/home/test');
+  for (const record of records.filter(record => record.type === 'assistant')) {
+    const { command } = record.message.content[0].input;
+    const name = record.message.content[0].id === 'tool-codex-1' ? 'claude-usage-query' : 'calls-heredoc';
+    assert.deepEqual(codexCall(command, record.cwd), {
+      model: 'gpt-6.1-sol', effort: 'max', fast: true, provider: 'openai',
+      task: `brief-${name}.md`, prompt: `/home/test/scratch/codex/brief-${name}.md`,
+      log: `/home/test/scratch/codex/log-${name}.log`,
+    });
+  }
+});
+
+test('heredoc bodies are opaque for every delimiter form, including unbalanced quotes and shell syntax', () => {
+  for (const [opener, terminator] of [['<<WORD', 'WORD'], ["<<'WORD'", 'WORD'], ['<<"WORD"', 'WORD'], ['<<-WORD', '\tWORD'], ["<<-'WORD'", '\tWORD']]) {
+    for (const body of ["Claude's", 'An unmatched " quote', "Claude's, don't; < > | $S && codex exec -m fake", 'codex exec -m fake']) {
+      const command = `S=/scratch; cat > brief.md ${opener}\n${body}\n${terminator}\ncd /repo && codex exec -m actual - < $S/brief.md > $S/run.log 2>&1`;
+      assert.equal(codexCall(command, '/repo')?.model, 'actual');
+      assert.equal(codexCall(command, '/repo')?.prompt, '/scratch/brief.md');
+      assert.equal(codexCall(command.slice(0, command.indexOf('\ncd /repo')), '/repo'), null, 'body commands never create calls');
+    }
+  }
+});
+
+test('multiple heredocs consume bodies in order, with exact terminators, tab stripping and CRLF', () => {
+  const command = `cat <<ONE <<"TWO"; echo ready
+ONE\u0020
+codex exec -m fake
+ONE
+Claude's " <<IGNORED
+TWO
+cat <<-THREE
+\tmore unmatched '
+\tTHREE
+codex exec -m actual > run.log`;
+  for (const body of [command, command.replace(/\n/g, '\r\n')]) assert.equal(codexCall(body)?.model, 'actual');
+  assert.equal(codexCall('cat <<EOF\ncodex exec -m fake'), null, 'unterminated bodies consume the rest of the command');
+  assert.equal(codexCall('cat <<-EOF\n EOF\ncodex exec -m fake'), null, '<<- strips tabs only');
+  assert.equal(codexCall('codex exec -m actual <<EOF\nunmatched "\nEOF')?.model, 'actual');
+});
+
+test('quoted heredoc examples, comments and here strings cannot consume later shell commands', () => {
+  for (const prefix of [`printf '%s' '<<EOF'`, `printf "%s" "<<EOF"`, '# cat <<EOF', 'cat <<<"example"']) {
+    assert.equal(codexCall(`${prefix}\ncodex exec -m actual`)?.model, 'actual');
+  }
 });
 
 test('foreground Agent and Codex runs finish on tool_result and replay never double counts or reopens them', () => {
@@ -136,6 +189,32 @@ test('auto-backgrounded calls and failed launches follow the actual result', () 
   assert.ok(calls.snapshot().every(call => call.running === 0));
 });
 
+test('BashOutput and TaskOutput only finish their matching background call on a successful terminal receipt', () => {
+  for (const name of ['BashOutput', 'TaskOutput']) {
+    for (const status of ['completed', 'failed', 'killed']) {
+      const calls = new AgentCalls();
+      for (const id of ['worker', 'other']) {
+        calls.apply(use(id, 'Bash', { command, run_in_background: true }));
+        calls.apply(result(id, { backgroundTaskId: `task-${id}` }));
+      }
+      const poll = (id, task, status, error = false) => {
+        calls.apply(use(id, name, name === 'BashOutput' ? { bash_id: task } : { task_id: task }));
+        return calls.apply(result(id, name === 'BashOutput' ? { status } : { task: { task_id: task, status } }, error));
+      };
+      assert.equal(poll('running', 'task-worker', 'running'), false);
+      assert.equal(poll('error', 'task-worker', status, true), false);
+      assert.equal(poll('unknown', 'unrelated', status), false);
+      assert.deepEqual(states(calls), [[0, 2, 0]]);
+      assert.equal(poll('done', 'task-worker', status), true);
+      assert.deepEqual(states(calls), [[0, 1, 1]]);
+      assert.equal(poll('duplicate', 'task-worker', status), false);
+      calls.apply(stop());
+      assert.deepEqual(states(calls), [[0, 1, 0]], 'only the completed worker leaves after review');
+      assert.equal(poll('late', 'task-worker', status), false);
+    }
+  }
+});
+
 test('routes group by every route field, keep the latest five tasks and inherit the current Claude provider', () => {
   const meter = new UsageMeter('claude', { provider: 'relay.example' });
   for (let i = 0; i < 7; i++) {
@@ -226,6 +305,18 @@ test('Codex log redirections resolve against record cwd without evaluating shell
   for (const command of ['codex exec - < "$UNKNOWN/prompt.md"', 'codex exec - < "$(pwd)/prompt.md"', "codex exec - < '$PWD/prompt.md'", 'codex exec - < /dev/null']) assert.equal(codexCall(command, cwd).prompt, null);
   assert.equal(codexCall('codex exec > logs/run.txt 2>&1', '/srv/repo').log, '/srv/repo/logs/run.txt');
   for (const command of ['codex exec -o result.md', 'codex exec ">" log.txt', 'codex exec > "$UNKNOWN/log.txt"', 'codex exec > "$(pwd)/log.txt"', "codex exec > '$PWD/log.txt'", 'codex exec > /dev/null']) assert.equal(codexCall(command, cwd).log, null);
+});
+
+test('Git Bash drive aliases resolve local worker files without rewriting SSH paths', () => {
+  const command = 'S=/c/Users/test/scratch; codex exec - < $S/prompt.md > $S/worker.log 2>&1';
+  if (process.platform === 'win32') {
+    const call = codexCall(command, 'C:\\repo');
+    assert.equal(call.prompt, 'c:\\Users\\test\\scratch\\prompt.md');
+    assert.equal(call.log, 'c:\\Users\\test\\scratch\\worker.log');
+  }
+  const remote = codexCall(command, '/srv/repo');
+  assert.equal(remote.prompt, '/c/Users/test/scratch/prompt.md');
+  assert.equal(remote.log, '/c/Users/test/scratch/worker.log');
 });
 
 test('subagent items keep every role and full description newest first, including repeated tasks', () => {
@@ -333,12 +424,14 @@ test('a background Codex run prepares, starts quietly, awaits its delivered revi
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { folder, calls } = await fixture(t);
   let changes = 0; calls.changed = () => changes++;
-  const log = path.join(folder, 'run.log.txt');
+  const [,, launch, receipt] = await heredocFixture(folder);
+  const id = launch.message.content[0].id;
+  const log = path.join(folder, 'scratch/codex/log-calls-heredoc.log');
+  await fs.mkdir(path.dirname(log), { recursive: true });
   const header = 'OpenAI Codex v0.163.0\n--------\nworkdir: <repo>\nmodel: gpt-6.1-sol\nprovider: openai\n--------\nuser\nRead the code and use codex exec if asked.\n';
   await fs.writeFile(log, header);
-  const launch = { ...use('b', 'Bash', { command: 'codex exec -m gpt-6.1-sol - < prompt.md > run.log.txt 2>&1', run_in_background: true }), cwd: folder };
   calls.apply(launch);
-  calls.apply(result('b', { backgroundTaskId: 'b3ptl09kb' }));
+  calls.apply(receipt);
   await calls.work;
   assert.deepEqual(states(calls), [[1, 0, 0]], 'header and echoed prompt are not model output');
   assert.ok(calls.timer);
@@ -349,20 +442,22 @@ test('a background Codex run prepares, starts quietly, awaits its delivered revi
   t.mock.timers.tick(2500); await calls.work;
   assert.deepEqual(states(calls), [[0, 1, 0]]);
   assert.equal(changes, 1); assert.equal(calls.timer, null);
-  calls.apply(stop('2026-10-23T02:32:55.157Z'));
+  await fs.writeFile(path.join(folder, 'scratch/codex/out-calls-heredoc.md'), 'Checks passed.');
+  calls.apply(stop('2026-10-28T12:28:00.000Z'));
   assert.deepEqual(states(calls), [[0, 1, 0]], 'the launch round ending does not finish the worker');
-  const completion = notice('b'); completion.timestamp = '2026-10-23T02:35:00.000Z';
+  const completion = notice(id); completion.timestamp = '2026-10-28T12:35:00.000Z';
+  completion.message.content = completion.message.content.replace('<task-id>task</task-id>', '<task-id>task-codex-2</task-id>').replace(`<tool-use-id>${id}</tool-use-id>`, '');
   calls.apply({ type: 'queue-operation', operation: 'enqueue', timestamp: completion.timestamp, content: completion.message.content });
   assert.deepEqual(states(calls), [[0, 0, 1]]);
-  calls.apply(stop('2026-10-23T02:35:01.000Z'));
+  calls.apply(stop('2026-10-28T12:35:01.000Z'));
   assert.deepEqual(states(calls), [[0, 0, 1]], 'a queued report has not had its review round yet');
   calls.apply(completion);
   calls.apply(use('read', 'Read', { file_path: log }));
   calls.apply({ type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Checks passed.' }] } });
   assert.deepEqual(states(calls), [[0, 0, 1]], 'assistant text does not replace the existing Stop signal');
-  assert.equal(calls.apply(stop('2026-10-23T02:36:00.000Z')), true);
+  assert.equal(calls.apply(stop('2026-10-28T12:36:00.000Z')), true);
   assert.deepEqual(calls.snapshot(), []);
-  for (const record of [launch, result('b'), completion, stop()]) assert.equal(calls.apply(record), false, 'late records cannot reopen a reviewed call');
+  for (const record of [launch, receipt, completion, stop()]) assert.equal(calls.apply(record), false, 'late records cannot reopen a reviewed call');
   t.mock.timers.tick(10000); assert.equal(changes, 1); assert.equal(calls.timer, null);
 });
 

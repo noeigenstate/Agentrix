@@ -1292,12 +1292,28 @@ test('the title and the duration of a round come from data it already has', () =
 });
 
 const { ResultStatus } = loadUI('features/reading/ResultCard.tsx');
-function assertResultHeading(result, taskTitle, expected, label = 'Done') {
-  const heading = elements(ResultStatus({ result, taskTitle, onShowTerminal() {}, onError() {} })).find(node => node.type === 'h3');
-  assert.equal(heading.props.children[0].props.children, expected, 'the visible title is plain text');
-  assert.equal(heading.props.title, `${expected} · ${label}`, 'the tooltip uses the same complete title');
-  assert.equal(renderToStaticMarkup(heading).match(/title="([^"]*)"/)[1], `${expected} · ${label}`, 'the native HTML title attribute');
+function assertResultHeading(result, taskTitle, expected, label = '') {
+  const html = renderToStaticMarkup(ResultStatus({ result, taskTitle, onShowTerminal() {}, onError() {} }));
+  const heading = html.match(/<h3 class="result-title"[\s\S]*?<\/h3>/)[0], title = label ? `${expected} · ${label}` : expected;
+  assert.equal(heading.replace(/<[^>]*>/g, '').replace(/\u00a0/g, ' '), title, 'the full visible title is plain text');
+  assert.equal(heading.match(/title="([^"]*)"/)[1], title, 'the native HTML title uses the same complete title');
+  assert.ok(html.includes(`role="status" aria-label="${label || 'Done'}"`), 'the status announces the translated result label');
 }
+
+test('completed text, code and picture headings omit the completion suffix and keep completion accessible', () => {
+  const ask = readingEntry('u', 'user', 1, { text: 'Finish the task.' });
+  for (const entry of [readingEntry('a', 'assistant', 2, { text: 'Done.' }), roundEdit('e', 2), roundPicture('g', 2)]) {
+    const result = latestResult([ask, entry], idle);
+    assertResultHeading(result, '**Finished** the task. More details.', 'Finished the task.');
+  }
+});
+
+test('failed and interrupted headings retain their visible labels and native tooltips', () => {
+  const result = latestResult([readingEntry('u', 'user', 1, { text: 'Run checks.' }), readingTool('npm test', 2, { failed: true })], idle);
+  for (const [failure, label] of [['npm test', 'Failed'], ['', 'Interrupted']]) {
+    assertResultHeading({ ...result, failure }, 'Run the checks', 'Run the checks', label);
+  }
+});
 
 test('a reply stored as the task title contributes only its opening sentence to the result heading and native tooltip', t => {
   const { PromptQueue } = require('../electron/prompt-queue.cjs');
@@ -1331,7 +1347,7 @@ test('a reply stored as the task title contributes only its opening sentence to 
   const { state, render } = readingHarness(t, entries);
   state.terminal.taskTitle = queue.task.title;
   const html = render(), heading = html.match(/<h3 class="result-title"[\s\S]*?<\/h3>/)[0];
-  assert.equal(heading, `<h3 class="result-title" title="${expected} · Done"><span>${expected}</span><b> · Done</b></h3>`);
+  assert.equal(heading, `<h3 class="result-title" title="${expected}"><span>${expected}</span></h3>`);
   assert.doesNotMatch(heading, /Your copy|How the update works|api\.github\.com|\*\*|\| Host|\|---/);
   assert.ok(html.includes('Your copy is **0.8.0**'), 'the reply body is still shown below the heading');
 });
@@ -1367,7 +1383,7 @@ test('missing, empty Markdown and copied request titles use the round kind fallb
   assert.equal(queue.task.title, request, 'without a delivery summary, the upstream title is still the user message');
   const result = latestResult([readingEntry('u', 'user', 1, { text: request }), readingEntry('a', 'assistant', 2, { text: reply })], idle);
   for (const kind of Object.keys(FALLBACK_TITLES)) for (const source of [undefined, '', ' \r\n ', '***', queue.task.title, '# **FIX THE UPDATER.**\nOther details.']) {
-    assertResultHeading({ ...result, kind }, source, en[FALLBACK_TITLES[kind]], kind === 'failed' ? 'Interrupted' : 'Done');
+    assertResultHeading({ ...result, kind }, source, en[FALLBACK_TITLES[kind]], kind === 'failed' ? 'Interrupted' : '');
   }
   assertResultHeading({ ...result, kind: 'failed', failure: 'download failed' }, undefined, en[FALLBACK_TITLES.failed], 'Failed');
 });
@@ -1378,7 +1394,7 @@ test('the latest round alone carries the status row and the actions, and the com
   state.terminal.taskTitle = 'Built the app';
   let html = render();
   assert.equal((html.match(/class="result-status/g) || []).length, 1, 'one status row, for the latest round only');
-  assert.match(html, /Built the app<\/span><b> · Done<\/b>/); assert.match(html, /placeholder="Keep editing, or describe the next step…"/);
+  assert.match(html, /Built the app<\/span><\/h3>/); assert.match(html, /placeholder="Keep editing, or describe the next step…"/);
   assert.equal((html.match(/class="result-actions"/g) || []).length, 1);
   assert.match(html, /<div class="reading-turn-item-body"><div class="result-status/, 'the result entry has no time stamp of its own: the status row says when it ended');
   assert.match(html, /aria-label="Open file"[^>]*>[\s\S]*aria-label="Keep editing"/);

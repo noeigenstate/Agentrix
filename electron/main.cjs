@@ -30,6 +30,11 @@ const { agentSettings } = require('./features/agents/agent-settings.cjs');
 const { UsageMeter, claudeProvider, codexProvider, claudeAccount, claudeAccountFiles } = require('./features/agents/agent-usage.cjs');
 const { CodexAccountUsage } = require('./features/agents/codex-account-usage.cjs');
 const codexAccounts = new CodexAccountUsage();
+const { ClaudeAccountUsage, readClaudeAccount } = require('./features/agents/claude-account-usage.cjs');
+const claudeAccounts = new ClaudeAccountUsage({ changed: () => queueClaudeAccounts(), read: options => readClaudeAccount({ ...options,
+  routes: localClaudeMeters().map(s => ({ cwd: s.usageCwd, env: s.usageEnv || process.env })),
+  fetch: (url, options) => electronNet.fetch(url, options),
+}) });
 const { agentCommand } = require('./features/agents/agent-command.cjs');
 const { setThumbnailer, isGeneratedImage } = require('./conversation.cjs');
 const { saveDialogOptions, saveTarget } = require('./image-save.cjs');
@@ -355,6 +360,9 @@ function followClaude(project, s, event) {
     const onRecord = record => {
       if (sessions.get(s.terminalId) !== s || s.claudeTranscript !== tail) return;
       s.completionWork?.record(record, 'claude', remote ? s.activityClockOffset || 0 : 0);
+      // Finish this user round even if later background records replace the poll's final snapshot.
+      const endedAt = s.completionWork?.endedAt;
+      if (endedAt && endedAt >= (s.activitySince || 0) && endedAt > s.promptQueue.finishedAt) s.promptQueue.finish(endedAt);
       if (record.workOnly) {
         if (['queue-operation', 'user', 'attachment'].includes(record.type)) claudeConversation(s.conversation, record, project.path, { queueOnly: true });
         return;
@@ -400,6 +408,7 @@ function usageHistory(s, ready) {
 // read from this computer's settings; over SSH, Claude's stays unnamed and Codex's is the id its records give.
 function startUsage(project, s, event) {
   stopUsageAccount(s);
+  s.usageCwd = event.cwd || project.path;
   const usage = s.usage = new UsageMeter(s.agent, { changed: () => { if (s.usage === usage && !s.usageHistory) scheduleState(); } });
   if (s.agent === 'codex') {
     let binding;
@@ -435,10 +444,12 @@ let claudeAccountTimer = null;
 let claudeAccountSoon = null, claudeAccountPending = null, claudeAccountQueued = false, claudeAccountGeneration = 0;
 const claudeAccountWatchers = new Map();
 function localClaudeMeters(skip) {
-  return [...sessions.values()].filter(s => s !== skip && s.codexActive && s.usage?.agent === 'claude' && store.projects.find(p => p.id === s.projectId)?.kind !== 'ssh');
+  return [...sessions.values()].filter(s => s !== skip && s.codexActive && s.agent === 'claude' && s.usage?.agent === 'claude' &&
+    store.projects.some(p => p.id === s.projectId && p.kind !== 'ssh'));
 }
 function disposeClaudeAccounts() {
   ++claudeAccountGeneration;
+  claudeAccounts.setActive(false);
   clearInterval(claudeAccountTimer); if (claudeAccountSoon) clearTimeout(claudeAccountSoon);
   claudeAccountTimer = null; claudeAccountSoon = null; claudeAccountPending = null; claudeAccountQueued = false;
   for (const { watcher } of claudeAccountWatchers.values()) watcher.close();
@@ -478,7 +489,8 @@ function watchClaudeAccounts() {
   }
 }
 async function refreshClaudeAccounts() {
-  if (!localClaudeMeters().length) { disposeClaudeAccounts(); return; }
+  if (quitting || !localClaudeMeters().length) { disposeClaudeAccounts(); return; }
+  claudeAccounts.setActive(true); claudeAccounts.refresh();
   if (claudeAccountSoon) clearTimeout(claudeAccountSoon);
   claudeAccountSoon = null;
   watchClaudeAccounts();
@@ -487,10 +499,10 @@ async function refreshClaudeAccounts() {
   claudeAccountTimer.unref?.();
   if (claudeAccountPending) { claudeAccountQueued = true; return claudeAccountPending; }
   const generation = claudeAccountGeneration;
-  const pending = claudeAccountPending = Promise.resolve().then(() => claudeAccount()).then(account => {
+  const pending = claudeAccountPending = Promise.resolve().then(() => claudeAccount(undefined, undefined, claudeAccounts.account)).then(account => {
     if (generation !== claudeAccountGeneration) return;
     let changed = false;
-    for (const s of localClaudeMeters()) if (s.usage.account(account)) changed = true;
+    for (const s of localClaudeMeters()) if (s.usage.account(account, claudeAccounts.account)) changed = true;
     if (changed) { scheduleState(); scheduleUsageRollover(); }
   }).finally(() => {
     if (claudeAccountPending !== pending) return;
@@ -569,6 +581,7 @@ function applyActivity(project, s, snapshot) {
   s.codexActivity = snapshot.state;
   if (s.agent === 'claude') {
     s.claudeActivitySnapshot = snapshot;
+    if (snapshot.state === 'complete' && project.kind !== 'ssh') void refreshClaudeAccounts();
     if (['complete', 'interrupted'].includes(snapshot.state)) {
       // The last poll may still add tool calls. Settle both views afterward, unless another round has started.
       const settle = () => {
@@ -1273,6 +1286,7 @@ app.on('before-quit', event => {
   quitting = true;
   updateManager?.dispose();
   codexAccounts.dispose();
+  claudeAccounts.dispose();
   disposeClaudeAccounts();
   clearTimeout(usageRolloverTimer);
   clearTimeout(stateTimer);

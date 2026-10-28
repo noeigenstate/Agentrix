@@ -9,9 +9,36 @@ const unquote = value => value.replace(/["']/g, '');
 const basename = value => value.split(/[\\/]/).at(-1);
 const agentRoles = new Map(Object.entries({ Explore: '搜索', Plan: '规划', 'general-purpose': '通用', claude: '通用', none: '通用', fork: '分身' }));
 
+// Heredocs are data: their quotes and command examples must never become shell tokens.
+function shellTokens(command) {
+  const tokens = [], heredocs = [];
+  const syntax = /<<<|<<(-?)[ \t]*((?:[^\s"';&|<>]+|"[^"\r\n]*"|'[^'\r\n]*')+)|#[^\r\n]*|\d?>&\d|&>>?|\d?>>?|<|(?:[^\s"';&|<>]+|"(?:\\.|[^"\\])*"|'[^']*')+|&&|\|\||[;&|\n]/g;
+  let match;
+  while ((match = syntax.exec(command))) {
+    if (match[2] !== undefined) {
+      heredocs.push({ delimiter: unquote(match[2]), stripTabs: !!match[1] });
+      continue;
+    }
+    const token = match[0];
+    if (token.startsWith('#')) continue;
+    tokens.push(token);
+    if (token !== '\n') continue;
+    for (const { delimiter, stripTabs } of heredocs) {
+      while (syntax.lastIndex < command.length) {
+        const end = command.indexOf('\n', syntax.lastIndex);
+        const line = command.slice(syntax.lastIndex, end < 0 ? command.length : end).replace(/\r$/, '');
+        syntax.lastIndex = end < 0 ? command.length : end + 1;
+        if ((stripTabs ? line.replace(/^\t+/, '') : line) === delimiter) break;
+      }
+    }
+    heredocs.length = 0;
+  }
+  return tokens;
+}
+
 // Only inspect the command, never evaluate shell syntax. Keep quoted config values together.
 function codexCall(command, cwd) {
-  const tokens = text(command).match(/\d?>&\d|&>>?|\d?>>?|<|(?:[^\s"';&|<>]+|"(?:\\.|[^"\\])*"|'[^']*')+|&&|\|\||[;&|\n]/g) || [];
+  const tokens = shellTokens(text(command));
   const words = tokens.map(unquote);
   const separator = word => /^(?:&&|\|\||[;&|\n])$/.test(word);
   const start = words.findIndex((word, i) => {
@@ -42,7 +69,9 @@ function codexCall(command, cwd) {
       if (match[1] === 'service_tier') fast = /fast|priority/i.test(match[2]);
     } else if (/^(?:<|[12]?>>?|&>>?)$/.test(tokens[i]) && words[i + 1]) {
       const input = tokens[i] === '<';
-      const filename = tokens[++i].startsWith("'") ? words[i] : expand(words[i]);
+      let filename = tokens[++i].startsWith("'") ? words[i] : expand(words[i]);
+      // Git Bash records drive aliases; only a Windows cwd proves they name local files.
+      if (process.platform === 'win32' && /^(?:[a-z]:[\\/]|\\\\)/i.test(cwd || '')) filename = filename.replace(/^\/([a-z])\//i, '$1:/');
       const resolved = /[$`]|^(?:nul|\/dev\/null)$/i.test(filename) ? null : resolvePath(cwd, filename);
       if (input) { task = basename(filename); prompt = resolved; } else log = resolved;
     }
@@ -66,7 +95,7 @@ class AgentCalls {
   constructor({ changed = () => {}, names = id => id === 'openai' ? 'OpenAI' : id } = {}) {
     this.changed = changed; this.names = names; this.folder = null; this.reset();
   }
-  reset() { clearTimeout(this.timer); this.timer = null; this.calls = new Map(); this.meta = new Map(); this.pending = new Set(); this.work = null; }
+  reset() { clearTimeout(this.timer); this.timer = null; this.calls = new Map(); this.polls = new Map(); this.meta = new Map(); this.pending = new Set(); this.work = null; }
   setFolder(folder) { if (folder !== this.folder) { this.reset(); this.folder = folder; } }
   snapshot(provider) {
     const groups = new Map();
@@ -90,6 +119,11 @@ class AgentCalls {
     const at = Date.parse(record.timestamp);
     let changed = false;
     for (const block of Array.isArray(content) ? content : []) {
+      if (record.type === 'assistant' && block.type === 'tool_use' && ['BashOutput', 'TaskOutput'].includes(block.name)) {
+        const task = block.input?.bash_id || block.input?.task_id;
+        if (typeof block.id === 'string' && typeof task === 'string' && task) this.polls.set(block.id, task);
+        continue;
+      }
       if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && !this.calls.has(block.id)) {
         const input = block.input || {}, codex = block.name === 'Bash' ? codexCall(input.command, record.cwd) : null;
         if (block.name !== 'Agent' && !codex) continue;
@@ -107,9 +141,17 @@ class AgentCalls {
         this.refresh(block.id);
         changed = true;
       } else if (record.type === 'user' && block.type === 'tool_result') {
+        const result = record.toolUseResult || {}, task = this.polls.get(block.tool_use_id);
+        if (task) {
+          this.polls.delete(block.tool_use_id);
+          const call = [...this.calls.values()].find(call => call.agent === 'Codex' && call.backgroundTaskId === (result.task?.task_id || task));
+          if (call && !call.reviewed && (!call.done || call.pendingReview) && !block.is_error && /^(?:completed|failed|killed)$/.test(result.task?.status || result.status)) {
+            call.done = true; call.finishedAt = at; call.pendingReview = false; changed = true;
+          }
+          continue;
+        }
         const call = this.calls.get(block.tool_use_id);
         if (!call || call.reviewed) continue;
-        const result = record.toolUseResult || {};
         call.background ||= enabled(result.isAsync) || !!result.backgroundTaskId;
         if (call.agent === 'Codex' && typeof result.backgroundTaskId === 'string' && result.backgroundTaskId) call.backgroundTaskId = result.backgroundTaskId;
         if ((block.is_error || !call.background) && !call.done) { call.done = true; call.finishedAt = at; changed = true; }

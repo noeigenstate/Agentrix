@@ -4,14 +4,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const vm = require('node:vm');
-const { UsageMeter, claudeAccount } = require('../electron/features/agents/agent-usage.cjs');
+const { UsageMeter, claudeAccount, selectClaudeAccount } = require('../electron/features/agents/agent-usage.cjs');
 const { CodexActivityReader, monitorActivity } = require('../electron/codex-activity.cjs');
 const { CodexAccountUsage, accountResult } = require('../electron/features/agents/codex-account-usage.cjs');
+const { ClaudeAccountUsage, readClaudeAccount } = require('../electron/features/agents/claude-account-usage.cjs');
 const { promptText } = require('../electron/prompt-queue.cjs');
 
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const section = (from, to) => main.slice(main.indexOf(from), main.indexOf(to));
 const accounts = section('let claudeAccountTimer =', '// Restores and the reading-view picker');
+const claudeService = section('const claudeAccounts = new', 'const { agentCommand }');
 const notes = section('function noteSettings(', '// A skill step names the skill;');
 const historyUsage = section('function usageHistory(', '// What the activity pane shows');
 const lifecycle = section('function startUsage(', 'let claudeAccountTimer =');
@@ -46,6 +48,8 @@ function runtime(overrides = {}) {
     store: { projects: [{ id: 'local', kind: 'local' }, { id: 'remote', kind: 'ssh' }], settings: {}, expectCompletion: () => assert.fail('background usage must not rearm completion'), setRestore() {} },
     claudeAccountFiles: () => [path.join(os.tmpdir(), 'usage-cache', '.claude.json'), path.join(os.tmpdir(), 'usage-cache', '.codepulse', 'claude-quota.json')],
     claudeAccount: async () => account(), agentSettings: previous => previous,
+    ClaudeAccountUsage, readClaudeAccount: async () => ({ state: 'skipped', reason: 'fixture' }),
+    electronNet: { fetch: () => assert.fail('unexpected Chromium fetch') },
     codexProvider: async () => id => id, claudeProvider: async () => 'Anthropic', claudeConfigDir: () => '',
     followClaude() {}, applyActivity() {}, broadcast() {}, isLocalAgentCommand: (_agent, text) => text.startsWith('/'),
     terminalIds, shownTerminalIds: terminalIds,
@@ -54,8 +58,9 @@ function runtime(overrides = {}) {
     ...overrides,
   });
   // Run the real main-process functions without requiring Electron or creating a terminal.
-  const api = vm.runInContext(`${accounts}\n${notes}\n${historyUsage}\n${lifecycle}\n${hooks}\n${events}\n${state}\n({
+  const api = vm.runInContext(`${claudeService}\n${accounts}\n${notes}\n${historyUsage}\n${lifecycle}\n${hooks}\n${events}\n${state}\n({
     refreshClaudeAccounts, startUsage, stopUsageAccount, disposeClaudeAccounts, scheduleUsageRollover, noteSettings, usageHistory, claudeActivity, onEvent, publicState,
+    claudeAccounts,
     resources: () => ({ claudeAccountTimer, claudeAccountSoon, claudeAccountPending, claudeAccountWatchers, usageRolloverTimer, usageRolloverAt })
   })`, context);
   api.history = (s, agent) => vm.runInContext(`s => { ${histories[agent === 'claude' ? 0 : 1]}; return onHistory; }`, context)(s);
@@ -170,9 +175,9 @@ test('new account limits reach the pane during slow history while conversation t
 test('one Claude account read updates every local meter and publishes once', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 100000 });
   const sessions = new Map(['first', 'middle', 'last'].map(terminalId => [terminalId, {
-    terminalId, projectId: 'local', codexActive: true, usage: new UsageMeter('claude'),
+    terminalId, projectId: 'local', codexActive: true, agent: 'claude', usage: new UsageMeter('claude'),
   }]));
-  sessions.set('remote', { projectId: 'remote', codexActive: true, usage: new UsageMeter('claude') });
+  sessions.set('remote', { projectId: 'remote', codexActive: true, agent: 'claude', usage: new UsageMeter('claude') });
   let at = 1000, reads = 0, publishes = 0;
   const api = runtime({
     sessions, scheduleState: () => ++publishes,
@@ -188,6 +193,79 @@ test('one Claude account read updates every local meter and publishes once', asy
   await api.refreshClaudeAccounts();
   assert.equal(publishes, 3, 'unchanged displayed values do not publish');
   assert.equal(sessions.get('remote').usage.limitsAt, null);
+});
+
+test('the real Claude poller uses Chromium fetch, publishes sanitized limits without rearming completion, excludes SSH and stops with the last local terminal', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 1000000 });
+  const root = path.join(__dirname, '../.test-output/claude-account-usage-20261028/main-fake-home');
+  const sessions = new Map([['remote', session('remote', 'claude', 'remote')], ['codex', session('codex', 'codex')],
+    ['inactive', { ...session('inactive'), codexActive: false }], ['stale', { ...session('stale'), agent: 'codex' }]]);
+  const fakeToken = 'fake-wiring-token-never-publish';
+  let requests = 0, publishes = 0, signal, release;
+  const api = runtime({ sessions, scheduleState: () => ++publishes,
+    claudeAccount: async (_file, _pulse, direct) => selectClaudeAccount(null, account(1000010, 3), direct),
+    readClaudeAccount: options => {
+      assert.equal(options.routes.length, 1);
+      assert.equal(typeof options.fetch, 'function', 'production must inject Chromium fetch before any request is possible');
+      return readClaudeAccount({ ...options, env: {}, home: root, platform: 'linux',
+      async readFile(file) {
+        assert.ok(file.startsWith(root), 'all credential/settings reads use fake paths');
+        if (file === path.join(root, '.claude', '.credentials.json')) return JSON.stringify({ claudeAiOauth: {
+          accessToken: fakeToken, scopes: ['user:profile', 'user:inference'], expiresAt: 9999999999999,
+        } });
+        throw Object.assign(new Error(fakeToken), { code: 'ENOENT' });
+      } });
+    },
+    electronNet: { async fetch(_url, init) {
+        ++requests; signal = init.signal;
+        assert.equal(init.headers.Authorization, `Bearer ${fakeToken}`);
+        if (requests === 2) return new Promise(resolve => { release = resolve; });
+        return { status: 200, json: async () => ({ five_hour: { utilization: 24, resets_at: '1970-01-01T01:00:00Z' }, private: fakeToken }) };
+    } },
+  });
+  t.after(() => api.close());
+  await api.refreshClaudeAccounts();
+  t.mock.timers.tick(60000); await flush(); assert.equal(requests, 0);
+  const s = session('one'); s.usageEnv = {}; s.usageCwd = path.join(root, 'project'); sessions.set('one', s);
+  await api.refreshClaudeAccounts();
+  t.mock.timers.tick(249); await flush(); assert.equal(requests, 0);
+  t.mock.timers.tick(1); await flush(); assert.equal(requests, 1);
+  t.mock.timers.tick(25); await api.resources().claudeAccountPending;
+  const shown = api.publicState().projects[0].terminals.find(item => item.id === 'one').agentUsage;
+  assert.equal(shown.limitsFrom, 'Claude'); assert.equal(shown.limits[0].percent, 24);
+  assert.equal(sessions.get('remote').usage.limitsAt, null); assert.equal(sessions.get('inactive').usage.limitsAt, null);
+  assert.doesNotMatch(JSON.stringify(api.publicState()), /fake-wiring-token|Authorization|Bearer/);
+  assert.ok(publishes > 0);
+  const event = { state: 'complete', sessionId: 'one-session', eventId: 'one-stop' };
+  api.claudeActivity({ id: 'local', kind: 'local' }, s, event); await flush();
+  t.mock.timers.tick(59975); await flush(); assert.equal(requests, 2);
+  api.stopUsageAccount(s); s.codexActive = false;
+  assert.equal(signal.aborted, true); assert.equal(api.claudeAccounts.active, false);
+  const before = publishes;
+  release({ status: 200, json: async () => ({ five_hour: { utilization: 99 } }) }); await flush();
+  t.mock.timers.tick(120000); await flush();
+  assert.equal(requests, 2); assert.equal(publishes, before); assert.equal(s.usage.limits[0].percent, 24);
+});
+
+test('a slow pre-query fallback read compares against the current direct observation when it finally publishes', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 1000000 });
+  const s = session('one'), pulse = { ...account(1100000, 2), source: 'CodePulse' };
+  s.usage.account(pulse);
+  let release, first = true;
+  const api = runtime({ sessions: new Map([['one', s]]),
+    claudeAccount: async (_file, _pulse, direct) => {
+      if (!first) return selectClaudeAccount(null, pulse, direct);
+      first = false; assert.equal(direct, null);
+      return new Promise(resolve => { release = resolve; });
+    },
+    readClaudeAccount: async () => ({ state: 'ready', status: 200, account: { ...account(Date.now(), 24), source: 'Claude' } }),
+  });
+  t.after(() => api.close());
+  const pending = api.refreshClaudeAccounts(); await flush();
+  t.mock.timers.tick(250); await flush();
+  assert.equal(api.claudeAccounts.account.source, 'Claude');
+  release(pulse); await pending;
+  assert.deepEqual([s.usage.limitsAt, s.usage.limitsFrom, s.usage.limits[0].percent], [1000250, 'Claude', 24]);
 });
 
 test('shared Claude folder watchers coalesce atomic-replace bursts and release with the last local terminal', async t => {
