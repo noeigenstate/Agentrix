@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { _electron as electron } from 'playwright-core';
-import { waitFor } from './wait.mjs';
+import { waitFor, terminalsSettled } from './wait.mjs';
 
 const require = createRequire(import.meta.url);
 const exec = promisify(execFile);
@@ -45,18 +45,44 @@ try {
   assert.deepEqual((await receipt()).args.slice(6), ['resume', sessionId, '继续'], 'cmd passes the resume arguments, Chinese included, through the codex wrapper');
   assert.equal((await terminal()).shell, 'cmd');
   await waitFor(async () => (await terminal()).codexActive, 'the wrapper reports Codex as started');
+  const panel = page.locator(`[data-project-id="${project.id}"]`);
+  const { id: terminalId, sessionId: shellSession } = await terminal();
+  const shell = panel.locator(`[data-terminal-slot="${terminalId}"]`);
   await page.screenshot({ path: path.join(output, 'cmd-codex.png') });
   // Leaving Codex returns to the cmd prompt, which reports itself through its invisible marker.
-  await page.evaluate(id => window.agentrix.writeTerminal(id, '\x03'), project.id);
+  await page.evaluate(id => window.agentrix.writeTerminal(id, '\x03'), terminalId);
   await waitFor(async () => { const state = await terminal(); return !state.codexActive && state.shellReady; }, 'back at the cmd prompt after Codex exits');
-  await page.evaluate(id => window.agentrix.writeTerminal(id, 'cd sub\r'), project.id);
+  assert.equal(await page.locator('.focus-mode').count(), 0, 'exiting Codex keeps the project in the grid');
+  await shell.waitFor({ state: 'hidden' });
+  await terminalsSettled(page);
+  await page.evaluate(id => window.agentrix.writeTerminal(id, 'cd sub\r'), terminalId);
   await waitFor(async () => { const saved = JSON.parse(await fs.readFile(path.join(dataDir, 'workspace.json'), 'utf8')); return saved.projects[0].restore.cwd === path.join(project.path, 'sub'); }, 'the prompt reports the new directory');
-  const text = await page.locator('.xterm-rows').first().innerText();
-  // The welcome has scrolled away under Codex's output; the new prompt is on screen.
-  await waitFor(async () => (await page.locator('.xterm-rows').first().innerText()).includes(`${path.join(project.path, 'sub')}>`), 'the cmd prompt shows the new directory');
+  // Plain shells stay running in the grid; reveal one before checking its rendered prompt.
+  await panel.locator('.panel-name').click();
+  await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  await shell.waitFor({ state: 'visible' });
+  await terminalsSettled(page);
+  const rows = shell.locator('.xterm-rows');
+  await rows.waitFor({ state: 'visible' });
+  // A narrow terminal wraps the prompt across physical rows.
+  let text;
+  await waitFor(async () => {
+    text = (await rows.locator(':scope > div').allTextContents()).join('');
+    return text.includes(`${path.join(project.path, 'sub')}>`);
+  }, 'the cmd prompt shows the new directory');
   assert.ok(!text.includes('6973') && !text.includes('Agentrix;prompt'), 'the prompt marker stays invisible');
   await page.screenshot({ path: path.join(output, 'cmd-prompt.png') });
+  await page.locator('.focus-sidebar .explorer-back').click();
+  await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  await shell.waitFor({ state: 'hidden' });
+  const returned = await terminal();
+  assert.equal(returned.sessionId, shellSession, 'returning to the grid preserves the cmd session');
+  assert.ok(!returned.codexActive && returned.shellReady, 'the hidden cmd shell stays ready');
+  const saved = JSON.parse(await fs.readFile(path.join(dataDir, 'workspace.json'), 'utf8'));
+  assert.equal(saved.projects[0].restore.cwd, path.join(project.path, 'sub'), 'returning to the grid preserves the reported directory');
+  await page.screenshot({ path: path.join(output, 'cmd-grid.png') });
   console.log('PASS: Command Prompt terminals start from settings, report prompts and directories, run codex through the wrapper and resume interrupted sessions with 继续');
+  console.log('PASS: the current cmd prompt is visible on expansion and the hidden shell stays live on return');
 } catch (error) {
   console.error(error); process.exitCode = 1;
   if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});
