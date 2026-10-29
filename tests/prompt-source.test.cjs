@@ -340,7 +340,7 @@ test('main keeps the short lastTask and long card task across bare follow-ups in
       s.promptQueue.finish(2300 + index * 200);
     }
     Object.assign(context, { terminalIds: () => [s.terminalId], shownTerminalIds: () => [s.terminalId], getBranch: () => '', localShell: () => ({ kind: 'powershell' }),
-      t: text => text, briefAction: value => value, desktopGlassBackend: null, desktopGlassActive: false, desktopGlassWindow: false,
+      t: text => text, briefAction: value => value, desktopGlassBackend: null, desktopGlassActive: false, desktopGlassWindow: false, windowZoom: null,
       startupErrors: new Map(), process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: 'synthetic' } }, app: { getVersion: () => '0.0.0' } });
     vm.runInContext(main.slice(main.indexOf('function publicState('), main.indexOf('function terminalIds(')), context);
     const card = () => context.publicState().projects[0].terminals[0];

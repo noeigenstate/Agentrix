@@ -54,7 +54,7 @@ function runtime(overrides = {}) {
     followClaude() {}, applyActivity() {}, broadcast() {}, isLocalAgentCommand: (_agent, text) => text.startsWith('/'),
     terminalIds, shownTerminalIds: terminalIds,
     localShell: () => ({ kind: 'pwsh' }), t: value => value, getBranch: () => '', startupErrors: new Map(),
-    desktopGlassBackend: null, desktopGlassActive: false, desktopGlassWindow: false, app: { getVersion: () => 'test' },
+    desktopGlassBackend: null, desktopGlassActive: false, desktopGlassWindow: false, windowZoom: null, app: { getVersion: () => 'test' },
     ...overrides,
   });
   // Run the real main-process functions without requiring Electron or creating a terminal.

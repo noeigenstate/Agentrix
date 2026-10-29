@@ -194,7 +194,7 @@ test('legacy theme values fall back to the first theme on load and on settings u
 });
 
 test('settings reject invalid layout and font values', () => {
-  assert.deepEqual(cleanSettings({ columns: 999, fontSize: -2, notifications: 'yes', sound: false }), { startView: 'decisions', fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', focusAnimation: 'smooth', language: 'en', theme: 'mono', surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', shortcuts: {}, guideVersion: '', shell: 'powershell', notifications: true, sound: false, closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, restoreSessions: true, autoSave: true, activityPane: true, voiceModel: 'sensevoice' });
+  assert.deepEqual(cleanSettings({ columns: 999, fontSize: -2, notifications: 'yes', sound: false }), { startView: 'decisions', fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', focusAnimation: 'smooth', uiZoom: null, language: 'en', theme: 'mono', surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', shortcuts: {}, guideVersion: '', shell: 'powershell', notifications: true, sound: false, closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, restoreSessions: true, autoSave: true, activityPane: true, voiceModel: 'sensevoice' });
   // The spoken notice is gone: its old settings are dropped.
   const old = cleanSettings({ announce: true, announcePhrase: '{项目}', summary: { mode: 'local' } });
   assert.equal('announce' in old || 'announcePhrase' in old || 'summary' in old, false);
@@ -329,6 +329,27 @@ test('glass transparency is optional, validated and preserved across material ch
   assert.equal(new WorkspaceStore(file).settings.glassTransparency, null);
   for (const value of [-1, 101, 0.5, '50', true, NaN, Infinity, undefined]) {
     assert.equal(cleanSettings({ glassTransparency: value }).glassTransparency, null);
+  }
+});
+
+test('interface zoom defaults to auto and preserves only supported percentages across restart', t => {
+  const { store, file } = fixture(t);
+  assert.equal(store.settings.uiZoom, null);
+  const old = JSON.parse(fs.readFileSync(file, 'utf8'));
+  delete old.settings.uiZoom;
+  fs.writeFileSync(file, JSON.stringify(old));
+  assert.equal(new WorkspaceStore(file).settings.uiZoom, null, 'old workspaces without a zoom setting use auto');
+  for (const value of [80, 90, 100, 110, 125, 150, null]) {
+    store.updateSettings({ uiZoom: value });
+    store.updateSettings({ theme: 'light' });
+    assert.equal(new WorkspaceStore(file).settings.uiZoom, value);
+    assert.equal(store.settings.fontSize, 12, 'page zoom does not rewrite terminal font settings');
+  }
+  for (const value of [0, 79, 85, 95, 101, 151, 100.5, '100', true, false, NaN, Infinity, undefined, {}, []]) {
+    assert.equal(cleanSettings({ uiZoom: value }).uiZoom, null);
+    store.updateSettings({ uiZoom: 125 });
+    store.updateSettings({ uiZoom: value });
+    assert.equal(new WorkspaceStore(file).settings.uiZoom, null);
   }
 });
 
