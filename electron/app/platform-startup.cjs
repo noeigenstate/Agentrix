@@ -1,7 +1,7 @@
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { isInstalledBuild } = require('../updates.cjs');
-const { windowsAppId, materializeIcon, repairShortcuts, refreshSearchIcons } = require('../windows-integration.cjs');
+const { windowsAppId, windowsDisplayName, registerNotificationIdentity, materializeIcon, repairShortcuts, refreshSearchIcons } = require('../windows-integration.cjs');
 const { findShell, prepareZshStartup, withoutAppImage, loginShellPath, mergePath } = require('../zsh-terminal.cjs');
 
 function configureApplication(app) {
@@ -17,15 +17,17 @@ function configureApplication(app) {
   const voiceDirectory = path.join(!app.isPackaged && !process.env.AGENTRIX_DATA_DIR ? path.join(app.getPath('appData'), 'Agentrix') : app.getPath('userData'), 'voice');
   app.setName('Agentrix');
   const installed = isInstalledBuild(app.isPackaged, process.execPath);
-  const appUserModelId = windowsAppId({ packaged: app.isPackaged, installed, profile: process.env.AGENTRIX_DATA_DIR });
+  const build = { packaged: app.isPackaged, installed, profile: process.env.AGENTRIX_DATA_DIR };
+  const appUserModelId = windowsAppId(build);
   if (process.platform === 'win32') app.setAppUserModelId(appUserModelId);
-  return { installed, appUserModelId, voiceDirectory };
+  return { installed, appUserModelId, relaunchDisplayName: windowsDisplayName(build), voiceDirectory };
 }
 
-function prepareWindowIcon({ app, shell, root, installed }) {
+function prepareWindowIcon({ app, shell, root, installed, appUserModelId, relaunchDisplayName }) {
   let shellIcon = path.join(root, 'assets/icon.ico');
   if (process.platform !== 'win32') return shellIcon;
   shellIcon = materializeIcon(shellIcon, app.getPath('userData'));
+  void registerNotificationIdentity({ appUserModelId, displayName: relaunchDisplayName, icon: shellIcon });
   const refreshIcons = () => execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/ie4uinit.exe'), ['-show'], { windowsHide: true, timeout: 5000 }, () => {});
   if (installed && !process.env.AGENTRIX_DATA_DIR) {
     try {

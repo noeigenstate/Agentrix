@@ -87,7 +87,7 @@ const root = path.join(__dirname, '..');
 const integrationDir = app.isPackaged ? path.join(process.resourcesPath, 'integration') : path.join(root, 'integration');
 const { accountEnvironment } = require(path.join(integrationDir, 'codex-account-scope.cjs'));
 const devUrl = !app.isPackaged ? process.env.AGENTRIX_DEV_URL : null;
-const { installed, appUserModelId, voiceDirectory } = configureApplication(app);
+const { installed, appUserModelId, relaunchDisplayName, voiceDirectory } = configureApplication(app);
 registerAppSchemes(protocol);
 
 const { translate } = require('./i18n.cjs');
@@ -1251,7 +1251,7 @@ if (!app.requestSingleInstanceLock()) {
     fs.mkdirSync(app.getPath('userData'), { recursive: true });
     // Before any terminal or agent starts: they inherit the system proxy only through process.env.
     await adoptSystemProxy({ session: electronSession.defaultSession }).catch(error => console.warn('System proxy:', error.message));
-    const shellIcon = prepareWindowIcon({ app, shell, root, installed });
+    const shellIcon = prepareWindowIcon({ app, shell, root, installed, appUserModelId, relaunchDisplayName });
     zshStartup = prepareShellIntegration({ app, integrationDir, agents });
     store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'));
     skills = new SkillsStore({ dataDir: app.getPath('userData'), builtinDir: app.isPackaged ? path.join(process.resourcesPath, 'skills') : path.join(root, 'resources', 'skills'),
@@ -1302,7 +1302,7 @@ if (!app.requestSingleInstanceLock()) {
     }
     if (process.platform === 'win32') window.setAppDetails({ appId: appUserModelId, appIconPath: shellIcon, appIconIndex: 0,
       relaunchCommand: app.isPackaged ? `"${process.execPath}"` : `"${process.execPath}" "${root}"`,
-      relaunchDisplayName: process.env.AGENTRIX_DATA_DIR ? 'Agentrix Test' : !app.isPackaged ? 'Agentrix Dev' : installed ? 'Agentrix' : 'Agentrix Portable',
+      relaunchDisplayName,
     });
     windowZoom = registerWindowZoom({ window, screen, getZoom: () => store.settings.uiZoom, broadcast });
     registerWindowContents({ window, Menu, clipboard, previewResources, pictureFrom, devUrl, t,

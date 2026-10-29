@@ -1,14 +1,37 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const { execFile } = require('node:child_process');
 
 const APP_ID = 'local.projectgrid.desktop';
 const APP_NAME = 'Agentrix';
 
 function windowsAppId({ packaged, installed, profile }) {
-  if (profile) return `${APP_ID}.test.${createHash('sha256').update(path.resolve(profile)).digest('hex').slice(0, 12)}`;
+  // Profile directories isolate the single-instance lock; tests share one shell identity.
+  if (profile) return `${APP_ID}.test`;
   if (!packaged) return `${APP_ID}.development`;
   return installed ? APP_ID : `${APP_ID}.portable`;
+}
+
+function windowsDisplayName({ packaged, installed, profile }) {
+  if (profile) return `${APP_NAME} Test`;
+  if (!packaged) return `${APP_NAME} Dev`;
+  return installed ? APP_NAME : `${APP_NAME} Portable`;
+}
+
+async function registerNotificationIdentity({ appUserModelId, displayName, icon, execFile: execute = execFile }) {
+  if (appUserModelId === APP_ID) return;
+  const key = `HKCU\\Software\\Classes\\AppUserModelId\\${appUserModelId}`;
+  const reg = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe');
+  const run = args => new Promise(resolve => execute(reg, args, { windowsHide: true, timeout: 5000 }, (error, stdout) => resolve(error ? '' : stdout)));
+  try {
+    for (const [name, value] of [['DisplayName', displayName], ['IconUri', icon]]) {
+      // Match data inside reg.exe so Unicode paths do not depend on its output code page.
+      const current = await run(['query', key, '/f', value, '/d', '/e', '/c']);
+      if (new RegExp(`^\\s+${name}\\s+REG_(?:EXPAND_)?SZ\\s`, 'mi').test(current)) continue;
+      await run(['add', key, '/v', name, '/t', 'REG_SZ', '/d', value, '/f']);
+    }
+  } catch { /* Shell branding must never prevent startup. */ }
 }
 
 function materializeIcon(iconSource, userData) {
@@ -84,4 +107,4 @@ function repairShortcuts({ shell, executable, iconSource, userData, programs, co
   return { icon, changes, warnings };
 }
 
-module.exports = { APP_ID, windowsAppId, materializeIcon, repairShortcuts, refreshSearchIcons };
+module.exports = { APP_ID, windowsAppId, windowsDisplayName, registerNotificationIdentity, materializeIcon, repairShortcuts, refreshSearchIcons };
