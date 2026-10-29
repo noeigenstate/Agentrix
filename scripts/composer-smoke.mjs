@@ -106,7 +106,7 @@ try {
   await waitFor(async () => await terminal.locator('.xterm-decoration-top').count() > 0, 'selected cells rendered');
   assert.ok(await terminal.locator('.xterm-decoration-top:not(.xterm-cursor-block)').evaluateAll(cells => cells.every(cell => getComputedStyle(cell).backgroundColor === 'rgb(56, 56, 56)')), 'selection keeps its opaque grey background (#383838)');
   await page.screenshot({ path: path.join(output, 'selection.png') }); await page.keyboard.press('Escape');
-  await first.getByRole('button', { name: `全屏查看 ${projects[0].name}`, exact: true }).click();
+  await first.getByRole('button', { name: `进入 ${projects[0].name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await page.evaluate(() => window.agentrix.settings({ fontSize: 17 }));
   await composerSample(terminal, 'focused-17px');

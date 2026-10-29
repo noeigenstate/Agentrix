@@ -84,7 +84,7 @@ async function run() {
         await page.getByRole('menuitem', { name: /Back to projects|返回项目/i }).click();
       }
       // The isolated project's terminal is mounted in a focus view so CLI cursor queries receive real answers.
-      const expand = page.getByRole('button', { name: new RegExp(`Full screen.*${project.name}|全屏查看 ${project.name}`, 'i') }).first();
+      const expand = page.getByRole('button', { name: new RegExp(`Full screen.*${project.name}|进入 ${project.name}`, 'i') }).first();
       if (await expand.isVisible().catch(() => false)) await expand.click();
       const write = data => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: terminalId, data });
       const rows = () => page.locator(`[data-terminal-id="${terminalId}"] .xterm-rows > div`).allTextContents();

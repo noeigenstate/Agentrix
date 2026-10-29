@@ -84,7 +84,7 @@ async function prompt(name, title) {
 try {
   await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.setContentSize(1500, 950); w.webContents.setBackgroundThrottling(false); });
   await card.waitFor({ timeout: 20000 });
-  await card.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
+  await card.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
   await page.evaluate(id => window.agentrix.startTerminal(id), project.id);
   await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals[0]?.shellReady, 'shell');
   await write('codex\r');

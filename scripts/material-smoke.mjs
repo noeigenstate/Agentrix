@@ -99,7 +99,7 @@ try {
     await page.screenshot({ path: path.join(output, `liquid-${count}-cards.png`) });
   }
   const first = page.locator(`[data-project-id="${projects[0].id}"]`);
-  await first.getByRole('button', { name: `全屏查看 ${projects[0].name}`, exact: true }).click();
+  await first.getByRole('button', { name: `进入 ${projects[0].name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await checkEdges('focused');
   const focusedLayout = await checkGaps('focused');

@@ -39,7 +39,7 @@ export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects:
     },
     {
       id: 'expand', title: t('放大查看'), interactive: true,
-      body: [t('点击标题栏放大这个项目：左边是文件和 Git 更改，可以逐块保留或还原；右边的活动栏列出它的每一步。'), t('按 {key} 返回总览。', { key: shortcut('overview') })],
+      body: [t('点击标题栏进入这个项目：左边是文件和 Git 更改，可以逐块保留或还原；右边的活动栏列出它的每一步。'), t('按 {key} 返回总览。', { key: shortcut('overview') })],
       target: () => visible('.project-panel .panel-header'), done: () => !!focusedId,
     },
     {

@@ -163,7 +163,7 @@ try {
   await panel(3).locator('.panel-terminal-area').click({ position: { x: 40, y: 50 } });
   await page.keyboard.type('DRAFT_STAYS_SMALL'); assert.equal(await page.locator('.focus-mode').count(), 0);
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1600, 900));
-  await panel(0).getByRole('button', { name: `全屏查看 ${names[0]}`, exact: true }).click();
+  await panel(0).getByRole('button', { name: `进入 ${names[0]}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await page.screenshot({ path: path.join(output, 'focused-explorer.png') });
   await page.getByRole('button', { name: '返回总览', exact: true }).click();

@@ -71,7 +71,7 @@ try {
   assert.equal((await page.evaluate(id => window.agentrix.terminalActions(id), project.id)).value.length, 2, 'both steps are listed for the review card');
   // Expanded, the pane beside the terminal shows the prompts being worked on, then the model's route, the context it
   // fills and what it has used, as Codex's records give them.
-  await page.getByRole('button', { name: '全屏查看 Parent task status', exact: true }).click();
+  await page.getByRole('button', { name: '进入 Parent task status', exact: true }).click();
   const pane = page.locator('.activity-pane'); await pane.waitFor();
   const overview = pane.locator('.activity-main-tasks'); await overview.waitFor();
   assert.equal(await pane.locator('.activity-context .activity-figure').count(), 0, 'no context before Codex counts one');

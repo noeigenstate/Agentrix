@@ -182,7 +182,7 @@ try {
     requestAnimationFrame(sample);
   });
   const naturalStart = (await panel.boundingBox()).width;
-  await panel.getByRole('button', { name: `全屏查看 ${projects.at(-1).name}`, exact: true }).click();
+  await panel.getByRole('button', { name: `进入 ${projects.at(-1).name}`, exact: true }).click();
   await settled(true);
   const naturalEnd = (await panel.boundingBox()).width;
   const samples = await page.evaluate(() => globalThis.focusMotionSamples);

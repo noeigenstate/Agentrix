@@ -53,7 +53,7 @@ try {
   await waitFor(async () => (await state()).shellReady, 'isolated shell ready');
   await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'hierarchy-fixture> ' }; Send-AgentrixEvent 'codex-started'\r"), project.id);
   await waitFor(async () => (await state()).codexActive, 'fixture agent active');
-  if (!await page.locator('.focus-mode').count()) await card.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
+  if (!await page.locator('.focus-mode').count()) await card.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   if (!await card.locator('.reading-view').count()) await page.locator('.titlebar-tools').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
   await card.locator('.reading-tools-head').first().waitFor();
@@ -166,7 +166,7 @@ try {
   await popup.getByRole('button', { name: '关闭', exact: true }).click();
   await popup.waitFor({ state: 'detached' });
   assert.equal(await page.locator('.focus-mode').count(), 0, 'popup page navigation keeps the card small');
-  await card.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
+  await card.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await page.evaluate(() => window.agentrix.settings({ autoSave: true }));
   await page.getByRole('treeitem', { name: 'slow-save.txt', exact: true }).click();

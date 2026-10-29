@@ -129,7 +129,7 @@ try {
   await measure('hover-cards', async () => {
     for (let index = 0; index < 4; index++) { const card = await panels.nth(index).boundingBox(); await page.mouse.move(card.x + card.width / 2, card.y + card.height / 2, { steps: 10 }); await sleep(200); }
   }, 400);
-  await measure('expand', () => page.locator(`[data-project-id="${projects[3].id}"]`).getByRole('button', { name: `全屏查看 ${projects[3].name}`, exact: true }).click(), 1100);
+  await measure('expand', () => page.locator(`[data-project-id="${projects[3].id}"]`).getByRole('button', { name: `进入 ${projects[3].name}`, exact: true }).click(), 1100);
   const focused = page.locator(`[data-project-id="${projects[3].id}"]`);
   if (!await focused.locator('.reading-view').count()) await page.locator('.titlebar-tools').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click().catch(() => {});
   await sleep(800);

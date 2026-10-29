@@ -43,7 +43,7 @@ for (const agent of agents) {
     const screenText = async () => (await terminal.locator('.xterm-rows > div').allTextContents()).join('\n');
     const readingText = async () => (await terminal.locator('.reading-content').innerText().catch(() => ''));
     const shot = async name => page.screenshot({ path: path.join(output, agent, `${name}.png`) }).catch(() => {});
-    await card.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
+    await card.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
     await card.getByRole('button', { name: '只打开终端', exact: true }).click();
     for (let i = 0; i < 150 && !(await state()).shellReady; i++) await sleep(200);
     await page.evaluate(({ id, agent }) => window.agentrix.writeTerminal(id, agent + '\r'), { id: project.id, agent });
@@ -184,7 +184,7 @@ for (const agent of agents) {
       left = true;
       await page.getByRole('button', { name: '返回总览', exact: true }).first().click().catch(() => {});
       await sleep(2500);
-      await card.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click().catch(() => {});
+      await card.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click().catch(() => {});
       await composer.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
     } });
     check(agent, 'leave and return', 'returned to the reading view', await composer.isVisible().catch(() => false));

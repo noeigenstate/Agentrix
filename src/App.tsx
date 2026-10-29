@@ -331,7 +331,7 @@ export function App() {
         {focusedId && previewFile?.projectId === focusedId && !previewFile.diff && <Suspense fallback={null}><FilePreview key={`${focusedId}:${previewFile.path}`} projectId={focusedId} filePath={previewFile.path} onClose={async () => { if (await allowNavigation()) setPreviewFile(null); }} autoSave={settings.autoSave} onOpenLink={target => openTerminalLink(focusedId, target)} onError={reportError} registerGuard={registerEditorGuard} /></Suspense>}
         <div className={`grid-area ${!projects.length ? 'empty-area' : ''}`} style={{ visibility: focusedId && previewFile?.projectId === focusedId ? 'hidden' : undefined }}>
           {!projects.length ? <div className="empty-workspace">
-            <span className="eyebrow">{t('你的多项目工作台')}</span><h2>{t('每个项目，一个方框。')}</h2><p>{t('添加项目目录，在独立终端里运行 Codex 或 Claude Code。')}<br />{t('方框亮起时，点击全屏查看，再继续下一轮。')}</p>
+            <span className="eyebrow">{t('你的多项目工作台')}</span><h2>{t('每个项目，一个方框。')}</h2><p>{t('添加项目目录，在独立终端里运行 Codex 或 Claude Code。')}<br />{t('方框亮起时，点击进入会话，再继续下一轮。')}</p>
             <p className="agents-empty-note">{t('需要已安装 Codex CLI 或 Claude Code；可在设置的「编码助手」里一键安装。')}</p>
             <button className="button primary" onClick={() => setAddOpen(true)}><FolderSimplePlus size={18} />{t('添加第一个项目')}</button>
             <div className="empty-hints"><span><Circle weight="fill" size={7} />{t('白色呼吸光 · 等待查看')}</span><span><CheckCircle weight="fill" size={12} />{t('不发光 · 已查看')}</span></div>

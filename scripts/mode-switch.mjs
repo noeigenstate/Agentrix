@@ -6,7 +6,7 @@ const settled = (page, expanded) => page.waitForFunction(expanded => !!document.
 // terminalId: the split the switch acts on, for a project with several terminals (the first one is in use until another is picked).
 export async function setMode(page, projectName, mode, { terminalId } = {}) {
   const wasExpanded = await page.locator('.focus-mode').count() > 0;
-  if (!wasExpanded) { await page.getByRole('button', { name: `全屏查看 ${projectName}`, exact: true }).click(); await settled(page, true); }
+  if (!wasExpanded) { await page.getByRole('button', { name: `进入 ${projectName}`, exact: true }).click(); await settled(page, true); }
   if (terminalId) await page.locator(`[data-terminal-id="${terminalId}"] .terminal-split-body`).click({ position: { x: 8, y: 8 } });
   await page.locator('.titlebar-tools').getByRole('button', { name: LABELS[mode], exact: true }).click();
   if (!wasExpanded) { await page.getByRole('button', { name: '返回总览', exact: true }).click(); await settled(page, false); }

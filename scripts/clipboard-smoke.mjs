@@ -43,7 +43,7 @@ try {
       await globalThis.originalWriteText(text); globalThis.pathClipboardOwner = text;
     };
   });
-  await page.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
+  await page.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   for (const format of ['absolute', 'absolute', 'relative']) {
     await page.evaluate(({ id, filename }) => window.agentrix.copyEntries(id, [filename]), { id: project.id, filename });

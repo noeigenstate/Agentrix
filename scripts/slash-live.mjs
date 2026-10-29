@@ -174,7 +174,7 @@ try {
   await page.waitForSelector('.project-panel');
   card = page.locator(`[data-project-id="${project.id}"]`); terminal = page.locator(`[data-terminal-id="${project.id}"]`);
   composer = terminal.locator('.reading-composer textarea');
-  await card.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
+  await card.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
   await card.getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await state()).shellReady, 'PowerShell ready', 60000);
   for (const agent of agents) {

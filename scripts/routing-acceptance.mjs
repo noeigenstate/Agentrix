@@ -91,7 +91,7 @@ await withGuiLock('routing-acceptance', async () => {
     const call = async (method, ...args) => { const result = await page.evaluate(({ method, args }) => window.agentrix[method](...args), { method, args }); if (!result.ok) throw new Error(`${method}: ${result.error}`); return result.value; };
     const terminal = await call('addTerminal', project.id), rogueTerminal = await call('addTerminal', project.id);
     await waitFor(async () => (await call('getState')).projects[0].terminals.filter(item => [terminal, rogueTerminal].includes(item.id)).every(item => item.shellReady), 'lab shells ready', 60000);
-    const expand = page.getByRole('button', { name: /全屏查看 Routing lab|Full screen.*Routing lab/i }).first();
+    const expand = page.getByRole('button', { name: /进入 Routing lab|Full screen.*Routing lab/i }).first();
     if (await expand.isVisible().catch(() => false)) await expand.click();
     const write = (id, data) => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id, data });
     // The rogue terminal finds the fixture worker as Codex and keeps its rollout away from the real Codex home.

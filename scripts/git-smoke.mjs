@@ -38,7 +38,7 @@ const packaged = process.argv.includes('--packaged'), errors = [];
 let app, page;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
 async function openGit(name) {
-  await page.getByRole('button', { name: `全屏查看 ${name}`, exact: true }).click();
+  await page.getByRole('button', { name: `进入 ${name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await page.getByRole('button', { name: 'Git 历史', exact: true }).click();
   await page.getByRole('region', { name: '未提交更改', exact: true }).waitFor();
@@ -160,7 +160,7 @@ try {
   await panel.getByRole('button', { name: /查看提交.*合并工具栏功能/ }).click(); await panel.locator('.git-commit-detail').getByText('feature.txt', { exact: true }).waitFor();
   await page.screenshot({ path: path.join(output, 'ssh-git.png') });
   await page.getByRole('button', { name: '返回总览', exact: true }).click();
-  await page.getByRole('button', { name: `全屏查看 ${plain.name}`, exact: true }).click();
+  await page.getByRole('button', { name: `进入 ${plain.name}`, exact: true }).click();
   await page.getByRole('button', { name: 'Git 历史', exact: true }).click();
   await panel.getByText('此项目不是 Git 工作区', { exact: true }).waitFor();
   // Merge conflicts in the editor: each region offers the user's choices and the text changes only when one

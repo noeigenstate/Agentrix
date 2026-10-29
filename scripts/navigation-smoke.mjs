@@ -57,7 +57,7 @@ try {
   assert.ok(migrated.terminals.every(terminal => !terminal.sessionId && terminal.status === 'stopped'));
   assert.deepEqual((await state()).projects.find(project => project.id === closed.id).terminals.map(terminal => terminal.id), [closed.terminals[0].id], 'previously closed primary does not reappear');
   const legacyPanel = page.locator(`[data-project-id="${legacy.id}"]`);
-  await legacyPanel.getByRole('button', { name: `全屏查看 ${legacy.name}`, exact: true }).click(); await settled(true);
+  await legacyPanel.getByRole('button', { name: `进入 ${legacy.name}`, exact: true }).click(); await settled(true);
   await page.screenshot({ path: path.join(output, 'legacy-stopped-splits.png') });
   await legacyPanel.locator(`[data-terminal-id="${legacy.id}"]`).getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await state()).projects.find(project => project.id === legacy.id).terminals[0].shellReady, 'migrated primary can start manually');
@@ -72,7 +72,7 @@ try {
   assert.equal(await page.getByRole('menuitem', { name: /VS Code|标记开发完成|继续开发/ }).count(), 0);
   await page.getByRole('menuitem', { name: '打开项目目录', exact: true }).click();
   assert.deepEqual(await app.evaluate(() => globalThis.navigationOpened), [local.path]);
-  await first.getByRole('button', { name: `全屏查看 ${local.name}`, exact: true }).click(); await settled(true);
+  await first.getByRole('button', { name: `进入 ${local.name}`, exact: true }).click(); await settled(true);
   const sidebar = page.getByRole('complementary', { name: '项目侧边栏' });
   // The project is the sidebar title; files and Git share one switch, with no separate settings entry.
   assert.equal(await sidebar.getByRole('heading', { name: local.name, exact: true }).count(), 1);
@@ -178,7 +178,7 @@ try {
   assert.equal(await legacyPanel.evaluate(node => node.classList.contains('is-nav-target')), true, 'feedback timer restarts after each switch');
   await page.waitForFunction(() => !document.querySelector('.project-panel.is-nav-target, .panel-nav-hud, .project-switch-hud-content'));
   await page.evaluate(motion => { if (motion) document.documentElement.dataset.motion = motion; else delete document.documentElement.dataset.motion; }, motion);
-  await first.getByRole('button', { name: `全屏查看 ${local.name}`, exact: true }).click(); await settled(true);
+  await first.getByRole('button', { name: `进入 ${local.name}`, exact: true }).click(); await settled(true);
   await page.keyboard.press('Control+Shift+ArrowRight'); await settled(true); await assertSwitch(legacy, false);
   await page.keyboard.press('Control+Shift+ArrowLeft'); await settled(true); await assertSwitch(local, false);
   await page.screenshot({ path: path.join(output, 'project-switch-expanded.png') });
@@ -219,7 +219,7 @@ try {
     await page.screenshot({ path: path.join(output, target.endsWith('docs-alias') ? 'ssh-link-alias.png' : 'ssh-link-directory.png') });
     await page.keyboard.press('Escape'); await popup.waitFor({ state: 'detached' });
   }
-  await second.getByRole('button', { name: `全屏查看 ${remote.name}`, exact: true }).click(); await settled(true);
+  await second.getByRole('button', { name: `进入 ${remote.name}`, exact: true }).click(); await settled(true);
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).click();
   const editor = page.getByRole('textbox', { name: '文件编辑器', exact: true });
   await editor.fill('# 未保存草稿\n\n[查看文档目录](docs/nested/)\n');
@@ -241,7 +241,7 @@ try {
     await page.keyboard.press('F11'); await waitFor(async () => await fullScreen() === enabled, 'F11 toggles full screen');
     await page.getByRole('button', { name: '返回总览', exact: true }).click(); await settled(false);
     assert.equal(await fullScreen(), enabled, 'returning to the overview preserves the user fullscreen choice');
-    await second.getByRole('button', { name: `全屏查看 ${remote.name}`, exact: true }).click(); await settled(true);
+    await second.getByRole('button', { name: `进入 ${remote.name}`, exact: true }).click(); await settled(true);
     assert.equal(await fullScreen(), enabled, 'opening a project preserves the user fullscreen choice');
   }
   for (const [label, enabled] of [['全屏', true], ['退出全屏', false]]) {

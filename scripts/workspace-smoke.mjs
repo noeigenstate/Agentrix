@@ -131,7 +131,7 @@ try {
   const projectState = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0];
   const write = (id, data) => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id, data });
   const grid = async () => { await page.getByRole('button', { name: '返回总览', exact: true }).click(); await page.waitForFunction(() => !document.querySelector('[data-focus-motion]')); };
-  const expand = async () => { await panel.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click(); await page.waitForFunction(() => !document.querySelector('[data-focus-motion]')); await terminalsSettled(page); };
+  const expand = async () => { await panel.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click(); await page.waitForFunction(() => !document.querySelector('[data-focus-motion]')); await terminalsSettled(page); };
   const shellSession = (await projectState()).terminals[0].sessionId;
   await write(project.id, "Write-Output 'GRID_HIDDEN_SHELL_BUFFER'\r");
   await waitFor(async () => shell.locator('.xterm-rows > div').evaluateAll(rows => rows.some(row => row.textContent.trim() === 'GRID_HIDDEN_SHELL_BUFFER')), 'shell buffer marker renders');

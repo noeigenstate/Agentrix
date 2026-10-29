@@ -120,7 +120,7 @@ async function run() {
   };
   await waitFor(async () => (await call('getState')).projects[0].terminals.find(value => value.id === terminalId)?.shellReady, 'isolated shell ready');
   assert.deepEqual(await groups(), [], 'no preparing row is invented before dispatch-start');
-  const expand = page.getByRole('button', { name: /全屏查看 Dispatch probe|Full screen.*Dispatch probe/i }).first();
+  const expand = page.getByRole('button', { name: /进入 Dispatch probe|Full screen.*Dispatch probe/i }).first();
   if (await expand.isVisible().catch(() => false)) await expand.click();
   const write = data => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: terminalId, data });
   await write('claude --model claude-sonnet-4-5 --dangerously-skip-permissions AGENTRIX_DISPATCH_PROBE\r');

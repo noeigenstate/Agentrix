@@ -55,7 +55,7 @@ try {
   await write(projects[1].id, `function global:prompt { 'codex> ' }; Send-AgentrixEvent 'codex-started' -Agent 'codex'; $Host.UI.RawUI.WindowTitle = '${thread}'\r`);
   for (let i = 0; i < 100 && !(await state(1)).terminals[0].codexActive; i++) await sleep(200);
   for (const project of projects) {
-    await page.locator(`[data-project-id="${project.id}"]`).getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
+    await page.locator(`[data-project-id="${project.id}"]`).getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
     await sleep(600);
     const card = page.locator(`[data-project-id="${project.id}"]`);
     if (!await card.locator('.reading-view').count()) await page.locator('.titlebar-tools').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click().catch(() => {});

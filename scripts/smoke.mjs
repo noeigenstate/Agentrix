@@ -135,7 +135,7 @@ try {
 
   for (const [index, project] of projects.entries()) {
     const projectPanel = page.locator(`[data-project-id="${project.id}"]`);
-    if (index === 0) await projectPanel.getByRole('button', { name: `全屏查看 ${project.name}`, exact: true }).click();
+    if (index === 0) await projectPanel.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
     await page.waitForFunction(() => !document.querySelector('.focus-motion-panel'));
     assert.equal(await projectPanel.locator('.terminal-host').count(), 0, 'no empty terminal layer may intercept the start button');
     const startButton = projectPanel.getByRole('button', { name: '只打开终端', exact: true });

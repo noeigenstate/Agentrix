@@ -175,11 +175,11 @@ try {
       await grid();
       let target = panel(index).locator(entry === 'header' ? '.panel-index' : '.panel-name');
       if (entry === 'expand') {
-        const expand = panel(index).locator('.panel-header > .icon-button').and(panel(index).getByRole('button', { name: `全屏查看 ${projects[index].name}`, exact: true }));
+        const expand = panel(index).locator('.panel-header > .icon-button').and(panel(index).getByRole('button', { name: `进入 ${projects[index].name}`, exact: true }));
         if (await expand.count()) target = expand;
         else {
           await panel(index).getByRole('button', { name: `${projects[index].name} 的更多操作`, exact: true }).click();
-          target = panel(index).getByRole('menuitem', { name: '全屏查看', exact: true });
+          target = panel(index).getByRole('menuitem', { name: '进入会话', exact: true });
         }
       }
       await sample(`${kind}-${entry}`, [id], () => target.click());

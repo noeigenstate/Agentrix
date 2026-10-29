@@ -237,7 +237,7 @@ background:radial-gradient(circle at 20% 15%,#ff7ab6 0,transparent 42%),radial-g
 
     // The storefront, expanded: reading view with the activity pane.
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1600, 1040));
-    await panel(0).getByRole('button', { name: '全屏查看 商城前端', exact: true }).click();
+    await panel(0).getByRole('button', { name: '进入 商城前端', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
     await setMode(page, projects[0].name, 'reading');
     const reader = panel(0).locator('.reading-view'), activity = page.locator('.activity-pane');
@@ -331,7 +331,7 @@ background:radial-gradient(circle at 20% 15%,#ff7ab6 0,transparent 42%),radial-g
         await waitFor(async () => (await state(2)).unread > 0, 'dashboard finished');
         await page.waitForTimeout(4200);
         // The storefront opens; its conversation is read as a document while the test run finishes.
-        await panel(0).getByRole('button', { name: `全屏查看 ${projects[0].name}`, exact: true }).click();
+        await panel(0).getByRole('button', { name: `进入 ${projects[0].name}`, exact: true }).click();
         await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
         await page.waitForTimeout(700);
         await setMode(page, projects[0].name, 'reading');
