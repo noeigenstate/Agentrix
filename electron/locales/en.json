@@ -1665,5 +1665,17 @@
   "首次打开项目 · 第一次会话开始前": "First open of a project · before its first session starts",
   "以项目自己的版本为准：{projects}": "Defers to the project’s own copy: {projects}",
   "等 {count} 个项目": "and others ({count} in all)",
-  "渲染": "Rendered"
+  "渲染": "Rendered",
+  "自带「代码规范」技能：第一次在项目里启动会话时先审查代码、给出分阶段计划，你同意后才动手；之后每次改代码都遵循它。": "The built-in Code standard skill: the first session in a project reviews the code and proposes a staged plan, changing nothing until you agree; afterwards every code change follows it.",
+  "触发时机": "Triggers",
+  "技能有始终、按需、首次打开项目三种触发方式；项目里已有同名技能时，以项目自己的版本为准。": "Skills trigger always, on demand, or on a project's first open; where a project has its own copy of a skill, that copy wins.",
+  "技能页": "Skills page",
+  "SKILL.md 渲染成排版后的正文，可切换源码；依赖写明 Codex 或 Claude Code 至少装一个。": "SKILL.md shows as formatted text with a Source toggle; the dependency reads that at least one of Codex or Claude Code is needed.",
+  "主模型状态": "Main model status",
+  "主模型卡片只跟主模型这一轮：由后台结果唤起的一轮会写明在处理哪个结果，结束即停，不再停留在「正在处理」。": "The Main model card follows the main round only: a round woken by a background result says which result it handles and stops when the round ends, instead of lingering on “working”.",
+  "思考深度": "Effort and mode",
+  "每个模型的标题行显示思考深度和输出模式，Claude 子代理也有；不再重复显示「子代理」和官方服务商。": "Each model head shows its effort and output mode, Claude sub-agents included; the repeated “sub-agent” tag and official provider name are gone.",
+  "图标等大": "Marks at one size",
+  "OpenAI 和 Claude 的图标在各处显示同样大小。": "The OpenAI and Claude marks show at the same size everywhere.",
+  "普通": "Standard"
 }

@@ -52,10 +52,10 @@ function Rate({ rate }: { rate: TokenRate | null | undefined }) {
 function ModelHead({ agent, name, effort, fast, provider, title, rate }: { agent: AgentCall['agent']; name: string; effort?: string | null; fast?: boolean | null; provider: string | null | undefined; title: string; rate: TokenRate | null | undefined }) {
   const Mark = agent === 'Codex' ? CodexLogo : ClaudeLogo;
   const visibleProvider = provider === (agent === 'Codex' ? 'OpenAI' : 'Anthropic') ? null : provider;
-  const how = [effort === 'default' ? t('默认') : effort, fast != null && (fast ? t('快速') : t('普通模式'))].filter(Boolean).join(' · ');
+  const how = [effort === 'default' ? t('默认') : effort, fast != null && (fast ? t('快速') : t('普通'))].filter(Boolean).join(' · ');
   return <li className="activity-call-head" title={[title, how].filter(Boolean).join('\n')}>
     <span className="activity-row-icon"><Mark size={16} /></span>
-    <p><b>{name}</b>{how && <span className="activity-call-settings"> · {how}</span>}{visibleProvider && <span className="activity-call-provider">{visibleProvider}</span>}</p>
+    <p><b>{name}</b>{how && <span className="activity-call-settings">{how}</span>}{visibleProvider && <span className="activity-call-provider">{visibleProvider}</span>}</p>
     <Rate rate={rate} />
   </li>;
 }

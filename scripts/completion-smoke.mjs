@@ -81,8 +81,9 @@ try {
   await fs.appendFile(transcript, JSON.stringify({ type: 'turn_context', timestamp: new Date().toISOString(), payload: { cwd: project.path, model: 'gpt-6.1-sol', effort: 'high' } }) + '\n'
     + tokens(used(320000, 290000, 4200), used(310000, 300000, 4200), { primary: { used_percent: 34, window_minutes: 300, resets_at: resets }, secondary: { used_percent: 92, window_minutes: 10080, resets_at: resets } }));
   const text = selector => pane.locator(selector).evaluateAll(nodes => nodes.map(node => node.textContent.replace(/\s+/g, ' ').trim()));
-  await waitFor(async () => (await text('.activity-main .activity-call-head p')).join() === 'GPT-6.1-SolOpenAI', 'the main model section names the model and its service');
-  assert.deepEqual(await text('.activity-main .activity-call-note p'), ['思考 high'], 'the main model section says how the model runs');
+  await waitFor(async () => (await text('.activity-main .activity-call-head p')).join() === 'GPT-6.1-Solhigh', 'the main model section names the model and its effort (the mark stands for the official service)');
+  assert.deepEqual(await text('.activity-main .activity-call-settings'), ['high'], 'the main model head says how the model runs, with no separate note line');
+  assert.equal(await pane.locator('.activity-main .activity-call-note').count(), 0);
   await waitFor(async () => (await text('.activity-context .activity-metric > small')).join() === '共 828k tokens · 还可容纳 514k', 'the context shows how full the window is');
   assert.deepEqual(await text('.activity-context .activity-metric-label'), ['上下文长度'], 'the context title is the label of its meter line');
   assert.deepEqual(await text('.activity-context .activity-metric > b'), ['38%']);

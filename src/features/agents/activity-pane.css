@@ -56,6 +56,8 @@
 .activity-call-head p > .activity-call-settings { flex: 0 2 auto; }
 .activity-call-head p > .activity-call-provider { flex: 0 100 auto; }
 .activity-call-settings { font-size: 12px; font-weight: 400; color: var(--flow-muted); }
+/* The separator is drawn here: a flex row would trim a leading space inside the span. */
+.activity-call-settings::before { content: '·'; margin: 0 6px; }
 .activity-call-rows li .activity-rate { min-width: 80px; text-align: right; }
 .activity-call-rows li .activity-rate.is-live { color: var(--flow-ink); }
 /* A model that has not replied yet keeps its hint in the text column. */
