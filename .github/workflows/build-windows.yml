@@ -212,6 +212,8 @@ jobs:
           name: desktop-test-screenshots
           path: |
             .test-output/desktop-*/*.png
+            .test-output/cmd-*/*.png
+            .test-output/cmd-*/*.json
             .test-output/sessions-*/*.png
             .test-output/workspace-*/*.png
             .test-output/reading-hierarchy-*/*.png

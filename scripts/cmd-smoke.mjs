@@ -69,7 +69,12 @@ try {
   await waitFor(async () => {
     text = (await rows.locator(':scope > div').allTextContents()).join('');
     return text.includes(`${path.join(project.path, 'sub')}>`);
-  }, 'the cmd prompt shows the new directory');
+  }, 'the cmd prompt shows the new directory').catch(async error => {
+    // CI-only failures need the rendered rows and the buffer, not just the timeout.
+    await fs.writeFile(path.join(output, 'prompt-rows.json'), JSON.stringify({ expected: `${path.join(project.path, 'sub')}>`, text, rows: await rows.locator(':scope > div').allTextContents(), state: await terminal() }, null, 1));
+    await page.screenshot({ path: path.join(output, 'failure-prompt.png') });
+    throw error;
+  });
   assert.ok(!text.includes('6973') && !text.includes('Agentrix;prompt'), 'the prompt marker stays invisible');
   await page.screenshot({ path: path.join(output, 'cmd-prompt.png') });
   await page.locator('.focus-sidebar .explorer-back').click();
