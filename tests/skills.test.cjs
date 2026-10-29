@@ -50,6 +50,27 @@ test('skill defaults, exact public shape, read-only built-ins and local-only pro
   assert.equal(scoped.projectName, 'First');
 });
 
+test('shipped code standard is an always-on built-in delivered locally and over SSH', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-shipped-skills-'));
+  const project = { id: 'p1', name: 'First', path: path.join(root, 'project') };
+  const remote = { id: 'ssh', name: 'Remote', kind: 'ssh', path: '/srv/app' };
+  fs.mkdirSync(project.path);
+  const store = new SkillsStore({ dataDir: path.join(root, 'profile'), builtinDir: path.join(__dirname, '../resources/skills'),
+    getProjects: () => [project, remote], getAgents: () => ({ claude: { installed: true }, codex: { installed: true } }) });
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  const skill = store.list().find(item => item.id === 'builtin:code-standard');
+  assert.ok(skill);
+  assert.deepEqual([skill.name, skill.title, skill.source, skill.enabled, skill.trigger], ['code-standard', '代码规范', 'builtin', true, 'always']);
+  const note = startupNote('Read.', null, null, store.delivery(project));
+  assert.ok(note.includes('Before any task, read and follow ' + skill.path.replace(/\\/g, '/') + '.'));
+  const delivery = store.delivery(remote, true);
+  const shipped = delivery.bundle.files.find(file => file.id === skill.id);
+  assert.ok(shipped);
+  assert.equal(shipped.text, fs.readFileSync(skill.path, 'utf8'));
+  assert.ok(delivery.bundle.instructions.includes('Before any task, read and follow {AGENTRIX_SKILLS}/builtin/code-standard/SKILL.md.'));
+});
+
 test('save, independent history, revert, options persistence, import and delete', async t => {
   const { store, root, options } = fixture(t);
   const first = await store.save(null, draft('release'));

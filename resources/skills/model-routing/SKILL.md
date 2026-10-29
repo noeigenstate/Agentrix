@@ -150,7 +150,7 @@ git worktree add <scratch>/wt-b -b work/<topic>-b
 
 A task with one side may run in the project itself. Every brief holds:
 - The goal, what was wrong before, the files the worker may change, the behaviour it must keep, the contract from stage 1.
-- The project's own conventions and code standards, pasted in.
+- The `code-standard` skill's rules and the project's own conventions and code standards, pasted in.
 - Never: commit, push, release, touch secrets, or touch anything outside its worktree.
 - Its report: files changed, the checks it ran with results, what it left open.
 

@@ -81,14 +81,21 @@ export type Distribution = 'development' | 'installed' | 'portable' | 'macos' | 
 export type AppUpdateState = { supported: boolean; currentVersion: string; distribution: Distribution; status: 'unavailable' | 'idle' | 'checking' | 'current' | 'downloading' | 'ready' | 'error'; version: string | null; percent: number; error: string | null };
 // Skills (Settings › 技能). Built-in ones ship with the app and are read-only; the user's own live in Agentrix's data folder
 // (all projects) or in a project's skills/ folder (that project), and agents may refine them as work goes on.
-// id: "builtin:<name>", "user:<name>" or "project:<projectId>:<name>". trigger: always = read before every task; auto = when its description fits.
+// id: "builtin:<name>", "user:<name>" or "project:<projectId>:<name>". trigger: always = read before every task; auto = when its description fits;
+// first-open = read and run before the first task of the first session Agentrix starts in a project, then as auto.
 export type SkillInfo = {
   id: string; name: string; description: string; source: 'builtin' | 'user'; scope: 'builtin' | 'global' | 'project';
   // What the settings page shows: a built-in skill's `title` / `summary` front matter (Chinese, translated through en.json);
   // a user skill's name and description. The SKILL.md body stays what agents read.
   title: string; summary: string;
+  // When the skill takes effect, in words for the settings page: a built-in's `when` front matter (Chinese, through en.json),
+  // otherwise derived from the trigger. A built-in's default trigger comes from its `trigger` front matter.
+  when: string;
+  // The project already has its own copy (skills/, .claude/skills, .codex/skills, or named in AGENTS.md / CLAUDE.md):
+  // a built-in then yields to it in that project. Project names, for the settings page.
+  yieldsTo: string[];
   projectId: string | null; projectName: string | null; path: string;
-  enabled: boolean; trigger: 'always' | 'auto'; autoOptimize: boolean; confirmChanges: boolean;
+  enabled: boolean; trigger: 'always' | 'auto' | 'first-open'; autoOptimize: boolean; confirmChanges: boolean;
   // The latest version and who made it; createdByAgent until the user has looked at it (the 新 mark).
   // updatedIn and lastUsed.project are project NAMES (for display), never ids.
   version: number; updatedAt: number | null; updatedBy: 'agent' | 'user' | 'app' | null; updatedIn: string | null; createdByAgent: boolean;
