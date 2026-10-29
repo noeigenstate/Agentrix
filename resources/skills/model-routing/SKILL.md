@@ -1,11 +1,11 @@
 ---
 name: model-routing
-title: 模型路由
-summary: 每个任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能和前端，Terra 验证界面。GPT 默认 max + fast，Claude 默认 high。
-description: Route each task among an architect, core engineer, execution engineer and visual verifier, with fallbacks for either installed agent, fixed model settings and cross review. Use when starting any task, before doing the work.
+description: Use before every task in any project, before doing any of it yourself, unless the project has its own model-routing skill; route the task among an architect, core engineer, execution engineer and visual verifier, with fallbacks for either installed agent, fixed model settings and cross review.
 trigger: always
 when: 每个任务开始前生效；项目已有同名技能时以项目为准
 requires: any-agent
+title: 模型路由
+summary: 每个任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能和前端，Terra 验证界面。GPT 默认 max + fast，Claude 默认 high。
 ---
 
 # Routing work between models

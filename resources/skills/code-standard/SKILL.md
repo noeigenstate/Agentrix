@@ -1,11 +1,11 @@
 ---
 name: code-standard
-title: 代码规范
-summary: 首次运行先审查现有代码，报告主要问题和分阶段计划，经用户同意后再加入项目。之后每次代码变更都减少冗余和复杂度，保持行为与接口不变。
-description: Review existing code and propose a staged adoption plan on first run, then reduce redundancy and complexity while preserving behavior and interfaces on every change. Use when first opening a project without this standard, or when writing, changing or reviewing code afterwards.
+description: Use on the first session Agentrix starts in a project without its own code standard, before its first task, and afterwards whenever writing, changing or reviewing code; yield to the project's own standard, review existing code and propose a staged adoption plan on first run, then reduce redundancy and complexity while preserving behavior and interfaces.
 trigger: first-open
 when: 首次在项目中启动会话、且项目里还没有这条规范时生效；之后写、改、审代码时按需生效
 requires: none
+title: 代码规范
+summary: 首次运行先审查现有代码，报告主要问题和分阶段计划，经用户同意后再加入项目。之后每次代码变更都减少冗余和复杂度，保持行为与接口不变。
 ---
 
 # Code standard

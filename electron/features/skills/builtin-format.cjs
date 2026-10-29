@@ -1,6 +1,6 @@
 const { metadata } = require('./files.cjs');
 
-const KEYS = ['name', 'title', 'summary', 'description', 'trigger', 'when', 'requires'];
+const KEYS = ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary'];
 const SECTIONS = ['When this applies', 'What to do', 'Rules', 'Done when'];
 const TRIGGERS = ['always', 'auto', 'first-open'];
 const REQUIRES = ['none', 'any-agent', 'codex', 'claude', 'both'];
@@ -33,7 +33,7 @@ function builtinMetadata(text, folder) {
   if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(fields.name) || fields.name !== folder) fail('name must be kebab-case and match its folder');
   if (!/^[\p{Script=Han}]{2,8}$/u.test(fields.title)) fail('title must be 2-8 Chinese characters');
   if (!chinese(fields.summary) || [...fields.summary].length > 90 || sentences(fields.summary) > 2) fail('summary must be Chinese, at most two sentences and 90 characters');
-  if (fields.description.length > 2000 || chinese(fields.description) || !/^[A-Za-z].+\bUse when\s+\S/.test(fields.description)) fail('description must be English, include Use when and be at most 2000 characters');
+  if (fields.description.length > 2000 || chinese(fields.description) || !/^Use (when|before|on|at|whenever)\b\s+\S/.test(fields.description)) fail('description must be English, start with a Use trigger and be at most 2000 characters');
   if (!TRIGGERS.includes(fields.trigger)) fail('invalid trigger');
   if (!chinese(fields.when) || sentences(fields.when) !== 1) fail('when must be one Chinese sentence');
   if (!REQUIRES.includes(fields.requires)) fail('invalid requires');

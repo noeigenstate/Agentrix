@@ -742,7 +742,7 @@ function readingHarness(t, entries = [], overrides = {}) {
   });
   const state = { entries, pending: [], terminal: { id: 'terminal', sessionId: 'session', agent: 'codex', codexActive: true, needsInput: null } };
   const parsed = [], icon = () => React.createElement('svg');
-  const { ReadingView } = loadUI('features/reading/ReadingView.tsx', {
+  const { ReadingView, Markdown } = loadUI('features/reading/ReadingView.tsx', {
     './markdown-escape': { readingMarked: { parse: text => { parsed.push(text); return text; } } },
     dompurify: { default: () => ({ sanitize: html => html }) },
     '@phosphor-icons/react': new Proxy({}, { get: () => icon }),
@@ -769,8 +769,17 @@ function readingHarness(t, entries = [], overrides = {}) {
     projectId: 'project', terminal: state.terminal,
     autoFocus: false, onShowTerminal() {}, onError() {}, onOpenLink() {},
   }));
-  return { state, render, parsed, ReadingView };
+  return { state, render, parsed, ReadingView, Markdown };
 }
+
+test('Markdown can opt into soft line breaks without changing the reading view default', t => {
+  const { Markdown } = readingHarness(t, [], { './markdown-escape': require('../src/features/reading/markdown-escape.ts') });
+  const text = 'First line\ncontinues here.';
+  const render = softBreaks => renderToStaticMarkup(React.createElement(Markdown, { text, softBreaks }));
+  assert.match(render(true), /<p>First line\ncontinues here\.<\/p>/);
+  assert.match(render(false), /<p>First line<br>continues here\.<\/p>/);
+  assert.match(render(undefined), /<p>First line<br>continues here\.<\/p>/);
+});
 
 test('reading entry rendering parses only the last 40 blocks inside a turn and leaves the welcome branch intact', t => {
   const { state, render, parsed } = readingHarness(t, Array.from({ length: 400 }, (_, index) => ({ id: String(index), at: 0, role: 'assistant', text: `answer-${index}` })));

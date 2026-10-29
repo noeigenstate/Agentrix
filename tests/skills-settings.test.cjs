@@ -75,7 +75,7 @@ function mount(t, skills, { details = {}, failure = null, language = 'zh' } = {}
   };
   // The reading view's Markdown, with its real parser: the DOM that sanitizes and decorates the HTML is not available here.
   const { readingMarked } = loader({})(path.join(root, 'features/reading/markdown-escape.ts'));
-  const ReadingView = { Markdown: ({ text }) => React.createElement('div', { className: 'reading-markdown', dangerouslySetInnerHTML: { __html: readingMarked.parse(text) } }) };
+  const ReadingView = { Markdown: ({ text, softBreaks }) => React.createElement('div', { className: 'reading-markdown', dangerouslySetInnerHTML: { __html: readingMarked.parse(text, { breaks: !softBreaks }) } }) };
   const { SkillsSettings } = loader(hooks, language, { ReadingView })(path.join(root, 'features/settings/SkillsSettings.tsx'));
   const projects = [{ id: 'p1', name: 'agentrix', kind: 'local' }, { id: 'p2', name: 'demo-site', kind: 'local' }, { id: 'p3', name: 'prod-box', kind: 'ssh' }];
   const render = () => {
@@ -480,13 +480,13 @@ test('English exists for each built-in skill title and summary', () => {
 });
 
 test('the trigger offers 首次打开项目, which sets first-open, in Chinese and English', async t => {
-  for (const [language, label] of [['zh', '首次打开项目 · 第一次会话开始前'], ['en', 'First open of a project · before its first session starts']]) {
+  for (const [language, labels] of [['zh', ['始终', '按需', '首次打开项目']], ['en', ['Always', 'On demand', 'First project open']]]) {
     const h = mount(t, [builtinRouting({ trigger: 'first-open' }), release], { language });
     await h.settle(); h.clear();
     const trigger = h.byLabel(language === 'zh' ? '触发' : 'Trigger');
     assert.equal(trigger.props.value, 'first-open');
     assert.deepEqual(trigger.props.options.map(option => option.value), ['always', 'auto', 'first-open']);
-    assert.equal(trigger.props.options[2].label, label);
+    assert.deepEqual(trigger.props.options.map(option => option.label), labels);
     trigger.props.onChange('first-open'); await h.settle();
     assert.deepEqual(h.calls.filter(call => call[0] === 'options'), [['options', 'builtin:model-routing', { trigger: 'first-open' }]]);
   }
@@ -521,13 +521,16 @@ test('a built-in that yields to project copies says so, naming three projects an
 });
 
 test('SKILL.md shows rendered headings and lists without its front matter, and 源码 shows the file as written', async t => {
-  const file = '---\nname: release\ndescription: 发布新版本\n---\n\n# 发布\n\n## 步骤\n\n1. 升版本号\n2. 写更新说明\n\n- 先看 [说明](https://example.com)\n- 再发布\n\n---\n\n结束';
+  const file = '---\nname: release\ndescription: 发布新版本\n---\n\n# 发布\n\nA hard-wrapped sentence\ncontinues here.\n\nAnother paragraph.\n\n## 步骤\n\n1. 升版本号\n2. 写更新说明\n\n- 先看 [说明](https://example.com)\n- 再发布\n\n```text\nfirst line\nsecond line\n```\n\nIntentional break  \ncontinues here.\n\n---\n\n结束';
   const h = mount(t, [builtinRouting(), release], { details: { 'user:release': { ...releaseV4, text: file } } });
   await h.settle();
   h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
   const html = h.one(node => node.props.className === 'reading-markdown').props.dangerouslySetInnerHTML.__html;
   assert.match(html, /<h1>发布<\/h1>/); assert.match(html, /<h2>步骤<\/h2>/);
+  assert.match(html, /<p>A hard-wrapped sentence\ncontinues here\.<\/p>\s*<p>Another paragraph\.<\/p>/);
   assert.match(html, /<ol>\s*<li>升版本号<\/li>\s*<li>写更新说明<\/li>\s*<\/ol>/); assert.match(html, /<ul>\s*<li>先看 <a href="https:\/\/example.com">说明<\/a><\/li>/);
+  assert.match(html, /<pre><code class="language-text">first line\nsecond line\n<\/code><\/pre>/);
+  assert.match(html, /<p>Intentional break<br>continues here\.<\/p>/);
   assert.match(html, /<hr/); assert.equal(html.includes('name: release') || html.includes('description:'), false);
   assert.equal(h.all(node => node.type === 'pre').length, 0);
   const view = mode => h.one(node => node.props['data-skill-view-mode'] === mode);

@@ -33,7 +33,7 @@ function Changes({ heading, before, after }: { heading: string; before: string; 
 // The SKILL.md as the reading view lays out Markdown. Links stay inert so nothing here can navigate the window, and the
 // code blocks' own buttons are hidden by the style (the 源码 view is the way to copy).
 function RenderedText({ text }: { text: string }) {
-  return <div className="skills-rendered" onClick={event => { if ((event.target as Element).closest('a')) event.preventDefault(); }}><Markdown text={skillBody(text)} /></div>;
+  return <div className="skills-rendered" onClick={event => { if ((event.target as Element).closest('a')) event.preventDefault(); }}><Markdown text={skillBody(text)} softBreaks /></div>;
 }
 
 // The right side: one skill's switches, trigger, scope, version history, proof of use, and below them its SKILL.md or a change.
@@ -63,7 +63,7 @@ export function SkillDetailPane({ skill, detail, scopes, tab, now, actions }: {
         <button type="button" className="text-button" data-skill-discard onClick={() => actions.onResolve(false)}>{t('放弃')}</button></dd></div>}
       <div className={mine ? 'skills-trigger-row skills-facts-pair' : 'skills-trigger-row'}>
         <dt>{t('触发')}</dt><dd><Select label={t('触发')} className="skills-trigger" value={skill.trigger} onChange={value => actions.onOptions({ trigger: value as SkillInfo['trigger'] })}
-          options={[{ value: 'always', label: t('始终 · 每个任务开始前') }, { value: 'auto', label: t('按需 · 描述匹配时') }, { value: 'first-open', label: t('首次打开项目 · 第一次会话开始前') }]} /></dd>
+          options={[{ value: 'always', label: t('始终') }, { value: 'auto', label: t('按需') }, { value: 'first-open', label: t('首次打开项目') }]} /></dd>
         {mine && <><dt>{t('范围')}</dt><dd><Select label={t('范围')} className="skills-scope" value={skill.scope === 'project' && skill.projectId ? skill.projectId : 'global'} options={scopes} onChange={actions.onScope} /></dd></>}
         <dd className="skills-when" data-skill-when>{skillWhen(skill)}</dd>
         {note && <dd className="skills-when" data-skill-yield title={note.title}>{note.text}</dd>}

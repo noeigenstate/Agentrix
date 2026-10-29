@@ -5,6 +5,7 @@ const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
+const vm = require('node:vm');
 const { renderToStaticMarkup } = require('react-dom/server');
 const { Marked } = require('marked');
 const { hookHarness } = require('./helpers/hook-harness.cjs');
@@ -38,6 +39,46 @@ test('both reading Markdown parsers retain UNC and Windows path backslashes whil
   const ordinaryLinks = '[relative](docs/guide\\_draft.md "a \\"title\\"") [web](https://example.com/a\\(b\\).html)';
   assert.equal(readingMarked.parse(ordinaryLinks), new Marked({ async: false, gfm: true, breaks: true }).parse(ordinaryLinks));
   assert.doesNotMatch(readingMarked.parse('<img src=x onerror=alert(1)>'), /<img\b/);
+});
+
+test('long Markdown sends the break mode to the worker and caches each mode separately', async t => {
+  const previousWorker = globalThis.Worker, requests = [], worker = {};
+  const file = path.join(__dirname, '../src/features/reading/markdown.worker.ts');
+  const source = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  vm.runInNewContext(source, { exports: {}, require: () => ({ readingMarked }), self: worker }, { filename: file });
+  globalThis.Worker = class {
+    postMessage(data) {
+      requests.push(data);
+      worker.postMessage = result => queueMicrotask(() => this.onmessage({ data: result }));
+      worker.onmessage({ data });
+    }
+  };
+  t.after(() => { if (previousWorker === undefined) delete globalThis.Worker; else globalThis.Worker = previousWorker; });
+  const { parseMarkdown, parsedMarkdown } = require('../src/features/reading/markdown-parse.ts');
+  const text = `First line\ncontinues here.\n\n<unsafe>\n\nC:\\_work\\guide.md\n\n${'word '.repeat(900)}`;
+  const hard = await parseMarkdown(text), soft = await parseMarkdown(text, true);
+  assert.match(hard, /First line<br>continues here\./);
+  assert.match(soft, /First line\ncontinues here\./);
+  for (const html of [hard, soft]) { assert.ok(html.includes('&lt;unsafe&gt;')); assert.ok(html.includes('C:\\_work\\guide.md')); }
+  assert.equal(parsedMarkdown(text), hard); assert.equal(parsedMarkdown(text, true), soft);
+  assert.equal(await parseMarkdown(text, true), soft); assert.equal(await parseMarkdown(text), hard);
+  assert.deepEqual(requests.map(request => request.softBreaks), [false, true]);
+});
+
+test('an in-flight long parse never shows results for the wrong break mode', async t => {
+  const pending = [], text = 'long '.repeat(1000);
+  const h = hookHarness('src/features/reading/useLongMarkdown.ts', { './markdown-parse.ts': {
+    parsedMarkdown: () => undefined,
+    parseMarkdown: (value, softBreaks) => new Promise(resolve => pending.push({ value, softBreaks, resolve })),
+  } });
+  t.after(() => h.dispose());
+  assert.equal(h.render('useLongMarkdown', text, false, true).result, null);
+  assert.equal(h.render('useLongMarkdown', text, false, false).result, null);
+  pending[0].resolve('soft result'); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.render('useLongMarkdown', text, false, false).result, null);
+  assert.deepEqual(pending.map(job => [job.value, job.softBreaks]), [[text, true], [text, false]]);
+  pending[1].resolve('hard result'); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.render('useLongMarkdown', text, false, false).result, 'hard result');
 });
 
 test('reading path spans retain all text for selection/copy and escape agent output', () => {

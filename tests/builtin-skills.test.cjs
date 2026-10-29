@@ -11,8 +11,9 @@ const { startupNote } = require('../electron/features/agents/handoff.cjs');
 
 const resources = path.join(__dirname, '../resources/skills');
 const body = '# Example skill\n\n## When this applies\n\nUse when the task fits; the project copy takes precedence.\n\n## What to do\n\n1. Read the task and follow the procedure.\n\n## Rules\n\n- Preserve existing behavior.\n\n## Done when\n\n- The checks pass and the result is reported.\n';
-const builtin = (name = 'example', fields = {}) => Object.entries({ name, title: '示例技能', summary: '按步骤处理任务。',
-  description: 'Follow a tested procedure. Use when the task needs it.', trigger: 'auto', when: '描述匹配时生效', requires: 'none', ...fields })
+const builtin = (name = 'example', fields = {}) => Object.entries({ name,
+  description: 'Use when the task needs it; follow a tested procedure.', trigger: 'auto', when: '描述匹配时生效', requires: 'none',
+  title: '示例技能', summary: '按步骤处理任务。', ...fields })
   .map(([key, value]) => `${key}: ${value}`).join('\n').replace(/^/, '---\n') + '\n---\n\n' + body;
 const put = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
 const normalized = value => value.replace(/\\/g, '/');
@@ -38,12 +39,16 @@ test('strict built-in format accepts all allowed triggers/requires, scalar quoti
   for (const trigger of ['always', 'auto', 'first-open']) for (const requires of ['none', 'any-agent', 'codex', 'claude', 'both']) {
     const fields = builtinMetadata(builtin('example', { trigger, requires }), 'example');
     assert.equal(fields.trigger, trigger); assert.equal(fields.requires, requires);
-    assert.deepEqual(Object.keys(fields), ['name', 'title', 'summary', 'description', 'trigger', 'when', 'requires']);
+    assert.deepEqual(Object.keys(fields), ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary']);
   }
-  const prefix = 'Follow the procedure. Use when ';
+  for (const timing of ['when', 'before', 'on', 'at', 'whenever']) {
+    const description = `Use ${timing} a task needs it; follow the procedure.`;
+    assert.equal(builtinMetadata(builtin('example', { description }), 'example').description, description);
+  }
+  const prefix = 'Use when ';
   const limits = builtin('example', { title: '一二三四五六七八', summary: '中'.repeat(89) + '。', description: prefix + 'x'.repeat(2000 - prefix.length) });
   assert.doesNotThrow(() => builtinMetadata(limits, 'example'));
-  const quoted = builtin('example', { summary: "'审查代码: 先报告问题。'", description: '"Inspect code: report findings. Use when reviewing code."' });
+  const quoted = builtin('example', { summary: "'审查代码: 先报告问题。'", description: '"Use when reviewing code: report findings."' });
   assert.equal(builtinMetadata('\uFEFF' + quoted.replace(/\n/g, '\r\n'), 'example').summary, '审查代码: 先报告问题。');
   const fenced = builtin().replace('1. Read the task and follow the procedure.', '1. Read the example.\n\n````markdown\n## Example heading\n```\n## Still inside the example\n````');
   assert.doesNotThrow(() => builtinMetadata(fenced, 'example'));
@@ -56,6 +61,7 @@ test('strict built-in format rejects bad fields, limits, scalars and body sectio
     'missing key': good.replace('requires: none\n', ''),
     'extra key': good.replace('requires: none', 'requires: none\nextra: nope'),
     'wrong order': good.replace('trigger: auto\nwhen: 描述匹配时生效', 'when: 描述匹配时生效\ntrigger: auto'),
+    'old order': good.replace(/(description: [^\n]+\n)(trigger: [^\n]+\n)(when: [^\n]+\n)(requires: [^\n]+\n)(title: [^\n]+\n)(summary: [^\n]+\n)/, '$5$6$1$2$3$4'),
     'duplicate key': good.replace('requires: none', 'trigger: auto'),
     'mismatched folder': builtin('another'),
     'non-kebab name': builtin('bad_name'),
@@ -66,10 +72,13 @@ test('strict built-in format rejects bad fields, limits, scalars and body sectio
     'long summary': builtin('example', { summary: '中'.repeat(91) }),
     'English summary': builtin('example', { summary: 'Use a procedure.' }),
     'three-sentence summary': builtin('example', { summary: '先审查。再修改。后总结。' }),
-    'missing Use when': builtin('example', { description: 'Follow a procedure.' }),
-    'missing description before Use when': builtin('example', { description: 'Use when reviewing code.' }),
-    'Chinese description': builtin('example', { description: '审查代码。 Use when reviewing code.' }),
-    'long description': builtin('example', { description: 'Review code. Use when ' + ' '.repeat(2000) + 'needed.' }),
+    'missing Use trigger': builtin('example', { description: 'Follow a procedure.' }),
+    'trigger after description': builtin('example', { description: 'Follow a procedure. Use when reviewing code.' }),
+    'wrong trigger case': builtin('example', { description: 'use when reviewing code; follow the procedure.' }),
+    'trigger without a word boundary': builtin('example', { description: 'Use wheneverneeded; follow the procedure.' }),
+    'trigger without a condition': builtin('example', { description: 'Use when' }),
+    'Chinese description': builtin('example', { description: 'Use when reviewing code; 审查代码。' }),
+    'long description': builtin('example', { description: 'Use when ' + 'x'.repeat(2000) }),
     'bad trigger': builtin('example', { trigger: 'sometimes' }),
     'English timing': builtin('example', { when: 'Before a task.' }),
     'two-sentence timing': builtin('example', { when: '先审查。再修改。' }),
@@ -106,8 +115,20 @@ test('every shipped built-in passes the strict format and has English title, sum
   assert.ok(folders.length);
   for (const folder of folders) {
     const fields = builtinMetadata(fs.readFileSync(path.join(resources, folder.name, 'SKILL.md'), 'utf8'), folder.name);
+    assert.deepEqual(Object.keys(fields), ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary']);
+    assert.match(fields.description, /^Use (when|before|on|at|whenever)\b/, `${folder.name} description trigger`);
     for (const key of ['title', 'summary', 'when']) assert.match(english[fields[key]] || '', /[A-Za-z]/, `${folder.name} ${key} translation`);
   }
+});
+
+test('shipped descriptions include trigger timing and project precedence', () => {
+  const fields = name => builtinMetadata(fs.readFileSync(path.join(resources, name, 'SKILL.md'), 'utf8'), name);
+  const routing = fields('model-routing').description, standard = fields('code-standard').description;
+  assert.match(routing, /^Use before every task in any project, before doing any of it yourself/);
+  assert.match(routing, /unless the project has its own model-routing skill/);
+  assert.match(standard, /^Use on the first session .* before its first task, and afterwards whenever writing, changing or reviewing code/);
+  assert.match(standard, /project without its own code standard/);
+  assert.match(standard, /yield to the project's own standard/);
 });
 
 test('invalid built-ins warn and skip only the invalid file, including an invalid replacement', t => {

@@ -16,12 +16,14 @@ Exactly these keys, in this order, each on one line, no other keys, no quotes un
 | Key | Value |
 | --- | --- |
 | `name` | kebab-case, equal to the folder name |
-| `title` | the Chinese name shown in Settings › 技能, 2–8 characters |
-| `summary` | Chinese, one or two sentences, at most 90 characters, what it makes agents do |
-| `description` | English, one paragraph: what it does, then `Use when …` |
+| `description` | English, one paragraph: start with the trigger condition (`Use when …`, `Use before …`, `Use on …`, `Use at …` or `Use whenever …`), including first-open and yield-to-project conditions when applicable; then state what it does |
 | `trigger` | the default trigger: `always`, `auto` or `first-open` |
 | `when` | Chinese, one sentence: exactly when it takes effect (shown under 触发) |
 | `requires` | `none`, `any-agent` (Codex or Claude Code, at least one), `codex`, `claude` or `both` |
+| `title` | the Chinese name shown in Settings › 技能, 2–8 characters |
+| `summary` | Chinese, one or two sentences, at most 90 characters, what it makes agents do |
+
+Claude Code and Codex read `description` to decide whether to use a skill.
 
 Triggers:
 - `always`: read and follow before every task in every session.

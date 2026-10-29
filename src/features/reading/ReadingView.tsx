@@ -98,10 +98,10 @@ function finish(parsed: string, nested = false): string {
 }
 
 const safely = (make: () => string) => { try { return make(); } catch { return null; } };
-export function Markdown({ text }: { text: string }) {
+export function Markdown({ text, softBreaks = false }: { text: string; softBreaks?: boolean }) {
   const language = currentLanguage(), short = text.length <= QUICK;
-  const quick = useMemo(() => short ? safely(() => finish(readingMarked.parse(text) as string)) : undefined, [text, language, short]);
-  const long = useLongMarkdown(text, short);
+  const quick = useMemo(() => short ? safely(() => finish(readingMarked.parse(text, { breaks: !softBreaks }) as string)) : undefined, [text, language, short, softBreaks]);
+  const long = useLongMarkdown(text, short, softBreaks);
   const html = useMemo(() => short ? quick : long == null ? null : safely(() => finish(long)), [short, quick, long, language]);
   if (html == null) return <p className="reading-plain"><PathText text={text} /></p>;
   return <div className="reading-markdown" dangerouslySetInnerHTML={{ __html: html }} />;
