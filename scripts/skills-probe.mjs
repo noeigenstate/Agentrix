@@ -28,7 +28,7 @@ let app, page;
 
 async function run() {
   const env = { ...isolatedEnvironment(home), AGENTRIX_DATA_DIR: profile, AGENTRIX_TEST_AGENTS: '1',
-    ANTHROPIC_API_KEY: 'standin', STANDIN_API_KEY: 'standin', CLAUDE_CODE_SKIP_PROMPT_HISTORY: '1' };
+    ANTHROPIC_API_KEY: 'standin', STANDIN_API_KEY: 'standin' };
   for (const folder of [profile, project.path, env.CODEX_HOME, env.CLAUDE_CONFIG_DIR]) await fs.mkdir(folder, { recursive: true });
   await new Promise(resolve => model.server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${model.server.address().port}`;
