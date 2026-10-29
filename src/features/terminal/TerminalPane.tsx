@@ -231,7 +231,7 @@ export function TerminalPane({ id, sessionId, fontSize, onError, focused, onOpen
     if (focused && sessionId) {
       const frame = requestAnimationFrame(() => {
         if (!term.current) return;
-        fitTerminal(term.current);
+        // ResizeObserver fits after reveal settles; fitting while xterm is still paused can leave its viewport a row behind.
         // Selecting a split through its controls must leave the keyboard on that control.
         if (!host.current?.closest('.terminal-split')?.contains(document.activeElement)) term.current.focus();
       });

@@ -62,7 +62,7 @@ function terminalHarness(t, initial = {}) {
   return { node, body, split, frames, fits, focused, terminals, render, frame };
 }
 
-test('activating a split preserves intentional tool focus through the delayed fit', t => {
+test('activating a split preserves intentional tool focus through delayed autofocus', t => {
   const h = terminalHarness(t), tools = h.node('terminal-split-tools', h.split);
   for (const name of ['restart', 'close']) {
     h.render({ focused: false }); h.body.focus(); h.render({ focused: true });
@@ -71,8 +71,7 @@ test('activating a split preserves intentional tool focus through the delayed fi
     const fits = h.fits.length;
     h.frame();
     assert.equal(document.activeElement, control, `${name} retains keyboard focus`);
-    assert.equal(h.fits.length, fits + 1, 'preserving a control does not skip fitting');
-    assert.equal(h.fits.at(-1), h.terminals.at(-1));
+    assert.equal(h.fits.length, fits, 'activation leaves fitting to the settled ResizeObserver');
   }
   assert.equal(h.focused.length, 0);
 });
@@ -86,7 +85,7 @@ test('activation still autofocuses from project controls, another split or a det
     assert.equal(document.activeElement, h.terminals.at(-1).textarea);
   }
   assert.equal(h.focused.length, 5);
-  assert.equal(h.fits.length, 5);
+  assert.equal(h.fits.length, 0);
 });
 
 test('returning from reading and replacing a session retain fallback autofocus', t => {
