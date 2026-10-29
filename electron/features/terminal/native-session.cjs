@@ -75,7 +75,8 @@ function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {},
     try {
       if (ended) return;
       if (mode === 'claude-sdk') {
-        child = spawnCli(['--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--permission-prompt-tool', 'stdio', '--verbose']);
+        child = spawnCli(['--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--permission-prompt-tool', 'stdio', '--verbose',
+          ...(env.AGENTRIX_READING_NOTE ? ['--append-system-prompt', env.AGENTRIX_READING_NOTE] : [])]);
         const protocol = new ClaudeProtocol(registry), initializeId = `agentrix-initialize-${binding.sessionId}`;
         readStdout(message => {
           if (message.type === 'control_response') {
@@ -109,7 +110,7 @@ function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {},
         try {
         if (ended || connected) { client.terminate(); return; }
         connected = true; socket = client; clearTimeout(connectTimer);
-        child = spawnCli(['app-server', '--listen', 'stdio://']);
+        child = spawnCli(['app-server', '--listen', 'stdio://', ...(env.AGENTRIX_READING_NOTE ? ['-c', `developer_instructions=${JSON.stringify(env.AGENTRIX_READING_NOTE)}`] : [])]);
         readStdout(message => {
           if (protocol.server(message) && !ended) {
             if (client.bufferedAmount > MAX_BYTES) { finish('native-websocket-backpressure'); return; }

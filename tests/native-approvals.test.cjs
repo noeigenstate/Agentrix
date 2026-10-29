@@ -271,10 +271,11 @@ test('oversized and binary WebSocket messages close the native channel', async t
 });
 
 test('Claude managed startup initializes exact SDK stream flags and answers on original child stdin', async t => {
-  const events = [], launches = [], terminal = createNativeSession({ binding: { ...binding, provider: 'claude' }, mode: 'claude-sdk', cwd: process.cwd(), env: { ...process.env }, cli: fixture, event: message => events.push(message), launch: (...args) => { launches.push(args); return spawn(...args); } });
+  const events = [], launches = [], note = 'Before any task, read and follow C:/isolated/skills/model-routing/SKILL.md.';
+  const terminal = createNativeSession({ binding: { ...binding, provider: 'claude' }, mode: 'claude-sdk', cwd: process.cwd(), env: { ...process.env, AGENTRIX_READING_NOTE: note }, cli: fixture, event: message => events.push(message), launch: (...args) => { launches.push(args); return spawn(...args); } });
   t.after(() => terminal.kill()); assert.throws(() => terminal.prompt('before initialize'));
   await waitFor(() => events.some(m => m.type === 'managed-ready'));
-  assert.deepEqual(launches[0][1].slice(1), ['--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--permission-prompt-tool', 'stdio', '--verbose']);
+  assert.deepEqual(launches[0][1].slice(1), ['--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--permission-prompt-tool', 'stdio', '--verbose', '--append-system-prompt', note]);
   assert.ok(!launches[0][1].includes('--dangerously-skip-permissions'));
   terminal.prompt('harmless fixture prompt'); await waitFor(() => terminal.registry.list().length);
   assert.throws(() => terminal.prompt('overlapping prompt'));
@@ -314,7 +315,7 @@ for (const [platform, shellKind] of [['win32', 'powershell'], ['linux', 'bash'],
     app: { getPreferredSystemLanguages() { languageCalls++; return languages; } },
     terminalLocale(value) { localeCalls.push(value); return terminalLocale(value, name => name === 'zh_CN.UTF-8'); },
     randomUUID: () => `native-generation-${++uuid}`, restorePlans: new Map(), store: { findTerminal: () => ({ record: {} }), setRestore: noOp }, localShell: () => ({ kind: shellKind }), runtimeDir: 'unused', eventServer: { address: 'unused' },
-    createTerminalEnvironment: () => ({}), withoutAppImage: value => value, accountEnvironment: () => ({}), startupNote: () => 'note', READING_NOTE: 'note', handoffFile: () => 'unused', writeHandoff: async () => {}, memoryDir: () => 'unused',
+    createTerminalEnvironment: () => ({}), withoutAppImage: value => value, accountEnvironment: () => ({}), skills: { delivery: () => ({}) }, writeSkillFile: noOp, startupNote: () => 'note', READING_NOTE: 'note', handoffFile: () => 'unused', writeHandoff: async () => {}, memoryDir: () => 'unused',
     shellEnvironment: environment('bash', shellEnvironment), zshEnvironment: environment('zsh', zshEnvironment), zshStartup: 'unused', integrationDir: 'unused', pty: { spawn: () => assert.fail('native launch started a shell') },
     createNativeSession: value => { options = value; return terminal; }, scheduleState: noOp, nativeSessionEvent: noOp,
     TerminalTitleTracker: dummy, SubmissionTracker: dummy, ApprovalGuard: require('../electron/features/terminal/approval-guard.cjs').ApprovalGuard,

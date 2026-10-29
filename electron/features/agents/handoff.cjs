@@ -6,6 +6,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { gather, writeMemoryBook, renderRound, forAgents } = require('./project-memory.cjs');
+const { MAX_NOTE, plain, skillInstructions } = require('../skills/delivery.cjs');
 
 const ROUND_LIMIT = 12, FILE_LIMIT = 48 * 1024;
 
@@ -39,7 +40,7 @@ async function writeHandoff(file, cwd, { memoryDir, codexHome, claudeHome } = {}
 // The note both CLIs get at start: what the reading view shows; for a local folder, where its handoff is; and the
 // project's skills, how they grow and that they carry nothing personal. Paths are written with forward slashes: the
 // note travels inside a TOML string to Codex, where a backslash escapes. It holds no double quote or line break.
-function startupNote(readingNote, file, skills) {
+function startupNote(readingNote, file, skills, delivery = null) {
   // The homework card shows these three parts first (src/features/home/delivery.ts); the labels are what it reads.
   let note = `${readingNote} When you finish a task, end your reply with a delivery summary for the user to grade: a line 【交付】, then for a fix three lines 问题：(the problem solved) 原因：(its specific cause) 结果：(the outcome and how it was verified), `
     + 'or for an optimization three lines 优化：(what was optimized) 解决：(the problem it solves) 对比：(before and after, with numbers when measured). One or two plain sentences each, with these labels exactly.';
@@ -50,7 +51,13 @@ function startupNote(readingNote, file, skills) {
     + 'When you take on a task, look there and follow the skills whose description fits. When the work shows a procedure, convention or lesson that will come up again in this project, '
     + 'create or update a skill there: short, specific, and tested. Skills are committed to the repository and shared, so never write personal or private data into them: '
     + 'no names of people, email addresses, phone numbers, user names, home folder paths, host names or IP addresses, passwords, tokens or keys; write placeholders such as <home>, <user>, <host> or <secret> instead.';
-  return note;
+  if (!delivery) return plain(note);
+  const instructions = skillInstructions(delivery);
+  // Large libraries travel by manifest, never as skill bodies in an environment variable/command line.
+  // The manifest contains the full always/auto list and every editing permission, with no entries dropped.
+  const suffix = note.length + instructions.length + 1 <= MAX_NOTE ? instructions
+    : `Before any task, read and follow ${delivery.manifest}. It lists all enabled always/auto skills, installed agents and skill editing permissions.`;
+  return plain(`${note} ${suffix}`);
 }
 
 module.exports = { writeHandoff, handoffText, startupNote };

@@ -112,7 +112,7 @@ class CodexActivityReader {
 // interval: ms to the next read, or a function giving it (shorter while the agent works). watch: the file the records
 // go to, once known: each write to it is read at once instead of at the next poll (the system tells a write within
 // milliseconds), so the reading view keeps up with the agent; the polls go on underneath in case a change is missed.
-function monitorActivity(read, onChange, { interval = 1000, watch = null } = {}) {
+function monitorActivity(read, onChange, { interval = 1000, watch = null, recursive = false, debounce = 25 } = {}) {
   let stopped = false, timer = null, pending = null, queued = null, last = '', watcher = null, watched = null, soon = null;
   const follow = () => {
     const file = stopped ? null : watch?.() || null;
@@ -120,7 +120,7 @@ function monitorActivity(read, onChange, { interval = 1000, watch = null } = {})
     watcher?.close(); watcher = null; watched = file;
     if (!file) return;
     try {
-      watcher = watchFile(file, { persistent: false }, () => { if (!soon && !stopped) soon = setTimeout(() => { soon = null; void poll(); }, 25); });
+      watcher = watchFile(file, { persistent: false, recursive }, () => { if (!soon && !stopped) soon = setTimeout(() => { soon = null; void poll(); }, debounce); });
       watcher.on('error', () => { watcher?.close(); watcher = null; });
     } catch { watcher = null; }
   };

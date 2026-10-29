@@ -54,8 +54,15 @@ function claudeAction(block, at, cwd) {
   const action = { id: String(block.id || ''), at, kind: CLAUDE_KINDS[name] || 'other', tool: name, target: '', detail: '', description: '', done: false, failed: false };
   const mcp = mcpTool(name);
   if (mcp) { action.kind = 'mcp'; action.target = `${mcp.server} · ${mcp.tool}`; action.server = mcp.server; }
-  else if (action.kind === 'edit' || action.kind === 'read') action.target = projectPath(input.file_path || input.notebook_path, cwd);
-  else if (action.kind === 'command') { action.target = clip(input.command || input.bash_id, 240); action.detail = clip(input.description, 160); Object.assign(action, commandPhrase(input.command || '')); }
+  else if (action.kind === 'edit' || action.kind === 'read') {
+    const file = input.file_path || input.notebook_path;
+    action.target = projectPath(file, cwd);
+    if (action.kind === 'read' && /(?:^|[\\/])SKILL\.md$/i.test(file || '')) {
+      action.kind = 'skill'; action.skillFile = file; action.cwd = cwd;
+      action.target = String(file).replace(/\\/g, '/').split('/').at(-2) || 'skill';
+    }
+  }
+  else if (action.kind === 'command') { action.target = clip(input.command || input.bash_id, 240); action.detail = clip(input.description, 160); Object.assign(action, commandPhrase(input.command || '')); markSkillRead(action, input.command || '', cwd); }
   else if (action.kind === 'search') { action.target = clip(input.pattern, 160); action.detail = projectPath(input.path, cwd); }
   else if (action.kind === 'web') action.target = clip(input.url || input.query, 240);
   else if (action.kind === 'skill') { action.target = clip(input.skill, 120); action.detail = clip(input.args, 160); }
@@ -106,7 +113,14 @@ function commandPhrase(command) {
 }
 const PHRASES = [...COMMAND_PHRASES.map(([, phrase]) => phrase), '运行脚本', '运行命令'];
 
-const EDITING_COMMAND = /\b(apply_patch|writeFileSync|appendFileSync|Set-Content|Add-Content|Out-File|sed\s+-i|tee\s)/;
+const EDITING_COMMAND = /\b(apply_patch|writeFileSync|appendFileSync|write_text|write_bytes|Set-Content|Add-Content|Out-File|sed\s+-i|tee\s)|\.write\(/;
+function markSkillRead(action, command, cwd) {
+  if (EDITING_COMMAND.test(command) || !/\b(?:Get-Content|Select-String|cat|head|tail|type|more|sed|grep|rg|readFile(?:Sync)?|read_text|read_bytes|open)\b/i.test(command) || /\brg\b[^;&|]*--files\b/.test(command)) return;
+  const files = [...command.matchAll(/(?:["']([^"'\r\n]*[\\/]SKILL\.md)["']|([^\s"'`]*[\\/]SKILL\.md))/gi)].map(match => match[1] || match[2]);
+  if (!files.length) return;
+  action.kind = 'skill'; action.skillFile = files[0]; action.skillFiles = files; action.cwd = cwd;
+  action.target = files[0].replace(/\\/g, '/').split('/').at(-2);
+}
 // Read literal arguments without executing the script. Interpolated templates cannot name a command reliably.
 const LITERAL = `("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*'|\x60(?:[^\x60\\\\]|\\\\.)*\x60)`;
 function scriptString(input, key) {
@@ -133,11 +147,9 @@ function literalValue(literal) {
 function codexCommand(id, at, command, cwd) {
   const action = { id, at, cwd, kind: 'command', tool: 'exec_command', target: clip(command, 240), detail: '', description: '', done: false, failed: false };
   const files = [...String(command).matchAll(/^\*\*\* (Update|Add|Delete) File: (.+)$/gm)].map(match => ({ path: projectPath(match[2].trim(), cwd), change: match[1].toLowerCase() }));
-  const skill = /([^\s"'`]*[\\/]([^\\/\s"'`]+)[\\/]SKILL\.md)/.exec(String(command));
   if (files.length) { action.kind = 'edit'; action.files = files; action.target = files.slice(0, 3).map(file => file.path).join('、') + (files.length > 3 ? ` +${files.length - 3}` : ''); }
-  else if (skill) { action.kind = 'skill'; action.target = skill[2]; action.skillFile = skill[1]; }
   else if (EDITING_COMMAND.test(String(command))) { action.kind = 'edit'; action.detail = action.target; action.target = ''; }
-  else Object.assign(action, commandPhrase(command));
+  else { Object.assign(action, commandPhrase(command)); markSkillRead(action, String(command), cwd); }
   return action;
 }
 // One response_item of a Codex rollout that calls a tool. Newer Codex wraps every call in a script
@@ -214,7 +226,7 @@ class ActionLog {
   finish(id, failed = false, prefix = false) {
     for (const action of this.list) {
       if (action.done || !(prefix ? action.id.startsWith(`${id}:`) : action.id === id)) continue;
-      action.done = true; action.failed = failed; this.changed({ action });
+      action.done = true; action.failed = failed; this.changed({ action, finished: true });
     }
   }
   // A round that ended leaves nothing running, whatever the transcript recorded last.

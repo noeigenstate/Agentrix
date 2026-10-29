@@ -110,6 +110,11 @@
           "!**/*.pyc",
           "!**/*.cs"
         ]
+      },
+      {
+        "from": "resources/skills",
+        "to": "skills",
+        "filter": ["**/*"]
       }
     ],
     "asarUnpack": [

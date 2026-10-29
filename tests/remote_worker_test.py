@@ -30,6 +30,27 @@ GIT_TOO_OLD = _git_too_old()
 
 
 class RemoteFilesTest(unittest.TestCase):
+    def test_skills_are_copied_to_private_remote_paths_and_manifest_expands(self):
+        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
+        text = "---\nname: model-routing\ndescription: Route models.\n---\nRead me.\n"
+        self.worker.skills_bundle = {"files": [{"id": "builtin:model-routing", "name": "model-routing", "scope": "builtin", "text": text,
+                                                "assets": [{"path": "scripts/check.sh", "data": base64.b64encode(b"echo check").decode()}]}],
+                                    "instructions": "Before any task, read and follow {AGENTRIX_SKILLS}/builtin/model-routing/SKILL.md. {AGENTRIX_AGENTS}"}
+        with mock.patch.object(remote.shutil, "which", side_effect=lambda name: "/bin/claude" if name == "claude" else None):
+            note = self.worker.install_skills(self.worker.skills_bundle["instructions"])
+        filename = self.worker.skill_paths["builtin:model-routing"]
+        self.assertEqual(Path(filename).read_text(encoding="utf-8"), text)
+        self.assertEqual((Path(filename).parent / "scripts/check.sh").read_bytes(), b"echo check")
+        self.assertIn(filename, note)
+        self.assertIn("Claude Code installed; Codex missing", note)
+        self.assertNotIn("{AGENTRIX_", note)
+        self.assertEqual((Path(self.worker.temp) / "skills/instructions.md").read_text(encoding="utf-8"), note)
+
+    def test_remote_skill_names_cannot_escape_session_folder(self):
+        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
+        self.worker.skills_bundle = {"files": [{"id": "bad", "name": "../escape", "scope": "global", "text": "bad"}]}
+        with self.assertRaises(ValueError): self.worker.install_skills("note")
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="agentrix-worker-test-")
         self.root = Path(self.temp.name) / "project"
