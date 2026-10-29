@@ -9,6 +9,7 @@ const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 const { CodexLogo, ClaudeLogo } = require('../src/features/agents/AgentBrandIcon.ts');
 const marks = require('../assets/brands/official-marks.json');
+const codexViewBox = '180.499 180.499 354.675 354.675';
 
 const root = path.join(__dirname, '..');
 const asset = name => fs.readFileSync(path.join(root, 'assets/brands', name));
@@ -46,14 +47,14 @@ test('bundled vectors retain the authenticated source geometry and attribution',
   assert.equal(marks.claude.source, 'https://claude.com/');
 });
 
-test('16px marks preserve aspect ratio, original paths and clear-space canvases', () => {
-  for (const [Logo, mark] of [[CodexLogo, marks.openai], [ClaudeLogo, marks.claude]]) {
-    for (const size of [16, 24]) {
+test('marks preserve aspect ratio and original paths in balanced square viewBoxes', () => {
+  for (const [Logo, mark, viewBox] of [[CodexLogo, marks.openai, codexViewBox], [ClaudeLogo, marks.claude, marks.claude.viewBox]]) {
+    for (const size of [16, 22, 24, 26]) {
       const html = renderToStaticMarkup(React.createElement(Logo, { size }));
       assert.match(html, new RegExp(`width="${size}" height="${size}"`));
       assert.match(html, /preserveAspectRatio="xMidYMid meet"/);
       assert.match(html, /aria-hidden="true" focusable="false"/);
-      assert.deepEqual(geometry(html), { viewBox: mark.viewBox, path: mark.path });
+      assert.deepEqual(geometry(html), { viewBox, path: mark.path });
       assert.doesNotMatch(html, /<(?:line|g|image)|transform=|https?:\/\//);
       assert.equal((html.match(/<path /g) || []).length, 1);
     }
@@ -78,7 +79,7 @@ test('Codex follows the selected theme while keeping its official geometry', t =
     const html = renderToStaticMarkup(React.createElement(CodexLogo));
     assert.match(html, new RegExp(`color="${ink}"`));
     assert.match(html, /fill="currentColor"/);
-    assert.deepEqual(geometry(html), { viewBox: marks.openai.viewBox, path: marks.openai.path });
+    assert.deepEqual(geometry(html), { viewBox: codexViewBox, path: marks.openai.path });
   }
   delete document.documentElement;
   assert.match(renderToStaticMarkup(React.createElement(CodexLogo)), /color="#ffffff"/);
@@ -119,9 +120,8 @@ test('Codex inherits its own ink, and a running node is a heavier ring with no a
     .map(([, selector, body]) => ({ selector: selector.trim(), fill: body.match(/\bfill\s*:\s*([^;]+)/)[1].trim() }));
   assert.deepEqual(fillRules, []);
   assert.match(renderToStaticMarkup(React.createElement(CodexLogo)), /fill="currentColor"/);
-  // The marks fill their node like the user's picture does: the Blossom's canvas (half clear space) is larger than the node, the Claude spark nearly its size.
-  assert.match(css, /\.reading-node > \.agent-brand-codex \{ width: 44px; height: 44px; \}/);
-  assert.match(css, /\.reading-node > \.agent-brand-claude \{ width: 26px; height: 26px; \}/);
+  // Both official marks use the same box in the reading node.
+  assert.match(css, /\.reading-node > :is\(\.agent-brand-codex, \.agent-brand-claude\) \{ width: 26px; height: 26px; \}/);
   assert.match(css, /\.reading-node > \.user-avatar \{ width: 100%; height: 100%; \}/);
   assert.doesNotMatch(css, /reading-spark|spark-bloom|agent-brand-[^{]+\{[^}]*\b(?:animation|transform):/);
   // Only generic nodes have rings, including while running or failed; brand marks stay borderless.

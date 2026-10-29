@@ -10,7 +10,8 @@ export function CodexLogo({ size = 16 }: BrandIconProps = {}) {
   const theme = useSyncExternalStore(subscribeTheme, currentTheme, currentTheme);
   return createElement('svg', {
     className: 'agent-brand-icon agent-brand-codex', width: size, height: size,
-    viewBox: marks.openai.viewBox, preserveAspectRatio: 'xMidYMid meet',
+    // Crop the official canvas to the Blossom's square path bounds without changing its geometry.
+    viewBox: '180.499 180.499 354.675 354.675', preserveAspectRatio: 'xMidYMid meet',
     // The reading node inherits secondary ink; retain the original white mark in mono.
     color: theme === 'light' ? '#24272d' : '#ffffff', fill: 'none', 'aria-hidden': true, focusable: false,
   }, createElement('path', { d: marks.openai.path, fill: 'currentColor' }));

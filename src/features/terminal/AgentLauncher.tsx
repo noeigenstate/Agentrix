@@ -8,7 +8,7 @@ import './agent-launcher.css';
 
 type Agent = 'claude' | 'codex';
 type History = Record<Agent, { id: string; at: number } | null>;
-const AGENTS: { agent: Agent; name: string; mark: ReactNode }[] = [{ agent: 'claude', name: 'Claude Code', mark: <ClaudeLogo size={22} /> }, { agent: 'codex', name: 'Codex', mark: <CodexLogo size={37} /> }];
+const AGENTS: { agent: Agent; name: string; mark: ReactNode }[] = [{ agent: 'claude', name: 'Claude Code', mark: <ClaudeLogo size={22} /> }, { agent: 'codex', name: 'Codex', mark: <CodexLogo size={22} /> }];
 
 // A project with no agent on the card: pick the agent to work with, fresh or continuing this folder's latest conversation
 // with it. An agent not installed yet is installed by the same click (Node.js first, when even npm is missing), then

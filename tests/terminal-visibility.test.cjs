@@ -44,7 +44,7 @@ test('launcher shows official agent marks, giving way to the busy spinner only w
   const Terminal = ({ size }) => React.createElement('svg', { 'data-icon': 'terminal', width: size, height: size });
   const expected = {
     claude: renderToStaticMarkup(React.createElement(ClaudeLogo, { size: 22 })),
-    codex: renderToStaticMarkup(React.createElement(CodexLogo, { size: 37 })),
+    codex: renderToStaticMarkup(React.createElement(CodexLogo, { size: 22 })),
   };
   const spinner = renderToStaticMarkup(React.createElement(CircleNotch, { size: 16, className: 'loading-spinner' }));
   const terminal = renderToStaticMarkup(React.createElement(Terminal, { size: 13 }));
