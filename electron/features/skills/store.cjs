@@ -4,9 +4,12 @@ const { monitorActivity } = require('../../codex-activity.cjs');
 const { SkillHistory, safeId } = require('./history.cjs');
 const { metadata, draftText, readJson, writeFile, checkedPath, readText, listFolder, folderSignature, importFiles } = require('./files.cjs');
 const { skillInstructions } = require('./delivery.cjs');
+const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
+const { projectSkillTargets, projectSkillNames, projectSkillSignature } = require('./project-skills.cjs');
 const MAX_SSH_BUNDLE_BYTES = 512 * 1024;
 
-const defaults = source => ({ enabled: true, trigger: source === 'builtin' ? 'always' : 'auto', autoOptimize: source !== 'builtin', confirmChanges: false, createdByAgent: false, reviewed: false, lastUsed: null });
+const defaults = entry => ({ enabled: true, trigger: entry.source === 'builtin' ? entry.trigger : 'auto', autoOptimize: entry.source !== 'builtin', confirmChanges: false, createdByAgent: false, reviewed: false, lastUsed: null });
+const triggerWhen = { always: '每个任务开始前', auto: '描述匹配时', 'first-open': '首次打开项目时' };
 const canonical = file => {
   const resolved = path.resolve(file);
   return process.platform === 'win32' ? resolved.replace(/\\/g, '/').toLowerCase() : resolved;
@@ -21,6 +24,7 @@ class SkillsStore {
       && Object.values(value).every(item => item && typeof item === 'object' && !Array.isArray(item)));
     this.history = new SkillHistory(dataDir, report);
     this.entries = new Map(); this.watchers = new Map(); this.writers = new Map();
+    this.projectSkills = new Map();
     this.knownRoots = new Set(); this.baselines = new Set(); this.dirtyRoots = new Set(); this.deliveries = new Map();
     for (const folder of [this.globalFolder, path.join(dataDir, 'skill-pending')]) {
       try { fs.mkdirSync(folder, { recursive: true }); } catch (error) { report(error); }
@@ -62,6 +66,22 @@ class SkillsStore {
   record(entry, text, by, projectId = null) { return this.history.record(entry.id, text, by, this.projectName(projectId), Date.now(), projectId); }
   invalidateDelivery() { this.deliveries.clear(); }
 
+  refreshProjectSkills(selected) {
+    const projects = this.getProjects().filter(project => project.kind !== 'ssh');
+    let modified = false;
+    for (const id of this.projectSkills.keys()) if (!projects.some(project => project.id === id)) { this.projectSkills.delete(id); modified = true; }
+    for (const project of projects) {
+      const previous = this.projectSkills.get(project.id);
+      if (previous?.path === project.path && selected && !projectSkillTargets(project).some(target => selected.has(target))) continue;
+      const names = projectSkillNames(project, this.report);
+      modified ||= previous?.path !== project.path || names.size !== previous.names.size || [...names].some(name => !previous.names.has(name));
+      this.projectSkills.set(project.id, { path: project.path, names });
+    }
+    return modified;
+  }
+
+  yields(entry, project) { return entry.source === 'builtin' && project.kind !== 'ssh' && !!this.projectSkills.get(project.id)?.names.has(entry.name); }
+
   refresh(initial = false, selected = null) {
     if (this.mutating) return this.infos();
     const roots = this.roots(), rootPaths = new Set(roots.map(item => item.root));
@@ -75,11 +95,12 @@ class SkillsStore {
       const previousEntries = [...this.entries.values()].filter(entry => entry.root === root);
       for (const entry of previousEntries) entries.delete(entry.id);
       let readable = true;
-      const files = listFolder(root, this.report, folder => {
+      const report = error => { if (source === 'builtin') console.warn(`Skipping invalid built-in skill: ${error.message}`); this.report(error); };
+      const files = listFolder(root, report, folder => {
         if (folder === null) readable = false;
         else if (baseline) this.baselines.add(idFor(folder));
-        for (const entry of previousEntries) if (folder === null || entry.folder === folder) entries.set(entry.id, entry);
-      });
+        if (source !== 'builtin') for (const entry of previousEntries) if (folder === null || entry.folder === folder) entries.set(entry.id, entry);
+      }, source === 'builtin' ? builtinMetadata : metadata);
       for (const file of files) {
         const id = idFor(file.folder), appBaseline = this.baselines.delete(id) || baseline;
         const entry = { ...file, id, root, source, scope, projectId: project?.id || null, projectName: project?.name || null };
@@ -101,7 +122,7 @@ class SkillsStore {
     }
     this.entries = entries;
     this.knownRoots = knownRoots;
-    if (modified) this.invalidateDelivery();
+    if (this.refreshProjectSkills(selected) || modified) this.invalidateDelivery();
     this.persistOptions();
     return this.infos();
   }
@@ -115,17 +136,19 @@ class SkillsStore {
   pendingText(entry) { try { return readText(this.pendingPath(entry)); } catch (error) { this.report(error); return null; } }
 
   info(entry) {
-    const latest = this.history.latest(entry.id), options = { ...defaults(entry.source), ...this.options[entry.id] };
-    const agents = entry.id === 'builtin:model-routing' ? this.getAgents() : null;
+    const latest = this.history.latest(entry.id), options = { ...defaults(entry), ...this.options[entry.id] };
+    const agents = this.getAgents(), required = entry.source === 'builtin' ? entry.requires : 'none';
     const lastUsed = options.lastUsed && { at: options.lastUsed.at, project: this.projectName(options.lastUsedProjectId || options.lastUsed.project, options.lastUsed.project), agent: options.lastUsed.agent };
     return { id: entry.id, name: entry.name, description: entry.description, title: entry.source === 'builtin' ? entry.title : entry.name,
       summary: entry.source === 'builtin' ? entry.summary : entry.description, source: entry.source, scope: entry.scope,
+      when: entry.source === 'builtin' ? entry.when : triggerWhen[options.trigger],
+      yieldsTo: this.getProjects().filter(project => this.yields(entry, project)).map(project => project.name),
       projectId: entry.projectId, projectName: this.projectName(entry.projectId), path: entry.path,
       enabled: options.enabled, trigger: options.trigger, autoOptimize: entry.source !== 'builtin' && options.autoOptimize,
       confirmChanges: entry.source !== 'builtin' && options.confirmChanges,
       version: latest?.version || 0, updatedAt: latest?.at || null, updatedBy: latest?.by || null, updatedIn: this.projectName(latest?.projectId || latest?.project, latest?.project || null),
       createdByAgent: options.createdByAgent, pending: entry.source !== 'builtin' && this.pendingText(entry) !== null,
-      requires: entry.id === 'builtin:model-routing' ? { codex: !!agents.codex?.installed, claude: !!agents.claude?.installed } : null,
+      requires: required === 'none' ? null : { codex: required === 'claude' ? null : !!agents.codex?.installed, claude: required === 'codex' ? null : !!agents.claude?.installed },
       lastUsed: lastUsed || null };
   }
 
@@ -199,7 +222,7 @@ class SkillsStore {
     const entry = this.entry(id);
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('技能选项无效。');
     for (const [key, value] of Object.entries(patch)) {
-      if (key === 'trigger' ? !['always', 'auto'].includes(value) : !['enabled', 'autoOptimize', 'confirmChanges'].includes(key) || typeof value !== 'boolean') throw new Error('技能选项无效。');
+      if (key === 'trigger' ? !TRIGGERS.includes(value) : !['enabled', 'autoOptimize', 'confirmChanges'].includes(key) || typeof value !== 'boolean') throw new Error('技能选项无效。');
       if (entry.source === 'builtin' && ['autoOptimize', 'confirmChanges'].includes(key) && value) throw new Error('系统自带技能为只读。');
     }
     this.options[id] = { ...this.options[id], ...patch };
@@ -279,14 +302,26 @@ class SkillsStore {
     }
   }
 
-  delivery(project, remote = false) {
-    const agents = this.getAgents(), key = JSON.stringify([remote ? 'ssh' : project.id, !!agents.claude?.installed, !!agents.codex?.installed]);
+  delivery(project, remote = false, sessionId = null) {
+    // A newly added or moved project can start a session before its watcher's first debounced scan.
+    if (!remote && project.kind !== 'ssh' && this.projectSkills.get(project.id)?.path !== project.path
+      && this.refreshProjectSkills(new Set())) this.invalidateDelivery();
+    const agents = this.getAgents(), key = JSON.stringify([project.id, remote, sessionId, !!agents.claude?.installed, !!agents.codex?.installed]);
     if (this.deliveries.has(key)) return this.deliveries.get(key);
     const entries = [...this.entries.values()].filter(entry => entry.scope !== 'project' || !remote && entry.projectId === project.id);
     const remotePath = entry => `{AGENTRIX_SKILLS}/${entry.scope === 'builtin' ? 'builtin' : 'global'}/${entry.folder}/SKILL.md`;
-    let skills = entries.map(entry => ({ ...this.info(entry), ...(remote ? { path: remotePath(entry) } : {}) }));
-    const manifest = remote ? '{AGENTRIX_SKILLS}/instructions.md' : path.join(this.dataDir, 'skill-delivery', `${safeId(project.id)}.md`);
-    const delivery = { skills, remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
+    // No remote project-skill discovery is available; SSH sessions never use host-side yield detection.
+    const yielded = remote ? [] : entries.filter(entry => this.yields(entry, project));
+    let skills = entries.filter(entry => !yielded.includes(entry)).map(entry => {
+      const info = this.info(entry);
+      if (info.enabled && info.trigger === 'first-open') {
+        const firstSession = this.options[entry.id]?.firstOpenedProjects?.[project.id];
+        if (firstSession && firstSession !== sessionId) info.trigger = 'auto';
+      }
+      return { ...info, ...(remote ? { path: remotePath(entry) } : {}) };
+    });
+    const manifest = remote ? '{AGENTRIX_SKILLS}/instructions.md' : path.join(this.dataDir, 'skill-delivery', `${safeId(JSON.stringify([project.id, sessionId]))}.md`);
+    const delivery = { skills, yielded: yielded.filter(entry => this.info(entry).enabled).map(entry => entry.name), remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
       pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)), manifest };
     let bundle = null;
     if (remote) {
@@ -305,6 +340,18 @@ class SkillsStore {
       bundle.key = safeId(JSON.stringify(bundle));
     } else {
       try { writeFile(manifest, skillInstructions(delivery)); } catch (error) { this.report(error); }
+    }
+    if (sessionId) {
+      let recorded = false;
+      for (const skill of skills.filter(skill => skill.enabled && skill.trigger === 'first-open')) {
+        const runs = this.options[skill.id]?.firstOpenedProjects || {};
+        if (runs[project.id]) continue;
+        // Session startup is the run boundary: delivery is observable; model compliance is not.
+        // Keep its session id so refreshed notes retain the first-run instruction; later sessions use auto.
+        this.options[skill.id] = { ...this.options[skill.id], firstOpenedProjects: { ...runs, [project.id]: sessionId } };
+        recorded = true;
+      }
+      if (recorded) { this.invalidateDelivery(); this.persistOptions(); }
     }
     const result = { ...delivery, bundle };
     this.deliveries.set(key, result);
@@ -325,12 +372,13 @@ class SkillsStore {
 
   syncWatchers() {
     if (this.closed) return;
-    const roots = new Set([...this.roots().filter(entry => entry.source === 'user').map(entry => entry.root), path.join(this.dataDir, 'skill-pending')]);
+    const projectTargets = new Set(this.getProjects().filter(project => project.kind !== 'ssh').flatMap(projectSkillTargets));
+    const roots = new Set([...this.roots().filter(entry => entry.source === 'user').map(entry => entry.root), ...projectTargets, path.join(this.dataDir, 'skill-pending')]);
     for (const [root, watcher] of this.watchers) if (!roots.has(root)) { watcher.stop(); this.watchers.delete(root); }
     for (const root of roots) if (!this.watchers.has(root)) {
       // Missing project skills folders are polled until created; never recursively watch the whole repo.
       // All directory events share one debounce, so N project watchers do not cause N full scans.
-      const watcher = monitorActivity(async () => ({ signature: await folderSignature(root, root === path.join(this.dataDir, 'skill-pending') ? 2 : 1) }), () => this.queueRefresh(root),
+      const watcher = monitorActivity(async () => ({ signature: await (projectTargets.has(root) ? projectSkillSignature(root) : folderSignature(root, root === path.join(this.dataDir, 'skill-pending') ? 2 : 1)) }), () => this.queueRefresh(root),
         { interval: 2000, recursive: true, watch: () => {
           try { return fs.lstatSync(root, { throwIfNoEntry: false })?.isDirectory() ? root : null; } catch { return null; }
         } });

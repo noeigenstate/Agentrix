@@ -80,7 +80,7 @@ function readText(file) {
   return fs.readFileSync(file, 'utf8');
 }
 
-function listFolder(root, report = () => {}, invalid = () => {}) {
+function listFolder(root, report = () => {}, invalid = () => {}, parse = metadata) {
   const result = [];
   let folders;
   try {
@@ -93,7 +93,7 @@ function listFolder(root, report = () => {}, invalid = () => {}) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     try {
       const file = checkedPath(root, entry.name), text = readText(file);
-      if (text !== null) result.push({ folder: entry.name, path: file, text, ...metadata(text) });
+      if (text !== null) result.push({ folder: entry.name, path: file, text, ...parse(text, entry.name) });
       else invalid(entry.name);
     } catch (error) {
       // An agent may be halfway through writing a file. The debounced watcher/fallback retries it.

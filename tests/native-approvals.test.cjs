@@ -305,7 +305,7 @@ test('production startup/state/preload/UI path is connected; legacy permission e
 
 for (const [platform, shellKind] of [['win32', 'powershell'], ['linux', 'bash'], ['darwin', 'zsh']]) test(`actual main startTerminal binds native mode and generation without starting a shell on ${platform}`, () => {
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'), sessions = new Map();
-  const project = { id: 'project', path: process.cwd(), kind: 'local' }, writes = []; let options;
+  const project = { id: 'project', path: process.cwd(), kind: 'local' }, writes = [], deliveries = []; let options;
   const languages = ['zh-Hans-CN', 'en-US'], localeCalls = [], integrations = []; let languageCalls = 0;
   const environment = (kind, helper) => (env, integration) => { integrations.push({ kind, integration }); return helper(env, integration); };
   const terminal = { registry: { close() {} }, onData() {}, onExit() {}, write: data => writes.push(data) };
@@ -315,7 +315,7 @@ for (const [platform, shellKind] of [['win32', 'powershell'], ['linux', 'bash'],
     app: { getPreferredSystemLanguages() { languageCalls++; return languages; } },
     terminalLocale(value) { localeCalls.push(value); return terminalLocale(value, name => name === 'zh_CN.UTF-8'); },
     randomUUID: () => `native-generation-${++uuid}`, restorePlans: new Map(), store: { findTerminal: () => ({ record: {} }), setRestore: noOp }, localShell: () => ({ kind: shellKind }), runtimeDir: 'unused', eventServer: { address: 'unused' },
-    createTerminalEnvironment: () => ({}), withoutAppImage: value => value, accountEnvironment: () => ({}), skills: { delivery: () => ({}) }, writeSkillFile: noOp, startupNote: () => 'note', READING_NOTE: 'note', handoffFile: () => 'unused', writeHandoff: async () => {}, memoryDir: () => 'unused',
+    createTerminalEnvironment: () => ({}), withoutAppImage: value => value, accountEnvironment: () => ({}), skills: { delivery: (...args) => { deliveries.push(args); return {}; } }, writeSkillFile: noOp, startupNote: () => 'note', READING_NOTE: 'note', handoffFile: () => 'unused', writeHandoff: async () => {}, memoryDir: () => 'unused',
     shellEnvironment: environment('bash', shellEnvironment), zshEnvironment: environment('zsh', zshEnvironment), zshStartup: 'unused', integrationDir: 'unused', pty: { spawn: () => assert.fail('native launch started a shell') },
     createNativeSession: value => { options = value; return terminal; }, scheduleState: noOp, nativeSessionEvent: noOp,
     TerminalTitleTracker: dummy, SubmissionTracker: dummy, ApprovalGuard: require('../electron/features/terminal/approval-guard.cjs').ApprovalGuard,
@@ -332,6 +332,7 @@ for (const [platform, shellKind] of [['win32', 'powershell'], ['linux', 'bash'],
   context.startTerminal('sdk-terminal', 'claude-sdk'); const sdk = sessions.get('sdk-terminal'); assert.equal(options.binding.provider, 'claude'); assert.equal(options.binding.sessionId, sdk.sessionId); assert.equal(sdk.agent, 'claude');
   assert.equal(options.mode, 'claude-sdk'); assert.equal(options.binding.projectId, 'project'); assert.equal(options.binding.terminalId, 'sdk-terminal');
   assert.equal(sdk.native, terminal); assert.equal(sdk.codexActive, true); assert.notEqual(s.sessionId, sdk.sessionId);
+  assert.deepEqual(deliveries, [[project, false, s.sessionId], [project, false, sdk.sessionId]], 'both agent startup paths bind skill timing to the new session');
   assert.equal(s.shellKind, shellKind); assert.equal(sdk.shellKind, shellKind); assert.equal(s.bootstrapFile, null); assert.equal(sdk.bootstrapFile, null);
   assert.equal(languageCalls, platform === 'darwin' ? 2 : 0);
   assert.deepEqual(localeCalls, platform === 'darwin' ? [languages, languages] : []);

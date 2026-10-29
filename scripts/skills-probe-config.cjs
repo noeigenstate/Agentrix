@@ -2,7 +2,7 @@
 function claudeProbeConfig(project, key) {
   return { hasCompletedOnboarding: true, theme: 'dark', bypassPermissionsModeAccepted: true,
     customApiKeyResponses: { approved: [key.trim().slice(-20)], rejected: [] },
-    projects: { [project.replace(/\\/g, '/')]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } } };
+    projects: Object.fromEntries([].concat(project).map(folder => [folder.replace(/\\/g, '/'), { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true }])) };
 }
 
 module.exports = { claudeProbeConfig };
