@@ -1682,5 +1682,7 @@
   "每个模型的标题行显示思考深度和输出模式，Claude 子代理也有；不再重复显示「子代理」和官方服务商。": "Each model head shows its effort and output mode, Claude sub-agents included; the repeated “sub-agent” tag and official provider name are gone.",
   "图标等大": "Marks at one size",
   "OpenAI 和 Claude 的图标在各处显示同样大小。": "The OpenAI and Claude marks show at the same size everywhere.",
-  "普通": "Standard"
+  "普通": "Standard",
+  "分派时声明 {model} · {effort} · {mode}": "Declared at dispatch: {model} · {effort} · {mode}",
+  "未报告": "unreported"
 }

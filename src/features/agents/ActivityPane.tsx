@@ -137,8 +137,9 @@ function CallsCard({ calls }: { calls: AgentCall[] }) {
             <ModelHead agent={call.agent} name={name} effort={call.effort} fast={call.fast} provider={call.provider} title={[call.agent, call.provider, name].filter(Boolean).join(' / ')} rate={call.rate} />
             {call.items.slice(0, MAX_CALL_ITEMS).map((item, index) => {
               const failure = item.failure ? failureWord(item.failure) : null;
-              return <li key={index} className={`is-${item.state}${failure ? ' is-failed' : ''}`} title={failure ? `${item.title}
-${failure}` : item.title}>
+              // A dispatched worker that runs other settings than the lead declared says so in its tooltip.
+              const declared = item.declared && t('分派时声明 {model} · {effort} · {mode}', { model: modelName(item.declared.model), effort: item.declared.effort ?? t('未报告'), mode: item.declared.fast == null ? t('未报告') : t(item.declared.fast ? '快速' : '普通') });
+              return <li key={index} className={`is-${item.state}${failure ? ' is-failed' : ''}`} title={[item.title, failure, declared].filter(Boolean).join('\n')}>
                 <span className="activity-row-icon">{failure ? <WarningCircle size={14} weight="fill" aria-hidden="true" /> : CALL_STATES[item.state].icon}</span>
                 <p><span className="activity-call-role">{t(item.role)}</span>{item.title}</p>
                 <span className="activity-row-end">{failure ?? t(CALL_STATES[item.state].word)}</span>
