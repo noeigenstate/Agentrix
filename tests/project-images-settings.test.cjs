@@ -79,7 +79,7 @@ function settingsDialogFixture(t, props = {}) {
   const components = {
     '../voice/VoiceButton': { VoiceModelSetting: empty }, '../shortcuts/ShortcutSettings': { ShortcutSettings: empty },
     '../agents/AgentsSettings': { AgentsSettings: empty }, './TerminalFontSettings': { TerminalFontSettings: empty },
-    './UserAvatarSetting': { UserAvatarSetting: Avatar }, './ThemeSetting': { ThemeSetting: empty }, './ProjectImagesSettings': { ProjectImagesSettings: List }, './AboutSettings': { AboutSettings: empty },
+    './UserAvatarSetting': { UserAvatarSetting: Avatar }, './ThemeSetting': { ThemeSetting: empty }, './ProjectImagesSettings': { ProjectImagesSettings: List }, './SkillsSettings': { SkillsSettings: empty }, './AboutSettings': { AboutSettings: empty },
   };
   mod.require = name => name === 'react' ? hooks : name === '@phosphor-icons/react' ? new Proxy({}, { get: () => empty })
     : name === '../../shared/i18n' ? { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (_match, key) => values[key]), currentLanguage: () => 'zh' }
@@ -100,7 +100,7 @@ function settingsDialogFixture(t, props = {}) {
 
 test('project thumbnails enter from one appearance row and keep the original sidebar categories', t => {
   const h = settingsDialogFixture(t), tree = nodes(h.render());
-  assert.deepEqual(tree.filter(node => node.props['data-settings-tab']).map(node => node.props['data-settings-tab']), ['appearance', 'notifications', 'terminal', 'agents', 'shortcuts', 'about']);
+  assert.deepEqual(tree.filter(node => node.props['data-settings-tab']).map(node => node.props['data-settings-tab']), ['appearance', 'notifications', 'terminal', 'agents', 'skills', 'shortcuts', 'about']);
   const appearance = h.section('appearance'), children = React.Children.toArray(appearance.props.children);
   const avatar = children.findIndex(node => node.type === h.Avatar), entry = children.findIndex(node => node.props['data-project-images-setting'] === true);
   assert.equal(entry, avatar + 1); assert.equal(children[entry].props.className, 'setting-row');

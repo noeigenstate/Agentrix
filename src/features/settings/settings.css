@@ -17,10 +17,12 @@ dialog { color: var(--text-1); }
 .setting-group > .setting-row { border-bottom: 0; }
 .setting-row select { height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-1); background: var(--bg-control); }
 .setting-row .select-trigger { flex: none; width: 200px; }
-.setting-row input[type="checkbox"] { appearance: none; flex: 0 0 38px; position: relative; width: 38px; height: 22px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input); cursor: pointer; }
-.setting-row input[type="checkbox"]::before { content: ''; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-2); }
-.setting-row input[type="checkbox"]:checked { background: var(--text-1); border-color: var(--text-1); }
-.setting-row input[type="checkbox"]:checked::before { background: var(--bg-app); transform: translateX(16px); }
+.setting-row input[type="checkbox"], .skills-settings input[type="checkbox"] { appearance: none; flex: 0 0 38px; position: relative; width: 38px; height: 22px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input); cursor: pointer; }
+.setting-row input[type="checkbox"]::before, .skills-settings input[type="checkbox"]::before { content: ''; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-2); }
+.setting-row input[type="checkbox"]:checked, .skills-settings input[type="checkbox"]:checked { background: var(--text-1); border-color: var(--text-1); }
+.setting-row input[type="checkbox"]:checked::before, .skills-settings input[type="checkbox"]:checked::before { background: var(--bg-app); transform: translateX(16px); }
+.skills-settings input[type="checkbox"] { margin: 0; }
+.skills-settings input[type="checkbox"]:disabled { opacity: .5; cursor: default; }
 .setting-row input[type="range"] { accent-color: var(--text-1); }
 .settings-note { display: flex; gap: 8px; margin: 20px 0; color: var(--text-2); }
 .settings-note svg { flex-shrink: 0; margin-top: 3px; }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, House, ArrowsOutSimple, Terminal as TerminalIcon, Power, ArrowCounterClockwise, Monitor, Cpu, Info, SpeakerHigh, Globe, MagnifyingGlassPlus, Microphone, BookOpen, FloppyDisk, Palette, Robot, Keyboard, ImageSquare, ArrowLeft, X } from '@phosphor-icons/react';
+import { Bell, House, ArrowsOutSimple, Terminal as TerminalIcon, Power, ArrowCounterClockwise, Monitor, Cpu, Info, SpeakerHigh, Globe, MagnifyingGlassPlus, Microphone, BookOpen, FloppyDisk, Palette, Robot, Lightning, Keyboard, ImageSquare, ArrowLeft, X } from '@phosphor-icons/react';
 import type { AgentsState, AppUpdateState, Project, Settings, Workspace } from '../../shared/types';
 import { VoiceModelSetting } from '../voice/VoiceButton';
 import { currentLanguage, t } from '../../shared/i18n';
@@ -11,6 +11,7 @@ import { TerminalFontSettings } from './TerminalFontSettings';
 import { UserAvatarSetting } from './UserAvatarSetting';
 import { ThemeSetting } from './ThemeSetting';
 import { Select } from '../../shared/Select';
+import { SkillsSettings } from './SkillsSettings';
 import { ProjectImagesSettings } from './ProjectImagesSettings';
 import { AboutSettings } from './AboutSettings';
 import { steps as ZOOM_STEPS } from '../../../electron/window-zoom.json';
@@ -30,6 +31,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, uiZoom, 
     { id: 'notifications', title: t('提醒'), hint: t('系统通知与提示音'), icon: <Bell size={17} /> },
     { id: 'terminal', title: t('终端与编辑'), hint: t('终端、会话恢复与编辑器'), icon: <TerminalIcon size={17} /> },
     { id: 'agents', title: t('编码助手'), hint: t('Codex 与 Claude Code'), icon: <Robot size={17} /> },
+    { id: 'skills', title: t('技能'), hint: t('系统自带的技能，和你自己的技能'), icon: <Lightning size={17} /> },
     { id: 'shortcuts', title: t('键盘快捷键'), hint: t('查看和修改快捷键'), icon: <Keyboard size={17} /> },
     { id: 'about', title: t('更新与关于'), hint: t('版本信息、应用更新与相关资源'), icon: <Info size={17} /> },
   ];
@@ -92,6 +94,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, uiZoom, 
       <section className="settings-section" id="settings-agents" aria-label={t('编码助手')} hidden={current.id !== 'agents'}>
       <AgentsSettings agents={agents} onChange={onAgents} />
       </section>
+      {current.id === 'skills' && <section className="settings-section skills-section" id="settings-skills" aria-label={t('技能')}><SkillsSettings projects={projects} /></section>}
       {current.id === 'shortcuts' && <ShortcutSettings settings={settings} update={update} />}
       <section className="settings-section" id="settings-about" aria-label={t('更新与关于')} hidden={current.id !== 'about'}>
       <AboutSettings updates={updates} onCheck={onCheckUpdate} onInstall={onInstallUpdate} onDownloadPage={onDownloadPage} />

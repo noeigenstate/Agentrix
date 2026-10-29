@@ -1,0 +1,66 @@
+/* Settings › 技能: a list of 240px beside one skill's detail. The pane keeps one height, so the list and the detail scroll on their own. */
+.settings-pane:has(> .skills-section) { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 24px; }
+.skills-section { flex: 1; min-height: 0; width: 100%; }
+.skills-settings { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 24px; height: 100%; }
+.skills-list { display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow: auto; padding-top: 16px; }
+.skills-list .search-input { width: 100%; min-width: 0; margin-bottom: 8px; box-sizing: border-box; }
+.skills-group { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 32px; margin-top: 12px; padding: 0 12px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.skills-group:first-child { margin-top: 0; }
+.skills-group span { font-weight: 400; color: var(--text-3); }
+.skills-group-tools { display: flex; align-items: center; gap: 8px; }
+.skills-group-tools .icon-button:last-child { margin-right: -8px; }
+.skills-item { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 0; border-radius: 8px; font-size: 13px; text-align: left; color: var(--text-2); background: transparent; }
+.skills-item:hover { color: var(--text-1); background: var(--bg-hover); }
+.skills-item[aria-current="true"] { color: var(--text-1); background: var(--bg-selected); }
+.skills-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skills-mark { flex: none; font-size: 12px; color: var(--text-1); }
+.skills-list-note { margin: 0; padding: 8px 12px; font-size: 12px; line-height: 20px; color: var(--text-2); }
+.skills-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
+.skills-dot.is-hollow { background: transparent; box-shadow: inset 0 0 0 2px var(--text-3); }
+
+.skills-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.skills-error { margin: 16px 0 0; }
+.skills-detail { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; padding-top: 16px; }
+.skills-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 36px; }
+.skills-title b { font-size: 16px; font-weight: 600; }
+.skills-title b em { margin-left: 8px; font-size: 12px; font-weight: 400; font-style: normal; color: var(--text-3); }
+.skills-title-tools { display: flex; align-items: center; gap: 12px; }
+.skills-desc { margin: 4px 0 0; font-size: 13px; line-height: 20px; color: var(--text-2); }
+.skills-new-note { color: var(--text-1); }
+.skills-desc .text-button { margin-left: 12px; font-size: 13px; }
+.skills-facts { margin: 8px 0 0; padding: 0; }
+.skills-facts > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 48px; border-bottom: 1px solid var(--divider); font-size: 13px; }
+.skills-facts > .skills-facts-pair { justify-content: flex-start; gap: 12px; }
+.skills-facts-pair dt:not(:first-child) { margin-left: 24px; }
+.skills-facts dt { color: var(--text-2); }
+.skills-facts dt small { display: block; margin-top: 2px; font-size: 12px; line-height: 20px; color: var(--text-3); }
+.skills-facts dd { display: flex; align-items: center; min-width: 0; margin: 0; color: var(--text-1); }
+.skills-facts dd.is-quiet { color: var(--text-3); }
+.skills-facts .select-trigger { width: 208px; }
+.skills-facts .select-trigger.skills-scope { width: 160px; }
+.skills-facts dd .text-button { position: relative; margin-left: 12px; font-size: 13px; }
+.skills-facts dd .text-button::after { content: ''; position: absolute; inset: -8px -4px; }
+.skills-version { color: var(--text-2); }
+.skills-dependency { gap: 8px; }
+.skills-heading { margin: 16px 0 8px; font-size: 14px; font-weight: 600; }
+.skills-input { flex: none; width: 320px; max-width: 100%; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; font: 14px var(--font-ui); color: var(--text-1); background: var(--bg-input); }
+.skills-input::placeholder, .skills-textarea::placeholder { color: var(--text-2); opacity: 1; }
+.skills-input:focus, .skills-textarea:focus { outline: 0; border-color: var(--focus-ring); }
+.skills-tabs { display: flex; align-items: center; gap: 16px; margin: 16px 0 8px; }
+.skills-tabs button { height: 32px; padding: 0; border: 0; border-bottom: 2px solid transparent; font-size: 14px; font-weight: 600; color: var(--text-3); background: transparent; }
+.skills-tabs button[aria-pressed="true"] { color: var(--text-1); border-bottom-color: var(--text-1); }
+.skills-tab-note { margin-left: auto; font-size: 12px; color: var(--text-3); }
+.skills-reading, .skills-textarea { box-sizing: border-box; flex: 1 0 200px; margin: 0; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); font: 12px/20px var(--font-mono); color: var(--text-1); }
+.skills-reading { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; }
+.skills-textarea { display: block; width: 100%; resize: none; }
+.skills-diff { padding: 12px 0; white-space: normal; }
+.skills-diff .ln { display: block; padding: 0 20px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
+.skills-diff .ln i { display: inline-block; width: 16px; font-style: normal; color: var(--text-3); }
+.skills-diff .ln.add { color: var(--text-1); background: var(--bg-selected); }
+.skills-diff .ln.del { color: var(--text-3); text-decoration: line-through; }
+.skills-diff-meta { margin: 0 0 8px; font-size: 12px; line-height: 20px; color: var(--text-3); }
+.skills-foot { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 16px; }
+.skills-foot .text-button { margin-right: auto; font-size: 13px; }
+.skills-empty { flex: none; align-items: flex-start; gap: 12px; padding: 24px 0 0; font-size: 13px; line-height: 20px; color: var(--text-2); }
+.skills-empty b { font-size: 14px; font-weight: 600; color: var(--text-1); }
+.skills-empty-actions { display: flex; gap: 8px; }
