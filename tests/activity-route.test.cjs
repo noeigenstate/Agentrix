@@ -58,7 +58,10 @@ test('the models group hides empty calls and lists each model with its calls, th
   ];
   const html = activityMarkup(calls);
   const section = /<section class="activity-card activity-calls"[\s\S]*?<\/section>/.exec(html)[0], plain = section.replace(/<[^>]*>/g, '|');
-  for (const text of ['调用的模型', 'Sonnet 5.5', 'Anthropic', 'GPT-6.1-Sol', 'OpenAI', 'max · 快速', '运行中', '审核中', '准备中']) assert.ok(plain.includes(text), text);
+  for (const text of ['调用的模型', 'Sonnet 5.5', 'GPT-6.1-Sol', 'max · 快速', '运行中', '审核中', '准备中']) assert.ok(plain.includes(text), text);
+  assert.doesNotMatch(plain, /Anthropic|OpenAI|子代理/);
+  assert.match(section, /title="Claude Code \/ Anthropic \/ Sonnet 5\.5"/);
+  assert.match(section, /title="Codex \/ OpenAI \/ GPT-6\.1-Sol"/);
   assert.ok(section.includes('<span class="activity-count">5</span>'), 'the heading counts every call');
   assert.ok(html.indexOf('activity-main"') < html.indexOf('activity-calls"') && html.indexOf('activity-calls"') < html.indexOf('activity-context"'), 'the main model (with its task), the sub-agents, then context and usage');
   assert.ok(section.includes('title="Polish &lt;card&gt;"'));
@@ -66,6 +69,37 @@ test('the models group hides empty calls and lists each model with its calls, th
   for (const [state, count] of [['preparing', 1], ['running', 3], ['reviewing', 1]]) assert.equal((section.match(new RegExp(`<li class="is-${state}"`, 'g')) || []).length, count);
   const english = activityMarkup(calls, 'en').replace(/<[^>]*>/g, '|');
   for (const text of ['Models called', 'Running', 'Reviewing', 'Preparing', 'max · Fast']) assert.ok(english.includes(text), text);
+  assert.doesNotMatch(english, /Anthropic|OpenAI|Sub-agent/);
+});
+
+test('main and called heads show non-default providers, retain full tooltips and keep their rate column', () => {
+  const cases = [
+    ['claude', 'Claude Code', 'claude-opus-5-5', 'Opus 5.5', 'Anthropic', null],
+    ['codex', 'Codex', 'gpt-6.1-sol', 'GPT-6.1-Sol', 'OpenAI', null],
+    ['claude', 'Claude Code', 'claude-opus-5-5', 'Opus 5.5', 'relay.example:8443', 'relay.example:8443'],
+    ['claude', 'Claude Code', 'claude-opus-5-5', 'Opus 5.5', 'Amazon Bedrock', 'Amazon Bedrock'],
+    ['claude', 'Claude Code', 'claude-opus-5-5', 'Opus 5.5', 'Google Vertex AI', 'Google Vertex AI'],
+    ['claude', 'Claude Code', 'claude-opus-5-5', 'Opus 5.5', 'OpenAI', 'OpenAI'],
+    ['codex', 'Codex', 'gpt-6.1-sol', 'GPT-6.1-Sol', 'proxy.example', 'proxy.example'],
+    ['codex', 'Codex', 'gpt-6.1-sol', 'GPT-6.1-Sol', 'Azure OpenAI', 'Azure OpenAI'],
+    ['codex', 'Codex', 'gpt-6.1-sol', 'GPT-6.1-Sol', 'Anthropic', 'Anthropic'],
+    ['claude', 'Claude Code', 'claude-opus-5-5', 'Opus 5.5', null, null],
+    ['codex', 'Codex', 'gpt-6.1-sol', 'GPT-6.1-Sol', null, null],
+  ];
+  const rate = { outputTokens: 480, activeMs: 10000, samples: 2, updatedAt: 1, partial: false };
+  for (const language of ['zh', 'en']) for (const [agent, label, model, name, provider, visible] of cases) {
+    const call = { agent: label, provider, model, effort: null, fast: null, rate, items: [{ state: 'running', role: '执行', title: 'work' }] };
+    const html = activityMarkup([call], language, { agent, agentSettings: { model }, agentUsage: { provider, model, rate, limits: [], calls: [call] } });
+    const heads = [...html.matchAll(/<li class="activity-call-head" title="([^"]*)">([\s\S]*?)<\/li>/g)];
+    assert.equal(heads.length, 2, `${language} ${label} ${provider}`);
+    for (const [, title, content] of heads) {
+      assert.equal(title, [label, provider, name].filter(Boolean).join(' / '));
+      assert.equal(/<span class="activity-call-provider">([^<]*)<\/span>/.exec(content)?.[1] ?? null, visible);
+      assert.ok(content.includes(`<p><b>${name}</b>`));
+      assert.match(content, /class="activity-row-end activity-rate is-live"[^>]*>48 token\/s<\/span>/);
+      assert.doesNotMatch(content, /activity-call-tag|子代理|Sub-agent/);
+    }
+  }
 });
 
 test('a single preparing or reviewing call shows its own state and reviewed routes disappear', () => {
@@ -503,14 +537,14 @@ test('the main row shows the step under way and spins only while the agent works
   assert.doesNotMatch(css, /activity-route/, 'the route chips are gone');
 });
 
-test('every group of called models is a sub-agent: tagged, with its own rate, its effort under its head, its calls exactly as given and never merged', () => {
+test('every group of called models has its own rate, its effort under its head, its calls exactly as given and is never merged', () => {
   const call = (model, extra = {}) => ({ agent: 'Claude Code', provider: 'Anthropic', model, effort: null, fast: null, preparing: 0, running: 1, reviewing: 0, tasks: [], items: [{ state: 'running', role: '执行', title: `${model} work` }], ...extra });
   const html = activityMarkup([call('claude-opus-5-5', { rate: { outputTokens: 480, activeMs: 10000, samples: 2, updatedAt: 1, partial: false }, effort: 'high' }),
     call('claude-sonnet-5-5'), call('claude-sonnet-5-5', { effort: 'max', fast: true, rate: null })], 'zh', { agentUsage: { provider: 'Anthropic', limits: [], model: 'claude-opus-5-5', calls: [] } });
   const calls = /<section class="activity-card activity-calls"[\s\S]*?<\/section>/.exec(activityMarkup([call('claude-opus-5-5', { rate: { outputTokens: 480, activeMs: 10000, samples: 2, updatedAt: 1, partial: false }, effort: 'high' }),
     call('claude-sonnet-5-5'), call('claude-sonnet-5-5', { effort: 'max', fast: true, rate: null })]))[0];
   assert.ok(html.includes('主模型'));
-  assert.equal((calls.match(/<span class="activity-call-tag">子代理<\/span>/g) || []).length, 3, 'every group is a sub-agent, even one on the main model');
+  assert.doesNotMatch(calls, /activity-call-tag|子代理/, 'the section heading identifies the called models');
   assert.equal((calls.match(/class="activity-call-head"/g) || []).length, 3, 'three groups, none merged');
   assert.deepEqual([...calls.matchAll(/<span class="activity-row-end activity-rate[^"]*" title="[^"]*">([^<]*)<\/span>/g)].map(match => match[1]), ['48 token/s', '— token/s', '— token/s'], 'each group has its own rate');
   assert.ok(calls.includes('<li class="activity-call-note"><span></span><p>high</p><span></span></li>') && calls.includes('<p>max · 快速</p>'), 'effort and speed under the head, not at its end');
@@ -518,5 +552,5 @@ test('every group of called models is a sub-agent: tagged, with its own rate, it
   assert.deepEqual([...calls.matchAll(/<\/span>(claude-[a-z0-9-]+ work)<\/p>/g)].map(match => match[1]), ['claude-opus-5-5 work', 'claude-sonnet-5-5 work', 'claude-sonnet-5-5 work'], 'calls as given');
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
   assert.match(css, /\.activity-call-head p > \.activity-call-provider \{ flex: 0 100 auto; \}/, 'the service gives way first');
-  assert.match(css, /\.activity-call-head p > \.activity-call-tag \{ flex: none;/, 'the tag never does');
+  assert.doesNotMatch(css, /activity-call-tag/);
 });

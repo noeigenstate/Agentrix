@@ -48,12 +48,11 @@
 
 
 /* A called model: its name leads (its service after it), its calls follow in the secondary ink; the part of a call before its subject is the role. */
-/* A head's name, service and tag share one line: the name keeps its room, the service gives way first, the tag never; the rate is a fixed 80px column at the right. */
+/* A head's name and service share one line: the name keeps its room, the service gives way first; the rate is a fixed 80px column at the right. */
 .activity-call-rows li.activity-call-head p { display: flex; align-items: baseline; }
 .activity-call-head p > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-call-head p > b { flex: 0 1 auto; }
 .activity-call-head p > .activity-call-provider { flex: 0 100 auto; }
-.activity-call-head p > .activity-call-tag { flex: none; margin-left: 8px; font-size: 12px; font-weight: 400; color: var(--flow-faint); }
 .activity-call-rows li .activity-rate { min-width: 80px; text-align: right; }
 .activity-call-rows li .activity-rate.is-live { color: var(--flow-ink); }
 /* How the model runs, under its head, in the text column. */

@@ -48,11 +48,13 @@ function Rate({ rate }: { rate: TokenRate | null | undefined }) {
   return <span className="activity-row-end activity-rate" title={t('这个模型的记录在这里读不到，所以没有速率。')}>— token/s</span>;
 }
 
-// A head row: the model's mark, its name and service (the service gives way first when the pane is narrow), an optional tag, and its rate.
-function ModelHead({ Mark, name, provider, tag, title, rate }: { Mark: typeof ClaudeLogo; name: string; provider: string | null | undefined; tag?: string; title: string; rate: TokenRate | null | undefined }) {
+// A head row: the model's mark, its name and any non-default service (which gives way first when the pane is narrow), and its rate.
+function ModelHead({ agent, name, provider, title, rate }: { agent: AgentCall['agent']; name: string; provider: string | null | undefined; title: string; rate: TokenRate | null | undefined }) {
+  const Mark = agent === 'Codex' ? CodexLogo : ClaudeLogo;
+  const visibleProvider = provider === (agent === 'Codex' ? 'OpenAI' : 'Anthropic') ? null : provider;
   return <li className="activity-call-head" title={title}>
     <span className="activity-row-icon"><Mark size={16} /></span>
-    <p><b>{name}</b>{provider && <span className="activity-call-provider">{provider}</span>}{tag && <span className="activity-call-tag">{tag}</span>}</p>
+    <p><b>{name}</b>{visibleProvider && <span className="activity-call-provider">{visibleProvider}</span>}</p>
     <Rate rate={rate} />
   </li>;
 }
@@ -87,7 +89,7 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
   return <section className="activity-card activity-main" aria-label={t('主模型')}>
     <h4 className="activity-card-title">{t('主模型')}</h4>
     <ul className="activity-call-rows">
-      <ModelHead Mark={terminal.agent === 'claude' ? ClaudeLogo : CodexLogo} name={name} provider={usage?.provider} title={title} rate={usage?.rate} />
+      <ModelHead agent={agent} name={name} provider={usage?.provider} title={title} rate={usage?.rate} />
       <li className="activity-call-note"><span /><p>{model ? how || t('按默认设置运行') : t('第一次回复后显示模型。')}</p><span /></li>
     </ul>
     <ul className="activity-call-rows activity-main-tasks" aria-label={t('提示')}>
@@ -114,18 +116,18 @@ const CALL_STATES = {
 } as const;
 const MAX_CALL_ITEMS = 4;
 
-// The sub-agents the agent called (everything in the calls is a worker it spawned, so every group is tagged as one): per model one head (its mark, name, service and rate), how it runs under it, then a row for each of its calls
+// The sub-agents the agent called: per model one head (its mark, name, service and rate), how it runs under it, then a row for each of its calls
 // (the state's icon, the role and what it does, the state in words). The heading counts every call; a model's calls past the fourth fold into "+N".
 function CallsCard({ calls }: { calls: AgentCall[] }) {
   return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
     <h4 className="activity-card-title">{t('调用的模型')}<span className="activity-count">{calls.reduce((sum, call) => sum + call.items.length, 0)}</span></h4>
     <ul className="activity-call-groups">
       {calls.map(call => {
-        const Mark = call.agent === 'Codex' ? CodexLogo : ClaudeLogo, name = modelName(call.model);
+        const name = modelName(call.model);
         const how = [call.effort, call.fast != null && (call.fast ? t('快速') : t('普通模式'))].filter(Boolean).join(' · ');
         return <li key={JSON.stringify([call.agent, call.provider, call.model, call.effort, call.fast])}>
           <ul className="activity-call-rows">
-            <ModelHead Mark={Mark} name={name} provider={call.provider} tag={t('子代理')} title={[[call.agent, call.provider, name].filter(Boolean).join(' / '), t('子代理')].join('\n')} rate={call.rate} />
+            <ModelHead agent={call.agent} name={name} provider={call.provider} title={[call.agent, call.provider, name].filter(Boolean).join(' / ')} rate={call.rate} />
             {how && <li className="activity-call-note"><span /><p>{how}</p><span /></li>}
             {call.items.slice(0, MAX_CALL_ITEMS).map((item, index) => <li key={index} className={`is-${item.state}`} title={item.title}>
               <span className="activity-row-icon">{CALL_STATES[item.state].icon}</span>
