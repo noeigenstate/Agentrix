@@ -79,6 +79,26 @@ export type GitCommitFiles = { files: { path: string; status: string; originalPa
 type TextPage = { index: number; count: number; byteStart: number; byteEnd: number; encoding: string };
 export type Distribution = 'development' | 'installed' | 'portable' | 'macos' | 'linux';
 export type AppUpdateState = { supported: boolean; currentVersion: string; distribution: Distribution; status: 'unavailable' | 'idle' | 'checking' | 'current' | 'downloading' | 'ready' | 'error'; version: string | null; percent: number; error: string | null };
+// Skills (Settings › 技能). Built-in ones ship with the app and are read-only; the user's own live in Agentrix's data folder
+// (all projects) or in a project's skills/ folder (that project), and agents may refine them as work goes on.
+// id: "builtin:<name>", "user:<name>" or "project:<projectId>:<name>". trigger: always = read before every task; auto = when its description fits.
+export type SkillInfo = {
+  id: string; name: string; description: string; source: 'builtin' | 'user'; scope: 'builtin' | 'global' | 'project';
+  projectId: string | null; projectName: string | null; path: string;
+  enabled: boolean; trigger: 'always' | 'auto'; autoOptimize: boolean; confirmChanges: boolean;
+  // The latest version and who made it; createdByAgent until the user has looked at it (the 新 mark).
+  version: number; updatedAt: number | null; updatedBy: 'agent' | 'user' | 'app' | null; updatedIn: string | null; createdByAgent: boolean;
+  // A change an agent proposed while confirmChanges is on, waiting for the user.
+  pending: boolean;
+  // Built-in skills that need other agents: whether each is installed (null: not needed).
+  requires: { codex: boolean | null; claude: boolean | null } | null;
+  // Proof it takes effect: the last time an agent Agentrix runs read it.
+  lastUsed: { at: number; project: string; agent: 'claude' | 'codex' } | null;
+};
+export type SkillVersion = { version: number; at: number; by: 'agent' | 'user' | 'app'; project: string | null; text: string };
+export type SkillDetail = { text: string; versions: SkillVersion[]; pending: string | null };
+export type SkillDraft = { name: string; description: string; scope: 'global' | 'project'; projectId: string | null; text: string };
+export type SkillOptions = Partial<Pick<SkillInfo, 'enabled' | 'trigger' | 'autoOptimize' | 'confirmChanges'>>;
 export type AgentsState = { codex: { installed: boolean }; claude: { installed: boolean }; npm: boolean; installing: 'codex' | 'claude' | null; message: string; error: string };
 export type FilePreview = { path: string; name: string; size: number; modifiedAt: number; revision: string } & (
   { kind: 'text'; content: string; page: TextPage } | { kind: 'unsupported'; reason: string }
@@ -170,6 +190,18 @@ type Bridge = {
   fileCard(id: string, file: string): Promise<Result<FileCard>>;
   agentHistory(id: string): Promise<Result<{ claude: { id: string; at: number } | null; codex: { id: string; at: number } | null }>>;
   agentLaunch(id: string, agent: 'claude' | 'codex', mode: 'new' | 'continue' | 'native'): Promise<Result<boolean>>;
+  listSkills(): Promise<Result<SkillInfo[]>>;
+  readSkill(id: string): Promise<Result<SkillDetail>>;
+  // Creates a user skill (id null) or saves a new version of one; built-in skills cannot be saved.
+  saveSkill(id: string | null, draft: SkillDraft): Promise<Result<SkillInfo>>;
+  deleteSkill(id: string): Promise<Result<boolean>>;
+  setSkillOptions(id: string, options: SkillOptions): Promise<Result<SkillInfo>>;
+  revertSkill(id: string, version: number): Promise<Result<SkillInfo>>;
+  // Takes or drops a change an agent proposed; also clears the 新 mark of an agent-created skill when it is kept.
+  resolveSkillChange(id: string, accept: boolean): Promise<Result<SkillInfo | null>>;
+  // Copies a folder holding a SKILL.md (chosen in a dialog) into the user's skills; null when cancelled.
+  importSkill(scope: 'global' | 'project', projectId: string | null): Promise<Result<SkillInfo | null>>;
+  onSkills(callback: (skills: SkillInfo[]) => void): () => void;
   answerNativeApproval(id: string, answer: { token: string; decision: string }): Promise<Result<{ mode: 'native'; requestId: string | number }>>;
   managedPrompt(id: string, sessionId: string, text: string): Promise<Result<boolean>>;
   agentSessions(id: string): Promise<Result<AgentSession[]>>;
