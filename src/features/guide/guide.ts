@@ -1,11 +1,11 @@
 // What the usage guide and the About page list for this release; the guide opens on it after an update.
 // Each note is a short title and one detail line, both with their English at the end of electron/locales/en.json.
 export const WHATS_NEW: { title: string; text: string }[] = [
-  { title: '主模型', text: '活动栏顶部显示主 Agent 实际在用的模型、它此刻在做的步骤，以及实时的平均速率（xx token/s）。' },
-  { title: '子代理速率', text: '「调用的模型」里每组都标明「子代理」，并显示各自的 token/s；子代理和主模型的记录分开计算，互不混入。' },
-  { title: 'Claude 额度', text: 'Claude 终端运行时，活动栏里的额度会自己更新，不用再输入 /usage；查询不往终端输入任何内容，不打断正在运行的项目。' },
-  { title: '任务列表', text: '任务做完立即从「正在处理的任务」里移除；后台通知触发的回复不再让旧任务一直挂着。' },
-  { title: '后台 Codex', text: '「调用的模型」能显示在后台运行的 Codex 调用，跑完后才转入审核。' },
-  { title: '阅读视图', text: '完成的结果标题不再带「· 已完成」；失败和中断照常标明。' },
-  { title: '快捷键', text: '用快捷键切换项目时不再出现重点色边框。' },
+  { title: "界面缩放", text: "设置 › 外观里可以缩放界面，默认按当前显示器自动调整，也可选 80%–150%，文字和终端一起按同一比例缩放。" },
+  { title: "技能管理", text: "设置新增「技能」页：系统自带的和你自己的技能分开管理，能看 Agent 改了什么、退回旧版，并显示最近一次生效。" },
+  { title: "模型路由", text: "自带「模型路由」技能：Agentrix 启动的每个 Claude Code 和 Codex 会话都会遵循它分工，只装了一个 Agent 时也有对应安排。" },
+  { title: "主模型任务", text: "主模型卡片直接显示正在处理的任务、计时、当前步骤和排队的任务，原来的「正在处理的任务」卡片并入其中。" },
+  { title: "单独删图", text: "阅读视图输入框里粘贴的每张图片都有自己的移除按钮，删一张不影响其他图片和文字。" },
+  { title: "官方图标", text: "选择助手时显示 Claude 和 Codex 的官方图标；Claude Code 项目里的列表圆点改用 Claude 的橙色。" },
+  { title: "状态修正", text: "GPT 子代理显示 token/s，已停止的后台调用不再一直显示运行中，有命令失败时头像不再出现红圈。" },
 ];

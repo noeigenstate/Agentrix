@@ -1633,5 +1633,17 @@
   "谁来做什么：Opus 规划与审查架构，GPT-6.1-Sol 写核心代码并调试，Sonnet 做日常与前端，GPT-6.1-Terra 验收界面并处理小任务。GPT 默认 max + fast，Claude 默认 high；只装了一个 Agent 时也有对应分工。": "Who does what: Opus plans and reviews the architecture, GPT-6.1-Sol writes the core code and debugs, Sonnet does routine work and the front end, GPT-6.1-Terra checks the interface and takes small tasks. GPT defaults to max + fast, Claude to high; there is a matching split when only one agent is installed.",
   "Agent 提议的修改尚未处理，保存会丢弃它。继续？": "An agent's proposed change has not been handled yet; saving discards it. Continue?",
   "继续": "Continue",
-  "原有版本": "Existing version"
+  "原有版本": "Existing version",
+  "设置 › 外观里可以缩放界面，默认按当前显示器自动调整，也可选 80%–150%，文字和终端一起按同一比例缩放。": "Settings › Appearance can zoom the interface: Auto fits the current display, or pick 80–150 %; text and terminals scale by the same ratio.",
+  "技能管理": "Skills",
+  "设置新增「技能」页：系统自带的和你自己的技能分开管理，能看 Agent 改了什么、退回旧版，并显示最近一次生效。": "Settings has a Skills page: built-in skills and your own, what an agent changed and a way back to an older version, and when a skill last took effect.",
+  "自带「模型路由」技能：Agentrix 启动的每个 Claude Code 和 Codex 会话都会遵循它分工，只装了一个 Agent 时也有对应安排。": "The built-in Model routing skill: every Claude Code and Codex session Agentrix starts follows its division of work, with a plan for when only one agent is installed.",
+  "主模型任务": "Main model tasks",
+  "主模型卡片直接显示正在处理的任务、计时、当前步骤和排队的任务，原来的「正在处理的任务」卡片并入其中。": "The Main model card shows the task in progress with its clock, the current step and queued tasks; the separate tasks card is folded into it.",
+  "单独删图": "Remove one image",
+  "阅读视图输入框里粘贴的每张图片都有自己的移除按钮，删一张不影响其他图片和文字。": "Each image pasted into the reading-view composer has its own remove button; removing one keeps the other images and your text.",
+  "官方图标": "Official marks",
+  "选择助手时显示 Claude 和 Codex 的官方图标；Claude Code 项目里的列表圆点改用 Claude 的橙色。": "Choosing an assistant shows the official Claude and Codex marks; list bullets in a Claude Code project use Claude's orange.",
+  "状态修正": "Status fixes",
+  "GPT 子代理显示 token/s，已停止的后台调用不再一直显示运行中，有命令失败时头像不再出现红圈。": "GPT sub-agents show their token/s, a stopped background call no longer stays “running”, and a failed command no longer rings the avatar."
 }
