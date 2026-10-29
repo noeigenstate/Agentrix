@@ -1,0 +1,364 @@
+// A command-line worker declares its assignment here; Agentrix never infers it from shell commands.
+const fs = require('node:fs');
+const path = require('node:path');
+const net = require('node:net');
+const { spawn } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
+const { StringDecoder } = require('node:string_decoder');
+const { homedir, constants: { signals } } = require('node:os');
+
+// Plain Node cannot read app.asar. Packaged and SSH helpers carry these same pure modules beside them.
+const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
+const { TokenRates } = require(path.join(runtime, 'features/agents/token-rate.cjs'));
+const { agentSettings } = require(path.join(runtime, 'features/agents/agent-settings.cjs'));
+const { rolloutFiles, sessionMeta } = require(path.join(runtime, 'session-files.cjs'));
+const { TranscriptTail } = require(path.join(runtime, 'transcript-tail.cjs'));
+const RUNTIME_FILES = ['session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
+  'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs'];
+const runtimeFiles = () => Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
+
+const START_TIMEOUT = 30000;
+const RATE_INTERVAL = 5000;
+const LIMIT = 4 * 1024 * 1024;
+const word = value => typeof value === 'string' && value.trim() ? value.trim() : null;
+const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+const roles = new Map([['执行', '执行'], ['调查', '调查'], ['审查', '审查'], ['exec', '执行'], ['investigate', '调查'], ['review', '审查']]);
+const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审查|exec|investigate|review>
+  --title <task> --model <model> --effort <effort> --cwd <dir> --brief <file> --out <file>
+  Codex: [--fast] [--image <file> ...] [--read-only]
+  Claude: --permission <plan|acceptEdits>
+`;
+
+function argumentsOf(argv) {
+  const [agent, ...flags] = argv;
+  if (!['codex', 'claude'].includes(agent)) throw new Error('Expected codex or claude');
+  const options = { agent, images: [], fast: false, readOnly: false };
+  const names = new Map(['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out', 'permission'].map(key => [`--${key}`, key]));
+  for (let i = 0; i < flags.length; i++) {
+    const flag = flags[i];
+    if (flag === '--fast' || flag === '--read-only') { options[flag === '--fast' ? 'fast' : 'readOnly'] = true; continue; }
+    if (!names.has(flag) && flag !== '--image') throw new Error(`Unknown option ${flag}`);
+    const value = flags[++i];
+    if (!value || value.startsWith('--') || /[\0\r\n]/.test(value)) throw new Error(`Expected one-line value for ${flag}`);
+    if (flag === '--image') options.images.push(value);
+    else {
+      if (options[names.get(flag)] !== undefined) throw new Error(`Repeated option ${flag}`);
+      options[names.get(flag)] = value;
+    }
+  }
+  for (const key of ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out']) if (!options[key]) throw new Error(`Missing --${key}`);
+  if (!roles.has(options.role)) throw new Error('Expected --role 执行, 调查, 审查, exec, investigate or review');
+  options.role = roles.get(options.role);
+  if (options.title.length > 1024 || options.model.length > 160 || options.effort.length > 32) throw new Error('Assignment is too long');
+  if (agent === 'claude' && (options.fast || options.readOnly || options.images.length)) throw new Error('Claude supports --permission, not Codex options');
+  if (agent === 'claude' && !['plan', 'acceptEdits'].includes(options.permission)) throw new Error('Expected --permission plan or acceptEdits');
+  if (agent === 'codex' && options.permission) throw new Error('--permission is only for Claude');
+  options.cwd = path.resolve(options.cwd);
+  for (const key of ['brief', 'out']) options[key] = path.resolve(options.cwd, options[key]);
+  options.images = options.images.map(file => path.resolve(options.cwd, file));
+  for (const file of [options.cwd, options.brief, options.out, ...options.images]) if (file.length > 4096) throw new Error('Path is too long');
+  return options;
+}
+
+function commandOf(options) {
+  if (options.agent === 'claude') return ['-p', '--model', options.model, '--effort', options.effort,
+    '--permission-mode', options.permission, '--output-format', 'stream-json', '--verbose'];
+  return ['exec', '-m', options.model, '-c', `model_reasoning_effort=${options.effort}`,
+    ...(options.fast ? ['-c', 'service_tier="fast"'] : []), '--json', '-C', options.cwd, '-o', options.out,
+    ...options.images.flatMap(file => ['-i', file]), ...(options.readOnly ? ['-s', 'read-only'] : []), '-'];
+}
+
+// Serialize sends to preserve start/rate/end order. No pipe callback delays the worker or its output.
+function eventSink(filename) {
+  let bootstrap;
+  try {
+    if (!filename || fs.statSync(filename).size > 16384) return () => {};
+    bootstrap = JSON.parse(fs.readFileSync(filename, 'utf8').replace(/^\uFEFF/, ''));
+    if (![bootstrap.pipeName, bootstrap.projectId, bootstrap.sessionKey].every(word)) return () => {};
+  } catch { return () => {}; }
+  const address = process.platform === 'win32' && !bootstrap.pipeName.startsWith('\\\\') ? `\\\\.\\pipe\\${bootstrap.pipeName}` : bootstrap.pipeName;
+  let sending = false;
+  const queue = [];
+  function drain() {
+    if (sending || !queue.length) return;
+    sending = true;
+    const event = queue.shift(), socket = net.connect(address);
+    socket.setTimeout(250, () => socket.destroy());
+    socket.on('error', () => socket.destroy());
+    socket.once('close', () => { sending = false; drain(); });
+    socket.once('connect', () => socket.end(JSON.stringify({ ...event, projectId: bootstrap.projectId, sessionKey: bootstrap.sessionKey }) + '\n'));
+  }
+  return event => {
+    // A slow/disappeared app cannot retain unlimited rate reports.
+    if (event.type === 'dispatch-rate') {
+      const index = queue.findIndex(value => value.type === 'dispatch-rate');
+      if (index >= 0) queue.splice(index, 1);
+    }
+    queue.push(event); drain();
+  };
+}
+
+// Settings are read only from worker records/headers. A missing value remains unreported.
+class WorkerOutput {
+  constructor(agent, changed = () => {}) {
+    this.agent = agent; this.changed = changed; this.meter = new TokenRates(agent);
+    this.model = null; this.effort = null; this.fast = null; this.sessionId = null;
+    this.outputTokens = null; this.activeMs = null; this.failed = false; this.capacity = false; this.confirmed = false;
+  }
+  settings(value) {
+    this.model = word(value.model) || this.model;
+    this.effort = word(value.perTurnEffort ?? value.reasoning_effort ?? value.reasoningEffort ?? value.effort ?? value.reasoning?.effort) || this.effort;
+    const tier = value.service_tier ?? value.serviceTier ?? value.speed ?? value.usage?.speed;
+    if (typeof value.fast === 'boolean') this.fast = value.fast;
+    else if (typeof value.fast_mode === 'boolean') this.fast = value.fast_mode;
+    else if (['on', 'off'].includes(value.fast_mode_state)) this.fast = value.fast_mode_state === 'on';
+    else if (['fast', 'priority', 'standard', 'default', 'flex', 'auto'].includes(tier)) this.fast = ['fast', 'priority'].includes(tier);
+  }
+  measure(record) {
+    this.meter.apply(record);
+    const rates = [...this.meter.rates.values()];
+    if (!rates.length) return;
+    if (!rates.some(rate => rate.samples)) { this.outputTokens = null; this.activeMs = null; return; }
+    this.outputTokens = rates.reduce((sum, rate) => sum + rate.outputTokens, 0);
+    this.activeMs = rates.reduce((sum, rate) => sum + rate.activeMs, 0);
+  }
+  rollout(record) {
+    const payload = record.payload || {};
+    const settings = agentSettings({ model: this.model, effort: this.effort, fast: this.fast }, 'codex', record);
+    Object.assign(this, settings);
+    if (record.type === 'session_meta' || record.type === 'turn_context') this.settings(payload);
+    if (record.type === 'turn_context') this.confirmed = true;
+    this.measure(record);
+  }
+  line(line) {
+    const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
+    let record;
+    try { record = JSON.parse(clean); } catch {
+      if (/\bat capacity\b|overloaded|capacity exceeded/i.test(clean)) this.capacity = true;
+      const header = /^(model|reasoning effort|service tier|speed|session id):\s*(.+)$/i.exec(clean);
+      if (header) {
+        const [, key, value] = header;
+        if (key.toLowerCase() === 'session id') this.sessionId = word(value);
+        else this.settings({ [key.toLowerCase().replace('reasoning effort', 'effort').replace('service tier', 'service_tier')]: value });
+        this.changed();
+      }
+      return;
+    }
+    this.record(record);
+  }
+  record(record) {
+    if (Array.isArray(record)) { for (const entry of record) this.record(entry); return; }
+    if (!record || typeof record !== 'object') return;
+    if (this.agent === 'claude' && (record.parent_tool_use_id || record.isSidechain)) return;
+    const type = record.type;
+    if (['error', 'turn.failed'].includes(type) || record.is_error === true || type === 'result' && /^error_/.test(record.subtype || '')) {
+      this.failed = true;
+      if (/\bat capacity\b|overloaded|capacity exceeded/i.test(JSON.stringify(record))) this.capacity = true;
+    }
+    if (this.agent === 'codex') {
+      if (type === 'thread.started') this.sessionId = word(record.thread_id);
+      if (type === 'turn.completed') {
+        this.failed = false; this.capacity = false;
+        if (this.activeMs === null) this.outputTokens = count(record.usage?.output_tokens);
+      }
+    } else {
+      if (type === 'system' && record.subtype === 'init') {
+        this.sessionId = word(record.session_id); this.settings(record); this.confirmed = true;
+      }
+      if (type === 'assistant') {
+        this.settings(record);
+        this.settings(record.message || {});
+      }
+      if (type === 'assistant' || type === 'user') this.measure(record);
+      if (type === 'result') {
+        this.sessionId = word(record.session_id) || this.sessionId;
+        this.confirmed ||= !!this.sessionId;
+        this.settings(record);
+        const models = Object.keys(record.modelUsage || {});
+        if (models.length === 1) this.model = models[0];
+        this.result = typeof record.result === 'string' ? record.result : null;
+        if (!record.is_error && !/^error_/.test(record.subtype || '')) { this.failed = false; this.capacity = false; }
+        // JSON-only/older CLIs may expose only these final API totals. Never time a whole process as a response.
+        if (count(record.usage?.output_tokens) !== null) {
+          this.outputTokens = record.usage.output_tokens;
+          this.activeMs = Number.isFinite(record.duration_api_ms) && record.duration_api_ms > 0 ? record.duration_api_ms : null;
+        }
+      }
+    }
+    this.changed();
+  }
+  routing() { return { model: this.model || 'unreported', effort: this.effort, fast: this.fast }; }
+}
+
+class CodexRollout {
+  constructor(home, output) { this.directory = path.join(home, 'sessions'); this.output = output; }
+  read() {
+    if (!this.pending) this.pending = this.update().catch(() => {}).finally(() => { this.pending = null; });
+    return this.pending;
+  }
+  async update() {
+    const id = this.output.sessionId;
+    if (!id) return;
+    if (!this.tail) {
+      const files = (await rolloutFiles(this.directory)).filter(file => file.name.endsWith(`-${id}.jsonl`));
+      for (const file of files) {
+        if ((await sessionMeta(file.filename))?.id !== id) continue;
+        this.tail = new TranscriptTail(file.filename, { onReset: partial => {
+          this.output.meter.reset(partial); this.output.outputTokens = null; this.output.activeMs = null;
+        } });
+        break;
+      }
+    }
+    await this.tail?.read(record => this.output.rollout(record));
+    this.output.changed();
+  }
+}
+
+// Standard Windows npm installs expose a JS entrypoint beside the shim; never invoke a shell.
+function executable(agent, args, env) {
+  if (process.platform !== 'win32') return { file: agent, args };
+  const searchPath = Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '';
+  for (const directory of searchPath.split(path.delimiter).filter(Boolean)) {
+    const folder = directory.replace(/^"|"$/g, '');
+    const native = path.join(folder, agent + '.exe');
+    if (fs.existsSync(native)) return { file: native, args };
+    const entry = path.join(folder, 'node_modules', agent === 'codex' ? '@openai/codex/bin/codex.js' : '@anthropic-ai/claude-code/cli.js');
+    if (fs.existsSync(entry)) return { file: process.execPath, args: [entry, ...args] };
+  }
+  return { file: agent, args };
+}
+
+async function run(argv, { env = process.env, stdout = process.stdout, launch = spawn, startTimeout = START_TIMEOUT } = {}) {
+  if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude'].includes(argv[0]))) {
+    stdout.write(USAGE); return 0;
+  }
+  const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
+  let options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, endSent = false;
+  let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null;
+  const signal = line => stdout.write(`[dispatch] ${line}\n`);
+  const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
+  const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: options.role, title: options.title,
+    cwd: options.cwd, brief: options.brief, out: options.out, sessionId: output.sessionId, startedAt: Date.now() });
+  const failed = (reason, exitCode = null) => {
+    if (unconfirmed || started) return;
+    unconfirmed = true; signal(`failed to start ${id}: ${reason}`);
+    if (!options) return;
+    // Even without a session, the pane needs a declared row before it can retain the failure.
+    send({ ...assignment(), ...declared(), unconfirmed: true });
+    send({ type: 'dispatch-end', id, ...declared(), exitCode, reason: 'unconfirmed', outputTokens: null, activeMs: null, endedAt: Date.now() });
+    endSent = true;
+  };
+  const reported = () => {
+    const route = unconfirmed ? declared() : output.routing();
+    return `${options.agent} model ${route.model} effort ${route.effort || 'unreported'} fast ${route.fast === null ? 'unreported' : route.fast ? 'on' : 'off'}`;
+  };
+  const output = new WorkerOutput(argv[0], () => {
+    if (started || unconfirmed || exited || !child?.pid || child.exitCode !== null || !output.sessionId) return;
+    if (!output.confirmed) { if (options.agent === 'codex') void rollout.read(); return; }
+    started = true; clearTimeout(startTimer);
+    const actual = output.routing(), requested = declared();
+    const mismatch = Object.keys(requested).some(key => actual[key] !== requested[key]);
+    const routing = mismatch ? `MISMATCH (declared ${requested.model} ${requested.effort} fast ${requested.fast ? 'on' : 'off'})` : 'ok';
+    signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}`);
+    send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
+    rateTimer = setInterval(() => {
+      const { outputTokens, activeMs } = output;
+      if (outputTokens === null || !(activeMs > 0) || lastRate?.outputTokens === outputTokens && lastRate?.activeMs === activeMs) return;
+      lastRate = { outputTokens, activeMs };
+      send({ type: 'dispatch-rate', id, ...lastRate });
+    }, RATE_INTERVAL);
+  });
+  const rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
+  const stop = (kind, requested = true) => {
+    if (requested) killed = true;
+    if (exited || !child?.pid || child.exitCode !== null) return;
+    if (process.platform === 'win32') {
+      const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+      killer.on('error', () => child.kill());
+    } else {
+      try { process.kill(-child.pid, kind); } catch { child.kill(kind); }
+      clearTimeout(forceTimer);
+      forceTimer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, 1000);
+      forceTimer.unref();
+    }
+  };
+  const onInterrupt = () => stop('SIGINT'), onTerminate = () => stop('SIGTERM'), onHangup = () => stop('SIGHUP');
+  try {
+    options = argumentsOf(argv);
+    const brief = fs.readFileSync(options.brief);
+    log = fs.createWriteStream(options.out + '.log');
+    await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
+    const command = executable(options.agent, commandOf(options), env);
+    child = launch(command.file, command.args, { cwd: options.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+      detached: process.platform !== 'win32' });
+    log.on('error', error => { spawnError = error; stop('SIGTERM', false); });
+    process.on('SIGINT', onInterrupt); process.on('SIGTERM', onTerminate); process.on('SIGHUP', onHangup);
+    startTimer = setTimeout(() => { failed('session not reported within 30 s'); stop('SIGTERM', false); }, startTimeout);
+    if (options.agent === 'codex') pollTimer = setInterval(() => { void rollout.read(); }, 250);
+    child.once('exit', code => {
+      exited = true; clearTimeout(startTimer); clearInterval(pollTimer); clearInterval(rateTimer);
+      if (!started) failed(output.capacity ? 'at capacity' : 'worker exited without a confirmed session', code === 0 ? 1 : code);
+    });
+    const tails = [];
+    for (const stream of [child.stdout, child.stderr]) {
+      const decoder = new StringDecoder('utf8');
+      let buffer = '', skipping = false, json = '';
+      const parseLine = line => {
+        // Claude's JSON result can be a pretty-printed array, or older builds can emit JSON lines.
+        if (options.agent !== 'claude' || !json && !/^\s*[\[{]\s*$/.test(line)) { output.line(line); return; }
+        json += line + '\n';
+        if (json.length > LIMIT) { json = ''; return; }
+        try { const record = JSON.parse(json); json = ''; output.record(record); } catch {}
+      };
+      const accept = data => {
+        buffer += data;
+        let end;
+        while ((end = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
+          if (!skipping && line.length <= LIMIT) parseLine(line);
+          skipping = false;
+        }
+        if (buffer.length > LIMIT) { buffer = ''; skipping = true; }
+      };
+      stream.on('data', chunk => { log.write(chunk); accept(decoder.write(chunk)); });
+      tails.push(() => { accept(decoder.end()); if (!skipping && buffer.trim()) parseLine(buffer); });
+    }
+    child.stdin.on('error', error => { if (error.code !== 'EPIPE') spawnError = error; });
+    child.stdin.end(brief);
+    const result = await new Promise(resolve => {
+      child.once('error', error => { spawnError = error; });
+      child.once('close', (code, killedBy) => resolve({ code, killedBy }));
+    });
+    for (const tail of tails) tail();
+    clearInterval(pollTimer); clearInterval(rateTimer);
+    if (options.agent === 'codex') { await rollout.pending; await rollout.read(); }
+    clearTimeout(startTimer); clearTimeout(forceTimer);
+    if (!started) failed(spawnError?.message || (output.capacity ? 'at capacity' : 'worker exited without a confirmed session'), result.code === 0 ? 1 : result.code);
+    if (options.agent === 'claude' && output.result !== null && output.result !== undefined) fs.writeFileSync(options.out, output.result);
+    const reason = unconfirmed ? 'unconfirmed' : killed ? 'killed' : output.capacity ? 'capacity' : result.killedBy ? 'killed'
+      : spawnError || output.failed || result.code !== 0 ? 'error' : 'exit';
+    const exitCode = Number.isInteger(result.code) ? (result.code === 0 && unconfirmed ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
+    const rate = output.outputTokens !== null && output.activeMs > 0 ? `${Math.round(output.outputTokens * 1000 / output.activeMs)} token/s (${output.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(output.activeMs / 1000)} s)` : 'token/s unreported';
+    signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason} · out ${options.out}`);
+    if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode, reason, outputTokens: output.outputTokens, activeMs: output.activeMs, endedAt: Date.now() });
+    await new Promise(resolve => log.end(resolve));
+    return exitCode;
+  } catch (error) {
+    failed(error.message, 1);
+    if (child?.pid) stop('SIGTERM', false);
+    if (options) {
+      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${unconfirmed ? 'unconfirmed' : 'error'} · out ${options.out}`);
+      if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', outputTokens: null, activeMs: null, endedAt: Date.now() });
+    }
+    log?.destroy();
+    return 1;
+  } finally {
+    clearTimeout(startTimer); clearTimeout(forceTimer);
+    clearInterval(pollTimer); clearInterval(rateTimer);
+    await rollout.pending;
+    process.removeListener('SIGINT', onInterrupt); process.removeListener('SIGTERM', onTerminate); process.removeListener('SIGHUP', onHangup);
+  }
+}
+
+if (require.main === module) run(process.argv.slice(2)).then(code => { process.exitCode = code; });
+module.exports = { argumentsOf, commandOf, WorkerOutput, CodexRollout, runtimeFiles, run, RATE_INTERVAL };

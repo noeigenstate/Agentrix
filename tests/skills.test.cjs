@@ -603,7 +603,7 @@ test('delivery is reused until relevant changes and successful reads publish usa
   const sessions = new Map([['one', { projectId: 'p1', terminalId: 'one', sessionId: 'first', skillNoteFile: 'one.txt' }], ['two', { projectId: 'p1', terminalId: 'two', sessionId: 'later', skillNoteFile: 'two.txt' }]]);
   let deliveries = 0, writes = 0;
   const refreshNotes = require('node:vm').runInNewContext('(' + notes + ')', { sessions, store: { projects }, skills: { delivery: (project, remote, sessionId) => { assert.equal(project.id, 'p1'); assert.equal(remote, false); assert.ok(['first', 'later'].includes(sessionId)); deliveries++; return {}; } }, startupNote: () => 'Current instructions.', path,
-    handoffFile: id => id, READING_NOTE: 'Read.', writeSkillFile: () => writes++ });
+    integrationDir: '/synthetic/integration', handoffFile: id => id, READING_NOTE: 'Read.', writeSkillFile: () => writes++ });
   refreshNotes(); assert.equal(deliveries, 2); assert.equal(writes, 2);
   refreshNotes(); assert.equal(writes, 2, 'unchanged notes are not rewritten');
 });

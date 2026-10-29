@@ -1,0 +1,12 @@
+{"timestamp":"2026-01-01T00:00:00.000Z","type":"session_meta","payload":{"id":"22222222-2222-4222-8222-222222222222","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/synthetic/project","originator":"codex_exec","cli_version":"0.0.0-fixture","source":"exec","model_provider":"openai"}}
+{"timestamp":"2026-01-01T00:00:00.000Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model":"gpt-6.1-sol","reasoning_effort":"max","service_tier":"priority"}}}
+{"timestamp":"2026-01-01T00:00:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"fixture-turn"}}
+{"timestamp":"2026-01-01T00:00:00.000Z","type":"turn_context","payload":{"turn_id":"fixture-turn","cwd":"/synthetic/project","model":"gpt-6.1-sol","effort":"max","collaboration_mode":{"mode":"default","settings":{"model":"gpt-6.1-sol","reasoning_effort":"max"}}}}
+{"timestamp":"2026-01-01T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"Inspect the placeholder file."}}
+{"timestamp":"2026-01-01T00:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"output_tokens":100,"reasoning_output_tokens":20},"last_token_usage":{"output_tokens":100,"reasoning_output_tokens":20}}}}
+{"timestamp":"2026-01-01T00:00:03.000Z","type":"token_usage_record","payload":{"turn_id":"fixture-turn","response_id":"fixture-response-1","usage":{"output_tokens":100,"reasoning_output_tokens":20},"thread_token_usage":{"output_tokens":100,"reasoning_output_tokens":20}}}
+{"timestamp":"2026-01-01T00:00:03.100Z","type":"response_item","payload":{"type":"function_call","call_id":"fixture-tool","name":"exec_command","arguments":"{}"}}
+{"timestamp":"2026-01-01T00:00:08.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"ToolCall","call_id":"fixture-tool","completed_at_ms":1767225608000}}}
+{"timestamp":"2026-01-01T00:00:08.100Z","type":"response_item","payload":{"type":"function_call_output","call_id":"fixture-tool","output":"Placeholder result."}}
+{"timestamp":"2026-01-01T00:00:10.000Z","type":"token_usage_record","payload":{"turn_id":"fixture-turn","response_id":"fixture-response-2","usage":{"output_tokens":50,"reasoning_output_tokens":10},"thread_token_usage":{"output_tokens":150,"reasoning_output_tokens":30}}}
+{"timestamp":"2026-01-01T00:00:10.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"output_tokens":150,"reasoning_output_tokens":30},"last_token_usage":{"output_tokens":50,"reasoning_output_tokens":10}}}}

@@ -267,7 +267,7 @@ test('first-open is claimed by an agent, never a shell or refresh; later launche
     ['idle', { projectId: projects[1].id, terminalId: 'idle', sessionId: 'idle', skillNoteFile: 'idle.txt' }]]), written = new Map();
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const refresh = vm.runInNewContext('(' + main.slice(main.indexOf('function refreshSkillNotes()'), main.indexOf('// Claude Code writes')) + ')', {
-    sessions, store: { projects }, skills: store, startupNote, path, handoffFile: () => null, READING_NOTE: 'Read.', writeSkillFile: (file, text) => written.set(file, text),
+    sessions, store: { projects }, skills: store, startupNote, path, integrationDir: '/synthetic/integration', handoffFile: () => null, READING_NOTE: 'Read.', writeSkillFile: (file, text) => written.set(file, text),
   });
   refresh();
   assert.equal(written.has('one.txt'), false); assert.equal(written.has('two.txt'), false);
@@ -306,7 +306,7 @@ test('simultaneous launches claim first-open once and the production launch boun
   const { store, projects, root } = fixture(t), project = projects[0], id = 'builtin:code-standard';
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   let serial = 0;
-  const context = vm.createContext({ skills: store, randomUUID: () => `agent-${++serial}`, path, startupNote, READING_NOTE: 'Read.',
+  const context = vm.createContext({ skills: store, randomUUID: () => `agent-${++serial}`, path, integrationDir: '/synthetic/integration', startupNote, READING_NOTE: 'Read.',
     handoffFile: () => null, writeSkillFile: put, report: error => { throw error; } });
   vm.runInContext(main.slice(main.indexOf('function startSkillSession('), main.indexOf('// Wrappers reread idle')), context);
   const shell = terminalId => ({ projectId: project.id, terminalId, sessionId: terminalId, agent: 'codex', skillNoteFile: path.join(root, `${terminalId}.txt`) });

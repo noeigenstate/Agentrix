@@ -85,6 +85,12 @@ class TokenRates {
     this.generation = null; this.counter = partial ? null : 0; this.credit = 0; this.turn = null;
   }
   snapshot(model = this.model) { return { ...(this.rates.get(model) || emptyRate(this.partial)), partial: this.partial }; }
+  // Dispatch reports cumulative completed-response totals; replace, never add a repeated report.
+  totals(model, outputTokens, activeMs, at) {
+    this.setModel(model, at);
+    this.rates.set(model, { outputTokens, activeMs, samples: activeMs > 0 ? 1 : 0, updatedAt: at, partial: false });
+    return this.snapshot(model);
+  }
   setModel(model, at) {
     if (Number.isFinite(at) && at < this.modelAt) return;
     this.model = model; this.modelAt = Number.isFinite(at) ? at : this.modelAt;

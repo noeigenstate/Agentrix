@@ -3,13 +3,13 @@
 # the user's own ~/.bashrc, unchanged, then adds what zsh-integration.zsh adds to zsh: a report at every prompt
 # and the codex and claude wrappers. No user file is modified.
 
-# What Agentrix passed in, kept in this shell only; programs started here do not inherit it.
+# Keep shell integration private; the bootstrap path is inherited by dispatch helpers.
 __pg_socket=$AGENTRIX_SOCKET __pg_project=$AGENTRIX_PROJECT_ID __pg_key=$AGENTRIX_SESSION_KEY
 __pg_node=$AGENTRIX_NODE __pg_helper=$AGENTRIX_EVENT_HELPER __pg_start=$AGENTRIX_START_DIR __pg_note=$AGENTRIX_READING_NOTE
 __pg_note_file=$AGENTRIX_READING_NOTE_FILE
 __pg_account_baseline=$AGENTRIX_ACCOUNT_BASELINE
 __pg_sequence=0
-unset AGENTRIX_SOCKET AGENTRIX_PROJECT_ID AGENTRIX_SESSION_KEY AGENTRIX_NODE AGENTRIX_EVENT_HELPER AGENTRIX_START_DIR AGENTRIX_BOOTSTRAP AGENTRIX_READING_NOTE AGENTRIX_READING_NOTE_FILE AGENTRIX_ACCOUNT_BASELINE
+unset AGENTRIX_SOCKET AGENTRIX_PROJECT_ID AGENTRIX_SESSION_KEY AGENTRIX_NODE AGENTRIX_EVENT_HELPER AGENTRIX_START_DIR AGENTRIX_READING_NOTE AGENTRIX_READING_NOTE_FILE AGENTRIX_ACCOUNT_BASELINE
 
 __pg_reading_note() {
   if [[ -n $__pg_note_file && -r $__pg_note_file ]]; then cat -- "$__pg_note_file"; else printf '%s' "$__pg_note"; fi
