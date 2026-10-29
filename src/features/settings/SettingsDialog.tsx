@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, House, ArrowsOutSimple, Terminal as TerminalIcon, Power, ArrowCounterClockwise, Monitor, Cpu, Info, SpeakerHigh, Globe, Microphone, BookOpen, FloppyDisk, Palette, Robot, Keyboard, ImageSquare, ArrowLeft, X } from '@phosphor-icons/react';
+import { Bell, House, ArrowsOutSimple, Terminal as TerminalIcon, Power, ArrowCounterClockwise, Monitor, Cpu, Info, SpeakerHigh, Globe, MagnifyingGlassPlus, Microphone, BookOpen, FloppyDisk, Palette, Robot, Keyboard, ImageSquare, ArrowLeft, X } from '@phosphor-icons/react';
 import type { AgentsState, AppUpdateState, Project, Settings, Workspace } from '../../shared/types';
 import { VoiceModelSetting } from '../voice/VoiceButton';
 import { currentLanguage, t } from '../../shared/i18n';
@@ -14,9 +14,11 @@ import { Select } from '../../shared/Select';
 import { ProjectImagesSettings } from './ProjectImagesSettings';
 import { AboutSettings } from './AboutSettings';
 
-export function SettingsDialog({ settings, projects = [], desktopGlass, localShell, agents, onAgents, initialSection, updates, onCheckUpdate, onInstallUpdate, onDownloadPage, onGuide, close, update, quit }: {
+const ZOOM_STEPS = [80, 90, 100, 110, 125, 150];
+
+export function SettingsDialog({ settings, projects = [], desktopGlass, uiZoom, localShell, agents, onAgents, initialSection, updates, onCheckUpdate, onInstallUpdate, onDownloadPage, onGuide, close, update, quit }: {
   localShell: Workspace['localShell']; agents: AgentsState | null; onAgents: (state: AgentsState) => void; initialSection: string;
-  projects?: Project[]; desktopGlass?: Workspace['desktopGlass']; settings: Settings; close: () => void; update: (patch: Partial<Settings>) => void; quit: () => void; onGuide: () => void;
+  projects?: Project[]; desktopGlass?: Workspace['desktopGlass']; uiZoom?: Workspace['uiZoom']; settings: Settings; close: () => void; update: (patch: Partial<Settings>) => void; quit: () => void; onGuide: () => void;
   updates: AppUpdateState | null; onCheckUpdate: () => void; onInstallUpdate: () => void; onDownloadPage: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -55,6 +57,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, localShe
       <section className="settings-section" id="settings-appearance" aria-label={t('外观')} hidden={current.id !== 'appearance' || projectImages}>
       <ThemeSetting theme={settings.theme} update={theme => update({ theme })} />
       <label className="setting-row"><span><Globe size={19} /><span><b>{t('语言')}</b><small>{t('界面与提示的语言')}</small></span></span><Select label={t('语言')} value={settings.language} onChange={value => update({ language: value as Settings['language'] })} options={[{ value: 'zh', label: '中文' }, { value: 'en', label: 'English' }]} /></label>
+      <label className="setting-row"><span><MagnifyingGlassPlus size={19} /><span><b>{t('界面缩放')}</b><small>{t('界面和文字按同一比例缩放；自动：按当前显示器调整')}</small></span></span><Select label={t('界面缩放')} value={settings.uiZoom === null ? 'auto' : String(settings.uiZoom)} onChange={value => update({ uiZoom: value === 'auto' ? null : Number(value) })} options={[{ value: 'auto', label: t('自动（当前 {n}%）', { n: uiZoom ?? 100 }) }, ...ZOOM_STEPS.map(step => ({ value: String(step), label: `${step}%` }))]} /></label>
       <UserAvatarSetting avatar={settings.userAvatar} update={userAvatar => update({ userAvatar })} />
       <div className="setting-row" data-project-images-setting><span><ImageSquare size={19} /><span><b>{t('项目缩略图')}</b><small>{t('自动选择、固定图片与原有编号')}</small></span></span><button type="button" className="button secondary" data-project-images-open onClick={() => { setProjectImages(true); pane.current?.scrollTo({ top: 0 }); }}>{t('管理…')}</button></div>
       <label className="setting-row"><span><House size={19} /><span><b>{t('启动时打开')}</b><small>{t('决策：先看需要你决定的事；工作台：项目网格')}</small></span></span><Select label={t('启动时打开')} value={settings.startView} onChange={value => update({ startView: value as Settings['startView'] })} options={[{ value: 'decisions', label: t('决策') }, { value: 'workspace', label: t('工作台') }]} /></label>

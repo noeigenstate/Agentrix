@@ -149,6 +149,7 @@ In the Decide composer or review feedback box, Enter inserts the recognised word
 - **Splits you drag**: several terminals for one project side by side, with no header or footer bars. Hover or keyboard focus reveals a drag grip, restart and close in the top-right corner; use the grip to reorder splits.
 - **Clear to read**: choose **Black and white** (dark, default) or **Black on white** (light) in Settings → Appearance. Both use solid grayscale surfaces, with no wallpaper picker. Font size, terminal fonts and text weight remain adjustable.
 - **Project thumbnails**: automatically pick a local project image and keep it fixed; change it or restore numbered cards in [Appearance settings](docs/project-images.md).
+- **Interface zoom**: choose 80%–150% under Settings → Appearance → Interface zoom; the interface and its text, terminals included, scale by the same ratio. The default, Auto, follows the current display.
 - **Version and updates in Settings**: Updates and about identifies the version and build (installed, portable, development, macOS or Linux), and shows the current update state with the available check, retry, download-page or restart-and-install action. Changelog and About have their own pages. The title bar uses the app's four-square logo and a stamp icon for Decide.
 - **English and Chinese, remappable shortcuts, updates for installed Windows copies**, and a guided tour the first time you open it.
 
