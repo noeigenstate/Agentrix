@@ -58,7 +58,7 @@ build and no screenshot pass, a CSS-only change has no core build).
 ### Model settings
 
 - **GPT models** (Sol, Terra and any other `gpt-*`): default `model_reasoning_effort=max` and `service_tier="fast"`.
-- **Claude models** (Opus, Sonnet, Haiku): default effort `high` (`effort: "high"` on an Agent call, `--effort high` for `claude -p`).
+- **Claude models** (Opus, Sonnet, Haiku): default effort `high` (`effort: "high"` on an Agent call, `--effort high` for a command-line Claude worker).
 - **Whenever Codex is installed**, before the first task of a project, ask the user with options, not an open question
   (the AskUserQuestion tool in Claude Code, a numbered list in Codex):
   1. max + fast (default, recommended): quickest, spends more of the plan's limits
@@ -83,43 +83,43 @@ Check first: `claude --version` and `codex --version` (a startup note may alread
 | --- | --- |
 | Orchestrator | The lead Claude session |
 | Architect and architecture review | Opus (the lead, or a fresh `opus` subagent for the review) |
-| Core engineer | GPT-6.1-Sol via `codex exec` |
+| Core engineer | GPT-6.1-Sol, a Codex worker (see Launching workers) |
 | Execution engineer | Sonnet subagent |
-| Visual and verification, small tasks | GPT-6.1-Terra via `codex exec` |
+| Visual and verification, small tasks | GPT-6.1-Terra, a Codex worker |
 
 - Sonnet: an Agent call with `model: "sonnet"`, `effort: "high"`, working in worktree B (`isolation: "worktree"` or its path in the brief).
-- Sol, in the background, brief in a file:
+- Sol, as a background command, brief in a file:
 
   ```
-  codex exec -m gpt-6.1-sol -c model_reasoning_effort=max -c service_tier='"fast"' -C <worktree-a> -o <out.md> - < <prompt.md> > <log.txt> 2>&1
+  node "<helper>" codex --role <role> --title "<one line>" --model gpt-6.1-sol --effort max --fast --cwd <worktree-a> --brief <prompt.md> --out <out.md>
   ```
 
-- Terra takes small tasks the same way with `-m gpt-6.1-terra`, and UI acceptance read-only with the screenshots attached:
-  `-s read-only -i <shot1.png> -i <shot2.png>`.
+- Terra takes small tasks the same way with `--model gpt-6.1-terra`, and UI acceptance read-only with the screenshots attached:
+  `--role <role> --read-only --image <shot1.png> --image <shot2.png>`.
 
 #### 2. Codex leads, both installed
 
 | Role | Model |
 | --- | --- |
-| Orchestrator and core engineer | GPT-6.1-Sol (the lead session; `codex exec` for a separate core worker) |
-| Architect and architecture review | Opus via `claude -p` |
-| Execution engineer | Sonnet via `claude -p`, run inside worktree B |
-| Visual and verification, small tasks | GPT-6.1-Terra via `codex exec` |
+| Orchestrator and core engineer | GPT-6.1-Sol (the lead session; a Codex worker for a separate core worker) |
+| Architect and architecture review | Opus, a Claude worker |
+| Execution engineer | Sonnet, a Claude worker run inside worktree B |
+| Visual and verification, small tasks | GPT-6.1-Terra, a Codex worker |
 
-- Opus, read-only, brief on stdin and the answer in a file:
-
-  ```
-  claude -p --model opus --effort high --permission-mode plan < <brief.md> > <answer.md>
-  ```
-
-- Sonnet edits files, so start it inside worktree B:
+- Opus, read-only, brief in a file and the answer in a file:
 
   ```
-  cd <worktree-b> && claude -p --model sonnet --effort high --permission-mode acceptEdits < <brief.md> > <report.md>
+  node "<helper>" claude --role <role> --title "<one line>" --model opus --effort high --permission plan --cwd <dir> --brief <brief.md> --out <answer.md>
   ```
 
-- Terra: `codex exec -m gpt-6.1-terra -c model_reasoning_effort=max -c service_tier='"fast"' -C <dir> -o <out.md> - < <prompt.md>`;
-  for UI acceptance add `-s read-only -i <screenshot.png>`.
+- Sonnet edits files, so point it at worktree B:
+
+  ```
+  node "<helper>" claude --role <role> --title "<one line>" --model sonnet --effort high --permission acceptEdits --cwd <worktree-b> --brief <brief.md> --out <report.md>
+  ```
+
+- Terra: `node "<helper>" codex --role <role> --title "<one line>" --model gpt-6.1-terra --effort max --fast --cwd <dir> --brief <prompt.md> --out <out.md>`;
+  for UI acceptance add `--read-only --image <screenshot.png>`.
 
 #### 3. Claude Code only
 
@@ -136,15 +136,38 @@ Every worker is an Agent call with `model` set and `effort: "high"`; worktrees t
 
 #### 4. Codex only
 
-Every worker is a background `codex exec -m <model> -c model_reasoning_effort=max -c service_tier='"fast"' -C <worktree>` run.
+Every worker is a background Codex worker (`node "<helper>" codex --model <model> --effort max --fast --cwd <worktree> …`).
 
 | Role | Model |
 | --- | --- |
 | Orchestrator, architect, core engineer, architecture review | GPT-6.1-Sol |
 | Execution engineer (routine work, front end), visual and verification, small tasks | GPT-6.1-Terra |
 
-The author never reviews its own change: Sol reviews Terra's code (`-s read-only`), Terra checks the screens of Sol's work
-(`-s read-only -i <png>`), each as a fresh run.
+The author never reviews its own change: Sol reviews Terra's code (`--read-only`), Terra checks the screens of Sol's work
+(`--read-only --image <png>`), each as a fresh run.
+
+### Launching workers
+
+Command-line workers (Codex, or Claude Code through `claude -p`) are started through the dispatch helper, never by
+typing `codex exec` or `claude -p` yourself. The helper's path is in the session's startup note (`Dispatch helper: node
+"<path>/dispatch.cjs"`); it declares the worker to Agentrix, so the activity pane's called models shows it, and reports how
+it ended. Outside Agentrix there is no startup note: start the same workers directly (`codex exec -m <model> -c
+model_reasoning_effort=<effort> -c service_tier='"fast"' -C <dir> -o <out.md> - < <brief.md>`, `claude -p --model <model>
+--effort <effort> --permission-mode <mode> < <brief.md>`) with the same settings.
+
+```
+node "<helper>" codex --role <role> --title "<one line>" --model <model> --effort <effort> [--fast] --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only]
+node "<helper>" claude --role <role> --title "<one line>" --model <model> --effort <effort> --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md>
+```
+
+- `--role` says what the worker does (execution, investigation or review; the helper's usage text lists the exact words).
+- Run the helper as a background command. It feeds the brief on stdin, exits with the worker's exit code and writes a log
+  next to `--out` (`<out>.log`).
+- Right after launching, read its `[dispatch] started …` line: it names the model, effort and mode the worker itself
+  reports, and `routing ok` confirms they match what you asked for. On `[dispatch] failed to start` fix the brief or
+  relaunch; on `routing MISMATCH` stop the worker and relaunch with the intended settings, or tell the user why the
+  actual model is acceptable.
+- While the worker runs, the activity pane shows its token/s live. When the task finishes, read the `[dispatch] ended …` line: its exit code, reason and the final average token/s.
 
 ### 1. Plan
 
@@ -195,6 +218,7 @@ Each confirmed finding goes back to the worker that owns the file, then stage 3 
 - Use separate worktrees for parallel builds, with no overlapping file ownership.
 - Paste the project's code-standard rules into every worker brief and review every diff against them before accepting it.
 - GPT models default to max effort with fast mode; Claude models default to high effort. Honor the user's chosen settings.
+- Start command-line workers only through the dispatch helper as background commands, read the start line to confirm the launch and routing, and act on `failed to start` or `routing MISMATCH`.
 - Use the one-agent fallback when needed and state unavailable-model substitutions in the plan.
 - Review is stage 4: architecture review plus UI and interaction acceptance, with fresh reviewers who did not build the work.
 - Follow the user's authorization for commits, builds, app launches and releases; release only when requested.

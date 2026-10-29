@@ -44,6 +44,7 @@
 .activity-call-rows li :is(time, .activity-row-end) { font-size: 12px; line-height: 16px; color: var(--flow-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .activity-call-rows li:is(.is-running, .is-working) .activity-row-icon { color: var(--running); }
 .activity-call-rows li.is-reviewing .activity-row-icon { color: var(--flow-muted); }
+.activity-call-rows li.is-failed :is(.activity-row-icon, .activity-row-end) { color: var(--danger); }
 .activity-call-rows li.is-done .activity-row-icon { color: var(--success); }
 
 

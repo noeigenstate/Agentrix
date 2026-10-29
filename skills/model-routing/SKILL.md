@@ -42,7 +42,7 @@ Concept images to choose from still come from Codex's image tool (see `design-po
 ## Model settings (fixed)
 
 - **GPT models** (Sol, Terra, and any other `gpt-*`): default `model_reasoning_effort=max` and `service_tier="fast"`.
-- **Claude models** (Sonnet and Opus subagents): default `effort: "high"` on the Agent call (`--effort high` for `claude -p`).
+- **Claude models** (Sonnet and Opus subagents): default `effort: "high"` on the Agent call (`--effort high` for a command-line Claude worker).
 - **First run in a project, whenever Codex is installed** (every case in the table below, including a Codex lead
   session): before the first task, ask the owner with options, not an open question. In Claude Code use the
   AskUserQuestion tool; in Codex, a numbered list:
@@ -66,18 +66,18 @@ never by the author's own context: a fresh worker reviews.
 | --- | --- | --- | --- |
 | Orchestrator | Lead session | Lead Claude session | Lead Codex session |
 | Architect / planner | Opus 5.5 | Opus 5.5 (lead, or an `opus` subagent) | GPT-6.1-Sol (lead) |
-| Core engineer | GPT-6.1-Sol | Opus 5.5 subagent | GPT-6.1-Sol via `codex exec` |
-| Execution engineer | Sonnet 5.5 subagent | Sonnet 5.5 subagent | GPT-6.1-Terra via `codex exec` |
-| Visual and verification | GPT-6.1-Terra | Sonnet 5.5 subagent (reads screenshots) | GPT-6.1-Terra via `codex exec -i <png>` |
+| Core engineer | GPT-6.1-Sol | Opus 5.5 subagent | GPT-6.1-Sol via the dispatch helper |
+| Execution engineer | Sonnet 5.5 subagent | Sonnet 5.5 subagent | GPT-6.1-Terra via the dispatch helper |
+| Visual and verification | GPT-6.1-Terra | Sonnet 5.5 subagent (reads screenshots) | GPT-6.1-Terra via the dispatch helper with `--image <png>` |
 | Small quick tasks | GPT-6.1-Terra | Haiku 5.5 subagent | GPT-6.1-Terra |
-| Architecture review | Opus 5.5 subagent | Opus 5.5 subagent (fresh) | GPT-6.1-Sol `codex exec -s read-only` (fresh) |
+| Architecture review | Opus 5.5 subagent | Opus 5.5 subagent (fresh) | GPT-6.1-Sol via the dispatch helper with `--read-only` (fresh) |
 | UI acceptance | GPT-6.1-Terra | Sonnet 5.5 subagent (fresh, not the builder) | GPT-6.1-Terra (fresh, not the builder) |
 
 - **Claude Code only:** every worker is an Agent call with `model` set and `effort: "high"`; worktrees through
   `isolation: "worktree"`. Opus takes Sol's hard work; Sonnet keeps routine work and front end and also does the visual
   checks Terra would; Haiku takes one-line fixes and lookups.
-- **Codex only:** every worker is a background `codex exec -m <model> -c model_reasoning_effort=max -c service_tier='"fast"'`
-  run with `-C <worktree>`; Sol takes architecture, core code, debugging and the architecture review; Terra takes routine
+- **Codex only:** every worker is a background Codex run through the dispatch helper
+  (`--model <model> --effort max --fast --cwd <worktree>`); Sol takes architecture, core code, debugging and the architecture review; Terra takes routine
   work, front end, small tasks and UI checks. The author never reviews its own change: Sol reviews Terra's code, Terra
   checks the screens of Sol's.
 - **Settings stay fixed** in every case: GPT max + fast, Claude high.
@@ -104,10 +104,25 @@ cmd /c mklink /J <scratch>\wt-a\node_modules <repo>\node_modules
 
 A task with only one side may run in the repo itself; worktrees are for parallel 2A + 2B work.
 
-**2A, Sol.** Brief in a scratch file, run in the background:
+**Launching command-line workers.** Sol, Terra (and Opus or Sonnet when Codex leads) start only through Agentrix's
+dispatch helper (`skills/agent-dispatch/SKILL.md`), never by typing `codex exec` or `claude -p`. The helper's path is in
+the session's startup note (`Dispatch helper: node "<path>/dispatch.cjs"`); outside Agentrix the same workers may be
+started directly with `codex exec` / `claude -p` and the same settings. Run it as a background command:
 
 ```
-codex exec -m gpt-6.1-sol -c model_reasoning_effort=max -c service_tier='"fast"' -C <scratch>/wt-a -o <scratch>/out.md - < <scratch>/prompt.md > <scratch>/log.txt 2>&1
+node "<helper>" codex --role 执行 --title "<one line>" --model <model> --effort max --fast --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only]
+node "<helper>" claude --role 审查 --title "<one line>" --model <model> --effort high --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md>
+```
+
+Right after launching, read its `[dispatch] started …` line: it confirms the start and that routing is ok (the model,
+effort and mode the worker itself reports match what you declared). On `[dispatch] failed to start` fix the brief or
+relaunch; on `routing MISMATCH` stop the worker and relaunch with the intended settings, or tell the owner why the actual
+model is acceptable. While the worker runs, the activity pane shows its token/s live. When the task finishes, read the `[dispatch] ended …` line for the exit code, reason and the final average token/s.
+
+**2A, Sol.** Brief in a scratch file, run in the background through the helper:
+
+```
+node "<helper>" codex --role 执行 --title "<one line>" --model gpt-6.1-sol --effort max --fast --cwd <scratch>/wt-a --brief <scratch>/prompt.md --out <scratch>/out.md
 ```
 
 Codex runs with no approvals and full access, so the scope comes from the prompt alone:
@@ -118,7 +133,7 @@ Codex runs with no approvals and full access, so the scope comes from the prompt
 - An "at capacity" error at the end of a run can come after the work is done: check the outputs before rerunning.
 
 A small quick task (a one-line fix, a rename, a screenshot question) goes to Terra with the same command and the same
-rules, `-m gpt-6.1-terra`, attaching any screenshots with `-i`.
+rules, `--model gpt-6.1-terra`, attaching any screenshots with `--image`.
 
 **2B, Sonnet.** Agent tool with `model: "sonnet"`, `effort: "high"`, working in worktree B (pass its path in the brief, or
 `isolation: "worktree"`). The brief holds:
@@ -151,7 +166,7 @@ Run both in parallel on the merged result:
 - **GPT-6.1-Terra, UI and interaction.** Read-only Codex run with the screenshots attached:
 
   ```
-  codex exec -m gpt-6.1-terra -c model_reasoning_effort=max -c service_tier='"fast"' -s read-only -C <repo> -i <shot1.png> -i <shot2.png> -o <scratch>/terra.md - < <scratch>/terra-prompt.md
+  node "<helper>" codex --role 审查 --title "UI acceptance" --model gpt-6.1-terra --effort max --fast --read-only --cwd <repo> --image <shot1.png> --image <shot2.png> --brief <scratch>/terra-prompt.md --out <scratch>/terra.md
   ```
 
   The prompt gives the acceptance criteria, the states each screenshot shows, the `design-acceptance` checklist and the

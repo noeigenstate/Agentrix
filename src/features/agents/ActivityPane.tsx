@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowCounterClockwise, CheckCircle, Circle, CircleNotch, Record as RecordDot } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, CheckCircle, Circle, CircleNotch, Record as RecordDot, WarningCircle } from '@phosphor-icons/react';
 import type { AgentCall, AgentTokens, AgentUsage, ProjectTerminal, TokenRate } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { modelName } from '../reading/model-name';
@@ -116,6 +116,14 @@ const CALL_STATES = {
 } as const;
 const MAX_CALL_ITEMS = 4;
 
+// A dispatched worker that did not finish cleanly, in words in the state column (skills/agent-dispatch).
+function failureWord(failure: NonNullable<AgentCall['items'][number]['failure']>) {
+  if (failure.reason === 'unconfirmed') return t('未能启动');
+  if (failure.reason === 'capacity') return t('模型满载');
+  if (failure.reason === 'killed') return t('已停止');
+  return failure.exitCode == null ? t('出错退出') : t('出错退出（代码 {code}）', { code: failure.exitCode });
+}
+
 // The sub-agents the agent called: per model one head (its mark, name, settings, service and rate), then a row for each of its calls
 // (the state's icon, the role and what it does, the state in words). The heading counts every call; a model's calls past the fourth fold into "+N".
 function CallsCard({ calls }: { calls: AgentCall[] }) {
@@ -127,11 +135,15 @@ function CallsCard({ calls }: { calls: AgentCall[] }) {
         return <li key={JSON.stringify([call.agent, call.provider, call.model, call.effort, call.fast])}>
           <ul className="activity-call-rows">
             <ModelHead agent={call.agent} name={name} effort={call.effort} fast={call.fast} provider={call.provider} title={[call.agent, call.provider, name].filter(Boolean).join(' / ')} rate={call.rate} />
-            {call.items.slice(0, MAX_CALL_ITEMS).map((item, index) => <li key={index} className={`is-${item.state}`} title={item.title}>
-              <span className="activity-row-icon">{CALL_STATES[item.state].icon}</span>
-              <p><span className="activity-call-role">{t(item.role)}</span>{item.title}</p>
-              <span className="activity-row-end">{t(CALL_STATES[item.state].word)}</span>
-            </li>)}
+            {call.items.slice(0, MAX_CALL_ITEMS).map((item, index) => {
+              const failure = item.failure ? failureWord(item.failure) : null;
+              return <li key={index} className={`is-${item.state}${failure ? ' is-failed' : ''}`} title={failure ? `${item.title}
+${failure}` : item.title}>
+                <span className="activity-row-icon">{failure ? <WarningCircle size={14} weight="fill" aria-hidden="true" /> : CALL_STATES[item.state].icon}</span>
+                <p><span className="activity-call-role">{t(item.role)}</span>{item.title}</p>
+                <span className="activity-row-end">{failure ?? t(CALL_STATES[item.state].word)}</span>
+              </li>;
+            })}
             {call.items.length > MAX_CALL_ITEMS && <li className="activity-call-more"><span /><p>{t('+{count} 个', { count: call.items.length - MAX_CALL_ITEMS })}</p></li>}
           </ul>
         </li>;
