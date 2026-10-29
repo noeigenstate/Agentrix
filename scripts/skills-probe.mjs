@@ -43,7 +43,7 @@ async function run() {
   await fs.writeFile(path.join(env.CLAUDE_CONFIG_DIR, '.claude.json'), JSON.stringify(claudeProbeConfig(projects.map(project => project.path), env.ANTHROPIC_API_KEY)));
   await fs.writeFile(path.join(env.CLAUDE_CONFIG_DIR, 'settings.json'), JSON.stringify({ skipDangerousModePermissionPrompt: true }));
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: {
-    terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, language: 'en', startView: 'workspace',
+    terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, language: 'en', startView: 'workspace', guideVersion: '9.9.9',
   } }));
   const packaged = process.argv.includes('--packaged');
   app = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'), args: packaged ? [] : [root], cwd: root, env, timeout: 30000 });
@@ -84,7 +84,8 @@ async function run() {
         await page.getByRole('menuitem', { name: /Back to projects|返回项目/i }).click();
       }
       // The isolated project's terminal is mounted in a focus view so CLI cursor queries receive real answers.
-      await page.getByRole('button', { name: new RegExp(`Full screen.*${project.name}|全屏查看 ${project.name}`, 'i') }).first().click();
+      const expand = page.getByRole('button', { name: new RegExp(`Full screen.*${project.name}|全屏查看 ${project.name}`, 'i') }).first();
+      if (await expand.isVisible().catch(() => false)) await expand.click();
       const write = data => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: terminalId, data });
       const rows = () => page.locator(`[data-terminal-id="${terminalId}"] .xterm-rows > div`).allTextContents();
       const command = agent === 'claude' ? 'claude --model claude-sonnet-4-5 --dangerously-skip-permissions AGENTRIX_SKILLS_PROBE'

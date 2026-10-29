@@ -135,6 +135,9 @@ rules, `-m gpt-6.1-terra`, attaching any screenshots with `-i`.
 - Commit each worktree on its branch, then merge into the working branch in dependency order (the side that defines data
   first). Resolve conflicts against the contract, not by taking one side.
 - Run `npx tsc --noEmit -p .`, `npm test`, `npm run build`, then the relevant desktop suites one at a time under the GUI lock.
+- A merge conflict (usually both sides appending to `electron/locales/en.json`) is resolved and the file validated
+  (`JSON.parse`) before `git commit`; never chain the commit after a resolving script on a separate line, where it runs even
+  when the script fails.
 - When a suite fails, run it against the last commit in a `git worktree` to tell a regression from an old failure.
 - Remove worktrees when done: `rmdir` the `node_modules` junction first, then `git worktree remove`, then delete the branches.
 
