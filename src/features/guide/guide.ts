@@ -6,5 +6,6 @@ export const WHATS_NEW: { title: string; text: string }[] = [
   { title: "技能页", text: "SKILL.md 渲染成排版后的正文，可切换源码；依赖写明 Codex 或 Claude Code 至少装一个。" },
   { title: "主模型状态", text: "主模型卡片只跟主模型这一轮：由后台结果唤起的一轮会写明在处理哪个结果，结束即停，不再停留在「正在处理」。" },
   { title: "思考深度", text: "每个模型的标题行显示思考深度和输出模式，Claude 子代理也有；不再重复显示「子代理」和官方服务商。" },
+  { title: "派发确认", text: "主模型派出的 Codex 和 Claude 子任务由派发助手启动：开始时确认模型路由，运行中每 5 秒更新 token/s，完成后显示已完成并在 3 秒后移除。" },
   { title: "图标等大", text: "OpenAI 和 Claude 的图标在各处显示同样大小。" },
 ];

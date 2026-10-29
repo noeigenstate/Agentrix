@@ -49,8 +49,9 @@ function standin(command, failure) {
             usage: { input_tokens: 1, output_tokens: 100, total_tokens: 101 } } }])), 1800).unref();
           return;
         }
-        const useTool = !dispatched;
-        dispatched = true;
+        // Claude Code also asks for a session title without tools; only the conversation request (it offers Bash) gets the tool call.
+        const useTool = !dispatched && Array.isArray(data.tools) && data.tools.some(tool => tool.name === 'Bash');
+        dispatched ||= useTool;
         const block = useTool ? { type: 'tool_use', id: `tool_${id}`, name: 'Bash', input: {} } : { type: 'text', text: '' };
         response.writeHead(200, { 'content-type': 'text/event-stream' });
         // A review response stays open long enough to inspect a failed worker before the Stop hook removes it.
@@ -160,7 +161,8 @@ async function run() {
   assert.equal(running.model, declared.model, 'CLI must report its actual model; unreported is a protocol limitation, not routing proof');
   assert.equal(running.effort, declared.effort, 'CLI must report its actual effort');
   assert.equal(running.fast, declared.fast, 'CLI must report its actual service tier');
-  assert.ok(liveRate, 'a completed model response produced a rate while the worker was still running');
+  // The failing worker ends within the first 5 s rate tick, so only the successful run must show a live rate.
+  if (!failure) assert.ok(liveRate, 'a completed model response produced a rate while the worker was still running');
   assert.ok(model.requests.some(value => value.agent === 'claude' && value.instructions.includes('Dispatch helper: node ')), 'lead received the helper startup note');
   const pane = await page.locator('.activity-calls').allTextContents(); evidence.pane = pane;
   evidence.passed = true;
