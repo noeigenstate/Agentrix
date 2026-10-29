@@ -12,7 +12,7 @@
   --button-primary: #e5e5e5; --button-primary-text: #181818; --focus-ring: #d0d0d0;
   --success: #70bfa4; --success-text: var(--success); --running: #78a8cc; --warning: #d8ae67; --danger: #de7878; --usage: #68b8ae;
   /* The two agents' own colours, on their marks and status dots only: Claude Code's brand orange and Codex's green; and the app icon's coral, on the logo's fourth square only. */
-  --agent-claude: #d97757; --agent-codex: #34d5a5; --brand-coral: #ef7681;
+  --agent-claude: #d97757; --agent-claude-text: var(--agent-claude); --agent-codex: #34d5a5; --brand-coral: #ef7681;
   /* The short bar at the left of a selected list row. */
   --select-bar: #b5b5b5;
 }
@@ -41,6 +41,8 @@
   --success: #438f73; --success-text: #37745e; --running: #386687; --warning: #825b05; --danger: #a34346; --usage: #136e66;
   /* Claude Code keeps its brand #d97757 (3.1:1 on white). Codex's green is darkened to 4.1:1 on white as an icon colour; --select-bar is the dark ink of a selected row's bar. */
   --agent-codex: #0d8f6a; --select-bar: #4a4f57; --brand-coral: #cc3f52;
+  /* Claude's orange as text (a reading view's list numerals): #b04e2a is 5.3:1 on white and 5.0:1 on the canvas, where #d97757 is 3.1:1; dots and rings are marks and keep it. In dark, #d97757 is 4.8:1 or more. */
+  --agent-claude-text: #b04e2a;
   /* --bg-aside and --bg-aside-well follow --bg-sidebar and --bg-input outside the workbench, as in the dark theme; --agent-claude stays #d97757 (the brand colour). */
   /* File and folder icon tones (file-icons.css): content colour, 3:1 or more on the sidebar and on a selected row. */
   --fi-slate: #6b7f9e; --fi-blue: #427ed3; --fi-green: #258f59; --fi-yellow: #9e7900;

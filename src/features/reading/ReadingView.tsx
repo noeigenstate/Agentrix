@@ -633,7 +633,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
       })}
     </>;
   }
-  return <div className="reading-view" {...pathLinks} onClick={event => {
+  return <div className="reading-view" data-agent={kind} {...pathLinks} onClick={event => {
     const button = (event.target as Element).closest<HTMLButtonElement>('[data-copy-code]');
     const toggle = (event.target as Element).closest<HTMLButtonElement>('[data-code-source]');
     if (toggle) { const source = toggle.closest('.reading-code')!.classList.toggle('is-source'); toggle.textContent = t(source ? '预览' : '源码'); return; }

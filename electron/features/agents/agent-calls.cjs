@@ -83,7 +83,7 @@ function codexCall(command, cwd) {
   return { model, effort, fast, provider, task, log, prompt };
 }
 
-// Brief headings need only the beginning, read once.
+// Brief headings need only the beginning; retry missing or empty files until their writer runs.
 async function readPrompt(filename) {
   let file;
   try {
@@ -212,7 +212,7 @@ class AgentCalls {
   }
   follows(call) {
     return this.local && (this.folder || call.log) && (call.done ? !call.drained : !call.reviewed &&
-      (call.agent === 'Claude Code' ? !!this.folder : !!call.log && (call.preparing || call.threadId || !call.headerDone)));
+      (call.agent === 'Claude Code' ? !!this.folder : !!call.prompt || !!call.log && (call.preparing || call.threadId || !call.headerDone)));
   }
   // Follow running workers too; generation identity cancels even an already queued callback.
   schedule() {
@@ -243,10 +243,10 @@ class AgentCalls {
         for (const id of ids) {
           const call = calls.get(id);
           if (!call) continue;
-          const filename = call.prompt; call.prompt = null;
-          const prompt = filename ? await readPrompt(filename) : null;
+          const prompt = call.prompt ? await readPrompt(call.prompt) : null;
           if (this.calls !== calls) return;
-          if (prompt !== null) {
+          if (prompt) {
+            call.prompt = null;
             const heading = /^[ \t]{0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/m.exec(prompt.replace(/^\uFEFF/, ''))?.[1];
             const title = heading?.replace(/^Task\s+[\w-]+(?:\s*\([^)]*\))?\s*[:：]\s*/i, '').trim() || call.title;
             // File-specific read-only restrictions also appear in implementation briefs.
@@ -365,7 +365,11 @@ class AgentCalls {
       }
       const ids = call.plainIds.size ? call.plainIds : call.jsonIds;
       call.threadId = ids.size === 1 ? [...ids][0] : null;
-    } catch { call.preparing = false; call.headerDone = true; call.threadId = null; }
+    } catch (error) {
+      // tool_use can arrive before the shell creates its redirected log.
+      call.headerDone = error.code !== 'ENOENT'; call.threadId = null;
+      if (call.headerDone) call.preparing = false;
+    }
     finally { await file?.close(); }
   }
   async readExec(call, calls) {

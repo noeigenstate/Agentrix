@@ -28,14 +28,6 @@
         "exit": 0
       },
       {
-        "script": "test:glass-transparency",
-        "exit": 0
-      },
-      {
-        "script": "test:desktop-glass",
-        "exit": 0
-      },
-      {
         "script": "test:readability",
         "exit": 0
       },
@@ -95,14 +87,6 @@
     "affectedFollowup": [
       {
         "script": "test:appearance",
-        "exit": 0
-      },
-      {
-        "script": "test:desktop-glass",
-        "exit": 0
-      },
-      {
-        "script": "test:glass-transparency",
         "exit": 0
       },
       {

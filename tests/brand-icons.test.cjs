@@ -17,6 +17,17 @@ const geometry = svg => ({
   path: svg.match(/<path d="([^"]+)"/)[1],
 });
 
+function loadTimeline() {
+  const filename = path.join(root, 'src/features/reading/Timeline.tsx');
+  const mod = new Module(filename, module);
+  mod.filename = filename;
+  mod.paths = Module._nodeModulePaths(path.dirname(filename));
+  mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText, filename);
+  return mod.exports;
+}
+
 test('bundled vectors retain the authenticated source geometry and attribution', () => {
   const fixtures = [
     ['openai-blossom-black.svg', marks.openai, marks.openai.blackSha256],
@@ -74,18 +85,31 @@ test('Codex follows the selected theme while keeping its official geometry', t =
 });
 
 test('ClaudeSpark retains its export and size API as a direct official-logo alias', () => {
-  const filename = path.join(root, 'src/features/reading/Timeline.tsx');
-  const mod = new Module(filename, module);
-  mod.filename = filename;
-  mod.paths = Module._nodeModulePaths(path.dirname(filename));
-  mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
-  }).outputText, filename);
-  assert.equal(mod.exports.ClaudeSpark, ClaudeLogo);
+  const { ClaudeSpark } = loadTimeline();
+  assert.equal(ClaudeSpark, ClaudeLogo);
   assert.equal(
-    renderToStaticMarkup(React.createElement(mod.exports.ClaudeSpark, { size: 20 })),
+    renderToStaticMarkup(React.createElement(ClaudeSpark, { size: 20 })),
     renderToStaticMarkup(React.createElement(ClaudeLogo, { size: 20 })),
   );
+});
+
+test('Claude keeps its official spark without a ring in failed, running and earlier turns', () => {
+  const { TimelineStep, AgentMark } = loadTimeline();
+  for (const state of [null, 'running', 'failed']) for (const latest of [false, true]) {
+    const html = renderToStaticMarkup(React.createElement(TimelineStep, {
+      at: 1, kind: 'agent', agent: 'claude', state, latest, who: 'Claude Code',
+      mark: React.createElement(AgentMark, { agent: 'claude' }), children: null,
+    }));
+    assert.deepEqual(geometry(html), { viewBox: marks.claude.viewBox, path: marks.claude.path });
+    assert.equal((html.match(/<path /g) || []).length, 1);
+    assert.doesNotMatch(html, /<(?:circle|line|animate|image)\b/);
+  }
+  const css = fs.readFileSync(path.join(root, 'src/features/reading/reading-flow.css'), 'utf8');
+  const rules = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+  for (const [, selector, body] of rules) {
+    if (!selector.includes('.reading-node') || !/\b(?:box-shadow|outline|border(?:-(?:width|style|color))?)\s*:/.test(body)) continue;
+    for (const agent of ['claude', 'codex']) assert.match(selector, new RegExp(`:not\\([^)]*\\.is-${agent}\\b[^)]*\\)`), selector);
+  }
 });
 
 test('Codex inherits its own ink, and a running node is a heavier ring with no animation', () => {
@@ -100,10 +124,10 @@ test('Codex inherits its own ink, and a running node is a heavier ring with no a
   assert.match(css, /\.reading-node > \.agent-brand-claude \{ width: 26px; height: 26px; \}/);
   assert.match(css, /\.reading-node > \.user-avatar \{ width: 100%; height: 100%; \}/);
   assert.doesNotMatch(css, /reading-spark|spark-bloom|agent-brand-[^{]+\{[^}]*\b(?:animation|transform):/);
-  // Only a generic step's node has a ring (heavier while it runs); you and the agents have none, except in the danger colour once failed.
+  // Only generic nodes have rings, including while running or failed; brand marks stay borderless.
   assert.match(css, /\.reading-step:not\(\.is-user, \.is-claude, \.is-codex\) \.reading-node \{ box-shadow: inset 0 0 0 1\.5px var\(--node-tint\); \}/);
   assert.match(css, /\.reading-step\.is-running:not\(\.is-user, \.is-claude, \.is-codex\) \.reading-node \{ box-shadow: inset 0 0 0 2px var\(--node-tint\); \}/);
-  assert.match(css, /\.reading-step\.is-failed \.reading-node \{ --node-tint: var\(--flow-fail\); box-shadow: inset 0 0 0 2px var\(--node-tint\); \}/);
+  assert.match(css, /\.reading-step\.is-failed:not\(\.is-user, \.is-claude, \.is-codex\) \.reading-node \{ --node-tint: var\(--flow-fail\); box-shadow: inset 0 0 0 2px var\(--node-tint\); \}/);
   assert.doesNotMatch(/\.reading-node \{[^}]*\}/.exec(css)[0], /box-shadow/, 'the base node has no ring');
   assert.doesNotMatch(css, /@keyframes|animation:/);
 });

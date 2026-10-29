@@ -1,13 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { CircleNotch, Terminal as TerminalIcon } from '@phosphor-icons/react';
 import type { AgentsState, Result } from '../../shared/types';
 import { relativeTime } from '../../shared/time';
 import { t } from '../../shared/i18n';
+import { ClaudeLogo, CodexLogo } from '../agents/AgentBrandIcon.ts';
 import './agent-launcher.css';
 
 type Agent = 'claude' | 'codex';
 type History = Record<Agent, { id: string; at: number } | null>;
-const AGENTS: { agent: Agent; name: string; mark: string }[] = [{ agent: 'claude', name: 'Claude Code', mark: '✻' }, { agent: 'codex', name: 'Codex', mark: '>_' }];
+const AGENTS: { agent: Agent; name: string; mark: ReactNode }[] = [{ agent: 'claude', name: 'Claude Code', mark: <ClaudeLogo size={22} /> }, { agent: 'codex', name: 'Codex', mark: <CodexLogo size={37} /> }];
 
 // A project with no agent on the card: pick the agent to work with, fresh or continuing this folder's latest conversation
 // with it. An agent not installed yet is installed by the same click (Node.js first, when even npm is missing), then

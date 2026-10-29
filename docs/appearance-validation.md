@@ -14,8 +14,8 @@
 
 | 阶段 | 检查 | 结果 |
 | --- | --- | --- |
-| 保留的历史基线 | appearance、glass-transparency、desktop-glass、readability、themes-markdown、gpu-terminal、editor-terminals、material、composer、reading、completion、git、navigation、motion、desktop、question-appearance、appearance-packaged | 17 项通过 |
-| 字体后备与标题栏底色调整后的保留记录 | appearance、desktop-glass、glass-transparency、readability、question-appearance | 5 项通过 |
+| 保留的历史基线 | appearance、readability、themes-markdown、gpu-terminal、editor-terminals、material、composer、reading、completion、git、navigation、motion、desktop、question-appearance、appearance-packaged | 15 项通过 |
+| 字体后备与标题栏底色调整后的保留记录 | appearance、readability、question-appearance | 3 项通过 |
 | 全量单元检查 | tests/*.test.cjs | 446 通过、4 跳过、0 失败 |
 
 名称对应历史测试脚本；当前打包检查通过下述环境变量运行。完整原始日志保留在本地测试输出，文档只链接随 PR 提交的摘要，避免依赖无法在 GitHub 打开的本机日志。
@@ -29,13 +29,11 @@ npm run build
 node --experimental-strip-types --test tests/*.test.cjs
 
 npm run test:appearance
-npm run test:glass-transparency
-npm run test:desktop-glass
 npm run test:readability
 npm run test:question-appearance
 ```
 
-GUI 检查应顺序运行。脚本创建独立 AGENTRIX_DATA_DIR、演示项目和助手资料；只关闭自身启动的测试窗口，不操作用户工作区。桌面模糊对照在 Windows 使用测试专属背景窗口和标记区域，需可见的桌面会话；无对应后端时不能据此宣称实际背景模糊通过。运行结束后可按日志打印的目录查看截图和 results.json。
+GUI 检查应顺序运行。脚本创建独立 AGENTRIX_DATA_DIR、演示项目和助手资料；只关闭自身启动的测试窗口，不操作用户工作区。运行结束后可按日志打印的目录查看截图和 results.json。
 
 ## 字体与打包
 

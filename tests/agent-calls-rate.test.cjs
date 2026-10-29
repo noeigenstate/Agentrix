@@ -43,6 +43,76 @@ async function execFiles(home, id = execId, records = null, log = null, suffix =
 }
 const launchExec = (id, home, logfile, model = 'requested-model') => use(id, 'Bash', { command: `codex exec -m ${model} > "${logfile}" 2>&1`, run_in_background: true, description: `Exact task ${id}` }, home);
 
+test('delayed exec files recover the brief and rate for heredoc and standalone Git Bash launches', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const heredoc of [true, false]) {
+    const { home, calls } = await workspace(t);
+    const scratch = home.replace(/\\/g, '/').replace(/^([a-z]):\//i, (_, drive) => `/${drive.toLowerCase()}/`);
+    const brief = '# Task Q: Delayed worker heading\nDo not evaluate Claude\'s word=value; < > $S or codex exec -m decoy.\n';
+    const prefix = heredoc ? `cp sample.png "$S/image.png"; cat > "$S/brief.md" <<'EOF'\n${brief}EOF\n` : '';
+    const command = `cd "${scratch}"; S="${scratch}"; ${prefix}codex exec -m gpt-6.1-terra -c model_reasoning_effort=max -c service_tier='"fast"' -C . -i "$S/image.png" -o "$S/output.md" - < "$S/brief.md" > "$S/${execId}.log" 2>&1`;
+    const prompt = path.join(home, 'brief.md'), logfile = path.join(home, `${execId}.log`);
+    calls.apply(use('delayed', 'Bash', { command, run_in_background: true }, home)); await calls.work;
+    assert.ok(calls.calls.get('delayed').prompt, 'a missing brief remains pending');
+    assert.equal(path.relative(home, calls.calls.get('delayed').log), path.basename(logfile));
+    assert.equal(calls.snapshot()[0].rate, null); assert.equal(calls.snapshot()[0].preparing, 1);
+    assert.ok(calls.timer, 'tool_use precedes execution of its shell command');
+    await fs.writeFile(prompt, ''); await fs.writeFile(logfile, '');
+    t.mock.timers.tick(2500); await calls.work;
+    assert.ok(calls.calls.get('delayed').prompt, 'opening a redirected file can precede its first write');
+    assert.ok(calls.timer); assert.equal(calls.snapshot()[0].rate, null);
+    await fs.writeFile(prompt, brief);
+    const { filename } = await execFiles(home);
+    t.mock.timers.tick(2500); await calls.work;
+    const group = calls.snapshot()[0];
+    assert.equal(group.effort, 'max'); assert.equal(group.fast, true);
+    assert.deepEqual(group.items, [{ state: 'running', role: '执行', title: 'Delayed worker heading' }]);
+    assert.deepEqual(group.rate, expected(75, 3000, 1, 4));
+    assert.equal(calls.calls.get('delayed').reader.filename, filename);
+    assert.equal(calls.calls.get('delayed').threadId, execId);
+    assert.equal(calls.calls.get('delayed').prompt, null);
+    await fs.writeFile(prompt, '# Task Q: Replacement must not change a resolved title');
+    t.mock.timers.tick(1000); await calls.work;
+    assert.equal(calls.snapshot()[0].items[0].title, 'Delayed worker heading');
+    assert.deepEqual(calls.snapshot()[0].rate, group.rate, 'polling does not duplicate samples');
+    calls.apply(notice('delayed')); await calls.work;
+    assert.deepEqual(calls.snapshot()[0].rate, group.rate);
+    assert.equal(calls.snapshot()[0].items[0].state, 'reviewing'); assert.equal(calls.timer, null);
+    calls.reset();
+  }
+});
+
+test('a pending brief retries after log output starts without binding an unidentified rollout', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { home, calls } = await workspace(t);
+  const { logfile } = await execFiles(home, execId, null, 'OpenAI Codex\nuser\nPlaceholder.\ncodex\nInspecting.\n');
+  const launch = launchExec('late-brief', home, logfile);
+  launch.message.content[0].input.command = `codex exec - < brief.md > "${logfile}" 2>&1`;
+  calls.apply(launch); await calls.work;
+  assert.equal(calls.snapshot()[0].items[0].state, 'running'); assert.ok(calls.timer);
+  await fs.writeFile(path.join(home, 'brief.md'), '# Task R: READ-ONLY delayed inspection');
+  t.mock.timers.tick(1000); await calls.work;
+  assert.deepEqual(calls.snapshot()[0].items, [{ state: 'running', role: '调查', title: 'READ-ONLY delayed inspection' }]);
+  assert.equal(calls.calls.get('late-brief').threadId, null); assert.equal(calls.calls.get('late-brief').reader, null);
+  assert.equal(calls.snapshot()[0].rate, null); assert.equal(calls.timer, null);
+});
+
+test('failed launches stop retrying missing exec files and cannot be rearmed by a queued timer', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const scheduled = t.mock.method(global, 'setTimeout');
+  const { home, calls } = await workspace(t);
+  calls.apply(use('failed', 'Bash', { command: `codex exec - < brief.md > ${execId}.log 2>&1` }, home)); await calls.work;
+  assert.ok(calls.timer);
+  const callback = scheduled.mock.calls.at(-1).arguments[0];
+  const failed = result('failed', {}); failed.message.content[0].is_error = true;
+  calls.apply(failed); await calls.work;
+  assert.equal(calls.timer, null); assert.equal(calls.snapshot()[0].items[0].state, 'reviewing');
+  await fs.writeFile(path.join(home, 'brief.md'), '# Task Q: A finished call stays finished'); await execFiles(home);
+  callback(); t.mock.timers.tick(10000); await calls.work;
+  assert.equal(calls.snapshot()[0].items[0].title, 'brief.md'); assert.equal(calls.snapshot()[0].rate, null);
+  assert.equal(calls.timer, null);
+});
+
 test('main Opus and a running Opus child keep separate rates, resolved grouping and exact tasks', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { folder, home, calls } = await workspace(t);

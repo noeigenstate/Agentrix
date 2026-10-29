@@ -161,7 +161,7 @@ export function StepState({ running, failed, filled = false }: { running: boolea
 export function WorkingLine({ agent, label }: { agent: 'claude' | 'codex'; label: string }) {
   const [started] = useState(() => Date.now()), now = useNow(started);
   return <div className={`reading-status is-working is-${agent}`} role="status">
-    <i className="reading-status-mark" aria-hidden="true">{agent === 'claude' ? null : '•'}</i>
+    {agent === 'codex' && <i className="reading-status-mark" aria-hidden="true">•</i>}
     <span>{label}…</span><small>{t('（{seconds} 秒 · Esc 中断）', { seconds: Math.floor((now - started) / 1000) })}</small>
   </div>;
 }

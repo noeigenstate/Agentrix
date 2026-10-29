@@ -95,7 +95,7 @@ Light theme 白底黑字 (the owner's values, one line each; a white panel on a 
   There is no accent and no "key interaction" colour: a checked switch or checkbox, a picked option or tile, the active file tab,
   a toggled icon button, the guide's current dot and a spinner take `--text-1` or `--text-2`; a link is underlined. Codex's mark and
   status dot take `--agent-codex`. Not coloured by these rules: file-type icons (`--fi-*` in file-icons.css, content), ANSI output, syntax,
-  diff bands, images. **One owner exception:** list bullets and numbers in the reading view are `--usage`.
+  diff bands, images. **One owner exception:** list bullets and numbers in the reading view are `--usage` in a Codex project and Claude's orange (`--agent-claude`, numerals `--agent-claude-text`) in a Claude Code project, so the list tells the agent at a glance.
 - Colour goes on icons and indicators (a check, a cross, a dot, a ring, a bar), never on a pill, a card or a panel background: a
   command pill is a grey pill with grey text, and only its check is green, its cross red, its running dot blue. A state colour paints a
   ring, a tag's text, a dot or an icon, never a panel. Warning and danger appear only for what is waiting or failed; usage meters do not warm.

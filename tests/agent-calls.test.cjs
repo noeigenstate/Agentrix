@@ -408,7 +408,7 @@ test('Codex roles recognize a read-only heading or early lines and preserve head
   }
 });
 
-test('missing, headingless, out-of-bounds and SSH prompts keep the filename without polling', async t => {
+test('missing local prompts retry while headingless, out-of-bounds and SSH prompts keep the filename', async t => {
   const { folder, calls } = await fixture(t);
   for (const [name, body] of [['plain.md', 'No heading.'], ['late.md', 'x'.repeat(4096) + '\n# Task R9: Out of bounds\nREAD-ONLY'], ['remote.md', '# Task R1: Local file must not be read over SSH']]) await fs.writeFile(path.join(folder, name), body);
   const open = t.mock.method(fs, 'open');
@@ -417,15 +417,16 @@ test('missing, headingless, out-of-bounds and SSH prompts keep the filename with
     await calls.work;
     assert.deepEqual(calls.snapshot()[0].items[0], { state: 'running', role: '执行', title: name });
   }
-  await fs.writeFile(path.join(folder, 'missing.md'), '# Task R3: Created too late');
+  assert.ok(calls.timer);
+  await fs.writeFile(path.join(folder, 'missing.md'), '# Task R3: Delayed prompt');
   calls.refresh('missing.md'); await calls.work;
-  assert.equal(calls.snapshot()[0].items.find(item => item.title === 'missing.md')?.role, '执行');
-  assert.equal(open.mock.callCount(), 3);
+  assert.equal(calls.snapshot()[0].items.find(item => item.title === 'Delayed prompt')?.role, '执行');
+  assert.equal(open.mock.callCount(), 4);
   const remote = new AgentCalls();
   remote.apply({ ...use('ssh', 'Bash', { command: `codex exec - < "${path.join(folder, 'remote.md')}"` }), cwd: folder });
   await remote.work;
   assert.deepEqual(remote.snapshot()[0].items, [{ state: 'running', role: '执行', title: 'remote.md' }]);
-  assert.equal(open.mock.callCount(), 3, 'SSH sessions have no local transcript folder and never open a prompt');
+  assert.equal(open.mock.callCount(), 4, 'SSH sessions have no local transcript folder and never open a prompt');
   assert.equal(calls.timer, null); assert.equal(remote.timer, null);
 });
 
@@ -458,6 +459,7 @@ test('a background Codex run prepares, starts quietly, awaits its delivered revi
   await fs.mkdir(path.dirname(log), { recursive: true });
   const header = 'OpenAI Codex v0.163.0\n--------\nworkdir: <repo>\nmodel: gpt-6.1-sol\nprovider: openai\n--------\nuser\nRead the code and use codex exec if asked.\n';
   await fs.writeFile(log, header);
+  await fs.writeFile(path.join(path.dirname(log), 'brief-calls-heredoc.md'), 'Placeholder prompt.');
   calls.apply(launch);
   calls.apply(receipt);
   await calls.work;
@@ -538,17 +540,16 @@ test('failed and killed background workers enter review and leave on Stop, inclu
   }
 });
 
-test('unreadable SSH-like Codex logs and commands without logs skip preparing and still review', async t => {
+test('missing local Codex logs stay preparing until completion; commands without logs still run', async t => {
   const { folder, calls } = await fixture(t);
-  const remote = '/srv/agentrix-missing-worker/log.txt';
-  calls.apply({ ...use('ssh', 'Bash', { command: `codex exec > ${remote} 2>&1`, run_in_background: true }), cwd: '/srv/project' });
+  calls.apply({ ...use('missing', 'Bash', { command: 'codex exec > missing.log 2>&1', run_in_background: true }), cwd: folder });
   await calls.work;
-  assert.deepEqual(states(calls), [[0, 1, 0]]); assert.equal(calls.timer, null);
+  assert.deepEqual(states(calls), [[1, 0, 0]]); assert.ok(calls.timer);
   calls.apply({ ...use('no-log', 'Bash', { command: 'codex exec -o out.md', run_in_background: true }), cwd: folder });
   await calls.work;
-  assert.deepEqual(states(calls), [[0, 2, 0]]); assert.equal(calls.timer, null);
-  calls.apply(notice('ssh', 'failed')); calls.apply(notice('no-log', 'killed'));
-  assert.deepEqual(states(calls), [[0, 0, 2]]);
+  assert.deepEqual(states(calls), [[1, 1, 0]]); assert.ok(calls.timer);
+  calls.apply(notice('missing', 'failed')); calls.apply(notice('no-log', 'killed')); await calls.work;
+  assert.deepEqual(states(calls), [[0, 0, 2]]); assert.equal(calls.timer, null);
   calls.apply(stop()); assert.deepEqual(calls.snapshot(), []);
 });
 

@@ -1444,3 +1444,30 @@ test('the save-as channel is registered in the main process, the preload and the
   assert.match(read('src/shared/types.ts'), /saveImageAs\(file: string\): Promise<Result<string \| null>>/);
   for (const text of ['保存图片', '继续修改', '继续追问', '重试', '查看大图', '{time} 完成', '继续修改，或描述下一步…']) assert.ok(text in en, `${text} has an English translation`);
 });
+
+test('list markers take the running agent\'s colour: Claude orange for Claude Code, the usage teal for Codex and anything else', t => {
+  const { state, render } = readingHarness(t, [readingEntry('a1', 'assistant', 1, { text: '- one' })]);
+  for (const [agent, expected] of [['claude', 'claude'], ['codex', 'codex'], ['future-agent', 'codex']]) {
+    state.terminal.agent = agent;
+    assert.match(render(), new RegExp(`<div class="reading-view" data-agent="${expected}"`), `${agent} marks the reading root`);
+  }
+  assert.match(fs.readFileSync(path.join(__dirname, '../src/features/reading/ManagedSession.tsx'), 'utf8'), /className="reading-view" data-agent="claude"/);
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading.css'), 'utf8');
+  const themes = fs.readFileSync(path.join(__dirname, '../src/shared/styles/themes.css'), 'utf8');
+  assert.match(css, /\.reading-view\[data-agent="claude"\] \{ --list-marker: var\(--agent-claude\); --list-number: var\(--agent-claude-text\); \}/);
+  assert.doesNotMatch(css, /data-agent="codex"/, 'Codex keeps the default');
+  assert.match(css, /ul > li::before \{[^}]*background: var\(--list-marker, var\(--usage\)\)/);
+  assert.match(css, /ul ul > li::before \{[^}]*inset 0 0 0 1\.5px var\(--list-marker, var\(--usage\)\)/);
+  assert.match(css, /ol > li::marker \{ color: var\(--list-number, var\(--usage\)\)/);
+  assert.doesNotMatch(css.match(/\.reading-markdown ul > li[\s\S]*?ol > li::marker[^\n]*/)[0], /(?<!, )var\(--usage\)(?!\))/, 'no marker rule names the teal without the fallback');
+  // The numeral is text: its token reaches 4.5:1 on every light reading surface; dark keeps the brand orange.
+  const token = (block, name) => block.match(new RegExp(`${name}: (#[0-9a-f]{6})`))[1];
+  const light = themes.slice(themes.indexOf(':root[data-theme="light"] {')), dark = themes.slice(0, themes.indexOf(':root[data-theme="light"] {'));
+  const channel = value => { const c = parseInt(value, 16) / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  const lum = hex => 0.2126 * channel(hex.slice(1, 3)) + 0.7152 * channel(hex.slice(3, 5)) + 0.0722 * channel(hex.slice(5, 7));
+  const ratio = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+  const numeral = token(light, '--agent-claude-text');
+  for (const surface of [token(light, '--bg-card'), token(light, '--bg-app'), token(light, '--bg-hover')]) assert.ok(ratio(numeral, surface) >= 4.5, `${numeral} on ${surface}`);
+  assert.match(dark, /--agent-claude-text: var\(--agent-claude\)/);
+  assert.equal(token(dark, '--agent-claude'), '#d97757');
+});

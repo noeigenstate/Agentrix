@@ -25,8 +25,8 @@
 /* The head line stands level with the node (28px): the speaker in the label style, the time small and muted beside it. */
 .reading-step-head { display: flex; align-items: center; gap: 8px; min-height: var(--step-node); }
 .reading-step-head > time, .reading-turn-item-body > time { font: 400 calc(11px * var(--reading-text))/1.4 var(--font-ui); color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* A step's node is a hollow ring in secondary text. You and the agents have no ring: your picture fills the node, an agent's own mark stands in it (Codex on a quiet disc);
-   only a node that failed gets a ring, in the danger colour. */
+/* A step's node is a hollow ring in secondary text. You and the agents have no ring: your picture fills the node, an agent's own mark stands in it (Codex on a quiet disc).
+   Generic nodes use the danger colour when failed. */
 .reading-node { --node-tint: var(--flow-step); position: relative; z-index: 1; display: grid; grid-template: var(--step-node) / var(--step-node); place-items: center; width: var(--step-node); height: var(--step-node); border-radius: 50%;
   color: var(--node-tint); }
 .reading-step:not(.is-user, .is-claude, .is-codex) .reading-node { box-shadow: inset 0 0 0 1.5px var(--node-tint); }
@@ -39,9 +39,9 @@
    the Claude spark has no clear space and is 26px. Codex uses its supplied white mark; Claude retains its official orange. */
 .reading-node > .agent-brand-codex { width: 44px; height: 44px; }
 .reading-node > .agent-brand-claude { width: 26px; height: 26px; }
-/* A running step's ring is the heavier one; a node that failed has it in the danger colour. */
+/* A generic running step's ring is the heavier one; a failed one has it in the danger colour. */
 .reading-step.is-running:not(.is-user, .is-claude, .is-codex) .reading-node { box-shadow: inset 0 0 0 2px var(--node-tint); }
-.reading-step.is-failed .reading-node { --node-tint: var(--flow-fail); box-shadow: inset 0 0 0 2px var(--node-tint); }
+.reading-step.is-failed:not(.is-user, .is-claude, .is-codex) .reading-node { --node-tint: var(--flow-fail); box-shadow: inset 0 0 0 2px var(--node-tint); }
 /* The cards start at the node's right edge, 14px from the rail and nearer to it than the name label, which stays beside the node. */
 .reading-step-body > .reading-turn { margin-left: calc(var(--reading-inset) - var(--step-lead) - var(--turn-pad)); }
 .reading-step.is-agent .reading-step-head { padding-left: max(0px, calc(var(--reading-inset) - var(--step-lead))); }

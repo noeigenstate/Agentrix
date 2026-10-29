@@ -38,6 +38,36 @@ function loadUI(name, overrides = {}) {
   return mod.exports;
 }
 
+test('launcher shows official agent marks, giving way to the busy spinner only while each agent installs or starts', () => {
+  const { ClaudeLogo, CodexLogo } = require('../src/features/agents/AgentBrandIcon.ts');
+  const CircleNotch = ({ size, className }) => React.createElement('svg', { 'data-icon': 'circle-notch', width: size, height: size, className });
+  const Terminal = ({ size }) => React.createElement('svg', { 'data-icon': 'terminal', width: size, height: size });
+  const expected = {
+    claude: renderToStaticMarkup(React.createElement(ClaudeLogo, { size: 22 })),
+    codex: renderToStaticMarkup(React.createElement(CodexLogo, { size: 37 })),
+  };
+  const spinner = renderToStaticMarkup(React.createElement(CircleNotch, { size: 16, className: 'loading-spinner' }));
+  const terminal = renderToStaticMarkup(React.createElement(Terminal, { size: 13 }));
+  for (const state of [{}, { missing: 'claude' }, { missing: 'codex' }, { installing: 'claude' }, { installing: 'codex' }, { starting: 'claude' }, { starting: 'codex' }]) {
+    let index = 0;
+    const slots = [null, 'new', state.starting ?? null, {
+      npm: true, codex: { installed: state.missing !== 'codex' }, claude: { installed: state.missing !== 'claude' }, installing: state.installing ?? null,
+    }];
+    const { AgentLauncher } = loadUI('terminal/AgentLauncher.tsx', { react: {
+      useState: () => [slots[index++], () => {}], useEffect() {},
+    }, '@phosphor-icons/react': { CircleNotch, Terminal } });
+    const html = renderToStaticMarkup(AgentLauncher({ terminalId: 't', projectId: 'p', onAction() {}, onOpenTerminal() {} }));
+    for (const agent of ['claude', 'codex']) {
+      const tile = html.match(new RegExp(`<button[^>]+class="agent-launcher-agent is-${agent}[^"]*"[\\s\\S]*?<\\/button>`))[0];
+      const busy = state.installing === agent || state.starting === agent;
+      assert.equal(tile.includes(expected[agent]), !busy, `${agent}: ${JSON.stringify(state)}`);
+      assert.equal(tile.includes(spinner), busy, `${agent}: ${JSON.stringify(state)}`);
+      assert.doesNotMatch(tile, /✻|(?:&gt;|>)_/);
+    }
+    assert.ok(html.includes(`${terminal}只打开终端`));
+  }
+});
+
 test('cards use live agent detection, including typed commands and startup, rather than shell or saved agent metadata', () => {
   const shells = ['powershell', 'bash', 'zsh', 'cmd'].map(shell => terminal(shell, { shell, agent: 'codex', task: 'codex', agentCommand: 'codex', nativeMode: 'codex-native' }));
   assert.deepEqual(visibleTerminals(shells, false), []);
