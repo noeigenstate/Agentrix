@@ -397,3 +397,11 @@ test('the user avatar keeps only a small WebP, PNG or JPEG data URL', t => {
   }
   store.updateSettings({ userAvatar: '' }); assert.equal(store.settings.userAvatar, '');
 });
+
+test('isolated test profiles default to 100 % zoom, keep an explicit 自动, and 自动 again with AGENTRIX_TEST_ZOOM=auto', () => {
+  const { execFileSync } = require('node:child_process');
+  const probe = `const { cleanSettings } = require(${JSON.stringify(path.join(__dirname, '..', 'electron', 'state.cjs'))}); process.stdout.write(JSON.stringify([cleanSettings({}).uiZoom, cleanSettings({ uiZoom: null }).uiZoom, cleanSettings({ uiZoom: 7 }).uiZoom]));`;
+  const run = extra => JSON.parse(execFileSync(process.execPath, ['-e', probe], { env: { ...process.env, AGENTRIX_DATA_DIR: os.tmpdir(), AGENTRIX_TEST_ZOOM: '', ...extra }, encoding: 'utf8' }));
+  assert.deepEqual(run({}), [100, null, 100]);
+  assert.deepEqual(run({ AGENTRIX_TEST_ZOOM: 'auto' }), [null, null, null]);
+});

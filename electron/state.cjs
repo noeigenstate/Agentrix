@@ -46,7 +46,10 @@ function cleanRestore(input, kind) {
 // Where the window opens: the decisions to make (the home page) or the grid of projects. Isolated test profiles
 // open on the grid they exercise unless they ask for the home page.
 const DEFAULT_START = process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST_HOME !== '1' ? 'workspace' : 'decisions';
-const defaults = { startView: DEFAULT_START, surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', autoSave: true, activityPane: true, notifications: true, sound: true, language: 'en', theme: 'mono', shortcuts: {}, guideVersion: '', shell: 'powershell', closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', restoreSessions: true, focusAnimation: 'smooth', uiZoom: null, voiceModel: DEFAULT_VOICE_MODEL };
+// Isolated test profiles keep pixel layouts exact at 100 % unless they choose 自动 themselves (a test machine's small
+// display would otherwise shrink every layout under test).
+const DEFAULT_ZOOM = process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST_ZOOM !== 'auto' ? 100 : null;
+const defaults = { startView: DEFAULT_START, surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', autoSave: true, activityPane: true, notifications: true, sound: true, language: 'en', theme: 'mono', shortcuts: {}, guideVersion: '', shell: 'powershell', closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', restoreSessions: true, focusAnimation: 'smooth', uiZoom: DEFAULT_ZOOM, voiceModel: DEFAULT_VOICE_MODEL };
 
 // Keyboard shortcuts the user changed, by action; defaults live in the window (src/features/shortcuts/shortcuts.ts).
 // "Ctrl+Shift+F": Ctrl, Alt and Shift in that order, then one letter, digit, F-key or punctuation key.
@@ -83,7 +86,7 @@ function cleanSettings(input = {}) {
     terminalCjkFontFamily: typeof input.terminalCjkFontFamily === 'string' && input.terminalCjkFontFamily.length <= 80 && !/[\u0000-\u001f\u007f]/.test(input.terminalCjkFontFamily) ? input.terminalCjkFontFamily.trim() : defaults.terminalCjkFontFamily,
     userAvatar: typeof input.userAvatar === 'string' && input.userAvatar.length <= AVATAR_MAX_LENGTH && AVATAR_URL.test(input.userAvatar) ? input.userAvatar : defaults.userAvatar,
     focusAnimation: ['smooth', 'system', 'off'].includes(input.focusAnimation) ? input.focusAnimation : defaults.focusAnimation,
-    uiZoom: UI_ZOOM_STEPS.includes(input.uiZoom) ? input.uiZoom : defaults.uiZoom,
+    uiZoom: input.uiZoom === null || UI_ZOOM_STEPS.includes(input.uiZoom) ? input.uiZoom : defaults.uiZoom,
     startView: ['decisions', 'workspace'].includes(input.startView) ? input.startView : defaults.startView,
     language: ['zh', 'en'].includes(input.language) ? input.language : defaults.language,
     // Ids of src/shared/themes.ts; a profile that holds a removed theme gets the first.

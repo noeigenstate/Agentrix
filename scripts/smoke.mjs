@@ -207,7 +207,7 @@ try {
 
   const runtime = (await fs.readdir(dataDir)).find(name => name.startsWith('runtime-'));
   const bootstraps = [];
-  for (const filename of await fs.readdir(path.join(dataDir, runtime))) bootstraps.push(JSON.parse(await fs.readFile(path.join(dataDir, runtime, filename), 'utf8')));
+  for (const filename of (await fs.readdir(path.join(dataDir, runtime))).filter(name => name.endsWith('.json'))) bootstraps.push(JSON.parse(await fs.readFile(path.join(dataDir, runtime, filename), 'utf8')));
   const info = bootstraps.find(b => b.projectId === projects[0].id);
   const complete = async (turnId, target = info, threadId = 'smoke-thread') => {
     const payload = JSON.stringify({ type: 'agent-turn-complete', 'thread-id': threadId, 'turn-id': turnId, cwd: projects[0].path, 'last-assistant-message': '验证完成 "quotes" 中文' });
