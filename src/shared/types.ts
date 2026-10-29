@@ -84,9 +84,13 @@ export type AppUpdateState = { supported: boolean; currentVersion: string; distr
 // id: "builtin:<name>", "user:<name>" or "project:<projectId>:<name>". trigger: always = read before every task; auto = when its description fits.
 export type SkillInfo = {
   id: string; name: string; description: string; source: 'builtin' | 'user'; scope: 'builtin' | 'global' | 'project';
+  // What the settings page shows: a built-in skill's `title` / `summary` front matter (Chinese, translated through en.json);
+  // a user skill's name and description. The SKILL.md body stays what agents read.
+  title: string; summary: string;
   projectId: string | null; projectName: string | null; path: string;
   enabled: boolean; trigger: 'always' | 'auto'; autoOptimize: boolean; confirmChanges: boolean;
   // The latest version and who made it; createdByAgent until the user has looked at it (the 新 mark).
+  // updatedIn and lastUsed.project are project NAMES (for display), never ids.
   version: number; updatedAt: number | null; updatedBy: 'agent' | 'user' | 'app' | null; updatedIn: string | null; createdByAgent: boolean;
   // A change an agent proposed while confirmChanges is on, waiting for the user.
   pending: boolean;
