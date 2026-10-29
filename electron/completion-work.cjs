@@ -1,4 +1,4 @@
-const { messageText, promptText } = require('./prompt-queue.cjs');
+const { messageText, promptText, promptSummary } = require('./prompt-queue.cjs');
 
 // Jobs with missing end receipts expire from launch, without success; services are excluded.
 const LOST_WORK_TIMEOUT = 12 * 60 * 60 * 1000;
@@ -39,6 +39,7 @@ class CompletionWork {
     const pending = !!(this.tasks?.size || this.notifications?.size || this.reviewAt || this.reading);
     clearTimeout(this.timer); this.timer = null;
     this.tasks = new Map(); this.calls = new Map(); this.services = new Set(); this.notifications = new Set();
+    this.deliveries = new Map();
     this.reviewAt = 0; this.endedAt = 0; this.turn = null; this.reading = false;
     this.expired = false; this.version = 0;
     this.uncertain = false;
@@ -54,8 +55,8 @@ class CompletionWork {
       if (key === id || task.id === id || task.id?.endsWith(`/${id}`) || id.endsWith(`/${task.id}`)) return key;
     }
   }
-  start(key, at, id = key) {
-    if (key) this.tasks.set(key, { id, startedAt: this.tasks.get(key)?.startedAt ?? at });
+  start(key, at, id = key, description = this.tasks.get(key)?.description) {
+    if (key) this.tasks.set(key, { id, startedAt: this.tasks.get(key)?.startedAt ?? at, ...(description ? { description } : {}) });
   }
   finish(id) {
     const key = this.find(id), task = this.tasks.get(key);
@@ -74,21 +75,22 @@ class CompletionWork {
     this.version++;
   }
   claude(record, at) {
+    if ((record.isCompactSummary || record.isVisibleInTranscriptOnly || record.message?.model === '<synthetic>') && !record.isApiErrorMessage) return;
     const content = record.message?.content;
     for (const block of Array.isArray(content) ? content : []) {
-      if (record.type === 'assistant' && block.type === 'tool_use') {
+      if (record.type === 'assistant' && !record.isMeta && block.type === 'tool_use') {
         const input = block.input || {};
         // A foreground Bash can also become a background task after its timeout.
         if (['Agent', 'Task', 'Bash', 'TaskOutput', 'TaskStop', 'KillShell'].includes(block.name)) {
           const task = input.task_id || input.shell_id;
           const stopped = ['TaskStop', 'KillShell'].includes(block.name) ? this.finish(task) : null;
-          this.calls.set(block.id, { name: block.name, task, stopped, at });
+          this.calls.set(block.id, { name: block.name, task, stopped, at, description: input.description });
           if (block.name === 'Bash' && isServiceCommand(input.command)) {
             const running = this.finish(block.id);
             this.services.add(block.id);
             if (running) this.services.add(running.id);
           }
-          if (enabled(input.run_in_background) && !this.services.has(block.id)) this.start(block.id, at);
+          if (enabled(input.run_in_background) && !this.services.has(block.id)) this.start(block.id, at, block.id, input.description);
         }
       } else if (record.type === 'user' && block.type === 'tool_result') {
         const result = record.toolUseResult || {}, call = this.calls.get(block.tool_use_id);
@@ -97,12 +99,12 @@ class CompletionWork {
           this.finish(block.tool_use_id); this.finish(id);
           if (id) this.services.add(id);
         }
-        else if (!block.is_error && id) this.start(block.tool_use_id, call?.at ?? at, id);
+        else if (!block.is_error && id) this.start(block.tool_use_id, call?.at ?? at, id, call?.description);
         else if (call?.name === 'TaskOutput') {
           const task = result.task || {};
           if (finished(task.status)) this.finish(task.task_id || call.task);
         } else if (call?.stopped) {
-          if (block.is_error) this.tasks.set(call.stopped.key, { id: call.stopped.id, startedAt: call.stopped.startedAt });
+          if (block.is_error) { const { key, ...task } = call.stopped; this.tasks.set(key, task); }
         } else if (['TaskStop', 'KillShell'].includes(call?.name) && !block.is_error) this.finish(call.task || result.task_id);
         else this.finish(block.tool_use_id);
         this.calls.delete(block.tool_use_id);
@@ -112,11 +114,17 @@ class CompletionWork {
     if (queued && (record.operation === 'clear' || record.operation === 'popAll' && record.content == null)) this.notifications.clear();
     const text = messageText(queued ? record.content : record.attachment?.prompt ?? content);
     let delivered = false;
+    const notices = [];
     for (const [notice] of (queued || ['user', 'attachment'].includes(record.type) ? text : '').matchAll(/<task-notification>[\s\S]*?<\/task-notification>/g)) {
       const tag = name => new RegExp(`<${name}>\\s*([^<]+?)\\s*</${name}>`).exec(notice)?.[1];
       const taskId = tag('task-id'), toolUseId = tag('tool-use-id'), id = taskId || toolUseId;
       if (!id || !finished(tag('status')) || this.services.has(taskId) || this.services.has(toolUseId)) continue;
       const tracked = this.find(toolUseId) || this.find(taskId);
+      const description = this.tasks.get(tracked)?.description;
+      const previous = this.deliveries.get(id);
+      const text = String(tag('summary') || description || previous?.text || id).replace(/\s+/g, ' ').trim().slice(0, 2000);
+      this.deliveries.set(id, { text, delivered: previous?.delivered || false });
+      if (this.deliveries.size > 1000) this.deliveries.delete(this.deliveries.keys().next().value);
       this.finish(toolUseId); this.finish(taskId);
       if (queued && record.operation === 'enqueue') {
         // Historical or duplicate receipts may never be delivered. Only an
@@ -127,7 +135,9 @@ class CompletionWork {
       // selected. Receipt, or a named delivery, starts the parent's review.
       else if (!queued || ['remove', 'popOne', 'popAll'].includes(record.operation)) {
         this.notifications.delete(id);
-        if (!queued || record.operation === 'remove' && !['cleared_on_cancel', 'dropped_by_hook'].includes(record.reason)) {
+        if ((!queued || record.operation === 'remove' && !['cleared_on_cancel', 'dropped_by_hook'].includes(record.reason)) && !previous?.delivered) {
+          this.deliveries.get(id).delivered = true;
+          notices.push({ text, summary: promptSummary(text, { keepFollowUp: true }) || text, at });
           this.reviewAt = Math.max(this.reviewAt, at); delivered = true;
         }
       }
@@ -139,13 +149,26 @@ class CompletionWork {
     if ((humanDelivery || handoff) && at > (this.turn?.updatedAt || 0)) {
       this.reviewAt = Math.max(this.reviewAt, at); delivered = true;
     }
-    const ended = record.type === 'assistant' && record.message?.stop_reason === 'end_turn'
-      || record.type === 'system' && record.subtype === 'stop_hook_summary';
-    const working = delivered || record.type === 'assistant' && Array.isArray(content) && content.length && !ended;
+    const interrupted = record.type === 'user' && /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(text)
+      || record.type === 'assistant' && record.isApiErrorMessage;
+    const stop = record.type === 'system' && record.subtype === 'stop_hook_summary';
+    const ended = interrupted || stop || record.type === 'assistant' && record.message?.stop_reason === 'end_turn';
+    const working = delivered || !record.isMeta && record.type === 'assistant' && Array.isArray(content) && content.length && !ended;
     if ((ended || working) && at >= (this.turn?.updatedAt || 0)) {
-      this.turn = { state: ended ? 'complete' : 'working', updatedAt: at, turnId: ended ? record.uuid || `stop-${at}` : null };
+      // A parent round and the project's outstanding background work have different lifetimes.
+      // Keep the first delivered source and its clock through tools and mid-turn messages.
+      let background = this.turn?.state === 'working' || ended ? this.turn?.background : null;
+      if (notices.length) background = background ? { ...background, count: background.count + notices.length } : { ...notices[0], count: notices.length };
+      const state = interrupted || stop && this.turn?.state === 'interrupted' ? 'interrupted' : ended ? 'complete' : 'working';
+      this.turn = { state, updatedAt: at, turnId: ended ? record.uuid || `stop-${at}` : null, background };
       if (ended) this.end(at);
     }
+  }
+  // Publish the main round before the project-completion gate folds in workers and queued receipts.
+  mainTurn(snapshot = this.turn) {
+    const state = snapshot?.state || 'unknown';
+    const background = this.turn?.state === state && this.turn.updatedAt >= (snapshot?.updatedAt || 0) ? this.turn.background : null;
+    return { state, updatedAt: snapshot?.updatedAt || 0, background: background || null };
   }
   codex(record, at) {
     const item = record.payload || {};
@@ -254,7 +277,7 @@ class CompletionWork {
       }
     }
     if (this.expired) return 'interrupted';
-    return pending && ['complete', 'interrupted'].includes(snapshot.state) ? 'working' : snapshot.state;
+    return pending && snapshot.state === 'complete' ? 'working' : snapshot.state;
   }
 }
 

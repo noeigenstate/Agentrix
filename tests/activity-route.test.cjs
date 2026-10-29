@@ -32,7 +32,7 @@ function compileAgentsFile(basename, language) {
     if (name === './ResetCountdown') return loadAgentsFile('ResetCountdown.tsx', language);
     if (name === './action-text') return loadAgentsFile('action-text.ts', language);
     if (name === 'react-dom') return { createPortal: children => children };
-    if (name === '@phosphor-icons/react') return new Proxy({}, { get: () => () => React.createElement('svg') });
+    if (name === '@phosphor-icons/react') return new Proxy({}, { get: (_, icon) => ({ className }) => React.createElement('svg', { className, 'data-icon': icon }) });
     return original(name);
   };
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
@@ -302,7 +302,9 @@ test('with no prompt the main card says the agent state in words and invents no 
   // Nothing tracked: the state in words, and not the result summary the card header's status may carry.
   for (const [codexActivity, word] of [['working', '正在处理'], ['complete', '本轮已完成'], ['interrupted', '已中断'], ['unknown', '等待下一步']]) {
     const html = tasks(render({ id: 'none', codexActivity }));
-    assert.match(html, new RegExp('<li class="is-idle">[\\s\\S]*?<p>' + word + '</p>')); assert.doesNotMatch(html, /RESULT|<time>/);
+    assert.match(html, new RegExp('<li class="is-' + (codexActivity === 'working' ? 'working' : 'idle') + '"[^>]*>[\\s\\S]*?<p>' + word + '</p>'));
+    assert.doesNotMatch(html, /RESULT|<time>[^<]+/);
+    assert.match(html, new RegExp('data-icon="' + (codexActivity === 'working' ? 'CircleNotch' : 'Circle') + '"'));
   }
   // A working round with its prompt is remembered; when the round ends the same prompt stays as the finished row.
   render({ codexActivity: 'working', prompts: [prompt] });
@@ -326,6 +328,44 @@ test('each task row is on the 32px grid: its state icon, the role word and the t
   assert.match(css, /\.activity-call-rows li:is\(\.is-running, \.is-working\) \.activity-row-icon \{ color: var\(--running\); \}/, 'the spinner is the one colour');
   assert.match(css, /\.activity-call-rows li\.is-done \.activity-row-icon \{ color: var\(--success\); \}/);
   assert.match(css, /\.activity-call-rows li\.is-step p \{ color: var\(--flow-faint\); \}/, 'the step is quieter');
+});
+
+test('the main card shows the parent review source, clock and step before queued prompts, and ends with the parent', () => {
+  const at = Date.now() - 65000;
+  const background = { text: 'Parser worker completed verification.', summary: 'Parser verification completed', count: 2, at };
+  const action = { kind: 'read', tool: 'Read', target: 'report.txt', detail: '', done: false };
+  const prompts = [{ id: 'q', text: 'Next human request', summary: 'Next human request', state: 'queued', at: at + 60000 }];
+  const main = (state, extra = {}, language = 'zh') => /<section class="activity-card activity-main"[\s\S]*?<\/section>/.exec(activityMarkup([], language,
+    { id: 'background-round', sessionId: 'session', codexActivity: 'working', mainTurn: { state, background }, action, prompts, ...extra }))[0];
+  const running = main('working');
+  assert.match(running, /<li class="is-working"[^>]*>[\s\S]*?class="loading-spinner" data-icon="CircleNotch"[\s\S]*?<p>处理后台结果：Parser verification completed 等 2 项<\/p><time>1:0\d<\/time>/);
+  assert.ok(running.indexOf('is-working') < running.indexOf('is-step') && running.indexOf('is-step') < running.indexOf('is-queued'));
+  assert.equal((running.match(/class="is-step"/g) || []).length, 1);
+  const done = main('complete', { prompts: [], lastCompletedAt: at - 3600000, mainTurn: { state: 'complete', updatedAt: at, background } });
+  assert.match(done, /class="is-done"[\s\S]*?data-icon="CheckCircle"[\s\S]*?本轮已完成/);
+  assert.doesNotMatch(done, /loading-spinner|is-step|is-working/);
+  const endedClock = new Date(at).toTimeString().slice(0, 5);
+  assert.ok(done.includes(`<time>${endedClock}</time>`), 'the clock is this main round, not a previous project completion');
+  const interrupted = main('interrupted', { prompts: [] });
+  assert.match(interrupted, /已中断/); assert.doesNotMatch(interrupted, /loading-spinner|is-step|is-working/);
+  const waiting = main('complete', { mainTurn: { state: 'complete', background: null }, prompts: [], id: 'main-waits-for-worker' });
+  assert.match(waiting, /本轮已完成/); assert.doesNotMatch(waiting, /正在处理|loading-spinner|is-step/);
+  const english = main('working', {}, 'en');
+  assert.match(english, /Reviewing background result: Parser verification completed and others \(2 total\)/);
+});
+
+test('a working main round without a known task spins with its current step, including while a human request is queued', () => {
+  const action = { kind: 'edit', tool: 'Edit', target: 'parser.ts', detail: 'Update parser', done: false };
+  const main = extra => /<section class="activity-card activity-main"[\s\S]*?<\/section>/.exec(activityMarkup([], 'zh',
+    { id: 'unknown-main-task', sessionId: 'session', codexActivity: 'working', action, ...extra }))[0];
+  for (const prompts of [[], [{ id: 'q', text: 'Next request', summary: 'Next request', state: 'queued', at: Date.now() }]]) {
+    const html = main({ prompts });
+    assert.match(html, /class="is-working"[^>]*>[\s\S]*?class="loading-spinner" data-icon="CircleNotch"[\s\S]*?正在<\/span>修改 parser.ts/);
+    assert.doesNotMatch(html, /class="is-idle"|class="is-step"/);
+  }
+  const noStep = main({ action: { ...action, done: true } });
+  assert.match(noStep, /data-icon="CircleNotch"[\s\S]*?<p>正在处理<\/p>/);
+  assert.doesNotMatch(noStep, /parser.ts|data-icon="Circle"/);
 });
 
 test('the clock reads m:ss and h:mm:ss', () => {
@@ -454,7 +494,7 @@ test('the main row shows the step under way and spins only while the agent works
   assert.match(running, /<li class="is-step" title="src\/features\/agents\/ActivityPane\.tsx">[\s\S]*?<span class="activity-call-role">正在<\/span>修改 ActivityPane\.tsx<\/p>/);
   for (const html of [running, step({ ...edit, done: true }, 'working'), step(null, 'working')]) { assert.doesNotMatch(html, /SUB TITLE|RESULT SUMMARY/, 'neither a sub-agent title nor the result summary'); assert.match(html, /PROMPT TEXT/, 'the main task is the queue\'s working prompt'); }
   const finished = step({ ...edit, done: true }, 'working');
-  assert.doesNotMatch(finished, /is-running|loading-spinner|ActivityPane/, 'a done step is not shown as running');
+  assert.doesNotMatch(finished, /is-step|ActivityPane/, 'a done step is not shown as running');
   assert.doesNotMatch(step(edit, 'complete'), /is-step|ActivityPane/, 'a running step of an agent that is not working is stale');
   assert.match(step(edit, 'complete'), /<li class="is-queued"|<li class="is-working"/);
   assert.equal((step(edit, 'working').match(/<li class="is-step"/g) || []).length, 1); assert.equal((finished.match(/<li class="is-step"/g) || []).length, 0);

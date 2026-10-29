@@ -231,6 +231,10 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
         self.assertEqual(stop["subtype"], "stop_hook_summary")
         ended = remote.compact_claude_record({"type": "assistant", "message": {"content": [], "stop_reason": "end_turn"}})
         self.assertEqual(ended["message"]["stop_reason"], "end_turn")
+        error = remote.compact_claude_record({"type": "assistant", "isApiErrorMessage": True,
+            "message": {"model": "<synthetic>", "stop_reason": None, "content": [{"type": "text", "text": "API request failed."}]}})
+        self.assertTrue(error["isApiErrorMessage"])
+        self.assertEqual(error["message"]["model"], "<synthetic>")
         for value in ({"agent_id": "child", "output": "private output"}, {"session_id": 42, "output": "private output"},
                       {"exit_code": 130, "output": "private output"}, {"status": {"child": {"completed": "private output"}}},
                       {"agents": [{"agent_name": "child", "agent_status": {"completed": "private output"}}]}):

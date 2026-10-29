@@ -138,6 +138,102 @@ async function activityFeed(t, h, { clockOffset = h.project.kind === 'ssh' ? 100
 const userRoundFixture = require('./fixtures/claude-user-round-background.json');
 const recordedLine = line => userRoundFixture.records[userRoundFixture.sourceLines.indexOf(line)];
 
+for (const kind of ['local', 'ssh']) {
+  test(`Claude ${kind} main rounds show delivered background sources without consuming queued human prompts`, async t => {
+    const h = await harness(t, kind, 'claude'), { s } = h;
+    const feed = await activityFeed(t, h, { clockOffset: 0 });
+    const mainTurn = () => s.completionWork.mainTurn(s.activitySnapshot);
+    const append = async record => { h.now(Date.parse(record.timestamp)); await feed.append(record); await feed.poll(); };
+    const content = id => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>launch-${id}</tool-use-id>\n<status>completed</status>\n<summary>${id} verification finished</summary>\n<result>Worker output is not a main-agent prompt.</result>\n</task-notification>`;
+    const receipt = (id, at) => ({ type: 'user', uuid: `notice-${id}`, timestamp: stamp(at), message: { content: content(id) } });
+    h.write('Verify the parser\r');
+    await feed.user('Verify the parser', 2000);
+    assert.equal(mainTurn().state, 'working'); assert.equal(s.promptQueue.list()[0].summary, 'Verify the parser');
+    await append(background('Agent', 'launch-first', 2050));
+    await append({ type: 'user', timestamp: stamp(2060), toolUseResult: { isAsync: true, agentId: 'first' }, message: { content: [{ type: 'tool_result', tool_use_id: 'launch-first' }] } });
+    await feed.complete(2200);
+    assert.equal(s.codexActivity, 'working', 'the project still has background work');
+    assert.equal(mainTurn().state, 'complete', 'the main agent has ended its prompt round');
+    assert.deepEqual(s.promptQueue.list(), []);
+    await append({ type: 'queue-operation', operation: 'enqueue', timestamp: stamp(2300), content: content('first') });
+    assert.equal(mainTurn().state, 'complete', 'enqueue alone never starts a main-agent round');
+    await append({ type: 'queue-operation', operation: 'dequeue', timestamp: stamp(2310) });
+    assert.equal(mainTurn().state, 'complete', 'an anonymous dequeue is not delivery');
+    await append(receipt('first', 2320));
+    assert.deepEqual(mainTurn().background, { text: 'first verification finished', summary: 'first verification finished', at: 2320, count: 1 });
+    assert.equal(mainTurn().state, 'working'); assert.deepEqual(s.promptQueue.list(), []);
+    await append({ type: 'queue-operation', operation: 'enqueue', timestamp: stamp(2330), content: 'Check the next change' });
+    assert.deepEqual(s.promptQueue.list().map(item => item.state), ['queued']);
+    await append(receipt('second', 2340));
+    await append({ ...receipt('first', 2350), uuid: 'duplicate-first' });
+    assert.equal(mainTurn().background.count, 2); assert.equal(mainTurn().background.at, 2320);
+    assert.equal(mainTurn().background.summary, 'first verification finished');
+    await append({ type: 'user', uuid: 'sidechain', isSidechain: true, timestamp: stamp(2360), message: { content: 'PRIVATE WORKER PROMPT' } });
+    await append({ type: 'assistant', uuid: 'sidechain-end', isSidechain: true, timestamp: stamp(2370), message: { stop_reason: 'end_turn', content: [] } });
+    assert.equal(mainTurn().state, 'working'); assert.equal(mainTurn().background.count, 2);
+    await feed.complete(2500, 'review-end');
+    assert.equal(mainTurn().state, 'complete');
+    assert.equal(s.codexActivity, 'working', 'the queued human prompt still blocks project completion');
+    assert.deepEqual(s.promptQueue.list().map(item => item.state), ['queued']);
+    await feed.user('Check the next change', 2600);
+    assert.equal(mainTurn().state, 'working'); assert.equal(mainTurn().background, null);
+    assert.deepEqual(s.promptQueue.list().map(item => item.state), ['working']);
+    await feed.complete(2700, 'next-end');
+    assert.equal(mainTurn().state, 'complete'); assert.deepEqual(s.promptQueue.list(), []);
+    assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1);
+    h.store.acknowledge(h.project.id);
+    await append(receipt('first', 2800));
+    assert.equal(mainTurn().state, 'complete', 'a repeated receipt cannot reopen an ended review');
+    assert.equal(h.alerts(), 1); assert.equal(h.armings(), 1); assert.equal(h.project.unread, 0);
+  });
+
+  test(`Claude ${kind} interrupted rounds end promptly and compaction cannot invent or finish a round`, async t => {
+    const h = await harness(t, kind, 'claude'), { s } = h;
+    const feed = await activityFeed(t, h, { clockOffset: 0 });
+    const mainTurn = () => s.completionWork.mainTurn(s.activitySnapshot);
+    const append = async record => { h.now(Date.parse(record.timestamp)); await feed.append(record); await feed.poll(); };
+    await feed.user('Test interruption', 2000);
+    await append(background('Agent', 'pending-child', 2100));
+    const compact = at => [
+      { type: 'system', subtype: 'compact_boundary', timestamp: stamp(at) },
+      { type: 'user', uuid: `compact-${at}`, isCompactSummary: true, timestamp: stamp(at + 1), message: { content: 'This session is being continued from a previous conversation. Synthetic summary.' } },
+      { type: 'assistant', uuid: `synthetic-${at}`, timestamp: stamp(at + 2), message: { model: '<synthetic>', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Compacted context.' }] } },
+    ];
+    for (const record of compact(2200)) await append(record);
+    assert.equal(mainTurn().state, 'working'); assert.equal(s.promptQueue.list().length, 1);
+    await append({ type: 'user', uuid: 'interrupt', timestamp: stamp(2300), message: { content: '[Request interrupted by user for tool use]' } });
+    assert.equal(mainTurn().state, 'interrupted'); assert.equal(s.codexActivity, 'interrupted');
+    assert.deepEqual(s.promptQueue.list(), []); assert.equal(h.alerts(), 0);
+    await append({ type: 'system', subtype: 'stop_hook_summary', uuid: 'stop', timestamp: stamp(2400) });
+    assert.equal(mainTurn().state, 'interrupted', 'Stop after interruption cannot become success');
+    for (const record of compact(2500)) await append(record);
+    assert.equal(mainTurn().state, 'interrupted'); assert.deepEqual(s.promptQueue.list(), []);
+    await feed.user('A fresh round', 2600);
+    assert.equal(mainTurn().state, 'working'); assert.equal(mainTurn().background, null);
+    await feed.complete(2700, 'fresh-end');
+    assert.equal(mainTurn().state, 'complete'); assert.deepEqual(s.promptQueue.list(), []);
+    for (const record of compact(2800)) await append(record);
+    assert.equal(mainTurn().state, 'complete', 'compaction after completion cannot reopen work');
+  });
+}
+
+test('Claude terminal API errors interrupt the main round; retry records and later Stop hooks cannot misreport it', async t => {
+  const h = await harness(t, 'local', 'claude'), { s } = h;
+  const feed = await activityFeed(t, h, { clockOffset: 0 });
+  await feed.user('Verify error recovery', 2000);
+  await feed.append({ type: 'system', subtype: 'api_error', timestamp: stamp(2100), retryInMs: 500, retryAttempt: 1 }); await feed.poll();
+  assert.equal(s.completionWork.mainTurn(s.activitySnapshot).state, 'working');
+  await feed.append({ type: 'assistant', uuid: 'api-error', timestamp: stamp(2200), isApiErrorMessage: true,
+    message: { model: '<synthetic>', stop_reason: null, content: [{ type: 'text', text: 'API request failed.' }] } }); await feed.poll();
+  assert.equal(s.completionWork.mainTurn(s.activitySnapshot).state, 'interrupted');
+  assert.equal(s.codexActivity, 'interrupted'); assert.deepEqual(s.promptQueue.list(), []);
+  h.now(2300);
+  h.context.claudeActivity(h.project, s, { state: 'complete', sessionId: 'session', eventId: 'session:stop' });
+  await s.activityMonitor.poll(); await Promise.resolve();
+  assert.equal(s.completionWork.mainTurn(s.activitySnapshot).state, 'interrupted');
+  assert.equal(s.codexActivity, 'interrupted'); assert.equal(h.alerts(), 0);
+});
+
 for (const kind of ['local', 'ssh']) for (const order of ['prefixes', 'batched-background', 'late-user']) {
   test(`Claude ${kind} real user round clears at its own end (${order}) while project completion waits for background work`, async t => {
     const h = await harness(t, kind, 'claude'), { s } = h, offset = kind === 'ssh' ? 100000 : 0;

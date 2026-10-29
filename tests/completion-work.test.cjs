@@ -285,3 +285,22 @@ test('remote clock offsets keep launch deadlines and parent review in the local 
     h.now(2000 + LOST_WORK_TIMEOUT); assert.equal(work.state(complete), 'interrupted');
   }
 });
+
+test('a summary-free delivered notification keeps its worker description through enqueue and duplicate receipts', t => {
+  const h = fixture(t), { work } = h;
+  h.claude(tool('Agent', 'launch', { run_in_background: true, description: 'Verify the parser', prompt: 'PRIVATE WORKER PROMPT' }), 2000);
+  h.claude(result('launch', { isAsync: true, agentId: 'worker' }), 2010);
+  h.claude({ type: 'assistant', message: { content: [], stop_reason: 'end_turn' } }, 2100);
+  const content = '<task-notification><task-id>worker</task-id><status>completed</status></task-notification>';
+  h.claude({ type: 'queue-operation', operation: 'enqueue', content }, 2200);
+  assert.equal(work.mainTurn().state, 'complete');
+  h.claude({ type: 'queue-operation', operation: 'remove', content, reason: 'absorbed_mid_turn' }, 2300);
+  h.claude({ type: 'attachment', attachment: { type: 'queued_command', prompt: content } }, 2310);
+  assert.deepEqual(work.mainTurn().background, { text: 'Verify the parser', summary: 'Verify the parser', count: 1, at: 2300 });
+  assert.doesNotMatch(JSON.stringify(work.mainTurn()), /PRIVATE WORKER PROMPT/);
+  h.claude({ type: 'system', subtype: 'stop_hook_summary' }, 2400);
+  assert.equal(work.mainTurn().state, 'complete');
+  h.claude({ type: 'user', message: { content } }, 2500);
+  assert.equal(work.mainTurn().state, 'complete');
+  assert.equal(work.state(work.turn), 'complete');
+});

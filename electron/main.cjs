@@ -162,6 +162,7 @@ function publicState() {
           // A run of the CLI that is no conversation (update, --version, login), for the reading view to say so.
           agentCommand: s?.codexActive ? s.agentCommand || null : null,
           codexActivity: s?.codexActivity || 'unknown', needsInput: s?.needsInput?.message || null, shellReady: !!s?.ready && !s?.inputDirty, codexAvailable: s?.codexAvailable ?? null,
+          mainTurn: s?.codexActive ? s.completionWork?.mainTurn(s.activitySnapshot) || null : null,
           lastCompletedAt: s?.lastCompletedAt || null, error: s?.error || startupErrors.get(id) || null,
           // The step a working agent is on, for the card's one-line status; the full list is sent separately.
           action: s?.codexActive && s.codexActivity === 'working' ? briefAction(s.actions.current()) : null,
@@ -683,7 +684,8 @@ function claudeActivity(project, s, event) {
   if (event.state === 'complete' && s.activityMonitor) {
     const promptEvent = s.claudePromptEventId;
     void Promise.resolve(s.activityMonitor.poll()).then(() => {
-      if (s.agent === 'claude' && (!s.claudeSessionId || s.claudeSessionId === event.sessionId) && s.claudePromptEventId === promptEvent && !(s.activityRawSnapshot?.updatedAt > snapshot.updatedAt)) applyActivity(project, s, { ...snapshot, transcriptRead: true });
+      if (s.agent !== 'claude' || s.claudeSessionId && s.claudeSessionId !== event.sessionId || s.claudePromptEventId !== promptEvent || s.activityRawSnapshot?.updatedAt > snapshot.updatedAt) return;
+      applyActivity(project, s, { ...snapshot, state: s.completionWork?.turn?.state === 'interrupted' ? 'interrupted' : snapshot.state, transcriptRead: true });
     }).catch(() => {});
   } else applyActivity(project, s, snapshot);
 }

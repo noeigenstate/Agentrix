@@ -52,6 +52,8 @@
   "{n} 分钟前": "{n} min ago",
   "{n} 小时前": "{n} h ago",
   "正在处理": "Working",
+  "处理后台结果：{summary}": "Reviewing background result: {summary}",
+  " 等 {count} 项": " and others ({count} total)",
   "等待你查看": "Waiting for you",
   "需要检查": "Needs attention",
   "本轮已完成": "Round complete",

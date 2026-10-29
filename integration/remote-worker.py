@@ -217,7 +217,7 @@ def compact_claude_record(record):
                               "input": {key: clip(value, 600) for key, value in arguments.items() if isinstance(value, (str, int, float, bool))}})
             elif kind == "tool_result": parts.append({"type": "tool_result", "tool_use_id": block.get("tool_use_id"), "is_error": bool(block.get("is_error")), "content": ""})
     else: return None
-    kept = {**provenance, **{key: record.get(key) for key in ("type", "uuid", "parentUuid", "timestamp", "cwd", "sessionId", "effort") if key in record}}
+    kept = {**provenance, **{key: record.get(key) for key in ("type", "uuid", "parentUuid", "timestamp", "cwd", "sessionId", "effort", "isApiErrorMessage") if key in record}}
     kept["message"] = {"role": message.get("role"), "content": parts}
     if "stop_reason" in message: kept["message"]["stop_reason"] = message["stop_reason"]
     result = record.get("toolUseResult")

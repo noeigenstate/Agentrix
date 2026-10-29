@@ -60,9 +60,8 @@ function ModelHead({ Mark, name, provider, tag, title, rate }: { Mark: typeof Cl
 // The prompt each terminal's agent last worked on (kept across the pane closing and opening), for the finished row.
 const workedPrompts = new Map<string, { session: string | null; summary: string; text: string }>();
 // The main agent: its model as its latest reply records it (the configured one only until there is a reply, or in the tooltip when they differ), how it runs, its rate, and what it is doing.
-// What it is doing is its prompts, in order (the one being worked on with its spinner and clock, then those waiting), and under the working one the step it is on. A prompt is only ever a
-// real one the user sent (the queue leaves out sub-agent messages and background notifications); with none tracked the row says the agent's state in words and invents no task. When a round
-// ends, the prompt it worked on stays as the finished row, until another round starts. A step shows only while it is under way and the agent is working, never after.
+// Prompts belong to the user; a delivered background result names the main agent's review separately.
+// The main round can end while the project still waits for workers. Steps and spinners follow that round.
 function MainCard({ terminal }: { terminal: ProjectTerminal }) {
   const usage = terminal.agentUsage, settings = terminal.agentSettings, agent = terminal.agent === 'claude' ? 'Claude Code' : 'Codex';
   const actual = usage?.model || null, configured = settings?.model || null, model = actual ?? configured, name = model ? modelName(model) : agent;
@@ -70,17 +69,20 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
     settings?.fast != null && (settings.fast ? t('快速模式') : t('普通模式'))].filter(Boolean).join(' · ');
   const title = [[agent, usage?.provider, model && name].filter(Boolean).join(' / '),
     actual && configured && actual !== configured && t('设置为 {configured}，实际回复来自 {actual}', { configured: modelName(configured), actual: name })].filter(Boolean).join('\n');
-  const now = useNow(Date.now), activity = terminal.codexActivity, prompts = terminal.prompts || [], working = prompts.find(prompt => prompt.state === 'working');
-  // A round with a prompt of its own is remembered for its finished row; one without (a background notification) forgets it, so a stale task is never shown for it.
-  if (activity === 'working') { if (working) workedPrompts.set(terminal.id, { session: terminal.sessionId, summary: working.summary, text: working.text }); else workedPrompts.delete(terminal.id); }
-  const last = workedPrompts.get(terminal.id), ended = !prompts.length && (activity === 'complete' || activity === 'interrupted') && last?.session === terminal.sessionId ? last : null;
+  const now = useNow(Date.now), activity = terminal.mainTurn?.state ?? terminal.codexActivity, prompts = terminal.prompts || [], working = prompts.find(prompt => prompt.state === 'working');
+  const source = terminal.mainTurn?.background, background = activity === 'working' ? source : null;
+  const summary = source ? t('处理后台结果：{summary}', { summary: source.summary }) + (source.count > 1 ? t(' 等 {count} 项', { count: source.count }) : '') : '';
+  const current = source ? { session: terminal.sessionId, summary, text: source.text } : working ? { session: terminal.sessionId, summary: working.summary, text: working.text } : null;
+  if (activity === 'working') { if (current) workedPrompts.set(terminal.id, current); else workedPrompts.delete(terminal.id); }
+  const last = source ? current : workedPrompts.get(terminal.id), ended = !prompts.length && (activity === 'complete' || activity === 'interrupted') && last?.session === terminal.sessionId ? last : null;
   const action = terminal.action, running = !!action && !action.done && activity === 'working';
+  const endedAt = terminal.mainTurn?.updatedAt ?? terminal.lastCompletedAt;
   const state = activity === 'working' ? t('正在处理') : activity === 'complete' ? t('本轮已完成') : activity === 'interrupted' ? t('已中断') : t('等待下一步');
   const step = running && <li className="is-step" title={action.detail || action.target}>
     <span className="activity-row-icon">{CALL_STATES.running.icon}</span><p><span className="activity-call-role">{t('正在')}</span>{actionText(action)}</p><span />
   </li>;
   const task = (icon: ReactNode, className: string, word: string, summary: string, text: string, time: string) => <li className={className} title={`${text}\n${word}${time ? ` · ${time}` : ''}`}>
-    <span className="activity-row-icon">{icon}</span><p><span className="activity-call-role">{word}</span>{summary}</p><time>{time}</time>
+    <span className="activity-row-icon">{icon}</span><p>{word && <span className="activity-call-role">{word}</span>}{summary}</p><time>{time}</time>
   </li>;
   return <section className="activity-card activity-main" aria-label={t('主模型')}>
     <h4 className="activity-card-title">{t('主模型')}</h4>
@@ -89,15 +91,17 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
       <li className="activity-call-note"><span /><p>{model ? how || t('按默认设置运行') : t('第一次回复后显示模型。')}</p><span /></li>
     </ul>
     <ul className="activity-call-rows activity-main-tasks" aria-label={t('提示')}>
+      {background && <>{task(CALL_STATES.running.icon, 'is-working', '', summary, background.text, elapsedClock(now - background.at))}{step}</>}
+      {activity === 'working' && !working && !background && task(CALL_STATES.running.icon, 'is-working', running ? t('正在') : '', running ? actionText(action) : state, running ? action.detail || action.target : state, '')}
       {prompts.map(prompt => <Fragment key={prompt.id}>
         {task(prompt.state === 'working' ? CALL_STATES.running.icon : <Circle size={14} aria-hidden="true" />, prompt.state === 'working' ? 'is-working' : 'is-queued', t(prompt.state === 'working' ? '处理中' : '排队中'),
           prompt.summary, prompt.text, prompt.at ? elapsedClock(now - prompt.at) : '')}
-        {prompt === working && step}
+        {prompt === working && !background && step}
       </Fragment>)}
-      {!prompts.length && (ended
+      {!prompts.length && !background && activity !== 'working' && (ended
         ? task(activity === 'complete' ? <CheckCircle size={14} weight="fill" aria-hidden="true" /> : <Circle size={14} aria-hidden="true" />, activity === 'complete' ? 'is-done' : 'is-idle', state, ended.summary, ended.text,
-          activity === 'complete' && terminal.lastCompletedAt ? resetTime(terminal.lastCompletedAt) : '')
-        : <><li className="is-idle"><span className="activity-row-icon"><Circle size={14} aria-hidden="true" /></span><p>{state}</p><span /></li>{step}</>)}
+          activity === 'complete' && endedAt ? resetTime(endedAt) : '')
+        : <li className="is-idle"><span className="activity-row-icon"><Circle size={14} aria-hidden="true" /></span><p>{state}</p><span /></li>)}
     </ul>
   </section>;
 }
