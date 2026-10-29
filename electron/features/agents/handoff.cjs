@@ -6,7 +6,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { gather, writeMemoryBook, renderRound, forAgents } = require('./project-memory.cjs');
-const { MAX_NOTE, plain, skillInstructions } = require('../skills/delivery.cjs');
+const { MAX_NOTE, SSH_REFERENCE_NOTE, plain, skillInstructions } = require('../skills/delivery.cjs');
 
 const ROUND_LIMIT = 12, FILE_LIMIT = 48 * 1024;
 
@@ -54,9 +54,9 @@ function startupNote(readingNote, file, skills, delivery = null) {
   if (!delivery) return plain(note);
   const instructions = skillInstructions(delivery);
   // Large libraries travel by manifest, never as skill bodies in an environment variable/command line.
-  // The manifest contains the full always/auto list and every editing permission, with no entries dropped.
+  // The manifest contains the selected always/auto list and permissions. Disclose SSH omissions in either form.
   const suffix = note.length + instructions.length + 1 <= MAX_NOTE ? instructions
-    : `Before any task, read and follow ${delivery.manifest}. It lists all enabled always/auto skills, installed agents and skill editing permissions.`;
+    : `Before any task, read and follow ${delivery.manifest}. It lists all enabled always/auto skills, installed agents and skill editing permissions. ${delivery.remote ? SSH_REFERENCE_NOTE : ''} ${delivery.skippedNote || ''}`;
   return plain(`${note} ${suffix}`);
 }
 

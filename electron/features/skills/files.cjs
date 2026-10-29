@@ -3,6 +3,8 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
 const MAX_BYTES = 512 * 1024;
+const MAX_IMPORT_BYTES = 8 * 1024 * 1024, MAX_IMPORT_FILES = 128;
+const FRONT_MATTER = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
 function skillName(value) {
   if (typeof value !== 'string' || !/^[\p{L}\p{N}_][\p{L}\p{N}_.-]{0,119}$/u.test(value)
@@ -12,7 +14,7 @@ function skillName(value) {
 
 function metadata(text) {
   if (typeof text !== 'string' || Buffer.byteLength(text) > MAX_BYTES || text.includes('\0')) throw new Error('技能文件过大或格式无效。');
-  const front = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+  const front = FRONT_MATTER.exec(text);
   if (!front) throw new Error('SKILL.md 需要 name 和 description front matter。');
   const field = key => {
     const match = new RegExp(`^${key}:[ \\t]*(.*(?:\\r?\\n[ \\t]+.*)*)$`, 'm').exec(front[1]);
@@ -23,23 +25,34 @@ function metadata(text) {
   };
   const name = skillName(field('name')), description = field('description');
   if (!description || description.length > 2000) throw new Error('请填写技能描述（最多 2000 字）。');
-  return { name, description };
+  return { name, description, title: field('title') || name, summary: field('summary') || description };
 }
 
 function draftText(draft) {
   skillName(draft?.name);
   if (typeof draft.description !== 'string' || !draft.description.trim() || draft.description.length > 2000 || typeof draft.text !== 'string') throw new Error('技能内容无效。');
   // The editor owns name/description; preserve other front matter and the entire body.
-  const front = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(draft.text);
+  const front = FRONT_MATTER.exec(draft.text);
   const extra = front ? front[1].replace(/^(?:name|description):[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*(?:\r?\n|$)/gm, '').trim() : '';
   const text = `---\nname: ${JSON.stringify(draft.name)}\ndescription: ${JSON.stringify(draft.description.trim())}\n${extra ? extra + '\n' : ''}---\n${front ? draft.text.slice(front[0].length) : draft.text}`;
   metadata(text);
   return text;
 }
 
-function readJson(file, fallback) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
-  catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
+function readJson(file, fallback, report = () => {}, valid = value => value && typeof value === 'object' && !Array.isArray(value)) {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!valid(value)) throw new SyntaxError('Invalid skills JSON structure.');
+    return value;
+  } catch (error) {
+    if (error.code === 'ENOENT') return fallback;
+    if (error instanceof SyntaxError) {
+      try { fs.copyFileSync(file, `${file}.corrupt-${randomUUID()}.bak`); }
+      catch (backupError) { report(backupError); }
+    }
+    report(new Error(`Skipping skills JSON ${file}: ${error.message}`));
+    return fallback;
+  }
 }
 
 function writeFile(file, text) {
@@ -67,38 +80,70 @@ function readText(file) {
   return fs.readFileSync(file, 'utf8');
 }
 
-function listFolder(root) {
-  if (!fs.existsSync(root)) return [];
-  if (fs.lstatSync(root).isSymbolicLink()) return [];
+function listFolder(root, report = () => {}, invalid = () => {}) {
   const result = [];
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+  let folders;
+  try {
+    const stat = fs.lstatSync(root, { throwIfNoEntry: false });
+    if (!stat) return result;
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Invalid skills folder: ${root}`);
+    folders = fs.readdirSync(root, { withFileTypes: true });
+  } catch (error) { report(error); invalid(null); return result; }
+  for (const entry of folders) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     try {
       const file = checkedPath(root, entry.name), text = readText(file);
       if (text !== null) result.push({ folder: entry.name, path: file, text, ...metadata(text) });
+      else invalid(entry.name);
     } catch (error) {
       // An agent may be halfway through writing a file. The debounced watcher/fallback retries it.
-      if (error.code && !['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+      invalid(entry.name); report(error);
     }
   }
   return result;
 }
 
-function importFiles(folder) {
+// Poll metadata only, asynchronously. Never read skill bodies (or walk a project's other files) on idle polls.
+async function folderSignature(root, depth = 1) {
+  try {
+    const stat = await fs.promises.lstat(root);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return `${stat.mode}:${stat.mtimeMs}:${stat.size}`;
+    const entries = await fs.promises.readdir(root, { withFileTypes: true }), parts = [];
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory() && depth > 0) parts.push([entry.name, await folderSignature(path.join(root, entry.name), depth - 1)]);
+      else if (entry.name === 'SKILL.md') {
+        const info = await fs.promises.lstat(path.join(root, entry.name));
+        parts.push([entry.name, info.mtimeMs, info.ctimeMs, info.size, info.ino]);
+      }
+    }
+    return JSON.stringify(parts);
+  } catch (error) { return error.code || error.message; }
+}
+
+async function importFiles(folder) {
   const files = [];
-  const walk = directory => {
-    const stat = fs.lstatSync(directory);
+  let bytes = 0, count = 0;
+  const walk = async directory => {
+    const stat = await fs.promises.lstat(directory);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('导入的技能不能使用符号链接。');
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const entries = await fs.promises.opendir(directory);
+    for await (const entry of entries) {
+      if (entry.name === '.git' || entry.name === 'node_modules' || entry.isDirectory() && entry.name.startsWith('.')) continue;
+      if (++count > MAX_IMPORT_FILES) throw new Error(`技能导入最多 ${MAX_IMPORT_FILES} 个文件和文件夹。`);
       const file = path.join(directory, entry.name);
       if (entry.isSymbolicLink()) throw new Error('导入的技能不能使用符号链接。');
-      if (entry.isDirectory()) walk(file);
-      else if (entry.isFile()) files.push({ file, relative: path.relative(folder, file) });
+      if (entry.isDirectory()) await walk(file);
+      else if (entry.isFile()) {
+        bytes += (await fs.promises.stat(file)).size;
+        if (bytes > MAX_IMPORT_BYTES) throw new Error('技能导入合计超过 8 MB。');
+        files.push({ file, relative: path.relative(folder, file) });
+      }
       else throw new Error('只能导入普通技能文件。');
     }
   };
-  walk(folder);
+  await walk(folder);
   return files;
 }
 
-module.exports = { MAX_BYTES, skillName, metadata, draftText, readJson, writeFile, checkedPath, readText, listFolder, importFiles };
+module.exports = { MAX_BYTES, MAX_IMPORT_BYTES, MAX_IMPORT_FILES, skillName, metadata, draftText, readJson, writeFile, checkedPath, readText, listFolder, folderSignature, importFiles };

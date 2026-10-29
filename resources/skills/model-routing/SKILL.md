@@ -1,5 +1,7 @@
 ---
 name: model-routing
+title: 模型路由
+summary: 谁来做什么：Opus 规划与审查架构，GPT-6.1-Sol 写核心代码并调试，Sonnet 做日常与前端，GPT-6.1-Terra 验收界面并处理小任务。GPT 默认 max + fast，Claude 默认 high；只装了一个 Agent 时也有对应分工。
 description: Who does what on a task, for any project. The lead session orchestrates; Opus plans and reviews the architecture, GPT-6.1-Sol writes the core code and debugs, Sonnet does routine work and front end, GPT-6.1-Terra checks the interface and takes small tasks. Four stages - plan, build in separate worktrees, integrate and test, cross review, then final acceptance. GPT models default to max effort in fast mode, Claude models to high effort. Covers four setups - Claude Code or Codex leading with both installed, Claude Code only, Codex only. Use at the start of every task, before doing any of it yourself.
 ---
 

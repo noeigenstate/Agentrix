@@ -49,7 +49,13 @@ class RemoteLink {
   // What SSH itself says (a banner, a warning, why it failed) is shown in every terminal it carries.
   output(text) { for (const channel of this.channels.values()) channel.events.emit('data', text); }
   send(message) {
-    if (!this.closed && this.child.stdin.writable) this.child.stdin.write(JSON.stringify(message) + '\n');
+    // Put channel first so the worker can reject an oversized line before parsing the full payload.
+    if (!this.closed && this.child.stdin.writable) this.child.stdin.write(JSON.stringify({ channel: message.channel, ...message }) + '\n');
+  }
+  open(message) {
+    const skillsKey = message.skills?.key || null;
+    this.send({ ...message, skillsKey, skills: skillsKey && skillsKey === this.skillsKey ? null : message.skills });
+    this.skillsKey = skillsKey;
   }
   receive(text) {
     this.buffer += text;
@@ -107,7 +113,7 @@ class RemoteConnection {
       if (seconds > 60) this.fail(new Error('SSH 连接超时。请确认主机可连接，且远端已安装 Python 3 和 Bash。'));
     }, 1000);
     this.connectTimer.unref?.();
-    this.send({ op: 'open', path: project.path, codingPath, projectId: project.id, token: sessionKey, cols: 90, rows: 24, readingNote, skills });
+    this.link.open({ channel: this.channel, op: 'open', path: project.path, codingPath, projectId: project.id, token: sessionKey, cols: 90, rows: 24, readingNote, skills });
   }
   onData(callback) { this.events.on('data', callback); return { dispose: () => this.events.off('data', callback) }; }
   onExit(callback) { this.events.on('exit', callback); return { dispose: () => this.events.off('exit', callback) }; }

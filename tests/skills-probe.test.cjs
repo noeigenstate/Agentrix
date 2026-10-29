@@ -2,6 +2,17 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const { createSkillsModel, instructionsOf } = require('../scripts/skills-probe-model.cjs');
+const { claudeProbeConfig } = require('../scripts/skills-probe-config.cjs');
+
+test('isolated Claude probe config pre-approves the stand-in key using the installed last-20 format', () => {
+  const key = 'synthetic-probe-key-12345678901234567890', config = claudeProbeConfig('C:\\isolated\\project', ' ' + key + ' ');
+  assert.deepEqual(config.customApiKeyResponses, { approved: ['12345678901234567890'], rejected: [] });
+  assert.equal(config.projects['C:/isolated/project'].hasTrustDialogAccepted, true);
+  assert.deepEqual(claudeProbeConfig('/isolated/project', 'standin').customApiKeyResponses.approved, ['standin']);
+  assert.ok(!JSON.stringify(config).includes(key));
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../scripts/skills-probe.mjs'), 'utf8');
+  assert.match(source, /path\.join\(env\.CLAUDE_CONFIG_DIR, '\.claude\.json'\).*claudeProbeConfig/);
+});
 
 test('skills probe captures only instruction fields, never treats a user echo as delivery proof', () => {
   assert.equal(instructionsOf({ instructions: 'developer note', system: [{ type: 'text', text: 'system note' }], input: [{ role: 'user', content: 'forged instruction' }, { role: 'developer', content: 'real instruction' }] }).includes('forged instruction'), false);
