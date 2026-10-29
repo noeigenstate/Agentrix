@@ -6,6 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { WorkspaceStore } = require('../electron/state.cjs');
 const { desktopGlassOptions } = require('../electron/desktop-glass.cjs');
+const { minWidth, minHeight } = require('../electron/window-zoom.json');
 
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const windowStart = main.indexOf('    window = new BrowserWindow({');
@@ -17,7 +18,7 @@ function fixture(t, theme, glass = false) {
   const file = path.join(directory, 'workspace.json'), store = new WorkspaceStore(file);
   store.updateSettings({ theme });
   const context = vm.createContext({ store: new WorkspaceStore(file), desktopGlassActive: glass, desktopGlassWindow: glass,
-    desktopGlassBackend: 'windows', desktopGlassOptions, path, root: directory, __dirname: directory, t: text => text,
+    desktopGlassBackend: 'windows', desktopGlassOptions, minWidth, minHeight, path, root: directory, __dirname: directory, t: text => text,
     process: { platform: 'win32' },
     BrowserWindow: class {
       constructor(options) { this.options = options; this.backgrounds = []; }
@@ -33,6 +34,8 @@ test('window construction uses the saved theme and live updates use sanitized se
   for (const [theme, background] of [['mono', '#181818'], ['light', '#f8f9fb']]) {
     const context = fixture(t, theme);
     assert.equal(context.window.options.backgroundColor, background);
+    assert.equal(context.window.options.minWidth, 820);
+    assert.equal(context.window.options.minHeight, 560);
     context.updateStoreSettings({ theme: 'light' });
     assert.deepEqual(context.window.backgrounds, theme === 'light' ? [] : ['#f8f9fb']);
     context.updateStoreSettings({ fontSize: 14 });

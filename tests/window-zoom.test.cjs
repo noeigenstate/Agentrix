@@ -27,13 +27,15 @@ test('minimum window size preserves the CSS viewport and caps each dimension at 
   assert.deepEqual(zoomMinimumSize(80, { width: 600, height: 400 }), [600, 400]);
 });
 
-function fixture(t, zoom = null, workArea = { width: 1280, height: 680 }) {
-  const state = { settings: cleanSettings({ uiZoom: zoom }), workArea, factor: 1.35, factors: [], minimums: [], broadcasts: [], bounds: { x: 0, y: 0, width: 1500, height: 940 } };
+function fixture(t, { zoom = null, workArea = { width: 1280, height: 680 }, loaded = true } = {}) {
+  const state = { settings: cleanSettings({ uiZoom: zoom }), workArea, loaded, factor: 1.35, pageFactor: loaded ? 1.35 : 1, factors: [], minimums: [], broadcasts: [], bounds: { x: 0, y: 0, width: 1500, height: 940 } };
   const contents = Object.assign(new EventEmitter(), {
     getZoomFactor: () => state.factor,
-    setZoomFactor: value => { state.factor = value; state.factors.push(value); },
+    setZoomFactor: value => {
+      state.factor = value; state.factors.push(value);
+      if (state.loaded && state.mode !== 'manual') state.pageFactor = value;
+    },
     setZoomMode: mode => { state.mode = mode; },
-    setVisualZoomLevelLimits: async (...limits) => { state.limits = limits; },
   });
   const window = Object.assign(new EventEmitter(), {
     webContents: contents, isDestroyed: () => !!state.destroyed, getBounds: () => state.bounds,
@@ -45,20 +47,48 @@ function fixture(t, zoom = null, workArea = { width: 1280, height: 680 }) {
   const broadcast = () => state.broadcasts.push(controller.percent);
   const controller = registerWindowZoom({ window, screen, getZoom: () => state.settings.uiZoom, broadcast });
   t.after(() => { state.destroyed = true; window.emit('closed'); });
-  return { state, contents, window, screen, controller, broadcast };
+  const load = () => { state.loaded = true; state.pageFactor = 1; contents.emit('did-finish-load'); };
+  return { state, contents, window, screen, controller, broadcast, load };
 }
 
 test('registration applies auto or explicit page zoom immediately without multiplying the display scale', t => {
   for (const [setting, expected] of [[null, 80], [80, 80], [90, 90], [100, 100], [110, 110], [125, 125], [150, 150]]) {
-    const { state, controller } = fixture(t, setting);
+    const { state, controller } = fixture(t, { zoom: setting });
     assert.equal(controller.percent, expected);
     assert.deepEqual(state.factors, [expected / 100]);
+    assert.equal(state.pageFactor, expected / 100, 'the page must rescale, not just remember the requested factor');
     assert.deepEqual(state.minimums, [zoomMinimumSize(expected, state.workArea)]);
     assert.deepEqual(state.matchedBounds, state.bounds);
-    assert.equal(state.mode, 'manual');
-    assert.deepEqual(state.limits, [1, 1]);
+    assert.equal(state.mode, 'isolated');
     assert.deepEqual(state.broadcasts, [], 'initial zoom is available in the first workspace snapshot');
   }
+});
+
+test('initial load and later reloads reapply zoom even when the reported factor already matches', t => {
+  for (const [zoom, expected] of [[null, 0.8], [125, 1.25]]) {
+    const { state, load } = fixture(t, { zoom, loaded: false });
+    assert.equal(state.factor, expected, 'a pre-load zoom request is remembered');
+    assert.equal(state.pageFactor, 1, 'a pre-load zoom request cannot rescale the missing renderer');
+    load();
+    assert.equal(state.pageFactor, expected);
+    load();
+    assert.equal(state.pageFactor, expected, 'crash reloads also restore page zoom');
+    assert.deepEqual(state.factors, [expected, expected, expected]);
+    assert.equal(state.mode, 'isolated', 'per-webContents mode survives navigation');
+    assert.deepEqual(state.broadcasts, []);
+  }
+});
+
+test('finishing a load recomputes automatic zoom and broadcasts only an effective percentage change', t => {
+  const { state, controller, load } = fixture(t, { loaded: false });
+  state.workArea = { width: 1920, height: 1032 };
+  load();
+  assert.equal(controller.percent, 100);
+  assert.equal(state.pageFactor, 1);
+  assert.deepEqual(state.minimums.at(-1), [820, 560]);
+  assert.deepEqual(state.broadcasts, [100]);
+  load();
+  assert.deepEqual(state.broadcasts, [100]);
 });
 
 test('display moves, resizes and metric changes debounce auto zoom and broadcast only effective changes', t => {
@@ -66,9 +96,9 @@ test('display moves, resizes and metric changes debounce auto zoom and broadcast
   const { state, window, screen, controller } = fixture(t);
   state.workArea = { width: 1920, height: 1032 };
   state.bounds.x = 1920;
-  window.emit('moved');
+  window.emit('move');
   t.mock.timers.tick(100);
-  window.emit('resized');
+  window.emit('resize');
   screen.emit('display-metrics-changed', {}, {}, ['scaleFactor', 'workArea']);
   t.mock.timers.tick(149);
   assert.equal(controller.percent, 80);
@@ -77,7 +107,7 @@ test('display moves, resizes and metric changes debounce auto zoom and broadcast
   assert.equal(state.matchedBounds.x, 1920);
   assert.deepEqual(state.minimums.at(-1), [820, 560]);
   assert.deepEqual(state.broadcasts, [100]);
-  window.emit('resized');
+  window.emit('resize');
   t.mock.timers.tick(150);
   assert.deepEqual(state.broadcasts, [100]);
   assert.equal(state.minimums.length, 2, 'unchanged constraints do not cause resize loops');
@@ -87,13 +117,31 @@ test('display moves, resizes and metric changes debounce auto zoom and broadcast
   assert.deepEqual(state.broadcasts, [100, 80]);
 });
 
+test('move, resize, display-added, display-removed and metric events each recompute automatic zoom', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { state, window, screen, controller } = fixture(t);
+  const events = [[window, 'move'], [window, 'resize'], [screen, 'display-added'], [screen, 'display-removed'], [screen, 'display-metrics-changed']];
+  for (const [target, event] of events) {
+    const previous = controller.percent, next = previous === 80 ? 100 : 80;
+    state.workArea = next === 100 ? { width: 1920, height: 1032 } : { width: 1280, height: 680 };
+    target.emit(event);
+    t.mock.timers.tick(149);
+    assert.equal(controller.percent, previous, `${event} is debounced`);
+    t.mock.timers.tick(1);
+    assert.equal(controller.percent, next, event);
+    assert.equal(state.pageFactor, next / 100, event);
+    assert.equal(state.broadcasts.at(-1), next, event);
+  }
+  assert.deepEqual(state.broadcasts, [100, 80, 100, 80, 100]);
+});
+
 test('explicit zoom survives display changes while minimum size follows the current work area cap', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { state, window, screen, controller } = fixture(t, 150);
+  const { state, window, screen, controller } = fixture(t, { zoom: 150 });
   assert.deepEqual(state.minimums.at(-1), [1230, 680]);
   state.workArea = { width: 1000, height: 600 };
-  window.emit('moved');
-  screen.emit('display-metrics-changed');
+  window.emit('move');
+  screen.emit('display-removed');
   t.mock.timers.tick(150);
   assert.equal(controller.percent, 150);
   assert.deepEqual(state.factors, [1.5]);
@@ -101,25 +149,43 @@ test('explicit zoom survives display changes while minimum size follows the curr
   assert.deepEqual(state.broadcasts, []);
 });
 
-test('wheel zoom is reset to the effective setting, and zoom keys still reach the terminals', t => {
-  const { state, contents } = fixture(t, 125);
-  state.factor = 2;
-  contents.emit('zoom-changed', {}, 'in');
-  assert.equal(state.factor, 1.25);
+test('wheel and pinch zoom are reset to the effective setting, and zoom keys still reach the terminals', t => {
+  const { state, contents } = fixture(t, { zoom: 125 });
+  for (const [factor, direction] of [[2, 'in'], [0.5, 'out']]) {
+    state.factor = state.pageFactor = factor;
+    contents.emit('zoom-changed', {}, direction);
+    assert.equal(state.factor, 1.25);
+    assert.equal(state.pageFactor, 1.25);
+  }
   for (const key of ['=', '+', '-', '0']) {
     contents.emit('before-input-event', { preventDefault: () => assert.fail(`Ctrl+${key} must reach the page`) }, { type: 'keyDown', control: true, key });
   }
   assert.deepEqual(state.broadcasts, []);
 });
 
-test('closing a window releases its global display listener and pending debounce', t => {
+test('zoom comparisons tolerate rounding noise but correct a larger drift', t => {
+  const { state, controller } = fixture(t, { zoom: 125 });
+  for (const factor of [1.2505, 1.2495]) {
+    state.factor = factor;
+    assert.equal(controller.update(), false);
+    assert.deepEqual(state.factors, [1.25]);
+  }
+  state.factor = 1.252;
+  assert.equal(controller.update(), false);
+  assert.deepEqual(state.factors, [1.25, 1.25]);
+  assert.equal(state.pageFactor, 1.25);
+  assert.deepEqual(state.broadcasts, []);
+});
+
+test('closing a window releases all global display listeners and the pending debounce', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { state, window, screen, controller } = fixture(t);
   state.workArea = { width: 1920, height: 1032 };
-  window.emit('moved');
+  window.emit('move');
+  screen.emit('display-added');
   state.destroyed = true;
   window.emit('closed');
-  assert.equal(screen.listenerCount('display-metrics-changed'), 0);
+  for (const event of ['display-metrics-changed', 'display-added', 'display-removed']) assert.equal(screen.listenerCount(event), 0, event);
   t.mock.timers.tick(1000);
   assert.equal(controller.update(), false);
   assert.equal(controller.percent, 80);

@@ -4,6 +4,7 @@ const { randomUUID } = require('node:crypto');
 const { normalizeSSH } = require('./ssh-config.cjs');
 const { sanitizeProjectSvg } = require('./project-svg.cjs');
 const { MODELS: VOICE_MODELS, DEFAULT_MODEL: DEFAULT_VOICE_MODEL } = require('./voice.cjs');
+const { steps: UI_ZOOM_STEPS } = require('./window-zoom.json');
 
 // Local folders once opened as projects, newest first, so a removed project can be added again in one click.
 const HISTORY_LIMIT = 30;
@@ -82,7 +83,7 @@ function cleanSettings(input = {}) {
     terminalCjkFontFamily: typeof input.terminalCjkFontFamily === 'string' && input.terminalCjkFontFamily.length <= 80 && !/[\u0000-\u001f\u007f]/.test(input.terminalCjkFontFamily) ? input.terminalCjkFontFamily.trim() : defaults.terminalCjkFontFamily,
     userAvatar: typeof input.userAvatar === 'string' && input.userAvatar.length <= AVATAR_MAX_LENGTH && AVATAR_URL.test(input.userAvatar) ? input.userAvatar : defaults.userAvatar,
     focusAnimation: ['smooth', 'system', 'off'].includes(input.focusAnimation) ? input.focusAnimation : defaults.focusAnimation,
-    uiZoom: [80, 90, 100, 110, 125, 150].includes(input.uiZoom) ? input.uiZoom : defaults.uiZoom,
+    uiZoom: UI_ZOOM_STEPS.includes(input.uiZoom) ? input.uiZoom : defaults.uiZoom,
     startView: ['decisions', 'workspace'].includes(input.startView) ? input.startView : defaults.startView,
     language: ['zh', 'en'].includes(input.language) ? input.language : defaults.language,
     // Ids of src/shared/themes.ts; a profile that holds a removed theme gets the first.

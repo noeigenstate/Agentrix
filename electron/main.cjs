@@ -3,6 +3,7 @@ const { registerAppSchemes, registerAppProtocols } = require('./app/protocols.cj
 const { configureApplication, prepareWindowIcon, prepareShellIntegration } = require('./app/platform-startup.cjs');
 const { registerWindowContents, registerWindowLifecycle } = require('./app/window-events.cjs');
 const { registerWindowZoom } = require('./app/window-zoom.cjs');
+const { minWidth, minHeight } = require('./window-zoom.json');
 const { createImageTools, registerImageIpc } = require('./app/images.cjs');
 const { createProjectHandoff } = require('./app/project-handoff.cjs');
 const { createCloseGuards, restoreTerminals } = require('./app/terminal-lifecycle.cjs');
@@ -1247,7 +1248,7 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
     desktopGlassWindow = store.settings.surface === 'glass' && store.settings.glassBackground === 'desktop' && !!desktopGlassBackend;
     window = new BrowserWindow({
-      width: 1500, height: 940, minWidth: 820, minHeight: 560,
+      width: 1500, height: 940, minWidth, minHeight,
       title: t('Agentrix'), backgroundColor: windowBackgroundColor(),
       ...(desktopGlassWindow ? desktopGlassOptions(desktopGlassBackend) : {}),
       // macOS keeps its own window buttons over the title bar; Windows draws them in the page.

@@ -148,19 +148,23 @@ test('appearance thumbnail management accepts existing SettingsDialog callers wi
 });
 
 test('interface zoom row follows the language row and offers automatic plus 80-150 percent', t => {
-  const h = settingsDialogFixture(t, { uiZoom: 110 }), children = React.Children.toArray(h.section('appearance').props.children);
+  const h = settingsDialogFixture(t, { uiZoom: 90 }), children = React.Children.toArray(h.section('appearance').props.children);
   const row = children.findIndex(node => nodes(node).some(inner => inner.props.label === '界面缩放')), language = children.findIndex(node => nodes(node).some(inner => inner.props.label === '语言'));
   assert.equal(row, language + 1);
   const select = h.find(node => node.props.label === '界面缩放').props;
-  assert.deepEqual(select.options.map(option => option.label), ['自动（当前 110%）', '80%', '90%', '100%', '110%', '125%', '150%']);
+  assert.deepEqual(select.options.map(option => option.label), ['自动（当前 90%）', '80%', '90%', '100%', '110%', '125%', '150%']);
   assert.equal(select.value, 'auto');
   select.onChange('125'); select.onChange('auto');
   assert.deepEqual(h.updates, [{ uiZoom: 125 }, { uiZoom: null }]);
 });
 
-test('interface zoom row shows an explicit choice and reads 100 percent before the workspace reports one', t => {
-  const explicit = settingsDialogFixture(t, { settings: { language: 'zh', surface: 'solid', uiZoom: 90, userAvatar: '', shortcuts: {} } });
-  assert.equal(explicit.find(node => node.props.label === '界面缩放').props.value, '90');
+test('interface zoom shows the current-percent hint only for automatic zoom and defaults to 100 before a snapshot', t => {
+  for (const uiZoom of [90, 150]) {
+    const explicit = settingsDialogFixture(t, { uiZoom, settings: { language: 'zh', surface: 'solid', uiZoom, userAvatar: '', shortcuts: {} } });
+    const select = explicit.find(node => node.props.label === '界面缩放').props;
+    assert.equal(select.value, String(uiZoom));
+    assert.equal(select.options[0].label, '自动');
+  }
   assert.equal(settingsDialogFixture(t).find(node => node.props.label === '界面缩放').props.options[0].label, '自动（当前 100%）');
 });
 
