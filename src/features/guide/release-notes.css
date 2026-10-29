@@ -1,0 +1,5 @@
+/* The release notes: a left-aligned list in whatever card it sits in, one left edge, rows 12px apart. The marker is --usage, the colour the reading view's list bullets take. */
+.release-notes { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; text-align: left; font-size: 14px; line-height: 22px; color: var(--text-2); }
+.release-notes li { position: relative; padding-left: 16px; }
+.release-notes li::before { content: ''; position: absolute; left: 0; top: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--usage); }
+.release-notes b { margin-right: 8px; font-weight: 600; color: var(--text-1); }

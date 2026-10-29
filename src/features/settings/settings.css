@@ -158,8 +158,6 @@ dialog { color: var(--text-1); }
 .about-row small { font-size: 13px; color: var(--text-2); }
 .about-heading { display: flex; align-items: baseline; gap: 12px; margin: 0; font-size: 18px; font-weight: 600; }
 .about-heading span { font-size: 13px; font-weight: 400; color: var(--text-2); }
-.about-notes { margin: 0; padding: 0 0 0 20px; font-size: 14px; line-height: 24px; }
-.about-notes li + li { margin-top: 8px; }
 .about-facts { margin: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); }
 .about-facts > div { display: flex; justify-content: space-between; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--divider); font-size: 13px; }
 .about-facts > div:last-child { border-bottom: 0; }

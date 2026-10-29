@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowCounterClockwise, Circle, CircleNotch, Record as RecordDot } from '@phosphor-icons/react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
+import { ArrowCounterClockwise, CheckCircle, Circle, CircleNotch, Record as RecordDot } from '@phosphor-icons/react';
 import type { AgentCall, AgentTokens, AgentUsage, ProjectTerminal, TokenRate } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { modelName } from '../reading/model-name';
@@ -21,18 +21,14 @@ export function tokenCount(value: number) {
 const exactCount = (value: number) => value.toLocaleString('en-US');
 const percentOf = (part: number, whole: number) => whole > 0 ? Math.min(100, Math.round(part / whole * 100)) : 0;
 
-// Beside an expanded project's terminal: the main model, the sub-agents it called, running tasks, context and usage.
+// Beside an expanded project's terminal: the main model with what it is working on, the sub-agents it called, context and usage.
 export function ActivityPane({ terminal }: { terminal: ProjectTerminal }) {
   const calls = terminal.agentUsage?.calls;
   return <aside className="activity-pane" aria-label={t('活动')}>
     {terminal.codexActive ? <MainCard terminal={terminal} /> : <section className="activity-card">
-      <p className="activity-empty">{t('在终端里启动 Codex 或 Claude Code 后，这里显示它的模型路由、上下文长度和用量。')}</p>
+      <p className="activity-empty">{t('在终端里启动 Codex 或 Claude Code 后，这里显示它的主模型、任务、上下文长度和用量。')}</p>
     </section>}
     {terminal.codexActive && !!calls?.length && <CallsCard calls={calls} />}
-    <section className="activity-card activity-tasks" aria-label={t('正在处理的任务')}>
-      <h4 className="activity-card-title">{t('正在处理的任务')}{(terminal.prompts?.length ?? 0) > 1 && <span className="activity-count">{terminal.prompts.length}</span>}</h4>
-      <PromptList terminal={terminal} />
-    </section>
     {terminal.codexActive && <div className="activity-gauges">
       <ContextCard usage={terminal.agentUsage} />
       <UsageCard usage={terminal.agentUsage} terminal={terminal} />
@@ -61,8 +57,12 @@ function ModelHead({ Mark, name, provider, tag, title, rate }: { Mark: typeof Cl
   </li>;
 }
 
-// The main agent: its model as its latest reply records it (the configured one only until there is a reply, or in the tooltip when they differ), how it runs, its rate, and the step
-// it is on right now. That row spins only while a step is under way and the agent is working; otherwise it says in words what the agent is doing, never a step that has finished.
+// The prompt each terminal's agent last worked on (kept across the pane closing and opening), for the finished row.
+const workedPrompts = new Map<string, { session: string | null; summary: string; text: string }>();
+// The main agent: its model as its latest reply records it (the configured one only until there is a reply, or in the tooltip when they differ), how it runs, its rate, and what it is doing.
+// What it is doing is its prompts, in order (the one being worked on with its spinner and clock, then those waiting), and under the working one the step it is on. A prompt is only ever a
+// real one the user sent (the queue leaves out sub-agent messages and background notifications); with none tracked the row says the agent's state in words and invents no task. When a round
+// ends, the prompt it worked on stays as the finished row, until another round starts. A step shows only while it is under way and the agent is working, never after.
 function MainCard({ terminal }: { terminal: ProjectTerminal }) {
   const usage = terminal.agentUsage, settings = terminal.agentSettings, agent = terminal.agent === 'claude' ? 'Claude Code' : 'Codex';
   const actual = usage?.model || null, configured = settings?.model || null, model = actual ?? configured, name = model ? modelName(model) : agent;
@@ -70,16 +70,34 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
     settings?.fast != null && (settings.fast ? t('快速模式') : t('普通模式'))].filter(Boolean).join(' · ');
   const title = [[agent, usage?.provider, model && name].filter(Boolean).join(' / '),
     actual && configured && actual !== configured && t('设置为 {configured}，实际回复来自 {actual}', { configured: modelName(configured), actual: name })].filter(Boolean).join('\n');
-  const action = terminal.action, running = !!action && !action.done && terminal.codexActivity === 'working';
-  const state = terminal.codexActivity === 'working' ? t('正在处理') : terminal.codexActivity === 'complete' ? t('本轮已完成') : terminal.codexActivity === 'interrupted' ? t('已中断') : t('等待下一步');
+  const now = useNow(Date.now), activity = terminal.codexActivity, prompts = terminal.prompts || [], working = prompts.find(prompt => prompt.state === 'working');
+  // A round with a prompt of its own is remembered for its finished row; one without (a background notification) forgets it, so a stale task is never shown for it.
+  if (activity === 'working') { if (working) workedPrompts.set(terminal.id, { session: terminal.sessionId, summary: working.summary, text: working.text }); else workedPrompts.delete(terminal.id); }
+  const last = workedPrompts.get(terminal.id), ended = !prompts.length && (activity === 'complete' || activity === 'interrupted') && last?.session === terminal.sessionId ? last : null;
+  const action = terminal.action, running = !!action && !action.done && activity === 'working';
+  const state = activity === 'working' ? t('正在处理') : activity === 'complete' ? t('本轮已完成') : activity === 'interrupted' ? t('已中断') : t('等待下一步');
+  const step = running && <li className="is-step" title={action.detail || action.target}>
+    <span className="activity-row-icon">{CALL_STATES.running.icon}</span><p><span className="activity-call-role">{t('正在')}</span>{actionText(action)}</p><span />
+  </li>;
+  const task = (icon: ReactNode, className: string, word: string, summary: string, text: string, time: string) => <li className={className} title={`${text}\n${word}${time ? ` · ${time}` : ''}`}>
+    <span className="activity-row-icon">{icon}</span><p><span className="activity-call-role">{word}</span>{summary}</p><time>{time}</time>
+  </li>;
   return <section className="activity-card activity-main" aria-label={t('主模型')}>
     <h4 className="activity-card-title">{t('主模型')}</h4>
     <ul className="activity-call-rows">
       <ModelHead Mark={terminal.agent === 'claude' ? ClaudeLogo : CodexLogo} name={name} provider={usage?.provider} title={title} rate={usage?.rate} />
       <li className="activity-call-note"><span /><p>{model ? how || t('按默认设置运行') : t('第一次回复后显示模型。')}</p><span /></li>
-      {running ? <li className="is-running" title={action.detail || action.target}>
-        <span className="activity-row-icon">{CALL_STATES.running.icon}</span><p><span className="activity-call-role">{t('正在')}</span>{actionText(action)}</p><span />
-      </li> : <li className="is-idle"><span className="activity-row-icon"><Circle size={14} aria-hidden="true" /></span><p>{state}</p><span /></li>}
+    </ul>
+    <ul className="activity-call-rows activity-main-tasks" aria-label={t('提示')}>
+      {prompts.map(prompt => <Fragment key={prompt.id}>
+        {task(prompt.state === 'working' ? CALL_STATES.running.icon : <Circle size={14} aria-hidden="true" />, prompt.state === 'working' ? 'is-working' : 'is-queued', t(prompt.state === 'working' ? '处理中' : '排队中'),
+          prompt.summary, prompt.text, prompt.at ? elapsedClock(now - prompt.at) : '')}
+        {prompt === working && step}
+      </Fragment>)}
+      {!prompts.length && (ended
+        ? task(activity === 'complete' ? <CheckCircle size={14} weight="fill" aria-hidden="true" /> : <Circle size={14} aria-hidden="true" />, activity === 'complete' ? 'is-done' : 'is-idle', state, ended.summary, ended.text,
+          activity === 'complete' && terminal.lastCompletedAt ? resetTime(terminal.lastCompletedAt) : '')
+        : <><li className="is-idle"><span className="activity-row-icon"><Circle size={14} aria-hidden="true" /></span><p>{state}</p><span /></li>{step}</>)}
     </ul>
   </section>;
 }
@@ -271,33 +289,4 @@ function resetTime(at: number) {
 export function elapsedClock(ms: number) {
   const total = Math.max(0, Math.floor(ms / 1000)), hours = Math.floor(total / 3600), minutes = Math.floor(total % 3600 / 60), seconds = String(total % 60).padStart(2, '0');
   return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}` : `${minutes}:${seconds}`;
-}
-
-// One task as a 32px row: its state's icon, the task on one line, and the time at the right. The row's tooltip is the whole prompt and its state.
-function TaskRow({ icon, state, text, title, time, className }: { icon: ReactNode; state: string; text: string; title: string; time: string; className?: string }) {
-  return <li className={className} title={`${title}
-${state}${time ? ` · ${time}` : ''}`}>
-    <span className="activity-prompt-state">{icon}<span className="sr-only">{state}</span></span>
-    <p>{text}</p>
-    <time>{time}</time>
-  </li>;
-}
-
-// The prompts sent and not finished: the one being worked on first, then those waiting their turn. A prompt
-// leaves the list when the round that worked on it ends. One clock ticks for the whole list.
-function PromptRows({ prompts }: { prompts: ProjectTerminal['prompts'] }) {
-  const now = useNow(Date.now);
-  return <ol className="activity-prompts" aria-label={t('提示')}>
-    {prompts.map(prompt => {
-      const working = prompt.state === 'working';
-      return <TaskRow key={prompt.id} className={working ? 'is-working' : undefined} state={t(working ? '正在处理' : '排队中')} text={prompt.summary} title={prompt.text} time={prompt.at ? elapsedClock(now - prompt.at) : ''}
-        icon={working ? <CircleNotch size={14} weight="bold" className="loading-spinner" aria-hidden="true" /> : <Circle size={14} aria-hidden="true" />} />;
-    })}
-  </ol>;
-}
-
-function PromptList({ terminal }: { terminal: ProjectTerminal }) {
-  const prompts = terminal.prompts || [];
-  if (prompts.length) return <PromptRows prompts={prompts} />;
-  return <p className="activity-task-quiet">{t(terminal.codexActive ? '没有待处理的提示' : '还没有开始任务')}</p>;
 }

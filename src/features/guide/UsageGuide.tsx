@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { DownloadSimple, Keyboard } from '@phosphor-icons/react';
 import { SHORTCUT_ACTIONS, shortcut } from '../shortcuts/shortcuts';
-import { WHATS_NEW } from './guide';
+import { ReleaseNotes } from './ReleaseNotes';
 import { t } from '../../shared/i18n';
 import './guide.css';
 
@@ -22,7 +22,7 @@ export function UsageGuide({ version, start, onClose, onTour }: { version: strin
     { id: 'keys', badge: <Keyboard size={20} weight="bold" />, title: t('常用快捷键'), body: <>
       <dl className="guide-keys">{SHORTCUT_ACTIONS.map(action => <div key={action.id}><dt>{t(action.label)}</dt><dd><kbd>{shortcut(action.id)}</kbd></dd></div>)}</dl>
       <p className="guide-note">{t('这些快捷键都可以在设置的「键盘快捷键」里修改。')}</p></> },
-    { id: 'news', badge: <DownloadSimple size={20} weight="bold" />, title: t('本次更新 v{version}', { version }), body: <ul>{WHATS_NEW.map(item => <li key={item}>{t(item)}</li>)}</ul> },
+    { id: 'news', badge: <DownloadSimple size={20} weight="bold" />, title: t('本次更新 v{version}', { version }), body: <div className="guide-notes"><ReleaseNotes /></div> },
   ];
   const [index, setIndex] = useState(() => Math.max(0, pages.findIndex(page => page.id === start)));
   const page = pages[index], last = index === pages.length - 1;

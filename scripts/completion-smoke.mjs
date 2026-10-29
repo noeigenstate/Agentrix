@@ -73,7 +73,7 @@ try {
   // fills and what it has used, as Codex's records give them.
   await page.getByRole('button', { name: '全屏查看 Parent task status', exact: true }).click();
   const pane = page.locator('.activity-pane'); await pane.waitFor();
-  const overview = pane.locator('.activity-tasks'); await overview.waitFor();
+  const overview = pane.locator('.activity-main-tasks'); await overview.waitFor();
   assert.equal(await pane.locator('.activity-context .activity-figure').count(), 0, 'no context before Codex counts one');
   const tokens = (total, last, limits) => JSON.stringify({ type: 'event_msg', timestamp: new Date().toISOString(), payload: { type: 'token_count', info: { total_token_usage: total, last_token_usage: last, model_context_window: 828400 }, rate_limits: limits } }) + '\n';
   const used = (input, cached, output) => ({ input_tokens: input, cached_input_tokens: cached, output_tokens: output, reasoning_output_tokens: 0, total_tokens: input + output });
@@ -109,22 +109,21 @@ try {
   assert.deepEqual(await text('.activity-usage .activity-tokens > .activity-metric-label'), ['本轮', '本次对话']);
   assert.deepEqual(await text('.activity-usage .activity-tokens > small'), ['输入 320k · 缓存命中 91% · 输出 4.2k', '输入 320k · 缓存命中 91% · 输出 4.2k']);
   // The overview lists the prompts: the one being worked on, then one sent while it works. The card's size is fixed:
-  // more prompts never push the model route and the usage down.
+  // more prompts never move the main model card.
   // Measured once the panel has finished opening: while it flies in it is still scaled a little, every top a pixel off.
   const routeTop = () => pane.locator('.activity-main').evaluate(node => Math.round(node.getBoundingClientRect().top));
   await page.waitForFunction(() => !document.querySelector('[data-focus-motion]'));
   const before = await routeTop();
   await input('给登录页加上验证码。然后跑一下测试\r');
-  const prompts = () => overview.locator('.activity-prompts li').evaluateAll(items => items.map(item => `${item.classList.contains('is-working') ? 'working' : 'queued'}:${item.querySelector('p').textContent}`));
+  const prompts = () => overview.locator('li.is-working, li.is-queued').evaluateAll(items => items.map(item => `${item.classList.contains('is-working') ? 'working' : 'queued'}:${item.querySelector('p').lastChild.textContent}`));
   // Each prompt shows its first sentence; the hover retains the whole text before its state and clock.
   await waitFor(async () => JSON.stringify(await prompts()) === JSON.stringify(['working:first instruction', 'queued:给登录页加上验证码。']), 'prompt list shows the working and the waiting prompt');
-  const queuedTitle = await overview.locator('.activity-prompts li').nth(1).getAttribute('title');
+  const queuedTitle = await overview.locator('li.is-queued').first().getAttribute('title');
   assert.equal(queuedTitle.slice(0, queuedTitle.lastIndexOf('\n')), '给登录页加上验证码。然后跑一下测试');
   assert.match(queuedTitle.slice(queuedTitle.lastIndexOf('\n') + 1), /^排队中 · \d+:\d{2}(?::\d{2})?$/);
-  assert.equal(await overview.locator('.activity-progress').count(), 0, 'task cards show state without an invented progress bar');
-  assert.equal(await overview.locator('li.is-working .activity-prompt-state').innerText(), '正在处理');
-  assert.equal(await routeTop(), before, 'a second prompt leaves the cards under the task list where they were');
-  assert.deepEqual(await text('.activity-tasks .activity-count'), ['2'], 'the title counts the prompts');
+  assert.equal(await overview.locator('.activity-progress').count(), 0, 'task rows show state without an invented progress bar');
+  assert.equal(await overview.locator('li.is-working .activity-call-role').innerText(), '处理中');
+  assert.equal(await routeTop(), before, 'a second prompt leaves the main model card where it was');
   await page.waitForFunction(() => !document.querySelector('[data-focus-motion]')); await page.screenshot({ path: path.join(output, 'activity-pane.png') });
   // While Codex runs, its conversation shows as a document by default; the title-bar switch shows the terminal.
   const reading = page.locator('.project-panel .reading-view');
@@ -144,7 +143,7 @@ try {
   assert.deepEqual(await text('.activity-context .activity-metric > small'), ['共 828k tokens · 还可容纳 748k']);
   const overflow = await pane.evaluate(node => {
     const right = node.getBoundingClientRect().right + 1;
-    return [...node.querySelectorAll('.activity-card, .activity-prompts, .activity-metric, .activity-call-rows li')].filter(item => item.getBoundingClientRect().right > right).map(item => item.className);
+    return [...node.querySelectorAll('.activity-card, .activity-metric, .activity-call-rows li')].filter(item => item.getBoundingClientRect().right > right).map(item => item.className);
   });
   assert.deepEqual(overflow, [], 'nothing in the activity pane reaches past its edge');
   await page.getByRole('button', { name: '隐藏活动栏', exact: true }).click(); await waitFor(async () => !await pane.count(), 'activity pane can be hidden');

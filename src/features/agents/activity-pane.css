@@ -14,18 +14,17 @@
 .activity-gauges { flex: none; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 /* The route, context and usage keep their height. The models called and the tasks share what is left, each list scrolling under its own fixed title; a list never takes more than its content,
    and shrinks in proportion to it down to the title and a row (two rows when it has them). */
-.activity-calls, .activity-tasks { flex: 0 1 auto; min-height: 60px; }
-.activity-calls:has(.activity-call-rows li:nth-child(2)), .activity-tasks:has(.activity-prompts li:nth-child(2)) { min-height: 92px; }
-.activity-tasks:has(.activity-task-quiet) { min-height: 0; }
+.activity-calls { flex: 0 1 auto; min-height: 60px; }
+.activity-calls:has(.activity-call-rows li:nth-child(2)) { min-height: 92px; }
+/* The main model keeps its head, its note and one task row; the rows of its prompts scroll when there are more than fit. */
+.activity-main { flex: 0 1 auto; min-height: 116px; }
 .activity-card-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
 :is(.activity-main, .activity-calls) .activity-card-title { font-size: 13px; color: var(--flow-muted); }
-:is(.activity-tasks, .activity-calls) > .activity-card-title { display: flex; align-items: baseline; gap: 8px; flex: none; }
+.activity-calls > .activity-card-title { display: flex; align-items: baseline; gap: 8px; flex: none; }
 .activity-count { font-size: 12px; font-weight: 400; color: var(--flow-faint); font-variant-numeric: tabular-nums; }
 .activity-note { margin: 0; font-size: 12px; line-height: 16px; color: var(--flow-faint); overflow-wrap: anywhere; }
 .activity-empty { margin: 0; font-size: 12px; line-height: 18px; color: var(--flow-muted); }
 
-/* The task being worked on, and those waiting their turn. */
-/* Size to the prompts; a long queue scrolls inside its group. */
 /* Each task, and each called model and its calls, is a 32px row on a 16 | text | end grid, rows touching: the icon is the state (the spinner the only colour; a queued task an empty circle, a finished one its check),
    the subject is one line with an ellipsis, the time or state is quiet at the right. The hover fill reaches 8px past the text, into the group's own padding, so the left edge never moves. */
 .activity-call-rows { display: grid; margin: 0; padding: 0; list-style: none; }
@@ -35,21 +34,17 @@
 @property --fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
 @property --fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
 @keyframes activity-fade { 0% { --fade-top: 0px; --fade-bottom: 16px; } 4% { --fade-top: 16px; } 96% { --fade-bottom: 16px; } 100% { --fade-top: 16px; --fade-bottom: 0px; } }
-.activity-prompts, .activity-call-groups { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; display: grid; align-content: start; margin: 0 -14px 0 -8px; padding: 0 8px; list-style: none;
+.activity-main-tasks, .activity-call-groups { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; display: grid; align-content: start; margin: 0 -14px 0 -8px; padding: 0 8px; list-style: none;
   mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent); animation: activity-fade linear both; animation-timeline: scroll(self); }
-:is(.activity-prompts, .activity-call-rows) li { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; height: 32px; }
-:is(.activity-prompts, .activity-call-rows) li::before { content: ''; position: absolute; inset: 0 -8px; border-radius: 8px; }
-:is(.activity-prompts, .activity-call-rows) li:hover::before { background: var(--bg-hover); }
-:is(.activity-prompts, .activity-call-rows) li > * { position: relative; }
-:is(.activity-prompts, .activity-call-rows) li p { margin: 0; overflow: hidden; font-size: 13px; line-height: 20px; color: var(--flow-ink); text-overflow: ellipsis; white-space: nowrap; }
-:is(.activity-prompts, .activity-call-rows) li :is(time, .activity-row-end) { font-size: 12px; line-height: 16px; color: var(--flow-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
-:is(.activity-prompt-state, .activity-row-icon) { display: grid; place-items: center; width: 16px; height: 16px; color: var(--flow-faint); }
-.activity-prompt-state .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.activity-prompt-state svg { color: inherit; }
-.activity-prompts li.is-working .activity-prompt-state, .activity-call-rows li.is-running .activity-row-icon { color: var(--running); }
+.activity-call-rows li { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; height: 32px; }
+.activity-call-rows li::before { content: ''; position: absolute; inset: 0 -8px; border-radius: 8px; }
+.activity-call-rows li:hover::before { background: var(--bg-hover); }
+.activity-call-rows li > * { position: relative; }
+.activity-call-rows li p { margin: 0; overflow: hidden; font-size: 13px; line-height: 20px; color: var(--flow-ink); text-overflow: ellipsis; white-space: nowrap; }
+.activity-call-rows li :is(time, .activity-row-end) { font-size: 12px; line-height: 16px; color: var(--flow-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.activity-call-rows li:is(.is-running, .is-working) .activity-row-icon { color: var(--running); }
 .activity-call-rows li.is-reviewing .activity-row-icon { color: var(--flow-muted); }
-.activity-prompts li.is-done .activity-prompt-state { color: var(--success); }
-.activity-task-quiet { min-height: 0; overflow-y: auto; margin: 0; font-size: 12px; line-height: 18px; color: var(--flow-muted); overflow-wrap: anywhere; }
+.activity-call-rows li.is-done .activity-row-icon { color: var(--success); }
 
 
 /* A called model: its name leads (its service after it), its calls follow in the secondary ink; the part of a call before its subject is the role. */
@@ -66,6 +61,8 @@
 .activity-call-rows li.activity-call-note p { font-size: 12px; line-height: 16px; color: var(--flow-faint); }
 .activity-call-rows li.activity-call-note:hover::before { background: none; }
 .activity-call-rows li.is-idle p { color: var(--flow-faint); }
+.activity-call-rows li.is-step p { color: var(--flow-faint); }
+.activity-call-rows li.is-step p { color: var(--flow-faint); }
 .activity-call-head p b { font-weight: 600; }
 .activity-call-rows li:not(.activity-call-head) p { color: var(--flow-muted); }
 .activity-call-provider, .activity-call-role { font-size: 12px; font-weight: 400; color: var(--flow-faint); }

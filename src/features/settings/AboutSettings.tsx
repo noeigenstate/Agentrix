@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ArrowLeft, ArrowUpRight, CaretRight, DownloadSimple, Info, ListBullets } from '@phosphor-icons/react';
 import type { AppUpdateState, Distribution } from '../../shared/types';
 import { t } from '../../shared/i18n';
-import { WHATS_NEW } from '../guide/guide';
+import { ReleaseNotes } from '../guide/ReleaseNotes';
 
 type Page = 'changelog' | 'info';
 type ProjectPage = Parameters<Window['agentrix']['openProjectPage']>[0];
@@ -46,7 +46,7 @@ export function AboutSettings({ updates, onCheck, onInstall, onDownloadPage }: {
   const back = <button type="button" className="text-button" onClick={() => setPage(null)}><ArrowLeft size={15} />{t('返回更新与关于')}</button>;
   if (page === 'changelog') return <div className="about-page">{back}
     <h3 className="about-heading">{t('更新日志')}{version && <span>v{version}</span>}</h3>
-    <ul className="about-notes">{WHATS_NEW.map(item => <li key={item}>{t(item)}</li>)}</ul>
+    <ReleaseNotes />
     <LinkRow title={t('在 GitHub 查看全部版本')} page="releases" />
   </div>;
   if (page === 'info') return <div className="about-page">{back}

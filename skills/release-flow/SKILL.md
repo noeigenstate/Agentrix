@@ -8,9 +8,11 @@ description: Publish a new Agentrix version — bump, update notes, the full loc
 1. **Version.** `npm version X.Y.Z --no-git-tag-version` (updates package.json and package-lock.json).
 2. **Docs.** `docs/usage.md` names the version four times (the `AGENTRIX_VERSION=` lines and the macOS zip name);
    replace them all.
-3. **Update notes.** Replace `WHATS_NEW` in `src/features/guide/guide.ts` with this release's changes: one plain
-   Chinese sentence each, what the user sees, no internals. Add each sentence's English to the end of
-   `electron/locales/en.json` (keep the older entries). The guide opens on this page after an update.
+3. **Update notes.** Replace `WHATS_NEW` in `src/features/guide/guide.ts` with this release's changes: each note is
+   `{ title, text }`, a short Chinese title (2 to 6 characters, what changed) and one plain sentence of what the user sees,
+   no internals and no repeating the title. Add the English of every title and sentence to the end of
+   `electron/locales/en.json` (keep the older entries). The notes show as a list in the guide, which opens on this page
+   after an update, and on the About page; about seven fit the guide card, a longer list scrolls.
 4. **Local checks, in order.** `npm run build`, `npm test`, `python -m unittest discover -s tests -p '*_test.py'`,
    then the sixteen desktop suites one at a time (each starts Electron with its own isolated profile; never run
    them in parallel or against the real app): `test:desktop`, `test:path-refresh`, `test:sessions`,

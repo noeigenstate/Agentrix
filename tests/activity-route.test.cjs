@@ -9,7 +9,13 @@ const { renderToStaticMarkup } = require('react-dom/server');
 const en = require('../electron/locales/en.json');
 
 // A component of the agents folder compiled with its imports stubbed (the language, the icons, the portal), for static rendering.
+const loadedAgentsFiles = new Map();
 function loadAgentsFile(basename, language = 'zh') {
+  const key = `${basename}:${language}`;
+  if (!loadedAgentsFiles.has(key)) loadedAgentsFiles.set(key, compileAgentsFile(basename, language));
+  return loadedAgentsFiles.get(key);
+}
+function compileAgentsFile(basename, language) {
   const filename = path.join(__dirname, '../src/features/agents', basename);
   const mod = new Module(filename, module);
   mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
@@ -54,7 +60,7 @@ test('the models group hides empty calls and lists each model with its calls, th
   const section = /<section class="activity-card activity-calls"[\s\S]*?<\/section>/.exec(html)[0], plain = section.replace(/<[^>]*>/g, '|');
   for (const text of ['调用的模型', 'Sonnet 5.5', 'Anthropic', 'GPT-6.1-Sol', 'OpenAI', 'max · 快速', '运行中', '审核中', '准备中']) assert.ok(plain.includes(text), text);
   assert.ok(section.includes('<span class="activity-count">5</span>'), 'the heading counts every call');
-  assert.ok(html.indexOf('activity-main"') < html.indexOf('activity-calls"') && html.indexOf('activity-calls"') < html.indexOf('activity-tasks"'), 'route, models, then tasks');
+  assert.ok(html.indexOf('activity-main"') < html.indexOf('activity-calls"') && html.indexOf('activity-calls"') < html.indexOf('activity-context"'), 'the main model (with its task), the sub-agents, then context and usage');
   assert.ok(section.includes('title="Polish &lt;card&gt;"'));
   assert.match(section, /agent-brand-claude/); assert.match(section, /agent-brand-codex/);
   for (const [state, count] of [['preparing', 1], ['running', 3], ['reviewing', 1]]) assert.equal((section.match(new RegExp(`<li class="is-${state}"`, 'g')) || []).length, count);
@@ -235,82 +241,91 @@ test('Codex reset count arrives automatically, shows zero and bounded query stat
   for (const [html, short, full] of cases) { assert.equal(status(html), short); assert.ok(hover(html).startsWith(full + '\n'), full); assert.doesNotMatch(/<div class="activity-reset">[\s\S]*?<\/div>/.exec(html)[0], /activity-note/, 'no separate status line'); }
 });
 
-test('working task keeps its real status, spinner and text, with no fake progress or dead theme overrides', () => {
+test('the pane: the main card (with its tasks) above the models, context and usage; no separate tasks card, no fake progress', () => {
   const html = activityMarkup([], 'zh', { agent: 'codex',
     prompts: [{ id: 'work', text: 'Continue responding while usage hangs', summary: 'Continue responding while usage hangs', state: 'working' }],
-    agentUsage: { provider: 'OpenAI', context: { used: 25000, window: 100000 },
-      limits: [{ minutes: 300, percent: 60 }], resets: { left: 2 }, resetQuery: { state: 'ready' } },
+    agentUsage: { provider: 'OpenAI', context: { used: 25000, window: 100000 }, limits: [{ minutes: 300, percent: 60 }], resets: { left: 2 }, resetQuery: { state: 'ready' } },
   });
-  const positions = ['activity-main"', 'activity-tasks"', 'activity-context"', 'activity-usage"'].map(name => html.indexOf(name));
-  assert.ok(positions.every((position, i) => position >= 0 && (!i || position > positions[i - 1])), 'route, tasks, context, then usage/reset controls');
-  const usage = html.slice(positions[3]);
+  const positions = ['activity-main"', 'activity-context"', 'activity-usage"'].map(name => html.indexOf(name));
+  assert.ok(positions.every((position, i) => position >= 0 && (!i || position > positions[i - 1])), 'main model, context, then usage/reset controls');
+  const usage = html.slice(positions[2]);
   assert.match(usage, /activity-estop/); assert.match(usage, /剩余 2 次/);
   assert.match(html, /aria-valuenow="25"/); assert.match(usage, /aria-valuenow="60"/);
-  assert.match(html, /正在处理/); assert.match(html, /Continue responding while usage hangs/);
+  assert.match(/<section class="activity-card activity-main"[\s\S]*?<\/section>/.exec(html)[0], /Continue responding while usage hangs/);
+  assert.doesNotMatch(html, /activity-tasks|正在处理的任务|activity-progress/);
   assert.match(fs.readFileSync(path.join(__dirname, '../src/features/agents/ActivityPane.tsx'), 'utf8'), /className="loading-spinner"/);
-  assert.doesNotMatch(html, /activity-progress/);
-  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8'), /activity-progress/);
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
+  assert.doesNotMatch(css, /activity-progress|activity-tasks|activity-prompts|activity-prompt-state|activity-task-quiet/);
 });
 
-test('inactive terminal keeps its empty card above tasks; the pane shows no scrollbar and its two lists scroll inside their own windows', () => {
+test('without an agent the pane shows only its hint, no main model and no tasks; it is bounded: no scrollbar, the lists scroll inside their own windows', () => {
   const html = activityMarkup([], 'en', { codexActive: false });
-  assert.ok(html.indexOf('activity-empty') < html.indexOf('activity-tasks'));
-  assert.ok(html.includes('No task yet'));
-  assert.doesNotMatch(html, /activity-main|activity-context|activity-usage/);
+  assert.ok(html.includes('class="activity-empty"') && html.includes('main model, task, context length and usage'));
+  assert.doesNotMatch(html, /activity-main|activity-context|activity-usage|activity-tasks|No task yet/);
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
-  // The pane shows no scrollbar; the fixed groups keep their height, the two lists share the rest and scroll under their own titles.
+  // The pane shows no scrollbar; the fixed groups keep their height, the main card's prompts and the called models scroll under their own titles.
   assert.match(/\.activity-pane \{[^}]*\}/.exec(css)[0], /scrollbar-width: none/);
-  const sections = /\.activity-calls, \.activity-tasks \{([^}]+)\}/.exec(css)[1];
-  assert.match(sections, /flex: 0 1 auto; min-height: 60px/);
+  assert.match(css, /\.activity-calls \{ flex: 0 1 auto; min-height: 60px; \}/);
+  assert.match(css, /\.activity-main \{ flex: 0 1 auto; min-height: 116px; \}/);
   assert.doesNotMatch(css, /max-height/);
-  assert.match(css, /\.activity-card \{ flex: none;/, 'the route, context and usage never shrink');
-  const list = /\.activity-prompts, \.activity-call-groups \{([^}]+)\}/.exec(css)[1];
+  assert.match(css, /\.activity-card \{ flex: none;/, 'context and usage never shrink');
+  const list = /\.activity-main-tasks, \.activity-call-groups \{([^}]+)\}/.exec(css)[1];
   for (const part of ['flex: 0 1 auto', 'min-height: 0', 'overflow-y: auto', 'scrollbar-gutter: stable', 'mask-image', 'animation-timeline: scroll(self)']) assert.ok(list.includes(part), part);
   assert.match(css, /@keyframes activity-fade/);
-  assert.match(css, /\.activity-call-rows\) li p \{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis; white-space: nowrap/);
+  assert.match(css, /\.activity-call-rows li p \{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis; white-space: nowrap/);
 });
 
-test('task cards display source summaries and retain the complete original only in their hovers', () => {
-  const original = 'Please fix the button.\n<pasted_content id="1">Synthetic hidden details.</pasted_content>';
-  const html = activityMarkup([], 'zh', { prompts: [
-    { id: 'working', text: original, summary: 'Please fix the button.', state: 'working' },
-    { id: 'queued', text: '```js\nconst synthetic = 1;\n```', summary: '（代码）', state: 'queued' },
-  ] });
-  assert.match(html, /<p>Please fix the button\.<\/p>/); assert.match(html, /<p>（代码）<\/p>/);
-  assert.ok(html.includes('title="Please fix the button.\n&lt;pasted_content id=&quot;1&quot;&gt;Synthetic hidden details.&lt;/pasted_content&gt;'+String.fromCharCode(10)+'正在处理"'));
-  assert.doesNotMatch(html.replace(/title="[^"]*"/g, ''), /pasted_content|Synthetic hidden details|const synthetic/);
-  const completed = activityMarkup([], 'zh', { codexActivity: 'complete', task: '按钮现在可以正常点击。', taskTitle: original });
-  assert.match(completed, /<p class="activity-task-quiet">没有待处理的提示<\/p>/);
-  assert.doesNotMatch(completed, /activity-prompts|is-done|按钮现在可以正常点击|Please fix the button|pasted_content/);
-  const command = activityMarkup([], 'zh', { prompts: [
-    { id: 'command', text: '<command-name>/model</command-name>', summary: '/model', state: 'working' },
-  ] });
-  assert.match(command, />\/model<\/p>/); assert.doesNotMatch(command.replace(/title="[^"]*"/g, ''), /command-name/);
-  assert.ok(command.includes('title="&lt;command-name&gt;/model&lt;/command-name&gt;\n正在处理"'));
+test('the main card lists the prompts: the working one with its spinner and clock, the step under it, those waiting after, each row the summary with the whole text in its hover', () => {
+  const now = Date.now(), original = 'Please fix the button.\n<pasted_content id="1">Synthetic hidden details.</pasted_content>';
+  const prompts = [{ id: 'a', text: original, summary: 'Please fix the button.', state: 'working', at: now - 134000 },
+    { id: 'b', text: 'A real queued request.', summary: 'Queued request.', state: 'queued', at: now - 12000 }, { id: 'c', text: 'no start', summary: '（代码）', state: 'queued' }];
+  const edit = { kind: 'edit', tool: 'Edit', target: 'src/App.tsx', detail: '', done: false };
+  const main = html => /<section class="activity-card activity-main"[\s\S]*?<\/section>/.exec(html)[0], rows = html => [...main(html).matchAll(/<li class="(is-[a-z]+(?: [^"]*)?|activity-call-[a-z]+)"[^>]*>/g)].map(match => match[1]);
+  const html = main(activityMarkup([], 'zh', { codexActivity: 'working', prompts, action: edit }));
+  assert.deepEqual(rows(html), ['activity-call-head', 'activity-call-note', 'is-working', 'is-step', 'is-queued', 'is-queued'], 'head, note, the working prompt, its step, then the waiting ones');
+  assert.ok(html.includes('<li class="is-working" title="Please fix the button.\n&lt;pasted_content id=&quot;1&quot;&gt;Synthetic hidden details.&lt;/pasted_content&gt;\n处理中 · 2:1'), 'the whole text in the hover, with the state and clock');
+  assert.match(html, /<span class="activity-call-role">处理中<\/span>Please fix the button\.<\/p><time>2:1\d<\/time>/);
+  assert.match(html, /<li class="is-queued" title="A real queued request\.\n排队中 · 0:1\d">[\s\S]*?<span class="activity-call-role">排队中<\/span>Queued request\.<\/p><time>0:1\d<\/time>/);
+  assert.ok(html.includes('title="no start\n排队中"') && html.includes('<p><span class="activity-call-role">排队中</span>（代码）</p><time></time>'), 'a prompt with no start shows no clock');
+  assert.doesNotMatch(html.replace(/title="[^"]*"/g, ''), /pasted_content|Synthetic hidden details/);
+  assert.match(html, /<li class="is-step" title="src\/App\.tsx">[\s\S]*?<span class="activity-call-role">正在<\/span>修改 App\.tsx<\/p>/);
+  assert.ok(html.indexOf('is-working') < html.indexOf('is-step') && html.indexOf('is-step') < html.indexOf('is-queued'), 'the step is under the working prompt');
+  const command = main(activityMarkup([], 'zh', { codexActivity: 'working', prompts: [{ id: 'command', text: '<command-name>/model</command-name>', summary: '/model', state: 'working' }] }));
+  assert.match(command, /<\/span>\/model<\/p>/); assert.doesNotMatch(command.replace(/title="[^"]*"/g, ''), /command-name/);
+  assert.ok(main(activityMarkup([], 'en', { codexActivity: 'working', prompts })).includes(`>${en['处理中']}<`) && main(activityMarkup([], 'en', { codexActivity: 'working', prompts })).includes(`>${en['排队中']}<`));
 });
 
-test('each task is a 32px row: its state icon, the task on one line, a clock at the right and the state in the hover', () => {
-  const now = Date.now();
-  const html = activityMarkup([], 'zh', { prompts: [
-    { id: 'a', text: 'first task', summary: 'first task', state: 'working', at: now - 134000 },
-    { id: 'b', text: 'second task', summary: 'second task', state: 'queued', at: now - 12000 },
-    { id: 'c', text: 'no start', summary: 'no start', state: 'queued' },
-  ] });
-  assert.equal((html.match(/<time>/g) || []).length, 3, 'one row per task');
-  assert.match(html, /class="is-working" title="first task\n正在处理 · 2:1\d"/);
-  assert.match(html, /title="second task\n排队中 · 0:\d\d"/);
-  assert.ok(html.includes('title="no start\n排队中"') && html.includes('<time></time>'), 'a task with no start time shows no clock');
-  assert.match(html, /<span class="activity-prompt-state">.*?<span class="sr-only">正在处理<\/span><\/span><p>first task<\/p><time>2:1\d<\/time>/);
-  assert.match(html, /<span class="activity-prompt-state"><svg><\/svg><span class="sr-only">排队中<\/span><\/span><p>second task<\/p><time>0:\d\d<\/time>/);
-  const done = activityMarkup([], 'zh', { codexActivity: 'complete', task: '按钮可以点了。', taskTitle: '原始提示', lastCompletedAt: Date.now() });
-  assert.match(done, /<p class="activity-task-quiet">没有待处理的提示<\/p>/);
-  assert.doesNotMatch(done, /activity-prompts|is-done|按钮可以点了|原始提示|<time>/);
+test('with no prompt the main card says the agent state in words and invents no task; the finished prompt shows only for the round it belongs to', () => {
+  const now = Date.now(), prompt = { id: 'p', text: 'Fix <the> bug in the parser.', summary: 'Fix the parser bug.', state: 'working', at: now - 5000 };
+  const main = html => /<section class="activity-card activity-main"[\s\S]*?<\/section>/.exec(html)[0], tasks = html => main(html).slice(main(html).indexOf('activity-main-tasks'));
+  const render = (terminal, language = 'zh') => main(activityMarkup([], language, { id: 'finished-case', sessionId: 's1', task: 'RESULT SUMMARY', taskTitle: 'RESULT TITLE', ...terminal }));
+  // Nothing tracked: the state in words, and not the result summary the card header's status may carry.
+  for (const [codexActivity, word] of [['working', '正在处理'], ['complete', '本轮已完成'], ['interrupted', '已中断'], ['unknown', '等待下一步']]) {
+    const html = tasks(render({ id: 'none', codexActivity }));
+    assert.match(html, new RegExp('<li class="is-idle">[\\s\\S]*?<p>' + word + '</p>')); assert.doesNotMatch(html, /RESULT|<time>/);
+  }
+  // A working round with its prompt is remembered; when the round ends the same prompt stays as the finished row.
+  render({ codexActivity: 'working', prompts: [prompt] });
+  const done = tasks(render({ codexActivity: 'complete', prompts: [], lastCompletedAt: now }));
+  assert.match(done, /<li class="is-done" title="Fix &lt;the&gt; bug in the parser\.\n本轮已完成 · \d\d:\d\d">[\s\S]*?<span class="activity-call-role">本轮已完成<\/span>Fix the parser bug\.<\/p><time>\d\d:\d\d<\/time>/);
+  assert.doesNotMatch(done, /RESULT/, 'the result summary is not the task');
+  assert.match(tasks(render({ codexActivity: 'interrupted', prompts: [] })), /<li class="is-idle" title="Fix &lt;the&gt; bug in the parser\.\n已中断">[\s\S]*?<span class="activity-call-role">已中断<\/span>Fix the parser bug\.<\/p><time><\/time>/);
+  // Another session of the same terminal never shows it, and a round without a prompt of its own (a background notification) forgets it.
+  assert.doesNotMatch(tasks(render({ codexActivity: 'complete', prompts: [], sessionId: 's2' })), /parser bug/);
+  render({ codexActivity: 'working', prompts: [] });
+  assert.doesNotMatch(tasks(render({ codexActivity: 'complete', prompts: [], lastCompletedAt: now })), /parser bug|is-done/, 'no stale task after a round that had none');
+});
+
+test('each task row is on the 32px grid: its state icon, the role word and the task on one line, a clock at the right', () => {
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
-  const row = css.split(/\r?\n/).find(line => line.startsWith(':is(.activity-prompts, .activity-call-rows) li {'));
+  const row = css.split(/\r?\n/).find(line => line.startsWith('.activity-call-rows li {'));
   for (const part of ['grid-template-columns: 16px minmax(0, 1fr) auto', 'column-gap: 8px', 'height: 32px']) assert.ok(row.includes(part), part);
-  assert.ok(css.includes(':is(.activity-prompts, .activity-call-rows) li::before { content: \'\'; position: absolute; inset: 0 -8px; border-radius: 8px; }'), 'the hover reaches 8px past the text');
-  assert.match(css, /\.activity-call-rows\) li p \{[^}]*text-overflow: ellipsis; white-space: nowrap/);
+  assert.ok(css.includes('.activity-call-rows li::before { content: \'\'; position: absolute; inset: 0 -8px; border-radius: 8px; }'), 'the hover reaches 8px past the text');
+  assert.match(css, /\.activity-call-rows li p \{[^}]*text-overflow: ellipsis; white-space: nowrap/);
   assert.match(css, /li :is\(time, \.activity-row-end\) \{[^}]*font-size: 12px[^}]*var\(--flow-faint\)[^}]*tabular-nums/);
+  assert.match(css, /\.activity-call-rows li:is\(\.is-running, \.is-working\) \.activity-row-icon \{ color: var\(--running\); \}/, 'the spinner is the one colour');
+  assert.match(css, /\.activity-call-rows li\.is-done \.activity-row-icon \{ color: var\(--success\); \}/);
+  assert.match(css, /\.activity-call-rows li\.is-step p \{ color: var\(--flow-faint\); \}/, 'the step is quieter');
 });
 
 test('the clock reads m:ss and h:mm:ss', () => {
@@ -433,19 +448,16 @@ test('the main model section: the model its latest reply records (the setting on
 
 test('the main row shows the step under way and spins only while the agent works; a finished or missing step shows the agent state, never a prompt or a sub-agent title', () => {
   const step = (action, codexActivity) => /<section class="activity-card activity-main"[\s\S]*?<\/section>/.exec(activityMarkup([{ agent: 'Codex', model: 'gpt-6.1-sol', provider: 'OpenAI', effort: null, fast: null, preparing: 0, running: 1, reviewing: 0, tasks: [], items: [{ state: 'running', role: '执行', title: 'SUB TITLE' }] }], 'zh',
-    { action, codexActivity, prompts: [{ id: 'p', text: 'PROMPT TEXT', summary: 'PROMPT TEXT', state: 'working' }] }))[0];
+    { action, codexActivity, task: 'RESULT SUMMARY', prompts: [{ id: 'p', text: 'PROMPT TEXT', summary: 'PROMPT TEXT', state: 'working' }] }))[0];
   const edit = { kind: 'edit', tool: 'Edit', target: 'src/features/agents/ActivityPane.tsx', detail: '', done: false };
   const running = step(edit, 'working');
-  assert.match(running, /<li class="is-running" title="src\/features\/agents\/ActivityPane\.tsx">[\s\S]*?<span class="activity-call-role">正在<\/span>修改 ActivityPane\.tsx<\/p>/);
-  for (const html of [running, step({ ...edit, done: true }, 'working'), step(null, 'working')]) assert.doesNotMatch(html, /PROMPT TEXT|SUB TITLE/, 'only the main agent\'s own step');
+  assert.match(running, /<li class="is-step" title="src\/features\/agents\/ActivityPane\.tsx">[\s\S]*?<span class="activity-call-role">正在<\/span>修改 ActivityPane\.tsx<\/p>/);
+  for (const html of [running, step({ ...edit, done: true }, 'working'), step(null, 'working')]) { assert.doesNotMatch(html, /SUB TITLE|RESULT SUMMARY/, 'neither a sub-agent title nor the result summary'); assert.match(html, /PROMPT TEXT/, 'the main task is the queue\'s working prompt'); }
   const finished = step({ ...edit, done: true }, 'working');
   assert.doesNotMatch(finished, /is-running|loading-spinner|ActivityPane/, 'a done step is not shown as running');
-  assert.match(finished, /<li class="is-idle"><span class="activity-row-icon">[\s\S]*?<\/span><p>正在处理<\/p>/);
-  assert.doesNotMatch(step(edit, 'complete'), /is-running|loading-spinner|ActivityPane/, 'a running step of an agent that is not working is stale');
-  assert.match(step(edit, 'complete'), /<p>本轮已完成<\/p>/);
-  assert.match(step(null, 'interrupted'), /<p>已中断<\/p>/);
-  assert.match(step(null, 'unknown'), /<p>等待下一步<\/p>/);
-  assert.equal((step(edit, 'working').match(/<li/g) || []).length, (step(null, 'unknown').match(/<li/g) || []).length, 'the same rows with or without a step: nothing jumps');
+  assert.doesNotMatch(step(edit, 'complete'), /is-step|ActivityPane/, 'a running step of an agent that is not working is stale');
+  assert.match(step(edit, 'complete'), /<li class="is-queued"|<li class="is-working"/);
+  assert.equal((step(edit, 'working').match(/<li class="is-step"/g) || []).length, 1); assert.equal((finished.match(/<li class="is-step"/g) || []).length, 0);
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
   assert.match(css, /\.activity-call-rows li \.activity-rate \{ min-width: 80px; text-align: right; \}/, 'a fixed column for the rate');
   assert.doesNotMatch(css, /activity-route/, 'the route chips are gone');

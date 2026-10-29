@@ -129,9 +129,9 @@ class AgentCalls {
     const at = Date.parse(record.timestamp);
     let changed = false;
     for (const block of Array.isArray(content) ? content : []) {
-      if (record.type === 'assistant' && block.type === 'tool_use' && ['BashOutput', 'TaskOutput'].includes(block.name)) {
-        const task = block.input?.bash_id || block.input?.task_id;
-        if (typeof block.id === 'string' && typeof task === 'string' && task) this.polls.set(block.id, task);
+      if (record.type === 'assistant' && block.type === 'tool_use' && ['BashOutput', 'TaskOutput', 'TaskStop', 'KillShell'].includes(block.name)) {
+        const task = block.input?.bash_id || block.input?.task_id || block.input?.shell_id;
+        if (typeof block.id === 'string' && typeof task === 'string' && task) this.polls.set(block.id, { task, stop: ['TaskStop', 'KillShell'].includes(block.name) });
         continue;
       }
       if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && !this.calls.has(block.id)) {
@@ -151,11 +151,12 @@ class AgentCalls {
         this.refresh(block.id);
         changed = true;
       } else if (record.type === 'user' && block.type === 'tool_result') {
-        const result = record.toolUseResult || {}, task = this.polls.get(block.tool_use_id);
-        if (task) {
+        const result = record.toolUseResult || {}, poll = this.polls.get(block.tool_use_id);
+        if (poll) {
           this.polls.delete(block.tool_use_id);
-          const call = [...this.calls.values()].find(call => call.agent === 'Codex' && call.backgroundTaskId === (result.task?.task_id || task));
-          if (call && !call.reviewed && (!call.done || call.pendingReview) && !block.is_error && /^(?:completed|failed|killed)$/.test(result.task?.status || result.status)) {
+          const task = result.task?.task_id || result.task_id || poll.task;
+          const call = [...this.calls.values()].find(call => call.backgroundTaskId === task || (poll.stop && call.agentId === task));
+          if (call && !call.reviewed && (!call.done || call.pendingReview) && !block.is_error && (poll.stop || /^(?:completed|failed|killed)$/.test(result.task?.status || result.status))) {
             call.done = true; call.finishedAt = at; call.pendingReview = false; changed = true;
           }
           continue;
@@ -248,7 +249,9 @@ class AgentCalls {
           if (prompt !== null) {
             const heading = /^[ \t]{0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/m.exec(prompt.replace(/^\uFEFF/, ''))?.[1];
             const title = heading?.replace(/^Task\s+[\w-]+(?:\s*\([^)]*\))?\s*[:：]\s*/i, '').trim() || call.title;
-            const role = /\bread[- ]only\b|只读/i.test([heading, ...prompt.split(/\r?\n/, 20)].join('\n')) ? '调查' : '执行';
+            // File-specific read-only restrictions also appear in implementation briefs.
+            const role = /\bread[- ]only\b|只读/i.test(heading || '') ||
+              /^[ \t]*(?:[-*][ \t]+)?(?:this (?:task|run) is )?(?:read[- ]only\b|只读)/im.test(prompt.split(/\r?\n/, 20).join('\n')) ? '调查' : '执行';
             call.title = title; call.role = role;
           }
           if (call.agent === 'Codex') await this.readExec(call, calls);

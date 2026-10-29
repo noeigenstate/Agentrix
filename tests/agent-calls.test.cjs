@@ -215,6 +215,32 @@ test('BashOutput and TaskOutput only finish their matching background call on a 
   }
 });
 
+test('TaskStop and KillShell finish only their matching worker after a successful receipt', () => {
+  for (const name of ['TaskStop', 'KillShell']) {
+    for (const agent of ['Codex', 'Claude Code']) {
+      const calls = new AgentCalls({ local: false });
+      for (const id of ['worker', 'other']) {
+        calls.apply(use(id, agent === 'Codex' ? 'Bash' : 'Agent', { command, run_in_background: true }));
+        calls.apply(result(id, agent === 'Codex' ? { backgroundTaskId: `task-${id}` } : { isAsync: true, agentId: `task-${id}` }));
+      }
+      const cancel = (id, task, error = false) => {
+        calls.apply(use(id, name, name === 'TaskStop' ? { task_id: task } : { shell_id: task }));
+        assert.deepEqual(states(calls), [[0, 2, 0]], 'a stop request alone does not end the worker');
+        return calls.apply(result(id, { task_id: task, task_type: 'local_bash', message: 'Task stopped.' }, error));
+      };
+      assert.equal(cancel('failed', 'task-worker', true), false);
+      assert.equal(cancel('unknown', 'unrelated'), false);
+      assert.equal(cancel('success', 'task-worker'), true);
+      assert.deepEqual(states(calls), [[0, 1, 1]]);
+      assert.equal(calls.apply(result('success', { task_id: 'task-worker' })), false);
+      calls.apply(stop());
+      assert.deepEqual(states(calls), [[0, 1, 0]], 'only the stopped worker leaves after review');
+      calls.apply(notice('worker'));
+      assert.deepEqual(states(calls), [[0, 1, 0]], 'a late notification cannot reopen the stopped worker');
+    }
+  }
+});
+
 test('routes group by every route field, keep the latest five tasks and inherit the current Claude provider', () => {
   const meter = new UsageMeter('claude', { provider: 'relay.example' });
   for (let i = 0; i < 7; i++) {
@@ -371,6 +397,8 @@ test('Codex roles recognize a read-only heading or early lines and preserve head
     ['# Task R3: Fix C#\nWrite the change.', '执行', 'Fix C#'],
     ['# Task R4: Implement parser\n' + '\n'.repeat(25) + 'Other workers are read-only.', '执行', 'Implement parser'],
     ['\n'.repeat(25) + '# Task R5: read-only review', '调查', 'read-only review'],
+    ['# Task R6: Implement parser\nOther files are read-only.\nKeep user data read-only.', '执行', 'Implement parser'],
+    ['# Task R7: Inspect records\n- This task is READ-ONLY.', '调查', 'Inspect records'],
   ];
   for (const [i, [body, role, title]] of cases.entries()) {
     await fs.writeFile(path.join(folder, `${i}.md`), body);
