@@ -1701,5 +1701,7 @@
   "图标对齐": "Aligned icons",
   "活动面板里每行的图标和文字居中对齐。": "Icons and text line up in every row of the activity pane.",
   "进入": "Open",
-  "鼠标移到项目卡片的标题栏上会显示「进入」，点击进入会话；菜单里的「全屏查看」改叫「进入会话」，不再和窗口全屏混淆。": "Hovering a project card's title bar shows Open; clicking it opens the session. The menu's Expand is now Open session, no longer confused with full-screen window."
+  "鼠标移到项目卡片的标题栏上会显示「进入」，点击进入会话；菜单里的「全屏查看」改叫「进入会话」，不再和窗口全屏混淆。": "Hovering a project card's title bar shows Open; clicking it opens the session. The menu's Expand is now Open session, no longer confused with full-screen window.",
+  "快速子任务": "Fast workers",
+  "几秒内就做完的子任务也会显示「已完成」，不再误报「未能启动」；子任务启动后一秒内就能确认它在运行。": "A worker that finishes within seconds now shows Done instead of failing to start, and a running worker is confirmed within a second."
 }
