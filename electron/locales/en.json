@@ -1562,7 +1562,6 @@
   "用快捷键切换项目时不再出现重点色边框。": "Switching projects with a shortcut no longer draws an accent border.",
   "主模型": "Main model",
   "正在": "Now",
-  "等待下一步": "Waiting for the next step",
   "等待中": "Waiting",
   "设置为 {configured}，实际回复来自 {actual}": "Set to {configured}; the replies come from {actual}",
   "这个模型的记录在这里读不到，所以没有速率。": "This model's records cannot be read here, so there is no rate.",

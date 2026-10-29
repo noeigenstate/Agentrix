@@ -1,7 +1,6 @@
 # Agentrix working agreements
 
 - Apply the user's `apply-gpt-5p6-guidance` skill silently for every request.
-- **Temporary override (from 2026-10-29 until the owner says model routing is complete):** Opus does all the work. The lead (Opus) plans and implements itself, or through Opus subagents (Agent tool, `model: "opus"`, `effort: "high"`) for parallel work and the independent architecture review; no Codex (Sol/Terra) or Sonnet workers. The routing rule below resumes when the owner lifts this.
 - Route every task by `skills/model-routing/SKILL.md` automatically, before doing any of it and without being asked: the lead orchestrates; Opus 5.5 (architect) plans; GPT-6.1-Sol (core engineer) takes complex code, refactors, debugging and test fixes in worktree A; a Sonnet 5.5 subagent (execution engineer) takes routine features, front end, tests and docs in worktree B; GPT-6.1-Terra (visual and verification engineer) takes UI checks and small tasks; the lead integrates and runs the tests; an Opus 5.5 subagent reviews the architecture and GPT-6.1-Terra accepts the UI and interaction; then final acceptance. GPT models always run at max effort in fast mode, Claude models at high effort. A worker never delegates further.
 - Every code change, by any worker or the lead, follows `skills/code-standard/SKILL.md`; the lead reviews each worker's diff against it before accepting.
 - Review is stage 4 of `model-routing` (Opus architecture review + Terra UI acceptance); do not add other reviewer workflows.

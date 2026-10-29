@@ -78,7 +78,7 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
   const last = source ? current : workedPrompts.get(terminal.id), ended = !prompts.length && (activity === 'complete' || activity === 'interrupted') && last?.session === terminal.sessionId ? last : null;
   const action = terminal.action, running = !!action && !action.done && activity === 'working';
   const endedAt = terminal.mainTurn?.updatedAt ?? terminal.lastCompletedAt;
-  const state = activity === 'working' ? t('正在处理') : activity === 'complete' ? t('本轮已完成') : activity === 'interrupted' ? t('已中断') : t('等待下一步');
+  const state = activity === 'working' ? t('正在处理') : activity === 'complete' ? t('本轮已完成') : t('已中断');
   const step = running && <li className="is-step" title={action.detail || action.target}>
     <span className="activity-row-icon">{CALL_STATES.running.icon}</span><p><span className="activity-call-role">{t('正在')}</span>{actionText(action)}</p><span />
   </li>;
@@ -99,7 +99,7 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
           prompt.summary, prompt.text, prompt.at ? elapsedClock(now - prompt.at) : '')}
         {prompt === working && !background && step}
       </Fragment>)}
-      {!prompts.length && !background && activity !== 'working' && (ended
+      {!prompts.length && !background && (activity === 'complete' || activity === 'interrupted') && (ended
         ? task(activity === 'complete' ? <CheckCircle size={14} weight="fill" aria-hidden="true" /> : <Circle size={14} aria-hidden="true" />, activity === 'complete' ? 'is-done' : 'is-idle', state, ended.summary, ended.text,
           activity === 'complete' && endedAt ? resetTime(endedAt) : '')
         : <li className="is-idle"><span className="activity-row-icon"><Circle size={14} aria-hidden="true" /></span><p>{state}</p><span /></li>)}

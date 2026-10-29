@@ -366,12 +366,14 @@ test('with no prompt the main card says the agent state in words and invents no 
   const main = html => /<section class="activity-card activity-main"[\s\S]*?<\/section>/.exec(html)[0], tasks = html => main(html).slice(main(html).indexOf('activity-main-tasks'));
   const render = (terminal, language = 'zh') => main(activityMarkup([], language, { id: 'finished-case', sessionId: 's1', task: 'RESULT SUMMARY', taskTitle: 'RESULT TITLE', ...terminal }));
   // Nothing tracked: the state in words, and not the result summary the card header's status may carry.
-  for (const [codexActivity, word] of [['working', '正在处理'], ['complete', '本轮已完成'], ['interrupted', '已中断'], ['unknown', '等待下一步']]) {
+  for (const [codexActivity, word] of [['working', '正在处理'], ['complete', '本轮已完成'], ['interrupted', '已中断']]) {
     const html = tasks(render({ id: 'none', codexActivity }));
     assert.match(html, new RegExp('<li class="is-' + (codexActivity === 'working' ? 'working' : 'idle') + '"[^>]*>[\\s\\S]*?<p>' + word + '</p>'));
     assert.doesNotMatch(html, /RESULT|<time>[^<]+/);
     assert.match(html, new RegExp('data-icon="' + (codexActivity === 'working' ? 'CircleNotch' : 'Circle') + '"'));
   }
+  // An agent with no round yet shows only its model: no idle row with nothing to say.
+  assert.doesNotMatch(tasks(render({ id: 'none', codexActivity: 'unknown' })), /<li|等待下一步/);
   // A working round with its prompt is remembered; when the round ends the same prompt stays as the finished row.
   render({ codexActivity: 'working', prompts: [prompt] });
   const done = tasks(render({ codexActivity: 'complete', prompts: [], lastCompletedAt: now }));
