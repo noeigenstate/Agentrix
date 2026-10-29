@@ -61,7 +61,7 @@ async function run() {
   const instruction = `Before any task, read and follow ${builtin.path.replace(/\\/g, '/')}.`;
   const standardPath = standard.path.replace(/\\/g, '/');
   const firstOpen = `Before the first task of this session, read and follow ${standardPath}; this is its first run in this project.`;
-  const yieldLine = 'This project has its own code-standard skill; follow it.';
+  const yieldLine = 'This project has its own code-standard skill at skills/code-standard/SKILL.md; follow it.';
   await app.evaluate(({ app, BrowserWindow, dialog }, expectedProfile) => {
     if (app.getPath('userData') !== expectedProfile) throw new Error('Refusing a non-probe profile');
     // Closing generated test terminals must not leave a modal waiting for a person.

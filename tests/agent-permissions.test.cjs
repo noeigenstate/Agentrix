@@ -19,6 +19,7 @@ function handlers() {
       expectCompletion(id, expected = true) { assert.equal(id, project.id); calls.completion.push([id, expected]); project.completionArmed = expected; } }, quitting: false,
     broadcast() { calls.broadcast++; }, followClaude() { calls.follow++; }, applyActivity(_project, s, event) { calls.activity++; s.codexActivity = event.state; },
     acceptShellEvent: () => true, resumeAfterPrompt: async () => {}, isLocalAgentCommand, promptText: require('../electron/prompt-queue.cjs').promptText, t: text => text,
+    endSkillSession() {},
   });
   // onEvent owns account-query cleanup on real agent/shell exit. Include that
   // legitimate dependency, with an observable subscription instead of a PTY.

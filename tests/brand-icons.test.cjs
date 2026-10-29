@@ -38,7 +38,8 @@ test('bundled vectors retain the authenticated source geometry and attribution',
   for (const [name, mark, expectedHash] of fixtures) {
     const svg = asset(name);
     assert.equal(crypto.createHash('sha256').update(svg).digest('hex'), expectedHash, name);
-    assert.deepEqual(geometry(svg.toString()), { viewBox: mark.viewBox, path: mark.path }, name);
+    const viewBox = mark === marks.openai ? '0 0 716 716' : mark.viewBox;
+    assert.deepEqual(geometry(svg.toString()), { viewBox, path: mark.path }, name);
     assert.ok(mark.source.startsWith('https://'));
     assert.match(mark.attribution, /trademarks/);
     assert.doesNotMatch(svg.toString(), /<(?:image|script|foreignObject)|(?:href|src)=/);
@@ -59,7 +60,8 @@ test('marks preserve aspect ratio and original paths in balanced square viewBoxe
       assert.equal((html.match(/<path /g) || []).length, 1);
     }
   }
-  assert.equal(marks.openai.viewBox, '0 0 716 716');
+  assert.equal(marks.openai.viewBox, codexViewBox);
+  assert.match(marks.openai.sourceNotes, /original SVG viewBox is 0 0 716 716/);
   assert.equal(marks.claude.viewBox, '0 0 125 125');
 });
 

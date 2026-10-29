@@ -79,7 +79,7 @@ __pg_program() {
 __pg_send() {
   emulate -L zsh
   (( ++__pg_sequence ))
-  local project key cwd home command launch= codex=false claude=false
+  local project key cwd home command codex=false claude=false
   __pg_json "${4:-}"; command=$REPLY
   __pg_json $__pg_project; project=$REPLY
   __pg_json $__pg_key; key=$REPLY
@@ -87,12 +87,13 @@ __pg_send() {
   __pg_json ${CODEX_HOME:-$HOME/.codex}; home=$REPLY
   __pg_program codex && codex=true
   __pg_program claude && claude=true
-  if [[ $1 == codex-started && ${3:-codex} == codex ]]; then
-    local scope=unavailable
-    [[ ${5:-} == model-only-v1 ]] && scope=model-only-v1
-    launch=",\"accountLaunch\":\"$scope\""
+  if [[ $1 == codex-started ]]; then
+    # Wait for the main process to finish the launch note before the CLI reads it.
+    ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_helper" shell-event "$__pg_socket" "$__pg_project" "$__pg_key" \
+      "$1" "$__pg_sequence" "${2:-0}" "${3:-codex}" "$codex" "$claude" "${CODEX_HOME:-$HOME/.codex}" "$PWD" "${4:-}" "${5:-}" </dev/null >/dev/null 2>&1
+    return 0
   fi
-  local line="{\"projectId\":$project,\"sessionKey\":$key,\"type\":\"$1\",\"sequence\":$__pg_sequence,\"exitCode\":${2:-0},\"agent\":\"${3:-codex}\",\"codexAvailable\":$codex,\"claudeAvailable\":$claude,\"codexHome\":$home,\"cwd\":$cwd,\"command\":$command$launch}"
+  local line="{\"projectId\":$project,\"sessionKey\":$key,\"type\":\"$1\",\"sequence\":$__pg_sequence,\"exitCode\":${2:-0},\"agent\":\"${3:-codex}\",\"codexAvailable\":$codex,\"claudeAvailable\":$claude,\"codexHome\":$home,\"cwd\":$cwd,\"command\":$command}"
   ( zsocket $__pg_socket && print -r -u $REPLY -- $line ) 2>/dev/null
   return 0
 }

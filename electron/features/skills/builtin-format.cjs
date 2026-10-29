@@ -1,4 +1,5 @@
-const { metadata } = require('./files.cjs');
+const { skillName } = require('./files.cjs');
+const { frontMatter } = require('./front-matter.cjs');
 
 const KEYS = ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary'];
 const SECTIONS = ['When this applies', 'What to do', 'Rules', 'Done when'];
@@ -10,22 +11,18 @@ const needsQuotes = value => /^[>|[\]{}&*!#'"%@`,]|^[-?:](?:\s|$)|:\s|\s#/.test(
 
 function builtinMetadata(text, folder) {
   const fail = reason => { throw new Error(`Invalid built-in skill ${folder}: ${reason}`); };
-  try { metadata(text); } catch (error) { fail(error.message); }
-  const front = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/.exec(text);
+  let front;
+  try { front = frontMatter(text); if (front) skillName(front.fields.name); } catch (error) { fail(error.message); }
   if (!front) fail('expected front matter followed by a body');
-  const lines = front[1].split(/\r?\n/), fields = {};
+  const lines = front.raw.split(/\r?\n/), fields = {};
   if (lines.length !== KEYS.length) fail('expected exactly seven front matter keys');
   for (const [index, key] of KEYS.entries()) {
     const match = new RegExp(`^${key}: (\\S(?:.*\\S)?)$`).exec(lines[index]);
     if (!match) fail(`expected a single-line ${key} at position ${index + 1}`);
-    let value = match[1];
-    const quoted = value.startsWith('"') || value.startsWith("'");
-    if (value.startsWith('"')) {
-      try { value = JSON.parse(value); } catch { fail(`invalid quoted ${key}`); }
-    } else if (value.startsWith("'")) {
-      if (!/^'(?:[^']|'')*'$/.test(value)) fail(`invalid quoted ${key}`);
-      value = value.slice(1, -1).replace(/''/g, "'");
-    } else if (needsQuotes(value)) fail(`invalid plain scalar ${key}`);
+    const raw = match[1], value = front.fields[key];
+    const quoted = raw.startsWith('"') || raw.startsWith("'");
+    if (raw.startsWith("'") && !/^'(?:[^']|'')*'$/.test(raw)) fail(`invalid quoted ${key}`);
+    if (!quoted && needsQuotes(raw)) fail(`invalid plain scalar ${key}`);
     if (typeof value !== 'string' || !value.trim() || /[\x00-\x1f\x7f\u0085\u2028\u2029]/.test(value)) fail(`invalid ${key}`);
     if (quoted && !needsQuotes(value)) fail(`unnecessary quotes around ${key}`);
     fields[key] = value;
@@ -40,7 +37,7 @@ function builtinMetadata(text, folder) {
 
   // Fenced examples may contain headings; only actual document headings define the format.
   let fence = null;
-  const body = front[2].split(/\r?\n/).filter(line => {
+  const body = front.body.split(/\r?\n/).filter(line => {
     const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (marker) {
       if (!fence) fence = marker[1];

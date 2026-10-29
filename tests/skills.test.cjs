@@ -8,12 +8,23 @@ const { metadata, draftText, importFiles, MAX_IMPORT_BYTES, MAX_IMPORT_FILES } =
 const { safeId, MAX_VERSIONS, TEXT_VERSIONS } = require('../electron/features/skills/history.cjs');
 const { startupNote } = require('../electron/features/agents/handoff.cjs');
 const { MAX_NOTE } = require('../electron/features/skills/delivery.cjs');
-const { ActionLog, TranscriptTail, claudeRecord, codexRecord } = require('../electron/agent-actions.cjs');
+const { ActionLog, TranscriptTail, claudeRecord, codexRecord, skillDescription } = require('../electron/agent-actions.cjs');
 const { CodexActivityReader } = require('../electron/codex-activity.cjs');
 
 const text = (name, body = 'Use this procedure.', description = 'A tested procedure.') => `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n${body}\n`;
 const put = (file, body) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body); };
 const draft = (name, scope = 'global', projectId = null, body = 'First version.') => ({ name, description: 'A tested procedure.', text: body, scope, projectId });
+
+test('metadata and activity descriptions share front-matter decoding for BOM, quotes and folded scalars', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-front-matter-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'SKILL.md');
+  for (const description of ['"Read \\"quoted\\" paths"', "'Read the project''s own procedure'", '>\n  Read the project\n  before changing code']) {
+    const source = `\uFEFF---\nname: example\ndescription: ${description}\n---\nBody.\n`;
+    put(file, source);
+    assert.equal(await skillDescription('example', root, file), metadata(source).description);
+  }
+});
 
 function fixture(t, setup = () => {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-skills-'));

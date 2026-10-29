@@ -608,7 +608,7 @@
   "读取": "Read",
   "搜索": "Search",
   "访问": "Open",
-  "技能": "Skill",
+  "技能": "Skills",
   "子代理": "Subagent",
   "调用": "Call",
   "通过命令修改文件": "Editing files through a command",
@@ -1662,7 +1662,6 @@
   "每个任务开始前": "Before every task",
   "描述匹配时": "When the description fits",
   "首次打开项目时": "When first opening the project",
-  "GPT 子代理显示 token/s，已停止的后台调用不再一直显示运行中，有命令失败时头像不再出现红圈。": "GPT sub-agents show their token/s, a stopped background call no longer stays “running”, and a failed command no longer rings the avatar.",
   "首次打开项目 · 第一次会话开始前": "First open of a project · before its first session starts",
   "以项目自己的版本为准：{projects}": "Defers to the project’s own copy: {projects}",
   "等 {count} 个项目": "and others ({count} in all)",

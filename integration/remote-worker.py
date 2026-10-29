@@ -56,15 +56,18 @@ try:
         if mode=="codex-exited": event["exitCode"]=int(sys.argv[2])
         elif len(sys.argv)>2 and sys.argv[2]: event["command"]=sys.argv[2][:24]
     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-        client.settimeout(2)
+        client.settimeout(5 if mode == "codex-started" else 2)
         client.connect(os.environ["AGENTRIX_SOCKET"])
         client.sendall((json.dumps(event)+"\n").encode())
+        if mode == "codex-started": client.recv(1)
 except Exception: pass
 '''
 
 BASH_SOURCE = r'''if [ -r "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi
 cd -- "$AGENTRIX_ROOT" || exit 1
 __pg_note=$AGENTRIX_READING_NOTE; unset AGENTRIX_READING_NOTE
+__pg_note_file=$AGENTRIX_READING_NOTE_FILE; unset AGENTRIX_READING_NOTE_FILE
+__pg_reading_note() { if [ -r "$__pg_note_file" ]; then cat -- "$__pg_note_file"; else printf '%s' "$__pg_note"; fi; }
 unalias codex 2>/dev/null || true
 unalias claude 2>/dev/null || true
 __pg_emit() { "$AGENTRIX_PYTHON" "$AGENTRIX_NOTIFY_FILE" "$@" >/dev/null 2>&1; }
@@ -78,7 +81,8 @@ function codex {
     __pg_emit codex-started "$(__pg_command "$@")"
     # What the reading view can show (electron/features/agents/reading-note.cjs); the user's own -c comes later and wins.
     local -a note=()
-    [ -n "$__pg_note" ] && note=(-c "developer_instructions=\"$__pg_note\"")
+    local current_note=$(__pg_reading_note)
+    [ -n "$current_note" ] && note=(-c "developer_instructions=\"$current_note\"")
     "$executable" -c "notify=$AGENTRIX_NOTIFY_COMMAND" -c 'tui.terminal_title=["session-id"]' "${note[@]}" "$@"
     result=$?
     __pg_emit codex-exited "$result"
@@ -99,7 +103,8 @@ print(json.dumps({"hooks":hooks}))
 PY
     )
     local -a note=()
-    [ -n "$__pg_note" ] && note=(--append-system-prompt "$__pg_note")
+    local current_note=$(__pg_reading_note)
+    [ -n "$current_note" ] && note=(--append-system-prompt "$current_note")
     "$executable" --settings "$settings" "${note[@]}" "$@"
     result=$?
     __pg_emit codex-exited "$result" claude
@@ -217,7 +222,7 @@ def compact_claude_record(record):
                               "input": {key: clip(value, 600) for key, value in arguments.items() if isinstance(value, (str, int, float, bool))}})
             elif kind == "tool_result": parts.append({"type": "tool_result", "tool_use_id": block.get("tool_use_id"), "is_error": bool(block.get("is_error")), "content": ""})
     else: return None
-    kept = {**provenance, **{key: record.get(key) for key in ("type", "uuid", "parentUuid", "timestamp", "cwd", "sessionId", "effort", "isApiErrorMessage") if key in record}}
+    kept = {**provenance, **{key: record.get(key) for key in ("type", "uuid", "parentUuid", "timestamp", "cwd", "sessionId", "effort", "perTurnEffort", "isApiErrorMessage") if key in record}}
     kept["message"] = {"role": message.get("role"), "content": parts}
     if "stop_reason" in message: kept["message"]["stop_reason"] = message["stop_reason"]
     result = record.get("toolUseResult")
@@ -565,6 +570,8 @@ class Worker:
         self.temp = None
         self.skills_bundle = None
         self.skill_paths = {}
+        self.skill_note_ready = threading.Event()
+        self.skill_note_sequence = None
         self.master = None
         self.child = None
         self.stopping = False
@@ -946,6 +953,7 @@ class Worker:
             return text.replace("{AGENTRIX_SKILLS}", folder.replace(os.sep, "/")).replace("{AGENTRIX_AGENTS}", agents)
         bundle = self.skills_bundle if self.skills_bundle is not None else {}
         if not isinstance(bundle, dict) or not isinstance(bundle.get("files", []), list): raise ValueError("Invalid remote skills bundle.")
+        self.skill_paths = {}
         for skill in bundle.get("files", []):
             if not isinstance(skill, dict) or not isinstance(skill.get("id"), str) or skill.get("assets"): raise ValueError("Only remote SKILL.md text is supported.")
             name, scope, text = skill.get("name"), skill.get("scope"), skill.get("text")
@@ -955,6 +963,7 @@ class Worker:
             directory = os.path.join(folder, scope, name)
             os.makedirs(directory, mode=0o700, exist_ok=True)
             filename = os.path.join(directory, "SKILL.md")
+            if os.path.exists(filename): os.chmod(filename, 0o600)
             with open(filename, "w", encoding="utf-8") as output: output.write(text)
             os.chmod(filename, 0o400)
             self.skill_paths[skill["id"]] = filename.replace(os.sep, "/")
@@ -968,6 +977,17 @@ class Worker:
         # Expand every placeholder before applying the shell's existing limit; long notes must not kill a channel.
         note = self.install_skills(reading_note).replace("{AGENTRIX_HANDOFF}", self.handoff_path())
         return note[:8000] if not set('"\\\n\r') & set(note) else ""
+
+    def update_skill_note(self, sequence, note, bundle):
+        if sequence != self.skill_note_sequence: raise ValueError("Agent launch changed.")
+        try:
+            self.skills_bundle = bundle
+            text = self.startup_note(note)
+            filename = os.path.join(self.temp, "skill-note.txt")
+            with open(filename, "w", encoding="utf-8") as output: output.write(text)
+            os.chmod(filename, 0o600)
+            return self.skill_paths
+        finally: self.skill_note_ready.set()
 
     def start_terminal(self, cols, rows, reading_note=""):
         with self.lock:
@@ -995,6 +1015,7 @@ class Worker:
         # Plain words for the Codex wrapper in BASH_SOURCE; anything that could break its TOML string is left out.
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
         if reading_note: env["AGENTRIX_READING_NOTE"] = reading_note
+        env["AGENTRIX_READING_NOTE_FILE"] = os.path.join(self.temp, "skill-note.txt")
         for key in ("NO_COLOR", "NODE_DISABLE_COLORS"): env.pop(key, None)
         if env.get("FORCE_COLOR") == "0": env.pop("FORCE_COLOR", None)
         child, master = pty.fork()
@@ -1028,7 +1049,13 @@ class Worker:
                     with self.sequence_lock:
                         self.sequence += 1
                         event.update(projectId=self.project_id, sessionKey=self.token, sequence=self.sequence)
+                        if event.get("type") == "codex-started":
+                            self.skill_note_sequence = self.sequence
+                            self.skill_note_ready.clear()
                         self.emit({"type": "event", "event": event})
+                    if event.get("type") == "codex-started":
+                        self.skill_note_ready.wait(4)
+                        client.sendall(b"\n")
                 except (OSError, ValueError): pass
 
     def terminal_loop(self):
@@ -1119,6 +1146,7 @@ class Channel:
             elif op == "claude-status": value = worker.claude_status(message.get("path"), message.get("since"))
             elif op == "history": value = history_records(worker.coding_root, worker.codex_home, os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
             elif op == "write-handoff": value = worker.write_handoff(message.get("text"))
+            elif op == "skill-note": value = worker.update_skill_note(message.get("sequence"), message.get("note"), message.get("skills"))
             elif op == "create": value = worker.create(message.get("path", ""), message["name"], message["kind"], message.get("unique", False))
             elif op == "rename": value = worker.rename(message["path"], message["name"])
             elif op == "remove": value = worker.remove(message["path"])

@@ -1,7 +1,7 @@
 // What an agent runs with, as its own records tell it: the model, how hard it thinks (its effort) and whether fast mode
 // is on. Codex writes them when a turn starts (turn_context) and whenever its settings are applied (at start, after
 // /model or /fast: thread_settings_applied, whose service tier "priority" is fast mode). Claude Code writes them with
-// every reply (message.model, effort, usage.speed) and answers /model, /effort and /fast at once in its own output.
+// every reply (message.model, effort/perTurnEffort, usage.speed) and answers /model, /effort and /fast at once in its own output.
 // The reading view shows them above its message box.
 const EMPTY = { model: null, effort: null, fast: null };
 const text = value => typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -34,7 +34,8 @@ function agentSettings(current, agent, record) {
     if (record.isSidechain) return current;
     if (record.type === 'assistant') {
       const model = text(record.message?.model), speed = record.message?.usage?.speed;
-      return changed(current, { model: model && model !== '<synthetic>' ? model : null, effort: text(record.effort), fast: typeof speed === 'string' ? speed === 'fast' : null });
+      return changed(current, { model: model && model !== '<synthetic>' ? model : null, effort: text(record.perTurnEffort) ?? text(record.effort),
+        fast: speed === 'fast' ? true : speed === 'standard' ? false : null });
     }
     if (record.type === 'user') { const said = claudeCommandOutput(record); return said ? changed(current, said) : current; }
     return current;

@@ -356,10 +356,31 @@ function describeActions(s, cwd, actions) {
     skillDescription(action.target, cwd, action.skillFile).then(description => { if (description) { action.description = description; s.actions.update(action); } }).catch(() => {});
   }
 }
-// A shell can outlive a Settings change. Its wrappers reread this small file for every new CLI session.
+function startSkillSession(project, s, sequence, started = true) {
+  skills.endSession(project.id, s.skillSessionId);
+  s.skillSessionId = randomUUID();
+  const remote = project.kind === 'ssh';
+  const delivery = skills.delivery(project, remote, s.skillSessionId, { agent: s.agent, started });
+  const note = startupNote(READING_NOTE, remote ? '{AGENTRIX_HANDOFF}' : handoffFile(s.terminalId),
+    (remote ? path.posix : path).join(project.path, 'skills'), delivery);
+  if (remote) {
+    void s.terminal.request('skill-note', { sequence, note, skills: delivery.bundle }).then(paths => {
+      if (s.terminal.info) s.terminal.info.skills = paths;
+    }).catch(report);
+  } else {
+    writeSkillFile(s.skillNoteFile, note); s.skillNote = note;
+  }
+}
+
+function endSkillSession(s) {
+  skills.endSession(s.projectId, s.skillSessionId);
+  s.skillSessionId = null;
+}
+
+// Wrappers reread idle shells' notes. Running agents keep the note actually delivered at their launch.
 function refreshSkillNotes() {
   for (const s of sessions.values()) {
-    if (!s.skillNoteFile) continue;
+    if (!s.skillNoteFile || s.codexActive || s.status === 'exited') continue;
     const project = store.projects.find(project => project.id === s.projectId);
     if (!project) continue;
     const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'), skills.delivery(project, false, s.sessionId));
@@ -697,6 +718,7 @@ function onEvent(event) {
   if (event.type !== 'turn-complete' && !acceptShellEvent(s, event)) return;
   s.approval?.context('shell-event', [event.type, event.sequence]);
   if (event.type === 'shell-ready' || event.type === 'shell-prompt') {
+    endSkillSession(s);
     s.needsInput = null; s.agentCommand = null; stopUsageAccount(s);
     s.claudeResumeId = null; s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
     s.activityMonitor?.stop(); s.activityMonitor = null;
@@ -720,6 +742,7 @@ function onEvent(event) {
       stopUsageAccount(s);
       s.ready = false; s.codexActive = true; s.status = 'codex'; s.error = null; s.codexActivity = 'unknown'; s.agentSettings = null; s.usage = null;
       s.agent = event.agent === 'claude' ? 'claude' : 'codex';
+      startSkillSession(project, s, event.sequence, false);
       s.activityMonitor?.stop(); s.activityMonitor = null; s.actions.reset(); s.conversation.reset(); s.promptQueue.reset();
       broadcast(); return;
     }
@@ -744,6 +767,7 @@ function onEvent(event) {
     if (!keepClaudeHistory) { s.actions.reset(); s.conversation.reset(); s.claudeTranscript = null; s.claudeSessionId = null; }
     s.promptQueue.reset();
     s.agent = event.agent === 'claude' ? 'claude' : 'codex';
+    startSkillSession(project, s, event.sequence);
     if (!keepClaudeHistory) { s.activityMonitor?.stop(); s.activityMonitor = null; }
     if (!keepClaudeHistory || !s.usage) startUsage(project, s, event);
     // A terminal restores the agent it last ran. Switching agents drops the other one's conversation id.
@@ -813,6 +837,7 @@ function onEvent(event) {
     store.setRestore(s.terminalId, { terminal: true, codex: true, cwd: event.cwd });
     // Unread completion is independent of session activity. It survives new turns.
   } else if (event.type === 'codex-exited') {
+    endSkillSession(s);
     s.needsInput = null; s.agentCommand = null; stopUsageAccount(s);
     s.claudeResumeId = null; s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
     s.activityMonitor?.stop(); s.activityMonitor = null; s.codexActivity = 'unknown';
@@ -934,12 +959,11 @@ function nativeSessionEvent(id, sessionId, message) {
   };
   if (message.type === 'managed-ready') { s.nativeReady = true; scheduleState(); }
   if (message.type === 'managed-prompt' && promptText(message.text, message) !== null) {
-    s.completionWork?.begin();
+    s.completionWork?.begin(at);
     add('user', message.text);
-    const task = summarizeTask(message.text, { spoken: true });
-    if (task) { s.lastTask = task; s.lastTaskSummary = summarizeTask(message.text); s.lastTaskTitle = message.text; }
     s.activityInputAt = s.activityConfirmedInputAt = at;
-    s.codexActivity = 'working'; store.expectCompletion(project.id); scheduleState();
+    store.expectCompletion(project.id);
+    applyActivity(project, s, { threadId: s.claudeSessionId || sessionId, turnId: null, state: 'working', updatedAt: at, prompt: message.text });
   }
   if (s.nativeMode === 'claude-sdk') {
     if (message.session_id) s.claudeSessionId = message.session_id;
@@ -987,7 +1011,8 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   // The agent wrappers tell Claude Code and Codex what the reading view shows (an SSH project's worker is told on start),
   // and where the work done in this folder before is written down for them (handoff.cjs), so either one carries it on.
   if (project.kind !== 'ssh') {
-    env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), skills.delivery(project, false, sessionId));
+    env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
+      skills.delivery(project, false, sessionId));
     writeSkillFile(skillNoteFile, env.AGENTRIX_READING_NOTE);
     env.AGENTRIX_READING_NOTE_FILE = skillNoteFile;
     void writeHandoff(handoffFile(id), startPath, { memoryDir: memoryDir() }).catch(() => {});
@@ -1006,6 +1031,11 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     mode: nativeMode, cwd: startPath, env, pty, changed: scheduleState,
     event: message => nativeSessionEvent(id, sessionId, message),
   }) : null;
+  if (native) {
+    env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
+      skills.delivery(project, false, sessionId, { agent: nativeMode === 'claude-sdk' ? 'claude' : 'codex', started: true }));
+    writeSkillFile(skillNoteFile, env.AGENTRIX_READING_NOTE);
+  }
   const terminalOptions = { name: 'xterm-256color', cols: 90, rows: 22, cwd: startPath, env,
     ...(!['zsh', 'bash'].includes(shellKind) ? { useConpty: true, useConptyDll: true } : {}) };
   const remoteSkills = project.kind === 'ssh' ? skills.delivery(project, true, sessionId) : null;
@@ -1017,7 +1047,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     : shellKind === 'cmd' ? pty.spawn(cmdPath, ['/D', '/Q', '/K', path.join(integrationDir, 'bootstrap.cmd')], terminalOptions)
     : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions));
   const s = {
-    terminal, terminalId: id, projectId: project.id, sessionId, sessionKey, bootstrapFile, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
+    terminal, terminalId: id, projectId: project.id, sessionId, skillSessionId: nativeMode ? sessionId : null, sessionKey, bootstrapFile, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
     // Command Prompt reports its prompts through markers in its output instead of the event pipe.
     usageEnv: project.kind === 'ssh' ? null : { ...env },
     prompts: !native && shellKind === 'cmd' ? new PromptMarkers() : null,
@@ -1123,6 +1153,9 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     if (sessions.get(id) !== s) return;
     flush();
     s.native?.registry.close();
+    endSkillSession(s);
+    skills.endSession(project.id, sessionId);
+    if (skillNoteFile) fs.rmSync(skillNoteFile, { force: true });
     stopUsageAccount(s);
     s.status = 'exited'; s.ready = false; s.codexActive = false;
     s.activityMonitor?.stop(); s.activityMonitor = null; s.codexActivity = 'unknown';
@@ -1142,6 +1175,8 @@ function disposeTerminal(id) {
   const s = sessions.get(id);
   if (!s) return;
   sessions.delete(id);
+  endSkillSession(s);
+  skills.endSession(s.projectId, s.sessionId);
   s.native?.registry.close();
   stopUsageAccount(s);
   clearTimeout(s.flushTimer); clearTimeout(s.actionTimer); clearTimeout(s.conversationTimer);

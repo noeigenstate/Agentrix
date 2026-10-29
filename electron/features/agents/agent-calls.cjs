@@ -5,12 +5,14 @@ const { claudePrompt, resolvePath, TranscriptTail } = require('../../agent-actio
 const { rolloutFiles, sessionMeta } = require('../../session-files.cjs');
 const { codexMetadata } = require('../../transcript-window.cjs');
 const { TokenRates, emptyRate } = require('./token-rate.cjs');
+const { agentSettings } = require('./agent-settings.cjs');
 
 const text = value => typeof value === 'string' ? value : '';
 const short = value => text(value).replace(/\s+/g, ' ').trim().slice(0, 240);
 const enabled = value => value === true || value === 'true';
 const unquote = value => value.replace(/["']/g, '');
 const basename = value => value.split(/[\\/]/).at(-1);
+const separator = word => /^(?:&&|\|\||[;&|\n])$/.test(word);
 const agentRoles = new Map(Object.entries({ Explore: '搜索', Plan: '规划', 'general-purpose': '通用', claude: '通用', none: '通用', fork: '分身' }));
 
 // Heredocs are data: their quotes and command examples must never become shell tokens.
@@ -40,15 +42,18 @@ function shellTokens(command) {
   return tokens;
 }
 
+function commandPrefix(tokens, words, index) {
+  const boundary = tokens.slice(0, index).findLastIndex(separator);
+  return words.slice(boundary + 1, index).every(prefix => /^(?:env|nohup|exec)$|^\w+=/.test(prefix));
+}
+
 // Only inspect the command, never evaluate shell syntax. Keep quoted config values together.
 function codexCall(command, cwd) {
   const tokens = shellTokens(text(command));
   const words = tokens.map(unquote);
-  const separator = word => /^(?:&&|\|\||[;&|\n])$/.test(word);
   const start = words.findIndex((word, i) => {
     if (!/(?:^|[\\/])codex(?:\.exe|\.cmd)?$/i.test(word) || words[i + 1] !== 'exec') return false;
-    const boundary = tokens.slice(0, i).findLastIndex(separator);
-    return words.slice(boundary + 1, i).every(prefix => /^(?:env|nohup|exec)$|^\w+=/.test(prefix));
+    return commandPrefix(tokens, words, i);
   });
   if (start < 0) return null;
   const variables = new Map(cwd ? [['PWD', cwd]] : []);
@@ -81,6 +86,30 @@ function codexCall(command, cwd) {
     }
   }
   return { model, effort, fast, provider, task, log, prompt };
+}
+
+function claudeCall(command) {
+  const tokens = shellTokens(text(command)), words = tokens.map(unquote);
+  const start = words.findIndex((word, i) => /(?:^|[\\/])claude(?:\.exe|\.cmd)?$/i.test(word) && commandPrefix(tokens, words, i));
+  if (start < 0) return null;
+  let print = false, model = 'default', effort = null, settings = {};
+  for (let i = start + 1; i < words.length; i++) {
+    const word = words[i];
+    if (separator(tokens[i]) || word === '--') break;
+    if (['-h', '--help', '-v', '--version'].includes(word)) return null;
+    if (word === '-p' || word === '--print') print = true;
+    else if (/^(?:<|[12]?>>?|&>>?)$/.test(tokens[i])) i++;
+    else if (word === '--model') model = words[++i] || model;
+    else if (word.startsWith('--model=')) model = word.slice(8) || model;
+    else if (word === '--effort') effort = words[++i] || null;
+    else if (word.startsWith('--effort=')) effort = word.slice(9) || null;
+    else if (word === '--settings' || word.startsWith('--settings=')) {
+      // Inline settings are recorded with this call; never read the caller's current defaults or evaluate a path.
+      const value = word.includes('=') ? tokens[i].slice(tokens[i].indexOf('=') + 1) : tokens[++i] || '';
+      try { settings = JSON.parse(value.startsWith('"') ? JSON.parse(value) : value.replace(/^'([\s\S]*)'$/, '$1')); } catch { }
+    } else if (!print && !word.startsWith('-')) return null;
+  }
+  return print ? { model, effort, fast: typeof settings?.fastMode === 'boolean' ? settings.fastMode : null } : null;
 }
 
 // Brief headings need only the beginning; retry missing or empty files until their writer runs.
@@ -136,17 +165,18 @@ class AgentCalls {
       }
       if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && !this.calls.has(block.id)) {
         const input = block.input || {}, codex = block.name === 'Bash' ? codexCall(input.command, record.cwd) : null;
-        if (block.name !== 'Agent' && !codex) continue;
-        const model = codex?.model || text(input.model) || 'default';
+        const claude = block.name === 'Bash' && !codex ? claudeCall(input.command) : null;
+        if (block.name !== 'Agent' && !codex && !claude) continue;
+        const settings = { model: codex?.model || claude?.model || text(input.model) || 'default',
+          effort: codex?.effort ?? claude?.effort ?? (text(input.effort).trim() || null), fast: codex?.fast ?? claude?.fast ?? null };
         this.calls.set(block.id, {
           agent: codex ? 'Codex' : 'Claude Code', provider: codex?.provider ?? null,
-          model, requestedModel: model, rate: null,
-          effort: codex?.effort ?? null, fast: codex?.fast ?? null,
+          ...settings, requested: settings, rate: null, shell: !!claude,
           task: short(input.description || block.description || codex?.task || input.subagent_type || block.name),
           title: text(codex?.task || input.description || block.description || input.subagent_type || block.name).replace(/\s+/g, ' ').trim(),
-          role: codex ? '执行' : agentRoles.get(input.subagent_type) || text(input.subagent_type) || '通用',
+          role: codex || claude ? '执行' : agentRoles.get(input.subagent_type) || text(input.subagent_type) || '通用',
           prompt: this.local && this.folder ? codex?.prompt : null,
-          background: enabled(input.run_in_background), done: false, preparing: this.local && (codex ? !!codex.log : !!this.folder), log: codex?.log,
+          background: enabled(input.run_in_background), done: false, preparing: this.local && (codex ? !!codex.log : !claude && !!this.folder), log: codex?.log,
         });
         this.refresh(block.id);
         changed = true;
@@ -164,7 +194,7 @@ class AgentCalls {
         const call = this.calls.get(block.tool_use_id);
         if (!call || call.reviewed) continue;
         call.background ||= enabled(result.isAsync) || !!result.backgroundTaskId;
-        if (call.agent === 'Codex' && typeof result.backgroundTaskId === 'string' && result.backgroundTaskId) call.backgroundTaskId = result.backgroundTaskId;
+        if (typeof result.backgroundTaskId === 'string' && result.backgroundTaskId) call.backgroundTaskId = result.backgroundTaskId;
         if ((block.is_error || !call.background) && !call.done) { call.done = true; call.finishedAt = at; changed = true; }
         if (call.agent === 'Claude Code') {
           if (typeof result.resolvedModel === 'string' && result.resolvedModel) {
@@ -211,7 +241,7 @@ class AgentCalls {
     return changed;
   }
   follows(call) {
-    return this.local && (this.folder || call.log) && (call.done ? !call.drained : !call.reviewed &&
+    return this.local && !call.shell && (this.folder || call.log) && (call.done ? !call.drained : !call.reviewed &&
       (call.agent === 'Claude Code' ? !!this.folder : !!call.prompt || !!call.log && (call.preparing || call.threadId || !call.headerDone)));
   }
   // Follow running workers too; generation identity cancels even an already queued callback.
@@ -262,31 +292,38 @@ class AgentCalls {
       }
     }).catch(() => {}).finally(() => { if (this.calls === calls) { this.work = null; this.schedule(); } });
   }
-  signature(call) { return JSON.stringify(call && [call.model, call.preparing, call.title, call.role, call.rate]); }
+  signature(call) { return JSON.stringify(call && [call.model, call.effort, call.fast, call.preparing, call.title, call.role, call.rate]); }
   bind(call, filename) {
     if (call.reader?.filename === filename) return;
-    call.model = call.resultModel || call.requestedModel; call.rate = null; call.verified = false;
+    Object.assign(call, call.requested);
+    call.model = call.resultModel || call.model; call.rate = null; call.verified = false;
     call.meter = new TokenRates(call.agent === 'Codex' ? 'codex' : 'claude', { sidechain: true });
     call.reader = filename ? new TranscriptTail(filename, { onReset: async (partial, file) => {
       call.meter.reset(partial);
+      Object.assign(call, call.requested);
       call.verified = call.agent === 'Claude Code' || !!await codexMetadata(file, call.threadId, 'exec');
     } }) : null;
   }
   async readWorker(call, filename, calls, meta = null) {
     this.bind(call, filename);
-    if (!call.reader) { call.model = call.resultModel || text(meta?.model) || call.requestedModel; return; }
+    if (!call.reader) { call.model = call.resultModel || text(meta?.model) || call.requested.model; return; }
     const readable = await call.reader.read(record => {
       if (this.calls !== calls || !call.verified) return;
       if (call.agent === 'Codex' && record.type === 'session_meta' && (record.payload?.id !== call.threadId || record.payload?.source !== 'exec')) { call.verified = false; return; }
+      if (call.agent === 'Claude Code') {
+        const settings = agentSettings(null, 'claude', { ...record, isSidechain: false });
+        if (settings) { call.effort = settings.effort ?? call.effort; call.fast = settings.fast ?? call.fast; }
+      }
       call.meter.apply(record);
       if (record.type === 'assistant' || record.type === 'token_usage_record') call.preparing = false;
     }).catch(() => false);
     if (this.calls !== calls) return;
     call.rate = readable && call.verified ? call.meter.snapshot() : null;
-    call.model = call.meter.model || call.resultModel || text(meta?.model) || call.requestedModel;
+    call.effort ??= text(meta?.effort).trim() || null;
+    call.model = call.meter.model || call.resultModel || text(meta?.model) || call.requested.model;
   }
   async readModels(folder, ids, calls) {
-    ids = new Set([...ids].filter(id => calls.get(id)?.agent === 'Claude Code'));
+    ids = new Set([...ids].filter(id => calls.get(id)?.agent === 'Claude Code' && !calls.get(id).shell));
     if (!folder || !ids.size) return;
     const files = [...ids].some(id => !calls.get(id).filename) ? await fs.readdir(folder).catch(() => []) : [...ids].map(id => path.basename(calls.get(id).filename).replace(/\.jsonl$/, '.meta.json'));
     if (this.calls !== calls) return;
@@ -393,4 +430,4 @@ class AgentCalls {
   }
 }
 
-module.exports = { AgentCalls, codexCall };
+module.exports = { AgentCalls, codexCall, claudeCall };

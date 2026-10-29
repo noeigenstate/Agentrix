@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { AgentCalls, codexCall } = require('../electron/features/agents/agent-calls.cjs');
+const { AgentCalls, codexCall, claudeCall } = require('../electron/features/agents/agent-calls.cjs');
 const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
 
 const use = (id, name = 'Agent', input = {}) => ({ type: 'assistant', message: { model: 'claude-opus-5-5', content: [{ type: 'tool_use', id, name, input }] } });
@@ -39,6 +39,68 @@ test('Codex shell flags preserve the route, prompt filename and resolved stdin p
   assert.equal(codexCall('echo codex exec -m gpt-6.1-sol'), null);
   assert.equal(codexCall(`printf '%s' 'codex exec -m gpt-6.1-sol'`), null);
   assert.equal(codexCall('cd <home>/repo&&codex exec -m gpt-6.1-sol\necho done').model, 'gpt-6.1-sol');
+});
+
+test('Claude Agent calls keep their own effort and leave unrecorded effort and speed unknown', () => {
+  const calls = new AgentCalls({ local: false });
+  for (const [id, effort] of [['high', 'high'], ['max', 'max'], ['missing', undefined]]) calls.apply(use(id, 'Agent', { model: 'opus', effort }));
+  assert.deepEqual(calls.snapshot().map(({ agent, model, effort, fast }) => ({ agent, model, effort, fast })), [
+    { agent: 'Claude Code', model: 'opus', effort: 'high', fast: null },
+    { agent: 'Claude Code', model: 'opus', effort: 'max', fast: null },
+    { agent: 'Claude Code', model: 'opus', effort: null, fast: null },
+  ]);
+});
+
+test('Claude print launches parse model, effort and inline fast settings without inheriting defaults', () => {
+  assert.deepEqual(claudeCall('claude -p "Inspect the parser" --effort high --model claude-opus-5-5'), { model: 'claude-opus-5-5', effort: 'high', fast: null });
+  assert.deepEqual(claudeCall('cd /repo && env MODE=test nohup "/tools/claude.cmd" --model=sonnet --effort=max --print < brief.md > out.txt'), { model: 'sonnet', effort: 'max', fast: null });
+  assert.deepEqual(claudeCall(`claude -p --effort xhigh --settings '{"fastMode":true}'`), { model: 'default', effort: 'xhigh', fast: true });
+  assert.deepEqual(claudeCall(`claude --settings='{"fastMode":false}' --print --model opus`), { model: 'opus', effort: null, fast: false });
+  assert.deepEqual(claudeCall(String.raw`claude -p --settings "{\"fastMode\":true}"`), { model: 'default', effort: null, fast: true });
+  assert.deepEqual(claudeCall('claude -p < --effort=max > --model=decoy'), { model: 'default', effort: null, fast: null });
+  assert.deepEqual(claudeCall('claude -p --effort ultracode --settings settings.json'), { model: 'default', effort: 'ultracode', fast: null });
+  assert.deepEqual(claudeCall('claude -p "--effort max --model fake"; echo --effort low'), { model: 'default', effort: null, fast: null });
+  for (const command of ['claude --help', 'claude --help -p', 'claude --version', 'claude --effort high --model opus', 'claude doctor -p',
+    'echo claude -p --effort high', `printf '%s' 'claude -p --effort high'`, 'claude --model "--print"', 'claude -- "--print"',
+    'cat <<EOF\nclaude -p --effort high\nEOF', '# claude -p --effort high', 'codex exec -m gpt-6.1-sol']) assert.equal(claudeCall(command), null, command);
+});
+
+test('Claude Bash print launches share call lifecycle while Codex detection keeps precedence', () => {
+  const calls = new AgentCalls({ local: false });
+  calls.apply(use('claude-shell', 'Bash', { command: 'claude -p --model opus --effort high', run_in_background: true }));
+  calls.apply(result('claude-shell', { backgroundTaskId: 'shell-task' }));
+  const claude = calls.snapshot()[0];
+  assert.deepEqual([claude.agent, claude.model, claude.effort, claude.fast, claude.running], ['Claude Code', 'opus', 'high', null, 1]);
+  calls.apply(use('codex-shell', 'Bash', { command: `${command} "claude -p --effort low"` }));
+  const codex = calls.snapshot()[1];
+  assert.deepEqual([codex.agent, codex.model, codex.effort, codex.fast], ['Codex', 'gpt-6.1-sol', 'high', true]);
+  const completion = notice('unused'); completion.message.content = completion.message.content.replace('<task-id>task</task-id>', '<task-id>shell-task</task-id>');
+  calls.apply(completion);
+  assert.equal(calls.snapshot()[0].reviewing, 1);
+  calls.apply(stop());
+  assert.equal(calls.snapshot().length, 1);
+  assert.equal(calls.snapshot()[0].agent, 'Codex');
+});
+
+test('Claude worker replies refine only their own effort and speed, and transcript resets restore launch records', async t => {
+  const { folder, calls } = await fixture(t);
+  const filename = path.join(folder, 'agent-own-settings.jsonl');
+  await fs.writeFile(path.join(folder, 'agent-own-settings.meta.json'), JSON.stringify({ toolUseId: 'own-settings', model: 'opus' }));
+  const reply = { type: 'assistant', isSidechain: true, effort: 'high', perTurnEffort: 'xhigh', message: { model: 'claude-opus-5-5', usage: { speed: 'fast' }, content: [] } };
+  await fs.writeFile(filename, JSON.stringify(reply) + '\n');
+  calls.apply(use('own-settings', 'Agent', { model: 'opus', effort: 'medium' })); await calls.work;
+  await fs.writeFile(path.join(folder, 'agent-unrelated.meta.json'), JSON.stringify({ toolUseId: 'unrelated', model: 'sonnet', effort: 'low' }));
+  await fs.writeFile(path.join(folder, 'agent-unrelated.jsonl'), '{}\n');
+  calls.apply(use('unrelated', 'Agent', { model: 'sonnet' })); await calls.work;
+  assert.deepEqual(calls.snapshot().map(({ model, effort, fast }) => [model, effort, fast]), [['claude-opus-5-5', 'xhigh', true], ['sonnet', 'low', null]]);
+  let changes = 0; calls.changed = () => changes++;
+  await fs.appendFile(filename, JSON.stringify({ ...reply, perTurnEffort: 'max', message: { ...reply.message, usage: { speed: 'standard' } } }) + '\n');
+  calls.refresh('own-settings'); await calls.work;
+  assert.deepEqual([calls.snapshot()[0].effort, calls.snapshot()[0].fast], ['max', false]);
+  assert.equal(changes, 1, 'setting-only changes publish even when the model and rate stay the same');
+  await fs.writeFile(filename, '\n');
+  calls.refresh('own-settings'); await calls.work;
+  assert.deepEqual([calls.snapshot()[0].effort, calls.snapshot()[0].fast], ['medium', null], 'a replaced transcript cannot retain another run’s settings');
 });
 
 test('sanitised real heredoc launches keep Codex flags and redirected files after cd &&', async () => {

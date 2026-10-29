@@ -113,6 +113,7 @@ function mainHarness(t, f) {
   const context = vm.createContext({ path, sessions, store, TranscriptTail, monitorActivity: (read, changed, options) => monitorActivity(read, changed, { ...options, watch: null }), claudeConversation, claudeRecord,
     claudeConfigDir: () => f.home, findClaudeSession: (cwd, id) => findClaudeSession(cwd, id, f.home),
     describeActions() {}, skills: null, findProject: () => project, broadcast() {}, scheduleState() {}, acceptShellEvent: () => true, noteSettings() {}, readEvery: () => 1000,
+    startSkillSession() {}, endSkillSession() {},
     ...require('../electron/features/agents/agent-usage.cjs'), claudeAccount: async () => null, setInterval: (run, ms) => setInterval(run, ms).unref(), clearInterval, agentCommand: require('../electron/features/agents/agent-command.cjs').agentCommand,
     claudeAccounts: { account: null, setActive() {}, refresh() {} },
     quitting: false, Date, claudeResumeCommand, restorePlans: new Map(), agentCommand, sshHandoff: async () => false,

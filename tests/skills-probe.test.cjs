@@ -45,14 +45,14 @@ test('loopback probe captures first-open, later-session auto and project yield i
       fs.mkdirSync(path.join(project.path, 'skills/code-standard'), { recursive: true });
       store.refresh(false, new Set([path.join(project.path, 'skills')]));
     }
-    const instructions = startupNote('Read.', null, null, store.delivery(project, false, phase));
+    const instructions = startupNote('Read.', null, null, store.delivery(project, false, phase, { agent: project.id, started: true }));
     const payload = project.id === 'codex' ? { input: [{ role: 'developer', content: instructions }] } : { system: instructions, stream: true, messages: [] };
     const response = await fetch(base + (project.id === 'codex' ? '/v1/responses' : '/v1/messages'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
     assert.equal(response.status, 200); await response.text();
     const captured = model.requests.at(-1);
     assert.equal(captured.agent, project.id);
     assert.equal(captured.instructions.includes(first), phase === 'first');
-    assert.equal(captured.instructions.includes('This project has its own code-standard skill; follow it.'), phase === 'yielded');
+    assert.equal(captured.instructions.includes('This project has its own code-standard skill at skills/code-standard/SKILL.md; follow it.'), phase === 'yielded');
     if (phase === 'later') assert.ok(captured.instructions.includes('Available auto skills: code-standard:'));
     if (phase === 'yielded') assert.ok(!captured.instructions.includes(standardPath));
   }

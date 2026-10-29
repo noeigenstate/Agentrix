@@ -3,6 +3,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import queue
 import os
 import re
 import shlex
@@ -10,6 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest import mock
 import uuid
@@ -30,6 +32,66 @@ GIT_TOO_OLD = _git_too_old()
 
 
 class RemoteFilesTest(unittest.TestCase):
+    def test_each_agent_launch_gets_a_fresh_note_and_stale_launches_cannot_replace_it(self):
+        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
+        self.worker.handoff_path = lambda: os.path.join(self.worker.temp, "handoff.md")
+        text = "---\nname: code-standard\ndescription: Code rules.\n---\nFollow the rules."
+        bundle = {"files": [{"id": "builtin:code-standard", "name": "code-standard", "scope": "builtin", "text": text}],
+                  "instructions": "First run: {AGENTRIX_SKILLS}/builtin/code-standard/SKILL.md"}
+        self.worker.skill_note_sequence = 1
+        paths = self.worker.update_skill_note(1, bundle["instructions"], bundle)
+        note_file = Path(self.worker.temp) / "skill-note.txt"
+        self.assertIn("First run:", note_file.read_text(encoding="utf-8"))
+        self.assertIn(paths["builtin:code-standard"], note_file.read_text(encoding="utf-8"))
+        self.assertTrue(self.worker.skill_note_ready.is_set())
+        self.worker.skill_note_sequence = 2
+        self.worker.skill_note_ready.clear()
+        with self.assertRaisesRegex(ValueError, "launch changed"):
+            self.worker.update_skill_note(1, "stale note", bundle)
+        self.assertFalse(self.worker.skill_note_ready.is_set())
+        bundle = dict(bundle, instructions="Auto: {AGENTRIX_SKILLS}/builtin/code-standard/SKILL.md")
+        self.worker.update_skill_note(2, bundle["instructions"], bundle)
+        self.assertIn("Auto:", note_file.read_text(encoding="utf-8"))
+        self.assertNotIn("First run", note_file.read_text(encoding="utf-8"))
+        for filename in self.worker.skill_paths.values(): os.chmod(filename, 0o600)
+
+    def test_launch_notification_waits_for_acknowledgment_without_printing(self):
+        sockets = mock.MagicMock()
+        client = sockets.socket.return_value.__enter__.return_value
+        client.recv.return_value = b"\n"
+        output = io.StringIO()
+        with mock.patch.dict(sys.modules, {"socket": sockets}), mock.patch.dict(os.environ, {"AGENTRIX_SOCKET": "fixture", "AGENTRIX_TOKEN": "fixture"}), \
+                mock.patch.object(sys, "argv", ["notify.py", "codex-started"]), contextlib.redirect_stdout(output):
+            exec(compile(remote.NOTIFY_SOURCE, "notify.py", "exec"), {})
+        names = [call[0] for call in client.mock_calls]
+        self.assertLess(names.index("sendall"), names.index("recv"))
+        client.recv.assert_called_once_with(1)
+        self.assertEqual(output.getvalue(), "")
+
+    @unittest.skipUnless(hasattr(remote.socket, "AF_UNIX"), "Unix-domain sockets are unavailable")
+    def test_launch_helper_waits_for_the_host_note_before_continuing(self):
+        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
+        self.worker.handoff_path = lambda: os.path.join(self.worker.temp, "handoff.md")
+        socket_path = os.path.join(self.worker.temp, "note.sock")
+        self.worker.listener = remote.socket.socket(remote.socket.AF_UNIX, remote.socket.SOCK_STREAM)
+        self.worker.listener.bind(socket_path)
+        self.worker.listener.listen()
+        self.worker.listener.settimeout(0.1)
+        events = queue.Queue()
+        self.worker.emit = events.put
+        thread = threading.Thread(target=self.worker.events_loop, daemon=True)
+        thread.start()
+        env = dict(os.environ, AGENTRIX_SOCKET=socket_path, AGENTRIX_TOKEN=self.worker.token)
+        process = subprocess.Popen([sys.executable, "-c", remote.NOTIFY_SOURCE, "codex-started"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        event = events.get(timeout=5)["event"]
+        self.assertIsNone(process.poll(), "launch waits until the host writes its note")
+        self.worker.update_skill_note(event["sequence"], "Fresh launch note.", {"files": [], "instructions": "Auto skills."})
+        stdout, stderr = process.communicate(timeout=5)
+        self.assertEqual((process.returncode, stdout, stderr), (0, b"", b""))
+        self.assertEqual((Path(self.worker.temp) / "skill-note.txt").read_text(encoding="utf-8"), "Fresh launch note.")
+        self.worker.stop(); thread.join(timeout=2)
+
     def test_skills_are_copied_to_private_remote_paths_and_manifest_expands(self):
         self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
         text = "---\nname: model-routing\ndescription: Route models.\n---\nRead me.\n"
@@ -141,7 +203,7 @@ class RemoteFilesTest(unittest.TestCase):
         filename = self.claude_file()
         rows = [
             {"type": "user", "uuid": "u1", "message": {"content": "Remote prompt"}},
-            {"type": "assistant", "uuid": "a1", "effort": "high", "message": {"id": "msg-1", "model": "claude-test", "usage": {
+            {"type": "assistant", "uuid": "a1", "effort": "high", "perTurnEffort": "xhigh", "message": {"id": "msg-1", "model": "claude-test", "usage": {
                 "speed": "fast", "input_tokens": 120, "cache_creation_input_tokens": 40, "cache_read_input_tokens": 80, "output_tokens": 15,
                 "service_tier": "standard", "server_tool_use": {"web_search_requests": 1}, "cache_creation": {"ephemeral_5m_input_tokens": 40}, "other": 1}, "content": [
                 {"type": "thinking", "thinking": "hidden"}, {"type": "text", "text": "Reading"},
@@ -156,6 +218,7 @@ class RemoteFilesTest(unittest.TestCase):
         self.assertEqual([row["uuid"] for row in status["records"]], ["u1", "a1", "queued"])
         reply = status["records"][1]
         self.assertEqual(reply["message"]["model"], "claude-test"); self.assertEqual(reply["effort"], "high")
+        self.assertEqual(reply["perTurnEffort"], "xhigh")
         self.assertEqual(reply["message"]["id"], "msg-1")
         self.assertEqual(reply["message"]["usage"], {"speed": "fast", "input_tokens": 120, "cache_creation_input_tokens": 40, "cache_read_input_tokens": 80, "output_tokens": 15})
         self.assertEqual([block["type"] for block in reply["message"]["content"]], ["text", "tool_use", "tool_use"])

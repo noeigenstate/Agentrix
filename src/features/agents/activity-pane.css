@@ -16,8 +16,8 @@
    and shrinks in proportion to it down to the title and a row (two rows when it has them). */
 .activity-calls { flex: 0 1 auto; min-height: 60px; }
 .activity-calls:has(.activity-call-rows li:nth-child(2)) { min-height: 92px; }
-/* The main model keeps its head, its note and one task row; the rows of its prompts scroll when there are more than fit. */
-.activity-main { flex: 0 1 auto; min-height: 116px; }
+/* The main model keeps its head and one task row; the rows of its prompts scroll when there are more than fit. */
+.activity-main { flex: 0 1 auto; min-height: 100px; }
 .activity-card-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
 :is(.activity-main, .activity-calls) .activity-card-title { font-size: 13px; color: var(--flow-muted); }
 .activity-calls > .activity-card-title { display: flex; align-items: baseline; gap: 8px; flex: none; }
@@ -48,14 +48,17 @@
 
 
 /* A called model: its name leads (its service after it), its calls follow in the secondary ink; the part of a call before its subject is the role. */
-/* A head's name and service share one line: the name keeps its room, the service gives way first; the rate is a fixed 80px column at the right. */
-.activity-call-rows li.activity-call-head p { display: flex; align-items: baseline; }
+/* At 340px the text shrinks and ends in ellipses; settings never widen the rate's 80px column. */
+.activity-call-rows li.activity-call-head { grid-template-columns: 16px minmax(0, 1fr) 80px; }
+.activity-call-rows li.activity-call-head p { display: flex; align-items: baseline; min-width: 0; }
 .activity-call-head p > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-call-head p > b { flex: 0 1 auto; }
+.activity-call-head p > .activity-call-settings { flex: 0 2 auto; }
 .activity-call-head p > .activity-call-provider { flex: 0 100 auto; }
+.activity-call-settings { font-size: 12px; font-weight: 400; color: var(--flow-muted); }
 .activity-call-rows li .activity-rate { min-width: 80px; text-align: right; }
 .activity-call-rows li .activity-rate.is-live { color: var(--flow-ink); }
-/* How the model runs, under its head, in the text column. */
+/* A model that has not replied yet keeps its hint in the text column. */
 .activity-call-rows li.activity-call-note { height: 24px; }
 .activity-call-rows li.activity-call-note p { font-size: 12px; line-height: 16px; color: var(--flow-faint); }
 .activity-call-rows li.activity-call-note:hover::before { background: none; }

@@ -5,6 +5,7 @@ const { transcriptWindow, LIVE_READ_LIMIT } = require('./transcript-window.cjs')
 const { CompletionHistory } = require('./completion-history.cjs');
 const { ClaudeImageLine, readTranscriptChunk } = require('./oversized-record.cjs');
 const { messageText, ownMessage, promptText } = require('./prompt-queue.cjs');
+const { frontMatter } = require('./features/skills/front-matter.cjs');
 
 // What an agent is doing, step by step: each tool it calls becomes one action the window can show
 // ("editing src/App.tsx", "running npm test", "skill code-review", "MCP github · create_issue").
@@ -324,9 +325,9 @@ async function readSkillDescription(file) {
   let handle; try { handle = await fs.open(file, 'r'); } catch { return ''; }
   try {
     const buffer = Buffer.alloc(8192), { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(buffer.toString('utf8', 0, bytesRead));
-    const line = front && /^description:\s*(.*(?:\r?\n[ \t]+.*)*)$/m.exec(front[1]);
-    return line ? clip(line[1].replace(/^[>|][+-]?\s*/, '').replace(/^["']|["']$/g, ''), 400) : '';
+    const description = frontMatter(buffer.toString('utf8', 0, bytesRead))?.fields.description;
+    return typeof description === 'string' ? clip(description.replace(/^[>|][+-]?\s*/, ''), 400) : '';
+  } catch { return '';
   } finally { await handle.close(); }
 }
 // name: "skill" or "plugin:skill". file: a SKILL.md the agent itself read (Codex), relative to cwd.

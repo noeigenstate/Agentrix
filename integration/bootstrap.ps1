@@ -80,11 +80,18 @@ function global:Send-AgentrixEvent {
             $eventData.accountLaunch = if ($AccountLaunch -ceq 'model-only-v1') { 'model-only-v1' } else { 'unavailable' }
         }
         $eventData = $eventData | ConvertTo-Json -Compress
-        $pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', $global:AgentrixSession.pipeName, [System.IO.Pipes.PipeDirection]::Out)
+        $pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', $global:AgentrixSession.pipeName, [System.IO.Pipes.PipeDirection]::InOut)
         try {
             $pipe.Connect(750)
-            $writer = [System.IO.StreamWriter]::new($pipe, [System.Text.UTF8Encoding]::new($false))
-            try { $writer.WriteLine($eventData); $writer.Flush() } finally { $writer.Dispose() }
+            $writer = [System.IO.StreamWriter]::new($pipe, [System.Text.UTF8Encoding]::new($false), 1024, $true)
+            try {
+                $writer.WriteLine($eventData); $writer.Flush()
+                # The main process closes the pipe after writing this launch's agent-specific note.
+                if ($Type -eq 'codex-started') {
+                    $ack = [byte[]]::new(1)
+                    [void]$pipe.ReadAsync($ack, 0, 1).Wait(1500)
+                }
+            } finally { $writer.Dispose() }
         } finally { $pipe.Dispose() }
     } catch { }
 }
@@ -168,11 +175,16 @@ function global:codex {
 # executable path has no spaces and stays unquoted (a quoted first word is only a string in
 # PowerShell), arguments are quoted, and every path uses forward slashes.
 function global:claude {
+    if (-not $global:AgentrixClaudeCommand) {
+        Write-Host 'Claude Code was not found in PATH. Install it, then restart this terminal.' -ForegroundColor Yellow
+        return
+    }
+    Send-AgentrixEvent 'codex-started' -Agent 'claude' -Command (Get-AgentrixCommand $args)
     $currentNote = Get-AgentrixReadingNote
     $readingNote = if ($currentNote) { @('--append-system-prompt', $currentNote) } else { @() }
     if (-not $global:AgentrixClaudeExecutable -or [IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -ne '.exe') {
-        if ($global:AgentrixClaudeCommand) { & $global:AgentrixClaudeCommand @readingNote @args; return }
-        Write-Host 'Claude Code was not found in PATH. Install it, then restart this terminal.' -ForegroundColor Yellow
+        try { & $global:AgentrixClaudeCommand @readingNote @args }
+        finally { Send-AgentrixEvent 'codex-exited' $global:LASTEXITCODE -Agent 'claude' }
         return
     }
     $hookCommand = @(
@@ -185,7 +197,6 @@ function global:claude {
     ) -join ' '
     $hook = { param($kind) @{ hooks = @(@{ type = 'command'; command = ($hookCommand + ' -Kind ' + $kind); timeout = 10 }) } }
     $settings = @{ hooks = @{ UserPromptSubmit = @(& $hook 'start'); Stop = @(& $hook 'stop'); Notification = @(& $hook 'notify'); SessionStart = @(& $hook 'session') } } | ConvertTo-Json -Depth 6 -Compress
-    Send-AgentrixEvent 'codex-started' -Agent 'claude' -Command (Get-AgentrixCommand $args)
     $claudeExit = 0
     try {
         $startInfo = [Diagnostics.ProcessStartInfo]::new()

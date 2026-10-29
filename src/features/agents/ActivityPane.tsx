@@ -48,13 +48,14 @@ function Rate({ rate }: { rate: TokenRate | null | undefined }) {
   return <span className="activity-row-end activity-rate" title={t('这个模型的记录在这里读不到，所以没有速率。')}>— token/s</span>;
 }
 
-// A head row: the model's mark, its name and any non-default service (which gives way first when the pane is narrow), and its rate.
-function ModelHead({ agent, name, provider, title, rate }: { agent: AgentCall['agent']; name: string; provider: string | null | undefined; title: string; rate: TokenRate | null | undefined }) {
+// A head row: the name, recorded effort and speed, any non-default service (which gives way first), and a fixed rate column.
+function ModelHead({ agent, name, effort, fast, provider, title, rate }: { agent: AgentCall['agent']; name: string; effort?: string | null; fast?: boolean | null; provider: string | null | undefined; title: string; rate: TokenRate | null | undefined }) {
   const Mark = agent === 'Codex' ? CodexLogo : ClaudeLogo;
   const visibleProvider = provider === (agent === 'Codex' ? 'OpenAI' : 'Anthropic') ? null : provider;
-  return <li className="activity-call-head" title={title}>
+  const how = [effort === 'default' ? t('默认') : effort, fast != null && (fast ? t('快速') : t('普通模式'))].filter(Boolean).join(' · ');
+  return <li className="activity-call-head" title={[title, how].filter(Boolean).join('\n')}>
     <span className="activity-row-icon"><Mark size={16} /></span>
-    <p><b>{name}</b>{visibleProvider && <span className="activity-call-provider">{visibleProvider}</span>}</p>
+    <p><b>{name}</b>{how && <span className="activity-call-settings"> · {how}</span>}{visibleProvider && <span className="activity-call-provider">{visibleProvider}</span>}</p>
     <Rate rate={rate} />
   </li>;
 }
@@ -67,8 +68,6 @@ const workedPrompts = new Map<string, { session: string | null; summary: string;
 function MainCard({ terminal }: { terminal: ProjectTerminal }) {
   const usage = terminal.agentUsage, settings = terminal.agentSettings, agent = terminal.agent === 'claude' ? 'Claude Code' : 'Codex';
   const actual = usage?.model || null, configured = settings?.model || null, model = actual ?? configured, name = model ? modelName(model) : agent;
-  const how = [settings?.effort && t('思考 {effort}', { effort: settings.effort === 'default' ? t('默认') : settings.effort }),
-    settings?.fast != null && (settings.fast ? t('快速模式') : t('普通模式'))].filter(Boolean).join(' · ');
   const title = [[agent, usage?.provider, model && name].filter(Boolean).join(' / '),
     actual && configured && actual !== configured && t('设置为 {configured}，实际回复来自 {actual}', { configured: modelName(configured), actual: name })].filter(Boolean).join('\n');
   const now = useNow(Date.now), activity = terminal.mainTurn?.state ?? terminal.codexActivity, prompts = terminal.prompts || [], working = prompts.find(prompt => prompt.state === 'working');
@@ -89,8 +88,8 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
   return <section className="activity-card activity-main" aria-label={t('主模型')}>
     <h4 className="activity-card-title">{t('主模型')}</h4>
     <ul className="activity-call-rows">
-      <ModelHead agent={agent} name={name} provider={usage?.provider} title={title} rate={usage?.rate} />
-      <li className="activity-call-note"><span /><p>{model ? how || t('按默认设置运行') : t('第一次回复后显示模型。')}</p><span /></li>
+      <ModelHead agent={agent} name={name} effort={settings?.effort} fast={settings?.fast} provider={usage?.provider} title={title} rate={usage?.rate} />
+      {!model && <li className="activity-call-note"><span /><p>{t('第一次回复后显示模型。')}</p><span /></li>}
     </ul>
     <ul className="activity-call-rows activity-main-tasks" aria-label={t('提示')}>
       {background && <>{task(CALL_STATES.running.icon, 'is-working', '', summary, background.text, elapsedClock(now - background.at))}{step}</>}
@@ -116,7 +115,7 @@ const CALL_STATES = {
 } as const;
 const MAX_CALL_ITEMS = 4;
 
-// The sub-agents the agent called: per model one head (its mark, name, service and rate), how it runs under it, then a row for each of its calls
+// The sub-agents the agent called: per model one head (its mark, name, settings, service and rate), then a row for each of its calls
 // (the state's icon, the role and what it does, the state in words). The heading counts every call; a model's calls past the fourth fold into "+N".
 function CallsCard({ calls }: { calls: AgentCall[] }) {
   return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
@@ -124,11 +123,9 @@ function CallsCard({ calls }: { calls: AgentCall[] }) {
     <ul className="activity-call-groups">
       {calls.map(call => {
         const name = modelName(call.model);
-        const how = [call.effort, call.fast != null && (call.fast ? t('快速') : t('普通模式'))].filter(Boolean).join(' · ');
         return <li key={JSON.stringify([call.agent, call.provider, call.model, call.effort, call.fast])}>
           <ul className="activity-call-rows">
-            <ModelHead agent={call.agent} name={name} provider={call.provider} title={[call.agent, call.provider, name].filter(Boolean).join(' / ')} rate={call.rate} />
-            {how && <li className="activity-call-note"><span /><p>{how}</p><span /></li>}
+            <ModelHead agent={call.agent} name={name} effort={call.effort} fast={call.fast} provider={call.provider} title={[call.agent, call.provider, name].filter(Boolean).join(' / ')} rate={call.rate} />
             {call.items.slice(0, MAX_CALL_ITEMS).map((item, index) => <li key={index} className={`is-${item.state}`} title={item.title}>
               <span className="activity-row-icon">{CALL_STATES[item.state].icon}</span>
               <p><span className="activity-call-role">{t(item.role)}</span>{item.title}</p>

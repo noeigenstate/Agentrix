@@ -61,7 +61,7 @@ test('the models group hides empty calls and lists each model with its calls, th
   for (const text of ['调用的模型', 'Sonnet 5.5', 'GPT-6.1-Sol', 'max · 快速', '运行中', '审核中', '准备中']) assert.ok(plain.includes(text), text);
   assert.doesNotMatch(plain, /Anthropic|OpenAI|子代理/);
   assert.match(section, /title="Claude Code \/ Anthropic \/ Sonnet 5\.5"/);
-  assert.match(section, /title="Codex \/ OpenAI \/ GPT-6\.1-Sol"/);
+  assert.match(section, /title="Codex \/ OpenAI \/ GPT-6\.1-Sol\nmax · 快速"/);
   assert.ok(section.includes('<span class="activity-count">5</span>'), 'the heading counts every call');
   assert.ok(html.indexOf('activity-main"') < html.indexOf('activity-calls"') && html.indexOf('activity-calls"') < html.indexOf('activity-context"'), 'the main model (with its task), the sub-agents, then context and usage');
   assert.ok(section.includes('title="Polish &lt;card&gt;"'));
@@ -102,6 +102,35 @@ test('main and called heads show non-default providers, retain full tooltips and
   }
 });
 
+test('main and called heads share inline recorded effort and speed, including explicit off and unknown values', () => {
+  for (const language of ['zh', 'en']) for (const [agent, label, model, name] of [
+    ['claude', 'Claude Code', 'claude-opus-5-5', 'Opus 5.5'], ['codex', 'Codex', 'gpt-6.1-terra', 'GPT-6.1-Terra'],
+  ]) for (const [effort, fast] of [['high', false], ['max', true], ['xhigh', null], [null, false], [null, true], [null, null], ['default', null], ['ultracode', null]]) {
+    const call = { agent: label, provider: null, model, effort, fast, items: [] };
+    const html = activityMarkup([call], language, { agent, agentSettings: { model, effort, fast }, agentUsage: { model, provider: null, calls: [call], limits: [] } });
+    const how = [effort === 'default' ? language === 'en' ? 'default' : '默认' : effort,
+      fast == null ? null : fast ? language === 'en' ? 'Fast' : '快速' : language === 'en' ? 'standard mode' : '普通模式'].filter(Boolean).join(' · ');
+    const heads = [...html.matchAll(/<li class="activity-call-head" title="([^"]*)">([\s\S]*?)<\/li>/g)];
+    assert.equal(heads.length, 2);
+    for (const [, title, content] of heads) {
+      assert.equal(title, `${label} / ${name}${how ? '\n' + how : ''}`);
+      assert.ok(content.includes(`<p><b>${name}</b>${how ? `<span class="activity-call-settings"> · ${how}</span>` : ''}</p>`));
+    }
+    assert.doesNotMatch(html, /activity-call-note|Runs with its default settings|按默认设置运行/, 'known model heads have no duplicate note or invented default mode');
+  }
+});
+
+test('340px heads reserve the rate column and truncate secondary settings before they can overflow', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
+  assert.match(css, /\.activity-call-rows li\.activity-call-head \{ grid-template-columns: 16px minmax\(0, 1fr\) 80px; \}/);
+  assert.match(css, /\.activity-call-rows li\.activity-call-head p \{[^}]*display: flex;[^}]*min-width: 0;/);
+  assert.match(css, /\.activity-call-head p > \* \{ min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; \}/);
+  assert.match(css, /\.activity-call-head p > b \{ flex: 0 1 auto; \}/);
+  assert.match(css, /\.activity-call-head p > \.activity-call-settings \{ flex: 0 2 auto; \}/);
+  assert.match(css, /\.activity-call-settings \{ font-size: 12px; font-weight: 400; color: var\(--flow-muted\); \}/);
+  assert.match(css, /\.activity-call-head p b \{ font-weight: 600; \}/);
+});
+
 test('a single preparing or reviewing call shows its own state and reviewed routes disappear', () => {
   for (const [state, word] of [['preparing', 'Preparing'], ['reviewing', 'Reviewing']]) {
     const html = activityMarkup([{ agent: 'Codex', model: 'gpt-6.1-sol', provider: null, effort: null, fast: null, preparing: 0, running: 0, reviewing: 0, [state]: 1, tasks: [], items: [{ state, role: '执行', title: 'one task' }] }], 'en');
@@ -111,7 +140,10 @@ test('a single preparing or reviewing call shows its own state and reviewed rout
   }
   const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
   const calls = new AgentCalls();
-  calls.apply({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', id: 'a', input: { model: 'sonnet', description: 'Check layout' } }] } });
+  calls.apply({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', id: 'a', input: { model: 'sonnet', effort: 'high', description: 'Check layout' } }] } });
+  const called = /<section class="activity-card activity-calls"[\s\S]*?<\/section>/.exec(activityMarkup(calls.snapshot()))[0];
+  assert.match(called, /<span class="activity-call-settings"> · high<\/span>/, 'the Agent tool’s effort reaches the rendered model head');
+  assert.doesNotMatch(called, /普通模式|快速|activity-call-note/, 'neither speed nor a duplicate note is inferred');
   calls.apply({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'a', content: 'Checked' }] } });
   assert.match(activityMarkup(calls.snapshot()), /class="is-reviewing"/);
   calls.apply({ type: 'system', subtype: 'stop_hook_summary', hookCount: 1 });
@@ -300,7 +332,7 @@ test('without an agent the pane shows only its hint, no main model and no tasks;
   // The pane shows no scrollbar; the fixed groups keep their height, the main card's prompts and the called models scroll under their own titles.
   assert.match(/\.activity-pane \{[^}]*\}/.exec(css)[0], /scrollbar-width: none/);
   assert.match(css, /\.activity-calls \{ flex: 0 1 auto; min-height: 60px; \}/);
-  assert.match(css, /\.activity-main \{ flex: 0 1 auto; min-height: 116px; \}/);
+  assert.match(css, /\.activity-main \{ flex: 0 1 auto; min-height: 100px; \}/);
   assert.doesNotMatch(css, /max-height/);
   assert.match(css, /\.activity-card \{ flex: none;/, 'context and usage never shrink');
   const list = /\.activity-main-tasks, \.activity-call-groups \{([^}]+)\}/.exec(css)[1];
@@ -316,7 +348,7 @@ test('the main card lists the prompts: the working one with its spinner and cloc
   const edit = { kind: 'edit', tool: 'Edit', target: 'src/App.tsx', detail: '', done: false };
   const main = html => /<section class="activity-card activity-main"[\s\S]*?<\/section>/.exec(html)[0], rows = html => [...main(html).matchAll(/<li class="(is-[a-z]+(?: [^"]*)?|activity-call-[a-z]+)"[^>]*>/g)].map(match => match[1]);
   const html = main(activityMarkup([], 'zh', { codexActivity: 'working', prompts, action: edit }));
-  assert.deepEqual(rows(html), ['activity-call-head', 'activity-call-note', 'is-working', 'is-step', 'is-queued', 'is-queued'], 'head, note, the working prompt, its step, then the waiting ones');
+  assert.deepEqual(rows(html), ['activity-call-head', 'is-working', 'is-step', 'is-queued', 'is-queued'], 'head, the working prompt, its step, then the waiting ones');
   assert.ok(html.includes('<li class="is-working" title="Please fix the button.\n&lt;pasted_content id=&quot;1&quot;&gt;Synthetic hidden details.&lt;/pasted_content&gt;\n处理中 · 2:1'), 'the whole text in the hover, with the state and clock');
   assert.match(html, /<span class="activity-call-role">处理中<\/span>Please fix the button\.<\/p><time>2:1\d<\/time>/);
   assert.match(html, /<li class="is-queued" title="A real queued request\.\n排队中 · 0:1\d">[\s\S]*?<span class="activity-call-role">排队中<\/span>Queued request\.<\/p><time>0:1\d<\/time>/);
@@ -500,12 +532,13 @@ test('the main model section: the model its latest reply records (the setting on
   const usage = extra => ({ provider: 'Anthropic', limits: [], calls: [], ...extra });
   const html = activityMarkup([], 'zh', { agentUsage: usage({ model: 'claude-sonnet-5-5' }) });
   assert.match(html, /<section class="activity-card activity-main" aria-label="主模型"><h4 class="activity-card-title">主模型<\/h4>/);
-  assert.deepEqual(head(html), ['Claude Code / Anthropic / Sonnet 5.5\n设置为 Opus 5.5，实际回复来自 Sonnet 5.5', 'Sonnet 5.5'], 'the reply wins over the setting, and the tooltip says so');
-  assert.deepEqual(head(activityMarkup([], 'zh', { agentUsage: usage({ model: 'claude-opus-5-5' }) })), ['Claude Code / Anthropic / Opus 5.5', 'Opus 5.5'], 'no remark when they agree');
-  assert.deepEqual(head(activityMarkup([], 'zh', { agentUsage: usage({}) })), ['Claude Code / Anthropic / Opus 5.5', 'Opus 5.5'], 'the setting stands in until a reply records the model');
+  assert.deepEqual(head(html), ['Claude Code / Anthropic / Sonnet 5.5\n设置为 Opus 5.5，实际回复来自 Sonnet 5.5\nxhigh · 普通模式', 'Sonnet 5.5'], 'the reply wins over the setting, and the tooltip says so');
+  assert.deepEqual(head(activityMarkup([], 'zh', { agentUsage: usage({ model: 'claude-opus-5-5' }) })), ['Claude Code / Anthropic / Opus 5.5\nxhigh · 普通模式', 'Opus 5.5'], 'no mismatch remark when they agree');
+  assert.deepEqual(head(activityMarkup([], 'zh', { agentUsage: usage({}) })), ['Claude Code / Anthropic / Opus 5.5\nxhigh · 普通模式', 'Opus 5.5'], 'the setting stands in until a reply records the model');
   const waiting = activityMarkup([], 'zh', { agentSettings: null, agentUsage: usage({}) });
   assert.deepEqual(head(waiting), ['Claude Code / Anthropic', 'Claude Code']); assert.ok(main(waiting).includes('第一次回复后显示模型。'));
-  assert.ok(main(html).includes('<p>思考 xhigh · 普通模式</p>'), 'how it runs, under the head');
+  assert.ok(main(html).includes('<span class="activity-call-settings"> · xhigh · 普通模式</span>'), 'how it runs, in the head');
+  assert.doesNotMatch(main(html), /activity-call-note/, 'the same settings are not repeated below it');
   assert.doesNotMatch(main(html), /activity-call-tag|子代理/, 'the main agent is not a sub-agent');
   // The rate: average output speed; waiting before a finished reply; a dash when the records cannot be read (the tooltip says so).
   const rate = value => /<span class="activity-row-end activity-rate( is-live)?" title="([^"]*)">([^<]*)<\/span>/.exec(main(activityMarkup([], 'zh', { agentUsage: usage({ rate: value }) }))).slice(1);
@@ -537,7 +570,7 @@ test('the main row shows the step under way and spins only while the agent works
   assert.doesNotMatch(css, /activity-route/, 'the route chips are gone');
 });
 
-test('every group of called models has its own rate, its effort under its head, its calls exactly as given and is never merged', () => {
+test('every group of called models has its own rate and inline effort, its calls exactly as given and is never merged', () => {
   const call = (model, extra = {}) => ({ agent: 'Claude Code', provider: 'Anthropic', model, effort: null, fast: null, preparing: 0, running: 1, reviewing: 0, tasks: [], items: [{ state: 'running', role: '执行', title: `${model} work` }], ...extra });
   const html = activityMarkup([call('claude-opus-5-5', { rate: { outputTokens: 480, activeMs: 10000, samples: 2, updatedAt: 1, partial: false }, effort: 'high' }),
     call('claude-sonnet-5-5'), call('claude-sonnet-5-5', { effort: 'max', fast: true, rate: null })], 'zh', { agentUsage: { provider: 'Anthropic', limits: [], model: 'claude-opus-5-5', calls: [] } });
@@ -547,8 +580,8 @@ test('every group of called models has its own rate, its effort under its head, 
   assert.doesNotMatch(calls, /activity-call-tag|子代理/, 'the section heading identifies the called models');
   assert.equal((calls.match(/class="activity-call-head"/g) || []).length, 3, 'three groups, none merged');
   assert.deepEqual([...calls.matchAll(/<span class="activity-row-end activity-rate[^"]*" title="[^"]*">([^<]*)<\/span>/g)].map(match => match[1]), ['48 token/s', '— token/s', '— token/s'], 'each group has its own rate');
-  assert.ok(calls.includes('<li class="activity-call-note"><span></span><p>high</p><span></span></li>') && calls.includes('<p>max · 快速</p>'), 'effort and speed under the head, not at its end');
-  assert.equal((calls.match(/class="activity-call-note"/g) || []).length, 2, 'no note when a group has neither');
+  assert.ok(calls.includes('<span class="activity-call-settings"> · high</span>') && calls.includes('<span class="activity-call-settings"> · max · 快速</span>'), 'effort and speed follow the bold model name');
+  assert.doesNotMatch(calls, /activity-call-note/, 'settings are never repeated on a separate row');
   assert.deepEqual([...calls.matchAll(/<\/span>(claude-[a-z0-9-]+ work)<\/p>/g)].map(match => match[1]), ['claude-opus-5-5 work', 'claude-sonnet-5-5 work', 'claude-sonnet-5-5 work'], 'calls as given');
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
   assert.match(css, /\.activity-call-head p > \.activity-call-provider \{ flex: 0 100 auto; \}/, 'the service gives way first');

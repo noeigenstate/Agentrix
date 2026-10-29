@@ -332,7 +332,10 @@ for (const [platform, shellKind] of [['win32', 'powershell'], ['linux', 'bash'],
   context.startTerminal('sdk-terminal', 'claude-sdk'); const sdk = sessions.get('sdk-terminal'); assert.equal(options.binding.provider, 'claude'); assert.equal(options.binding.sessionId, sdk.sessionId); assert.equal(sdk.agent, 'claude');
   assert.equal(options.mode, 'claude-sdk'); assert.equal(options.binding.projectId, 'project'); assert.equal(options.binding.terminalId, 'sdk-terminal');
   assert.equal(sdk.native, terminal); assert.equal(sdk.codexActive, true); assert.notEqual(s.sessionId, sdk.sessionId);
-  assert.deepEqual(deliveries, [[project, false, s.sessionId], [project, false, sdk.sessionId]], 'both agent startup paths bind skill timing to the new session');
+  assert.equal(JSON.stringify(deliveries), JSON.stringify([
+    [project, false, s.sessionId], [project, false, s.sessionId, { agent: 'codex', started: true }],
+    [project, false, sdk.sessionId], [project, false, sdk.sessionId, { agent: 'claude', started: true }],
+  ]), 'native agent launch claims first-open after CLI resolution, with the right agent');
   assert.equal(s.shellKind, shellKind); assert.equal(sdk.shellKind, shellKind); assert.equal(s.bootstrapFile, null); assert.equal(sdk.bootstrapFile, null);
   assert.equal(languageCalls, platform === 'darwin' ? 2 : 0);
   assert.deepEqual(localeCalls, platform === 'darwin' ? [languages, languages] : []);
@@ -354,7 +357,8 @@ function mainExitFixture(terminal, native = true) {
   const s = { native: native ? terminal : null, status: 'codex', ready: true, codexActive: true, error: null,
     completionWork: new (require('../electron/completion-work.cjs').CompletionWork)() };
   const sessions = new Map([['terminal', s]]), restores = [], calls = [];
-  const context = vm.createContext({ terminal, s, sessions, id: 'terminal', bootstrapFile: null, quitting: false,
+  const context = vm.createContext({ terminal, s, sessions, id: 'terminal', project: { id: 'project' }, sessionId: 'generation', bootstrapFile: null, skillNoteFile: null, quitting: false,
+    endSkillSession: () => calls.push('endSkillSession'), skills: { endSession: () => calls.push('endDelivery') },
     flush: () => calls.push('flush'), stopUsageAccount: () => calls.push('stopUsage'), restorePlans: new Map([['terminal', {}]]),
     store: { setRestore: (_id, value) => restores.push(value) }, broadcast: () => calls.push('broadcast'),
     t: (_message, { code }) => `exit ${code}`,

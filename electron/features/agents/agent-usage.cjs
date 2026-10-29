@@ -157,14 +157,13 @@ function tokensOf(usage) {
   return { input: count(usage.input_tokens), cached: count(usage.cached_input_tokens), output: count(usage.output_tokens) };
 }
 
-// The service behind a Codex model_provider id: its own names for the built-in ones, else the host of the base_url
-// that config.toml gives the provider, else the id.
+// A configured endpoint takes precedence over a built-in provider's name; keep OpenAI's own host quiet.
 const CODEX_PROVIDERS = { openai: 'OpenAI', azure: 'Azure OpenAI', ollama: 'Ollama', oss: 'Ollama', lmstudio: 'LM Studio' };
 function codexProviderName(id, config = '') {
-  if (CODEX_PROVIDERS[id]) return CODEX_PROVIDERS[id];
   const header = new RegExp(`^\\s*\\[model_providers\\.(?:${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}|"${id.replace(/[.*+?^${}()|[\]\\"]/g, '\\$&')}")\\]\\s*$`, 'm').exec(config);
   const section = header ? config.slice(header.index + header[0].length).split(/^\s*\[/m)[0] : '';
-  return hostOf(/^\s*base_url\s*=\s*["']([^"']+)["']/m.exec(section)?.[1]) || id;
+  const host = hostOf(/^\s*base_url\s*=\s*["']([^"']+)["']/m.exec(section)?.[1]);
+  return host && (id !== 'openai' || host !== 'api.openai.com') ? host : CODEX_PROVIDERS[id] || id;
 }
 async function codexProvider(codexHome) {
   const config = await fs.readFile(path.join(codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml'), 'utf8').catch(() => '');

@@ -26,6 +26,12 @@ class SkillsStore {
     this.entries = new Map(); this.watchers = new Map(); this.writers = new Map();
     this.projectSkills = new Map();
     this.knownRoots = new Set(); this.baselines = new Set(); this.dirtyRoots = new Set(); this.deliveries = new Map();
+    const deliveryFolder = path.join(dataDir, 'skill-delivery');
+    try {
+      for (const entry of fs.readdirSync(deliveryFolder, { withFileTypes: true })) {
+        if (entry.isFile() && /^[a-f0-9]{64}\.md$/.test(entry.name)) fs.rmSync(path.join(deliveryFolder, entry.name), { force: true });
+      }
+    } catch (error) { if (error.code !== 'ENOENT') report(error); }
     for (const folder of [this.globalFolder, path.join(dataDir, 'skill-pending')]) {
       try { fs.mkdirSync(folder, { recursive: true }); } catch (error) { report(error); }
     }
@@ -66,6 +72,15 @@ class SkillsStore {
   record(entry, text, by, projectId = null) { return this.history.record(entry.id, text, by, this.projectName(projectId), Date.now(), projectId); }
   invalidateDelivery() { this.deliveries.clear(); }
 
+  pruneProjects() {
+    const projects = new Set(this.getProjects().map(project => project.id));
+    let modified = false;
+    for (const options of Object.values(this.options)) {
+      for (const id of Object.keys(options.firstOpenedProjects || {})) if (!projects.has(id)) { delete options.firstOpenedProjects[id]; modified = true; }
+    }
+    return modified;
+  }
+
   refreshProjectSkills(selected) {
     const projects = this.getProjects().filter(project => project.kind !== 'ssh');
     let modified = false;
@@ -73,14 +88,17 @@ class SkillsStore {
     for (const project of projects) {
       const previous = this.projectSkills.get(project.id);
       if (previous?.path === project.path && selected && !projectSkillTargets(project).some(target => selected.has(target))) continue;
-      const names = projectSkillNames(project, this.report);
-      modified ||= previous?.path !== project.path || names.size !== previous.names.size || [...names].some(name => !previous.names.has(name));
+      const names = projectSkillNames(project, [...this.entries.values()].filter(entry => entry.source === 'builtin').map(entry => entry.path));
+      modified ||= previous?.path !== project.path || JSON.stringify([...names]) !== JSON.stringify([...previous.names]);
       this.projectSkills.set(project.id, { path: project.path, names });
     }
     return modified;
   }
 
-  yields(entry, project) { return entry.source === 'builtin' && project.kind !== 'ssh' && !!this.projectSkills.get(project.id)?.names.has(entry.name); }
+  yields(entry, project, agent = null) {
+    const copies = entry.source === 'builtin' && project.kind !== 'ssh' && this.projectSkills.get(project.id)?.names.get(entry.name);
+    return copies && (agent ? copies[agent] : copies.claude || copies.codex) || null;
+  }
 
   refresh(initial = false, selected = null) {
     if (this.mutating) return this.infos();
@@ -122,7 +140,8 @@ class SkillsStore {
     }
     this.entries = entries;
     this.knownRoots = knownRoots;
-    if (this.refreshProjectSkills(selected) || modified) this.invalidateDelivery();
+    const pruned = this.pruneProjects();
+    if (this.refreshProjectSkills(selected) || pruned || modified) this.invalidateDelivery();
     this.persistOptions();
     return this.infos();
   }
@@ -302,26 +321,26 @@ class SkillsStore {
     }
   }
 
-  delivery(project, remote = false, sessionId = null) {
+  delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {
     // A newly added or moved project can start a session before its watcher's first debounced scan.
     if (!remote && project.kind !== 'ssh' && this.projectSkills.get(project.id)?.path !== project.path
       && this.refreshProjectSkills(new Set())) this.invalidateDelivery();
-    const agents = this.getAgents(), key = JSON.stringify([project.id, remote, sessionId, !!agents.claude?.installed, !!agents.codex?.installed]);
+    const agents = this.getAgents(), key = JSON.stringify([project.id, remote, sessionId, agent, started, !!agents.claude?.installed, !!agents.codex?.installed]);
     if (this.deliveries.has(key)) return this.deliveries.get(key);
     const entries = [...this.entries.values()].filter(entry => entry.scope !== 'project' || !remote && entry.projectId === project.id);
     const remotePath = entry => `{AGENTRIX_SKILLS}/${entry.scope === 'builtin' ? 'builtin' : 'global'}/${entry.folder}/SKILL.md`;
     // No remote project-skill discovery is available; SSH sessions never use host-side yield detection.
-    const yielded = remote ? [] : entries.filter(entry => this.yields(entry, project));
-    let skills = entries.filter(entry => !yielded.includes(entry)).map(entry => {
-      const info = this.info(entry);
+    const infos = entries.map(entry => ({ ...this.info(entry), override: !remote && this.yields(entry, project, agent) }));
+    const yielded = infos.filter(info => info.override);
+    let skills = infos.filter(info => !info.override).map(({ override, ...info }) => {
       if (info.enabled && info.trigger === 'first-open') {
-        const firstSession = this.options[entry.id]?.firstOpenedProjects?.[project.id];
+        const firstSession = this.options[info.id]?.firstOpenedProjects?.[project.id];
         if (firstSession && firstSession !== sessionId) info.trigger = 'auto';
       }
-      return { ...info, ...(remote ? { path: remotePath(entry) } : {}) };
+      return { ...info, ...(remote ? { path: remotePath(this.entries.get(info.id)) } : {}) };
     });
     const manifest = remote ? '{AGENTRIX_SKILLS}/instructions.md' : path.join(this.dataDir, 'skill-delivery', `${safeId(JSON.stringify([project.id, sessionId]))}.md`);
-    const delivery = { skills, yielded: yielded.filter(entry => this.info(entry).enabled).map(entry => entry.name), remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
+    const delivery = { skills, yielded: yielded.filter(info => info.enabled).map(info => ({ name: info.name, path: info.override })), remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
       pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)), manifest };
     let bundle = null;
     if (remote) {
@@ -341,13 +360,13 @@ class SkillsStore {
     } else {
       try { writeFile(manifest, skillInstructions(delivery)); } catch (error) { this.report(error); }
     }
-    if (sessionId) {
+    if (started && sessionId) {
       let recorded = false;
       for (const skill of skills.filter(skill => skill.enabled && skill.trigger === 'first-open')) {
         const runs = this.options[skill.id]?.firstOpenedProjects || {};
         if (runs[project.id]) continue;
-        // Session startup is the run boundary: delivery is observable; model compliance is not.
-        // Keep its session id so refreshed notes retain the first-run instruction; later sessions use auto.
+        // Only an observed agent launch claims first-open, synchronously: simultaneous starts are first-wins.
+        // Keep the agent session identity so another CLI in the same terminal receives auto.
         this.options[skill.id] = { ...this.options[skill.id], firstOpenedProjects: { ...runs, [project.id]: sessionId } };
         recorded = true;
       }
@@ -356,6 +375,16 @@ class SkillsStore {
     const result = { ...delivery, bundle };
     this.deliveries.set(key, result);
     return result;
+  }
+
+  endSession(projectId, sessionId) {
+    if (!sessionId) return;
+    try { fs.rmSync(path.join(this.dataDir, 'skill-delivery', `${safeId(JSON.stringify([projectId, sessionId]))}.md`), { force: true }); }
+    catch (error) { this.report(error); }
+    for (const key of this.deliveries.keys()) {
+      const [project, , session] = JSON.parse(key);
+      if (project === projectId && session === sessionId) this.deliveries.delete(key);
+    }
   }
 
   queueRefresh(root) {
@@ -372,6 +401,7 @@ class SkillsStore {
 
   syncWatchers() {
     if (this.closed) return;
+    if (this.pruneProjects()) { this.invalidateDelivery(); this.persistOptions(); }
     const projectTargets = new Set(this.getProjects().filter(project => project.kind !== 'ssh').flatMap(projectSkillTargets));
     const roots = new Set([...this.roots().filter(entry => entry.source === 'user').map(entry => entry.root), ...projectTargets, path.join(this.dataDir, 'skill-pending')]);
     for (const [root, watcher] of this.watchers) if (!roots.has(root)) { watcher.stop(); this.watchers.delete(root); }

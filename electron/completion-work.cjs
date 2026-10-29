@@ -277,7 +277,7 @@ class CompletionWork {
       }
     }
     if (this.expired) return 'interrupted';
-    return pending && snapshot.state === 'complete' ? 'working' : snapshot.state;
+    return pending && ['complete', 'interrupted'].includes(snapshot.state) ? 'working' : snapshot.state;
   }
 }
 

@@ -9,7 +9,7 @@ function skillInstructions({ skills, yielded = [], globalFolder, agents, pending
   for (const skill of enabled.filter(skill => skill.trigger === 'first-open')) parts.push(`Before the first task of this session, read and follow ${skill.path}; this is its first run in this project.`);
   const auto = enabled.filter(skill => skill.trigger === 'auto');
   if (auto.length) parts.push(`Available auto skills: ${auto.map(skill => `${skill.name}: ${skill.description} (${skill.path})`).join('; ')}; read the one whose description fits before starting.`);
-  for (const name of yielded) parts.push(`This project has its own ${name} skill; follow it.`);
+  for (const { name, path } of yielded) parts.push(`This project has its own ${name} skill at ${path}; follow it.`);
   parts.push(`Global user skills folder: ${globalFolder}.`);
   if (remote) parts.push(SSH_REFERENCE_NOTE);
   if (skippedNote) parts.push(skippedNote);

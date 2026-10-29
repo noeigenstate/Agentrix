@@ -39,6 +39,7 @@ async function harness(t, kind = 'local', agent = 'codex') {
     memoryFolder: () => directory, memoryDir: () => directory, roundsOf: () => [], remember: async () => {},
     setTimeout: () => ({ unref() {} }), scrubProjectSkills: async () => {},
     followClaude() {}, followClaudeSession: async () => {}, resumeCommand, claudeResumeCommand,
+    startSkillSession() {}, endSkillSession() {},
     restorePlans: new Map(), Date: class extends Date { static now() { return now; } },
   });
   vm.runInContext(main.slice(main.indexOf('function applyActivity('), main.indexOf('function onEvent(')), context);
@@ -202,7 +203,7 @@ for (const kind of ['local', 'ssh']) {
     for (const record of compact(2200)) await append(record);
     assert.equal(mainTurn().state, 'working'); assert.equal(s.promptQueue.list().length, 1);
     await append({ type: 'user', uuid: 'interrupt', timestamp: stamp(2300), message: { content: '[Request interrupted by user for tool use]' } });
-    assert.equal(mainTurn().state, 'interrupted'); assert.equal(s.codexActivity, 'interrupted');
+    assert.equal(mainTurn().state, 'interrupted'); assert.equal(s.codexActivity, 'working', 'the child still blocks project completion');
     assert.deepEqual(s.promptQueue.list(), []); assert.equal(h.alerts(), 0);
     await append({ type: 'system', subtype: 'stop_hook_summary', uuid: 'stop', timestamp: stamp(2400) });
     assert.equal(mainTurn().state, 'interrupted', 'Stop after interruption cannot become success');
@@ -780,6 +781,49 @@ test('actual managed Claude handlers wait for SDK tasks and their review, withou
   assert.equal(h.project.completionArmed, false);
 });
 
+test('managed Claude reports each new main round working after the previous round ended', async t => {
+  const h = await harness(t, 'local', 'claude'), { s } = h;
+  Object.assign(s, { native: {}, nativeMode: 'claude-sdk', sessionId: 'generation', nativeMessages: [] });
+  const event = (message, at) => { h.now(at); h.context.nativeSessionEvent(s.terminalId, s.sessionId, message); };
+  const main = () => s.completionWork.mainTurn(s.activitySnapshot).state;
+  event({ type: 'managed-prompt', text: 'First task' }, 2000);
+  assert.equal(main(), 'working'); assert.equal(s.codexActivity, 'working');
+  event({ type: 'result', session_id: 'claude-session', uuid: 'first' }, 2100);
+  assert.equal(main(), 'complete'); h.store.acknowledge(h.project.id);
+  event({ type: 'managed-prompt', text: 'Second task' }, 3000);
+  assert.equal(main(), 'working'); assert.equal(s.activitySnapshot.updatedAt, 3000);
+  s.completionWork.changed(); assert.equal(main(), 'working');
+  event({ type: 'result', uuid: 'second', is_error: true }, 3100);
+  assert.equal(main(), 'interrupted'); assert.equal(s.codexActivity, 'interrupted');
+  assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 1);
+});
+
+for (const kind of ['local', 'ssh']) test(`${kind} project waits for children while its Main card is interrupted; callbacks stay disarmed`, async t => {
+  const h = await harness(t, kind), { s } = h;
+  h.write('Finish the work\r'); h.user('Finish the work');
+  s.completionWork.start('child', 2050);
+  h.apply('interrupted', 'main', 2100);
+  assert.equal(s.codexActivity, 'working');
+  assert.equal(s.completionWork.mainTurn(s.activitySnapshot).state, 'interrupted');
+  assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 0);
+  const armed = h.armings();
+  s.completionWork.finish('child'); s.completionWork.changed();
+  assert.equal(s.codexActivity, 'interrupted');
+  assert.equal(s.completionWork.mainTurn(s.activitySnapshot).state, 'interrupted');
+  h.apply('complete', 'background', 2200); h.store.acknowledge(h.project.id);
+  s.promptQueue.changed(); s.completionWork.changed(); await Promise.resolve();
+  assert.equal(h.armings(), armed); assert.equal(h.alerts(), 0); assert.equal(h.project.unread, 0);
+  assert.equal(h.project.completionArmed, false);
+});
+
+test('an interrupted main round with no pending work interrupts the project', async t => {
+  const h = await harness(t), { s } = h;
+  h.write('Do the task\r'); h.user('Do the task'); h.apply('interrupted', 'main', 2100);
+  assert.equal(s.codexActivity, 'interrupted');
+  assert.equal(s.completionWork.mainTurn(s.activitySnapshot).state, 'interrupted');
+  assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 0);
+});
+
 test('actual Codex native handlers wait for children but not leftover command items and keep idle turns disarmed', async t => {
   const h = await harness(t), { s } = h;
   Object.assign(s, { native: {}, nativeMode: 'codex-native', sessionId: 'generation' });
@@ -854,7 +898,8 @@ test('native process exit cancels its pending work and alert without waiting for
   h.write('background work\r'); h.user('background work');
   s.completionWork.start('pending-native-task', 2000); h.apply('complete', 'parent', 2100);
   Object.assign(context, { id: s.terminalId, s, project: h.project, terminal: { onExit: callback => { exited = callback; } }, flush() {},
-    stopUsageAccount() {}, restorePlans: new Map(), quitting: false, bootstrapFile: null });
+    stopUsageAccount() {}, restorePlans: new Map(), quitting: false, bootstrapFile: null, skillNoteFile: null, sessionId: 'generation',
+    endSkillSession() {}, skills: { endSession() {} } });
   const start = main.indexOf('  terminal.onExit(({ exitCode }) => {');
   vm.runInContext(main.slice(start, main.indexOf('  captureBranch(project);', start)), context);
   exited({ exitCode: 0 });

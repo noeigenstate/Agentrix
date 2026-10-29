@@ -51,7 +51,7 @@ function runtime(overrides = {}) {
     ClaudeAccountUsage, readClaudeAccount: async () => ({ state: 'skipped', reason: 'fixture' }),
     electronNet: { fetch: () => assert.fail('unexpected Chromium fetch') },
     codexProvider: async () => id => id, claudeProvider: async () => 'Anthropic', claudeConfigDir: () => '',
-    followClaude() {}, applyActivity() {}, broadcast() {}, isLocalAgentCommand: (_agent, text) => text.startsWith('/'),
+    followClaude() {}, applyActivity() {}, broadcast() {}, startSkillSession() {}, endSkillSession() {}, isLocalAgentCommand: (_agent, text) => text.startsWith('/'),
     terminalIds, shownTerminalIds: terminalIds,
     localShell: () => ({ kind: 'pwsh' }), t: value => value, getBranch: () => '', startupErrors: new Map(),
     desktopGlassBackend: null, desktopGlassActive: false, desktopGlassWindow: false, windowZoom: null, app: { getVersion: () => 'test' },

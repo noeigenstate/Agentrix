@@ -1,10 +1,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { MAX_BYTES, frontMatter } = require('./front-matter.cjs');
 
-const MAX_BYTES = 512 * 1024;
 const MAX_IMPORT_BYTES = 8 * 1024 * 1024, MAX_IMPORT_FILES = 128;
-const FRONT_MATTER = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
 function skillName(value) {
   if (typeof value !== 'string' || !/^[\p{L}\p{N}_][\p{L}\p{N}_.-]{0,119}$/u.test(value)
@@ -13,15 +12,11 @@ function skillName(value) {
 }
 
 function metadata(text) {
-  if (typeof text !== 'string' || Buffer.byteLength(text) > MAX_BYTES || text.includes('\0')) throw new Error('技能文件过大或格式无效。');
-  const front = FRONT_MATTER.exec(text);
+  let front;
+  try { front = frontMatter(text); } catch { throw new Error('技能文件过大或 front matter 格式无效。'); }
   if (!front) throw new Error('SKILL.md 需要 name 和 description front matter。');
   const field = key => {
-    const match = new RegExp(`^${key}:[ \\t]*(.*(?:\\r?\\n[ \\t]+.*)*)$`, 'm').exec(front[1]);
-    let value = (match?.[1] || '').trim();
-    if (value.startsWith('"')) { try { value = JSON.parse(value); } catch { throw new Error('技能 front matter 格式无效。'); } }
-    else if (value.startsWith("'")) value = value.slice(1, -1).replace(/''/g, "'");
-    return value.replace(/^[>|][+-]?\s*/, '').replace(/\s+/g, ' ').trim();
+    return (front.fields[key] || '').replace(/^[>|][+-]?\s*/, '').replace(/\s+/g, ' ').trim();
   };
   const name = skillName(field('name')), description = field('description');
   if (!description || description.length > 2000) throw new Error('请填写技能描述（最多 2000 字）。');
@@ -32,9 +27,9 @@ function draftText(draft) {
   skillName(draft?.name);
   if (typeof draft.description !== 'string' || !draft.description.trim() || draft.description.length > 2000 || typeof draft.text !== 'string') throw new Error('技能内容无效。');
   // The editor owns name/description; preserve other front matter and the entire body.
-  const front = FRONT_MATTER.exec(draft.text);
-  const extra = front ? front[1].replace(/^(?:name|description):[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*(?:\r?\n|$)/gm, '').trim() : '';
-  const text = `---\nname: ${JSON.stringify(draft.name)}\ndescription: ${JSON.stringify(draft.description.trim())}\n${extra ? extra + '\n' : ''}---\n${front ? draft.text.slice(front[0].length) : draft.text}`;
+  const front = frontMatter(draft.text);
+  const extra = front ? front.raw.replace(/^(?:name|description):[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*(?:\r?\n|$)/gm, '').trim() : '';
+  const text = `---\nname: ${JSON.stringify(draft.name)}\ndescription: ${JSON.stringify(draft.description.trim())}\n${extra ? extra + '\n' : ''}---\n${front ? front.body : draft.text}`;
   metadata(text);
   return text;
 }
@@ -74,9 +69,10 @@ function checkedPath(root, name) {
 }
 
 function readText(file) {
-  const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+  const stat = fs.statSync(file, { throwIfNoEntry: false });
   if (!stat) return null;
-  if (!stat.isFile() || stat.size > MAX_BYTES) throw new Error('只能读取不超过 512 KB 的普通技能文件。');
+  if (stat.size > MAX_BYTES) return null;
+  if (!stat.isFile()) throw new Error('只能读取普通技能文件。');
   return fs.readFileSync(file, 'utf8');
 }
 
@@ -106,14 +102,15 @@ function listFolder(root, report = () => {}, invalid = () => {}, parse = metadat
 // Poll metadata only, asynchronously. Never read skill bodies (or walk a project's other files) on idle polls.
 async function folderSignature(root, depth = 1) {
   try {
-    const stat = await fs.promises.lstat(root);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) return `${stat.mode}:${stat.mtimeMs}:${stat.size}`;
+    const stat = await fs.promises.stat(root);
+    if (!stat.isDirectory()) return `${stat.mode}:${stat.mtimeMs}:${stat.size}`;
     const entries = await fs.promises.readdir(root, { withFileTypes: true }), parts = [];
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory() && depth > 0) parts.push([entry.name, await folderSignature(path.join(root, entry.name), depth - 1)]);
+      const file = path.join(root, entry.name);
+      const info = entry.isSymbolicLink() ? await fs.promises.stat(file).catch(() => null) : entry;
+      if (info?.isDirectory() && depth > 0) parts.push([entry.name, await folderSignature(file, depth - 1)]);
       else if (entry.name === 'SKILL.md') {
-        const info = await fs.promises.lstat(path.join(root, entry.name));
+        const info = await fs.promises.stat(file);
         parts.push([entry.name, info.mtimeMs, info.ctimeMs, info.size, info.ino]);
       }
     }

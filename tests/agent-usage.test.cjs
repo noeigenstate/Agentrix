@@ -208,6 +208,19 @@ test("the service names: Codex's providers by their own names or their base_url'
   assert.equal(codexProviderName('relay', config), 'api.relay.example');
   assert.equal(codexProviderName('my.box', config), '10.0.0.5:8000');
   assert.equal(codexProviderName('unknown', config), 'unknown');
+  for (const id of ['openai', '"openai"']) {
+    const custom = `[model_providers.${id}]\nname = "OpenAI"\nbase_url = "https://gateway.example:8443/v1"\n[tui]\n`;
+    assert.equal(codexProviderName('openai', custom), 'gateway.example:8443');
+    const meter = new UsageMeter('codex', { names: provider => codexProviderName(provider, custom) });
+    meter.apply({ type: 'session_meta', payload: { model_provider: 'openai' } });
+    assert.equal(meter.snapshot().provider, 'gateway.example:8443');
+    const parent = new UsageMeter('claude', { rates: false, names: provider => codexProviderName(provider, custom) });
+    parent.apply({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'custom-provider', name: 'Bash', input: { command: 'codex exec -m gpt-6.1-terra' } }] } });
+    assert.equal(parent.snapshot().calls[0].provider, 'gateway.example:8443', 'called Codex models use the same endpoint resolver');
+  }
+  assert.equal(codexProviderName('openai', '[model_providers.openai]\nbase_url = "https://api.openai.com/v1"'), 'OpenAI');
+  assert.equal(codexProviderName('openai', '[model_providers.openai]\nbase_url = "invalid"'), 'OpenAI');
+  assert.equal(codexProviderName('openai', config), 'OpenAI', 'an unrelated provider endpoint does not leak into OpenAI');
   const relay = new UsageMeter('codex', { names: id => codexProviderName(id, config) });
   relay.apply({ type: 'session_meta', payload: { model_provider: 'relay' } });
   assert.equal(relay.snapshot().provider, 'api.relay.example');

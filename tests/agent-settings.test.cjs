@@ -23,6 +23,14 @@ test("Claude Code's model, effort and speed come from its replies, and its own c
   assert.equal(agentSettings(null, 'claude', { type: 'system' }), null);
 });
 
+test('Claude reports effective per-turn effort and recognizes only recorded fast or standard speed', () => {
+  const effective = { ...reply('claude-opus-5-5', 'high', 'fast'), perTurnEffort: 'xhigh' };
+  assert.deepEqual(replay('claude', [effective]), { model: 'claude-opus-5-5', effort: 'xhigh', fast: true });
+  assert.deepEqual(replay('claude', [reply('claude-opus-5-5', undefined, undefined)]), { model: 'claude-opus-5-5', effort: null, fast: null });
+  assert.equal(replay('claude', [reply('claude-opus-5-5', 'high', 'unrecognized')]).fast, null);
+  assert.equal(replay('claude', [effective, reply('claude-opus-5-5', undefined, 'unrecognized')]).fast, true);
+});
+
 test("Codex's model and effort come from each turn, and fast mode from the settings it applies", () => {
   const settings = replay('codex', [
     { type: 'event_msg', payload: { type: 'thread_settings_applied', thread_settings: { model: 'gpt-6.1-sol', service_tier: 'priority', reasoning_effort: 'high' } } },

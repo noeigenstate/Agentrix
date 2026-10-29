@@ -19,6 +19,19 @@ const notice = (id, operation = 'enqueue', status = 'completed') => ({ type: 'qu
 const call = (name, call_id, args) => ({ type: 'function_call', name, call_id, arguments: JSON.stringify(args) });
 const output = (call_id, value) => ({ type: 'function_call_output', call_id, output: JSON.stringify(value) });
 
+test('pending work keeps the project working after main interruption without changing the main round', t => {
+  for (const pending of ['task', 'notification', 'review', 'reading', 'queue']) {
+    const { work } = fixture(t), interrupted = { state: 'interrupted', updatedAt: 2100 };
+    if (pending === 'task') work.start('child', 2000);
+    if (pending === 'notification') work.notifications.add('child');
+    if (pending === 'review') work.reviewAt = 2000;
+    if (pending === 'reading') work.reading = true;
+    assert.equal(work.state(interrupted, { queued: pending === 'queue' }), 'working', pending);
+    assert.equal(work.mainTurn(interrupted).state, 'interrupted', pending);
+    work.reset(); assert.equal(work.state(interrupted), 'interrupted');
+  }
+});
+
 test('service command table excludes persistent servers and watchers but retains finite jobs', () => {
   const services = [
     ...['npm', 'pnpm', 'yarn', 'bun'].flatMap(manager => ['dev', 'start', 'serve', 'preview', 'watch']
