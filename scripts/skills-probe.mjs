@@ -37,8 +37,9 @@ async function run() {
     '[model_providers.standin]', 'name = "Stand-in"', `base_url = "${base}/v1"`, 'wire_api = "responses"', 'env_key = "STANDIN_API_KEY"',
     '[windows]', 'sandbox = "unelevated"', `[projects.'${project.path.replace(/'/g, "''")}']`, 'trust_level = "trusted"', '',
   ].join('\n'));
+  // Claude Code indexes trusted projects with forward slashes, including on Windows.
   await fs.writeFile(path.join(env.CLAUDE_CONFIG_DIR, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark',
-    bypassPermissionsModeAccepted: true, projects: { [project.path]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } } }));
+    bypassPermissionsModeAccepted: true, projects: { [project.path.replace(/\\/g, '/')]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } } }));
   await fs.writeFile(path.join(env.CLAUDE_CONFIG_DIR, 'settings.json'), JSON.stringify({ skipDangerousModePermissionPrompt: true }));
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: {
     terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, language: 'en', startView: 'workspace',
@@ -79,7 +80,7 @@ async function run() {
       const answered = new Set();
       await waitFor(async () => {
         const screen = (await rows()).join('\n');
-        for (const [key, pattern, answer] of [['trust', /Yes, I trust this folder|trust the files in this folder/i, '\r'],
+        for (const [key, pattern, answer] of [['trust', /Yes, I trust this folder|trust the files in this folder/i, /[❯›>]\s*No, exit/i.test(screen) ? '\x1b[B\r' : '\r'],
           ['bypass', /Yes, I accept|accept.*bypass permissions/i, '\x1b[B\r'], ['theme', /Choose the text style/i, '\r']]) {
           if (!answered.has(key) && pattern.test(screen)) { answered.add(key); await write(answer); }
         }

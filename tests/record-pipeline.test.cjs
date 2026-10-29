@@ -185,10 +185,12 @@ test('Codex script commands and workdirs stay with their own calls across litera
     'tools.exec_command({cmd: variable});',
     'tools.exec_command({cmd: "git diff", workdir: "other"});',
     'tools.exec_command({cmd: `echo ${value}`, workdir: `${directory}`});',
+    `tools.exec_command(${JSON.stringify({ cmd: 'Get-Content ./SKILL.md', workdir: 'skills/with spaces' })});`,
+    "tools.exec_command({'cmd': 'cat ./SKILL.md', 'workdir': 'skills/other'});",
   ].join('\n');
   const actions = codexActions({ type: 'custom_tool_call', call_id: 'call', input }, 0, '/home/u/proj');
-  assert.deepEqual(actions.map(action => action.target), ['npm test', 'git status', 'node task.js', '', 'git diff', '']);
-  assert.deepEqual(actions.map(action => action.cwd), ['/home/u/proj/tests', '/home/u/proj/docs', '/home/u/proj/scripts', '/home/u/proj', '/home/u/proj/other', '/home/u/proj']);
+  assert.deepEqual(actions.map(action => action.target), ['npm test', 'git status', 'node task.js', '', 'git diff', '', '.', '.']);
+  assert.deepEqual(actions.map(action => action.cwd), ['/home/u/proj/tests', '/home/u/proj/docs', '/home/u/proj/scripts', '/home/u/proj', '/home/u/proj/other', '/home/u/proj', '/home/u/proj/skills/with spaces', '/home/u/proj/skills/other']);
   const escaped = codexActions({ type: 'custom_tool_call', call_id: 'escaped', input: `tools.exec_command({cmd: 'echo \\'hello\\' "world"', workdir: 'folder'});` }, 0, '/home/u/proj');
   assert.equal(escaped[0].target, 'echo \'hello\' "world"');
 });

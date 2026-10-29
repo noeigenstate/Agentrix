@@ -6,7 +6,8 @@ const path = require('node:path');
 const { SkillsStore } = require('../electron/features/skills/store.cjs');
 const { startupNote } = require('../electron/features/agents/handoff.cjs');
 const { MAX_NOTE } = require('../electron/features/skills/delivery.cjs');
-const { ActionLog, claudeRecord, codexRecord } = require('../electron/agent-actions.cjs');
+const { ActionLog, TranscriptTail, claudeRecord, codexRecord } = require('../electron/agent-actions.cjs');
+const { CodexActivityReader } = require('../electron/codex-activity.cjs');
 
 const text = (name, body = 'Use this procedure.', description = 'A tested procedure.') => `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n${body}\n`;
 const put = (file, body) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body); };
@@ -238,6 +239,55 @@ test('successful Claude/Codex skill reads record lastUsed, failed/settled/mentio
   const remoteFile = '/tmp/agentrix-test/skills/builtin/model-routing/SKILL.md';
   store.recordAction({ kind: 'skill', skillFile: remoteFile, done: true, at: at + 50 }, { cwd: '/srv/app', project: 'ssh', agent: 'claude', remotePaths: { [skill.id]: remoteFile } });
   assert.equal(store.list()[0].lastUsed.project, 'ssh');
+});
+
+for (const shell of ['Get-Content', 'cat']) {
+  test(`Codex ${shell} skill reads in JSON-keyed exec scripts persist usage from text-block results`, async t => {
+    const { store, projects, root, dataDir, changed } = fixture(t), skill = store.list()[0], cwd = projects[0].path;
+    const at = Date.now(), timestamp = new Date(at).toISOString(), id = '00000000-0000-4000-8000-000000000001';
+    const home = path.join(root, 'codex'), filename = path.join(home, 'sessions', `rollout-${id}.jsonl`);
+    const cmd = shell === 'cat' ? "cat './SKILL.md'" : `Get-Content -LiteralPath '${skill.path.replace(/\\/g, '/')}'`;
+    const record = payload => JSON.stringify({ type: 'response_item', timestamp, payload }) + '\n';
+    const call = callId => record({ type: 'custom_tool_call', id: `ct_${callId}`, call_id: callId, name: 'exec', namespace: 'functions',
+      input: `text(await tools.exec_command(${JSON.stringify({ cmd, workdir: path.dirname(skill.path) })}));` });
+    const result = (callId, exitCode) => record({ type: 'custom_tool_call_output', call_id: callId, output: [
+      { type: 'input_text', text: 'Script completed\nWall time 0.3 seconds\nOutput:\n' },
+      { type: 'input_text', text: JSON.stringify({ chunk_id: 'synthetic', exit_code: exitCode, output: exitCode ? 'Read failed' : text('model-routing') }) },
+    ] });
+    put(filename, JSON.stringify({ type: 'session_meta', timestamp, payload: { id, cwd, source: 'cli', originator: 'codex-tui' } }) + '\n'
+      + call('failed') + result('failed', 1) + call('read'));
+    const log = new ActionLog(change => { if (change.finished) store.recordAction(change.action, { cwd, project: 'p1', agent: 'codex', since: at }); });
+    const reader = new CodexActivityReader(cwd, home, at, { onRecord: value => codexRecord(log, value, cwd) });
+    await reader.read();
+    assert.deepEqual(log.list.map(action => [action.kind, action.done, action.failed]), [['skill', true, true], ['skill', false, false]]);
+    assert.equal(store.list()[0].lastUsed, null, 'a failed read and a pending read prove no successful usage');
+    fs.appendFileSync(filename, result('read', 0));
+    await reader.read();
+    const expected = { at, project: 'p1', agent: 'codex' };
+    assert.deepEqual(store.list()[0].lastUsed, expected);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'skills.json'), 'utf8'))[skill.id].lastUsed, expected);
+    const count = changed.length;
+    await reader.read();
+    assert.equal(changed.length, count, 'idle polls do not record usage again');
+  });
+}
+
+test('Claude transcript Read and tool_result record usage across Windows slash and case variants', async t => {
+  const { store, projects, root, dataDir } = fixture(t), skill = store.list()[0], cwd = projects[0].path;
+  const at = Date.now(), timestamp = new Date(at).toISOString(), filename = path.join(root, 'claude', 'session.jsonl');
+  const file = process.platform === 'win32' ? skill.path.replace(/\\/g, '/').toUpperCase() : skill.path;
+  const log = new ActionLog(change => { if (change.finished) store.recordAction(change.action, { cwd, project: 'p1', agent: 'claude', since: at }); });
+  const tail = new TranscriptTail(filename), read = () => tail.read(record => claudeRecord(log, record, cwd));
+  put(filename, JSON.stringify({ type: 'assistant', timestamp, cwd, isSidechain: false, message: { role: 'assistant',
+    content: [{ type: 'tool_use', id: 'tool_skills_read', name: 'Read', input: { file_path: file } }] } }) + '\n');
+  await read();
+  assert.equal(store.list()[0].lastUsed, null);
+  fs.appendFileSync(filename, JSON.stringify({ type: 'user', timestamp, cwd, isSidechain: false, message: { role: 'user',
+    content: [{ type: 'tool_result', tool_use_id: 'tool_skills_read', content: [{ type: 'text', text: text('model-routing') }] }] } }) + '\n');
+  await read();
+  const expected = { at, project: 'p1', agent: 'claude' };
+  assert.deepEqual(store.list()[0].lastUsed, expected);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'skills.json'), 'utf8'))[skill.id].lastUsed, expected);
 });
 
 test('native SDK and app-server reads share the successful-result usage path', t => {

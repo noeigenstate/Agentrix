@@ -124,7 +124,7 @@ function markSkillRead(action, command, cwd) {
 // Read literal arguments without executing the script. Interpolated templates cannot name a command reliably.
 const LITERAL = `("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*'|\x60(?:[^\x60\\\\]|\\\\.)*\x60)`;
 function scriptString(input, key) {
-  const match = new RegExp(`\\b${key}:\\s*${LITERAL}`).exec(input);
+  const match = new RegExp(`(?:\\b${key}|"${key}"|'${key}')\\s*:\\s*${LITERAL}`).exec(input);
   return match ? literalValue(match[1]) : null;
 }
 // A call's first argument when it is a string: tools.apply_patch("*** Begin Patch\n*** Add File: …").
