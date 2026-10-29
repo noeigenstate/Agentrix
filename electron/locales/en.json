@@ -1649,7 +1649,6 @@
   "官方图标": "Official marks",
   "选择助手时显示 Claude 和 Codex 的官方图标；Claude Code 项目里的列表圆点改用 Claude 的橙色。": "Choosing an assistant shows the official Claude and Codex marks; list bullets in a Claude Code project use Claude's orange.",
   "状态修正": "Status fixes",
-<<<<<<< HEAD
   "GPT 子代理显示 token/s，已停止的后台调用不再一直显示运行中，有命令失败时头像不再出现红圈。": "GPT sub-agents show their token/s, a stopped background call no longer stays “running”, and a failed command no longer rings the avatar.",
   "模型路由": "Model routing",
   "每个任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能和前端，Terra 验证界面。GPT 默认 max + fast，Claude 默认 high。": "Route every task: Opus plans and reviews architecture, Sol handles core code, Sonnet handles routine work and the front end, and Terra verifies the interface. GPT defaults to max + fast, Claude to high.",
@@ -1659,12 +1658,10 @@
   "首次在项目中启动会话、且项目里还没有这条规范时生效；之后写、改、审代码时按需生效": "Applies to the first session in a project without this standard; afterwards, use it when writing, changing or reviewing code.",
   "每个任务开始前": "Before every task",
   "描述匹配时": "When the description fits",
-  "首次打开项目时": "When first opening the project"
-=======
+  "首次打开项目时": "When first opening the project",
   "GPT 子代理显示 token/s，已停止的后台调用不再一直显示运行中，有命令失败时头像不再出现红圈。": "GPT sub-agents show their token/s, a stopped background call no longer stays “running”, and a failed command no longer rings the avatar.",
   "首次打开项目 · 第一次会话开始前": "First open of a project · before its first session starts",
   "以项目自己的版本为准：{projects}": "Defers to the project’s own copy: {projects}",
   "等 {count} 个项目": "and others ({count} in all)",
   "渲染": "Rendered"
->>>>>>> work/skills-trigger-b
 }
