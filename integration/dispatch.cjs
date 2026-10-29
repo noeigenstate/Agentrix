@@ -20,6 +20,9 @@ const runtimeFiles = () => Object.fromEntries(RUNTIME_FILES.map(file => [file, f
 
 const START_TIMEOUT = 30000;
 const RATE_INTERVAL = 5000;
+// How often a Codex worker's session file is read until its start is confirmed, and how long a worker's last output may
+// take to arrive after it exits before the helper decides from what it has.
+const POLL_INTERVAL = 250, EXIT_SETTLE = 500;
 const LIMIT = 4 * 1024 * 1024;
 const word = value => typeof value === 'string' && value.trim() ? value.trim() : null;
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -240,10 +243,9 @@ class CodexRollout {
     const id = this.output.sessionId;
     if (!id) return;
     if (!this.tail) {
-      const files = (await rolloutFiles(this.directory)).filter(file => file.name.endsWith(`-${id}.jsonl`));
-      for (const file of files) {
-        if ((await sessionMeta(file.filename))?.id !== id) continue;
-        this.tail = new TranscriptTail(file.filename, { onReset: partial => {
+      for (const filename of await this.files(id)) {
+        if ((await sessionMeta(filename))?.id !== id) continue;
+        this.tail = new TranscriptTail(filename, { onReset: partial => {
           this.output.meter.reset(partial); this.output.outputTokens = null; this.output.activeMs = null;
         } });
         break;
@@ -251,6 +253,18 @@ class CodexRollout {
     }
     await this.tail?.read(record => this.output.rollout(record));
     this.output.changed();
+  }
+  // Codex writes sessions/<year>/<month>/<day>/rollout-*-<id>.jsonl under the local date it started. Today's and
+  // yesterday's folders are read directly on every poll, so a new file is found at once; the shared listing (kept
+  // current by a watcher, walked again every 10 s) covers any other folder.
+  async files(id) {
+    const suffix = `-${id}.jsonl`, found = [];
+    for (const at of [Date.now(), Date.now() - 86400000]) {
+      const day = new Date(at), pad = value => String(value).padStart(2, '0');
+      const folder = path.join(this.directory, String(day.getFullYear()), pad(day.getMonth() + 1), pad(day.getDate()));
+      try { for (const name of await fs.promises.readdir(folder)) if (name.startsWith('rollout-') && name.endsWith(suffix)) found.push(path.join(folder, name)); } catch {}
+    }
+    return found.length ? found : (await rolloutFiles(this.directory)).filter(file => file.name.endsWith(suffix)).map(file => file.filename);
   }
 }
 
@@ -274,7 +288,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   }
   const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
   let options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, endSent = false;
-  let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null;
+  let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
+  // Settles once the worker's output has been read to the end.
+  const drained = new Promise(resolve => { drain = resolve; });
   const signal = line => stdout.write(`[dispatch] ${line}\n`);
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
   const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: options.role, title: options.title,
@@ -292,22 +308,27 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     const route = unconfirmed ? declared() : output.routing();
     return `${options.agent} model ${route.model} effort ${route.effort || 'unreported'} fast ${route.fast === null ? 'unreported' : route.fast ? 'on' : 'off'}`;
   };
-  const output = new WorkerOutput(argv[0], () => {
-    if (started || unconfirmed || exited || !child?.pid || child.exitCode !== null || !output.sessionId) return;
-    if (!output.confirmed) { if (options.agent === 'codex') void rollout.read(); return; }
+  // A start is confirmed only by the worker's own records: its session, and Codex's turn context in that session's file.
+  // While it runs, every new record is checked at once. A worker that has exited is judged once, on everything it left
+  // (final), so a fast worker that did start is reported started and done, and one without those records is not.
+  const confirm = (final = false) => {
+    if (started || unconfirmed || !child?.pid || !output.sessionId || !final && (exited || child.exitCode !== null)) return;
+    if (!output.confirmed) { if (!final && options.agent === 'codex') void rollout.read(); return; }
     started = true; clearTimeout(startTimer);
     const actual = output.routing(), requested = declared();
     const mismatch = Object.keys(requested).some(key => actual[key] !== requested[key]);
     const routing = mismatch ? `MISMATCH (declared ${requested.model} ${requested.effort} fast ${requested.fast ? 'on' : 'off'})` : 'ok';
     signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}`);
     send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
+    if (final) return;
     rateTimer = setInterval(() => {
       const { outputTokens, activeMs } = output;
       if (outputTokens === null || !(activeMs > 0) || lastRate?.outputTokens === outputTokens && lastRate?.activeMs === activeMs) return;
       lastRate = { outputTokens, activeMs };
       send({ type: 'dispatch-rate', id, ...lastRate });
     }, RATE_INTERVAL);
-  });
+  };
+  const output = new WorkerOutput(argv[0], () => confirm());
   const rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
   const stop = (kind, requested = true) => {
     if (requested) killed = true;
@@ -336,10 +357,18 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     log.on('error', error => { spawnError = error; stop('SIGTERM', false); });
     process.on('SIGINT', onInterrupt); process.on('SIGTERM', onTerminate); process.on('SIGHUP', onHangup);
     startTimer = setTimeout(() => { failed('session not reported within 30 s'); stop('SIGTERM', false); }, startTimeout);
-    if (options.agent === 'codex') pollTimer = setInterval(() => { void rollout.read(); }, 250);
+    if (options.agent === 'codex') pollTimer = setInterval(() => { void rollout.read(); }, POLL_INTERVAL);
     child.once('exit', code => {
       exited = true; clearTimeout(startTimer); clearInterval(pollTimer); clearInterval(rateTimer);
-      if (!started) failed(output.capacity ? 'at capacity' : 'worker exited without a confirmed session', code === 0 ? 1 : code);
+      if (started) return;
+      // Its last output can still be in the pipes: once that is read (at most EXIT_SETTLE), decide from its records,
+      // without waiting for pipes a leftover child process may hold open.
+      void Promise.race([drained, new Promise(resolve => setTimeout(resolve, EXIT_SETTLE))]).then(async () => {
+        if (started || unconfirmed) return;
+        if (options.agent === 'codex') { await rollout.pending; await rollout.read(); }
+        confirm(true);
+        if (!started) failed(output.capacity ? 'at capacity' : 'worker exited without a confirmed session', code === 0 ? 1 : code);
+      });
     });
     const tails = [];
     for (const stream of [child.stdout, child.stderr]) {
@@ -374,6 +403,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     for (const tail of tails) tail();
     clearInterval(pollTimer); clearInterval(rateTimer);
     if (options.agent === 'codex') { await rollout.pending; await rollout.read(); }
+    confirm(true); drain();
     clearTimeout(startTimer); clearTimeout(forceTimer);
     if (!started) failed(spawnError?.message || (output.capacity ? 'at capacity' : 'worker exited without a confirmed session'), result.code === 0 ? 1 : result.code);
     if (options.agent === 'claude' && output.result !== null && output.result !== undefined) fs.writeFileSync(options.out, output.result);

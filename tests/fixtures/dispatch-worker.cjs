@@ -10,6 +10,8 @@ async function main() {
   fs.writeFileSync(process.env.DISPATCH_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), brief, pid: process.pid }));
   for (const entry of fixture.lines || []) {
     if (entry.delay) await delay(entry.delay);
+    // When a record was written, for tests that time how soon the helper reads it.
+    if (entry.mark) { fs.writeFileSync(entry.mark, String(Date.now())); continue; }
     // A worker editing its project: the scope check compares these with --allow.
     if (entry.write) { fs.mkdirSync(path.dirname(path.resolve(entry.write)), { recursive: true }); fs.writeFileSync(path.resolve(entry.write), entry.text || ''); continue; }
     if (entry.rollout || entry.rolloutRaw) {

@@ -255,6 +255,51 @@ test('a thread id alone cannot confirm a start and an exiting worker still leave
   assert.equal(f.events[1].reason, 'unconfirmed');
 });
 
+test('a worker that exits right after its records is confirmed from them; without them it still failed to start', async t => {
+  for (const [agent, lines] of [['codex', codex], ['claude', claude.map(record => ({ record }))]]) {
+    const f = await fixture(t, lines, { agent, hold: 0 }), result = await f.finished;
+    assert.equal(result.code, 0, agent);
+    assert.match(result.stdout, /\[dispatch\] started \S+ \w+ model .* · routing ok · pid \d+ session /, agent);
+    assert.match(result.stdout, / exit 0 reason exit · out /, agent);
+    assert.deepEqual(f.events.map(event => event.type), ['dispatch-start', 'dispatch-end'], agent);
+    assert.equal(f.events[0].unconfirmed, undefined, agent); assert.equal(f.events[1].reason, 'exit', agent);
+  }
+  // A session file without its turn context proves no start, however quickly or cleanly the worker ends.
+  const f = await fixture(t, [codex[0], { rollout: rollout[0] }], { hold: 0 }), result = await f.finished;
+  assert.notEqual(result.code, 0); assert.match(result.stdout, /failed to start \S+: worker exited without a confirmed session/);
+  assert.equal(f.events[0].unconfirmed, true); assert.equal(f.events[1].reason, 'unconfirmed');
+});
+
+test('a running worker is confirmed within a second of writing its turn context', async t => {
+  const mark = path.join(os.tmpdir(), `agentrix-dispatch-mark-${randomUUID()}`); t.after(() => fs.rm(mark, { force: true }));
+  // The session file exists early; its turn context arrives later with nothing after it, so only the helper's polling
+  // (not the first read, nor a later record on stdout) can find it.
+  const at = codex.findIndex(line => line.rollout?.type === 'turn_context');
+  const lines = [...codex.slice(0, at), { ...codex[at], delay: 600 }, { mark }];
+  const f = await fixture(t, lines, { hold: 2000 }); await f.finished;
+  const start = f.events.find(event => event.type === 'dispatch-start');
+  assert.equal(start.unconfirmed, undefined);
+  const scale = Math.max(1, Number(process.env.AGENTRIX_TEST_TIMEOUT_SCALE) || 1);
+  assert.ok(start.receivedAt - Number(await fs.readFile(mark, 'utf8')) < 1000 * scale, 'started within a second');
+});
+
+test("a session file in today's folder is found on the next read, without waiting for the shared listing", async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-rollout-today-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const { rolloutFiles } = require('../electron/session-files.cjs');
+  await fs.mkdir(path.join(home, 'sessions'));
+  // The shared listing is current (its first walk and the one after its watcher starts) before the file exists.
+  for (let walk = 0; walk < 2; walk++) assert.deepEqual(await rolloutFiles(path.join(home, 'sessions')), []);
+  const day = new Date(), pad = value => String(value).padStart(2, '0');
+  const folder = path.join(home, 'sessions', String(day.getFullYear()), pad(day.getMonth() + 1), pad(day.getDate()));
+  await fs.mkdir(folder, { recursive: true });
+  await fs.writeFile(path.join(folder, `rollout-today-${session}.jsonl`), rollout.slice(0, 4).map(record => JSON.stringify(record)).join('\n') + '\n');
+  const output = new WorkerOutput('codex'), reader = new CodexRollout(home, output);
+  output.record(codex[0].record);
+  await reader.read();
+  assert.equal(output.confirmed, true); assert.equal(output.model, 'gpt-6.1-sol');
+});
+
 test('exit or timeout emits the unconfirmed pair before still-open stdout closes', async t => {
   const { run } = require('../integration/dispatch.cjs');
   const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');

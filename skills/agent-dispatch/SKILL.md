@@ -63,8 +63,12 @@ The start line is the lead's proof that the task started and that model routing 
 itself reports it is running — Codex's matching rollout (`turn_context` model and effort; recorded service tier),
 Claude's `system/init` record (model, effort and fast-mode state when present) — and compares it with what was declared. `routing ok` when they match;
 `routing MISMATCH (declared …)` otherwise, with the actual values first; a value the worker does not report is written
-`unreported`, never assumed. "Started" is printed only once the worker is confirmed running — its process alive and its
-session reported (and Codex's turn context read) — within 30 seconds, else "failed to start". The lead reads the start line right after launching (the
+`unreported`, never assumed. "Started" is printed only from the worker's own records — its session reported (and
+Codex's turn context read from its session file) — within 30 seconds, else "failed to start". While the worker runs, its
+session file is read every 250 ms (today's and yesterday's `sessions/<y>/<m>/<d>` folders directly, so a new file is
+found at once), and a start is reported well within a second of the record. A worker that finishes in a few seconds is
+judged on everything it left: once its output is read (at most 0.5 s after it exits), records that confirm it give
+"started" and then "ended"; an exit without them is "failed to start". The lead reads the start line right after launching (the
 one line it may read from a running background task): on "failed to start" it fixes the brief or relaunches; on a
 mismatch it stops the worker and relaunches with the intended settings, or tells the owner why the actual model is
 acceptable. It gets the end line when the background task finishes.
@@ -100,7 +104,7 @@ code 0 shows 已完成 and the row is removed 3 seconds later; any other end (�
 出错退出（代码 N）, 越界) stays visible until the lead's next round so it is not missed. The helper finds the reason from the
 worker's exit code and the end of its own output (e.g. "at capacity"). `dispatch-rate` makes the running row's model
 group show its token/s while the worker runs (the same TokenRates as other calls); `dispatch-end`'s totals are the
-last word. When confirmation times out or the process exits first, the helper immediately sends the declared
+last word. When confirmation times out, or the process exits without confirming records, the helper sends the declared
 `dispatch-start` with `unconfirmed: true`, followed by `dispatch-end` reason `unconfirmed` (exit code null if still
 unknown). This pair creates the 未能启动 row even without a worker session. The rate is the only thing sent while a
 confirmed worker runs.
