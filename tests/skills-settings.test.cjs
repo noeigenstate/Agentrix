@@ -72,7 +72,7 @@ function mount(t, skills, { details = {}, failure = null } = {}) {
     },
   };
   const { SkillsSettings } = loader(hooks)(path.join(root, 'features/settings/SkillsSettings.tsx'));
-  const projects = [{ id: 'p1', name: 'agentrix' }, { id: 'p2', name: 'demo-site' }];
+  const projects = [{ id: 'p1', name: 'agentrix', kind: 'local' }, { id: 'p2', name: 'demo-site', kind: 'local' }, { id: 'p3', name: 'prod-box', kind: 'ssh' }];
   const render = () => {
     cursor = 0; dirty = false; effects = [];
     const tree = SkillsSettings({ projects }), run = effects;
@@ -107,10 +107,12 @@ function mount(t, skills, { details = {}, failure = null } = {}) {
 }
 
 const now = Date.now();
-const builtinRouting = over => skill({ id: 'builtin:model-routing', name: '模型路由', description: '谁做什么', source: 'builtin', scope: 'builtin', trigger: 'always', autoOptimize: false, requires: { codex: true, claude: true }, ...over });
+const routingSummary = '谁来做什么：Opus 规划与审查架构，GPT-6.1-Sol 写核心代码并调试，Sonnet 做日常与前端，GPT-6.1-Terra 验收界面并处理小任务。GPT 默认 max + fast，Claude 默认 high；只装了一个 Agent 时也有对应分工。';
+const builtinRouting = over => skill({ id: 'builtin:model-routing', name: 'model-routing', description: 'Who does what on a task, in English, seven lines long.', title: '模型路由', summary: routingSummary, source: 'builtin', scope: 'builtin', trigger: 'always', autoOptimize: false, requires: { codex: true, claude: true }, ...over });
 function skill(over = {}) {
-  return { id: 'user:release', name: '发布流程', description: '发布新版本', source: 'user', scope: 'global', projectId: null, projectName: null, path: '', enabled: true, trigger: 'auto',
-    autoOptimize: true, confirmChanges: false, version: 1, updatedAt: null, updatedBy: null, updatedIn: null, createdByAgent: false, pending: false, requires: null, lastUsed: null, ...over };
+  const named = { name: '发布流程', description: '发布新版本', ...over };
+  return { id: 'user:release', title: named.name, summary: named.description, source: 'user', scope: 'global', projectId: null, projectName: null, path: '', enabled: true, trigger: 'auto',
+    autoOptimize: true, confirmChanges: false, version: 1, updatedAt: null, updatedBy: null, updatedIn: null, createdByAgent: false, pending: false, requires: null, lastUsed: null, ...named };
 }
 const releaseV4 = { text: '## 步骤\n1. 升版本号\n2. 写更新说明，并确认 CHANGELOG\n3. 跑完整本地测试', pending: null, versions: [
   { version: 3, at: now - 1e7, by: 'user', project: null, text: '## 步骤\n1. 升版本号\n2. 写更新说明\n3. 跑完整本地测试' },
@@ -348,5 +350,87 @@ test('Settings lists 技能 after 编码助手 and English strings exist for eve
   for (const phrase of phrases) assert.ok(en[phrase], phrase);
   for (const file of ['SkillsSettings.tsx', 'SkillsList.tsx', 'SkillEditForm.tsx', 'SkillDetailPane.tsx', 'skill-text.ts']) {
     for (const [, phrase] of fs.readFileSync(path.join(root, 'features/settings', file), 'utf8').matchAll(/\bt\('([^']+)'/g)) assert.ok(phrase in en, `${file}: ${phrase}`);
+  }
+});
+
+test('the page shows a built-in skill by its title and clamped summary, never its English name or description', async t => {
+  const h = mount(t, [builtinRouting(), release]);
+  await h.settle();
+  assert.equal(h.items()[0], '模型路由');
+  const summary = h.one(node => node.props.className === 'skills-desc skills-summary');
+  assert.equal(h.text(summary), routingSummary); assert.equal(summary.props.title, routingSummary);
+  assert.equal(h.items().join().includes('model-routing'), false); assert.equal(h.page().includes('seven lines'), false);
+  assert.equal(h.text(h.one(node => node.props.className === 'skills-title')).startsWith('模型路由'), true);
+  h.byLabel('启用 模型路由');
+  const css = fs.readFileSync(path.join(root, 'features/settings/skills-settings.css'), 'utf8');
+  assert.match(css, /\.skills-summary \{[^}]*-webkit-line-clamp: 2;[^}]*overflow: hidden;/);
+});
+
+test('the search matches the shown title and summary as well as the name', async t => {
+  const many = Array.from({ length: 6 }, (_, at) => skill({ id: `user:n${at}`, name: `技能 ${at}`, description: `第 ${at} 个` }));
+  const h = mount(t, [builtinRouting(), release, ...many]);
+  await h.settle();
+  h.byLabel('搜索技能').props.onChange({ target: { value: '审查架构' } }); await h.settle();
+  assert.deepEqual(h.items(), ['模型路由']);
+});
+
+test('the scope picker offers local projects only, in the detail and in the form', async t => {
+  const h = mount(t, [builtinRouting(), release]);
+  await h.settle();
+  h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
+  const labels = select => select.props.options.map(option => option.label);
+  assert.deepEqual(labels(h.byLabel('范围')), ['所有项目', 'agentrix', 'demo-site']);
+  h.one(node => node.props['data-skill-edit']).props.onClick(); await h.settle();
+  assert.deepEqual(labels(h.byLabel('范围')), ['所有项目', 'agentrix', 'demo-site']);
+});
+
+test('saving sends the folder name unless the name field was edited', async t => {
+  const folder = skill({ id: 'user:release-flow', name: '发布流程', path: 'C:\\data\\skills\\release-flow\\SKILL.md' });
+  const h = mount(t, [builtinRouting(), folder]);
+  await h.settle();
+  h.all(node => node.props['data-skill-id'] === 'user:release-flow')[0].props.onClick(); await h.settle(); h.clear();
+  h.byLabel('范围').props.onChange('p1'); await h.settle();
+  h.one(node => node.props['data-skill-edit']).props.onClick(); await h.settle();
+  assert.equal(h.byLabel('名称').props.value, '发布流程');
+  h.button('保存').props.onClick(); await h.settle();
+  h.one(node => node.props['data-skill-edit']).props.onClick(); await h.settle();
+  h.byLabel('名称').props.onChange({ target: { value: '发布' } }); await h.settle();
+  h.button('保存').props.onClick(); await h.settle();
+  assert.deepEqual(h.calls.filter(call => call[0] === 'save').map(call => call[2].name), ['release-flow', 'release-flow', '发布']);
+});
+
+test('saving over a pending agent proposal asks first, and 取消 keeps editing', async t => {
+  const pending = { ...release, pending: true };
+  const h = mount(t, [builtinRouting(), pending], { details: { 'user:release': { ...releaseV4, pending: 'proposal' } } });
+  await h.settle();
+  h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
+  h.one(node => node.props['data-skill-edit']).props.onClick(); await h.settle(); h.clear();
+  h.button('保存').props.onClick(); await h.settle();
+  assert.equal(h.calls.some(call => call[0] === 'save'), false);
+  assert.equal(h.text(h.one(node => node.props.role === 'alert')), 'Agent 提议的修改尚未处理，保存会丢弃它。继续？');
+  h.button('取消').props.onClick(); await h.settle();
+  assert.equal(h.nodes().some(node => node.props.role === 'alert'), false); assert.equal(h.byLabel('名称').props.value, '发布流程');
+  h.button('保存').props.onClick(); await h.settle();
+  h.button('继续').props.onClick(); await h.settle();
+  assert.equal(h.calls.filter(call => call[0] === 'save').length, 1);
+  assert.equal(h.nodes().some(node => node.props['data-skill-detail']), true);
+});
+
+test('every settings switch has a hit area of at least 32 px around its 22 px look', () => {
+  const css = fs.readFileSync(path.join(root, 'features/settings/settings.css'), 'utf8');
+  const rule = /input\[type="checkbox"\]::after[^{]*\{([^}]*)\}/.exec(css);
+  assert.ok(rule, 'a ::after hit area');
+  const inset = /position: absolute; inset: (-?\d+)px (-?\d+)px/.exec(rule[1]);
+  assert.ok(inset && 22 - 2 * Number(inset[1]) >= 32 && 38 - 2 * Number(inset[2]) >= 32);
+  assert.match(css, /\.setting-row input\[type="checkbox"\]::after, \.skills-settings input\[type="checkbox"\]::after/);
+});
+
+test('English exists for each built-in skill title and summary', () => {
+  const en = require('../electron/locales/en.json');
+  assert.equal(en['模型路由'], 'Model routing'); assert.ok(en[routingSummary]);
+  const folder = path.join(__dirname, '../resources/skills');
+  for (const name of fs.readdirSync(folder)) {
+    const front = /^---\n([\s\S]*?)\n---/.exec(fs.readFileSync(path.join(folder, name, 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n'))?.[1] ?? '';
+    for (const [, key, text] of front.matchAll(/^(title|summary): (.+)$/gm)) assert.ok(en[text.trim()], `${name} ${key}`);
   }
 });
