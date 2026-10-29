@@ -74,6 +74,15 @@ test('the startup note names the handoff and skills with forward slashes and no 
   assert.ok(!plain.includes('skills') && !plain.includes('read the file'));
 });
 
+test('the dispatch helper note uses an unquoted path for the quote-free startup envelope', () => {
+  const note = startupNote('Read.', null, null, null, 'C:\\Program Files\\Agentrix\\integration\\dispatch.cjs');
+  assert.ok(note.includes('Dispatch helper: node C:/Program Files/Agentrix/integration/dispatch.cjs — start every command-line Codex or Claude worker through it (see the agent-dispatch rules).'));
+  assert.ok(!/["\\\n]/.test(note));
+  const remote = startupNote('Read.', null, null, null, '{AGENTRIX_DISPATCH}');
+  assert.ok(remote.includes('{AGENTRIX_DISPATCH_NOTE}'));
+  assert.ok(!remote.includes('C:/Program Files'));
+});
+
 test('a round joins the memory once and later only grows; notices are not asks', async t => {
   const { roundsOf, remember, readArchive } = require('../electron/features/agents/project-memory.cjs');
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-memory-'));

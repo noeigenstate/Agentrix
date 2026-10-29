@@ -569,6 +569,8 @@ class Worker:
         self.root = None
         self.temp = None
         self.skills_bundle = None
+        self.dispatch_source = None
+        self.dispatch_note = None
         self.skill_paths = {}
         self.skill_note_ready = threading.Event()
         self.skill_note_sequence = None
@@ -616,6 +618,7 @@ class Worker:
         self.token = config["token"]
         self.project_id = config["projectId"]
         self.skills_bundle = config.get("skills")
+        self.dispatch_source = config.get("dispatchHelper")
         branch = ""
         try:
             # rev-parse names the branch on every Git; branch --show-current needs 2.22 and -C needs 1.8.5.
@@ -976,7 +979,25 @@ class Worker:
     def startup_note(self, reading_note):
         # Expand every placeholder before applying the shell's existing limit; long notes must not kill a channel.
         note = self.install_skills(reading_note).replace("{AGENTRIX_HANDOFF}", self.handoff_path())
+        if "{AGENTRIX_DISPATCH_NOTE}" in note:
+            note = note.replace("{AGENTRIX_DISPATCH_NOTE}", self.install_dispatch())
         return note[:8000] if not set('"\\\n\r') & set(note) else ""
+
+    def install_dispatch(self):
+        if self.dispatch_note is not None: return self.dispatch_note
+        source = self.dispatch_source
+        if not shutil.which("node") or not isinstance(source, str) or not source or len(source.encode("utf-8")) > 256 * 1024:
+            self.dispatch_note = "Dispatch helper: unavailable over SSH (remote Node.js or helper missing); command-line workers run unseen in Agentrix."
+            return self.dispatch_note
+        filename = os.path.join(self.temp, "dispatch.cjs")
+        with open(filename, "w", encoding="utf-8") as output: output.write(source)
+        os.chmod(filename, 0o600)
+        bootstrap = os.path.join(self.temp, "dispatch.json")
+        with open(bootstrap, "w", encoding="utf-8") as output:
+            json.dump({"pipeName": os.path.join(self.temp, "events.sock"), "sessionKey": self.token, "projectId": self.project_id}, output)
+        os.chmod(bootstrap, 0o600)
+        self.dispatch_note = "Dispatch helper: node %s — start every command-line Codex or Claude worker through it (see the agent-dispatch rules)." % filename.replace(os.sep, "/")
+        return self.dispatch_note
 
     def update_skill_note(self, sequence, note, bundle):
         if sequence != self.skill_note_sequence: raise ValueError("Agent launch changed.")
@@ -1012,6 +1033,7 @@ class Worker:
         self.listener.listen(8)
         self.listener.settimeout(0.5)
         env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", AGENTRIX_ROOT=self.coding_root, AGENTRIX_PYTHON=sys.executable, AGENTRIX_NOTIFY_FILE=notify_file, AGENTRIX_SOCKET=self.socket_path, AGENTRIX_TOKEN=self.token, AGENTRIX_NOTIFY_COMMAND=json.dumps([sys.executable, notify_file, "notify"]))
+        if os.path.isfile(os.path.join(self.temp, "dispatch.json")): env["AGENTRIX_BOOTSTRAP"] = os.path.join(self.temp, "dispatch.json")
         # Plain words for the Codex wrapper in BASH_SOURCE; anything that could break its TOML string is left out.
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
         if reading_note: env["AGENTRIX_READING_NOTE"] = reading_note
@@ -1040,8 +1062,13 @@ class Worker:
                         chunk = client.recv(4096)
                         if not chunk: break
                         data += chunk
+                    if len(data) > 65536: continue
                     event = json.loads(data)
-                    if event.pop("token", None) != self.token: continue
+                    if not isinstance(event, dict): continue
+                    dispatch = str(event.get("type", "")).startswith("dispatch-")
+                    if dispatch:
+                        if event.pop("sessionKey", None) != self.token or event.get("projectId") != self.project_id: continue
+                    elif event.pop("token", None) != self.token: continue
                     codex_home = event.pop("codexHome", None)
                     if event.get("type") in ("shell-prompt", "codex-started"):
                         if isinstance(codex_home, str) and os.path.isabs(codex_home): self.codex_home = codex_home

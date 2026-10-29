@@ -181,7 +181,7 @@ test('Claude call review uses Stop and actual prompts without disturbing usage o
   assert.equal(meter.apply({ type: 'system', subtype: 'stop_hook_summary', hookCount: 1, timestamp: at('22') }), true);
   assert.deepEqual(meter.snapshot().calls, []); assert.deepEqual(meter.snapshot().total, tokens);
   assert.equal(meter.apply({ type: 'system', subtype: 'stop_hook_summary', hookCount: 1, timestamp: at('22') }), false);
-  meter.apply({ type: 'assistant', timestamp: at('23'), message: { content: [{ type: 'tool_use', id: 'b', name: 'Bash', input: { command: 'codex exec', run_in_background: true } }] } });
+  meter.apply({ type: 'assistant', timestamp: at('23'), message: { content: [{ type: 'tool_use', id: 'b', name: 'Agent', input: { run_in_background: true } }] } });
   meter.apply({ type: 'user', timestamp: at('24'), message: { content: [{ type: 'tool_result', tool_use_id: 'b', is_error: true, content: 'Launch failed' }] } });
   assert.equal(meter.snapshot().calls[0].reviewing, 1);
   meter.apply({ type: 'user', timestamp: at('25'), message: { content: 'Try a different fix.' } });
@@ -214,9 +214,6 @@ test("the service names: Codex's providers by their own names or their base_url'
     const meter = new UsageMeter('codex', { names: provider => codexProviderName(provider, custom) });
     meter.apply({ type: 'session_meta', payload: { model_provider: 'openai' } });
     assert.equal(meter.snapshot().provider, 'gateway.example:8443');
-    const parent = new UsageMeter('claude', { rates: false, names: provider => codexProviderName(provider, custom) });
-    parent.apply({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'custom-provider', name: 'Bash', input: { command: 'codex exec -m gpt-6.1-terra' } }] } });
-    assert.equal(parent.snapshot().calls[0].provider, 'gateway.example:8443', 'called Codex models use the same endpoint resolver');
   }
   assert.equal(codexProviderName('openai', '[model_providers.openai]\nbase_url = "https://api.openai.com/v1"'), 'OpenAI');
   assert.equal(codexProviderName('openai', '[model_providers.openai]\nbase_url = "invalid"'), 'OpenAI');

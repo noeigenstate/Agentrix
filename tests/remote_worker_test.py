@@ -32,6 +32,42 @@ GIT_TOO_OLD = _git_too_old()
 
 
 class RemoteFilesTest(unittest.TestCase):
+    def test_dispatch_events_use_the_same_authenticated_envelope_over_ssh(self):
+        events = []
+        self.worker.emit = events.append
+        self.worker.listener = mock.MagicMock()
+        payload = {"type": "dispatch-rate", "id": "22222222-2222-4222-8222-222222222222", "outputTokens": 50, "activeMs": 1000,
+                   "projectId": self.worker.project_id, "sessionKey": self.worker.token}
+        clients = []
+        for value in ([], dict(payload, sessionKey="wrong"), dict(payload, projectId="other"), payload):
+            client = mock.MagicMock()
+            client.__enter__.return_value = client
+            client.recv.return_value = json.dumps(value).encode("utf-8") + b"\n"
+            clients.append((client, None))
+        self.worker.listener.accept.side_effect = clients + [OSError("closed")]
+        self.worker.events_loop()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], dict(payload, sequence=1))
+
+    def test_dispatch_copy_and_bootstrap_exist_only_with_remote_node(self):
+        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
+        self.worker.dispatch_source = "// synthetic dispatch helper\n"
+        self.worker.handoff_path = lambda: os.path.join(self.worker.temp, "handoff.md")
+        with mock.patch.object(remote.shutil, "which", return_value=None):
+            note = self.worker.startup_note("Read. {AGENTRIX_DISPATCH_NOTE}")
+        self.assertIn("unavailable over SSH", note)
+        self.assertIn("workers run unseen", note)
+        self.assertFalse((Path(self.worker.temp) / "dispatch.cjs").exists())
+        self.worker.dispatch_note = None
+        with mock.patch.object(remote.shutil, "which", return_value="/bin/node"):
+            note = self.worker.startup_note("Read. {AGENTRIX_DISPATCH_NOTE}")
+        self.assertIn("Dispatch helper: node ", note)
+        self.assertEqual((Path(self.worker.temp) / "dispatch.cjs").read_text(encoding="utf-8"), self.worker.dispatch_source)
+        bootstrap = json.loads((Path(self.worker.temp) / "dispatch.json").read_text(encoding="utf-8"))
+        self.assertEqual(bootstrap, {"pipeName": os.path.join(self.worker.temp, "events.sock"), "sessionKey": self.worker.token, "projectId": self.worker.project_id})
+        if os.name == "posix":
+            self.assertEqual(os.stat(Path(self.worker.temp) / "dispatch.json").st_mode & 0o777, 0o600)
+
     def test_each_agent_launch_gets_a_fresh_note_and_stale_launches_cannot_replace_it(self):
         self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
         self.worker.handoff_path = lambda: os.path.join(self.worker.temp, "handoff.md")

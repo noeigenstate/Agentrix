@@ -28,11 +28,11 @@ const claudeWindow = (model, used) => LARGE_WINDOW.test(model || '') || used > 2
 // provider: Claude's, known when it starts. Codex names its own in each conversation's first record; names turns that
 // id into what the pane shows.
 class UsageMeter {
-  constructor(agent, { provider = null, names = codexProviderName, changed = () => {}, rates = true, codexHome } = {}) {
+  constructor(agent, { provider = null, names = codexProviderName, changed = () => {}, rates = true } = {}) {
     this.agent = agent; this.provider = provider; this.names = names; this.providerId = null; this.limits = [];
     this.resets = null; this.limitsAt = null; this.claudeDirect = null;
     this.rates = new TokenRates(agent); this.readRates = rates; this.mainCodex = true;
-    this.calls = new AgentCalls({ changed, names: id => this.names(id), local: rates, codexHome });
+    this.calls = new AgentCalls({ changed, local: rates });
     this.reset();
   }
   // Claude's plan limits from the read-only account query or the existing local caches.
@@ -68,7 +68,7 @@ class UsageMeter {
     return true;
   }
   // Another conversation starts over; the provider and the plan's limits stay.
-  reset() { this.context = null; this.round = null; this.total = null; this.roundStart = null; this.replies = new Map(); this.rates.reset(); this.calls.reset(); }
+  reset(preserveDispatch = false) { this.context = null; this.round = null; this.total = null; this.roundStart = null; this.replies = new Map(); this.rates.reset(); this.calls.reset(preserveDispatch); }
   resetScope() {
     this.providerId = null; this.scopeCwd = null; this.resets = null;
     this.limits = []; this.limitsAt = null; this.limitsFrom = null; this.claudeDirect = null;
@@ -90,7 +90,8 @@ class UsageMeter {
       if (record.type === 'session_meta') this.mainCodex = record.payload?.source !== 'exec';
       if (!this.mainCodex) return false;
       const changed = this.codex(record);
-      return this.rates.apply(record) || changed;
+      const callsChanged = record.type === 'event_msg' && record.payload?.type === 'user_message' && this.calls.review(Date.parse(record.timestamp), true);
+      return this.rates.apply(record) || changed || callsChanged;
     }
     if (record.isSidechain) return false;
     const callsChanged = this.calls.apply(record);

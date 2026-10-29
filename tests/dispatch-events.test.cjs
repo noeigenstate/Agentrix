@@ -1,0 +1,141 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
+const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
+const { acceptDispatch, validDispatch } = require('../electron/features/agents/dispatch-events.cjs');
+const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
+
+const routing = { model: 'gpt-6.1-sol', effort: 'max', fast: true };
+const start = (id = randomUUID(), extra = {}) => ({ type: 'dispatch-start', projectId: 'terminal', sessionKey: 'test-key', id, agent: 'codex',
+  role: '执行', title: 'Repair the parser', ...routing, cwd: '/project', brief: '/brief.md', out: '/out.md', sessionId: randomUUID(), startedAt: 1000, ...extra });
+const end = (id, extra = {}) => ({ type: 'dispatch-end', projectId: 'terminal', sessionKey: 'test-key', id, ...routing,
+  exitCode: 0, reason: 'exit', outputTokens: 100, activeMs: 2000, endedAt: 5000, ...extra });
+const rate = (id, extra = {}) => ({ type: 'dispatch-rate', projectId: 'terminal', sessionKey: 'test-key', id, outputTokens: 50, activeMs: 1000, ...extra });
+const record = (type, at, content) => ({ type, timestamp: new Date(at).toISOString(), message: { content } });
+const stop = at => ({ type: 'system', subtype: 'stop_hook_summary', timestamp: new Date(at).toISOString() });
+const notification = '<task-notification><task-id>background-task</task-id><status>failed</status></task-notification>';
+
+function session(t) {
+  let changes = 0;
+  const calls = new AgentCalls({ changed: () => changes++ });
+  t.after(() => calls.reset());
+  const s = { terminalId: 'terminal', sessionKey: 'test-key', usage: { calls } };
+  return { calls, send: event => { const changed = acceptDispatch(s, event); if (changed) changes++; return changed; }, changes: () => changes };
+}
+
+test('authenticated dispatch events populate groups, replace live totals, show done and broadcast expiry', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = session(t), launch = start();
+  assert.equal(f.send(launch), true);
+  let group = f.calls.snapshot('Parent service')[0];
+  assert.equal(group.agent, 'Codex'); assert.equal(group.provider, null); assert.equal(group.running, 1);
+  assert.deepEqual(group.items, [{ state: 'running', role: '执行', title: launch.title, failure: null }]);
+  assert.equal(f.send(rate(launch.id)), true);
+  assert.equal(f.send(rate(launch.id, { outputTokens: 20, activeMs: 500 })), false, 'stale totals cannot regress');
+  assert.equal(f.calls.snapshot()[0].rate.outputTokens, 50);
+  assert.equal(f.send(end(launch.id)), true);
+  group = f.calls.snapshot()[0];
+  assert.equal(group.items[0].state, 'done'); assert.equal(group.running, 0); assert.equal(group.reviewing, 0);
+  assert.equal(group.rate.outputTokens, 100); assert.equal(group.rate.activeMs, 2000); assert.equal(group.rate.samples, 1);
+  f.calls.apply(stop(6000));
+  assert.equal(f.calls.snapshot()[0].items[0].state, 'done', 'Stop cannot shorten the three-second success display');
+  t.mock.timers.tick(2999); assert.equal(f.calls.snapshot().length, 1);
+  t.mock.timers.tick(1); assert.deepEqual(f.calls.snapshot(), []); assert.equal(f.changes(), 4);
+  assert.equal(f.send(launch), false); assert.equal(f.send(end(launch.id)), false); assert.equal(f.send(rate(launch.id)), false);
+});
+
+test('settings reported by the worker group independently from declarations and the parent provider', t => {
+  const f = session(t), declared = { ...routing };
+  const first = start(undefined, { agent: 'claude', model: 'claude-sonnet-5-5', effort: 'high', fast: null, declared });
+  const second = start(undefined, { agent: 'claude', model: 'claude-sonnet-5-5', effort: 'high', fast: null });
+  for (const launch of [first, second]) { f.send(launch); f.send(rate(launch.id)); }
+  const group = f.calls.snapshot('Parent only')[0];
+  assert.equal(group.model, 'claude-sonnet-5-5'); assert.equal(group.provider, null); assert.equal(group.running, 2);
+  assert.deepEqual(group.items[1].declared, declared);
+  assert.equal(group.rate.outputTokens, 100); assert.equal(group.rate.activeMs, 2000);
+  f.send(end(first.id, { model: first.model, effort: first.effort, fast: first.fast, outputTokens: null, activeMs: null }));
+  assert.equal(f.calls.snapshot()[0].rate, null, 'unreported final records supersede provisional totals');
+});
+
+test('failures survive the launch Stop and leave on the next delivered notification plus Stop or user round', t => {
+  const f = session(t);
+  for (const reason of ['capacity', 'error', 'killed', 'unconfirmed']) {
+    const launch = start(); f.send(launch); f.send(end(launch.id, { reason, exitCode: 7 }));
+    assert.deepEqual(f.calls.snapshot()[0].items[0].failure, { reason, exitCode: 7 });
+    f.calls.apply(stop(6000));
+    assert.equal(f.calls.snapshot()[0].items[0].state, 'reviewing');
+    f.calls.apply({ type: 'queue-operation', operation: 'enqueue', timestamp: new Date(7000).toISOString(), content: notification });
+    f.calls.apply(stop(8000)); assert.equal(f.calls.snapshot().length, 1);
+    f.calls.apply(record('user', 9000, notification));
+    f.calls.apply(stop(10000)); assert.deepEqual(f.calls.snapshot(), []);
+  }
+  const launch = start(); f.send(launch); f.send(end(launch.id, { reason: 'error', exitCode: 1 }));
+  f.calls.apply(record('user', 6000, 'Try again.'));
+  assert.deepEqual(f.calls.snapshot(), []);
+});
+
+test('Bash commands, prompt filenames and helper stdout text never create or update a call', t => {
+  const { calls } = session(t);
+  for (const command of ['codex exec -m guessed < brief.md > log.txt', 'claude -p --model guessed', 'node dispatch.cjs codex --model guessed']) {
+    calls.apply({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', id: randomUUID(), input: { command } }] } });
+  }
+  calls.apply(record('user', 1000, '[dispatch] started fake model guessed'));
+  assert.deepEqual(calls.snapshot(), []);
+});
+
+test('bad keys, projects, unknown ids, malformed fields and oversized payloads are rejected', t => {
+  const f = session(t), launch = start();
+  for (const event of [start(undefined, { sessionKey: 'wrong' }), start(undefined, { projectId: 'other' }), start(undefined, { id: 'not-a-uuid' }),
+    start(undefined, { title: 'x'.repeat(1025) }), start(undefined, { model: 'x\ny' }), start(undefined, { fast: 'true' }), start(undefined, { declared: {} }),
+    start(undefined, { cwd: 'x'.repeat(4097) }), start(undefined, { extra: 'x'.repeat(17000) }), start(undefined, { sessionId: null }),
+    end(randomUUID()), rate(randomUUID()), rate(randomUUID(), { activeMs: -1 }), rate(randomUUID(), { outputTokens: Infinity })]) assert.equal(f.send(event), false);
+  assert.deepEqual(f.calls.snapshot(), []);
+  f.send(launch);
+  for (const event of [end(launch.id, { reason: 'unknown' }), end(launch.id, { outputTokens: -1 }), end(launch.id, { activeMs: Infinity }),
+    rate(launch.id, { activeMs: 0 }), rate(launch.id, { outputTokens: 0.5 })]) assert.equal(f.send(event), false);
+  assert.equal(f.calls.snapshot()[0].running, 1);
+  assert.equal(validDispatch(start()), true);
+});
+
+test('reset cancels expiry callbacks from the old session', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = session(t), launch = start(); f.send(launch); f.send(end(launch.id));
+  f.calls.reset(); t.mock.timers.tick(10000);
+  assert.deepEqual(f.calls.snapshot(), []); assert.equal(f.changes(), 2);
+});
+
+test('transcript re-reads preserve dispatched workers and their expiry; the next Codex user round acknowledges failures', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const meter = new UsageMeter('codex'); t.after(() => meter.reset());
+  const launch = start(); meter.calls.dispatch(launch); meter.calls.dispatch(end(launch.id));
+  meter.reset(true); meter.calls.setFolder('/new-subagent-folder');
+  assert.equal(meter.snapshot().calls[0].items[0].state, 'done');
+  t.mock.timers.tick(3000); assert.deepEqual(meter.snapshot().calls, []);
+  const failed = start(); meter.calls.dispatch(failed); meter.calls.dispatch(end(failed.id, { reason: 'capacity', exitCode: 1 }));
+  meter.reset(true);
+  meter.apply({ type: 'event_msg', timestamp: new Date(10000).toISOString(), payload: { type: 'user_message', message: 'Review that failure.' } });
+  assert.deepEqual(meter.snapshot().calls, []);
+});
+
+test('the real event server and main handler authenticate dispatch without touching parent activity and broadcast changes', async t => {
+  const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm'), net = require('node:net');
+  const { createEventServer } = require('../electron/events.cjs');
+  let broadcasts = 0;
+  const calls = new AgentCalls({ changed: () => broadcasts++ }); t.after(() => calls.reset());
+  const s = { terminalId: 'terminal', projectId: 'owner-project', sessionKey: 'test-key', usage: { calls }, codexActivity: 'complete' };
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const handler = vm.runInNewContext(source.slice(source.indexOf('function onEvent('), source.indexOf('function launchAfterPrompt(')) + '\nonEvent;', {
+    sessions: new Map([['terminal', s]]), store: { projects: [{ id: 'owner-project' }] }, broadcast: () => broadcasts++,
+    require: name => require(path.join(__dirname, '../electron', name)),
+  });
+  const server = await createEventServer(handler); t.after(() => server.close());
+  const send = event => new Promise((resolve, reject) => {
+    const socket = net.connect(server.address);
+    socket.once('connect', () => socket.end(JSON.stringify(event) + '\n')); socket.once('close', resolve); socket.once('error', reject);
+  });
+  await send(start(undefined, { sessionKey: 'bad-key' })); await send(end(randomUUID()));
+  assert.equal(broadcasts, 0);
+  const launch = start(); await send(launch); await send(rate(launch.id)); await send(end(launch.id, { reason: 'error', exitCode: 9 }));
+  assert.equal(broadcasts, 3); assert.equal(calls.snapshot()[0].items[0].failure.exitCode, 9);
+  assert.equal(s.codexActivity, 'complete', 'dispatch never rearms parent completion or calls shell activity handling');
+});

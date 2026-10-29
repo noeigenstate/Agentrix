@@ -81,7 +81,7 @@ test('Codex prefers response usage times, deduplicates counters and includes rea
   assert.deepEqual(meter.snapshot().rate, rate(260, 9000, 3, 27));
   assert.equal(meter.snapshot().total.output, 350, 'existing token accounting stays intact');
   const before = meter.snapshot();
-  replay(meter, await fixture('codex-exec-token-rate.jsonl'));
+  replay(meter, [{ type: 'session_meta', payload: { source: 'exec' } }, { type: 'turn_context', payload: { model: 'other' } }]);
   assert.deepEqual(meter.snapshot(), before, 'exec records never enter the main Codex meter');
 });
 
@@ -176,8 +176,9 @@ test('the main Codex incremental reader ignores a newer exec rollout in the same
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-main-rate-'));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
   await fs.mkdir(path.join(home, 'sessions'));
-  for (const name of ['codex-token-rate.jsonl', 'codex-exec-token-rate.jsonl']) {
-    const records = await fixture(name); records[0].payload.cwd = home;
+  for (const exec of [false, true]) {
+    const records = await fixture('codex-token-rate.jsonl'); records[0].payload.cwd = home;
+    if (exec) { records[0].payload.source = 'exec'; records[0].payload.id = '22222222-2222-4222-8222-222222222222'; }
     await fs.writeFile(path.join(home, 'sessions', `rollout-${records[0].payload.id}.jsonl`), records.map(record => JSON.stringify(record) + '\n').join(''));
   }
   const meter = new UsageMeter('codex'); t.after(() => meter.reset());

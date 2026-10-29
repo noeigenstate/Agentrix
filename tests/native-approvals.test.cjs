@@ -305,13 +305,13 @@ test('production startup/state/preload/UI path is connected; legacy permission e
 
 for (const [platform, shellKind] of [['win32', 'powershell'], ['linux', 'bash'], ['darwin', 'zsh']]) test(`actual main startTerminal binds native mode and generation without starting a shell on ${platform}`, () => {
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'), sessions = new Map();
-  const project = { id: 'project', path: process.cwd(), kind: 'local' }, writes = [], deliveries = []; let options;
+  const project = { id: 'project', path: process.cwd(), kind: 'local' }, writes = [], deliveries = [], bootstraps = []; let options;
   const languages = ['zh-Hans-CN', 'en-US'], localeCalls = [], integrations = []; let languageCalls = 0;
   const environment = (kind, helper) => (env, integration) => { integrations.push({ kind, integration }); return helper(env, integration); };
   const terminal = { registry: { close() {} }, onData() {}, onExit() {}, write: data => writes.push(data) };
   const noOp = () => {}, dummy = class { reset() {} dispose() {} output() {} };
   let uuid = 0;
-  const context = vm.createContext({ sessions, findProject: () => project, disposeTerminal: noOp, process: { platform, env: {}, execPath: process.execPath }, fs: { existsSync: () => true }, path,
+  const context = vm.createContext({ sessions, findProject: () => project, disposeTerminal: noOp, process: { platform, env: {}, execPath: process.execPath }, fs: { existsSync: () => true, writeFileSync: (file, data) => bootstraps.push({ file, data: JSON.parse(data) }) }, path, powershellPath: 'powershell.exe',
     app: { getPreferredSystemLanguages() { languageCalls++; return languages; } },
     terminalLocale(value) { localeCalls.push(value); return terminalLocale(value, name => name === 'zh_CN.UTF-8'); },
     randomUUID: () => `native-generation-${++uuid}`, restorePlans: new Map(), store: { findTerminal: () => ({ record: {} }), setRestore: noOp }, localShell: () => ({ kind: shellKind }), runtimeDir: 'unused', eventServer: { address: 'unused' },
@@ -336,7 +336,9 @@ for (const [platform, shellKind] of [['win32', 'powershell'], ['linux', 'bash'],
     [project, false, s.sessionId], [project, false, s.sessionId, { agent: 'codex', started: true }],
     [project, false, sdk.sessionId], [project, false, sdk.sessionId, { agent: 'claude', started: true }],
   ]), 'native agent launch claims first-open after CLI resolution, with the right agent');
-  assert.equal(s.shellKind, shellKind); assert.equal(sdk.shellKind, shellKind); assert.equal(s.bootstrapFile, null); assert.equal(sdk.bootstrapFile, null);
+  assert.equal(s.shellKind, shellKind); assert.equal(sdk.shellKind, shellKind);
+  assert.equal(bootstraps.length, 2); assert.equal(s.bootstrapFile, bootstraps[0].file); assert.equal(sdk.bootstrapFile, bootstraps[1].file);
+  assert.equal(bootstraps[0].data.projectId, s.terminalId); assert.equal(bootstraps[0].data.sessionKey, s.sessionKey);
   assert.equal(languageCalls, platform === 'darwin' ? 2 : 0);
   assert.deepEqual(localeCalls, platform === 'darwin' ? [languages, languages] : []);
   assert.equal(integrations.length, platform === 'win32' ? 0 : 2);

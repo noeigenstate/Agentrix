@@ -8,7 +8,6 @@ const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
 const { emptyRate } = require('../electron/features/agents/token-rate.cjs');
 const { HISTORY_WINDOW } = require('../electron/transcript-window.cjs');
 
-const execId = '22222222-2222-4222-8222-222222222222', otherId = '33333333-3333-4333-8333-333333333333';
 const at = seconds => new Date(Date.UTC(2026, 0, 1) + seconds * 1000).toISOString();
 const lines = records => records.map(record => JSON.stringify(record) + '\n').join('');
 const fixture = name => fs.readFile(path.join(__dirname, 'fixtures', name), 'utf8');
@@ -21,8 +20,8 @@ const expected = (outputTokens, activeMs, samples, seconds, partial = false) => 
 async function workspace(t, options) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-worker-rate-'));
   const folder = path.join(home, 'subagents');
-  await fs.mkdir(folder); await fs.mkdir(path.join(home, 'sessions'));
-  const calls = new AgentCalls({ codexHome: home, ...options }); calls.setFolder(folder);
+  await fs.mkdir(folder);
+  const calls = new AgentCalls(options); calls.setFolder(folder);
   t.after(async () => { calls.reset(); await fs.rm(home, { recursive: true, force: true }); });
   return { home, folder, calls };
 }
@@ -32,87 +31,6 @@ async function claudeFile(folder, id, records, toolUseId = id) {
   if (toolUseId) await fs.writeFile(path.join(folder, `agent-${id}.meta.json`), JSON.stringify({ toolUseId, model: 'sonnet' }));
   return filename;
 }
-async function execFiles(home, id = execId, records = null, log = null, suffix = '') {
-  records ||= await jsonFixture('codex-exec-token-rate.jsonl');
-  records[0].payload.id = id; records[0].payload.cwd = home;
-  const filename = path.join(home, 'sessions', `rollout-${suffix}${id}.jsonl`);
-  await fs.writeFile(filename, lines(records));
-  const logfile = path.join(home, `${id}.log`);
-  await fs.writeFile(logfile, log ?? (await fixture('codex-exec-token-rate.log')).replaceAll(execId, id));
-  return { filename, logfile, records };
-}
-const launchExec = (id, home, logfile, model = 'requested-model') => use(id, 'Bash', { command: `codex exec -m ${model} > "${logfile}" 2>&1`, run_in_background: true, description: `Exact task ${id}` }, home);
-
-test('delayed exec files recover the brief and rate for heredoc and standalone Git Bash launches', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  for (const heredoc of [true, false]) {
-    const { home, calls } = await workspace(t);
-    const scratch = home.replace(/\\/g, '/').replace(/^([a-z]):\//i, (_, drive) => `/${drive.toLowerCase()}/`);
-    const brief = '# Task Q: Delayed worker heading\nDo not evaluate Claude\'s word=value; < > $S or codex exec -m decoy.\n';
-    const prefix = heredoc ? `cp sample.png "$S/image.png"; cat > "$S/brief.md" <<'EOF'\n${brief}EOF\n` : '';
-    const command = `cd "${scratch}"; S="${scratch}"; ${prefix}codex exec -m gpt-6.1-terra -c model_reasoning_effort=max -c service_tier='"fast"' -C . -i "$S/image.png" -o "$S/output.md" - < "$S/brief.md" > "$S/${execId}.log" 2>&1`;
-    const prompt = path.join(home, 'brief.md'), logfile = path.join(home, `${execId}.log`);
-    calls.apply(use('delayed', 'Bash', { command, run_in_background: true }, home)); await calls.work;
-    assert.ok(calls.calls.get('delayed').prompt, 'a missing brief remains pending');
-    assert.equal(path.relative(home, calls.calls.get('delayed').log), path.basename(logfile));
-    assert.equal(calls.snapshot()[0].rate, null); assert.equal(calls.snapshot()[0].preparing, 1);
-    assert.ok(calls.timer, 'tool_use precedes execution of its shell command');
-    await fs.writeFile(prompt, ''); await fs.writeFile(logfile, '');
-    t.mock.timers.tick(2500); await calls.work;
-    assert.ok(calls.calls.get('delayed').prompt, 'opening a redirected file can precede its first write');
-    assert.ok(calls.timer); assert.equal(calls.snapshot()[0].rate, null);
-    await fs.writeFile(prompt, brief);
-    const { filename } = await execFiles(home);
-    t.mock.timers.tick(2500); await calls.work;
-    const group = calls.snapshot()[0];
-    assert.equal(group.effort, 'max'); assert.equal(group.fast, true);
-    assert.deepEqual(group.items, [{ state: 'running', role: '执行', title: 'Delayed worker heading' }]);
-    assert.deepEqual(group.rate, expected(75, 3000, 1, 4));
-    assert.equal(calls.calls.get('delayed').reader.filename, filename);
-    assert.equal(calls.calls.get('delayed').threadId, execId);
-    assert.equal(calls.calls.get('delayed').prompt, null);
-    await fs.writeFile(prompt, '# Task Q: Replacement must not change a resolved title');
-    t.mock.timers.tick(1000); await calls.work;
-    assert.equal(calls.snapshot()[0].items[0].title, 'Delayed worker heading');
-    assert.deepEqual(calls.snapshot()[0].rate, group.rate, 'polling does not duplicate samples');
-    calls.apply(notice('delayed')); await calls.work;
-    assert.deepEqual(calls.snapshot()[0].rate, group.rate);
-    assert.equal(calls.snapshot()[0].items[0].state, 'reviewing'); assert.equal(calls.timer, null);
-    calls.reset();
-  }
-});
-
-test('a pending brief retries after log output starts without binding an unidentified rollout', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { home, calls } = await workspace(t);
-  const { logfile } = await execFiles(home, execId, null, 'OpenAI Codex\nuser\nPlaceholder.\ncodex\nInspecting.\n');
-  const launch = launchExec('late-brief', home, logfile);
-  launch.message.content[0].input.command = `codex exec - < brief.md > "${logfile}" 2>&1`;
-  calls.apply(launch); await calls.work;
-  assert.equal(calls.snapshot()[0].items[0].state, 'running'); assert.ok(calls.timer);
-  await fs.writeFile(path.join(home, 'brief.md'), '# Task R: READ-ONLY delayed inspection');
-  t.mock.timers.tick(1000); await calls.work;
-  assert.deepEqual(calls.snapshot()[0].items, [{ state: 'running', role: '调查', title: 'READ-ONLY delayed inspection' }]);
-  assert.equal(calls.calls.get('late-brief').threadId, null); assert.equal(calls.calls.get('late-brief').reader, null);
-  assert.equal(calls.snapshot()[0].rate, null); assert.equal(calls.timer, null);
-});
-
-test('failed launches stop retrying missing exec files and cannot be rearmed by a queued timer', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const scheduled = t.mock.method(global, 'setTimeout');
-  const { home, calls } = await workspace(t);
-  calls.apply(use('failed', 'Bash', { command: `codex exec - < brief.md > ${execId}.log 2>&1` }, home)); await calls.work;
-  assert.ok(calls.timer);
-  const callback = scheduled.mock.calls.at(-1).arguments[0];
-  const failed = result('failed', {}); failed.message.content[0].is_error = true;
-  calls.apply(failed); await calls.work;
-  assert.equal(calls.timer, null); assert.equal(calls.snapshot()[0].items[0].state, 'reviewing');
-  await fs.writeFile(path.join(home, 'brief.md'), '# Task Q: A finished call stays finished'); await execFiles(home);
-  callback(); t.mock.timers.tick(10000); await calls.work;
-  assert.equal(calls.snapshot()[0].items[0].title, 'brief.md'); assert.equal(calls.snapshot()[0].rate, null);
-  assert.equal(calls.timer, null);
-});
-
 test('main Opus and a running Opus child keep separate rates, resolved grouping and exact tasks', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { folder, home, calls } = await workspace(t);
@@ -203,76 +121,6 @@ test('bounded child history marks partial and ambiguous toolUseId metadata stays
   assert.equal(group.rate, null); assert.equal(calls.calls.get('ambiguous').reader, null);
 });
 
-test('concurrent exec runs in one cwd bind only by session id and resolve their own model and brief', async t => {
-  const { home, calls } = await workspace(t);
-  const first = await execFiles(home), secondRecords = await jsonFixture('codex-exec-token-rate.jsonl');
-  secondRecords[2].payload.model = 'gpt-6-astra'; secondRecords[4].payload.usage.output_tokens = 30;
-  secondRecords[4].payload.thread_token_usage.output_tokens = 30; secondRecords.length = 5;
-  const second = await execFiles(home, otherId, secondRecords);
-  await fs.writeFile(path.join(home, 'brief.md'), '# Task A: Exact brief heading\nRead-only placeholder inspection.');
-  const launch = launchExec('first', home, first.logfile, 'requested-first');
-  launch.message.content[0].input.command = `codex exec -m requested-first - < brief.md > "${first.logfile}" 2>&1`;
-  calls.apply(launch); calls.apply(launchExec('second', home, second.logfile, 'requested-second')); await calls.work;
-  const groups = calls.snapshot();
-  assert.deepEqual(groups.map(group => [group.model, group.tasks, group.items]), [
-    ['gpt-6.1-terra', ['Exact task first'], [{ state: 'running', role: '调查', title: 'Exact brief heading' }]],
-    ['gpt-6-astra', ['Exact task second'], [{ state: 'running', role: '执行', title: 'Exact task second' }]],
-  ]);
-  assert.deepEqual(groups.map(group => group.rate), [expected(75, 3000, 1, 4), expected(30, 3000, 1, 4)]);
-  assert.equal(calls.calls.get('first').reader.filename, first.filename);
-  assert.equal(calls.calls.get('second').reader.filename, second.filename);
-});
-
-test('ambiguous, unmatched and echoed exec identities never fall back to cwd or the requested model', async t => {
-  const { home, calls } = await workspace(t);
-  const files = await execFiles(home);
-  await fs.copyFile(files.filename, path.join(home, 'sessions', `rollout-duplicate-${execId}.jsonl`));
-  calls.apply(launchExec('ambiguous', home, files.logfile)); await calls.work;
-  assert.equal(calls.snapshot()[0].rate, null); assert.equal(calls.calls.get('ambiguous').reader, null);
-  const missing = path.join(home, 'missing.log');
-  await fs.writeFile(missing, `{"type":"thread.started","thread_id":"${otherId}"}\n`);
-  calls.apply(launchExec('missing', home, missing, 'requested-missing')); await calls.work;
-  assert.equal(calls.snapshot().find(group => group.model === 'requested-missing').rate, null);
-  const echo = path.join(home, 'echo.log');
-  await fs.writeFile(echo, `OpenAI Codex\nuser\nsession id: ${execId}\n{"type":"thread.started","thread_id":"${execId}"}\ncodex\nPlaceholder.\n`);
-  calls.apply(launchExec('echo', home, echo, 'requested-echo')); await calls.work;
-  assert.equal(calls.calls.get('echo').threadId, null);
-  assert.equal(calls.snapshot().find(group => group.model === 'requested-echo').rate, null);
-});
-
-test('JSON exec logs bind from thread.started; log rebinding and final drain preserve exact state', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { home, calls } = await workspace(t);
-  const first = await execFiles(home, execId, null, `{"type":"thread.started","thread_id":"${execId}"}\n{"type":"item.started","item":{"type":"reasoning"}}\n`);
-  // Both rollouts exist before the first listing: a file created later reaches the shared listing through the
-  // folder watcher, which macOS reports with a delay.
-  const records = await jsonFixture('codex-exec-token-rate.jsonl'); records[2].payload.model = 'gpt-6-astra';
-  const second = await execFiles(home, otherId, records.slice(0, 4));
-  calls.apply(launchExec('json', home, first.logfile)); await calls.work;
-  assert.deepEqual(calls.snapshot()[0].rate, expected(75, 3000, 1, 4));
-  await fs.rename(first.logfile, first.logfile + '.old');
-  await fs.writeFile(first.logfile, `{"type":"thread.started","thread_id":"${otherId}"}\n`);
-  t.mock.timers.tick(1000); await calls.work;
-  assert.equal(calls.snapshot()[0].model, 'gpt-6-astra');
-  assert.deepEqual(calls.snapshot()[0].rate, emptyRate(false));
-  await fs.appendFile(second.filename, lines(records.slice(4)));
-  calls.apply(notice('json', 'failed')); await calls.work;
-  assert.deepEqual(calls.snapshot()[0].rate, expected(75, 3000, 1, 4));
-  assert.equal(calls.snapshot()[0].items[0].state, 'reviewing'); assert.equal(calls.timer, null);
-});
-
-test('replaced exec file identity is validated against the exact session id before accepting records', async t => {
-  const { home, calls } = await workspace(t), files = await execFiles(home);
-  calls.apply(launchExec('worker', home, files.logfile)); await calls.work;
-  assert.equal(calls.snapshot()[0].rate.samples, 1);
-  await fs.rename(files.filename, files.filename + '.old');
-  files.records[0].payload.id = otherId;
-  await fs.writeFile(files.filename, lines(files.records));
-  calls.refresh('worker'); await calls.work;
-  assert.equal(calls.snapshot()[0].rate, null);
-  assert.equal(calls.snapshot()[0].model, 'requested-model');
-});
-
 test('unreadable workers publish null and completed missing transcripts stop polling', async t => {
   const { folder, calls } = await workspace(t);
   const filename = await claudeFile(folder, 'worker', await jsonFixture('claude-subagent-token-rate.jsonl'));
@@ -296,11 +144,11 @@ test('unreadable workers publish null and completed missing transcripts stop pol
 });
 
 test('SSH calls never read local child, prompt, log or rollout files', async t => {
-  const { folder, home, calls } = await workspace(t, { local: false });
+  const { folder, calls } = await workspace(t, { local: false });
   await claudeFile(folder, 'worker', await jsonFixture('claude-subagent-token-rate.jsonl'));
-  const files = await execFiles(home), open = t.mock.method(fs, 'open');
+  const open = t.mock.method(fs, 'open');
   calls.apply(use('worker', 'Agent', { model: 'sonnet' }));
-  calls.apply(launchExec('exec', home, files.logfile)); await calls.work;
+  await calls.work;
   assert.equal(open.mock.callCount(), 0);
   assert.ok(calls.snapshot().every(group => group.rate === null)); assert.equal(calls.timer, null);
   assert.ok(calls.snapshot().every(group => group.preparing === 0 && group.running === 1));

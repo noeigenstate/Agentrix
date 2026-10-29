@@ -362,7 +362,7 @@ function startSkillSession(project, s, sequence, started = true) {
   const remote = project.kind === 'ssh';
   const delivery = skills.delivery(project, remote, s.skillSessionId, { agent: s.agent, started });
   const note = startupNote(READING_NOTE, remote ? '{AGENTRIX_HANDOFF}' : handoffFile(s.terminalId),
-    (remote ? path.posix : path).join(project.path, 'skills'), delivery);
+    (remote ? path.posix : path).join(project.path, 'skills'), delivery, remote ? '{AGENTRIX_DISPATCH}' : path.join(integrationDir, 'dispatch.cjs'));
   if (remote) {
     void s.terminal.request('skill-note', { sequence, note, skills: delivery.bundle }).then(paths => {
       if (s.terminal.info) s.terminal.info.skills = paths;
@@ -383,7 +383,7 @@ function refreshSkillNotes() {
     if (!s.skillNoteFile || s.codexActive || s.status === 'exited') continue;
     const project = store.projects.find(project => project.id === s.projectId);
     if (!project) continue;
-    const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'), skills.delivery(project, false, s.sessionId));
+    const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'), skills.delivery(project, false, s.sessionId), path.join(integrationDir, 'dispatch.cjs'));
     if (note !== s.skillNote) { writeSkillFile(s.skillNoteFile, note); s.skillNote = note; }
   }
 }
@@ -401,7 +401,7 @@ function followClaude(project, s, event) {
   if (s.claudeTranscript?.filename !== file) {
     const onHistory = ready => {
       if (ready) s.conversation.endHistory();
-      else { s.conversation.beginHistory(); s.actions.reset(); s.conversation.reset(); s.usage?.reset(); }
+      else { s.conversation.beginHistory(); s.actions.reset(); s.conversation.reset(); s.usage?.reset(true); }
       if (!ready && s.completionWork?.reset()) store.expectCompletion(project.id, false);
       if (s.completionWork) s.completionWork.reading = !ready;
       usageHistory(s, ready);
@@ -714,6 +714,10 @@ function onEvent(event) {
   if (!s || event.sessionKey !== s.sessionKey) return;
   const project = store.projects.find(p => p.id === s.projectId);
   if (!project) return;
+  if (['dispatch-start', 'dispatch-rate', 'dispatch-end'].includes(event.type)) {
+    if (require('./features/agents/dispatch-events.cjs').acceptDispatch(s, event)) broadcast();
+    return;
+  }
   if (event.type === 'agent-activity') { claudeActivity(project, s, event); return; }
   if (event.type !== 'turn-complete' && !acceptShellEvent(s, event)) return;
   s.approval?.context('shell-event', [event.type, event.sequence]);
@@ -788,7 +792,7 @@ function onEvent(event) {
     const onHistory = ready => {
       if (ready) s.conversation.endHistory();
       else {
-        s.conversation.beginHistory(); s.actions.reset(); s.conversation.reset(); s.usage?.reset();
+        s.conversation.beginHistory(); s.actions.reset(); s.conversation.reset(); s.usage?.reset(true);
         if (s.completionWork?.reset()) store.expectCompletion(project.id, false);
         s.usage?.resetScope(); s.bindUsageAccount?.();
       }
@@ -999,10 +1003,10 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   const startPath = restorePlans.get(id)?.cwd || store.findTerminal(id)?.record.restore?.cwd || project.path;
   // Local terminals use the shell chosen in settings (zsh on macOS); SSH projects always run Bash on the server.
   const shell = project.kind === 'ssh' ? { kind: 'bash', file: null } : localShell(true), shellKind = shell.kind;
-  const bootstrapFile = !nativeMode && ['powershell', 'cmd'].includes(shellKind) ? path.join(runtimeDir, `${sessionId}.json`) : null;
+  const bootstrapFile = project.kind !== 'ssh' ? path.join(runtimeDir, `${sessionId}.json`) : null;
   const skillNoteFile = project.kind === 'ssh' ? null : path.join(runtimeDir, `${sessionId}-skills.txt`);
   if (bootstrapFile) fs.writeFileSync(bootstrapFile, JSON.stringify({
-    projectId: id, projectPath: startPath, sessionKey, pipeName: eventServer.name,
+    projectId: id, projectPath: startPath, sessionKey, pipeName: process.platform === 'win32' ? eventServer.name : eventServer.address,
     powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath: path.join(integrationDir, 'claude-hook.ps1'),
     nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'),
   }), { mode: 0o600 });
@@ -1012,7 +1016,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   // and where the work done in this folder before is written down for them (handoff.cjs), so either one carries it on.
   if (project.kind !== 'ssh') {
     env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
-      skills.delivery(project, false, sessionId));
+      skills.delivery(project, false, sessionId), path.join(integrationDir, 'dispatch.cjs'));
     writeSkillFile(skillNoteFile, env.AGENTRIX_READING_NOTE);
     env.AGENTRIX_READING_NOTE_FILE = skillNoteFile;
     void writeHandoff(handoffFile(id), startPath, { memoryDir: memoryDir() }).catch(() => {});
@@ -1033,14 +1037,14 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   }) : null;
   if (native) {
     env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
-      skills.delivery(project, false, sessionId, { agent: nativeMode === 'claude-sdk' ? 'claude' : 'codex', started: true }));
+      skills.delivery(project, false, sessionId, { agent: nativeMode === 'claude-sdk' ? 'claude' : 'codex', started: true }), path.join(integrationDir, 'dispatch.cjs'));
     writeSkillFile(skillNoteFile, env.AGENTRIX_READING_NOTE);
   }
   const terminalOptions = { name: 'xterm-256color', cols: 90, rows: 22, cwd: startPath, env,
     ...(!['zsh', 'bash'].includes(shellKind) ? { useConpty: true, useConptyDll: true } : {}) };
   const remoteSkills = project.kind === 'ssh' ? skills.delivery(project, true, sessionId) : null;
   const terminal = native || (project.kind === 'ssh' ? new RemoteConnection({ ...project, id }, { integrationDir, auth: sshAuth, sessionKey, onEvent, codingPath: startPath, askpassPath: sshAskpassPath,
-    readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', path.posix.join(project.path, 'skills'), remoteSkills), skills: remoteSkills.bundle,
+    readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', path.posix.join(project.path, 'skills'), remoteSkills, '{AGENTRIX_DISPATCH}'), skills: remoteSkills.bundle,
     onReady: info => { remoteBranch(project.id, info.branch); },
   }) : shellKind === 'zsh' ? pty.spawn(shell.file, ['-l', '-i'], terminalOptions)
     : shellKind === 'bash' ? pty.spawn(shell.file, bashArguments(integrationDir), terminalOptions)
