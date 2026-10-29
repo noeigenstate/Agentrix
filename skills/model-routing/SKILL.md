@@ -1,6 +1,6 @@
 ---
 name: model-routing
-description: Who does what in this project — the lead orchestrates; Opus 5.5 is the architect, GPT-6.1-Sol the core engineer (complex code, refactors, debugging, test fixes), Sonnet 5.5 the execution engineer (routine features, front end, tests, docs), GPT-6.1-Terra the visual and verification engineer (UI checks, screenshots, interface driving, small tasks). Four stages — Opus plans; Sol and Sonnet build in separate worktrees; Opus integrates and runs the tests; Opus reviews the architecture and GPT-6.1-Terra accepts the UI and interaction; then final acceptance. GPT models always run at max effort in fast mode, Claude models at high effort. Use at the start of every task, before doing any of it yourself.
+description: Who does what in this project (with a fallback table for when only Claude Code or only Codex is installed) — the lead orchestrates; Opus 5.5 is the architect, GPT-6.1-Sol the core engineer (complex code, refactors, debugging, test fixes), Sonnet 5.5 the execution engineer (routine features, front end, tests, docs), GPT-6.1-Terra the visual and verification engineer (UI checks, screenshots, interface driving, small tasks). Four stages — Opus plans; Sol and Sonnet build in separate worktrees; Opus integrates and runs the tests; Opus reviews the architecture and GPT-6.1-Terra accepts the UI and interaction; then final acceptance. GPT models always run at max effort in fast mode, Claude models at high effort. Use at the start of every task, before doing any of it yourself.
 ---
 
 # Routing work between models
@@ -43,6 +43,34 @@ Concept images to choose from still come from Codex's image tool (see `design-po
 
 - **GPT models** (Sol, Terra, and any other `gpt-*`): always `model_reasoning_effort=max` and `service_tier="fast"`.
 - **Claude models** (Sonnet and Opus subagents): always `effort: "high"` on the Agent call.
+
+## When only one agent is installed
+
+Check first: `claude --version` and `codex --version` (Agentrix also states which agents are installed in the session's
+startup note). The roles stay; the models filling them change. Review stays cross-model where two models exist, and
+never by the author's own context: a fresh worker reviews.
+
+| Role | Both installed | Claude Code only | Codex only |
+| --- | --- | --- | --- |
+| Orchestrator | Lead session | Lead Claude session | Lead Codex session |
+| Architect / planner | Opus 5.5 | Opus 5.5 (lead, or an `opus` subagent) | GPT-6.1-Sol (lead) |
+| Core engineer | GPT-6.1-Sol | Opus 5.5 subagent | GPT-6.1-Sol via `codex exec` |
+| Execution engineer | Sonnet 5.5 subagent | Sonnet 5.5 subagent | GPT-6.1-Terra via `codex exec` |
+| Visual and verification | GPT-6.1-Terra | Sonnet 5.5 subagent (reads screenshots) | GPT-6.1-Terra via `codex exec -i <png>` |
+| Small quick tasks | GPT-6.1-Terra | Haiku 5.5 subagent | GPT-6.1-Terra |
+| Architecture review | Opus 5.5 subagent | Opus 5.5 subagent (fresh) | GPT-6.1-Sol `codex exec -s read-only` (fresh) |
+| UI acceptance | GPT-6.1-Terra | Sonnet 5.5 subagent (fresh, not the builder) | GPT-6.1-Terra (fresh, not the builder) |
+
+- **Claude Code only:** every worker is an Agent call with `model` set and `effort: "high"`; worktrees through
+  `isolation: "worktree"`. Opus takes Sol's hard work; Sonnet keeps routine work and front end and also does the visual
+  checks Terra would; Haiku takes one-line fixes and lookups.
+- **Codex only:** every worker is a background `codex exec -m <model> -c model_reasoning_effort=max -c service_tier='"fast"'`
+  run with `-C <worktree>`; Sol takes architecture, core code, debugging and the architecture review; Terra takes routine
+  work, front end, small tasks and UI checks. The author never reviews its own change: Sol reviews Terra's code, Terra
+  checks the screens of Sol's.
+- **Settings stay fixed** in every case: GPT max + fast, Claude high.
+- **A model missing from the account** (e.g. no Opus access): use the next one down in the same family for that role
+  (Opus → Sonnet, Sol → Terra) and say so in the plan.
 
 ## 1. Plan (lead)
 
