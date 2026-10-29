@@ -357,13 +357,11 @@ function describeActions(s, cwd, actions) {
 }
 // A shell can outlive a Settings change. Its wrappers reread this small file for every new CLI session.
 function refreshSkillNotes() {
-  const deliveries = new Map();
   for (const s of sessions.values()) {
     if (!s.skillNoteFile) continue;
     const project = store.projects.find(project => project.id === s.projectId);
     if (!project) continue;
-    if (!deliveries.has(project.id)) deliveries.set(project.id, skills.delivery(project));
-    const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'), deliveries.get(project.id));
+    const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'), skills.delivery(project, false, s.sessionId));
     if (note !== s.skillNote) { writeSkillFile(s.skillNoteFile, note); s.skillNote = note; }
   }
 }
@@ -987,7 +985,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   // The agent wrappers tell Claude Code and Codex what the reading view shows (an SSH project's worker is told on start),
   // and where the work done in this folder before is written down for them (handoff.cjs), so either one carries it on.
   if (project.kind !== 'ssh') {
-    env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), skills.delivery(project));
+    env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), skills.delivery(project, false, sessionId));
     writeSkillFile(skillNoteFile, env.AGENTRIX_READING_NOTE);
     env.AGENTRIX_READING_NOTE_FILE = skillNoteFile;
     void writeHandoff(handoffFile(id), startPath, { memoryDir: memoryDir() }).catch(() => {});
@@ -1008,7 +1006,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   }) : null;
   const terminalOptions = { name: 'xterm-256color', cols: 90, rows: 22, cwd: startPath, env,
     ...(!['zsh', 'bash'].includes(shellKind) ? { useConpty: true, useConptyDll: true } : {}) };
-  const remoteSkills = project.kind === 'ssh' ? skills.delivery(project, true) : null;
+  const remoteSkills = project.kind === 'ssh' ? skills.delivery(project, true, sessionId) : null;
   const terminal = native || (project.kind === 'ssh' ? new RemoteConnection({ ...project, id }, { integrationDir, auth: sshAuth, sessionKey, onEvent, codingPath: startPath, askpassPath: sshAskpassPath,
     readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', path.posix.join(project.path, 'skills'), remoteSkills), skills: remoteSkills.bundle,
     onReady: info => { remoteBranch(project.id, info.branch); },

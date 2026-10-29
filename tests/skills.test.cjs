@@ -20,7 +20,7 @@ function fixture(t, setup = () => {}) {
   const dataDir = path.join(root, 'profile'), builtinDir = path.join(root, 'resources', 'skills');
   const projects = [{ id: 'p1', name: 'First', path: path.join(root, 'first') }, { id: 'p2', name: 'Second', path: path.join(root, 'second') }, { id: 'ssh', name: 'Remote', kind: 'ssh', path: '/srv/app' }];
   for (const project of projects.filter(p => p.kind !== 'ssh')) fs.mkdirSync(project.path);
-  put(path.join(builtinDir, 'model-routing', 'SKILL.md'), text('model-routing'));
+  put(path.join(builtinDir, 'model-routing', 'SKILL.md'), fs.readFileSync(path.join(__dirname, '../resources/skills/model-routing/SKILL.md'), 'utf8'));
   const changed = [], changes = [], errors = [], active = [];
   const options = { dataDir, builtinDir, getProjects: () => projects, getAgents: () => ({ claude: { installed: true }, codex: { installed: false } }), activeProjects: () => active,
     changed: (value, change) => { changed.push(value); changes.push(change); }, report: error => errors.push(error) };
@@ -37,7 +37,7 @@ const until = async (check, label) => {
 
 test('skill defaults, exact public shape, read-only built-ins and local-only project scopes', async t => {
   const { store } = fixture(t), builtin = store.list()[0];
-  assert.deepEqual(Object.keys(builtin).sort(), ['id', 'name', 'description', 'title', 'summary', 'source', 'scope', 'projectId', 'projectName', 'path', 'enabled', 'trigger', 'autoOptimize', 'confirmChanges', 'version', 'updatedAt', 'updatedBy', 'updatedIn', 'createdByAgent', 'pending', 'requires', 'lastUsed'].sort());
+  assert.deepEqual(Object.keys(builtin).sort(), ['id', 'name', 'description', 'title', 'summary', 'when', 'yieldsTo', 'source', 'scope', 'projectId', 'projectName', 'path', 'enabled', 'trigger', 'autoOptimize', 'confirmChanges', 'version', 'updatedAt', 'updatedBy', 'updatedIn', 'createdByAgent', 'pending', 'requires', 'lastUsed'].sort());
   assert.deepEqual([builtin.id, builtin.enabled, builtin.trigger, builtin.autoOptimize], ['builtin:model-routing', true, 'always', false]);
   assert.deepEqual(builtin.requires, { claude: true, codex: false });
   await assert.rejects(() => store.save(builtin.id, draft('model-routing')), /只读/);
@@ -50,7 +50,7 @@ test('skill defaults, exact public shape, read-only built-ins and local-only pro
   assert.equal(scoped.projectName, 'First');
 });
 
-test('shipped code standard is an always-on built-in delivered locally and over SSH', t => {
+test('shipped code standard defaults to first-open locally and over SSH', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-shipped-skills-'));
   const project = { id: 'p1', name: 'First', path: path.join(root, 'project') };
   const remote = { id: 'ssh', name: 'Remote', kind: 'ssh', path: '/srv/app' };
@@ -61,14 +61,14 @@ test('shipped code standard is an always-on built-in delivered locally and over 
 
   const skill = store.list().find(item => item.id === 'builtin:code-standard');
   assert.ok(skill);
-  assert.deepEqual([skill.name, skill.title, skill.source, skill.enabled, skill.trigger], ['code-standard', '代码规范', 'builtin', true, 'always']);
-  const note = startupNote('Read.', null, null, store.delivery(project));
-  assert.ok(note.includes('Before any task, read and follow ' + skill.path.replace(/\\/g, '/') + '.'));
-  const delivery = store.delivery(remote, true);
+  assert.deepEqual([skill.name, skill.title, skill.source, skill.enabled, skill.trigger], ['code-standard', '代码规范', 'builtin', true, 'first-open']);
+  const note = startupNote('Read.', null, null, store.delivery(project, false, 'first-session'));
+  assert.ok(note.includes('Before the first task of this session, read and follow ' + skill.path.replace(/\\/g, '/') + '; this is its first run in this project.'));
+  const delivery = store.delivery(remote, true, 'remote-session');
   const shipped = delivery.bundle.files.find(file => file.id === skill.id);
   assert.ok(shipped);
   assert.equal(shipped.text, fs.readFileSync(skill.path, 'utf8'));
-  assert.ok(delivery.bundle.instructions.includes('Before any task, read and follow {AGENTRIX_SKILLS}/builtin/code-standard/SKILL.md.'));
+  assert.ok(delivery.bundle.instructions.includes('Before the first task of this session, read and follow {AGENTRIX_SKILLS}/builtin/code-standard/SKILL.md; this is its first run in this project.'));
 });
 
 test('save, independent history, revert, options persistence, import and delete', async t => {
@@ -188,13 +188,14 @@ test('startup notes deliver always/auto/disabled and every optimization permissi
 test('all option combinations and large libraries keep the complete instructions in a bounded manifest', async t => {
   const { store, projects } = fixture(t);
   await store.save(null, draft('matrix'));
-  for (const enabled of [false, true]) for (const trigger of ['always', 'auto']) for (const autoOptimize of [false, true]) for (const confirmChanges of [false, true]) {
+  for (const enabled of [false, true]) for (const trigger of ['always', 'auto', 'first-open']) for (const autoOptimize of [false, true]) for (const confirmChanges of [false, true]) {
     store.setOptions('user:matrix', { enabled, trigger, autoOptimize, confirmChanges });
     const delivery = store.delivery(projects[0]), note = startupNote('Read.', null, null, delivery);
     const file = store.entry('user:matrix').path.replace(/\\/g, '/');
     assert.equal(note.includes(file), enabled);
     if (enabled) {
       assert.equal(note.includes(`Before any task, read and follow ${file}.`), trigger === 'always');
+      assert.equal(note.includes(`Before the first task of this session, read and follow ${file}; this is its first run in this project.`), trigger === 'first-open');
       assert.ok(note.includes(!autoOptimize ? 'must not change it' : confirmChanges ? 'propose edits only to' : 'may update it in place'));
     }
   }
@@ -588,11 +589,11 @@ test('delivery is reused until relevant changes and successful reads publish usa
   assert.notEqual(store.delivery(projects[0]), delivery);
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const notes = source.slice(source.indexOf('function refreshSkillNotes()'), source.indexOf('// Claude Code writes'));
-  const sessions = new Map([['one', { projectId: 'p1', terminalId: 'one', skillNoteFile: 'one.txt' }], ['two', { projectId: 'p1', terminalId: 'two', skillNoteFile: 'two.txt' }]]);
+  const sessions = new Map([['one', { projectId: 'p1', terminalId: 'one', sessionId: 'first', skillNoteFile: 'one.txt' }], ['two', { projectId: 'p1', terminalId: 'two', sessionId: 'later', skillNoteFile: 'two.txt' }]]);
   let deliveries = 0, writes = 0;
-  const refreshNotes = require('node:vm').runInNewContext('(' + notes + ')', { sessions, store: { projects }, skills: { delivery: () => { deliveries++; return {}; } }, startupNote: () => 'Current instructions.', path,
+  const refreshNotes = require('node:vm').runInNewContext('(' + notes + ')', { sessions, store: { projects }, skills: { delivery: (project, remote, sessionId) => { assert.equal(project.id, 'p1'); assert.equal(remote, false); assert.ok(['first', 'later'].includes(sessionId)); deliveries++; return {}; } }, startupNote: () => 'Current instructions.', path,
     handoffFile: id => id, READING_NOTE: 'Read.', writeSkillFile: () => writes++ });
-  refreshNotes(); assert.equal(deliveries, 1); assert.equal(writes, 2);
+  refreshNotes(); assert.equal(deliveries, 2); assert.equal(writes, 2);
   refreshNotes(); assert.equal(writes, 2, 'unchanged notes are not rewritten');
 });
 
