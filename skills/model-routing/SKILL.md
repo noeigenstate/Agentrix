@@ -41,8 +41,13 @@ Concept images to choose from still come from Codex's image tool (see `design-po
 
 ## Model settings (fixed)
 
-- **GPT models** (Sol, Terra, and any other `gpt-*`): always `model_reasoning_effort=max` and `service_tier="fast"`.
-- **Claude models** (Sonnet and Opus subagents): always `effort: "high"` on the Agent call.
+- **GPT models** (Sol, Terra, and any other `gpt-*`): default `model_reasoning_effort=max` and `service_tier="fast"`.
+- **Claude models** (Sonnet and Opus subagents): default `effort: "high"` on the Agent call (`--effort high` for `claude -p`).
+- **First Codex run:** before the first `codex exec` of a session, ask the owner once whether to use fast mode (it
+  spends more of the plan's limits), with yes as the default; use the answer for every later run in the session.
+- **The owner can change these at any time in conversation** ("Terra 用 high", "关掉 fast", "Sonnet 用 max"): apply the
+  change from the next worker on, per model or per family, and state the settings in use when you launch a worker.
+  Without an instruction, the defaults above hold.
 
 ## When only one agent is installed
 
