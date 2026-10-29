@@ -97,3 +97,9 @@ description: Publish a new Agentrix version — bump, update notes, the full loc
    Close through a bounded teardown, as `scripts/material-teardown.mjs` does: race `app.close()` against
    `15s × timeoutScale`, then kill only that smoke's Electron process tree and fail, so the retry runs. Print PASS only
    after the app has exited.
+27. **A race fixed by waiting longer moves it elsewhere.** A fixture that "holds" a fixed time so the code under test
+   can observe it is a race on a slower runner; lengthening the hold breaks every test that times the whole run. Make
+   the fixture wait for the observable event instead (the dispatch fixture worker stays until the test has read the
+   helper's start line, from a release file outside the worker's folder, since the scope check reports any file inside it).
+   Prove it at the extreme (hold 0) and at the CI scales (`AGENTRIX_TEST_TIMEOUT_SCALE=2` and `3`), compare each test's
+   duration with the previous version, and run all of `npm test` at scale 2 before tagging.

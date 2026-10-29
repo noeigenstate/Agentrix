@@ -22,6 +22,8 @@ async function main() {
     const stream = entry.stderr ? process.stderr : process.stdout;
     stream.write(typeof entry.raw === 'string' ? entry.raw : JSON.stringify(entry.record) + '\n');
   }
+  // Stays until the test has seen the helper's start line (bounded, so a broken helper cannot hang the test run).
+  for (const end = Date.now() + 60000; fixture.release && !fs.existsSync(fixture.release) && Date.now() < end;) await delay(10);
   if (fixture.hold) await delay(fixture.hold);
   process.exitCode = fixture.exitCode || 0;
 }

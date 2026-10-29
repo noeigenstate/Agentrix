@@ -27,17 +27,18 @@ const codex = [
   { record: { type: 'turn.completed', usage: { output_tokens: 150, reasoning_output_tokens: 30 } } },
 ];
 
-// How long a fixture worker stays alive after its last record: the helper confirms a start only while the worker runs, and
-// its rollout read is asynchronous, so a slow runner (macOS CI) needs more than the 150 ms that passed locally.
-const HOLD = 1000 * Math.max(1, Number(process.env.AGENTRIX_TEST_TIMEOUT_SCALE) || 1);
-async function fixture(t, lines = codex, { agent = 'codex', role = '执行', bootstrap = true, exitCode = 0, hold = HOLD, timeout = 30000, extra = [], setup } = {}) {
+async function fixture(t, lines = codex, { agent = 'codex', role = '执行', bootstrap = true, exitCode = 0, hold, timeout = 30000, extra = [], setup } = {}) {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const events = [], server = await createEventServer(event => events.push({ ...event, receivedAt: Date.now() }));
   const brief = path.join(directory, 'brief.md'), out = path.join(directory, 'answer.md'), runner = path.join(directory, 'runner.cjs');
   const input = path.join(directory, 'fixture.json'), capture = path.join(directory, 'capture.json'), config = path.join(directory, 'bootstrap.json');
   await fs.writeFile(brief, '# A worker brief\nKeep Unicode: 执行.\n');
   if (setup) await setup(directory);
-  await fs.writeFile(input, JSON.stringify({ lines, exitCode, hold, sessionId: session }));
+  // The helper confirms a start only while the worker runs, and reads Codex's rollout asynchronously: a fixture with no
+  // hold of its own stays until the helper has printed its start (or failed-start) line, so no runner is too slow for it.
+  // Outside the worker's folder: the scope check reports any file that appears there.
+  const release = hold === undefined ? path.join(os.tmpdir(), `agentrix-dispatch-release-${randomUUID()}`) : null;
+  await fs.writeFile(input, JSON.stringify({ lines, exitCode, hold: hold ?? 150, release, sessionId: session }));
   await fs.mkdir(path.join(directory, 'codex'));
   await fs.writeFile(path.join(directory, 'codex/config.toml'), 'service_tier = "flex"\n');
   await fs.writeFile(config, JSON.stringify({ pipeName: server.name.startsWith('agentrix-') ? server.name : server.address, projectId: 'project', sessionKey: 'secret-for-test' }));
@@ -52,13 +53,15 @@ run(process.argv.slice(2), {startTimeout:${timeout}, resolveExecutable:(_,args)=
   if (bootstrap) env.AGENTRIX_BOOTSTRAP = config;
   const child = spawn(process.execPath, [runner, ...args], { env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
   let stdout = '', stderr = '';
-  child.stdout.on('data', chunk => { stdout += chunk.toString(); }); child.stderr.on('data', chunk => { stderr += chunk.toString(); });
-  const finished = once(child, 'close').then(([code]) => ({ code, stdout, stderr }));
+  // A test that runs the helper again on this fixture passes that run's output here too, so its worker waits the same way.
+  const releaseOn = text => { if (release && /\[dispatch\] (started|failed to start) /.test(text)) require('node:fs').writeFileSync(release, ''); };
+  child.stdout.on('data', chunk => { stdout += chunk.toString(); releaseOn(stdout); }); child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+  const finished = once(child, 'close').then(async ([code]) => { if (release) await fs.rm(release, { force: true }); return { code, stdout, stderr }; });
   t.after(async () => {
     if (child.exitCode === null) { child.send('SIGTERM'); await finished; }
-    server.close(); await fs.rm(directory, { recursive: true, force: true });
+    server.close(); await fs.rm(directory, { recursive: true, force: true }); if (release) await fs.rm(release, { force: true });
   });
-  return { child, finished, events, directory, out, capture, args, stdout: () => stdout };
+  return { child, finished, events, directory, out, capture, args, stdout: () => stdout, releaseOn };
 }
 
 async function until(predicate, timeout = 5000) {
@@ -301,7 +304,7 @@ test('without bootstrap or with a stalled pipe the worker still runs and finishe
   await fs.writeFile(bootstrap, JSON.stringify({ pipeName: address, sessionKey: 'test', projectId: 'project' }));
   const began = Date.now();
   assert.equal(await run(f.args, { env: { ...process.env, CODEX_HOME: path.join(f.directory, 'codex'), AGENTRIX_BOOTSTRAP: bootstrap, DISPATCH_FIXTURE: path.join(f.directory, 'fixture.json'), DISPATCH_CAPTURE: f.capture },
-    stdout: { write() {} }, resolveExecutable: (_, args) => ({ file: process.execPath, args: [worker, ...args] }) }), 0);
+    stdout: { write: f.releaseOn }, resolveExecutable: (_, args) => ({ file: process.execPath, args: [worker, ...args] }) }), 0);
   assert.ok(Date.now() - began < 2000, 'the worker never awaits pipe acknowledgments');
 });
 
@@ -345,7 +348,7 @@ test('a real helper entrypoint resolves a fake executable without evaluating pat
   await fs.copyFile(helper, installed);
   await require('../scripts/after-pack.cjs').copyDispatchRuntime(path.dirname(installed));
   const child = spawn(process.execPath, [installed, ...f.args], { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-  let stdout = ''; child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.resume();
+  let stdout = ''; child.stdout.on('data', chunk => { stdout += chunk; f.releaseOn(stdout); }); child.stderr.resume();
   const [code] = await once(child, 'close');
   assert.equal(code, 0); assert.match(stdout, /routing ok/);
   assert.deepEqual(JSON.parse(await fs.readFile(f.capture, 'utf8')).args, commandOf(argumentsOf(f.args)));
