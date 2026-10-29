@@ -1,0 +1,22 @@
+const MAX_NOTE = 6000;
+const plain = value => String(value || '').replace(/\\/g, '/').replace(/"/g, "'").replace(/[\x00-\x1f\x7f]+/g, ' ');
+
+function skillInstructions({ skills, globalFolder, agents, pendingPath, remote = false }) {
+  const enabled = skills.filter(skill => skill.enabled), parts = [];
+  parts.push(remote ? '{AGENTRIX_AGENTS}' : `Installed agents: Claude Code ${agents?.claude?.installed ? 'installed' : 'missing'}; Codex ${agents?.codex?.installed ? 'installed' : 'missing'}.`);
+  for (const skill of enabled.filter(skill => skill.trigger === 'always')) parts.push(`Before any task, read and follow ${skill.path}.`);
+  const auto = enabled.filter(skill => skill.trigger === 'auto');
+  if (auto.length) parts.push(`Available auto skills: ${auto.map(skill => `${skill.name}: ${skill.description} (${skill.path})`).join('; ')}; read the one whose description fits before starting.`);
+  parts.push(`Global user skills folder: ${globalFolder}.`);
+  for (const skill of enabled.filter(skill => skill.source === 'user')) {
+    parts.push(`${skill.path}: ${!skill.autoOptimize ? 'must not change it' : skill.confirmChanges
+      ? `propose edits only to ${pendingPath(skill)}; do not change the active file until the user accepts`
+      : 'may update it in place with short, specific, tested improvements'}.`);
+  }
+  const disabled = skills.filter(skill => skill.scope === 'project' && !skill.enabled);
+  if (disabled.length) parts.push(`Project skills: do not use these: ${disabled.map(skill => skill.name).join(', ')}.`);
+  parts.push('Built-in skills are read-only. Never write personal or private data into any skill: use placeholders for names, emails, phones, user names, home paths, hosts, IPs, passwords, tokens and keys.');
+  return plain(parts.join(' '));
+}
+
+module.exports = { MAX_NOTE, plain, skillInstructions };

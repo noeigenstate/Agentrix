@@ -24,6 +24,10 @@ const { createGitRuntime } = require('./features/git/runtime.cjs');
 const { registerGitIpc } = require('./features/git/ipc.cjs');
 const { registerUpdatesIpc } = require('./features/updates/ipc.cjs');
 const { registerAgentsIpc } = require('./features/agents/ipc.cjs');
+const { registerSkillsIpc } = require('./features/skills/ipc.cjs');
+const { SkillsStore } = require('./features/skills/store.cjs');
+const { nativeSkillActions } = require('./features/skills/native-actions.cjs');
+const { writeFile: writeSkillFile } = require('./features/skills/files.cjs');
 const { folderHistory, launchCommand } = require('./features/agents/launch.cjs');
 const { READING_NOTE } = require('./features/agents/reading-note.cjs');
 const { writeHandoff, startupNote } = require('./features/agents/handoff.cjs');
@@ -125,6 +129,7 @@ let activeTerminal = null;
 let activeFileTree = null;
 let fileOperations, filesIpc;
 let voiceManager;
+let skills;
 let attentionTimer;
 const { allowEditorClose, affectsEditor, getEditorFile, registerEditorIpc } = createEditorGuard({ getWindow: () => window, showWindow, send, randomUUID, dialog, t });
 const { confirmTerminalClose, requestQuit, liveTerminalCount } = createCloseGuards({ app, dialog, getWindow: () => window,
@@ -262,6 +267,7 @@ function trayMenu() {
 }
 
 function broadcast() {
+  skills?.syncWatchers();
   clearTimeout(stateTimer);
   stateTimer = null;
   updateIndicators();
@@ -299,7 +305,13 @@ function notifyCompletion(project) {
 
 function briefAction(action) { return action ? { kind: action.kind, tool: action.tool, target: action.target, detail: action.detail, done: action.done, phrase: action.phrase, object: action.object } : null; }
 // A step that starts or ends changes the card's one-line status.
-function publishAction(s) { if (sessions.get(s.terminalId) === s) scheduleState(); }
+function publishAction(s, change) {
+  if (sessions.get(s.terminalId) !== s) return;
+  scheduleState();
+  // Only a successful tool result proves a read; round settlement/idle callbacks do not.
+  if (change?.finished) skills?.recordAction(change.action, { cwd: s.actionsCwd || findProject(s.terminalId).path, project: s.projectId,
+    agent: s.agent, since: s.activitySince || 0, clockOffset: s.activityClockOffset || 0, remotePaths: s.terminal.info?.skills || null });
+}
 // The conversation for the reading view reaches the window in small batches.
 function publishConversation(s, change) {
   if (sessions.get(s.terminalId) !== s || s.conversation.loading) return;
@@ -334,9 +346,21 @@ function noteSettings(s, agent, record) {
 }
 // A skill step names the skill; what the skill is for comes from its SKILL.md, a moment later.
 function describeActions(s, cwd, actions) {
+  s.actionsCwd = cwd;
   for (const action of actions || []) {
     if (action.kind !== 'skill') continue;
+    const skill = skills?.matchFile(action.skillFile, action.cwd || cwd, s.projectId, s.terminal.info?.skills || null);
+    if (skill) { action.description = skill.description; s.actions.update(action); continue; }
+    if (findProject(s.terminalId).kind === 'ssh') continue;
     skillDescription(action.target, cwd, action.skillFile).then(description => { if (description) { action.description = description; s.actions.update(action); } }).catch(() => {});
+  }
+}
+// A shell can outlive a Settings change. Its wrappers reread this small file for every new CLI session.
+function refreshSkillNotes() {
+  for (const s of sessions.values()) {
+    if (!s.skillNoteFile) continue;
+    const project = store.projects.find(project => project.id === s.projectId);
+    if (project) writeSkillFile(s.skillNoteFile, startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'), skills.delivery(project)));
   }
 }
 // Claude Code writes each tool call to its transcript; follow it while the session lasts.
@@ -893,6 +917,7 @@ function nativeSessionEvent(id, sessionId, message) {
   }
   s.completionWork?.native(message, s.agent, at, s.reportedThreadId);
   if (s.nativeMode !== 'claude-sdk' && s.reportedThreadId && p?.threadId && p.threadId !== s.reportedThreadId) return;
+  describeActions(s, project.path, nativeSkillActions(s.actions, message, project.path, at));
   const add = (role, text, entryId, provenance = message) => {
     if (typeof text !== 'string' || !text) return;
     // Native user-item replays must retain the original prompt's input watermark.
@@ -947,6 +972,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   // Local terminals use the shell chosen in settings (zsh on macOS); SSH projects always run Bash on the server.
   const shell = project.kind === 'ssh' ? { kind: 'bash', file: null } : localShell(true), shellKind = shell.kind;
   const bootstrapFile = !nativeMode && ['powershell', 'cmd'].includes(shellKind) ? path.join(runtimeDir, `${sessionId}.json`) : null;
+  const skillNoteFile = project.kind === 'ssh' ? null : path.join(runtimeDir, `${sessionId}-skills.txt`);
   if (bootstrapFile) fs.writeFileSync(bootstrapFile, JSON.stringify({
     projectId: id, projectPath: startPath, sessionKey, pipeName: eventServer.name,
     powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath: path.join(integrationDir, 'claude-hook.ps1'),
@@ -957,7 +983,9 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   // The agent wrappers tell Claude Code and Codex what the reading view shows (an SSH project's worker is told on start),
   // and where the work done in this folder before is written down for them (handoff.cjs), so either one carries it on.
   if (project.kind !== 'ssh') {
-    env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'));
+    env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), skills.delivery(project));
+    writeSkillFile(skillNoteFile, env.AGENTRIX_READING_NOTE);
+    env.AGENTRIX_READING_NOTE_FILE = skillNoteFile;
     void writeHandoff(handoffFile(id), startPath, { memoryDir: memoryDir() }).catch(() => {});
   }
   // zsh and Bash learn where to report from their environment (integration/zsh-integration.zsh and
@@ -976,14 +1004,16 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   }) : null;
   const terminalOptions = { name: 'xterm-256color', cols: 90, rows: 22, cwd: startPath, env,
     ...(!['zsh', 'bash'].includes(shellKind) ? { useConpty: true, useConptyDll: true } : {}) };
-  const terminal = native || (project.kind === 'ssh' ? new RemoteConnection({ ...project, id }, { integrationDir, auth: sshAuth, sessionKey, onEvent, codingPath: startPath, askpassPath: sshAskpassPath, readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', `${project.path.replace(/\/+$/, '')}/skills`),
+  const remoteSkills = project.kind === 'ssh' ? skills.delivery(project, true) : null;
+  const terminal = native || (project.kind === 'ssh' ? new RemoteConnection({ ...project, id }, { integrationDir, auth: sshAuth, sessionKey, onEvent, codingPath: startPath, askpassPath: sshAskpassPath,
+    readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', null, remoteSkills), skills: remoteSkills.bundle,
     onReady: info => { remoteBranch(project.id, info.branch); },
   }) : shellKind === 'zsh' ? pty.spawn(shell.file, ['-l', '-i'], terminalOptions)
     : shellKind === 'bash' ? pty.spawn(shell.file, bashArguments(integrationDir), terminalOptions)
     : shellKind === 'cmd' ? pty.spawn(cmdPath, ['/D', '/Q', '/K', path.join(integrationDir, 'bootstrap.cmd')], terminalOptions)
     : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions));
   const s = {
-    terminal, terminalId: id, projectId: project.id, sessionId, sessionKey, bootstrapFile, status: 'starting', agentStarting, ready: false, shellKind,
+    terminal, terminalId: id, projectId: project.id, sessionId, sessionKey, bootstrapFile, skillNoteFile, status: 'starting', agentStarting, ready: false, shellKind,
     // Command Prompt reports its prompts through markers in its output instead of the event pipe.
     usageEnv: project.kind === 'ssh' ? null : { ...env },
     prompts: !native && shellKind === 'cmd' ? new PromptMarkers() : null,
@@ -995,7 +1025,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     native, nativeMode, nativeReady: false, nativeMessages: [],
   };
   if (native) { s.status = 'codex'; s.codexActive = true; s.agent = nativeMode === 'claude-sdk' ? 'claude' : 'codex'; s.activitySince = Date.now(); s.codexActivity = 'unknown'; }
-  s.actions = new ActionLog(() => publishAction(s));
+  s.actions = new ActionLog(change => publishAction(s, change));
   s.gate = new InputGate(data => {
     if (sessions.get(id) !== s || s.status === 'exited') return;
     if (!isTerminalResponse(data)) s.approval.invalidate();
@@ -1115,10 +1145,12 @@ function disposeTerminal(id) {
   s.activityMonitor?.stop(); s.gate.dispose(); s.promptQueue.reset(); s.completionWork?.reset();
   try { s.terminal.kill(); } catch { }
   if (s.bootstrapFile) fs.rmSync(s.bootstrapFile, { force: true });
+  if (s.skillNoteFile) fs.rmSync(s.skillNoteFile, { force: true });
 }
 
 function registerIpc() {
   const { handle, listen } = createIpcAdapter({ ipcMain, getWindow: () => window, devUrl, t, report });
+  registerSkillsIpc({ handle, skills, dialog, getWindow: () => window });
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
     getRestoreCwd: id => store.findTerminal(id)?.record.restore?.cwd, listClaudeSessions, listCodexSessions, followClaudeSession, listAgentCommands, t });
   registerSshIpc({ handle, getSSHInfo, sshAuth, addSSH: input => store.addSSH(input), hasSession: id => sessions.has(id), getSession: id => sessions.get(id),
@@ -1218,6 +1250,10 @@ if (!app.requestSingleInstanceLock()) {
     const shellIcon = prepareWindowIcon({ app, shell, root, installed });
     zshStartup = prepareShellIntegration({ app, integrationDir, agents });
     store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'));
+    skills = new SkillsStore({ dataDir: app.getPath('userData'), builtinDir: app.isPackaged ? path.join(process.resourcesPath, 'skills') : path.join(root, 'resources', 'skills'),
+      getProjects: () => store.projects, getAgents: () => agents.getState(), activeProjects: () => [...sessions.values()].filter(s => s.codexActive).map(s => s.projectId),
+      changed: infos => { send('skills:changed', infos); refreshSkillNotes(); }, report });
+    skills.syncWatchers();
     projectImageAuto = createProjectImageAuto({
       getProject: id => quitting ? null : store.projects.find(project => project.id === id),
       listCandidates: folder => projectImageCandidates(folder, 1),
@@ -1290,6 +1326,7 @@ app.on('before-quit', event => {
   if (process.platform === 'darwin' && !quitting && window && !window.isDestroyed()) { event.preventDefault(); showWindow(); requestQuit().catch(report); return; }
   clearTimeout(attentionTimer);
   voiceManager?.close(); fileOperations?.cancel();
+  skills?.close();
   quitting = true;
   updateManager?.dispose();
   codexAccounts.dispose();

@@ -29,6 +29,13 @@ if ($global:AgentrixClaudeCommand -and [IO.Path]::GetExtension($global:AgentrixC
     if (Test-Path -LiteralPath $nativeClaude) { $global:AgentrixClaudeExecutable = $nativeClaude }
 }
 
+function global:Get-AgentrixReadingNote {
+    if ($env:AGENTRIX_READING_NOTE_FILE) {
+        try { return [IO.File]::ReadAllText($env:AGENTRIX_READING_NOTE_FILE, [Text.Encoding]::UTF8) } catch { }
+    }
+    return $env:AGENTRIX_READING_NOTE
+}
+
 # Windows PowerShell 5 strips embedded quotes when forwarding native arguments.
 # Build the standard Windows argv representation explicitly so notify's TOML
 # array, Chinese paths, quotes and trailing backslashes reach Codex intact.
@@ -135,7 +142,8 @@ function global:codex {
             throw 'Use a native Codex executable or the standard npm installation of Codex.'
         }
         # What the reading view can show (electron/features/agents/reading-note.cjs); the user's own -c comes later and wins.
-        $readingNote = if ($env:AGENTRIX_READING_NOTE) { @('-c', ('developer_instructions="' + $env:AGENTRIX_READING_NOTE + '"')) } else { @() }
+        $currentNote = Get-AgentrixReadingNote
+        $readingNote = if ($currentNote) { @('-c', ('developer_instructions="' + $currentNote + '"')) } else { @() }
         $nativeArgs = @($global:AgentrixCodexPrefix) + @('-c', ('notify=' + $notifyCommand), '-c', 'tui.terminal_title=["session-id"]') + $readingNote + $forwardArgs
         $startInfo = [Diagnostics.ProcessStartInfo]::new()
         $startInfo.FileName = $global:AgentrixCodexExecutable
@@ -160,8 +168,10 @@ function global:codex {
 # executable path has no spaces and stays unquoted (a quoted first word is only a string in
 # PowerShell), arguments are quoted, and every path uses forward slashes.
 function global:claude {
+    $currentNote = Get-AgentrixReadingNote
+    $readingNote = if ($currentNote) { @('--append-system-prompt', $currentNote) } else { @() }
     if (-not $global:AgentrixClaudeExecutable -or [IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -ne '.exe') {
-        if ($global:AgentrixClaudeCommand) { & $global:AgentrixClaudeCommand @args; return }
+        if ($global:AgentrixClaudeCommand) { & $global:AgentrixClaudeCommand @readingNote @args; return }
         Write-Host 'Claude Code was not found in PATH. Install it, then restart this terminal.' -ForegroundColor Yellow
         return
     }
@@ -181,7 +191,6 @@ function global:claude {
         $startInfo = [Diagnostics.ProcessStartInfo]::new()
         $startInfo.FileName = $global:AgentrixClaudeExecutable
         # What the reading view can show (electron/features/agents/reading-note.cjs); a later --append-system-prompt of the user's wins.
-        $readingNote = if ($env:AGENTRIX_READING_NOTE) { @('--append-system-prompt', $env:AGENTRIX_READING_NOTE) } else { @() }
         $startInfo.Arguments = ((@('--settings', $settings) + $readingNote + @($args)) | ForEach-Object { ConvertTo-AgentrixArgument ([string]$_) }) -join ' '
         $startInfo.UseShellExecute = $false
         $startInfo.WorkingDirectory = (Get-Location).Path

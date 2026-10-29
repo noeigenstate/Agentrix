@@ -35,7 +35,7 @@ async function harness(t, kind = 'local', agent = 'codex') {
     if (!armed && project.completionArmed) armings++;
   };
   const context = vm.createContext({ sessions, store, summarizeTask: () => '', isLocalAgentCommand, promptText,
-    notifyCompletion: () => alerts++, broadcast() {}, publishConversation() {}, refreshClaudeAccounts() {},
+    notifyCompletion: () => alerts++, broadcast() {}, publishConversation() {}, refreshClaudeAccounts() {}, describeActions() {}, nativeSkillActions() {},
     memoryFolder: () => directory, memoryDir: () => directory, roundsOf: () => [], remember: async () => {},
     setTimeout: () => ({ unref() {} }), scrubProjectSkills: async () => {},
     followClaude() {}, followClaudeSession: async () => {}, resumeCommand, claudeResumeCommand,

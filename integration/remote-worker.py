@@ -563,6 +563,8 @@ class Worker:
         self.emit = emit
         self.root = None
         self.temp = None
+        self.skills_bundle = None
+        self.skill_paths = {}
         self.master = None
         self.child = None
         self.stopping = False
@@ -606,6 +608,7 @@ class Worker:
         if not os.path.isdir(self.coding_root): raise ValueError("上次工作的远程目录已不存在。")
         self.token = config["token"]
         self.project_id = config["projectId"]
+        self.skills_bundle = config.get("skills")
         branch = ""
         try:
             # rev-parse names the branch on every Git; branch --show-current needs 2.22 and -C needs 1.8.5.
@@ -935,6 +938,40 @@ class Worker:
         os.replace(temporary, path)
         return path
 
+    def install_skills(self, reading_note):
+        """Session-private copies; project skills stay local-only. No file is written to ~/.claude or ~/.codex."""
+        folder = os.path.join(self.temp, "skills")
+        agents = "Installed agents: Claude Code %s; Codex %s." % tuple("installed" if shutil.which(name) else "missing" for name in ("claude", "codex"))
+        def expand(text):
+            return text.replace("{AGENTRIX_SKILLS}", folder.replace(os.sep, "/")).replace("{AGENTRIX_AGENTS}", agents)
+        bundle = self.skills_bundle or {}
+        for skill in bundle.get("files", []):
+            name, scope, text = skill.get("name"), skill.get("scope"), skill.get("text")
+            if not isinstance(name, str) or not re.fullmatch(r"[\w][\w.-]{0,119}", name) or name.endswith(".") or scope not in ("builtin", "global"):
+                raise ValueError("Invalid remote skill.")
+            if not isinstance(text, str) or len(text.encode("utf-8")) > 512 * 1024: raise ValueError("Remote skill is too large.")
+            directory = os.path.join(folder, scope, name)
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            filename = os.path.join(directory, "SKILL.md")
+            with open(filename, "w", encoding="utf-8") as output: output.write(text)
+            os.chmod(filename, 0o400 if scope == "builtin" else 0o600)
+            for asset in skill.get("assets", []):
+                relative = asset.get("path")
+                if not isinstance(relative, str) or os.path.isabs(relative) or "\\" in relative or any(part in ("", ".", "..") for part in relative.split("/")) or relative == "SKILL.md":
+                    raise ValueError("Invalid remote skill asset path.")
+                data = base64.b64decode(asset["data"], validate=True)
+                if len(data) > 8 * 1024 * 1024: raise ValueError("Remote skill asset is too large.")
+                target = os.path.join(directory, relative)
+                os.makedirs(os.path.dirname(target), mode=0o700, exist_ok=True)
+                with open(target, "wb") as output: output.write(data)
+                os.chmod(target, 0o400 if scope == "builtin" else 0o600)
+            self.skill_paths[skill["id"]] = filename.replace(os.sep, "/")
+        os.makedirs(os.path.join(folder, "global"), mode=0o700, exist_ok=True)
+        instructions = bundle.get("instructions", "")
+        if not isinstance(instructions, str) or len(instructions.encode("utf-8")) > 2 * 1024 * 1024: raise ValueError("Remote skill manifest is too large.")
+        with open(os.path.join(folder, "instructions.md"), "w", encoding="utf-8") as output: output.write(expand(instructions))
+        return expand(reading_note) if isinstance(reading_note, str) else ""
+
     def start_terminal(self, cols, rows, reading_note=""):
         with self.lock:
             if not self.stopping: self.spawn_terminal(cols, rows, reading_note)
@@ -945,6 +982,7 @@ class Worker:
         bash = shutil.which("bash")
         if not bash: raise ValueError("远端没有找到 Bash。")
         self.temp = tempfile.mkdtemp(prefix="agentrix-")
+        reading_note = self.install_skills(reading_note)
         notify_file = os.path.join(self.temp, "notify.py")
         rc_file = os.path.join(self.temp, "bashrc")
         for filename, content in ((notify_file, NOTIFY_SOURCE), (rc_file, BASH_SOURCE)):
@@ -960,7 +998,9 @@ class Worker:
         # Plain words for the Codex wrapper in BASH_SOURCE; anything that could break its TOML string is left out.
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
         if isinstance(reading_note, str): reading_note = reading_note.replace("{AGENTRIX_HANDOFF}", self.handoff_path())
-        if isinstance(reading_note, str) and reading_note and not set('"\\\n') & set(reading_note): env["AGENTRIX_READING_NOTE"] = reading_note[:4000]
+        if isinstance(reading_note, str) and reading_note and not set('"\\\n\r') & set(reading_note):
+            if len(reading_note) > 8000: raise ValueError("Remote startup note is too large.")
+            env["AGENTRIX_READING_NOTE"] = reading_note
         for key in ("NO_COLOR", "NODE_DISABLE_COLORS"): env.pop(key, None)
         if env.get("FORCE_COLOR") == "0": env.pop("FORCE_COLOR", None)
         child, master = pty.fork()
@@ -1057,6 +1097,7 @@ class Channel:
             info = worker.initialize(config)
             # The shell starts before "ready", so the size and keys sent after it find the terminal there.
             worker.start_terminal(config.get("cols", 90), config.get("rows", 24), config.get("readingNote", ""))
+            info["skills"] = worker.skill_paths
             worker.emit({"type": "ready", "info": info})
         except Exception as error: worker.emit({"type": "error", "error": str(error)[:1000]})
 

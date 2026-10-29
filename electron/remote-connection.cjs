@@ -92,7 +92,7 @@ function linkFor(ssh, options) {
 // A terminal of an SSH project, with its requests for the files, Git and conversations there.
 class RemoteConnection {
   constructor(project, options) {
-    const { auth, sessionKey, onEvent, onReady, codingPath, readingNote = '' } = options;
+    const { auth, sessionKey, onEvent, onReady, codingPath, readingNote = '', skills = null } = options;
     this.project = project; this.events = new EventEmitter();
     this.pending = new Map(); this.nextId = 0; this.connected = false; this.closed = false;
     this.terminalDecoder = new StringDecoder('utf8');
@@ -107,7 +107,7 @@ class RemoteConnection {
       if (seconds > 60) this.fail(new Error('SSH 连接超时。请确认主机可连接，且远端已安装 Python 3 和 Bash。'));
     }, 1000);
     this.connectTimer.unref?.();
-    this.send({ op: 'open', path: project.path, codingPath, projectId: project.id, token: sessionKey, cols: 90, rows: 24, readingNote });
+    this.send({ op: 'open', path: project.path, codingPath, projectId: project.id, token: sessionKey, cols: 90, rows: 24, readingNote, skills });
   }
   onData(callback) { this.events.on('data', callback); return { dispose: () => this.events.off('data', callback) }; }
   onExit(callback) { this.events.on('exit', callback); return { dispose: () => this.events.off('exit', callback) }; }
