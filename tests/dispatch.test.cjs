@@ -27,7 +27,10 @@ const codex = [
   { record: { type: 'turn.completed', usage: { output_tokens: 150, reasoning_output_tokens: 30 } } },
 ];
 
-async function fixture(t, lines = codex, { agent = 'codex', role = '执行', bootstrap = true, exitCode = 0, hold = 150, timeout = 30000, extra = [], setup } = {}) {
+// How long a fixture worker stays alive after its last record: the helper confirms a start only while the worker runs, and
+// its rollout read is asynchronous, so a slow runner (macOS CI) needs more than the 150 ms that passed locally.
+const HOLD = 1000 * Math.max(1, Number(process.env.AGENTRIX_TEST_TIMEOUT_SCALE) || 1);
+async function fixture(t, lines = codex, { agent = 'codex', role = '执行', bootstrap = true, exitCode = 0, hold = HOLD, timeout = 30000, extra = [], setup } = {}) {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const events = [], server = await createEventServer(event => events.push({ ...event, receivedAt: Date.now() }));
   const brief = path.join(directory, 'brief.md'), out = path.join(directory, 'answer.md'), runner = path.join(directory, 'runner.cjs');
