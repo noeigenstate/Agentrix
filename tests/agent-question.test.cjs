@@ -123,7 +123,8 @@ test('Codex pages with Ctrl+P / Ctrl+N, and cancelling from open notes takes two
 });
 
 test('a question card keeps its identity while ticks, typed text and the cursor change, and not across pages', () => {
-  const { choiceIdentity, choiceContent } = require('../src/features/reading/choice-keys.ts');
+  const { choiceContent } = require('../src/features/reading/choice-keys.ts');
+  const { choiceIdentity } = require('../src/features/agents/agent-screen.ts');
   const same = ['claude-question-multi', 'claude-question-multi-checked', 'claude-question-typed', 'claude-question-submit'].map(name => choiceIdentity(parse(name)));
   assert.equal(new Set(same).size, 1);
   assert.notEqual(choiceContent(parse('claude-question-multi')), choiceContent(parse('claude-question-multi-checked')), 'a tick is new content');

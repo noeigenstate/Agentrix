@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { registerReadingTerminal, mountReadingTerminal, pruneReadingCli } = require('../src/features/reading/reading-terminal.ts');
+const { registerReadingTerminal, mountReadingTerminal, pruneReadingCli } = require('../src/features/terminal/terminal-popup.ts');
 
 function terminalHarness(t) {
   const saved = ['document', 'getComputedStyle', 'ResizeObserver'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);

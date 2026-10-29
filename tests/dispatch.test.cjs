@@ -7,7 +7,8 @@ const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { randomUUID } = require('node:crypto');
-const { argumentsOf, commandOf, WorkerOutput, CodexRollout, RATE_INTERVAL } = require('../integration/dispatch.cjs');
+const { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, RATE_INTERVAL } = require('../integration/dispatch.cjs');
+const { execFileSync } = require('node:child_process');
 const { TokenRates } = require('../electron/features/agents/token-rate.cjs');
 const { createEventServer } = require('../electron/events.cjs');
 
@@ -26,12 +27,13 @@ const codex = [
   { record: { type: 'turn.completed', usage: { output_tokens: 150, reasoning_output_tokens: 30 } } },
 ];
 
-async function fixture(t, lines = codex, { agent = 'codex', role = '执行', bootstrap = true, exitCode = 0, hold = 150, timeout = 30000 } = {}) {
+async function fixture(t, lines = codex, { agent = 'codex', role = '执行', bootstrap = true, exitCode = 0, hold = 150, timeout = 30000, extra = [], setup } = {}) {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const events = [], server = await createEventServer(event => events.push({ ...event, receivedAt: Date.now() }));
   const brief = path.join(directory, 'brief.md'), out = path.join(directory, 'answer.md'), runner = path.join(directory, 'runner.cjs');
   const input = path.join(directory, 'fixture.json'), capture = path.join(directory, 'capture.json'), config = path.join(directory, 'bootstrap.json');
   await fs.writeFile(brief, '# A worker brief\nKeep Unicode: 执行.\n');
+  if (setup) await setup(directory);
   await fs.writeFile(input, JSON.stringify({ lines, exitCode, hold, sessionId: session }));
   await fs.mkdir(path.join(directory, 'codex'));
   await fs.writeFile(path.join(directory, 'codex/config.toml'), 'service_tier = "flex"\n');
@@ -41,7 +43,7 @@ process.on('message', signal => process.emit(signal));
 run(process.argv.slice(2), {startTimeout:${timeout}, resolveExecutable:(_,args)=>({file:process.execPath,args:[${JSON.stringify(worker)},...args]})})
 .then(code=>{process.exitCode=code;process.disconnect?.();});`);
   const args = [agent, '--role', role, '--title', 'Exact dispatch task', '--model', agent === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5', '--effort', agent === 'codex' ? 'max' : 'high',
-    '--cwd', directory, '--brief', brief, '--out', out, ...(agent === 'codex' ? ['--fast', '--image', 'first image.png', '--read-only'] : ['--permission', 'plan'])];
+    '--cwd', directory, '--brief', brief, '--out', out, ...(agent === 'codex' ? ['--fast', '--image', 'first image.png', '--read-only'] : ['--permission', 'plan']), ...extra];
   const env = { ...process.env, CODEX_HOME: path.join(directory, 'codex'), DISPATCH_FIXTURE: input, DISPATCH_CAPTURE: capture };
   delete env.AGENTRIX_BOOTSTRAP;
   if (bootstrap) env.AGENTRIX_BOOTSTRAP = config;
@@ -344,4 +346,67 @@ test('a real helper entrypoint resolves a fake executable without evaluating pat
   const [code] = await once(child, 'close');
   assert.equal(code, 0); assert.match(stdout, /routing ok/);
   assert.deepEqual(JSON.parse(await fs.readFile(f.capture, 'utf8')).args, commandOf(argumentsOf(f.args)));
+});
+
+const gitInit = async (directory, files) => {
+  for (const [file, text] of Object.entries(files)) { await fs.mkdir(path.dirname(path.join(directory, file)), { recursive: true }); await fs.writeFile(path.join(directory, file), text); }
+  const run = (...args) => execFileSync('git', args, { cwd: directory, stdio: 'ignore' });
+  run('init', '-q'); run('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'add', '-A'); run('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'base');
+};
+const PROBE_FILES = '/brief.md\n/answer.md*\n/capture.json\n/fixture.json\n/runner.cjs\n/bootstrap.json\n/codex/\n';
+
+test('--allow, --ledger and --resume are parsed; a resumed Codex keeps its own sandbox', () => {
+  const base = ['--role', 'exec', '--title', 'T', '--model', 'gpt-6.1-sol', '--effort', 'max', '--cwd', '.', '--brief', 'b.md', '--out', 'o.md'];
+  const options = argumentsOf(['codex', ...base, '--allow', 'src/**', '--allow', './docs/*.md', '--ledger', 'ledger.md', '--resume', session]);
+  assert.deepEqual(options.allow, ['src/**', 'docs/*.md']);
+  assert.equal(options.ledger, path.resolve('ledger.md'));
+  assert.deepEqual(commandOf(options).slice(0, 3), ['exec', 'resume', session]);
+  assert.ok(!commandOf(options).includes('-C') && !commandOf(options).includes('-s'));
+  assert.throws(() => argumentsOf(['codex', ...base, '--resume', session, '--read-only']), /keeps its own sandbox/);
+  assert.throws(() => argumentsOf(['codex', ...base, '--resume', 'bad id']), /session id/);
+  const claude = argumentsOf(['claude', ...base, '--permission', 'plan', '--resume', session]);
+  assert.deepEqual(commandOf(claude).slice(0, 3), ['-p', '--resume', session]);
+});
+
+test('the worker reads the ledger, the boundaries of the modules it may change, its allowed paths and how to hand back', async t => {
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-brief-')));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  await gitInit(directory, {
+    'src/BOUNDARY.md': '# Boundary: Src\n\n## Owns\n- `src/**`\n\n## Interface\n\n## May import\n\n## Invariants\n- keep — why — test: `t` › "n"\n\n## Not ours\n',
+    'src/a.js': '', 'other/BOUNDARY.md': '# Boundary: Other\n\n## Owns\n- `other/**`\n', 'other/b.js': '',
+    'ledger.md': '# Ledger\n\n- The owner decided: amounts are in cents.\n',
+  });
+  const options = { cwd: directory, allow: ['src/**'], ledger: path.join(directory, 'ledger.md') };
+  const text = briefOf(options, Buffer.from('Do the task.')).toString('utf8');
+  assert.match(text, /# Shared context for this task[\s\S]*amounts are in cents/);
+  assert.match(text, /# Module boundary: src\/BOUNDARY\.md/);
+  assert.doesNotMatch(text, /Boundary: Other/, 'only the boundaries of modules the worker may change');
+  assert.match(text, /# Files you may change\n\n- `src\/\*\*`[\s\S]*out of scope/);
+  assert.match(text, /## Findings for the ledger/);
+  assert.match(text, /# Task\n\nDo the task\.$/);
+  assert.equal(briefOf({ cwd: directory, allow: [] }, Buffer.from('plain')).toString(), 'plain');
+  assert.equal(recordFindings(options, 'Done.\n\n## Findings for the ledger\n\n- `src/a.js:1` parses cents.\n', 'now · T'), true);
+  assert.match(await fs.readFile(options.ledger, 'utf8'), /### now · T\n\n- `src\/a\.js:1` parses cents\./);
+});
+
+test('a worker that changes files outside --allow ends out of scope, with the files, and its findings reach the ledger', async t => {
+  const answer = 'Done.\n\n## Findings for the ledger\n\n- Shortcut taken through other/b.js.\n';
+  const lines = [...codex, { write: 'src/a.js', text: 'allowed change' }, { write: 'other/b.js', text: 'outside change' }, { write: 'answer.md', text: answer }];
+  const { finished, events, directory } = await fixture(t, lines, {
+    extra: ['--allow', 'src/**', '--ledger', 'ledger.md'],
+    setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'src/a.js': '', 'other/b.js': '', 'ledger.md': '# Ledger\n' }),
+  });
+  const { stdout } = await finished;
+  assert.match(stdout, /reason scope · OUT OF SCOPE: other\/b\.js · out /);
+  const end = events.find(event => event.type === 'dispatch-end');
+  assert.equal(end.reason, 'scope');
+  assert.deepEqual(end.outOfScope, ['other/b.js']);
+  assert.match(await fs.readFile(path.join(directory, 'ledger.md'), 'utf8'), /Exact dispatch task[\s\S]*Shortcut taken through other\/b\.js/);
+});
+
+test('a worker that stays within --allow ends with scope ok', async t => {
+  const { finished } = await fixture(t, [...codex, { write: 'src/a.js', text: 'allowed change' }], {
+    extra: ['--allow', 'src/**'], setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'src/a.js': '' }),
+  });
+  assert.match((await finished).stdout, /reason exit · scope ok · out /);
 });

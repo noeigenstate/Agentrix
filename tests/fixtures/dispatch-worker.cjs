@@ -10,6 +10,8 @@ async function main() {
   fs.writeFileSync(process.env.DISPATCH_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), brief, pid: process.pid }));
   for (const entry of fixture.lines || []) {
     if (entry.delay) await delay(entry.delay);
+    // A worker editing its project: the scope check compares these with --allow.
+    if (entry.write) { fs.mkdirSync(path.dirname(path.resolve(entry.write)), { recursive: true }); fs.writeFileSync(path.resolve(entry.write), entry.text || ''); continue; }
     if (entry.rollout || entry.rolloutRaw) {
       const folder = path.join(process.env.CODEX_HOME, 'sessions/2026/01/01');
       fs.mkdirSync(folder, { recursive: true });

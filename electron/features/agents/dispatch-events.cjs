@@ -13,7 +13,8 @@ function validDispatch(event) {
     (event.unconfirmed === undefined || typeof event.unconfirmed === 'boolean') &&
     (line(event.sessionId, 160) || event.unconfirmed === true && event.sessionId === null) &&
     number(event.startedAt) && (event.declared === undefined || routing(event.declared));
-  return event.type === 'dispatch-end' && ['exit', 'killed', 'capacity', 'error', 'unconfirmed'].includes(event.reason) &&
+  return event.type === 'dispatch-end' && ['exit', 'killed', 'capacity', 'error', 'unconfirmed', 'scope'].includes(event.reason) &&
+    (event.outOfScope === undefined || Array.isArray(event.outOfScope) && event.outOfScope.length <= 50 && event.outOfScope.every(file => line(file, 4096))) &&
     (event.exitCode === null || Number.isSafeInteger(event.exitCode) && Math.abs(event.exitCode) <= 0xffffffff) && number(event.endedAt) &&
     (event.outputTokens === null || Number.isSafeInteger(event.outputTokens) && event.outputTokens >= 0) &&
     (event.activeMs === null || number(event.activeMs));

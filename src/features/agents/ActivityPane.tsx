@@ -2,8 +2,8 @@ import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowCounterClockwise, CheckCircle, Circle, CircleNotch, Record as RecordDot, WarningCircle } from '@phosphor-icons/react';
 import type { AgentCall, AgentTokens, AgentUsage, ProjectTerminal, TokenRate } from '../../shared/types';
 import { t } from '../../shared/i18n';
-import { modelName } from '../reading/model-name';
-import { useNow } from '../reading/useNow';
+import { modelName } from '../../shared/model-name';
+import { useNow } from '../../shared/useNow';
 import { readScreen, subscribeScreen } from '../terminal/terminal-screen';
 import { sendToAgent } from '../home/send-to-agent';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
@@ -121,6 +121,7 @@ function failureWord(failure: NonNullable<AgentCall['items'][number]['failure']>
   if (failure.reason === 'unconfirmed') return t('未能启动');
   if (failure.reason === 'capacity') return t('模型满载');
   if (failure.reason === 'killed') return t('已停止');
+  if (failure.reason === 'scope') return t('越界');
   return failure.exitCode == null ? t('出错退出') : t('出错退出（代码 {code}）', { code: failure.exitCode });
 }
 
@@ -139,7 +140,8 @@ function CallsCard({ calls }: { calls: AgentCall[] }) {
               const failure = item.failure ? failureWord(item.failure) : null;
               // A dispatched worker that runs other settings than the lead declared says so in its tooltip.
               const declared = item.declared && t('分派时声明 {model} · {effort} · {mode}', { model: modelName(item.declared.model), effort: item.declared.effort ?? t('未报告'), mode: item.declared.fast == null ? t('未报告') : t(item.declared.fast ? '快速' : '普通') });
-              return <li key={index} className={`is-${item.state}${failure ? ' is-failed' : ''}`} title={[item.title, failure, declared].filter(Boolean).join('\n')}>
+              const outside = item.failure?.files?.length ? t('改了允许范围之外的文件：{files}', { files: item.failure.files.join('、') }) : null;
+              return <li key={index} className={`is-${item.state}${failure ? ' is-failed' : ''}`} title={[item.title, failure, outside, declared].filter(Boolean).join('\n')}>
                 <span className="activity-row-icon">{failure ? <WarningCircle size={14} weight="fill" aria-hidden="true" /> : CALL_STATES[item.state].icon}</span>
                 <p><span className="activity-call-role">{t(item.role)}</span>{item.title}</p>
                 <span className="activity-row-end">{failure ?? t(CALL_STATES[item.state].word)}</span>

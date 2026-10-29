@@ -13,7 +13,8 @@ const { TokenRates } = require(path.join(runtime, 'features/agents/token-rate.cj
 const { agentSettings } = require(path.join(runtime, 'features/agents/agent-settings.cjs'));
 const { rolloutFiles, sessionMeta } = require(path.join(runtime, 'session-files.cjs'));
 const { TranscriptTail } = require(path.join(runtime, 'transcript-tail.cjs'));
-const RUNTIME_FILES = ['session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
+const { matches, snapshot, changedBetween, boundariesFor } = require(path.join(runtime, 'boundaries.cjs'));
+const RUNTIME_FILES = ['boundaries.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs'];
 const runtimeFiles = () => Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
 
@@ -25,6 +26,9 @@ const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const roles = new Map([['执行', '执行'], ['调查', '调查'], ['审查', '审查'], ['exec', '执行'], ['investigate', '调查'], ['review', '审查']]);
 const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审查|exec|investigate|review>
   --title <task> --model <model> --effort <effort> --cwd <dir> --brief <file> --out <file>
+  [--allow <glob> ...]    the only files it may change; any other change is reported as out of scope
+  [--ledger <file>]       the task's shared context: given to the worker, its findings appended after
+  [--resume <session>]    continue that worker session (same context) instead of starting a new one
   Codex: [--fast] [--image <file> ...] [--read-only]
   Claude: --permission <plan|acceptEdits>
 `;
@@ -32,15 +36,16 @@ const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审
 function argumentsOf(argv) {
   const [agent, ...flags] = argv;
   if (!['codex', 'claude'].includes(agent)) throw new Error('Expected codex or claude');
-  const options = { agent, images: [], fast: false, readOnly: false };
-  const names = new Map(['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out', 'permission'].map(key => [`--${key}`, key]));
+  const options = { agent, images: [], allow: [], fast: false, readOnly: false };
+  const names = new Map(['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out', 'permission', 'ledger', 'resume'].map(key => [`--${key}`, key]));
   for (let i = 0; i < flags.length; i++) {
     const flag = flags[i];
     if (flag === '--fast' || flag === '--read-only') { options[flag === '--fast' ? 'fast' : 'readOnly'] = true; continue; }
-    if (!names.has(flag) && flag !== '--image') throw new Error(`Unknown option ${flag}`);
+    if (!names.has(flag) && flag !== '--image' && flag !== '--allow') throw new Error(`Unknown option ${flag}`);
     const value = flags[++i];
     if (!value || value.startsWith('--') || /[\0\r\n]/.test(value)) throw new Error(`Expected one-line value for ${flag}`);
     if (flag === '--image') options.images.push(value);
+    else if (flag === '--allow') options.allow.push(value.replace(/\\/g, '/').replace(/^\.\//, ''));
     else {
       if (options[names.get(flag)] !== undefined) throw new Error(`Repeated option ${flag}`);
       options[names.get(flag)] = value;
@@ -53,19 +58,54 @@ function argumentsOf(argv) {
   if (agent === 'claude' && (options.fast || options.readOnly || options.images.length)) throw new Error('Claude supports --permission, not Codex options');
   if (agent === 'claude' && !['plan', 'acceptEdits'].includes(options.permission)) throw new Error('Expected --permission plan or acceptEdits');
   if (agent === 'codex' && options.permission) throw new Error('--permission is only for Claude');
+  if (options.resume && !/^[\w-]{1,160}$/.test(options.resume)) throw new Error('Expected a session id for --resume');
+  if (options.resume && options.readOnly) throw new Error('A resumed Codex session keeps its own sandbox; --read-only applies to new sessions');
   options.cwd = path.resolve(options.cwd);
-  for (const key of ['brief', 'out']) options[key] = path.resolve(options.cwd, options[key]);
+  for (const key of ['brief', 'out', 'ledger']) if (options[key]) options[key] = path.resolve(options.cwd, options[key]);
   options.images = options.images.map(file => path.resolve(options.cwd, file));
   for (const file of [options.cwd, options.brief, options.out, ...options.images]) if (file.length > 4096) throw new Error('Path is too long');
   return options;
 }
 
 function commandOf(options) {
-  if (options.agent === 'claude') return ['-p', '--model', options.model, '--effort', options.effort,
-    '--permission-mode', options.permission, '--output-format', 'stream-json', '--verbose'];
-  return ['exec', '-m', options.model, '-c', `model_reasoning_effort=${options.effort}`,
-    ...(options.fast ? ['-c', 'service_tier="fast"'] : []), '--json', '-C', options.cwd, '-o', options.out,
-    ...options.images.flatMap(file => ['-i', file]), ...(options.readOnly ? ['-s', 'read-only'] : []), '-'];
+  if (options.agent === 'claude') return ['-p', ...(options.resume ? ['--resume', options.resume] : []), '--model', options.model,
+    '--effort', options.effort, '--permission-mode', options.permission, '--output-format', 'stream-json', '--verbose'];
+  const settings = ['-m', options.model, '-c', `model_reasoning_effort=${options.effort}`, ...(options.fast ? ['-c', 'service_tier="fast"'] : []), '--json'];
+  const images = options.images.flatMap(file => ['-i', file]);
+  // `codex exec resume` keeps the session's own folder and sandbox: it takes no -C or -s, and runs from cwd.
+  if (options.resume) return ['exec', 'resume', options.resume, ...settings, '-o', options.out, ...images, '-'];
+  return ['exec', ...settings, '-C', options.cwd, '-o', options.out, ...images, ...(options.readOnly ? ['-s', 'read-only'] : []), '-'];
+}
+
+const FINDINGS = '## Findings for the ledger';
+
+// What the worker reads before the brief: the task's shared ledger, the boundaries of the modules it may change, the
+// paths it may change, and how to hand its findings back.
+function briefOf(options, brief) {
+  const parts = [];
+  if (options.ledger) {
+    let ledger = '';
+    try { ledger = fs.readFileSync(options.ledger, 'utf8').trim(); } catch {}
+    if (ledger) parts.push(`# Shared context for this task\n\n${ledger}`);
+  }
+  if (options.allow.length) {
+    for (const boundary of boundariesFor(options.cwd, options.allow)) parts.push(`# Module boundary: ${boundary.file}\n\n${boundary.text.trim()}`);
+    parts.push(`# Files you may change\n\n${options.allow.map(glob => `- \`${glob}\``).join('\n')}\n\nChange nothing else. Any other changed file is `
+      + 'reported to the lead as out of scope and the work is rejected. If the task cannot be done within these paths, stop and say which file you would need and why.');
+  }
+  if (options.ledger) parts.push(`# Handing back\n\nEnd your final answer with a section headed exactly \`${FINDINGS}\`: bullets with the facts, decisions `
+    + 'and pitfalls the next worker on this task must know (file:line where it helps). They are added to the shared context.');
+  return parts.length ? Buffer.concat([Buffer.from(`${parts.join('\n\n')}\n\n# Task\n\n`), brief]) : brief;
+}
+
+// The worker's findings section, appended to the ledger under the task it came from.
+function recordFindings(options, answer, header) {
+  const at = answer.indexOf(FINDINGS);
+  if (!options.ledger || at < 0) return false;
+  const findings = answer.slice(at + FINDINGS.length).split(/\n#{1,2} /)[0].trim();
+  if (!findings) return false;
+  fs.appendFileSync(options.ledger, `\n\n### ${header}\n\n${findings}\n`);
+  return true;
 }
 
 // Serialize sends to preserve start/rate/end order. No pipe callback delays the worker or its output.
@@ -234,7 +274,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   }
   const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
   let options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, endSent = false;
-  let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null;
+  let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null;
   const signal = line => stdout.write(`[dispatch] ${line}\n`);
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
   const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: options.role, title: options.title,
@@ -285,7 +325,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const onInterrupt = () => stop('SIGINT'), onTerminate = () => stop('SIGTERM'), onHangup = () => stop('SIGHUP');
   try {
     options = argumentsOf(argv);
-    const brief = fs.readFileSync(options.brief);
+    const brief = briefOf(options, fs.readFileSync(options.brief));
+    // What the working tree held before the worker, so its own changes can be checked against --allow afterwards.
+    if (options.allow.length) before = snapshot(options.cwd);
     log = fs.createWriteStream(options.out + '.log');
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
     const command = resolveExecutable(options.agent, commandOf(options), env);
@@ -335,12 +377,24 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     clearTimeout(startTimer); clearTimeout(forceTimer);
     if (!started) failed(spawnError?.message || (output.capacity ? 'at capacity' : 'worker exited without a confirmed session'), result.code === 0 ? 1 : result.code);
     if (options.agent === 'claude' && output.result !== null && output.result !== undefined) fs.writeFileSync(options.out, output.result);
+    const after = options.allow.length ? snapshot(options.cwd) : null;
+    // The helper's own files (the answer, its log, the ledger it appends to) are not the worker's changes.
+    const own = after ? new Set([options.out, `${options.out}.log`, options.ledger].filter(Boolean).map(file => path.relative(after.root, file).split(path.sep).join('/'))) : null;
+    const changed = (after && changedBetween(before, after)?.filter(file => !own.has(file))) ?? null;
+    const outOfScope = changed && changed.filter(file => !matches(options.allow, file));
+    const route = output.routing();
+    try {
+      recordFindings(options, fs.readFileSync(options.out, 'utf8'), `${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${options.title} · ${options.agent} ${route.model} · session ${output.sessionId || 'unreported'}`);
+    } catch {}
     const reason = unconfirmed ? 'unconfirmed' : killed ? 'killed' : output.capacity ? 'capacity' : result.killedBy ? 'killed'
-      : spawnError || output.failed || result.code !== 0 ? 'error' : 'exit';
+      : spawnError || output.failed || result.code !== 0 ? 'error' : outOfScope?.length ? 'scope' : 'exit';
+    const scope = !options.allow.length ? '' : changed === null ? ' · scope unchecked (not a git working tree)'
+      : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
     const exitCode = Number.isInteger(result.code) ? (result.code === 0 && unconfirmed ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
     const rate = output.outputTokens !== null && output.activeMs > 0 ? `${Math.round(output.outputTokens * 1000 / output.activeMs)} token/s (${output.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(output.activeMs / 1000)} s)` : 'token/s unreported';
-    signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason} · out ${options.out}`);
-    if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode, reason, outputTokens: output.outputTokens, activeMs: output.activeMs, endedAt: Date.now() });
+    signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope} · out ${options.out}`);
+    if (!endSent) send({ type: 'dispatch-end', id, ...route, exitCode, reason, outputTokens: output.outputTokens, activeMs: output.activeMs,
+      ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), endedAt: Date.now() });
     await new Promise(resolve => log.end(resolve));
     return exitCode;
   } catch (error) {
@@ -361,4 +415,4 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
 }
 
 if (require.main === module) run(process.argv.slice(2)).then(code => { process.exitCode = code; });
-module.exports = { argumentsOf, commandOf, WorkerOutput, CodexRollout, runtimeFiles, run, RATE_INTERVAL };
+module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, runtimeFiles, run, RATE_INTERVAL };

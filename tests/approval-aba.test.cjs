@@ -83,7 +83,7 @@ function cardHarness(t, agent, view = 'reading', kind = 'permission') {
     cursor = 0; const c = choice();
     const props = { choice: c, terminalId: 'aba', agent, onShowTerminal: () => opened.push('aba'), onError: error => errors.push(error) };
     const decision = { id: `${c.approval?.instance}:${c.title}`, kind: kind === 'permission' ? 'approval' : 'choice', terminalId: 'aba', agent, choice: c,
-      identity: require('../src/features/reading/choice-keys.ts').choiceIdentity(c), title: c.title, context: c.context, projectName: 'fixture' };
+      identity: require('../src/features/agents/agent-screen.ts').choiceIdentity(c), title: c.title, context: c.context, projectName: 'fixture' };
     root = view === 'reading' ? mod.exports.ReadingChoice(props) : mod.exports.DecisionCard({ decision, now: 1, onOpen: d => opened.push(d.terminalId), onDone: message => done.push(message), onError: props.onError });
     if (root.props.ref) root.props.ref.current = { focus() {}, querySelector() {} };
     while (effects.length) effects.shift()();

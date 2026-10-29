@@ -40,6 +40,9 @@
 .activity-call-rows li::before { content: ''; position: absolute; inset: 0 -8px; border-radius: 8px; }
 .activity-call-rows li:hover::before { background: var(--bg-hover); }
 .activity-call-rows li > * { position: relative; }
+/* The 16px icon box centres its mark: an inline SVG would sit on the text baseline, above the row's middle. */
+.activity-row-icon { display: grid; place-items: center; width: 16px; height: 16px; }
+.activity-row-icon > svg { display: block; }
 .activity-call-rows li p { margin: 0; overflow: hidden; font-size: 13px; line-height: 20px; color: var(--flow-ink); text-overflow: ellipsis; white-space: nowrap; }
 .activity-call-rows li :is(time, .activity-row-end) { font-size: 12px; line-height: 16px; color: var(--flow-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .activity-call-rows li:is(.is-running, .is-working) .activity-row-icon { color: var(--running); }

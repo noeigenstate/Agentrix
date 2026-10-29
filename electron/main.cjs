@@ -27,7 +27,7 @@ const { registerAgentsIpc } = require('./features/agents/ipc.cjs');
 const { registerSkillsIpc } = require('./features/skills/ipc.cjs');
 const { SkillsStore } = require('./features/skills/store.cjs');
 const { nativeSkillActions } = require('./features/skills/native-actions.cjs');
-const { writeFile: writeSkillFile } = require('./features/skills/files.cjs');
+const { writeFileAtomic } = require('./atomic-write.cjs');
 const { folderHistory, launchCommand } = require('./features/agents/launch.cjs');
 const { READING_NOTE } = require('./features/agents/reading-note.cjs');
 const { writeHandoff, startupNote } = require('./features/agents/handoff.cjs');
@@ -368,7 +368,7 @@ function startSkillSession(project, s, sequence, started = true) {
       if (s.terminal.info) s.terminal.info.skills = paths;
     }).catch(report);
   } else {
-    writeSkillFile(s.skillNoteFile, note); s.skillNote = note;
+    writeFileAtomic(s.skillNoteFile, note); s.skillNote = note;
   }
 }
 
@@ -384,7 +384,7 @@ function refreshSkillNotes() {
     const project = store.projects.find(project => project.id === s.projectId);
     if (!project) continue;
     const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'), skills.delivery(project, false, s.sessionId), path.join(integrationDir, 'dispatch.cjs'));
-    if (note !== s.skillNote) { writeSkillFile(s.skillNoteFile, note); s.skillNote = note; }
+    if (note !== s.skillNote) { writeFileAtomic(s.skillNoteFile, note); s.skillNote = note; }
   }
 }
 // Claude Code writes each tool call to its transcript; follow it while the session lasts.
@@ -1017,7 +1017,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   if (project.kind !== 'ssh') {
     env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
       skills.delivery(project, false, sessionId), path.join(integrationDir, 'dispatch.cjs'));
-    writeSkillFile(skillNoteFile, env.AGENTRIX_READING_NOTE);
+    writeFileAtomic(skillNoteFile, env.AGENTRIX_READING_NOTE);
     env.AGENTRIX_READING_NOTE_FILE = skillNoteFile;
     void writeHandoff(handoffFile(id), startPath, { memoryDir: memoryDir() }).catch(() => {});
   }
@@ -1038,7 +1038,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   if (native) {
     env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
       skills.delivery(project, false, sessionId, { agent: nativeMode === 'claude-sdk' ? 'claude' : 'codex', started: true }), path.join(integrationDir, 'dispatch.cjs'));
-    writeSkillFile(skillNoteFile, env.AGENTRIX_READING_NOTE);
+    writeFileAtomic(skillNoteFile, env.AGENTRIX_READING_NOTE);
   }
   const terminalOptions = { name: 'xterm-256color', cols: 90, rows: 22, cwd: startPath, env,
     ...(!['zsh', 'bash'].includes(shellKind) ? { useConpty: true, useConptyDll: true } : {}) };

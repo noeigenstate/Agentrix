@@ -23,8 +23,8 @@ function compileAgentsFile(basename, language) {
   mod.require = name => {
     if (name.endsWith('.css')) return {};
     if (name === '../../shared/i18n') return { t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
-    if (name === '../reading/model-name') return require('../src/features/reading/model-name.ts');
-    if (name === '../reading/useNow') return require('../src/features/reading/useNow.ts');
+    if (name === '../../shared/model-name') return require('../src/shared/model-name.ts');
+    if (name === '../../shared/useNow') return require('../src/shared/useNow.ts');
     if (name === '../terminal/terminal-screen') return { readScreen: () => null, subscribeScreen: () => () => {} };
     if (name === '../home/send-to-agent') return { sendToAgent: () => { throw new Error('render must not send input'); } };
     if (name === './AgentBrandIcon') return require('../src/features/agents/AgentBrandIcon.ts');

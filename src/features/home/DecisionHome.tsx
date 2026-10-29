@@ -8,7 +8,7 @@ import { inboxItems, newWorkProjects } from './inbox-items';
 import { SessionLine } from './SessionLine';
 import { acceptedToday } from './review-history';
 import { sendToAgent, untilAtPrompt } from './send-to-agent';
-import { dataUrl, thumbnail } from '../reading/image-thumbnail';
+import { dataUrl, thumbnail } from '../../shared/image-thumbnail';
 import { VoiceButton } from '../voice/VoiceButton';
 import { useDictatedBox } from '../voice/voice-input';
 import { showPopup } from '../files/file-popup';

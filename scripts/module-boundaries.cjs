@@ -7,44 +7,29 @@ const ROOT = path.resolve(__dirname, '..');
 const SECTIONS = ['Owns', 'Interface', 'May import', 'Invariants', 'Not ours'];
 const LIMITS = { Owns: [1, Infinity], Interface: [0, 12], 'May import': [0, 12], Invariants: [1, 8], 'Not ours': [0, 8] };
 const SOURCE = /\.(?:[cm]?js|tsx?)$/;
-const SKIP = new Set(['node_modules', 'dist', 'release', '.git', '.test-output', '.claude', 'tests', 'docs', 'assets', 'resources', 'skills']);
+// Generated or vendored anywhere; repository-level folders that hold no app code only at the root.
+const SKIP = new Set(['node_modules', 'dist', 'release', '.git', '.test-output', '.claude']);
+const SKIP_AT_ROOT = new Set(['tests', 'scripts', 'docs', 'assets', 'resources', 'skills']);
 const EXCEPTION = /\bexcept\b|\bunless\b|例外|除非/i;
 
-const posix = file => file.split(path.sep).join('/');
+// One glob syntax for BOUNDARY.md and the dispatch helper's --allow.
+const { posix, globRegExp, matches } = require('../electron/boundaries.cjs');
 
-function globRegExp(glob) {
-  const source = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\/?/g, '\0').replace(/\*/g, '[^/]*').replace(/\0/g, '(?:.*/)?');
-  return new RegExp(`^${source.replace(/\(\?:\.\*\/\)\?$/, '.*')}$`);
-}
-const matches = (globs, file) => globs.some(glob => globRegExp(glob).test(file));
-
-// Every source file the boundaries can own, repo-relative with forward slashes.
-function sourceFiles(root = ROOT) {
+// Repo-relative paths (forward slashes) of the files under root that `wanted` accepts.
+function walkFiles(root, wanted) {
   const files = [];
   const walk = folder => {
     for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
-      if (entry.isDirectory()) { if (!SKIP.has(entry.name)) walk(path.join(folder, entry.name)); }
-      else if (SOURCE.test(entry.name)) files.push(posix(path.relative(root, path.join(folder, entry.name))));
+      if (entry.isDirectory()) { if (!SKIP.has(entry.name) && !(folder === root && SKIP_AT_ROOT.has(entry.name))) walk(path.join(folder, entry.name)); }
+      else if (wanted(entry.name)) files.push(posix(path.relative(root, path.join(folder, entry.name))));
     }
   };
   walk(root);
   return files;
 }
-
-function boundaryFiles(root = ROOT) {
-  return sourceFilesWithName(root, 'BOUNDARY.md');
-}
-function sourceFilesWithName(root, name) {
-  const found = [];
-  const walk = folder => {
-    for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
-      if (entry.isDirectory()) { if (!SKIP.has(entry.name) || entry.name === 'skills') walk(path.join(folder, entry.name)); }
-      else if (entry.name === name) found.push(posix(path.relative(root, path.join(folder, entry.name))));
-    }
-  };
-  walk(root);
-  return found;
-}
+// Every source file the boundaries can own, and every BOUNDARY.md.
+const sourceFiles = (root = ROOT) => walkFiles(root, name => SOURCE.test(name));
+const boundaryFiles = (root = ROOT) => walkFiles(root, name => name === 'BOUNDARY.md');
 
 // A BOUNDARY.md as { file, name, sections: { Owns: [...], ... }, errors }.
 function parseBoundary(file, text) {

@@ -6,7 +6,8 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
-const { choiceKeys, selectedChoiceIndex, choiceIdentity, writeChoiceKeys } = require('../src/features/reading/choice-keys.ts');
+const { choiceKeys, selectedChoiceIndex, writeChoiceKeys } = require('../src/features/reading/choice-keys.ts');
+const { choiceIdentity } = require('../src/features/agents/agent-screen.ts');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
 const en = require('../electron/locales/en.json');
 
@@ -33,6 +34,9 @@ function loadUI(name, overrides = {}) {
   const originalRequire = mod.require.bind(mod);
   mod.require = name => {
     const key = name.startsWith('.') ? './' + path.basename(name) : name;
+    // Stubbed screen modules keep their pure helpers (bindApproval, choiceIdentity) unless a test replaces them too.
+    if (Object.hasOwn(overrides, key) && key === './terminal-screen') return { bindApproval: require('../src/features/terminal/terminal-screen.ts').bindApproval, ...overrides[key] };
+    if (Object.hasOwn(overrides, key) && key === './agent-screen') return { choiceIdentity: require('../src/features/agents/agent-screen.ts').choiceIdentity, ...overrides[key] };
     if (Object.hasOwn(overrides, key)) return overrides[key];
     if (name.endsWith('.css')) return {};
     // Every icon renders as a plain svg carrying its class name.
@@ -56,7 +60,7 @@ function loadUI(name, overrides = {}) {
     if (key === './result-round') return require('../src/features/reading/result-round.ts');
     if (key === './typing') return require('../src/features/reading/typing.ts');
     if (key === './composer-prefill') return require('../src/features/reading/composer-prefill.ts');
-    if (key === './image-thumbnail') return require('../src/features/reading/image-thumbnail.ts');
+    if (key === './image-thumbnail') return require('../src/shared/image-thumbnail.ts');
     if (key === './image-input') return require('../src/features/reading/image-input.ts');
     if (key === './markdown-escape') return require('../src/features/reading/markdown-escape.ts');
     if (key === './pasted-pictures') return require('../src/features/reading/pasted-pictures.ts');
@@ -1423,7 +1427,7 @@ test('local /resume keeps its session picker, and SSH /resume opens the live ter
 test('the terminal popup closes only by its button or backdrop and never translates a key', () => {
   let closes = 0;
   const hooks = { useRef: value => ({ current: value }), useLayoutEffect() {} };
-  const { ReadingTerminalPopup } = loadUI('features/reading/ReadingTerminalPopup.tsx', { react: hooks, './reading-terminal': {} });
+  const { ReadingTerminalPopup } = loadUI('features/reading/ReadingTerminalPopup.tsx', { react: hooks, './terminal-popup': {} });
   const root = ReadingTerminalPopup({ terminalId: 't', sessionId: 's', command: '/config', onReady() {}, onClose: () => closes++, onError: assert.fail });
   for (const key of ['Escape', 'Enter', 'Tab', 'ArrowDown', 'c']) {
     const event = { key, stopPropagation() {}, preventDefault: () => assert.fail('xterm owns the key') };
@@ -1448,7 +1452,7 @@ test('switching to a terminal in another small card closes the popup without res
   t.after(() => { for (const cleanup of cleanups) cleanup?.(); globalThis.document = saved; });
   let restored = 0, ready = 0;
   const hooks = { useRef: value => ({ current: value }), useLayoutEffect: effect => cleanups.push(effect()) };
-  const { ReadingTerminalPopup } = loadUI('features/reading/ReadingTerminalPopup.tsx', { react: hooks, './reading-terminal': { mountReadingTerminal: () => () => restored++ } });
+  const { ReadingTerminalPopup } = loadUI('features/reading/ReadingTerminalPopup.tsx', { react: hooks, './terminal-popup': { mountReadingTerminal: () => () => restored++ } });
   ReadingTerminalPopup({ terminalId: 'A', sessionId: 's', command: '/status', onReady: () => ready++, onClose: focus => closes.push(focus), onError: assert.fail });
   assert.equal(ready, 1);
   const target = id => ({ closest: () => ({ dataset: { terminalId: id } }) });

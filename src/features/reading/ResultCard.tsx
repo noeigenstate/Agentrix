@@ -6,7 +6,7 @@ import { t } from '../../shared/i18n';
 import './result-card.css';
 import { showPopup } from '../files/file-popup';
 import { stepTime } from './Timeline';
-import { useNow } from './useNow.ts';
+import { useNow } from '../../shared/useNow.ts';
 import { elapsed, FALLBACK_TITLES, resultActions, type LatestResult, type ResultAction } from './result-round';
 import { PathText } from './PathText';
 import { markdownTitle } from './markdown-escape';

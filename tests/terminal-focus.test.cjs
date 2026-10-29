@@ -41,7 +41,7 @@ function terminalHarness(t, initial = {}) {
   const harness = hookHarness('src/features/terminal/TerminalPane.tsx', {
     'react/jsx-runtime': { ...jsx, jsx: (type, props) => { if (props.className === 'terminal-host') props.ref.current = host; return jsx.jsx(type, props); } },
     '@xterm/xterm': { Terminal }, '@xterm/xterm/css/xterm.css': {},
-    './reading-terminal': { registerReadingTerminal: () => noop },
+    './terminal-popup': { registerReadingTerminal: () => noop },
     './terminal-fit': { fitTerminal: terminal => fits.push(terminal) },
     './terminal-links': { createTerminalLinkProvider: noop }, './terminal-styling': { styleTerminal: () => disposable },
     './terminal-theme': { terminalOptions: { fontWeight: 400 }, terminalTheme: noop },

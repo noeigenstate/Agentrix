@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef } from 'react';
 import { TerminalWindow, X } from '@phosphor-icons/react';
-import { mountReadingTerminal } from './reading-terminal';
+import { mountReadingTerminal } from '../terminal/terminal-popup';
 import { t } from '../../shared/i18n';
 import './reading-terminal-popup.css';
 

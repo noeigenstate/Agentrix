@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Terminal } from '@xterm/xterm';
-import { registerReadingTerminal } from '../reading/reading-terminal';
+import { registerReadingTerminal } from './terminal-popup';
 import { fitTerminal } from './terminal-fit';
 import type { TerminalPacket } from '../../shared/types';
 import { createTerminalLinkProvider } from './terminal-links';

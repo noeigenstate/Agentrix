@@ -1686,5 +1686,7 @@
   "分派时声明 {model} · {effort} · {mode}": "Declared at dispatch: {model} · {effort} · {mode}",
   "未报告": "unreported",
   "派发确认": "Confirmed dispatch",
-  "主模型派出的 Codex 和 Claude 子任务由派发助手启动：开始时确认模型路由，运行中每 5 秒更新 token/s，完成后显示已完成并在 3 秒后移除。": "Codex and Claude workers the main model sends out start through the dispatch helper: routing is confirmed at the start, token/s updates every 5 s while they run, and a finished one shows Done for 3 s."
+  "主模型派出的 Codex 和 Claude 子任务由派发助手启动：开始时确认模型路由，运行中每 5 秒更新 token/s，完成后显示已完成并在 3 秒后移除。": "Codex and Claude workers the main model sends out start through the dispatch helper: routing is confirmed at the start, token/s updates every 5 s while they run, and a finished one shows Done for 3 s.",
+  "越界": "Out of scope",
+  "改了允许范围之外的文件：{files}": "Changed files outside the allowed paths: {files}"
 }

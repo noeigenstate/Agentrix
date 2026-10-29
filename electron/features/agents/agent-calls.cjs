@@ -66,7 +66,7 @@ class AgentCalls {
     call.rate = event.outputTokens === null || event.activeMs === null ? null
       : call.meter.totals(call.model, event.outputTokens, event.activeMs, event.endedAt);
     call.failure = event.reason === 'exit' && event.exitCode === 0 ? null
-      : { reason: event.reason === 'exit' ? 'error' : event.reason, exitCode: event.exitCode };
+      : { reason: event.reason === 'exit' ? 'error' : event.reason, exitCode: event.exitCode, ...(event.outOfScope ? { files: event.outOfScope } : {}) };
     call.pendingReview = !!call.failure;
     if (!call.failure) {
       call.expiry = setTimeout(() => {

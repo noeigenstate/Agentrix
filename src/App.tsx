@@ -6,7 +6,7 @@ import { ProjectExplorer } from './features/files/ProjectExplorer';
 import { AddProjectDialog } from './features/workspace/AddProjectDialog';
 import { SSHAuthDialog } from './features/ssh/SSHAuthDialog';
 import { useProjectReorder } from './features/workspace/useProjectReorder';
-import { pruneReadingCli } from './features/reading/reading-terminal';
+import { pruneReadingCli } from './features/terminal/terminal-popup';
 import { setReading } from './features/reading/reading-mode';
 import { useProjectFocusMotion } from './features/workspace/useProjectFocusMotion';
 import { useWorkspaceAppearance } from './features/workspace/useWorkspaceAppearance';

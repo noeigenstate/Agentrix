@@ -50,13 +50,6 @@ function readJson(file, fallback, report = () => {}, valid = value => value && t
   }
 }
 
-function writeFile(file, text) {
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.${randomUUID()}.tmp`;
-  try { fs.writeFileSync(temporary, text, { mode: 0o600 }); fs.renameSync(temporary, file); }
-  finally { fs.rmSync(temporary, { force: true }); }
-}
-
 // Skills are writable folders. Refuse symlinks at the managed boundary, including SKILL.md itself, so
 // imports, edits and deletion cannot escape through a skill supplied by an agent or an imported folder.
 function checkedPath(root, name) {
@@ -142,5 +135,8 @@ async function importFiles(folder) {
   await walk(folder);
   return files;
 }
+
+// Skills share the app's atomic write (electron/atomic-write.cjs).
+const { writeFileAtomic: writeFile } = require('../../atomic-write.cjs');
 
 module.exports = { MAX_BYTES, MAX_IMPORT_BYTES, MAX_IMPORT_FILES, skillName, metadata, draftText, readJson, writeFile, checkedPath, readText, listFolder, folderSignature, importFiles };

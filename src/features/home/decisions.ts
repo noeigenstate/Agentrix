@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { Project } from '../../shared/types';
 import type { ScreenChoice } from '../agents/agent-screen-types';
-import { parseAgentScreen } from '../agents/agent-screen';
+import { choiceIdentity, parseAgentScreen } from '../agents/agent-screen';
 import { signInScreen } from '../agents/sign-in-screen';
 import { hasCliInput } from '../reading/cli-panel';
-import { bindApproval, choiceIdentity } from '../reading/choice-keys';
-import { subscribeScreen, type Screen } from '../terminal/terminal-screen';
+import { bindApproval, subscribeScreen, type Screen } from '../terminal/terminal-screen';
 import { reviewHistory } from './review-history';
 
 // Something one of the agents waits on you for, across every project: a permission to grant, a question to answer, a

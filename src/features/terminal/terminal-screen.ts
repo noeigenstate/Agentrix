@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Terminal } from '@xterm/xterm';
 import type { ApprovalStamp } from '../../shared/types';
 import type { ScreenAgent, ScreenChoice } from '../agents/agent-screen-types';
-import { parseAgentScreen } from '../agents/agent-screen.ts';
-import { bindApproval, choiceIdentity } from '../reading/choice-keys.ts';
+import { choiceIdentity, parseAgentScreen } from '../agents/agent-screen.ts';
 
 // What a terminal shows right now, as text rows: the agent's own screen (its welcome lines, footer, mode and the
 // choices it is asking about) for the reading view to present without switching to the terminal. Each
@@ -96,4 +95,10 @@ export function useScreen(id: string) {
   const [screen, setScreen] = useState<Screen | null>(() => readScreen(id));
   useEffect(() => subscribeScreen(id, setScreen), [id]);
   return screen;
+}
+
+// A permission choice carries the screen's approval stamp and the agent's instance, so a stale card cannot answer a newer prompt.
+export function bindApproval(choice: ScreenChoice | null, agent: ScreenAgent, screen: Screen | null): ScreenChoice | null {
+  if (choice?.kind !== 'permission') return choice;
+  return { ...choice, approval: { instance: screen?.instances?.[agent] ?? 0, stamp: screen?.approval ?? null } };
 }

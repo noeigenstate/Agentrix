@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { agentSettings } = require('../electron/features/agents/agent-settings.cjs');
-const { modelName } = require('../src/features/reading/model-name.ts');
+const { modelName } = require('../src/shared/model-name.ts');
 
 const replay = (agent, records) => records.reduce((current, record) => agentSettings(current, agent, record), null);
 const reply = (model, effort, speed) => ({ type: 'assistant', effort, message: { model, usage: { speed } } });

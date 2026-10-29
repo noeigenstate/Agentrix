@@ -1,5 +1,5 @@
 import type { Terminal } from '@xterm/xterm';
-import { fitTerminal } from '../terminal/terminal-fit.ts';
+import { fitTerminal } from './terminal-fit.ts';
 
 type Entry = { terminal: Terminal; restore?: () => void };
 const terminals = new Map<string, Entry>();
