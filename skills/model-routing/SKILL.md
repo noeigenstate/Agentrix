@@ -1,9 +1,28 @@
 ---
 name: model-routing
-description: Who does what in this project, in four stages — Opus plans; GPT-6.1-Sol (backend logic, refactors, debugging) and a Sonnet subagent (front-end components, tests) build in separate worktrees; Opus integrates and runs the tests; Opus reviews the architecture and GPT-6.1-Terra accepts the UI and interaction; then final acceptance. GPT models always run at max effort in fast mode, Claude models at high effort. Use at the start of every task, before doing any of it yourself.
+description: Who does what in this project — the lead orchestrates; Opus 5.5 is the architect, GPT-6.1-Sol the core engineer (complex code, refactors, debugging, test fixes), Sonnet 5.5 the execution engineer (routine features, front end, tests, docs), GPT-6.1-Terra the visual and verification engineer (UI checks, screenshots, interface driving, small tasks). Four stages — Opus plans; Sol and Sonnet build in separate worktrees; Opus integrates and runs the tests; Opus reviews the architecture and GPT-6.1-Terra accepts the UI and interaction; then final acceptance. GPT models always run at max effort in fast mode, Claude models at high effort. Use at the start of every task, before doing any of it yourself.
 ---
 
 # Routing work between models
+
+## Roles
+
+A request enters as one natural-language sentence from the owner (or the CLI). The lead session is the
+**orchestrator**: it decomposes the task, manages context, routes each part to a model, schedules by dependency and
+holds the permissions (commits, pushes, releases, the GUI lock, secrets). Workers get only what their brief grants.
+
+| Model | Role | Takes |
+| --- | --- | --- |
+| Claude Opus 5.5 | Architect / planner | Technology choices, complex design, task breakdown, architecture consistency (stage 1 and the stage 4 architecture review) |
+| GPT-6.1-Sol | Core engineer | Complex implementation, cross-module refactors, debugging, fixing failing tests |
+| Claude Sonnet 5.5 | Efficient execution engineer | Routine features, front-end components and polish, unit tests, code maintenance, docs |
+| GPT-6.1-Terra | Visual and verification engineer | UI checks, reading screenshots, driving the interface (probe scripts under the GUI lock), small quick tasks |
+
+Pick by the task, not by the side of the code: a hard cross-module change in the renderer still goes to Sol, a routine
+main-process tweak or a doc edit to Sonnet, a one-line fix or a screenshot check to Terra. Review is cross-model: no
+model accepts its own work (Opus reviews what Sol and Sonnet built, Terra verifies what anyone changed on screen).
+
+## Stages
 
 The owner's pipeline. Every task goes through these stages; skip a stage only when the task has nothing for it
 (a back-end-only fix has no 2B and no Terra pass, a CSS-only change has no 2A).
@@ -11,10 +30,10 @@ The owner's pipeline. Every task goes through these stages; skip a stage only wh
 | Stage | Who | What it produces |
 | --- | --- | --- |
 | 1 Analysis and planning | Lead (Opus 5.5) | Requirement breakdown, architecture constraints, interface contracts, acceptance criteria |
-| 2A Back end | GPT-6.1-Sol (Codex) in worktree A | Main-process and data logic, parsing, complex refactors, CI diagnosis, all debugging |
-| 2B Front end | Sonnet subagent in worktree B | React components, CSS, layout and polish, tests for them |
+| 2A Core | GPT-6.1-Sol (Codex) in worktree A | Complex logic (main process, data, parsing), cross-module refactors, CI diagnosis, all debugging, failing-test fixes |
+| 2B Routine and front end | Sonnet subagent in worktree B | Routine features, React components, CSS, layout and polish, unit tests, maintenance, docs |
 | 3 Integration and automated tests | Lead | Both branches merged in dependency order; build, unit tests, desktop suites |
-| 4 Review | Opus 5.5 subagent + GPT-6.1-Terra (Codex) | Opus: cross-module architecture review. Terra: UI and interaction acceptance |
+| 4 Cross review | Opus 5.5 subagent + GPT-6.1-Terra (Codex) | Opus: cross-module architecture review. Terra: UI and interaction acceptance |
 | Final acceptance | Lead, then the owner | Tests pass + every review finding resolved + the owner confirms key changes |
 
 Concept images to choose from still come from Codex's image tool (see `design-polish`). Every brief carries
@@ -57,6 +76,9 @@ Codex runs with no approvals and full access, so the scope comes from the prompt
 - Secrets: helper scripts read a token from `git credential fill` inside themselves; never print it or write it.
 - Its report: the root cause with evidence, the change, the tests it ran.
 - An "at capacity" error at the end of a run can come after the work is done: check the outputs before rerunning.
+
+A small quick task (a one-line fix, a rename, a screenshot question) goes to Terra with the same command and the same
+rules, `-m gpt-6.1-terra`, attaching any screenshots with `-i`.
 
 **2B, Sonnet.** Agent tool with `model: "sonnet"`, `effort: "high"`, working in worktree B (pass its path in the brief, or
 `isolation: "worktree"`). The brief holds:
