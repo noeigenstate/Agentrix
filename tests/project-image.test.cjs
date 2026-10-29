@@ -179,7 +179,7 @@ test('public state themes SVG pictures without changing their canonical storage 
   const context = vm.createContext({ store, projectSvgForTheme, sessions: new Map(), startupErrors: new Map(),
     terminalIds: p => [p.id], shownTerminalIds: p => [p.id], getBranch: () => 'main', t: text => text,
     localShell: () => ({ kind: 'powershell' }), process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: 'isolated' } },
-    app: { getVersion: () => '1' }, desktopGlassBackend: null, desktopGlassWindow: false, desktopGlassActive: false });
+    app: { getVersion: () => '1' }, desktopGlassBackend: null, desktopGlassWindow: false, desktopGlassActive: false, windowZoom: null });
   vm.runInContext(main.slice(main.indexOf('function publicState('), main.indexOf('function terminalIds(')), context);
   const before = JSON.parse(JSON.stringify(context.publicState()));
   assert.equal(Object.hasOwn(before.projects[0], 'image'), false);

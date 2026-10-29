@@ -2,6 +2,7 @@ const { registerWindowIpc } = require('./app/window-ipc.cjs');
 const { registerAppSchemes, registerAppProtocols } = require('./app/protocols.cjs');
 const { configureApplication, prepareWindowIcon, prepareShellIntegration } = require('./app/platform-startup.cjs');
 const { registerWindowContents, registerWindowLifecycle } = require('./app/window-events.cjs');
+const { registerWindowZoom } = require('./app/window-zoom.cjs');
 const { createImageTools, registerImageIpc } = require('./app/images.cjs');
 const { createProjectHandoff } = require('./app/project-handoff.cjs');
 const { createCloseGuards, restoreTerminals } = require('./app/terminal-lifecycle.cjs');
@@ -40,7 +41,7 @@ const { setThumbnailer, isGeneratedImage } = require('./conversation.cjs');
 const { saveDialogOptions, saveTarget } = require('./image-save.cjs');
 const { registerVoiceIpc } = require('./features/voice/ipc.cjs');
 const { createIpcAdapter } = require('./shared/ipc.cjs');
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage, Notification, clipboard, shell, protocol, session: electronSession, net: electronNet } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage, Notification, clipboard, shell, screen, protocol, session: electronSession, net: electronNet } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -87,15 +88,17 @@ registerAppSchemes(protocol);
 const { translate } = require('./i18n.cjs');
 // Text shown by the main process follows the language chosen in settings (Chinese source -> locales/en.json).
 const t = (text, values) => translate(store?.settings.language, text, values);
-let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto;
+let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
 function windowBackgroundColor() { return store.settings.theme === 'light' ? '#f8f9fb' : '#181818'; }
 function updateStoreSettings(patch) {
-  const theme = store.settings.theme;
+  const { theme, uiZoom } = store.settings;
   store.updateSettings(patch);
   // An active system backdrop needs its transparent ground, including when the theme changes.
   if (theme !== store.settings.theme && window && !window.isDestroyed() && !desktopGlassActive) window.setBackgroundColor(windowBackgroundColor());
+  // The settings IPC broadcasts after applying the window's new zoom.
+  if (uiZoom !== store.settings.uiZoom) windowZoom?.update();
 }
 const sessions = new Map();
 const { handoffFile, memoryDir, memoryFolder, scrubProjectSkills, sshHandoff } = createProjectHandoff({ app, getStore: () => store, sessions });
@@ -180,6 +183,7 @@ function publicState() {
       };
     }),
     settings: store.settings,
+    uiZoom: windowZoom?.percent ?? 100,
     desktopGlass: { supported: !!desktopGlassBackend, compatibility: desktopGlassBackend === 'windows-compat', active: desktopGlassActive, restart: store.settings.surface === 'glass' && store.settings.glassBackground === 'desktop' && !!desktopGlassBackend && !desktopGlassWindow, failed: desktopGlassWindow && !desktopGlassActive },
     warning: store.warning,
     platform: process.platform,
@@ -1259,6 +1263,7 @@ if (!app.requestSingleInstanceLock()) {
       relaunchCommand: app.isPackaged ? `"${process.execPath}"` : `"${process.execPath}" "${root}"`,
       relaunchDisplayName: process.env.AGENTRIX_DATA_DIR ? 'Agentrix Test' : !app.isPackaged ? 'Agentrix Dev' : installed ? 'Agentrix' : 'Agentrix Portable',
     });
+    windowZoom = registerWindowZoom({ window, screen, getZoom: () => store.settings.uiZoom, broadcast });
     registerWindowContents({ window, Menu, clipboard, previewResources, pictureFrom, devUrl, t,
       getActiveTerminal: () => activeTerminal, getActiveFileTree: () => activeFileTree, getShortcuts: () => store.settings.shortcuts });
     registerWindowLifecycle({ window, getSettings: () => store.settings, isQuitting: () => quitting, hasTray: () => !!tray,
