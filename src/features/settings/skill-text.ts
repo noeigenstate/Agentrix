@@ -4,6 +4,13 @@ import { relativeTime } from '../../shared/time';
 
 const AGENT_NAMES = { claude: 'Claude Code', codex: 'Codex' };
 
+// What the page shows of a skill: a built-in's Chinese title and summary go through translation, a user's own words stay as written.
+export const skillTitle = (skill: SkillInfo) => skill.source === 'builtin' ? t(skill.title) : skill.title;
+export const skillSummary = (skill: SkillInfo) => skill.source === 'builtin' ? t(skill.summary) : skill.summary;
+
+// The skill's folder name: the id follows the name sent when saving, which may differ from the SKILL.md front matter.
+export const folderName = (skill: SkillInfo) => skill.path.split(/[\\/]/).at(-2) || skill.name;
+
 // The two newest versions, oldest first: the pair the 变更 tab compares.
 export function latestTwo(versions: SkillVersion[]): [SkillVersion, SkillVersion] | null {
   const [latest, previous] = [...versions].sort((a, b) => b.version - a.version);
@@ -43,8 +50,8 @@ export function dependency(skill: SkillInfo): { text: string; hollow: boolean } 
 
 export type ScopeOption = { value: string; label: string };
 
-// 所有项目 and each open project; a skill scoped to a project that is no longer open keeps an entry of its own.
+// 所有项目 and each open local project (SSH projects cannot hold skills); a skill scoped to a project that is no longer open keeps an entry of its own.
 export function scopeOptions(projects: Project[], current?: { id: string | null; name: string | null }): ScopeOption[] {
-  const options = [{ value: 'global', label: t('所有项目') }, ...projects.map(project => ({ value: project.id, label: project.name }))];
+  const options = [{ value: 'global', label: t('所有项目') }, ...projects.filter(project => project.kind === 'local').map(project => ({ value: project.id, label: project.name }))];
   return current?.id && !options.some(option => option.value === current.id) ? [...options, { value: current.id, label: current.name ?? current.id }] : options;
 }

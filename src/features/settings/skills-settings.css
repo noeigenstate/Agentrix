@@ -26,6 +26,7 @@
 .skills-title b em { margin-left: 8px; font-size: 12px; font-weight: 400; font-style: normal; color: var(--text-3); }
 .skills-title-tools { display: flex; align-items: center; gap: 12px; }
 .skills-desc { margin: 4px 0 0; font-size: 13px; line-height: 20px; color: var(--text-2); }
+.skills-summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .skills-new-note { color: var(--text-1); }
 .skills-desc .text-button { margin-left: 12px; font-size: 13px; }
 .skills-facts { margin: 8px 0 0; padding: 0; }
@@ -60,6 +61,7 @@
 .skills-diff .ln.del { color: var(--text-3); text-decoration: line-through; }
 .skills-diff-meta { margin: 0 0 8px; font-size: 12px; line-height: 20px; color: var(--text-3); }
 .skills-foot { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 16px; }
+.skills-foot-note { margin-right: auto; font-size: 13px; color: var(--text-1); }
 .skills-foot .text-button { margin-right: auto; font-size: 13px; }
 .skills-empty { flex: none; align-items: flex-start; gap: 12px; padding: 24px 0 0; font-size: 13px; line-height: 20px; color: var(--text-2); }
 .skills-empty b { font-size: 14px; font-weight: 600; color: var(--text-1); }

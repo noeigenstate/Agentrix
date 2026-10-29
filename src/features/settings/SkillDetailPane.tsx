@@ -3,7 +3,7 @@ import type { SkillDetail, SkillInfo, SkillOptions } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { Select } from '../../shared/Select';
 import { diffLines } from './skill-diff';
-import { changeSummary, dependency, latestTwo, type ScopeOption, usedText } from './skill-text';
+import { changeSummary, dependency, latestTwo, type ScopeOption, skillSummary, skillTitle, usedText } from './skill-text';
 
 // text: the SKILL.md; diff: the latest two versions; pending: the text now against the change an agent proposed.
 export type SkillTab = 'text' | 'diff' | 'pending';
@@ -32,19 +32,20 @@ function Changes({ heading, before, after }: { heading: string; before: string; 
 export function SkillDetailPane({ skill, detail, scopes, tab, now, actions }: {
   skill: SkillInfo; detail: SkillDetail | null; scopes: ScopeOption[]; tab: SkillTab; now: number; actions: SkillActions;
 }) {
-  const mine = skill.source === 'user', needs = dependency(skill), pair = detail && latestTwo(detail.versions), proposal = detail?.pending ?? null;
+  const mine = skill.source === 'user', title = skillTitle(skill), summary = skillSummary(skill), needs = dependency(skill), pair = detail && latestTwo(detail.versions), proposal = detail?.pending ?? null;
   const changeTab = pair ? 'diff' : 'pending', hasChanges = !!pair || proposal !== null;
   const body = tab === 'pending' && proposal !== null ? <Changes heading={t('当前 → Agent 的提议')} before={detail!.text} after={proposal} />
     : tab !== 'text' && pair ? <Changes heading={`v${pair[0].version} → v${pair[1].version} · ${changeSummary(skill, now)}`} before={pair[0].text} after={pair[1].text} />
     : <pre className="skills-reading">{detail?.text ?? ''}</pre>;
   return <div className="skills-detail" data-skill-detail={skill.id}>
-    <div className="skills-title"><b>{skill.name}<em>{mine ? `v${skill.version}` : `v${skill.version} · ${t('随应用更新')}`}</em></b>
+    <div className="skills-title"><b>{title}<em>{mine ? `v${skill.version}` : `v${skill.version} · ${t('随应用更新')}`}</em></b>
       <span className="skills-title-tools">
         {mine && <button type="button" className="button" data-skill-edit onClick={actions.onEdit}><PencilSimple size={16} />{t('编辑')}</button>}
-        <Switch label={t('启用 {name}', { name: skill.name })} checked={skill.enabled} onChange={enabled => actions.onOptions({ enabled })} />
+        <Switch label={t('启用 {name}', { name: title })} checked={skill.enabled} onChange={enabled => actions.onOptions({ enabled })} />
       </span></div>
-    <p className="skills-desc">{skill.description}{skill.createdByAgent && <> <span className="skills-new-note">{t('新 · 由 Agent 创建，看一眼再决定留不留。')}</span>
-      <button type="button" className="text-button" data-skill-keep onClick={() => actions.onResolve(true)}>{t('确认保留')}</button></>}</p>
+    <p className="skills-desc skills-summary" title={summary}>{summary}</p>
+    {skill.createdByAgent && <p className="skills-desc"><span className="skills-new-note">{t('新 · 由 Agent 创建，看一眼再决定留不留。')}</span>
+      <button type="button" className="text-button" data-skill-keep onClick={() => actions.onResolve(true)}>{t('确认保留')}</button></p>}
     <dl className="skills-facts">
       {skill.pending && <div><dt>{t('Agent 提议了修改')}</dt><dd>
         <button type="button" className="text-button" data-skill-view onClick={() => actions.onTab('pending')}>{t('查看')}</button>

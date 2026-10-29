@@ -21,6 +21,7 @@ dialog { color: var(--text-1); }
 .setting-row input[type="checkbox"]::before, .skills-settings input[type="checkbox"]::before { content: ''; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-2); }
 .setting-row input[type="checkbox"]:checked, .skills-settings input[type="checkbox"]:checked { background: var(--text-1); border-color: var(--text-1); }
 .setting-row input[type="checkbox"]:checked::before, .skills-settings input[type="checkbox"]:checked::before { background: var(--bg-app); transform: translateX(16px); }
+.setting-row input[type="checkbox"]::after, .skills-settings input[type="checkbox"]::after { content: ''; position: absolute; inset: -6px -2px; } /* a 42 x 34 px hit area around the 38 x 22 px switch */
 .skills-settings input[type="checkbox"] { margin: 0; }
 .skills-settings input[type="checkbox"]:disabled { opacity: .5; cursor: default; }
 .setting-row input[type="range"] { accent-color: var(--text-1); }

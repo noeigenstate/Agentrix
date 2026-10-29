@@ -2,7 +2,7 @@ import { FolderOpen, MagnifyingGlass, Plus } from '@phosphor-icons/react';
 import type { SkillInfo } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { IconButton } from '../../shared/IconButton';
-import { dependency } from './skill-text';
+import { dependency, skillSummary, skillTitle } from './skill-text';
 
 // Below this many skills a list needs no search.
 const SEARCH_FROM = 8;
@@ -19,10 +19,10 @@ export function SkillsList({ skills, selectedId, query, onQuery, onSelect, onNew
   onQuery: (query: string) => void; onSelect: (id: string) => void; onNew: () => void; onImport: () => void;
 }) {
   const needle = query.trim().toLowerCase();
-  const matches = (skill: SkillInfo) => !needle || `${skill.name} ${skill.description} ${skill.id}`.toLowerCase().includes(needle);
+  const matches = (skill: SkillInfo) => !needle || `${skillTitle(skill)} ${skillSummary(skill)} ${skill.name} ${skill.id}`.toLowerCase().includes(needle);
   const builtin = skills.filter(skill => skill.source === 'builtin'), mine = skills.filter(skill => skill.source === 'user');
   const row = (skill: SkillInfo) => <button type="button" key={skill.id} className="skills-item" data-skill-id={skill.id} aria-current={skill.id === selectedId ? 'true' : undefined} onClick={() => onSelect(skill.id)}>
-    <span className="skills-item-name">{skill.name}</span><Mark skill={skill} />
+    <span className="skills-item-name">{skillTitle(skill)}</span><Mark skill={skill} />
   </button>;
   return <div className="skills-list">
     {skills.length >= SEARCH_FROM && <label className="search-input"><MagnifyingGlass size={16} /><input value={query} placeholder={t('搜索技能')} aria-label={t('搜索技能')} onChange={event => onQuery(event.target.value)} /></label>}
