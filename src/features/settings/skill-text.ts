@@ -7,6 +7,19 @@ const AGENT_NAMES = { claude: 'Claude Code', codex: 'Codex' };
 // What the page shows of a skill: a built-in's Chinese title and summary go through translation, a user's own words stay as written.
 export const skillTitle = (skill: SkillInfo) => skill.source === 'builtin' ? t(skill.title) : skill.title;
 export const skillSummary = (skill: SkillInfo) => skill.source === 'builtin' ? t(skill.summary) : skill.summary;
+export const skillWhen = (skill: SkillInfo) => skill.source === 'builtin' ? t(skill.when) : skill.when;
+
+// A SKILL.md without its front matter: the page shows those fields above the text.
+export const skillBody = (text: string) => text.replace(/^﻿?---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/, '');
+
+// The projects whose own copy a built-in yields to: the first three by name, the full list in the tooltip.
+const NAMED_PROJECTS = 3;
+export function yieldNote(names: string[]) {
+  if (!names.length) return null;
+  const note = (projects: string) => t('以项目自己的版本为准：{projects}', { projects });
+  const some = names.slice(0, NAMED_PROJECTS).join(' · ');
+  return { text: note(names.length > NAMED_PROJECTS ? `${some} ${t('等 {count} 个项目', { count: names.length })}` : some), title: note(names.join(' · ')) };
+}
 
 // The skill's folder name: the id follows the name sent when saving, which may differ from the SKILL.md front matter.
 export const folderName = (skill: SkillInfo) => skill.path.split(/[\\/]/).at(-2) || skill.name;

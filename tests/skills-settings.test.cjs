@@ -11,12 +11,12 @@ const fill = (text, values = {}) => text.replace(/\{(\w+)\}/g, (_match, key) => 
 const empty = () => null;
 
 // Loads a TSX/TS file from src with the renderer's hooks, icons, styles, i18n and Select replaced by stand-ins.
-function loader(hooks, language = 'zh') {
+function loader(hooks, language = 'zh', extra = {}) {
   const cache = new Map();
   const translations = language === 'en' ? require('../electron/locales/en.json') : {};
   const stubs = {
     react: hooks, '@phosphor-icons/react': new Proxy({}, { get: () => empty }),
-    i18n: { t: (text, values) => fill(translations[text] ?? text, values), currentLanguage: () => language }, Select: { Select: props => React.createElement('select-stub', props) },
+    i18n: { t: (text, values) => fill(translations[text] ?? text, values), currentLanguage: () => language }, Select: { Select: props => React.createElement('select-stub', props) }, ...extra,
   };
   const load = file => {
     if (cache.has(file)) return cache.get(file);
@@ -29,7 +29,7 @@ function loader(hooks, language = 'zh') {
       if (!name.startsWith('.')) return original(name);
       const target = path.resolve(path.dirname(file), name);
       if (stubs[path.basename(target)]) return stubs[path.basename(target)];
-      return load(['.tsx', '.ts'].map(ext => target + ext).find(fs.existsSync));
+      return load(['', '.tsx', '.ts'].map(ext => target + ext).find(file => fs.existsSync(file) && fs.statSync(file).isFile()));
     };
     cache.set(file, mod.exports);
     mod._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 } }).outputText, file);
@@ -66,13 +66,17 @@ function mount(t, skills, { details = {}, failure = null, language = 'zh' } = {}
       if (!(index in slots)) slots[index] = initial;
       return [slots[index], next => { if (!Object.is(next, slots[index])) { slots[index] = next; dirty = true; } }];
     },
+    useMemo: make => make(),
     useEffect(callback, deps) {
       const index = cursor++, previous = slots[index];
       if (previous && deps && deps.every((dep, at) => Object.is(dep, previous.deps[at]))) return;
       effects.push(() => { previous?.cleanup?.(); slots[index] = { deps, cleanup: callback() }; });
     },
   };
-  const { SkillsSettings } = loader(hooks, language)(path.join(root, 'features/settings/SkillsSettings.tsx'));
+  // The reading view's Markdown, with its real parser: the DOM that sanitizes and decorates the HTML is not available here.
+  const { readingMarked } = loader({})(path.join(root, 'features/reading/markdown-escape.ts'));
+  const ReadingView = { Markdown: ({ text }) => React.createElement('div', { className: 'reading-markdown', dangerouslySetInnerHTML: { __html: readingMarked.parse(text) } }) };
+  const { SkillsSettings } = loader(hooks, language, { ReadingView })(path.join(root, 'features/settings/SkillsSettings.tsx'));
   const projects = [{ id: 'p1', name: 'agentrix', kind: 'local' }, { id: 'p2', name: 'demo-site', kind: 'local' }, { id: 'p3', name: 'prod-box', kind: 'ssh' }];
   const render = () => {
     cursor = 0; dirty = false; effects = [];
@@ -112,7 +116,7 @@ const routingSummary = '谁来做什么：Opus 规划与审查架构，GPT-6.1-S
 const builtinRouting = over => skill({ id: 'builtin:model-routing', name: 'model-routing', description: 'Who does what on a task, in English, seven lines long.', title: '模型路由', summary: routingSummary, source: 'builtin', scope: 'builtin', trigger: 'always', autoOptimize: false, requires: { codex: true, claude: true }, ...over });
 function skill(over = {}) {
   const named = { name: '发布流程', description: '发布新版本', ...over };
-  return { id: 'user:release', title: named.name, summary: named.description, source: 'user', scope: 'global', projectId: null, projectName: null, path: '', enabled: true, trigger: 'auto',
+  return { id: 'user:release', title: named.name, summary: named.description, when: '描述与任务匹配时读取', yieldsTo: [], source: 'user', scope: 'global', projectId: null, projectName: null, path: '', enabled: true, trigger: 'auto',
     autoOptimize: true, confirmChanges: false, version: 1, updatedAt: null, updatedBy: null, updatedIn: null, createdByAgent: false, pending: false, requires: null, lastUsed: null, ...named };
 }
 const releaseV4 = { text: '## 步骤\n1. 升版本号\n2. 写更新说明，并确认 CHANGELOG\n3. 跑完整本地测试', pending: null, versions: [
@@ -228,6 +232,7 @@ test('a user skill shows its version line and a 变更 tab with the line diff of
   await h.settle();
   assert.equal(h.text(h.one(node => node.props.className === 'skills-version')), 'v4 · 最近由 Agent 优化 · 3 小时前 · 项目 agentrix');
   assert.ok(h.page().includes('回退到 v3'));
+  h.one(node => node.props['data-skill-view-mode'] === 'source').props.onClick(); await h.settle();
   assert.equal(h.text(h.one(node => node.type === 'pre')), releaseV4.text);
   h.button('变更').props.onClick();
   await h.settle();
@@ -472,4 +477,87 @@ test('English exists for each built-in skill title and summary', () => {
     const front = /^---\n([\s\S]*?)\n---/.exec(fs.readFileSync(path.join(folder, name, 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n'))?.[1] ?? '';
     for (const [, key, text] of front.matchAll(/^(title|summary): (.+)$/gm)) assert.ok(en[text.trim()], `${name} ${key}`);
   }
+});
+
+test('the trigger offers 首次打开项目, which sets first-open, in Chinese and English', async t => {
+  for (const [language, label] of [['zh', '首次打开项目 · 第一次会话开始前'], ['en', 'First open of a project · before its first session starts']]) {
+    const h = mount(t, [builtinRouting({ trigger: 'first-open' }), release], { language });
+    await h.settle(); h.clear();
+    const trigger = h.byLabel(language === 'zh' ? '触发' : 'Trigger');
+    assert.equal(trigger.props.value, 'first-open');
+    assert.deepEqual(trigger.props.options.map(option => option.value), ['always', 'auto', 'first-open']);
+    assert.equal(trigger.props.options[2].label, label);
+    trigger.props.onChange('first-open'); await h.settle();
+    assert.deepEqual(h.calls.filter(call => call[0] === 'options'), [['options', 'builtin:model-routing', { trigger: 'first-open' }]]);
+  }
+});
+
+test('the trigger row shows when the skill takes effect: a built-in through translation, a user skill as given', async t => {
+  const h = mount(t, [builtinRouting({ when: '每个任务开始前读取并遵循' }), release], { details: { 'user:release': releaseV4 } });
+  await h.settle();
+  assert.equal(h.text(h.one(node => node.props['data-skill-when'])), '每个任务开始前读取并遵循');
+  assert.equal(h.one(node => node.props['data-skill-when']).props.className, 'skills-when');
+  h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
+  assert.equal(h.text(h.one(node => node.props['data-skill-when'])), '描述与任务匹配时读取');
+  const english = mount(t, [builtinRouting({ when: '始终 · 每个任务开始前' }), release], { language: 'en' });
+  await english.settle();
+  assert.equal(english.text(english.one(node => node.props['data-skill-when'])), 'Always · before every task');
+});
+
+test('a built-in that yields to project copies says so, naming three projects and the full list in the tooltip', async t => {
+  const h = mount(t, [builtinRouting(), release]);
+  await h.settle();
+  assert.equal(h.all(node => node.props['data-skill-yield']).length, 0);
+  const show = async yieldsTo => { h.state.skills = [builtinRouting({ yieldsTo }), release]; h.listeners[0](h.state.skills); await h.settle(); return h.one(node => node.props['data-skill-yield']); };
+  const one = await show(['agentrix']);
+  assert.equal(h.text(one), '以项目自己的版本为准：agentrix'); assert.equal(one.props.title, '以项目自己的版本为准：agentrix');
+  assert.equal(h.text(await show(['a', 'b', 'c'])), '以项目自己的版本为准：a · b · c');
+  const many = await show(['a', 'b', 'c', 'd', 'e']);
+  assert.equal(h.text(many), '以项目自己的版本为准：a · b · c 等 5 个项目');
+  assert.equal(many.props.title, '以项目自己的版本为准：a · b · c · d · e');
+  const english = mount(t, [builtinRouting({ yieldsTo: ['a', 'b', 'c', 'd'] }), release], { language: 'en' });
+  await english.settle();
+  assert.equal(english.text(english.one(node => node.props['data-skill-yield'])), 'Defers to the project’s own copy: a · b · c and others (4 in all)');
+});
+
+test('SKILL.md shows rendered headings and lists without its front matter, and 源码 shows the file as written', async t => {
+  const file = '---\nname: release\ndescription: 发布新版本\n---\n\n# 发布\n\n## 步骤\n\n1. 升版本号\n2. 写更新说明\n\n- 先看 [说明](https://example.com)\n- 再发布\n\n---\n\n结束';
+  const h = mount(t, [builtinRouting(), release], { details: { 'user:release': { ...releaseV4, text: file } } });
+  await h.settle();
+  h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
+  const html = h.one(node => node.props.className === 'reading-markdown').props.dangerouslySetInnerHTML.__html;
+  assert.match(html, /<h1>发布<\/h1>/); assert.match(html, /<h2>步骤<\/h2>/);
+  assert.match(html, /<ol>\s*<li>升版本号<\/li>\s*<li>写更新说明<\/li>\s*<\/ol>/); assert.match(html, /<ul>\s*<li>先看 <a href="https:\/\/example.com">说明<\/a><\/li>/);
+  assert.match(html, /<hr/); assert.equal(html.includes('name: release') || html.includes('description:'), false);
+  assert.equal(h.all(node => node.type === 'pre').length, 0);
+  const view = mode => h.one(node => node.props['data-skill-view-mode'] === mode);
+  assert.deepEqual([view('text').props['aria-pressed'], view('source').props['aria-pressed']], [true, false]);
+  assert.deepEqual(['渲染', '源码'].map(label => h.text(view(label === '渲染' ? 'text' : 'source'))), ['渲染', '源码']);
+  view('source').props.onClick(); await h.settle();
+  assert.equal(h.text(h.one(node => node.type === 'pre')), file); assert.equal(h.all(node => node.props.className === 'reading-markdown').length, 0);
+  assert.deepEqual([view('text').props['aria-pressed'], view('source').props['aria-pressed']], [false, true]);
+  view('text').props.onClick(); await h.settle();
+  assert.equal(h.all(node => node.type === 'pre').length, 0);
+});
+
+test('a link in the rendered SKILL.md is inert, and the 变更 tab stays plain text without the toggle', async t => {
+  const h = mount(t, [builtinRouting(), release], { details: { 'user:release': releaseV4 } });
+  await h.settle();
+  h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
+  let prevented = 0;
+  const target = { closest: selector => selector === 'a' ? {} : null };
+  h.one(node => node.props.className === 'skills-rendered').props.onClick({ target, preventDefault: () => { prevented++; } });
+  h.one(node => node.props.className === 'skills-rendered').props.onClick({ target: { closest: () => null }, preventDefault: () => { prevented++; } });
+  assert.equal(prevented, 1);
+  h.button('变更').props.onClick(); await h.settle();
+  assert.equal(h.all(node => node.props['data-skill-view-mode']).length, 0);
+  assert.equal(h.all(node => node.props.className === 'skills-rendered').length, 0);
+  assert.ok(h.all(node => node.props['data-diff']).length > 0);
+});
+
+test('skillBody strips only the leading front matter', () => {
+  const { skillBody } = loader({})(path.join(root, 'features/settings/skill-text.ts'));
+  assert.equal(skillBody('---\r\nname: a\r\n---\r\n# 标题\r\n\r\n---\r\n结尾'), '# 标题\r\n\r\n---\r\n结尾');
+  assert.equal(skillBody('---\n---\n正文'), '正文');
+  assert.equal(skillBody('没有前置信息\n---\n不是前置信息\n---'), '没有前置信息\n---\n不是前置信息\n---');
 });

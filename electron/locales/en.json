@@ -1651,5 +1651,9 @@
   "官方图标": "Official marks",
   "选择助手时显示 Claude 和 Codex 的官方图标；Claude Code 项目里的列表圆点改用 Claude 的橙色。": "Choosing an assistant shows the official Claude and Codex marks; list bullets in a Claude Code project use Claude's orange.",
   "状态修正": "Status fixes",
-  "GPT 子代理显示 token/s，已停止的后台调用不再一直显示运行中，有命令失败时头像不再出现红圈。": "GPT sub-agents show their token/s, a stopped background call no longer stays “running”, and a failed command no longer rings the avatar."
+  "GPT 子代理显示 token/s，已停止的后台调用不再一直显示运行中，有命令失败时头像不再出现红圈。": "GPT sub-agents show their token/s, a stopped background call no longer stays “running”, and a failed command no longer rings the avatar.",
+  "首次打开项目 · 第一次会话开始前": "First open of a project · before its first session starts",
+  "以项目自己的版本为准：{projects}": "Defers to the project’s own copy: {projects}",
+  "等 {count} 个项目": "and others ({count} in all)",
+  "渲染": "Rendered"
 }
