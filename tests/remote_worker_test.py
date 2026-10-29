@@ -52,6 +52,7 @@ class RemoteFilesTest(unittest.TestCase):
     def test_dispatch_copy_and_bootstrap_exist_only_with_remote_node(self):
         self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
         self.worker.dispatch_source = "// synthetic dispatch helper\n"
+        self.worker.dispatch_modules = {"features/agents/token-rate.cjs": "// synthetic shared meter\n"}
         self.worker.handoff_path = lambda: os.path.join(self.worker.temp, "handoff.md")
         with mock.patch.object(remote.shutil, "which", return_value=None):
             note = self.worker.startup_note("Read. {AGENTRIX_DISPATCH_NOTE}")
@@ -63,10 +64,23 @@ class RemoteFilesTest(unittest.TestCase):
             note = self.worker.startup_note("Read. {AGENTRIX_DISPATCH_NOTE}")
         self.assertIn("Dispatch helper: node ", note)
         self.assertEqual((Path(self.worker.temp) / "dispatch.cjs").read_text(encoding="utf-8"), self.worker.dispatch_source)
+        meter = Path(self.worker.temp) / "electron/features/agents/token-rate.cjs"
+        self.assertEqual(meter.read_text(encoding="utf-8"), self.worker.dispatch_modules["features/agents/token-rate.cjs"])
         bootstrap = json.loads((Path(self.worker.temp) / "dispatch.json").read_text(encoding="utf-8"))
         self.assertEqual(bootstrap, {"pipeName": os.path.join(self.worker.temp, "events.sock"), "sessionKey": self.worker.token, "projectId": self.worker.project_id})
         if os.name == "posix":
             self.assertEqual(os.stat(Path(self.worker.temp) / "dispatch.json").st_mode & 0o777, 0o600)
+            self.assertEqual(os.stat(meter).st_mode & 0o777, 0o600)
+
+    def test_dispatch_modules_are_bounded_and_cannot_escape_the_runtime_folder(self):
+        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
+        self.worker.dispatch_source = "// synthetic dispatch helper\n"
+        for modules in ({"../escape.cjs": "bad"}, {"/absolute.cjs": "bad"}, {"module.cjs": None},
+                        {"module.cjs": "x" * (256 * 1024 + 1)}, []):
+            self.worker.dispatch_modules = modules
+            with mock.patch.object(remote.shutil, "which", return_value="/bin/node"), self.assertRaises(ValueError):
+                self.worker.install_dispatch()
+            self.assertFalse((Path(self.worker.temp) / "dispatch.cjs").exists())
 
     def test_each_agent_launch_gets_a_fresh_note_and_stale_launches_cannot_replace_it(self):
         self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")

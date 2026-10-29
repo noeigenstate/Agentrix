@@ -74,6 +74,19 @@ test('failures survive the launch Stop and leave on the next delivered notificat
   assert.deepEqual(f.calls.snapshot(), []);
 });
 
+test('an unconfirmed start without a session creates a failure row until the next user round', t => {
+  const f = session(t), launch = start(undefined, { sessionId: null, unconfirmed: true });
+  assert.equal(f.send(launch), true);
+  assert.equal(f.send(end(launch.id, { reason: 'unconfirmed', exitCode: null, outputTokens: null, activeMs: null })), true);
+  assert.deepEqual(f.calls.snapshot()[0].items[0].failure, { reason: 'unconfirmed', exitCode: null });
+  f.calls.apply(stop(6000));
+  assert.equal(f.calls.snapshot()[0].items[0].state, 'reviewing');
+  f.calls.apply(record('user', 7000, 'Try again.'));
+  assert.deepEqual(f.calls.snapshot(), []);
+  assert.equal(validDispatch(start(undefined, { sessionId: null, unconfirmed: false })), false);
+  assert.equal(validDispatch(start(undefined, { unconfirmed: 'yes' })), false);
+});
+
 test('Bash commands, prompt filenames and helper stdout text never create or update a call', t => {
   const { calls } = session(t);
   for (const command of ['codex exec -m guessed < brief.md > log.txt', 'claude -p --model guessed', 'node dispatch.cjs codex --model guessed']) {

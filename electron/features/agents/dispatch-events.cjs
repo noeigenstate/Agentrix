@@ -9,7 +9,9 @@ function validDispatch(event) {
   if (event.type === 'dispatch-rate') return totals(event) && event.activeMs > 0;
   if (!routing(event)) return false;
   if (event.type === 'dispatch-start') return ['codex', 'claude'].includes(event.agent) && ['执行', '调查', '审查'].includes(event.role) &&
-    line(event.title, 1024) && ['cwd', 'brief', 'out'].every(key => line(event[key], 4096)) && line(event.sessionId, 160) &&
+    line(event.title, 1024) && ['cwd', 'brief', 'out'].every(key => line(event[key], 4096)) &&
+    (event.unconfirmed === undefined || typeof event.unconfirmed === 'boolean') &&
+    (line(event.sessionId, 160) || event.unconfirmed === true && event.sessionId === null) &&
     number(event.startedAt) && (event.declared === undefined || routing(event.declared));
   return event.type === 'dispatch-end' && ['exit', 'killed', 'capacity', 'error', 'unconfirmed'].includes(event.reason) &&
     (event.exitCode === null || Number.isSafeInteger(event.exitCode) && Math.abs(event.exitCode) <= 0xffffffff) && number(event.endedAt) &&

@@ -619,6 +619,7 @@ class Worker:
         self.project_id = config["projectId"]
         self.skills_bundle = config.get("skills")
         self.dispatch_source = config.get("dispatchHelper")
+        self.dispatch_modules = config.get("dispatchModules", {})
         branch = ""
         try:
             # rev-parse names the branch on every Git; branch --show-current needs 2.22 and -C needs 1.8.5.
@@ -990,6 +991,17 @@ class Worker:
             self.dispatch_note = "Dispatch helper: unavailable over SSH (remote Node.js or helper missing); command-line workers run unseen in Agentrix."
             return self.dispatch_note
         filename = os.path.join(self.temp, "dispatch.cjs")
+        modules = getattr(self, "dispatch_modules", {})
+        if not isinstance(modules, dict) or len(modules) > 32 or any(
+                not isinstance(name, str) or not re.fullmatch(r"[\w-]+(?:/[\w-]+)*\.cjs", name)
+                or not isinstance(text, str) for name, text in modules.items()) or sum(
+                len(text.encode("utf-8")) for text in modules.values()) > 256 * 1024:
+            raise ValueError("Invalid dispatch modules.")
+        for name, text in modules.items():
+            target = os.path.join(self.temp, "electron", *name.split("/"))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "w", encoding="utf-8") as output: output.write(text)
+            os.chmod(target, 0o600)
         with open(filename, "w", encoding="utf-8") as output: output.write(source)
         os.chmod(filename, 0o600)
         bootstrap = os.path.join(self.temp, "dispatch.json")

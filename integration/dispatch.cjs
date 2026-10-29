@@ -5,12 +5,29 @@ const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
-const { constants: { signals } } = require('node:os');
+const { homedir, constants: { signals } } = require('node:os');
+
+// Plain Node cannot read app.asar. Packaged and SSH helpers carry these same pure modules beside them.
+const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
+const { TokenRates } = require(path.join(runtime, 'features/agents/token-rate.cjs'));
+const { agentSettings } = require(path.join(runtime, 'features/agents/agent-settings.cjs'));
+const { rolloutFiles, sessionMeta } = require(path.join(runtime, 'session-files.cjs'));
+const { TranscriptTail } = require(path.join(runtime, 'transcript-tail.cjs'));
+const RUNTIME_FILES = ['session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
+  'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs'];
+const runtimeFiles = () => Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
 
 const START_TIMEOUT = 30000;
+const RATE_INTERVAL = 5000;
 const LIMIT = 4 * 1024 * 1024;
 const word = value => typeof value === 'string' && value.trim() ? value.trim() : null;
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+const roles = new Map([['执行', '执行'], ['调查', '调查'], ['审查', '审查'], ['exec', '执行'], ['investigate', '调查'], ['review', '审查']]);
+const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审查|exec|investigate|review>
+  --title <task> --model <model> --effort <effort> --cwd <dir> --brief <file> --out <file>
+  Codex: [--fast] [--image <file> ...] [--read-only]
+  Claude: --permission <plan|acceptEdits>
+`;
 
 function argumentsOf(argv) {
   const [agent, ...flags] = argv;
@@ -30,7 +47,8 @@ function argumentsOf(argv) {
     }
   }
   for (const key of ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out']) if (!options[key]) throw new Error(`Missing --${key}`);
-  if (!['执行', '调查', '审查'].includes(options.role)) throw new Error('Expected --role 执行, 调查 or 审查');
+  if (!roles.has(options.role)) throw new Error('Expected --role 执行, 调查, 审查, exec, investigate or review');
+  options.role = roles.get(options.role);
   if (options.title.length > 1024 || options.model.length > 160 || options.effort.length > 32) throw new Error('Assignment is too long');
   if (agent === 'claude' && (options.fast || options.readOnly || options.images.length)) throw new Error('Claude supports --permission, not Codex options');
   if (agent === 'claude' && !['plan', 'acceptEdits'].includes(options.permission)) throw new Error('Expected --permission plan or acceptEdits');
@@ -44,7 +62,7 @@ function argumentsOf(argv) {
 
 function commandOf(options) {
   if (options.agent === 'claude') return ['-p', '--model', options.model, '--effort', options.effort,
-    '--permission-mode', options.permission, '--output-format', 'json'];
+    '--permission-mode', options.permission, '--output-format', 'stream-json', '--verbose'];
   return ['exec', '-m', options.model, '-c', `model_reasoning_effort=${options.effort}`,
     ...(options.fast ? ['-c', 'service_tier="fast"'] : []), '--json', '-C', options.cwd, '-o', options.out,
     ...options.images.flatMap(file => ['-i', file]), ...(options.readOnly ? ['-s', 'read-only'] : []), '-'];
@@ -82,11 +100,10 @@ function eventSink(filename) {
 
 // Settings are read only from worker records/headers. A missing value remains unreported.
 class WorkerOutput {
-  constructor(agent, changed = () => {}, response = () => {}) {
-    this.agent = agent; this.changed = changed; this.response = response;
+  constructor(agent, changed = () => {}) {
+    this.agent = agent; this.changed = changed; this.meter = new TokenRates(agent);
     this.model = null; this.effort = null; this.fast = null; this.sessionId = null;
-    this.outputTokens = null; this.activeMs = null; this.turnAt = null; this.failed = false; this.capacity = false;
-    this.tools = new Set(); this.waitAt = null; this.waitMs = 0; this.responses = new Set(); this.turnOutput = 0;
+    this.outputTokens = null; this.activeMs = null; this.failed = false; this.capacity = false; this.confirmed = false;
   }
   settings(value) {
     this.model = word(value.model) || this.model;
@@ -94,17 +111,26 @@ class WorkerOutput {
     const tier = value.service_tier ?? value.serviceTier ?? value.speed ?? value.usage?.speed;
     if (typeof value.fast === 'boolean') this.fast = value.fast;
     else if (typeof value.fast_mode === 'boolean') this.fast = value.fast_mode;
+    else if (['on', 'off'].includes(value.fast_mode_state)) this.fast = value.fast_mode_state === 'on';
     else if (['fast', 'priority', 'standard', 'default', 'flex', 'auto'].includes(tier)) this.fast = ['fast', 'priority'].includes(tier);
   }
-  sample(tokens, ms, total = false) {
-    if (count(tokens) === null) return;
-    const measured = this.outputTokens !== null;
-    const duration = Number.isFinite(ms) && ms > 0 && ms <= Number.MAX_SAFE_INTEGER ? ms : null;
-    this.outputTokens = total ? tokens : (this.outputTokens || 0) + tokens;
-    this.activeMs = total ? duration : duration !== null && (!measured || this.activeMs !== null) ? (this.activeMs || 0) + duration : null;
-    if (this.activeMs !== null) this.response();
+  measure(record) {
+    this.meter.apply(record);
+    const rates = [...this.meter.rates.values()];
+    if (!rates.length) return;
+    if (!rates.some(rate => rate.samples)) { this.outputTokens = null; this.activeMs = null; return; }
+    this.outputTokens = rates.reduce((sum, rate) => sum + rate.outputTokens, 0);
+    this.activeMs = rates.reduce((sum, rate) => sum + rate.activeMs, 0);
   }
-  line(line, at = Date.now()) {
+  rollout(record) {
+    const payload = record.payload || {};
+    const settings = agentSettings({ model: this.model, effort: this.effort, fast: this.fast }, 'codex', record);
+    Object.assign(this, settings);
+    if (record.type === 'session_meta' || record.type === 'turn_context') this.settings(payload);
+    if (record.type === 'turn_context') this.confirmed = true;
+    this.measure(record);
+  }
+  line(line) {
     const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
     let record;
     try { record = JSON.parse(clean); } catch {
@@ -118,67 +144,74 @@ class WorkerOutput {
       }
       return;
     }
-    this.record(record, at);
+    this.record(record);
   }
-  record(record, at = Date.now()) {
-    if (Array.isArray(record)) { for (const entry of record) this.record(entry, at); return; }
+  record(record) {
+    if (Array.isArray(record)) { for (const entry of record) this.record(entry); return; }
     if (!record || typeof record !== 'object') return;
-    const type = record.type, timestamp = Date.parse(record.timestamp);
-    if (Number.isFinite(timestamp)) at = timestamp;
+    if (this.agent === 'claude' && (record.parent_tool_use_id || record.isSidechain)) return;
+    const type = record.type;
     if (['error', 'turn.failed'].includes(type) || record.is_error === true || type === 'result' && /^error_/.test(record.subtype || '')) {
       this.failed = true;
       if (/\bat capacity\b|overloaded|capacity exceeded/i.test(JSON.stringify(record))) this.capacity = true;
     }
     if (this.agent === 'codex') {
-      if (type === 'thread.started') { this.sessionId = word(record.thread_id); this.settings(record); }
-      if (['session.started', 'turn.started', 'turn_context'].includes(type)) this.settings(record.payload || record);
-      if (type === 'turn.started' || type === 'response.started' || type === 'response.created') {
-        this.turnAt = at; this.waitMs = 0; this.waitAt = null; this.tools.clear(); this.turnOutput = 0;
-      }
-      if (['item.started', 'item.completed'].includes(type) && ['command_execution', 'mcp_tool_call', 'web_search'].includes(record.item?.type)) {
-        const id = record.item.id;
-        if (type === 'item.started') { if (!this.tools.size) this.waitAt = at; this.tools.add(id); }
-        else if (this.tools.delete(id) && !this.tools.size) { this.waitMs += at - this.waitAt; this.waitAt = null; }
-      }
-      if (type === 'token_usage_record') {
-        const payload = record.payload || record, id = payload.response_id;
-        if (id && !this.responses.has(id)) {
-          this.responses.add(id);
-          if (this.responses.size > 1024) this.responses.delete(this.responses.values().next().value);
-          const tokens = payload.usage?.output_tokens;
-          this.sample(tokens, payload.duration_api_ms ?? payload.active_ms ?? (this.turnAt === null ? null : at - this.turnAt - this.waitMs));
-          this.turnOutput += count(tokens) || 0;
-          this.turnAt = at; this.waitMs = 0;
-        }
-      }
-      if (type === 'turn.completed' || type === 'response.completed') {
+      if (type === 'thread.started') this.sessionId = word(record.thread_id);
+      if (type === 'turn.completed') {
         this.failed = false; this.capacity = false;
-        const tokens = record.usage?.output_tokens ?? record.response?.usage?.output_tokens;
-        const ms = record.duration_api_ms ?? record.active_ms ?? (this.turnAt === null || this.waitAt !== null ? null : at - this.turnAt - this.waitMs);
-        if (!this.turnOutput) this.sample(tokens, ms);
-        else if (count(tokens) !== null && tokens > this.turnOutput) this.sample(tokens - this.turnOutput, ms);
-        this.turnAt = null;
+        if (this.activeMs === null) this.outputTokens = count(record.usage?.output_tokens);
       }
     } else {
-      if (type === 'system' && record.subtype === 'init') { this.sessionId = word(record.session_id); this.settings(record); }
+      if (type === 'system' && record.subtype === 'init') {
+        this.sessionId = word(record.session_id); this.settings(record); this.confirmed = true;
+      }
       if (type === 'assistant') {
         this.settings(record);
         this.settings(record.message || {});
-        this.sample(record.message?.usage?.output_tokens, record.duration_api_ms);
       }
+      if (type === 'assistant' || type === 'user') this.measure(record);
       if (type === 'result') {
         this.sessionId = word(record.session_id) || this.sessionId;
+        this.confirmed ||= !!this.sessionId;
         this.settings(record);
         const models = Object.keys(record.modelUsage || {});
         if (models.length === 1) this.model = models[0];
         this.result = typeof record.result === 'string' ? record.result : null;
         if (!record.is_error && !/^error_/.test(record.subtype || '')) { this.failed = false; this.capacity = false; }
-        this.sample(record.usage?.output_tokens, record.duration_api_ms, true);
+        // JSON-only/older CLIs may expose only these final API totals. Never time a whole process as a response.
+        if (count(record.usage?.output_tokens) !== null) {
+          this.outputTokens = record.usage.output_tokens;
+          this.activeMs = Number.isFinite(record.duration_api_ms) && record.duration_api_ms > 0 ? record.duration_api_ms : null;
+        }
       }
     }
     this.changed();
   }
   routing() { return { model: this.model || 'unreported', effort: this.effort, fast: this.fast }; }
+}
+
+class CodexRollout {
+  constructor(home, output) { this.directory = path.join(home, 'sessions'); this.output = output; }
+  read() {
+    if (!this.pending) this.pending = this.update().catch(() => {}).finally(() => { this.pending = null; });
+    return this.pending;
+  }
+  async update() {
+    const id = this.output.sessionId;
+    if (!id) return;
+    if (!this.tail) {
+      const files = (await rolloutFiles(this.directory)).filter(file => file.name.endsWith(`-${id}.jsonl`));
+      for (const file of files) {
+        if ((await sessionMeta(file.filename))?.id !== id) continue;
+        this.tail = new TranscriptTail(file.filename, { onReset: partial => {
+          this.output.meter.reset(partial); this.output.outputTokens = null; this.output.activeMs = null;
+        } });
+        break;
+      }
+    }
+    await this.tail?.read(record => this.output.rollout(record));
+    this.output.changed();
+  }
 }
 
 // Standard Windows npm installs expose a JS entrypoint beside the shim; never invoke a shell.
@@ -196,28 +229,49 @@ function executable(agent, args, env) {
 }
 
 async function run(argv, { env = process.env, stdout = process.stdout, launch = spawn, startTimeout = START_TIMEOUT } = {}) {
+  if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude'].includes(argv[0]))) {
+    stdout.write(USAGE); return 0;
+  }
   const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
-  let options, child, log, startTimer, forceTimer, started = false, unconfirmed = false, killed = false, spawnError = null, lastRate = -Infinity;
+  let options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, endSent = false;
+  let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null;
   const signal = line => stdout.write(`[dispatch] ${line}\n`);
-  const failed = reason => { if (!unconfirmed && !started) { unconfirmed = true; signal(`failed to start ${id}: ${reason}`); } };
-  const reported = () => `${options.agent} model ${output.model || 'unreported'} effort ${output.effort || 'unreported'} fast ${output.fast === null ? 'unreported' : output.fast ? 'on' : 'off'}`;
+  const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
+  const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: options.role, title: options.title,
+    cwd: options.cwd, brief: options.brief, out: options.out, sessionId: output.sessionId, startedAt: Date.now() });
+  const failed = (reason, exitCode = null) => {
+    if (unconfirmed || started) return;
+    unconfirmed = true; signal(`failed to start ${id}: ${reason}`);
+    if (!options) return;
+    // Even without a session, the pane needs a declared row before it can retain the failure.
+    send({ ...assignment(), ...declared(), unconfirmed: true });
+    send({ type: 'dispatch-end', id, ...declared(), exitCode, reason: 'unconfirmed', outputTokens: null, activeMs: null, endedAt: Date.now() });
+    endSent = true;
+  };
+  const reported = () => {
+    const route = unconfirmed ? declared() : output.routing();
+    return `${options.agent} model ${route.model} effort ${route.effort || 'unreported'} fast ${route.fast === null ? 'unreported' : route.fast ? 'on' : 'off'}`;
+  };
   const output = new WorkerOutput(argv[0], () => {
-    if (started || unconfirmed || !child?.pid || child.exitCode !== null || !output.sessionId) return;
+    if (started || unconfirmed || exited || !child?.pid || child.exitCode !== null || !output.sessionId) return;
+    if (!output.confirmed) { if (options.agent === 'codex') void rollout.read(); return; }
     started = true; clearTimeout(startTimer);
-    const actual = output.routing(), declared = { model: options.model, effort: options.effort, fast: options.fast };
-    const mismatch = Object.keys(declared).some(key => actual[key] !== declared[key]);
-    const routing = mismatch ? `MISMATCH (declared ${declared.model} ${declared.effort} fast ${declared.fast ? 'on' : 'off'})` : 'ok';
+    const actual = output.routing(), requested = declared();
+    const mismatch = Object.keys(requested).some(key => actual[key] !== requested[key]);
+    const routing = mismatch ? `MISMATCH (declared ${requested.model} ${requested.effort} fast ${requested.fast ? 'on' : 'off'})` : 'ok';
     signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}`);
-    send({ type: 'dispatch-start', id, agent: options.agent, role: options.role, title: options.title, ...actual,
-      ...(mismatch ? { declared } : {}), cwd: options.cwd, brief: options.brief, out: options.out, sessionId: output.sessionId, startedAt: Date.now() });
-  }, () => {
-    if (!started || Date.now() - lastRate < 2000) return;
-    lastRate = Date.now();
-    send({ type: 'dispatch-rate', id, outputTokens: output.outputTokens, activeMs: output.activeMs });
+    send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
+    rateTimer = setInterval(() => {
+      const { outputTokens, activeMs } = output;
+      if (outputTokens === null || !(activeMs > 0) || lastRate?.outputTokens === outputTokens && lastRate?.activeMs === activeMs) return;
+      lastRate = { outputTokens, activeMs };
+      send({ type: 'dispatch-rate', id, ...lastRate });
+    }, RATE_INTERVAL);
   });
+  const rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
   const stop = (kind, requested = true) => {
     if (requested) killed = true;
-    if (!child?.pid || child.exitCode !== null) return;
+    if (exited || !child?.pid || child.exitCode !== null) return;
     if (process.platform === 'win32') {
       const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
       killer.on('error', () => child.kill());
@@ -240,6 +294,11 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     log.on('error', error => { spawnError = error; stop('SIGTERM', false); });
     process.on('SIGINT', onInterrupt); process.on('SIGTERM', onTerminate); process.on('SIGHUP', onHangup);
     startTimer = setTimeout(() => { failed('session not reported within 30 s'); stop('SIGTERM', false); }, startTimeout);
+    if (options.agent === 'codex') pollTimer = setInterval(() => { void rollout.read(); }, 250);
+    child.once('exit', code => {
+      exited = true; clearTimeout(startTimer); clearInterval(pollTimer); clearInterval(rateTimer);
+      if (!started) failed(output.capacity ? 'at capacity' : 'worker exited without a confirmed session', code === 0 ? 1 : code);
+    });
     const tails = [];
     for (const stream of [child.stdout, child.stderr]) {
       const decoder = new StringDecoder('utf8');
@@ -271,31 +330,35 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       child.once('close', (code, killedBy) => resolve({ code, killedBy }));
     });
     for (const tail of tails) tail();
+    clearInterval(pollTimer); clearInterval(rateTimer);
+    if (options.agent === 'codex') { await rollout.pending; await rollout.read(); }
     clearTimeout(startTimer); clearTimeout(forceTimer);
-    if (!started) failed(spawnError?.message || (output.capacity ? 'at capacity' : 'worker exited without a confirmed session'));
+    if (!started) failed(spawnError?.message || (output.capacity ? 'at capacity' : 'worker exited without a confirmed session'), result.code === 0 ? 1 : result.code);
     if (options.agent === 'claude' && output.result !== null && output.result !== undefined) fs.writeFileSync(options.out, output.result);
-    const reason = killed ? 'killed' : output.capacity ? 'capacity' : unconfirmed ? 'unconfirmed' : result.killedBy ? 'killed'
+    const reason = unconfirmed ? 'unconfirmed' : killed ? 'killed' : output.capacity ? 'capacity' : result.killedBy ? 'killed'
       : spawnError || output.failed || result.code !== 0 ? 'error' : 'exit';
     const exitCode = Number.isInteger(result.code) ? (result.code === 0 && unconfirmed ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
     const rate = output.outputTokens !== null && output.activeMs > 0 ? `${Math.round(output.outputTokens * 1000 / output.activeMs)} token/s (${output.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(output.activeMs / 1000)} s)` : 'token/s unreported';
     signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason} · out ${options.out}`);
-    send({ type: 'dispatch-end', id, ...output.routing(), exitCode, reason, outputTokens: output.outputTokens, activeMs: output.activeMs, endedAt: Date.now() });
+    if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode, reason, outputTokens: output.outputTokens, activeMs: output.activeMs, endedAt: Date.now() });
     await new Promise(resolve => log.end(resolve));
     return exitCode;
   } catch (error) {
-    failed(error.message);
+    failed(error.message, 1);
     if (child?.pid) stop('SIGTERM', false);
     if (options) {
-      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason unconfirmed · out ${options.out}`);
-      send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'unconfirmed', outputTokens: null, activeMs: null, endedAt: Date.now() });
+      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${unconfirmed ? 'unconfirmed' : 'error'} · out ${options.out}`);
+      if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', outputTokens: null, activeMs: null, endedAt: Date.now() });
     }
     log?.destroy();
     return 1;
   } finally {
     clearTimeout(startTimer); clearTimeout(forceTimer);
+    clearInterval(pollTimer); clearInterval(rateTimer);
+    await rollout.pending;
     process.removeListener('SIGINT', onInterrupt); process.removeListener('SIGTERM', onTerminate); process.removeListener('SIGHUP', onHangup);
   }
 }
 
 if (require.main === module) run(process.argv.slice(2)).then(code => { process.exitCode = code; });
-module.exports = { argumentsOf, commandOf, WorkerOutput, run };
+module.exports = { argumentsOf, commandOf, WorkerOutput, CodexRollout, runtimeFiles, run, RATE_INTERVAL };

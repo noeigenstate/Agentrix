@@ -114,7 +114,8 @@ class RemoteConnection {
     }, 1000);
     this.connectTimer.unref?.();
     this.link.open({ channel: this.channel, op: 'open', path: project.path, codingPath, projectId: project.id, token: sessionKey, cols: 90, rows: 24, readingNote, skills,
-      dispatchHelper: fs.readFileSync(path.join(options.integrationDir, 'dispatch.cjs'), 'utf8') });
+      dispatchHelper: fs.readFileSync(path.join(options.integrationDir, 'dispatch.cjs'), 'utf8'),
+      dispatchModules: require(path.join(options.integrationDir, 'dispatch.cjs')).runtimeFiles() });
   }
   onData(callback) { this.events.on('data', callback); return { dispose: () => this.events.off('data', callback) }; }
   onExit(callback) { this.events.on('exit', callback); return { dispose: () => this.events.off('exit', callback) }; }

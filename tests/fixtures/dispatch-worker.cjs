@@ -1,5 +1,6 @@
 // A real child process standing in for either CLI. All input/output stays in the test's temporary directory.
 const fs = require('node:fs');
+const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 
 async function main() {
@@ -9,6 +10,13 @@ async function main() {
   fs.writeFileSync(process.env.DISPATCH_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), brief, pid: process.pid }));
   for (const entry of fixture.lines || []) {
     if (entry.delay) await delay(entry.delay);
+    if (entry.rollout || entry.rolloutRaw) {
+      const folder = path.join(process.env.CODEX_HOME, 'sessions/2026/01/01');
+      fs.mkdirSync(folder, { recursive: true });
+      fs.appendFileSync(path.join(folder, `rollout-fixture-${entry.rolloutSession || fixture.sessionId}.jsonl`),
+        entry.rolloutRaw || JSON.stringify(entry.rollout) + '\n');
+      continue;
+    }
     const stream = entry.stderr ? process.stderr : process.stdout;
     stream.write(typeof entry.raw === 'string' ? entry.raw : JSON.stringify(entry.record) + '\n');
   }
