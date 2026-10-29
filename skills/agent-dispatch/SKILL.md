@@ -62,7 +62,7 @@ rate, live:
 | type | fields |
 | --- | --- |
 | `dispatch-start` | `id` (uuid), `agent` (codex/claude), `role`, `title`, `model`, `effort`, `fast` (as the worker reports them; `declared` holds the declared three when they differ), `cwd`, `brief`, `out`, `sessionId`, `startedAt` |
-| `dispatch-rate` | `id`, `outputTokens`, `activeMs` — running totals, sent after each finished model response of the worker (at most once per 2 s) |
+| `dispatch-rate` | `id`, `outputTokens`, `activeMs` — running totals from the worker's finished model responses, sent every 5 s while it runs (skipped when unchanged) |
 | `dispatch-end` | `id`, `model`, `effort`, `fast`, `exitCode`, `reason` (`exit`, `killed`, `capacity`, `error`, `unconfirmed`), `outputTokens`, `activeMs` (null when unreported), `endedAt` |
 
 `dispatch-start` shows the row as 运行中 with the model, effort and mode the worker reports (a mismatch is noted in the
