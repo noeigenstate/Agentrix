@@ -1632,5 +1632,6 @@
   "模型路由": "Model routing",
   "谁来做什么：Opus 规划与审查架构，GPT-6.1-Sol 写核心代码并调试，Sonnet 做日常与前端，GPT-6.1-Terra 验收界面并处理小任务。GPT 默认 max + fast，Claude 默认 high；只装了一个 Agent 时也有对应分工。": "Who does what: Opus plans and reviews the architecture, GPT-6.1-Sol writes the core code and debugs, Sonnet does routine work and the front end, GPT-6.1-Terra checks the interface and takes small tasks. GPT defaults to max + fast, Claude to high; there is a matching split when only one agent is installed.",
   "Agent 提议的修改尚未处理，保存会丢弃它。继续？": "An agent's proposed change has not been handled yet; saving discards it. Continue?",
-  "继续": "Continue"
+  "继续": "Continue",
+  "原有版本": "Existing version"
 }

@@ -19,7 +19,8 @@ export function latestTwo(versions: SkillVersion[]): [SkillVersion, SkillVersion
 
 // Who last touched a skill, when and where, for the 版本 line and the diff heading.
 export function changeSummary(skill: SkillInfo, now: number) {
-  if (skill.updatedBy === 'app') return t('随应用更新');
+  // 'app' is a built-in's shipped text, or a user skill as Agentrix first found it (no one changed it since).
+  if (skill.updatedBy === 'app') return t(skill.source === 'builtin' ? '随应用更新' : '原有版本');
   if (skill.updatedBy === 'user') return t('你编辑于 {time}', { time: relativeTime(skill.updatedAt, now) });
   const what = skill.createdByAgent ? t('由 Agent 创建') : t('最近由 Agent 优化');
   return [what, relativeTime(skill.updatedAt, now), skill.updatedIn && t('项目 {name}', { name: skill.updatedIn })].filter(Boolean).join(' · ');
