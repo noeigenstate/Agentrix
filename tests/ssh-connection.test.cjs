@@ -95,6 +95,28 @@ test('terminals on one host share its SSH connection: one login, their own outpu
   assert.equal(prompts.size, 2);
 });
 
+test('SSH sends unchanged skills by key on the same link and resends only when the bundle changes', { timeout: 30000 }, async t => {
+  const fixture = await createSSHFixture(), auth = await new SSHAuthServer().start(), opened = [];
+  const project = { id: randomUUID(), kind: 'ssh', path: process.platform === 'win32' ? '/srv/fixture' : fixture.project, ssh: { host: 'fixture', configFile: fixture.configFile } };
+  const open = skills => {
+    const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: randomUUID(), skills });
+    opened.push(connection); return connection;
+  };
+  t.after(async () => { for (const connection of opened) connection.close(); auth.close(); await fixture.close(); });
+  const bundle = { key: 'a'.repeat(64), instructions: 'Read-only references.', files: [{ id: 'user:test', scope: 'global', name: 'test', text: '---\nname: test\ndescription: Test.\n---\nBody.' }] };
+  const first = open(bundle); await first.ready;
+  const sent = [], write = first.link.child.stdin.write.bind(first.link.child.stdin);
+  t.mock.method(first.link.child.stdin, 'write', (data, ...args) => { sent.push(JSON.parse(data)); return write(data, ...args); });
+  const second = open(bundle); await second.ready;
+  const unchanged = sent.find(message => message.op === 'open');
+  assert.equal(unchanged.skills, null); assert.equal(unchanged.skillsKey, bundle.key);
+  assert.equal(Object.keys(unchanged)[0], 'channel');
+  const changed = { ...bundle, key: 'b'.repeat(64), instructions: 'Updated read-only references.' };
+  const third = open(changed); await third.ready;
+  assert.deepEqual(sent.filter(message => message.op === 'open')[1].skills, changed);
+  assert.equal(fixture.workers, 1);
+});
+
 test('native SSH prompts for a first host key and password without writing credentials to project config',{ timeout: 30000 }, async t => {
   const fixture = await createSSHFixture({ password: true, unknownHost: true, nativeWorker: false });
   const askpassPath = process.platform === 'win32' ? path.join(fixture.directory, 'askpass.exe') : undefined;

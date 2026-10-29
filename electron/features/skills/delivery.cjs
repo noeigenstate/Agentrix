@@ -1,14 +1,17 @@
 const MAX_NOTE = 6000;
+const SSH_REFERENCE_NOTE = 'Shipped built-in and global skills are read-only reference copies for this SSH session, contain SKILL.md text only, and are deleted when it ends.';
 const plain = value => String(value || '').replace(/\\/g, '/').replace(/"/g, "'").replace(/[\x00-\x1f\x7f]+/g, ' ');
 
-function skillInstructions({ skills, globalFolder, agents, pendingPath, remote = false }) {
+function skillInstructions({ skills, globalFolder, agents, pendingPath, remote = false, skippedNote = '' }) {
   const enabled = skills.filter(skill => skill.enabled), parts = [];
   parts.push(remote ? '{AGENTRIX_AGENTS}' : `Installed agents: Claude Code ${agents?.claude?.installed ? 'installed' : 'missing'}; Codex ${agents?.codex?.installed ? 'installed' : 'missing'}.`);
   for (const skill of enabled.filter(skill => skill.trigger === 'always')) parts.push(`Before any task, read and follow ${skill.path}.`);
   const auto = enabled.filter(skill => skill.trigger === 'auto');
   if (auto.length) parts.push(`Available auto skills: ${auto.map(skill => `${skill.name}: ${skill.description} (${skill.path})`).join('; ')}; read the one whose description fits before starting.`);
   parts.push(`Global user skills folder: ${globalFolder}.`);
-  for (const skill of enabled.filter(skill => skill.source === 'user')) {
+  if (remote) parts.push(SSH_REFERENCE_NOTE);
+  if (skippedNote) parts.push(skippedNote);
+  for (const skill of enabled.filter(skill => !remote && skill.source === 'user')) {
     parts.push(`${skill.path}: ${!skill.autoOptimize ? 'must not change it' : skill.confirmChanges
       ? `propose edits only to ${pendingPath(skill)}; do not change the active file until the user accepts`
       : 'may update it in place with short, specific, tested improvements'}.`);
@@ -19,4 +22,4 @@ function skillInstructions({ skills, globalFolder, agents, pendingPath, remote =
   return plain(parts.join(' '));
 }
 
-module.exports = { MAX_NOTE, plain, skillInstructions };
+module.exports = { MAX_NOTE, SSH_REFERENCE_NOTE, plain, skillInstructions };

@@ -14,6 +14,7 @@ import { waitFor } from './wait.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { createSkillsModel } = require('./skills-probe-model.cjs');
+const { claudeProbeConfig } = require('./skills-probe-config.cjs');
 const { isolatedEnvironment } = require('./native-approval-probe.cjs');
 const { onPath } = require('../electron/agents.cjs');
 const selected = process.argv.find(arg => arg.startsWith('--agent='))?.slice(8);
@@ -38,8 +39,7 @@ async function run() {
     '[windows]', 'sandbox = "unelevated"', `[projects.'${project.path.replace(/'/g, "''")}']`, 'trust_level = "trusted"', '',
   ].join('\n'));
   // Claude Code indexes trusted projects with forward slashes, including on Windows.
-  await fs.writeFile(path.join(env.CLAUDE_CONFIG_DIR, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark',
-    bypassPermissionsModeAccepted: true, projects: { [project.path.replace(/\\/g, '/')]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } } }));
+  await fs.writeFile(path.join(env.CLAUDE_CONFIG_DIR, '.claude.json'), JSON.stringify(claudeProbeConfig(project.path, env.ANTHROPIC_API_KEY)));
   await fs.writeFile(path.join(env.CLAUDE_CONFIG_DIR, 'settings.json'), JSON.stringify({ skipDangerousModePermissionPrompt: true }));
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: {
     terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, language: 'en', startView: 'workspace',
@@ -85,7 +85,7 @@ async function run() {
           if (!answered.has(key) && pattern.test(screen)) { answered.add(key); await write(answer); }
         }
         const usage = (await call('listSkills')).find(skill => skill.id === builtin.id)?.lastUsed;
-        return model.results.has(agent) && usage?.agent === agent && usage.project === project.id;
+        return model.results.has(agent) && usage?.agent === agent && usage.project === project.name;
       }, `${agent}: tool read and lastUsed`, 90000);
       assert.ok(model.requests.some(request => request.agent === agent && request.instructions.includes(instruction)), `${agent}: system/developer instructions contain the always skill and exact path`);
       const skill = (await call('listSkills')).find(skill => skill.id === builtin.id);

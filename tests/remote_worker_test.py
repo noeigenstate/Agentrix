@@ -33,14 +33,17 @@ class RemoteFilesTest(unittest.TestCase):
     def test_skills_are_copied_to_private_remote_paths_and_manifest_expands(self):
         self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
         text = "---\nname: model-routing\ndescription: Route models.\n---\nRead me.\n"
-        self.worker.skills_bundle = {"files": [{"id": "builtin:model-routing", "name": "model-routing", "scope": "builtin", "text": text,
-                                                "assets": [{"path": "scripts/check.sh", "data": base64.b64encode(b"echo check").decode()}]}],
+        self.worker.skills_bundle = {"files": [{"id": "builtin:model-routing", "name": "model-routing", "scope": "builtin", "text": text},
+                                               {"id": "user:global", "name": "global", "scope": "global", "text": text}],
                                     "instructions": "Before any task, read and follow {AGENTRIX_SKILLS}/builtin/model-routing/SKILL.md. {AGENTRIX_AGENTS}"}
         with mock.patch.object(remote.shutil, "which", side_effect=lambda name: "/bin/claude" if name == "claude" else None):
             note = self.worker.install_skills(self.worker.skills_bundle["instructions"])
         filename = self.worker.skill_paths["builtin:model-routing"]
         self.assertEqual(Path(filename).read_text(encoding="utf-8"), text)
-        self.assertEqual((Path(filename).parent / "scripts/check.sh").read_bytes(), b"echo check")
+        self.assertEqual([file.name for file in Path(filename).parent.iterdir()], ["SKILL.md"])
+        for file in self.worker.skill_paths.values():
+            if os.name == "posix": self.assertEqual(os.stat(file).st_mode & 0o777, 0o400)
+            os.chmod(file, 0o600)
         self.assertIn(filename, note)
         self.assertIn("Claude Code installed; Codex missing", note)
         self.assertNotIn("{AGENTRIX_", note)
@@ -50,6 +53,25 @@ class RemoteFilesTest(unittest.TestCase):
         self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
         self.worker.skills_bundle = {"files": [{"id": "bad", "name": "../escape", "scope": "global", "text": "bad"}]}
         with self.assertRaises(ValueError): self.worker.install_skills("note")
+
+    def test_remote_skills_reject_attachments_and_invalid_bundles(self):
+        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
+        for bundle in ([], {"files": "invalid"}, {"files": [None]}, {"files": [{"id": "user:test", "name": "test", "scope": "global", "text": "text", "assets": [{"path": "large"}]}]}):
+            self.worker.skills_bundle = bundle
+            with self.assertRaises(ValueError): self.worker.install_skills("note")
+
+    def test_startup_note_truncates_after_expanding_every_placeholder(self):
+        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
+        note = "{AGENTRIX_SKILLS} " * 220 + "{AGENTRIX_HANDOFF} " * 80 + "{AGENTRIX_AGENTS}"
+        folder = os.path.join(self.worker.temp, "skills").replace(os.sep, "/")
+        handoff = "/synthetic/" + "handoff" * 30 + ".md"
+        with mock.patch.object(self.worker, "handoff_path", return_value=handoff), mock.patch.object(remote.shutil, "which", return_value=None):
+            result = self.worker.startup_note(note)
+        expanded = note.replace("{AGENTRIX_SKILLS}", folder).replace("{AGENTRIX_HANDOFF}", handoff).replace("{AGENTRIX_AGENTS}", "Installed agents: Claude Code missing; Codex missing.")
+        self.assertLess(len(note), 8000)
+        self.assertGreater(len(expanded), 8000)
+        self.assertEqual(result, expanded[:8000])
+        self.assertNotIn("{AGENTRIX_", result)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="agentrix-worker-test-")
@@ -796,7 +818,7 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
         other.mkdir()
         (other / "only-here.txt").write_text("x", encoding="utf-8")
         lines, written, channels = queue.Queue(), [], {}
-        send = lambda message: lines.put((json.dumps(message) + "\n").encode())
+        send = lambda message: lines.put((json.dumps({"channel": message["channel"], **message}) + "\n").encode())
         def wait(found):
             for _ in range(250):
                 match = [message for message in list(written) if found(message)]
@@ -807,11 +829,13 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
         with mock.patch.object(remote.Worker, "spawn_terminal", lambda *_: None):
             server = threading.Thread(target=remote.serve, args=(lambda _size: lines.get(), written.append, channels), daemon=True)
             server.start()
-            send({"op": "open", "channel": 1, "path": str(self.root), "token": "one", "projectId": "p"})
-            send({"op": "open", "channel": 2, "path": str(other), "token": "two", "projectId": "p"})
+            bundle = {"key": "a" * 64, "files": [], "instructions": "Read-only references."}
+            send({"op": "open", "channel": 1, "path": str(self.root), "token": "one", "projectId": "p", "skillsKey": bundle["key"], "skills": bundle})
+            send({"op": "open", "channel": 2, "path": str(other), "token": "two", "projectId": "p", "skillsKey": bundle["key"], "skills": None})
             send({"op": "open", "channel": 3, "path": str(Path(self.temp.name) / "missing"), "token": "three", "projectId": "p"})
             self.assertEqual(wait(lambda m: m["type"] == "ready" and m["channel"] == 1)["info"]["root"], os.path.realpath(self.root))
             self.assertEqual(wait(lambda m: m["type"] == "ready" and m["channel"] == 2)["info"]["root"], os.path.realpath(other))
+            self.assertIs(channels[1].worker.skills_bundle, channels[2].worker.skills_bundle)
             self.assertIn("不存在", wait(lambda m: m["type"] == "error" and m.get("channel") == 3)["error"])
             send({"op": "directory", "channel": 2, "id": 7, "path": ""})
             listing = wait(lambda m: m["type"] == "response" and m["id"] == 7)
@@ -823,13 +847,26 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
             self.assertEqual(wait(lambda m: m["type"] == "response" and m["id"] == 9)["channel"], 2)
             self.assertTrue(first.stopping)
             self.assertFalse([m for m in written if m.get("id") == 8])
-            # Input that is no message ends every channel.
+            # A partial oversized open is drained, and malformed opens affect only their named channel.
             second = channels[2].worker
+            lines.put(b'{"channel":4,"op":"open","skills":"' + b"x" * remote.MAX_MESSAGE)
+            lines.put(b'more data"}\n')
+            self.assertIn("过大", wait(lambda m: m["type"] == "error" and m.get("channel") == 4)["error"])
+            lines.put(b'{"channel":5,"op":"open",broken}\n')
+            wait(lambda m: m["type"] == "error" and m.get("channel") == 5)
+            send({"op": "open", "channel": 6, "path": str(self.root), "token": "missing-bundle", "projectId": "p", "skillsKey": "b" * 64})
+            self.assertIn("missing", wait(lambda m: m["type"] == "error" and m.get("channel") == 6)["error"])
+            lines.put(b'{"channel":[],"op":"open"}\n')
+            lines.put(b'[]\n')
             lines.put(b"not a message\n")
+            send({"op": "directory", "channel": 2, "id": 10, "path": ""})
+            self.assertEqual(wait(lambda m: m["type"] == "response" and m.get("id") == 10)["channel"], 2)
+            self.assertFalse(second.stopping)
+            self.assertTrue(server.is_alive())
+            self.assertTrue(all("channel" in message for message in written))
+            lines.put(b"")
             server.join(5)
             self.assertFalse(server.is_alive())
-            self.assertNotIn("channel", written[-1])
-            self.assertEqual(written[-1]["type"], "error")
             self.assertTrue(second.stopping)
 
 if __name__ == "__main__": unittest.main()

@@ -357,10 +357,14 @@ function describeActions(s, cwd, actions) {
 }
 // A shell can outlive a Settings change. Its wrappers reread this small file for every new CLI session.
 function refreshSkillNotes() {
+  const deliveries = new Map();
   for (const s of sessions.values()) {
     if (!s.skillNoteFile) continue;
     const project = store.projects.find(project => project.id === s.projectId);
-    if (project) writeSkillFile(s.skillNoteFile, startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'), skills.delivery(project)));
+    if (!project) continue;
+    if (!deliveries.has(project.id)) deliveries.set(project.id, skills.delivery(project));
+    const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'), deliveries.get(project.id));
+    if (note !== s.skillNote) { writeSkillFile(s.skillNoteFile, note); s.skillNote = note; }
   }
 }
 // Claude Code writes each tool call to its transcript; follow it while the session lasts.
@@ -1006,14 +1010,14 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     ...(!['zsh', 'bash'].includes(shellKind) ? { useConpty: true, useConptyDll: true } : {}) };
   const remoteSkills = project.kind === 'ssh' ? skills.delivery(project, true) : null;
   const terminal = native || (project.kind === 'ssh' ? new RemoteConnection({ ...project, id }, { integrationDir, auth: sshAuth, sessionKey, onEvent, codingPath: startPath, askpassPath: sshAskpassPath,
-    readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', null, remoteSkills), skills: remoteSkills.bundle,
+    readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', path.posix.join(project.path, 'skills'), remoteSkills), skills: remoteSkills.bundle,
     onReady: info => { remoteBranch(project.id, info.branch); },
   }) : shellKind === 'zsh' ? pty.spawn(shell.file, ['-l', '-i'], terminalOptions)
     : shellKind === 'bash' ? pty.spawn(shell.file, bashArguments(integrationDir), terminalOptions)
     : shellKind === 'cmd' ? pty.spawn(cmdPath, ['/D', '/Q', '/K', path.join(integrationDir, 'bootstrap.cmd')], terminalOptions)
     : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions));
   const s = {
-    terminal, terminalId: id, projectId: project.id, sessionId, sessionKey, bootstrapFile, skillNoteFile, status: 'starting', agentStarting, ready: false, shellKind,
+    terminal, terminalId: id, projectId: project.id, sessionId, sessionKey, bootstrapFile, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
     // Command Prompt reports its prompts through markers in its output instead of the event pipe.
     usageEnv: project.kind === 'ssh' ? null : { ...env },
     prompts: !native && shellKind === 'cmd' ? new PromptMarkers() : null,
@@ -1252,7 +1256,7 @@ if (!app.requestSingleInstanceLock()) {
     store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'));
     skills = new SkillsStore({ dataDir: app.getPath('userData'), builtinDir: app.isPackaged ? path.join(process.resourcesPath, 'skills') : path.join(root, 'resources', 'skills'),
       getProjects: () => store.projects, getAgents: () => agents.getState(), activeProjects: () => [...sessions.values()].filter(s => s.codexActive).map(s => s.projectId),
-      changed: infos => { send('skills:changed', infos); refreshSkillNotes(); }, report });
+      changed: (infos, { deliveryChanged }) => { send('skills:changed', infos); if (deliveryChanged) refreshSkillNotes(); }, report });
     skills.syncWatchers();
     projectImageAuto = createProjectImageAuto({
       getProject: id => quitting ? null : store.projects.find(project => project.id === id),

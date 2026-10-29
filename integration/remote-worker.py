@@ -939,13 +939,15 @@ class Worker:
         return path
 
     def install_skills(self, reading_note):
-        """Session-private copies; project skills stay local-only. No file is written to ~/.claude or ~/.codex."""
+        """Session-private SKILL.md reference copies. Project skills remain in the remote repository."""
         folder = os.path.join(self.temp, "skills")
         agents = "Installed agents: Claude Code %s; Codex %s." % tuple("installed" if shutil.which(name) else "missing" for name in ("claude", "codex"))
         def expand(text):
             return text.replace("{AGENTRIX_SKILLS}", folder.replace(os.sep, "/")).replace("{AGENTRIX_AGENTS}", agents)
-        bundle = self.skills_bundle or {}
+        bundle = self.skills_bundle if self.skills_bundle is not None else {}
+        if not isinstance(bundle, dict) or not isinstance(bundle.get("files", []), list): raise ValueError("Invalid remote skills bundle.")
         for skill in bundle.get("files", []):
+            if not isinstance(skill, dict) or not isinstance(skill.get("id"), str) or skill.get("assets"): raise ValueError("Only remote SKILL.md text is supported.")
             name, scope, text = skill.get("name"), skill.get("scope"), skill.get("text")
             if not isinstance(name, str) or not re.fullmatch(r"[\w][\w.-]{0,119}", name) or name.endswith(".") or scope not in ("builtin", "global"):
                 raise ValueError("Invalid remote skill.")
@@ -954,23 +956,18 @@ class Worker:
             os.makedirs(directory, mode=0o700, exist_ok=True)
             filename = os.path.join(directory, "SKILL.md")
             with open(filename, "w", encoding="utf-8") as output: output.write(text)
-            os.chmod(filename, 0o400 if scope == "builtin" else 0o600)
-            for asset in skill.get("assets", []):
-                relative = asset.get("path")
-                if not isinstance(relative, str) or os.path.isabs(relative) or "\\" in relative or any(part in ("", ".", "..") for part in relative.split("/")) or relative == "SKILL.md":
-                    raise ValueError("Invalid remote skill asset path.")
-                data = base64.b64decode(asset["data"], validate=True)
-                if len(data) > 8 * 1024 * 1024: raise ValueError("Remote skill asset is too large.")
-                target = os.path.join(directory, relative)
-                os.makedirs(os.path.dirname(target), mode=0o700, exist_ok=True)
-                with open(target, "wb") as output: output.write(data)
-                os.chmod(target, 0o400 if scope == "builtin" else 0o600)
+            os.chmod(filename, 0o400)
             self.skill_paths[skill["id"]] = filename.replace(os.sep, "/")
         os.makedirs(os.path.join(folder, "global"), mode=0o700, exist_ok=True)
         instructions = bundle.get("instructions", "")
         if not isinstance(instructions, str) or len(instructions.encode("utf-8")) > 2 * 1024 * 1024: raise ValueError("Remote skill manifest is too large.")
         with open(os.path.join(folder, "instructions.md"), "w", encoding="utf-8") as output: output.write(expand(instructions))
         return expand(reading_note) if isinstance(reading_note, str) else ""
+
+    def startup_note(self, reading_note):
+        # Expand every placeholder before applying the shell's existing limit; long notes must not kill a channel.
+        note = self.install_skills(reading_note).replace("{AGENTRIX_HANDOFF}", self.handoff_path())
+        return note[:8000] if not set('"\\\n\r') & set(note) else ""
 
     def start_terminal(self, cols, rows, reading_note=""):
         with self.lock:
@@ -982,7 +979,7 @@ class Worker:
         bash = shutil.which("bash")
         if not bash: raise ValueError("远端没有找到 Bash。")
         self.temp = tempfile.mkdtemp(prefix="agentrix-")
-        reading_note = self.install_skills(reading_note)
+        reading_note = self.startup_note(reading_note)
         notify_file = os.path.join(self.temp, "notify.py")
         rc_file = os.path.join(self.temp, "bashrc")
         for filename, content in ((notify_file, NOTIFY_SOURCE), (rc_file, BASH_SOURCE)):
@@ -997,10 +994,7 @@ class Worker:
         env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", AGENTRIX_ROOT=self.coding_root, AGENTRIX_PYTHON=sys.executable, AGENTRIX_NOTIFY_FILE=notify_file, AGENTRIX_SOCKET=self.socket_path, AGENTRIX_TOKEN=self.token, AGENTRIX_NOTIFY_COMMAND=json.dumps([sys.executable, notify_file, "notify"]))
         # Plain words for the Codex wrapper in BASH_SOURCE; anything that could break its TOML string is left out.
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
-        if isinstance(reading_note, str): reading_note = reading_note.replace("{AGENTRIX_HANDOFF}", self.handoff_path())
-        if isinstance(reading_note, str) and reading_note and not set('"\\\n\r') & set(reading_note):
-            if len(reading_note) > 8000: raise ValueError("Remote startup note is too large.")
-            env["AGENTRIX_READING_NOTE"] = reading_note
+        if reading_note: env["AGENTRIX_READING_NOTE"] = reading_note
         for key in ("NO_COLOR", "NODE_DISABLE_COLORS"): env.pop(key, None)
         if env.get("FORCE_COLOR") == "0": env.pop("FORCE_COLOR", None)
         child, master = pty.fork()
@@ -1099,7 +1093,9 @@ class Channel:
             worker.start_terminal(config.get("cols", 90), config.get("rows", 24), config.get("readingNote", ""))
             info["skills"] = worker.skill_paths
             worker.emit({"type": "ready", "info": info})
-        except Exception as error: worker.emit({"type": "error", "error": str(error)[:1000]})
+        except Exception as error:
+            worker.emit({"type": "error", "error": str(error)[:1000]})
+            self.close()
 
     def receive(self, message):
         op, worker = message.get("op"), self.worker
@@ -1142,26 +1138,48 @@ class Channel:
 
 def serve(read_line, write, channels):
     """Runs the channels the lines read open ("open"), feed and close ("shutdown") until the input ends."""
+    cached_key, cached_bundle = None, None
     try:
         while True:
             line = read_line(MAX_MESSAGE + 1)
             if not line: break
-            if len(line) > MAX_MESSAGE: raise ValueError("远程请求过大。")
-            message = json.loads(line)
-            name, op = message.get("channel"), message.get("op")
-            channel = channels.get(name)
-            if op == "open":
-                if channel is None:
-                    channels[name] = channel = Channel(name, write)
-                    # Its folder and Git are read in a thread of its own, so the other terminals' keys go on meanwhile.
-                    threading.Thread(target=channel.open, args=(message,), daemon=True).start()
-            elif channel is None: continue
-            elif op == "shutdown": channels.pop(name).close()
-            else:
-                try: channel.receive(message)
-                except Exception as error: channel.worker.emit({"type": "error", "error": str(error)[:1000]})
-    except Exception as error:
-        write({"type": "error", "error": str(error)[:1000]})
+            # Open envelopes put channel first, allowing a bounded read to identify a failed channel.
+            prefix = re.match(br'^\s*\{\s*"channel"\s*:\s*([0-9]{1,16})\s*[,}]', line)
+            name = int(prefix.group(1)) if prefix else None
+            try:
+                if len(line) > MAX_MESSAGE:
+                    while line and not line.endswith(b"\n"): line = read_line(MAX_MESSAGE + 1)
+                    raise ValueError("远程请求过大。")
+                message = json.loads(line)
+                if not isinstance(message, dict): raise ValueError("Invalid remote message.")
+                name, op = message.get("channel"), message.get("op")
+                if type(name) is not int or name <= 0:
+                    name = None
+                    raise ValueError("Invalid remote channel.")
+                channel = channels.get(name)
+                if op == "open":
+                    key, bundle = message.get("skillsKey"), message.get("skills")
+                    if key is not None:
+                        if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key): raise ValueError("Invalid remote skills key.")
+                        if bundle is None:
+                            if key != cached_key: raise ValueError("Remote skills bundle is missing.")
+                            message["skills"] = cached_bundle
+                        else:
+                            if not isinstance(bundle, dict) or bundle.get("key") != key: raise ValueError("Invalid remote skills bundle.")
+                            cached_key, cached_bundle = key, bundle
+                    if channel is None:
+                        channels[name] = channel = Channel(name, write)
+                        # Its folder and Git are read in a thread of its own, so other terminals' keys go on meanwhile.
+                        threading.Thread(target=channel.open, args=(message,), daemon=True).start()
+                elif channel is None: continue
+                elif op == "shutdown": channels.pop(name).close()
+                else: channel.receive(message)
+            except Exception as error:
+                # Unidentifiable garbage is discarded. An unscoped error would disconnect every terminal on this host.
+                if name is not None:
+                    channel = channels.pop(name, None)
+                    if channel: channel.close()
+                    write({"type": "error", "channel": name, "error": str(error)[:1000]})
     finally:
         for channel in list(channels.values()): channel.close()
 
