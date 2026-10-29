@@ -38,15 +38,22 @@ export function usedText(used: SkillInfo['lastUsed']) {
   return used ? t('最近一次生效：{time} · 项目 {project} · {agent}', { time: clock(used.at), project: used.project, agent: AGENT_NAMES[used.agent] }) : t('还没有 Agent 用过');
 }
 
-// What a built-in skill needs from the installed agents; hollow when it falls back to the main model.
-export function dependency(skill: SkillInfo): { text: string; hollow: boolean } | null {
+// What a built-in skill needs from the installed agents; a hollow dot marks an unavailable dependency or a disabled skill.
+export function dependency(skill: SkillInfo): { text: string; state?: string; hollow: boolean } | null {
   const needs = skill.requires;
   if (!needs || needs.codex === null && needs.claude === null) return null;
+  // A skill that names both agents works with either one (model routing has a plan for each alone).
+  if (needs.codex !== null && needs.claude !== null) {
+    const text = t('至少安装 Codex 或 Claude Code 其中一个');
+    if (!skill.enabled) return { text, state: t('已关闭'), hollow: true };
+    if (needs.codex && needs.claude) return { text, state: t('两个都已安装，按完整分工运行'), hollow: false };
+    if (needs.codex || needs.claude) return { text, state: t('已安装 {agent}，按只装 {agent} 的方案分工', { agent: needs.codex ? 'Codex' : 'Claude Code' }), hollow: false };
+    return { text, state: t('都未安装，技能暂不生效'), hollow: true };
+  }
   if (!skill.enabled) return { text: t('已关闭'), hollow: true };
   const missing = [needs.codex === false && 'Codex', needs.claude === false && 'Claude Code'].filter(Boolean).join(' · ');
   if (missing) return { text: t('{agents} 未安装 · 将由主模型自己完成', { agents: missing }), hollow: true };
-  const present = [needs.codex && 'Codex CLI', needs.claude && 'Claude Code'].filter((name): name is string => !!name);
-  return { text: present.length > 1 ? t('{a} 与 {b} 均已安装', { a: present[0], b: present[1] }) : t('{agents} 已安装', { agents: present[0] }), hollow: false };
+  return { text: t('{agents} 已安装', { agents: needs.codex ? 'Codex' : 'Claude Code' }), hollow: false };
 }
 
 export type ScopeOption = { value: string; label: string };

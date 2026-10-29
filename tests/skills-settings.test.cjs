@@ -11,11 +11,12 @@ const fill = (text, values = {}) => text.replace(/\{(\w+)\}/g, (_match, key) => 
 const empty = () => null;
 
 // Loads a TSX/TS file from src with the renderer's hooks, icons, styles, i18n and Select replaced by stand-ins.
-function loader(hooks) {
+function loader(hooks, language = 'zh') {
   const cache = new Map();
+  const translations = language === 'en' ? require('../electron/locales/en.json') : {};
   const stubs = {
     react: hooks, '@phosphor-icons/react': new Proxy({}, { get: () => empty }),
-    i18n: { t: fill, currentLanguage: () => 'zh' }, Select: { Select: props => React.createElement('select-stub', props) },
+    i18n: { t: (text, values) => fill(translations[text] ?? text, values), currentLanguage: () => language }, Select: { Select: props => React.createElement('select-stub', props) },
   };
   const load = file => {
     if (cache.has(file)) return cache.get(file);
@@ -38,7 +39,7 @@ function loader(hooks) {
 }
 
 // One mounted component: useState and useEffect with dependencies, re-rendered until the async work has settled.
-function mount(t, skills, { details = {}, failure = null } = {}) {
+function mount(t, skills, { details = {}, failure = null, language = 'zh' } = {}) {
   const before = global.window, calls = [], listeners = [];
   const state = { skills, failure };
   const reply = value => Promise.resolve(state.failure ? { ok: false, error: state.failure } : { ok: true, value });
@@ -71,7 +72,7 @@ function mount(t, skills, { details = {}, failure = null } = {}) {
       effects.push(() => { previous?.cleanup?.(); slots[index] = { deps, cleanup: callback() }; });
     },
   };
-  const { SkillsSettings } = loader(hooks)(path.join(root, 'features/settings/SkillsSettings.tsx'));
+  const { SkillsSettings } = loader(hooks, language)(path.join(root, 'features/settings/SkillsSettings.tsx'));
   const projects = [{ id: 'p1', name: 'agentrix', kind: 'local' }, { id: 'p2', name: 'demo-site', kind: 'local' }, { id: 'p3', name: 'prod-box', kind: 'ssh' }];
   const render = () => {
     cursor = 0; dirty = false; effects = [];
@@ -154,21 +155,59 @@ test('a built-in skill is read-only: no edit or delete, a trigger, its dependenc
   assert.equal(h.all(node => node.props.label === '范围').length, 0);
   assert.equal(h.all(node => node.props['aria-label'] === '允许 Agent 自动优化').length, 0);
   assert.ok(h.page().includes('系统自带 · 只读'));
-  assert.ok(h.page().includes('Codex 未安装 · 将由主模型自己完成'));
+  assert.ok(h.page().includes('至少安装 Codex 或 Claude Code 其中一个'));
+  assert.ok(h.page().includes('已安装 Claude Code，按只装 Claude Code 的方案分工'));
   assert.equal(h.text(h.one(node => node.props['data-skill-used'])), '还没有 Agent 用过');
   assert.equal(h.one(node => node.props['data-skill-used']).props.className, 'is-quiet');
   assert.equal(h.items()[0], '模型路由');
-  assert.equal(h.nodes().some(node => node.props.className?.includes('skills-dot is-hollow')), true);
+  assert.equal(h.nodes().some(node => node.props.className?.includes('skills-dot is-hollow')), false);
 });
 
-test('a built-in skill with every agent installed says so, and an installed one needing none shows no dependency', async t => {
+test('a built-in skill needing no agents shows no dependency', async t => {
   const h = mount(t, [builtinRouting(), release]);
   await h.settle();
-  assert.ok(h.page().includes('Codex CLI 与 Claude Code 均已安装'));
   h.state.skills = [builtinRouting({ requires: null }), release];
   h.listeners[0](h.state.skills);
   await h.settle();
   assert.equal(h.page().includes('依赖'), false);
+  h.state.skills = [builtinRouting({ requires: { codex: null, claude: null } }), release];
+  h.listeners[0](h.state.skills);
+  await h.settle();
+  assert.equal(h.page().includes('依赖'), false);
+});
+
+for (const language of ['zh', 'en']) test(`model routing shows the requirement and each installation state in ${language}`, async t => {
+  const cases = [
+    { requires: { codex: true, claude: true }, hollow: false, zh: '两个都已安装，按完整分工运行', en: 'Both are installed; the full role distribution applies' },
+    { requires: { codex: false, claude: true }, hollow: false, zh: '已安装 Claude Code，按只装 Claude Code 的方案分工', en: 'Claude Code is installed; roles follow the Claude Code-only plan' },
+    { requires: { codex: true, claude: false }, hollow: false, zh: '已安装 Codex，按只装 Codex 的方案分工', en: 'Codex is installed; roles follow the Codex-only plan' },
+    { requires: { codex: false, claude: false }, hollow: true, zh: '都未安装，技能暂不生效', en: 'Neither is installed; this skill is inactive' },
+    { requires: { codex: true, claude: true }, enabled: false, hollow: true, zh: '已关闭', en: 'Off' },
+  ];
+  const h = mount(t, [builtinRouting(), release], { language });
+  await h.settle();
+  for (const item of cases) {
+    h.state.skills = [builtinRouting({ requires: item.requires, enabled: item.enabled ?? true }), release];
+    h.listeners[0](h.state.skills);
+    await h.settle();
+    const row = h.one(node => node.props.className === 'skills-dependency');
+    const [dot, text] = row.props.children;
+    assert.equal(dot.props.className, item.hollow ? 'skills-dot is-hollow' : 'skills-dot');
+    assert.equal(h.text(text.props.children[0]), language === 'zh' ? '至少安装 Codex 或 Claude Code 其中一个' : 'Install at least one of Codex or Claude Code');
+    assert.equal(text.props.children[1].type, 'small');
+    assert.equal(h.text(text.props.children[1]), item[language]);
+    assert.equal(h.all(node => node.props.className === 'skills-dot is-hollow').length, item.hollow ? 2 : 0);
+  }
+});
+
+test('a dependency on a single agent keeps its original fallback', async t => {
+  const h = mount(t, [builtinRouting({ requires: { codex: true, claude: null } }), release]);
+  await h.settle();
+  assert.equal(h.text(h.one(node => node.props.className === 'skills-dependency')), 'Codex 已安装');
+  h.state.skills = [builtinRouting({ requires: { codex: false, claude: null } }), release];
+  h.listeners[0](h.state.skills);
+  await h.settle();
+  assert.equal(h.text(h.one(node => node.props.className === 'skills-dependency')), 'Codex 未安装 · 将由主模型自己完成');
 });
 
 test('the last use shows as today\'s clock time with project and agent', async t => {

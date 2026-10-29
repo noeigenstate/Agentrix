@@ -56,7 +56,8 @@ export function SkillDetailPane({ skill, detail, scopes, tab, now, actions }: {
           options={[{ value: 'always', label: t('始终 · 每个任务开始前') }, { value: 'auto', label: t('按需 · 描述匹配时') }]} /></dd>
         {mine && <><dt>{t('范围')}</dt><dd><Select label={t('范围')} className="skills-scope" value={skill.scope === 'project' && skill.projectId ? skill.projectId : 'global'} options={scopes} onChange={actions.onScope} /></dd></>}
       </div>
-      {needs && <div><dt>{t('依赖')}</dt><dd className="skills-dependency"><i className={`skills-dot${needs.hollow ? ' is-hollow' : ''}`} aria-hidden="true" />{needs.text}</dd></div>}
+      {needs && <div><dt>{t('依赖')}</dt><dd className="skills-dependency"><i className={`skills-dot${needs.hollow ? ' is-hollow' : ''}`} aria-hidden="true" />
+        <span>{needs.text}{needs.state && <small>{needs.state}</small>}</span></dd></div>}
       {mine && <>
         <div><dt><span>{t('允许 Agent 自动优化')}<small>{t('默认开启：Agent 发现更好的做法时更新这个技能')}</small></span></dt>
           <dd><Switch label={t('允许 Agent 自动优化')} checked={skill.autoOptimize} onChange={autoOptimize => actions.onOptions({ autoOptimize })} /></dd></div>
