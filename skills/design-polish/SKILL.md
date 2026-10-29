@@ -25,7 +25,7 @@ Write the prompt to a scratch file:
 Run it in the background:
 
 ```
-codex exec -m gpt-6.1-sol -c model_reasoning_effort=high -c service_tier='"fast"' -C <repo> -i <reference.png> -o <scratch>/out.md - < <scratch>/prompt.md
+codex exec -m gpt-6.1-sol -c model_reasoning_effort=max -c service_tier='"fast"' -C <repo> -i <reference.png> -o <scratch>/out.md - < <scratch>/prompt.md
 ```
 
 It takes about two minutes per image. Keep working on other things meanwhile.
