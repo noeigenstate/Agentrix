@@ -110,6 +110,8 @@ await withGuiLock('routing-acceptance', async () => {
         '--cwd', repo, '--brief', `${stem}-brief.md`, '--out', `${stem}-answer.md`, ...allow.flatMap(glob => ['--allow', glob]),
         ...(ledger ? ['--ledger', path.join(repo, 'ledger.md')] : []), ...(resume ? ['--resume', resume] : [])];
       await write(id, `node ${quote(helper)} ${args.map(quote).join(' ')} *> ${quote(signals)}; New-Item -ItemType File ${quote(flag)} -Force | Out-Null\r`);
+      // The activity pane follows the selected terminal: select the one that dispatches, so its screenshots show this worker.
+      await page.locator(`[data-terminal-id="${id}"]`).dispatchEvent('pointerdown');
       const seen = new Set(); let liveRate = null, running = null, ended = null;
       await waitFor(async () => {
         const group = (await groupsOf(id, title))[0], item = group?.items.find(value => value.title === title);
