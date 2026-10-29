@@ -57,6 +57,7 @@ function loadUI(name, overrides = {}) {
     if (key === './typing') return require('../src/features/reading/typing.ts');
     if (key === './composer-prefill') return require('../src/features/reading/composer-prefill.ts');
     if (key === './image-thumbnail') return require('../src/features/reading/image-thumbnail.ts');
+    if (key === './image-input') return require('../src/features/reading/image-input.ts');
     if (key === './markdown-escape') return require('../src/features/reading/markdown-escape.ts');
     if (key === './pasted-pictures') return require('../src/features/reading/pasted-pictures.ts');
     if (key === './sign-in-screen') return require('../src/features/agents/sign-in-screen.ts');
@@ -998,7 +999,219 @@ test('a question renders as its own card: progress, the question, options, an ow
   assert.match(codex, /Question 1\/2/); assert.match(codex, /Notes \(optional\)/); assert.doesNotMatch(codex, /Optionally, add details/);
 });
 
+// A native editor with atomic image elements, following Claude 2.1.312's Mi cursor and Codex 0.165.0's TextArea.
+// It retains actual attachment identities separately from their labels, so renumbering cannot hide a wrong deletion.
+let imageComposerSequence = 0;
+function imageComposerHarness(t, agent, { decode = file => Promise.resolve(file.preview), remote = false } = {}) {
+  let text = '', cursor = 0, next = 0, heldScreen = null;
+  const attached = [];
+  const rows = () => composerRows(agent, 'idle', heldScreen ?? text);
+  const h = dictationHarness(t, {
+    './terminal-screen': { useScreen: () => null, readScreen: () => ({ rows: rows() }) },
+    './agent-screen': { parseAgentScreen }, './image-thumbnail': { thumbnail: decode },
+  });
+  h.props.terminal.agent = agent; h.props.remote = remote;
+  const pasteKey = agent === 'claude' ? '\x1bv' : '\x16';
+  const chips = () => [...text.matchAll(/\[Image #(\d+)\]/g)];
+  const insert = value => { text = text.slice(0, cursor) + value + text.slice(cursor); cursor += value.length; };
+  window.agentrix.writeTerminal = (id, keys) => {
+    h.written.push({ id, text: keys });
+    if (keys === pasteKey) {
+      const number = agent === 'claude' ? ++next : attached.length + 1;
+      attached.push({ number, image: h.pasting }); insert((text ? ' ' : '') + `[Image #${number}]`); return;
+    }
+    const events = keys.match(/\x1b\[1;5[CD]|\x1b\[[HFC]|[\x01\x05\x7f\r]/g) ?? [];
+    assert.equal(events.join(''), keys, 'only navigation, one Backspace and submission are allowed');
+    for (const event of events) {
+      if (event === '\x05' || event === '\x1b[F') cursor = text.length;
+      else if (event === '\x01' || event === '\x1b[H') cursor = 0;
+      else if (event === '\x1b[1;5D') {
+        while (cursor && /\s/.test(text[cursor - 1])) cursor--;
+        const chip = chips().find(match => match.index + match[0].length === cursor);
+        assert.ok(chip, 'word-left reaches a complete chip'); cursor = chip.index;
+      } else if (event === '\x1b[1;5C') {
+        while (/\s/.test(text[cursor] ?? '') && cursor < text.length) cursor++;
+        const chip = chips().find(match => match.index === cursor);
+        assert.ok(chip, 'word-right reaches a complete chip'); cursor += chip[0].length;
+      } else if (event === '\x1b[C') {
+        const chip = chips().find(match => match.index === cursor);
+        cursor += chip?.[0].length ?? 1;
+      } else if (event === '\x7f') {
+        const chip = chips().find(match => match.index + match[0].length === cursor);
+        assert.ok(chip, 'Backspace must remove an image, never typed text');
+        const number = Number(chip[1]);
+        text = text.slice(0, chip.index) + text.slice(cursor); cursor = chip.index;
+        attached.splice(attached.findIndex(image => image.number === number), 1);
+        if (agent === 'codex') {
+          for (const image of attached) if (image.number > number) image.number--;
+          text = text.replace(/\[Image #(\d+)\]/g, (label, n) => Number(n) > number ? `[Image #${Number(n) - 1}]` : label);
+        }
+      } else if (event === '\r') { h.received = { text, images: attached.map(image => image.image) }; text = ''; cursor = 0; attached.length = 0; }
+    }
+  };
+  window.agentrix.pasteTerminal = async (id, value) => { h.pasted.push({ id, text: value }); insert(value); return { ok: true }; };
+  const folder = `/remote/paste-${++imageComposerSequence}`, picturePath = image => `${folder}/image-${image}.png`;
+  window.agentrix.saveImage = async (id, bytes) => ({ ok: true, value: picturePath(new Uint8Array(bytes)[0]) });
+  const previews = () => elements(h.tree()).find(element => element.props.onRemove && element.props.images);
+  return Object.assign(h, {
+    picturePath,
+    previews: () => previews().props.images,
+    numbers: () => previews().props.numbers,
+    remove(index) { h.render(); previews().props.onRemove(index); h.render(); },
+    async paste(image) {
+      h.pasting = image;
+      const file = { size: 1, type: 'image/png', preview: `data:image/png;base64,${image}`, arrayBuffer: async () => new Uint8Array([image]).buffer };
+      h.render().props.onPaste({ preventDefault() {}, clipboardData: { getData: () => '', items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }] } });
+      await h.tick(0);
+    },
+    native: () => ({ text, images: attached.map(image => image.image) }),
+    editNative(value) { text = value; cursor = 0; },
+    holdScreen() { heldScreen = text; },
+    releaseScreen() { heldScreen = null; },
+    nextNumber(number) { next = number - 1; },
+  });
+}
+
+test('composer thumbnails each have the decision page remove label and 12px bold X, while message pictures only zoom', () => {
+  const removed = [], opened = [];
+  const { UserImages } = loadUI('features/reading/PendingPromptEntries.tsx', { './file-popup': { showPopup: picture => opened.push(picture) } });
+  const images = ['data:image/png;base64,one', 'data:image/png;base64,two', 'data:image/png;base64,three'];
+  const tree = UserImages({ images, onRemove: index => removed.push(index) }), nodes = elements(tree);
+  const buttons = nodes.filter(element => element.props.className === 'reading-user-image-remove');
+  assert.equal(buttons.length, 3);
+  for (const button of buttons) {
+    assert.equal(button.props['aria-label'], en['移除这张图片']);
+    assert.equal(button.props.children.props.size, 12); assert.equal(button.props.children.props.weight, 'bold');
+  }
+  buttons[1].props.onClick(); assert.deepEqual(removed, [1]); assert.deepEqual(opened, []);
+  nodes.find(element => element.props.className === 'reading-user-image-zoom').props.onClick();
+  assert.equal(opened[0].src, images[0]);
+  assert.doesNotMatch(renderToStaticMarkup(React.createElement(UserImages, { images })), /reading-user-image-remove|Remove this picture/);
+});
+
 for (const agent of ['claude', 'codex']) {
+  test(agent + ': removing the second native image preserves the other attachments and typed composer text on send', async t => {
+    const h = imageComposerHarness(t, agent);
+    for (const image of [1, 2, 3]) await h.paste(image);
+    h.edit('keep these words'); h.remove(1);
+    const end = '\x05\x1b[F'.repeat(composerRows(agent).length + 1);
+    assert.equal(h.written.at(-1).text, end + '\x1b[1;5D'.repeat(2) + '\x1b[C\x7f' + end);
+    assert.deepEqual(h.previews(), [1, 2, 3].map(image => `data:image/png;base64,${image}`), 'wait for the CLI redraw');
+    await h.tick(80);
+    assert.deepEqual(h.previews(), [1, 3].map(image => `data:image/png;base64,${image}`));
+    assert.deepEqual(h.native(), { text: agent === 'claude' ? '[Image #1]  [Image #3]' : '[Image #1]  [Image #2]', images: [1, 3] });
+    assert.deepEqual(h.numbers(), agent === 'claude' ? [1, 3] : [1, 2]);
+    assert.equal(h.node.value, 'keep these words'); assert.equal(document.activeElement, h.node);
+    h.press('Enter'); await h.tick(0); await h.tick(400);
+    assert.deepEqual(h.received.images, [1, 3]);
+    assert.ok(h.received.text.endsWith('keep these words'));
+    assert.deepEqual(h.echoed, [{ text: 'keep these words', images: [1, 3].map(image => `data:image/png;base64,${image}`) }]);
+    assert.ok(h.written.every(({ text }) => !text.includes('\x15')));
+  });
+
+  test(agent + ': consecutive removals reread shifted labels, and a later paste keeps native image identities', async t => {
+    const h = imageComposerHarness(t, agent);
+    for (const image of [1, 2, 3]) await h.paste(image);
+    h.remove(1); await h.tick(80);
+    await h.paste(4);
+    h.remove(1); await h.tick(80);
+    assert.deepEqual(h.previews(), [1, 4].map(image => `data:image/png;base64,${image}`));
+    assert.deepEqual(h.native(), { text: agent === 'claude' ? '[Image #1]   [Image #4]' : '[Image #1]   [Image #2]', images: [1, 4] });
+  });
+
+  test(agent + ': removing the last image clears the attachment count and disables an empty send', async t => {
+    const h = imageComposerHarness(t, agent);
+    await h.paste(1); h.remove(0); await h.tick(80);
+    assert.deepEqual(h.native().images, []);
+    assert.ok(!elements(h.tree()).some(element => element.props.className === 'reading-attachments'));
+    assert.equal(elements(h.tree()).find(element => element.props.className === 'icon-button reading-send').props.disabled, true);
+  });
+
+  test(agent + ': a failed native deletion keeps its previews and surfaces a terminal check without destructive retries', async t => {
+    const h = imageComposerHarness(t, agent), errors = [];
+    h.props.onError = message => errors.push(message);
+    for (const image of [1, 2, 3]) await h.paste(image);
+    window.agentrix.writeTerminal = (id, text) => h.written.push({ id, text });
+    h.remove(1);
+    for (let attempt = 0; attempt < 10; attempt++) await h.tick(80);
+    assert.equal(errors.length, 1); assert.equal(h.previews().length, 3); assert.deepEqual(h.native().images, [1, 2, 3]);
+    assert.equal(h.written.length, 4, 'three pastes and exactly one removal attempt');
+  });
+
+  test(agent + ': ambiguous prose on both sides of an image never causes guessed editing keystrokes', async t => {
+    const h = imageComposerHarness(t, agent), errors = [];
+    h.props.onError = message => errors.push(message);
+    for (const image of [1, 2, 3]) await h.paste(image);
+    h.editNative('before ' + h.native().text + ' after'); h.remove(1); await h.tick(1000);
+    assert.equal(errors.length, 1); assert.equal(h.written.length, 3);
+    assert.equal(h.previews().length, 3); assert.deepEqual(h.native().images, [1, 2, 3]);
+  });
+
+  for (const position of ['before', 'after']) test(`${agent}: native text ${position} the images is preserved from an arbitrary cursor position`, async t => {
+    const h = imageComposerHarness(t, agent);
+    for (const image of [1, 2, 3]) await h.paste(image);
+    const words = 'keep  native 文本', native = h.native().text;
+    h.editNative(position === 'before' ? words + ' ' + native : native + ' ' + words);
+    h.remove(1); await h.tick(80);
+    assert.deepEqual(h.native().images, [1, 3]); assert.ok(h.native().text.includes(words));
+    assert.deepEqual(h.previews(), [1, 3].map(image => `data:image/png;base64,${image}`));
+  });
+
+  test(agent + ': a slow or removed preview cannot reorder images or reappear when decoding finishes', async t => {
+    const decoding = new Map();
+    const h = imageComposerHarness(t, agent, { decode: file => new Promise(resolve => decoding.set(file.preview, resolve)) });
+    for (const image of [1, 2, 3]) await h.paste(image);
+    decoding.get('data:image/png;base64,3')('data:image/png;base64,3'); await h.tick(0);
+    assert.deepEqual(h.previews(), ['', '', 'data:image/png;base64,3']);
+    h.remove(1); await h.tick(80);
+    for (const image of [2, 1]) decoding.get(`data:image/png;base64,${image}`)(`data:image/png;base64,${image}`);
+    await h.tick(0);
+    assert.deepEqual(h.previews(), [1, 3].map(image => `data:image/png;base64,${image}`));
+    assert.deepEqual(h.native().images, [1, 3]);
+  });
+
+  test(agent + ': native removal waits for acknowledgment and sends no extra keys after session A to B to A', async t => {
+    const h = imageComposerHarness(t, agent);
+    for (const image of [1, 2, 3]) await h.paste(image);
+    h.holdScreen(); h.remove(1); await h.tick(80);
+    assert.equal(h.previews().length, 3);
+    h.edit('wait'); h.press('Enter'); await h.tick(0); assert.deepEqual(h.pasted, []);
+    const written = h.written.length;
+    h.props.terminal.sessionId = 'B'; h.render(); h.props.terminal.sessionId = 'session'; h.render();
+    h.releaseScreen(); await h.tick(1000);
+    assert.equal(h.written.length, written); assert.equal(h.previews().length, 3);
+  });
+
+  test(agent + ': the four-image limit cannot leave a fifth invisible native attachment', async t => {
+    const h = imageComposerHarness(t, agent), errors = [];
+    h.props.onError = message => errors.push(message);
+    for (const image of [1, 2, 3, 4, 5]) await h.paste(image);
+    assert.equal(h.previews().length, 4); assert.deepEqual(h.native().images, [1, 2, 3, 4]); assert.equal(errors.length, 1);
+  });
+
+  test(agent + ': SSH removes only the second saved path, preserves the other previews and sends no removal keystrokes', async t => {
+    const h = imageComposerHarness(t, agent, { remote: true });
+    for (const image of [1, 2, 3]) await h.paste(image);
+    h.edit('keep these words'); h.remove(1); await h.tick(0);
+    assert.deepEqual(h.previews(), [1, 3].map(image => `data:image/png;base64,${image}`));
+    assert.deepEqual(h.written, []); assert.equal(h.node.value, 'keep these words'); assert.equal(document.activeElement, h.node);
+    h.press('Enter'); await h.tick(0);
+    assert.deepEqual(h.pasted, [{ id: h.props.terminal.id, text: `${h.picturePath(1)} ${h.picturePath(3)} keep these words` }]);
+  });
+
+  test(agent + ': SSH thumbnails finishing out of order still remove the corresponding saved path', async t => {
+    const decoding = new Map();
+    const h = imageComposerHarness(t, agent, { remote: true, decode: file => new Promise(resolve => decoding.set(file.preview, resolve)) });
+    for (const image of [1, 2, 3]) await h.paste(image);
+    for (const image of [3, 1]) decoding.get(`data:image/png;base64,${image}`)(`data:image/png;base64,${image}`);
+    await h.tick(0);
+    assert.deepEqual(h.previews(), ['data:image/png;base64,1', '', 'data:image/png;base64,3']);
+    h.remove(1); decoding.get('data:image/png;base64,2')('data:image/png;base64,2'); await h.tick(0);
+    h.edit('describe'); h.press('Enter'); await h.tick(0);
+    assert.deepEqual(h.pasted.map(item => item.text), [`${h.picturePath(1)} ${h.picturePath(3)} describe`]);
+    assert.deepEqual(h.written, []);
+  });
+
   for (const activity of ['idle', 'working', 'shell']) {
     for (const picture of ['none', 'ready', 'loading']) {
       test(`${agent}: a ${picture} picture and message send while ${activity} without opening the popup`, async t => {
@@ -1119,6 +1332,15 @@ for (const agent of ['claude', 'codex']) {
     }
   });
 }
+
+test('Claude paste IDs can begin above one and remain visible after deleting the middle image', async t => {
+  const h = imageComposerHarness(t, 'claude');
+  h.nextNumber(17);
+  for (const image of [1, 2, 3]) await h.paste(image);
+  assert.deepEqual(h.numbers(), [17, 18, 19]);
+  h.remove(1); await h.tick(80);
+  assert.deepEqual(h.numbers(), [17, 19]); assert.deepEqual(h.native().images, [1, 3]);
+});
 
 test('session A to B to A, terminal selection and unmount cancel every delayed command key', async t => {
   for (const change of ['session', 'terminal', 'selection', 'unmount', 'close']) await t.test(change, async t => {

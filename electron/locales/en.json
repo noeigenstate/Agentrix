@@ -1026,6 +1026,8 @@
   "描述要做的事，比如“给登录页加上验证码”；可以直接粘贴截图": "Describe the work, like \"add a captcha to the login page\"; you can paste screenshots",
   "附图": "Pictures",
   "移除这张图片": "Remove this picture",
+  "最多附加 4 张图片，请先移除一张。": "Up to 4 images can be attached. Remove one before pasting another.",
+  "请在终端中检查并移除这张图片。": "Check and remove this image in the terminal.",
   "Codex 正在工作，等这一轮结束再切换会话。": "Codex is working; switch conversations once this round ends.",
   "Codex 没有退出，请在终端里退出后再恢复。": "Codex didn't quit; quit it in the terminal, then resume.",
   "无法加载 {agent} 会话。": "Could not load {agent} sessions.",

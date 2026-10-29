@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { readingMarked } from './markdown-escape';
 import createDOMPurify from 'dompurify';
-import { ArrowDown, CaretDown, CaretUp, Image as ImageIcon, PaperPlaneRight, Stop, X } from '@phosphor-icons/react';
+import { ArrowDown, CaretDown, CaretUp, Image as ImageIcon, PaperPlaneRight, Stop } from '@phosphor-icons/react';
 import type { AgentCommand, ConversationEntry, ProjectTerminal } from '../../shared/types';
 import { actionText, stepVerb } from '../agents/action-text';
 import { dictateInto } from '../voice/voice-input';
@@ -17,6 +17,7 @@ import { ReadingQuestion } from './ReadingQuestion';
 import { ReadingSessions } from './ReadingSessions';
 import { typeReadingCommand, usesSessionPicker } from './reading-sessions';
 import { dataUrl, thumbnail } from './image-thumbnail';
+import { imageRemoval, inputImageLabels } from './image-input';
 import { rememberPicture, withPictures } from './pasted-pictures';
 import { useWelcomeStarting } from './reading-welcome';
 import { ReadingTerminalPopup } from './ReadingTerminalPopup';
@@ -230,8 +231,8 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
   const [commands, setCommands] = useState<AgentCommand[]>([]), [requested, setRequested] = useState(false);
   const [dismissed, setDismissed] = useState(false), [selection, setSelection] = useState(0);
   const historyAt = useRef<number | null>(null), unsent = useRef(''), caret = useRef<number | null>(null), sending = useRef(false);
-  // Images pasted for the next message. The agent holds them itself; this only counts them.
-  const [images, setImages] = useState<string[]>([]);
+  // Reserve an image's place before decoding it, so slow previews cannot reorder attachments or revive a removed one.
+  const [images, setImages] = useState<{ id: number; src: string }[]>([]), imageSequence = useRef(0);
   // An SSH project's pictures for the next message: files saved on that computer. Their paths join the message only as
   // it is sent (both CLIs take a picture's path as the picture); the message box shows the words alone.
   const [serverPictures, setServerPictures] = useState<string[]>([]);
@@ -352,9 +353,9 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
   // own: written in the composer here (it is cleared, with its pictures); otherwise a message sent again, which leaves
   // whatever is being written now alone and takes no pictures with it.
   const deliver = async (words: string, own: boolean, owner: number) => {
-    const attached = own ? images : [], pictures = own ? serverPictures : [];
+    const attached = own ? images.map(image => image.src).filter(Boolean) : [], pictures = own ? serverPictures : [];
     const text = pictures.length ? (isTypedCommand(words) ? [words, ...pictures] : [...pictures, words]).filter(Boolean).join(' ') : words;
-    if ((!text && !attached.length) || !terminal.sessionId) return;
+    if ((!text && !(own && images.length)) || !terminal.sessionId) return;
     if (usesSessionPicker(terminal, text, remote)) {
       if (inputBlocked) return;
       choiceVisible.current = true; restoreComposer.current = document.activeElement === input.current;
@@ -405,7 +406,13 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     if (text) await submitted(kind, text, owner);
   };
   // What is typed in the CLI's own input right now.
-  const inputDraft = (agent: 'claude' | 'codex') => { const current = readScreen(terminal.id); return current ? cliInputDraft(agent, current.rows, parseAgentScreen(agent, current.rows)) : ''; };
+  const readInput = (agent: 'claude' | 'codex') => {
+    const current = readScreen(terminal.id);
+    if (!current) return null;
+    const screen = parseAgentScreen(agent, current.rows);
+    return { rows: current.rows, screen, text: cliInputDraft(agent, current.rows, screen) };
+  };
+  const inputDraft = (agent: 'claude' | 'codex') => readInput(agent)?.text ?? '';
   // Ctrl+U clears a row of the CLI's input: Claude Code clears only the visual row of a long draft wrapped over several,
   // so it is pressed again until the input is empty (a few more than the rows, at most).
   const clearInput = async (agent: 'claude' | 'codex', owner: number) => {
@@ -477,7 +484,13 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     const item = [...data.items].find(item => item.kind === 'file' && item.type.startsWith('image/'));
     if (!item) return;
     event.preventDefault();
+    if (sending.current) return;
     if (!terminal.codexActive || !terminal.sessionId) { onError(t('启动 Codex 或 Claude Code 后才能粘贴图片。')); return; }
+    const file = item.getAsFile();
+    if (!file) return;
+    if (!remote && file.size > 25 * 1024 * 1024) { onError(t('图片太大（超过 25 MB），请压缩后再粘贴。')); return; }
+    // A fifth native paste would leave an invisible attachment behind when the four-preview window rolls over.
+    if (!remote && images.length >= 4) { onError(t('最多附加 4 张图片，请先移除一张。')); return; }
     // The first picture goes into a clean input: text left there (a prompt Claude put back after an interrupt) would be
     // sent with this message, and once pictures are in it Ctrl+U would take them too. One of ours still waiting stays.
     const left = !images.length && !remote ? inputDraft(kind) : '';
@@ -487,40 +500,56 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     // Over SSH the CLI cannot reach this computer's clipboard: the picture goes over as a file on that computer, whose
     // path joins the message when it is sent (serverPictures).
     if (remote) {
-      const file = item.getAsFile();
-      if (!file) return;
       void file.arrayBuffer().then(bytes => window.agentrix.saveImage(terminal.id, bytes, file.type)).then(saved => {
         if (!ownsSend(owner)) return;
         if (!saved.ok) { onError(saved.error); return; }
         // The picture shows as itself (in the box above the composer and in the message), never as its long path.
-        void thumbnail(file).catch(() => dataUrl(file)).then(small => { rememberPicture(saved.value, small); setPictureTick(tick => tick + 1); }).catch(() => {});
+        void thumbnail(file).catch(() => dataUrl(file)).then(small => { if (ownsSend(owner)) { rememberPicture(saved.value, small); setPictureTick(tick => tick + 1); } }).catch(() => {});
         setServerPictures(list => [...list, saved.value].slice(-4));
       }).catch(error => onError(String(error)));
       return;
     }
+    const id = ++imageSequence.current;
+    setImages(list => [...list, { id, src: '' }].slice(-4));
     const pasteKey = terminal.agent === 'claude' ? '\x1bv' : '\x16';
     if (clearFirst) void cleared.then(() => setTimeout(() => { if (ownsSend(owner)) window.agentrix.writeTerminal(terminal.id, pasteKey); }, 60));
     else window.agentrix.writeTerminal(terminal.id, pasteKey);
     // The agent takes the picture from the clipboard; a copy is kept here to show in the message, small (a 4K
     // screenshot decoded at full size costs tens of megabytes per copy).
-    const file = item.getAsFile();
-    if (!file) return;
-    if (file.size > 25 * 1024 * 1024) { onError(t('图片太大（超过 25 MB），请压缩后再粘贴。')); return; }
     // A picture this window cannot decode still went to the agent: it is listed as it came.
     void thumbnail(file).catch(() => dataUrl(file)).then(small => {
-      if (ownsSend(owner)) setImages(list => [...list, small].slice(-4));
+      if (ownsSend(owner)) setImages(list => list.map(image => image.id === id ? { ...image, src: small } : image));
     }).catch(() => onError(t('无法读取这张图片。')));
   };
-  // The attached pictures wait in the CLI's own input as "[Image #1]" placeholders, which Ctrl+U clears with them.
-  // An SSH project's pictures show above the composer by the copies made when they were pasted.
+  // Resolve SSH previews per path, in attachment order, even when they finish decoding in a different order.
   const [, setPictureTick] = useState(0);
-  const shownImages = [...images, ...withPictures(serverPictures.join(' ')).images];
+  const shownImages = [...images.map(image => image.src), ...serverPictures.map(path => withPictures(path).images[0] ?? '')];
+  const imageNumbers = images.length ? inputImageLabels(inputDraft(kind)).slice(-images.length).map(label => Number(label.match(/\d+/)![0])) : undefined;
   const attachedCount = images.length + serverPictures.length;
-  const removeImages = () => {
-    setServerPictures([]);
-    if (!images.length) { input.current?.focus(); return; }
-    window.agentrix.writeTerminal(terminal.id, '');
-    setImages([]); input.current?.focus();
+  const removeImage = async (index: number) => {
+    input.current?.focus();
+    if (sending.current) return;
+    if (index >= images.length) { setServerPictures(list => list.filter((_, at) => at !== index - images.length)); return; }
+    const current = readInput(kind);
+    if (choiceVisible.current || !current || !hasCliInput(kind, current.rows, current.screen) || cliDialogShown(kind, current.rows, current.screen)) return;
+    const labels = inputImageLabels(current.text);
+    const removal = labels.length >= images.length ? imageRemoval(kind, current.text, labels.length - images.length + index, current.rows.length) : null;
+    if (!removal) { onError(t('请在终端中检查并移除这张图片。')); return; }
+    const owner = sendCounter.current, id = images[index].id;
+    sending.current = true;
+    try {
+      window.agentrix.writeTerminal(terminal.id, removal.keys);
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 80));
+        if (!ownsSend(owner) || choiceVisible.current) return;
+        const current = readInput(kind);
+        if (!current || !hasCliInput(kind, current.rows, current.screen) || cliDialogShown(kind, current.rows, current.screen)) continue;
+        if (JSON.stringify(inputImageLabels(current.text)) !== JSON.stringify(removal.labels)) continue;
+        setImages(list => list.filter(image => image.id !== id)); return;
+      }
+      onError(t('请在终端中检查并移除这张图片。'));
+    } catch (error) { if (ownsSend(owner)) onError(String(error)); }
+    finally { if (ownsSend(owner)) { sending.current = false; input.current?.focus(); } }
   };
   const keys = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     markTyping(event.currentTarget);
@@ -651,8 +680,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
       </div>}
     </div>
     {terminalPopup !== null && <ReadingTerminalPopup key={sendCounter.current} terminalId={terminal.id} sessionId={terminal.sessionId} command={terminalPopup.command} onReady={readyPopup} onClose={closePopup} onError={onError} />}
-    {attachedCount > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: attachedCount })}<UserImages images={shownImages} />
-      <button type="button" className="reading-attachments-remove" onClick={removeImages} title={t('移除图片')} aria-label={t('移除图片')}><X size={12} weight="bold" /></button></div>}
+    {attachedCount > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: attachedCount })}<UserImages images={shownImages} numbers={imageNumbers} onRemove={index => void removeImage(index)} /></div>}
     {terminal.nativeApprovals?.map(request => <NativeApprovalCard key={request.token} request={request} onError={onError} />)}
     {screen.choice && !(screen.choice.kind === 'permission' && terminal.nativeApprovals?.length) && !sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}>{screen.choice.kind === 'question'
       ? <ReadingQuestion key={choiceKey} choice={screen.choice} terminalId={terminal.id} onError={onError} />

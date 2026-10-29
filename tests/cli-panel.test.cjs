@@ -92,3 +92,13 @@ test('Codex usage dialogs block delivery even with a visible input and no parsed
   assert.equal(cliDialogShown('codex', rows, screen), true);
   assert.equal(isAtPrompt('codex', rows, screen), false);
 });
+
+test('image removal gaps and wrapped image chips stay readable in both native inputs', () => {
+  for (const agent of ['claude', 'codex']) {
+    const text = '[Image #1]  [Image #3]', rows = input(agent, text);
+    assert.equal(cliInputDraft(agent, rows, inspect(agent, rows)), text);
+    const wrapped = agent === 'claude' ? ['────', '❯ [Image #1]', '  [Image #2]  [Image #3]', '────', ...footer(agent)]
+      : ['› [Image #1]', '  [Image #2]  [Image #3]', '', ...footer(agent)];
+    assert.equal(cliInputDraft(agent, wrapped, inspect(agent, wrapped)), '[Image #1] [Image #2]  [Image #3]');
+  }
+});

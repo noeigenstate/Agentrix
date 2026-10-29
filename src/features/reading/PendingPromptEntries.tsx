@@ -5,6 +5,7 @@ import { withPictures } from './pasted-pictures';
 import { showPopup } from '../files/file-popup';
 import { t } from '../../shared/i18n';
 import { UserAvatar } from '../../shared/UserAvatar';
+import { Image as ImageIcon, X } from '@phosphor-icons/react';
 import './pending-prompts.css';
 
 // What the user wrote, folded to three lines when it runs longer (a pasted log, a long brief), with a button to read
@@ -34,11 +35,12 @@ export function UserMessage({ text, images }: { text: string; images?: readonly 
 }
 
 // A click shows the picture larger, in the popup over the conversation.
-export function UserImages({ images }: { images: readonly string[] }) {
+export function UserImages({ images, numbers, onRemove }: { images: readonly string[]; numbers?: readonly number[]; onRemove?: (index: number) => void }) {
   return <div className="reading-user-images">{images.map((src, index) => {
-    const name = t('附加的图片 {n}', { n: index + 1 });
-    return <button type="button" key={index} title={t('点击放大')} aria-label={t('放大 {name}', { name })} onClick={() => showPopup({ kind: 'picture', src, path: name })}>
-      <img src={src} alt={name} loading="lazy" decoding="async" /></button>;
+    const name = t('附加的图片 {n}', { n: numbers?.[index] ?? index + 1 });
+    return <span key={index} className="reading-user-image"><button type="button" className="reading-user-image-zoom" disabled={!src} title={t('点击放大')} aria-label={t('放大 {name}', { name })} onClick={() => showPopup({ kind: 'picture', src, path: name })}>
+      {src ? <img src={src} alt={name} loading="lazy" decoding="async" /> : <ImageIcon size={24} aria-label={name} />}</button>
+      {onRemove && <button type="button" className="reading-user-image-remove" title={t('移除这张图片')} aria-label={t('移除这张图片')} onClick={() => onRemove(index)}><X size={12} weight="bold" /></button>}</span>;
   })}</div>;
 }
 

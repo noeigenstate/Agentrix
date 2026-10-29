@@ -10,7 +10,7 @@ const prompt = (agent: ScreenAgent, row: string) => {
   const shell = /^\s*!(?:\s+(.*))?$/.exec(row.replace(/\r$/, ''));
   if (shell) return '!' + (shell[1] ?? '').trim();
   const match = (agent === 'claude' ? /^\s*❯(?:\s+(.*))?$/ : /^\s*›(?:\s+(.*))?$/).exec(row.replace(/\r$/, ''));
-  if (!match || /^\d+\.\s/.test(match[1] ?? '') || /\S\s{2,}\S/.test(match[1] ?? '')) return null;
+  if (!match || /^\d+\.\s/.test(match[1] ?? '')) return null;
   return (match[1] ?? '').trim();
 };
 
@@ -34,7 +34,11 @@ function cliInputArea(agent: ScreenAgent, rows: string[], screen: AgentScreen) {
       const draft = [text, ...rows.slice(index + 1, end).map(row => row.trim())].join(' ').trim();
       return { row: index, start, footer: end + 1, text: draft, hasFooter };
     }
-    if (hasFooter && rows.slice(index + 1, index + 14).some(codexFooterRow)) return { row: index, start: index, footer: index + 1, text, hasFooter };
+    const following = rows.slice(index + 1, index + 14), footer = following.findIndex(codexModelRow);
+    if (footer !== -1) {
+      const draft = [text, ...following.slice(0, footer).filter(row => /^ {2}\S/.test(row)).map(row => row.trim())].join(' ').trim();
+      return { row: index, start: index, footer: index + 1, text: draft, hasFooter: true };
+    }
   }
   return null;
 }
@@ -78,7 +82,8 @@ export function isCliIdle(agent: ScreenAgent, rows: string[], screen: AgentScree
   return isAtPrompt(agent, rows, screen) && !cliInputDraft(agent, rows, screen);
 }
 
-const codexFooterRow = (row: string) => /^\s*(?:GPT|gpt|o\d|codex)[^·]*\s+·\s+.+$/.test(row.replace(/\r$/, '')) || /^\s*(?:\? for shortcuts|⚠)/.test(row);
+const codexModelRow = (row: string) => /^\s*(?:GPT|gpt|o\d|codex)[^·]*\s+·\s+.+$/.test(row.replace(/\r$/, ''));
+const codexFooterRow = (row: string) => codexModelRow(row) || /^\s*(?:\? for shortcuts|⚠)/.test(row);
 function codexPickerBelow(rows: string[], inputRow: number) {
   return rows.slice(inputRow + 1).some(row => !codexFooterRow(row) && /\besc\b|\benter\b/i.test(row));
 }
