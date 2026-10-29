@@ -14,7 +14,7 @@ function handlers() {
   const calls = { broadcast: 0, restore: 0, activity: 0, follow: 0, completion: [], usageDispose: 0 };
   session.usageAccount = { dispose() { calls.usageDispose++; } };
   session.bindUsageAccount = () => {};
-  const context = vm.createContext({
+  const context = vm.createContext({ dispatchedOnly: () => null,
     sessions: new Map([['t', session]]), store: { projects: [project], setRestore() { calls.restore++; },
       expectCompletion(id, expected = true) { assert.equal(id, project.id); calls.completion.push([id, expected]); project.completionArmed = expected; } }, quitting: false,
     broadcast() { calls.broadcast++; }, followClaude() { calls.follow++; }, applyActivity(_project, s, event) { calls.activity++; s.codexActivity = event.state; },
@@ -169,7 +169,7 @@ test('terminals show in the order they were dragged into; a new one comes last a
 
 test('public state exposes waiting messages and null for terminals without a notice', () => {
   const context = vm.createContext({
-    store: { projects: [{ id: 'p' }], settings: { language: 'zh' } }, sessions: new Map([['waiting', { needsInput: { message: 'Approve tool' } }]]),
+    dispatchedOnly: () => null, store: { projects: [{ id: 'p' }], settings: { language: 'zh' } }, sessions: new Map([['waiting', { needsInput: { message: 'Approve tool' } }]]),
     terminalIds: () => ['waiting', 'stopped'], shownTerminalIds: () => ['waiting', 'stopped'], getBranch: () => undefined, startupErrors: new Map(), t: text => text, localShell: () => ({ kind: 'powershell' }),
     process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: 'isolated' } }, app: { getVersion: () => '1' },
     desktopGlassBackend: null, desktopGlassWindow: false, desktopGlassActive: false, windowZoom: null,

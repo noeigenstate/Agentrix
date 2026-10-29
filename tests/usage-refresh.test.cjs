@@ -43,7 +43,7 @@ function runtime(overrides = {}) {
     return ids.length ? ids : [project.id];
   };
   const context = vm.createContext({
-    UsageMeter, promptText, sessions, process, path, Date, setTimeout, clearTimeout, setInterval, clearInterval,
+    UsageMeter, promptText, sessions, process, path, Date, setTimeout, clearTimeout, setInterval, clearInterval, callsOf: () => null, dispatchedOnly: () => null,
     fs: watcherFs().fs, quitting: false, scheduleState() {},
     store: { projects: [{ id: 'local', kind: 'local' }, { id: 'remote', kind: 'ssh' }], settings: {}, expectCompletion: () => assert.fail('background usage must not rearm completion'), setRestore() {} },
     claudeAccountFiles: () => [path.join(os.tmpdir(), 'usage-cache', '.claude.json'), path.join(os.tmpdir(), 'usage-cache', '.codepulse', 'claude-quota.json')],

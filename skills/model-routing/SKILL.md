@@ -91,6 +91,11 @@ Write the plan before any worker starts:
 - The interface contract between them: shared types (`src/shared/types.ts`), IPC payloads, CSS class names, test
   hooks. The lead writes shared types itself before 2A and 2B start, so both build against the same shape.
 - Acceptance criteria that can be checked: test names, measured numbers, the screenshots and states Terra must see.
+- Each task's module and its `BOUNDARY.md` (`skills/module-boundary`): the task's file scope is that module's Owns (or
+  a part of it). A task that needs to change another module is split, or the boundary is changed first by the architect.
+- A ledger for the task (`<scratch>/<topic>-ledger.md`, or in the repo when it should be kept): the owner's words that
+  decide the work, decisions made in the plan, known pitfalls. Every worker on the task gets it with `--ledger`, so
+  briefs never re-state the owner's decisions from memory and findings carry over from one worker to the next.
 
 ## 2. Build in two worktrees
 
@@ -110,7 +115,7 @@ the session's startup note (`Dispatch helper: node "<path>/dispatch.cjs"`); outs
 started directly with `codex exec` / `claude -p` and the same settings. Run it as a background command:
 
 ```
-node "<helper>" codex --role 执行 --title "<one line>" --model <model> --effort max --fast --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only]
+node "<helper>" codex --role 执行 --title "<one line>" --model <model> --effort max --fast --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only] [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>]
 node "<helper>" claude --role 审查 --title "<one line>" --model <model> --effort high --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md>
 ```
 
@@ -119,14 +124,22 @@ effort and mode the worker itself reports match what you declared). On `[dispatc
 relaunch; on `routing MISMATCH` stop the worker and relaunch with the intended settings, or tell the owner why the actual
 model is acceptable. While the worker runs, the activity pane shows its token/s live. When the task finishes, read the `[dispatch] ended …` line for the exit code, reason and the final average token/s.
 
+- `--allow <glob>` for every worker that changes files: its task's file scope. The helper adds the module's
+  `BOUNDARY.md` to the brief and checks the working tree afterwards; an end line with `OUT OF SCOPE: <files>` (pane: 越界)
+  is rejected — revert those files and send the work back, or split the task — never accepted silently.
+- `--ledger <file>` for every task that has one: the ledger goes before the brief and the worker's `## Findings for the
+  ledger` are appended to it. Read the new findings before the next worker starts.
+- `--resume <session>` (the start line's `session`) for a follow-up on the same work — a review finding, a failing
+  test — so the worker keeps its context instead of a new brief re-explaining it.
+
 **2A, Sol.** Brief in a scratch file, run in the background through the helper:
 
 ```
-node "<helper>" codex --role 执行 --title "<one line>" --model gpt-6.1-sol --effort max --fast --cwd <scratch>/wt-a --brief <scratch>/prompt.md --out <scratch>/out.md
+node "<helper>" codex --role 执行 --title "<one line>" --model gpt-6.1-sol --effort max --fast --cwd <scratch>/wt-a --brief <scratch>/prompt.md --out <scratch>/out.md --allow '<module glob>' --ledger <scratch>/<topic>-ledger.md
 ```
 
-Codex runs with no approvals and full access, so the scope comes from the prompt alone:
-- What it may touch: the exact files, or "read-only" for an investigation.
+Codex runs with no approvals and full access, so the scope comes from the prompt and `--allow`:
+- What it may touch: `--allow` with the exact files or module globs, or `--read-only` for an investigation.
 - Never: commit, push, release, re-run CI jobs, run the app or its desktop suites (its sandbox cannot run Electron).
 - Secrets: helper scripts read a token from `git credential fill` inside themselves; never print it or write it.
 - Its report: the root cause with evidence, the change, the tests it ran.
@@ -172,7 +185,8 @@ Run both in parallel on the merged result:
   The prompt gives the acceptance criteria, the states each screenshot shows, the `design-acceptance` checklist and the
   interaction rules in AGENTS.md (small cards, completion glow). Findings: what is wrong, where, which rule.
 
-Each confirmed finding goes back to the worker that owns the file (Sol or Sonnet), then stage 3 runs again.
+Each confirmed finding goes back to the worker that owns the file (Sol or Sonnet) — a command-line worker through
+`--resume` with its session — then stage 3 runs again.
 
 ## 5. Final acceptance
 

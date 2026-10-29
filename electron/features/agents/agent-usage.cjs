@@ -28,12 +28,13 @@ const claudeWindow = (model, used) => LARGE_WINDOW.test(model || '') || used > 2
 // provider: Claude's, known when it starts. Codex names its own in each conversation's first record; names turns that
 // id into what the pane shows.
 class UsageMeter {
-  constructor(agent, { provider = null, names = codexProviderName, changed = () => {}, rates = true } = {}) {
+  // calls: the terminal session's called models, which outlive this agent (dispatched workers stay when it restarts).
+  constructor(agent, { provider = null, names = codexProviderName, changed = () => {}, rates = true, calls = null } = {}) {
     this.agent = agent; this.provider = provider; this.names = names; this.providerId = null; this.limits = [];
     this.resets = null; this.limitsAt = null; this.claudeDirect = null;
     this.rates = new TokenRates(agent); this.readRates = rates; this.mainCodex = true;
-    this.calls = new AgentCalls({ changed, local: rates });
-    this.reset();
+    this.calls = calls || new AgentCalls({ changed, local: rates });
+    this.reset(!!calls);
   }
   // Claude's plan limits from the read-only account query or the existing local caches.
   account(account, direct = null) {

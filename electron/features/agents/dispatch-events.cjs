@@ -20,9 +20,10 @@ function validDispatch(event) {
     (event.activeMs === null || number(event.activeMs));
 }
 
-function acceptDispatch(session, event) {
+// calls: the session's called models (AgentCalls), present whether or not an agent runs in that terminal.
+function acceptDispatch(session, event, calls) {
   if (!session || event.sessionKey !== session.sessionKey || event.projectId !== session.terminalId || !validDispatch(event)) return false;
-  return session.usage?.calls.dispatch(event) || false;
+  return calls?.dispatch(event) || false;
 }
 
 module.exports = { acceptDispatch, validDispatch };

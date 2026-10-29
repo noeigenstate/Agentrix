@@ -34,6 +34,7 @@ const { writeHandoff, startupNote } = require('./features/agents/handoff.cjs');
 const { remember, roundsOf } = require('./features/agents/project-memory.cjs');
 const { agentSettings } = require('./features/agents/agent-settings.cjs');
 const { UsageMeter, claudeProvider, codexProvider, claudeAccount, claudeAccountFiles } = require('./features/agents/agent-usage.cjs');
+const { AgentCalls } = require('./features/agents/agent-calls.cjs');
 const { CodexAccountUsage } = require('./features/agents/codex-account-usage.cjs');
 const codexAccounts = new CodexAccountUsage();
 const { ClaudeAccountUsage, readClaudeAccount } = require('./features/agents/claude-account-usage.cjs');
@@ -158,7 +159,7 @@ function publicState() {
           // The model, effort and fast mode its records show, above the reading view's message box.
           agentSettings: s?.codexActive ? s.agentSettings || null : null,
           // The service its model is reached through, the context it fills and the tokens it took, for the activity pane.
-          agentUsage: s?.codexActive && s.usage ? s.usage.snapshot(s.usageHistory) : null,
+          agentUsage: s?.codexActive && s.usage ? s.usage.snapshot(s.usageHistory) : dispatchedOnly(s),
           // A run of the CLI that is no conversation (update, --version, login), for the reading view to say so.
           agentCommand: s?.codexActive ? s.agentCommand || null : null,
           codexActivity: s?.codexActivity || 'unknown', needsInput: s?.needsInput?.message || null, shellReady: !!s?.ready && !s?.inputDirty, codexAvailable: s?.codexAvailable ?? null,
@@ -459,10 +460,20 @@ function usageHistory(s, ready) {
 
 // What the activity pane shows of the model route and the tokens spent. Which service a model is reached through is
 // read from this computer's settings; over SSH, Claude's stays unnamed and Codex's is the id its records give.
+// The called models belong to the terminal session, so workers dispatched from a plain shell, or before the agent
+// restarts, stay visible; the agent's usage meter shares them while it runs.
+function callsOf(s, project) {
+  return s.calls ||= new AgentCalls({ changed: () => scheduleState(), local: project.kind !== 'ssh' });
+}
+function dispatchedOnly(s) {
+  const calls = s?.calls?.snapshot(null) || [];
+  return calls.length ? { provider: null, context: null, round: null, total: null, limits: [], calls } : null;
+}
+
 function startUsage(project, s, event) {
   stopUsageAccount(s);
   s.usageCwd = event.cwd || project.path;
-  const usage = s.usage = new UsageMeter(s.agent, { rates: project.kind !== 'ssh', codexHome: event.codexHome || s.codexHome,
+  const usage = s.usage = new UsageMeter(s.agent, { rates: project.kind !== 'ssh', calls: callsOf(s, project), codexHome: event.codexHome || s.codexHome,
     changed: () => { if (s.usage === usage && !s.usageHistory) scheduleState(); } });
   if (s.agent === 'codex') {
     let binding;
@@ -715,7 +726,7 @@ function onEvent(event) {
   const project = store.projects.find(p => p.id === s.projectId);
   if (!project) return;
   if (['dispatch-start', 'dispatch-rate', 'dispatch-end'].includes(event.type)) {
-    if (require('./features/agents/dispatch-events.cjs').acceptDispatch(s, event)) broadcast();
+    if (require('./features/agents/dispatch-events.cjs').acceptDispatch(s, event, callsOf(s, project))) broadcast();
     return;
   }
   if (event.type === 'agent-activity') { claudeActivity(project, s, event); return; }

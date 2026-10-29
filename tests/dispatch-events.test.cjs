@@ -19,8 +19,8 @@ function session(t) {
   let changes = 0;
   const calls = new AgentCalls({ changed: () => changes++ });
   t.after(() => calls.reset());
-  const s = { terminalId: 'terminal', sessionKey: 'test-key', usage: { calls } };
-  return { calls, send: event => { const changed = acceptDispatch(s, event); if (changed) changes++; return changed; }, changes: () => changes };
+  const s = { terminalId: 'terminal', sessionKey: 'test-key' };
+  return { calls, send: event => { const changed = acceptDispatch(s, event, calls); if (changed) changes++; return changed; }, changes: () => changes };
 }
 
 test('authenticated dispatch events populate groups, replace live totals, show done and broadcast expiry', t => {
@@ -135,10 +135,10 @@ test('the real event server and main handler authenticate dispatch without touch
   const { createEventServer } = require('../electron/events.cjs');
   let broadcasts = 0;
   const calls = new AgentCalls({ changed: () => broadcasts++ }); t.after(() => calls.reset());
-  const s = { terminalId: 'terminal', projectId: 'owner-project', sessionKey: 'test-key', usage: { calls }, codexActivity: 'complete' };
+  const s = { terminalId: 'terminal', projectId: 'owner-project', sessionKey: 'test-key', calls, codexActivity: 'complete' };
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const handler = vm.runInNewContext(source.slice(source.indexOf('function onEvent('), source.indexOf('function launchAfterPrompt(')) + '\nonEvent;', {
-    sessions: new Map([['terminal', s]]), store: { projects: [{ id: 'owner-project' }] }, broadcast: () => broadcasts++,
+    sessions: new Map([['terminal', s]]), store: { projects: [{ id: 'owner-project' }] }, broadcast: () => broadcasts++, callsOf: session => session.calls,
     require: name => require(path.join(__dirname, '../electron', name)),
   });
   const server = await createEventServer(handler); t.after(() => server.close());
@@ -151,4 +151,24 @@ test('the real event server and main handler authenticate dispatch without touch
   const launch = start(); await send(launch); await send(rate(launch.id)); await send(end(launch.id, { reason: 'error', exitCode: 9 }));
   assert.equal(broadcasts, 3); assert.equal(calls.snapshot()[0].items[0].failure.exitCode, 9);
   assert.equal(s.codexActivity, 'complete', 'dispatch never rearms parent completion or calls shell activity handling');
+});
+
+test('dispatched workers belong to the terminal session: shown without an agent and kept when the agent restarts', t => {
+  const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const { callsOf, dispatchedOnly } = vm.runInNewContext(source.slice(source.indexOf('function callsOf('), source.indexOf('function startUsage('))
+    + '\n({ callsOf, dispatchedOnly });', { AgentCalls, scheduleState: () => {} });
+  const s = { terminalId: 'terminal', sessionKey: 'test-key' }, project = { kind: 'local' };
+  assert.equal(dispatchedOnly(s), null, 'no rows, no pane data');
+  const launch = start();
+  assert.equal(acceptDispatch(s, launch, callsOf(s, project)), true, 'a plain shell accepts dispatch');
+  t.after(() => s.calls.reset());
+  assert.deepEqual(dispatchedOnly(s).calls[0].items.map(item => item.title), [launch.title]);
+  const first = new UsageMeter('codex', { calls: callsOf(s, project) });
+  assert.deepEqual(first.snapshot().calls[0].items.map(item => item.title), [launch.title], 'the agent starts with the rows');
+  const restarted = new UsageMeter('codex', { calls: callsOf(s, project) });
+  assert.equal(restarted.calls, first.calls);
+  assert.deepEqual(restarted.snapshot().calls[0].items.map(item => item.state), ['running'], 'a restart keeps the running worker');
+  assert.equal(acceptDispatch(s, end(launch.id), callsOf(s, project)), true);
+  assert.equal(dispatchedOnly(s).calls[0].items[0].state, 'done', 'the agent gone, its end still shows');
 });

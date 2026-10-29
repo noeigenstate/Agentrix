@@ -24,7 +24,7 @@ function activityHarness(mode = 'codex') {
     activitySince: 1000, activityInputAt: 0, promptQueue: new PromptQueue(() => {}, { now: () => now }), actions: new ActionLog(), submissions: new SubmissionTracker(),
     gate: { input() {} }, nativeMessages: [], native: mode.endsWith('-native') ? { registry: { list: () => [] } } : null };
   const sessions = new Map([[s.terminalId, s]]);
-  const context = vm.createContext({ s, project, sessions, store, ConversationLog, summarizeTask: promptSummary, promptText, isLocalAgentCommand,
+  const context = vm.createContext({ s, project, sessions, store, ConversationLog, summarizeTask: promptSummary, promptText, isLocalAgentCommand, callsOf: () => null, dispatchedOnly: () => null,
     publishConversation() {}, broadcast() {}, scheduleState() {}, notifyCompletion() { alerts++; }, followClaude() {}, refreshClaudeAccounts() {}, describeActions() {}, nativeSkillActions() {},
     memoryFolder: () => '', memoryDir: () => '', roundsOf: () => [], remember: async () => {}, scrubProjectSkills: async () => {},
     setTimeout: () => ({ unref() {} }), Date: class extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } },

@@ -156,8 +156,8 @@ model_reasoning_effort=<effort> -c service_tier='"fast"' -C <dir> -o <out.md> - 
 --effort <effort> --permission-mode <mode> < <brief.md>`) with the same settings.
 
 ```
-node "<helper>" codex --role <role> --title "<one line>" --model <model> --effort <effort> [--fast] --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only]
-node "<helper>" claude --role <role> --title "<one line>" --model <model> --effort <effort> --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md>
+node "<helper>" codex --role <role> --title "<one line>" --model <model> --effort <effort> [--fast] --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only] [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>]
+node "<helper>" claude --role <role> --title "<one line>" --model <model> --effort <effort> --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md> [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>]
 ```
 
 - `--role` says what the worker does (execution, investigation or review; the helper's usage text lists the exact words).
@@ -168,6 +168,12 @@ node "<helper>" claude --role <role> --title "<one line>" --model <model> --effo
   relaunch; on `routing MISMATCH` stop the worker and relaunch with the intended settings, or tell the user why the
   actual model is acceptable.
 - While the worker runs, the activity pane shows its token/s live. When the task finishes, read the `[dispatch] ended …` line: its exit code, reason and the final average token/s.
+- `--allow <glob>` (repeatable) for every worker that changes files: the task's file scope. The helper adds any
+  `BOUNDARY.md` of the modules involved to the brief and checks the git working tree afterwards. An end line with
+  `OUT OF SCOPE: <files>` is rejected: revert those files and send the work back, or split the task.
+- `--ledger <file>` for a task with decisions to keep: the ledger goes before the brief and the worker's
+  `## Findings for the ledger` section is appended to it, so the next worker knows what earlier ones learned.
+- `--resume <session>` (the start line's `session`) for a follow-up on the same work, so the worker keeps its context.
 
 ### 1. Plan
 
@@ -176,6 +182,8 @@ Write the plan before any worker starts:
 - The interface contract between them (shared types, payloads, names, test hooks). Write it first so every worker builds
   against the same shape.
 - Acceptance criteria that can be checked: test names, measured numbers, the screenshots and states to see.
+- A ledger for the task: the user's words that decide the work, the plan's decisions and known pitfalls, given to every
+  worker with `--ledger` so no brief re-states them from memory.
 
 ### 2. Build in worktrees
 
@@ -209,7 +217,7 @@ Run both on the merged result, in parallel where the setup allows:
 - **Architecture:** the architect, read-only, given the diff range and the contract, not your conclusions. It checks module boundaries, data flow, duplication and consistency. Findings: file:line, the failure, severity.
 - **UI and interaction:** the visual engineer, read-only, with screenshots of each state and the acceptance criteria. Findings: what is wrong, where, which rule.
 
-Each confirmed finding goes back to the worker that owns the file, then stage 3 runs again.
+Each confirmed finding goes back to the worker that owns the file (a command-line worker through `--resume`), then stage 3 runs again.
 
 ## Rules
 
@@ -219,6 +227,7 @@ Each confirmed finding goes back to the worker that owns the file, then stage 3 
 - Paste the project's code-standard rules into every worker brief and review every diff against them before accepting it.
 - GPT models default to max effort with fast mode; Claude models default to high effort. Honor the user's chosen settings.
 - Start command-line workers only through the dispatch helper as background commands, read the start line to confirm the launch and routing, and act on `failed to start` or `routing MISMATCH`.
+- Give a worker that changes files `--allow` for its scope and reject any `OUT OF SCOPE` result.
 - Use the one-agent fallback when needed and state unavailable-model substitutions in the plan.
 - Review is stage 4: architecture review plus UI and interaction acceptance, with fresh reviewers who did not build the work.
 - Follow the user's authorization for commits, builds, app launches and releases; release only when requested.

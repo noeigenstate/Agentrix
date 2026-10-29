@@ -329,7 +329,7 @@ test('main lifecycle follows recorded provider, replaces sessions safely and nev
   const pending = [], sessions = new Map();
   const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
   const { startUsage, stopUsageAccount, noteSettings } = vm.runInNewContext(`${functions}\n${notes}\n({ startUsage, stopUsageAccount, noteSettings })`, {
-    UsageMeter, codexAccounts: service, sessions, process, scheduleState() {}, scheduleUsageRollover() {},
+    UsageMeter, callsOf: () => null, codexAccounts: service, sessions, process, scheduleState() {}, scheduleUsageRollover() {},
     localClaudeMeters: () => [], disposeClaudeAccounts() {},
     codexProvider: async () => id => id, claudeProvider: async () => 'Anthropic', claudeConfigDir: () => '', refreshClaudeAccounts() {},
     agentSettings: previous => previous,

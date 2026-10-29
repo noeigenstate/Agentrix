@@ -28,7 +28,7 @@ export function ActivityPane({ terminal }: { terminal: ProjectTerminal }) {
     {terminal.codexActive ? <MainCard terminal={terminal} /> : <section className="activity-card">
       <p className="activity-empty">{t('在终端里启动 Codex 或 Claude Code 后，这里显示它的主模型、任务、上下文长度和用量。')}</p>
     </section>}
-    {terminal.codexActive && !!calls?.length && <CallsCard calls={calls} />}
+    {!!calls?.length && <CallsCard calls={calls} />}
     {terminal.codexActive && <div className="activity-gauges">
       <ContextCard usage={terminal.agentUsage} />
       <UsageCard usage={terminal.agentUsage} terminal={terminal} />

@@ -14,7 +14,7 @@ worker.
 
 ```
 node "<helper>" codex --role 执行 --title "Fix the cmd prompt reflow" --model gpt-6.1-sol --effort max --fast \
-  --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only]
+  --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only]   [--allow <glob> …] [--ledger <ledger.md>] [--resume <session id>]
 node "<helper>" claude --role 审查 --title "Architecture review" --model opus --effort high \
   --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md>
 ```
@@ -26,6 +26,27 @@ brief on stdin, so what is declared is what runs. It exits with the worker's exi
 (`<out>.log`). `--role`: 执行 / exec, 调查 / investigate or 审查 / review (English aliases become the corresponding Chinese
 role in events). `--help` lists all six values. `--title`: one line, what the worker does.
 
+## Scope, shared context and follow-ups
+
+- `--allow <glob>` (repeatable, relative to the git root): the only files the worker may change. The helper snapshots
+  the working tree before and after (its own answer, log and ledger excluded) and reports every other changed file as
+  out of scope: the end line says `· scope ok` or `· OUT OF SCOPE: <files>`, `dispatch-end` carries `outOfScope`, and
+  the reason becomes `scope` (the pane shows 越界, files in the tooltip). The brief is also prefixed with the
+  `BOUNDARY.md` of every module the globs touch (`skills/module-boundary`) and the allowed paths, with the instruction
+  to stop and name the file it would need rather than step outside. Outside a git tree the end line says
+  `scope unchecked`. The lead rejects or reverts an out-of-scope result; it never accepts one silently.
+- `--ledger <file>`: the task's shared context (owner's words, decisions, pitfalls). Its text goes before the brief, and
+  the worker is told to end its answer with `## Findings for the ledger`; those bullets are appended to the ledger under
+  `### <time> · <title> · <agent> <model> · session <id>`. One ledger per task, in the project (not under `.dispatch/`
+  if it should be kept); the next worker on the task gets everything earlier ones learned, so briefs stay short and
+  never repeat the owner's decisions by memory.
+- `--resume <session id>` (from the start line's `session`): continues that worker's conversation —
+  `codex exec resume <id> …` (keeps the session's own folder and sandbox, so no `--read-only`) or `claude -p --resume`.
+  Use it for a follow-up on the same work (a review finding, a failing test) instead of re-explaining in a new worker.
+
+A worker reads its surroundings: a ledger or answer lying in a sibling folder is context too. Keep unrelated tasks'
+ledgers out of reach of a worker that must not know them.
+
 ## Signals to the lead
 
 The lead starts the helper as a background command and learns from its output that the task is really running. The
@@ -35,7 +56,7 @@ helper prints exactly one start line, then exactly one end line, on its stdout:
 [dispatch] started <id> codex model gpt-6.1-sol effort max fast on · routing ok · pid <n> session <session id>
 [dispatch] started <id> codex model gpt-6.1-terra effort high fast off · routing MISMATCH (declared gpt-6.1-sol max fast on) · …
 [dispatch] failed to start <id>: <reason>          (instead of "started"; the helper then exits non-zero)
-[dispatch] ended <id> codex model gpt-6.1-sol effort max fast on · 43 token/s (5,210 output tokens in 121 s) · exit 0 reason exit · out <answer path>
+[dispatch] ended <id> codex model gpt-6.1-sol effort max fast on · 43 token/s (5,210 output tokens in 121 s) · exit 0 reason exit · scope ok · out <answer path>
 ```
 
 The start line is the lead's proof that the task started and that model routing worked: it states what the worker
@@ -71,12 +92,12 @@ rate, live:
 | --- | --- |
 | `dispatch-start` | `id` (uuid), `agent` (codex/claude), `role`, `title`, `model`, `effort`, `fast` (as the worker reports them; `declared` holds the declared three when they differ), `cwd`, `brief`, `out`, `sessionId`, `startedAt`; an unconfirmed start uses the declared routing and `unconfirmed: true`, with `sessionId: null` if unknown |
 | `dispatch-rate` | `id`, `outputTokens`, `activeMs` — cumulative completed-response totals, checked every 5 s while running; unchanged or unreported totals are skipped |
-| `dispatch-end` | `id`, `model`, `effort`, `fast`, `exitCode`, `reason` (`exit`, `killed`, `capacity`, `error`, `unconfirmed`), `outputTokens`, `activeMs` (null when unreported), `endedAt` |
+| `dispatch-end` | `id`, `model`, `effort`, `fast`, `exitCode`, `reason` (`exit`, `killed`, `capacity`, `error`, `unconfirmed`, `scope`), `outputTokens`, `activeMs` (null when unreported), `endedAt`; `outOfScope` (files) with `--allow` |
 
 `dispatch-start` shows the row as 运行中 with the model, effort and mode the worker reports (a mismatch is noted in the
 row's tooltip). `dispatch-end` with `reason` exit and
 code 0 shows 已完成 and the row is removed 3 seconds later; any other end (未能启动 for unconfirmed, 模型满载, 已停止,
-出错退出（代码 N）) stays visible until the lead's next round so it is not missed. The helper finds the reason from the
+出错退出（代码 N）, 越界) stays visible until the lead's next round so it is not missed. The helper finds the reason from the
 worker's exit code and the end of its own output (e.g. "at capacity"). `dispatch-rate` makes the running row's model
 group show its token/s while the worker runs (the same TokenRates as other calls); `dispatch-end`'s totals are the
 last word. When confirmation times out or the process exits first, the helper immediately sends the declared
@@ -88,6 +109,7 @@ confirmed worker runs.
 
 - Start every command-line Codex or Claude worker through the helper, as a background command; never `codex exec` /
   `claude -p` directly.
+- Give every worker that changes files `--allow` for its module, and every task with owner decisions a `--ledger`.
 - Right after launching, read the helper's start line; treat anything but `[dispatch] started … routing ok` as a launch
   to fix before relying on the worker.
 - Claude Code's own Agent tool calls stay as they are: their transcript records are already structured.
