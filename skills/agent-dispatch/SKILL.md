@@ -21,7 +21,7 @@ node "<helper>" claude --role 审查 --title "Architecture review" --model opus 
 
 The helper builds the real command itself (`codex exec -m … -c model_reasoning_effort=… -c service_tier="fast" --json -C … -o <out> -` /
 `claude -p --model … --effort … --permission-mode … --output-format json`; the helper reads these streams itself and
-sends nothing while the worker runs), feeds the
+sends only the token rate while the worker runs), feeds the
 brief on stdin, so what is declared is what runs. It exits with the worker's exit code and writes a log next to `--out`
 (`<out>.log`). `--role`: 执行, 调查 or 审查. `--title`: one line, what the worker does.
 
@@ -55,20 +55,23 @@ are not added again. No usable record: `token/s unreported`.
 
 ## Events to Agentrix
 
-Two events over the session's authenticated event pipe (`pipeName`, `sessionKey` from `AGENTRIX_BOOTSTRAP`), one JSON
-line each, sent at the same moments as the two lines above — nothing in between:
+Events over the session's authenticated event pipe (`pipeName`, `sessionKey` from `AGENTRIX_BOOTSTRAP`), one JSON line
+each: `dispatch-start` and `dispatch-end` at the same moments as the two lines above, and in between only the token
+rate, live:
 
 | type | fields |
 | --- | --- |
 | `dispatch-start` | `id` (uuid), `agent` (codex/claude), `role`, `title`, `model`, `effort`, `fast` (as the worker reports them; `declared` holds the declared three when they differ), `cwd`, `brief`, `out`, `sessionId`, `startedAt` |
+| `dispatch-rate` | `id`, `outputTokens`, `activeMs` — running totals, sent after each finished model response of the worker (at most once per 2 s) |
 | `dispatch-end` | `id`, `model`, `effort`, `fast`, `exitCode`, `reason` (`exit`, `killed`, `capacity`, `error`, `unconfirmed`), `outputTokens`, `activeMs` (null when unreported), `endedAt` |
 
 `dispatch-start` shows the row as 运行中 with the model, effort and mode the worker reports (a mismatch is noted in the
 row's tooltip). `dispatch-end` with `reason` exit and
 code 0 shows 已完成 and the row is removed 3 seconds later; any other end (未能启动 for unconfirmed, 模型满载, 已停止,
 出错退出（代码 N）) stays visible until the lead's next round so it is not missed. The helper finds the reason from the
-worker's exit code and the end of its own output (e.g. "at capacity"). The rate from `dispatch-end` joins that model's
-group rate (the same TokenRates as other calls) and shows on the 已完成 row.
+worker's exit code and the end of its own output (e.g. "at capacity"). `dispatch-rate` makes the running row's model
+group show its token/s while the worker runs (the same TokenRates as other calls); `dispatch-end`'s totals are the
+last word. The rate is the only thing sent while a worker runs.
 
 ## Rules
 
