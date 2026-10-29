@@ -112,6 +112,7 @@ const CALL_STATES = {
   preparing: { word: '准备中', icon: <Circle size={14} aria-hidden="true" /> },
   running: { word: '运行中', icon: <CircleNotch size={14} weight="bold" className="loading-spinner" aria-hidden="true" /> },
   reviewing: { word: '审核中', icon: <RecordDot size={14} aria-hidden="true" /> },
+  done: { word: '已完成', icon: <CheckCircle size={14} weight="fill" aria-hidden="true" /> },
 } as const;
 const MAX_CALL_ITEMS = 4;
 
