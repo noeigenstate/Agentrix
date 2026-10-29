@@ -112,20 +112,6 @@
         ]
       },
       {
-        "from": "electron",
-        "to": "integration/electron",
-        "filter": [
-          "session-files.cjs",
-          "transcript-tail.cjs",
-          "transcript-window.cjs",
-          "completion-history.cjs",
-          "oversized-record.cjs",
-          "prompt-queue.cjs",
-          "features/agents/token-rate.cjs",
-          "features/agents/agent-settings.cjs"
-        ]
-      },
-      {
         "from": "resources/skills",
         "to": "skills",
         "filter": [

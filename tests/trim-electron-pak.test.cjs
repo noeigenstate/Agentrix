@@ -91,15 +91,21 @@ for (const [platform, arch, key, relative] of [
   ['linux', 1, 'linux-x64', 'resources.pak'],
   ['linux', 3, 'linux-arm64', 'resources.pak'],
 ]) {
-  test(`afterPack trims the correct ${key} path before the Windows early return`, async () => {
-    const calls = [], removed = [];
+  test(`afterPack trims and copies the dispatch runtime for ${key} before platform cleanup`, async () => {
+    const calls = [], removed = [], created = [], written = [];
+    const runtime = { 'transcript-tail.cjs': 'tail source\n', 'features/agents/token-rate.cjs': 'rate source\n' };
     const hook = await loadScript('after-pack.cjs', {
-      'node:fs/promises': { rm: async file => removed.push(file), readdir: async () => ['keep.sh', 'drop.ps1', 'drop.cmd', 'drop.exe', 'drop.cs'] },
+      'node:fs/promises': { rm: async file => removed.push(file), readdir: async () => ['keep.sh', 'drop.ps1', 'drop.cmd', 'drop.exe', 'drop.cs'],
+        mkdir: async folder => created.push(folder), writeFile: async (...args) => written.push(args) },
       './trim-electron-pak.cjs': { trimElectronPak: async (...args) => { calls.push(args); return { removedBytes: 1 }; } },
+      '../integration/dispatch.cjs': { runtimeFiles: () => runtime },
     });
     const appOutDir = path.resolve('fixture-output');
     await hook.default({ electronPlatformName: platform, arch, appOutDir, packager: { appInfo: { productFilename: 'Named App' } } });
     assert.deepEqual(calls, [[path.join(appOutDir, relative), key]]);
+    const resources = path.join(appOutDir, platform === 'darwin' ? 'Named App.app/Contents/Resources' : 'resources');
+    assert.deepEqual(written, Object.entries(runtime).map(([name, source]) => [path.join(resources, 'integration/electron', name), source]));
+    assert.deepEqual(created, written.map(([file]) => path.dirname(file)));
     assert.equal(removed.some(file => file.endsWith('keep.sh')), false);
     assert.equal(removed.some(file => file.endsWith('dxcompiler.dll')), platform === 'win32');
     assert.equal(removed.some(file => file.endsWith('drop.ps1')), platform !== 'win32');

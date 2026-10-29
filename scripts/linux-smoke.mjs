@@ -51,7 +51,8 @@ const errors = [];
 let application, savedClipboard = null;
 try {
   application = await electron.launch({ executablePath, args, cwd: root, env, timeout: 30000 });
-  application.process().stderr.on('data', data => { const text = data.toString(); if (/Uncaught|Error:|failed to load/i.test(text) && !/ERROR:|dbus|libva|vaInitialize/i.test(text)) errors.push(text); });
+  application.process().stdout.on('data', data => process.stdout.write(data));
+  application.process().stderr.on('data', data => { process.stderr.write(data); const text = data.toString(); if (/Uncaught|Error:|failed to load/i.test(text) && !/ERROR:|dbus|libva|vaInitialize/i.test(text)) errors.push(text); });
   const page = await application.firstWindow();
   page.on('pageerror', error => errors.push(error.message));
   await page.waitForSelector('.project-panel', { timeout: 20000 });

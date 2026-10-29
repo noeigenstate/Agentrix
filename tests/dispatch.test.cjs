@@ -7,7 +7,7 @@ const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { randomUUID } = require('node:crypto');
-const { argumentsOf, commandOf, WorkerOutput, CodexRollout, runtimeFiles, RATE_INTERVAL } = require('../integration/dispatch.cjs');
+const { argumentsOf, commandOf, WorkerOutput, CodexRollout, RATE_INTERVAL } = require('../integration/dispatch.cjs');
 const { TokenRates } = require('../electron/features/agents/token-rate.cjs');
 const { createEventServer } = require('../electron/events.cjs');
 
@@ -27,7 +27,7 @@ const codex = [
 ];
 
 async function fixture(t, lines = codex, { agent = 'codex', role = '执行', bootstrap = true, exitCode = 0, hold = 150, timeout = 30000 } = {}) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-'));
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const events = [], server = await createEventServer(event => events.push({ ...event, receivedAt: Date.now() }));
   const brief = path.join(directory, 'brief.md'), out = path.join(directory, 'answer.md'), runner = path.join(directory, 'runner.cjs');
   const input = path.join(directory, 'fixture.json'), capture = path.join(directory, 'capture.json'), config = path.join(directory, 'bootstrap.json');
@@ -36,10 +36,9 @@ async function fixture(t, lines = codex, { agent = 'codex', role = '执行', boo
   await fs.mkdir(path.join(directory, 'codex'));
   await fs.writeFile(path.join(directory, 'codex/config.toml'), 'service_tier = "flex"\n');
   await fs.writeFile(config, JSON.stringify({ pipeName: server.name.startsWith('agentrix-') ? server.name : server.address, projectId: 'project', sessionKey: 'secret-for-test' }));
-  await fs.writeFile(runner, `const {spawn}=require('node:child_process');
-const {run}=require(${JSON.stringify(helper)});
+  await fs.writeFile(runner, `const {run}=require(${JSON.stringify(helper)});
 process.on('message', signal => process.emit(signal));
-run(process.argv.slice(2), {startTimeout:${timeout}, launch:(file,args,options)=>spawn(process.execPath,[${JSON.stringify(worker)},...args],options)})
+run(process.argv.slice(2), {startTimeout:${timeout}, resolveExecutable:(_,args)=>({file:process.execPath,args:[${JSON.stringify(worker)},...args]})})
 .then(code=>{process.exitCode=code;process.disconnect?.();});`);
   const args = [agent, '--role', role, '--title', 'Exact dispatch task', '--model', agent === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5', '--effort', agent === 'codex' ? 'max' : 'high',
     '--cwd', directory, '--brief', brief, '--out', out, ...(agent === 'codex' ? ['--fast', '--image', 'first image.png', '--read-only'] : ['--permission', 'plan'])];
@@ -297,7 +296,7 @@ test('without bootstrap or with a stalled pipe the worker still runs and finishe
   await fs.writeFile(bootstrap, JSON.stringify({ pipeName: address, sessionKey: 'test', projectId: 'project' }));
   const began = Date.now();
   assert.equal(await run(f.args, { env: { ...process.env, CODEX_HOME: path.join(f.directory, 'codex'), AGENTRIX_BOOTSTRAP: bootstrap, DISPATCH_FIXTURE: path.join(f.directory, 'fixture.json'), DISPATCH_CAPTURE: f.capture },
-    stdout: { write() {} }, launch: (_, args, options) => spawn(process.execPath, [worker, ...args], options) }), 0);
+    stdout: { write() {} }, resolveExecutable: (_, args) => ({ file: process.execPath, args: [worker, ...args] }) }), 0);
   assert.ok(Date.now() - began < 2000, 'the worker never awaits pipe acknowledgments');
 });
 
@@ -329,6 +328,7 @@ test('a real helper entrypoint resolves a fake executable without evaluating pat
     const entry = path.join(bin, 'node_modules/@openai/codex/bin/codex.js');
     await fs.mkdir(path.dirname(entry), { recursive: true });
     await fs.writeFile(entry, `require(${JSON.stringify(worker)});`);
+    await fs.writeFile(path.join(bin, 'codex.cmd'), '@echo off\r\nexit /b 93\r\n');
   } else {
     await fs.writeFile(path.join(bin, 'codex'), `#!${process.execPath}\nrequire(${JSON.stringify(worker)});\n`, { mode: 0o700 });
   }
@@ -338,13 +338,7 @@ test('a real helper entrypoint resolves a fake executable without evaluating pat
   const installed = path.join(f.directory, 'installed/integration/dispatch.cjs');
   await fs.mkdir(path.dirname(installed), { recursive: true });
   await fs.copyFile(helper, installed);
-  const modules = runtimeFiles();
-  const resources = require('../package.json').build.extraResources.find(item => item.to === 'integration/electron');
-  assert.deepEqual([...resources.filter].sort(), Object.keys(modules).sort(), 'packaging includes the shared runtime');
-  for (const [name, source] of Object.entries(modules)) {
-    const target = path.join(path.dirname(installed), 'electron', name);
-    await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, source);
-  }
+  await require('../scripts/after-pack.cjs').copyDispatchRuntime(path.dirname(installed));
   const child = spawn(process.execPath, [installed, ...f.args], { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = ''; child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.resume();
   const [code] = await once(child, 'close');

@@ -228,7 +228,7 @@ function executable(agent, args, env) {
   return { file: agent, args };
 }
 
-async function run(argv, { env = process.env, stdout = process.stdout, launch = spawn, startTimeout = START_TIMEOUT } = {}) {
+async function run(argv, { env = process.env, stdout = process.stdout, launch = spawn, resolveExecutable = executable, startTimeout = START_TIMEOUT } = {}) {
   if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude'].includes(argv[0]))) {
     stdout.write(USAGE); return 0;
   }
@@ -288,7 +288,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     const brief = fs.readFileSync(options.brief);
     log = fs.createWriteStream(options.out + '.log');
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
-    const command = executable(options.agent, commandOf(options), env);
+    const command = resolveExecutable(options.agent, commandOf(options), env);
     child = launch(command.file, command.args, { cwd: options.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
       detached: process.platform !== 'win32' });
     log.on('error', error => { spawnError = error; stop('SIGTERM', false); });
