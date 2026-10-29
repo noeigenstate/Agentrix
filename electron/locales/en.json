@@ -1573,5 +1573,8 @@
   "Claude 终端运行时，活动栏里的额度会自己更新，不用再输入 /usage；查询不往终端输入任何内容，不打断正在运行的项目。": "While a Claude terminal runs, its limits in the activity pane refresh on their own, with no need to type /usage; the check types nothing into the terminal and never interrupts a running project.",
   "完成的结果标题不再带「· 已完成」；失败和中断照常标明。": "A finished result title no longer ends in \"· Done\"; failed and interrupted results are still marked.",
   "处理中": "Working",
-  "在终端里启动 Codex 或 Claude Code 后，这里显示它的主模型、任务、上下文长度和用量。": "Start Codex or Claude Code in the terminal and its main model, task, context length and usage show here."
+  "在终端里启动 Codex 或 Claude Code 后，这里显示它的主模型、任务、上下文长度和用量。": "Start Codex or Claude Code in the terminal and its main model, task, context length and usage show here.",
+  "界面缩放": "Interface zoom",
+  "界面和文字按同一比例缩放；自动：按当前显示器调整": "The interface and its text scale by the same ratio; Auto adjusts to the current display.",
+  "自动（当前 {n}%）": "Auto (currently {n}%)"
 }

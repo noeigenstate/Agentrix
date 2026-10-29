@@ -87,7 +87,7 @@ function settingsDialogFixture(t, props = {}) {
     : name === '../../shared/platform' ? { isMac: false, isLinux: false }
     : name === '../shortcuts/shortcuts' ? { shortcut: () => 'Ctrl+Shift+V' } : components[name] || original(name);
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
-  const settings = { language: 'zh', surface: 'solid', glassTransparency: null, terminalFontWeight: 400, userAvatar: '', shortcuts: {} };
+  const settings = { language: 'zh', surface: 'solid', glassTransparency: null, uiZoom: null, terminalFontWeight: 400, userAvatar: '', shortcuts: {} };
   const render = () => { cursor = 0; return mod.exports.SettingsDialog({ settings, initialSection: 'appearance', localShell: null, agents: null, updates: null, update: patch => updates.push(patch), close: empty, quit: empty, onGuide: empty, onAgents: empty, onCheckUpdate: empty, onInstallUpdate: empty, onDownloadPage: empty, projects, ...props }); };
   const find = predicate => nodes(render()).find(predicate);
   return { render, updates, List, Avatar, find,
@@ -146,3 +146,21 @@ test('appearance thumbnail management accepts existing SettingsDialog callers wi
   const h = settingsDialogFixture(t, { projects: undefined }); h.open();
   assert.deepEqual(h.find(node => node.type === h.List).props.projects, []); assert.deepEqual(h.updates, []);
 });
+
+test('interface zoom row follows the language row and offers automatic plus 80-150 percent', t => {
+  const h = settingsDialogFixture(t, { uiZoom: 110 }), children = React.Children.toArray(h.section('appearance').props.children);
+  const row = children.findIndex(node => nodes(node).some(inner => inner.props.label === '界面缩放')), language = children.findIndex(node => nodes(node).some(inner => inner.props.label === '语言'));
+  assert.equal(row, language + 1);
+  const select = h.find(node => node.props.label === '界面缩放').props;
+  assert.deepEqual(select.options.map(option => option.label), ['自动（当前 110%）', '80%', '90%', '100%', '110%', '125%', '150%']);
+  assert.equal(select.value, 'auto');
+  select.onChange('125'); select.onChange('auto');
+  assert.deepEqual(h.updates, [{ uiZoom: 125 }, { uiZoom: null }]);
+});
+
+test('interface zoom row shows an explicit choice and reads 100 percent before the workspace reports one', t => {
+  const explicit = settingsDialogFixture(t, { settings: { language: 'zh', surface: 'solid', uiZoom: 90, userAvatar: '', shortcuts: {} } });
+  assert.equal(explicit.find(node => node.props.label === '界面缩放').props.value, '90');
+  assert.equal(settingsDialogFixture(t).find(node => node.props.label === '界面缩放').props.options[0].label, '自动（当前 100%）');
+});
+
