@@ -580,7 +580,10 @@ function watchClaudeAccounts() {
     if (claudeAccountWatchers.has(folder)) continue;
     try {
       const entry = { names };
-      entry.watcher = fs.watch(folder, { persistent: false }, (_event, name) => {
+      // Normalize only the OS watch path; ownership and event filters still use the caller's folder.
+      let watchDirectory = folder;
+      try { watchDirectory = fs.realpathSync.native(watchDirectory); } catch { }
+      entry.watcher = fs.watch(watchDirectory, { persistent: false }, (_event, name) => {
         if (claudeAccountWatchers.get(folder) === entry && (!name || entry.names.has(String(name)))) queueClaudeAccounts();
       });
       entry.watcher.unref?.();

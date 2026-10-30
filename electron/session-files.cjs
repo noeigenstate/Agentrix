@@ -33,6 +33,11 @@ async function* records(filename, { historyWindow = false } = {}) {
   if (buffer.length && !skipping) { try { yield JSON.parse(buffer.toString('utf8')); } catch { } }
 }
 
+// libuv can abort on Windows 8.3 aliases. Resolve only the OS watch path, keeping caller-visible paths intact.
+function nativeWatchPath(filename) {
+  try { return fs.realpathSync.native(filename); } catch { return filename; }
+}
+
 // Codex keeps every conversation as sessions/<year>/<month>/<day>/rollout-*.jsonl, thousands of files
 // after a few months. Each terminal needs their modification times to find its own conversation, so one
 // listing per sessions folder is shared by all terminals and kept current by a directory watcher.
@@ -43,13 +48,16 @@ class SessionFiles {
     // Node 24 watches a missing folder without an error and never reports anything from it. Until the folder
     // exists, every listing walks it; the first listing after it appears starts the watcher.
     if (!fs.existsSync(this.directory)) return;
+    const watchDirectory = nativeWatchPath(this.directory);
     try {
-      this.watcher = fs.watch(this.directory, { recursive: true, persistent: false }, (_type, name) => {
+      this.watcher = fs.watch(watchDirectory, { recursive: true, persistent: false }, (_type, name) => {
         // When the watched folder itself is deleted, Windows reports its own absolute path without end.
         // Stop watching at once; the next listing starts a new watcher if the folder is there again.
         // macOS reports only the folder's own name, once, and nothing for the files that went with it.
-        if (name && (path.isAbsolute(String(name)) || String(name) === path.basename(this.directory) && !fs.existsSync(this.directory))) { this.unwatch(); this.missed = true; }
-        else if (name) this.changed.add(path.join(this.directory, String(name)));
+        const reported = String(name);
+        const ownName = reported === path.basename(this.directory) || reported === path.basename(watchDirectory);
+        if (name && (path.isAbsolute(reported) || ownName && !fs.existsSync(this.directory))) { this.unwatch(); this.missed = true; }
+        else if (name) this.changed.add(path.join(this.directory, reported));
         // Linux reports an empty name once when the watched folder itself is deleted, and the watcher then
         // stays open on a folder that no longer exists.
         else { this.missed = true; if (!fs.existsSync(this.directory)) this.unwatch(); }
@@ -136,4 +144,4 @@ async function sessionMeta(filename) {
   return null;
 }
 
-module.exports = { records, rolloutFiles, sessionMeta };
+module.exports = { records, rolloutFiles, sessionMeta, nativeWatchPath };
