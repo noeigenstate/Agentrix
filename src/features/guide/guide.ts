@@ -1,8 +1,10 @@
 // What the usage guide and the About page list for this release; the guide opens on it after an update.
 // Each note is a short title and one detail line, both with their English at the end of electron/locales/en.json.
 export const WHATS_NEW: { title: string; text: string }[] = [
-  { title: "圆桌会议", text: "分派子任务前可以先开圆桌会：每个子模型复述自己的任务，主模型逐条答复，大家确认后才开工；会议纪要以两张表给你看（网页和 Markdown）。" },
-  { title: "共享项目记忆", text: "同一仓库的子模型共享一份项目记忆：开工时都能看到上一轮的整理、其他子模型的发现、此刻谁在改哪些文件；两个子任务改同一批文件会被拦下。" },
-  { title: "每轮整理", text: "一轮开发结束后，主模型把结果和架构调整写进项目记忆；没整理完不能开下一轮的圆桌会。" },
-  { title: "界面", text: "主模型卡片在还没开始任何一轮时不再显示「等待下一步」。" },
+  { title: "代码规范", text: "每个任务开始前都会先读代码规范技能；它在项目里第一次运行时仍只审查一次现有代码，1.3.20 里审查过的项目不会再问。" },
+  { title: "模型路由", text: "改为按需自动生效：只有比快速问答或一行修改更大的任务才会先读这个技能。" },
+  { title: "界面规范", text: "新增的系统技能，设计、实现或审查界面时自动生效：先出设计稿，再按量化问题和灰度清单验收。" },
+  { title: "系统技能", text: "详情里不再有「变更」页，每个版本的改动写在这里的更新说明里。" },
+  { title: "重置次数", text: "打开项目时会主动查一次 Codex 剩余重置次数，不用先开始会话；查不到时分别显示查询中、未提供次数或暂不支持，不再一律显示次数未知。" },
+  { title: "标题栏", text: "项目卡片标题栏去掉「进入」按钮，悬停时提示「进入会话，按住可拖动」。" },
 ];

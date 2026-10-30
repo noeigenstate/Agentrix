@@ -1721,5 +1721,14 @@
   "找不到 Codex 程序，无法查询重置次数": "Codex was not found, so the reset count cannot be queried.",
   "点击后开始 10 秒倒计时，期间可取消；结束后打开 {agent} 的 /usage，由你选择并确认重置": "Click to start a 10-second countdown; you can cancel it. Afterward, {agent}'s /usage opens, where you choose and confirm a reset.",
   "没有剩余重置次数，此行不可点击": "No resets remain; this row is disabled.",
-  "倒计时进行中，可点击「取消」、按 Esc 或点击空白处取消": "The countdown is in progress. Cancel it with the button, Esc, or a click outside."
+  "倒计时进行中，可点击「取消」、按 Esc 或点击空白处取消": "The countdown is in progress. Cancel it with the button, Esc, or a click outside.",
+  "每个任务开始前都会先读代码规范技能；它在项目里第一次运行时仍只审查一次现有代码，1.3.20 里审查过的项目不会再问。": "Every task now starts by reading the code standard skill. It still reviews the existing code only on its first run in a project, and projects reviewed in 1.3.20 are not asked again.",
+  "改为按需自动生效：只有比快速问答或一行修改更大的任务才会先读这个技能。": "Now applies automatically on demand: the skill is read first only for tasks bigger than a quick answer or a one-line change.",
+  "新增的系统技能，设计、实现或审查界面时自动生效：先出设计稿，再按量化问题和灰度清单验收。": "A new built-in skill that applies automatically when designing, building or reviewing an interface: start with a mockup, then accept the result by measured questions and a grayscale checklist.",
+  "系统技能": "Built-in skills",
+  "详情里不再有「变更」页，每个版本的改动写在这里的更新说明里。": "Their details no longer have a Changes tab; what changed in each version is written in these update notes.",
+  "重置次数": "Reset count",
+  "打开项目时会主动查一次 Codex 剩余重置次数，不用先开始会话；查不到时分别显示查询中、未提供次数或暂不支持，不再一律显示次数未知。": "Opening a project now checks the remaining Codex reset count once, without starting a session first. When it cannot be read, it shows Checking, Not provided or Not supported instead of always showing Unknown.",
+  "标题栏": "Title bar",
+  "项目卡片标题栏去掉「进入」按钮，悬停时提示「进入会话，按住可拖动」。": "The Open button is gone from the project card title bar; hovering it now says Open the session; hold to drag."
 }
