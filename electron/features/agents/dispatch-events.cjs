@@ -8,7 +8,7 @@ function validDispatch(event) {
   if (!event || !uuid(event.id) || Buffer.byteLength(JSON.stringify(event)) > 16384) return false;
   if (event.type === 'dispatch-rate') return totals(event) && event.activeMs > 0;
   if (!routing(event)) return false;
-  if (event.type === 'dispatch-start') return ['codex', 'claude'].includes(event.agent) && ['执行', '调查', '审查'].includes(event.role) &&
+  if (event.type === 'dispatch-start') return ['codex', 'claude'].includes(event.agent) && ['执行', '调查', '审查', '圆桌'].includes(event.role) &&
     line(event.title, 1024) && ['cwd', 'brief', 'out'].every(key => line(event[key], 4096)) &&
     (event.unconfirmed === undefined || typeof event.unconfirmed === 'boolean') &&
     (line(event.sessionId, 160) || event.unconfirmed === true && event.sessionId === null) &&

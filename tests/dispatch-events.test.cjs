@@ -117,6 +117,16 @@ test('reset cancels expiry callbacks from the old session', t => {
   assert.deepEqual(f.calls.snapshot(), []); assert.equal(f.changes(), 2);
 });
 
+test('roundtable is an authenticated role and does not change parent completion', t => {
+  const f = session(t), launch = start(undefined, { role: '圆桌' });
+  assert.equal(f.send(launch), true);
+  assert.deepEqual(f.calls.snapshot()[0].items[0], { state: 'running', role: '圆桌', title: launch.title, failure: null });
+  assert.equal(f.send(start(undefined, { role: 'roundtable' })), false, 'only the explicit event role is accepted');
+  f.send(end(launch.id));
+  assert.equal(f.calls.snapshot()[0].items[0].state, 'done');
+  assert.equal(require('../electron/locales/en.json')['圆桌'], 'Roundtable');
+});
+
 test('transcript re-reads preserve dispatched workers and their expiry; the next Codex user round acknowledges failures', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const meter = new UsageMeter('codex'); t.after(() => meter.reset());
