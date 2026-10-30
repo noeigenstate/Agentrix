@@ -2,6 +2,8 @@
 // time it hands in, the review keeps the assignment's name (not your notes, its latest message), shows which submission
 // this is and your last notes, so you can see whether they were addressed. Passing it starts over. Kept in this
 // window's storage, by project.
+import type { DeliveryGrade } from '../../shared/types';
+
 type History = { task?: string; notes: { at: number; text: string }[] };
 const key = (projectId: string) => `agentrix.review.${projectId}`;
 function read(projectId: string): History {
@@ -21,6 +23,12 @@ export function sentBack(projectId: string, task: string | undefined, text: stri
   write(projectId, { task: history.task || task, notes: [...history.notes, { at: Date.now(), text }].slice(-20) });
 }
 export function passed(projectId: string) { write(projectId, { notes: [] }); }
+
+// Your call also goes to the dashboard's records (the main process adds the model from the terminal's session). It is
+// a record, not part of the review: it is never awaited, and a failure of any kind changes nothing.
+export function reportGrade(grade: DeliveryGrade) {
+  try { void Promise.resolve(window.agentrix.gradeDelivery(grade)).catch(() => undefined); } catch { /* a record only */ }
+}
 
 // Deliveries accepted today, kept in this window's storage for the home page's line about the day.
 const ACCEPTED_KEY = 'agentrix.decisions.accepted';
