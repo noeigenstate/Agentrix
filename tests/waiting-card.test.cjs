@@ -59,8 +59,11 @@ test('the waiting card reuses the choice card frame and the 32px result button, 
 // The choice cards' styles, read as text: sizes on the scale, 32px hit areas, readable text in both themes.
 const strip = css => css.replace(/\/\*[\s\S]*?\*\//g, '');
 const rules = css => [...strip(css).matchAll(/([^{}]+)\{([^}]*)\}/g)].map(match => ({ selector: match[1].trim(), body: match[2] }));
+const sharedRules = rules(fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'styles', 'styles.css'), 'utf8'));
 const cardRules = rules(fs.readFileSync(path.join(root, 'reading.css'), 'utf8')).filter(rule => /\.reading-(choice|question|waiting)/.test(rule.selector));
 const declarations = body => body.split(';').map(item => [item.slice(0, item.indexOf(':')).trim(), item.slice(item.indexOf(':') + 1).trim()]).filter(([name]) => name);
+const declared = (list, selector, property) => list.filter(rule => rule.selector === selector).flatMap(rule => declarations(rule.body))
+  .filter(([name]) => name === property).at(-1)?.[1];
 
 test('the choice and question cards keep their spacing on the 2/4/8/12/16/20/24/32 scale', () => {
   const scale = new Set([0, 2, 4, 8, 12, 16, 20, 24, 32]), off = [];
@@ -80,8 +83,27 @@ test('the text actions of the choice and question cards have a 32px hit area, an
   assert.match(waiting.body, /font-size: inherit/, 'the 32px button speaks in the card\'s size, not its own 14px');
 });
 
-test('a disabled option dims through theme text, never through opacity', () => {
-  assert.doesNotMatch(cardRules.find(rule => rule.selector === '.reading-choice-option:disabled').body, /opacity/);
+test('a disabled choice or question option resolves to full opacity over the shared button rule', () => {
+  // Both ReadingChoice and ReadingQuestion use .reading-choice-option on their disabled buttons. That selector has
+  // higher specificity than button:disabled; without its own value, the shared button rule still applies.
+  const shared = declared(sharedRules, 'button:disabled', 'opacity');
+  const option = declared(cardRules, '.reading-choice-option:disabled', 'opacity');
+  const important = value => /\s*!important\s*$/i.test(value ?? '');
+  const resolved = important(shared) && !important(option) ? shared : option ?? shared ?? '1';
+  assert.equal(Number(resolved.replace(/\s*!important\s*$/i, '')), 1, `resolved opacity: option=${option}, shared=${shared}`);
+});
+
+test('the permission hint margin and chat action gap resolve to the spacing scale', () => {
+  const scale = new Set([0, 2, 4, 8, 12, 16, 20, 24, 32]);
+  const hint = cardRules.find(rule => rule.selector === '.reading-choice-hint');
+  const margin = declarations(hint.body).filter(([name]) => name === 'margin' || name === 'margin-bottom').at(-1);
+  const parts = margin?.[1].trim().split(/\s+/);
+  const bottom = margin?.[0] === 'margin-bottom' ? parts?.[0] : parts?.[2] ?? parts?.[0];
+  assert.ok(bottom !== undefined && scale.has(parseFloat(bottom)), `hint bottom margin must replace the user-agent margin: ${bottom}`);
+  const action = cardRules.find(rule => rule.selector.includes('.reading-question-actions') && rule.selector.endsWith('.text-button'));
+  const actionGap = declarations(action.body).filter(([name]) => name === 'gap').at(-1)?.[1];
+  const sharedGap = declared(sharedRules, '.text-button', 'gap');
+  assert.ok(scale.has(parseFloat(actionGap ?? sharedGap)), `resolved chat action gap: ${actionGap ?? sharedGap}`);
 });
 
 // WCAG contrast of the colours the cards put text in (a permission card's numbers, details, hints and actions).
