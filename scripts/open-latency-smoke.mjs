@@ -56,43 +56,44 @@ function observe(marker) {
 
 async function checkPaging(page, directory) {
   const scroll = page.locator('.reading-scroll');
-  // A wheel event establishes reader intent; the scroll itself reaches the sentinel in one frame.
-  const before = await scroll.evaluate(node => {
-    node.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }));
-    node.scrollTo({ top: 0, behavior: 'instant' });
-    const top = node.getBoundingClientRect().top;
-    const entries = [...node.querySelectorAll('[data-reading-entry]')];
-    const anchor = entries.find(entry => entry.getBoundingClientRect().bottom > top);
-    const before = { count: entries.length, anchor: anchor.dataset.readingEntry, y: anchor.getBoundingClientRect().top };
-    return before;
-  });
-  await wait(() => scroll.locator('[data-reading-entry]').count().then(count => count > before.count), 'scroll-up history page');
-  const position = () => scroll.evaluate((node, before) => {
-    const entries = [...node.querySelectorAll('[data-reading-entry]')];
-    const anchor = entries.find(entry => entry.dataset.readingEntry === before.anchor);
-    return { count: entries.length, height: node.scrollHeight, unique: new Set(entries.map(entry => entry.dataset.readingEntry)).size,
-      anchorDelta: anchor.getBoundingClientRect().top - before.y };
-  }, before);
-  let lastHeight, stable = 0;
-  // Worker parses change many older replies on successive frames. Check after layout settles, not mid-commit.
-  let after;
   const samples = [];
-  try {
-    after = await wait(async () => {
-      const value = await position(); samples.push(value);
-      stable = value.height === lastHeight && Math.abs(value.anchorDelta) <= 2 ? stable + 1 : 0;
-      lastHeight = value.height;
-      return stable >= 3 ? value : null;
-    }, 'Markdown layout and prepend anchor', 5000);
-  } finally { await fs.writeFile(path.join(directory, 'paging-samples.json'), JSON.stringify(samples)); }
-  assert.equal(after.count, after.unique, 'history prepend has no duplicate DOM entries');
-  assert.ok(Math.abs(after.anchorDelta) <= 2, `scroll anchor moved ${after.anchorDelta}px`);
-  assert.equal(await scroll.locator('.reading-unseen').count(), 0, 'older pages are not new messages');
-  // The same operation remains available through the existing earlier button, including keyboard activation.
-  await scroll.locator('.reading-earlier').evaluate(button => button.click());
-  await wait(() => scroll.locator('[data-reading-entry]').count().then(count => count > after.count), 'earlier button history page');
+  for (const trigger of ['sentinel', 'button']) {
+    const sample = await scroll.evaluate((node, trigger) => new Promise(resolve => {
+      if (trigger === 'sentinel') {
+        node.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }));
+        node.scrollTo({ top: 0, behavior: 'instant' });
+      }
+      const entries = [...node.querySelectorAll('[data-reading-entry]')];
+      const anchor = entries.find(entry => entry.getBoundingClientRect().bottom > node.getBoundingClientRect().top);
+      const before = { count: entries.length, anchor: anchor.dataset.readingEntry, y: anchor.getBoundingClientRect().top };
+      const start = performance.now(), frames = [];
+      let changedAt = start, height = node.scrollHeight, count = entries.length;
+      function frame() {
+        const all = [...node.querySelectorAll('[data-reading-entry]')];
+        const retained = all.find(entry => entry.dataset.readingEntry === before.anchor);
+        const now = performance.now();
+        if (height !== node.scrollHeight || count !== all.length) { changedAt = now; height = node.scrollHeight; count = all.length; }
+        frames.push({ ms: now - start, count, height, anchorDelta: retained ? retained.getBoundingClientRect().top - before.y : null });
+        const settled = now - start >= 4000 && now - changedAt >= 500;
+        if (!settled && now - start < 12000) requestAnimationFrame(frame);
+        else resolve({ trigger, before, frames, settled, unique: new Set(all.map(entry => entry.dataset.readingEntry)).size });
+      }
+      requestAnimationFrame(frame);
+      if (trigger === 'button') node.querySelector('.reading-earlier').click();
+    }), trigger);
+    sample.maxOffset = Math.max(...sample.frames.map(frame => frame.anchorDelta === null ? Infinity : Math.abs(frame.anchorDelta)));
+    samples.push(sample);
+    await fs.writeFile(path.join(directory, 'paging-samples.json'), JSON.stringify(samples, null, 2));
+    const after = sample.frames.at(-1);
+    assert.ok(sample.settled, `${trigger} layout settles within 12 seconds`);
+    assert.ok(after.count > sample.before.count, `${trigger} loads an older page`);
+    assert.equal(after.count, sample.unique, 'history prepend has no duplicate DOM entries');
+    assert.ok(sample.frames.every(frame => frame.anchorDelta !== null), 'the anchor exists in every frame');
+    assert.ok(sample.maxOffset <= 2, `${trigger} per-frame scroll anchor moved ${sample.maxOffset}px`);
+    assert.equal(await scroll.locator('.reading-unseen').count(), 0, 'older pages are not new messages');
+  }
   await page.screenshot({ path: path.join(directory, 'paging.png') });
-  return { before: before.count, afterScroll: after.count, afterButton: await scroll.locator('[data-reading-entry]').count(), anchorDelta: after.anchorDelta };
+  return samples.map(({ trigger, before, frames, maxOffset }) => ({ trigger, before: before.count, after: frames.at(-1).count, frames: frames.length, maxOffset }));
 }
 
 await withGuiLock(`open-latency ${process.pid}`, async () => {
@@ -155,7 +156,7 @@ require(path.join(root,'electron/main.cjs'));`);
       results.push(result); await fs.writeFile(path.join(directory, 'results.json'), JSON.stringify(result, null, 2));
       await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(results, null, 2));
       for (const value of measured) assert.ok(value.ms <= 3000, `${agent} ${mib} MiB ${value.label}: ${value.ms.toFixed(1)} ms > 3000`);
-      console.log(JSON.stringify({ agent, mib, mode, measured }));
+      console.log(JSON.stringify({ agent, mib, mode, measured, paging }));
     } catch (error) {
       await fs.writeFile(path.join(directory, 'failure.txt'), String(error.stack || error));
       if (page) await page.screenshot({ path: path.join(directory, 'failure.png') }).catch(() => {});

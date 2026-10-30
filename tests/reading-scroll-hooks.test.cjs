@@ -155,3 +155,83 @@ test('returning to the bottom releases the prepend ResizeObserver before later i
   position += 100; node.scrollHeight += 100; if (active) resize();
   assert.equal(node.scrollTop, 1400, 'the old anchor cannot drag a latest-button or composer jump back');
 });
+
+function prependHarness(t) {
+  const observers = { ResizeObserver: new Set(), MutationObserver: new Set() }, handlers = new Map();
+  const descriptors = Object.fromEntries(Object.keys(observers).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, active] of Object.entries(observers)) globalThis[key] = class {
+    constructor(callback) { this.callback = callback; }
+    observe() { active.add(this); }
+    disconnect() { active.delete(this); }
+  };
+  let position = 300;
+  const anchor = { isConnected: true, getBoundingClientRect: () => ({ top: position - node.scrollTop, bottom: position - node.scrollTop + 30 }) };
+  const node = {
+    scrollTop: 150, scrollHeight: 1000, firstElementChild: {}, getBoundingClientRect: () => ({ top: 0 }), querySelectorAll: () => [anchor],
+    scrollTo({ top, behavior }) { assert.equal(behavior, 'instant'); this.scrollTop = top; },
+    addEventListener(event, callback) { handlers.set(event, callback); },
+    removeEventListener(event, callback) { if (handlers.get(event) === callback) handlers.delete(event); },
+  };
+  const h = hookHarness('src/features/reading/useVisibleTail.ts'), container = { current: node }, list = blocks(entries(100));
+  const render = (grouped = list, key = 'session', stuck = false, remote) => h.render('useVisibleTail', grouped, key, container, stuck, () => {}, remote).result;
+  t.after(() => {
+    h.dispose();
+    assert.equal(observers.ResizeObserver.size + observers.MutationObserver.size, 0, 'unmount disconnects both observers');
+    assert.equal(handlers.size, 0, 'unmount releases input listeners');
+    for (const [key, descriptor] of Object.entries(descriptors)) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key];
+    }
+  });
+  return {
+    node, render, handlers, observers,
+    y: () => anchor.getBoundingClientRect().top,
+    grow(amount, total = amount) { position += amount; node.scrollHeight += total; },
+    notify(key) { for (const observer of observers[key]) observer.callback(); },
+  };
+}
+
+test('prepend and subsequent React commits compensate in layout before paint, even with unchanged total height', t => {
+  const h = prependHarness(t), before = h.y();
+  h.render().showEarlier(); h.grow(600); h.render();
+  assert.equal(h.y(), before, 'the prepend is compensated before any observer delivery or animation frame');
+  h.grow(460, 0); h.render();
+  assert.equal(h.y(), before, 'a later commit must retain the anchor without waiting for total-height notification');
+});
+
+test('child Markdown mutations and late image or file-card sizes compensate before the next paint until released', t => {
+  const h = prependHarness(t), before = h.y();
+  h.render().showEarlier(); h.grow(600); h.render();
+  assert.ok(h.observers.MutationObserver.size, 'child-only commits need a pre-paint mutation checkpoint');
+  h.grow(-460, 0); h.notify('MutationObserver');
+  assert.equal(h.y(), before, 'Markdown can move the anchor without resizing the entire content');
+  h.grow(240); h.notify('ResizeObserver');
+  assert.equal(h.y(), before, 'intrinsic image or file-card growth is compensated in the resize delivery');
+  h.handlers.get('wheel')();
+  const released = h.node.scrollTop;
+  h.grow(300); h.notify('MutationObserver'); h.notify('ResizeObserver'); h.render();
+  assert.equal(h.node.scrollTop, released, 'user input releases observers and later layout compensation');
+});
+
+test('a user gesture during an asynchronous prepend releases its pending anchor before the page commits', async t => {
+  const h = prependHarness(t);
+  let finish;
+  const remote = { paged: true, hasEarlier: true, loading: false, loadEarlier: () => new Promise(resolve => { finish = resolve; }) };
+  const loading = h.render(undefined, 'session', false, remote).showEarlier();
+  assert.ok(h.handlers.has('wheel'), 'input can release the anchor while IPC is pending');
+  h.handlers.get('wheel')();
+  h.node.scrollTop = 200; h.grow(600); finish(true); await loading;
+  h.render(blocks(entries(140)), 'session', false, remote);
+  assert.equal(h.node.scrollTop, 200);
+});
+
+test('a failed page releases only its own anchor after switching away and back', async t => {
+  const h = prependHarness(t), pending = [];
+  const remote = { paged: true, hasEarlier: true, loading: false, loadEarlier: () => new Promise(resolve => pending.push(resolve)) };
+  const old = h.render(undefined, 'session', false, remote).showEarlier();
+  h.render(undefined, 'other');
+  const latest = h.render(undefined, 'session', false, remote).showEarlier();
+  const before = h.y(); pending[0](false); await old;
+  assert.ok(h.handlers.has('wheel'), 'the new anchor keeps its own release listener');
+  h.grow(600); pending[1](true); await latest; h.render(blocks(entries(140)), 'session', false, remote);
+  assert.equal(h.y(), before, 'the old IPC failure cannot release the newer anchor');
+});
