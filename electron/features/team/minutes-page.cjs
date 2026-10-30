@@ -59,11 +59,12 @@ th { white-space: nowrap; font-weight: 600; color: var(--text-2); background: va
 .status { white-space: nowrap; }
 `;
 
+// Shared with the Markdown minutes (team.cjs): the issue fields, what counts as empty, and the time format.
+const ISSUE_KEYS = ['issue', 'raisedBy', 'answer', 'result'];
+const lines = value => (Array.isArray(value) ? value.join('\n') : String(value ?? '')).trim();
+const blank = value => !lines(value) || /^none$/i.test(lines(value));
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
-const text = value => {
-  const lines = (Array.isArray(value) ? value.join('\n') : String(value ?? '')).trim();
-  return /^none$/i.test(lines) || !lines ? '—' : escape(lines);
-};
+const text = value => blank(value) ? '—' : escape(lines(value));
 const pad = number => String(number).padStart(2, '0');
 const stamp = ms => {
   const date = new Date(ms);
@@ -93,9 +94,9 @@ ${items.length
 <p class="meta">${t.generated} ${stamp(minutes.generatedAt)}</p>
 <p class="summary">${t.summary(rows.filter(row => row.status === 'confirmed').length, rows.length)}</p>
 ${section(t.understandings, t.columns, rows, understanding, t.noRows, ' class="wide"')}
-${section(t.issues, t.issueColumns, issues, item => cells(['issue', 'raisedBy', 'answer', 'result'].map(key => text(item[key]))), t.noIssues)}
+${section(t.issues, t.issueColumns, issues, item => cells(ISSUE_KEYS.map(key => text(item[key]))), t.noIssues)}
 </main></body></html>
 `;
 }
 
-module.exports = { minutesPage, LABELS: { zh: ZH, en: EN } };
+module.exports = { minutesPage, LABELS: { zh: ZH, en: EN }, ISSUE_KEYS, blank, stamp };
