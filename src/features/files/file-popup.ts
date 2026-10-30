@@ -14,3 +14,9 @@ const publish = (target: PopupTarget | null) => { current = target; listeners.fo
 export const showPopup = (target: PopupTarget) => publish(target);
 export const closePopup = () => publish(null);
 export const usePopup = () => useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => current);
+
+export const openLinkInPopup = (projectId: string, link: string, onError: (message: string) => void) =>
+  window.agentrix.openLink(projectId, link).then(result => {
+    if (!result.ok) onError(result.error);
+    else if (result.value.kind !== 'external') showPopup({ kind: result.value.kind === 'file' ? 'file' : 'folder', projectId, path: result.value.path });
+  });

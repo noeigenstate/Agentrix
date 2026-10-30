@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type Mous
 import { ArrowUp, CaretLeft, CaretRight, File, FileText, FilmStrip, Folder, Globe, Image as ImageIcon, SpinnerGap, X } from '@phosphor-icons/react';
 import type { DirectoryListing, FilePreview as Preview } from '../../shared/types';
 import { TextContent } from './FilePreview';
-import { closePopup, showPopup, type PopupTarget } from './file-popup';
+import { closePopup, openLinkInPopup, showPopup, type PopupTarget } from './file-popup';
 import { t } from '../../shared/i18n';
 import './file-popup.css';
 const MarkdownPreview = lazy(() => import('./MarkdownPreview').then(module => ({ default: module.MarkdownPreview })));
@@ -69,11 +69,7 @@ export function FilePopup({ target, onError }: { target: PopupTarget; onError: (
   }, []);
   const openLink = (link: string) => {
     if (target.kind === 'image' || target.kind === 'picture') return;
-    const projectId = target.projectId;
-    void window.agentrix.openLink(projectId, link).then(result => {
-      if (!result.ok) onError(result.error);
-      else if (result.value.kind !== 'external') showPopup({ kind: result.value.kind === 'file' ? 'file' : 'folder', projectId, path: result.value.path });
-    });
+    void openLinkInPopup(target.projectId, link, onError);
   };
   const parent = target.kind === 'folder' && target.path ? target.path.split('/').slice(0, -1).join('/') : null;
   const preview = shown?.kind === 'preview' ? shown.preview : null;
