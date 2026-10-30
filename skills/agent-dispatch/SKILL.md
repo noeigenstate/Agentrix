@@ -1,6 +1,6 @@
 ---
 name: agent-dispatch
-description: Use whenever a session inside Agentrix starts a Codex or Claude Code worker from the command line (codex exec, claude -p) — launch it only through Agentrix's dispatch helper, which declares the assignment to the app and reports how the worker ended; covers the helper's arguments, the event protocol and what the activity pane shows. Also use when changing the helper, the event server or the called-models pane.
+description: Use whenever a session inside Agentrix starts a Codex or Claude Code worker from the command line (codex exec, claude -p) — launch it only through Agentrix's dispatch helper, which declares the assignment to the app and reports how the worker ended; covers the helper's arguments, the roundtable before work, the shared project memory and the per-round consolidation, the event protocol and what the activity pane shows. Also use when changing the helper, the event server or the called-models pane.
 ---
 
 # Dispatching command-line workers
@@ -14,9 +14,12 @@ worker.
 
 ```
 node "<helper>" codex --role 执行 --title "Fix the cmd prompt reflow" --model gpt-6.1-sol --effort max --fast \
-  --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only]   [--allow <glob> …] [--ledger <ledger.md>] [--resume <session id>]
+  --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only]   [--allow <glob> …] [--ledger <ledger.md>] [--resume <session id>] \
+  [--meeting <id>] [--skip-meeting <reason>]
 node "<helper>" claude --role 审查 --title "Architecture review" --model opus --effort high \
   --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md>
+node "<helper>" minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues <issues.json>] [--language zh|en]
+node "<helper>" consolidate --cwd <dir> --meeting <id> --summary <file.md>
 ```
 
 The helper builds the real command itself (`codex exec -m … -c model_reasoning_effort=… -c service_tier="fast" --json -C … -o <out> -` /
@@ -39,13 +42,107 @@ role in events). `--help` lists all six values. `--title`: one line, what the wo
   the worker is told to end its answer with `## Findings for the ledger`; those bullets are appended to the ledger under
   `### <time> · <title> · <agent> <model> · session <id>`. One ledger per task, in the project (not under `.dispatch/`
   if it should be kept); the next worker on the task gets everything earlier ones learned, so briefs stay short and
-  never repeat the owner's decisions by memory.
+  never repeat the owner's decisions by memory. In a git repository the findings also go to the project memory
+  (below), so a worker on another module reads them without a ledger.
 - `--resume <session id>` (from the start line's `session`): continues that worker's conversation —
   `codex exec resume <id> …` (keeps the session's own folder and sandbox, so no `--read-only`) or `claude -p --resume`.
   Use it for a follow-up on the same work (a review finding, a failing test) instead of re-explaining in a new worker.
 
 A worker reads its surroundings: a ledger or answer lying in a sibling folder is context too. Keep unrelated tasks'
 ledgers out of reach of a worker that must not know them.
+
+## Roundtable, shared memory and rounds
+
+A round is plan → roundtable → build → integrate and review → consolidate (`skills/model-routing`). The helper backs it
+with a team folder and three refusals, so the process does not rest on the lead remembering it. The code is the Team
+module (`electron/features/team/`, `team.cjs`; its page for the owner is `minutes-page.cjs`).
+
+**The team folder** is `<common>/agentrix/`, `<common>` being `git rev-parse --git-common-dir` from the worker's `--cwd`:
+every worktree of one repository sees the same folder, and nothing in it is committed. Outside a git repository there is
+no team folder, every rule here is off and the helper behaves as before.
+- `memory.md` — the project memory: every worker's `## Findings for the ledger` (also with `--ledger`, which gets them
+  too) and the lead's round consolidations.
+- `journal.jsonl` — one JSON object per line, appended by the helper: `meeting` (a roundtable answer: meeting id, session,
+  agent, model, title, allow, the parsed understanding or confirmation, status), `skip` (a `--skip-meeting` run and its
+  reason), `end` (an 执行 run's end, with the meeting it belongs to or null) and `consolidate` (meeting id, time).
+- `board/<run id>.json` — one per running worker (title, role, agent, model, cwd, allow, meeting, the helper's pid,
+  start time), written at the start and removed on every way out, a refused or failed launch included. An entry whose
+  pid is not alive is stale: it is ignored and removed when seen. Checking the overlap and registering happen under one
+  exclusive lock file in the folder, so two launches at the same moment cannot both pass.
+
+**`--meeting <id>`** (`[\w.-]{1,64}`) makes the run the roundtable for meeting `<id>`. Pass the role the worker will have at
+work (`--role 执行 --meeting …`); the event role Agentrix receives is `圆桌`, and the gates below still use the real role.
+Allowed with every role, not with `--read-only` (a resumed Codex keeps its first sandbox and the same session builds
+later; a Claude meeting runs with `--permission plan` and the build resumes it with `acceptEdits`). The worker must change
+no file: any change in the git working tree (the helper's own out, log, ledger and memory files excluded) ends the run
+with reason `scope` and `OUT OF SCOPE`. An 执行 meeting still needs `--allow`; the globs are shown to the worker as the
+files it will change after the roundtable. The start line carries ` · roundtable <id>`; the end line the same and
+` · understanding complete|incomplete` or ` · confirmed|open`.
+- A first meeting run of a session (no `--resume`, or a resumed session with no understanding yet) gets the
+  **understanding request** appended to its brief: read the whole plan, change no file, answer in the plan's language and
+  end with exactly
+
+  ```
+  ## Roundtable understanding
+  - Goal: …
+  - Files: …
+  - Provides: …
+  - Uses: …
+  - Done when: …
+  - Questions and risks: …
+  ```
+
+  (`none` where empty). Parsed into goal / files / provides / uses / doneWhen / questions: status `understood` when all
+  six are present, else `incomplete`.
+- A resumed session that already has an understanding in this meeting gets the **confirmation request**: the brief carries
+  the minutes, the worker checks that the others' understanding of the interfaces it shares matches its own and that its
+  questions are answered, and ends with `## Roundtable confirmation` and `Status: confirmed`, or `Status: open` followed
+  by bullets with what is still unresolved. Anything else counts as `open`.
+- A meeting run that ends with any reason other than `exit` is journaled as `invalid`, whatever its answer says; only
+  `confirmed` from a clean run opens the second gate.
+
+**`--skip-meeting <reason>`** lets an 执行 run with `--allow` start without a confirmed roundtable. The reason is
+journaled and printed on the start line (` · roundtable skipped: <reason>`).
+
+**The minutes.** `node "<helper>" minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues <issues.json>] [--language zh|en]`
+writes `<minutes.md>` (two Markdown tables) and the same path with `.html` (the page for the owner), from the journal: the
+latest understanding of every session in the meeting and its latest status (`confirmed`, `open`, `understood`,
+`incomplete`, `invalid`). Rounds are numbered by the order in which meeting ids first appear in the journal. `--issues` is
+a file the lead writes, the second table:
+
+```
+[{ "issue": "Where do team.cjs and the page live?", "raisedBy": "Sol", "answer": "A new Team module", "result": "settled" }]
+```
+
+`--language` defaults to `zh`. The lead runs `minutes` after the understanding runs, sends `minutes.md` as the brief of the
+resumed confirmation runs, and runs it again after the confirmations for the owner (Markdown tables in the reply, the
+HTML page by path).
+
+**The consolidation.** `node "<helper>" consolidate --cwd <dir> --meeting <id> --summary <file.md>`: the summary must hold
+the headings `### Results` and `### Architecture changes` (the latter may say "none" with why). It is appended to
+`memory.md` under `## Round <n> · <meeting id> · <yyyy-mm-dd hh:mm>` and journaled. Both subcommands start no worker and
+exit 0, or 1 with one `[dispatch] …` line.
+
+**The gates.** Each refuses with `[dispatch] failed to start <id>: <reason>`, exit 1 and the usual unconfirmed start/end
+events, before anything is launched. 调查 and 审查 runs are never gated.
+1. **Overlap** — an 执行 run with `--allow` is refused while another live board entry of the same repository is an 执行
+   run whose globs overlap: some file of `git ls-files --cached --others --exclude-standard` in this run's worktree
+   matches both sets, or a glob string is in both. The reason names the other run's title and up to three shared
+   files or globs.
+2. **Roundtable** — an 执行 run with `--allow` and without `--meeting` must `--resume` a session whose latest `meeting`
+   entry is `confirmed` and whose meeting `allow` equals this run's `--allow` as a set (so repeat the same globs), or
+   carry `--skip-meeting`. The reason says which is missing (no meeting for the session, not confirmed, scope differs
+   from the one agreed) and how to go on.
+3. **Consolidation** — a `--meeting` run with a new id is refused while an earlier meeting has an `end` entry and no
+   `consolidate` entry. The reason names that meeting and the `consolidate` command.
+
+**What every worker reads first** (when the team folder exists), before the ledger, boundary and allowed-files parts:
+1. `# Project memory` — the path of `memory.md`, then its latest two `## Round` sections and everything after the last
+   one, the newest text within 24 KB (cut at the start, marked `…`).
+2. `# Working now` — every other live board entry: `- <title> (<agent> <model>, <role>): <globs or "no file changes">`.
+3. `# Repository` — `git status --short` (at most 40 lines, then `… and N more`) and `git log --oneline -5`.
+
+The handing-back section is always there: findings go to `memory.md`, and to `--ledger` as well when one is given.
 
 ## Signals to the lead
 
@@ -114,6 +211,9 @@ confirmed worker runs.
 - Start every command-line Codex or Claude worker through the helper, as a background command; never `codex exec` /
   `claude -p` directly.
 - Give every worker that changes files `--allow` for its module, and every task with owner decisions a `--ledger`.
+- In a git repository, hold the roundtable (`--meeting`) before the build, resume the confirmed session with the same
+  `--allow`, and consolidate the round (`consolidate`) before the next round's roundtable; `--skip-meeting <reason>` only
+  for a task too small for one.
 - Right after launching, read the helper's start line; treat anything but `[dispatch] started … routing ok` as a launch
   to fix before relying on the worker.
 - Claude Code's own Agent tool calls stay as they are: their transcript records are already structured.
