@@ -285,7 +285,8 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // way back. The dialog is over once the CLI's input is back, or the hint has been gone longer than a redraw takes.
   const dialog = waiting && JSON.stringify([terminal.agentStartedAt, waiting.title]);
   useEffect(() => {
-    if (dialog !== null) { if (active && startDialog(terminal.id, dialog)) setTerminalPopup({ command: '' }); return; }
+    // Disabling the composer can blur it before this effect: use the typing state captured during render.
+    if (dialog !== null) { if (active && !typingAtChoice.current && startDialog(terminal.id, dialog)) setTerminalPopup({ command: '' }); return; }
     if (inputShown) { endDialog(terminal.id); return; }
     const timer = setTimeout(() => endDialog(terminal.id), DIALOG_SETTLE);
     return () => clearTimeout(timer);

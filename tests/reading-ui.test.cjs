@@ -801,6 +801,41 @@ function waitingHarness(t, { rows = [], ready = loadUI('features/reading/reading
 const menuChoice = () => ({ ...fakeChoice(), kind: 'menu' });
 const restored = thread => ({ key: 'history', agent: 'codex', threadId: thread });
 
+test('a permission redraw while composing never opens a terminal that would take the next Enter', async t => {
+  const view = { rows: IDLE_ROWS };
+  const h = dictationHarness(t, {
+    './terminal-screen': { useScreen: () => ({ rows: view.rows }), readScreen: () => ({ rows: view.rows }) },
+    './agent-screen': { parseAgentScreen },
+    './typing': { markTyping() {}, isTyping: node => !!node?.value?.trim() },
+  });
+  h.edit('先别批准');
+  // Captured before the desktop fixture draws its approval: PowerShell first echoes the wrapped command itself.
+  view.rows = [
+    " Clear-Host; Write-Host '  Would you like to run the following command?'; Write-Host ''; Write-Host '  $ npm test'; Write-Host ''; Write-Host '› 1. Yes, proceed (y)'; Write-Host '  2. No, an",
+    "d tell Codex what to do differently (esc)'; Write-Host ''; Write-Host '  Press enter to confirm or esc to cancel'; $global:ReadingFixtureClearOnPrompt = $true; Start-Sleep -Seconds 30",
+  ];
+  assert.ok(parseAgentScreen('codex', view.rows).waiting, 'the real parser sees a transient waiting screen');
+  h.render(); h.render();
+  assert.ok(named(h.tree(), 'WaitingCard'));
+  assert.equal(h.render().props.disabled, true);
+  assert.equal(h.popup(), undefined, 'an automatic popup would focus xterm and turn the next Enter into approval');
+  // Disabling the composer can blur it. Redraws must remember who was typing before it was disabled.
+  document.activeElement = document.body;
+  h.render(); await h.tick(2000);
+  assert.equal(h.popup(), undefined);
+  view.rows = [
+    '  Would you like to run the following command?', '', '  $ npm test', '',
+    '› 1. Yes, proceed (y)', '  2. No, and tell Codex what to do differently (esc)', '',
+    '  Press enter to confirm or esc to cancel',
+  ];
+  h.render(); h.render();
+  assert.equal(elements(h.tree()).find(node => node.props.choice)?.props.choice.kind, 'permission');
+  assert.equal(h.popup(), undefined);
+  assert.equal(h.render().props.value, '先别批准');
+  h.press('Enter'); await h.tick(800);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+});
+
 test('a dialog the screen has no card for shows the waiting card with its heading, blocks the composer and opens the terminal once', t => {
   const h = waitingHarness(t);
   h.screen.waiting = { title: 'Exit plan mode?' };
