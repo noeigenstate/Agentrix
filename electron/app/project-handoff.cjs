@@ -30,7 +30,7 @@ function createProjectHandoff({ app, getStore, sessions }) {
     const history = await s.terminal.request('history', {}), rounds = [];
     for (const [agent, read] of [['codex', codexConversation], ['claude', claudeConversation]]) {
       for (const session of Array.isArray(history?.[agent]) ? history[agent] : []) {
-        const log = new ConversationLog(() => {}, 2000);
+        const log = new ConversationLog(() => {}, 2000, { pictures: false });
         for (const record of Array.isArray(session.records) ? session.records : []) { try { read(log, record, cwd); } catch { } }
         rounds.push(...roundsOf(log.list, agent, String(session.id || '')));
       }

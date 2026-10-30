@@ -2,12 +2,12 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { TimelineStep } from './Timeline';
 import type { PendingPrompt } from './pending-prompts';
 import { withPictures } from './pasted-pictures';
+import { omitted as omittedPicture, unavailable as unavailablePicture } from '../../../electron/features/files/picture-values.json';
 import { showPopup } from '../files/file-popup';
 import { t } from '../../shared/i18n';
 import { UserAvatar } from '../../shared/UserAvatar';
 import { Image as ImageIcon, X } from '@phosphor-icons/react';
 import './pending-prompts.css';
-import './file-cards.css';
 
 // What the user wrote, folded to three lines when it runs longer (a pasted log, a long brief), with a button to read
 // all of it. Whether it runs longer is measured on the laid-out text, so a long line that wraps counts too.
@@ -39,8 +39,8 @@ export function UserMessage({ text, images }: { text: string; images?: readonly 
 export function UserImages({ images, numbers, onRemove }: { images: readonly string[]; numbers?: readonly number[]; onRemove?: (index: number) => void }) {
   return <div className="reading-user-images">{images.map((src, index) => {
     const name = t('附加的图片 {n}', { n: numbers?.[index] ?? index + 1 });
-    const unavailable = src.startsWith('agentrix-image:');
-    const reason = unavailable ? t(src === 'agentrix-image:omitted' ? '图片较大，未在此显示' : '图片文件已不存在或无法读取') : '';
+    const unavailable = src === omittedPicture || src === unavailablePicture;
+    const reason = unavailable ? t(src === omittedPicture ? '图片较大，未在此显示' : '图片文件已不存在或无法读取') : '';
     return <span key={index} className="reading-user-image"><button type="button" className={`reading-user-image-zoom${unavailable ? ' is-unavailable' : ''}`} disabled={!src || unavailable} title={reason || t('点击放大')} aria-label={reason ? `${name}：${reason}` : t('放大 {name}', { name })} onClick={() => { if (src && !unavailable) showPopup({ kind: 'picture', src, path: name }); }}>
       {unavailable ? <span className="reading-image-placeholder"><ImageIcon size={24} /><span>{reason}</span></span> : src ? <img src={src} alt={name} loading="lazy" decoding="async" /> : <ImageIcon size={24} aria-label={name} />}</button>
       {onRemove && <button type="button" className="reading-user-image-remove" title={t('移除这张图片')} aria-label={t('移除这张图片')} onClick={() => onRemove(index)}><X size={12} weight="bold" /></button>}</span>;

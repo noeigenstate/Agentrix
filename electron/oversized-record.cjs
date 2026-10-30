@@ -2,12 +2,32 @@
 // except generated pictures: their id/state/prompt and saved path survive in the record's start and end.
 const HEAD = 64 * 1024, TAIL = 8 * 1024;
 const IMAGE_LIMIT = 2_800_000, RECORD_LIMIT = 16 * 1024 * 1024;
-const IMAGE_OMITTED = 'agentrix-image:omitted';
+const IMAGE_OMITTED = Object.freeze({ omitted: true });
 
 // Claude puts pasted screenshots between the prompt's text blocks. Keep small images intact and replace larger
 // base64 strings with a small marker before parsing, so the reading view can explain why the picture is absent.
 class ClaudeImageLine {
-  constructor(start, keys = /"data"\s*:\s*"/) { this.keys = keys; this.parts = []; this.size = 0; this.buffer = Buffer.alloc(0); this.data = null; this.add(start); }
+  constructor(start, keys = /"data"\s*:\s*"/) { this.keys = new RegExp(keys.source, 'g'); this.quoted = false; this.escaped = false; this.parts = []; this.size = 0; this.buffer = Buffer.alloc(0); this.data = null; this.add(start); }
+  scan(end, state = this, start = 0) {
+    for (let at = start; at < end; at++) {
+      const byte = this.buffer[at];
+      if (state.escaped) state.escaped = false;
+      else if (state.quoted && byte === 92) state.escaped = true;
+      else if (byte === 34) state.quoted = !state.quoted;
+    }
+  }
+  matchData() {
+    this.keys.lastIndex = 0;
+    const text = this.buffer.toString('latin1');
+    const state = { quoted: this.quoted, escaped: this.escaped };
+    let match, cursor = 0;
+    while ((match = this.keys.exec(text))) {
+      this.scan(match.index, state, cursor);
+      if (!state.quoted && !state.escaped) return match;
+      cursor = match.index;
+    }
+    return null;
+  }
   keep(part) {
     if (!part.length) return;
     this.size += part.length;
@@ -30,8 +50,9 @@ class ClaudeImageLine {
         const rest = this.buffer.subarray(quote + 1);
         this.keep(this.omitted ? Buffer.from(JSON.stringify(IMAGE_OMITTED)) : Buffer.concat([Buffer.from('"'), ...this.data, Buffer.from('"')]));
         this.data = null; this.buffer = this.discarded ? Buffer.alloc(0) : rest;
+        this.quoted = false; this.escaped = false;
       } else {
-        const match = this.keys.exec(this.buffer.toString('latin1'));
+        const match = this.matchData();
         if (match) {
           const end = match.index + match[0].length;
           const rest = this.buffer.subarray(end);
@@ -41,6 +62,7 @@ class ClaudeImageLine {
         } else {
           // A data key may straddle reads; bytes are decoded only once the whole record is rebuilt.
           const end = Math.max(0, this.buffer.length - 64), rest = this.buffer.subarray(end);
+          this.scan(end);
           this.keep(this.buffer.subarray(0, end)); this.buffer = this.discarded ? Buffer.alloc(0) : rest;
           return;
         }
@@ -73,7 +95,7 @@ function oversizedRecord(head, tail) {
   } } };
 }
 
-const CODEX_IMAGE_KEYS = /"(?:data|image_url|url)"\s*:\s*"|"(?=data:image\/[\w.+-]+;base64,)/;
+const CODEX_IMAGE_KEYS = /"data"\s*:\s*"|"(?:image_url|url)"\s*:\s*"(?=data:image\/[\w.+-]+;base64,)|"(?=data:image\/[\w.+-]+;base64,)/;
 const userImageRecord = head => {
   const text = head.toString('utf8');
   return /"type"\s*:\s*"response_item"/.test(text) && /"role"\s*:\s*"user"/.test(text)

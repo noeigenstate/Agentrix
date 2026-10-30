@@ -3,7 +3,8 @@ const path = require('node:path');
 const { randomBytes } = require('node:crypto');
 const { createReadStream } = require('node:fs');
 const { Readable } = require('node:stream');
-const { resolveProjectPath, IMAGE_TYPES, VIDEO_TYPES } = require('./project-files.cjs');
+const { IMAGE_TYPES, VIDEO_TYPES } = require('./project-files.cjs');
+const { folderGrantAllowed, within, localPath } = require('./features/files/preview-location.cjs');
 
 const WEB_TYPES = {
   ...IMAGE_TYPES, ...VIDEO_TYPES,
@@ -28,6 +29,7 @@ const PREVIEW_CSP = [
   "object-src 'none'", "frame-src 'none'", "form-action 'none'", "base-uri 'self'",
   "sandbox allow-scripts allow-same-origin",
 ].join('; ');
+const OFFLINE_CSP = PREVIEW_CSP.replaceAll(' https:', '');
 
 function allowsHiddenPath(session, relativePath) {
   if (relativePath === session.filePath.replace(/\\/g, '/')) return true;
@@ -37,7 +39,7 @@ function allowsHiddenPath(session, relativePath) {
 }
 
 class PreviewResources {
-  constructor({ remote } = {}) { this.sessions = new Map(); this.remote = remote; }
+  constructor({ remote, getProjects = () => [] } = {}) { this.sessions = new Map(); this.remote = remote; this.getProjects = getProjects; }
 
   open(project, filePath, kind, mimeType) {
     const previewId = randomBytes(24).toString('hex');
@@ -50,12 +52,14 @@ class PreviewResources {
   close(previewId) { if (typeof previewId === 'string') this.sessions.delete(previewId); }
   closeProject(projectId) { for (const [id, session] of this.sessions) if (session.project.id === projectId) this.sessions.delete(id); }
   hasUrl(url) { try { const value = new URL(url); return value.protocol === 'project-preview:' && this.sessions.has(value.hostname); } catch { return false; } }
+  isOutsideUrl(url) { try { return !!this.sessions.get(new URL(url).hostname)?.project.previewRoot; } catch { return false; } }
 
   async resolve(url) {
     const address = new URL(url);
     const session = address.protocol === 'project-preview:' && this.sessions.get(address.hostname);
     if (!session || address.username || address.password || address.port) throw new Error('Preview expired');
     const relativePath = decodeURIComponent(address.pathname).replace(/^\//, '');
+    localPath(relativePath);
     if (!relativePath || !allowsHiddenPath(session, relativePath)) throw new Error('Hidden paths are not preview resources');
     if (!['html', 'markdown'].includes(session.kind) && relativePath !== session.filePath.replace(/\\/g, '/')) throw new Error('Media preview is limited to the selected file');
     const mimeType = session.kind === 'markdown' ? IMAGE_TYPES[path.extname(relativePath).toLowerCase()] : session.kind !== 'html' && session.mimeType ? session.mimeType : WEB_TYPES[path.extname(relativePath).toLowerCase()];
@@ -68,9 +72,17 @@ class PreviewResources {
       resolved = relativePath; size = stat.size;
       readChunk = async (offset, length) => Buffer.from(await connection.request('read', { path: relativePath, offset, length }), 'base64');
     } else {
-      if (session.project.previewRoot && await fs.realpath(session.project.path) !== session.project.previewRoot) throw new Error('Preview folder changed');
-      resolved = await resolveProjectPath(session.project, relativePath);
-      const relativeReal = path.relative(await fs.realpath(session.project.path), resolved);
+      localPath(session.project.path);
+      if (path.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath) || /[:\0]/.test(relativePath) || relativePath.split(/[\\/]/).includes('..')) throw new Error('Invalid preview path');
+      const root = await fs.realpath(session.project.path);
+      if (session.project.previewRoot && root !== session.project.previewRoot) throw new Error('Preview folder changed');
+      const singleFile = session.project.previewRoot && (session.project.previewSingleFile || !await folderGrantAllowed(root,
+        [{ path: session.project.previewProjectPath }, ...this.getProjects()]));
+      if (singleFile && relativePath !== session.filePath.replace(/\\/g, '/')) throw new Error('Preview is limited to the selected file');
+      resolved = await fs.realpath(path.resolve(root, relativePath));
+      localPath(resolved);
+      if (!within(root, resolved)) throw new Error('Preview path escaped its folder');
+      const relativeReal = path.relative(root, resolved);
       if (!allowsHiddenPath(session, relativeReal.split(path.sep).join('/'))) throw new Error('Hidden link targets are not preview resources');
       const stat = await fs.stat(resolved);
       if (!stat.isFile()) throw new Error('Preview resource is not a supported file');
@@ -81,7 +93,7 @@ class PreviewResources {
       'Cache-Control': 'no-store',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
-      'Content-Security-Policy': PREVIEW_CSP,
+      'Content-Security-Policy': session.project.previewRoot ? OFFLINE_CSP : PREVIEW_CSP,
       'Cross-Origin-Resource-Policy': 'cross-origin',
       'Accept-Ranges': 'bytes',
     } };

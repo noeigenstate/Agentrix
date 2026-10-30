@@ -6,6 +6,8 @@
 .reading-user-image { position: relative; display: block; }
 .reading-user-image-zoom { display: block; padding: 0; overflow: hidden; border: 1px solid var(--divider); border-radius: 8px; background: var(--bg-app); cursor: zoom-in; }
 .reading-user-image-zoom:disabled { display: grid; place-items: center; width: 64px; height: 40px; color: var(--text-3); cursor: default; }
+.reading-user-image .reading-user-image-zoom.is-unavailable { width: 160px; height: 100px; cursor: default; opacity: 1; }
+.reading-image-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px; color: var(--text-2); font: 400 calc(12px * var(--reading-text)) var(--font-ui); white-space: normal; }
 .reading-user-images button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .reading-user-images img { display: block; max-width: 220px; max-height: 140px; object-fit: cover; }
 .reading-user-images button:hover { border-color: var(--border-hover); }

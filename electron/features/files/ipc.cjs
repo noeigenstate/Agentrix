@@ -3,7 +3,8 @@ const fs = require('node:fs');
 const { findFiles, listDirectory, readProjectFile, saveProjectFile, resolveProjectPath, VIDEO_TYPES } = require('../../project-files.cjs');
 const { projectPaths } = require('../../project-paths.cjs');
 const { resolveTerminalLink, resolveRevealPath } = require('../../terminal-links.cjs');
-const { previewLocation, pageKind, SSH_OUTSIDE } = require('./preview-location.cjs');
+const { previewLocation, failure, SSH_OUTSIDE } = require('./preview-location.cjs');
+const { isPageFile } = require('./file-kind.cjs');
 
 function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperations, clipboardWrites, clipboard, previewResources, affectsEditor, allowEditorClose, shell, getActiveFileTree, setActiveFileTree, setActiveTerminal, send }) {
   const fileSaves = new Set();
@@ -39,15 +40,14 @@ function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperatio
   async function readFile(id, relativePath, pageIndex) {
     const project = findProject(id);
     let location = { project, relative: relativePath };
-    if (project.kind !== 'ssh' && typeof relativePath === 'string' && pageKind(relativePath)) location = await previewLocation(project, relativePath);
-    let preview;
-    try {
-      preview = project.kind === 'ssh' ? await remoteFor(id).request('preview', { path: relativePath, page: pageIndex || 0 }) : await readProjectFile(location.project, location.relative, pageIndex);
-    } catch (error) {
-      if (project.kind === 'ssh' && typeof relativePath === 'string' && pageKind(relativePath)
-        && (path.posix.isAbsolute(relativePath) || relativePath.split('/').includes('..') || error.message === '该链接指向远程项目目录之外。')) throw new Error(SSH_OUTSIDE);
-      throw error;
+    if (project.kind !== 'ssh' && isPageFile(relativePath)) location = await previewLocation(project, relativePath, project.path, previewResources.getProjects?.() || []);
+    if (project.kind === 'ssh' && isPageFile(relativePath)) {
+      const remote = remoteFor(id); await remote.ready;
+      const root = remote.info?.root || project.path, normalized = relativePath.replace(/\\/g, '/');
+      location.relative = path.posix.relative(root, path.posix.resolve(root, normalized));
+      if (location.relative === '..' || location.relative.startsWith('../')) throw failure('SSH_OUTSIDE', SSH_OUTSIDE);
     }
+    const preview = project.kind === 'ssh' ? await remoteFor(id).request('preview', { path: location.relative, page: pageIndex || 0 }) : await readProjectFile(location.project, location.relative, pageIndex);
     if (['image', 'html', 'markdown', 'video'].includes(preview.kind)) return { ...preview, ...previewResources.open(location.project, location.relative, preview.kind, preview.mimeType) };
     return preview;
   }
