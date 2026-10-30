@@ -19,9 +19,10 @@ in its root AGENTS.md or CLAUDE.md, follow that project's skill instead of this 
 ## What to do
 
 1. Check the installed agents and the project's model settings, then choose the matching setup below.
-2. Have the architect plan the work, define separate file scopes and agree the shared contracts before implementation.
-3. Route the builds by difficulty, integrate in dependency order and run the project's checks.
-4. Complete stage 4 architecture review and UI acceptance where applicable, resolve findings and report the result.
+2. Have the architect plan the work by module, define separate file scopes and agree the shared contracts before implementation.
+3. Hold a roundtable: every worker restates its task from the whole plan, you answer its questions, everyone confirms, and the user sees the minutes as tables.
+4. Route the builds by difficulty, integrate in dependency order and run the project's checks.
+5. Complete stage 4 architecture review and UI acceptance where applicable, resolve findings, consolidate the round into the shared project memory and report the result.
 
 ### Roles
 
@@ -44,15 +45,18 @@ Review is cross-model where two models exist and never by the author: a fresh wo
 ### Stages
 
 Every task goes through these; skip a stage only when the task has nothing for it (a back-end-only fix has no front-end
-build and no screenshot pass, a CSS-only change has no core build).
+build and no screenshot pass, a CSS-only change has no core build; a task too small for a roundtable, such as one worker
+and a one-line fix, skips it with a recorded reason).
 
 | Stage | What happens | Output |
 | --- | --- | --- |
-| 1 Plan | Architect: split the task, set constraints, write the interface contract and the acceptance criteria | A written plan |
-| 2A Core build | Core engineer in worktree A | Complex logic, refactors, debugging, failing-test fixes |
-| 2B Routine build | Execution engineer in worktree B | Routine features, front end, tests, docs |
-| 3 Integrate and test | Orchestrator merges the branches in dependency order, runs build and tests | A green merged tree |
-| 4 Cross review | Architecture review by the architect; UI and interaction acceptance by the visual engineer | Findings with file, line and failure |
+| 1 Plan | Architect: split the task by module, set constraints, write the interface contract and the acceptance criteria | A written plan |
+| 2 Roundtable | Every worker gets the whole plan, changes nothing and restates its task; the orchestrator answers; all confirm | Minutes, shown to the user as tables |
+| 3A Core build | Core engineer in worktree A | Complex logic, refactors, debugging, failing-test fixes |
+| 3B Routine build | Execution engineer in worktree B | Routine features, front end, tests, docs |
+| 4a Integrate and test | Orchestrator merges the branches in dependency order, runs build and tests | A green merged tree |
+| 4b Cross review | Architecture review by the architect; UI and interaction acceptance by the visual engineer | Findings with file, line and failure |
+| 5 Consolidate | Orchestrator writes the round's results and architecture changes into the shared project memory and adjusts the module boundaries | The next round starts from them |
 | Final acceptance | Tests pass, every finding is fixed or dismissed with a reason, the user has seen the key changes | Done |
 
 ### Model settings
@@ -156,8 +160,10 @@ model_reasoning_effort=<effort> -c service_tier='"fast"' -C <dir> -o <out.md> - 
 --effort <effort> --permission-mode <mode> < <brief.md>`) with the same settings.
 
 ```
-node "<helper>" codex --role <role> --title "<one line>" --model <model> --effort <effort> [--fast] --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only] [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>]
-node "<helper>" claude --role <role> --title "<one line>" --model <model> --effort <effort> --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md> [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>]
+node "<helper>" codex --role <role> --title "<one line>" --model <model> --effort <effort> [--fast] --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only] [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>] [--meeting <id>] [--skip-meeting <reason>]
+node "<helper>" claude --role <role> --title "<one line>" --model <model> --effort <effort> --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md> [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>] [--meeting <id>] [--skip-meeting <reason>]
+node "<helper>" minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues <issues.json>] [--language zh|en]
+node "<helper>" consolidate --cwd <dir> --meeting <id> --summary <summary.md>
 ```
 
 - `--role` says what the worker does (execution, investigation or review; the helper's usage text lists the exact words).
@@ -174,18 +180,64 @@ node "<helper>" claude --role <role> --title "<one line>" --model <model> --effo
 - `--ledger <file>` for a task with decisions to keep: the ledger goes before the brief and the worker's
   `## Findings for the ledger` section is appended to it, so the next worker knows what earlier ones learned.
 - `--resume <session>` (the start line's `session`) for a follow-up on the same work, so the worker keeps its context.
+- In a git repository the helper keeps a team folder in the repository's git directory, shared by every worktree and never
+  committed: the project memory (workers' findings and the orchestrator's round summaries, read first by every worker), a
+  journal of the roundtables, and a board of the workers running now. It refuses a build whose `--allow` overlaps a
+  running worker's, refuses a build without a confirmed roundtable for the same `--allow` (`--skip-meeting <reason>` is
+  the recorded exception), and refuses a new round's roundtable while the last round is not consolidated. Outside a git
+  repository none of this applies.
 
 ### 1. Plan
 
 Write the plan before any worker starts:
-- The requirement split into tasks, each with an owner and an exact file scope. No file appears in two tasks.
+- The requirement split into tasks by module, each with an owner and an exact file scope. No file appears in two tasks.
+  A good split lets each worker stay inside its own module without touching the others.
 - The interface contract between them (shared types, payloads, names, test hooks). Write it first so every worker builds
   against the same shape.
 - Acceptance criteria that can be checked: test names, measured numbers, the screenshots and states to see.
 - A ledger for the task: the user's words that decide the work, the plan's decisions and known pitfalls, given to every
   worker with `--ledger` so no brief re-states them from memory.
 
-### 2. Build in worktrees
+### 2. Roundtable
+
+Before anyone builds, every worker gets the whole plan plus its own task, changes nothing and restates its understanding;
+you check it against the plan. Pick a meeting id for the round (`[\w.-]{1,64}`).
+
+1. **Understanding.** One run per worker, in parallel, each in its own worktree, with the role and `--allow` it will have
+   at work plus `--meeting <id>` (never `--read-only`: the same session builds later; the helper checks that no file
+   changed). The brief is the whole plan and that worker's task; the helper adds the request to end with a
+   `## Roundtable understanding` block (Goal, Files, Provides, Uses, Done when, Questions and risks). For a Claude worker
+   use `--permission plan`:
+
+   ```
+   node "<helper>" codex --role <role> --meeting <id> --title "<one line>" --model <model> --effort <effort> --fast --cwd <worktree> --brief <plan.md> --out <meeting.md> --allow '<module glob>'
+   ```
+
+2. **Your check.** Read each answer against the plan: do the workers agree on the interfaces they share, are the files
+   disjoint, are the questions real? Answer them, write the disagreements and answers to `issues.json`, and build the
+   minutes (two Markdown tables, plus the same as an HTML page beside it):
+
+   ```
+   [{ "issue": "<question or disagreement>", "raisedBy": "<worker>", "answer": "<your answer>", "result": "<settled | changed the plan | open>" }]
+   node "<helper>" minutes --cwd <repo> --meeting <id> --out <minutes.md> --issues <issues.json> [--language zh|en]
+   ```
+
+3. **Confirmation.** Resume each worker's session with `minutes.md` as the brief; the helper adds the request to end with
+   `## Roundtable confirmation` and `Status: confirmed`, or `Status: open` and what is unresolved. Answer any `open` and
+   repeat from the minutes.
+
+   ```
+   node "<helper>" codex --role <role> --meeting <id> --resume <session> --title "<one line>" --model <model> --effort <effort> --fast --cwd <worktree> --brief <minutes.md> --out <confirm.md> --allow '<same globs>'
+   ```
+
+4. **The user.** Run `minutes` again after the confirmations and show both tables in your reply and the path of the HTML
+   page, then start the build; the user can change the plan at any time.
+
+The build then resumes each worker's meeting session with the same `--allow` globs. A subagent started through an Agent
+call has no helper session: give it the whole plan, ask it to change nothing and restate its task, and show what it
+restated beside the minutes.
+
+### 3. Build in worktrees
 
 One branch and worktree per parallel task, from the current HEAD, with dependencies shared (a link to the main
 `node_modules`):
@@ -204,20 +256,35 @@ A task with one side may run in the project itself. Every brief holds:
 A Codex run has no approvals, so its scope comes from the prompt alone. An "at capacity" error at the end of a run can
 come after the work is done: check the outputs before rerunning.
 
-### 3. Integrate and test
+### 4a. Integrate and test
 
 - Read every diff against the project's conventions and the contract before accepting it; send a diff that breaks them back with the specific lines.
 - Commit each worktree on its branch, merge in dependency order (the side that defines data first), resolve conflicts against the contract, not by taking one side.
 - Run the project's type check, tests and build. When a test fails, run it on the last commit to tell a regression from an old failure.
 - Remove the worktrees and branches when done.
 
-### 4. Review
+### 4b. Review
 
 Run both on the merged result, in parallel where the setup allows:
 - **Architecture:** the architect, read-only, given the diff range and the contract, not your conclusions. It checks module boundaries, data flow, duplication and consistency. Findings: file:line, the failure, severity.
 - **UI and interaction:** the visual engineer, read-only, with screenshots of each state and the acceptance criteria. Findings: what is wrong, where, which rule.
 
-Each confirmed finding goes back to the worker that owns the file (a command-line worker through `--resume`), then stage 3 runs again.
+Each confirmed finding goes back to the worker that owns the file (a command-line worker through `--resume`), then stage 4a runs again.
+
+### 5. Consolidate
+
+When the round is integrated and reviewed, write down what it produced so the next round starts from it: a file with the
+headings `### Results` (what each module now does, the checks that passed, the review findings and how each was settled)
+and `### Architecture changes` (module boundaries moved, files that changed owner, new invariants; "none" with the reason
+when nothing changed). Then:
+
+```
+node "<helper>" consolidate --cwd <repo> --meeting <id> --summary <summary.md>
+```
+
+The helper appends it to the project memory under `## Round <n> · <meeting id> · <date time>`, where every later worker
+reads it first. Adjust the module-boundary files the round touched in the same round; the project memory itself is not
+committed. The next round's roundtable is refused until this is done.
 
 ## Rules
 
@@ -228,6 +295,7 @@ Each confirmed finding goes back to the worker that owns the file (a command-lin
 - GPT models default to max effort with fast mode; Claude models default to high effort. Honor the user's chosen settings.
 - Start command-line workers only through the dispatch helper as background commands, read the start line to confirm the launch and routing, and act on `failed to start` or `routing MISMATCH`.
 - Give a worker that changes files `--allow` for its scope and reject any `OUT OF SCOPE` result.
+- Hold the roundtable before the build and consolidate the round after the review; show the user the minutes as tables.
 - Use the one-agent fallback when needed and state unavailable-model substitutions in the plan.
 - Review is stage 4: architecture review plus UI and interaction acceptance, with fresh reviewers who did not build the work.
 - Follow the user's authorization for commits, builds, app launches and releases; release only when requested.
