@@ -95,8 +95,9 @@ files it will change after the roundtable. The start line carries ` · roundtabl
   - Questions and risks: …
   ```
 
-  (`none` where empty). Parsed into goal / files / provides / uses / doneWhen / questions: status `understood` when all
-  six are present, else `incomplete`.
+  (`none` where empty). Each field may continue on following lines; a line that does not start a named field belongs to
+  the preceding field. Parsed into goal / files / provides / uses / doneWhen / questions: status `understood` when all
+  six are present and non-empty, with no duplicate fields; otherwise `incomplete`.
 - A resumed session that already has an understanding in this meeting gets the **confirmation request**: the brief carries
   the minutes, the worker checks that the others' understanding of the interfaces it shares matches its own and that its
   questions are answered, and ends with `## Roundtable confirmation` and `Status: confirmed`, or `Status: open` followed
@@ -160,16 +161,19 @@ helper prints exactly one start line, then exactly one end line, on its stdout:
 
 ```
 [dispatch] started <id> codex model gpt-6.1-sol effort max fast on · routing ok · pid <n> session <session id>
+[dispatch] started <id> claude model claude-sonnet-5-5 effort unreported fast off · routing ok (effort unverified) · pid <n> session <session id>
 [dispatch] started <id> codex model gpt-6.1-terra effort high fast off · routing MISMATCH (declared gpt-6.1-sol max fast on) · …
 [dispatch] failed to start <id>: <reason>          (instead of "started"; the helper then exits non-zero)
 [dispatch] ended <id> codex model gpt-6.1-sol effort max fast on · 43 token/s (5,210 output tokens in 121 s) · exit 0 reason exit · scope ok · out <answer path>
 ```
 
-The start line is the lead's proof that the task started and that model routing worked: it states what the worker
-itself reports it is running — Codex's matching rollout (`turn_context` model and effort; recorded service tier),
-Claude's `system/init` record (model, effort and fast-mode state when present) — and compares it with what was declared. `routing ok` when they match;
-`routing MISMATCH (declared …)` otherwise, with the actual values first; a value the worker does not report is written
-`unreported`, never assumed. "Started" is printed only from the worker's own records — its session reported (and
+The start line proves that the worker started and states its reported model, effort and mode. The helper compares
+Codex's matching rollout (`turn_context` model and effort; recorded service tier) or Claude's `system/init` record
+(model, effort and fast-mode state when present) with the declaration. A reported difference gives
+`routing MISMATCH (declared ...)` with the reported values first; otherwise it says `routing ok`. A value the worker
+does not report stays `unreported` in the values and is listed as `unverified` after the verdict, including when another
+reported value mismatches. It is never assumed from the declaration, so verify an unreported setting before relying on it.
+"Started" is printed only from the worker's own records — its session reported (and
 Codex's turn context read from its session file) — within 30 seconds, else "failed to start". While the worker runs, its
 session file is read every 250 ms (today's and yesterday's `sessions/<y>/<m>/<d>` folders directly, so a new file is
 found at once), and a start is reported well within a second of the record. A worker that finishes in a few seconds is
@@ -200,7 +204,7 @@ rate, live:
 
 | type | fields |
 | --- | --- |
-| `dispatch-start` | `id` (uuid), `agent` (codex/claude), `role`, `title`, `model`, `effort`, `fast` (as the worker reports them; `declared` holds the declared three when they differ), `cwd`, `brief`, `out`, `sessionId`, `startedAt`; an unconfirmed start uses the declared routing and `unconfirmed: true`, with `sessionId: null` if unknown |
+| `dispatch-start` | `id` (uuid), `agent` (codex/claude), `role`, `title`, `model`, `effort`, `fast` (as the worker reports them; `declared` holds the declared three when a reported value differs), `cwd`, `brief`, `out`, `sessionId`, `startedAt`; an unconfirmed start uses the declared routing and `unconfirmed: true`, with `sessionId: null` if unknown |
 | `dispatch-rate` | `id`, `outputTokens`, `activeMs` — cumulative completed-response totals, checked every 5 s while running; unchanged or unreported totals are skipped |
 | `dispatch-end` | `id`, `model`, `effort`, `fast`, `exitCode`, `reason` (`exit`, `killed`, `capacity`, `error`, `unconfirmed`, `scope`), `outputTokens`, `activeMs` (null when unreported), `endedAt`; `outOfScope` (files) with `--allow` |
 
@@ -225,8 +229,6 @@ confirmed worker runs.
   for a task too small for one.
 - A Claude worker (`claude -p`) can read only inside its `--cwd`: paste anything else it needs (a review report, a
   plan in the scratch folder) into the brief, or copy it into its worktree. A Codex worker can read outside it.
-- Each understanding field is one line (join items with `;`); a multi-line field is judged `incomplete` and the worker
-  must restate. Say so in the plan when a worker tends to write lists.
 - Right after launching, read the helper's start line; treat anything but `[dispatch] started … routing ok` as a launch
   to fix before relying on the worker.
 - Claude Code's own Agent tool calls stay as they are: their transcript records are already structured.

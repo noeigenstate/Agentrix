@@ -13,6 +13,7 @@ const { createRequire } = require('node:module');
 const vm = require('node:vm');
 const { projectTeam, understandingOf, confirmationOf, memoryExcerpt, minutesMarkdown } = require('../electron/features/team/team.cjs');
 const { createEventServer } = require('../electron/events.cjs');
+const { minutesPage } = require('../electron/features/team/minutes-page.cjs');
 
 const helper = path.resolve(__dirname, '../integration/dispatch.cjs');
 const worker = path.resolve(__dirname, 'fixtures/dispatch-worker.cjs');
@@ -123,13 +124,14 @@ test('team options reject ambiguity and never leak helper flags into CLI argv', 
   assert.throws(() => argumentsOf(['consolidate', '--cwd', '.', '--meeting', 'x', '--summary', 's.md', '--out', 'm.md']));
 });
 
-test('understanding and confirmation parsing require complete final blocks', () => {
+test('understanding and confirmation parsing require complete blocks', () => {
   assert.equal(understandingOf(understanding).status, 'understood');
   assert.deepEqual(understandingOf(understanding).understanding, {
     goal: 'Coordinate safely', files: 'src/a.js', provides: 'team state', uses: 'minutesPage(minutes)', doneWhen: 'tests pass', questions: 'none',
   });
   for (const answer of ['', understanding.replace('- Uses: minutesPage(minutes)\n', ''), understanding.replace('- Uses: minutesPage(minutes)', '- Uses: '),
-    understanding + '- Goal: duplicate\n', understanding + '\n## Another section\nNo.\n']) assert.equal(understandingOf(answer).status, 'incomplete');
+    understanding + '- Goal: duplicate\n', understanding.replace('- Uses: minutesPage(minutes)', '- Uses:\n  \t'),
+    understanding.replace('- Goal:', 'orphan before fields\n- Goal:')]) assert.equal(understandingOf(answer).status, 'incomplete');
   assert.equal(confirmationOf(confirmation).status, 'confirmed');
   for (const answer of ['', 'Status: confirmed', confirmation + '- still unresolved', '## Roundtable confirmation\nStatus: yes']) assert.equal(confirmationOf(answer).status, 'open');
   assert.deepEqual(confirmationOf('## Roundtable confirmation\nStatus: open\n- Answer my question.\n').confirmation.questions, ['Answer my question.']);
@@ -137,6 +139,26 @@ test('understanding and confirmation parsing require complete final blocks', () 
   assert.equal(understandingOf(understanding + '\n## Roundtable understanding\n- Goal: incomplete').status, 'incomplete');
   assert.equal(confirmationOf(confirmation + '\n## Roundtable confirmation\nStatus: open\n- Latest question.').status, 'open');
   assert.equal(confirmationOf('## Roundtable confirmation\nStatus: open\n- Old question.\n\n' + confirmation).status, 'confirmed');
+});
+
+test('understanding fields accept continuations and preserve them in the minutes', () => {
+  const answer = understanding.replace('Goal: Coordinate safely', 'Goal: Coordinate safely\nand report findings')
+    .replace('Files: src/a.js', 'Files: src/a.js\n  src/b.js')
+    .replace('Uses: minutesPage(minutes)', 'Uses:\n  - first dependency\n  - second dependency')
+    .replace('Questions and risks: none', 'Questions and risks: none\n- Other: follow-up\n\n## Another section\nNo.');
+  const parsed = understandingOf(answer.replace(/\n/g, '\r\n'));
+  assert.equal(parsed.status, 'understood');
+  assert.equal(parsed.understanding.goal, 'Coordinate safely\nand report findings');
+  assert.equal(parsed.understanding.files, 'src/a.js\n  src/b.js');
+  assert.equal(parsed.understanding.uses, '- first dependency\n  - second dependency');
+  assert.equal(parsed.understanding.questions, 'none\n- Other: follow-up\n\n## Another section\nNo.');
+  const minutes = { meeting: 'r1', round: 1, generatedAt: 0, language: 'en', issues: [],
+    rows: [{ who: 'Terra', title: 'Task', ...parsed.understanding, status: parsed.status }] };
+  const md = minutesMarkdown(minutes), html = minutesPage(minutes);
+  assert.match(md, /Coordinate safely<br>and report findings/);
+  assert.match(md, /src\/a\.js<br>  src\/b\.js/);
+  assert.match(html, /Coordinate safely\nand report findings/);
+  assert.match(html, /src\/<wbr>a\.js<\/span><span class="file">src\/<wbr>b\.js/);
 });
 
 test('worktrees share team state and outside git the helper behaves as before', async t => {
@@ -211,9 +233,12 @@ test('execution requires a confirmed resumed session and the same scope set', as
   assert.equal(refused.code, 1); assert.match(refused.stdout, /no meeting for the session.*--skip-meeting/); assert.equal(exists(absent.capture), false);
   await until(() => f.events.length >= 2);
   assert.deepEqual(f.events.slice(0, 2).map(event => [event.type, event.unconfirmed || event.reason]), [['dispatch-start', true], ['dispatch-end', 'unconfirmed']]);
-  const first = await start(f, { meeting: 'r1', session, allow });
+  const answer = understanding.replace('Files: src/a.js', 'Files: src/a.js\n  src/b.js');
+  const first = await start(f, { meeting: 'r1', session, allow, answer });
   assert.match((await output(first)).stdout, /roundtable r1 · understanding complete/);
   assert.equal(team.entries().at(-1).status, 'understood');
+  assert.equal(team.entries().at(-1).understanding.files, 'src/a.js\n  src/b.js');
+  assert.match((await json(first.capture)).brief, /fields may continue on following lines/);
   const notConfirmed = await start(f, { resume: session, allow });
   assert.match((await output(notConfirmed)).stdout, /roundtable not confirmed/);
   const confirm = await start(f, { meeting: 'r1', resume: session, session, allow, answer: confirmation });
