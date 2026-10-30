@@ -843,6 +843,7 @@ function onEvent(event) {
     const onHistory = ready => {
       if (ready) s.conversation.endHistory();
       else {
+        s.activitySnapshot = s.activityRawSnapshot = null;
         s.conversation.beginHistory(); s.actions.reset(); s.conversation.reset(); s.usage?.reset(true);
         if (s.completionWork?.reset()) store.expectCompletion(project.id, false);
         s.usage?.resetScope(); s.bindUsageAccount?.();
@@ -878,8 +879,10 @@ function onEvent(event) {
       onReset: partial => { if (readCurrent() && s.usage?.rates) s.usage.rates.partial = partial; }, onRecord, onWorkRecord: record => onRecord({ ...record, workOnly: true }) });
     s.activityMonitor = monitorActivity(
       async () => {
-        const snapshot = await (reader ? reader.read() : project.terminals?.length && !s.reportedThreadId ? null : s.terminal.request('codex-status', { since: remoteSince, threadId: s.reportedThreadId }).then(remoteStatus));
+        let snapshot = await (reader ? reader.read() : project.terminals?.length && !s.reportedThreadId ? null : s.terminal.request('codex-status', { since: remoteSince, threadId: s.reportedThreadId }).then(remoteStatus));
         if (!readCurrent()) return null;
+        // Fresh SSH snapshots use the remote clock; cached snapshots already use this clock.
+        if (snapshot && !reader) snapshot = { ...snapshot, updatedAt: snapshot.updatedAt + s.activitySince - remoteSince };
         if (reader?.filename && snapshot?.threadId) void prepareReading(s.terminalId,
           { agent: 'codex', threadId: snapshot.threadId, cwd: event.cwd || project.path }, reader.filename);
         if (s.completionWork && reader) {
@@ -890,7 +893,6 @@ function onEvent(event) {
         return latest && { ...latest, workVersion: s.completionWork?.version, reading: !!s.completionWork?.reading };
       },
       snapshot => {
-        if (!reader) snapshot = { ...snapshot, updatedAt: snapshot.updatedAt + s.activitySince - remoteSince };
         // Codex can record the received prompt after task_started for the same open turn.
         if (snapshot.state === 'working' && s.activityPromptAt > snapshot.updatedAt) snapshot = { ...snapshot, updatedAt: s.activityPromptAt };
         applyActivity(project, s, snapshot);
@@ -944,12 +946,13 @@ async function resumeAfterPrompt(project, session) {
   const plan = restorePlans.get(session.terminalId);
   if (!plan || !session.ready) return;
   restorePlans.delete(session.terminalId);
-  if (session.inputDirty) { readingHistory.close(session.terminalId); return; }
-  const restore = store.findTerminal(session.terminalId)?.record.restore;
-  // Claude Code resumes its own conversation, here or on the terminal's SSH channel.
-  if (restore?.agent === 'claude') {
-    if (!session.claudeAvailable || !plan.codex) { readingHistory.close(session.terminalId); return; }
-    try {
+  session.agentStarting = true;
+  try {
+    if (session.inputDirty) return;
+    const restore = store.findTerminal(session.terminalId)?.record.restore;
+    // Claude Code resumes its own conversation, here or on the terminal's SSH channel.
+    if (restore?.agent === 'claude') {
+      if (!session.claudeAvailable || !plan.codex) return;
       const command = claudeResumeCommand(restore);
       if (sessions.get(session.terminalId) !== session || !session.ready || session.inputDirty || session.codexActive) return;
       store.expectCompletion(project.id, restore.interrupted === true);
@@ -959,12 +962,9 @@ async function resumeAfterPrompt(project, session) {
       // Remote SessionStart hooks bind the server transcript; never search this computer for that path.
       if (restore.threadId && project.kind !== 'ssh') await followClaudeSession(project, session, restore.threadId);
       broadcast();
-    } catch (error) { session.error = `恢复会话失败：${error.message}`; broadcast(); }
-    return;
-  }
-  if (!session.codexAvailable) { readingHistory.close(session.terminalId); return; }
-  session.agentStarting = true;
-  try {
+      return;
+    }
+    if (!session.codexAvailable) return;
     const info = project.kind === 'ssh' ? await session.terminal.request('resume-info', { threadId: restore?.threadId }) : await recentSession(restore?.cwd || project.path, session.codexHome, restore?.threadId);
     // Legacy versions did not record which process owned a conversation. Open
     // that history, but do not submit work to a possibly still-running session.

@@ -345,6 +345,60 @@ test('restored sessions follow before a hook and keep history when the agent-sta
   assert.equal(h.s.claudeTranscript, tail); assert.equal(h.resets(), 1); assert.equal(h.s.conversation.list[0].text, 'Restored prompt');
 });
 
+test('Claude restore keeps the same read-only preview in broadcasts until its CLI starts', async t => {
+  const f = await fixture(t), id = '12345678-1234-1234-1234-123456789abc';
+  await f.write(id, [user('Restored prompt')]);
+  const h = mainHarness(t, f), scope = { key: 'saved-preview', agent: 'claude', threadId: id }, snapshots = [];
+  Object.assign(h.restore, { threadId: id, codex: true });
+  Object.assign(h.s, { ready: true, status: 'shell', codexActive: false, claudeAvailable: true, gate: { afterPrompt() {} } });
+  h.s.promptQueue.list = () => [];
+  h.context.readingHistory.summary = () => scope;
+  h.context.readingHistory.close = () => assert.fail('a launched restore retains its preview binding');
+  Object.assign(h.context, {
+    terminalIds: () => ['terminal'], shownTerminalIds: () => ['terminal'], startupErrors: new Map(),
+    dispatchedOnly: () => null, getBranch: () => '', t: text => text, localShell: () => ({ kind: 'powershell' }),
+    process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: f.home } }, app: { getVersion: () => 'test' },
+    desktopGlassBackend: null, desktopGlassWindow: false, desktopGlassActive: false, windowZoom: null,
+  });
+  h.store.settings = {};
+  vm.runInContext(main.slice(main.indexOf('function publicState('), main.indexOf('function terminalIds(')), h.context);
+  const shown = () => h.context.publicState().projects[0].terminals[0];
+  h.context.broadcast = () => snapshots.push(shown());
+  const follow = h.context.followClaudeSession;
+  let resumeFollow;
+  h.context.followClaudeSession = async (...args) => {
+    await new Promise(resolve => { resumeFollow = resolve; });
+    return follow(...args);
+  };
+  h.context.restorePlans.set('terminal', { codex: true });
+  assert.equal(shown().readingHistory, scope);
+  const restoring = h.context.resumeAfterPrompt(h.project, h.s);
+  assert.equal(h.context.restorePlans.has('terminal'), false);
+  h.context.broadcast();
+  assert.equal(shown().readingHistory, scope); assert.equal(shown().agentStarting, true); assert.equal(shown().shellReady, false);
+  resumeFollow(); await restoring;
+  assert.equal(shown().readingHistory, scope); assert.equal(shown().agentStarting, true);
+  h.context.onEvent({ projectId: 'terminal', sessionKey: 'key', type: 'codex-started', agent: 'claude', cwd: f.cwd });
+  assert.equal(h.s.agentStarting, false); assert.equal(shown().agentStarting, false); assert.equal(shown().readingHistory, scope);
+  assert.ok(snapshots.length >= 3); assert.ok(snapshots.every(value => value.readingHistory === scope));
+});
+
+test('Claude restore failures clear startup and close the consumed preview binding', async t => {
+  const f = await fixture(t);
+  for (const failure of ['dirty', 'missing', 'terminal-only', 'invalid-id', 'active']) {
+    const h = mainHarness(t, f), closed = [];
+    Object.assign(h.s, { ready: true, codexActive: failure === 'active', claudeAvailable: failure !== 'missing',
+      agentStarting: true, inputDirty: failure === 'dirty', gate: { afterPrompt: () => assert.fail(failure) } });
+    if (failure === 'invalid-id') h.restore.threadId = 'invalid';
+    h.context.readingHistory.close = id => closed.push(id);
+    h.context.restorePlans.set('terminal', { codex: failure !== 'terminal-only' });
+    await h.context.resumeAfterPrompt(h.project, h.s);
+    assert.equal(h.s.agentStarting, false, failure); assert.deepEqual(closed, ['terminal'], failure);
+    assert.equal(h.context.restorePlans.size, 0, failure);
+    if (failure === 'invalid-id') assert.match(h.s.error, /恢复会话失败/);
+  }
+});
+
 for (const catchingUp of [false, true]) test(`Claude CLI start preserves recovered workers and catching-up=${catchingUp} without arming completion`, async t => {
   const { CompletionWork } = require('../electron/completion-work.cjs');
   const f = await fixture(t), id = '12345678-1234-1234-1234-123456789abc';

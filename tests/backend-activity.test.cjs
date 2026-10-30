@@ -224,6 +224,54 @@ async function activityFeed(t, h, { clockOffset = h.project.kind === 'ssh' ? 100
   };
 }
 
+for (const clockOffset of [100000, -100000]) test(`SSH Codex null history polls preserve the cached main-clock time with offset ${clockOffset}`, async t => {
+  const h = await harness(t, 'ssh'), { s, project } = h, feed = await activityFeed(t, h, { clockOffset });
+  h.write('First request\r'); await feed.user('First request', 2000); await feed.complete(2100);
+  assert.equal(h.alerts(), 1); h.store.acknowledge(project.id);
+  h.now(2200); h.write('Current request\r'); h.user('Current request', 2200 - clockOffset);
+  const response = { snapshot: null, records: [], historyDone: false };
+  s.terminal.request = async () => response;
+  for (let poll = 0; poll < 4; poll++) {
+    await feed.poll();
+    assert.equal(s.activityRawSnapshot.updatedAt, 2100, 'cached timestamps are already on the main clock');
+    assert.equal(s.codexActivity, 'working'); assert.equal(h.alerts(), 1); assert.equal(project.unread, 0);
+  }
+  response.historyDone = true;
+  await feed.poll();
+  s.completionWork.changed(); await Promise.resolve();
+  assert.equal(s.activityRawSnapshot.updatedAt, 2100); assert.equal(s.codexActivity, 'working');
+  response.snapshot = { threadId: s.rootThreadId, turnId: 'current', state: 'working', updatedAt: 2300 - clockOffset };
+  await feed.poll();
+  assert.equal(s.activityRawSnapshot.updatedAt, 2300, 'a fresh remote snapshot is shifted once and replaces the cache');
+  s.completionWork.changed(); await Promise.resolve();
+  const otherId = h.store.addTerminal(project.id);
+  const other = { terminalId: otherId, projectId: project.id, agent: 'codex', codexActive: true, promptQueue: new PromptQueue() };
+  h.sessions.set(otherId, other); t.after(() => other.promptQueue.reset());
+  h.context.applyActivity(project, other, { threadId: 'sibling', turnId: 'done', state: 'complete', updatedAt: 2400 });
+  assert.equal(s.codexActivity, 'working'); assert.equal(project.unread, 0); assert.equal(h.alerts(), 1);
+  assert.equal(h.armings(), 2, 'history polls and completion refreshes never arm another round');
+});
+
+for (const kind of ['local', 'ssh']) test(`Codex ${kind} thread switches discard cached snapshots before a null history read`, async t => {
+  const h = await harness(t, kind), { s, project } = h, feed = await activityFeed(t, h);
+  h.write('First request\r'); await feed.user('First request', 2000); await feed.complete(2100);
+  h.store.acknowledge(project.id);
+  h.now(2200); h.write('Current request\r');
+  s.reportedThreadId = '00000000-0000-4000-8000-000000000002';
+  if (kind === 'ssh') {
+    let reset = true;
+    s.terminal.request = async () => { const value = { snapshot: null, records: [], historyDone: false, reset }; reset = false; return value; };
+  }
+  for (let poll = 0; poll < 3; poll++) {
+    assert.equal(await feed.poll(), null);
+    assert.equal(s.activityRawSnapshot, null); assert.equal(s.activitySnapshot, null);
+    s.completionWork.changed(); s.promptQueue.changed(); await Promise.resolve();
+    assert.equal(s.activityRawSnapshot, null, 'completion callbacks cannot recover the old thread');
+    assert.equal(s.codexActivity, 'working'); assert.equal(h.alerts(), 1); assert.equal(project.unread, 0);
+  }
+  assert.equal(h.armings(), 2);
+});
+
 const userRoundFixture = require('./fixtures/claude-user-round-background.json');
 const recordedLine = line => userRoundFixture.records[userRoundFixture.sourceLines.indexOf(line)];
 
