@@ -71,4 +71,8 @@ export type AgentScreen = {
   // The CLI's own popups over its input; the reading view has its own for "/" and "@", so these only tell it to
   // stay out of the way: 'slash' (command list), 'mention' (@ list), 'shortcuts' ("?" help), or none.
   overlay: 'none' | 'slash' | 'mention' | 'shortcuts';
+  // The CLI is waiting for the user's choice on a screen the parser could not turn into a card (a dialog a CLI update
+  // added, or one clipped by the window): the reading view shows a generic card that opens the terminal instead.
+  // title is the dialog's own heading when one was read. Absent or null when nothing waits or choice holds the card.
+  waiting?: { title: string | null } | null;
 };
