@@ -1,5 +1,7 @@
 import type { ThemeId } from './themes';
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
+// A delivery the owner passed or sent back (the review card). submission counts from 1; note is the sent-back text.
+export type DeliveryGrade = { projectId: string; terminalId: string; outcome: 'passed' | 'sent-back'; submission: number; note?: string };
 export type AgentCommand = { name: string; description: string; source: 'builtin' | 'project' | 'user' | 'skill'; view: 'terminal' | 'reading' };
 // messages is exact within 256 KiB, estimated from record density for larger transcripts.
 export type AgentSession = { id: string; updatedAt: number; title: string; messages: number };
@@ -157,6 +159,8 @@ type Bridge = {
   listProjectImageCandidates(projectId: string): Promise<Result<ProjectImageCandidates>>;
   reorderTerminals(projectId: string, ids: string[]): Promise<Result<void>>;
   acknowledge(id: string): Promise<Result<void>>;
+  // The owner's call on a delivery, kept for the model dashboard; the main process adds the agent, model and session.
+  gradeDelivery(grade: DeliveryGrade): Promise<Result<void>>;
   settings(patch: Partial<Settings>): Promise<Result<void>>;
   listDirectory(id: string, relativePath?: string, offset?: number): Promise<Result<DirectoryListing>>;
   findFiles(projectId: string, query: string): Promise<Result<MentionFile[]>>;
