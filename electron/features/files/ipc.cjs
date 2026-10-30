@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const { findFiles, listDirectory, readProjectFile, saveProjectFile, resolveProjectPath, VIDEO_TYPES } = require('../../project-files.cjs');
 const { projectPaths } = require('../../project-paths.cjs');
 const { resolveTerminalLink, resolveRevealPath } = require('../../terminal-links.cjs');
+const { previewLocation, pageKind, SSH_OUTSIDE } = require('./preview-location.cjs');
 
 function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperations, clipboardWrites, clipboard, previewResources, affectsEditor, allowEditorClose, shell, getActiveFileTree, setActiveFileTree, setActiveTerminal, send }) {
   const fileSaves = new Set();
@@ -37,8 +38,17 @@ function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperatio
   listen('files:focus', (id, focused) => { if (focused) { findProject(id); setActiveFileTree(id); setActiveTerminal(null); } else if (getActiveFileTree() === id) setActiveFileTree(null); });
   async function readFile(id, relativePath, pageIndex) {
     const project = findProject(id);
-    const preview = project.kind === 'ssh' ? await remoteFor(id).request('preview', { path: relativePath, page: pageIndex || 0 }) : await readProjectFile(project, relativePath, pageIndex);
-    if (['image', 'html', 'markdown', 'video'].includes(preview.kind)) return { ...preview, ...previewResources.open(project, relativePath, preview.kind, preview.mimeType) };
+    let location = { project, relative: relativePath };
+    if (project.kind !== 'ssh' && typeof relativePath === 'string' && pageKind(relativePath)) location = await previewLocation(project, relativePath);
+    let preview;
+    try {
+      preview = project.kind === 'ssh' ? await remoteFor(id).request('preview', { path: relativePath, page: pageIndex || 0 }) : await readProjectFile(location.project, location.relative, pageIndex);
+    } catch (error) {
+      if (project.kind === 'ssh' && typeof relativePath === 'string' && pageKind(relativePath)
+        && (path.posix.isAbsolute(relativePath) || relativePath.split('/').includes('..') || error.message === '该链接指向远程项目目录之外。')) throw new Error(SSH_OUTSIDE);
+      throw error;
+    }
+    if (['image', 'html', 'markdown', 'video'].includes(preview.kind)) return { ...preview, ...previewResources.open(location.project, location.relative, preview.kind, preview.mimeType) };
     return preview;
   }
   handle('project:file', readFile);

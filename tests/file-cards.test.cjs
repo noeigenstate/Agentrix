@@ -44,10 +44,10 @@ test('an HTML page is pictured once per version of the file, one page at a time,
   assert.equal(captures, 2, 'a changed file is pictured again');
 });
 
-test('files outside the project or of other kinds get no card', async () => {
+test('missing files and unsupported kinds get no card', async () => {
   const { project, previews } = fixture();
   const card = createFileCards({ previews, capture: async () => null });
-  await assert.rejects(card(project, '../outside.html'), /文件在项目目录之外/);
+  await assert.rejects(card(project, '../outside.html'), /找不到这个文件/);
   await assert.rejects(card(project, '../missing-outside.md'), /找不到这个文件/);
   await assert.rejects(card(project, 'notes.txt'), /没有预览卡片/);
   assert.equal(cardKind('README.MD'), 'markdown'); assert.equal(cardKind('a/b.htm'), 'html'); assert.equal(cardKind('x.webm'), 'video'); assert.equal(cardKind('x.PNG'), 'image'); assert.equal(cardKind('x.ts'), null);
@@ -70,7 +70,7 @@ test('files in a remote project are read over its connection: pages pictured, do
   assert.deepEqual(await card(project, 'img/cat.png'), { kind: 'image', path: 'img/cat.png', remote: true, picture: 'data:image/png;base64,small' });
   assert.deepEqual(shrunk, [300 * 1024], 'the whole image arrives, in the pieces the worker reads at once');
   assert.deepEqual(reads.filter(([file]) => file === 'img/cat.png').map(([, offset, length]) => [offset, length]), [[0, 256 * 1024], [256 * 1024, 44 * 1024]]);
-  await assert.rejects(card(project, '/etc/site.html'), /文件在项目目录之外/);
+  await assert.rejects(card(project, '/etc/site.html'), /SSH 项目暂不支持预览项目目录外的页面和视频/);
   await assert.rejects(card(project, 'img/missing.png'), /找不到这张图片/);
 });
 
@@ -125,7 +125,7 @@ test('relative paths use the agent cwd, including parent steps that stay in the 
   const card = createFileCards({ previews, capture: async () => 'picture' });
   assert.equal((await card(project, 'guide.md', cwd)).path, 'docs/guide.md');
   assert.equal((await card(project, '../page.html', cwd)).path, 'page.html');
-  await assert.rejects(card(project, '../../outside.html', cwd), /文件在项目目录之外/);
+  await assert.rejects(card(project, '../../outside.html', cwd), /找不到这个文件/);
 });
 
 test('HTML URLs encode special names and serve local styles and scripts under the existing sandbox CSP', async () => {
@@ -187,13 +187,16 @@ test('more than 32 queued pages keep their preview URLs alive and capture sequen
   assert.equal(most, 1); assert.equal(previews.sessions.size, 0);
 });
 
-test('outside absolute paths, sibling prefixes and external junctions show a clear project-boundary error', async () => {
+test('outside absolute paths, sibling prefixes and junctions preview the selected real folder', async () => {
   const { project, previews } = fixture();
   const card = createFileCards({ previews, capture: async () => 'picture' });
   const outside = fs.mkdtempSync(project.path + '-outside-');
   fs.writeFileSync(path.join(outside, 'page.html'), '<h1>Outside</h1>');
   fs.symlinkSync(outside, path.join(project.path, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
-  for (const file of [path.join(outside, 'page.html'), 'linked/page.html', '../outside.html']) await assert.rejects(card(project, file), /文件在项目目录之外/);
+  for (const file of [path.join(outside, 'page.html'), 'linked/page.html']) {
+    assert.deepEqual(await card(project, file), { kind: 'html', path: fs.realpathSync(path.join(outside, 'page.html')), picture: 'picture' });
+  }
+  await assert.rejects(card(project, '../outside.html'), /找不到这个文件/);
 });
 
 test('Claude transcripts and Codex rollouts keep the cwd of each written file', async () => {

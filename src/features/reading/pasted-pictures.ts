@@ -9,14 +9,14 @@ export function rememberPicture(path: string, thumbnail: string) {
   while (pictures.size > LIMIT) pictures.delete(pictures.keys().next().value!);
 }
 
-// The message's words without the paths of pictures pasted here, and those pictures after any it already had.
+// A recorded picture may already have its thumbnail; the paste cache must not add the same picture again.
 export function withPictures(text: string, images: readonly string[] = []): { text: string; images: string[] } {
-  const found: string[] = [];
+  const found = [...images].slice(0, 4);
   let words = text;
   for (const [path, thumbnail] of pictures) {
     if (!words.includes(path)) continue;
-    found.push(thumbnail); words = words.split(path).join(' ');
+    if (found.length < 4 && !found.includes(thumbnail)) found.push(thumbnail);
+    words = words.split(path).join(' ');
   }
-  if (!found.length) return { text, images: [...images] };
-  return { text: words.replace(/[ \t]{2,}/g, ' ').replace(/^\s+|\s+$/g, ''), images: [...images, ...found].slice(0, 6) };
+  return { text: words === text ? text : words.replace(/[ \t]{2,}/g, ' ').replace(/^\s+|\s+$/g, ''), images: found };
 }
