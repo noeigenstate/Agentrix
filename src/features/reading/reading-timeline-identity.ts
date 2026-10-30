@@ -2,14 +2,15 @@ import type { ConversationEntry } from '../../shared/types';
 
 type Identity = { id: string; at: number; user?: string };
 type EntryIdentity = { turn: Identity; tools?: Identity };
-// Metadata belongs only to retained objects, never to an ever-growing ID registry or to the IPC schema.
+// Retained objects carry page-boundary identity; the WeakMap reconciles overlaps without a growing ID registry.
 const identities = new WeakMap<ConversationEntry, EntryIdentity>();
-export const timelineIdentity = (entry: ConversationEntry) => identities.get(entry);
+export const timelineIdentity = (entry: ConversationEntry) => identities.get(entry) ?? entry.timeline;
 
 // Reconcile before trimming the buffer. Overlapping IDs preserve both append and full-snapshot identities;
 // a prepended part of the same turn inherits its already visible parent instead of remounting it.
 export function retainTimelineIdentity(previous: readonly ConversationEntry[], incoming: readonly ConversationEntry[]): ConversationEntry[] {
-  const known = new Map(previous.map(entry => [entry.id, identities.get(entry)]));
+  const known = new Map(previous.map(entry => [entry.id, timelineIdentity(entry)]));
+  for (const entry of incoming) if (!known.has(entry.id) && entry.timeline) known.set(entry.id, entry.timeline);
   // Also support an unannotated initial caller, without changing its objects.
   if (previous.length && !previous.some(entry => identities.has(entry))) {
     for (const entry of retainTimelineIdentity([], previous)) known.set(entry.id, identities.get(entry));

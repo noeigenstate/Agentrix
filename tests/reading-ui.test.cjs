@@ -10,6 +10,7 @@ const { choiceKeys, selectedChoiceIndex, writeChoiceKeys } = require('../src/fea
 const { choiceIdentity } = require('../src/features/agents/agent-screen.ts');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
 const en = require('../electron/locales/en.json');
+const historySnapshot = entries => ({ entries, paged: false, hasEarlier: false, loading: false, error: null, loadEarlier: async () => false });
 
 // Components use test-only screen values until feat/screen-parser replaces the stub.
 const fakeScreen = overrides => ({
@@ -441,7 +442,7 @@ function dictationHarness(t, overrides = {}) {
     './ReadingWelcome': {}, './ReadingChoice': {}, './ReadingQuestion': {}, './ReadingSessions': {},
     './reading-mode': { setChoiceVisible() {} }, './typing': { markTyping() {}, isTyping: () => false },
     './useStickToBottom': { useStickToBottom: () => ({ stuck: true, unseen: 0, ready: true, holdPosition() {}, toBottom() {} }) },
-    './useReadingConversation': { conversationKey: () => 'session', useReadingConversation: () => [] },
+    './useReadingConversation': { conversationKey: (id, session) => JSON.stringify([id, session]), useReadingHistory: () => historySnapshot([]) },
     './useVisibleTail': { blocks: () => [], conversationTurns: () => [], useVisibleTail: () => ({ earlier: 0, visible: [] }) },
     './useMentions': { useMentions: () => ({ open: false, keys: () => false }) }, './MentionPalette': {},
     './usePendingPrompts': { usePendingPrompts: () => ({ pending: [], echo: (text, images) => { echoed.push({ text, images }); return null; }, cancelEcho() {} }) },
@@ -712,6 +713,33 @@ test('reading view requires an active agent and a live terminal session', () => 
   assert.equal(mode.readingShown({ ...value, sessionId: null }, []), false);
 });
 
+test('an identity-checked restored history may show before the CLI, respects raw choice and disappears when unbound', () => {
+  const mode = readingMode(), value = { ...terminal('restored-preview', null), sessionId: null, codexActive: false,
+    readingHistory: { key: 'checked-session', agent: 'claude', threadId: 'restored' } };
+  assert.equal(isReading(mode, value), true);
+  mode.setReading(value.id, false); assert.equal(isReading(mode, value), false);
+  mode.setReading(value.id, true); assert.equal(isReading(mode, value), true);
+  assert.equal(isReading(mode, { ...value, readingHistory: null }), false);
+});
+
+test('a restored preview cannot send until its own CLI input is ready, and changing the history key disables it again', async t => {
+  let rows = [];
+  const h = dictationHarness(t, { './terminal-screen': { useScreen: () => ({ rows }), readScreen: () => ({ rows }) } });
+  Object.assign(h.props.terminal, { sessionId: null, codexActive: false, readingHistory: { key: 'history-a', agent: 'codex', threadId: 'restored' } });
+  assert.equal(h.render().props.disabled, true);
+  assert.equal(h.render().props.placeholder, en['正在启动…']);
+  h.edit('do not send before ready'); h.press('Enter'); await h.tick(1000);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+  Object.assign(h.props.terminal, { sessionId: 'resumed-runtime', codexActive: true });
+  assert.equal(h.render().props.disabled, true);
+  rows = ['› Ask Codex to do anything', '', 'gpt-6.1-sol · high · 100% context left'];
+  assert.equal(h.render().props.disabled, false);
+  rows = ['Working...'];
+  assert.equal(h.render().props.disabled, false, 'input readiness remains latched through a working turn');
+  h.props.terminal.readingHistory = { key: 'history-b', agent: 'codex', threadId: 'different' };
+  assert.equal(h.render().props.disabled, true);
+});
+
 test('the terminal surface follows reading intent even before the reading subtree exists, and respects raw choice', () => {
   const mode = readingMode(), value = { ...terminal('surface', null), title: 'Terminal', status: 'shell' };
   const { ProjectTerminals } = loadUI('features/terminal/ProjectTerminals.tsx', {
@@ -755,7 +783,7 @@ function readingHarness(t, entries = [], overrides = {}) {
     './ReadingWelcome': { ReadingWelcome: () => React.createElement('p', null, 'welcome preserved') },
     './ReadingChoice': {}, './ReadingQuestion': {}, './reading-mode': {},
     './useStickToBottom': { useStickToBottom: () => ({ stuck: true, unseen: 0, ready: true, holdPosition() {}, toBottom() {} }) },
-    './useReadingConversation': { conversationKey: () => 'session', useReadingConversation: () => state.entries },
+    './useReadingConversation': { conversationKey: () => 'session', useReadingHistory: () => historySnapshot(state.entries) },
     './useVisibleTail': tail, './reading.css': {},
     './useMentions': { useMentions: () => ({ open: false }) }, './MentionPalette': { MentionPalette: () => null },
     './pending-prompts': require('../src/features/reading/pending-prompts.ts'),
@@ -961,7 +989,7 @@ test('unrelated user records cannot discard a stalled prompt; retries stay bound
   let state = prompts.addPendingPrompt(prompts.createPendingPrompts('session'), 'lost', 'NEVER_DELIVERED', 1000);
   state = prompts.reconcilePendingPrompts(state, 'session', records, clock);
   const h = dictationHarness(t, {
-    './useReadingConversation': { conversationKey: (id, session) => session, useReadingConversation: () => records },
+    './useReadingConversation': { conversationKey: (id, session) => session, useReadingHistory: () => historySnapshot(records) },
     './usePendingPrompts': { usePendingPrompts: () => {
       state = prompts.reconcilePendingPrompts(state, 'session', records, clock);
       return { pending: state.prompts,
@@ -1406,7 +1434,7 @@ test('/clear hides the previous entries only after submission and keeps the term
   const record = { id: 'before-clear', role: 'user', text: 'old conversation' };
   let shown;
   const h = dictationHarness(t, {
-    './useReadingConversation': { conversationKey: () => 'clear-test', useReadingConversation: () => [record] },
+    './useReadingConversation': { conversationKey: () => 'clear-test', useReadingHistory: () => historySnapshot([record]) },
     './useVisibleTail': { blocks: entries => { shown = entries; return []; }, conversationTurns: () => [], useVisibleTail: () => ({ earlier: 0, visible: [] }) },
   });
   h.props.terminal.agent = 'claude'; h.edit('/clear'); h.press('Enter'); await h.tick(0); await h.tick(60);

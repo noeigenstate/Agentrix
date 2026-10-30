@@ -6,9 +6,10 @@ const RECORD_LIMIT = 16 * 1024 * 1024;
 // reads, including the record cut by the display window's byte boundary.
 class CompletionHistory {
   constructor(end) { this.end = end; this.offset = 0; this.buffer = Buffer.alloc(0); this.done = !end; this.skipping = false; this.uncertain = false; }
-  async read(file, onRecord) {
+  async read(file, onRecord, budget = Infinity) {
     const limit = this.offset + LIVE_READ_LIMIT;
-    while (!this.done && this.offset < limit) {
+    const began = performance.now();
+    while (!this.done && this.offset < limit && performance.now() - began < budget) {
       const chunk = Buffer.alloc(Math.min(65536, limit - this.offset));
       const { bytesRead } = await file.read(chunk, 0, chunk.length, this.offset);
       if (!bytesRead) return false;
@@ -28,6 +29,17 @@ class CompletionHistory {
       }
     }
     return this.done;
+  }
+  // Production recovery drains without an idle poll between chunks, yielding so a reading page can paint first.
+  async catchUp(file, onRecord, current = () => true) {
+    while (!this.done && current()) {
+      const before = this.offset;
+      await this.read(file, onRecord, 8);
+      if (this.done) return current();
+      if (this.offset === before) return false;
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    return this.done && current();
   }
 }
 

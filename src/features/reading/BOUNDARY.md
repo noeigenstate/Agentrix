@@ -39,7 +39,7 @@ reading and the raw terminal.
 - A session change (A to B to A), another split's selection or unmounting cancels every delayed key — keys meant for one session must never reach another — test: `tests/reading-ui.test.cjs` › "session A to B to A, terminal selection and unmount cancel every delayed command key"
 - A message the agent queued is never sent again, and a stalled send retries a bounded number of times — a resend runs the task twice — test: `tests/reading-ui.test.cjs` › "unrelated user records cannot discard a stalled prompt; retries stay bounded and queued prompts never resend"
 - Editing keys are sent only for what the CLI's screen shows unambiguously, never guessed from prose — a guessed key edits the wrong text — test: `tests/reading-ui.test.cjs` › "ambiguous prose on both sides of an image never causes guessed editing keystrokes"
-- The reading view shows only for an active agent in a live terminal session — a plain shell has nothing to read — test: `tests/reading-ui.test.cjs` › "reading view requires an active agent and a live terminal session"
+- Interactive reading requires an active agent in a live terminal; an identity-checked restored history may show read-only until that CLI draws its input, and a changed history key invalidates it — test: `tests/reading-history.test.cjs` › "a forged metadata scope and a file outside the configured home never become previews"
 - A waiting notice hands the reader to the terminal at most once, and a manual switch cancels the automatic return — a handoff must not be rearmed by later screen updates — test: `tests/reading-ui.test.cjs` › "one automatic handoff per notice and manual toggles cancel automatic return"
 
 ## Not ours

@@ -12,7 +12,7 @@ function publisher() {
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const packets = [], session = { terminalId: 'terminal', conversation: { list: [], loading: false, snapshot() { return this.list; } } };
   const context = vm.createContext({
-    sessions: new Map([['terminal', session]]), conversationBatchDelay, setTimeout, clearTimeout,
+    sessions: new Map([['terminal', session]]), readingHistory: { summary: () => null }, conversationBatchDelay, setTimeout, clearTimeout,
     send: (channel, packet) => packets.push({ channel, packet }),
   });
   vm.runInContext(source.slice(source.indexOf('function publishConversation('), source.indexOf('// A skill step')), context);

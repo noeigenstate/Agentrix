@@ -42,6 +42,31 @@ test('large valid records preserve completion metadata after outputs without mak
   assert.equal(history.uncertain, false); assert.ok(work.find('shell'));
 });
 
+test('cooperative recovery drains the prefix in order without idle-poll timers', async t => {
+  const directory = await fixture(t), filename = path.join(directory, 'history.jsonl');
+  const lines = Array.from({ length: 1800 }, (_, n) => row({ type: 'system', n, padding: 'x'.repeat(4096) }));
+  await fs.writeFile(filename, lines.join(''));
+  const file = await fs.open(filename, 'r'); t.after(() => file.close());
+  const history = new CompletionHistory((await file.stat()).size - 1), seen = [];
+  let yielded = false; setImmediate(() => { yielded = true; });
+  assert.equal(await history.catchUp(file, record => seen.push(record.n)), true);
+  assert.equal(yielded, true);
+  assert.deepEqual(seen, Array.from({ length: 1800 }, (_, n) => n));
+});
+
+test('a replaced session cancels cooperative recovery before another chunk can report work', async t => {
+  const directory = await fixture(t), filename = path.join(directory, 'history.jsonl');
+  await fs.writeFile(filename, row({ type: 'system', padding: 'x'.repeat(8192) }).repeat(1600));
+  const file = await fs.open(filename, 'r'); t.after(() => file.close());
+  const history = new CompletionHistory((await file.stat()).size - 1);
+  let current = true, seen = 0;
+  setImmediate(() => { current = false; });
+  assert.equal(await history.catchUp(file, () => seen++, () => current), false);
+  const before = seen;
+  assert.equal(await history.catchUp(file, () => seen++, () => current), false);
+  assert.equal(seen, before); assert.equal(history.done, false);
+});
+
 for (const agent of ['claude', 'codex']) test(`${agent} recovers launches and ends before the 8 MiB tail, then reads the remaining worker's end`, async t => {
   const directory = await fixture(t), folder = path.join(directory, 'sessions');
   await fs.mkdir(folder);

@@ -91,7 +91,9 @@ class CodexActivityReader {
         this.options.onReset?.(this.offset > 0);
       }
       this.fileIdentity = identity; this.fileSize = size;
-      if (this.workHistory && !await this.workHistory.read(file, this.options.onWorkRecord)) return null;
+      if (this.workHistory && !await (this.options.catchUpHistory
+        ? this.workHistory.catchUp(file, this.options.onWorkRecord, this.options.isCurrent)
+        : this.workHistory.read(file, this.options.onWorkRecord))) return null;
       // Catch up the bounded history in one poll; live growth keeps its smaller budget.
       const end = this.historyPending ? size : Math.min(size, this.offset + LIVE_READ_LIMIT);
       while (this.offset < end) {

@@ -75,6 +75,15 @@ test('stuck streaming and resize pin instantly; a scrolled-up reader stays and c
   assert.equal(h.render([...list, { id: 'new', text: 'updated' }, { id: 'newer' }]).result.unseen, 1);
 });
 
+test('prepending a history page keeps the new-message count at zero while live arrivals still count', t => {
+  const h = scrollHarness(t), list = entries(80);
+  h.render(list); h.frame();
+  h.handlers.wheel({ deltaY: -20 }); h.node.scrollTop = 300; h.handlers.scroll();
+  const older = Array.from({ length: 40 }, (_, n) => ({ id: `old-${n}` }));
+  assert.equal(h.render([...older, ...list]).result.unseen, 0);
+  assert.equal(h.render([...older, ...list, { id: 'new-live-message' }]).result.unseen, 1);
+});
+
 test('automatic content growth interrupts a smooth latest-button jump with an instant pin', t => {
   const h = scrollHarness(t), list = entries(40);
   const initial = h.render(list).result; h.frame();
@@ -102,4 +111,21 @@ test('earlier-page layout compensates scroll height and anchors streamed arrival
   assert.equal(streaming.visible[0].entry.id, '20'); assert.equal(streaming.visible.length, 82);
   assert.equal(node.scrollTop, 1030);
   assert.equal(render(list, 'second', true).visible.length, 40, 'another session starts with one tail page');
+});
+
+test('a paged prepend waits for its asynchronous entries and compensates once they commit', async t => {
+  const harness = hookHarness('src/features/reading/useVisibleTail.ts'); t.after(() => harness.dispose());
+  let complete, held = 0;
+  const node = { scrollTop: 150, scrollHeight: 1000, scrollTo(options) { this.scrollTop = options.top; } };
+  const container = { current: node }, list = blocks(entries(80));
+  const remote = { paged: true, hasEarlier: true, loading: false, loadEarlier: () => new Promise(resolve => { complete = resolve; }) };
+  const render = (grouped = list, options = remote) => harness.render('useVisibleTail', grouped, 'session', container, false, () => held++, options).result;
+  const initial = render(); assert.equal(initial.visible.length, 80); assert.equal(initial.earlier, 0); assert.equal(initial.hasEarlier, true);
+  const loading = initial.showEarlier(); render(list, { ...remote, loading: true });
+  assert.equal(node.scrollTop, 150);
+  complete(true); await loading; node.scrollHeight = 1600;
+  const prepended = blocks([...Array.from({ length: 40 }, (_, n) => ({ id: `old${n}`, role: 'assistant', at: 0 })), ...entries(80)]);
+  assert.equal(render(prepended).visible.length, 120);
+  assert.equal(node.scrollTop, 750); assert.equal(held, 1);
+  render(prepended); assert.equal(node.scrollTop, 750);
 });

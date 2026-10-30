@@ -34,7 +34,8 @@ async function harness(t, kind = 'local', agent = 'codex') {
     expectCompletion(id, expected);
     if (!armed && project.completionArmed) armings++;
   };
-  const context = vm.createContext({ sessions, store, summarizeTask: () => '', isLocalAgentCommand, promptText,
+  const context = vm.createContext({ sessions, store,
+    readingHistory: { summary: () => null, close() {} }, prepareReading: async () => {}, summarizeTask: () => '', isLocalAgentCommand, promptText,
     notifyCompletion: () => alerts++, broadcast() {}, publishConversation() {}, refreshClaudeAccounts() {}, describeActions() {}, nativeSkillActions() {},
     memoryFolder: () => directory, memoryDir: () => directory, roundsOf: () => [], remember: async () => {},
     setTimeout: () => ({ unref() {} }), scrubProjectSkills: async () => {},
@@ -71,6 +72,59 @@ async function harness(t, kind = 'local', agent = 'codex') {
 }
 
 const stamp = at => new Date(at).toISOString();
+
+test('completion catch-up hides provisional completion without finishing prompts, notifying or rearming', async t => {
+  const h = await harness(t), { s, project, store } = h;
+  h.user('Actual human prompt', 2000);
+  s.completionWork.reading = true;
+  h.apply('complete', 'turn', 2100);
+  assert.equal(s.codexActivity, 'unknown');
+  assert.equal(s.promptQueue.list()[0].state, 'working');
+  assert.equal(s.completionWork.endedAt, 0);
+  assert.equal(h.alerts(), 0); assert.equal(project.unread, 0); assert.equal(h.armings(), 1);
+  s.completionWork.start('prefix-worker', 1000);
+  s.completionWork.reading = false;
+  h.apply('complete', 'turn', 2100);
+  assert.equal(s.codexActivity, 'working'); assert.equal(project.unread, 0);
+  s.completionWork.finish('prefix-worker');
+  h.apply('complete', 'turn', 2100);
+  assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 1); assert.equal(project.unread, 1);
+  store.acknowledge(project.id);
+  s.completionWork.reading = true; h.apply('complete', 'turn', 2100);
+  s.completionWork.reading = false; h.apply('complete', 'turn', 2100);
+  assert.equal(h.armings(), 1); assert.equal(h.alerts(), 1); assert.equal(project.unread, 0);
+});
+
+test('a late Codex read cannot alter the next launch of the same terminal or bind its reading preview', async t => {
+  const h = await harness(t), readers = [], bindings = [];
+  Object.assign(h.context, {
+    CodexActivityReader: class {
+      constructor(_cwd, _home, _since, options) { this.options = options; this.filename = 'synthetic.jsonl'; readers.push(this); }
+      read() { return new Promise(resolve => { this.resolve = resolve; }); }
+    },
+    monitorActivity: read => ({ poll: read, stop() {} }), readEvery: () => 1000,
+    codexConversation, codexRecord: () => [], noteSettings() {}, usageHistory() {},
+    prepareReading: (...args) => bindings.push(args),
+  });
+  h.s.actions.reset = () => {};
+  const start = main.indexOf('    const remoteSince =');
+  const launch = vm.runInContext('(event => {' + main.slice(start, main.indexOf('    // Unread completion', start))
+    + '\nreturn { monitor: s.activityMonitor, onRecord }; })', h.context);
+  const old = launch({ cwd: h.project.path, sentAt: 1000 }), pending = old.monitor.poll();
+  launch({ cwd: h.project.path, sentAt: 2000 });
+  readers[1].options.onHistory(false); h.s.completionWork.start('new-worker', 2000);
+  const version = h.s.completionWork.version;
+  readers[0].options.onHistory(true);
+  old.onRecord({ type: 'event_msg', timestamp: stamp(2100), payload: { type: 'user_message', message: 'stale prompt' } });
+  readers[0].options.onWorkRecord({ type: 'event_msg', timestamp: stamp(2200), payload: { type: 'task_complete' } });
+  readers[0].resolve({ threadId: 'old-thread', state: 'complete', turnId: 'old-turn', updatedAt: 2200 });
+  assert.equal(await pending, null);
+  assert.equal(readers[0].options.isCurrent(), false); assert.equal(readers[1].options.isCurrent(), true);
+  assert.equal(h.s.completionWork.reading, true); assert.equal(h.s.completionWork.version, version);
+  assert.ok(h.s.completionWork.find('new-worker')); assert.equal(h.s.conversation.list.length, 0);
+  assert.deepEqual(bindings, []); assert.equal(h.armings(), 0); assert.equal(h.alerts(), 0);
+});
+
 const background = (name, id, at) => ({ type: 'assistant', timestamp: stamp(at), message: { content: [
   { type: 'tool_use', name, id, input: { run_in_background: 'true' } },
 ] } });

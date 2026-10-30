@@ -77,6 +77,7 @@ const { ClipboardWrites } = require('./clipboard-writes.cjs');
 const { VoiceManager } = require('./voice.cjs');
 const { ActionLog, TranscriptTail, claudeRecord, codexRecord, skillDescription } = require('./agent-actions.cjs');
 const { ConversationLog, claudeConversation, codexConversation } = require('./conversation.cjs');
+const { ReadingHistory } = require('./reading-history.cjs');
 const { conversationBatchDelay, pollAfterSubmission } = require('./conversation-timing.cjs');
 const { listAgentCommands, isLocalAgentCommand } = require('./agent-commands.cjs');
 const { claudeConfigDir, findClaudeSession, listClaudeSessions } = require('./claude-sessions.cjs');
@@ -107,6 +108,13 @@ function updateStoreSettings(patch) {
   if (uiZoom !== store.settings.uiZoom) windowZoom?.update();
 }
 const sessions = new Map();
+const readingHistory = new ReadingHistory(() => { if (window && store && !quitting) broadcast(); });
+function prepareReading(id, restore, filename) {
+  const project = findProject(id);
+  if (project.kind === 'ssh' || !['codex', 'claude'].includes(restore?.agent) || !/^[\w-]{1,100}$/.test(restore?.threadId || '')) return Promise.resolve();
+  return readingHistory.bind(id, { agent: restore.agent, threadId: restore.threadId, cwd: restore.cwd || project.path,
+    home: restore.agent === 'claude' ? claudeConfigDir() : sessions.get(id)?.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), filename });
+}
 const { handoffFile, memoryDir, memoryFolder, scrubProjectSkills, sshHandoff } = createProjectHandoff({ app, getStore: () => store, sessions });
 const { setBranch, captureBranch, getBranch, forgetBranch, remoteBranch } = createGitRuntime({ getProjects: () => store.projects, execFile, broadcast });
 const projectGit = new ProjectGit(id => remoteFor(id));
@@ -154,6 +162,8 @@ function publicState() {
       const terminals = shownTerminalIds(p).map(id => {
         const s = sessions.get(id);
         return { id, title: t('终端 {n}', { n: opened.indexOf(id) + 1 }), shell: s?.shellKind || (p.kind === 'ssh' ? 'bash' : localShell().kind), sessionId: s?.sessionId || null, status: s?.status || 'stopped', codexActive: s?.codexActive || false, agent: s?.codexActive ? s.agent || 'codex' : null,
+          ...(typeof readingHistory !== 'undefined' && readingHistory.summary(id) ? { readingHistory: readingHistory.summary(id) } : {}),
+          historyCatchingUp: !!s?.completionWork?.reading,
           agentStarting: !!s?.agentStarting && !s.codexActive && s.status !== 'exited' && !s.error,
           agentStartedAt: s?.codexActive ? s.activitySince : null,
           nativeMode: s?.nativeMode || null, nativeApprovals: s?.native?.registry.list() || [], nativeMessages: s?.nativeMessages || [], nativeReady: !!s?.nativeReady,
@@ -225,7 +235,7 @@ function reorderTerminals(projectId, ids) {
 }
 
 function disposeProjectTerminals(project) {
-  for (const id of [project.id, ...(project.terminals || []).map(item => item.id)]) { restorePlans.delete(id); disposeTerminal(id); startupErrors.delete(id); }
+  for (const id of [project.id, ...(project.terminals || []).map(item => item.id)]) { readingHistory.close(id); restorePlans.delete(id); disposeTerminal(id); startupErrors.delete(id); }
 }
 function updateIndicators() {
   const unread = store.projects.filter(p => p.unread > 0).length;
@@ -328,7 +338,8 @@ function publishConversation(s, change) {
     // An answer streamed word by word puts the same entry many times in one batch: only its latest version goes.
     const latest = new Map();
     for (const item of changes) if (item.entry) latest.set(item.entry.id, item.entry);
-    send('terminal:conversation', latest.size > 40 || changes.some(item => item.reset) ? { id: s.terminalId, list: s.conversation.snapshot() } : { id: s.terminalId, changes: [...latest.values()] });
+    const scope = { id: s.terminalId, sessionId: s.sessionId, historyKey: readingHistory.summary(s.terminalId)?.key };
+    send('terminal:conversation', latest.size > 40 || changes.some(item => item.reset) ? { ...scope, list: s.conversation.snapshot() } : { ...scope, changes: [...latest.values()] });
   }, delay);
 }
 // How often an agent's records are read when nothing told of a write: often while it works, so the reading view keeps
@@ -396,11 +407,15 @@ function followClaude(project, s, event) {
   if (!file || paths.basename(file) !== `${event.sessionId}.jsonl`) return;
   // The worker checks remote paths against its own Claude projects folder before reading them.
   if (!remote && !file.toLowerCase().startsWith(claudeConfigDir().toLowerCase() + path.sep)) return;
+  if (!remote) void prepareReading(s.terminalId, { agent: 'claude', threadId: event.sessionId, cwd: project.path }, file);
   s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
   s.claudeSessionId = event.sessionId;
   s.approval?.context('claude-session', event.sessionId);
   s.usage?.calls.setFolder(remote ? null : path.join(path.dirname(file), event.sessionId, 'subagents'));
   if (s.claudeTranscript?.filename !== file) {
+    let tail;
+    const readCurrent = () => sessions.get(s.terminalId) === s && (!tail || s.claudeTranscript === tail)
+      && (s.codexActive && s.agent === 'claude' || s.claudeResumeId === event.sessionId);
     const onHistory = ready => {
       if (ready) s.conversation.endHistory();
       else { s.conversation.beginHistory(); s.actions.reset(); s.conversation.reset(); s.usage?.reset(true); }
@@ -409,11 +424,12 @@ function followClaude(project, s, event) {
       usageHistory(s, ready);
     };
     s.activitySnapshot = s.activityRawSnapshot = null;
-    s.claudeTranscript = remote ? { filename: file } : new TranscriptTail(file, { onHistory, onReset: partial => { if (s.usage?.rates) s.usage.rates.partial = partial; }, onWorkRecord: record => onRecord({ ...record, workOnly: true }) });
+    tail = s.claudeTranscript = remote ? { filename: file } : new TranscriptTail(file, { onHistory: ready => { if (readCurrent()) onHistory(ready); }, catchUpHistory: true,
+      isCurrent: readCurrent,
+      onReset: partial => { if (readCurrent() && s.usage?.rates) s.usage.rates.partial = partial; }, onWorkRecord: record => onRecord({ ...record, workOnly: true }) });
     s.activityMonitor?.stop();
-    const tail = s.claudeTranscript;
     const onRecord = record => {
-      if (sessions.get(s.terminalId) !== s || s.claudeTranscript !== tail) return;
+      if (!readCurrent()) return;
       s.completionWork?.record(record, 'claude', remote ? s.activityClockOffset || 0 : 0);
       // Finish this user round even if later background records replace the poll's final snapshot.
       const endedAt = s.completionWork?.endedAt;
@@ -431,7 +447,7 @@ function followClaude(project, s, event) {
     };
     const since = Number.isFinite(event.sentAt) ? event.sentAt : s.activitySince || Date.now();
     const remoteStatus = value => {
-      if (!value || sessions.get(s.terminalId) !== s || s.claudeTranscript !== tail || !s.activityMonitor) return null;
+      if (!value || !readCurrent() || !s.activityMonitor) return null;
       if (value.reset) onHistory(false);
       for (const record of Array.isArray(value.records) ? value.records : []) { try { onRecord(record); } catch { } }
       if (value.historyDone) onHistory(true);
@@ -442,6 +458,7 @@ function followClaude(project, s, event) {
     s.activityMonitor = monitorActivity(async () => {
       if (remote) return s.terminal.request('claude-status', { path: file, since }).then(remoteStatus);
       await tail.read(onRecord);
+      if (!readCurrent()) return null;
       if (s.completionWork) {
         s.completionWork.reading = tail.historyPending || tail.offset < tail.fileSize || tail.buffer.length > 0;
         s.completionWork.uncertain ||= tail.workHistory?.uncertain;
@@ -631,6 +648,7 @@ async function followClaudeSession(project, s, id) {
 // One place turns an agent's turn state into lights and completion alerts, for Codex and Claude alike.
 function applyActivity(project, s, snapshot) {
   if (sessions.get(s.terminalId) !== s || !s.codexActive) return;
+  if (s.completionWork?.reading) { s.codexActivity = 'unknown'; scheduleState(); return; }
   if (snapshot.updatedAt < (s.activitySince || 0)) return;
   // Readers deduplicate snapshots. Retain even a completion hidden by provisional
   // input so that expiring that submission can replay it without another record.
@@ -761,10 +779,16 @@ function onEvent(event) {
     if (!quitting && typeof event.cwd === 'string') store.setRestore(s.terminalId, { cwd: event.cwd });
   } else if (event.type === 'codex-started') {
     s.agentStarting = false;
+    const restored = store.findTerminal(s.terminalId)?.record.restore;
+    const startingAgent = event.agent === 'claude' ? 'claude' : 'codex';
+    if (typeof event.codexHome === 'string') s.codexHome = event.codexHome;
+    if (restored?.codex !== true || (restored.agent || 'codex') !== startingAgent) readingHistory.close(s.terminalId);
+    else void prepareReading(s.terminalId, { ...restored, agent: startingAgent, cwd: event.cwd || restored.cwd });
     // A run of the CLI that is no conversation (codex update, claude --version: agent-command.cjs): the reading view
     // says what it does and shows its output; nothing is handed over, followed or restored for it.
     s.agentCommand = agentCommand(event.agent, event.command);
     if (s.agentCommand) {
+      readingHistory.close(s.terminalId);
       stopUsageAccount(s);
       s.ready = false; s.codexActive = true; s.status = 'codex'; s.error = null; s.codexActivity = 'unknown'; s.agentSettings = null; s.usage = null;
       s.agent = event.agent === 'claude' ? 'claude' : 'codex';
@@ -787,7 +811,9 @@ function onEvent(event) {
     s.error = null;
     s.submissions.reset();
     s.codexActivity = 'unknown'; s.activitySince = Date.now(); s.activityInputAt = s.activityConfirmedInputAt = 0;
-    s.activitySnapshot = s.activityRawSnapshot = null; s.completionWork?.reset();
+    s.activitySnapshot = s.activityRawSnapshot = null;
+    // The kept tail has already replayed its prefix, including outstanding workers.
+    if (!keepClaudeHistory) s.completionWork?.reset();
     s.activityPromptAt = 0; s.claudePromptEventId = null;
     s.activityClockOffset = Number.isFinite(event.sentAt) ? s.activitySince - event.sentAt : 0;
     if (!keepClaudeHistory) { s.actions.reset(); s.conversation.reset(); s.claudeTranscript = null; s.claudeSessionId = null; }
@@ -809,6 +835,7 @@ function onEvent(event) {
     store.setRestore(s.terminalId, agentRestore);
     const remoteSince = Number.isFinite(event.sentAt) ? event.sentAt : s.activitySince;
     s.activityMonitor?.stop();
+    const readCurrent = () => sessions.get(s.terminalId) === s && s.codexReadEvent === event && s.codexActive && s.agent === 'codex';
     // Its records feed the reading view and the activity pane: read here, or, over SSH, read on that computer and
     // sent back compacted with each status (integration/remote-worker.py), with the same history start and end.
     const onHistory = ready => {
@@ -822,6 +849,7 @@ function onEvent(event) {
       usageHistory(s, ready);
     };
     const onRecord = record => {
+      if (!readCurrent()) return;
       s.completionWork?.record(record, 'codex', project.kind === 'ssh' ? s.activityClockOffset || 0 : 0);
       if (record.workOnly) return;
       codexConversation(s.conversation, record, event.cwd || project.path); describeActions(s, event.cwd || project.path, codexRecord(s.actions, record, event.cwd || project.path));
@@ -831,9 +859,10 @@ function onEvent(event) {
         s.promptQueue.finish(Number.isFinite(at) ? at : Date.now());
       }
     };
+    s.codexReadEvent = event;
     const remoteStatus = value => {
       if (!value || typeof value !== 'object' || !('snapshot' in value)) return value;
-      if (sessions.get(s.terminalId) !== s) return null;
+      if (!readCurrent()) return null;
       if (value.reset) onHistory(false);
       for (const record of Array.isArray(value.records) ? value.records : []) { try { onRecord(record); } catch { } }
       if (value.historyDone) onHistory(true);
@@ -841,10 +870,16 @@ function onEvent(event) {
       if (s.completionWork && value.completionUncertain) s.completionWork.uncertain = true;
       return value.snapshot;
     };
-    const reader = project.kind === 'ssh' ? null : new CodexActivityReader(event.cwd || project.path, event.codexHome || s.codexHome, s.activitySince, { threadId: () => s.reportedThreadId, requireBinding: () => (project.terminals?.length || 0) > 0, onHistory, onReset: partial => { if (s.usage?.rates) s.usage.rates.partial = partial; }, onRecord, onWorkRecord: record => s.completionWork?.record(record, 'codex') });
+    const reader = project.kind === 'ssh' ? null : new CodexActivityReader(event.cwd || project.path, event.codexHome || s.codexHome, s.activitySince, { threadId: () => s.reportedThreadId, requireBinding: () => (project.terminals?.length || 0) > 0,
+      onHistory: ready => { if (readCurrent()) onHistory(ready); },
+      catchUpHistory: true, isCurrent: readCurrent,
+      onReset: partial => { if (readCurrent() && s.usage?.rates) s.usage.rates.partial = partial; }, onRecord, onWorkRecord: record => onRecord({ ...record, workOnly: true }) });
     s.activityMonitor = monitorActivity(
       async () => {
         const snapshot = await (reader ? reader.read() : project.terminals?.length && !s.reportedThreadId ? null : s.terminal.request('codex-status', { since: remoteSince, threadId: s.reportedThreadId }).then(remoteStatus));
+        if (!readCurrent()) return null;
+        if (reader?.filename && snapshot?.threadId) void prepareReading(s.terminalId,
+          { agent: 'codex', threadId: snapshot.threadId, cwd: event.cwd || project.path }, reader.filename);
         if (s.completionWork && reader) {
           s.completionWork.reading = reader.historyPending || reader.offset < reader.fileSize || reader.buffer.length > 0;
           s.completionWork.uncertain ||= reader.workHistory?.uncertain;
@@ -863,6 +898,7 @@ function onEvent(event) {
     store.setRestore(s.terminalId, { terminal: true, codex: true, cwd: event.cwd });
     // Unread completion is independent of session activity. It survives new turns.
   } else if (event.type === 'codex-exited') {
+    readingHistory.close(s.terminalId);
     endSkillSession(s);
     s.needsInput = null; s.agentCommand = null; stopUsageAccount(s);
     s.claudeResumeId = null; s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
@@ -1162,6 +1198,9 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     }
     for (const threadId of s.titles.write(data)) {
       if (s.reportedThreadId !== threadId) {
+        const previous = readingHistory.summary(id);
+        if (previous && !previous.threadId.toLowerCase().startsWith(threadId.toLowerCase())) readingHistory.close(id);
+        if (s.agent === 'codex' && wholeThread(threadId)) void prepareReading(id, { agent: 'codex', threadId, cwd: store.findTerminal(id)?.record.restore?.cwd || project.path });
         s.reportedThreadId = threadId;
         s.approval.context('terminal-title', threadId);
         // A title cut short names the session only by how its id begins: the whole id is kept once its record is found.
@@ -1184,6 +1223,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     if (skillNoteFile) fs.rmSync(skillNoteFile, { force: true });
     stopUsageAccount(s);
     s.status = 'exited'; s.ready = false; s.codexActive = false;
+    readingHistory.close(id);
     s.activityMonitor?.stop(); s.activityMonitor = null; s.codexActivity = 'unknown';
     if (s.completionWork.reset()) store.expectCompletion(project.id, false);
     s.activitySnapshot = s.activityRawSnapshot = null;
@@ -1198,6 +1238,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
 }
 
 function disposeTerminal(id) {
+  readingHistory.close(id);
   const s = sessions.get(id);
   if (!s) return;
   sessions.delete(id);
@@ -1217,6 +1258,7 @@ function registerIpc() {
   const { handle, listen } = createIpcAdapter({ ipcMain, getWindow: () => window, devUrl, t, report });
   registerSkillsIpc({ handle, skills, dialog, getWindow: () => window });
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
+    readingPage: (id, request) => readingHistory.page(id, request.key, request.cursor),
     getRestoreCwd: id => store.findTerminal(id)?.record.restore?.cwd, listClaudeSessions, listCodexSessions, followClaudeSession, listAgentCommands, t });
   registerSshIpc({ handle, getSSHInfo, sshAuth, addSSH: input => store.addSSH(input), hasSession: id => sessions.has(id), getSession: id => sessions.get(id),
     startTerminal, setStartupError: (id, message) => startupErrors.set(id, message), broadcast });
@@ -1317,6 +1359,11 @@ if (!app.requestSingleInstanceLock()) {
     const shellIntegration = prepareShellIntegration({ app, integrationDir, agents });
     zshStartup = shellIntegration.startup; shellPathReady = shellIntegration.ready;
     store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'));
+    if (store.settings.restoreSessions && (!process.env.AGENTRIX_DATA_DIR || process.env.AGENTRIX_TEST_RESTORE === '1')) {
+      for (const project of store.projects) for (const record of [project, ...(project.terminals || [])]) {
+        if (record.restore?.codex === true) void prepareReading(record.id, { ...record.restore, agent: record.restore.agent || 'codex' });
+      }
+    }
     skills = new SkillsStore({ dataDir: app.getPath('userData'), builtinDir: app.isPackaged ? path.join(process.resourcesPath, 'skills') : path.join(root, 'resources', 'skills'),
       getProjects: () => store.projects, getAgents: () => agents.getState(), activeProjects: () => [...sessions.values()].filter(s => s.codexActive).map(s => s.projectId),
       changed: (infos, { deliveryChanged }) => { send('skills:changed', infos); if (deliveryChanged) refreshSkillNotes(); }, report });

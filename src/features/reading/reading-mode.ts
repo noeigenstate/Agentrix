@@ -36,10 +36,10 @@ export function setReading(id: string, on: boolean, auto = false) {
 export function useTerminalChoice() {
   return useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => snapshot);
 }
-export const readingShown = (terminal: ProjectTerminal, raw: string[]) => !!terminal.sessionId && terminal.codexActive && !raw.includes(terminal.id);
+export const readingShown = (terminal: ProjectTerminal, raw: string[]) => (!!terminal.sessionId && terminal.codexActive || !!terminal.readingHistory) && !raw.includes(terminal.id);
 // Forget a terminal's choice once its agent has exited.
 export function agentExited(terminal: ProjectTerminal) {
-  if (terminal.codexActive) return;
+  if (terminal.codexActive || terminal.readingHistory) return;
   cancelHandoff(terminal.id); choices.delete(terminal.id); inputSeen.delete(terminal.id); automatic.delete(terminal.id);
   if (terminals.has(terminal.id)) setReading(terminal.id, true);
 }

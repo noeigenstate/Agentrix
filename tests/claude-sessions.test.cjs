@@ -110,7 +110,8 @@ function mainHarness(t, f) {
     setRestore: (_id, value) => Object.assign(restore, value), expectCompletion() {} };
   // Reads here happen when the test asks: a write told by the file watch (codex-activity.test.cjs) would start one
   // while a large file is still being written.
-  const context = vm.createContext({ path, sessions, store, TranscriptTail, AgentCalls: require('../electron/features/agents/agent-calls.cjs').AgentCalls, monitorActivity: (read, changed, options) => monitorActivity(read, changed, { ...options, watch: null }), claudeConversation, claudeRecord,
+  const context = vm.createContext({ path, sessions, store,
+    readingHistory: { summary: () => null, close() {} }, prepareReading: async () => {}, TranscriptTail, AgentCalls: require('../electron/features/agents/agent-calls.cjs').AgentCalls, monitorActivity: (read, changed, options) => monitorActivity(read, changed, { ...options, watch: null }), claudeConversation, claudeRecord,
     claudeConfigDir: () => f.home, findClaudeSession: (cwd, id) => findClaudeSession(cwd, id, f.home),
     describeActions() {}, skills: null, findProject: () => project, broadcast() {}, scheduleState() {}, acceptShellEvent: () => true, noteSettings() {}, readEvery: () => 1000,
     startSkillSession() {}, endSkillSession() {},
@@ -344,6 +345,38 @@ test('restored sessions follow before a hook and keep history when the agent-sta
   assert.equal(h.s.claudeTranscript, tail); assert.equal(h.resets(), 1); assert.equal(h.s.conversation.list[0].text, 'Restored prompt');
 });
 
+for (const catchingUp of [false, true]) test(`Claude CLI start preserves recovered workers and catching-up=${catchingUp} without arming completion`, async t => {
+  const { CompletionWork } = require('../electron/completion-work.cjs');
+  const f = await fixture(t), id = '12345678-1234-1234-1234-123456789abc';
+  const timestamp = new Date(Date.now() - 30000).toISOString();
+  await f.write(id, [
+    { ...pendingTool('prefix-worker'), timestamp, message: { content: [{ type: 'tool_use', id: 'prefix-worker', name: 'Agent', input: { run_in_background: true } }] } },
+    { padding: 'x'.repeat(HISTORY_WINDOW + 1000) },
+    { type: 'assistant', uuid: 'ended', timestamp, message: { stop_reason: 'end_turn', content: [] } },
+  ]);
+  const h = activityHarness(t, f), changes = [];
+  h.s.completionWork = new CompletionWork(); t.after(() => h.s.completionWork.reset());
+  h.store.expectCompletion = (_id, value = true) => changes.push(value);
+  h.store.complete = () => assert.fail('historical replay cannot grant completion');
+  h.context.notifyCompletion = () => assert.fail('historical replay cannot notify');
+  Object.assign(h.s, { codexActive: false, claudeResumeId: id });
+  await h.context.followClaudeSession(h.project, h.s, id);
+  assert.ok(h.s.completionWork.find('prefix-worker'), 'the launch before the display window was recovered');
+  assert.equal(h.s.completionWork.reading, false);
+  h.s.completionWork.reading = catchingUp;
+  const tail = h.s.claudeTranscript, workVersion = h.s.completionWork.version;
+  h.context.onEvent({ projectId: 'terminal', sessionKey: 'key', type: 'codex-started', agent: 'claude', cwd: f.cwd });
+  assert.equal(h.s.claudeTranscript, tail);
+  assert.ok(h.s.completionWork.find('prefix-worker'));
+  assert.equal(h.s.completionWork.reading, catchingUp);
+  assert.equal(h.s.completionWork.version, workVersion);
+  assert.deepEqual(changes, []);
+  await h.s.activityMonitor.poll();
+  assert.ok(h.s.completionWork.find('prefix-worker'));
+  assert.equal(h.s.completionWork.state({ state: 'complete' }), 'working');
+  assert.deepEqual(changes, []);
+});
+
 test('following a different session replaces history, and invalid ids or closed terminals cannot bind', async t => {
   const f = await fixture(t); await f.write('first', [user('first')]); await f.write('second', [user('second')]);
   const h = mainHarness(t, f);
@@ -355,6 +388,28 @@ test('following a different session replaces history, and invalid ids or closed 
   assert.equal(await h.context.followClaudeSession(h.project, h.s, 'first'), false);
   h.sessions.delete('terminal');
   assert.equal(await h.context.followClaudeSession(h.project, h.s, 'first'), false);
+});
+
+test('a delayed Claude A read cannot clear catching-up state after A to B to A rebinding', async t => {
+  const f = await fixture(t), h = mainHarness(t, f), tails = [];
+  h.s.completionWork = new (require('../electron/completion-work.cjs').CompletionWork)();
+  t.after(() => h.s.completionWork.reset());
+  h.context.TranscriptTail = class {
+    constructor(filename, options) { this.filename = filename; this.options = options; tails.push(this); options.onHistory(false); }
+    read() { return new Promise(resolve => { this.resolve = resolve; }); }
+  };
+  h.context.monitorActivity = read => ({ poll: read, stop() {} });
+  const follow = sessionId => h.context.followClaude(h.project, h.s, { sessionId, transcriptPath: path.join(f.folder, `${sessionId}.jsonl`) });
+  follow('a'); const old = h.s.activityMonitor.poll();
+  follow('b'); follow('a');
+  h.s.completionWork.start('current-worker', Date.now());
+  const version = h.s.completionWork.version;
+  tails[0].options.onHistory(true);
+  tails[0].options.onWorkRecord(user('stale prompt'));
+  tails[0].resolve(true); assert.equal(await old, null);
+  assert.equal(tails[0].options.isCurrent(), false); assert.equal(tails[2].options.isCurrent(), true);
+  assert.equal(h.s.completionWork.reading, true); assert.equal(h.s.completionWork.version, version);
+  assert.ok(h.s.completionWork.find('current-worker')); assert.equal(h.s.conversation.list.length, 0);
 });
 
 test('SessionStart after clear/resume and process exit retire old background work without success or rearming', async t => {

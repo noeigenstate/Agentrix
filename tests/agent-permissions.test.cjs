@@ -14,7 +14,7 @@ function handlers() {
   const calls = { broadcast: 0, restore: 0, activity: 0, follow: 0, completion: [], usageDispose: 0 };
   session.usageAccount = { dispose() { calls.usageDispose++; } };
   session.bindUsageAccount = () => {};
-  const context = vm.createContext({ dispatchedOnly: () => null,
+  const context = vm.createContext({ dispatchedOnly: () => null, readingHistory: { close() {} },
     sessions: new Map([['t', session]]), store: { projects: [project], setRestore() { calls.restore++; },
       expectCompletion(id, expected = true) { assert.equal(id, project.id); calls.completion.push([id, expected]); project.completionArmed = expected; } }, quitting: false,
     broadcast() { calls.broadcast++; }, followClaude() { calls.follow++; }, applyActivity(_project, s, event) { calls.activity++; s.codexActivity = event.state; },

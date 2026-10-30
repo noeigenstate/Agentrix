@@ -24,6 +24,7 @@
     "test:sessions": "node scripts/session-smoke.mjs",
     "test:restore-slow": "node scripts/restore-slow-smoke.mjs",
     "test:workspace": "node scripts/workspace-smoke.mjs",
+    "test:open-latency": "node scripts/open-latency-smoke.mjs",
     "test:motion": "node scripts/focus-motion-smoke.mjs",
     "test:completion": "node scripts/completion-smoke.mjs",
     "test:gpu-terminal": "node scripts/gpu-terminal-smoke.mjs",

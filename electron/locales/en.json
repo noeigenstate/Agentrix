@@ -1730,5 +1730,9 @@
   "重置次数": "Reset count",
   "打开项目时会主动查一次 Codex 剩余重置次数，不用先开始会话；查不到时分别显示查询中、未提供次数或暂不支持，不再一律显示次数未知。": "Opening a project now checks the remaining Codex reset count once, without starting a session first. When it cannot be read, it shows Checking, Not provided or Not supported instead of always showing Unknown.",
   "标题栏": "Title bar",
-  "项目卡片标题栏去掉「进入」按钮，悬停时提示「进入会话，按住可拖动」。": "The Open button is gone from the project card title bar; hovering it now says Open the session; hold to drag."
+  "项目卡片标题栏去掉「进入」按钮，悬停时提示「进入会话，按住可拖动」。": "The Open button is gone from the project card title bar; hovering it now says Open the session; hold to drag.",
+  "显示更早的对话": "Show earlier conversation",
+  "无法加载更早的对话，请重试。": "Could not load earlier conversation. Try again.",
+  "对话历史已变化，请重新打开会话。": "Conversation history changed. Reopen the conversation.",
+  "无效的对话分页请求。": "Invalid conversation page request."
 }
