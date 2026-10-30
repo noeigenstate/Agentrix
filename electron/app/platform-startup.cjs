@@ -50,12 +50,13 @@ function prepareWindowIcon({ app, shell, root, installed, appUserModelId, relaun
 }
 
 function prepareShellIntegration({ app, integrationDir, agents }) {
-  if (process.platform !== 'darwin' && process.platform !== 'linux') return;
+  if (process.platform !== 'darwin' && process.platform !== 'linux') return { ready: Promise.resolve() };
   const startup = prepareZshStartup(path.join(app.getPath('userData'), 'zsh'), integrationDir);
   // Started from the Dock or a desktop launcher, this process may have only the system PATH; codex, claude and
   // npm are found with the login shell's. Terminals build their own from the user's start-up files.
-  loginShellPath(process.platform === 'linux' ? { shell: process.env.SHELL || findShell('bash') || '/bin/bash', env: withoutAppImage(process.env) } : undefined).then(value => { if (value) process.env.PATH = mergePath(value, process.env.PATH); agents.changed(); }).catch(() => {});
-  return startup;
+  const ready = loginShellPath(process.platform === 'linux' ? { shell: process.env.SHELL || findShell('bash') || '/bin/bash', env: withoutAppImage(process.env) } : undefined)
+    .then(value => { if (value) process.env.PATH = mergePath(value, process.env.PATH); agents.changed(); }).catch(() => {});
+  return { startup, ready };
 }
 
 module.exports = { configureApplication, prepareWindowIcon, prepareShellIntegration };

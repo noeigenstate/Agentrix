@@ -2,12 +2,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn, execFile } = require('node:child_process');
-const { createHash } = require('node:crypto');
+const { createHmac, randomBytes } = require('node:crypto');
 
 // Codex 0.163's generated GetAccountRateLimitsResponse/Params contract. This is an
 // owned stdio client, never the person's PTY. No threads, turns, login or reset RPCs.
 const MAX_OUTPUT = 256 * 1024;
 const unavailable = reason => ({ resets: null, resetQuery: { state: 'unavailable', reason } });
+const fingerprintKey = randomBytes(32);
 const SCOPE_ENVIRONMENT = new Set(['HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
   'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'PROGRAMDATA', 'PATH', 'PATHEXT',
   'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY']);
@@ -23,7 +24,7 @@ function environmentFingerprint(env) {
   const values = Object.entries(env).filter(([key]) => SCOPE_ENVIRONMENT.has(key.toUpperCase()) || accountVariable(key.toUpperCase()))
     .map(([key, value]) => [process.platform === 'win32' ? key.toUpperCase() : key, value])
     .sort(([a], [b]) => a.localeCompare(b));
-  return createHash('sha256').update(JSON.stringify(values)).digest('hex');
+  return createHmac('sha256', fingerprintKey).update(JSON.stringify(values)).digest('hex');
 }
 
 function accountResult(result, at = Date.now()) {
@@ -101,7 +102,7 @@ function readCodexAccount({ env = process.env, cwd, codexHome, signal, timeout =
         // Notifications may be interleaved. Never answer a server request that
         // could ask for auth or an action; this connection only reads usage.
         if (message.id !== stage || message.method) continue;
-        if (message.error) { if (message.error.code === -32601) finish(unavailable('unsupported')); else fail('query'); return; }
+        if (message.error) { if (message.error.code === -32601) finish(unavailable('version')); else fail('query'); return; }
         if (!Object.hasOwn(message, 'result')) continue;
         if (stage === 1) {
           stage = 2;
@@ -120,7 +121,7 @@ function readCodexAccount({ env = process.env, cwd, codexHome, signal, timeout =
     timer.unref?.();
     const start = file => {
       if (done) return;
-      if (!file) { finish(unavailable('unsupported')); return; }
+      if (!file) { finish(unavailable('missing')); return; }
       try {
         child = launch(file, ['app-server', '--listen', 'stdio://'], {
           cwd, env: { ...env, CODEX_HOME: codexHome || env.CODEX_HOME || path.join(os.homedir(), '.codex') },
@@ -260,23 +261,63 @@ async function accountConfigScope({ codexHome, cwd, env = process.env }) {
 }
 
 class CodexAccountUsage {
+  #projects = new Map();
+  #projectQueue = [];
+  #projectRunning = false;
+  #disposed = false;
+
   constructor({ read = readCodexAccount, scope = accountConfigScope, interval = 30000 } = {}) {
-    this.read = read; this.scope = scope; this.interval = interval; this.entries = new Map(); this.projects = new Map();
+    this.read = read; this.scope = scope; this.interval = interval; this.entries = new Map();
   }
-  check(options) {
-    return this.watch({ ...options, accountLaunch: 'project-open-v1' }, () => {}, true);
+  openProject(id, options) {
+    if (this.#disposed) return Promise.resolve(null);
+    const existing = this.#projects.get(id);
+    if (existing) return existing.done;
+    options = { ...options, accountLaunch: 'project-open-v1' };
+    let finish;
+    const done = new Promise(resolve => { finish = resolve; });
+    const project = { id, options, key: usageScope(options).key, done, finish };
+    this.#projects.set(id, project); this.#projectQueue.push(project);
+    void this.#drainProjects();
+    return done;
+  }
+  closeProject(id) {
+    const project = this.#projects.get(id);
+    if (!project) return;
+    this.#projects.delete(id); project.subscription?.dispose(); project.finish(null);
+  }
+  async #drainProjects() {
+    if (this.#projectRunning) return;
+    this.#projectRunning = true;
+    try {
+      while (this.#projectQueue.length && !this.#disposed) {
+        const project = this.#projectQueue.shift();
+        if (this.#projects.get(project.id) !== project) continue;
+        project.subscription = this.#subscribe(project.options, value => {
+          if (value.resetQuery.state !== 'loading') project.finish(value);
+        }, true);
+        const entry = this.entries.get(project.subscription.key);
+        await project.done;
+        // Even a closed project's cancelled reader must settle before another
+        // background check starts. A slow abort must not create a startup burst.
+        await entry?.readPromise;
+      }
+    } finally { this.#projectRunning = false; }
   }
   scopeFor(options) {
     // Only the project's own preflight can bridge the gap before session_meta.
     // Missing metadata that was actually reported must remain unproven.
     if (!options.scopeReported && options.accountLaunch === 'model-only-v1') {
       const opening = { ...options, recordedCwd: undefined, accountLaunch: 'project-open-v1' };
-      const scope = usageScope(opening), check = this.projects.get(options.projectId);
+      const scope = usageScope(opening), check = this.#projects.get(options.projectId);
       if (check?.key && check.key === scope.key) return { ...scope, options: opening };
     }
     return { ...usageScope(options), options };
   }
-  watch(options, changed, once = false) {
+  watch(options, changed) {
+    return this.#subscribe(options, changed, false);
+  }
+  #subscribe(options, changed, projectCheck) {
     const scope = this.scopeFor(options); options = scope.options;
     if (scope.reason) { changed(unavailable(scope.reason)); return { dispose() {}, refresh() {}, output() {} }; }
     // A quick rebind must retain the old read and throttle, even after its last listener leaves.
@@ -287,12 +328,14 @@ class CodexAccountUsage {
       entry = { options: { ...options, codexHome: scope.home, cwd: scope.cwd }, listeners: new Set(), checks: new Set(), failures: 0, generation: 0 };
       this.entries.set(scope.key, entry);
     }
-    const listeners = once ? entry.checks : entry.listeners;
+    const listeners = projectCheck ? entry.checks : entry.listeners;
     listeners.add(changed);
-    if (entry.value) changed(entry.value);
-    if (!entry.pending && !entry.timer) {
-      if (entry.value && Date.now() < entry.nextReadAt) {
-        if (!once) this.schedule(entry, entry.nextReadAt);
+    const fresh = entry.value && Date.now() < entry.nextReadAt;
+    if (fresh) changed(entry.value);
+    else if (entry.pending) changed({ resets: null, resetQuery: { state: 'loading' } });
+    if (!entry.pending) {
+      if (fresh) {
+        if (!projectCheck && !entry.timer) this.schedule(entry, entry.nextReadAt);
       } else this.refresh(entry);
     }
     let tail = '';
@@ -334,10 +377,13 @@ class CodexAccountUsage {
     clearTimeout(entry.timer); entry.timer = null;
     const generation = ++entry.generation;
     const abort = entry.abort = new AbortController();
-    const publish = value => { entry.value = value; for (const changed of entry.listeners) changed(value); };
+    const publish = value => {
+      entry.value = value;
+      for (const listeners of [entry.listeners, entry.checks]) for (const changed of listeners) changed(value);
+    };
     entry.pending = true; entry.queued = false; entry.lastAttemptAt = now;
     publish({ resets: null, resetQuery: { state: 'loading' } });
-    Promise.resolve().then(async () => {
+    entry.readPromise = Promise.resolve().then(async () => {
       const reason = await this.scope(entry.options);
       if (abort.signal.aborted) return null;
       if (reason) return unavailable(reason);
@@ -361,9 +407,11 @@ class CodexAccountUsage {
     });
   }
   dispose() {
+    this.#disposed = true;
+    for (const project of this.#projects.values()) project.finish(null);
+    this.#projects.clear(); this.#projectQueue.length = 0;
     for (const entry of this.entries.values()) { entry.listeners.clear(); entry.checks.clear(); ++entry.generation; clearTimeout(entry.timer); entry.abort?.abort(); }
     this.entries.clear();
-    this.projects.clear();
   }
 }
 

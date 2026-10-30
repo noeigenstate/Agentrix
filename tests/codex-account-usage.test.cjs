@@ -140,11 +140,14 @@ test('valid limits without reset credits keep the existing 30-second account cad
   assert.equal(reads, 7);
 });
 
-test('null/old protocol is unsupported, never zero; errors, exits, malformed and oversized output are bounded', async t => {
+test('missing count, old protocol and missing executable have distinct reasons; errors remain bounded and unknown is never zero', async t => {
   for (const mode of ['null', 'old']) {
     const value = await fakeRead(t, mode);
     assert.equal(value.resets, null); assert.equal(value.resetQuery.state, 'unavailable');
+    assert.equal(value.resetQuery.reason, mode === 'null' ? 'unsupported' : 'version');
   }
+  const missing = await readCodexAccount({ ...options, env: {}, launch: () => assert.fail('an empty fake PATH cannot launch Codex') });
+  assert.equal(missing.resets, null); assert.equal(missing.resetQuery.reason, 'missing');
   for (const mode of ['error', 'exit', 'invalid', 'null-message', 'overflow']) {
     const value = await fakeRead(t, mode);
     assert.equal(value.resets, null); assert.equal(value.resetQuery.state, 'error');
@@ -344,7 +347,7 @@ test('project open, reopen and a concurrent session share one read and hand the 
   const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
   t.after(() => service.dispose());
   const opening = { cwd: options.cwd, codexHome: options.codexHome, env: {} };
-  const first = service.check(opening), second = service.check({ ...opening, env: {} });
+  service.openProject('first', opening); service.openProject('second', { ...opening, env: {} });
   const session = service.watch({ ...options, env: {} }, value => values.push(value));
   assert.equal(values.at(-1).resetQuery.state, 'loading');
   await flush(); assert.equal(pending.length, 1);
@@ -362,7 +365,7 @@ test('project open, reopen and a concurrent session share one read and hand the 
   t.mock.timers.tick(24999); await flush(); assert.equal(pending.length, 1);
   t.mock.timers.tick(1); await flush(); assert.equal(pending.length, 2, 'only the session watcher enables the 30-second poll');
   pending[1].resolve(ready(1)); await flush();
-  later.dispose(); first.dispose(); second.dispose();
+  later.dispose(); service.closeProject('first'); service.closeProject('second');
   t.mock.timers.tick(60000); await flush(); assert.equal(pending.length, 2);
 });
 
@@ -372,22 +375,22 @@ test('a project check runs once without background polling and its failure backo
   const service = new CodexAccountUsage({ scope: async () => null, read: async () => ++reads === 1
     ? { resets: null, resetQuery: { state: 'error', reason: 'query' } } : ready(2) });
   t.after(() => service.dispose());
-  const check = service.check({ ...options, provider: undefined }); await flush();
+  service.openProject('project', { ...options, provider: undefined }); await flush();
   t.mock.timers.tick(5000); await flush(); assert.equal(reads, 1);
   const watcher = service.watch(options, value => values.push(value));
   assert.equal(values[0].resetQuery.state, 'error');
-  check.dispose(); watcher.refresh();
+  service.closeProject('project'); watcher.refresh();
   t.mock.timers.tick(54999); await flush(); assert.equal(reads, 1);
   t.mock.timers.tick(1); await flush(); assert.equal(reads, 2);
   assert.equal(values.at(-1).resets.left, 2);
   watcher.dispose();
-  const idle = service.check({ ...options, codexHome: options.codexHome + '-idle' }); await flush();
+  service.openProject('idle', { ...options, codexHome: options.codexHome + '-idle' }); await flush();
   t.mock.timers.tick(120000); await flush(); assert.equal(reads, 3, 'an open project alone never becomes a poller');
   const fresh = [];
   service.watch({ ...options, codexHome: options.codexHome + '-idle' }, value => fresh.push(value));
   assert.equal(fresh.at(-1).resetQuery.state, 'loading', 'an aged answer starts a fresh check when a session arrives');
   await flush(); assert.equal(reads, 4);
-  idle.dispose();
+  service.closeProject('idle');
 });
 
 test('closing a project drops its late answer even after reopening the same scope and preserves the five-second throttle', async t => {
@@ -395,9 +398,9 @@ test('closing a project drops its late answer even after reopening the same scop
   const pending = [], values = [];
   const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
   t.after(() => service.dispose());
-  const check = service.check({ ...options, provider: undefined }); await flush();
-  check.dispose(); assert.equal(pending[0].opts.signal.aborted, true);
-  const reopened = service.check({ ...options, provider: undefined, env: {} });
+  service.openProject('project', { ...options, provider: undefined }); await flush();
+  service.closeProject('project'); assert.equal(pending[0].opts.signal.aborted, true);
+  service.openProject('project', { ...options, provider: undefined, env: {} });
   const session = service.watch({ ...options, env: {} }, value => values.push(value));
   pending[0].resolve(ready(9)); await flush();
   assert.ok(values.every(value => value.resets?.left !== 9));
@@ -405,7 +408,7 @@ test('closing a project drops its late answer even after reopening the same scop
   t.mock.timers.tick(1); await flush(); assert.equal(pending.length, 2);
   assert.equal(values.at(-1).resetQuery.state, 'loading');
   pending[1].resolve(ready(2)); await flush(); assert.equal(values.at(-1).resets.left, 2);
-  reopened.dispose(); session.dispose();
+  service.closeProject('project'); session.dispose();
 });
 
 test('project-open preflight proves the official default and never reads remote, custom or unproven account routes', async t => {
@@ -419,37 +422,36 @@ test('project-open preflight proves the official default and never reads remote,
   } });
   t.after(() => service.dispose());
   const opening = { cwd: root, env: { CODEX_HOME: '.' } };
-  const check = service.check(opening);
-  const entry = service.entries.get(check.key);
-  while (entry.pending) await flush();
-  assert.equal(reads, 1); assert.equal(entry.value.resets.left, 2);
-  check.dispose();
+  const result = await service.openProject('official', opening);
+  assert.equal(reads, 1); assert.equal(result.resets.left, 2);
+  service.closeProject('official');
+  const refused = [];
   for (const [index, config] of ['', 'model_provider = "relay"', 'profile = "work"', '[model_providers.openai]\nbase_url = "https://example.invalid"'].entries()) {
     const folder = path.join(root, String(index)); fs.mkdirSync(folder);
     fs.writeFileSync(path.join(folder, 'config.toml'), config);
     const opts = { cwd: folder, codexHome: folder, env: {} };
     if (!index) {
-      service.check({ ...opts, remote: true }); service.check({ ...opts, provider: 'relay' });
+      refused.push(service.openProject('remote', { ...opts, remote: true }), service.openProject('relay', { ...opts, provider: 'relay' }));
       service.watch({ ...opts, provider: 'openai' }, () => {});
-    } else service.check(opts);
+    } else refused.push(service.openProject(`config-${index}`, opts));
   }
   for (const [index, name] of ['OPENAI_API_KEY', 'CHATGPT_TOKEN', 'AZURE_OPENAI_ENDPOINT', 'CODEX_PROFILE',
     'CODEX_MANAGED_REQUIREMENTS_PATH', 'codex_auth_file'].entries()) {
     const folder = path.join(root, `env-${index}`); fs.mkdirSync(folder);
-    service.check({ cwd: folder, codexHome: folder, env: { [name]: 'fake-override' } });
+    refused.push(service.openProject(`env-${index}`, { cwd: folder, codexHome: folder, env: { [name]: 'fake-override' } }));
   }
-  while ([...service.entries.values()].some(entry => entry.pending)) await flush();
+  await Promise.all(refused);
   assert.equal(reads, 1, 'all refused scopes stop before the injected account reader');
   assert.ok([...service.entries.values()].every(entry => entry.value?.resets == null));
 });
 
-function mainUsage(service, env = {}) {
+function mainUsage(service, env = {}, shellPathReady = Promise.resolve()) {
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const functions = main.slice(main.indexOf('function checkProjectAccount('), main.indexOf('let claudeAccountTimer ='));
   const notes = main.slice(main.indexOf('function noteSettings('), main.indexOf('// A skill step names the skill;'));
-  const sessions = new Map(), projectAccountChecks = service.projects;
-  return { main, sessions, projectAccountChecks, ...vm.runInNewContext(`${functions}\n${notes}\n({ checkProjectAccount, startUsage, stopUsageAccount, noteSettings })`, {
-    UsageMeter, codexAccounts: service, sessions, process: { env },
+  const sessions = new Map(), store = { projects: [] };
+  return { main, sessions, store, ...vm.runInNewContext(`${functions}\n${notes}\n({ checkProjectAccount, startUsage, stopUsageAccount, noteSettings })`, {
+    UsageMeter, codexAccounts: service, sessions, store, shellPathReady, quitting: false, process: { env },
     createTerminalEnvironment: require('../electron/terminal-env.cjs').createTerminalEnvironment,
     withoutAppImage: require('../electron/zsh-terminal.cjs').withoutAppImage,
     callsOf: () => null, scheduleState() {}, scheduleUsageRollover() {}, localClaudeMeters: () => [], disposeClaudeAccounts() {},
@@ -458,18 +460,23 @@ function mainUsage(service, env = {}) {
   }) };
 }
 
+function startupChecks(main) {
+  const start = main.indexOf('    if (!process.env.AGENTRIX_DATA_DIR) updateManager.start();');
+  return main.slice(main.indexOf('\n', start) + 1, main.indexOf('  }).catch(error => {', start));
+}
+
 test('main project-open handover shows loading or the cached answer immediately and rebinds to real session metadata', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   const pending = [];
   const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
   t.after(() => service.dispose());
-  const { checkProjectAccount, startUsage, stopUsageAccount, noteSettings, sessions } = mainUsage(service, { CODEX_HOME: options.codexHome });
+  const { checkProjectAccount, startUsage, stopUsageAccount, noteSettings, sessions, store } = mainUsage(service, { CODEX_HOME: options.codexHome });
   const project = { id: 'project', path: options.cwd, kind: 'local' };
   const s = { terminalId: 'test', codexActive: true, agent: 'codex', usageEnv: { CODEX_HOME: options.codexHome, AGENTRIX_BOOTSTRAP: 'different-copy' } };
   sessions.set(s.terminalId, s);
   const event = { codexHome: options.codexHome, accountLaunch: 'model-only-v1' };
   const meta = (provider, cwd = project.path) => ({ type: 'session_meta', payload: { model_provider: provider, cwd } });
-  checkProjectAccount(project); checkProjectAccount(project);
+  store.projects.push(project); checkProjectAccount(project); checkProjectAccount(project); await flush();
   startUsage(project, s, event);
   assert.equal(s.usage.snapshot().resetQuery.state, 'loading');
   noteSettings(s, 'codex', meta('openai')); await flush(); assert.equal(pending.length, 1);
@@ -497,18 +504,18 @@ test('workspace add, recent reopen and startup restore use the project-open hook
   const pending = [], handlers = new Map();
   const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
   t.after(() => service.dispose());
-  const { main, checkProjectAccount, projectAccountChecks } = mainUsage(service, { CODEX_HOME: options.codexHome });
+  const { main, checkProjectAccount, store } = mainUsage(service, { CODEX_HOME: options.codexHome });
   const project = { id: 'project', kind: 'local', path: options.cwd };
-  const store = {
-    projects: [],
+  Object.assign(store, {
     add() { if (!this.projects.length) this.projects.push(project); return { project }; },
     remove() { this.projects = []; }, recentEntry: () => project,
-  };
+  });
   const context = {
     registerWorkspaceIpc: require('../electron/features/workspace/ipc.cjs').registerWorkspaceIpc,
     handle: (name, fn) => handlers.set(name, fn), publicState: () => ({}),
     dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [project.path] }) }, window: null, t: text => text,
-    store, checkProjectAccount, codexAccounts: service, projectImageAuto: { enqueue() {} }, fs,
+    store, checkProjectAccount, codexAccounts: service, fs, shellPathReady: Promise.resolve(), quitting: false,
+    projectImageAuto: { enqueue() {} }, restoreTerminals() {}, restorePlans: new Map(), startupErrors: new Map(), startTerminal() {},
     getEditorFile: () => null, allowEditorClose: async () => true, confirmTerminalClose: async () => true,
     disposeProjectTerminals() {}, findProject: () => project, previewResources: { closeProject() {} },
     forgetBranch() {}, broadcast() {}, reorderTerminals() {}, updateStoreSettings() {},
@@ -517,12 +524,12 @@ test('workspace add, recent reopen and startup restore use the project-open hook
   vm.runInNewContext(main.slice(main.indexOf('  registerWorkspaceIpc({'), main.indexOf('  filesIpc =')), context);
   await handlers.get('workspace:add')(); handlers.get('workspace:add-recent')(project.path);
   await flush(); assert.equal(pending.length, 1);
-  assert.equal(projectAccountChecks.size, 1);
   pending[0].resolve(ready(2)); await flush();
   await handlers.get('workspace:remove')(project.id);
-  assert.equal(projectAccountChecks.size, 0);
-  const restore = main.match(/^    for \(const project of store.projects\) \{ checkProjectAccount\(project\); projectImageAuto.enqueue\(project\); \}$/m)[0];
-  store.projects.push(project); vm.runInNewContext(restore, context); vm.runInNewContext(restore, context);
+  const restore = startupChecks(main);
+  store.projects.push(project);
+  await vm.runInNewContext(`(async () => { ${restore} })()`, context);
+  await vm.runInNewContext(`(async () => { ${restore} })()`, context);
   t.mock.timers.tick(4999); await flush(); assert.equal(pending.length, 1);
   t.mock.timers.tick(1); await flush(); assert.equal(pending.length, 2);
   await handlers.get('workspace:remove')(project.id);
@@ -530,7 +537,7 @@ test('workspace add, recent reopen and startup restore use the project-open hook
   pending[1].resolve(ready(9)); await flush();
   assert.ok([...service.entries.values()].every(entry => entry.value == null), 'a removed project cannot retain a late answer');
   project.restore = { cwd: path.join(project.path, 'restored-cwd') }; store.projects.push(project);
-  vm.runInNewContext(restore, context); await flush();
+  await vm.runInNewContext(`(async () => { ${restore} })()`, context); await flush();
   assert.equal(pending.length, 3);
   assert.equal(pending[2].opts.cwd, project.restore.cwd, 'restored projects check the cwd their terminal will use');
 });
@@ -580,4 +587,131 @@ test('main lifecycle follows recorded provider, replaces sessions safely and nev
   untrustedLate.resolve(ready(2)); await flush();
   assert.equal(s.usage.snapshot().resets, null); assert.equal(s.usage.snapshot().resetQuery.reason, 'provider');
   stopUsageAccount(s); service.dispose();
+});
+
+test('project opens serialize background reads, keep their registry private and cancel queued or closed projects', async t => {
+  const pending = []; let active = 0, peak = 0;
+  const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => {
+    peak = Math.max(peak, ++active);
+    pending.push({ opts, resolve(value) { --active; resolve(value); } });
+  }) });
+  t.after(() => service.dispose());
+  assert.equal(service.projects, undefined);
+  assert.equal(service.check, undefined);
+  assert.equal(service.watch.length, 2, 'project retention is not a public watch flag');
+  const opts = name => ({ ...options, cwd: path.join(options.cwd, name), provider: undefined });
+  const first = service.openProject('first', opts('first'));
+  assert.equal(service.openProject('first', opts('first')), first, 'opening an already open project is idempotent');
+  const cancelled = service.openProject('cancelled', opts('cancelled'));
+  service.openProject('third', opts('third')); service.closeProject('cancelled');
+  assert.equal(await cancelled, null);
+  await flush(); assert.equal(pending.length, 1);
+  pending[0].resolve(ready(2)); await first; await flush();
+  assert.equal(pending.length, 2); assert.equal(pending[1].opts.cwd, opts('third').cwd);
+  service.closeProject('third'); service.openProject('fourth', opts('fourth'));
+  await flush(); assert.equal(pending.length, 2, 'a cancelled reader must settle before the next background read starts');
+  assert.equal(pending[1].opts.signal.aborted, true);
+  pending[1].resolve(ready(9)); await flush();
+  assert.equal(pending.length, 3); assert.equal(pending[2].opts.cwd, opts('fourth').cwd);
+  assert.equal(peak, 1);
+  service.openProject('never', opts('never')); service.dispose();
+  assert.equal(pending[2].opts.signal.aborted, true);
+  pending[2].resolve(ready(9)); await flush(); assert.equal(pending.length, 3);
+  assert.equal(await service.openProject('disposed', opts('disposed')), null);
+});
+
+test('expired project answers never replay into a new session before a fresh account read', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const pending = [];
+  const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
+  t.after(() => service.dispose());
+  service.openProject('project', { ...options, provider: undefined }); await flush();
+  pending[0].resolve(ready(2)); await flush();
+  t.mock.timers.tick(30000); await flush(); assert.equal(pending.length, 1);
+  const values = [], meter = new UsageMeter('codex');
+  service.watch(options, value => { values.push(value); meter.codexAccount(value); });
+  assert.equal(values.length, 1);
+  assert.equal(values[0].resetQuery.state, 'loading');
+  assert.equal(meter.snapshot().resets, null);
+  assert.deepEqual(meter.snapshot().limits, [], 'an expired account must not flash its limits in the new session');
+  await flush(); assert.equal(pending.length, 2);
+  pending[1].resolve(ready(7)); await flush();
+  assert.equal(meter.snapshot().resets.left, 7);
+  assert.ok(values.every(value => value.resets?.left !== 2));
+});
+
+test('account fingerprints use a random runtime HMAC key and remain stable only within that runtime', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../electron/features/agents/codex-account-usage.cjs'), 'utf8');
+  const crypto = require('node:crypto'), keys = [];
+  const loadScope = () => {
+    const context = { module: { exports: {} }, process, require: name => name === 'node:crypto' ? {
+      ...crypto, createHmac(algorithm, key) {
+        assert.equal(algorithm, 'sha256'); assert.equal(key.length, 32); keys.push(key);
+        return crypto.createHmac(algorithm, key);
+      },
+    } : require(name) };
+    vm.runInNewContext(source, context);
+    return context.module.exports.usageScope;
+  };
+  const first = loadScope(), second = loadScope();
+  const one = first(options).key;
+  assert.equal(first({ ...options, env: {} }).key, one);
+  assert.notEqual(second(options).key, one, 'another runtime cannot correlate the same environment digest');
+  assert.ok(keys[0].equals(keys[1])); assert.ok(!keys[0].equals(keys[2]));
+});
+
+function shellIntegration(platform) {
+  let resolve, reject;
+  const login = new Promise((yes, no) => { resolve = yes; reject = no; });
+  const env = { PATH: '/system/bin', SHELL: '/fake/shell', CODEX_HOME: options.codexHome };
+  let changes = 0, loginCalls = 0;
+  const modules = {
+    'node:path': path, 'node:child_process': {}, '../updates.cjs': {}, '../windows-integration.cjs': {},
+    '../zsh-terminal.cjs': { prepareZshStartup: () => '/fake/zsh', findShell: () => '/fake/shell', withoutAppImage: value => value,
+      loginShellPath: () => { ++loginCalls; return login; }, mergePath: (value, current) => `${value}:${current}` },
+  };
+  const context = { module: { exports: {} }, process: { platform, env }, require: name => {
+    assert.ok(Object.hasOwn(modules, name), name); return modules[name];
+  } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/app/platform-startup.cjs'), 'utf8'), context);
+  const integration = context.module.exports.prepareShellIntegration({ app: { getPath: () => '/fake/profile' }, integrationDir: '/fake/integration', agents: { changed() { ++changes; } } });
+  return { ...integration, env, resolve, reject, changes: () => changes, loginCalls: () => loginCalls };
+}
+
+test('startup project checks follow restore and the settled login PATH, skip Claude and SSH, and use the updated fingerprint', async t => {
+  for (const platform of ['darwin', 'linux']) {
+    const shell = shellIntegration(platform), reads = [], order = [];
+    const service = new CodexAccountUsage({ scope: async () => null, read: async opts => { reads.push(opts); order.push('read'); return ready(2); } });
+    t.after(() => service.dispose());
+    const { main, checkProjectAccount, store } = mainUsage(service, shell.env, shell.ready);
+    const local = { id: 'codex', kind: 'local', path: options.cwd };
+    store.projects.push({ ...local, id: 'claude', restore: { agent: 'claude' } }, { ...local, id: 'ssh', kind: 'ssh' }, local);
+    const context = { store, checkProjectAccount, shellPathReady: shell.ready, quitting: false,
+      restoreTerminals() { order.push('restore'); }, restorePlans: new Map(), startupErrors: new Map(), startTerminal() {}, broadcast() {} };
+    const startup = vm.runInNewContext(`(async () => { ${startupChecks(main)} })()`, context);
+    assert.deepEqual(order, ['restore'], 'terminal restore must run immediately without waiting for the login PATH');
+    await startup; await flush();
+    assert.deepEqual(order, ['restore']); assert.equal(service.entries.size, 0, 'only account checks wait for the login PATH');
+    assert.equal(shell.startup, '/fake/zsh'); assert.equal(shell.loginCalls(), 1);
+    shell.resolve('/login/bin'); await flush();
+    assert.equal(shell.changes(), 1); assert.equal(reads.length, 1);
+    assert.equal(reads[0].env.PATH, '/login/bin:/system/bin');
+    assert.deepEqual(order, ['restore', 'read']);
+    assert.equal(usageScope({ ...options, env: shell.env }).key, usageScope({ ...options, env: reads[0].env }).key);
+  }
+});
+
+test('login PATH readiness settles on failure and Windows, and closing a waiting project prevents its check', async t => {
+  for (const platform of ['darwin', 'linux']) {
+    const shell = shellIntegration(platform);
+    const service = new CodexAccountUsage({ scope: async () => null, read: () => assert.fail('a closed project must not query') });
+    t.after(() => service.dispose());
+    const { store, checkProjectAccount } = mainUsage(service, shell.env, shell.ready);
+    const project = { id: 'closed', path: options.cwd, kind: 'local' }; store.projects.push(project);
+    const check = checkProjectAccount(project); store.projects.length = 0;
+    shell.reject(new Error('offline fixture')); await shell.ready; await check;
+    assert.equal(shell.env.PATH, '/system/bin'); assert.equal(service.entries.size, 0);
+  }
+  const windows = shellIntegration('win32'); await windows.ready;
+  assert.equal(windows.loginCalls(), 0); assert.equal(windows.startup, undefined);
 });

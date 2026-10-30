@@ -126,6 +126,7 @@ let stateTimer;
 let runtimeDir;
 const { prepareAskpass, cleanupAskpass } = createSshRuntime({ fs, execFileSync, tempDirectory: () => app.getPath('temp'), integrationDir });
 let zshStartup;
+let shellPathReady = Promise.resolve();
 let activeTerminal = null;
 let activeFileTree = null;
 let fileOperations, filesIpc;
@@ -471,9 +472,12 @@ function dispatchedOnly(s) {
 }
 
 function checkProjectAccount(project) {
-  if (project.kind === 'ssh' || codexAccounts.projects.has(project.id)) return;
-  const env = createTerminalEnvironment(withoutAppImage(process.env), '');
-  codexAccounts.projects.set(project.id, codexAccounts.check({ cwd: project.restore?.cwd || project.path, env }));
+  if (project.kind === 'ssh' || project.restore?.agent === 'claude') return;
+  return shellPathReady.then(() => {
+    if (quitting || !store.projects.includes(project)) return;
+    const env = createTerminalEnvironment(withoutAppImage(process.env), '');
+    return codexAccounts.openProject(project.id, { cwd: project.restore?.cwd || project.path, env });
+  });
 }
 
 function startUsage(project, s, event) {
@@ -1223,7 +1227,7 @@ function registerIpc() {
   }, getRecentProjects: () => store.recentProjects(), getRecentSSH: () => store.recentSSH(), forgetRecentSSH: (host, folder) => store.forgetSSH(host, folder), clearSSHHistory: () => store.clearSSHHistory(), existsSync: fs.existsSync,
     getRecentEntry: folder => store.recentEntry(folder), forgetRecent: folder => store.forget(folder), clearHistory: () => store.clearHistory(),
     getEditorFile, allowEditorClose, confirmTerminalClose, disposeProjectTerminals, findProject, closeProjectPreviews: id => previewResources.closeProject(id),
-    removeProject: id => { codexAccounts.projects.get(id)?.dispose(); codexAccounts.projects.delete(id); store.remove(id); },
+    removeProject: id => { codexAccounts.closeProject(id); store.remove(id); },
     forgetBranch, broadcast, acknowledgeProject: id => store.acknowledge(id), reorderProjects: ids => store.reorderProjects(ids), reorderTerminals,
     setProjectImage: (id, image, mode) => {
       store.setProjectImage(id, image, mode);
@@ -1310,7 +1314,8 @@ if (!app.requestSingleInstanceLock()) {
     // Before any terminal or agent starts: they inherit the system proxy only through process.env.
     await adoptSystemProxy({ session: electronSession.defaultSession }).catch(error => console.warn('System proxy:', error.message));
     const shellIcon = prepareWindowIcon({ app, shell, root, installed, appUserModelId, relaunchDisplayName });
-    zshStartup = prepareShellIntegration({ app, integrationDir, agents });
+    const shellIntegration = prepareShellIntegration({ app, integrationDir, agents });
+    zshStartup = shellIntegration.startup; shellPathReady = shellIntegration.ready;
     store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'));
     skills = new SkillsStore({ dataDir: app.getPath('userData'), builtinDir: app.isPackaged ? path.join(process.resourcesPath, 'skills') : path.join(root, 'resources', 'skills'),
       getProjects: () => store.projects, getAgents: () => agents.getState(), activeProjects: () => [...sessions.values()].filter(s => s.codexActive).map(s => s.projectId),
@@ -1374,10 +1379,11 @@ if (!app.requestSingleInstanceLock()) {
     Menu.setApplicationMenu(process.platform === 'darwin' ? macMenu() : null);
     for (const project of store.projects) captureBranch(project);
     await window.loadURL(devUrl || 'agentrix://app/index.html');
-    for (const project of store.projects) { checkProjectAccount(project); projectImageAuto.enqueue(project); }
+    for (const project of store.projects) projectImageAuto.enqueue(project);
     updateIndicators();
     if (!process.env.AGENTRIX_DATA_DIR) updateManager.start();
     restoreTerminals({ store, restorePlans, startupErrors, startTerminal, broadcast, isQuitting: () => quitting });
+    for (const project of store.projects) void checkProjectAccount(project);
   }).catch(error => {
     dialog.showErrorBox(t('Agentrix 无法启动'), t(String(error?.stack || error)));
     app.exit(1);
