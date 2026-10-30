@@ -627,7 +627,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   const status = screen.choice?.kind === 'question' ? <div className="reading-status is-waiting" role="status">{t('等待你回答问题')}</div>
     // Without a choice to answer here (one the reading view cannot lay out), the terminal is a click away.
     : terminal.needsInput !== null ? <div className="reading-status is-waiting" role="status"><span>{t('等待你确认：{message}', { message: terminal.needsInput })}</span>
-      {!screen.choice && !waitingShown && <button type="button" className="text-button" onClick={onShowTerminal}>{t('切换到终端')}</button>}</div>
+      {!screen.choice && <button type="button" className="text-button" onClick={onShowTerminal}>{t('切换到终端')}</button>}</div>
     : statusRunning ? <WorkingLine key={terminal.sessionId} agent={kind} label={terminal.action ? t('正在{step}', { step: actionText(terminal.action) }) : t('{agent} 正在思考', { agent })} />
     : null;
   // The latest round once it has ended gets its status above the result and its actions under it; nothing while the agent

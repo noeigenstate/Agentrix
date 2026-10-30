@@ -913,7 +913,7 @@ test('an attention notice with no input box shows the waiting card without openi
   h.render();
   assert.equal(h.card().props.title, null);
   assert.equal(h.popup(), undefined, 'the handoff to the terminal stays with reading-mode');
-  assert.equal(h.showTerminalButton(), false, 'the status line does not offer the same action twice');
+  assert.equal(h.showTerminalButton(), true, 'the status line still switches to the terminal (the card opens it as a popup)');
   h.card().props.onOpenTerminal(); h.render();
   assert.ok(h.popup());
   assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
