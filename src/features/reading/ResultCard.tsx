@@ -4,7 +4,7 @@ import { ArrowCounterClockwise, ArrowsOutSimple, CheckCircle, ChatCircle, CopySi
 import type { ConversationEntry } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import './result-card.css';
-import { showPopup } from '../files/file-popup';
+import { openLinkInPopup, showPopup } from '../files/file-popup';
 import { stepTime } from './Timeline';
 import { useNow } from '../../shared/useNow.ts';
 import { elapsed, FALLBACK_TITLES, resultActions, type LatestResult, type ResultAction } from './result-round';
@@ -108,7 +108,7 @@ export function ResultActions({ result, projectId, remote, canSend, onContinue, 
   const run: Record<ResultAction, () => void> = {
     enlarge: () => showPopup({ kind: 'image', path: result.picture!.path }),
     save: () => void window.agentrix.saveImageAs(result.picture!.path).then(saved => { if (!saved.ok) onError(saved.error); }),
-    open: () => showPopup({ kind: 'file', projectId, path: result.written[0] }),
+    open: () => void openLinkInPopup(projectId, result.written[0], onError).catch(error => onError(String(error))),
     continue: () => onContinue(result.kind === 'picture' ? t('在这张图的基础上：') : undefined),
     ask: () => onContinue(), copy: () => copied(result.reply), retry: onRetry,
   };
