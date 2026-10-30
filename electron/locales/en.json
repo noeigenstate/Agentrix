@@ -1747,5 +1747,7 @@
   "Codex 消息里附带的图片会显示在你发的那条消息里，只显示一次；图片缺失或过大时显示占位。": "Pictures attached to a Codex message show once, in the message you sent; a missing or oversized picture shows a placeholder.",
   "没能启动的子任务条目 5 秒后自动收起，其他失败的条目仍保留到你查看。": "Subtask rows that failed to start leave after 5 seconds; other failed rows stay until you review them.",
   "启动提示": "Starting hint",
-  "助手启动期间输入框里的「正在启动…」对比度提高，浅色和深色主题下都看得清。": "The Starting… text in the input box while an assistant starts has higher contrast and reads clearly in light and dark themes."
+  "助手启动期间输入框里的「正在启动…」对比度提高，浅色和深色主题下都看得清。": "The Starting… text in the input box while an assistant starts has higher contrast and reads clearly in light and dark themes.",
+  "无效的交付评分。": "Invalid delivery grade.",
+  "评分终端与项目不匹配。": "The grading terminal does not belong to this project."
 }

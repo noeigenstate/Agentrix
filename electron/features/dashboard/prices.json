@@ -1,10 +1,10 @@
 {
   "updated": "2026-10-30",
   "models": {
-    "claude-opus-5-5": { "inputPerM": null, "cachedInputPerM": null, "outputPerM": null, "currency": "USD", "source": null, "checkedAt": null },
-    "claude-sonnet-5-5": { "inputPerM": null, "cachedInputPerM": null, "outputPerM": null, "currency": "USD", "source": null, "checkedAt": null },
-    "claude-haiku-5-5": { "inputPerM": null, "cachedInputPerM": null, "outputPerM": null, "currency": "USD", "source": null, "checkedAt": null },
-    "gpt-6.1-sol": { "inputPerM": null, "cachedInputPerM": null, "outputPerM": null, "currency": "USD", "source": null, "checkedAt": null },
-    "gpt-6.1-terra": { "inputPerM": null, "cachedInputPerM": null, "outputPerM": null, "currency": "USD", "source": null, "checkedAt": null }
+    "claude-opus-5-5": { "inputPerM": 4, "cachedInputPerM": 0.2, "outputPerM": 20, "currency": "USD", "source": "https://platform.claude.com/docs/en/about-claude/pricing", "checkedAt": "2026-10-06" },
+    "claude-sonnet-5-5": { "inputPerM": 2, "cachedInputPerM": 0.2, "outputPerM": 10, "currency": "USD", "source": "https://platform.claude.com/docs/en/about-claude/pricing", "checkedAt": "2026-10-06" },
+    "claude-haiku-5-5": { "inputPerM": 0.1, "cachedInputPerM": null, "outputPerM": 0.5, "currency": "USD", "source": "https://platform.claude.com/docs/en/about-claude/pricing", "checkedAt": "2026-10-06" },
+    "gpt-6.1-sol": { "inputPerM": 2, "cachedInputPerM": 0.1, "outputPerM": 10, "currency": "USD", "source": "https://metricnexus.ai/blog/gpt-6-1-sol-benchmarks-pricing", "checkedAt": "2026-10-30" },
+    "gpt-6.1-terra": { "inputPerM": 1, "cachedInputPerM": 0.05, "outputPerM": 5, "currency": "USD", "source": "https://apidog.com/blog/gpt-6-1-terra-pricing/", "checkedAt": "2026-10-30" }
   }
 }
