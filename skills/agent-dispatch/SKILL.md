@@ -234,5 +234,11 @@ confirmed worker runs.
   plan in the scratch folder) into the brief, or copy it into its worktree. A Codex worker can read outside it.
 - Right after launching, read the helper's start line. On `routing unverified`, establish the model before relying on
   routing; on `routing ok`, check any unverified settings separately. Act on `failed to start` or `routing MISMATCH`.
+- Before widening one worker's `--allow`, compare it with every live worker's globs (the board): a shared file such as
+  `electron/locales/en.json` is refused as an overlap. Hand a file to the worker that needs it and take it from the
+  other; the lead adds strings or one-line wiring a worker may not touch.
+- A follow-up fix after review goes to a fresh session with a focused brief (findings, file:line, done-when), with
+  `--skip-meeting "<review follow-up of round …>"` and the same module globs. Resuming a long build session costs far
+  more (observed: about 50 min per resume against 5–8 min fresh).
 - Claude Code's own Agent tool calls stay as they are: their transcript records are already structured.
 - The app no longer parses Bash command lines, briefs or logs to find workers.

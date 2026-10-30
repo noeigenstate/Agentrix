@@ -94,3 +94,9 @@ For transcript rotation, read handle metadata with `file.stat({ bigint: true })`
 in the identity. NTFS file IDs above the safe integer limit can round to the same Number for two different files,
 silently reusing the old read offset. Convert only `size` for byte offsets. Keep the rotation regression using two
 distinct bigint IDs that become the same Number; verify both Claude and Codex restart their bounded history window.
+
+Parser fixtures copy the real record shapes (synthetic content, no real paths or pixels). Before writing one, look at
+a current rollout or transcript read-only and keep every record the CLI writes for the event. A pasted picture in
+Codex is two records per prompt: a `response_item` user message (`input_text "<image name=[Image #1] path=\"…\">"`,
+`input_image` data URL, `input_text "</image>"`, the prompt) and an `event_msg item_completed` `UserMessage`
+(`local_image` path + text). A fixture of only one of them passed while every real prompt showed twice.
