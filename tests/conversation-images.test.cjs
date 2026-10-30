@@ -6,7 +6,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { ConversationLog, codexConversation, claudeConversation, setThumbnailer } = require('../electron/conversation.cjs');
 const { ClaudeImageLine, IMAGE_LIMIT, IMAGE_OMITTED: RAW_OMITTED, readTranscriptChunk } = require('../electron/oversized-record.cjs');
-const { omitted: IMAGE_OMITTED, unavailable: missing } = require('../src/shared/picture-values.json');
+const { omitted: IMAGE_OMITTED, unavailable: missing } = require('../electron/picture-values.json');
 
 const small = 'data:image/jpeg;base64,SMALL';
 function png(width = 8, height = 8) {

@@ -4,7 +4,7 @@ const { VIDEO_TYPES } = require('../../project-files.cjs');
 const { inside, previewLocation, localPath, projectFile, networkPath, checked, failure, OUTSIDE, SSH_OUTSIDE } = require('./preview-location.cjs');
 const { cardKind, isImageFile } = require('./file-kind.cjs');
 const { PictureThumbnails, dataImage, FILE_LIMIT: IMAGE_BYTES } = require('./picture-thumbnail.cjs');
-const pictureValues = require('../../../src/shared/picture-values.json');
+const pictureValues = require('../../picture-values.json');
 
 // What the reading view shows of a document, page, video or image an agent wrote or named: the start of a Markdown
 // file, a picture of an HTML page, a video to play, a small copy of the image. Cards are asked for only once they

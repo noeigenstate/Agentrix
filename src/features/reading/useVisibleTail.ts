@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { ConversationEntry } from '../../shared/types';
 import { timelineIdentity } from './reading-timeline-identity.ts';
-import { conversationBlocks } from '../../shared/conversation-blocks.mjs';
+import { conversationBlocks } from '../../../electron/conversation-blocks.mjs';
 
 type ConversationBlock = { kind: 'message'; entry: ConversationEntry } | { kind: 'tools'; id: string; entries: ConversationEntry[] };
 type AgentTurn = { kind: 'agent'; id: string; at: number; blocks: ConversationBlock[] };

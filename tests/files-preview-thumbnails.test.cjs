@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { PictureThumbnails, FILE_LIMIT } = require('../electron/features/files/picture-thumbnail.cjs');
 const { createFileCards } = require('../electron/features/files/file-cards.cjs');
-const values = require('../src/shared/picture-values.json');
+const values = require('../electron/picture-values.json');
 const image = width => { const bytes = Buffer.alloc(24); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(bytes); bytes.writeUInt32BE(width, 16); bytes.writeUInt32BE(width, 20); return bytes; };
 function jpeg(width, height, segments = 2) {
   const metadata = Buffer.alloc(65537); metadata[0] = 255; metadata[1] = 226; metadata.writeUInt16BE(65535, 2);

@@ -6,7 +6,7 @@ const { interactiveSession } = require('./session-restore.cjs');
 const { findClaudeSession } = require('./claude-sessions.cjs');
 const { ConversationLog, codexConversation, claudeConversation } = require('./conversation.cjs');
 const { readTranscriptChunk, ClaudeImageLine } = require('./oversized-record.cjs');
-const { conversationBlocks } = require('../src/shared/conversation-blocks.mjs');
+const { conversationBlocks } = require('./conversation-blocks.mjs');
 
 const INITIAL_BLOCKS = 80, PAGE_BLOCKS = 40, CHUNK = 256 * 1024, BYTE_LIMIT = 8 * 1024 * 1024;
 const changedHistory = () => new Error('对话历史已变化，请重新打开会话。');

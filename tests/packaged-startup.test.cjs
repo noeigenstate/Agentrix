@@ -44,7 +44,7 @@ for (const arch of ['x64', 'arm64']) test(`packaged Linux ${arch} retains every 
       fs.copyFileSync(file, destination);
     }
   }
-  copy(main, ['package.json', 'src/shared/conversation-blocks.mjs', 'src/shared/picture-values.json', ...fs.readdirSync(path.join(root, 'electron'), { recursive: true }).map(name => path.join('electron', name))]);
+  copy(main, ['package.json', ...fs.readdirSync(path.join(root, 'electron'), { recursive: true }).map(name => path.join('electron', name))]);
   for (const matcher of extras) copy(matcher);
   await copyDispatchRuntime(path.join(directory, 'integration'));
 

@@ -6,7 +6,7 @@ const path = require('node:path');
 const { TranscriptTail, ActionLog, claudeRecord, codexActions, codexRecord } = require('../electron/agent-actions.cjs');
 const { ConversationLog, claudeConversation, codexConversation, brief } = require('../electron/conversation.cjs');
 const { ClaudeImageLine, IMAGE_LIMIT } = require('../electron/oversized-record.cjs');
-const { omitted: IMAGE_OMITTED } = require('../src/shared/picture-values.json');
+const { omitted: IMAGE_OMITTED } = require('../electron/picture-values.json');
 
 const image = data => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data } });
 const user = (content, extra = {}) => ({ type: 'user', uuid: 'prompt', timestamp: '2026-10-12T08:00:00.000Z', message: { content }, ...extra });

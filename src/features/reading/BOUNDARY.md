@@ -23,6 +23,7 @@ reading and the raw terminal.
 
 ## May import
 - `src/shared/**`
+- `electron/conversation-blocks.mjs` (the conversation grouping rule the main process and the renderer share)
 - `src/features/agents/agent-screen*.ts`
 - `src/features/agents/sign-in-screen.ts`
 - `src/features/agents/action-text.ts`

@@ -37,7 +37,7 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 - `electron/prompt-queue.cjs`
 - `electron/session-*.cjs`
 - `electron/claude-sessions.cjs`
-- `electron/conversation.cjs`
+- `electron/conversation*` (the record parser and the shared grouping rule)
 - `electron/oversized-record.cjs`
 
 ## Invariants

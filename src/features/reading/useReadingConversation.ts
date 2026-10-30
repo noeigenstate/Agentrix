@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ConversationEntry, ConversationPage, ReadingHistoryScope } from '../../shared/types';
 import { createConversationBuffer } from './conversation-buffer';
-import { conversationBlocks } from '../../shared/conversation-blocks.mjs';
+import { conversationBlocks } from '../../../electron/conversation-blocks.mjs';
 
 export function conversationKey(id: string, sessionId: string | null) { return JSON.stringify([id, sessionId]); }
 
