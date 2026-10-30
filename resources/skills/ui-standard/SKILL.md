@@ -1,11 +1,11 @@
 ---
 name: ui-standard
-description: Use when designing, building, restyling or reviewing any user interface, unless the project has its own UI standard; show a clickable mockup before building, judge the result with five measured questions and a grayscale checklist, keep colour and material restrained, use regular spacing and one set of sizes, and have another model accept the screenshots.
+description: Use when designing, building, restyling or reviewing any user interface, unless the project has its own UI standard; for UI building beyond a small fix, show a clickable mockup; judge the result with five measured questions and a grayscale checklist, keep colour and material restrained, use regular spacing and one set of sizes, and have another model accept the screenshots, or the user when no second model is available.
 trigger: auto
 when: 设计、实现、改版或审查界面时生效；项目已有自己的界面规范时以项目为准
 requires: none
 title: 界面规范
-summary: 先出可点击设计稿再动手，按五个量化问题和灰度清单验收，颜色克制、间距成刻度；截图由另一个模型验收。
+summary: 界面开发超出小修时先出可点击设计稿，按五个量化问题和灰度清单验收，颜色克制、间距成刻度；截图由另一个模型验收，没有时由用户验收。
 ---
 
 # UI standard
@@ -36,8 +36,8 @@ conflict, follow the currently accepted standard or the user's explicit choice a
    "Motion" and "Crispness").
 6. **Verify in the running app.** Use isolated or safe test data. Check the applicable default, hover, pressed,
    disabled and busy states, keyboard focus and activation, scrolling and reduced motion. Capture every theme the
-   product ships at the default, an intermediate (about 1100px) and the minimum supported viewport; record unsupported
-   themes or sizes as N/A. Another model, or the user when no second model is available, accepts the screenshots, never
+   product ships at the default viewport, a supported intermediate width between the default and minimum, and the
+   minimum supported viewport. Record an unavailable size as N/A. Another model, or the user when no second model is available, accepts the screenshots, never
    their author; report that acceptance as outstanding until one of them has accepted.
 
 ### The five measured questions
@@ -52,8 +52,8 @@ Measure the application's own interface only, not wallpapers, photos or brand ma
 | 2 | Is alignment uniform? | Distinct left edges per pane | at most 4 |
 | | | Near-misses (edges 1 to 3px apart) | 0 |
 | | | Vertical centres within one row | differ by at most 1px |
-| 3 | Is spacing regular? | Padding, margin and gap values off the scale 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64 | 0 |
-| | | Distinct spacing values | at most 8 |
+| 3 | Is spacing regular? | Nonzero padding, margin and gap values off the scale 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64 | 0 |
+| | | Distinct nonzero spacing values | at most 8 |
 | | | Repeated rows or cards | fixed-height groups have identical heights and gaps; content-driven groups may grow, with consistent gaps and padding |
 | 4 | Are colour and material restrained? | Chromatic hue families | at most 5 semantic colours |
 | | | Chromatic background area of a pane | at most 5% |
@@ -61,13 +61,14 @@ Measure the application's own interface only, not wallpapers, photos or brand ma
 | 5 | Is it one product? | Distinct border radii | at most 4, from one set |
 | | | Font sizes and weights | at most 6 and 3 |
 | | | Button variants and heights | at most 2 variants; one standard height and at most one compact height inside rows |
-| | | Transition duration and easing | one of each |
+| | | Nonzero transition durations and their easings | at most 1 of each; N/A if there are no transitions |
 | | | Icon family and sizes | one family, at most 3 sizes |
 | | | Token definitions across at least two relevant screens | one shared set; page-specific exceptions named |
 
-The default style rules below are stricter than these measurement ceilings: a design without glass, gradients or tinted
-panels passes the material limits by construction, and the ceilings only bound a project whose own rules allow such
-materials. Name any deliberate exception in the report with its reason; never pass it silently.
+The default style rules below are stricter than these measurement ceilings where they apply. Measure the distinct
+backdrop filters, shadows and background alpha values even when the design has no glass, gradients or tinted panels.
+Project and user rules take precedence as stated above. Name any deliberate exception in the report with its reason;
+never pass it silently.
 
 Record the theme, state, viewport in logical pixels and device scale for each measurement. In a web UI, use browser
 developer tools, computed styles and bounding rectangles; in a native UI, use the platform's inspector or layout
@@ -77,6 +78,9 @@ cannot be measured.
 Count a visible text block once, excluding duplicated ancestor text. For alignment, count the first box in each row and
 each text column's left edge, rounding to the nearest logical pixel; an icon and text in one row share one line. Compare
 repeated rows or cards within adjacent runs of the same component type; a separator starts a new run.
+
+If there are no visible text blocks, mark the first font-size metric N/A. If there is only one distinct font size, check
+the largest-size block count and mark the next-size ratio N/A.
 
 For colour, convert to HSL and count colours with saturation at least 25% and lightness from 12% through 92% in
 30-degree hue buckets. Exclude the pane's own surface and non-interface content. Measure coloured-background coverage as
@@ -201,9 +205,11 @@ property.
 
 ## Done when
 
-- The mockup was shown and the user's decisions are recorded, or the change was small enough to need none.
-- The five questions have measured values and every applicable grayscale item has a PASS with evidence; absent items
-  are N/A and unmeasurable items are UNKNOWN. Deliberate exceptions are named with their reasons.
+- For UI building beyond a small fix, the mockup was shown and the user's decisions were recorded. An existing-UI
+  review or small fix needs no new mockup.
+- Each applicable metric of the five questions has a measured value and a PASS or a named exception; absent metrics are
+  N/A and unmeasurable metrics are UNKNOWN. Each applicable grayscale item has a PASS with evidence or a named
+  exception. Give the reason for every deliberate exception.
 - Every theme the product ships, at the recorded viewport sizes, has been inspected in the running UI. Page-level
   horizontal scrolling and accidental clipping are absent; intentionally ellipsized text remains accessible in full.
 - Another model, or the user when no second model is available, has accepted the screenshots. Until one of them has,
