@@ -2,6 +2,7 @@ node_modules/
 dist/
 release/
 .test-output/
+.probe/
 *.log
 !tests/fixtures/codex-exec-token-rate.log
 docs/overview.png

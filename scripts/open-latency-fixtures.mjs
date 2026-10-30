@@ -70,6 +70,7 @@ export function isolatedEnvironment(fixture, profile, home) {
   return { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => allowed.test(key))),
     HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData/Roaming'), LOCALAPPDATA: path.join(home, 'AppData/Local'),
     TEMP: home, TMP: home, AGENTRIX_DATA_DIR: profile, CODEX_HOME: fixture.codexHome, CLAUDE_CONFIG_DIR: fixture.claudeHome,
+    // An explicit endpoint blocks Codex's upward search for a .codex/config.toml outside the isolated home.
     AGENTRIX_TEST_RESTORE: '1', OPENAI_BASE_URL: 'http://127.0.0.1:9/offline-probe',
     Path: [fixture.bin, path.dirname(process.execPath), path.join(process.env.SystemRoot, 'System32'), path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0'), 'C:\\Program Files\\Git\\cmd'].join(path.delimiter) };
 }

@@ -86,6 +86,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "src/shared/conversation-blocks.mjs",
       "assets/**/*",
       "package.json",
       "LICENSE",

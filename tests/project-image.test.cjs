@@ -176,7 +176,7 @@ test('the secured preload API saves then broadcasts and returns rejected mutatio
 test('public state themes SVG pictures without changing their canonical storage or terminal state', t => {
   const { store, project, file } = fixture(t);
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const context = vm.createContext({ store, projectSvgForTheme, sessions: new Map(), startupErrors: new Map(), dispatchedOnly: () => null,
+  const context = vm.createContext({ restorePlans: new Map(), readingHistory: { summary: () => null }, store, projectSvgForTheme, sessions: new Map(), startupErrors: new Map(), dispatchedOnly: () => null,
     terminalIds: p => [p.id], shownTerminalIds: p => [p.id], getBranch: () => 'main', t: text => text,
     localShell: () => ({ kind: 'powershell' }), process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: 'isolated' } },
     app: { getVersion: () => '1' }, desktopGlassBackend: null, desktopGlassWindow: false, desktopGlassActive: false, windowZoom: null });

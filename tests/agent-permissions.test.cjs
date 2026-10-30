@@ -169,6 +169,7 @@ test('terminals show in the order they were dragged into; a new one comes last a
 
 test('public state exposes waiting messages and null for terminals without a notice', () => {
   const context = vm.createContext({
+    restorePlans: new Map(), readingHistory: { summary: () => null },
     dispatchedOnly: () => null, store: { projects: [{ id: 'p' }], settings: { language: 'zh' } }, sessions: new Map([['waiting', { needsInput: { message: 'Approve tool' } }]]),
     terminalIds: () => ['waiting', 'stopped'], shownTerminalIds: () => ['waiting', 'stopped'], getBranch: () => undefined, startupErrors: new Map(), t: text => text, localShell: () => ({ kind: 'powershell' }),
     process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: 'isolated' } }, app: { getVersion: () => '1' },
@@ -177,6 +178,20 @@ test('public state exposes waiting messages and null for terminals without a not
   vm.runInContext(main.slice(main.indexOf('function publicState('), main.indexOf('function terminalIds(')), context);
   const terminals = context.publicState().projects[0].terminals;
   assert.equal(terminals[0].needsInput, 'Approve tool'); assert.equal(terminals[1].needsInput, null);
+  const session = context.sessions.get('waiting'), scope = { key: 'preview', agent: 'claude', threadId: 'saved' };
+  context.readingHistory.summary = () => scope;
+  const shown = () => context.publicState().projects[0].terminals[0].readingHistory;
+  assert.equal(shown(), undefined, 'no restore or CLI means the launcher and shell stay visible');
+  context.restorePlans.set('waiting', { codex: true }); assert.equal(shown(), scope);
+  session.inputDirty = true; assert.equal(shown(), undefined, 'typing into the shell cancels the preview'); session.inputDirty = false;
+  context.restorePlans.delete('waiting'); assert.equal(shown(), undefined, 'a consumed plan with no CLI cannot retain the preview');
+  session.agentStarting = true; assert.equal(shown(), scope);
+  session.error = 'start failed'; assert.equal(shown(), undefined); session.error = null;
+  context.startupErrors.set('waiting', 'startTerminal threw'); assert.equal(shown(), undefined);
+  context.startupErrors.clear(); session.agentStarting = false; session.inputDirty = true; session.codexActive = true;
+  session.promptQueue = { list: () => [] }; assert.equal(shown(), scope, 'a CLI that really started owns its history even after shell typing');
+  session.completionWork = { reading: true, mainTurn: () => null };
+  assert.equal(context.publicState().projects[0].terminals[0].codexActivity, 'working', 'catch-up is visible even when the only lifecycle snapshot predates this launch');
 });
 
 test('PowerShell Claude notification hooks filter idle events and send silent bounded permission notices', { skip: process.platform !== 'win32', timeout: 20000 }, async t => {

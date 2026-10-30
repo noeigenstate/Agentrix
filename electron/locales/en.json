@@ -1737,5 +1737,6 @@
   "显示更早的对话": "Show earlier conversation",
   "无法加载更早的对话，请重试。": "Could not load earlier conversation. Try again.",
   "对话历史已变化，请重新打开会话。": "Conversation history changed. Reopen the conversation.",
-  "无效的对话分页请求。": "Invalid conversation page request."
+  "无效的对话分页请求。": "Invalid conversation page request.",
+  "此条对话过大，未在此显示。": "This conversation entry is too large to display here."
 }

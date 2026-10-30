@@ -26,7 +26,7 @@ import { signInScreen } from '../agents/sign-in-screen';
 import { setChoiceVisible } from './reading-mode';
 import { isTyping, markTyping } from './typing';
 import { useStickToBottom } from './useStickToBottom';
-import { conversationKey, useReadingHistory } from './useReadingConversation';
+import { useReadingHistory } from './useReadingConversation';
 import { blocks, conversationTurns, useVisibleTail } from './useVisibleTail';
 import './reading.css';
 import './reading-flow.css';
@@ -138,7 +138,7 @@ function GeneratedImage({ src, path, prompt, result = false, children }: { src: 
 // (the agents are told they can show one this way: reading-note.cjs).
 function AssistantReply({ entry, agent, projectId, result = false, onError }: { entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; result?: boolean; onError: (message: string) => void }) {
   const named = useMemo(() => entry.text ? replyFiles(entry.text) : [], [entry.text]);
-  const words = entry.text ? <Markdown text={entry.text} /> : null;
+  const words = entry.text ? <Markdown text={entry.omitted ? t('此条对话过大，未在此显示。') : entry.text} /> : null;
   // The latest result shows its picture first with the words under it; anywhere else the words come first.
   const picture = entry.generated && entry.images?.[0] ? <GeneratedImage src={entry.images[0]} {...entry.generated} result={result}>{result && words}</GeneratedImage> : null;
   return <div data-reading-entry={entry.id} className={`reading-assistant is-${agent}`}>{result && picture}{!(result && picture) && words}
@@ -183,42 +183,52 @@ function ToolGroup({ entries, live, projectId, onError }: { entries: Conversatio
 // and its tool calls folded between them. The real terminal stays underneath; what is written here goes to
 // it, and the toggle in the card header switches back to it at any time. autoFocus: the card is expanded and
 // this is its terminal in use, so the message box takes the keyboard (never a small card's).
-export function ReadingView(props: Parameters<typeof LegacyReadingView>[0]) {
-  return props.terminal.nativeMode === 'claude-sdk' ? <ManagedSession key={props.terminal.sessionId} projectId={props.projectId} terminal={props.terminal} onError={props.onError} /> : <LegacyReadingView {...props} />;
+export function ReadingView(props: Parameters<typeof TerminalReadingView>[0]) {
+  return props.terminal.nativeMode === 'claude-sdk' ? <ManagedSession key={props.terminal.sessionId} projectId={props.projectId} terminal={props.terminal} onError={props.onError} /> : <TerminalReadingView {...props} />;
 }
 
-function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, active = true, onShowTerminal, onError, onOpenLink }: { projectId: string; terminal: ProjectTerminal; remote?: boolean; autoFocus: boolean; active?: boolean; onShowTerminal: () => void; onError: (message: string) => void; onOpenLink: (target: string) => void }) {
+function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, active = true, onShowTerminal, onError, onOpenLink }: { projectId: string; terminal: ProjectTerminal; remote?: boolean; autoFocus: boolean; active?: boolean; onShowTerminal: () => void; onError: (message: string) => void; onOpenLink: (target: string) => void }) {
   const pathLinks = useReadingPaths(projectId, onError);
   const kind = (terminal.agent ?? terminal.readingHistory?.agent) === 'claude' ? 'claude' : 'codex';
-  const readingSession = terminal.readingHistory?.key || terminal.sessionId;
+  const readingSession = terminal.sessionId;
+  const thread = terminal.readingHistory?.threadId;
+  const identity = useRef({ id: terminal.id, session: readingSession, thread, epoch: 0 });
+  if (identity.current.id !== terminal.id || identity.current.session !== readingSession || thread && identity.current.thread && thread !== identity.current.thread) {
+    identity.current = { id: terminal.id, session: readingSession, thread, epoch: identity.current.epoch + 1 };
+  } else if (thread) identity.current.thread = thread;
+  const epoch = identity.current.epoch;
+  const conversation = JSON.stringify([terminal.id, readingSession, epoch]);
   const historyPage = useReadingHistory(terminal.id, terminal.sessionId, terminal.readingHistory);
   const conversationEntries = historyPage.entries;
-  const [hidden, setHidden] = useState(() => cleared.get(conversationKey(terminal.id, readingSession)));
-  useEffect(() => { setHidden(cleared.get(conversationKey(terminal.id, readingSession))); }, [terminal.id, readingSession]);
+  const [hidden, setHidden] = useState(() => cleared.get(conversation));
+  useEffect(() => { setHidden(cleared.get(conversation)); }, [conversation]);
   // What /clear hid stays hidden only while that conversation is the one shown: once the agent has moved to another
   // (its new conversation came in), resuming the old one later shows it again rather than an empty page.
   useEffect(() => {
     if (!hidden || !conversationEntries.length || conversationEntries.some(entry => hidden.has(entry.id))) return;
-    cleared.delete(conversationKey(terminal.id, readingSession)); setHidden(undefined);
-  }, [conversationEntries, hidden, terminal.id, readingSession]);
+    cleared.delete(conversation); setHidden(undefined);
+  }, [conversationEntries, hidden, conversation]);
   const entries = useMemo(() => conversationEntries.filter(entry => !entry.queued && !hidden?.has(entry.id)), [conversationEntries, hidden]);
-  const { pending, echo, cancelEcho } = usePendingPrompts(terminal.id, readingSession, conversationEntries);
+  const { pending, echo, cancelEcho } = usePendingPrompts(terminal.id, readingSession, conversationEntries, thread);
   // Queued records wait after the active turn, with or without a renderer echo. They never start a new agent turn.
   const cards = useMemo(() => pendingPromptCards(pending, conversationEntries.filter(entry => !hidden?.has(entry.id))), [pending, conversationEntries, hidden]);
   const queued = (prompt: PendingPrompt) => cards.queuedIds.has(prompt.id);
-  const visibleEntries = useMemo(() => [...entries, ...cards.prompts], [entries, cards]);
   const sendCounter = useRef(0);
   const visibleScreen = useScreen(terminal.id);
-  const screen = useMemo(() => {
+  const parsedScreen = useMemo(() => {
     const parsed = parseAgentScreen(kind, visibleScreen?.rows ?? []);
     return { ...parsed, choice: bindApproval(parsed.choice, kind, visibleScreen) };
   }, [terminal.agent, visibleScreen]);
+  const readySession = useRef<{ session: string; epoch: number } | null>(null);
+  if (terminal.codexActive && terminal.sessionId && hasCliInput(kind, visibleScreen?.rows ?? [], parsedScreen)) readySession.current = { session: terminal.sessionId, epoch };
+  const preview = !!terminal.readingHistory && (!terminal.codexActive || !terminal.sessionId || readySession.current?.session !== terminal.sessionId || readySession.current?.epoch !== epoch);
+  const screen = preview ? { ...parsedScreen, choice: null } : parsedScreen;
   // The CLI signing in before its input exists (a link to open, a code to paste): a popup, never a stuck welcome.
   const signIn = useMemo(() => terminal.codexActive && visibleScreen && !screen.choice && !hasCliInput(kind, visibleScreen.rows, screen) ? signInScreen(kind, visibleScreen.rows) : null,
     [terminal.agent, terminal.codexActive, visibleScreen, screen]);
   const choiceKey = screen.choice ? `${terminal.sessionId}:${screen.choice.approval?.instance ?? ''}:${choiceIdentity(screen.choice)}` : null;
   const [sessionsOpen, setSessionsOpen] = useState(false);
-  useEffect(() => { setSessionsOpen(false); }, [terminal.id, terminal.sessionId, terminal.agent]);
+  useEffect(() => { setSessionsOpen(false); }, [terminal.id, terminal.sessionId, terminal.agent, epoch]);
   const welcomeIsStarting = useWelcomeStarting(terminal.agentStartedAt, screen);
   const hasChoice = screen.choice !== null || sessionsOpen, choiceVisible = useRef(hasChoice);
   const mounted = useRef(true);
@@ -253,7 +263,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
   useLayoutEffect(() => {
     setTerminalPopup(null);
     return cancelSend;
-  }, [terminal.id, terminal.sessionId, readingSession]);
+  }, [terminal.id, terminal.sessionId, epoch, terminal.codexActive]);
   const ownership = useRef({ active, autoFocus });
   useLayoutEffect(() => {
     const previous = ownership.current; ownership.current = { active, autoFocus };
@@ -261,14 +271,11 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
   }, [active, autoFocus]);
   // A question's own key hint with no card read from it (the question is taller than the view, or its hint wrapped):
   // a message typed here would land in the question, so the box waits and the terminal shows the question instead.
-  const unreadQuestion = !screen.choice && !!visibleScreen?.rows.some(row => /\benter to submit (?:answer|all)\b/i.test(row) || /^\s*Enter to select\b.*\bEsc to cancel\b/i.test(row));
+  const unreadQuestion = !preview && !screen.choice && !!visibleScreen?.rows.some(row => /\benter to submit (?:answer|all)\b/i.test(row) || /^\s*Enter to select\b.*\bEsc to cancel\b/i.test(row));
   useEffect(() => { if (unreadQuestion) setTerminalPopup({ command: '' }); }, [unreadQuestion]);
-  const readySession = useRef<string | null>(null);
-  if (terminal.codexActive && terminal.sessionId && hasCliInput(kind, visibleScreen?.rows ?? [], screen)) readySession.current = conversationKey(terminal.sessionId, readingSession);
-  const preview = !!terminal.readingHistory && (!terminal.codexActive || !terminal.sessionId || readySession.current !== conversationKey(terminal.sessionId, readingSession));
   const inputBlocked = preview || sessionsOpen || !!screen.choice && screen.choice.kind !== 'menu' || unreadQuestion;
-  const conversation = conversationKey(terminal.id, readingSession);
-  const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, visibleEntries, conversation);
+  const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, entries, conversation);
+  useEffect(() => { if (stuck) void historyPage.compact(); }, [stuck, conversationEntries, historyPage.compact]);
   // A step hops only when the pointer moves onto it: moving arms the hops, any scroll disarms them until it moves again,
   // so the steps sliding under a still pointer stay put (marked on the element itself, without a render).
   useEffect(() => {
@@ -363,6 +370,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
   // own: written in the composer here (it is cleared, with its pictures); otherwise a message sent again, which leaves
   // whatever is being written now alone and takes no pictures with it.
   const deliver = async (words: string, own: boolean, owner: number) => {
+    if (preview) return;
     const attached = own ? images.map(image => image.src).filter(Boolean) : [], pictures = own ? serverPictures : [];
     const text = pictures.length ? (isTypedCommand(words) ? [words, ...pictures] : [...pictures, words]).filter(Boolean).join(' ') : words;
     if ((!text && !(own && images.length)) || !terminal.sessionId) return;
@@ -460,9 +468,9 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
   const [idleSince, setIdleSince] = useState(() => Date.now()), [, setTick] = useState(0);
   useEffect(() => { if (!working) setIdleSince(Date.now()); }, [working]);
   // A message in Claude Code's queue has arrived: it is taken up when the current step is done, never sent again.
-  const stalled = pending.filter(prompt => !prompt.sending && !queued(prompt)), idle = !working && terminalPopup === null && !hasChoice && Date.now() - idleSince >= 5000;
+  const stalled = pending.filter(prompt => !prompt.sending && !queued(prompt)), idle = !preview && !working && terminalPopup === null && !hasChoice && Date.now() - idleSince >= 5000;
   useEffect(() => {
-    if (!stalled.length || working || terminalPopup !== null || hasChoice) return;
+    if (preview || !stalled.length || working || terminalPopup !== null || hasChoice) return;
     const wait = idleSince + 5000 - Date.now();
     if (wait > 0) { const timer = setTimeout(() => setTick(tick => tick + 1), wait + 50); return () => clearTimeout(timer); }
     for (const prompt of stalled) {
@@ -692,7 +700,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     </div>
     {terminalPopup !== null && <ReadingTerminalPopup key={sendCounter.current} terminalId={terminal.id} sessionId={terminal.sessionId} command={terminalPopup.command} onReady={readyPopup} onClose={closePopup} onError={onError} />}
     {attachedCount > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: attachedCount })}<UserImages images={shownImages} numbers={imageNumbers} onRemove={index => void removeImage(index)} /></div>}
-    {terminal.nativeApprovals?.map(request => <NativeApprovalCard key={request.token} request={request} onError={onError} />)}
+    {!preview && terminal.nativeApprovals?.map(request => <NativeApprovalCard key={request.token} request={request} onError={onError} />)}
     {screen.choice && !(screen.choice.kind === 'permission' && terminal.nativeApprovals?.length) && !sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}>{screen.choice.kind === 'question'
       ? <ReadingQuestion key={choiceKey} choice={screen.choice} terminalId={terminal.id} onError={onError} />
       : <ReadingChoice key={choiceKey} choice={screen.choice} terminalId={terminal.id} agent={kind} onShowTerminal={onShowTerminal} onError={onError} />}</div>}

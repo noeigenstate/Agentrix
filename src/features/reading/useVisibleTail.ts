@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { ConversationEntry } from '../../shared/types';
 import { timelineIdentity } from './reading-timeline-identity.ts';
+import { conversationBlocks } from '../../shared/conversation-blocks.mjs';
 
 type ConversationBlock = { kind: 'message'; entry: ConversationEntry } | { kind: 'tools'; id: string; entries: ConversationEntry[] };
 type AgentTurn = { kind: 'agent'; id: string; at: number; blocks: ConversationBlock[] };
@@ -10,15 +11,9 @@ export const blockId = (block: ConversationBlock) => block.kind === 'message' ? 
 
 // Slice after grouping: consecutive tools count as one reading block.
 export function blocks(entries: readonly ConversationEntry[]): ConversationBlock[] {
-  const result: ConversationBlock[] = [];
-  for (const entry of entries) {
-    const last = result.at(-1);
-    if (entry.role === 'tool') {
-      if (last?.kind === 'tools') last.entries.push(entry);
-      else result.push({ kind: 'tools', id: timelineIdentity(entry)?.tools?.id ?? entry.id, entries: [entry] });
-    } else result.push({ kind: 'message', entry });
-  }
-  return result;
+  return conversationBlocks(entries).map(group => group[0].role === 'tool'
+    ? { kind: 'tools', id: timelineIdentity(group[0])?.tools?.id ?? group[0].id, entries: group }
+    : { kind: 'message', entry: group[0] });
 }
 
 // Page by content blocks, then nest the visible ones in turns. Read the prefix only for parent identity/time:
@@ -67,6 +62,7 @@ export function useVisibleTail(grouped: readonly ConversationBlock[], conversati
     return () => { prepend.current = null; release.current?.(); release.current = null; };
   }, [conversation]);
   useLayoutEffect(() => {
+    if (stuck) { prepend.current = null; release.current?.(); release.current = null; }
     const node = container.current, pending = prepend.current;
     if (pending && node && pending.conversation === conversation && (!remote?.paged || pending.grouped !== grouped)) {
       const adjust = () => {

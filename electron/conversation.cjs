@@ -1,6 +1,7 @@
 const { claudeAction, claudeOwnRecord, codexActions, codexFailed, resolvePath } = require('./agent-actions.cjs');
 const { IMAGE_LIMIT } = require('./oversized-record.cjs');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const { PictureThumbnails, dataImage } = require('./features/files/picture-thumbnail.cjs');
 const pictureValues = require('./features/files/picture-values.json');
 const { messageText, promptText, promptKey, promptCommand } = require('./prompt-queue.cjs');
@@ -123,7 +124,7 @@ class ConversationLog {
   constructor(changed = () => {}, limit = 400, { pictures = true } = {}) {
     this.pictures = pictures;
     this.changed = changed; this.limit = limit; this.list = []; this.cwd = null;
-    this.queue = []; this.queueCount = 0; this.received = new Map(); this.deliveries = [];
+    this.queue = []; this.received = new Map(); this.deliveries = [];
   }
   // Records still feed activity tracking during replay, but reading snapshots wait for the file tail.
   beginHistory() { this.loading = true; }
@@ -131,7 +132,7 @@ class ConversationLog {
   snapshot() { return this.loading ? [] : this.list; }
   reset() {
     this.codexUser = null; this.codexPictures = null; this.codexTurn = null;
-    this.queue = []; this.queueCount = 0; this.received.clear(); this.deliveries = [];
+    this.queue = []; this.received.clear(); this.deliveries = [];
     if (!this.list.length) return;
     this.list = []; this.changed({ reset: true });
   }
@@ -192,7 +193,9 @@ function claudeQueue(log, record, queueOnly) {
     // A slash command or shell line sent while it works is not a message (the reading view's isTypedCommand).
     const command = /^\s*<command-name>/.test(original || '') || (/^\/[^\s/]+(?:\s|$)/.test(text) || text.startsWith('!')) && !/[\r\n]/.test(text);
     if (original === null || command) return;
-    const entry = withImages({ id: `q:${record.timestamp}:${++log.queueCount}`, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original, queued: true }, record.content, log);
+    const id = `q:${record.uuid || createHash('sha256').update(JSON.stringify(record)).digest('hex')}`;
+    if (log.queue.some(entry => entry.id === id)) return;
+    const entry = withImages({ id, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original, queued: true }, record.content, log);
     log.queue.push(entry); log.put(entry);
     return;
   }
