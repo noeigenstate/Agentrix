@@ -98,4 +98,4 @@ ${section(t.issues, t.issueColumns, issues, item => cells(['issue', 'raisedBy', 
 `;
 }
 
-module.exports = { minutesPage };
+module.exports = { minutesPage, LABELS: { zh: ZH, en: EN } };

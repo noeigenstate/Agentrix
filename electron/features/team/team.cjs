@@ -5,6 +5,7 @@ const { execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { setTimeout: delay } = require('node:timers/promises');
 const { matches, repoFiles } = require('../../boundaries.cjs');
+const { LABELS } = require('./minutes-page.cjs');
 
 const FINDINGS = '## Findings for the ledger';
 const fields = { Goal: 'goal', Files: 'files', Provides: 'provides', Uses: 'uses', 'Done when': 'doneWhen', 'Questions and risks': 'questions' };
@@ -183,7 +184,7 @@ class Team {
         const parsed = report.phase === 'confirmation' ? confirmationOf(report.answer) : understandingOf(report.answer);
         const status = report.reason === 'exit' ? parsed.status : 'invalid';
         this.append({ type: 'meeting', id: report.id, meeting: options.meeting, session: report.session || options.resume || null,
-          agent: options.agent, model: report.model, title: options.title, allow: options.allow, ...parsed, status });
+          agent: options.agent, model: report.model, role: options.role, title: options.title, allow: options.allow, ...parsed, status });
         return report.phase === 'confirmation' ? (status === 'confirmed' ? 'confirmed' : 'open')
           : `understanding ${status === 'understood' ? 'complete' : 'incomplete'}`;
       }
@@ -201,7 +202,7 @@ class Team {
     }
     const rows = [...sessions.values()].map(({ understanding, latest }) => {
       const entry = understanding || latest;
-      return { who: `${entry.agent} ${entry.model} · ${entry.session || 'unreported'}`, title: entry.title,
+      return { who: [entry.model, entry.role].filter(Boolean).join(' · '), title: entry.title,
         ...Object.fromEntries(Object.values(fields).map(key => [key, entry.understanding?.[key] || ''])), status: latest.status };
     });
     return { meeting, round: this.round(history, meeting), generatedAt: Date.now(), language: language === 'en' ? 'en' : 'zh', rows, issues };
@@ -220,12 +221,9 @@ class Team {
   }
 }
 
+// The same minutes as Markdown, with the page's labels: the brief of the confirmation runs and the lead's tables.
 function minutesMarkdown(minutes) {
-  const en = minutes.language === 'en', labels = en
-    ? ['Worker', 'Task', 'Files', 'Provides', 'Uses', 'Done when', 'Questions or risks', 'Status']
-    : ['子模型', '任务', '负责的文件', '提供的接口', '用到的接口', '怎样算完成', '疑问或风险', '状态'];
-  const states = en ? { confirmed: '✅ Confirmed', open: '⚠️ Needs clarification', understood: '📝 Restated', incomplete: '✖ Incomplete', invalid: '✖ Incomplete' }
-    : { confirmed: '✅ 已确认', open: '⚠️ 待澄清', understood: '📝 已复述', incomplete: '✖ 不完整', invalid: '✖ 不完整' };
+  const t = LABELS[minutes.language] || LABELS.zh;
   const cell = value => {
     if (Array.isArray(value)) return value.map(cell).join('<br>');
     if (value === undefined || value === null || !String(value).trim() || String(value).trim().toLowerCase() === 'none') return '—';
@@ -235,12 +233,11 @@ function minutesMarkdown(minutes) {
   const table = (headings, rows) => [`| ${headings.join(' | ')} |`, `| ${headings.map(() => '---').join(' | ')} |`,
     ...rows.map(row => `| ${row.join(' | ')} |`)].join('\n');
   const rows = minutes.rows.map(row => [cell(row.who), `**${cell(row.title)}**<br>${cell(row.goal)}`,
-    ...['files', 'provides', 'uses', 'doneWhen', 'questions'].map(key => cell(row[key])), cell(states[row.status] || row.status)]);
+    ...['files', 'provides', 'uses', 'doneWhen', 'questions'].map(key => cell(row[key])), cell(t.statuses[row.status] || row.status)]);
   const issues = minutes.issues.map(issue => ['issue', 'raisedBy', 'answer', 'result'].map(key => cell(issue[key])));
   const confirmed = minutes.rows.filter(row => row.status === 'confirmed').length;
-  return `# ${en ? 'Round' : '第'} ${minutes.round}${en ? '' : ' 轮'} · ${cell(minutes.meeting)}\n\n${localTime(minutes.generatedAt)}\n\n`
-    + table(labels, rows) + '\n\n' + table(en ? ['Issue or question', 'Raised by', 'Lead answer', 'Result'] : ['分歧或疑问', '谁提出', '主模型的答复', '结果'], issues)
-    + `\n\n${confirmed}/${minutes.rows.length} ${en ? 'workers confirmed.' : '个子模型已确认。'}\n`;
+  return `# ${t.round(minutes.round)} · ${cell(minutes.meeting)}\n\n${localTime(minutes.generatedAt)}\n\n`
+    + table(t.columns, rows) + '\n\n' + table(t.issueColumns, issues) + `\n\n${t.summary(confirmed, minutes.rows.length)}\n`;
 }
 
 module.exports = { projectTeam, understandingOf, confirmationOf, meetingRequest, memoryExcerpt, recordFindings, minutesMarkdown, FINDINGS };

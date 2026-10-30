@@ -343,7 +343,7 @@ test('findings always reach memory and also reach an explicit ledger', async t =
 
 test('minutes write two escaped Markdown tables and the HTML companion without a worker', async t => {
   const f = await lab(t), team = projectTeam(f.repo, true), session = randomUUID();
-  const entry = { type: 'meeting', meeting: 'r1', session, agent: 'codex', model: 'gpt-6.1-sol', title: 'Task | <script>unsafe</script>',
+  const entry = { type: 'meeting', meeting: 'r1', session, agent: 'codex', model: 'gpt-6.1-sol', role: '执行', title: 'Task | <script>unsafe</script>',
     allow: ['src/a.js'], ...understandingOf(understanding), status: 'understood' };
   team.append(entry); team.append({ ...entry, understanding: undefined, confirmation: { status: 'confirmed' }, title: 'Confirm minutes', status: 'confirmed' });
   team.append({ ...entry, session: randomUUID(), title: 'Failed task', status: 'invalid' });
@@ -357,7 +357,7 @@ test('minutes write two escaped Markdown tables and the HTML companion without a
   const md = await fs.readFile(out, 'utf8'), html = await fs.readFile(path.join(f.runtime, 'minutes.html'), 'utf8');
   assert.equal((md.match(/^\| (?:--- \| ?)+$/gm) || []).length, 2);
   assert.match(md, /\| Worker \| Task \|/); assert.match(md, /\*\*Task \\\| &lt;script&gt;unsafe&lt;\/script&gt;\*\*<br>Coordinate safely/);
-  assert.doesNotMatch(md, /Confirm minutes|<script>/); assert.match(md, /1\/2 workers confirmed/); assert.match(md, /✖ Incomplete/);
+  assert.doesNotMatch(md, /Confirm minutes|<script>/); assert.match(md, /Confirmed 1 of 2/); assert.match(md, /\| gpt-6\.1-sol · 执行 \|/); assert.match(md, /✖ Incomplete/);
   assert.match(html, /^<!doctype html>/i); assert.ok(html.includes('Coordinate safely')); assert.ok(!html.includes('<script>unsafe'));
   const data = team.minutes('r1');
   assert.equal(data.rows.length, 2); assert.equal(data.rows[0].title, entry.title); assert.equal(data.rows[0].status, 'confirmed');
