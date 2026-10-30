@@ -151,23 +151,26 @@ test('all eight columns fit at 1440 px: the wide table\'s minimum widths add up 
   assert.ok(table * 16 >= minimum - 16, 'the table minimum matches the columns');
 });
 
-test('the status cell counts the row\'s open questions under the status word, in both languages', () => {
-  const asked = (language, questions) => minutesPage(minutes({ language, rows: [{ ...row('open'), questions }] }));
-  const zh = asked('zh', ['一般的疑问', '未解决：第一个', ' 未解决：第二个']);
+test('the status cell counts the row\'s open list under the status word, in both languages', () => {
+  const asked = (language, open, questions = 'q') => minutesPage(minutes({ language, rows: [{ ...row('open'), questions, open }] }));
+  const zh = asked('zh', ['a', 'b']);
   assert.ok(zh.includes('<td class="status">⚠️ 待澄清<span class="open-count">2 个未解决问题</span></td>'));
-  const en = asked('en', 'Open: first\nOpen: second\nOpen: third\nplain risk');
+  const en = asked('en', ['a', 'b', 'c']);
   assert.ok(en.includes('<td class="status">⚠️ Open<span class="open-count">3 open questions</span></td>'));
-  assert.ok(asked('en', 'Open: only one').includes('<span class="open-count">1 open question</span>'));
+  assert.ok(asked('en', ['only']).includes('<span class="open-count">1 open question</span>'));
   assert.match(zh, /\.open-count \{[^}]*color: var\(--text-2\)/);
+  // The count comes from the list, not from the questions text.
+  assert.ok(asked('zh', ['a', 'b'], '未解决：a\n未解决：b\n未解决：c').includes('2 个未解决问题'));
 });
 
-test('without open questions the status cell has no count, and only the page language\'s prefix counts', () => {
-  const body = (language, questions) => minutesPage(minutes({ language, rows: [{ ...row('open'), questions }] })).replace(/\.open-count \{[^}]*\}/, '');
-  for (const questions of ['q', 'none', '', undefined, ['a', 'b'], 'see 未解决：inside the line']) {
-    for (const language of ['zh', 'en']) assert.doesNotMatch(body(language, questions), /open-count/, `${language} ${JSON.stringify(questions)}`);
+test('a confirmed row whose questions text starts with the prefix shows no count; a missing or non-list open shows none', () => {
+  const body = (language, overrides) => minutesPage(minutes({ language, rows: [{ ...row('confirmed'), ...overrides }] })).replace(/\.open-count \{[^}]*\}/, '');
+  for (const language of ['zh', 'en']) {
+    const prefix = language === 'zh' ? '未解决：' : 'Open: ';
+    assert.doesNotMatch(body(language, { questions: `${prefix}stale one\n${prefix}stale two` }), /open-count/, `${language} text`);
+    assert.doesNotMatch(body(language, { questions: `${prefix}x`, open: [] }), /open-count/, `${language} empty list`);
+    for (const open of [undefined, null, 'a', 2, { length: 2 }]) assert.doesNotMatch(body(language, { open }), /open-count/, `${language} ${JSON.stringify(open)}`);
   }
-  assert.doesNotMatch(body('en', '未解决：zh prefix'), /open-count/);
-  assert.doesNotMatch(body('zh', 'Open: en prefix'), /open-count/);
 });
 
 test('the open-question prefix is a shared label for both languages', () => {
