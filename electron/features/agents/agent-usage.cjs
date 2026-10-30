@@ -31,7 +31,7 @@ class UsageMeter {
   // calls: the terminal session's called models, which outlive this agent (dispatched workers stay when it restarts).
   constructor(agent, { provider = null, names = codexProviderName, changed = () => {}, rates = true, calls = null } = {}) {
     this.agent = agent; this.provider = provider; this.names = names; this.providerId = null; this.limits = [];
-    this.resets = null; this.limitsAt = null; this.claudeDirect = null;
+    this.resets = null; this.limitsAt = null; this.claudeDirect = null; this.scopeReported = false;
     this.rates = new TokenRates(agent); this.readRates = rates; this.mainCodex = true;
     this.calls = calls || new AgentCalls({ changed, local: rates });
     this.reset(!!calls);
@@ -71,7 +71,7 @@ class UsageMeter {
   // Another conversation starts over; the provider and the plan's limits stay.
   reset(preserveDispatch = false) { this.context = null; this.round = null; this.total = null; this.roundStart = null; this.replies = new Map(); this.rates.reset(); this.calls.reset(preserveDispatch); }
   resetScope() {
-    this.providerId = null; this.scopeCwd = null; this.resets = null;
+    this.providerId = null; this.scopeCwd = null; this.scopeReported = false; this.resets = null;
     this.limits = []; this.limitsAt = null; this.limitsFrom = null; this.claudeDirect = null;
     this.resetQuery = { state: 'unavailable', reason: 'scope' };
   }
@@ -130,6 +130,7 @@ class UsageMeter {
     const payload = record.payload || {};
     if (record.type === 'session_meta') {
       this.reset();
+      this.scopeReported = true;
       this.providerId = typeof payload.model_provider === 'string' && payload.model_provider ? payload.model_provider : null;
       this.scopeCwd = typeof payload.cwd === 'string' && path.isAbsolute(payload.cwd) ? payload.cwd : null;
       return true;

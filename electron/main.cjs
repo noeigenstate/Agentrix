@@ -470,6 +470,12 @@ function dispatchedOnly(s) {
   return calls.length ? { provider: null, context: null, round: null, total: null, limits: [], calls } : null;
 }
 
+function checkProjectAccount(project) {
+  if (project.kind === 'ssh' || codexAccounts.projects.has(project.id)) return;
+  const env = createTerminalEnvironment(withoutAppImage(process.env), '');
+  codexAccounts.projects.set(project.id, codexAccounts.check({ cwd: project.restore?.cwd || project.path, env }));
+}
+
 function startUsage(project, s, event) {
   stopUsageAccount(s);
   s.usageCwd = event.cwd || project.path;
@@ -478,12 +484,13 @@ function startUsage(project, s, event) {
   if (s.agent === 'codex') {
     let binding;
     s.bindUsageAccount = () => {
-      const next = JSON.stringify([usage.providerId, usage.scopeCwd, event.accountLaunch, event.codexHome || s.codexHome]);
+      const options = { codexHome: event.codexHome || s.codexHome, cwd: event.cwd || project.path,
+        recordedCwd: usage.scopeCwd, env: s.usageEnv || process.env, provider: usage.providerId,
+        remote: project.kind === 'ssh', accountLaunch: event.accountLaunch, projectId: project.id, scopeReported: usage.scopeReported };
+      const scope = codexAccounts.scopeFor(options), next = scope.key || scope.reason;
       if (s.usage !== usage || (s.usageAccount && binding === next)) return;
       s.usageAccount?.dispose(); binding = next;
-      s.usageAccount = codexAccounts.watch({ codexHome: event.codexHome || s.codexHome, cwd: event.cwd || project.path,
-        recordedCwd: usage.scopeCwd, env: s.usageEnv || process.env, provider: usage.providerId,
-        remote: project.kind === 'ssh', accountLaunch: event.accountLaunch }, account => {
+      s.usageAccount = codexAccounts.watch(options, account => {
         if (s.usage === usage && s.codexActive && sessions.get(s.terminalId) === s) { usage.codexAccount(account); scheduleState(); scheduleUsageRollover(); }
       });
     };
@@ -1212,11 +1219,12 @@ function registerIpc() {
   updatesIpc = registerUpdatesIpc({ handle, updateManager, openExternal: url => shell.openExternal(url), getWindow: () => window, dialog, t,
     allowEditorClose, liveTerminalCount, setQuitting: value => { quitting = value; } });
   registerWorkspaceIpc({ handle, publicState, dialog, getWindow: () => window, t, addProject: (folder, name) => {
-    const added = store.add(folder, name); projectImageAuto.enqueue(added.project); return added;
+    const added = store.add(folder, name); checkProjectAccount(added.project); projectImageAuto.enqueue(added.project); return added;
   }, getRecentProjects: () => store.recentProjects(), getRecentSSH: () => store.recentSSH(), forgetRecentSSH: (host, folder) => store.forgetSSH(host, folder), clearSSHHistory: () => store.clearSSHHistory(), existsSync: fs.existsSync,
     getRecentEntry: folder => store.recentEntry(folder), forgetRecent: folder => store.forget(folder), clearHistory: () => store.clearHistory(),
     getEditorFile, allowEditorClose, confirmTerminalClose, disposeProjectTerminals, findProject, closeProjectPreviews: id => previewResources.closeProject(id),
-    removeProject: id => store.remove(id), forgetBranch, broadcast, acknowledgeProject: id => store.acknowledge(id), reorderProjects: ids => store.reorderProjects(ids), reorderTerminals,
+    removeProject: id => { codexAccounts.projects.get(id)?.dispose(); codexAccounts.projects.delete(id); store.remove(id); },
+    forgetBranch, broadcast, acknowledgeProject: id => store.acknowledge(id), reorderProjects: ids => store.reorderProjects(ids), reorderTerminals,
     setProjectImage: (id, image, mode) => {
       store.setProjectImage(id, image, mode);
       if (mode === 'auto' && !image) projectImageAuto.enqueue(store.projects.find(project => project.id === id));
@@ -1366,7 +1374,7 @@ if (!app.requestSingleInstanceLock()) {
     Menu.setApplicationMenu(process.platform === 'darwin' ? macMenu() : null);
     for (const project of store.projects) captureBranch(project);
     await window.loadURL(devUrl || 'agentrix://app/index.html');
-    for (const project of store.projects) projectImageAuto.enqueue(project);
+    for (const project of store.projects) { checkProjectAccount(project); projectImageAuto.enqueue(project); }
     updateIndicators();
     if (!process.env.AGENTRIX_DATA_DIR) updateManager.start();
     restoreTerminals({ store, restorePlans, startupErrors, startTerminal, broadcast, isQuitting: () => quitting });

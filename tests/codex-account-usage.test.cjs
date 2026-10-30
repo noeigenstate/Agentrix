@@ -206,7 +206,7 @@ test('remote, custom provider and ambiguous override scopes never query the loca
     assert.equal(value.resets, null); assert.equal(value.resetQuery.reason, reason);
   }
   assert.notEqual(usageScope(options).key, usageScope({ ...options, cwd: options.cwd + '-project' }).key);
-  assert.notEqual(usageScope(options).key, usageScope({ ...options, env: {} }).key, 'independent account environments never share cached counts');
+  assert.equal(usageScope(options).key, usageScope({ ...options, env: {} }).key, 'equivalent terminal environments share the same account scope');
   assert.equal(usageScope({ ...options, codexHome: '.codex-local' }).home, path.join(options.cwd, '.codex-local'), 'relative homes follow the actual agent cwd');
   assert.equal(usageScope({ ...options, recordedCwd: path.join(options.cwd, 'different') }).reason, 'scope');
   assert.equal(usageScope({ ...options, recordedCwd: null }).reason, 'scope', 'missing recorded cwd cannot prove the project-config scope');
@@ -320,20 +320,226 @@ test('active reads share the scope throttle, coalesce in flight and read aged to
   t.mock.timers.tick(120000); await flush(); assert.equal(pending.length, 4);
 });
 
-test('main lifecycle follows recorded provider, replaces sessions safely and never uses local queries for SSH/Claude', async t => {
+test('account environment fingerprints share terminal copies and isolate every account-related difference without exposing values', () => {
+  const env = { HOME: 'home', CODEX_HOME: 'codex-home', PATH: 'fake-bin', HTTPS_PROXY: 'proxy' };
+  const key = usageScope({ ...options, env }).key;
+  assert.equal(key, usageScope({ ...options, env: { HTTPS_PROXY: 'proxy', PATH: 'fake-bin', CODEX_HOME: 'codex-home', HOME: 'home',
+    AGENTRIX_BOOTSTRAP: 'another-session', TERM: 'different-color' } }).key);
+  for (const name of ['HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME',
+    'XDG_DATA_HOME', 'XDG_STATE_HOME', 'ProgramData', 'PATH', 'PATHEXT', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+    'CODEX_HOME', 'CODEX_MANAGED_REQUIREMENTS_PATH', 'OPENAI_API_KEY', 'CHATGPT_TOKEN', 'AZURE_OPENAI_ENDPOINT']) {
+    const other = usageScope({ ...options, env: { ...env, [name]: 'fake-account-difference' } }).key;
+    assert.notEqual(key, other, name);
+    assert.ok(!other.includes('fake-account-difference'), 'only a digest belongs in the key');
+  }
+  env.CODEX_HOME = 'changed-home';
+  assert.notEqual(key, usageScope({ ...options, env }).key, 'mutating an existing environment changes its scope too');
+  if (process.platform === 'win32') assert.equal(usageScope({ ...options, env: { Path: 'bin', UserProfile: 'home' } }).key,
+    usageScope({ ...options, env: { PATH: 'bin', USERPROFILE: 'home' } }).key);
+});
+
+test('project open, reopen and a concurrent session share one read and hand the cached answer to the normal poller', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  // Exercise the real lifecycle functions without loading Electron or a PTY.
-  const functions = main.slice(main.indexOf('function startUsage('), main.indexOf('let claudeAccountTimer ='));
-  const notes = main.slice(main.indexOf('function noteSettings('), main.indexOf('// A skill step names the skill;'));
-  const pending = [], sessions = new Map();
+  const pending = [], values = [];
   const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
-  const { startUsage, stopUsageAccount, noteSettings } = vm.runInNewContext(`${functions}\n${notes}\n({ startUsage, stopUsageAccount, noteSettings })`, {
-    UsageMeter, callsOf: () => null, codexAccounts: service, sessions, process, scheduleState() {}, scheduleUsageRollover() {},
-    localClaudeMeters: () => [], disposeClaudeAccounts() {},
+  t.after(() => service.dispose());
+  const opening = { cwd: options.cwd, codexHome: options.codexHome, env: {} };
+  const first = service.check(opening), second = service.check({ ...opening, env: {} });
+  const session = service.watch({ ...options, env: {} }, value => values.push(value));
+  assert.equal(values.at(-1).resetQuery.state, 'loading');
+  await flush(); assert.equal(pending.length, 1);
+  assert.equal(pending[0].opts.accountLaunch, 'project-open-v1');
+  assert.equal(pending[0].opts.provider, undefined, 'the project proof never invents session metadata');
+  assert.equal(pending[0].opts.recordedCwd, undefined);
+  pending[0].resolve(ready(2)); await flush();
+  assert.equal(values.at(-1).resets.left, 2);
+  session.dispose();
+  const cached = [];
+  const later = service.watch({ ...options, env: {} }, value => cached.push(value));
+  assert.equal(cached[0].resets.left, 2, 'the answer is delivered synchronously on session start');
+  t.mock.timers.tick(4999); await flush(); assert.equal(pending.length, 1);
+  t.mock.timers.tick(1); await flush(); assert.equal(pending.length, 1, 'handover does not queue a second read at five seconds');
+  t.mock.timers.tick(24999); await flush(); assert.equal(pending.length, 1);
+  t.mock.timers.tick(1); await flush(); assert.equal(pending.length, 2, 'only the session watcher enables the 30-second poll');
+  pending[1].resolve(ready(1)); await flush();
+  later.dispose(); first.dispose(); second.dispose();
+  t.mock.timers.tick(60000); await flush(); assert.equal(pending.length, 2);
+});
+
+test('a project check runs once without background polling and its failure backoff survives session handover', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  let reads = 0; const values = [];
+  const service = new CodexAccountUsage({ scope: async () => null, read: async () => ++reads === 1
+    ? { resets: null, resetQuery: { state: 'error', reason: 'query' } } : ready(2) });
+  t.after(() => service.dispose());
+  const check = service.check({ ...options, provider: undefined }); await flush();
+  t.mock.timers.tick(5000); await flush(); assert.equal(reads, 1);
+  const watcher = service.watch(options, value => values.push(value));
+  assert.equal(values[0].resetQuery.state, 'error');
+  check.dispose(); watcher.refresh();
+  t.mock.timers.tick(54999); await flush(); assert.equal(reads, 1);
+  t.mock.timers.tick(1); await flush(); assert.equal(reads, 2);
+  assert.equal(values.at(-1).resets.left, 2);
+  watcher.dispose();
+  const idle = service.check({ ...options, codexHome: options.codexHome + '-idle' }); await flush();
+  t.mock.timers.tick(120000); await flush(); assert.equal(reads, 3, 'an open project alone never becomes a poller');
+  const fresh = [];
+  service.watch({ ...options, codexHome: options.codexHome + '-idle' }, value => fresh.push(value));
+  assert.equal(fresh.at(-1).resetQuery.state, 'loading', 'an aged answer starts a fresh check when a session arrives');
+  await flush(); assert.equal(reads, 4);
+  idle.dispose();
+});
+
+test('closing a project drops its late answer even after reopening the same scope and preserves the five-second throttle', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const pending = [], values = [];
+  const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
+  t.after(() => service.dispose());
+  const check = service.check({ ...options, provider: undefined }); await flush();
+  check.dispose(); assert.equal(pending[0].opts.signal.aborted, true);
+  const reopened = service.check({ ...options, provider: undefined, env: {} });
+  const session = service.watch({ ...options, env: {} }, value => values.push(value));
+  pending[0].resolve(ready(9)); await flush();
+  assert.ok(values.every(value => value.resets?.left !== 9));
+  t.mock.timers.tick(4999); await flush(); assert.equal(pending.length, 1);
+  t.mock.timers.tick(1); await flush(); assert.equal(pending.length, 2);
+  assert.equal(values.at(-1).resetQuery.state, 'loading');
+  pending[1].resolve(ready(2)); await flush(); assert.equal(values.at(-1).resets.left, 2);
+  reopened.dispose(); session.dispose();
+});
+
+test('project-open preflight proves the official default and never reads remote, custom or unproven account routes', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-project-open-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'config.toml'), 'model_provider = "openai"');
+  let reads = 0;
+  const service = new CodexAccountUsage({ read: async opts => {
+    ++reads; assert.equal(opts.codexHome, root); assert.equal(opts.cwd, root);
+    return ready(2);
+  } });
+  t.after(() => service.dispose());
+  const opening = { cwd: root, env: { CODEX_HOME: '.' } };
+  const check = service.check(opening);
+  const entry = service.entries.get(check.key);
+  while (entry.pending) await flush();
+  assert.equal(reads, 1); assert.equal(entry.value.resets.left, 2);
+  check.dispose();
+  for (const [index, config] of ['', 'model_provider = "relay"', 'profile = "work"', '[model_providers.openai]\nbase_url = "https://example.invalid"'].entries()) {
+    const folder = path.join(root, String(index)); fs.mkdirSync(folder);
+    fs.writeFileSync(path.join(folder, 'config.toml'), config);
+    const opts = { cwd: folder, codexHome: folder, env: {} };
+    if (!index) {
+      service.check({ ...opts, remote: true }); service.check({ ...opts, provider: 'relay' });
+      service.watch({ ...opts, provider: 'openai' }, () => {});
+    } else service.check(opts);
+  }
+  for (const [index, name] of ['OPENAI_API_KEY', 'CHATGPT_TOKEN', 'AZURE_OPENAI_ENDPOINT', 'CODEX_PROFILE',
+    'CODEX_MANAGED_REQUIREMENTS_PATH', 'codex_auth_file'].entries()) {
+    const folder = path.join(root, `env-${index}`); fs.mkdirSync(folder);
+    service.check({ cwd: folder, codexHome: folder, env: { [name]: 'fake-override' } });
+  }
+  while ([...service.entries.values()].some(entry => entry.pending)) await flush();
+  assert.equal(reads, 1, 'all refused scopes stop before the injected account reader');
+  assert.ok([...service.entries.values()].every(entry => entry.value?.resets == null));
+});
+
+function mainUsage(service, env = {}) {
+  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const functions = main.slice(main.indexOf('function checkProjectAccount('), main.indexOf('let claudeAccountTimer ='));
+  const notes = main.slice(main.indexOf('function noteSettings('), main.indexOf('// A skill step names the skill;'));
+  const sessions = new Map(), projectAccountChecks = service.projects;
+  return { main, sessions, projectAccountChecks, ...vm.runInNewContext(`${functions}\n${notes}\n({ checkProjectAccount, startUsage, stopUsageAccount, noteSettings })`, {
+    UsageMeter, codexAccounts: service, sessions, process: { env },
+    createTerminalEnvironment: require('../electron/terminal-env.cjs').createTerminalEnvironment,
+    withoutAppImage: require('../electron/zsh-terminal.cjs').withoutAppImage,
+    callsOf: () => null, scheduleState() {}, scheduleUsageRollover() {}, localClaudeMeters: () => [], disposeClaudeAccounts() {},
     codexProvider: async () => id => id, claudeProvider: async () => 'Anthropic', claudeConfigDir: () => '', refreshClaudeAccounts() {},
     agentSettings: previous => previous,
-  });
+  }) };
+}
+
+test('main project-open handover shows loading or the cached answer immediately and rebinds to real session metadata', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const pending = [];
+  const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
+  t.after(() => service.dispose());
+  const { checkProjectAccount, startUsage, stopUsageAccount, noteSettings, sessions } = mainUsage(service, { CODEX_HOME: options.codexHome });
+  const project = { id: 'project', path: options.cwd, kind: 'local' };
+  const s = { terminalId: 'test', codexActive: true, agent: 'codex', usageEnv: { CODEX_HOME: options.codexHome, AGENTRIX_BOOTSTRAP: 'different-copy' } };
+  sessions.set(s.terminalId, s);
+  const event = { codexHome: options.codexHome, accountLaunch: 'model-only-v1' };
+  const meta = (provider, cwd = project.path) => ({ type: 'session_meta', payload: { model_provider: provider, cwd } });
+  checkProjectAccount(project); checkProjectAccount(project);
+  startUsage(project, s, event);
+  assert.equal(s.usage.snapshot().resetQuery.state, 'loading');
+  noteSettings(s, 'codex', meta('openai')); await flush(); assert.equal(pending.length, 1);
+  pending[0].resolve(ready(2)); await flush();
+  startUsage(project, s, event);
+  assert.equal(s.usage.snapshot().resets.left, 2);
+  assert.equal(s.usage.providerId, null, 'inheriting a default account result does not invent recorded provider data');
+  noteSettings(s, 'codex', meta(undefined));
+  assert.equal(s.usage.snapshot().resetQuery.reason, 'scope', 'reported missing metadata cannot fall back to the open-project proof');
+  noteSettings(s, 'codex', meta('relay')); assert.equal(s.usage.snapshot().resetQuery.reason, 'provider');
+  noteSettings(s, 'codex', meta('openai')); assert.equal(s.usage.snapshot().resets.left, 2);
+  noteSettings(s, 'codex', meta('openai', path.join(project.path, 'elsewhere')));
+  assert.equal(s.usage.snapshot().resetQuery.reason, 'scope');
+  startUsage(project, s, { ...event, accountLaunch: 'unavailable' });
+  assert.equal(s.usage.snapshot().resetQuery.reason, 'scope');
+  startUsage(project, s, event); s.usageEnv = { ...s.usageEnv, HOME: 'different-account-home' }; s.bindUsageAccount();
+  assert.equal(s.usage.snapshot().resetQuery.reason, 'scope', 'a different environment cannot inherit the default scope before metadata');
+  noteSettings(s, 'codex', meta('openai')); await flush(); assert.equal(pending.length, 2);
+  t.mock.timers.tick(4999); await flush(); assert.equal(pending.length, 2);
+  stopUsageAccount(s);
+});
+
+test('workspace add, recent reopen and startup restore use the project-open hook and removal cancels its check', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const pending = [], handlers = new Map();
+  const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
+  t.after(() => service.dispose());
+  const { main, checkProjectAccount, projectAccountChecks } = mainUsage(service, { CODEX_HOME: options.codexHome });
+  const project = { id: 'project', kind: 'local', path: options.cwd };
+  const store = {
+    projects: [],
+    add() { if (!this.projects.length) this.projects.push(project); return { project }; },
+    remove() { this.projects = []; }, recentEntry: () => project,
+  };
+  const context = {
+    registerWorkspaceIpc: require('../electron/features/workspace/ipc.cjs').registerWorkspaceIpc,
+    handle: (name, fn) => handlers.set(name, fn), publicState: () => ({}),
+    dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [project.path] }) }, window: null, t: text => text,
+    store, checkProjectAccount, codexAccounts: service, projectImageAuto: { enqueue() {} }, fs,
+    getEditorFile: () => null, allowEditorClose: async () => true, confirmTerminalClose: async () => true,
+    disposeProjectTerminals() {}, findProject: () => project, previewResources: { closeProject() {} },
+    forgetBranch() {}, broadcast() {}, reorderTerminals() {}, updateStoreSettings() {},
+  };
+  // Run the real IPC wiring and startup loop without Electron, a terminal or an account.
+  vm.runInNewContext(main.slice(main.indexOf('  registerWorkspaceIpc({'), main.indexOf('  filesIpc =')), context);
+  await handlers.get('workspace:add')(); handlers.get('workspace:add-recent')(project.path);
+  await flush(); assert.equal(pending.length, 1);
+  assert.equal(projectAccountChecks.size, 1);
+  pending[0].resolve(ready(2)); await flush();
+  await handlers.get('workspace:remove')(project.id);
+  assert.equal(projectAccountChecks.size, 0);
+  const restore = main.match(/^    for \(const project of store.projects\) \{ checkProjectAccount\(project\); projectImageAuto.enqueue\(project\); \}$/m)[0];
+  store.projects.push(project); vm.runInNewContext(restore, context); vm.runInNewContext(restore, context);
+  t.mock.timers.tick(4999); await flush(); assert.equal(pending.length, 1);
+  t.mock.timers.tick(1); await flush(); assert.equal(pending.length, 2);
+  await handlers.get('workspace:remove')(project.id);
+  assert.equal(pending[1].opts.signal.aborted, true);
+  pending[1].resolve(ready(9)); await flush();
+  assert.ok([...service.entries.values()].every(entry => entry.value == null), 'a removed project cannot retain a late answer');
+  project.restore = { cwd: path.join(project.path, 'restored-cwd') }; store.projects.push(project);
+  vm.runInNewContext(restore, context); await flush();
+  assert.equal(pending.length, 3);
+  assert.equal(pending[2].opts.cwd, project.restore.cwd, 'restored projects check the cwd their terminal will use');
+});
+
+test('main lifecycle follows recorded provider, replaces sessions safely and never uses local queries for SSH/Claude', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const pending = [];
+  const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
+  const { startUsage, stopUsageAccount, noteSettings, sessions } = mainUsage(service);
   const s = { terminalId: 'test', codexActive: true, agent: 'codex', usageEnv: {} };
   sessions.set(s.terminalId, s);
   const project = { path: os.tmpdir(), kind: 'local' };

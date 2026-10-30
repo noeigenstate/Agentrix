@@ -2,13 +2,29 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn, execFile } = require('node:child_process');
+const { createHash } = require('node:crypto');
 
 // Codex 0.163's generated GetAccountRateLimitsResponse/Params contract. This is an
 // owned stdio client, never the person's PTY. No threads, turns, login or reset RPCs.
 const MAX_OUTPUT = 256 * 1024;
 const unavailable = reason => ({ resets: null, resetQuery: { state: 'unavailable', reason } });
-const environments = new WeakMap();
-let nextEnvironment = 0;
+const SCOPE_ENVIRONMENT = new Set(['HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
+  'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'PROGRAMDATA', 'PATH', 'PATHEXT',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY']);
+const accountVariable = name => /^(?:OPENAI|CHATGPT|AZURE_OPENAI|CODEX)_/.test(name);
+const accountOverride = name => /^(?:OPENAI|CHATGPT|AZURE_OPENAI)_/.test(name)
+  || name !== 'CODEX_HOME' && /^CODEX_.*(?:AUTH|TOKEN|KEY|PROVIDER|PROFILE|CONFIG|URL|ENDPOINT|GATEWAY|HOME|MANAGED)/.test(name);
+const environmentValue = (env, name) => process.platform === 'win32'
+  ? Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1] : env[name];
+
+function environmentFingerprint(env) {
+  // Stable across terminal copies, including account overrides and executable/config
+  // locations. Only the digest enters the cache key; no credential value is logged.
+  const values = Object.entries(env).filter(([key]) => SCOPE_ENVIRONMENT.has(key.toUpperCase()) || accountVariable(key.toUpperCase()))
+    .map(([key, value]) => [process.platform === 'win32' ? key.toUpperCase() : key, value])
+    .sort(([a], [b]) => a.localeCompare(b));
+  return createHash('sha256').update(JSON.stringify(values)).digest('hex');
+}
 
 function accountResult(result, at = Date.now()) {
   const left = result?.rateLimitResetCredits?.availableCount;
@@ -139,17 +155,17 @@ function scopePathKey(value, platform = process.platform) {
 
 function usageScope({ codexHome, cwd, recordedCwd, env = process.env, provider, remote, accountLaunch } = {}) {
   if (remote) return { reason: 'remote' };
-  if (!provider) return { reason: 'scope' };
-  if (provider !== 'openai') return { reason: 'provider' };
-  if (accountLaunch !== 'model-only-v1') return { reason: 'scope' };
+  const opening = accountLaunch === 'project-open-v1';
+  if (!provider && !opening) return { reason: 'scope' };
+  if (provider && provider !== 'openai') return { reason: 'provider' };
+  if (!opening && accountLaunch !== 'model-only-v1') return { reason: 'scope' };
   const directory = path.resolve(cwd || process.cwd());
   if (recordedCwd === null || recordedCwd && scopePathKey(recordedCwd) !== scopePathKey(directory)) return { reason: 'scope' };
-  const userHome = (process.platform === 'win32' ? env.USERPROFILE : env.HOME) || os.homedir();
-  const home = path.resolve(directory, codexHome || env.CODEX_HOME || path.join(userHome, '.codex'));
-  // Object identity keeps distinct account environments separate without ever
-  // inspecting, comparing, hashing or retaining credential values as cache keys.
-  if (!environments.has(env)) environments.set(env, ++nextEnvironment);
-  return { home, cwd: directory, key: JSON.stringify([scopePathKey(home), scopePathKey(directory), environments.get(env), provider, accountLaunch]) };
+  const userHome = environmentValue(env, process.platform === 'win32' ? 'USERPROFILE' : 'HOME') || os.homedir();
+  const home = path.resolve(directory, codexHome || environmentValue(env, 'CODEX_HOME') || path.join(userHome, '.codex'));
+  // Project opens prove the default route in config preflight, not session_meta.
+  // Once independently proven, both launch kinds read the same official scope.
+  return { home, cwd: directory, key: JSON.stringify([scopePathKey(home), scopePathKey(directory), environmentFingerprint(env)]) };
 }
 
 // This is deliberately a conservative boundary check, not a second Codex config
@@ -206,9 +222,8 @@ function configScope(text) {
 }
 
 async function accountConfigScope({ codexHome, cwd, env = process.env }) {
-  // Presence alone is sufficient to decline these routes; never inspect keys.
-  if (['OPENAI_BASE_URL', 'CODEX_CHATGPT_BASE_URL', 'CODEX_APP_SERVER_TEST_USER_CONFIG_FILE',
-    'CODEX_MANAGED_CONFIG_PATH', 'CODEX_MANAGED_REQUIREMENTS_PATH'].some(key => env[key])) return 'scope';
+  // Presence alone is sufficient to decline account/endpoint overrides.
+  if (Object.keys(env).some(key => accountOverride(key.toUpperCase()))) return 'scope';
   const files = new Set([path.join(codexHome, 'config.toml')]);
   let directory = cwd;
   for (let depth = 0; depth < 64; depth++) {
@@ -217,7 +232,7 @@ async function accountConfigScope({ codexHome, cwd, env = process.env }) {
     if (depth === 63) return 'scope';
   }
   // Codex's system config lives here on Unix. On Windows it uses ProgramData.
-  const system = process.platform === 'win32' ? path.join(process.env.ProgramData || 'C:\\ProgramData', 'OpenAI', 'Codex') : '/etc/codex';
+  const system = process.platform === 'win32' ? path.join(environmentValue(env, 'PROGRAMDATA') || 'C:\\ProgramData', 'OpenAI', 'Codex') : '/etc/codex';
   files.add(path.join(system, 'config.toml'));
   // Managed routing may remap credential sources. Its presence is enough to
   // decline; do not read that configuration or any credential store.
@@ -246,24 +261,43 @@ async function accountConfigScope({ codexHome, cwd, env = process.env }) {
 
 class CodexAccountUsage {
   constructor({ read = readCodexAccount, scope = accountConfigScope, interval = 30000 } = {}) {
-    this.read = read; this.scope = scope; this.interval = interval; this.entries = new Map();
+    this.read = read; this.scope = scope; this.interval = interval; this.entries = new Map(); this.projects = new Map();
   }
-  watch(options, changed) {
-    const scope = usageScope(options);
+  check(options) {
+    return this.watch({ ...options, accountLaunch: 'project-open-v1' }, () => {}, true);
+  }
+  scopeFor(options) {
+    // Only the project's own preflight can bridge the gap before session_meta.
+    // Missing metadata that was actually reported must remain unproven.
+    if (!options.scopeReported && options.accountLaunch === 'model-only-v1') {
+      const opening = { ...options, recordedCwd: undefined, accountLaunch: 'project-open-v1' };
+      const scope = usageScope(opening), check = this.projects.get(options.projectId);
+      if (check?.key && check.key === scope.key) return { ...scope, options: opening };
+    }
+    return { ...usageScope(options), options };
+  }
+  watch(options, changed, once = false) {
+    const scope = this.scopeFor(options); options = scope.options;
     if (scope.reason) { changed(unavailable(scope.reason)); return { dispose() {}, refresh() {}, output() {} }; }
     // A quick rebind must retain the old read and throttle, even after its last listener leaves.
-    for (const [key, entry] of this.entries) if (!entry.listeners.size && !entry.pending &&
+    for (const [key, entry] of this.entries) if (!entry.listeners.size && !entry.checks.size && !entry.pending &&
       Date.now() >= Math.max((entry.lastReadAt ?? entry.lastAttemptAt ?? 0) + 5000, entry.retryAt || 0)) this.entries.delete(key);
     let entry = this.entries.get(scope.key);
     if (!entry) {
-      entry = { options: { ...options, codexHome: scope.home, cwd: scope.cwd }, listeners: new Set(), failures: 0, generation: 0 };
+      entry = { options: { ...options, codexHome: scope.home, cwd: scope.cwd }, listeners: new Set(), checks: new Set(), failures: 0, generation: 0 };
       this.entries.set(scope.key, entry);
     }
-    entry.listeners.add(changed);
+    const listeners = once ? entry.checks : entry.listeners;
+    listeners.add(changed);
     if (entry.value) changed(entry.value);
-    if (!entry.pending && !entry.timer) this.refresh(entry);
+    if (!entry.pending && !entry.timer) {
+      if (entry.value && Date.now() < entry.nextReadAt) {
+        if (!once) this.schedule(entry, entry.nextReadAt);
+      } else this.refresh(entry);
+    }
     let tail = '';
     return {
+      key: scope.key,
       refresh: (maxAge = 0) => this.refresh(entry, true, maxAge),
       // A success printed by the actual CLI invalidates any pre-reset read. No
       // query ever writes into its PTY, submits a prompt or initiates a reset.
@@ -277,9 +311,11 @@ class CodexAccountUsage {
         }
       },
       dispose: () => {
-        entry.listeners.delete(changed);
+        listeners.delete(changed);
         if (entry.listeners.size) return;
-        clearTimeout(entry.timer); entry.timer = null; entry.value = null; entry.queued = false;
+        clearTimeout(entry.timer); entry.timer = null; entry.queued = false;
+        if (entry.checks.size) return;
+        entry.value = null;
         if (entry.pending) { entry.invalidated = true; entry.abort?.abort(); }
       },
     };
@@ -289,7 +325,7 @@ class CodexAccountUsage {
     entry.timer = setTimeout(() => this.refresh(entry), Math.max(0, at - Date.now())); entry.timer.unref?.();
   }
   refresh(entry, force = false, maxAge = 0) {
-    if (!entry.listeners.size) return;
+    if (!entry.listeners.size && !entry.checks.size) return;
     const now = Date.now(), lastRead = entry.lastReadAt ?? entry.lastAttemptAt;
     if (maxAge && lastRead != null && now - lastRead <= maxAge) return;
     if (entry.pending) { if (force) entry.queued = true; return; }
@@ -311,21 +347,23 @@ class CodexAccountUsage {
       if (entry.generation !== generation) return;
       entry.pending = false;
       const invalidated = entry.invalidated; entry.invalidated = false;
-      if (!entry.listeners.size) return;
+      if (!entry.listeners.size && !entry.checks.size) return;
       if (invalidated) { this.refresh(entry, true); return; }
-      publish(value);
       // Older accounts can report limits without the optional reset-credit counter.
       const failed = value.resetQuery.state !== 'ready' && !value.limits?.length;
       entry.failures = failed ? entry.failures + 1 : 0;
       const delay = failed ? Math.min(300000, this.interval * 2 ** Math.min(entry.failures, 4)) : this.interval;
       entry.retryAt = failed ? Date.now() + delay : 0;
+      entry.nextReadAt = Date.now() + delay;
+      publish(value);
       if (entry.queued) this.refresh(entry, true);
-      else this.schedule(entry, Date.now() + delay);
+      else if (entry.listeners.size) this.schedule(entry, entry.nextReadAt);
     });
   }
   dispose() {
-    for (const entry of this.entries.values()) { entry.listeners.clear(); ++entry.generation; clearTimeout(entry.timer); entry.abort?.abort(); }
+    for (const entry of this.entries.values()) { entry.listeners.clear(); entry.checks.clear(); ++entry.generation; clearTimeout(entry.timer); entry.abort?.abort(); }
     this.entries.clear();
+    this.projects.clear();
   }
 }
 

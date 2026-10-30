@@ -60,6 +60,31 @@ test("Codex's route, context, round, conversation and plan limits come from its 
   assert.equal(meter.apply(event({ type: 'agent_message', message: 'hi' })), false);
 });
 
+test('Codex project-open account states preserve unknown counts and limits without pretending metadata was reported', () => {
+  const { accountResult } = require('../electron/features/agents/codex-account-usage.cjs');
+  const meter = new UsageMeter('codex');
+  assert.equal(meter.scopeReported, false);
+  assert.equal(meter.snapshot().resetQuery, undefined);
+  meter.codexAccount(accountResult({ rateLimitResetCredits: { availableCount: 0 }, rateLimits: {
+    primary: { usedPercent: 12, windowDurationMins: 300 }, secondary: { usedPercent: 8, windowDurationMins: 10080 },
+  } }, 2000));
+  assert.equal(meter.snapshot().resets.left, 0);
+  assert.equal(meter.providerId, null);
+  meter.codexAccount({ resets: null, resetQuery: { state: 'loading' } });
+  assert.equal(meter.snapshot().resets, null);
+  assert.equal(meter.snapshot().resetQuery.state, 'loading');
+  assert.equal(meter.snapshot().limits.length, 2, 'a refresh preserves both already observed limit windows');
+  meter.codexAccount(accountResult({ rateLimits: { primary: { usedPercent: 14, windowDurationMins: 300 } } }, 3000));
+  assert.equal(meter.snapshot().resets, null);
+  assert.equal(meter.snapshot().resetQuery.reason, 'unsupported');
+  meter.apply({ type: 'session_meta', payload: {} });
+  assert.equal(meter.scopeReported, true, 'missing reported metadata still closes the default-route fallback');
+  meter.resetScope();
+  assert.equal(meter.scopeReported, false);
+  assert.equal(meter.snapshot().resets, null);
+  assert.equal(meter.snapshot().limits.length, 0);
+});
+
 test('a Codex round whose start was not read stays unknown, while the conversation total is known', () => {
   const snapshot = replay(new UsageMeter('codex'), [tokenCount(usage(1000, 0, 10), usage(1000, 0, 10))]);
   assert.equal(snapshot.round, null);
