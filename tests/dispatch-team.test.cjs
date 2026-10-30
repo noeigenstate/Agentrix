@@ -604,6 +604,7 @@ test('confirmation questions reach both minutes formats with their language pref
     const prefix = LABELS[language].openPrefix;
     assert.equal(prefix, expected, 'the page and Team share the unresolved-question prefix');
     const data = team.minutes('r1', [], language);
+    assert.deepEqual(data.rows[0].open, ['New question <script>?', 'Another question.']);
     assert.equal(data.rows[0].questions, 'Original question.\n' + prefix + 'New question <script>?\n' + prefix + 'Another question.');
     const md = minutesMarkdown(data), html = minutesPage(data);
     assert.ok(md.includes(prefix + 'New question')); assert.ok(html.includes(prefix + 'New question'));
@@ -627,15 +628,15 @@ test('finish returns status data and sessionless failures count as invalid worke
   assert.match(minutesPage({ ...data, language: 'en' }), /Confirmed 0 of 1/);
 });
 
-test('failed meetings are replaced by session-bearing retries with the same task title', async t => {
+test('failed meetings are replaced by retries with the same title agent and scope set', async t => {
   const f = await lab(t), team = projectTeam(f.repo, true);
   const failed = { type: 'meeting', meeting: 'r1', title: 'Core task', agent: 'codex', model: 'unreported', role: '执行',
-    session: null, status: 'invalid', understanding: {} };
+    session: null, status: 'invalid', allow: ['src/a.js', 'src/b.js'], understanding: {} };
   team.append(failed); team.append({ ...failed, id: 'another-failed-attempt' });
   let data = team.minutes('r1');
   assert.equal(data.rows.length, 1); assert.equal(data.rows[0].status, 'invalid');
   assert.match(minutesMarkdown(data), /已确认 0 \/ 1/);
-  const retry = { ...failed, session: 'retry-session', model: 'gpt-6.1-sol', ...understandingOf(understanding) };
+  const retry = { ...failed, session: 'retry-session', model: 'gpt-6.1-sol', allow: ['src/b.js', 'src/a.js', 'src/b.js'], ...understandingOf(understanding) };
   team.append(retry);
   data = team.minutes('r1');
   assert.equal(data.rows.length, 1); assert.equal(data.rows[0].status, 'understood');
@@ -650,6 +651,59 @@ test('failed meetings are replaced by session-bearing retries with the same task
   assert.match(minutesMarkdown(data), /已确认 1 \/ 2/);
   const { minutesPage } = require('../electron/features/team/minutes-page.cjs');
   assert.match(minutesPage({ ...data, language: 'en' }), /Confirmed 1 of 2/);
+});
+
+test('same-title failures survive retries by another agent or scope', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true);
+  const { minutesPage } = require('../electron/features/team/minutes-page.cjs');
+  for (const [meeting, changes] of [['agent', { agent: 'claude' }], ['scope', { allow: ['src/b.js'] }], ['larger-scope', { allow: ['src/a.js', 'src/b.js'] }]]) {
+    const failed = { type: 'meeting', meeting, title: 'Same task', agent: 'codex', model: 'unreported', role: '执行',
+      allow: ['src/a.js'], session: null, status: 'invalid' };
+    team.append(failed);
+    team.append({ ...failed, ...changes, session: 'retry', model: 'worker', ...understandingOf(understanding), status: 'confirmed' });
+    const data = team.minutes(meeting);
+    assert.equal(data.rows.length, 2, meeting);
+    assert.deepEqual(data.rows.map(row => row.status), ['invalid', 'confirmed'], meeting);
+    assert.match(minutesMarkdown(data), /已确认 1 \/ 2/);
+    assert.match(minutesPage({ ...data, language: 'en' }), /Confirmed 1 of 2/);
+  }
+});
+
+test('minutes keep distinct sessions separate when titles agents and scopes match', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true);
+  const entry = { type: 'meeting', meeting: 'r1', title: 'Same task', agent: 'codex', role: '执行', allow: ['src/a.js'], ...understandingOf(understanding) };
+  team.append({ ...entry, session: 'first', model: 'first worker' });
+  team.append({ ...entry, session: 'second', model: 'second worker' });
+  team.append({ ...entry, session: 'first', title: 'Confirm minutes', understanding: undefined, status: 'confirmed' });
+  const data = team.minutes('r1');
+  assert.equal(data.rows.length, 2);
+  assert.deepEqual(data.rows.map(row => [row.title, row.who, row.status]), [
+    ['Same task', 'first worker · 执行', 'confirmed'], ['Same task', 'second worker · 执行', 'understood'],
+  ]);
+  assert.match(minutesMarkdown(data), /已确认 1 \/ 2/);
+});
+
+test('minutes expose only the latest open confirmation questions and clear resolved ones', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true);
+  const entry = { type: 'meeting', meeting: 'r1', title: 'Task', agent: 'codex', session: 'session',
+    ...understandingOf(understanding.replace('Questions and risks: none', 'Questions and risks: Open: original plan question.')) };
+  team.append(entry);
+  assert.deepEqual(team.minutes('r1').rows[0].open, []);
+  const questions = ['Who owns this?\nAnd the follow-up?', 'Any risk?'];
+  team.append({ ...entry, understanding: undefined, status: 'open', confirmation: { status: 'open', questions } });
+  for (const [language, prefix] of [['en', 'Open: '], ['zh', '未解决：']]) {
+    const row = team.minutes('r1', [], language).rows[0];
+    assert.deepEqual(row.open, questions);
+    assert.equal(row.questions, 'Open: original plan question.\n' + questions.map(question => prefix + question).join('\n'));
+  }
+  team.append({ ...entry, understanding: undefined, status: 'open', confirmation: { status: 'open', questions: ['Latest question.'] } });
+  assert.deepEqual(team.minutes('r1').rows[0].open, ['Latest question.']);
+  for (const status of ['confirmed', 'understood', 'incomplete', 'invalid', 'open']) {
+    team.append({ ...entry, understanding: undefined, status, confirmation: status === 'open' ? undefined : { status: 'open', questions } });
+    const row = team.minutes('r1').rows[0];
+    assert.deepEqual(row.open, [], status);
+    assert.equal(row.questions, 'Open: original plan question.', status);
+  }
 });
 
 test('confirmation prefixes follow the shared page labels', async t => {
