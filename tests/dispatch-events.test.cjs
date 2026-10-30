@@ -57,9 +57,9 @@ test('settings reported by the worker group independently from declarations and 
   assert.equal(f.calls.snapshot()[0].rate, null, 'unreported final records supersede provisional totals');
 });
 
-test('failures survive the launch Stop and leave on the next delivered notification plus Stop or user round', t => {
+test('other failures survive the launch Stop and leave on the next delivered notification plus Stop or user round', t => {
   const f = session(t);
-  for (const reason of ['capacity', 'error', 'killed', 'unconfirmed']) {
+  for (const reason of ['capacity', 'scope', 'error', 'killed']) {
     const launch = start(); f.send(launch); f.send(end(launch.id, { reason, exitCode: 7 }));
     assert.deepEqual(f.calls.snapshot()[0].items[0].failure, { reason, exitCode: 7 });
     f.calls.apply(stop(6000));
@@ -74,15 +74,18 @@ test('failures survive the launch Stop and leave on the next delivered notificat
   assert.deepEqual(f.calls.snapshot(), []);
 });
 
-test('an unconfirmed start without a session creates a failure row until the next user round', t => {
+test('an unconfirmed start without a session can be reviewed before expiry', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = session(t), launch = start(undefined, { sessionId: null, unconfirmed: true });
   assert.equal(f.send(launch), true);
   assert.equal(f.send(end(launch.id, { reason: 'unconfirmed', exitCode: null, outputTokens: null, activeMs: null })), true);
   assert.deepEqual(f.calls.snapshot()[0].items[0].failure, { reason: 'unconfirmed', exitCode: null });
   f.calls.apply(stop(6000));
   assert.equal(f.calls.snapshot()[0].items[0].state, 'reviewing');
-  f.calls.apply(record('user', 7000, 'Try again.'));
+  assert.equal(f.calls.apply(record('user', 7000, 'Try again.')), true);
   assert.deepEqual(f.calls.snapshot(), []);
+  t.mock.timers.tick(5000); assert.equal(f.changes(), 2, 'expiry does not broadcast an already reviewed row');
+  assert.equal(f.send(launch), false, 'review keeps the receipt');
   assert.equal(validDispatch(start(undefined, { sessionId: null, unconfirmed: false })), false);
   assert.equal(validDispatch(start(undefined, { unconfirmed: 'yes' })), false);
 });
@@ -141,6 +144,7 @@ test('transcript re-reads preserve dispatched workers and their expiry; the next
 });
 
 test('the real event server and main handler authenticate dispatch without touching parent activity and broadcast changes', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm'), net = require('node:net');
   const { createEventServer } = require('../electron/events.cjs');
   let broadcasts = 0;
@@ -160,7 +164,12 @@ test('the real event server and main handler authenticate dispatch without touch
   assert.equal(broadcasts, 0);
   const launch = start(); await send(launch); await send(rate(launch.id)); await send(end(launch.id, { reason: 'error', exitCode: 9 }));
   assert.equal(broadcasts, 3); assert.equal(calls.snapshot()[0].items[0].failure.exitCode, 9);
-  assert.equal(s.codexActivity, 'complete', 'dispatch never rearms parent completion or calls shell activity handling');
+  const failed = start(undefined, { sessionId: null, unconfirmed: true, title: 'Failed to start' });
+  await send(failed); await send(end(failed.id, { reason: 'unconfirmed', exitCode: null, outputTokens: null, activeMs: null }));
+  assert.equal(broadcasts, 5);
+  t.mock.timers.tick(5000);
+  assert.equal(broadcasts, 6); assert.deepEqual(calls.snapshot()[0].items.map(item => item.title), [launch.title]);
+  assert.equal(s.codexActivity, 'complete', 'dispatch and expiry never rearm parent completion or call shell activity handling');
 });
 
 test('dispatched workers belong to the terminal session: shown without an agent and kept when the agent restarts', t => {

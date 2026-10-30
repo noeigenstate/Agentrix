@@ -22,6 +22,74 @@ async function fixture(t) {
   return { folder, calls };
 }
 
+function finishDispatch(calls, id, reason, exitCode = 1) {
+  const route = { model: 'gpt-6.1-terra', effort: 'max', fast: true };
+  const start = { type: 'dispatch-start', id, agent: 'codex', role: '审查', title: id, ...route,
+    sessionId: reason === 'unconfirmed' ? null : 'session', startedAt: 1000 };
+  const end = { type: 'dispatch-end', id, ...route, reason, exitCode, outputTokens: null, activeMs: null, endedAt: 5000 };
+  assert.equal(calls.dispatch(start), true); assert.equal(calls.dispatch(end), true);
+  return { start, end };
+}
+
+test('unconfirmed dispatches expire after five seconds without removing other failures or reviving duplicates', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let changes = 0;
+  const calls = new AgentCalls({ local: false, changed: () => changes++ }); t.after(() => calls.reset());
+  const failed = finishDispatch(calls, 'unconfirmed', 'unconfirmed', null);
+  finishDispatch(calls, 'success', 'exit', 0);
+  for (const reason of ['capacity', 'scope', 'error', 'killed', 'exit']) finishDispatch(calls, reason, reason);
+  const rows = () => calls.snapshot()[0]?.items || [];
+  assert.deepEqual(rows().find(item => item.title === 'unconfirmed').failure, { reason: 'unconfirmed', exitCode: null });
+  assert.equal(rows().find(item => item.title === 'success').state, 'done');
+  t.mock.timers.tick(2999); assert.equal(rows().length, 7); assert.equal(changes, 0);
+  t.mock.timers.tick(1); assert.equal(rows().length, 6); assert.equal(changes, 1);
+  t.mock.timers.tick(1999); assert.equal(rows().find(item => item.title === 'unconfirmed').state, 'reviewing');
+  t.mock.timers.tick(1);
+  assert.deepEqual(rows().map(item => item.title).sort(), ['capacity', 'error', 'exit', 'killed', 'scope']);
+  assert.equal(changes, 2);
+  assert.equal(calls.dispatch(failed.start), false);
+  assert.equal(calls.dispatch(failed.end), false);
+  assert.equal(calls.dispatch({ type: 'dispatch-rate', id: failed.start.id, outputTokens: 1, activeMs: 1 }), false);
+  assert.equal(calls.review(6000, true), true);
+  assert.deepEqual(calls.snapshot(), []);
+});
+
+test('an unconfirmed dispatch reviewed before expiry does not publish a second change', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let changes = 0;
+  const calls = new AgentCalls({ local: false, changed: () => changes++ }); t.after(() => calls.reset());
+  const failed = finishDispatch(calls, 'early-review', 'unconfirmed', null);
+  assert.equal(calls.review(6000, true), true);
+  assert.deepEqual(calls.snapshot(), []);
+  t.mock.timers.tick(5000);
+  assert.equal(changes, 0); assert.equal(calls.dispatch(failed.start), false);
+});
+
+test('unconfirmed expiry survives a preserving reset but not a full reset', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let changes = 0;
+  const calls = new AgentCalls({ local: false, changed: () => changes++ }); t.after(() => calls.reset());
+  const kept = finishDispatch(calls, 'kept', 'unconfirmed', null);
+  t.mock.timers.tick(2000); calls.reset(true); calls.setFolder('synthetic-folder');
+  t.mock.timers.tick(2999); assert.equal(calls.snapshot()[0].items[0].title, 'kept');
+  t.mock.timers.tick(1); assert.deepEqual(calls.snapshot(), []); assert.equal(changes, 1);
+  assert.equal(calls.dispatch(kept.start), false);
+  const cleared = finishDispatch(calls, 'cleared', 'unconfirmed', null);
+  t.mock.timers.tick(2000); calls.reset();
+  assert.equal(calls.dispatch(cleared.start), true);
+  t.mock.timers.tick(3000);
+  assert.equal(calls.snapshot()[0].items[0].state, 'running'); assert.equal(changes, 1);
+});
+
+test('unconfirmed dispatch expiry is unrefed and cleared on reset', t => {
+  const calls = new AgentCalls({ local: false }); t.after(() => calls.reset());
+  const clear = t.mock.method(global, 'clearTimeout');
+  finishDispatch(calls, 'unconfirmed', 'unconfirmed', null);
+  const expiry = calls.calls.get('unconfirmed').expiry;
+  assert.equal(expiry.hasRef(), false);
+  calls.reset(); assert.ok(clear.mock.calls.some(call => call.arguments[0] === expiry));
+});
+
 test('Claude Agent calls keep their own effort and leave unrecorded effort and speed unknown', () => {
   const calls = new AgentCalls({ local: false });
   for (const [id, effort] of [['high', 'high'], ['max', 'max'], ['missing', undefined]]) calls.apply(use(id, 'Agent', { model: 'opus', effort }));
