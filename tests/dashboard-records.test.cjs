@@ -4,10 +4,11 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
-const { DashboardRecords, FILE_LIMIT, LINE_LIMIT, READ_LIMIT, QUOTA_INTERVAL } = require('../electron/features/dashboard/records.cjs');
+const { DashboardRecords, quotaScope, FILE_LIMIT, LINE_LIMIT, READ_LIMIT, QUOTA_INTERVAL, QUIT_DRAIN_MS } = require('../electron/features/dashboard/records.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { acceptDispatch } = require('../electron/features/agents/dispatch-events.cjs');
 const { registerAgentsIpc } = require('../electron/features/agents/ipc.cjs');
+const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
 
 async function lab(t, options) {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dashboard-')));
@@ -70,14 +71,17 @@ test('run and grade hooks retain only local evaluation metadata', async t => {
   const start = { type: 'dispatch-start', id, projectId: session.terminalId, sessionKey: session.sessionKey, agent: 'codex', model: 'gpt-6.1-sol', effort: 'max', fast: true,
     role: '执行', kind: 'core', title: 't'.repeat(400), meeting: 'dash-r1', skipMeeting: null, cwd: '/secret/cwd', brief: '/secret/brief', out: '/secret/out', sessionId: randomUUID(), startedAt: 1 };
   const end = { type: 'dispatch-end', id, projectId: session.terminalId, sessionKey: session.sessionKey, model: 'gpt-6.1-sol', effort: 'max', fast: true,
-    endedAt: 9999, outputTokens: 20, inputTokens: 40, cachedTokens: 60, reportedCostUsd: 0.02, activeMs: 500, reason: 'exit', exitCode: 0,
+    endedAt: 9999, outputTokens: 20, totalOutputTokens: 30, inputTokens: 40, cachedTokens: 60, reportedCostUsd: 0.02, activeMs: 500, reason: 'exit', exitCode: 0,
     verdict: 'ok', outOfScope: ['/secret/file'], outOfScopeCount: 75, answer: 'never recorded' };
   assert.equal(acceptDispatch(session, start, calls), true);
+  const usage = new UsageMeter('codex', { calls, rates: false });
+  usage.apply({ type: 'session_meta', payload: { id: 'new-parent-conversation', source: 'cli' } });
   assert.equal(acceptDispatch(session, end, calls), true);
   assert.equal(acceptDispatch(session, end, calls), false);
   const run = (await records.read('runs'))[0];
   assert.equal(run.projectId, 'owner'); assert.equal(run.project, 'project'); assert.equal(run.agent, 'codex');
   assert.equal(run.title.length, 240); assert.equal(run.kind, 'core'); assert.equal(run.outOfScope, 75); assert.equal(run.inputTokens, 40);
+  assert.equal(run.outputTokens, 20); assert.equal(run.totalOutputTokens, 30);
   for (const secret of ['secret', 'never recorded', '/remote']) assert.ok(!JSON.stringify(run).includes(secret));
   const handlers = {};
   registerAgentsIpc({ handle: (name, fn) => { handlers[name] = fn; }, findProject: id => { assert.equal(id, 'terminal'); return project; },
@@ -108,6 +112,7 @@ test('unconfirmed runs retain declarations without inventing an actual route', a
 });
 
 test('quota snapshots throttle each provider and preserve zero', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   let now = 1000;
   const { records } = await lab(t, { now: () => now });
   const limits = [{ minutes: 300, percent: 0, resetsAt: null, accountId: 'never recorded' }];
@@ -120,4 +125,108 @@ test('quota snapshots throttle each provider and preserve zero', async t => {
   const quota = await records.read('quota');
   assert.equal(quota.length, 3); assert.equal(quota[0].windows[0].percent, 0);
   assert.equal(quota.at(-1).windows[0].percent, 1); assert.ok(!JSON.stringify(quota).includes('accountId'));
+});
+
+test('grades use only agent conversation ids and keep unknown identities null', async t => {
+  const { records } = await lab(t), project = { id: 'p', path: path.join(os.tmpdir(), 'project') };
+  const grade = { projectId: 'p', terminalId: 'terminal', outcome: 'passed', submission: 1 };
+  const base = { terminalId: 'terminal', projectId: 'p', sessionId: 'agentrix-internal-session' };
+  for (const [session, expected] of [
+    [{ agent: 'codex', rootThreadId: 'root', reportedThreadId: 'reported' }, 'root'],
+    [{ agent: 'codex', reportedThreadId: 'reported' }, 'reported'], [{ agent: 'codex' }, null],
+    [{ agent: 'claude', claudeSessionId: 'conversation', claudeResumeId: 'resumed' }, 'conversation'],
+    [{ agent: 'claude', claudeResumeId: 'resumed' }, 'resumed'], [{ agent: 'claude' }, null], [{ agent: 'other' }, null],
+  ]) {
+    records.grade(grade, project, { ...base, ...session });
+    assert.equal((await records.read('grades')).at(-1).sessionId, expected);
+  }
+  assert.ok(!JSON.stringify(await records.read('grades')).includes(base.sessionId));
+});
+
+test('quota series isolate providers, SSH hosts and CLI homes without recording their names', async t => {
+  const { records } = await lab(t);
+  const local = { kind: 'local' }, remote = host => ({ kind: 'ssh', ssh: { host, configFile: '/private/ssh/config' } });
+  const session = { codexHome: path.join(os.tmpdir(), 'private-codex-home'), usageEnv: { CLAUDE_CONFIG_DIR: path.join(os.tmpdir(), 'private-claude-home') } };
+  const inputs = [['codex', local, session], ['claude', local, session],
+    ['codex', remote('private-host-one'), session], ['codex', remote('private-host-two'), session],
+    ['codex', local, { ...session, codexHome: session.codexHome + '-two' }]];
+  const scopes = inputs.map(args => quotaScope(...args));
+  assert.equal(new Set(scopes).size, inputs.length);
+  assert.equal(quotaScope('codex', remote('private-host-one'), { ...session, terminalId: 'different-terminal' }), scopes[2]);
+  assert.equal(quotaScope('codex', { ...local, path: 'another-project' }, session), scopes[0]);
+  assert.equal(quotaScope('codex', local, { usageEnv: { CODEX_HOME: session.codexHome } }), scopes[0]);
+  assert.equal(quotaScope('codex', remote('private-host-one'), { ...session, usageEnv: { CODEX_HOME: 'ignored-local-home' } }), scopes[2]);
+  for (const [index, [provider]] of inputs.entries()) {
+    assert.match(scopes[index], /^[a-f0-9]{24}$/);
+    records.quota(provider, [{ minutes: 300, percent: index }], scopes[index]);
+    records.quota(provider, [{ minutes: 300, percent: index }], scopes[index]);
+  }
+  const quota = await records.read('quota');
+  assert.equal(quota.length, 5);
+  assert.equal(new Set(quota.map(record => record.scope)).size, 5);
+  assert.doesNotMatch(JSON.stringify(quota), /private|host-one|host-two|config|CODEX_HOME|terminal/);
+});
+
+test('quota bursts persist the trailing value when the ten-minute window ends', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  const { records } = await lab(t), limits = percent => [{ minutes: 300, percent }];
+  records.quota('codex', limits(0));
+  t.mock.timers.tick(100); records.quota('codex', limits(10));
+  t.mock.timers.tick(100); records.quota('codex', limits(20));
+  t.mock.timers.tick(QUOTA_INTERVAL - 201);
+  assert.deepEqual((await records.read('quota')).map(record => record.windows[0].percent), [0]);
+  t.mock.timers.tick(1);
+  assert.deepEqual((await records.read('quota')).map(record => record.windows[0].percent), [0, 20]);
+  records.quota('codex', limits(30)); records.quota('codex', limits(20));
+  t.mock.timers.tick(QUOTA_INTERVAL);
+  assert.equal((await records.read('quota')).length, 2, 'a return to the recorded value cancels the trailing write');
+});
+
+test('quit drains once within the cap even with a stalled write and a late append', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const records = new DashboardRecords(os.tmpdir());
+  let finish;
+  records.pending.set('runs', new Promise(resolve => { finish = resolve; }));
+  assert.equal(records.busy, true);
+  const wait = records.waitForQuit();
+  assert.ok(wait instanceof Promise); assert.equal(records.waitForQuit(), null);
+  t.mock.timers.tick(QUIT_DRAIN_MS);
+  await wait;
+  assert.equal(records.quitDrain, null); assert.equal(records.busy, true);
+  records.pending.set('grades', Promise.resolve());
+  assert.equal(records.waitForQuit(), null, 'late work cannot prevent a second quit');
+  finish(); await records.flush();
+});
+
+test('quit returns promptly for flushed and empty stores and preserves trailing quota changes', async t => {
+  const { records } = await lab(t);
+  records.quota('codex', [{ percent: 10 }]); records.quota('codex', [{ percent: 20 }]);
+  const wait = records.waitForQuit();
+  assert.ok(wait instanceof Promise); await wait;
+  assert.equal(records.quitDrain, null); assert.equal(records.busy, false); assert.equal(records.waitForQuit(), null);
+  assert.deepEqual((await records.read('quota')).map(record => record.windows[0].percent), [10, 20]);
+  const empty = new DashboardRecords(os.tmpdir());
+  assert.equal(empty.waitForQuit(), null);
+});
+
+test('main quit cleanup runs once and a late dashboard append cannot prevent the next quit', async t => {
+  const vm = require('node:vm'), { records } = await lab(t);
+  const source = await fs.readFile(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  let handler, cleanups = 0, quits = 0, prevented = 0;
+  vm.runInNewContext('let quitting = false, quitCleaned = false;\n' + source.slice(source.indexOf("app.on('before-quit',"), source.indexOf("app.on('window-all-closed',")), {
+    app: { on: (_, listener) => { handler = listener; }, quit: () => quits++ }, process: { platform: 'win32' }, dashboard: records,
+    clearTimeout, attentionTimer: null, voiceManager: null, fileOperations: null, skills: { close: () => cleanups++ },
+    updateManager: null, codexAccounts: { dispose() {} }, claudeAccounts: { dispose() {} }, disposeClaudeAccounts() {},
+    usageRolloverTimer: null, stateTimer: null, sessions: new Map(), sshAuth: null, eventServer: null, tray: null, cleanupAskpass() {}, runtimeDir: null,
+  });
+  const first = records.append('runs', { index: 1 });
+  handler({ preventDefault: () => prevented++ });
+  const drain = records.quitDrain;
+  assert.equal(prevented, 1); assert.equal(cleanups, 1);
+  await drain; await first;
+  assert.equal(quits, 1);
+  const late = records.append('grades', { index: 2 });
+  handler({ preventDefault: () => prevented++ });
+  assert.equal(prevented, 1); assert.equal(cleanups, 1);
+  await late;
 });

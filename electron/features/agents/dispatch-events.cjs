@@ -1,9 +1,9 @@
+const { TASK_KINDS } = require('../dashboard/records-routing.cjs');
 const uuid = value => typeof value === 'string' && /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(value);
 const line = (value, limit) => typeof value === 'string' && value.length > 0 && value.length <= limit && !/[\x00-\x1f\x7f]/.test(value);
 const number = value => Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 const routing = value => line(value?.model, 160) && (value.effort === null || line(value.effort, 32)) && (value.fast === null || typeof value.fast === 'boolean');
 const totals = event => Number.isSafeInteger(event.outputTokens) && event.outputTokens >= 0 && number(event.activeMs);
-const kinds = ['core', 'frontend', 'test', 'ui-check', 'docs', 'small', 'review', 'investigate', 'roundtable'];
 const optionalCount = value => value == null || Number.isSafeInteger(value) && value >= 0;
 
 function validDispatch(event) {
@@ -15,14 +15,14 @@ function validDispatch(event) {
     (event.unconfirmed === undefined || typeof event.unconfirmed === 'boolean') &&
     (line(event.sessionId, 160) || event.unconfirmed === true && event.sessionId === null) &&
     number(event.startedAt) && (event.declared === undefined || routing(event.declared)) &&
-    (event.kind == null || kinds.includes(event.kind)) &&
+    (event.kind == null || TASK_KINDS.includes(event.kind)) &&
     (event.meeting == null || typeof event.meeting === 'string' && /^[\w.-]{1,64}$/.test(event.meeting)) &&
     (event.skipMeeting == null || line(event.skipMeeting, 1024));
   return event.type === 'dispatch-end' && ['exit', 'killed', 'capacity', 'error', 'unconfirmed', 'scope'].includes(event.reason) &&
     (event.outOfScope === undefined || Array.isArray(event.outOfScope) && event.outOfScope.length <= 50 && event.outOfScope.every(file => line(file, 4096))) &&
     (event.exitCode === null || Number.isSafeInteger(event.exitCode) && Math.abs(event.exitCode) <= 0xffffffff) && number(event.endedAt) &&
     (event.outputTokens === null || Number.isSafeInteger(event.outputTokens) && event.outputTokens >= 0) &&
-    (event.activeMs === null || number(event.activeMs)) && optionalCount(event.inputTokens) && optionalCount(event.cachedTokens) &&
+    (event.activeMs === null || number(event.activeMs)) && optionalCount(event.inputTokens) && optionalCount(event.cachedTokens) && optionalCount(event.totalOutputTokens) &&
     optionalCount(event.outOfScopeCount) && (event.reportedCostUsd == null || number(event.reportedCostUsd)) &&
     (event.verdict === undefined || ['ok', 'mismatch', 'unverified'].includes(event.verdict));
 }

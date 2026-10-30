@@ -35,7 +35,7 @@ const { remember, roundsOf } = require('./features/agents/project-memory.cjs');
 const { agentSettings } = require('./features/agents/agent-settings.cjs');
 const { UsageMeter, claudeProvider, codexProvider, claudeAccount, claudeAccountFiles } = require('./features/agents/agent-usage.cjs');
 const { AgentCalls } = require('./features/agents/agent-calls.cjs');
-const { DashboardRecords } = require('./features/dashboard/records.cjs');
+const { DashboardRecords, quotaScope } = require('./features/dashboard/records.cjs');
 const { CodexAccountUsage } = require('./features/agents/codex-account-usage.cjs');
 const codexAccounts = new CodexAccountUsage();
 const { ClaudeAccountUsage, readClaudeAccount } = require('./features/agents/claude-account-usage.cjs');
@@ -97,7 +97,7 @@ registerAppSchemes(protocol);
 const { translate } = require('./i18n.cjs');
 // Text shown by the main process follows the language chosen in settings (Chinese source -> locales/en.json).
 const t = (text, values) => translate(store?.settings.language, text, values);
-let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, dashboardDraining = false;
+let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, quitCleaned = false;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
 function windowBackgroundColor() { return store.settings.theme === 'light' ? '#f8f9fb' : '#181818'; }
@@ -1127,7 +1127,8 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions));
   const s = {
     terminal, terminalId: id, projectId: project.id, sessionId, skillSessionId: nativeMode ? sessionId : null, sessionKey, bootstrapFile, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
-    recordRun: (call, event) => dashboard.run(project, call, event), recordQuota: (provider, limits) => dashboard.quota(provider, limits),
+    recordRun: (call, event) => dashboard.run(project, call, event),
+    recordQuota: (provider, limits) => dashboard.quota(provider, limits, quotaScope(provider, project, s)),
     // Command Prompt reports its prompts through markers in its output instead of the event pipe.
     usageEnv: project.kind === 'ssh' ? null : { ...env },
     prompts: !native && shellKind === 'cmd' ? new PromptMarkers() : null,
@@ -1458,28 +1459,32 @@ if (!app.requestSingleInstanceLock()) {
 app.on('before-quit', event => {
   // On macOS the Dock's Quit and logging out reach here directly; they ask about running terminals like ⌘Q.
   if (process.platform === 'darwin' && !quitting && window && !window.isDestroyed()) { event.preventDefault(); showWindow(); requestQuit().catch(report); return; }
-  clearTimeout(attentionTimer);
-  voiceManager?.close(); fileOperations?.cancel();
-  skills?.close();
-  quitting = true;
-  updateManager?.dispose();
-  codexAccounts.dispose();
-  claudeAccounts.dispose();
-  disposeClaudeAccounts();
-  clearTimeout(usageRolloverTimer);
-  clearTimeout(stateTimer);
-  for (const id of sessions.keys()) disposeTerminal(id);
-  sshAuth?.close();
-  eventServer?.close();
-  tray?.destroy();
-  cleanupAskpass();
-  if (runtimeDir) {
-    // Only this launch's generated, now-empty runtime directory is removed.
-    try { fs.rmdirSync(runtimeDir); } catch { }
+  if (!quitCleaned) {
+    quitCleaned = true;
+    clearTimeout(attentionTimer);
+    voiceManager?.close(); fileOperations?.cancel();
+    skills?.close();
+    quitting = true;
+    updateManager?.dispose();
+    codexAccounts.dispose();
+    claudeAccounts.dispose();
+    disposeClaudeAccounts();
+    clearTimeout(usageRolloverTimer);
+    clearTimeout(stateTimer);
+    for (const id of sessions.keys()) disposeTerminal(id);
+    sshAuth?.close();
+    eventServer?.close();
+    tray?.destroy();
+    cleanupAskpass();
+    if (runtimeDir) {
+      // Only this launch's generated, now-empty runtime directory is removed.
+      try { fs.rmdirSync(runtimeDir); } catch { }
+    }
   }
-  if (dashboard.pending.size) {
+  const drain = dashboard.waitForQuit();
+  if (drain) {
     event.preventDefault();
-    if (!dashboardDraining) { dashboardDraining = true; void dashboard.flush().then(() => app.quit()); }
+    void drain.then(() => app.quit());
   }
 });
 app.on('window-all-closed', () => { if (quitting) app.quit(); });

@@ -3,6 +3,7 @@ const path = require('node:path');
 const { claudePrompt, TranscriptTail } = require('../../agent-actions.cjs');
 const { TokenRates, emptyRate } = require('./token-rate.cjs');
 const { agentSettings } = require('./agent-settings.cjs');
+const { taskKind } = require('../dashboard/records-routing.cjs');
 
 const text = value => typeof value === 'string' ? value : '';
 const short = value => text(value).replace(/\s+/g, ' ').trim().slice(0, 240);
@@ -25,7 +26,8 @@ class AgentCalls {
     const groups = new Map();
     for (const call of this.calls.values()) {
       if (call.reviewed) continue;
-      const route = { agent: call.agent, provider: call.dispatch ? null : provider ?? null, model: call.model, effort: call.effort, fast: call.fast };
+      const route = { agent: call.agent, provider: call.dispatch ? null : provider ?? null,
+        ...(call.unconfirmed && call.declared ? call.declared : { model: call.model, effort: call.effort, fast: call.fast }) };
       const key = JSON.stringify(route);
       if (!groups.has(key)) groups.set(key, { ...route, preparing: 0, running: 0, reviewing: 0, tasks: [], items: [], rate: emptyRate(false) });
       const group = groups.get(key);
@@ -50,7 +52,7 @@ class AgentCalls {
       if (call || this.calls.size >= 1024) return false;
       this.calls.set(event.id, { dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
         model: event.model, effort: event.effort, fast: event.fast, declared: event.declared,
-        kind: event.kind ?? ({ 审查: 'review', 调查: 'investigate', 圆桌: 'roundtable' }[event.role] || null),
+        kind: taskKind(event),
         meeting: event.meeting ?? null, skipMeeting: event.skipMeeting ?? null, unconfirmed: event.unconfirmed === true,
         role: event.role, title: event.title, task: short(event.title), sessionId: event.sessionId,
         startedAt: event.startedAt, done: false, rate: null, meter: new TokenRates(event.agent) });

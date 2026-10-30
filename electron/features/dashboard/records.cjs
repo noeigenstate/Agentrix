@@ -1,16 +1,17 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { runRecord, gradeRecord, quotaWindows } = require('./records-values.cjs');
+const { runRecord, gradeRecord, quotaWindows, quotaScope } = require('./records-values.cjs');
 
 const KINDS = ['runs', 'grades', 'quota'];
 const FILE_LIMIT = 20 * 1024 * 1024, LINE_LIMIT = 16 * 1024;
-const READ_LIMIT = 10000, QUOTA_INTERVAL = 10 * 60 * 1000;
+const READ_LIMIT = 10000, QUOTA_INTERVAL = 10 * 60 * 1000, QUIT_DRAIN_MS = 2000;
 
 // Each store has one ordered I/O queue. Recording never propagates a disk failure to its caller.
 class DashboardRecords {
   constructor(userData, { now = Date.now, log = message => console.warn(message) } = {}) {
     this.directory = path.join(userData, 'dashboard'); this.now = now; this.log = log;
     this.pending = new Map(); this.quotas = new Map(); this.warned = false;
+    this.quitAttempted = false; this.quitDrain = null;
   }
   file(kind, previous = false) {
     if (!KINDS.includes(kind)) throw new Error('Unknown dashboard record kind');
@@ -42,16 +43,47 @@ class DashboardRecords {
   }
   run(project, call, event) { void this.append('runs', runRecord(project, call, event)); }
   grade(grade, project, session) { void this.append('grades', gradeRecord(grade, project, session)); }
-  quota(provider, limits) {
-    if (!['claude', 'codex'].includes(provider)) return;
+  quota(provider, limits, scope = quotaScope(provider, { kind: 'local' }, {})) {
+    if (this.quitAttempted || !['claude', 'codex'].includes(provider)) return;
     const windows = quotaWindows(limits);
     if (!windows.length) return;
-    const signature = JSON.stringify(windows), at = this.now(), previous = this.quotas.get(provider);
-    if (previous && (previous.signature === signature || at - previous.at < QUOTA_INTERVAL)) return;
-    this.quotas.set(provider, { signature, at });
-    void this.append('quota', { provider, windows });
+    const key = `${provider}:${scope}`, signature = JSON.stringify(windows), previous = this.quotas.get(key);
+    if (!previous) {
+      const state = { provider, scope };
+      this.quotas.set(key, state); this.writeQuota(state, windows);
+      return;
+    }
+    if (previous.signature === signature) {
+      clearTimeout(previous.timer); previous.timer = null; previous.trailing = null;
+      return;
+    }
+    const remaining = QUOTA_INTERVAL - (this.now() - previous.at);
+    if (remaining <= 0) { this.writeQuota(previous, windows); return; }
+    previous.trailing = windows;
+    previous.timer ??= setTimeout(() => this.writeQuota(previous, previous.trailing), remaining);
+    previous.timer.unref?.();
   }
+  writeQuota(state, windows) {
+    clearTimeout(state.timer); state.timer = null; state.trailing = null;
+    state.signature = JSON.stringify(windows); state.at = this.now();
+    void this.append('quota', { provider: state.provider, scope: state.scope, windows });
+  }
+  get busy() { return this.pending.size > 0; }
   async flush() { await Promise.all(this.pending.values()); }
+  // A quit may wait once. Late appends cannot re-arm the wait, and a stalled disk cannot hold the process open.
+  waitForQuit(capMs = QUIT_DRAIN_MS) {
+    if (this.quitAttempted) return null;
+    this.quitAttempted = true;
+    for (const state of this.quotas.values()) {
+      clearTimeout(state.timer); state.timer = null;
+      if (state.trailing) this.writeQuota(state, state.trailing);
+    }
+    if (!this.busy) return null;
+    let timer;
+    this.quitDrain = Promise.race([this.flush(), new Promise(resolve => { timer = setTimeout(resolve, capMs); })])
+      .catch(() => {}).finally(() => { clearTimeout(timer); this.quitDrain = null; });
+    return this.quitDrain;
+  }
   async read(kind, { since = 0 } = {}) {
     const files = [this.file(kind, true), this.file(kind)];
     if (!Number.isFinite(since) || since < 0) return [];
@@ -87,4 +119,4 @@ class DashboardRecords {
   }
 }
 
-module.exports = { DashboardRecords, FILE_LIMIT, LINE_LIMIT, READ_LIMIT, QUOTA_INTERVAL };
+module.exports = { DashboardRecords, quotaScope, FILE_LIMIT, LINE_LIMIT, READ_LIMIT, QUOTA_INTERVAL, QUIT_DRAIN_MS };

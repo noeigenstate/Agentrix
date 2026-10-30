@@ -124,10 +124,11 @@ test('dashboard event fields accept old helpers and reject malformed new metadat
   assert.equal(validDispatch(start()), true);
   const launch = start(undefined, { kind: 'core', meeting: 'dash-r1', skipMeeting: 'one bounded fix' });
   assert.equal(validDispatch(launch), true);
-  const finish = end(launch.id, { inputTokens: 0, cachedTokens: 0, reportedCostUsd: 0, verdict: 'ok', outOfScopeCount: 100 });
+  const finish = end(launch.id, { inputTokens: 0, cachedTokens: 0, totalOutputTokens: 0, reportedCostUsd: 0, verdict: 'ok', outOfScopeCount: 100 });
   assert.equal(validDispatch(finish), true);
   for (const patch of [{ kind: 'invalid' }, { meeting: '../other' }, { skipMeeting: 'x'.repeat(1025) }]) assert.equal(validDispatch({ ...launch, ...patch }), false);
-  for (const patch of [{ inputTokens: -1 }, { cachedTokens: 0.5 }, { reportedCostUsd: Infinity }, { verdict: null }, { outOfScopeCount: -1 }]) {
+  for (const patch of [{ inputTokens: -1 }, { cachedTokens: 0.5 }, { totalOutputTokens: -1 }, { totalOutputTokens: 0.5 },
+    { reportedCostUsd: Infinity }, { verdict: null }, { outOfScopeCount: -1 }]) {
     assert.equal(validDispatch({ ...finish, ...patch }), false);
   }
   let records = 0;
