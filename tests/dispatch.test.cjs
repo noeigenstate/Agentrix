@@ -146,14 +146,36 @@ test('reported mismatches and missing settings never borrow the declaration', as
   assert.deepEqual(f.events[0].declared, { model: 'gpt-6.1-sol', effort: 'max', fast: true });
   const missing = await fixture(t, [codex[0], { rollout: rollout[0] }, { rollout: { type: 'turn_context', payload: {} } }]);
   const unreported = await missing.finished;
-  assert.match(unreported.stdout, /model unreported effort unreported fast unreported · routing MISMATCH/);
-  assert.equal(missing.events[0].model, 'unreported'); assert.equal(missing.events[0].fast, null);
+  assert.match(unreported.stdout, /model unreported effort unreported fast unreported · routing ok \(model, effort, fast unverified\)/);
+  assert.equal(missing.events[0].model, 'unreported'); assert.equal(missing.events[0].effort, null);
+  assert.equal(missing.events[0].fast, null); assert.equal(missing.events[0].declared, undefined);
   assert.match(unreported.stdout, /token\/s unreported/);
   const withoutTier = structuredClone(rollout);
   delete withoutTier[1].payload.thread_settings.service_tier;
   const tier = await fixture(t, [codex[0], ...withoutTier.map(record => ({ rollout: record }))]);
-  assert.match((await tier.finished).stdout, /model gpt-6\.1-sol effort max fast unreported · routing MISMATCH/);
+  assert.match((await tier.finished).stdout, /model gpt-6\.1-sol effort max fast unreported · routing ok \(fast unverified\)/);
   assert.equal(tier.events[0].fast, null, 'global config and --fast are not session proof');
+  assert.equal(tier.events[0].declared, undefined);
+});
+
+test('unreported Claude fields are unverified even alongside a reported mismatch', async t => {
+  const matching = await fixture(t, [{ record: { ...claude[0], effort: undefined } }, { record: claude.at(-1) }], { agent: 'claude' });
+  const matchingResult = await matching.finished;
+  assert.match(matchingResult.stdout, /model claude-sonnet-5-5 effort unreported fast off · routing ok \(effort unverified\)/);
+  assert.equal(matching.events[0].effort, null); assert.equal(matching.events[0].fast, false);
+  assert.equal(matching.events[0].declared, undefined);
+
+  const init = { ...claude[0], model: 'claude-haiku-5-5', effort: undefined, fast_mode_state: undefined };
+  const mixed = await fixture(t, [{ record: init }, { record: claude.at(-1) }], { agent: 'claude' });
+  const mixedResult = await mixed.finished;
+  assert.match(mixedResult.stdout, /model claude-haiku-5-5 effort unreported fast unreported · routing MISMATCH \(declared claude-sonnet-5-5 high fast off\) \(effort, fast unverified\)/);
+  assert.deepEqual(mixed.events[0].declared, { model: 'claude-sonnet-5-5', effort: 'high', fast: false });
+  assert.equal(mixed.events[0].effort, null); assert.equal(mixed.events[0].fast, null);
+
+  const literal = await fixture(t, [{ record: { ...claude[0], model: 'unreported' } }, { record: claude.at(-1) }], { agent: 'claude' });
+  const literalResult = await literal.finished;
+  assert.match(literalResult.stdout, /model unreported effort high fast off · routing MISMATCH \(declared claude-sonnet-5-5 high fast off\)/);
+  assert.doesNotMatch(literalResult.stdout, /model unverified/);
 });
 
 test('Claude JSON and recorded stream-json init/result report settings and write only final text', async t => {
@@ -187,7 +209,7 @@ test('Claude final-only JSON sends available totals and leaves absent routing fi
   const f = await fixture(t, [{ record: final }], { agent: 'claude' });
   const result = await f.finished;
   assert.equal(result.code, 0);
-  assert.match(result.stdout, /model claude-sonnet-5-5 effort unreported fast unreported · routing MISMATCH/);
+  assert.match(result.stdout, /model claude-sonnet-5-5 effort unreported fast unreported · routing ok \(effort, fast unverified\)/);
   assert.deepEqual([f.events.at(-1).outputTokens, f.events.at(-1).activeMs], [150, 4000]);
   const output = new WorkerOutput('claude');
   output.record({ ...claude[0], effort: undefined, fast_mode_state: undefined });

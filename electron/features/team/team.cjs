@@ -42,15 +42,17 @@ function projectTeam(cwd, create = false) {
 function understandingOf(answer) {
   const block = blockOf(answer, 'Roundtable understanding');
   const understanding = {};
-  const lines = (block || '').split(/\r?\n/).filter(line => line.trim());
-  let complete = lines.length === 6;
-  for (const line of lines) {
+  let key = null, complete = true;
+  for (const line of block.split(/\r?\n/)) {
     const match = /^- (Goal|Files|Provides|Uses|Done when|Questions and risks):[ \t]*(.*)$/.exec(line);
-    if (!match) { complete = false; continue; }
-    const key = fields[match[1]];
-    if (Object.hasOwn(understanding, key)) complete = false;
-    understanding[key] = match[2].trim();
+    if (match) {
+      key = fields[match[1]];
+      if (Object.hasOwn(understanding, key)) complete = false;
+      understanding[key] = match[2];
+    } else if (key) understanding[key] += `\n${line}`;
+    else if (line.trim()) complete = false;
   }
+  for (const key of Object.keys(understanding)) understanding[key] = understanding[key].trim();
   return { understanding, status: complete && Object.values(fields).every(key => understanding[key]) ? 'understood' : 'incomplete' };
 }
 
@@ -64,7 +66,7 @@ function meetingRequest(phase) {
   const instruction = phase === 'confirmation'
     ? 'The brief carries the roundtable minutes. Check that the other workers understand your shared interfaces the same way and that your questions are answered. End with exactly:\n\n'
       + '## Roundtable confirmation\nStatus: confirmed\n\nor use Status: open followed by bullet lines naming what is unresolved.'
-    : 'Read the whole plan and restate your own task so the lead can check it before work. Answer in the language of the plan, ending with exactly this block (one line per field, none where empty):\n\n'
+    : 'Read the whole plan and restate your own task so the lead can check it before work. Answer in the language of the plan, ending with exactly this block (fields may continue on following lines; use none where empty):\n\n'
       + '## Roundtable understanding\n- Goal: …\n- Files: …\n- Provides: …\n- Uses: …\n- Done when: …\n- Questions and risks: …';
   return '# Roundtable before work\n\nThis run is the roundtable, not the work. Change no file in this run, including files in the agreed scope. '
     + instruction + '\n\nIf you have findings for the ledger, put that section before the final roundtable block.\n';
