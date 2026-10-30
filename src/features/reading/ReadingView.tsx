@@ -9,6 +9,8 @@ import { createDictationSend } from './dictation-send';
 import { bindApproval, readScreen, useScreen } from '../terminal/terminal-screen';
 import { choiceIdentity, parseAgentScreen } from '../agents/agent-screen';
 import { cliDialogShown, cliInputDraft, hasCliInput, isAtPrompt } from './cli-panel';
+import { cliReady, endDialog, startDialog } from './reading-ready';
+import { WaitingCard } from './WaitingCard';
 import { ReadingWelcome } from './ReadingWelcome';
 import { ReadingChoice } from './ReadingChoice';
 import { NativeApprovalCard } from './NativeApprovalCard';
@@ -219,10 +221,15 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     const parsed = parseAgentScreen(kind, visibleScreen?.rows ?? []);
     return { ...parsed, choice: bindApproval(parsed.choice, kind, visibleScreen) };
   }, [terminal.agent, visibleScreen]);
-  const readySession = useRef<{ session: string; epoch: number } | null>(null);
-  if (terminal.codexActive && terminal.sessionId && hasCliInput(kind, visibleScreen?.rows ?? [], parsedScreen)) readySession.current = { session: terminal.sessionId, epoch };
-  const preview = !!terminal.readingHistory && (!terminal.codexActive || !terminal.sessionId || readySession.current?.session !== terminal.sessionId || readySession.current?.epoch !== epoch);
-  const screen = preview ? { ...parsedScreen, choice: null } : parsedScreen;
+  // Readiness outlives this component: a dialog with no input box must still show after a trip to the raw terminal.
+  const inputShown = hasCliInput(kind, visibleScreen?.rows ?? [], parsedScreen);
+  const preview = !!terminal.readingHistory && !cliReady(terminal.id, terminal.sessionId, thread, terminal.codexActive, inputShown);
+  const screen = preview ? { ...parsedScreen, choice: null, waiting: null } : parsedScreen;
+  // The CLI waits for a choice the screen has no card for: a dialog it drew (waiting), or only its attention notice with
+  // no input box on screen. Either way the terminal is the place to answer, and a message typed here would land in it.
+  const waiting = screen.choice ? null : screen.waiting ?? null;
+  const notified = !preview && !screen.choice && !waiting && terminal.needsInput !== null && !inputShown;
+  const waitingShown = waiting !== null || notified;
   // The CLI signing in before its input exists (a link to open, a code to paste): a popup, never a stuck welcome.
   const signIn = useMemo(() => terminal.codexActive && visibleScreen && !screen.choice && !hasCliInput(kind, visibleScreen.rows, screen) ? signInScreen(kind, visibleScreen.rows) : null,
     [terminal.agent, terminal.codexActive, visibleScreen, screen]);
@@ -230,7 +237,8 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   const [sessionsOpen, setSessionsOpen] = useState(false);
   useEffect(() => { setSessionsOpen(false); }, [terminal.id, terminal.sessionId, terminal.agent, epoch]);
   const welcomeIsStarting = useWelcomeStarting(terminal.agentStartedAt, screen);
-  const hasChoice = screen.choice !== null || sessionsOpen, choiceVisible = useRef(hasChoice);
+  // A notice alone (no dialog read from the screen) leaves the handoff to the terminal in reading-mode.ts running.
+  const hasChoice = screen.choice !== null || waiting !== null || sessionsOpen, choiceVisible = useRef(hasChoice);
   const mounted = useRef(true);
   const choiceHost = useRef<HTMLDivElement>(null), restoreComposer = useRef(false), wasChoice = useRef(false), typingAtChoice = useRef(false);
   const focusChoice = () => { restoreComposer.current = true; };
@@ -269,11 +277,11 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     const previous = ownership.current; ownership.current = { active, autoFocus };
     if (previous.active && !active || previous.autoFocus && !autoFocus) { cancelSend(); setTerminalPopup(null); }
   }, [active, autoFocus]);
-  // A question's own key hint with no card read from it (the question is taller than the view, or its hint wrapped):
-  // a message typed here would land in the question, so the box waits and the terminal shows the question instead.
-  const unreadQuestion = !preview && !screen.choice && !!visibleScreen?.rows.some(row => /\benter to submit (?:answer|all)\b/i.test(row) || /^\s*Enter to select\b.*\bEsc to cancel\b/i.test(row));
-  useEffect(() => { if (unreadQuestion) setTerminalPopup({ command: '' }); }, [unreadQuestion]);
-  const inputBlocked = preview || sessionsOpen || !!screen.choice && screen.choice.kind !== 'menu' || unreadQuestion;
+  // A dialog the screen shows with no card for it (a question taller than the view, one a CLI update added) opens the
+  // terminal once, however often the view mounts or the screen redraws; the card stays for the way back.
+  const dialog = waiting && (waiting.title ?? '');
+  useEffect(() => { if (dialog === null) endDialog(terminal.id); else if (startDialog(terminal.id, dialog)) setTerminalPopup({ command: '' }); }, [terminal.id, dialog]);
+  const inputBlocked = preview || sessionsOpen || !!screen.choice && screen.choice.kind !== 'menu' || waitingShown;
   const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, entries, conversation);
   useEffect(() => { if (stuck) void historyPage.compact(); }, [stuck, conversationEntries, historyPage.compact]);
   // A step hops only when the pointer moves onto it: moving arms the hops, any scroll disarms them until it moves again,
@@ -610,7 +618,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   const status = screen.choice?.kind === 'question' ? <div className="reading-status is-waiting" role="status">{t('等待你回答问题')}</div>
     // Without a choice to answer here (one the reading view cannot lay out), the terminal is a click away.
     : terminal.needsInput !== null ? <div className="reading-status is-waiting" role="status"><span>{t('等待你确认：{message}', { message: terminal.needsInput })}</span>
-      {!screen.choice && <button type="button" className="text-button" onClick={onShowTerminal}>{t('切换到终端')}</button>}</div>
+      {!screen.choice && !waitingShown && <button type="button" className="text-button" onClick={onShowTerminal}>{t('切换到终端')}</button>}</div>
     : statusRunning ? <WorkingLine key={terminal.sessionId} agent={kind} label={terminal.action ? t('正在{step}', { step: actionText(terminal.action) }) : t('{agent} 正在思考', { agent })} />
     : null;
   // The latest round once it has ended gets its status above the result and its actions under it; nothing while the agent
@@ -704,6 +712,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     {screen.choice && !(screen.choice.kind === 'permission' && terminal.nativeApprovals?.length) && !sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}>{screen.choice.kind === 'question'
       ? <ReadingQuestion key={choiceKey} choice={screen.choice} terminalId={terminal.id} onError={onError} />
       : <ReadingChoice key={choiceKey} choice={screen.choice} terminalId={terminal.id} agent={kind} onShowTerminal={onShowTerminal} onError={onError} />}</div>}
+    {waitingShown && !terminal.nativeApprovals?.length && !sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}><WaitingCard title={waiting?.title ?? null} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
     {sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}><ReadingSessions key={`${terminal.id}-${terminal.sessionId}`} terminalId={terminal.id} agent={terminal.agent === 'codex' ? 'codex' : 'claude'} onError={onError} onClose={() => setSessionsOpen(false)} onSent={text => {
       history.set(terminal.id, [...(history.get(terminal.id) || []), text].slice(-50)); setImages([]); toBottom();
     }} /></div>}

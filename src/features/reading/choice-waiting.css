@@ -1,0 +1,2 @@
+/* The generic "the terminal is waiting for a choice" card: the choice card's frame, the dialog's own heading and one 32px button. */
+.reading-waiting-heading { margin: 0 0 8px; overflow-wrap: anywhere; color: var(--text-2); }

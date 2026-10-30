@@ -56,6 +56,8 @@ function loadUI(name, overrides = {}) {
     if (key === './AgentCommandRun') return { AgentCommandRun: () => null };
     if (key === './NativeApprovalCard') return { NativeApprovalCard: () => null };
     if (key === './ManagedSession') return { ManagedSession: () => null };
+    if (key === './reading-ready') return require('../src/features/reading/reading-ready.ts');
+    if (key === './WaitingCard') return loadUI('features/reading/WaitingCard.tsx');
     if (key === './Timeline') return loadUI('features/reading/Timeline.tsx');
     if (key === './ResultCard') return loadUI('features/reading/ResultCard.tsx');
     if (key === './result-round') return require('../src/features/reading/result-round.ts');
@@ -462,9 +464,11 @@ function dictationHarness(t, overrides = {}) {
     return box;
   };
   const unmount = () => { for (const slot of slots) if (slot?.cleanup) { slot.cleanup(); slot.cleanup = undefined; } };
+  // Mounting the same view again, as switching to the raw terminal and back does: the component's state is gone.
+  const remount = () => { unmount(); slots.length = 0; effects.length = 0; render(); return render(); };
   t.after(() => { unmount(); globalThis.window = previousWindow; globalThis.document = previousDocument; });
   render(); render();
-  return { props, screen, node, written, pasted, echoed, render, unmount, tree: () => root,
+  return { props, screen, node, written, pasted, echoed, render, unmount, remount, tree: () => root,
     popup: () => elements(root).find(element => element.type?.name === 'ReadingTerminalPopup'),
     command(text) { listeners.get('agentrix:command')({ detail: { terminalId: props.terminal.id, text }, preventDefault() {} }); render(); },
     dictate: (text, submit = true) => { insert(text, submit); render(); },
@@ -779,6 +783,129 @@ test('a read-only preview suppresses stale screen choices and approval cards', t
   Object.assign(h.props.terminal, { codexActive: false, readingHistory: { key: 'preview', agent: 'codex', threadId: 'saved' }, nativeApprovals: [{ token: 'stale' }] });
   assert.equal(h.render().props.disabled, true);
   assert.equal(elements(h.tree()).some(node => node.props.choice || node.props.request), false);
+});
+
+// Waiting dialogs: the harness reads the screen rows it is given and a fresh readiness module per test.
+const IDLE_ROWS = ['› Ask Codex to do anything', '', 'gpt-6.1-sol · high · 100% context left'];
+const named = (tree, name) => elements(tree).find(node => node.type?.name === name);
+function waitingHarness(t, { rows = [], ready = loadUI('features/reading/reading-ready.ts') } = {}) {
+  const view = { rows };
+  const h = dictationHarness(t, {
+    './reading-ready': ready, './terminal-screen': { useScreen: () => ({ rows: view.rows }), readScreen: () => ({ rows: view.rows }) },
+    './ReadingChoice': { ReadingChoice: function ReadingChoice() { return null; } },
+  });
+  return Object.assign(h, { view, card: () => named(h.tree(), 'WaitingCard'), choiceCard: () => named(h.tree(), 'ReadingChoice'),
+    showTerminalButton: () => elements(h.tree()).some(node => node.type === 'button' && node.props.className === 'text-button') });
+}
+const menuChoice = () => ({ ...fakeChoice(), kind: 'menu' });
+const restored = thread => ({ key: 'history', agent: 'codex', threadId: thread });
+
+test('a dialog the screen has no card for shows the waiting card with its heading, blocks the composer and opens the terminal once', t => {
+  const h = waitingHarness(t);
+  h.screen.waiting = { title: 'Exit plan mode?' };
+  assert.equal(h.render().props.disabled, true);
+  h.render();
+  assert.equal(h.card().props.title, 'Exit plan mode?');
+  assert.ok(h.popup(), 'the terminal opens beside the card');
+  h.popup().props.onClose(); h.render(); h.render();
+  assert.equal(h.popup(), undefined, 'the same dialog, drawn again, never reopens it');
+  assert.ok(h.card(), 'the card stays for the way back');
+  h.card().props.onOpenTerminal(); h.render();
+  assert.ok(h.popup(), 'the card button opens it again');
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+  assert.equal(h.showTerminalButton(), false);
+});
+
+test('a dialog without a heading still shows the card, and the next dialog opens the terminal again', t => {
+  const h = waitingHarness(t);
+  h.screen.waiting = { title: null };
+  h.render(); h.render();
+  assert.equal(h.card().props.title, null);
+  assert.ok(h.popup());
+  h.popup().props.onClose();
+  h.screen.waiting = null; h.render(); h.render();
+  assert.equal(h.card(), undefined);
+  assert.equal(h.render().props.disabled, false);
+  h.screen.waiting = { title: null }; h.render(); h.render();
+  assert.ok(h.popup(), 'a new dialog is a new notice');
+});
+
+test('a card read from the screen wins over waiting, and waiting never shows in a restored preview', t => {
+  const h = waitingHarness(t);
+  h.screen.choice = menuChoice(); h.screen.waiting = { title: 'both' };
+  h.render(); h.render();
+  assert.equal(h.card(), undefined); assert.ok(h.choiceCard());
+  h.screen.choice = null;
+  Object.assign(h.props.terminal, { sessionId: null, codexActive: false, needsInput: 'Allow?', readingHistory: restored('saved') });
+  h.render(); h.render();
+  assert.equal(h.card(), undefined);
+  assert.equal(h.popup(), undefined);
+  assert.equal(h.render().props.disabled, true);
+});
+
+test('an attention notice with no input box shows the waiting card without opening the terminal or pressing a key', t => {
+  const h = waitingHarness(t);
+  h.props.terminal.needsInput = 'Claude needs your attention';
+  assert.equal(h.render().props.disabled, true);
+  h.render();
+  assert.equal(h.card().props.title, null);
+  assert.equal(h.popup(), undefined, 'the handoff to the terminal stays with reading-mode');
+  assert.equal(h.showTerminalButton(), false, 'the status line does not offer the same action twice');
+  h.card().props.onOpenTerminal(); h.render();
+  assert.ok(h.popup());
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+  h.view.rows = IDLE_ROWS; h.popup().props.onClose();
+  assert.equal(h.render().props.disabled, false, 'an ordinary prompt with an old notice is not a dialog');
+  assert.equal(h.card(), undefined); assert.equal(h.showTerminalButton(), true);
+});
+
+test('the notice card gives way to a parsed choice and to a native approval card', t => {
+  const h = waitingHarness(t);
+  h.props.terminal.needsInput = 'Allow?';
+  h.screen.choice = menuChoice(); h.render(); h.render();
+  assert.equal(h.card(), undefined); assert.ok(h.choiceCard());
+  h.screen.choice = null; h.props.terminal.nativeApprovals = [{ token: 'native' }];
+  assert.equal(h.render().props.disabled, true, 'the composer stays blocked behind the native card');
+  h.render();
+  assert.equal(h.card(), undefined);
+  h.screen.waiting = { title: 'Dialog' }; h.render(); h.render();
+  assert.equal(h.card(), undefined, 'one card per request');
+  assert.equal(h.render().props.disabled, true);
+});
+
+test('a live dialog card survives a trip to the raw terminal and back, because readiness lives outside the component', t => {
+  const h = waitingHarness(t, { rows: IDLE_ROWS });
+  Object.assign(h.props.terminal, { sessionId: 'runtime', codexActive: true, readingHistory: restored('saved') });
+  assert.equal(h.render().props.disabled, false, 'the restored session has drawn its input');
+  h.view.rows = ['Do you want to proceed?'];
+  h.screen.choice = menuChoice();
+  h.render(); h.render();
+  assert.ok(h.choiceCard(), 'an approval screen has no input box, yet its card shows');
+  h.remount();
+  assert.ok(h.choiceCard(), 'the card is still there when the reading view mounts again');
+  h.screen.choice = null; h.screen.waiting = { title: 'Review your answers' };
+  h.render(); h.render(); h.popup()?.props.onClose();
+  h.remount(); h.render();
+  assert.equal(h.card().props.title, 'Review your answers');
+  assert.equal(h.popup(), undefined, 'a dialog the terminal was already opened for is not opened again by a remount');
+});
+
+test('a restored preview still hides its stale choice until its own CLI input is seen, and readiness ends with the CLI, session and thread', t => {
+  const h = waitingHarness(t, { rows: ['Do you want to proceed?'] });
+  Object.assign(h.props.terminal, { sessionId: 'runtime', codexActive: true, readingHistory: restored('saved') });
+  h.screen.choice = menuChoice();
+  assert.equal(h.render().props.disabled, true); h.render();
+  assert.equal(h.choiceCard(), undefined, 'a screen never drawn live is only history');
+  h.view.rows = IDLE_ROWS; h.render(); h.view.rows = ['Do you want to proceed?']; h.render(); h.render();
+  assert.ok(h.choiceCard());
+  h.props.terminal.codexActive = false; h.render(); h.props.terminal.codexActive = true; h.render(); h.render();
+  assert.equal(h.choiceCard(), undefined, 'a CLI that stopped must draw its input again');
+  h.view.rows = IDLE_ROWS; h.render(); h.view.rows = ['Do you want to proceed?']; h.render();
+  h.props.terminal.sessionId = 'next'; h.render(); h.render();
+  assert.equal(h.choiceCard(), undefined, 'a new session is not ready');
+  h.view.rows = IDLE_ROWS; h.render(); h.view.rows = ['Do you want to proceed?']; h.render();
+  h.props.terminal.readingHistory = restored('different'); h.remount();
+  assert.equal(h.choiceCard(), undefined, 'a different thread invalidates readiness across a remount');
 });
 
 test('the terminal surface follows reading intent even before the reading subtree exists, and respects raw choice', () => {
