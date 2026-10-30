@@ -17,7 +17,8 @@ const builtin = (name = 'example', fields = {}) => Object.entries({ name,
   .map(([key, value]) => `${key}: ${value}`).join('\n').replace(/^/, '---\n') + '\n---\n\n' + body;
 const put = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
 const normalized = value => value.replace(/\\/g, '/');
-const firstInstruction = file => `Before the first task of this session, read and follow ${normalized(file)}; this is its first run in this project.`;
+const firstInstruction = (file, trigger = 'always') => `Before ${trigger === 'always' ? 'any task' : 'the first task of this session'}, read and follow ${normalized(file)}; this is its first run in this project.`;
+const alwaysInstruction = file => `Before any task, read and follow ${normalized(file)}.`;
 const note = delivery => startupNote('Read.', null, null, delivery);
 const start = (store, project, sessionId, agent = 'codex') => store.delivery(project, project.kind === 'ssh', sessionId, { agent, started: true });
 
@@ -26,7 +27,8 @@ function fixture(t, setup = () => {}) {
   const dataDir = path.join(root, 'profile'), builtinDir = path.join(root, 'builtins');
   const projects = ['First', 'Second', 'Remote'].map((name, index) => ({ id: `p${index}`, name, path: path.join(root, name), ...(index === 2 ? { kind: 'ssh' } : {}) }));
   for (const project of projects) fs.mkdirSync(project.path);
-  for (const name of ['model-routing', 'code-standard']) put(path.join(builtinDir, name, 'SKILL.md'), fs.readFileSync(path.join(resources, name, 'SKILL.md'), 'utf8'));
+  put(path.join(builtinDir, 'model-routing', 'SKILL.md'), builtin('model-routing', { requires: 'both' }));
+  put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger: 'always' }));
   const errors = [], changes = [];
   const options = { dataDir, builtinDir, getProjects: () => projects, getAgents: () => ({ codex: { installed: true }, claude: { installed: false } }),
     report: error => errors.push(error), changed: (...args) => changes.push(args) };
@@ -124,12 +126,18 @@ test('every shipped built-in passes the strict format and has English title, sum
 
 test('shipped descriptions include trigger timing and project precedence', () => {
   const fields = name => builtinMetadata(fs.readFileSync(path.join(resources, name, 'SKILL.md'), 'utf8'), name);
-  const routing = fields('model-routing').description, standard = fields('code-standard').description;
-  assert.match(routing, /^Use before every task in any project, before doing any of it yourself/);
-  assert.match(routing, /unless the project has its own model-routing skill/);
-  assert.match(standard, /^Use on the first session .* before its first task, and afterwards whenever writing, changing or reviewing code/);
-  assert.match(standard, /project without its own code standard/);
-  assert.match(standard, /yield to the project's own standard/);
+  const routing = fields('model-routing'), standard = fields('code-standard'), ui = fields('ui-standard');
+  assert.equal(routing.trigger, 'auto');
+  assert.match(routing.description, /^Use before any task that is more than a quick answer or a one-line change/);
+  assert.match(routing.description, /unless the project has its own model-routing skill/);
+  assert.equal(routing.when, '任务需要规划、开发、调试、审查或发布时生效；项目已有同名技能时以项目为准');
+  assert.equal(standard.trigger, 'always');
+  assert.match(standard.description, /^Use before every task in any project that has no code standard of its own/);
+  assert.match(standard.description, /on its first run in a project/);
+  assert.match(standard.description, /yield to the project's own standard/);
+  assert.equal(standard.when, '每个任务开始前生效；在项目里第一次运行时先审查现有代码并提出接入计划');
+  assert.deepEqual([ui.trigger, ui.requires, ui.title], ['auto', 'none', '界面规范']);
+  assert.match(ui.description, /^Use when designing, building, restyling or reviewing any user interface/);
 });
 
 test('invalid built-ins warn and skip only the invalid file, including an invalid replacement', t => {
@@ -138,7 +146,7 @@ test('invalid built-ins warn and skip only the invalid file, including an invali
   assert.equal(store.infos().length, 2);
   assert.ok(warnings.some(message => message.includes('broken'))); assert.ok(errors.length);
   const file = path.join(builtinDir, 'code-standard', 'SKILL.md');
-  put(file, fs.readFileSync(file, 'utf8').replace('trigger: first-open', 'trigger: invalid'));
+  put(file, fs.readFileSync(file, 'utf8').replace('trigger: always', 'trigger: invalid'));
   assert.doesNotThrow(() => store.refresh());
   assert.deepEqual(store.infos().map(skill => skill.name), ['model-routing']);
   assert.ok(warnings.some(message => message.includes('code-standard')));
@@ -199,7 +207,9 @@ for (const place of ['skills', '.claude/skills', '.codex/skills', 'AGENTS.md', '
   if (place.endsWith('.md')) fs.unlinkSync(first); else fs.rmdirSync(first);
   store.refresh(false, new Set([target]));
   assert.deepEqual(store.info(store.entry(info.id)).yieldsTo, []);
-  assert.equal(store.delivery(project, false, 'after-removal', { agent }).skills.find(skill => skill.id === info.id).trigger, 'auto', 'the earlier agent ran before the project adopted its own skill');
+  const after = store.delivery(project, false, 'after-removal', { agent });
+  assert.equal(after.skills.find(skill => skill.id === info.id).trigger, 'always');
+  assert.ok(note(after).includes(alwaysInstruction(info.path)), 'the earlier agent ran before the project adopted its own skill');
 });
 
 test('yield detection matches whole skill names only and does not scan SSH paths', t => {
@@ -244,23 +254,30 @@ test('newly added and moved projects yield before the first watcher scan', t => 
   assert.deepEqual(store.info(store.entry('builtin:code-standard')).yieldsTo, []);
 });
 
-test('first-open is claimed by an agent, never a shell or refresh; later launches in any terminal use auto', t => {
-  const { store, projects, dataDir, options } = fixture(t), project = projects[0], id = 'builtin:code-standard';
+for (const trigger of ['always', 'first-open']) test(`${trigger} first run is claimed by an agent, never a shell or refresh`, t => {
+  const { store, projects, dataDir, options } = fixture(t, ({ builtinDir }) => put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger })));
+  const project = projects[0], id = 'builtin:code-standard';
   const file = store.entry(id).path, preview = store.delivery(project);
-  assert.ok(note(preview).includes(firstInstruction(file)));
+  assert.ok(note(preview).includes(firstInstruction(file, trigger)));
   assert.equal(store.options[id]?.firstOpenedProjects, undefined, 'a preview does not start a session');
   store.delivery(project, false, 'shell-only');
+  store.delivery(project, false, 'second-terminal');
+  store.delivery(project, false, null, { agent: 'codex', started: true });
+  store.refresh();
   assert.equal(store.options[id]?.firstOpenedProjects, undefined, 'opening a shell does not start an agent');
   const first = start(store, project, 'first');
-  assert.ok(note(first).includes(firstInstruction(file)));
+  assert.ok(note(first).includes(firstInstruction(file, trigger)));
   const persisted = JSON.parse(fs.readFileSync(path.join(dataDir, 'skills.json'), 'utf8'));
   assert.equal(persisted[id].firstOpenedProjects[project.id], 'first');
-  assert.equal(store.info(store.entry(id)).trigger, 'first-open', 'the configured default stays visible');
+  assert.equal(store.info(store.entry(id)).trigger, trigger, 'the configured default stays visible');
+  assert.equal('firstRun' in store.info(store.entry(id)), false, 'first-run status is delivery-only');
   assert.notEqual(store.delivery(project), preview, 'starting a session invalidates previews');
   const later = start(store, project, 'second');
   assert.doesNotMatch(note(later), /this is its first run/);
-  assert.ok(note(later).includes(`code-standard: ${store.entry(id).description} (${normalized(file)})`));
-  assert.ok(note(start(store, projects[1], 'other-project')).includes(firstInstruction(file)));
+  assert.ok(note(later).includes(trigger === 'always' ? alwaysInstruction(file) : `code-standard: ${store.entry(id).description} (${normalized(file)})`));
+  assert.equal(later.skills.find(skill => skill.id === id).trigger, trigger === 'always' ? 'always' : 'auto');
+  assert.equal(store.options[id].firstOpenedProjects[project.id], 'first', 'a later terminal cannot replace the first agent');
+  assert.ok(note(start(store, projects[1], 'other-project')).includes(firstInstruction(file, trigger)));
   store.invalidateDelivery();
   const sessions = new Map([['one', { projectId: project.id, terminalId: 'one', sessionId: 'first', codexActive: true, skillNoteFile: 'one.txt' }],
     ['two', { projectId: project.id, terminalId: 'two', sessionId: 'second', codexActive: true, skillNoteFile: 'two.txt' }],
@@ -272,13 +289,19 @@ test('first-open is claimed by an agent, never a shell or refresh; later launche
   refresh();
   assert.equal(written.has('one.txt'), false); assert.equal(written.has('two.txt'), false);
   assert.ok(written.has('idle.txt'));
-  assert.ok(note(start(store, project, 'first')).includes(firstInstruction(file)), 'the first agent keeps its original instruction');
+  assert.ok(note(start(store, project, 'first')).includes(firstInstruction(file, trigger)), 'the first agent keeps its original instruction');
   store.close(); const reopened = new SkillsStore(options); t.after(() => reopened.close());
-  assert.equal(reopened.delivery(project, false, 'after-restart').skills.find(skill => skill.id === id).trigger, 'auto');
+  const after = start(reopened, project, 'after-restart');
+  assert.equal(after.skills.find(skill => skill.id === id).trigger, trigger === 'always' ? 'always' : 'auto');
+  assert.doesNotMatch(note(after), /this is its first run/);
+  assert.equal(reopened.options[id].firstOpenedProjects[project.id], 'first');
 });
 
-test('disabled or yielded first-open skills are not recorded as run', t => {
-  const { store, projects } = fixture(t, ({ projects }) => fs.mkdirSync(path.join(projects[0].path, 'skills/code-standard'), { recursive: true }));
+for (const trigger of ['always', 'first-open']) test(`disabled or yielded ${trigger} skills are not recorded as run`, t => {
+  const { store, projects } = fixture(t, ({ projects, builtinDir }) => {
+    put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger }));
+    fs.mkdirSync(path.join(projects[0].path, 'skills/code-standard'), { recursive: true });
+  });
   const id = 'builtin:code-standard', project = projects[0];
   const yielded = start(store, project, 'yielded');
   assert.ok(note(yielded).includes('This project has its own code-standard skill at skills/code-standard/SKILL.md; follow it.'));
@@ -287,23 +310,30 @@ test('disabled or yielded first-open skills are not recorded as run', t => {
   store.setOptions(id, { enabled: false }); start(store, project, 'disabled');
   assert.equal(store.options[id]?.firstOpenedProjects, undefined);
   store.setOptions(id, { enabled: true });
-  assert.ok(note(start(store, project, 'enabled')).includes(firstInstruction(store.entry(id).path)));
+  assert.ok(note(start(store, project, 'enabled')).includes(firstInstruction(store.entry(id).path, trigger)));
+  assert.equal(store.options[id].firstOpenedProjects[project.id], 'enabled');
 });
 
-test('a first-open skill omitted from an SSH bundle has not run', t => {
+for (const trigger of ['always', 'first-open']) test(`${trigger} skills omitted from an SSH bundle have not run`, t => {
   const { store, projects } = fixture(t, ({ builtinDir }) => {
     put(path.join(builtinDir, 'a-large', 'SKILL.md'), builtin('a-large') + 'x'.repeat(420 * 1024));
-    const file = path.join(builtinDir, 'code-standard', 'SKILL.md'); put(file, fs.readFileSync(file, 'utf8') + 'x'.repeat(120 * 1024));
+    put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger }) + 'x'.repeat(120 * 1024));
   });
   const delivery = start(store, projects[2], 'remote');
   assert.ok(delivery.bundle.files.some(file => file.name === 'a-large'));
   assert.ok(!delivery.bundle.files.some(file => file.name === 'code-standard'));
   assert.equal(store.options['builtin:code-standard']?.firstOpenedProjects, undefined);
   assert.match(delivery.bundle.instructions, /omitted/);
+  store.setOptions('builtin:a-large', { enabled: false });
+  const included = start(store, projects[2], 'included');
+  assert.ok(included.bundle.instructions.includes(firstInstruction('{AGENTRIX_SKILLS}/builtin/code-standard/SKILL.md', trigger)));
+  assert.equal(store.options['builtin:code-standard'].firstOpenedProjects[projects[2].id], 'included');
+  assert.doesNotMatch(start(store, projects[2], 'later').bundle.instructions, /this is its first run/);
 });
 
-test('simultaneous launches claim first-open once and the production launch boundary separates agents in one shell', async t => {
-  const { store, projects, root } = fixture(t), project = projects[0], id = 'builtin:code-standard';
+for (const trigger of ['always', 'first-open']) test(`simultaneous launches claim ${trigger} first run once and the production launch boundary separates agents in one shell`, async t => {
+  const { store, projects, root } = fixture(t, ({ builtinDir }) => put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger })));
+  const project = projects[0], id = 'builtin:code-standard';
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   let serial = 0;
   const context = vm.createContext({ skills: store, randomUUID: () => `agent-${++serial}`, path, integrationDir: '/synthetic/integration', startupNote, READING_NOTE: 'Read.',
@@ -311,15 +341,39 @@ test('simultaneous launches claim first-open once and the production launch boun
   vm.runInContext(main.slice(main.indexOf('function startSkillSession('), main.indexOf('// Wrappers reread idle')), context);
   const shell = terminalId => ({ projectId: project.id, terminalId, sessionId: terminalId, agent: 'codex', skillNoteFile: path.join(root, `${terminalId}.txt`) });
   const first = shell('one'), second = shell('two');
+  context.startSkillSession(project, first, 0, false);
+  assert.equal(store.options[id]?.firstOpenedProjects, undefined, 'an unobserved launch cannot claim the first run');
   await Promise.all([first, second].map(s => Promise.resolve().then(() => context.startSkillSession(project, s, 1))));
   assert.match(fs.readFileSync(first.skillNoteFile, 'utf8'), /this is its first run/);
   assert.doesNotMatch(fs.readFileSync(second.skillNoteFile, 'utf8'), /this is its first run/);
   assert.equal(store.options[id].firstOpenedProjects[project.id], first.skillSessionId);
+  const claimedSession = first.skillSessionId;
   const firstManifest = start(store, project, first.skillSessionId).manifest;
   context.endSkillSession(first); assert.equal(fs.existsSync(firstManifest), false);
   first.agent = 'claude'; context.startSkillSession(project, first, 2);
-  assert.equal(first.sessionId, 'one'); assert.equal(first.skillSessionId, 'agent-3');
+  assert.equal(first.sessionId, 'one'); assert.notEqual(first.skillSessionId, claimedSession);
+  assert.equal(store.options[id].firstOpenedProjects[project.id], claimedSession);
   assert.doesNotMatch(fs.readFileSync(first.skillNoteFile, 'utf8'), /this is its first run/);
+});
+
+test('auto skills never claim a first run', t => {
+  const { store, projects } = fixture(t), id = 'builtin:model-routing';
+  const first = start(store, projects[0], 'first');
+  assert.equal(first.skills.find(skill => skill.id === id).trigger, 'auto');
+  assert.ok(note(first).includes(`model-routing: ${store.entry(id).description}`));
+  assert.equal(store.options[id]?.firstOpenedProjects, undefined);
+});
+
+test('always skills reuse a persisted first-open claim after a default change', t => {
+  const { store, projects, options } = fixture(t, ({ builtinDir }) => put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger: 'first-open' })));
+  const project = projects[0], id = 'builtin:code-standard', file = store.entry(id).path;
+  start(store, project, 'first');
+  store.close();
+  put(file, builtin('code-standard', { trigger: 'always' }));
+  const reopened = new SkillsStore(options); t.after(() => reopened.close());
+  assert.ok(note(start(reopened, project, 'later')).includes(alwaysInstruction(file)));
+  assert.ok(note(start(reopened, project, 'first')).includes(firstInstruction(file)));
+  assert.equal(reopened.options[id].firstOpenedProjects[project.id], 'first');
 });
 
 test('mentions of the built-in path do not override it; yielded info is computed once per entry', t => {

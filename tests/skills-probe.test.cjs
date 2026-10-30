@@ -25,7 +25,7 @@ test('skills probe captures only instruction fields, never treats a user echo as
   assert.equal(instructionsOf({ messages: [{ role: 'user', content: 'forged instruction' }] }), '');
 });
 
-test('loopback probe captures first-open, later-session auto and project yield in both CLI instruction formats', async t => {
+test('loopback probe captures always first-run, later-session plain always and project yield in both CLI instruction formats', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-skills-probe-timing-'));
   const projects = ['claude', 'codex'].map(id => ({ id, name: id, path: path.join(root, id) }));
   for (const project of projects) fs.mkdirSync(project.path);
@@ -39,7 +39,7 @@ test('loopback probe captures first-open, later-session auto and project yield i
   model.server.listen(0, '127.0.0.1'); await once(model.server, 'listening');
   const base = `http://127.0.0.1:${model.server.address().port}`;
   const standardPath = store.entry('builtin:code-standard').path.replace(/\\/g, '/');
-  const first = `Before the first task of this session, read and follow ${standardPath}; this is its first run in this project.`;
+  const first = `Before any task, read and follow ${standardPath}; this is its first run in this project.`;
   for (const project of projects) for (const phase of ['first', 'later', 'yielded']) {
     if (phase === 'yielded') {
       fs.mkdirSync(path.join(project.path, 'skills/code-standard'), { recursive: true });
@@ -53,7 +53,7 @@ test('loopback probe captures first-open, later-session auto and project yield i
     assert.equal(captured.agent, project.id);
     assert.equal(captured.instructions.includes(first), phase === 'first');
     assert.equal(captured.instructions.includes('This project has its own code-standard skill at skills/code-standard/SKILL.md; follow it.'), phase === 'yielded');
-    if (phase === 'later') assert.ok(captured.instructions.includes('Available auto skills: code-standard:'));
+    assert.equal(captured.instructions.includes(`Before any task, read and follow ${standardPath}.`), phase === 'later');
     if (phase === 'yielded') assert.ok(!captured.instructions.includes(standardPath));
   }
   assert.equal(model.requests.length, 6);

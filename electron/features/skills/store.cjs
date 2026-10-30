@@ -333,9 +333,10 @@ class SkillsStore {
     const infos = entries.map(entry => ({ ...this.info(entry), override: !remote && this.yields(entry, project, agent) }));
     const yielded = infos.filter(info => info.override);
     let skills = infos.filter(info => !info.override).map(({ override, ...info }) => {
-      if (info.enabled && info.trigger === 'first-open') {
+      if (info.enabled && (info.trigger === 'always' || info.trigger === 'first-open')) {
         const firstSession = this.options[info.id]?.firstOpenedProjects?.[project.id];
-        if (firstSession && firstSession !== sessionId) info.trigger = 'auto';
+        info.firstRun = !firstSession || firstSession === sessionId;
+        if (info.trigger === 'first-open' && !info.firstRun) info.trigger = 'auto';
       }
       return { ...info, ...(remote ? { path: remotePath(this.entries.get(info.id)) } : {}) };
     });
@@ -362,11 +363,11 @@ class SkillsStore {
     }
     if (started && sessionId) {
       let recorded = false;
-      for (const skill of skills.filter(skill => skill.enabled && skill.trigger === 'first-open')) {
+      for (const skill of skills.filter(skill => skill.enabled && skill.firstRun)) {
         const runs = this.options[skill.id]?.firstOpenedProjects || {};
         if (runs[project.id]) continue;
-        // Only an observed agent launch claims first-open, synchronously: simultaneous starts are first-wins.
-        // Keep the agent session identity so another CLI in the same terminal receives auto.
+        // Only an observed agent launch claims a first run, synchronously: simultaneous starts are first-wins.
+        // Keep the agent session identity so another CLI in the same terminal is a later run.
         this.options[skill.id] = { ...this.options[skill.id], firstOpenedProjects: { ...runs, [project.id]: sessionId } };
         recorded = true;
       }

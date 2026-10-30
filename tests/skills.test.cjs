@@ -49,7 +49,7 @@ const until = async (check, label) => {
 test('skill defaults, exact public shape, read-only built-ins and local-only project scopes', async t => {
   const { store } = fixture(t), builtin = store.list()[0];
   assert.deepEqual(Object.keys(builtin).sort(), ['id', 'name', 'description', 'title', 'summary', 'when', 'yieldsTo', 'source', 'scope', 'projectId', 'projectName', 'path', 'enabled', 'trigger', 'autoOptimize', 'confirmChanges', 'version', 'updatedAt', 'updatedBy', 'updatedIn', 'createdByAgent', 'pending', 'requires', 'lastUsed'].sort());
-  assert.deepEqual([builtin.id, builtin.enabled, builtin.trigger, builtin.autoOptimize], ['builtin:model-routing', true, 'always', false]);
+  assert.deepEqual([builtin.id, builtin.enabled, builtin.trigger, builtin.autoOptimize], ['builtin:model-routing', true, 'auto', false]);
   assert.deepEqual(builtin.requires, { claude: true, codex: false });
   await assert.rejects(() => store.save(builtin.id, draft('model-routing')), /只读/);
   for (const action of [() => store.delete(builtin.id), () => store.revert(builtin.id, 1), () => store.resolveChange(builtin.id, true), () => store.setOptions(builtin.id, { autoOptimize: true })]) assert.throws(action, /只读/);
@@ -61,7 +61,7 @@ test('skill defaults, exact public shape, read-only built-ins and local-only pro
   assert.equal(scoped.projectName, 'First');
 });
 
-test('shipped code standard defaults to first-open locally and over SSH', t => {
+test('shipped code standard stays always and marks only the first agent session locally and over SSH', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-shipped-skills-'));
   const project = { id: 'p1', name: 'First', path: path.join(root, 'project') };
   const remote = { id: 'ssh', name: 'Remote', kind: 'ssh', path: '/srv/app' };
@@ -72,14 +72,21 @@ test('shipped code standard defaults to first-open locally and over SSH', t => {
 
   const skill = store.list().find(item => item.id === 'builtin:code-standard');
   assert.ok(skill);
-  assert.deepEqual([skill.name, skill.title, skill.source, skill.enabled, skill.trigger], ['code-standard', '代码规范', 'builtin', true, 'first-open']);
-  const note = startupNote('Read.', null, null, store.delivery(project, false, 'first-session'));
-  assert.ok(note.includes('Before the first task of this session, read and follow ' + skill.path.replace(/\\/g, '/') + '; this is its first run in this project.'));
-  const delivery = store.delivery(remote, true, 'remote-session');
+  assert.deepEqual([skill.name, skill.title, skill.source, skill.enabled, skill.trigger], ['code-standard', '代码规范', 'builtin', true, 'always']);
+  const localPath = skill.path.replace(/\\/g, '/');
+  const note = startupNote('Read.', null, null, store.delivery(project, false, 'first-session', { agent: 'codex', started: true }));
+  assert.ok(note.includes(`Before any task, read and follow ${localPath}; this is its first run in this project.`));
+  const later = store.delivery(project, false, 'later-session', { agent: 'claude', started: true });
+  assert.ok(startupNote('Read.', null, null, later).includes(`Before any task, read and follow ${localPath}.`));
+  assert.equal(later.skills.find(item => item.id === skill.id).trigger, 'always');
+  const delivery = store.delivery(remote, true, 'remote-session', { agent: 'claude', started: true });
   const shipped = delivery.bundle.files.find(file => file.id === skill.id);
   assert.ok(shipped);
   assert.equal(shipped.text, fs.readFileSync(skill.path, 'utf8'));
-  assert.ok(delivery.bundle.instructions.includes('Before the first task of this session, read and follow {AGENTRIX_SKILLS}/builtin/code-standard/SKILL.md; this is its first run in this project.'));
+  assert.ok(delivery.bundle.instructions.includes('Before any task, read and follow {AGENTRIX_SKILLS}/builtin/code-standard/SKILL.md; this is its first run in this project.'));
+  const remoteLater = store.delivery(remote, true, 'remote-later', { agent: 'codex', started: true });
+  assert.ok(remoteLater.bundle.instructions.includes('Before any task, read and follow {AGENTRIX_SKILLS}/builtin/code-standard/SKILL.md.'));
+  assert.equal(remoteLater.skills.find(item => item.id === skill.id).trigger, 'always');
 });
 
 test('save, independent history, revert, options persistence, import and delete', async t => {
@@ -185,7 +192,7 @@ test('startup notes deliver always/auto/disabled and every optimization permissi
   const delivery = store.delivery(projects[0]);
   const note = startupNote('Reading note.', 'C:\\handoff\\one.md', path.join(projects[0].path, 'skills'), delivery);
   const normalPath = value => value.replace(/\\/g, '/');
-  assert.ok(note.includes(`Before any task, read and follow ${normalPath(store.entry('user:always').path)}.`));
+  assert.ok(note.includes(`Before any task, read and follow ${normalPath(store.entry('user:always').path)}; this is its first run in this project.`));
   assert.ok(note.includes('automatic: A tested procedure. ('));
   assert.ok(!note.includes('/skills/disabled/SKILL.md'));
   assert.ok(note.includes('do not use these: disabled-project'));
@@ -205,7 +212,7 @@ test('all option combinations and large libraries keep the complete instructions
     const file = store.entry('user:matrix').path.replace(/\\/g, '/');
     assert.equal(note.includes(file), enabled);
     if (enabled) {
-      assert.equal(note.includes(`Before any task, read and follow ${file}.`), trigger === 'always');
+      assert.equal(note.includes(`Before any task, read and follow ${file}; this is its first run in this project.`), trigger === 'always');
       assert.equal(note.includes(`Before the first task of this session, read and follow ${file}; this is its first run in this project.`), trigger === 'first-open');
       assert.ok(note.includes(!autoOptimize ? 'must not change it' : confirmChanges ? 'propose edits only to' : 'may update it in place'));
     }
