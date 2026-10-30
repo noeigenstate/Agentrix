@@ -130,6 +130,10 @@ test('per-step environments preserve system variables and isolate profiles, CLI 
   assert.notEqual(unit.CODEX_HOME, gui.CODEX_HOME);
   assert.equal(base.CODEX_HOME, 'real-login');
   assert.equal(stepEnvironment(base, { kind: 'unit', env: {} }, locations, sha).AGENTRIX_TEST_TIMEOUT_SCALE, '2');
+  // A Linux job's step keeps this host's TEMP: the short alias reproduces the Windows runner only.
+  const linux = stepEnvironment(base, { key: 'remote-linux/python-unittest', kind: 'python', env: {} }, locations, sha);
+  assert.equal(linux.temp, 'old temp');
+  for (const key of ['TEMP', 'TMP', 'RUNNER_TEMP']) assert.equal(Object.hasOwn(linux, key), false, key);
 });
 
 test('packaging refuses symlink/junction and absent node_modules while unit-only selection remains runnable', async () => {

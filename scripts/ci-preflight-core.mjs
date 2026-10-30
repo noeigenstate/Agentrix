@@ -79,9 +79,11 @@ export function renderRun(run, version) {
 }
 
 export function stepEnvironment(base, step, locations, sha) {
+  // The 8.3 short TEMP reproduces the Windows runner only; a step from a Linux job keeps this host's own TEMP (Linux has
+  // no short names, and its paths compared against long ones would fail here for a reason CI never meets).
+  const temp = step.key?.startsWith('remote-linux/') ? {} : { TEMP: locations.temp, TMP: locations.temp, RUNNER_TEMP: locations.temp };
   const values = {
-    ...step.env, CI: 'true', AGENTRIX_TEST_TIMEOUT_SCALE: step.env?.AGENTRIX_TEST_TIMEOUT_SCALE ?? '2',
-    TEMP: locations.temp, TMP: locations.temp, RUNNER_TEMP: locations.temp,
+    ...step.env, CI: 'true', AGENTRIX_TEST_TIMEOUT_SCALE: step.env?.AGENTRIX_TEST_TIMEOUT_SCALE ?? '2', ...temp,
     AGENTRIX_DATA_DIR: locations.profile, CODEX_HOME: locations.codex, CLAUDE_CONFIG_DIR: locations.claude,
     GITHUB_SHA: sha, GITHUB_REF: 'refs/heads/ci/local-preflight', GITHUB_REF_NAME: 'ci/local-preflight', GITHUB_REF_TYPE: 'branch',
     GITHUB_WORKSPACE: locations.root, GITHUB_OUTPUT: locations.output, GITHUB_STEP_SUMMARY: locations.summary,
