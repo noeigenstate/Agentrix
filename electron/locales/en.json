@@ -1738,5 +1738,14 @@
   "无法加载更早的对话，请重试。": "Could not load earlier conversation. Try again.",
   "对话历史已变化，请重新打开会话。": "Conversation history changed. Reopen the conversation.",
   "无效的对话分页请求。": "Invalid conversation page request.",
-  "此条对话过大，未在此显示。": "This conversation entry is too large to display here."
+  "此条对话过大，未在此显示。": "This conversation entry is too large to display here.",
+  "打开项目": "Opening projects",
+  "会话先显示最近的对话，往上翻再加载更早的内容，很长的对话也能在约 1 秒内看到。": "A session shows the latest conversation first and loads earlier parts as you scroll up, so even a very long conversation appears in about a second.",
+  "目录外预览": "Outside previews",
+  "回复里提到项目目录外的 HTML 页面或视频，也能直接预览；预览中的页面不能联网。": "HTML pages and videos outside the project folder named in a reply can now be previewed too; previewed pages cannot reach the network.",
+  "消息图片": "Message pictures",
+  "Codex 消息里附带的图片会显示在你发的那条消息里，只显示一次；图片缺失或过大时显示占位。": "Pictures attached to a Codex message show once, in the message you sent; a missing or oversized picture shows a placeholder.",
+  "没能启动的子任务条目 5 秒后自动收起，其他失败的条目仍保留到你查看。": "Subtask rows that failed to start leave after 5 seconds; other failed rows stay until you review them.",
+  "启动提示": "Starting hint",
+  "助手启动期间输入框里的「正在启动…」对比度提高，浅色和深色主题下都看得清。": "The Starting… text in the input box while an assistant starts has higher contrast and reads clearly in light and dark themes."
 }
