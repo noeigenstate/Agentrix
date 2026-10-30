@@ -108,6 +108,7 @@ await withGuiLock('routing-acceptance', async () => {
       if (fixture) await write(id, `$env:DISPATCH_FIXTURE = ${quote(fixture)}; $env:DISPATCH_CAPTURE = ${quote(stem + '-capture.json')}\r`);
       const args = ['codex', '--role', 'exec', '--title', title, '--model', fixture ? 'gpt-6.1-sol' : MODEL, '--effort', fixture ? 'max' : EFFORT, '--fast',
         '--cwd', repo, '--brief', `${stem}-brief.md`, '--out', `${stem}-answer.md`, ...allow.flatMap(glob => ['--allow', glob]),
+        '--skip-meeting', 'Routing acceptance isolates ledger, scope and resume behavior',
         ...(ledger ? ['--ledger', path.join(repo, 'ledger.md')] : []), ...(resume ? ['--resume', resume] : [])];
       await write(id, `node ${quote(helper)} ${args.map(quote).join(' ')} *> ${quote(signals)}; New-Item -ItemType File ${quote(flag)} -Force | Out-Null\r`);
       // The activity pane follows the selected terminal: select the one that dispatches, so its screenshots show this worker.

@@ -14,8 +14,11 @@ const { agentSettings } = require(path.join(runtime, 'features/agents/agent-sett
 const { rolloutFiles, sessionMeta } = require(path.join(runtime, 'session-files.cjs'));
 const { TranscriptTail } = require(path.join(runtime, 'transcript-tail.cjs'));
 const { matches, snapshot, changedBetween, boundariesFor } = require(path.join(runtime, 'boundaries.cjs'));
+const { projectTeam, meetingRequest, recordFindings, minutesMarkdown, FINDINGS } = require(path.join(runtime, 'features/team/team.cjs'));
+const { minutesPage } = require(path.join(runtime, 'features/team/minutes-page.cjs'));
 const RUNTIME_FILES = ['boundaries.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
-  'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs'];
+  'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs',
+  'features/team/team.cjs', 'features/team/minutes-page.cjs'];
 const runtimeFiles = () => Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
 
 const START_TIMEOUT = 30000;
@@ -32,19 +35,32 @@ const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审
   [--allow <glob> ...]    the only files it may change; any other change is reported as out of scope
   [--ledger <file>]       the task's shared context: given to the worker, its findings appended after
   [--resume <session>]    continue that worker session (same context) instead of starting a new one
+  [--meeting <id>]        roundtable before work; no file changes and no --read-only
+  [--skip-meeting <reason>] execution with --allow may bypass confirmation; the reason is recorded
   Codex: [--fast] [--image <file> ...] [--read-only]
   Claude: --permission <plan|acceptEdits>
+
+  node dispatch.cjs minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues <issues.json>] [--language zh|en]
+  node dispatch.cjs consolidate --cwd <dir> --meeting <id> --summary <file.md>
 `;
 
 function argumentsOf(argv) {
   const [agent, ...flags] = argv;
-  if (!['codex', 'claude'].includes(agent)) throw new Error('Expected codex or claude');
+  const command = ['minutes', 'consolidate'].includes(agent);
+  if (!command && !['codex', 'claude'].includes(agent)) throw new Error('Expected codex, claude, minutes or consolidate');
   const options = { agent, images: [], allow: [], fast: false, readOnly: false };
-  const names = new Map(['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out', 'permission', 'ledger', 'resume'].map(key => [`--${key}`, key]));
+  const keys = command ? ['cwd', 'meeting', ...(agent === 'minutes' ? ['out', 'issues', 'language'] : ['summary'])]
+    : ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out', 'permission', 'ledger', 'resume', 'meeting'];
+  const names = new Map(keys.map(key => [`--${key}`, key]));
+  if (!command) names.set('--skip-meeting', 'skipMeeting');
+  const seen = new Set();
   for (let i = 0; i < flags.length; i++) {
     const flag = flags[i];
-    if (flag === '--fast' || flag === '--read-only') { options[flag === '--fast' ? 'fast' : 'readOnly'] = true; continue; }
-    if (!names.has(flag) && flag !== '--image' && flag !== '--allow') throw new Error(`Unknown option ${flag}`);
+    if (!command && (flag === '--fast' || flag === '--read-only')) {
+      if (seen.has(flag)) throw new Error(`Repeated option ${flag}`);
+      seen.add(flag); options[flag === '--fast' ? 'fast' : 'readOnly'] = true; continue;
+    }
+    if (!names.has(flag) && (command || flag !== '--image' && flag !== '--allow')) throw new Error(`Unknown option ${flag}`);
     const value = flags[++i];
     if (!value || value.startsWith('--') || /[\0\r\n]/.test(value)) throw new Error(`Expected one-line value for ${flag}`);
     if (flag === '--image') options.images.push(value);
@@ -54,7 +70,15 @@ function argumentsOf(argv) {
       options[names.get(flag)] = value;
     }
   }
-  for (const key of ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out']) if (!options[key]) throw new Error(`Missing --${key}`);
+  const required = command ? ['cwd', 'meeting', agent === 'minutes' ? 'out' : 'summary'] : ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out'];
+  for (const key of required) if (!options[key]) throw new Error(`Missing --${key}`);
+  if (options.meeting && !/^[\w.-]{1,64}$/.test(options.meeting)) throw new Error('Expected --meeting id with 1–64 letters, digits, _, . or -');
+  if (command) {
+    options.cwd = path.resolve(options.cwd);
+    for (const key of ['out', 'issues', 'summary']) if (options[key]) options[key] = path.resolve(options.cwd, options[key]);
+    if (options.language && !['zh', 'en'].includes(options.language)) throw new Error('Expected --language zh or en');
+    return options;
+  }
   if (!roles.has(options.role)) throw new Error('Expected --role 执行, 调查, 审查, exec, investigate or review');
   options.role = roles.get(options.role);
   if (options.title.length > 1024 || options.model.length > 160 || options.effort.length > 32) throw new Error('Assignment is too long');
@@ -63,6 +87,12 @@ function argumentsOf(argv) {
   if (agent === 'codex' && options.permission) throw new Error('--permission is only for Claude');
   if (options.resume && !/^[\w-]{1,160}$/.test(options.resume)) throw new Error('Expected a session id for --resume');
   if (options.resume && options.readOnly) throw new Error('A resumed Codex session keeps its own sandbox; --read-only applies to new sessions');
+  if (options.meeting && options.readOnly) throw new Error('A roundtable session must later build; --meeting cannot use --read-only');
+  if (options.meeting && options.skipMeeting) throw new Error('--meeting and --skip-meeting cannot be combined');
+  if (options.meeting && options.role === '执行' && !options.allow.length) throw new Error('An execution roundtable requires --allow for the agreed scope');
+  if (options.skipMeeting && (!options.skipMeeting.trim() || options.skipMeeting.length > 1024 || options.role !== '执行' || !options.allow.length)) {
+    throw new Error('--skip-meeting requires a reason and an execution run with --allow');
+  }
   options.cwd = path.resolve(options.cwd);
   for (const key of ['brief', 'out', 'ledger']) if (options[key]) options[key] = path.resolve(options.cwd, options[key]);
   options.images = options.images.map(file => path.resolve(options.cwd, file));
@@ -80,35 +110,47 @@ function commandOf(options) {
   return ['exec', ...settings, '-C', options.cwd, '-o', options.out, ...images, ...(options.readOnly ? ['-s', 'read-only'] : []), '-'];
 }
 
-const FINDINGS = '## Findings for the ledger';
-
 // What the worker reads before the brief: the task's shared ledger, the boundaries of the modules it may change, the
 // paths it may change, and how to hand its findings back.
-function briefOf(options, brief) {
+function briefOf(options, brief, team = projectTeam(options.cwd), id, phase) {
   const parts = [];
   if (options.ledger) {
     let ledger = '';
     try { ledger = fs.readFileSync(options.ledger, 'utf8').trim(); } catch {}
     if (ledger) parts.push(`# Shared context for this task\n\n${ledger}`);
   }
+  if (team) parts.push(...team.context(id));
   if (options.allow.length) {
     for (const boundary of boundariesFor(options.cwd, options.allow)) parts.push(`# Module boundary: ${boundary.file}\n\n${boundary.text.trim()}`);
     parts.push(`# Files you may change\n\n${options.allow.map(glob => `- \`${glob}\``).join('\n')}\n\nChange nothing else. Any other changed file is `
       + 'reported to the lead as out of scope and the work is rejected. If the task cannot be done within these paths, stop and say which file you would need and why.');
   }
-  if (options.ledger) parts.push(`# Handing back\n\nEnd your final answer with a section headed exactly \`${FINDINGS}\`: bullets with the facts, decisions `
+  if (options.ledger || team) parts.push(`# Handing back\n\nEnd your final answer with a section headed exactly \`${FINDINGS}\`: bullets with the facts, decisions `
     + 'and pitfalls the next worker on this task must know (file:line where it helps). They are added to the shared context.');
-  return parts.length ? Buffer.concat([Buffer.from(`${parts.join('\n\n')}\n\n# Task\n\n`), brief]) : brief;
+  const prefixed = parts.length ? Buffer.concat([Buffer.from(`${parts.join('\n\n')}\n\n# Task\n\n`), brief]) : brief;
+  return team && options.meeting ? Buffer.concat([prefixed, Buffer.from('\n\n' + meetingRequest(phase))]) : prefixed;
 }
 
-// The worker's findings section, appended to the ledger under the task it came from.
-function recordFindings(options, answer, header) {
-  const at = answer.indexOf(FINDINGS);
-  if (!options.ledger || at < 0) return false;
-  const findings = answer.slice(at + FINDINGS.length).split(/\n#{1,2} /)[0].trim();
-  if (!findings) return false;
-  fs.appendFileSync(options.ledger, `\n\n### ${header}\n\n${findings}\n`);
-  return true;
+async function teamCommand(argv, stdout) {
+  try {
+    const options = argumentsOf(argv), team = projectTeam(options.cwd, true);
+    if (!team) throw new Error('Team commands require a git repository');
+    if (options.agent === 'consolidate') await team.consolidate(options.meeting, fs.readFileSync(options.summary, 'utf8'));
+    else {
+      const issues = options.issues ? JSON.parse(fs.readFileSync(options.issues, 'utf8').replace(/^\uFEFF/, '')) : [];
+      if (!Array.isArray(issues) || issues.some(issue => !issue || ['issue', 'raisedBy', 'answer', 'result'].some(key => typeof issue[key] !== 'string'))) {
+        throw new Error('Issues must be an array of { issue, raisedBy, answer, result } strings');
+      }
+      const html = path.join(path.dirname(options.out), path.parse(options.out).name + '.html');
+      if (html === options.out) throw new Error('--out must name the Markdown minutes, not the HTML companion');
+      const minutes = await team.locked(() => team.minutes(options.meeting, issues, options.language));
+      fs.writeFileSync(options.out, minutesMarkdown(minutes));
+      fs.writeFileSync(html, minutesPage(minutes));
+    }
+    return 0;
+  } catch (error) {
+    stdout.write(`[dispatch] ${error.message.replace(/[\r\n]+/g, ' ')}\n`); return 1;
+  }
 }
 
 // Serialize sends to preserve start/rate/end order. No pipe callback delays the worker or its output.
@@ -283,21 +325,25 @@ function executable(agent, args, env) {
 }
 
 async function run(argv, { env = process.env, stdout = process.stdout, launch = spawn, resolveExecutable = executable, startTimeout = START_TIMEOUT } = {}) {
-  if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude'].includes(argv[0]))) {
+  if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'minutes', 'consolidate'].includes(argv[0]))) {
     stdout.write(USAGE); return 0;
   }
+  if (['minutes', 'consolidate'].includes(argv[0])) return teamCommand(argv, stdout);
   const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
   let options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, endSent = false;
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
+  let team = null, admission = null, teamFinished = false;
+  const teamLabel = (end = false) => !team ? '' : options.meeting ? ` · roundtable ${options.meeting}`
+    : options.skipMeeting && !end ? ` · roundtable skipped: ${options.skipMeeting}` : '';
   // Settles once the worker's output has been read to the end.
   const drained = new Promise(resolve => { drain = resolve; });
   const signal = line => stdout.write(`[dispatch] ${line}\n`);
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
-  const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: options.role, title: options.title,
+  const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: team && options.meeting ? '圆桌' : options.role, title: options.title,
     cwd: options.cwd, brief: options.brief, out: options.out, sessionId: output.sessionId, startedAt: Date.now() });
   const failed = (reason, exitCode = null) => {
     if (unconfirmed || started) return;
-    unconfirmed = true; signal(`failed to start ${id}: ${reason}`);
+    unconfirmed = true; signal(`failed to start ${id}: ${reason.replace(/[\r\n]+/g, ' ')}`);
     if (!options) return;
     // Even without a session, the pane needs a declared row before it can retain the failure.
     send({ ...assignment(), ...declared(), unconfirmed: true });
@@ -318,7 +364,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     const actual = output.routing(), requested = declared();
     const mismatch = Object.keys(requested).some(key => actual[key] !== requested[key]);
     const routing = mismatch ? `MISMATCH (declared ${requested.model} ${requested.effort} fast ${requested.fast ? 'on' : 'off'})` : 'ok';
-    signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}`);
+    signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}${teamLabel()}`);
     send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
     if (final) return;
     rateTimer = setInterval(() => {
@@ -346,16 +392,20 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const onInterrupt = () => stop('SIGINT'), onTerminate = () => stop('SIGTERM'), onHangup = () => stop('SIGHUP');
   try {
     options = argumentsOf(argv);
-    const brief = briefOf(options, fs.readFileSync(options.brief));
+    process.on('SIGINT', onInterrupt); process.on('SIGTERM', onTerminate); process.on('SIGHUP', onHangup);
+    team = projectTeam(options.cwd, true);
+    if (team) admission = await team.admit(options, id);
+    if (killed) throw new Error('Dispatch interrupted before launch');
+    const brief = briefOf(options, fs.readFileSync(options.brief), team, id, admission?.phase);
     // What the working tree held before the worker, so its own changes can be checked against --allow afterwards.
-    if (options.allow.length) before = snapshot(options.cwd);
+    if (options.allow.length || team && options.meeting) before = snapshot(options.cwd);
+    if (team && options.meeting && !before) throw new Error('Cannot verify the roundtable working tree');
     log = fs.createWriteStream(options.out + '.log');
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
     const command = resolveExecutable(options.agent, commandOf(options), env);
     child = launch(command.file, command.args, { cwd: options.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
       detached: process.platform !== 'win32' });
     log.on('error', error => { spawnError = error; stop('SIGTERM', false); });
-    process.on('SIGINT', onInterrupt); process.on('SIGTERM', onTerminate); process.on('SIGHUP', onHangup);
     startTimer = setTimeout(() => { failed('session not reported within 30 s'); stop('SIGTERM', false); }, startTimeout);
     if (options.agent === 'codex') pollTimer = setInterval(() => { void rollout.read(); }, POLL_INTERVAL);
     child.once('exit', code => {
@@ -407,22 +457,28 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     clearTimeout(startTimer); clearTimeout(forceTimer);
     if (!started) failed(spawnError?.message || (output.capacity ? 'at capacity' : 'worker exited without a confirmed session'), result.code === 0 ? 1 : result.code);
     if (options.agent === 'claude' && output.result !== null && output.result !== undefined) fs.writeFileSync(options.out, output.result);
-    const after = options.allow.length ? snapshot(options.cwd) : null;
+    const checking = options.allow.length || team && options.meeting;
+    const after = checking ? snapshot(options.cwd) : null;
     // The helper's own files (the answer, its log, the ledger it appends to) are not the worker's changes.
-    const own = after ? new Set([options.out, `${options.out}.log`, options.ledger].filter(Boolean).map(file => path.relative(after.root, file).split(path.sep).join('/'))) : null;
+    const own = after ? new Set([options.out, `${options.out}.log`, options.ledger, team?.memory].filter(Boolean).map(file => path.relative(after.root, file).split(path.sep).join('/'))) : null;
     const changed = (after && changedBetween(before, after)?.filter(file => !own.has(file))) ?? null;
-    const outOfScope = changed && changed.filter(file => !matches(options.allow, file));
+    const outOfScope = changed && (team && options.meeting ? changed : changed.filter(file => !matches(options.allow, file)));
     const route = output.routing();
-    try {
-      recordFindings(options, fs.readFileSync(options.out, 'utf8'), `${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${options.title} · ${options.agent} ${route.model} · session ${output.sessionId || 'unreported'}`);
-    } catch {}
     const reason = unconfirmed ? 'unconfirmed' : killed ? 'killed' : output.capacity ? 'capacity' : result.killedBy ? 'killed'
-      : spawnError || output.failed || result.code !== 0 ? 'error' : outOfScope?.length ? 'scope' : 'exit';
-    const scope = !options.allow.length ? '' : changed === null ? ' · scope unchecked (not a git working tree)'
+      : team && options.meeting && outOfScope?.length ? 'scope' : spawnError || output.failed || result.code !== 0 || team && options.meeting && changed === null ? 'error' : outOfScope?.length ? 'scope' : 'exit';
+    let answer = '';
+    try { answer = fs.readFileSync(options.out, 'utf8'); } catch {}
+    const header = `${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${options.title} · ${options.agent} ${route.model} · session ${output.sessionId || 'unreported'}`;
+    let meetingStatus = '';
+    if (team) {
+      meetingStatus = await team.finish(options, { id, session: output.sessionId, model: route.model, answer, header, reason, ...admission });
+      teamFinished = true;
+    } else { try { recordFindings(options, answer, header); } catch {} }
+    const scope = !checking ? '' : changed === null ? (team ? ' · scope unchecked (working tree unavailable)' : ' · scope unchecked (not a git working tree)')
       : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
-    const exitCode = Number.isInteger(result.code) ? (result.code === 0 && unconfirmed ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
+    const exitCode = Number.isInteger(result.code) ? (result.code === 0 && (unconfirmed || team && options.meeting && reason !== 'exit') ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
     const rate = output.outputTokens !== null && output.activeMs > 0 ? `${Math.round(output.outputTokens * 1000 / output.activeMs)} token/s (${output.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(output.activeMs / 1000)} s)` : 'token/s unreported';
-    signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope} · out ${options.out}`);
+    signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${teamLabel(true)}${meetingStatus ? ` · ${meetingStatus}` : ''} · out ${options.out}`);
     if (!endSent) send({ type: 'dispatch-end', id, ...route, exitCode, reason, outputTokens: output.outputTokens, activeMs: output.activeMs,
       ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), endedAt: Date.now() });
     await new Promise(resolve => log.end(resolve));
@@ -431,7 +487,12 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     failed(error.message, 1);
     if (child?.pid) stop('SIGTERM', false);
     if (options) {
-      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${unconfirmed ? 'unconfirmed' : 'error'} · out ${options.out}`);
+      const reason = unconfirmed ? 'unconfirmed' : 'error';
+      let meetingStatus = '';
+      if (admission && !teamFinished) {
+        try { meetingStatus = await team.finish(options, { id, session: output.sessionId, model: output.routing().model, answer: '', header: '', reason, ...admission }); } catch {}
+      }
+      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${teamLabel(true)}${meetingStatus ? ` · ${meetingStatus}` : ''} · out ${options.out}`);
       if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', outputTokens: null, activeMs: null, endedAt: Date.now() });
     }
     log?.destroy();
@@ -440,6 +501,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     clearTimeout(startTimer); clearTimeout(forceTimer);
     clearInterval(pollTimer); clearInterval(rateTimer);
     await rollout.pending;
+    team?.release(id);
     process.removeListener('SIGINT', onInterrupt); process.removeListener('SIGTERM', onTerminate); process.removeListener('SIGHUP', onHangup);
   }
 }
