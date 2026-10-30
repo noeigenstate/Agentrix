@@ -193,7 +193,7 @@ test('outside absolute paths preview their folder while project junctions escapi
   const outside = fs.mkdtempSync(project.path + '-outside-');
   fs.writeFileSync(path.join(outside, 'page.html'), '<h1>Outside</h1>');
   fs.symlinkSync(outside, path.join(project.path, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
-  assert.deepEqual(await card(project, path.join(outside, 'page.html')), { kind: 'html', path: fs.realpathSync(path.join(outside, 'page.html')), picture: 'picture' });
+  assert.deepEqual(await card(project, path.join(outside, 'page.html')), { kind: 'html', path: fs.realpathSync.native(path.join(outside, 'page.html')), picture: 'picture' });
   await assert.rejects(card(project, 'linked/page.html'), { code: 'OUTSIDE_LINK' });
   await assert.rejects(card(project, '../outside.html'), /找不到这个文件/);
 });

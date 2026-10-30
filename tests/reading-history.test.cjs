@@ -157,15 +157,15 @@ test('consecutive tools count as a block and carry parent metadata across the in
 
 test('realpath aliases of the same home, cwd and transcript keep one binding without broadcasts', async t => {
   const f = await fixture(t), alias = path.join(f.directory, 'home-alias'), cwdAlias = path.join(f.directory, 'cwd-alias');
-  await fs.symlink(f.source.home, alias, 'junction'); await fs.symlink(f.source.cwd, cwdAlias, 'junction');
-  let changes = 0; f.history.changed = () => changes++;
-  const initial = f.history.bindings.get('terminal').initial;
   try {
+    await fs.symlink(f.source.home, alias, 'junction'); await fs.symlink(f.source.cwd, cwdAlias, 'junction');
+    let changes = 0; f.history.changed = () => changes++;
+    const initial = f.history.bindings.get('terminal').initial;
     for (let n = 0; n < 5; n++) await f.history.bind('terminal', { ...f.source, home: alias, cwd: cwdAlias,
       filename: path.join(alias, path.relative(f.source.home, f.filename)) });
     assert.equal(f.history.summary('terminal').key, f.key);
     assert.equal(f.history.bindings.get('terminal').initial, initial); assert.equal(changes, 0);
-  } finally { await fs.rmdir(alias); await fs.rmdir(cwdAlias); }
+  } finally { await Promise.all([alias, cwdAlias].map(link => fs.rm(link, { force: true }))); }
 });
 
 test('initial page refreshes are single-flight and giant final records leave one placeholder with a usable earlier cursor', async t => {
