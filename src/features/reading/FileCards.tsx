@@ -50,7 +50,7 @@ function FileCard({ projectId, file, renderMarkdown, onError, quiet }: { project
   const kind = card?.kind ?? (/\.html?$/i.test(file) ? 'html' : /\.(?:md|markdown|mdx)$/i.test(file) ? 'markdown' : /\.(?:png|jpe?g|gif|webp|bmp)$/i.test(file) ? 'image' : 'video');
   const Icon = kind === 'html' ? FileHtml : kind === 'video' ? FilmStrip : kind === 'image' ? ImageIcon : FileText;
   // An image on this computer is read by its own path; one in a remote project, like any file there, through the project.
-  // A Markdown file outside the project is shown as a document of its own: the project's preview cannot serve it.
+  // A Markdown file outside the project is read as a document; pages and videos resolve their own preview folder.
   const show = (shown: Card) => showPopup(shown.kind === 'image' && !shown.remote ? { kind: 'image', path: shown.path }
     : shown.kind === 'markdown' && shown.outside ? { kind: 'document', projectId, path: shown.path } : { kind: 'file', projectId, path: shown.path });
   // A click before the card loaded still resolves through the main process, never the raw agent path.

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { records } = require('../electron/session-files.cjs');
+const { readTranscriptChunk } = require('../electron/oversized-record.cjs');
 
 test('a generated picture record over 1 MB comes through without its pixels; other oversized records are skipped', async () => {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'oversized-')), 'rollout.jsonl');
@@ -19,4 +20,7 @@ test('a generated picture record over 1 MB comes through without its pixels; oth
   assert.deepEqual(read[0], { timestamp: picture.timestamp, type: 'event_msg', payload: { type: 'item_completed', item: {
     type: 'Extension', kind: 'image_gen.generation', id: 'exec-1', status: 'completed', revisedPrompt: '一只柯基 "小狗"', savedPath: saved } } });
   assert.deepEqual(read[1], after);
+  const oneRead = [], reader = { buffer: Buffer.alloc(0) };
+  readTranscriptChunk(reader, Buffer.from(JSON.stringify(picture) + '\n'), record => oneRead.push(record));
+  assert.deepEqual(oneRead, [read[0]], 'generated pictures survive a complete oversized line in a single read too');
 });

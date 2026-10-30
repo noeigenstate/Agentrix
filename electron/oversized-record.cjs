@@ -1,14 +1,13 @@
-// An oversized Codex record (over 1 MB) is skipped, except one: Codex writes a generated picture's pixels into
-// the record that reports it. What the reading view needs of it lies at its two ends, the picture's id, state and
-// prompt at the start and the file it was saved to at the end, so a reader keeps the start and the end of an oversized
-// line and this rebuilds the record without the pixels.
+// Large user-image records are parsed with bounded pixel strings. Other oversized Codex records are skipped,
+// except generated pictures: their id/state/prompt and saved path survive in the record's start and end.
 const HEAD = 64 * 1024, TAIL = 8 * 1024;
 const IMAGE_LIMIT = 2_800_000, RECORD_LIMIT = 16 * 1024 * 1024;
+const IMAGE_OMITTED = 'agentrix-image:omitted';
 
 // Claude puts pasted screenshots between the prompt's text blocks. Keep small images intact and replace larger
-// base64 strings with null before parsing, so neither the pixels nor the text after them can grow memory forever.
+// base64 strings with a small marker before parsing, so the reading view can explain why the picture is absent.
 class ClaudeImageLine {
-  constructor(start) { this.parts = []; this.size = 0; this.buffer = Buffer.alloc(0); this.data = null; this.add(start); }
+  constructor(start, keys = /"data"\s*:\s*"/) { this.keys = keys; this.parts = []; this.size = 0; this.buffer = Buffer.alloc(0); this.data = null; this.add(start); }
   keep(part) {
     if (!part.length) return;
     this.size += part.length;
@@ -29,10 +28,10 @@ class ClaudeImageLine {
         if (quote < 0) { this.pixels(this.buffer); this.buffer = Buffer.alloc(0); return; }
         this.pixels(this.buffer.subarray(0, quote));
         const rest = this.buffer.subarray(quote + 1);
-        this.keep(this.omitted ? Buffer.from('null') : Buffer.concat([Buffer.from('"'), ...this.data, Buffer.from('"')]));
+        this.keep(this.omitted ? Buffer.from(JSON.stringify(IMAGE_OMITTED)) : Buffer.concat([Buffer.from('"'), ...this.data, Buffer.from('"')]));
         this.data = null; this.buffer = this.discarded ? Buffer.alloc(0) : rest;
       } else {
-        const match = /"data"\s*:\s*"/.exec(this.buffer.toString('latin1'));
+        const match = this.keys.exec(this.buffer.toString('latin1'));
         if (match) {
           const end = match.index + match[0].length;
           const rest = this.buffer.subarray(end);
@@ -74,11 +73,28 @@ function oversizedRecord(head, tail) {
   } } };
 }
 
-// Follows one line that outgrew the reader's limit: the first HEAD bytes and the last TAIL bytes it had.
+const CODEX_IMAGE_KEYS = /"(?:data|image_url|url)"\s*:\s*"|"(?=data:image\/[\w.+-]+;base64,)/;
+const userImageRecord = head => {
+  const text = head.toString('utf8');
+  return /"type"\s*:\s*"response_item"/.test(text) && /"role"\s*:\s*"user"/.test(text)
+    || /"type"\s*:\s*"event_msg"/.test(text) && /"type"\s*:\s*"(?:UserMessage|user_message)"/.test(text);
+};
+
+// A user image may live inside an old input_image response item or an event's images array. Feed those lines
+// through the same bounded parser as Claude; generated-image records still need only their two ends.
 class OversizedLine {
-  constructor(start) { this.head = Buffer.from(start.subarray(0, HEAD)); this.tail = Buffer.from(start.subarray(-TAIL)); }
-  add(chunk) { this.tail = Buffer.concat([this.tail, chunk]).subarray(-TAIL); }
-  record() { return oversizedRecord(this.head, this.tail); }
+  constructor(start) {
+    this.head = Buffer.from(start.subarray(0, HEAD)); this.tail = Buffer.from(start.subarray(-TAIL));
+    this.images = userImageRecord(this.head) ? new ClaudeImageLine(start, CODEX_IMAGE_KEYS) : null;
+  }
+  add(chunk) {
+    if (!this.head.length) {
+      this.head = Buffer.from(chunk.subarray(0, HEAD));
+      if (userImageRecord(this.head)) { this.images = new ClaudeImageLine(chunk, CODEX_IMAGE_KEYS); return; }
+    } else if (this.images) { this.images.add(chunk); return; }
+    this.tail = Buffer.concat([this.tail, chunk]).subarray(-TAIL);
+  }
+  record() { return this.images ? this.images.record() : oversizedRecord(this.head, this.tail); }
 }
 
 // Both live readers retain the same byte boundary state; only their oversized record format differs.
@@ -99,4 +115,4 @@ function readTranscriptChunk(reader, chunk, onRecord, Line = OversizedLine) {
   }
 }
 
-module.exports = { OversizedLine, oversizedRecord, ClaudeImageLine, IMAGE_LIMIT, readTranscriptChunk };
+module.exports = { OversizedLine, oversizedRecord, ClaudeImageLine, IMAGE_LIMIT, IMAGE_OMITTED, readTranscriptChunk };

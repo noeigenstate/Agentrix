@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { VIDEO_TYPES, resolveProjectPath } = require('../../project-files.cjs');
+const { VIDEO_TYPES } = require('../../project-files.cjs');
+const { inside, previewLocation, localPath, checked, OUTSIDE, SSH_OUTSIDE } = require('./preview-location.cjs');
 
 // What the reading view shows of a document, page, video or image an agent wrote or named: the start of a Markdown
 // file, a picture of an HTML page, a video to play, a small copy of the image. Cards are asked for only once they
@@ -8,11 +9,8 @@ const { VIDEO_TYPES, resolveProjectPath } = require('../../project-files.cjs');
 const MARKDOWN = new Set(['.md', '.markdown', '.mdx']), HTML = new Set(['.html', '.htm']), IMAGES = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
 // A remote image travels over the SSH connection in pieces the size the remote worker reads at once.
 const EXCERPT = 8 * 1024, IMAGE_BYTES = 64 * 1024 * 1024, REMOTE_IMAGE_BYTES = 16 * 1024 * 1024, REMOTE_CHUNK = 256 * 1024, DOCUMENT_BYTES = 2 * 1024 * 1024;
-const OUTSIDE = '文件在项目目录之外，无法在此预览。';
 const cardKind = file => { const ext = path.extname(file).toLowerCase(); return MARKDOWN.has(ext) ? 'markdown' : HTML.has(ext) ? 'html' : VIDEO_TYPES[ext] ? 'video' : IMAGES.has(ext) ? 'image' : null; };
 const isImageFile = file => typeof file === 'string' && IMAGES.has(path.extname(file).toLowerCase());
-const localPath = value => { const normalized = value.replace(/\\/g, '/'); return process.platform === 'win32' ? normalized.replace(/^\/\/\?\/UNC\//i, '//').replace(/^\/\/\?\/(?=[a-z]:\/)/i, '') : normalized; };
-const checked = file => { if (typeof file !== 'string' || !file || file.length > 4096 || /[\0-\x1f]/.test(file)) throw new Error('无法预览此文件。'); return file; };
 // Text read from the start of a file, without the half of a character its last bytes may cut.
 const utf8 = buffer => buffer.toString('utf8').replace(/�+$/, '');
 
@@ -23,16 +21,6 @@ async function readExcerpt(file, size, limit) {
     const { buffer, bytesRead } = await handle.read(Buffer.alloc(length), 0, length, 0);
     return utf8(buffer.subarray(0, bytesRead));
   } finally { await handle.close(); }
-}
-
-// The file inside the project, as a path relative to its folder; anything outside it is refused.
-async function inside(project, file, cwd = project.path) {
-  const absolute = path.resolve(localPath(cwd), localPath(checked(file)));
-  const relative = path.relative(localPath(project.path), absolute).split(path.sep).join('/');
-  if (!relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative) || relative.includes(':')) throw new Error(OUTSIDE);
-  // Use the preview's real-path check too: a junction may lead outside the project.
-  try { return { absolute: await resolveProjectPath(project, relative), relative }; }
-  catch (error) { if (error.message === '该链接指向项目目录之外，无法在此打开。') throw new Error(OUTSIDE); throw error; }
 }
 
 // A Markdown file outside the project: the agents keep their memory and notes elsewhere (~/.claude/projects/…/memory,
@@ -91,10 +79,14 @@ function createFileCards({ previews, capture, shrink = () => null, shrinkBytes =
     const absolute = path.posix.resolve(typeof cwd === 'string' && cwd.startsWith('/') ? cwd : root, value.replace(/\\/g, '/'));
     const relative = path.posix.relative(root, absolute);
     if (!relative || relative === '..' || relative.startsWith('../')) {
+      if (kind === 'html' || kind === 'video') throw new Error(SSH_OUTSIDE);
       if (kind !== 'markdown' || !relative) throw new Error(OUTSIDE);
       return { kind, path: absolute, outside: true, excerpt: (await outsideDocument(previews, project, absolute, EXCERPT)).text };
     }
-    const stat = await connection.request('stat', { path: relative }).catch(() => null);
+    const stat = await connection.request('stat', { path: relative }).catch(error => {
+      if ((kind === 'html' || kind === 'video') && error.message === '该链接指向远程项目目录之外。') throw new Error(SSH_OUTSIDE);
+      return null;
+    });
     if (!stat?.file) throw new Error(kind === 'image' ? '找不到这张图片。' : '这个文件没有预览卡片。');
     const read = async (length, offset = 0) => Buffer.from(await connection.request('read', { path: relative, offset, length }), 'base64');
     if (kind === 'markdown') return { kind, path: relative, excerpt: utf8(await read(Math.min(EXCERPT, stat.size))) };
@@ -115,23 +107,26 @@ function createFileCards({ previews, capture, shrink = () => null, shrinkBytes =
     // An image is only shown here, never served by the preview, so one the agent saved anywhere on this computer (its
     // own output folder, the desktop) is shown as well.
     if (kind === 'image') {
-      const absolute = path.resolve(localPath(cwd), localPath(checked(file)));
+      const absolute = path.resolve(localPath(cwd || project.path), localPath(checked(file)));
       const stat = await fs.stat(absolute).catch(() => null);
       if (!stat?.isFile()) throw new Error('找不到这张图片。');
       if (stat.size > IMAGE_BYTES) throw new Error('图片太大，无法预览。');
       return { kind, path: absolute, picture: await thumbnail(`image|${absolute}|${stat.mtimeMs}|${stat.size}`, () => shrink(absolute)) };
     }
-    const where = await inside(project, file, cwd).catch(error => { if (kind === 'markdown' && error.message === OUTSIDE) return null; throw error; });
+    const where = kind === 'markdown'
+      ? await inside(project, file, cwd).catch(error => { if (error.message === OUTSIDE) return null; throw error; })
+      : await previewLocation(project, file, cwd);
     if (!where) {
       const absolute = path.resolve(localPath(cwd || project.path), localPath(file));
       return { kind, path: absolute, outside: true, excerpt: (await outsideDocument(previews, project, absolute, EXCERPT)).text };
     }
     const { absolute, relative } = where;
+    const previewProject = where.project || project, openingPath = where.outside ? absolute : relative;
     const stat = await fs.stat(absolute);
     if (!stat.isFile()) throw new Error('这个文件没有预览卡片。');
     if (kind === 'markdown') return { kind, path: relative, excerpt: await readExcerpt(absolute, stat.size, EXCERPT) };
-    if (kind === 'video') return { kind, path: relative, url: previews.open(project, relative, 'video', VIDEO_TYPES[path.extname(relative).toLowerCase()]).url };
-    return { kind, path: relative, picture: await picture(`${project.path}|${absolute}|${stat.mtimeMs}|${stat.ctimeMs}|${stat.size}`, project, relative) };
+    if (kind === 'video') return { kind, path: openingPath, url: previews.open(previewProject, relative, 'video', VIDEO_TYPES[path.extname(file).toLowerCase()]).url };
+    return { kind, path: openingPath, picture: await picture(`${project.id}|${project.path}|${absolute}|${stat.mtimeMs}|${stat.ctimeMs}|${stat.size}`, previewProject, relative) };
   };
 }
 

@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { TranscriptTail, ActionLog, claudeRecord, codexActions, codexRecord } = require('../electron/agent-actions.cjs');
 const { ConversationLog, claudeConversation, codexConversation, brief } = require('../electron/conversation.cjs');
-const { ClaudeImageLine, IMAGE_LIMIT } = require('../electron/oversized-record.cjs');
+const { ClaudeImageLine, IMAGE_LIMIT, IMAGE_OMITTED } = require('../electron/oversized-record.cjs');
 
 const image = data => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data } });
 const user = (content, extra = {}) => ({ type: 'user', uuid: 'prompt', timestamp: '2026-10-12T08:00:00.000Z', message: { content }, ...extra });
@@ -37,7 +37,7 @@ test('Claude prompts over 1 MiB retain text and screenshots up to IMAGE_LIMIT', 
   assert.deepEqual(history.list, f.log.list, 'history recovers the same prompt and image');
 });
 
-test('huge Claude images are omitted across live polls while text and other images survive', async t => {
+test('huge Claude images leave placeholders across live polls while text and other images survive', async t => {
   const f = await transcript(t), pixels = 'A'.repeat(24 * 1024 * 1024);
   const record = user([image('BEFORE'), { type: 'text', text: 'Look at these pictures.' }, image(pixels),
     { type: 'text', text: 'The last picture matters too.' }, image('AFTER')]);
@@ -50,7 +50,7 @@ test('huge Claude images are omitted across live polls while text and other imag
   while (f.tail.offset < size) await f.read();
   assert.deepEqual(f.log.list.map(entry => entry.role), ['user', 'tool']);
   assert.equal(f.log.list[0].text, 'Look at these pictures.\nThe last picture matters too.');
-  assert.deepEqual(f.log.list[0].images, ['data:image/png;base64,BEFORE', 'data:image/png;base64,AFTER']);
+  assert.deepEqual(f.log.list[0].images, ['data:image/png;base64,BEFORE', IMAGE_OMITTED, 'data:image/png;base64,AFTER']);
   assert.equal(f.tail.oversized, null);
 });
 

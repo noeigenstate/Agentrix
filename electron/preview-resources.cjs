@@ -68,6 +68,7 @@ class PreviewResources {
       resolved = relativePath; size = stat.size;
       readChunk = async (offset, length) => Buffer.from(await connection.request('read', { path: relativePath, offset, length }), 'base64');
     } else {
+      if (session.project.previewRoot && await fs.realpath(session.project.path) !== session.project.previewRoot) throw new Error('Preview folder changed');
       resolved = await resolveProjectPath(session.project, relativePath);
       const relativeReal = path.relative(await fs.realpath(session.project.path), resolved);
       if (!allowsHiddenPath(session, relativeReal.split(path.sep).join('/'))) throw new Error('Hidden link targets are not preview resources');
