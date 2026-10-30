@@ -1,0 +1,51 @@
+
+ ▐▛███▛█   Claude Code v2.1.314
+▝▜██████▀  Sonnet 4.5 · API Usage Billing
+ ▝▝   ▝▝   <project-root>
+
+
+❯ CHOICE_PROBE mcp
+
+  Calling localprobe…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tool use
+ localprobe — Choice Probe Tool: (MCP)
+
+ About the localprobe — Choice Probe Tool:
+ │ Local fixture only: show an input form and do nothing.
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for localprobe — Choice Probe commands in <repo-root>\.tes…
+   3. No
+
+ Esc to cancel · Tab to amend
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

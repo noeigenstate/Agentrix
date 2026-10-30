@@ -223,8 +223,13 @@ class RemoteFilesTest(unittest.TestCase):
             self.assertEqual(event["token"], "test"); self.assertTrue(event["eventId"].startswith("session:"))
             identities.append(event["eventId"])
         self.assertEqual(len(set(identities)), 4)
-        self.assertIsNotNone(notify("notify", dict(payload, notification_type="elicitation_dialog")))
-        for kind, hook in (("notify", dict(payload, notification_type="idle_prompt")), ("start", {}), ("unknown", payload)):
+        for notification_type in ("elicitation_dialog", "elicitation_url_dialog"):
+            event = notify("notify", dict(payload, notification_type=notification_type))
+            self.assertEqual(event["state"], "attention")
+            self.assertIsNone(event["prompt"])
+            self.assertEqual(event["message"], "m" * 300)
+        for kind, hook in (("notify", dict(payload, notification_type="idle_prompt")),
+                           ("notify", dict(payload, notification_type="auth_success")), ("start", {}), ("unknown", payload)):
             self.assertIsNone(notify(kind, hook))
 
     def test_notify_shell_events_name_claude_and_default_to_codex(self):

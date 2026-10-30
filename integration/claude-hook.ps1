@@ -14,7 +14,7 @@ try {
     [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
     $hook = [Console]::In.ReadToEnd() | ConvertFrom-Json
     # Idle notifications must not turn a completed round back into a waiting one.
-    if ($Kind -eq 'notify' -and $hook.notification_type -notin @('permission_prompt', 'elicitation_dialog')) { exit 0 }
+    if ($Kind -eq 'notify' -and $hook.notification_type -notin @('permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog')) { exit 0 }
     $sessionId = [string]$hook.session_id
     if (-not $sessionId) { exit 0 }
     $eventData = @{

@@ -32,7 +32,280 @@ const codexFooterScreen = (context, fields) => codexScreen({
   banner: { ...codexBanner, model: 'GPT-6.1-Sol', effort: 'high' }, status: codexStatus(context), ...fields,
 });
 
+// Real Claude 2.1.314 / Codex 0.166.0 captures. Keep redraw artifacts in the expectations;
+// these permission labels are informative screen text, never permission-request identities.
+const capturedClaudeBanner = { ...claudeBanner, version: '2.1.314', model: null, effort: null, plan: null, directory: '<project-root>' };
+const capturedCodexBanner = { ...codexBanner, version: '0.166.0', directory: '~\\Desktop\\agentrix\\.test-output\\slash-live-project' };
+const capturedClaude = fields => ({ ...emptyScreen, banner: capturedClaudeBanner, ...fields });
+const capturedCodex = fields => ({ ...emptyScreen, banner: capturedCodexBanner, ...fields });
+const capturedQuestion = (agent, fields = {}) => ({ agent, tabs: [], position: null, multi: false, submit: null, notes: null, review: null, ...fields });
+const capturedChoices = {
+  "claude-api-key": {
+    kind: "menu", title: "Detected a custom API key in your environment", context: ["ANTHROPIC_API_KEY: sk-ant-...e-local-standin-only","Do you want to use this API key?"],
+    options: [
+      option(1, "Yes"),
+      option(2, "No (recommended)", true),
+    ], hint: "Enter to confirm · Esc to cancel",
+  },
+  "claude-bash-amend": {
+    kind: "permission", title: "Do you want to proceed?", context: ["Bash command","Local choice probe; cancel without running","printf local-probe > choice-probe-write.txt"],
+    options: [
+      option(1, "Yes, and tell Claude what to do next", true),
+      option(2, "Yes, and always allow access to <project-root> from this"),
+      option(3, "Nooject"),
+    ], hint: "Esc to cancel",
+  },
+  "claude-bash": {
+    kind: "permission", title: "Do you want to proceed?", context: ["Bash command","Local choice probe; cancel without running","printf local-probe > choice-probe-write.txt"],
+    options: [
+      option(1, "Yes", true),
+      option(2, "Yes, and always allow access to <project-root> from this"),
+      option(3, "Nooject"),
+    ], hint: "Esc to cancel · Tab to amend",
+  },
+  "claude-edit": {
+    kind: "permission", title: "Do you want to make this edit to choice-probe-edit.txt?", context: ["Edit file","choice-probe-edit.txt","1 -before","1 +after"],
+    options: [
+      option(1, "Yes", true),
+      option(2, "Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session"),
+      option(3, "Nohift+tab)"),
+    ], hint: "Esc to cancel · Tab to amend",
+  },
+  "claude-mcp-url-waiting": {
+    kind: "permission", title: "MCP server “localprobe” wants to open a URL", context: ["Local MCP choice URL; do not open this link","https://choice-probe.example.invalid/authorize"],
+    options: [
+      option(1, "Accept", true),
+      option(2, "Decline"),
+    ], hint: "Esc to cancel · ←/→ to switch",
+  },
+  "claude-mcp": {
+    kind: "permission", title: "Do you want to proceed?", context: ["Tool use","localprobe — Choice Probe Tool: (MCP)","About the localprobe — Choice Probe Tool:","│ Local fixture only: show an input form and do nothing."],
+    options: [
+      option(1, "Yes", true),
+      option(2, "Yes, and don't ask again for localprobe — Choice Probe commands in <repo-root>\\.tes…"),
+      option(3, "No"),
+    ], hint: "Esc to cancel · Tab to amend",
+  },
+  "claude-multi": {
+    kind: "question", title: "Which checks should the local probe include?", context: [],
+    options: [
+      { ...option(1, "Parser", true, "Read screen rows"), role: "answer", checked: false },
+      { ...option(2, "UI", false, "Inspect the reading card"), role: "answer", checked: false },
+      { ...option(3, "Type something"), role: "input", checked: false },
+      { ...option(4, "Chat about this"), role: "chat" },
+    ], hint: "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    question: capturedQuestion("claude", {"multi":true,"submit":{"selected":false}}),
+  },
+  "claude-plan-waiting": {
+    kind: "permission", title: "Exit plan mode?", context: ["Claude wants to exit plan mode"],
+    options: [
+      option(1, "Yes, and switch to default (ask each time) for this session", true),
+      option(2, "No"),
+    ], hint: null,
+  },
+  "claude-review-waiting": {
+    kind: "question", title: "Ready to submit your answers?", context: ["⚠ You have not answered all questions"],
+    options: [
+      { ...option(1, "Submit answers", true), role: "answer" },
+      { ...option(2, "Cancel"), role: "answer" },
+    ], hint: null,
+    question: capturedQuestion("claude", {"tabs":[{"label":"Format","answered":false},{"label":"Checks","answered":false}],"review":[]}),
+  },
+  "claude-single-input": {
+    kind: "question", title: "Which output format should the local probe use?", context: [],
+    options: [
+      { ...option(1, "Text", false, "Plain text"), role: "answer" },
+      { ...option(2, "JSON", false, "Structured text"), role: "answer" },
+      { ...option(3, "Type something.", true), role: "input" },
+      { ...option(4, "Chat about this"), role: "chat" },
+    ], hint: "Enter to select · ↑/↓ to navigate · ctrl+g to edit in Notepad · Esc to cancel",
+    question: capturedQuestion("claude"),
+  },
+  "claude-single": {
+    kind: "question", title: "Which output format should the local probe use?", context: [],
+    options: [
+      { ...option(1, "Text", true, "Plain text"), role: "answer" },
+      { ...option(2, "JSON", false, "Structured text"), role: "answer" },
+      { ...option(3, "Type something."), role: "input" },
+      { ...option(4, "Chat about this"), role: "chat" },
+    ], hint: "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    question: capturedQuestion("claude"),
+  },
+  "claude-tabs-second": {
+    kind: "question", title: "Which checks should the local probe include?", context: [],
+    options: [
+      { ...option(1, "Parser", true, "Read screen rows"), role: "answer", checked: false },
+      { ...option(2, "UI", false, "Inspect the reading card"), role: "answer", checked: false },
+      { ...option(3, "Type something"), role: "input", checked: false },
+      { ...option(4, "Chat about this"), role: "chat" },
+    ], hint: "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+    question: capturedQuestion("claude", {"tabs":[{"label":"Format","answered":false},{"label":"Checks","answered":false}],"multi":true,"submit":{"selected":false}}),
+  },
+  "claude-tabs": {
+    kind: "question", title: "Which output format should the local probe use?", context: [],
+    options: [
+      { ...option(1, "Text", true, "Plain text"), role: "answer" },
+      { ...option(2, "JSON", false, "Structured text"), role: "answer" },
+      { ...option(3, "Type something."), role: "input" },
+      { ...option(4, "Chat about this"), role: "chat" },
+    ], hint: "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+    question: capturedQuestion("claude", {"tabs":[{"label":"Format","answered":false},{"label":"Checks","answered":false}]}),
+  },
+  "claude-trust": {
+    kind: "menu", title: "Accessing workspace:", context: ["<project-root>","Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source","project, or work from your team). If not, take a moment to review what's in this folder first.","Claude Code'll be able to read, edit, and execute files here.","Security guide"],
+    options: [
+      option(1, "No, exit", true),
+      option(2, "Yes, I trust this folder"),
+    ], hint: "Enter to confirm · Esc to cancel",
+  },
+  "claude-web": {
+    kind: "permission", title: "Do you want to allow Claude to fetch this content?", context: ["Fetch","Claude wants to fetch content from choice-probe.example.invalid","url: https://choice-probe.example.invalid/","prompt: Read the title only"],
+    options: [
+      option(1, "Yes", true),
+      option(2, "Yes, and don't ask again for choice-probe.example.invalid"),
+      option(3, "No, and tell Claude what to do differently (esc)"),
+    ], hint: null,
+  },
+  "claude-write": {
+    kind: "permission", title: "Do you want to create choice-probe-new.txt?", context: ["Create file","choice-probe-new.txt","1 Local probe; cancel without writing"],
+    options: [
+      option(1, "Yes", true),
+      option(2, "Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session"),
+      option(3, "Nohift+tab)"),
+    ], hint: "Esc to cancel · Tab to amend",
+  },
+  "codex-command-reopened": {
+    kind: "permission", title: "Would you like to run the following command?", context: ["Environment: local","Reason: Local choice probe; cancel this command","$ Set-Content -LiteralPath 'choice-probe-write.txt' -Value 'local'"],
+    options: [
+      option(1, "Yes, proceed", true, "", "y"),
+      option(2, "Yes, and don't ask again for commands that start with `Set-Content -LiteralPath choice-probe-write.txt -Value local`", false, "", "p"),
+      option(3, "No, and tell Codex what to do differently", false, "", "esc"),
+    ], hint: "Press enter to confirm or esc to cancel",
+  },
+  "codex-mcp-tool-approval": {
+    kind: "permission", title: "Allow the localprobe MCP server to run tool \"choice_probe\"?", context: [],
+    options: [
+      option(1, "Allow", true, "Run the tool and continue"),
+      option(2, "Allow for this session", false, "Run the tool and remember this choice for this session"),
+      option(3, "Always allow", false, "Run the tool and remember this choice for future tool calls"),
+      option(4, "Cancel", false, "Cancel this tool call"),
+    ], hint: "enter to submit | esc to cancel",
+  },
+  "codex-mcp-url": {
+    kind: "permission", title: "Action required", context: ["Server: localprobe","Local MCP choice URL; do not open this link","URL","https://choice-probe.example.invalid/authorize","Complete the requested action in your browser, then return here."],
+    options: [
+      option(1, "Open link", true),
+      option(2, "Back"),
+    ], hint: "tab / ↑ ↓ move · enter select · esc close",
+  },
+  "codex-patch": {
+    kind: "permission", title: "Would you like to make the following edits?", context: ["Description: Apply proposed file edits","Destination: <project-root>\\choice-probe-new.txt"],
+    options: [
+      option(1, "Yes, proceed", true, "", "y"),
+      option(2, "Yes, and don't ask again for these files", false, "", "a"),
+      option(3, "No, and tell Codex what to do differently", false, "", "esc"),
+    ], hint: "Press enter to confirm or esc to cancel",
+  },
+  "codex-permissions": {
+    kind: "permission", title: "Would you like to grant these permissions?", context: ["Environment: local","Reason: Local choice probe; cancel this grant","Permission rule: network"],
+    options: [
+      option(1, "Yes, grant these permissions for this turn", true, "", "y"),
+      option(2, "Yes, grant for this turn with strict auto review", false, "", "r"),
+      option(3, "Yes, grant these permissions for this session", false, "", "a"),
+      option(4, "No, continue without permissions", false, "", "d"),
+    ], hint: "Press enter to confirm or esc to cancel",
+  },
+  "codex-plan-complete": {
+    kind: "permission", title: "Implement this plan?", context: [],
+    options: [
+      option(1, "Yes, implement this plan", true, "Switch to Default and start coding"),
+      option(2, "Yes, clear context and implement", false, "Fresh thread with this plan"),
+      option(3, "No, stay in Plan mode", false, "Continue planning with the model"),
+    ], hint: "enter select · esc back",
+  },
+  "codex-question-last": {
+    kind: "question", title: "Which checks should the local probe include?", context: [],
+    options: [
+      { ...option(1, "Parser", true, "Read screen rows"), role: "answer" },
+      { ...option(2, "UI", false, "Inspect the reading card"), role: "answer" },
+      { ...option(3, "None of the above", false, "Optionally, add details in notes (tab)"), role: "answer" },
+    ], hint: "tab to add notes | enter to submit all | ←/→ to navigate questions | esc to interrupt",
+    question: capturedQuestion("codex", {"position":{"index":2,"count":2},"notes":{"open":false,"text":""}}),
+  },
+  "codex-question-notes": {
+    kind: "question", title: "Which output format should the local probe use?", context: [],
+    options: [
+      { ...option(1, "Text", true, "Plain text"), role: "answer" },
+      { ...option(2, "JSON", false, "Structured text"), role: "answer" },
+      { ...option(3, "None of the above", false, "Optionally, add details in notes (tab)"), role: "answer" },
+    ], hint: "tab or esc to clear notes | enter to submit answer",
+    question: capturedQuestion("codex", {"position":{"index":1,"count":2},"notes":{"open":true,"text":""}}),
+  },
+  "codex-question": {
+    kind: "question", title: "Which output format should the local probe use?", context: [],
+    options: [
+      { ...option(1, "Text", true, "Plain text"), role: "answer" },
+      { ...option(2, "JSON", false, "Structured text"), role: "answer" },
+      { ...option(3, "None of the above", false, "Optionally, add details in notes (tab)"), role: "answer" },
+    ], hint: "tab to add notes | enter to submit answer | ←/→ to navigate questions | esc to interrupt",
+    question: capturedQuestion("codex", {"position":{"index":1,"count":2},"notes":{"open":false,"text":""}}),
+  },
+  "codex-script-command": {
+    kind: "permission", title: "Would you like to run the following command?", context: ["Environment: local","Reason: Create hello.txt in the project?","$ Set-Content -LiteralPath 'hello.txt' -Value 'hi'"],
+    options: [
+      option(1, "Yes, proceed", true, "", "y"),
+      option(2, "Yes, and don't ask again for commands that start with `Set-Content -LiteralPath hello.txt -Value hi`", false, "", "p"),
+      option(3, "No, and tell Codex what to do differently", false, "", "esc"),
+    ], hint: "Press enter to confirm or esc to cancel",
+  },
+  "codex-script-edit": {
+    kind: "permission", title: "Would you like to make the following edits?", context: ["Description: Apply proposed file edits","Destination: <project-root>\\notes.md"],
+    options: [
+      option(1, "Yes, proceed", true, "", "y"),
+      option(2, "Yes, and don't ask again for these files", false, "", "a"),
+      option(3, "No, and tell Codex what to do differently", false, "", "esc"),
+    ], hint: "Press enter to confirm or esc to cancel",
+  },
+};
+
 const expected = {
+  "claude-investigation-api-key": { ...emptyScreen, choice: capturedChoices["claude-api-key"] },
+  "claude-investigation-bash-amend": capturedClaude({ choice: capturedChoices["claude-bash-amend"] }),
+  "claude-investigation-bash": capturedClaude({ choice: capturedChoices["claude-bash"] }),
+  "claude-investigation-edit": capturedClaude({ choice: capturedChoices["claude-edit"] }),
+  "claude-investigation-mcp-form-field": capturedClaude({ waiting: {"title":"MCP server “localprobe” requests your input"} }),
+  "claude-investigation-mcp-form-waiting": capturedClaude({ waiting: {"title":"MCP server “localprobe” requests your input"} }),
+  "claude-investigation-mcp-form": capturedClaude({ waiting: {"title":"MCP server “localprobe” requests your input"} }),
+  "claude-investigation-mcp-url-waiting": capturedClaude({ choice: capturedChoices["claude-mcp-url-waiting"] }),
+  "claude-investigation-mcp-url": capturedClaude({ choice: capturedChoices["claude-mcp-url-waiting"] }),
+  "claude-investigation-mcp": capturedClaude({ choice: capturedChoices["claude-mcp"] }),
+  "claude-investigation-multi": capturedClaude({ choice: capturedChoices["claude-multi"] }),
+  "claude-investigation-plan-waiting": capturedClaude({ choice: capturedChoices["claude-plan-waiting"] }),
+  "claude-investigation-plan": capturedClaude({ choice: capturedChoices["claude-plan-waiting"] }),
+  "claude-investigation-review-waiting": capturedClaude({ choice: capturedChoices["claude-review-waiting"] }),
+  "claude-investigation-review": capturedClaude({ choice: capturedChoices["claude-review-waiting"] }),
+  "claude-investigation-single-input": capturedClaude({ choice: capturedChoices["claude-single-input"] }),
+  "claude-investigation-single-reopened": capturedClaude({ choice: capturedChoices["claude-single-input"] }),
+  "claude-investigation-single": capturedClaude({ choice: capturedChoices["claude-single"] }),
+  "claude-investigation-tabs-second": capturedClaude({ choice: capturedChoices["claude-tabs-second"] }),
+  "claude-investigation-tabs": capturedClaude({ choice: capturedChoices["claude-tabs"] }),
+  "claude-investigation-tall": { ...emptyScreen, waiting: {"title":null} },
+  "claude-investigation-trust": { ...emptyScreen, choice: capturedChoices["claude-trust"] },
+  "claude-investigation-web": capturedClaude({ choice: capturedChoices["claude-web"] }),
+  "claude-investigation-write": capturedClaude({ choice: capturedChoices["claude-write"] }),
+  "codex-investigation-command-reopened": capturedCodex({ choice: capturedChoices["codex-command-reopened"] }),
+  "codex-investigation-command": capturedCodex({ choice: capturedChoices["codex-command-reopened"] }),
+  "codex-investigation-mcp-form": capturedCodex({ waiting: {"title":"Local MCP choice form"} }),
+  "codex-investigation-mcp-tool-approval": capturedCodex({ choice: capturedChoices["codex-mcp-tool-approval"] }),
+  "codex-investigation-mcp-url": capturedCodex({ choice: capturedChoices["codex-mcp-url"] }),
+  "codex-investigation-patch": capturedCodex({ choice: capturedChoices["codex-patch"] }),
+  "codex-investigation-permissions": capturedCodex({ choice: capturedChoices["codex-permissions"] }),
+  "codex-investigation-plan-complete": capturedCodex({ choice: capturedChoices["codex-plan-complete"] }),
+  "codex-investigation-question-last": capturedCodex({ choice: capturedChoices["codex-question-last"] }),
+  "codex-investigation-question-notes": capturedCodex({ choice: capturedChoices["codex-question-notes"] }),
+  "codex-investigation-question": capturedCodex({ choice: capturedChoices["codex-question"] }),
+  "codex-investigation-script-command": capturedCodex({ choice: capturedChoices["codex-script-command"], banner: { ...capturedCodexBanner, directory: "~\\Desktop\\agentrix\\.test-output\\codex-approval-1793373092906\\approval" } }),
+  "codex-investigation-script-edit": capturedCodex({ choice: capturedChoices["codex-script-edit"], banner: { ...capturedCodexBanner, directory: "~\\Desktop\\agentrix\\.test-output\\codex-approval-1793373092906\\approval" } }),
   'codex-bang-typed': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', model: 'GPT-6-Sol', effort: 'default' }, status: { ...emptyStatus, model: 'GPT-6-Sol', effort: 'default', notes: ['Shell mode'] } },
   'claude-bang-typed': { ...emptyScreen, banner: { ...claudeBanner, version: '2.1.302', model: null, effort: null, plan: null } },
   'claude-bang-empty-typed': { ...emptyScreen, banner: { ...claudeBanner, version: '2.1.302', model: null, effort: null, plan: null } },
@@ -43,8 +316,8 @@ const expected = {
   'claude-bang-multiline': { ...emptyScreen, banner: { ...claudeBanner, version: '2.1.302', model: null, effort: null, plan: null }, status: { ...emptyStatus, mode: 'manual mode on' } },
   'claude-bang-empty-model-working': { ...emptyScreen, banner: { ...claudeBanner, version: '2.1.302', model: null, effort: null, plan: null }, status: { ...emptyStatus, mode: 'manual mode on' } },
   'claude-2-1-302-start': { ...emptyScreen, banner: { product: 'Claude Code', version: '2.1.302', model: null, effort: null, plan: null, directory: 'C:\\work\\demo-app' }, status: { ...emptyStatus, mode: 'manual mode on' } },
-  'claude-2-1-302-status': emptyScreen,
-  'claude-2-1-302-config': emptyScreen,
+  'claude-2-1-302-status': { ...emptyScreen, waiting: { title: null } },
+  'claude-2-1-302-config': { ...emptyScreen, waiting: { title: null } },
   'codex-0-163-status': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', model: 'GPT-6-Sol', effort: 'default', directory: null }, status: freshStatus },
   'codex-0-163-model': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', directory: null }, choice: {
     title: 'Select Model and Effort', kind: 'menu', context: [], hint: 'enter select · esc back', options: [
@@ -58,8 +331,8 @@ const expected = {
       option(8, 'GPT-5.5', false, 'Legacy coding model.'),
     ],
   } },
-  'codex-0-163-permissions': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', directory: null } },
-  'codex-0-163-plugins': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', directory: null } },
+  'codex-0-163-permissions': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', directory: null }, waiting: { title: null } },
+  'codex-0-163-plugins': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', directory: null }, waiting: { title: null } },
   'codex-0-163-memories': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', model: 'GPT-6-Sol', effort: 'default', directory: null }, status: freshStatus, choice: {
     title: 'Enable memories?', kind: 'menu', context: ['Memories are disabled in this TUI session.'], hint: 'enter select · esc back', options: [
       option(1, 'Yes, enable', true, 'Save on the server for new threads without changing this thread'),
@@ -152,9 +425,9 @@ const expected = {
   // cli-panel.test.cjs): no choice, nothing over it.
   'claude-wrapped-draft': { ...emptyScreen, banner: { ...claudeBanner, version: '2.1.301', model: null, effort: null, plan: null, directory: '~\\work\\demo-app' } },
   // Claude Code 2.1.302's /usage during a round: the capture has no banner, input footer or choice.
-  'claude-usage-working': emptyScreen,
+  'claude-usage-working': { ...emptyScreen, waiting: { title: null } },
   // Claude Code 2.1.302's /config during a round: settings and its filter hint are not an agent choice or footer.
-  'claude-config-working': emptyScreen,
+  'claude-config-working': { ...emptyScreen, waiting: { title: null } },
   // Codex 0.162's resume list, drawn by "codex resume", by /resume inside a conversation, with nothing to resume, and
   // as Codex draws it on Linux.
   'codex-resume-start': resumeScreen([['整理发布说明', '2s ago'], ['修复阅读视图的滚动', '2s ago'], ['合并远端主分支', '2s ago']], 'new'),
@@ -169,7 +442,7 @@ const expected = {
   } }),
   'codex-memories-dialog-before': codexScreen({ banner: freshBanner, status: freshStatus }),
   // /plugins takes the input's place: its list's cursor row is no input, and its key hints are no footer.
-  'codex-plugins-view': emptyScreen,
+  'codex-plugins-view': { ...emptyScreen, waiting: { title: null } },
   'codex-plugins-view-before': codexScreen({ banner: freshBanner, status: freshStatus }),
   'codex-resume-linux': resumeScreen([['合并远端主分支', '3h ago'], ['修复阅读视图', '10h ago'], ['整理发布说明', '11h ago'], ['继承 Claude 日志', '2d ago'], ['查找 resume 记忆', '20d ago'],
     ['合并主分支', '26d ago'], ['删除显示和系统监控功能', '28d ago'], ['删除所有 mcp、plugin 和 skill', '35d ago']], 'new'),

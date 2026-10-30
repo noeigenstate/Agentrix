@@ -41,7 +41,7 @@ try:
         kind=sys.argv[2]
         if kind not in states: sys.exit(0)
         hook=json.load(sys.stdin)
-        if kind=="notify" and hook.get("notification_type") not in ("permission_prompt","elicitation_dialog"): sys.exit(0)
+        if kind=="notify" and hook.get("notification_type") not in ("permission_prompt","elicitation_dialog","elicitation_url_dialog"): sys.exit(0)
         identity=str(hook.get("session_id") or "")
         if not identity: sys.exit(0)
         event.update(type="agent-activity",agent="claude",state=states[kind],sessionId=identity,

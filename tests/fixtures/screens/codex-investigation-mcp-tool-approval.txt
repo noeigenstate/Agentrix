@@ -1,0 +1,51 @@
+
+  >_ OpenAI Codex (v0.166.0)
+     ~\Desktop\agentrix\.test-output\slash-live-project
+
+
+› CHOICE_PROBE mcp
+
+
+• Calling localprobe.choice_probe
+    + Show details
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Field 1/1
+  Allow the localprobe MCP server to run tool "choice_probe"?
+  › 1. Allow                   Run the tool and continue
+    2. Allow for this session  Run the tool and remember this choice for this session
+    3. Always allow            Run the tool and remember this choice for future tool calls
+    4. Cancel                  Cancel this tool call
+  enter to submit | esc to cancel
+

@@ -58,7 +58,7 @@ export function cliInputDraft(agent: ScreenAgent, rows: string[], screen: AgentS
 
 // Busy agents can take queued messages; dialogs and pickers own the keys even when the input stays visible.
 export function cliDialogShown(agent: ScreenAgent, rows: string[], screen: AgentScreen): boolean {
-  if (screen.choice || screen.overlay !== 'none') return true;
+  if (screen.choice || screen.waiting || screen.overlay !== 'none') return true;
   if (agent !== 'codex') return false;
   const input = cliInputArea(agent, rows, screen);
   return !!codexDialog(rows) || !!input && codexPickerBelow(rows, input.row);

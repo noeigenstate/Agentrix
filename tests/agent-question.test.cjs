@@ -55,6 +55,37 @@ test('Claude review page lists the answers before Submit answers / Cancel', () =
   assert.deepEqual(review.options.map(item => [item.label, item.selected]), [['Submit answers', true], ['Cancel', false]]);
 });
 
+test('Claude Review accepts the real unanswered warning with zero or some answers, and wrapped summaries', () => {
+  const rows = read('claude-question-review');
+  const heading = rows.findIndex(row => row.trim() === 'Review your answers');
+  const ready = rows.findIndex(row => row.trim() === 'Ready to submit your answers?');
+  for (const summaries of [[], [' ● First question', '   continued question', '   → First answer', '     continued answer']]) {
+    const screen = parseAgentScreen('claude', [...rows.slice(0, heading + 1), '', '⚠ You have not answered all questions', '', ...summaries, '', ...rows.slice(ready)]);
+    assert.equal(screen.choice?.kind, 'question');
+    assert.equal(screen.waiting, undefined);
+    assert.deepEqual(screen.choice.context, ['⚠ You have not answered all questions']);
+    assert.deepEqual(screen.choice.question.review, summaries.length ? [{ question: 'First question continued question', answer: 'First answer continued answer' }] : []);
+    assert.deepEqual(screen.choice.options.map(item => item.label), ['Submit answers', 'Cancel']);
+  }
+});
+
+test('Claude bundle checkbox, tick and pointer variants keep tabs and selections', () => {
+  const rows = read('claude-question-multi-checked');
+  // Claude 2.1.314's symbol tables: U+2610/2612/2714 and [ ]/[×]/U+221A with pointer >.
+  const fallback = rows.map(row => row.replaceAll('☐', '[ ]').replaceAll('☒', '[×]').replaceAll('✔', '√').replaceAll('❯', '>'));
+  assert.deepEqual(parseAgentScreen('claude', fallback).choice, parse('claude-question-multi-checked'));
+});
+
+test('a clipped Claude tab bar retains a complete visible question, but missing option one waits', () => {
+  const rows = read('claude-question');
+  const heading = rows.findIndex(row => row.trim() === '回收站怎么处理？');
+  assert.deepEqual(parseAgentScreen('claude', rows.slice(heading)).choice, parse('claude-question'));
+  const second = rows.findIndex(row => /^\s*2\./.test(row));
+  const clipped = parseAgentScreen('claude', rows.slice(second));
+  assert.equal(clipped.choice, null);
+  assert.deepEqual(clipped.waiting, { title: null });
+});
+
 test('Codex questions: position, two-column options, the last question and open notes', () => {
   assert.deepEqual(parse('codex-question'), {
     kind: 'question', title: '回收站怎么处理？', context: [], hint: 'tab to add notes | enter to submit answer | ←/→ to navigate questions | esc to interrupt',

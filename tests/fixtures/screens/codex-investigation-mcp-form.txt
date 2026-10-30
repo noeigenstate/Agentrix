@@ -1,0 +1,20 @@
+
+  >_ OpenAI Codex (v0.166.0)
+     ~\Desktop\agentrix\.test-output\slash-live-project
+
+
+› CHOICE_PROBE mcp-form
+
+
+• Calling localprobe.choice_probe
+    + Show details
+
+
+  Field 1/2 (1 required unanswered)
+  Local MCP choice form
+
+  Include optional details
+  › 1. True
+    2. False
+  enter to submit answer | ←/→ to navigate fields | esc to cancel
+

@@ -1,0 +1,51 @@
+
+  >_ OpenAI Codex (v0.166.0)
+     ~\Desktop\agentrix\.test-output\slash-live-project
+
+
+› CHOICE_PROBE mcp-url
+
+
+• Calling localprobe.choice_probe
+    + Show details
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Action required
+  Server: localprobe
+
+  Local MCP choice URL; do not open this link
+
+  URL
+  https://choice-probe.example.invalid/authorize
+
+  Complete the requested action in your browser, then return here.
+
+
+› 1. Open link
+  2. Back
+  tab / ↑ ↓ move · enter select · esc close

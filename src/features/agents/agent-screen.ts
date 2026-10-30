@@ -5,7 +5,7 @@ const rule = (row: string) => /^[─╌]{2,}$/.test(row.trim());
 const optionRow = (row: string) => /^(\s*)([❯›>↓↑]?\s*)(\d+)\.\s+(.+)$/.exec(row);
 const inputRow = (agent: ScreenAgent, row: string) =>
   (agent === 'claude' ? /^\s*❯(?:\s|$)/ : /^\s*›(?:\s|$)/).test(row) && !optionRow(row);
-const hintRow = (row: string) => /^(?:press\s+)?(?:enter|esc)\b.*(?:cancel|confirm|select|back|default|continue|skip|exit|close)/i.test(row.trim());
+const hintRow = (row: string) => /^(?:press\s+)?(?:enter|esc|tab)\b.*(?:cancel|confirm|select|submit|back|default|continue|skip|exit|close)/i.test(row.trim());
 const menuExtra = (row: string) => /^(?:…\s*\+\d+ models|●\s+\S+ effort\b.*to adjust|Learn more:\s+\S+)$/.test(row.trim());
 
 // A terminal gives CJK and other wide characters two cells: a row's columns are counted in cells, not characters.
@@ -51,7 +51,7 @@ export function codexDialog(rows: string[]): string[] | null {
 }
 // Codex asks "Would you like to run the following command?", "…make the following edits?", "…grant these permissions?"
 // and "<server> needs your approval."; Claude "Do you want to create hello.txt?".
-const permissionTitle = (row: string) => /^(?:Do you want\b|Would you like to\b|Allow\b)|\bneeds your approval\.?$/i.test(row);
+const permissionTitle = (row: string) => /^(?:Do you want\b|Would you like to\b|Allow\b)|\bneeds your approval\.?$|^(?:Exit plan mode\?|Implement this plan\?|Action required|MCP server .+ wants to open a URL)$/i.test(row);
 const choiceTitle = (row: string) => permissionTitle(row) || /^Select\b/i.test(row);
 
 // Claude surrounds its composer with rules; Codex puts its footer below the last composer.
@@ -372,6 +372,54 @@ function parseResumePicker(rows: string[]): ScreenChoice | null {
     escape: escape && /start new/i.test(escape) ? 'new' : escape && /exit|back|close/i.test(escape) ? 'back' : null };
 }
 
+// Claude's URL elicitation uses a horizontal Accept / Decline row. This is an informative permission card;
+// its positions describe the screen and never authorize a PTY response.
+function claudeUrlChoice(rows: string[]): ScreenChoice | null {
+  let head = rows.length - 1;
+  while (head >= 0 && !/^MCP server .+ wants to open a URL$/.test(rows[head].trim())) head--;
+  if (head < 0) return null;
+  let end = rows.length - 1;
+  while (end > head && !rows[end].trim()) end--;
+  if (!/^Esc to cancel · ←\/→ to switch$/i.test(rows[end].trim())) return null;
+  const at = rows.findIndex((row, index) => index > head && /^\s*(?:❯\s+)?Accept\s{2,}(?:❯\s+)?Decline\s*$/.test(row));
+  if (at < 0 || rows.slice(at + 1, end).some(row => row.trim())) return null;
+  const selected = /^\s*❯/.test(rows[at]) ? 0 : /\s❯\s+Decline/.test(rows[at]) ? 1 : -1;
+  if (selected < 0) return null;
+  return { kind: 'permission', title: rows[head].trim(), context: rows.slice(head + 1, at).map(row => row.trim()).filter(Boolean),
+    options: ['Accept', 'Decline'].map((label, index) => ({ number: index + 1, label, detail: '', hotkey: null, selected: index === selected })),
+    hint: rows[end].trim() };
+}
+
+// Only the live dialog's own closing controls establish waiting. Quoted hints above a returned input, an old
+// question followed by an answer, the working footer ("esc to interrupt") and silence cannot establish it.
+function parseWaiting(agent: ScreenAgent, rows: string[], dialog: string[] | null): AgentScreen['waiting'] {
+  const content = dialog ?? rows;
+  let end = content.length - 1;
+  while (end >= 0 && !content[end].trim()) end--;
+  if (end < 0) return null;
+  const hint = content[end].trim();
+  const controls = /^(?:(?:press\s+)?(?:enter|esc|tab|space)\b|[←→↑↓]|Type to filter\b)/i.test(hint) &&
+    /\b(?:select|submit|cancel|confirm|navigate|switch|close|back)\b/i.test(hint);
+  let head = -1;
+  for (let index = end; index >= 0; index--) {
+    const text = content[index].trim();
+    if (permissionTitle(text) || /^Review your answers$|^Ready to submit your answers\?$|^MCP server .+ requests your input$|^(?:Question|Field) \d+\/\d+\b/.test(text)) { head = index; break; }
+    if (inputRow(agent, content[index]) && !/^\s*[❯›>]\s+(?:[*◯◉]|Accept\b)/.test(content[index])) break;
+    if (conversationRow(content[index])) break;
+  }
+  if (head >= 0 && (controls || content.slice(head + 1, end + 1).some(row => /^\s*[❯›>]\s*(?:\d+\.|[*◯◉]|Accept\b)/.test(row)))) {
+    let title = content[head].trim();
+    if (/^(?:Question|Field) \d+\/\d+\b/.test(title)) title = content.slice(head + 1, end).find(row => row.trim())?.trim() ?? title;
+    return { title };
+  }
+  if (!controls) return null;
+  // One isolated Escape hint can occur in prose. A frame, a selector, or several key hints identify a dialog.
+  const framed = content.some(row => rule(row) || /^\s*▔{8,}/.test(row));
+  const selector = content.some(row => /^\s*[❯›>]\s*(?:\d+\.|[◯◉]|\*)/.test(row));
+  if (!dialog && !framed && !selector && !/[·|]|↑|↓/.test(hint)) return null;
+  return { title: dialog?.find(row => row.trim())?.trim() ?? null };
+}
+
 export function parseAgentScreen(agent: ScreenAgent, rows: string[]): AgentScreen {
   // Retain leading/column whitespace for option alignment; normalize CRLF and terminal padding.
   const normalized = rows.map(row => row.replace(/[\s\r]+$/, ''));
@@ -384,10 +432,12 @@ export function parseAgentScreen(agent: ScreenAgent, rows: string[]): AgentScree
   let choice = picker;
   if (!choice && overlay === 'none') {
     choice = dialog ? parseChoice(agent, dialog)
-      : parseQuestion(agent, normalized) ?? parseChoice(agent, normalized) ?? (agent === 'claude' ? looseMenu(normalized) : null);
+      : parseQuestion(agent, normalized) ?? (agent === 'claude' ? claudeUrlChoice(normalized) : null) ??
+        parseChoice(agent, normalized) ?? (agent === 'claude' ? looseMenu(normalized) : null);
   }
+  const waiting = !choice && overlay === 'none' ? parseWaiting(agent, normalized, dialog) : null;
   return { banner: parseBanner(agent, normalized, status), status,
-    choice, overlay: picker ? 'none' : overlay };
+    choice, overlay: picker ? 'none' : overlay, ...(waiting ? { waiting } : {}) };
 }
 
 // Display equivalence only: identical text is NOT a permission request identity (see approval-action.ts).
