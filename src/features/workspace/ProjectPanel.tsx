@@ -86,18 +86,16 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
     <span key={signalKey} className="panel-signal" aria-hidden="true" />
     {/* Where next/previous project landed, over the card itself (the screen-reader announcement is ProjectSwitchHud). */}
     {navTarget && <div key={`hud:${navTarget}`} className="panel-nav-hud" aria-hidden="true">{project.image && <img className="project-image project-switch-image" src={project.image} alt="" draggable={false} data-audit-ignore />}<span className="project-switch-index">{String(index + 1).padStart(2, '0')}</span><b>{project.name}</b>{navPosition && <small>{navPosition}</small>}</div>}
-    <header className="panel-header" title={focused ? undefined : t('点击进入会话，按住标题栏拖动排序')} onClick={event => {
+    <header className="panel-header" title={focused ? undefined : t('进入会话，按住可拖动')} onClick={event => {
       if (!focused && event.button === 0 && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && !(event.target as Element).closest('button, [role="menu"]')) onFocus(project.id);
     }}>
       {project.image ? <><img className="project-image panel-project-image" src={project.image} alt="" draggable={false} data-audit-ignore /><span className="panel-index panel-project-image-fallback">{String(index + 1).padStart(2, '0')}</span></> : <span className="panel-index">{String(index + 1).padStart(2, '0')}</span>}
-      <button className="panel-name" onClick={() => !focused && onFocus(project.id)} aria-label={focused ? undefined : t('进入 {name}', { name: project.name })} title={project.kind === 'ssh' ? `${project.ssh?.host}:${project.path}` : project.path}>
+      <button className="panel-name" onClick={() => !focused && onFocus(project.id)} aria-label={focused ? undefined : t('进入 {name}', { name: project.name })} title={focused ? (project.kind === 'ssh' ? `${project.ssh?.host}:${project.path}` : project.path) : undefined}>
         <span>{project.name}</span>
         {project.branch && <small><GitBranch size={11} />{project.branch}</small>}
         {project.kind === 'ssh' && <small className="ssh-project-label"><Globe size={11} />{project.ssh?.host}</small>}
       </button>
-      {!!meta && <span className="panel-meta" title={project.path}>{meta}</span>}
-      {/* Shown while the pointer is over the header: clicking anywhere on it enters; the name button carries the accessible action. */}
-      {!focused && <button type="button" className="panel-enter" tabIndex={-1} aria-hidden="true" onClick={() => onFocus(project.id)}><span>{t('进入')}</span><ArrowRight size={13} weight="bold" /></button>}
+      {!!meta && <span className="panel-meta" title={focused ? project.path : undefined}>{meta}</span>}
       {showHeaderActions && (!!project.unread && !focused && !working
         ? <button type="button" className={`${badgeClass} status-button`} title={status} onClick={() => onFocus(project.id)} aria-label={t('查看 {name} 的完成结果', { name: project.name })}>{badge}</button>
         : <span className={badgeClass} title={status}>{badge}</span>)}

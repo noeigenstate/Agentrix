@@ -67,7 +67,7 @@
   "终端已退出": "Terminal exited",
   "尚未启动": "Not started",
   "{time}完成": "finished {time}",
-  "点击进入会话，按住标题栏拖动排序": "Click to open the session; drag the title to reorder",
+  "进入会话，按住可拖动": "Open the session; hold to drag",
   "查看 {name} 的完成结果": "View the result of {name}",
   "重新启动": "Restart",
   "重启": "Restart",
