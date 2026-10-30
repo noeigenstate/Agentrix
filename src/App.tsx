@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { SquaresFour, FolderSimplePlus, MagnifyingGlass, X, Minus, Square, ListChecks, CheckCircle, Info, Circle, Stamp, CirclesFour } from '@phosphor-icons/react';
-import type { AgentsState, AppUpdateState, Project, ProjectLocation, Result, Settings, SSHAuthPrompt, Workspace } from './shared/types';
+import type { AgentsState, AppUpdateState, MenuCommand, Project, ProjectLocation, Result, Settings, SSHAuthPrompt, Workspace } from './shared/types';
 import { ProjectSwitchHud } from './features/workspace/ProjectSwitchHud';
 import { ProjectExplorer } from './features/files/ProjectExplorer';
 import { AddProjectDialog } from './features/workspace/AddProjectDialog';
@@ -12,14 +12,15 @@ import { useProjectFocusMotion } from './features/workspace/useProjectFocusMotio
 import { useWorkspaceAppearance } from './features/workspace/useWorkspaceAppearance';
 import { VoiceOverlay } from './features/voice/VoiceButton';
 import { applyLanguage, t } from './shared/i18n';
-import { actionFor, applyShortcuts, editingKeyInField, shortcut } from './features/shortcuts/shortcuts';
+import { isMac } from './shared/platform';
+import { actionFor, applyShortcuts, editingKeyInField, shortcut, type ShortcutAction } from './features/shortcuts/shortcuts';
 import { gridColumns, gridNeighbor } from './features/workspace/grid-navigation';
 import { quickDictation } from './features/voice/voice-input';
 import { UsageGuide } from './features/guide/UsageGuide';
 import { GuideTour } from './features/guide/GuideTour';
 import { AppMenu } from './features/titlebar/AppMenu';
 import { IconButton } from './shared/IconButton';
-import { ModeSwitch } from './features/reading/ModeSwitch';
+import { ModeSwitch, useReadingSwitch } from './features/reading/ModeSwitch';
 import { showPopup, usePopup } from './features/files/file-popup';
 import { ProjectPanel } from './features/workspace/ProjectPanel';
 import { SettingsDialog } from './features/settings/SettingsDialog';
@@ -51,6 +52,7 @@ function focusOverviewProject(id: string) {
 }
 
 const NO_PROJECTS: Project[] = [];
+const dialogOpen = () => !!document.querySelector('dialog[open], .tour-layer');
 
 export function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
@@ -191,63 +193,90 @@ export function App() {
   useEffect(() => {
     if (focusedId && workspace && !workspace.projects.some(p => p.id === focusedId)) returnToGrid();
   }, [workspace, focusedId, returnToGrid]);
+  const currentProject = useCallback(() => focusedId || lastProject.current || document.activeElement?.closest<HTMLElement>('[data-project-id]')?.dataset.projectId, [focusedId]);
+  // What a shortcut does; the app menu's commands of the same name run it too.
+  const runAction = useCallback((action: ShortcutAction) => {
+    if (action === 'search' && !focusedId) { setSearchOpen(true); requestAnimationFrame(() => queryInput.current?.focus()); }
+    else if (action === 'addProject') setAddOpen(true);
+    else if (action === 'voice') void quickDictation(reportError);
+    else if (action === 'overview') void returnToGrid();
+    else if (action === 'decisions') setView('decisions');
+    else if (action === 'explorer' && focusedId) perform(api.settings({ explorerCollapsed: !workspace?.settings.explorerCollapsed }));
+    else if (action === 'settings') setSettingsOpen(true);
+    else if (action === 'newTerminal') {
+      // A new split in the current project, ready to type in.
+      const id = currentProject();
+      if (!id) { reportError(t('先点一下要分屏的项目，再按 {key}。', { key: shortcut('newTerminal') })); return; }
+      void (async () => {
+        if (!focusedId && !await focusProject(id)) return;
+        const terminal = await perform(api.addTerminal(id));
+        if (terminal) focusTerminalWhenReady(terminal);
+      })();
+    }
+    else if (action === 'removeProject') {
+      const id = currentProject();
+      if (!id) { reportError(t('先点一下要移除的项目，再按 {key}。', { key: shortcut('removeProject') })); return; }
+      void perform(api.removeProject(id, true));
+    }
+    else if (action === 'maximize') { if (focusedId) void returnToGrid(); else { const id = currentProject(); if (id) void focusProject(id); } }
+    else if (action === 'fullscreen') api.toggleFullScreen();
+    else if (action === 'nextProject' || action === 'previousProject' || action === 'projectAbove' || action === 'projectBelow') {
+      // The project beside this one where the cards sit in the grid (Ctrl+Shift with an arrow by default).
+      const direction = ({ nextProject: 'right', previousProject: 'left', projectAbove: 'up', projectBelow: 'down' } as const)[action];
+      const next = gridNeighbor(navigation.current, currentProject(), direction);
+      if (!next) return;
+      // Expanded: preserve the editor guard. Overview: focus the card without expanding it.
+      if (focusedId) void focusProject(next).then(accepted => {
+        if (!accepted) return;
+        showProjectSwitch(next);
+        requestAnimationFrame(() => {
+          if (lastProject.current === next) document.querySelector<HTMLElement>(`[data-project-id="${CSS.escape(next)}"]`)?.scrollIntoView({ block: 'nearest' });
+        });
+      });
+      else { focusOverviewProject(next); showProjectSwitch(next); }
+    }
+  }, [focusedId, currentProject, returnToGrid, focusProject, perform, reportError, showProjectSwitch, workspace?.settings.explorerCollapsed]);
   useEffect(() => {
     // App shortcuts (configurable in settings). In text boxes and the editor, standard editing keys such as
     // Ctrl+A keep their meaning; in terminals and elsewhere the shortcut wins, before xterm sees the key.
     // While a dialog is open (including recording a new shortcut) nothing is intercepted.
     const handler = (event: KeyboardEvent) => {
       const action = actionFor(event);
-      if (!action || editingKeyInField(event) || document.querySelector('dialog[open], .tour-layer')) return;
+      if (!action || editingKeyInField(event) || dialogOpen()) return;
       event.preventDefault(); event.stopPropagation();
-      if (event.repeat) return;
-      if (action === 'search' && !focusedId) { setSearchOpen(true); requestAnimationFrame(() => queryInput.current?.focus()); }
-      else if (action === 'addProject') setAddOpen(true);
-      else if (action === 'voice') void quickDictation(reportError);
-      else if (action === 'overview') void returnToGrid();
-      else if (action === 'decisions') setView('decisions');
-      else if (action === 'explorer' && focusedId) perform(api.settings({ explorerCollapsed: !workspace?.settings.explorerCollapsed }));
-      else if (action === 'settings') setSettingsOpen(true);
-      else if (action === 'newTerminal') {
-        // A new split in the current project, ready to type in.
-        const id = currentProject();
-        if (!id) { reportError(t('先点一下要分屏的项目，再按 {key}。', { key: shortcut('newTerminal') })); return; }
-        void (async () => {
-          if (!focusedId && !await focusProject(id)) return;
-          const terminal = await perform(api.addTerminal(id));
-          if (terminal) focusTerminalWhenReady(terminal);
-        })();
-      }
-      else if (action === 'removeProject') {
-        const id = currentProject();
-        if (!id) { reportError(t('先点一下要移除的项目，再按 {key}。', { key: shortcut('removeProject') })); return; }
-        void perform(api.removeProject(id, true));
-      }
-      else if (action === 'maximize') { if (focusedId) void returnToGrid(); else { const id = currentProject(); if (id) void focusProject(id); } }
-      else if (action === 'fullscreen') api.toggleFullScreen();
-      else if (action === 'nextProject' || action === 'previousProject' || action === 'projectAbove' || action === 'projectBelow') {
-        // The project beside this one where the cards sit in the grid (Ctrl+Shift with an arrow by default).
-        const direction = ({ nextProject: 'right', previousProject: 'left', projectAbove: 'up', projectBelow: 'down' } as const)[action];
-        const next = gridNeighbor(navigation.current, currentProject(), direction);
-        if (!next) return;
-        // Expanded: preserve the editor guard. Overview: focus the card without expanding it.
-        if (focusedId) void focusProject(next).then(accepted => {
-          if (!accepted) return;
-          showProjectSwitch(next);
-          requestAnimationFrame(() => {
-            if (lastProject.current === next) document.querySelector<HTMLElement>(`[data-project-id="${CSS.escape(next)}"]`)?.scrollIntoView({ block: 'nearest' });
-          });
-        });
-        else { focusOverviewProject(next); showProjectSwitch(next); }
-      }
+      if (!event.repeat) runAction(action);
     };
-    const currentProject = () => focusedId || lastProject.current || document.activeElement?.closest<HTMLElement>('[data-project-id]')?.dataset.projectId;
     document.addEventListener('keydown', handler, true);
     return () => document.removeEventListener('keydown', handler, true);
-  }, [focusedId, returnToGrid, focusProject, perform, reportError, showProjectSwitch, workspace?.settings.explorerCollapsed]);
+  }, [runAction]);
 
   // Decisions across every project, for the home page, the count beside its tab and a notice when one arrives.
   const { decisions, snoozed } = useDecisions(workspace?.projects ?? NO_PROJECTS);
   const shownView = view ?? workspace?.settings.startView ?? 'workspace';
+  const focus = workspace?.projects.find(p => p.id === focusedId);
+  const installUpdate = useCallback(() => { perform(api.installUpdate()); }, [perform]);
+
+  // macOS shows the app's menus in the system menu bar: tell it what is on screen, and run what it sends back.
+  const activityPane = workspace?.settings.activityPane ?? false;
+  const canReturn = shownView !== 'workspace' || !!focusedId;
+  const readingSwitch = useReadingSwitch(focus);
+  const readingTerminal = readingSwitch?.terminalId;
+  const reading = shownView === 'workspace' && !previewFile ? readingSwitch?.reading ?? null : null;
+  const focused = !!focusedId;
+  useEffect(() => {
+    if (isMac && api) api.setMenuState({ view: shownView, decisions: decisions.length, canReturn, focused, activityPane, reading });
+  }, [shownView, decisions.length, canReturn, focused, activityPane, reading]);
+  useEffect(() => {
+    if (!isMac || !api) return;
+    return api.onMenuCommand((command: MenuCommand) => {
+      if (command === 'installUpdate') return installUpdate();
+      if (dialogOpen()) return;
+      if (command === 'workspace') setView('workspace');
+      else if (command === 'activityPane') perform(api.settings({ activityPane: !activityPane }));
+      else if (command === 'reading' || command === 'terminal') { if (readingTerminal) setReading(readingTerminal, command === 'reading'); }
+      else runAction(command);
+    });
+  }, [installUpdate, perform, activityPane, readingTerminal, runAction]);
   const seenDecisions = useRef<Set<string> | null>(null);
   useEffect(() => {
     const ids = new Set(decisions.map(decision => decision.id));
@@ -287,19 +316,21 @@ export function App() {
   const visibleIds = new Set(visible.map(p => p.id));
   const columns = gridColumns(visible.length);
   const rows = Math.max(1, Math.ceil(visible.length / columns));
-  const focus = projects.find(p => p.id === focusedId);
   navigation.current = (focusedId ? orderedProjects : orderedProjects.filter(project => visibleIds.has(project.id))).map(project => project.id);
   const switchProject = projectSwitch && projectRecords.get(projectSwitch.id);
   const switchPosition = projectSwitch ? navigation.current.indexOf(projectSwitch.id) + 1 : 0;
   const setPreference = (patch: Partial<Settings>) => { perform(api.settings(patch)); };
-  const installUpdate = () => { perform(api.installUpdate()); };
   const closeGuide = () => { setGuide(null); if (settings.guideVersion !== workspace.version) setPreference({ guideVersion: workspace.version }); };
 
-  return <div ref={focusMotionRoot} className={`app-shell ${focusedId ? 'focus-mode' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${fullScreen && workspace.autoHideTitlebar ? 'titlebar-auto' : ''}`} style={{ '--terminal-font-size': `${settings.fontSize}px` } as CSSProperties}>
-    {fullScreen && workspace.autoHideTitlebar && <div className="titlebar-reveal" aria-hidden="true" />}
-    <div className="titlebar">
-      <AppMenu fullScreen={fullScreen} canReturn={shownView !== 'workspace' || !!focusedId} updateReady={updates?.status === 'ready'}
-        onAddProject={() => setAddOpen(true)} onReturn={returnToGrid} onFullScreen={() => api.toggleFullScreen()} onSettings={() => setSettingsOpen(true)} onInstallUpdate={installUpdate} />
+  const searchShown = !focusedId && (searchOpen || !!query);
+  // macOS full screen has the system menu bar and no title bar of its own; it floats over the content only while the search box is in use.
+  const macFullScreen = isMac && fullScreen;
+  const autoHideTitlebar = fullScreen && !isMac && workspace.autoHideTitlebar;
+  return <div ref={focusMotionRoot} className={`app-shell ${focusedId ? 'focus-mode' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${autoHideTitlebar ? 'titlebar-auto' : ''} ${macFullScreen ? 'titlebar-bare' : ''}`} style={{ '--terminal-font-size': `${settings.fontSize}px` } as CSSProperties}>
+    {autoHideTitlebar && <div className="titlebar-reveal" aria-hidden="true" />}
+    {(!macFullScreen || searchShown) && <div className="titlebar">
+      {!isMac && <AppMenu fullScreen={fullScreen} canReturn={canReturn} updateReady={updates?.status === 'ready'}
+        onAddProject={() => setAddOpen(true)} onReturn={returnToGrid} onFullScreen={() => api.toggleFullScreen()} onSettings={() => setSettingsOpen(true)} onInstallUpdate={installUpdate} />}
       <nav className="home-nav" aria-label={t('页面')}>
         <button type="button" aria-current={shownView === 'decisions' ? 'page' : undefined} title={t('回到决策 · {key}', { key: shortcut('decisions') })} onClick={() => setView('decisions')}><Stamp size={16} />{t('决策')}{decisions.length > 0 && <span className="home-nav-count" aria-label={t('{count} 件待决定', { count: decisions.length })}>{decisions.length}</span>}</button>
         <button type="button" aria-current={shownView === 'workspace' ? 'page' : undefined} onClick={() => setView('workspace')}><CirclesFour size={16} />{t('工作台')}</button>
@@ -308,12 +339,12 @@ export function App() {
       <div className="titlebar-tools">
         {/* Search opens from its shortcut (Ctrl+Shift+F by default, configurable) and shows while in use. Settings and adding a project are in
             the app menu; with a project open, the activity pane's toggle sits here, where the pane is also hidden below 1001px (workspace.css). */}
-        {!focusedId && (searchOpen || query) && <div className="search-input"><MagnifyingGlass size={15} /><input ref={queryInput} placeholder={t('搜索项目或路径…')} aria-label={t('搜索项目')} value={query} onChange={e => setQuery(e.target.value)} onBlur={() => { if (!query) setSearchOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); } }} />{query ? <IconButton label={t('清除搜索')} onClick={() => setQuery('')}><X size={13} /></IconButton> : <kbd>{shortcut('search')}</kbd>}</div>}
+        {searchShown && <div className="search-input"><MagnifyingGlass size={15} /><input ref={queryInput} placeholder={t('搜索项目或路径…')} aria-label={t('搜索项目')} value={query} onChange={e => setQuery(e.target.value)} onBlur={() => { if (!query) setSearchOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); } }} />{query ? <IconButton label={t('清除搜索')} onClick={() => setQuery('')}><X size={13} /></IconButton> : <kbd>{shortcut('search')}</kbd>}</div>}
         {shownView === 'workspace' && focus && !previewFile && <ModeSwitch project={focus} />}
         {shownView === 'workspace' && focus && !previewFile && <IconButton label={settings.activityPane ? t('隐藏活动栏') : t('显示活动栏：它正在做什么')} className={`activity-toggle ${settings.activityPane ? 'is-active' : ''}`} onClick={() => setPreference({ activityPane: !settings.activityPane })}><ListChecks size={16} /></IconButton>}
       </div>
       <div className="window-actions"><IconButton label={t('最小化')} onClick={() => api.minimize()}><Minus size={16} /></IconButton><IconButton label={t('最大化或还原')} onClick={() => api.maximize()}><Square size={12} /></IconButton><IconButton label={t('关闭窗口')} className="window-close" onClick={() => api.close()}><X size={17} /></IconButton></div>
-    </div>
+    </div>}
     <div className="workspace-layout">
       {focus && <ProjectExplorer key={focus.id} project={focus} collapsed={settings.explorerCollapsed} hideNoise={settings.hideTreeNoise} onHideNoiseChange={hideTreeNoise => setPreference({ hideTreeNoise })}
         onFilesRemoved={paths => setPreviewFile(current => current?.projectId === focus.id && paths.some(path => current.path === path || current.path.startsWith(path + '/')) ? null : current)}
