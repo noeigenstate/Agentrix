@@ -7,6 +7,7 @@ const { Worker: Thread } = require('node:worker_threads');
 const ts = require('typescript');
 const { Marked, marked } = require('marked');
 const markedCjkFriendly = require('marked-cjk-friendly').default;
+const { markdownEmphasis } = require('../src/shared/markdown-emphasis.ts');
 const { readingMarked } = require('../src/features/reading/markdown-escape.ts');
 
 // Exercise the preview component's parser while leaving its DOM sanitization to the existing preview tests.
@@ -58,7 +59,12 @@ test('reading view and file preview render CJK emphasis and leave literal text a
     ['**Note:**text', '<p>**Note:**text</p>'],
     ['snake_case', '<p>snake_case</p>'],
     ['2*3*4 公式2*3*4', '<p>2*3*4 公式2*3*4</p>'],
+    ['计算：1+2*3*4=24，之后 5*6*7', '<p>计算：1+2*3*4=24，之后 5*6*7</p>'],
+    ['`x`2*3*4', '<p><code>x</code>2*3*4</p>'],
     ['**2*3*4**', '<p><strong>2*3*4</strong></p>'],
+    ['*2*3*4*', '<p><em>2</em>3<em>4</em></p>'],
+    ['2*3*4_!5*6*7*[x]*前1', '<p>2*3*4_!5*6*7<em>[x]</em>前1</p>'],
+    ['abc前2*3*422*`x`2*3*4', '<p>abc前2*3*422<em><code>x</code>2</em>3*4</p>'],
     ['**未完成：正文', '<p>**未完成：正文</p>'],
     ['*未完成：正文', '<p>*未完成：正文</p>'],
     ['`**结果：**好`', '<p><code>**结果：**好</code></p>'],
@@ -91,7 +97,23 @@ test('long unmatched star runs preserve the CJK tokenizer output around other ma
   }
 });
 
-test('the real Markdown worker parses a 20k-star run before its existing timeout', async t => {
+test('a long paragraph of inline code scales close to marked without the extension', t => {
+  const baseline = new Marked({ gfm: true }), cjk = new Marked(markdownEmphasis, { gfm: true });
+  const text = 'w `x` a1 '.repeat(40000);
+  for (const parser of [baseline, cjk]) parser.parse('warm up `x` 2*3*4');
+  const times = [[], []], outputs = [];
+  for (let round = 0; round < 3; round++) for (const index of (round % 2 ? [1, 0] : [0, 1])) {
+    const start = performance.now();
+    outputs[index] = [baseline, cjk][index].parse(text);
+    times[index].push(performance.now() - start);
+  }
+  assert.equal(outputs[1], outputs[0]);
+  const baseMs = Math.min(...times[0]), cjkMs = Math.min(...times[1]);
+  t.diagnostic(`360 kB: CJK ${cjkMs.toFixed(1)} ms, marked ${baseMs.toFixed(1)} ms`);
+  assert.ok(cjkMs < baseMs * 8, `CJK ${cjkMs.toFixed(1)} ms vs marked ${baseMs.toFixed(1)} ms`);
+});
+
+test('the real Markdown worker handles long Markdown before its existing timeout', async t => {
   const previous = globalThis.Worker, workers = [];
   const workerFile = path.join(__dirname, '../src/features/reading/markdown.worker.ts');
   const source = ts.transpileModule(fs.readFileSync(workerFile, 'utf8'), {
@@ -122,4 +144,6 @@ test('the real Markdown worker parses a 20k-star run before its existing timeout
   assert.equal(await parseMarkdown(text), `<p>${text}</p>\n`);
   const digits = '9'.repeat(20000);
   assert.equal(await parseMarkdown(digits), `<p>${digits}</p>\n`);
+  const longParagraph = 'w `x` a1 '.repeat(40000);
+  assert.equal(await parseMarkdown(longParagraph), new Marked({ gfm: true, breaks: true }).parse(longParagraph));
 });
