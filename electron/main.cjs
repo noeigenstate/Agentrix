@@ -3,6 +3,7 @@ const { registerAppSchemes, registerAppProtocols } = require('./app/protocols.cj
 const { configureApplication, prepareWindowIcon, prepareShellIntegration } = require('./app/platform-startup.cjs');
 const { registerWindowContents, registerWindowLifecycle } = require('./app/window-events.cjs');
 const { registerWindowZoom } = require('./app/window-zoom.cjs');
+const { DEFAULT_MENU_STATE, parseMenuState, buildMacMenuTemplate } = require('./app/mac-menu.cjs');
 const { minWidth, minHeight } = require('./window-zoom.json');
 const { createImageTools, registerImageIpc } = require('./app/images.cjs');
 const { createProjectHandoff } = require('./app/project-handoff.cjs');
@@ -98,16 +99,19 @@ const { translate } = require('./i18n.cjs');
 // Text shown by the main process follows the language chosen in settings (Chinese source -> locales/en.json).
 const t = (text, values) => translate(store?.settings.language, text, values);
 let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, quitCleaned = false;
+let menuState = DEFAULT_MENU_STATE;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
 function windowBackgroundColor() { return store.settings.theme === 'light' ? '#f8f9fb' : '#181818'; }
 function updateStoreSettings(patch) {
-  const { theme, uiZoom } = store.settings;
+  const { theme, uiZoom, language, shortcuts } = store.settings;
   store.updateSettings(patch);
   // An active system backdrop needs its transparent ground, including when the theme changes.
   if (theme !== store.settings.theme && window && !window.isDestroyed() && !desktopGlassActive) window.setBackgroundColor(windowBackgroundColor());
   // The settings IPC broadcasts after applying the window's new zoom.
   if (uiZoom !== store.settings.uiZoom) windowZoom?.update();
+  if (process.platform === 'darwin' && (language !== store.settings.language
+    || JSON.stringify(shortcuts) !== JSON.stringify(store.settings.shortcuts))) rebuildMacMenu();
 }
 const sessions = new Map();
 const readingHistory = new ReadingHistory(() => { if (window && store && !quitting) broadcast(); });
@@ -259,17 +263,26 @@ function trayImage(name) {
 // macOS: the application menu gives ⌘Q, ⌘H and ⌘M their usual meaning. Copy and paste stay with the window's
 // own key handling (before-input-event and the terminals), so there is no Edit menu to compete with it.
 function macMenu() {
-  return Menu.buildFromTemplate([
-    { label: app.name, submenu: [
-      { role: 'about', label: t('关于 Agentrix') }, { type: 'separator' },
-      { role: 'hide', label: t('隐藏 Agentrix') }, { role: 'hideOthers', label: t('隐藏其他') }, { role: 'unhide', label: t('全部显示') }, { type: 'separator' },
-      { label: t('退出 Agentrix'), accelerator: 'Command+Q', click: () => { showWindow(); requestQuit().catch(report); } },
-    ] },
-    { label: t('窗口'), submenu: [
-      { role: 'minimize', label: t('最小化') }, { role: 'zoom', label: t('缩放') }, { role: 'togglefullscreen', label: t('切换全屏') },
-      { type: 'separator' }, { label: t('关闭窗口'), accelerator: 'Command+W', click: () => window?.close() },
-    ] },
-  ]);
+  return Menu.buildFromTemplate(buildMacMenuTemplate({
+    appName: app.name, t, shortcuts: store?.settings.shortcuts, state: menuState,
+    updateReady: updateManager?.getState().status === 'ready', command: command => {
+      send('menu:command', command);
+      // Native checks toggle before click; the renderer may reject the command while a dialog is open.
+      if (['workspace', 'decisions', 'activityPane', 'reading', 'terminal'].includes(command)) rebuildMacMenu();
+    },
+    quit: () => { showWindow(); requestQuit().catch(report); }, close: () => window?.close(),
+  }));
+}
+
+function rebuildMacMenu() {
+  if (process.platform === 'darwin') Menu.setApplicationMenu(macMenu());
+}
+
+function setMenuState(state) {
+  const next = parseMenuState(state);
+  if (!next || Object.keys(next).every(key => next[key] === menuState[key])) return;
+  menuState = next;
+  rebuildMacMenu();
 }
 
 // Rebuilt when the language changes; Electron menus keep the labels they were built with.
@@ -1297,7 +1310,7 @@ function registerIpc() {
     },
     listProjectImageCandidates: folder => projectImageCandidates(folder, 6, store.settings.theme),
     getSettings: () => store.settings, updateStoreSettings,
-    rebuildMenus: () => { trayMenu(); if (process.platform === 'darwin') Menu.setApplicationMenu(macMenu()); },
+    rebuildMenus: () => trayMenu(),
     clearRestorePlans: () => restorePlans.clear(), chooseVoiceModel: model => voiceManager.choose(model) });
   filesIpc = registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperations, clipboardWrites, clipboard, previewResources, affectsEditor, allowEditorClose, shell,
     getActiveFileTree: () => activeFileTree, setActiveFileTree: value => { activeFileTree = value; }, setActiveTerminal: value => { activeTerminal = value; }, send });
@@ -1361,6 +1374,7 @@ function registerIpc() {
     acknowledgeProject: id => store.acknowledge(id), expectCompletion: id => store.expectCompletion(id), scheduleState, applyActivity, pollAfterSubmission, send,
     getActiveTerminal: () => activeTerminal, setActiveTerminal: value => { activeTerminal = value; }, setActiveFileTree: value => { activeFileTree = value; } });
   registerClipboardIpc({ handle, clipboardWrites, clipboard });
+  if (process.platform === 'darwin') listen('menu:state', setMenuState);
   registerWindowIpc({ handle, listen, getWindow: () => window, requestQuit });
 }
 
@@ -1407,11 +1421,17 @@ if (!app.requestSingleInstanceLock()) {
     runtimeDir = fs.mkdtempSync(path.join(app.getPath('userData'), 'runtime-'));
     eventServer = await createEventServer(onEvent);
     sshAuth = await new SSHAuthServer(queue => send('ssh:auth-changed', queue)).start();
+    let menuUpdateReady = false;
     updateManager = new UpdateManager({
       updater: isInstalledBuild(app.isPackaged, process.execPath) ? require('electron-updater').autoUpdater : null,
       version: app.getVersion(), distribution: distributionOf({ isPackaged: app.isPackaged, platform: process.platform, installed }), onChange: state => {
         updatesIpc?.onStateChange(state);
         send('updates:changed', state);
+        const ready = state.status === 'ready';
+        if (ready !== menuUpdateReady) {
+          menuUpdateReady = ready;
+          rebuildMacMenu();
+        }
       },
     });
     registerAppProtocols({ protocol, root, electronNet, previewResources, t });

@@ -8,6 +8,7 @@ const { createRequire } = require('node:module');
 const ts = require('typescript');
 const { WorkspaceStore, cleanSettings } = require('../electron/state.cjs');
 const { translate } = require('../electron/i18n.cjs');
+const { DEFAULT_MENU_STATE, buildMacMenuTemplate } = require('../electron/app/mac-menu.cjs');
 
 const root = path.join(__dirname, '..');
 const invalid = [undefined, null, '', 'fr', 'zh-CN', 'ZH', false, 0, {}, []];
@@ -116,6 +117,7 @@ test('native menus and completion notifications follow default English and expli
     on() {} show() {}
   }
   const context = vm.createContext({ translate, store: undefined, app: { name: 'Agentrix' }, path, root,
+    buildMacMenuTemplate, menuState: DEFAULT_MENU_STATE, updateManager: undefined,
     Menu: { buildFromTemplate: items => items }, Notification, window: { isFocused: () => true },
     tray: { isDestroyed: () => false, setContextMenu: items => { trayItems = items; } } });
   vm.runInContext(`${translator.getText(source)}\n${functions.join('\n')}`, context);
@@ -124,7 +126,7 @@ test('native menus and completion notifications follow default English and expli
   for (const language of [undefined, 'fr', 'en', 'zh']) {
     context.store = { settings: { language, notifications: true, sound: false } };
     const chinese = language === 'zh';
-    assert.equal(vm.runInContext('macMenu()', context)[1].label, chinese ? '窗口' : 'Window');
+    assert.equal(vm.runInContext('macMenu()', context)[3].label, chinese ? '窗口' : 'Window');
     vm.runInContext('trayMenu(); notifyCompletion({ id: "test", name: "Demo" })', context);
     assert.equal(trayItems[0].label, chinese ? '打开 Agentrix' : 'Open Agentrix');
     assert.equal(notification.title, translate(language, '{name} · 本轮已完成', { name: 'Demo' }));
