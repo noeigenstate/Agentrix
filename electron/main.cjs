@@ -120,7 +120,7 @@ const { setBranch, captureBranch, getBranch, forgetBranch, remoteBranch } = crea
 const projectGit = new ProjectGit(id => remoteFor(id));
 const startupErrors = new Map();
 const restorePlans = new Map();
-const previewResources = new PreviewResources({ remote: project => remoteFor(project.id) });
+const previewResources = new PreviewResources({ remote: project => remoteFor(project.id), getProjects: () => store?.projects || [] });
 const { thumbnail, small, pictureOf, thumbnailProjectImage, pictureFrom } = createImageTools({ nativeImage, BrowserWindow, previewResources });
 async function projectImageCandidates(folder, candidates = 6, theme = 'mono') {
   const result = await listProjectImageCandidates(folder, thumbnailProjectImage, { ...PROJECT_IMAGE_LIMITS, candidates });
