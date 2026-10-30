@@ -223,6 +223,10 @@ confirmed worker runs.
 - In a git repository, hold the roundtable (`--meeting`) before the build, resume the confirmed session with the same
   `--allow`, and consolidate the round (`consolidate`) before the next round's roundtable; `--skip-meeting <reason>` only
   for a task too small for one.
+- A Claude worker (`claude -p`) can read only inside its `--cwd`: paste anything else it needs (a review report, a
+  plan in the scratch folder) into the brief, or copy it into its worktree. A Codex worker can read outside it.
+- Each understanding field is one line (join items with `;`); a multi-line field is judged `incomplete` and the worker
+  must restate. Say so in the plan when a worker tends to write lists.
 - Right after launching, read the helper's start line; treat anything but `[dispatch] started … routing ok` as a launch
   to fix before relying on the worker.
 - Claude Code's own Agent tool calls stay as they are: their transcript records are already structured.
