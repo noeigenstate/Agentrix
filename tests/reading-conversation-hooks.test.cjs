@@ -9,6 +9,7 @@ function conversationHarness(t) {
   const requests = [], subscribers = new Set(), previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { agentrix: {
     terminalConversation: id => new Promise(resolve => requests.push({ id, resolve })),
+    terminalConversationPage: (id, request) => new Promise(resolve => requests.push({ id, request, resolve })),
     onTerminalConversation: callback => { subscribers.add(callback); return () => subscribers.delete(callback); },
   } } });
   const h = hookHarness('src/features/reading/useReadingConversation.ts', { './conversation-buffer': buffer });
@@ -16,6 +17,7 @@ function conversationHarness(t) {
   return {
     requests, subscribers,
     render: (id = 'first', session = 'session') => h.render('useReadingConversation', id, session).result,
+    history: scope => h.render('useReadingHistory', 'first', 'session', scope).result,
     packet: packet => subscribers.forEach(callback => callback(packet)),
     dispose: () => h.dispose(),
   };
@@ -55,6 +57,17 @@ test('terminal switching ignores late IPC replies and unmount cancels work', asy
   t.mock.timers.tick(50); assert.equal(h.subscribers.size, 0);
 });
 
+test('the first history binding retains the live legacy entries until its initial page arrives', async t => {
+  const h = conversationHarness(t);
+  h.history(); h.requests[0].resolve({ ok: true, value: [entry('first-turn')] }); await Promise.resolve(); t.mock.timers.tick(50);
+  assert.deepEqual(h.history().entries, [entry('first-turn')]);
+  const scope = { key: 'first-binding', agent: 'codex', threadId: 'first-thread' };
+  assert.deepEqual(h.history(scope).entries, [entry('first-turn')]);
+  assert.equal(h.requests[1].request.key, scope.key);
+  h.requests[1].resolve(page(scope.key, [entry('first-turn'), entry('reply')])); await Promise.resolve(); t.mock.timers.tick(50);
+  assert.deepEqual(h.history(scope).entries, [entry('first-turn'), entry('reply')]);
+});
+
 function pagedHarness(t) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const requests = [], subscribers = new Set(), previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -68,7 +81,7 @@ function pagedHarness(t) {
   return { requests, subscribers, render: (key = 'A', session = 'runtime') => h.render('useReadingHistory', 'first', session, { key, agent: 'codex', threadId: key }).result,
     packet: packet => subscribers.forEach(callback => callback({ id: 'first', historyKey: 'A', sessionId: 'runtime', ...packet })), dispose: () => h.dispose() };
 }
-const page = (key, entries, beforeCursor = 'older') => ({ ok: true, value: { key, entries, beforeCursor, hasEarlier: !!beforeCursor, watermark: 100 } });
+const page = (key, entries, beforeCursor = 'older') => ({ ok: true, value: { key, entries, beforeCursor } });
 
 test('paged reading coalesces its initial page and scoped live events while refusing other epochs', async t => {
   const h = pagedHarness(t); assert.deepEqual(h.render().entries, []);
@@ -106,4 +119,32 @@ test('paged A to B to A discards late requests and never paints the previous sco
   h.requests[2].resolve(page('A', [entry('fresh A')])); await Promise.resolve(); t.mock.timers.tick(50);
   assert.deepEqual(h.render('A').entries, [entry('fresh A')]);
   h.dispose(); assert.equal(h.subscribers.size, 0);
+});
+
+test('returning to the bottom evicts loaded old pages and re-pages them from a fresh cursor', async t => {
+  const h = pagedHarness(t); h.render();
+  const latest = Array.from({ length: 80 }, (_, n) => entry(`latest-${n}`));
+  h.requests[0].resolve(page('A', latest)); await Promise.resolve(); t.mock.timers.tick(50);
+  const loading = h.render().loadEarlier();
+  const older = Array.from({ length: 400 }, (_, n) => entry(`old-${n}`));
+  h.requests[1].resolve(page('A', older, 'farther')); await loading;
+  assert.equal(h.render().entries.length, 480);
+  const compacting = h.render().compact(); assert.equal(h.requests[2].request.cursor, null);
+  h.packet({ changes: [entry('during-refresh')] }); t.mock.timers.tick(50);
+  h.requests[2].resolve(page('A', latest, 'fresh-older')); await compacting;
+  assert.equal(h.render().entries.length, 81); assert.equal(h.render().entries.at(-1).id, 'during-refresh');
+  const repaging = h.render().loadEarlier(); assert.equal(h.requests[3].request.cursor, 'fresh-older');
+  h.requests[3].resolve(page('A', older.slice(-40))); await repaging;
+  assert.equal(h.render().entries.length, 121);
+});
+
+test('a failed tail compaction retains loaded history and its earlier cursor', async t => {
+  const h = pagedHarness(t); h.render();
+  h.requests[0].resolve(page('A', [entry('latest')])); await Promise.resolve(); t.mock.timers.tick(50);
+  const loading = h.render().loadEarlier(), older = Array.from({ length: 300 }, (_, n) => entry(`old-${n}`));
+  h.requests[1].resolve(page('A', older, 'original-older')); await loading;
+  const before = h.render().entries, compacting = h.render().compact();
+  h.requests[2].resolve({ ok: false, error: 'temporary read failure' }); await compacting;
+  assert.deepEqual(h.render().entries, before); assert.equal(h.render().error, 'temporary read failure');
+  assert.equal(h.render().hasEarlier, true);
 });

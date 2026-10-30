@@ -78,7 +78,8 @@ test('completion catch-up hides provisional completion without finishing prompts
   h.user('Actual human prompt', 2000);
   s.completionWork.reading = true;
   h.apply('complete', 'turn', 2100);
-  assert.equal(s.codexActivity, 'unknown');
+  assert.equal(s.codexActivity, 'working');
+  assert.equal(s.activityRawSnapshot.turnId, 'turn', 'catch-up retains the deferred completion');
   assert.equal(s.promptQueue.list()[0].state, 'working');
   assert.equal(s.completionWork.endedAt, 0);
   assert.equal(h.alerts(), 0); assert.equal(project.unread, 0); assert.equal(h.armings(), 1);
@@ -93,6 +94,39 @@ test('completion catch-up hides provisional completion without finishing prompts
   s.completionWork.reading = true; h.apply('complete', 'turn', 2100);
   s.completionWork.reading = false; h.apply('complete', 'turn', 2100);
   assert.equal(h.armings(), 1); assert.equal(h.alerts(), 1); assert.equal(project.unread, 0);
+});
+
+for (const agent of ['codex', 'claude']) test(`${agent}: catch-up completion is applied when an empty remote batch changes only reading state`, async t => {
+  const h = await harness(t, 'ssh', agent), feed = await activityFeed(t, h, { clockOffset: 0 });
+  h.write('A received human request\r');
+  await feed.user('A received human request', 2000);
+  const snapshot = { threadId: 'thread', turnId: 'deferred-turn', state: 'complete', updatedAt: 2100 };
+  let done = false;
+  h.s.activityRawSnapshot = snapshot;
+  h.s.terminal.request = async () => ({ snapshot, records: [], historyDone: done });
+  await feed.poll();
+  assert.equal(h.s.codexActivity, 'working'); assert.equal(h.alerts(), 0);
+  const version = h.s.completionWork.version;
+  done = true; await feed.poll();
+  assert.equal(h.s.completionWork.version, version); assert.equal(h.s.codexActivity, 'complete'); assert.equal(h.alerts(), 1);
+  h.store.acknowledge(h.project.id); await feed.poll();
+  assert.equal(h.alerts(), 1); assert.equal(h.project.unread, 0); assert.equal(h.armings(), 1);
+});
+
+test('consumed restore plans without a launched CLI close their preview, including shell input and missing agents', async t => {
+  for (const [agent, failure] of [['claude', 'missing'], ['claude', 'terminal-only'], ['codex', 'missing'], ['codex', 'dirty'], ['codex', 'lookup-failed']]) {
+    const h = await harness(t, 'local', agent), closed = [];
+    h.context.readingHistory.close = id => closed.push(id);
+    h.store.setRestore(h.s.terminalId, { agent });
+    Object.assign(h.s, { ready: true, codexActive: false, claudeAvailable: true, codexAvailable: true });
+    h.context.restorePlans.set(h.s.terminalId, { codex: failure !== 'terminal-only' });
+    if (failure === 'missing') h.s[agent === 'claude' ? 'claudeAvailable' : 'codexAvailable'] = false;
+    if (failure === 'dirty') h.s.inputDirty = true;
+    if (failure === 'lookup-failed') h.context.recentSession = async () => { throw new Error('synthetic failure'); };
+    await h.context.resumeAfterPrompt(h.project, h.s);
+    assert.deepEqual(closed, [h.s.terminalId], `${agent} ${failure}`);
+    assert.equal(h.context.restorePlans.size, 0); assert.ok(!h.s.agentStarting);
+  }
 });
 
 test('a late Codex read cannot alter the next launch of the same terminal or bind its reading preview', async t => {

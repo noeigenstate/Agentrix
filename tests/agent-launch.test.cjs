@@ -41,7 +41,7 @@ test('folder history reports each agent separately and survives one of them fail
 test('public state reserves the reading surface during agent startup and releases it on success, error or exit', () => {
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const session = { sessionId: 'session', status: 'starting', agentStarting: true, promptQueue: { list: () => [] } };
-  const context = vm.createContext({ dispatchedOnly: () => null,
+  const context = vm.createContext({ restorePlans: new Map(), readingHistory: { summary: () => null }, dispatchedOnly: () => null,
     store: { projects: [{ id: 'project', name: 'Project' }], settings: {} }, sessions: new Map([['project', session]]), startupErrors: new Map(),
     terminalIds: () => ['project'], shownTerminalIds: () => ['project'], getBranch: () => '', t: text => text,
     localShell: () => ({ kind: 'powershell' }), process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: 'isolated' } },

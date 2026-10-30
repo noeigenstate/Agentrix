@@ -49,6 +49,11 @@ export function createConversationBuffer(apply: (entries: ConversationEntry[]) =
       entries = retainTimelineIdentity(entries, [...older.filter(entry => !ids.has(entry.id)), ...entries]);
       apply(entries);
     },
+    refresh(initial: ConversationEntry[]) {
+      if (disposed || waiting) return;
+      entries = applyConversationPacket(initial, { list: entries }, true);
+      apply(entries);
+    },
     dispose() { disposed = true; queued = []; if (timer !== null) clearTimeout(timer); timer = null; },
   };
 }

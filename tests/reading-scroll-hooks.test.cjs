@@ -84,6 +84,13 @@ test('prepending a history page keeps the new-message count at zero while live a
   assert.equal(h.render([...older, ...list, { id: 'new-live-message' }]).result.unseen, 1);
 });
 
+test('a live reply arriving before the unchanged pending card counts once; prepends and prompt receipts do not', t => {
+  const h = scrollHarness(t), list = [...entries(2), { id: 'pending:echo' }];
+  h.render(list); h.frame(); h.handlers.wheel({ deltaY: -20 }); h.node.scrollTop = 300; h.handlers.scroll();
+  assert.equal(h.render([...entries(2), { id: 'new' }, { id: 'pending:echo' }]).result.unseen, 1);
+  assert.equal(h.render([{ id: 'old' }, ...entries(2), { id: 'new' }, { id: 'pending:echo' }]).result.unseen, 1);
+});
+
 test('automatic content growth interrupts a smooth latest-button jump with an instant pin', t => {
   const h = scrollHarness(t), list = entries(40);
   const initial = h.render(list).result; h.frame();
@@ -128,4 +135,23 @@ test('a paged prepend waits for its asynchronous entries and compensates once th
   assert.equal(render(prepended).visible.length, 120);
   assert.equal(node.scrollTop, 750); assert.equal(held, 1);
   render(prepended); assert.equal(node.scrollTop, 750);
+});
+
+test('returning to the bottom releases the prepend ResizeObserver before later image or Markdown growth', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let active = false, resize, position = 300;
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+  globalThis.ResizeObserver = class { constructor(callback) { resize = callback; } observe() { active = true; } disconnect() { active = false; } };
+  const h = hookHarness('src/features/reading/useVisibleTail.ts');
+  t.after(() => { h.dispose(); if (previous) Object.defineProperty(globalThis, 'ResizeObserver', previous); else delete globalThis.ResizeObserver; });
+  const anchor = { isConnected: true, getBoundingClientRect: () => ({ top: position - node.scrollTop, bottom: position - node.scrollTop + 30 }) };
+  const node = { scrollTop: 150, scrollHeight: 1000, firstElementChild: {}, getBoundingClientRect: () => ({ top: 0 }), querySelectorAll: () => [anchor],
+    scrollTo({ top }) { this.scrollTop = top; }, addEventListener() {}, removeEventListener() {} };
+  const container = { current: node }, list = blocks(entries(100));
+  const render = stuck => h.render('useVisibleTail', list, 'session', container, stuck, () => {}).result;
+  render(false).showEarlier(); position += 600; node.scrollHeight += 600; render(false);
+  assert.equal(node.scrollTop, 750); assert.equal(active, true);
+  node.scrollTop = 1400; render(true); assert.equal(active, false);
+  position += 100; node.scrollHeight += 100; if (active) resize();
+  assert.equal(node.scrollTop, 1400, 'the old anchor cannot drag a latest-button or composer jump back');
 });

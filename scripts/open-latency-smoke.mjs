@@ -75,12 +75,16 @@ async function checkPaging(page, directory) {
   }, before);
   let lastHeight, stable = 0;
   // Worker parses change many older replies on successive frames. Check after layout settles, not mid-commit.
-  const after = await wait(async () => {
-    const value = await position();
-    stable = value.height === lastHeight && Math.abs(value.anchorDelta) <= 2 ? stable + 1 : 0;
-    lastHeight = value.height;
-    return stable >= 3 ? value : null;
-  }, 'Markdown layout and prepend anchor', 5000);
+  let after;
+  const samples = [];
+  try {
+    after = await wait(async () => {
+      const value = await position(); samples.push(value);
+      stable = value.height === lastHeight && Math.abs(value.anchorDelta) <= 2 ? stable + 1 : 0;
+      lastHeight = value.height;
+      return stable >= 3 ? value : null;
+    }, 'Markdown layout and prepend anchor', 5000);
+  } finally { await fs.writeFile(path.join(directory, 'paging-samples.json'), JSON.stringify(samples)); }
   assert.equal(after.count, after.unique, 'history prepend has no duplicate DOM entries');
   assert.ok(Math.abs(after.anchorDelta) <= 2, `scroll anchor moved ${after.anchorDelta}px`);
   assert.equal(await scroll.locator('.reading-unseen').count(), 0, 'older pages are not new messages');
@@ -104,21 +108,22 @@ for (const mib of sizes) {
     const boot = path.join(directory, 'boot.cjs');
     await fs.writeFile(boot, `const fs=require('node:fs'),fsp=require('node:fs/promises'),Module=require('node:module'),path=require('node:path');
 const {app,dialog}=require('electron');const root=${JSON.stringify(root)},dist=${JSON.stringify(dist)};
-globalThis.openLatency={events:[],forbidden:0};const clock=()=>performance.timeOrigin+performance.now();
-const forbidden=${JSON.stringify([path.join(os.homedir(), '.codex'), path.join(os.homedir(), '.claude'), path.join(os.homedir(), 'AppData/Roaming/Agentrix')].map(p => p.toLowerCase()))};
-function guard(file){if(typeof file!=='string')return;const p=path.resolve(file).toLowerCase();if(forbidden.some(r=>p===r||p.startsWith(r+path.sep))){globalThis.openLatency.forbidden++;throw Error('Real account path blocked');}}
-for(const key of ['open','readFile','stat','readdir','access']){const fn=fsp[key].bind(fsp);fsp[key]=(file,...args)=>{guard(file);return fn(file,...args);};}
-for(const key of ['readFileSync','statSync','existsSync','readdirSync']){const fn=fs[key].bind(fs);fs[key]=(file,...args)=>{guard(file);return fn(file,...args);};}
+globalThis.openLatency={events:[],forbidden:0,guard:true};const clock=()=>performance.timeOrigin+performance.now();
+const forbidden=${JSON.stringify([path.join(os.homedir(), '.codex'), path.join(os.homedir(), '.claude'), path.join(os.homedir(), '.claude.json'), path.join(os.homedir(), 'AppData/Roaming/Agentrix')].map(p => p.toLowerCase()))};
+function guard(file){if(file instanceof URL)file=require('node:url').fileURLToPath(file);if(Buffer.isBuffer(file))file=file.toString();if(typeof file!=='string')return;const p=path.resolve(file).toLowerCase();if(forbidden.some(r=>p===r||p.startsWith(r+path.sep))){globalThis.openLatency.forbidden++;throw Error('Real account path blocked');}}
+for(const key of ['open','readFile','stat','lstat','realpath','readdir','access']){const fn=fsp[key].bind(fsp);fsp[key]=async(file,...args)=>{guard(file);const result=await fn(file,...args);if(key==='realpath')guard(result);return result;};}
+for(const key of ['open','openSync','readFile','readFileSync','stat','statSync','lstat','lstatSync','existsSync','readdir','readdirSync','createReadStream','watch','realpath','realpathSync']){const fn=fs[key].bind(fs);fs[key]=(file,...args)=>{guard(file);if(key==='realpath'){const callback=args.pop();return fn(file,...args,(error,result)=>{if(!error)try{guard(result);}catch(blocked){return callback(blocked);}callback(error,result);});}const result=fn(file,...args);if(key==='realpathSync')guard(result);return result;};}
+fs.realpath.native=fs.realpath;fs.realpathSync.native=fs.realpathSync;
 app.getAppPath=()=>root;app.getVersion=()=>${JSON.stringify(require('../package.json').version)};
 dialog.showErrorBox=(title,message)=>{fs.writeFileSync(${JSON.stringify(path.join(directory, 'error.log'))},title+'\\n'+message);app.exit(1);};
 app.on('browser-window-created',(_,w)=>{w.on('show',()=>globalThis.openLatency.events.push({name:'show',t:clock()}));w.webContents.once('dom-ready',()=>w.webContents.executeJavaScript('('+${JSON.stringify(observe.toString())}+')('+${JSON.stringify(JSON.stringify(transcript.marker))}+')'));});
 const load=Module._extensions['.js'];Module._extensions['.cjs']=(module,filename)=>{if(filename===path.join(root,'electron/app/protocols.cjs')){module._compile(fs.readFileSync(filename,'utf8').replace("path.resolve(root, 'dist')",'dist').replace("const directory = dist;",'const directory = '+JSON.stringify(dist)+';'),filename);}else load(module,filename);};
 require(path.join(root,'electron/main.cjs'));`);
-    let app, page, owned;
+    let app, page, owned, exited = false;
     try {
       app = await electron.launch({ executablePath: require('electron'), args: [boot, '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'], cwd: root,
         env: isolatedEnvironment(fixture, profile, home), timeout: 45000 });
-      owned = app.process(); page = await app.firstWindow();
+      owned = app.process(); owned.once('exit', () => { exited = true; }); page = await app.firstWindow();
       page.on('pageerror', error => console.error(error));
       await page.waitForFunction(() => !!window.__openLatency);
       await page.locator('.panel-header').first().waitFor();
@@ -137,6 +142,7 @@ require(path.join(root,'electron/main.cjs'));`);
       }
       const paging = await checkPaging(page, directory);
       const main = await app.evaluate(() => globalThis.openLatency), events = await page.evaluate(() => window.__openLatency.events);
+      assert.equal(main.guard, true, 'the real-profile guard is mandatory for every native run');
       assert.equal(main.forbidden, 0, 'no real account path attempted');
       const show = main.events.find(e => e.name === 'show').t;
       const measured = events.filter(e => e.name === 'readable').map(e => {
@@ -150,11 +156,15 @@ require(path.join(root,'electron/main.cjs'));`);
       await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(results, null, 2));
       for (const value of measured) assert.ok(value.ms <= 3000, `${agent} ${mib} MiB ${value.label}: ${value.ms.toFixed(1)} ms > 3000`);
       console.log(JSON.stringify({ agent, mib, mode, measured }));
-    } catch (error) { if (page) await page.screenshot({ path: path.join(directory, 'failure.png') }).catch(() => {}); throw error; }
+    } catch (error) {
+      await fs.writeFile(path.join(directory, 'failure.txt'), String(error.stack || error));
+      if (page) await page.screenshot({ path: path.join(directory, 'failure.png') }).catch(() => {});
+      throw error;
+    }
     finally {
-      if (app) await app.evaluate(({ app }) => app.quit()).catch(() => {});
-      if (owned?.exitCode === null) await Promise.race([new Promise(resolve => owned.once('exit', resolve)), sleep(5000)]);
-      assert.ok(!owned || owned.exitCode !== null, 'previous isolated GUI exited before another can start');
+      if (app) await app.evaluate(({ app }) => { setTimeout(() => app.exit(0), 2000).unref(); app.quit(); }).catch(() => {});
+      if (owned && !exited) await Promise.race([new Promise(resolve => owned.once('exit', resolve)), sleep(5000)]);
+      assert.ok(!owned || exited, 'previous isolated GUI exited before another can start');
     }
   }
 }

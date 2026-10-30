@@ -42,7 +42,7 @@ function runtime(overrides = {}) {
     const ids = [...sessions.values()].filter(s => s.projectId === project.id).map(s => s.terminalId);
     return ids.length ? ids : [project.id];
   };
-  const context = vm.createContext({
+  const context = vm.createContext({ restorePlans: new Map(), readingHistory: { summary: () => null },
     UsageMeter, promptText, sessions, process, path, Date, setTimeout, clearTimeout, setInterval, clearInterval, callsOf: () => null, dispatchedOnly: () => null,
     fs: watcherFs().fs, quitting: false, scheduleState() {},
     store: { projects: [{ id: 'local', kind: 'local' }, { id: 'remote', kind: 'ssh' }], settings: {}, expectCompletion: () => assert.fail('background usage must not rearm completion'), setRestore() {} },

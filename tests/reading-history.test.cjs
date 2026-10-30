@@ -36,7 +36,7 @@ for (const agent of ['codex', 'claude']) {
     const { history, key } = await fixture(t, agent);
     let page = await history.page('terminal', key), seen = [...page.entries];
     assert.equal(page.entries.length, 80); assert.equal(page.entries.at(-1).text, 'answer 149');
-    while (page.hasEarlier) {
+    while (page.beforeCursor) {
       page = await history.page('terminal', key, page.beforeCursor);
       assert.ok(page.entries.length <= 40);
       seen = [...page.entries, ...seen];
@@ -93,8 +93,36 @@ test('conversion preserves image fields and ignores an incomplete final JSONL re
 });
 
 test('paged Codex history streams an oversized image record through the same decoder as the live reader', async t => {
+  const { ConversationLog, codexConversation, setThumbnailer } = require('../electron/conversation.cjs');
+  const { readTranscriptChunk } = require('../electron/oversized-record.cjs');
+  const f = await fixture(t, 'codex', 1), timestamp = new Date().toISOString();
+  setThumbnailer(() => null, () => 'data:image/png;base64,eA==');
+  t.after(() => setThumbnailer(() => null));
+  const records = [
+    { type: 'response_item', timestamp, payload: { type: 'message', role: 'user', content: [
+      { type: 'input_text', text: '<image name="picture">' },
+      { type: 'input_image', image_url: 'data:image/png;base64,' + 'A'.repeat(1200000) },
+      { type: 'input_text', text: '</image>\nDescribe this' },
+    ] } },
+    { type: 'event_msg', timestamp, payload: { type: 'item_completed', item: { type: 'UserMessage', id: 'human-picture', content: [
+      { type: 'local_image', path: path.join(f.directory, 'missing.png') }, { type: 'text', text: 'Describe this' },
+    ] } } },
+  ];
+  const bytes = Buffer.from(records.map(record => JSON.stringify(record)).join('\n') + '\n');
+  await fs.appendFile(f.filename, bytes);
+  const live = new ConversationLog(), reader = { buffer: Buffer.alloc(0) };
+  for (let at = 0; at < bytes.length; at += 65536) readTranscriptChunk(reader, bytes.subarray(at, at + 65536), record => codexConversation(live, record, f.source.cwd));
+  const page = await f.history.page('terminal', f.key), image = page.entries.find(entry => entry.id === 'u:human-picture');
+  assert.equal(live.list.length, 1);
+  assert.deepEqual(image.images, ['data:image/png;base64,' + 'A'.repeat(1200000)]);
+  assert.deepEqual(image, live.list[0]);
+});
+
+test('paged generated pictures retain the bounded saved-file thumbnail', async t => {
   const { setThumbnailer } = require('../electron/conversation.cjs');
   const f = await fixture(t, 'codex', 1), savedPath = path.join(f.directory, 'generated_images', 'thread', 'picture.png');
+  const header = Buffer.alloc(24); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(header); header.writeUInt32BE(8, 16); header.writeUInt32BE(8, 20);
+  await fs.mkdir(path.dirname(savedPath), { recursive: true }); await fs.writeFile(savedPath, header);
   setThumbnailer(file => { assert.equal(file, savedPath); return 'data:image/png;base64,eA=='; });
   t.after(() => setThumbnailer(() => null));
   await fs.appendFile(f.filename, JSON.stringify({ type: 'event_msg', timestamp: new Date().toISOString(), payload: {
@@ -125,4 +153,65 @@ test('consecutive tools count as a block and carry parent metadata across the in
   assert.equal(page.entries.length, 102);
   assert.equal(page.entries.at(-1).timeline.turn.id, page.entries[1].id);
   assert.equal(page.entries.at(-1).timeline.tools.id, 'tool0');
+});
+
+test('realpath aliases of the same home, cwd and transcript keep one binding without broadcasts', async t => {
+  const f = await fixture(t), alias = path.join(f.directory, 'home-alias'), cwdAlias = path.join(f.directory, 'cwd-alias');
+  await fs.symlink(f.source.home, alias, 'junction'); await fs.symlink(f.source.cwd, cwdAlias, 'junction');
+  let changes = 0; f.history.changed = () => changes++;
+  const initial = f.history.bindings.get('terminal').initial;
+  try {
+    for (let n = 0; n < 5; n++) await f.history.bind('terminal', { ...f.source, home: alias, cwd: cwdAlias,
+      filename: path.join(alias, path.relative(f.source.home, f.filename)) });
+    assert.equal(f.history.summary('terminal').key, f.key);
+    assert.equal(f.history.bindings.get('terminal').initial, initial); assert.equal(changes, 0);
+  } finally { await fs.rmdir(alias); await fs.rmdir(cwdAlias); }
+});
+
+test('initial page refreshes are single-flight and giant final records leave one placeholder with a usable earlier cursor', async t => {
+  const f = await fixture(t, 'codex', 1);
+  await fs.appendFile(f.filename, JSON.stringify({ type: 'irrelevant', text: 'x'.repeat(20 * 1024 * 1024) }) + '\n');
+  const first = f.history.page('terminal', f.key), second = f.history.page('terminal', f.key);
+  assert.equal(first, second, 'one conversion serves concurrent first-page requests');
+  const page = await first;
+  assert.equal(page.entries.length, 1); assert.equal(page.entries[0].omitted, true); assert.ok(page.beforeCursor);
+  const older = await f.history.page('terminal', f.key, page.beforeCursor);
+  assert.deepEqual(older.entries.map(entry => entry.text), ['question 0', 'answer 0']);
+  assert.equal(older.beforeCursor, null);
+});
+
+test('historical tool pages settle tools whose turn end lies beyond the cut', async t => {
+  const f = await fixture(t, 'codex', 1), timestamp = new Date().toISOString();
+  const records = [{ type: 'response_item', timestamp, payload: { type: 'function_call', name: 'exec_command', call_id: 'old-call', arguments: '{"cmd":"echo old"}' } }];
+  for (let n = 0; n < 100; n++) records.push({ type: 'event_msg', timestamp: new Date(Date.parse(timestamp) + n + 1).toISOString(), payload: { type: 'agent_message', message: `reply ${n}` } });
+  records.push({ type: 'event_msg', timestamp, payload: { type: 'task_complete' } });
+  await fs.appendFile(f.filename, records.map(record => JSON.stringify(record)).join('\n') + '\n');
+  let page = await f.history.page('terminal', f.key), tool;
+  while (page.beforeCursor && !tool) { page = await f.history.page('terminal', f.key, page.beforeCursor); tool = page.entries.find(entry => entry.role === 'tool'); }
+  assert.ok(tool); assert.equal(tool.tool.done, true);
+});
+
+test('queue IDs agree between a full live log and a page that omits earlier enqueues', async t => {
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const f = await fixture(t, 'claude', 0), live = new ConversationLog(), records = [];
+  for (let n = 0; n < 130; n++) records.push({ type: 'queue-operation', operation: 'enqueue', timestamp: new Date(1700000000000 + n).toISOString(), content: `queued ${n} ${'x'.repeat(9000)}` });
+  for (const record of records) claudeConversation(live, record, f.source.cwd);
+  await fs.appendFile(f.filename, records.map(record => JSON.stringify(record)).join('\n') + '\n');
+  const page = await f.history.page('terminal', f.key), older = await f.history.page('terminal', f.key, page.beforeCursor);
+  assert.deepEqual(page.entries.map(entry => entry.id), live.list.slice(-80).map(entry => entry.id));
+  assert.equal(new Set([...older.entries, ...page.entries].map(entry => entry.id)).size, 120);
+});
+
+test('all main-process binding requests derive the same launched cwd and account home', async () => {
+  const vm = require('node:vm'), main = await fs.readFile(path.join(__dirname, '../electron/main.cjs'), 'utf8'), calls = [];
+  const session = { agentCwd: 'C:\\project\\subfolder', codexHome: 'C:\\isolated-codex' };
+  const context = vm.createContext({ sessions: new Map([['terminal', session]]), store: { findTerminal: () => ({ record: { restore: { cwd: 'C:\\project\\old-subfolder' } } }) },
+    findProject: () => ({ kind: 'local', path: 'C:\\project' }), readingHistory: { bind: (_id, source) => calls.push(source) },
+    claudeConfigDir: () => 'C:\\isolated-claude', path, process, os });
+  vm.runInContext(main.slice(main.indexOf('function prepareReading('), main.indexOf('const { handoffFile', main.indexOf('function prepareReading('))), context);
+  context.prepareReading('terminal', { agent: 'claude', threadId: 'thread' });
+  context.prepareReading('terminal', { agent: 'claude', threadId: 'thread', cwd: 'C:\\project' });
+  context.prepareReading('terminal', { agent: 'codex', threadId: 'thread' });
+  assert.ok(calls.every(source => source.cwd === session.agentCwd));
+  assert.deepEqual(calls.map(source => source.home), ['C:\\isolated-claude', 'C:\\isolated-claude', session.codexHome]);
 });

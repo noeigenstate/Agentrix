@@ -18,11 +18,9 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
   const area = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const terminals = project.terminals;
-  const visible = visibleTerminals(terminals, focused);
+  const base = new Set(visibleTerminals(terminals, focused).map(terminal => terminal.id));
+  const visible = terminals.filter(terminal => base.has(terminal.id) || !focused && terminal.readingHistory);
   const visibleIds = new Set(visible.map(terminal => terminal.id));
-  if (!focused) for (const terminal of terminals) {
-    if (terminal.readingHistory && !visibleIds.has(terminal.id)) { visible.push(terminal); visibleIds.add(terminal.id); }
-  }
   const multiple = visible.length > 1;
   const columns = Math.min(Math.max(1, Math.ceil(Math.sqrt(visible.length))), width < 600 ? 1 : width < 1150 ? 2 : 3);
   const rows = Math.max(1, Math.ceil(visible.length / columns));

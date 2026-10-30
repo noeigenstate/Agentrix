@@ -112,7 +112,8 @@ const readingHistory = new ReadingHistory(() => { if (window && store && !quitti
 function prepareReading(id, restore, filename) {
   const project = findProject(id);
   if (project.kind === 'ssh' || !['codex', 'claude'].includes(restore?.agent) || !/^[\w-]{1,100}$/.test(restore?.threadId || '')) return Promise.resolve();
-  return readingHistory.bind(id, { agent: restore.agent, threadId: restore.threadId, cwd: restore.cwd || project.path,
+  return readingHistory.bind(id, { agent: restore.agent, threadId: restore.threadId,
+    cwd: sessions.get(id)?.agentCwd || restore.cwd || store.findTerminal(id)?.record.restore?.cwd || project.path,
     home: restore.agent === 'claude' ? claudeConfigDir() : sessions.get(id)?.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), filename });
 }
 const { handoffFile, memoryDir, memoryFolder, scrubProjectSkills, sshHandoff } = createProjectHandoff({ app, getStore: () => store, sessions });
@@ -161,9 +162,9 @@ function publicState() {
       const opened = terminalIds(p);
       const terminals = shownTerminalIds(p).map(id => {
         const s = sessions.get(id);
+        const reading = !s?.error && !startupErrors.has(id) && (s?.codexActive || !s?.inputDirty && (restorePlans.has(id) || s?.agentStarting)) ? readingHistory.summary(id) : null;
         return { id, title: t('终端 {n}', { n: opened.indexOf(id) + 1 }), shell: s?.shellKind || (p.kind === 'ssh' ? 'bash' : localShell().kind), sessionId: s?.sessionId || null, status: s?.status || 'stopped', codexActive: s?.codexActive || false, agent: s?.codexActive ? s.agent || 'codex' : null,
-          ...(typeof readingHistory !== 'undefined' && readingHistory.summary(id) ? { readingHistory: readingHistory.summary(id) } : {}),
-          historyCatchingUp: !!s?.completionWork?.reading,
+          ...(reading ? { readingHistory: reading } : {}),
           agentStarting: !!s?.agentStarting && !s.codexActive && s.status !== 'exited' && !s.error,
           agentStartedAt: s?.codexActive ? s.activitySince : null,
           nativeMode: s?.nativeMode || null, nativeApprovals: s?.native?.registry.list() || [], nativeMessages: s?.nativeMessages || [], nativeReady: !!s?.nativeReady,
@@ -173,7 +174,7 @@ function publicState() {
           agentUsage: s?.codexActive && s.usage ? s.usage.snapshot(s.usageHistory) : dispatchedOnly(s),
           // A run of the CLI that is no conversation (update, --version, login), for the reading view to say so.
           agentCommand: s?.codexActive ? s.agentCommand || null : null,
-          codexActivity: s?.codexActivity || 'unknown', needsInput: s?.needsInput?.message || null, shellReady: !!s?.ready && !s?.inputDirty, codexAvailable: s?.codexAvailable ?? null,
+          codexActivity: s?.completionWork?.reading ? 'working' : s?.codexActivity || 'unknown', needsInput: s?.needsInput?.message || null, shellReady: !!s?.ready && !s?.inputDirty, codexAvailable: s?.codexAvailable ?? null,
           mainTurn: s?.codexActive ? s.completionWork?.mainTurn(s.activitySnapshot) || null : null,
           lastCompletedAt: s?.lastCompletedAt || null, error: s?.error || startupErrors.get(id) || null,
           // The step a working agent is on, for the card's one-line status; the full list is sent separately.
@@ -407,7 +408,7 @@ function followClaude(project, s, event) {
   if (!file || paths.basename(file) !== `${event.sessionId}.jsonl`) return;
   // The worker checks remote paths against its own Claude projects folder before reading them.
   if (!remote && !file.toLowerCase().startsWith(claudeConfigDir().toLowerCase() + path.sep)) return;
-  if (!remote) void prepareReading(s.terminalId, { agent: 'claude', threadId: event.sessionId, cwd: project.path }, file);
+  if (!remote) void prepareReading(s.terminalId, { agent: 'claude', threadId: event.sessionId }, file);
   s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
   s.claudeSessionId = event.sessionId;
   s.approval?.context('claude-session', event.sessionId);
@@ -453,7 +454,7 @@ function followClaude(project, s, event) {
       if (value.historyDone) onHistory(true);
       if (s.completionWork) s.completionWork.reading = !value.historyDone;
       if (s.completionWork && value.completionUncertain) s.completionWork.uncertain = true;
-      return s.activityRawSnapshot && { ...s.activityRawSnapshot, workVersion: s.completionWork?.version, transcriptRead: true };
+      return s.activityRawSnapshot && { ...s.activityRawSnapshot, workVersion: s.completionWork?.version, reading: !!s.completionWork?.reading, transcriptRead: true };
     };
     s.activityMonitor = monitorActivity(async () => {
       if (remote) return s.terminal.request('claude-status', { path: file, since }).then(remoteStatus);
@@ -463,7 +464,7 @@ function followClaude(project, s, event) {
         s.completionWork.reading = tail.historyPending || tail.offset < tail.fileSize || tail.buffer.length > 0;
         s.completionWork.uncertain ||= tail.workHistory?.uncertain;
       }
-      return s.activityRawSnapshot && { ...s.activityRawSnapshot, workVersion: s.completionWork?.version, transcriptRead: true };
+      return s.activityRawSnapshot && { ...s.activityRawSnapshot, workVersion: s.completionWork?.version, reading: !!s.completionWork?.reading, transcriptRead: true };
     }, snapshot => applyActivity(project, s, snapshot), { interval: () => readEvery(s), watch: () => remote ? null : tail.filename });
   } else void s.activityMonitor?.poll();
 }
@@ -648,11 +649,11 @@ async function followClaudeSession(project, s, id) {
 // One place turns an agent's turn state into lights and completion alerts, for Codex and Claude alike.
 function applyActivity(project, s, snapshot) {
   if (sessions.get(s.terminalId) !== s || !s.codexActive) return;
-  if (s.completionWork?.reading) { s.codexActivity = 'unknown'; scheduleState(); return; }
   if (snapshot.updatedAt < (s.activitySince || 0)) return;
   // Readers deduplicate snapshots. Retain even a completion hidden by provisional
   // input so that expiring that submission can replay it without another record.
   if (snapshot.updatedAt >= (s.activityRawSnapshot?.updatedAt || 0)) s.activityRawSnapshot = snapshot;
+  if (s.completionWork?.reading) { s.codexActivity = 'working'; scheduleState(); return; }
   if (['complete', 'interrupted'].includes(snapshot.state)) {
     s.completionWork?.end(snapshot.updatedAt);
     s.promptQueue.finish?.(snapshot.updatedAt);
@@ -781,6 +782,7 @@ function onEvent(event) {
     s.agentStarting = false;
     const restored = store.findTerminal(s.terminalId)?.record.restore;
     const startingAgent = event.agent === 'claude' ? 'claude' : 'codex';
+    s.agentCwd = event.cwd || restored?.cwd || project.path;
     if (typeof event.codexHome === 'string') s.codexHome = event.codexHome;
     if (restored?.codex !== true || (restored.agent || 'codex') !== startingAgent) readingHistory.close(s.terminalId);
     else void prepareReading(s.terminalId, { ...restored, agent: startingAgent, cwd: event.cwd || restored.cwd });
@@ -884,7 +886,8 @@ function onEvent(event) {
           s.completionWork.reading = reader.historyPending || reader.offset < reader.fileSize || reader.buffer.length > 0;
           s.completionWork.uncertain ||= reader.workHistory?.uncertain;
         }
-        return snapshot && { ...snapshot, workVersion: s.completionWork?.version };
+        const latest = snapshot || s.activityRawSnapshot;
+        return latest && { ...latest, workVersion: s.completionWork?.version, reading: !!s.completionWork?.reading };
       },
       snapshot => {
         if (!reader) snapshot = { ...snapshot, updatedAt: snapshot.updatedAt + s.activitySince - remoteSince };
@@ -939,12 +942,13 @@ function launchAfterPrompt(project, session) {
 
 async function resumeAfterPrompt(project, session) {
   const plan = restorePlans.get(session.terminalId);
-  if (!plan || !session.ready || session.inputDirty) return;
+  if (!plan || !session.ready) return;
   restorePlans.delete(session.terminalId);
+  if (session.inputDirty) { readingHistory.close(session.terminalId); return; }
   const restore = store.findTerminal(session.terminalId)?.record.restore;
   // Claude Code resumes its own conversation, here or on the terminal's SSH channel.
   if (restore?.agent === 'claude') {
-    if (!session.claudeAvailable || !plan.codex) return;
+    if (!session.claudeAvailable || !plan.codex) { readingHistory.close(session.terminalId); return; }
     try {
       const command = claudeResumeCommand(restore);
       if (sessions.get(session.terminalId) !== session || !session.ready || session.inputDirty || session.codexActive) return;
@@ -958,7 +962,8 @@ async function resumeAfterPrompt(project, session) {
     } catch (error) { session.error = `恢复会话失败：${error.message}`; broadcast(); }
     return;
   }
-  if (!session.codexAvailable) return;
+  if (!session.codexAvailable) { readingHistory.close(session.terminalId); return; }
+  session.agentStarting = true;
   try {
     const info = project.kind === 'ssh' ? await session.terminal.request('resume-info', { threadId: restore?.threadId }) : await recentSession(restore?.cwd || project.path, session.codexHome, restore?.threadId);
     // Legacy versions did not record which process owned a conversation. Open
@@ -975,6 +980,9 @@ async function resumeAfterPrompt(project, session) {
       broadcast();
     }
   } catch (error) { session.error = `恢复会话失败：${error.message}`; broadcast(); }
+  finally {
+    if (sessions.get(session.terminalId) === session && session.ready) { session.agentStarting = false; readingHistory.close(session.terminalId); broadcast(); }
+  }
 }
 
 function remoteFor(id) {
@@ -1128,7 +1136,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     terminal.write(data);
   }, { shellOwnsInput: () => !s.codexActive });
   const refreshCompletion = () => {
-    if (sessions.get(id) === s && s.codexActive && s.activitySnapshot) applyActivity(project, s, s.activitySnapshot);
+    if (sessions.get(id) === s && s.codexActive && (s.activityRawSnapshot || s.activitySnapshot)) applyActivity(project, s, s.activityRawSnapshot || s.activitySnapshot);
   };
   s.completionWork = new CompletionWork({ changed: refreshCompletion });
   s.promptQueue = new PromptQueue(expired => {

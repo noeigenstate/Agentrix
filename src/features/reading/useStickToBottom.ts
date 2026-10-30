@@ -15,10 +15,13 @@ export function shouldStickToBottom(stuck: boolean, current: ScrollMetrics, prev
 
 // Count only the suffix after retained entries: a loaded history page is not a new message.
 export function countNewEntries(previous: ReadonlySet<string>, entries: readonly { id: string }[]): number {
+  let arrived = 0;
   for (let index = entries.length - 1; index >= 0; index--) {
-    if (previous.has(entries[index].id)) return entries.length - index - 1;
+    if (entries[index].id.startsWith('pending:')) continue;
+    if (previous.has(entries[index].id)) return arrived;
+    arrived++;
   }
-  return entries.length;
+  return arrived;
 }
 
 // Explicit 'instant' also overrides a stylesheet's scroll-behavior: smooth.

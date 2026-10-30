@@ -10,7 +10,7 @@ const { choiceKeys, selectedChoiceIndex, writeChoiceKeys } = require('../src/fea
 const { choiceIdentity } = require('../src/features/agents/agent-screen.ts');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
 const en = require('../electron/locales/en.json');
-const historySnapshot = entries => ({ entries, paged: false, hasEarlier: false, loading: false, error: null, loadEarlier: async () => false });
+const historySnapshot = entries => ({ entries, paged: false, hasEarlier: false, loading: false, error: null, loadEarlier: async () => false, compact: async () => false });
 
 // Components use test-only screen values until feat/screen-parser replaces the stub.
 const fakeScreen = overrides => ({
@@ -722,13 +722,15 @@ test('an identity-checked restored history may show before the CLI, respects raw
   assert.equal(isReading(mode, { ...value, readingHistory: null }), false);
 });
 
-test('a restored preview cannot send until its own CLI input is ready, and changing the history key disables it again', async t => {
+test('a restored preview cannot send until its own CLI input is ready, and a different thread disables it again', async t => {
   let rows = [];
   const h = dictationHarness(t, { './terminal-screen': { useScreen: () => ({ rows }), readScreen: () => ({ rows }) } });
   Object.assign(h.props.terminal, { sessionId: null, codexActive: false, readingHistory: { key: 'history-a', agent: 'codex', threadId: 'restored' } });
   assert.equal(h.render().props.disabled, true);
   assert.equal(h.render().props.placeholder, en['正在启动…']);
   h.edit('do not send before ready'); h.press('Enter'); await h.tick(1000);
+  h.command('/status'); await h.tick(1000);
+  h.dictate('/status', true); await h.tick(1000);
   assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
   Object.assign(h.props.terminal, { sessionId: 'resumed-runtime', codexActive: true });
   assert.equal(h.render().props.disabled, true);
@@ -736,8 +738,47 @@ test('a restored preview cannot send until its own CLI input is ready, and chang
   assert.equal(h.render().props.disabled, false);
   rows = ['Working...'];
   assert.equal(h.render().props.disabled, false, 'input readiness remains latched through a working turn');
+  h.props.terminal.readingHistory = { key: 'new-capability', agent: 'codex', threadId: 'restored' };
+  assert.equal(h.render().props.disabled, false, 'a new page capability is not a new CLI session');
   h.props.terminal.readingHistory = { key: 'history-b', agent: 'codex', threadId: 'different' };
   assert.equal(h.render().props.disabled, true);
+});
+
+test('a first-turn page binding cannot cancel the pending Enter or change the pending-prompt runtime slot', async t => {
+  const rows = ['› Ask Codex to do anything', '', 'gpt-6.1-sol · high · 100% context left'], owners = [];
+  const h = dictationHarness(t, {
+    './terminal-screen': { useScreen: () => ({ rows }), readScreen: () => ({ rows }) },
+    './usePendingPrompts': { usePendingPrompts: (_id, session) => { owners.push(session); return { pending: [], echo: () => 'pending:first', cancelEcho() {} }; } },
+  });
+  h.edit('first turn'); h.press('Enter'); await h.tick(100);
+  assert.equal(h.pasted.length, 1); assert.deepEqual(h.written, []);
+  h.props.terminal.readingHistory = { key: 'first-key', agent: 'codex', threadId: 'first-thread' };
+  h.render(); await h.tick(400);
+  assert.equal(h.written.filter(write => write.text === '\r').length, 1);
+  h.props.terminal.readingHistory = { key: 'refreshed-key', agent: 'codex', threadId: 'first-thread' };
+  h.render(); await h.tick(700);
+  assert.ok(owners.every(owner => owner === 'session'));
+});
+
+test('pending echoes survive a newly learned thread but a real thread or runtime switch clears them', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { usePendingPrompts } = loadUI('features/reading/usePendingPrompts.ts', { './pending-prompts': require('../src/features/reading/pending-prompts.ts'), react: {
+    useSyncExternalStore: (_subscribe, snapshot) => snapshot(), useMemo: make => make(), useLayoutEffect: run => run(),
+  } });
+  const id = 'pending-identity-test';
+  usePendingPrompts(id, 'runtime', []).echo('still sending');
+  assert.equal(usePendingPrompts(id, 'runtime', [], 'first-thread').pending.length, 1);
+  assert.equal(usePendingPrompts(id, 'runtime', [], 'different-thread').pending.length, 0);
+  usePendingPrompts(id, 'runtime', [], 'different-thread').echo('second send');
+  assert.equal(usePendingPrompts(id, 'new-runtime', [], 'different-thread').pending.length, 0);
+});
+
+test('a read-only preview suppresses stale screen choices and approval cards', t => {
+  const h = dictationHarness(t);
+  h.screen.choice = { kind: 'permission', options: [], question: 'stale screen' };
+  Object.assign(h.props.terminal, { codexActive: false, readingHistory: { key: 'preview', agent: 'codex', threadId: 'saved' }, nativeApprovals: [{ token: 'stale' }] });
+  assert.equal(h.render().props.disabled, true);
+  assert.equal(elements(h.tree()).some(node => node.props.choice || node.props.request), false);
 });
 
 test('the terminal surface follows reading intent even before the reading subtree exists, and respects raw choice', () => {
@@ -760,6 +801,22 @@ test('the terminal surface follows reading intent even before the reading subtre
   const raw = render(value);
   assert.match(raw, /data-reading="false"/); assert.match(raw, /data-focused="true"/);
   assert.match(render({ ...value, codexActive: false }), /data-reading="false"/, 'ordinary shells remain visible');
+});
+
+test('a restored preview and live splits keep the same order and fallback selection in small and expanded cards', () => {
+  const mode = readingMode(), { ProjectTerminals } = loadUI('features/terminal/ProjectTerminals.tsx', {
+    './reading-mode': mode, './ReadingView': { ReadingView: () => null }, './TerminalPane': { TerminalPane: () => null },
+    './AgentLauncher': { AgentLauncher: () => null }, './useProjectReorder': { useReorder: () => ({}) },
+  });
+  const first = { ...terminal('preview', null), title: 'Preview', codexActive: false, sessionId: null, readingHistory: { key: 'preview-key', agent: 'codex', threadId: 'saved' } };
+  const second = { ...terminal('live', null), title: 'Live' };
+  for (const focused of [false, true]) {
+    const html = renderToStaticMarkup(React.createElement(ProjectTerminals, {
+      project: { id: 'project', name: 'Project', terminals: [first, second] }, focused, activeId: null, setActiveId() {}, fontSize: 14,
+    }));
+    assert.ok(html.indexOf('data-terminal-slot="preview"') < html.indexOf('data-terminal-slot="live"'));
+    assert.match(html, /class="terminal-split is-active-terminal\s*"[^>]*data-terminal-id="preview"/);
+  }
 });
 
 function readingHarness(t, entries = [], overrides = {}) {
@@ -959,7 +1016,7 @@ test('an expanded visible tool group keeps its component state through rolling e
       if (Array.isArray(node)) { node.forEach(child => visit(child, path)); return; }
       const key = path + '/' + String(node.key ?? (typeof node.type === 'function' ? node.type.name : node.type));
       if (node.type?.name === 'ToolGroup') found = { key, node: run(key, node.type, node.props) };
-      else if (node.type?.name === 'LegacyReadingView') visit(run(key, node.type, node.props), key);
+      else if (node.type?.name === 'TerminalReadingView') visit(run(key, node.type, node.props), key);
       else visit(node.props?.children, key);
     };
     visit(root); return found;

@@ -2,17 +2,18 @@ import { useLayoutEffect, useMemo, useSyncExternalStore } from 'react';
 import type { ConversationEntry } from '../../shared/types';
 import { addPendingPrompt, createPendingPrompts, PENDING_PROMPT_TIMEOUT, reconcilePendingPrompts, removePendingPrompt, type PendingPrompts } from './pending-prompts';
 
-type Slot = { state: PendingPrompts; listeners: Set<() => void>; timer?: ReturnType<typeof setTimeout> };
+type Slot = { state: PendingPrompts; threadId?: string; listeners: Set<() => void>; timer?: ReturnType<typeof setTimeout> };
 // Keep an unconfirmed message when the reader temporarily switches to the CLI.
 const terminals = new Map<string, Slot>();
 
-function slotFor(id: string, sessionId: string | null): Slot {
+function slotFor(id: string, sessionId: string | null, threadId?: string): Slot {
   let slot = terminals.get(id);
-  if (!slot || slot.state.sessionId !== sessionId) {
+  if (!slot || slot.state.sessionId !== sessionId || threadId && slot.threadId && slot.threadId !== threadId) {
     clearTimeout(slot?.timer);
-    slot = { state: createPendingPrompts(sessionId), listeners: new Set() };
+    slot = { state: createPendingPrompts(sessionId), threadId, listeners: new Set() };
     terminals.set(id, slot);
   }
+  if (threadId) slot.threadId = threadId;
   return slot;
 }
 
@@ -25,8 +26,8 @@ function update(slot: Slot, state: PendingPrompts) {
   slot.listeners.forEach(listener => listener());
 }
 
-export function usePendingPrompts(id: string, sessionId: string | null, entries: readonly ConversationEntry[]) {
-  const slot = slotFor(id, sessionId);
+export function usePendingPrompts(id: string, sessionId: string | null, entries: readonly ConversationEntry[], threadId?: string) {
+  const slot = slotFor(id, sessionId, threadId);
   const snapshot = useSyncExternalStore(listener => { slot.listeners.add(listener); return () => { slot.listeners.delete(listener); }; }, () => slot.state);
   // Derive before paint so an incoming record never renders alongside its echo.
   const state = useMemo(() => reconcilePendingPrompts(snapshot, sessionId, entries, Date.now()), [snapshot, sessionId, entries]);
