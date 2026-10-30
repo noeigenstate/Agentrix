@@ -301,10 +301,20 @@ test('Codex reset count arrives automatically, shows zero and bounded query stat
   const loading = render('loading');
   assert.equal(status(loading), '查询中…'); assert.match(hover(loading), /^正在查询剩余次数…\n点击后有 10 秒可以取消/);
   assert.doesNotMatch(loading, /<button[^>]*disabled/);
-  const cases = [[render('error', null, 'timeout'), '查询失败', '查询失败，将自动重试'], [render('unavailable', null, 'remote'), '暂不支持', '远程账号暂不支持后台查询'],
+  const unchecked = activityMarkup([], 'zh', { agent: 'codex', agentUsage: { limits: [], resets: null } });
+  const cases = [[unchecked, '尚未查询', '还没有查询过这个账号的重置次数'],
+    [render('error', null, 'timeout'), '查询失败', '查询失败，将自动重试'], [render('unavailable', null, 'remote'), '暂不支持', '远程账号暂不支持后台查询'],
     [render('unavailable', null, 'provider'), '暂不支持', '当前接口不提供重置次数'], [render('unavailable', null, 'scope'), '无法确认', '无法确认账号环境，暂不能查询'],
-    [render('unavailable', null, 'unsupported'), '次数未知', '当前账号或 Codex 版本未提供次数，将自动重试']];
-  for (const [html, short, full] of cases) { assert.equal(status(html), short); assert.ok(hover(html).startsWith(full + '\n'), full); assert.doesNotMatch(/<div class="activity-reset">[\s\S]*?<\/div>/.exec(html)[0], /activity-note/, 'no separate status line'); }
+    [render('unavailable', null, 'unsupported'), '未提供次数', '这个账号没有返回重置次数，5 小时和每周额度照常显示；将定时再查'],
+    [render('ready'), '未提供次数', '这个账号没有返回重置次数，5 小时和每周额度照常显示；将定时再查'],
+    [render('unavailable', null, 'something-new'), '次数未知', '无法确定重置次数，将定时再查'], [render('unavailable'), '次数未知', '无法确定重置次数，将定时再查']];
+  for (const [html, short, full] of cases) { assert.equal(status(html), short); assert.ok(hover(html).startsWith(full + '\n'), full); assert.doesNotMatch(/<div class="activity-reset">[\s\S]*?<\/div>/.exec(html)[0], /activity-note/, 'no separate status line'); assert.doesNotMatch(html, /剩余 0 次|已用完/, `${short} is not zero`); }
+  // Never checked, answered without a count and an unnamed reason are three different things, each with its own hover.
+  const own = ['尚未查询', '未提供次数', '次数未知'];
+  assert.equal(new Set(cases.filter(([, short]) => own.includes(short)).map(([html]) => hover(html).split('\n')[0])).size, own.length);
+  // Without a background answer, a count the screen once said still shows.
+  assert.match(activityMarkup([], 'zh', { agent: 'codex', agentUsage: { limits: [], resets: { left: 2, total: null } } }), /<small>剩余 2 次<\/small>/);
+  for (const key of ['尚未查询', '还没有查询过这个账号的重置次数', '未提供次数', '这个账号没有返回重置次数，5 小时和每周额度照常显示；将定时再查', '次数未知', '无法确定重置次数，将定时再查']) assert.ok(en[key], key);
 });
 
 test('the pane: the main card (with its tasks) above the models, context and usage; no separate tasks card, no fake progress', () => {

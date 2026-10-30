@@ -235,12 +235,15 @@ function useResetsSaid(terminal: ProjectTerminal) {
 const COUNTDOWN = 10;
 // Why the number of resets is not known: a short form for the row's right-hand slot (which must leave the label whole) and the whole sentence for its hover.
 function queryStatus(query: AgentUsage['resetQuery']) {
-  if (query?.state === 'loading') return { short: t('查询中…'), full: t('正在查询剩余次数…') };
-  if (query?.reason === 'remote') return { short: t('暂不支持'), full: t('远程账号暂不支持后台查询') };
-  if (query?.reason === 'provider') return { short: t('暂不支持'), full: t('当前接口不提供重置次数') };
-  if (query?.reason === 'scope') return { short: t('无法确认'), full: t('无法确认账号环境，暂不能查询') };
-  if (query?.state === 'error') return { short: t('查询失败'), full: t('查询失败，将自动重试') };
-  return { short: t('次数未知'), full: t('当前账号或 Codex 版本未提供次数，将自动重试') };
+  if (!query) return { short: t('尚未查询'), full: t('还没有查询过这个账号的重置次数') };
+  if (query.state === 'loading') return { short: t('查询中…'), full: t('正在查询剩余次数…') };
+  if (query.reason === 'remote') return { short: t('暂不支持'), full: t('远程账号暂不支持后台查询') };
+  if (query.reason === 'provider') return { short: t('暂不支持'), full: t('当前接口不提供重置次数') };
+  if (query.reason === 'scope') return { short: t('无法确认'), full: t('无法确认账号环境，暂不能查询') };
+  if (query.state === 'error') return { short: t('查询失败'), full: t('查询失败，将自动重试') };
+  // The account answered (the limits show) but gave no count: told apart from a reason nobody named.
+  if (query.state === 'ready' || query.reason === 'unsupported') return { short: t('未提供次数'), full: t('这个账号没有返回重置次数，5 小时和每周额度照常显示；将定时再查') };
+  return { short: t('次数未知'), full: t('无法确定重置次数，将定时再查') };
 }
 function ResetQuota({ terminal }: { terminal: ProjectTerminal }) {
   const left = codexResetCount(terminal.agentUsage, useResetsSaid(terminal)), unknown = queryStatus(terminal.agentUsage?.resetQuery);
