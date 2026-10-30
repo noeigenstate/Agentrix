@@ -235,10 +235,12 @@ function useResetsSaid(terminal: ProjectTerminal) {
 const COUNTDOWN = 10;
 // Why the number of resets is not known: a short form for the row's right-hand slot (which must leave the label whole) and the whole sentence for its hover.
 function queryStatus(query: AgentUsage['resetQuery']) {
-  if (!query) return { short: t('尚未查询'), full: t('还没有查询过这个账号的重置次数') };
-  if (query.state === 'loading') return { short: t('查询中…'), full: t('正在查询剩余次数…') };
+  if (!query) return { short: t('暂无状态'), full: t('当前会话还没有重置次数的查询状态；符合条件的本地账号会自动查询') };
+  if (query.state === 'loading') return { short: t('查询中…'), full: t('正在查询剩余重置次数，结果出来后会显示在这里') };
   if (query.reason === 'remote') return { short: t('暂不支持'), full: t('远程账号暂不支持后台查询') };
   if (query.reason === 'provider') return { short: t('暂不支持'), full: t('当前接口不提供重置次数') };
+  if (query.reason === 'version') return { short: t('暂不支持'), full: t('当前 Codex 版本不支持查询重置次数') };
+  if (query.reason === 'missing') return { short: t('暂不支持'), full: t('找不到 Codex 程序，无法查询重置次数') };
   if (query.reason === 'scope') return { short: t('无法确认'), full: t('无法确认账号环境，暂不能查询') };
   if (query.state === 'error') return { short: t('查询失败'), full: t('查询失败，将自动重试') };
   // The account answered (the limits show) but gave no count: told apart from a reason nobody named.
@@ -270,9 +272,11 @@ function ResetQuota({ terminal }: { terminal: ProjectTerminal }) {
   // A 32px row on the task grid: the icon, the label and, in the right-hand slot, how many resets are left, or why that is not known, or that it is counting down. The countdown itself is the overlay.
   const counting = count !== null, status = counting ? t('倒计时中…') : left === 0 ? t('已用完') : left !== null ? t('剩余 {count} 次', { count: left }) : unknown.short;
   const start = () => { fired.current = false; setNote(null); setCount(COUNTDOWN); };
+  // The hover says what this row does now: why the count is unknown and then the click's explanation, that nothing is left to use, or how to cancel.
+  const title = counting ? t('倒计时进行中，可点击「取消」、按 Esc 或点击空白处取消') : left === 0 ? t('没有剩余重置次数，此行不可点击')
+    : [left === null && unknown.full, t('点击后开始 10 秒倒计时，期间可取消；结束后打开 {agent} 的 /usage，由你选择并确认重置', { agent: 'Codex' })].filter(Boolean).join('\n');
   return <div className="activity-reset">
-    <button ref={row} type="button" className="activity-reset-row activity-estop" disabled={counting || left === 0 || !terminal.codexActive}
-      title={[left === null && unknown.full, t('点击后有 10 秒可以取消，然后由 {agent} 自己完成重置', { agent: 'Codex' })].filter(Boolean).join('\n')} onClick={start}>
+    <button ref={row} type="button" className="activity-reset-row activity-estop" disabled={counting || left === 0 || !terminal.codexActive} title={title} onClick={start}>
       <span className="activity-row-icon"><ArrowCounterClockwise size={14} aria-hidden="true" /></span>
       <span className="activity-reset-label">{t('重置额度')}</span>
       <small>{status}</small>

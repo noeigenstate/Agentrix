@@ -290,31 +290,57 @@ test('hover titles give exact token counts, one-decimal limit percentages and th
 });
 
 test('Codex reset count arrives automatically, shows zero and bounded query states, preserving explicit reset controls', () => {
-  const render = (state, left = null, reason) => activityMarkup([], 'zh', { agent: 'codex', agentUsage: {
-    limits: [], resets: left === null ? null : { left, total: null }, resetQuery: { state, reason },
+  const render = (language, state, left = null, reason) => activityMarkup([], language, { agent: 'codex', agentUsage: {
+    limits: [], resets: left === null ? null : { left, total: null }, resetQuery: state && { state, reason },
   } });
-  assert.match(render('ready', 2), /<small>剩余 2 次<\/small>/);
-  const zero = render('ready', 0);
-  assert.match(zero, /<small>已用完<\/small>/); assert.match(zero, /<button[^>]*disabled/); assert.doesNotMatch(zero, /剩余 0 次/, 'none left is told apart from not knowing');
-  // Not knowing: a short status in the row's right-hand slot, the whole sentence (then the click's explanation) in the row's hover.
-  const status = html => /<small>([^<]*)<\/small><\/button>/.exec(html)[1], hover = html => /class="activity-reset-row activity-estop" title="([^"]*)"/.exec(html)[1];
-  const loading = render('loading');
-  assert.equal(status(loading), '查询中…'); assert.match(hover(loading), /^正在查询剩余次数…\n点击后有 10 秒可以取消/);
-  assert.doesNotMatch(loading, /<button[^>]*disabled/);
-  const unchecked = activityMarkup([], 'zh', { agent: 'codex', agentUsage: { limits: [], resets: null } });
-  const cases = [[unchecked, '尚未查询', '还没有查询过这个账号的重置次数'],
-    [render('error', null, 'timeout'), '查询失败', '查询失败，将自动重试'], [render('unavailable', null, 'remote'), '暂不支持', '远程账号暂不支持后台查询'],
-    [render('unavailable', null, 'provider'), '暂不支持', '当前接口不提供重置次数'], [render('unavailable', null, 'scope'), '无法确认', '无法确认账号环境，暂不能查询'],
-    [render('unavailable', null, 'unsupported'), '未提供次数', '这个账号没有返回重置次数，5 小时和每周额度照常显示；将定时再查'],
-    [render('ready'), '未提供次数', '这个账号没有返回重置次数，5 小时和每周额度照常显示；将定时再查'],
-    [render('unavailable', null, 'something-new'), '次数未知', '无法确定重置次数，将定时再查'], [render('unavailable'), '次数未知', '无法确定重置次数，将定时再查']];
-  for (const [html, short, full] of cases) { assert.equal(status(html), short); assert.ok(hover(html).startsWith(full + '\n'), full); assert.doesNotMatch(/<div class="activity-reset">[\s\S]*?<\/div>/.exec(html)[0], /activity-note/, 'no separate status line'); assert.doesNotMatch(html, /剩余 0 次|已用完/, `${short} is not zero`); }
-  // Never checked, answered without a count and an unnamed reason are three different things, each with its own hover.
-  const own = ['尚未查询', '未提供次数', '次数未知'];
-  assert.equal(new Set(cases.filter(([, short]) => own.includes(short)).map(([html]) => hover(html).split('\n')[0])).size, own.length);
+  // The row's right-hand slot (a short status) and its hover (the whole sentence); renderToStaticMarkup escapes the apostrophe in English.
+  const status = html => /<small>([^<]*)<\/small><\/button>/.exec(html)[1];
+  const hover = html => /class="activity-reset-row activity-estop"[^>]*? title="([^"]*)"/.exec(html)[1].replaceAll('&#x27;', "'");
+  const click = {
+    zh: '点击后开始 10 秒倒计时，期间可取消；结束后打开 Codex 的 /usage，由你选择并确认重置',
+    en: "Click to start a 10-second countdown; you can cancel it. Afterward, Codex's /usage opens, where you choose and confirm a reset.",
+  };
+  const unsupportedFull = ['这个账号没有返回重置次数，5 小时和每周额度照常显示；将定时再查', 'This account did not return a reset count; the 5-hour and weekly limits still show. It will be checked again on a schedule'];
+  const unknownFull = ['无法确定重置次数，将定时再查', 'Cannot tell how many resets are left; it will be checked again on a schedule'];
+  // [state, count, reason, short and hover in Chinese, short and hover in English]
+  const cases = [
+    [undefined, null, undefined, ['暂无状态', '当前会话还没有重置次数的查询状态；符合条件的本地账号会自动查询'], ['No status yet', 'No reset-count query status is available for this session yet; eligible local accounts are checked automatically.']],
+    ['loading', null, undefined, ['查询中…', '正在查询剩余重置次数，结果出来后会显示在这里'], ['Checking…', 'Checking the remaining reset count; the result will appear here.']],
+    ['error', null, 'timeout', ['查询失败', '查询失败，将自动重试'], ['Query failed', 'Query failed; retrying automatically']],
+    ['unavailable', null, 'remote', ['暂不支持', '远程账号暂不支持后台查询'], ['Not supported', 'Background queries are not yet supported for remote accounts']],
+    ['unavailable', null, 'provider', ['暂不支持', '当前接口不提供重置次数'], ['Not supported', 'This provider does not provide reset counts']],
+    ['unavailable', null, 'version', ['暂不支持', '当前 Codex 版本不支持查询重置次数'], ['Not supported', 'This Codex version cannot query the reset count.']],
+    ['unavailable', null, 'missing', ['暂不支持', '找不到 Codex 程序，无法查询重置次数'], ['Not supported', 'Codex was not found, so the reset count cannot be queried.']],
+    ['unavailable', null, 'scope', ['无法确认', '无法确认账号环境，暂不能查询'], ['Unconfirmed', 'Cannot verify the account environment; query unavailable']],
+    ['unavailable', null, 'unsupported', ['未提供次数', unsupportedFull[0]], ['Not provided', unsupportedFull[1]]],
+    ['ready', null, undefined, ['未提供次数', unsupportedFull[0]], ['Not provided', unsupportedFull[1]]],
+    ['unavailable', null, 'something-new', ['次数未知', unknownFull[0]], ['Unknown', unknownFull[1]]],
+    ['unavailable', null, undefined, ['次数未知', unknownFull[0]], ['Unknown', unknownFull[1]]],
+  ];
+  for (const language of ['zh', 'en']) {
+    const shown = language === 'zh' ? 0 : 1, hovers = [];
+    assert.match(render(language, 'ready', 2), language === 'zh' ? /<small>剩余 2 次<\/small>/ : /<small>2 left<\/small>/);
+    assert.equal(hover(render(language, 'ready', 2)), click[language], 'a known count has only the click explanation');
+    const zero = render(language, 'ready', 0);
+    assert.match(zero, language === 'zh' ? /<small>已用完<\/small>/ : /<small>None left<\/small>/); assert.match(zero, /<button[^>]*disabled/);
+    assert.equal(hover(zero), language === 'zh' ? '没有剩余重置次数，此行不可点击' : 'No resets remain; this row is disabled.', 'none left says the row is disabled');
+    assert.doesNotMatch(zero, /剩余 0 次|0 left/, 'none left is told apart from not knowing');
+    for (const [state, left, reason, ...texts] of cases) {
+      const html = render(language, state, left, reason), [short, full] = texts[shown];
+      assert.equal(status(html), short, `${state} ${reason}`); assert.equal(hover(html), `${full}\n${click[language]}`, `${state} ${reason}`);
+      assert.doesNotMatch(/<div class="activity-reset">[\s\S]*?<\/div>/.exec(html)[0], /activity-note/, 'no separate status line');
+      assert.doesNotMatch(html, /剩余 0 次|已用完|0 left|None left/, `${short} is not zero`);
+      assert.equal(/<button[^>]*disabled/.test(html), false, 'an unknown count can still be used');
+      hovers.push(full);
+    }
+    // Each reason has its own words; only two pairs share them: an answer without a count (unsupported or ready) and an unnamed or absent reason.
+    assert.equal(new Set(hovers).size, cases.length - 2);
+  }
   // Without a background answer, a count the screen once said still shows.
   assert.match(activityMarkup([], 'zh', { agent: 'codex', agentUsage: { limits: [], resets: { left: 2, total: null } } }), /<small>剩余 2 次<\/small>/);
-  for (const key of ['尚未查询', '还没有查询过这个账号的重置次数', '未提供次数', '这个账号没有返回重置次数，5 小时和每周额度照常显示；将定时再查', '次数未知', '无法确定重置次数，将定时再查']) assert.ok(en[key], key);
+  for (const [, , , zh, english] of cases) for (const [key, value] of [[zh[0], english[0]], [zh[1], english[1]]]) assert.equal(en[key], value, key);
+  for (const [key, value] of Object.entries({ '没有剩余重置次数，此行不可点击': 'No resets remain; this row is disabled.', '点击后开始 10 秒倒计时，期间可取消；结束后打开 {agent} 的 /usage，由你选择并确认重置': click.en.replace('Codex', '{agent}') })) assert.equal(en[key], value, key);
+  for (const gone of ['尚未查询', '还没有查询过这个账号的重置次数', '正在查询剩余次数…', '点击后有 10 秒可以取消，然后由 {agent} 自己完成重置']) assert.ok(!(gone in en), `${gone} is no longer used`);
 });
 
 test('the pane: the main card (with its tasks) above the models, context and usage; no separate tasks card, no fake progress', () => {
@@ -527,11 +553,14 @@ test('the reset countdown is one large overlay: a draining ring with the seconds
 
 test('the reset row stays the trigger: it never turns into a countdown row, and the old row countdown is gone', () => {
   const html = activityMarkup([], 'zh', { agent: 'codex', agentUsage: { limits: [], resets: { left: 2, total: null }, resetQuery: { state: 'ready' } } });
-  assert.match(html, /<button type="button" class="activity-reset-row activity-estop" title="点击后有 10 秒可以取消，然后由 Codex 自己完成重置"><span class="activity-row-icon">[\s\S]*?<\/span><span class="activity-reset-label">重置额度<\/span><small>剩余 2 次<\/small><\/button>/);
+  assert.match(html, /<button type="button" class="activity-reset-row activity-estop" title="点击后开始 10 秒倒计时，期间可取消；结束后打开 Codex 的 \/usage，由你选择并确认重置"><span class="activity-row-icon">[\s\S]*?<\/span><span class="activity-reset-label">重置额度<\/span><small>剩余 2 次<\/small><\/button>/);
   assert.doesNotMatch(html, /reset-countdown|role="timer"|倒计时中/, 'nothing counts before the click');
   const source = fs.readFileSync(path.join(__dirname, '../src/features/agents/ActivityPane.tsx'), 'utf8');
   assert.ok(source.includes("status = counting ? t('倒计时中…')"), 'while it counts the row says so quietly, in the same slot');
   assert.ok(source.includes('disabled={counting ||'), 'and cannot start a second countdown');
+  // The countdown is a state of the live component, so its hover is pinned in the source and the translations.
+  assert.ok(source.includes("const title = counting ? t('倒计时进行中，可点击「取消」、按 Esc 或点击空白处取消')"), 'while it counts the hover says how to cancel');
+  assert.equal(en['倒计时进行中，可点击「取消」、按 Esc 或点击空白处取消'], 'The countdown is in progress. Cancel it with the button, Esc, or a click outside.');
   assert.ok(source.includes('{!!count && <ResetCountdown count={count} total={COUNTDOWN} onCancel={() => setCount(null)} />}'));
   assert.doesNotMatch(source, /activity-reset-cancel|is-counting|'\{seconds\} 秒后重置'/);
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
