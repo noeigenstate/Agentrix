@@ -10,6 +10,12 @@ const { registerFilesIpc } = require('../electron/features/files/ipc.cjs');
 async function fixture(t) {
   const prefix = path.join(os.tmpdir(), 'agentrix-outside-preview-'), directory = await fs.mkdtemp(prefix);
   const project = { id: 'p', kind: 'local', path: path.join(directory, 'project') }, folder = path.join(directory, 'output'), links = [];
+  const home = path.join(directory, 'synthetic-home');
+  t.mock.method(os, 'homedir', () => home);
+  for (const [key, suffix] of Object.entries({ APPDATA: 'AppData/Roaming', LOCALAPPDATA: 'AppData/Local', XDG_CONFIG_HOME: '.config', XDG_DATA_HOME: '.local/share' })) {
+    const previous = process.env[key]; process.env[key] = path.join(home, suffix);
+    t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
+  }
   await fs.mkdir(project.path); await fs.mkdir(folder); await fs.mkdir(path.join(folder, 'assets'));
   await fs.writeFile(path.join(folder, 'page 中文 #%.html'), '<link rel="stylesheet" href="assets/style.css"><script src="assets/page.js"></script><h1>Outside</h1>');
   await fs.writeFile(path.join(folder, 'assets/style.css'), 'body { color: red; }');

@@ -1,7 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { VIDEO_TYPES } = require('../../project-files.cjs');
-const { inside, previewLocation, localPath, checked, failure, OUTSIDE, SSH_OUTSIDE } = require('./preview-location.cjs');
+const { inside, previewLocation, localPath, projectFile, networkPath, checked, failure, OUTSIDE, SSH_OUTSIDE } = require('./preview-location.cjs');
 const { cardKind, isImageFile } = require('./file-kind.cjs');
 const { PictureThumbnails, dataImage, FILE_LIMIT: IMAGE_BYTES } = require('./picture-thumbnail.cjs');
 const pictureValues = require('./picture-values.json');
@@ -109,19 +109,19 @@ function createFileCards({ previews, capture, shrink = () => null, shrinkBytes =
     // An image is only shown here, never served by the preview, so one the agent saved anywhere on this computer (its
     // own output folder, the desktop) is shown as well.
     if (kind === 'image') {
-      const absolute = path.resolve(localPath(cwd || project.path), localPath(checked(file)));
+      const { base, absolute } = projectFile(project, checked(file), cwd || project.path);
       const stat = await fs.stat(absolute).catch(() => null);
       if (!stat?.isFile()) throw new Error('找不到这张图片。');
       if (stat.size > IMAGE_BYTES) throw new Error('图片太大，无法预览。');
-      const picture = localPictures.file(absolute);
+      const picture = localPictures.file(absolute, { projectRoot: base });
       if (!dataImage(picture)) throw new Error(picture === pictureValues.omitted ? '图片太大，无法预览。' : '无法读取这张图片。');
-      return { kind, path: absolute, picture };
+      return { kind, path: networkPath(absolute) ? path.relative(base, absolute).split(path.sep).join('/') : absolute, picture };
     }
     const where = kind === 'markdown'
-      ? await inside(project, file, cwd).catch(error => { if (error.code === 'OUTSIDE') return null; throw error; })
+      ? await inside(project, file, cwd).catch(error => { if (['OUTSIDE', 'OUTSIDE_LINK'].includes(error.code)) return null; throw error; })
       : await previewLocation(project, file, cwd, previews.getProjects?.() || []);
     if (!where) {
-      const absolute = path.resolve(localPath(cwd || project.path), localPath(file));
+      const { absolute } = projectFile(project, file, cwd || project.path);
       return { kind, path: absolute, outside: true, excerpt: (await outsideDocument(previews, project, absolute, EXCERPT)).text };
     }
     const { absolute, relative } = where;

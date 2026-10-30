@@ -49,10 +49,13 @@ function FileCard({ projectId, file, renderMarkdown, onError, quiet }: { project
   const name = file.split(/[\\/]/).pop() || file;
   const kind = card?.kind ?? (/\.html?$/i.test(file) ? 'html' : /\.(?:md|markdown|mdx)$/i.test(file) ? 'markdown' : /\.(?:png|jpe?g|gif|webp|bmp)$/i.test(file) ? 'image' : 'video');
   const Icon = kind === 'html' ? FileHtml : kind === 'video' ? FilmStrip : kind === 'image' ? ImageIcon : FileText;
-  // An image on this computer is read by its own path; one in a remote project, like any file there, through the project.
+  // Standalone local images open by absolute path; images on a project share open through its file boundary.
   // A Markdown file outside the project is read as a document; pages and videos resolve their own preview folder.
-  const show = (shown: Card) => showPopup(shown.kind === 'image' && !shown.remote ? { kind: 'image', path: shown.path }
-    : shown.kind === 'markdown' && shown.outside ? { kind: 'document', projectId, path: shown.path } : { kind: 'file', projectId, path: shown.path });
+  const show = (shown: Card) => {
+    if (shown.kind === 'image' && !shown.remote && /^(?:[a-z]:[\\/]|\/(?!\/))/i.test(shown.path)) return showPopup({ kind: 'image', path: shown.path });
+    if (shown.kind === 'markdown' && shown.outside) return showPopup({ kind: 'document', projectId, path: shown.path });
+    showPopup({ kind: 'file', projectId, path: shown.path });
+  };
   // A click before the card loaded still resolves through the main process, never the raw agent path.
   const open = async () => {
     if (card) { show(card); return; }

@@ -1,11 +1,12 @@
-const { randomUUID } = require('node:crypto');
 const { resourceResponse } = require('../../preview-resources.cjs');
-// Outside pages use a private in-memory session; its filter never changes the application's session.
+const OFFLINE_PARTITION = 'preview-offline';
+const denyRequest = (_details, callback) => callback({ cancel: true });
+// Captures are serialized by file cards. Reuse one non-persistent offline session, separate from the application.
 function createPageCapture(BrowserWindow, { timeout = 10000, settle = 500, fontWait = 1200 } = {}) {
   return async function capturePage(url, resources) {
     const offline = resources?.isOutsideUrl(url) === true;
     const page = new BrowserWindow({ show: false, width: 1280, height: 800, webPreferences: { offscreen: true, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false,
-      ...(offline ? { partition: `preview-${randomUUID()}` } : {}) } });
+      ...(offline ? { partition: OFFLINE_PARTITION } : {}) } });
     const contents = page.webContents;
     contents.setWindowOpenHandler(() => ({ action: 'deny' }));
     contents.on('will-navigate', event => event.preventDefault());
@@ -15,6 +16,7 @@ function createPageCapture(BrowserWindow, { timeout = 10000, settle = 500, fontW
     let deadline;
     try {
       if (offline) {
+        contents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
         const host = new URL(url).hostname;
         contents.session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
           const local = /^(?:data:|blob:|about:blank$)/.test(details.url);
@@ -53,8 +55,11 @@ function createPageCapture(BrowserWindow, { timeout = 10000, settle = 500, fontW
       return await Promise.race([render(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Preview capture timed out')), timeout); })]);
     } finally {
       clearTimeout(deadline);
-      if (offline) { contents.session.protocol.unhandle('project-preview'); contents.session.webRequest.onBeforeRequest(null); }
       if (!page.isDestroyed()) page.destroy();
+      if (offline) {
+        contents.session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, denyRequest);
+        contents.session.protocol.unhandle('project-preview');
+      }
     }
   };
 }

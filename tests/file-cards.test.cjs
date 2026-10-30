@@ -198,6 +198,20 @@ test('outside absolute paths preview their folder while project junctions escapi
   await assert.rejects(card(project, '../outside.html'), /找不到这个文件/);
 });
 
+test('Markdown through a project junction is read as an outside document while HTML stays refused', async t => {
+  const prefix = path.join(os.tmpdir(), 'agentrix-junction-card-'), root = fs.mkdtempSync(prefix);
+  const project = { id: 'p', path: path.join(root, 'project') }, output = path.join(root, 'notes'), linked = path.join(project.path, 'linked');
+  fs.mkdirSync(project.path); fs.mkdirSync(output);
+  fs.writeFileSync(path.join(output, 'memory.md'), '# Synthetic memory'); fs.writeFileSync(path.join(output, 'page.html'), 'page');
+  fs.symlinkSync(output, linked, process.platform === 'win32' ? 'junction' : 'dir');
+  t.after(() => { fs.unlinkSync(linked); assert.ok(path.resolve(root).startsWith(prefix)); fs.rmSync(root, { recursive: true, force: true }); });
+  const previews = new PreviewResources(), card = createFileCards({ previews, capture: async () => null });
+  const shown = await card(project, 'linked/memory.md');
+  assert.deepEqual(shown, { kind: 'markdown', path: path.join(linked, 'memory.md'), outside: true, excerpt: '# Synthetic memory' });
+  assert.deepEqual(await documentText(previews, project, shown.path), { content: '# Synthetic memory', truncated: false });
+  await assert.rejects(card(project, 'linked/page.html'), { code: 'OUTSIDE_LINK' });
+});
+
 test('Claude transcripts and Codex rollouts keep the cwd of each written file', async () => {
   const { project, previews } = fixture(), cwd = path.join(project.path, 'docs');
   const card = createFileCards({ previews, capture: async () => 'picture' });
@@ -250,6 +264,9 @@ test('card and name clicks show only resolved paths in the popup, including earl
   states = []; index = 0;
   await item.type(item.props).props.children[1].props.onClick();
   assert.deepEqual(errors, ['文件在项目目录之外，无法在此预览。']); assert.equal(opened.length, 4);
+  states = [{ kind: 'image', path: 'images/share.png', picture: 'data:image/png;base64,SHARE' }, false, false]; index = 0;
+  await item.type(item.props).props.children[1].props.onClick();
+  assert.deepEqual(opened[4], { kind: 'file', projectId: 'p', path: 'images/share.png' }, 'project-share images open through the project file boundary');
 });
 
 test('an edit step names the files it wrote for the reading view, not those it deleted', () => {

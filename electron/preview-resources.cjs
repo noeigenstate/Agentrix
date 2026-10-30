@@ -72,7 +72,7 @@ class PreviewResources {
       resolved = relativePath; size = stat.size;
       readChunk = async (offset, length) => Buffer.from(await connection.request('read', { path: relativePath, offset, length }), 'base64');
     } else {
-      localPath(session.project.path);
+      if (session.project.previewRoot) localPath(session.project.path);
       if (path.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath) || /[:\0]/.test(relativePath) || relativePath.split(/[\\/]/).includes('..')) throw new Error('Invalid preview path');
       const root = await fs.realpath(session.project.path);
       if (session.project.previewRoot && root !== session.project.previewRoot) throw new Error('Preview folder changed');
@@ -80,7 +80,7 @@ class PreviewResources {
         [{ path: session.project.previewProjectPath }, ...this.getProjects()]));
       if (singleFile && relativePath !== session.filePath.replace(/\\/g, '/')) throw new Error('Preview is limited to the selected file');
       resolved = await fs.realpath(path.resolve(root, relativePath));
-      localPath(resolved);
+      if (session.project.previewRoot) localPath(resolved);
       if (!within(root, resolved)) throw new Error('Preview path escaped its folder');
       const relativeReal = path.relative(root, resolved);
       if (!allowsHiddenPath(session, relativeReal.split(path.sep).join('/'))) throw new Error('Hidden link targets are not preview resources');
