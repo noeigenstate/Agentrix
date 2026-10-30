@@ -2,6 +2,7 @@ import type { ScreenAgent, ScreenChoice, ScreenOption, ScreenQuestion } from './
 
 // Questions an agent asks with options, read from the text it drew (see tests/fixtures/screens/*-question*.txt).
 // Only a question still waiting is recognised: its key hint (or Claude's review options) must close the screen.
+// Codex MCP Field n/m forms deliberately stay waiting this round; their controls are not request_user_input's notes.
 const option = /^(\s*)([❯›>]?)(\s*)(\d+)\.\s+(.+)$/;
 const rule = (row: string) => /^\s*[─╌]{8,}\s*$/.test(row);
 const lastContent = (rows: string[]) => { let end = rows.length - 1; while (end >= 0 && !rows[end].trim()) end--; return end; };
@@ -75,6 +76,8 @@ function claudeQuestion(rows: string[]): ScreenChoice | null {
 
   let index = optionStart(rows, head, end, '❯');
   if (index < 0) return null;
+  // A missing tab bar cannot turn the conversation above option 1 into the question.
+  if (head < 0 && rows.slice(0, index).some(row => rule(row) || /^\s*(?:[⏺●⎿]|[❯›>](?:\s|$))/.test(row))) return null;
   const title = rows.slice(head + 1, index).map(row => row.trim()).filter(Boolean);
   const options: Draft[] = [];
   let submit: ScreenQuestion['submit'] = null, hint: string | null = null, underRule = false, multi = false;

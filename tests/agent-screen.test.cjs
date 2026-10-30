@@ -316,8 +316,8 @@ const expected = {
   'claude-bang-multiline': { ...emptyScreen, banner: { ...claudeBanner, version: '2.1.302', model: null, effort: null, plan: null }, status: { ...emptyStatus, mode: 'manual mode on' } },
   'claude-bang-empty-model-working': { ...emptyScreen, banner: { ...claudeBanner, version: '2.1.302', model: null, effort: null, plan: null }, status: { ...emptyStatus, mode: 'manual mode on' } },
   'claude-2-1-302-start': { ...emptyScreen, banner: { product: 'Claude Code', version: '2.1.302', model: null, effort: null, plan: null, directory: 'C:\\work\\demo-app' }, status: { ...emptyStatus, mode: 'manual mode on' } },
-  'claude-2-1-302-status': { ...emptyScreen, waiting: { title: null } },
-  'claude-2-1-302-config': { ...emptyScreen, waiting: { title: null } },
+  'claude-2-1-302-status': emptyScreen,
+  'claude-2-1-302-config': emptyScreen,
   'codex-0-163-status': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', model: 'GPT-6-Sol', effort: 'default', directory: null }, status: freshStatus },
   'codex-0-163-model': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', directory: null }, choice: {
     title: 'Select Model and Effort', kind: 'menu', context: [], hint: 'enter select · esc back', options: [
@@ -331,8 +331,8 @@ const expected = {
       option(8, 'GPT-5.5', false, 'Legacy coding model.'),
     ],
   } },
-  'codex-0-163-permissions': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', directory: null }, waiting: { title: null } },
-  'codex-0-163-plugins': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', directory: null }, waiting: { title: null } },
+  'codex-0-163-permissions': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', directory: null } },
+  'codex-0-163-plugins': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', directory: null } },
   'codex-0-163-memories': { ...emptyScreen, banner: { ...codexBanner, version: '0.163.0', model: 'GPT-6-Sol', effort: 'default', directory: null }, status: freshStatus, choice: {
     title: 'Enable memories?', kind: 'menu', context: ['Memories are disabled in this TUI session.'], hint: 'enter select · esc back', options: [
       option(1, 'Yes, enable', true, 'Save on the server for new threads without changing this thread'),
@@ -425,9 +425,9 @@ const expected = {
   // cli-panel.test.cjs): no choice, nothing over it.
   'claude-wrapped-draft': { ...emptyScreen, banner: { ...claudeBanner, version: '2.1.301', model: null, effort: null, plan: null, directory: '~\\work\\demo-app' } },
   // Claude Code 2.1.302's /usage during a round: the capture has no banner, input footer or choice.
-  'claude-usage-working': { ...emptyScreen, waiting: { title: null } },
+  'claude-usage-working': emptyScreen,
   // Claude Code 2.1.302's /config during a round: settings and its filter hint are not an agent choice or footer.
-  'claude-config-working': { ...emptyScreen, waiting: { title: null } },
+  'claude-config-working': emptyScreen,
   // Codex 0.162's resume list, drawn by "codex resume", by /resume inside a conversation, with nothing to resume, and
   // as Codex draws it on Linux.
   'codex-resume-start': resumeScreen([['整理发布说明', '2s ago'], ['修复阅读视图的滚动', '2s ago'], ['合并远端主分支', '2s ago']], 'new'),
@@ -442,7 +442,7 @@ const expected = {
   } }),
   'codex-memories-dialog-before': codexScreen({ banner: freshBanner, status: freshStatus }),
   // /plugins takes the input's place: its list's cursor row is no input, and its key hints are no footer.
-  'codex-plugins-view': { ...emptyScreen, waiting: { title: null } },
+  'codex-plugins-view': emptyScreen,
   'codex-plugins-view-before': codexScreen({ banner: freshBanner, status: freshStatus }),
   'codex-resume-linux': resumeScreen([['合并远端主分支', '3h ago'], ['修复阅读视图', '10h ago'], ['整理发布说明', '11h ago'], ['继承 Claude 日志', '2d ago'], ['查找 resume 记忆', '20d ago'],
     ['合并主分支', '26d ago'], ['删除显示和系统监控功能', '28d ago'], ['删除所有 mcp、plugin 和 skill', '35d ago']], 'new'),

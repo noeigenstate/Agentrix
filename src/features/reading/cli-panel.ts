@@ -10,7 +10,7 @@ const prompt = (agent: ScreenAgent, row: string) => {
   const shell = /^\s*!(?:\s+(.*))?$/.exec(row.replace(/\r$/, ''));
   if (shell) return '!' + (shell[1] ?? '').trim();
   const match = (agent === 'claude' ? /^\s*❯(?:\s+(.*))?$/ : /^\s*›(?:\s+(.*))?$/).exec(row.replace(/\r$/, ''));
-  if (!match || /^\d+\.\s/.test(match[1] ?? '')) return null;
+  if (!match) return null;
   return (match[1] ?? '').trim();
 };
 

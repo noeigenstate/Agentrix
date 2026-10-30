@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
-const { cliDialogShown, isAtPrompt } = require('../src/features/reading/cli-panel.ts');
+const { cliDialogShown, cliInputDraft, isAtPrompt } = require('../src/features/reading/cli-panel.ts');
 const read = name => fs.readFileSync(path.join(__dirname, 'fixtures/screens', name + '.txt'), 'utf8').split('\n');
 
 test('plan transitions and MCP browser actions are informative permission choices', () => {
@@ -57,6 +57,40 @@ test('waiting is evidence of live dialog controls, never silence, ordinary prose
     }
     const rows = ['Unfamiliar choice', 'tab to switch · enter to select · esc to cancel'];
     assert.deepEqual(parseAgentScreen(agent, rows).waiting, { title: null });
+  }
+});
+
+test('composer boundaries stop waiting scans for numbered, starred and Accept drafts', () => {
+  for (const agent of ['claude', 'codex']) {
+    for (const title of ['Do you want me to also update the tests?', 'Allow users to pick a theme in settings.']) {
+      for (const draft of ['1. step', '* item', 'Accept the change']) {
+        const input = agent === 'claude'
+          ? ['────', '❯ ' + draft, '────', '  ⏵⏵ auto mode on (shift+tab to cycle)']
+          : ['› ' + draft, '', '  GPT-6.1-Sol high · ~/work · 90% context left'];
+        for (const history of [[], read(agent === 'claude' ? 'claude-2-1-302-status' : 'codex-plugins-view')]) {
+          const rows = [...history, agent === 'claude' ? '⏺ I changed the parser.' : '• I changed the parser.', '', '  ' + title, '', ...input];
+          const screen = parseAgentScreen(agent, rows), label = `${agent}: ${draft}, history=${history.length}`;
+          assert.equal(screen.choice, null, label);
+          assert.equal(screen.waiting ?? null, null, label);
+          assert.equal(isAtPrompt(agent, rows, screen), true, label);
+          assert.equal(cliInputDraft(agent, rows, screen), draft, label);
+        }
+      }
+    }
+  }
+});
+
+test('captured slash panels stay in the terminal popup without waiting cards', () => {
+  for (const name of ['claude-2-1-302-status', 'claude-2-1-302-config', 'claude-config-working', 'claude-usage-working',
+    'codex-0-163-permissions', 'codex-0-163-plugins', 'codex-plugins-view']) {
+    const agent = name.startsWith('claude') ? 'claude' : 'codex';
+    const rows = read(name), screen = parseAgentScreen(agent, rows);
+    assert.equal(screen.choice, null, name);
+    assert.equal(screen.waiting ?? null, null, name);
+    assert.equal(isAtPrompt(agent, rows, screen), false, name);
+    const later = parseAgentScreen(agent, [...rows, 'MCP server “localprobe” requests your input',
+      '  > * Output format: not set', 'Esc to cancel · ↑/↓ to navigate']);
+    assert.deepEqual(later.waiting, { title: 'MCP server “localprobe” requests your input' }, name + ': later elicitation');
   }
 });
 
