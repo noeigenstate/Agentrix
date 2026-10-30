@@ -90,6 +90,20 @@ test('unconfirmed dispatch expiry is unrefed and cleared on reset', t => {
   calls.reset(); assert.ok(clear.mock.calls.some(call => call.arguments[0] === expiry));
 });
 
+test('unconfirmed starts stay in the declared model group while actual routing remains unreported', t => {
+  const calls = new AgentCalls({ local: false }); t.after(() => calls.reset());
+  const declared = { model: 'gpt-6.1-sol', effort: 'max', fast: true };
+  const start = { type: 'dispatch-start', id: 'not-started', agent: 'codex', role: '执行', title: 'Failed worker',
+    model: 'unreported', effort: null, fast: null, declared, unconfirmed: true, startedAt: 1000 };
+  const end = { type: 'dispatch-end', id: start.id, model: 'unreported', effort: null, fast: null,
+    reason: 'unconfirmed', exitCode: 1, endedAt: 5000, outputTokens: null, activeMs: null };
+  calls.dispatch(start); calls.dispatch(end);
+  const group = calls.snapshot()[0];
+  assert.equal(group.model, declared.model); assert.equal(group.effort, declared.effort); assert.equal(group.fast, declared.fast);
+  assert.equal(group.items[0].failure.reason, 'unconfirmed');
+  assert.equal(calls.calls.get(start.id).model, 'unreported'); assert.equal(calls.calls.get(start.id).unconfirmed, true);
+});
+
 test('Claude Agent calls keep their own effort and leave unrecorded effort and speed unknown', () => {
   const calls = new AgentCalls({ local: false });
   for (const [id, effort] of [['high', 'high'], ['max', 'max'], ['missing', undefined]]) calls.apply(use(id, 'Agent', { model: 'opus', effort }));

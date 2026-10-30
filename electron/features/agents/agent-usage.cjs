@@ -129,7 +129,7 @@ class UsageMeter {
   codex(record) {
     const payload = record.payload || {};
     if (record.type === 'session_meta') {
-      this.reset();
+      this.reset(true);
       this.scopeReported = true;
       this.providerId = typeof payload.model_provider === 'string' && payload.model_provider ? payload.model_provider : null;
       this.scopeCwd = typeof payload.cwd === 'string' && path.isAbsolute(payload.cwd) ? payload.cwd : null;

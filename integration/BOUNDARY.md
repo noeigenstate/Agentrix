@@ -8,7 +8,7 @@ The dispatch helper that every command-line Codex or Claude worker is started th
 
 ## Interface
 - `USAGE` (`integration/dispatch.cjs`) — the helper's command line (`node dispatch.cjs <codex|claude> …`); sessions learn its path from the startup note (skills/agent-dispatch)
-- `[dispatch]` (`integration/dispatch.cjs`) — the started / failed to start / ended lines the lead reads on the helper's stdout; events carry kind, meeting, verified routing and this invocation's usage, with rollout counts preferred over stdout
+- `[dispatch]` (`integration/dispatch.cjs`) — the started / failed to start / ended lines; events carry kind, meeting and verified routing; outputTokens/activeMs are the meter's timed pair and totalOutputTokens is the invocation's cost count; resumed Codex never falls back to stdout totals
 - `runtimeFiles` (`integration/dispatch.cjs`) — the electron modules the helper carries; copied by scripts/after-pack.cjs and electron/remote-connection.cjs
 - `acceptDispatch` (`electron/features/agents/dispatch-events.cjs`) — main.cjs hands it every dispatch-* event from a session's event pipe
 
@@ -20,6 +20,7 @@ The dispatch helper that every command-line Codex or Claude worker is started th
 - `electron/boundaries.cjs`
 - `electron/features/team/team.cjs`
 - `electron/features/team/minutes-page.cjs`
+- `electron/features/dashboard/records-routing.cjs`
 
 ## Invariants
 - A worker is known only from the helper's declarations, never shell commands, prompt filenames or stdout; events require the session's own key and project, well-formed fields and at most 16 KB — guessed routing is misleading and any local process can reach the pipe — test: `tests/dispatch-events.test.cjs` › "Bash commands, prompt filenames and helper stdout text never create or update a call"; test: `tests/dispatch-events.test.cjs` › "bad keys, projects, unknown ids, malformed fields and oversized payloads are rejected"

@@ -29,8 +29,6 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 ## May import
 - `src/shared/**`
 - `src/features/agents/AgentBrandIcon.ts`
-- `src/features/reading/model-name.ts`
-- `src/features/reading/useNow.ts`
 - `src/features/terminal/terminal-screen.ts`
 - `src/features/home/send-to-agent.ts`
 - `electron/agent-actions.cjs`
@@ -39,6 +37,7 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 - `electron/claude-sessions.cjs`
 - `electron/conversation*` (the record parser and the shared grouping rule)
 - `electron/oversized-record.cjs`
+- `electron/features/dashboard/records-routing.cjs`
 
 ## Invariants
 - Each model is shown from its own records: the main model is its latest reply's (configured only until the first reply), its rows are the user's prompts and its own steps, never another worker's or a prompt's model; a called model's effort and speed are its own recorded values, unknown (null) when absent, never taken from the parent, configuration or dispatch declaration — guessed routing hides which model really ran — test: `tests/activity-route.test.cjs` › "the main model section: the model its latest reply records"; test: `tests/agent-calls.test.cjs` › "Claude Agent calls keep their own effort and leave unrecorded effort and speed unknown"
@@ -47,7 +46,7 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 - Official Codex scopes use home/cwd and a process-keyed HMAC of account, location and proxy environment variables: equivalent copies share reads, related differences isolate them, and credential values never enter keys or logs in plaintext. Project checks prove the default route by config preflight (`project-open-v1`), share the five-second throttle and backoff, retain only fresh answers for replay and drop closed-project late answers; startup queues them one at a time after restore and login PATH readiness, skipping last-used Claude projects — duplicate reads and another account's stale limits must not reach the pane — test: `tests/codex-account-usage.test.cjs` › "account fingerprints use a random runtime HMAC key"; test: `tests/codex-account-usage.test.cjs` › "project opens serialize background reads"; test: `tests/codex-account-usage.test.cjs` › "expired project answers never replay"; test: `tests/codex-account-usage.test.cjs` › "startup project checks follow restore"
 - The pane shows state and never acts on its own: its one action types /usage into Codex after a cancellable 10-second countdown, account reads use only read-only calls (no reset, login or credential renewal), and it has no manual completion control or editor launch — a reset is costly and completion is automatic (AGENTS.md) — test: `tests/boundary-activity-pane.test.cjs` › "the pane never acts on its own"
 - SSH projects never read local transcripts, child logs, prompts or rollouts — the local machine's files belong to another conversation — test: `tests/agent-calls-rate.test.cjs` › "SSH calls never read local child, prompt, log or rollout files"
-- A dispatched worker that ended cleanly shows 已完成 and leaves 3 s later; an unconfirmed start shows 未能启动 and leaves after 5 s or an earlier review; other failures stay until the lead's next round. Dismissed dispatch receipts remain to reject delayed duplicates — failures must be visible without resurrecting stale rows — test: `tests/agent-calls.test.cjs` › "unconfirmed dispatches expire after five seconds without removing other failures or reviving duplicates"; test: `tests/dispatch-events.test.cjs` › "other failures survive the launch Stop and leave on the next delivered notification plus Stop or user round"
+- A dispatched worker that ended cleanly shows 已完成 and leaves 3 s later; an unconfirmed start groups under its declared model, shows 未能启动 and leaves after 5 s or an earlier review; other failures stay until the lead's next round. Dispatch receipts survive conversation resets and dismissed receipts reject delayed duplicates — failures must be visible without dropping terminal-owned runs or resurrecting stale rows — test: `tests/agent-calls.test.cjs` › "unconfirmed dispatches expire after five seconds without removing other failures or reviving duplicates"; test: `tests/dashboard-records.test.cjs` › "run and grade hooks retain only local evaluation metadata"
 - A reading cursor is an opaque main-owned capability for one terminal, verified transcript identity and binding generation; growth preserves it while rotation, truncation, boundary rewriting and rebinding reject it — a renderer cannot select another file or reuse another session's page — test: `tests/reading-history.test.cjs` › "a rewritten cursor boundary is rejected even when the same inode is regrown beyond its original size"
 
 ## Not ours

@@ -99,19 +99,20 @@ test('team records every role end and validates incidents and findings before co
   const f = await lab(t), team = projectTeam(f.repo, true), meeting = 'ledger-r1';
   for (const role of ['执行', '审查', '调查']) {
     await team.finish({ role, title: 't'.repeat(400), allow: [], agent: 'codex' }, { id: randomUUID(), session: randomUUID(), meeting,
-      model: 'gpt-6.1-sol', kind: role === '审查' ? 'review' : 'core', reason: 'exit', outputTokens: 25, activeMs: 2000, answer: '', header: '' });
+      model: 'gpt-6.1-sol', kind: role === '审查' ? 'review' : 'core', reason: 'exit', outputTokens: 25, totalOutputTokens: 40, activeMs: 2000, answer: '', header: '' });
   }
   const ends = team.entries().filter(entry => entry.type === 'end');
   assert.deepEqual(ends.map(entry => entry.role), ['执行', '审查', '调查']);
-  assert.ok(ends.every(entry => entry.title.length === 240 && entry.model === 'gpt-6.1-sol' && entry.reason === 'exit' && entry.outputTokens === 25 && entry.activeMs === 2000));
+  assert.ok(ends.every(entry => entry.title.length === 240 && entry.model === 'gpt-6.1-sol' && entry.reason === 'exit' && entry.outputTokens === 25 && entry.totalOutputTokens === 40 && entry.activeMs === 2000));
   team.append({ type: 'meeting', meeting, status: 'confirmed' });
   const incident = { model: 'gpt-6.1-sol', kind: 'test', cause: 'path assumption', fix: 'use native realpath', lead: 'missed', weight: { kind: 'test', from: 1, to: 0.5 } };
-  const finding = { author: 'gpt-6.1-sol', reviewer: 'claude-opus-5-5', category: 'boundary', severity: 'high', fixed: true, title: 't'.repeat(400) };
+  const finding = { author: 'gpt-6.1-sol', reviewer: 'claude-opus-5-5', category: 'boundary', severity: 'high', fixed: true, title: 't'.repeat(240) };
   const before = [await fs.readFile(team.journal, 'utf8'), await fs.readFile(team.memory, 'utf8')];
   for (const records of [{ incidents: {} }, { incidents: [{ ...incident, kind: 'invalid' }] }, { incidents: [{ ...incident, lead: 'unknown' }] },
     { incidents: [{ ...incident, weight: { ...incident.weight, to: -1 } }] }, { incidents: [{ ...incident, secret: 'must not be stored' }] },
     { incidents: [incident], findings: [{ ...finding, severity: 'critical' }] }, { findings: [{ ...finding, fixed: 'yes' }] },
-    { findings: [{ ...finding, category: 'other' }] }]) {
+    { findings: [{ ...finding, category: 'other' }] }, { findings: [{ ...finding, title: 't'.repeat(241) }] },
+    { incidents: [{ ...incident, cause: 't'.repeat(241) }] }, { incidents: [{ ...incident, fix: 't'.repeat(241) }] }]) {
     await assert.rejects(team.consolidate(meeting, summary, records), /incidents|findings/);
     assert.deepEqual([await fs.readFile(team.journal, 'utf8'), await fs.readFile(team.memory, 'utf8')], before);
   }
@@ -136,6 +137,34 @@ test('consolidate CLI reads optional JSON files and rejects invalid JSON without
   await fs.writeFile(findings, '[]');
   assert.equal(await run(args, { stdout: { write() {} } }), 0);
   assert.equal(team.entries().at(-1).type, 'consolidate');
+});
+
+test('consolidating a fresh repository reports missing roundtable records rather than a missing repository', async t => {
+  const f = await lab(t), summaryFile = path.join(f.runtime, 'summary.md');
+  await fs.writeFile(summaryFile, summary);
+  let stdout = '';
+  assert.equal(await run(['consolidate', '--cwd', f.repo, '--meeting', 'unknown-r1', '--summary', summaryFile],
+    { stdout: { write: value => { stdout += value; } }, launch: () => assert.fail('team command launched a worker') }), 1);
+  assert.match(stdout, /No roundtable records for unknown-r1/); assert.doesNotMatch(stdout, /require a git repository/);
+  assert.ok(projectTeam(f.repo));
+});
+
+test('review and investigation resumed from a consolidated round do not block the next roundtable', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true);
+  for (const role of ['审查', '调查']) {
+    const meeting = role === '审查' ? 'review-r1' : 'investigate-r1', session = randomUUID(), id = randomUUID();
+    team.append({ type: 'meeting', meeting, session, agent: 'codex', role, allow: [], status: 'confirmed' });
+    await team.consolidate(meeting, summary);
+    const resumed = { ...options(f.repo), role, allow: [], resume: session };
+    const admission = await team.admit(resumed, id);
+    assert.equal(admission.meeting, meeting);
+    await team.finish(resumed, { ...admission, id, session, answer: '', header: '', reason: 'exit', kind: role === '审查' ? 'review' : 'investigate' });
+    team.release(id);
+    assert.equal(team.entries().at(-1).meeting, meeting, 'the end remains recorded with its originating round');
+    const next = randomUUID();
+    await team.admit(options(f.repo, ['--meeting', meeting + '-next', '--allow', 'src/a.js']), next);
+    team.release(next);
+  }
 });
 
 function load(file, replacements = {}, globals = {}) {
@@ -531,7 +560,7 @@ test('Claude meetings use plan then acceptEdits on the resumed build', async t =
   assert.deepEqual(args.slice(0, 3), ['-p', '--resume', session]); assert.ok(args.includes('acceptEdits'));
 });
 
-test('meeting lifecycle closes consolidated ids blocks reused ids and tracks late ends', async t => {
+test('meeting lifecycle keeps consolidated ids closed even after late ends', async t => {
   const f = await lab(t), team = projectTeam(f.repo, true), session = randomUUID();
   const entry = { type: 'meeting', meeting: 'r1', session, agent: 'codex', model: 'gpt-6.1-sol', role: '执行', title: 'Task A',
     allow: ['src/a.js'], ...understandingOf(understanding), status: 'confirmed' };
@@ -551,8 +580,6 @@ test('meeting lifecycle closes consolidated ids blocks reused ids and tracks lat
   await assert.rejects(team.admit(options(f.repo, ['--meeting', 'r1', '--allow', 'src/a.js']), randomUUID(), helper), /closed.*new --meeting/);
   await assert.rejects(team.admit(options(f.repo, ['--resume', session, '--allow', 'src/a.js']), randomUUID(), helper), /closed.*--meeting <id>.*--resume.*--skip-meeting.*--help/);
   team.append({ type: 'end', id: 'late-build', meeting: 'r1', session });
-  await assert.rejects(team.admit(options(f.repo, ['--meeting', 'already-seen-r2', '--allow', 'src/b.js']), randomUUID(), helper), /r1 is not consolidated/);
-  await team.consolidate('r1', summary);
   const next = randomUUID();
   await team.admit(options(f.repo, ['--meeting', 'already-seen-r2', '--allow', 'src/b.js']), next, helper);
   team.release(next);

@@ -1,4 +1,7 @@
 const path = require('node:path');
+const os = require('node:os');
+const { createHash } = require('node:crypto');
+const { routingVerdict } = require('./records-routing.cjs');
 
 const text = (value, limit = 160) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, limit) : null;
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -9,13 +12,13 @@ const projectName = project => (project.kind === 'ssh' ? path.posix : path).base
 function runRecord(project, call, event) {
   const actual = call.unconfirmed ? route(null) : route(event);
   const declared = call.declared || call.unconfirmed ? route(call.declared || call) : null;
-  const mismatch = declared && Object.keys(actual).some(key => actual[key] !== null && actual[key] !== 'unreported' && actual[key] !== declared[key]);
-  const verdict = call.unconfirmed ? 'unverified' : event.verdict || (mismatch ? 'mismatch' : actual.model === 'unreported' ? 'unverified' : 'ok');
+  const verdict = call.unconfirmed ? 'unverified' : event.verdict || routingVerdict({ ...actual, model: actual.model === 'unreported' ? null : actual.model }, declared);
   return { id: text(event.id), projectId: text(project.id), project: text(projectName(project), 240),
     agent: call.sourceAgent, ...actual, ...(declared ? { declared } : {}), role: text(call.role, 32), kind: call.kind ?? null,
     title: text(call.title, 240), meeting: text(call.meeting, 64), skipMeeting: text(call.skipMeeting, 240),
     startedAt: number(call.startedAt), endedAt: number(event.endedAt), activeMs: number(event.activeMs),
-    outputTokens: count(event.outputTokens), inputTokens: count(event.inputTokens), cachedTokens: count(event.cachedTokens),
+    outputTokens: count(event.outputTokens), totalOutputTokens: count(event.totalOutputTokens),
+    inputTokens: count(event.inputTokens), cachedTokens: count(event.cachedTokens),
     reportedCostUsd: number(event.reportedCostUsd), reason: text(event.reason, 32),
     exitCode: Number.isSafeInteger(event.exitCode) ? event.exitCode : null, outOfScope: count(event.outOfScopeCount) ?? event.outOfScope?.length ?? 0, verdict };
 }
@@ -32,8 +35,8 @@ function gradeRecord(grade, project, session) {
   return { projectId: grade.projectId, project: text(projectName(project), 240), terminalId: grade.terminalId,
     agent: ['codex', 'claude'].includes(session.agent) ? session.agent : null,
     model: text(session.agentSettings?.model), effort: text(session.agentSettings?.effort, 32),
-    sessionId: text(session.agent === 'claude' ? session.claudeSessionId || session.claudeResumeId || session.sessionId
-      : session.rootThreadId || session.reportedThreadId || session.sessionId),
+    sessionId: text(session.agent === 'claude' ? session.claudeSessionId || session.claudeResumeId
+      : session.agent === 'codex' ? session.rootThreadId || session.reportedThreadId : null),
     outcome: grade.outcome, submission: grade.submission,
     ...(grade.outcome === 'sent-back' && grade.note !== undefined ? { note: grade.note.slice(0, 2000) } : {}) };
 }
@@ -45,4 +48,16 @@ function quotaWindows(limits) {
     .sort((a, b) => (a.minutes ?? 0) - (b.minutes ?? 0));
 }
 
-module.exports = { runRecord, gradeRecord, quotaWindows };
+// Account series contain a stable digest, never the host or CLI-home path that selected the account.
+function quotaScope(provider, project, session) {
+  const remote = project.kind === 'ssh', env = remote ? {} : session.usageEnv || process.env;
+  let home = provider === 'codex' ? session.codexHome || env.CODEX_HOME : env.CLAUDE_CONFIG_DIR;
+  if (!remote) {
+    home = path.resolve(home || path.join(os.homedir(), provider === 'codex' ? '.codex' : '.claude'));
+    if (process.platform === 'win32') home = home.toLowerCase();
+  }
+  return createHash('sha256').update(JSON.stringify([provider, remote ? 'ssh' : 'local',
+    remote ? project.ssh?.host : null, remote ? project.ssh?.configFile : null, home || null])).digest('hex').slice(0, 24);
+}
+
+module.exports = { runRecord, gradeRecord, quotaWindows, quotaScope };

@@ -16,9 +16,10 @@ const { TranscriptTail } = require(path.join(runtime, 'transcript-tail.cjs'));
 const { matches, snapshot, changedBetween, boundariesFor, repoFiles } = require(path.join(runtime, 'boundaries.cjs'));
 const { projectTeam, meetingRequest, recordFindings, minutesMarkdown, FINDINGS } = require(path.join(runtime, 'features/team/team.cjs'));
 const { minutesPage } = require(path.join(runtime, 'features/team/minutes-page.cjs'));
+const { TASK_KINDS, taskKind, routingVerdict } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
 const RUNTIME_FILES = ['boundaries.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs',
-  'features/team/team.cjs', 'features/team/minutes-page.cjs'];
+  'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/dashboard/records-routing.cjs'];
 const runtimeFiles = () => Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
 
 const START_TIMEOUT = 30000;
@@ -30,8 +31,6 @@ const LIMIT = 4 * 1024 * 1024;
 const word = value => typeof value === 'string' && value.trim() ? value.trim() : null;
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const roles = new Map([['执行', '执行'], ['调查', '调查'], ['审查', '审查'], ['exec', '执行'], ['investigate', '调查'], ['review', '审查']]);
-const KINDS = ['core', 'frontend', 'test', 'ui-check', 'docs', 'small', 'review', 'investigate', 'roundtable'];
-const kindOf = (options, roundtable = false) => options.kind || (roundtable ? 'roundtable' : ({ 审查: 'review', 调查: 'investigate' }[options.role] || null));
 const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审查|exec|investigate|review>
   --title <task> --model <model> --effort <effort> --cwd <dir> --brief <file> --out <file>
   [--allow <glob> ...]    the only files it may change; any other change is reported as out of scope
@@ -39,7 +38,7 @@ const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审
   [--resume <session>]    continue that worker session (same context) instead of starting a new one
   [--meeting <id>]        roundtable before work; no file changes and no --read-only
   [--skip-meeting <reason>] execution with --allow may bypass confirmation; the reason is recorded
-  [--kind <${KINDS.join('|')}>] task category for long-term evaluation
+  [--kind <${TASK_KINDS.join('|')}>] task category for long-term evaluation
   Codex: [--fast] [--image <file> ...] [--read-only]
   Claude: --permission <plan|acceptEdits>
 
@@ -84,7 +83,7 @@ function argumentsOf(argv) {
   }
   if (!roles.has(options.role)) throw new Error('Expected --role 执行, 调查, 审查, exec, investigate or review');
   options.role = roles.get(options.role);
-  if (options.kind && !KINDS.includes(options.kind)) throw new Error(`Expected --kind ${KINDS.join(', ')}`);
+  if (options.kind && !TASK_KINDS.includes(options.kind)) throw new Error(`Expected --kind ${TASK_KINDS.join(', ')}`);
   if (options.title.length > 1024 || options.model.length > 160 || options.effort.length > 32) throw new Error('Assignment is too long');
   if (agent === 'claude' && (options.fast || options.readOnly || options.images.length)) throw new Error('Claude supports --permission, not Codex options');
   if (agent === 'claude' && !['plan', 'acceptEdits'].includes(options.permission)) throw new Error('Expected --permission plan or acceptEdits');
@@ -137,7 +136,7 @@ function briefOf(options, brief, team, { id, phase, repo, before } = {}) {
 
 async function teamCommand(argv, stdout) {
   try {
-    const options = argumentsOf(argv), team = projectTeam(options.cwd, argv[0] !== 'consolidate');
+    const options = argumentsOf(argv), team = projectTeam(options.cwd, true);
     if (!team) throw new Error('Team commands require a git repository');
     if (options.agent === 'consolidate') {
       const records = {};
@@ -200,6 +199,7 @@ class WorkerOutput {
     this.outputTokens = null; this.activeMs = null; this.failed = false; this.capacity = false; this.confirmed = false;
     this.stdoutUsage = null; this.rolloutUsage = null; this.reportedCostUsd = null;
     this.baseline = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 };
+    this.resumed = false; this.lastCounters = {}; this.invalidCounters = new Set();
   }
   settings(value) {
     this.model = word(value.model) || this.model;
@@ -226,12 +226,17 @@ class WorkerOutput {
     if (record.type === 'turn_context') this.confirmed = true;
     const totals = this.counters(record);
     if (totals) {
-      const delta = key => count(totals[key]) !== null && count(this.baseline?.[key]) !== null && totals[key] >= this.baseline[key]
-        ? totals[key] - this.baseline[key] : null;
+      const delta = key => {
+        const current = count(totals[key]), baseline = count(this.baseline?.[key]);
+        if (current !== null) {
+          if (current < Math.max(this.lastCounters[key] ?? 0, baseline ?? 0)) this.invalidCounters.add(key);
+          this.lastCounters[key] = current;
+        }
+        return current !== null && baseline !== null && !this.invalidCounters.has(key) ? current - baseline : null;
+      };
       const input = delta('input_tokens'), cached = delta('cached_input_tokens');
-      const usage = { inputTokens: input !== null && cached !== null && input >= cached ? input - cached : null,
+      this.rolloutUsage = { inputTokens: input !== null && cached !== null && input >= cached ? input - cached : null,
         cachedTokens: cached, outputTokens: delta('output_tokens') };
-      if (Object.values(usage).some(value => value !== null)) this.rolloutUsage = usage;
     }
     this.measure(record);
   }
@@ -241,13 +246,10 @@ class WorkerOutput {
     return null;
   }
   usage() {
-    return { inputTokens: null, cachedTokens: null, outputTokens: this.outputTokens, ...(this.rolloutUsage || this.stdoutUsage),
+    const total = this.rolloutUsage || (!this.resumed ? this.stdoutUsage : null);
+    return { inputTokens: total?.inputTokens ?? null, cachedTokens: total?.cachedTokens ?? null,
+      outputTokens: this.outputTokens, totalOutputTokens: total?.outputTokens ?? null,
       activeMs: this.activeMs, reportedCostUsd: this.reportedCostUsd };
-  }
-  verdict(requested) {
-    const actual = this.routing();
-    if (Object.keys(actual).some(key => this[key] !== null && actual[key] !== requested[key])) return 'mismatch';
-    return this.model === null ? 'unverified' : 'ok';
   }
   line(line) {
     const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
@@ -281,7 +283,6 @@ class WorkerOutput {
         const input = count(record.usage?.input_tokens), cached = count(record.usage?.cached_input_tokens);
         this.stdoutUsage = { inputTokens: input !== null && cached !== null && input >= cached ? input - cached : null,
           cachedTokens: cached, outputTokens: count(record.usage?.output_tokens) };
-        if (this.activeMs === null) this.outputTokens = count(record.usage?.output_tokens);
       }
     } else {
       if (type === 'system' && record.subtype === 'init') {
@@ -325,11 +326,12 @@ class CodexRollout {
   async prepare(id) {
     // Capture the old file boundary before launch. Old turns never prove this invocation started.
     this.preparedId = id;
+    this.output.resumed = true; this.output.baseline = null;
     for (const filename of await this.files(id)) {
       if ((await sessionMeta(filename))?.id !== id) continue;
       this.tail = this.reader(filename);
-      this.output.baseline = null;
       await this.tail.read(record => { const totals = this.output.counters(record); if (totals) this.output.baseline = totals; });
+      this.output.lastCounters = { ...this.output.baseline };
       this.output.meter.reset(true);
       this.output.meter.counter = count(this.output.baseline?.output_tokens);
       return;
@@ -346,6 +348,7 @@ class CodexRollout {
     if (this.preparedId && id !== this.preparedId) {
       this.tail = null; this.preparedId = null;
       this.output.baseline = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 };
+      this.output.resumed = false; this.output.lastCounters = {}; this.output.invalidCounters.clear();
       this.output.rolloutUsage = null; this.output.stdoutUsage = null; this.output.outputTokens = null; this.output.activeMs = null;
       this.output.model = null; this.output.effort = null; this.output.fast = null; this.output.confirmed = false;
       this.output.meter.reset();
@@ -403,7 +406,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (!team || !admission || teamFinished) return {};
     teamFinished = true;
     try { return await team.finish(options, { id, session: output.sessionId, model: unconfirmed ? 'unreported' : output.routing().model,
-      kind: kindOf(options, roundtable), ...output.usage(), ...admission, ...report }); }
+      kind: taskKind(options, roundtable), ...output.usage(), ...admission, ...report }); }
     catch (error) { return { warning: String(error.message || error).replace(/[\r\n]+/g, ' ') }; }
   };
   const teamEnd = ({ status, warning }) => {
@@ -417,7 +420,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const signal = line => stdout.write(`[dispatch] ${line}\n`);
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
   const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
-    kind: kindOf(options, roundtable), meeting: admission?.meeting || options.meeting || null, skipMeeting: options.skipMeeting || null,
+    kind: taskKind(options, roundtable), meeting: admission?.meeting || options.meeting || null, skipMeeting: options.skipMeeting || null,
     cwd: options.cwd, brief: options.brief, out: options.out, sessionId: output.sessionId, startedAt: Date.now() });
   const failed = (reason, exitCode = null) => {
     if (unconfirmed || started) return;
@@ -426,7 +429,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     // Even without a session, the pane needs a declared row before it can retain the failure.
     send({ ...assignment(), model: 'unreported', effort: null, fast: null, declared: declared(), unconfirmed: true });
     send({ type: 'dispatch-end', id, model: 'unreported', effort: null, fast: null, exitCode, reason: 'unconfirmed',
-      inputTokens: null, cachedTokens: null, reportedCostUsd: null, outputTokens: null, activeMs: null, verdict: 'unverified', endedAt: Date.now() });
+      inputTokens: null, cachedTokens: null, reportedCostUsd: null, outputTokens: null, totalOutputTokens: null, activeMs: null, verdict: 'unverified', endedAt: Date.now() });
     endSent = true;
   };
   const reported = () => {
@@ -442,9 +445,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     started = true; clearTimeout(startTimer);
     const actual = output.routing(), requested = declared();
     const unverified = Object.keys(requested).filter(key => output[key] === null);
-    const mismatch = Object.keys(requested).some(key => !unverified.includes(key) && actual[key] !== requested[key]);
-    const verdict = mismatch ? `MISMATCH (declared ${requested.model} ${requested.effort} fast ${requested.fast ? 'on' : 'off'})`
-      : unverified.includes('model') ? 'unverified' : 'ok';
+    const decision = routingVerdict(output, requested), mismatch = decision === 'mismatch';
+    const verdict = mismatch ? `MISMATCH (declared ${requested.model} ${requested.effort} fast ${requested.fast ? 'on' : 'off'})` : decision;
     const routing = verdict + (unverified.length ? ` (${unverified.join(', ')}${verdict === 'unverified' ? '' : ' unverified'})` : '');
     signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}${teamLabel()}`);
     send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
@@ -570,7 +572,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     const exitCode = Number.isInteger(result.code) ? (result.code === 0 && (unconfirmed || roundtable && reason !== 'exit') ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
     const rate = output.outputTokens !== null && output.activeMs > 0 ? `${Math.round(output.outputTokens * 1000 / output.activeMs)} token/s (${output.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(output.activeMs / 1000)} s)` : 'token/s unreported';
     signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${teamLabel(true)}${teamEnd(bookkeeping)} · out ${options.out}`);
-    if (!endSent) send({ type: 'dispatch-end', id, ...route, exitCode, reason, ...output.usage(), verdict: output.verdict(declared()),
+    if (!endSent) send({ type: 'dispatch-end', id, ...route, exitCode, reason, ...output.usage(), verdict: routingVerdict(output, declared()),
       ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
       ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), endedAt: Date.now() });
     await new Promise(resolve => log.end(resolve));
@@ -583,7 +585,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       const bookkeeping = await recordTeam({ answer: '', header: '', reason });
       signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${teamLabel(true)}${teamEnd(bookkeeping)} · out ${options.out}`);
       if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', ...output.usage(),
-        verdict: output.verdict(declared()), endedAt: Date.now() });
+        verdict: routingVerdict(output, declared()), endedAt: Date.now() });
     }
     log?.destroy();
     return 1;

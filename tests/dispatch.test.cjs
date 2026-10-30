@@ -108,7 +108,7 @@ test('dispatch emits kind and provider token and cost totals for the ledger', as
   assert.equal((await codexRun.finished).code, 0);
   const end = codexRun.events.at(-1);
   assert.equal(codexRun.events[0].kind, 'core'); assert.equal(end.inputTokens, 1200); assert.equal(end.cachedTokens, 300);
-  assert.equal(end.outputTokens, 150); assert.equal(end.reportedCostUsd, null); assert.equal(end.verdict, 'ok');
+  assert.equal(end.outputTokens, 150); assert.equal(end.totalOutputTokens, 150); assert.equal(end.reportedCostUsd, null); assert.equal(end.verdict, 'ok');
   const claudeLines = structuredClone(claude).map(record => ({ record }));
   const result = claudeLines.at(-1).record;
   Object.assign(result.usage, { input_tokens: 100, cache_creation_input_tokens: 50, cache_read_input_tokens: 200 });
@@ -143,6 +143,21 @@ test('Codex receives stdin/argv/cwd and reads its rollout for routing and final 
   assert.equal(await fs.readFile(path.join(f.directory, 'codex/config.toml'), 'utf8'), 'service_tier = "flex"\n');
   assert.equal(await fs.readFile(path.join(f.directory, `codex/sessions/2026/01/01/rollout-fixture-${session}.jsonl`), 'utf8'),
     rollout.map(record => JSON.stringify(record) + '\n').join(''));
+});
+
+test('an untimed Codex reply changes cost totals without changing the pane or helper rate', async t => {
+  const lines = structuredClone(codex);
+  for (const line of lines) if (line.rollout?.timestamp === at(10)) delete line.rollout.timestamp;
+  const f = await fixture(t, lines), result = await f.finished;
+  assert.equal(result.code, 0);
+  const end = f.events.at(-1);
+  assert.deepEqual([end.outputTokens, end.activeMs, end.totalOutputTokens], [100, 2000, 150]);
+  assert.match(result.stdout, /50 token\/s \(100 output tokens in 2 s\)/);
+  const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
+  const calls = new AgentCalls({ local: false }); t.after(() => calls.reset());
+  for (const event of f.events) calls.dispatch(event);
+  const rate = calls.snapshot()[0].rate;
+  assert.deepEqual([rate.outputTokens, rate.activeMs], [100, 2000]);
 });
 
 test('live rates tick every five seconds, flush changed totals without another response and skip unchanged ticks', { timeout: 30000 }, async t => {
@@ -425,7 +440,7 @@ test('headers are read as reports and missing or backwards timing never invents 
   for (const line of ['model: actual', 'reasoning effort: high', 'service tier: standard', `session id: ${session}`]) output.line(line);
   assert.deepEqual(output.routing(), { model: 'actual', effort: 'high', fast: false });
   output.line(JSON.stringify({ type: 'turn.completed', usage: { output_tokens: 50 } }));
-  assert.equal(output.outputTokens, 50);
+  assert.equal(output.outputTokens, null); assert.equal(output.usage().totalOutputTokens, 50);
   output.line(JSON.stringify({ type: 'turn.started', timestamp: at(2) }));
   output.line(JSON.stringify({ type: 'turn.completed', timestamp: at(1), usage: { output_tokens: 50 } }));
   assert.equal(output.activeMs, null);
