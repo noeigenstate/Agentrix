@@ -6,7 +6,8 @@
 //   rows: [{ who, title, files, goal, provides, uses, doneWhen, questions,
 //     status: 'confirmed' | 'open' | 'understood' | 'incomplete' | 'invalid' }],
 //   issues: [{ issue, raisedBy, answer, result }] }
-// A value is text or a list of lines; empty or "none" shows as "—"; an unknown status shows as written.
+// A value is text or a list of lines; empty or "none" shows as "—"; a missing or unknown status shows as incomplete,
+// with an unknown value written after it in parentheses. Both tables always show, with one note row when empty.
 const ZH = {
   lang: 'zh-CN',
   round: round => `第 ${round} 轮圆桌`,
@@ -42,20 +43,25 @@ const STYLE = `
 }
 body { margin: 0; background: var(--canvas); color: var(--text-1); font: 14px/1.6 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; }
 main { max-width: 1440px; margin: 0 auto; padding: 32px 24px 48px; }
-h1 { margin: 0 0 4px; font-size: 22px; }
-h2 { margin: 32px 0 12px; font-size: 16px; }
+h1 { margin: 0 0 8px; font-size: 22px; }
+h2 { margin: 32px 0 16px; font-size: 16px; }
 p { margin: 0; }
 .meta, .empty { color: var(--text-2); }
-.summary { margin-top: 12px; font-weight: 600; }
+.summary { margin-top: 16px; font-weight: 600; }
 .panel { overflow-x: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 16px; }
-.panel:focus-visible { outline: 2px solid var(--text-2); outline-offset: 2px; }
-table { width: 100%; min-width: 40rem; border-collapse: collapse; }
-table.wide { min-width: 76rem; }
-th, td { padding: 12px 14px; text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
-td { min-width: 9rem; border-top: 1px solid var(--divider); }
+.panel:focus-visible { outline: 2px solid var(--text-2); }
+table { width: 100%; min-width: 40rem; border-collapse: separate; border-spacing: 0; }
+table.wide { min-width: 80rem; }
+th, td { padding: 8px 16px; text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
+td { min-width: 9rem; border-top: 1px solid var(--divider); background: var(--panel); }
 th { white-space: nowrap; font-weight: 600; color: var(--text-2); background: var(--well); }
-.goal { display: block; margin-top: 2px; color: var(--text-2); }
-.files { font: 12px/1.5 ui-monospace, Consolas, monospace; }
+td.empty { min-width: 0; }
+.wide :is(th, td):first-child:not(.empty) { position: sticky; left: 0; z-index: 1; box-shadow: inset -1px 0 var(--divider); }
+.wide :is(th, td):last-child:not(.empty) { position: sticky; right: 0; z-index: 1; box-shadow: inset 1px 0 var(--divider); }
+.goal { display: block; margin-top: 8px; color: var(--text-2); }
+.files { min-width: 18rem; overflow-wrap: break-word; font: 12px/1.5 ui-monospace, Consolas, monospace; }
+.file { display: block; padding-left: 16px; text-indent: -16px; }
+.file + .file { margin-top: 8px; }
 .status { white-space: nowrap; }
 `;
 
@@ -76,16 +82,18 @@ function minutesPage(minutes) {
   const t = minutes.language === 'en' ? EN : ZH;
   const rows = minutes.rows ?? [], issues = minutes.issues ?? [];
   const heading = `${t.round(text(minutes.round))} · ${text(minutes.meeting)}`;
-  const status = value => Object.hasOwn(t.statuses, value) ? t.statuses[value] : text(value);
+  const status = value => Object.hasOwn(t.statuses, value) ? t.statuses[value] : `${t.statuses.incomplete}${blank(value) ? '' : ` (${text(value)})`}`;
+  // Each file is its own block, and a path may break after a separator, so a wrapped line is told from the next file.
+  const files = value => blank(value) ? '—' : lines(value).split(/\r?\n/).filter(line => line.trim())
+    .map(line => `<span class="file">${escape(line.trim()).replace(/[/\\]/g, '$&<wbr>')}</span>`).join('');
   const cells = (values, classes = []) => values.map((value, index) => `<td${classes[index] ? ` class="${classes[index]}"` : ''}>${value}</td>`).join('');
   const section = (title, columns, items, row, empty, wide = '') => `<section>
 <h2>${title}</h2>
-${items.length
-    ? `<div class="panel" role="region" aria-label="${title}" tabindex="0"><table${wide}><thead><tr>${columns.map(column => `<th>${column}</th>`).join('')}</tr></thead><tbody>${items.map(item => `<tr>${row(item)}</tr>`).join('')}</tbody></table></div>`
-    : `<p class="empty">${empty}</p>`}
+<div class="panel" role="region" aria-label="${title}" tabindex="0"><table${wide}><thead><tr>${columns.map(column => `<th>${column}</th>`).join('')}</tr></thead><tbody>${items.length
+    ? items.map(item => `<tr>${row(item)}</tr>`).join('') : `<tr><td class="empty" colspan="${columns.length}">${empty}</td></tr>`}</tbody></table></div>
 </section>`;
   const understanding = row => cells([
-    text(row.who), `<strong>${text(row.title)}</strong><span class="goal">${text(row.goal)}</span>`, text(row.files),
+    text(row.who), `<strong>${text(row.title)}</strong><span class="goal">${text(row.goal)}</span>`, files(row.files),
     text(row.provides), text(row.uses), text(row.doneWhen), text(row.questions), status(row.status),
   ], ['', '', 'files', '', '', '', '', 'status']);
   return `<!DOCTYPE html>

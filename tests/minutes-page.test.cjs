@@ -60,30 +60,50 @@ test('each status has its mark and word, invalid reads as incomplete, and only c
   assert.match(all, /已确认 1 \/ 5/);
 });
 
-test('an unknown status is shown as written and an unknown language falls back to zh', () => {
-  const html = minutesPage(minutes({ language: 'constructor', rows: [row('constructor'), row(undefined, 'Terra')] }));
+test('a missing or unknown status reads as incomplete, keeping an unknown value in parentheses, and an unknown language falls back to zh', () => {
+  const html = minutesPage(minutes({ language: 'constructor', rows: [row('constructor'), row(undefined, 'Terra'), row('none', 'Luna'), row('<b>', 'Evil')] }));
   assert.match(html, /<html lang="zh-CN">/);
-  assert.ok(html.includes('<td class="status">constructor</td>'));
-  assert.ok(html.includes('<td class="status">—</td>'));
+  assert.ok(html.includes('<td class="status">✖ 不完整 (constructor)</td>'));
+  assert.ok(html.includes('<td class="status">✖ 不完整</td>'));
+  assert.ok(html.includes('<td class="status">✖ 不完整 (&#60;b&#62;)</td>'));
+  assert.equal(html.match(/<td class="status">✖ 不完整<\/td>/g).length, 2);
+  const en = minutesPage(minutes({ language: 'en', rows: [row('later'), row(null)] }));
+  assert.ok(en.includes('<td class="status">✖ Incomplete (later)</td>'));
+  assert.ok(en.includes('<td class="status">✖ Incomplete</td>'));
+  assert.match(en, /Confirmed 0 of 2/);
 });
 
-test('no issues leaves a note instead of an empty second table; no rows still gives a full page', () => {
+test('empty data keeps both tables and their headers, with the note in one full-width row', () => {
   const noIssues = minutesPage(minutes({ issues: [] }));
-  assert.equal(noIssues.match(/<table/g).length, 1);
-  assert.match(noIssues, /<p class="empty">没有分歧或疑问<\/p>/);
-  assert.match(minutesPage(minutes({ language: 'en', issues: [] })), /<p class="empty">No disagreements or questions<\/p>/);
+  assert.equal(noIssues.match(/<table/g).length, 2);
+  assert.ok(noIssues.includes('<td class="empty" colspan="4">没有分歧或疑问</td>'));
+  assert.ok(noIssues.includes('<th>主模型的答复</th>'));
+  assert.ok(minutesPage(minutes({ language: 'en', issues: [] })).includes('<td class="empty" colspan="4">No disagreements or questions</td>'));
   const empty = minutesPage(minutes({ rows: [], issues: [] }));
-  assert.equal(empty.match(/<table/g), null);
-  assert.match(empty, /还没有子模型的记录/);
+  assert.equal(empty.match(/<table/g).length, 2);
+  assert.ok(empty.includes('<td class="empty" colspan="8">还没有子模型的记录</td>'));
+  assert.ok(empty.includes('<td class="empty" colspan="4">没有分歧或疑问</td>'));
+  assert.ok(empty.includes('<th>状态</th>'));
+  assert.ok(minutesPage(minutes({ language: 'en', rows: [] })).includes('<td class="empty" colspan="8">No worker has answered yet</td>'));
   assert.match(empty, /已确认 0 \/ 0/);
   assert.match(minutesPage({ meeting: 'm', round: 1 }), /<\/html>\n$/);
 });
 
 test('lists keep their lines; empty, missing and "none" values read as a dash', () => {
   const html = minutesPage(minutes({ rows: [{ ...row('open'), files: ['a.cjs', 'b/*.cjs'], provides: 'none', uses: ' None ', doneWhen: '', questions: undefined }] }));
-  assert.ok(html.includes('<td class="files">a.cjs\nb/*.cjs</td>'));
   assert.match(html, /white-space: pre-wrap/);
   assert.equal(html.match(/<td>—<\/td>/g).length, 4);
+  assert.ok(minutesPage(minutes({ rows: [{ ...row('open'), files: 'none' }] })).includes('<td class="files">—</td>'));
+  assert.ok(minutesPage(minutes({ rows: [{ ...row('open'), questions: 'one\ntwo' }] })).includes('<td>one\ntwo</td>'));
+});
+
+test('each file is its own block, escaped first, with a break opportunity after every separator', () => {
+  const html = minutesPage(minutes({ rows: [{ ...row('open'), files: ['a.cjs', 'src/<b>/x&y.cjs', 'win\\dir\\f.cjs', ' '] }] }));
+  assert.ok(html.includes('<td class="files"><span class="file">a.cjs</span><span class="file">src/<wbr>&#60;b&#62;/<wbr>x&#38;y.cjs</span><span class="file">win\\<wbr>dir\\<wbr>f.cjs</span></td>'));
+  assert.ok(minutesPage(minutes({ rows: [{ ...row('open'), files: 'a/b.cjs\nc/d.cjs' }] }))
+    .includes('<span class="file">a/<wbr>b.cjs</span><span class="file">c/<wbr>d.cjs</span>'));
+  assert.match(html, /\.files \{[^}]*min-width: 18rem; overflow-wrap: break-word/);
+  assert.match(html, /\.file \{[^}]*padding-left: 16px; text-indent: -16px/);
 });
 
 test('the task cell has the title in bold and the goal below it', () => {
@@ -104,6 +124,27 @@ test('the page follows the viewer\'s light or dark preference, with the app\'s p
   for (const colour of ['#181818', '#262626', '#f8f9fb', '#ffffff', '#e4e7eb', '#24272d']) assert.ok(html.toLowerCase().includes(colour), colour);
   assert.match(html, /\.panel \{ overflow-x: auto/);
   assert.equal(html.match(/<div class="panel"[^>]*><table/g).length, 2);
+});
+
+test('in the wide table the worker column sticks left and the status column right, over opaque cells', () => {
+  const html = minutesPage(minutes());
+  assert.match(html, /\.wide :is\(th, td\):first-child:not\(\.empty\) \{[^}]*position: sticky; left: 0;[^}]*box-shadow: inset -1px 0 var\(--divider\)/);
+  assert.match(html, /\.wide :is\(th, td\):last-child:not\(\.empty\) \{[^}]*position: sticky; right: 0;[^}]*box-shadow: inset 1px 0 var\(--divider\)/);
+  assert.match(html, /\ntd \{[^}]*background: var\(--panel\)/);
+  assert.match(html, /\nth \{[^}]*background: var\(--well\)/);
+  assert.match(html, /border-collapse: separate/);
+  assert.equal(html.match(/<table class="wide">/g).length, 1);
+  assert.equal(html.match(/<table>/g).length, 1);
+});
+
+test('spacing follows the 8 px rhythm', () => {
+  const html = minutesPage(minutes());
+  assert.match(html, /th, td \{ padding: 8px 16px;/);
+  assert.match(html, /h2 \{ margin: 32px 0 16px;/);
+  assert.match(html, /\.summary \{ margin-top: 16px;/);
+  const lengths = [...html.match(/<style>[\s\S]*<\/style>/)[0].matchAll(/(?:margin|padding)[a-z-]*:[^;}]+/g)].flatMap(([declaration]) => declaration.match(/-?\d+px/g) ?? []);
+  assert.ok(lengths.length >= 8);
+  for (const length of lengths) assert.equal(Math.abs(parseInt(length, 10)) % 8, 0, length);
 });
 
 test('the page is one self-contained document that loads nothing external', () => {

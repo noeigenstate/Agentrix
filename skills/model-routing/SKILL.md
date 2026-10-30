@@ -108,8 +108,10 @@ Write the plan before any worker starts:
 Before anyone builds, every worker gets the whole plan plus its own task, changes nothing and restates its understanding;
 the lead checks it against the plan. In a git repository the dispatch helper enforces this: it refuses a build whose
 session has no confirmed roundtable for the same `--allow` (`--skip-meeting <reason>` is the recorded exception) and
-refuses a new round's roundtable while the last round is not consolidated (step 5). Pick a meeting id for the round
-(`roundtable-1`, `[\w.-]{1,64}`).
+refuses a new round's roundtable while the last round is not consolidated (step 5). `--meeting` needs a git repository.
+Pick a **new meeting id every round** (`<topic>-r1`, `<topic>-r2`, `[\w.-]{1,64}`) and keep it through that round's
+understanding, confirmation, minutes and consolidation; reusing an earlier round's id is refused, and once a round is
+consolidated its meeting is closed, so its confirmations no longer open builds.
 
 1. **Understanding.** One run per worker, in parallel, each in its own worktree. Pass the role and the `--allow` the
    worker will have at work, plus `--meeting` (never `--read-only`: the same session builds later; the helper checks that
@@ -132,7 +134,8 @@ refuses a new round's roundtable while the last round is not consolidated (step 
    ```
 
    `minutes.md` is two Markdown tables (each worker's understanding and status; the issues) and `minutes.html` beside it
-   is the same as a page.
+   is the same as a page. A worker's unresolved confirmation questions are appended to its questions cell, prefixed
+   `未解决：` (`Open: ` with `--language en`), so an `open` worker's questions show without being copied by hand.
 3. **Confirmation.** Resume each worker's session with `minutes.md` as the brief; the helper appends the request to end
    with `## Roundtable confirmation` and `Status: confirmed`, or `Status: open` and what is unresolved:
 
@@ -141,6 +144,8 @@ refuses a new round's roundtable while the last round is not consolidated (step 
    ```
 
    On any `open`, answer it, add it to `issues.json` and repeat from the minutes; change the plan if the answer changes it.
+   A build refused for lack of a confirmed roundtable gets this same flow back from the helper: hold the roundtable with
+   `--meeting <new id>` and the build's `--allow`, then resume that session for the build with the same globs.
 4. **The owner.** Run `minutes` again after the confirmations and show the owner both tables in the reply (the contents
    of `minutes.md`) and the path of `minutes.html`. Then start the build; the owner can change the plan at any time.
 
@@ -263,9 +268,10 @@ node "<helper>" consolidate --cwd <repo> --meeting <id> --summary <scratch>/roun
 ```
 
 The helper appends it to the project memory under `## Round <n> · <meeting id> · <date time>`, where every later worker
-reads it first. Adjust the `BOUNDARY.md` files the round touched (Owns, Interface, Invariants, Not ours) in the same
-round and commit them; the project memory itself is not committed. The next round's roundtable is refused until this
-step is done.
+reads it first and the meeting is closed. `consolidate` is refused while a worker of that meeting still runs, so let the
+round's builds and review fixes end first. Adjust the `BOUNDARY.md` files the round touched (Owns, Interface, Invariants,
+Not ours) in the same round and commit them; the project memory itself is not committed. The next round's roundtable
+(a new meeting id) is refused until this step is done.
 
 ## Final acceptance
 

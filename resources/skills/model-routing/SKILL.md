@@ -201,7 +201,10 @@ Write the plan before any worker starts:
 ### 2. Roundtable
 
 Before anyone builds, every worker gets the whole plan plus its own task, changes nothing and restates its understanding;
-you check it against the plan. Pick a meeting id for the round (`[\w.-]{1,64}`).
+you check it against the plan. `--meeting` needs a git repository. Pick a **new meeting id every round** (`<topic>-r1`,
+`<topic>-r2`, `[\w.-]{1,64}`) and keep it through that round's understanding, confirmation, minutes and consolidation;
+reusing an earlier round's id is refused, and once a round is consolidated its meeting is closed, so its confirmations
+no longer open builds.
 
 1. **Understanding.** One run per worker, in parallel, each in its own worktree, with the role and `--allow` it will have
    at work plus `--meeting <id>` (never `--read-only`: the same session builds later; the helper checks that no file
@@ -215,7 +218,8 @@ you check it against the plan. Pick a meeting id for the round (`[\w.-]{1,64}`).
 
 2. **Your check.** Read each answer against the plan: do the workers agree on the interfaces they share, are the files
    disjoint, are the questions real? Answer them, write the disagreements and answers to `issues.json`, and build the
-   minutes (two Markdown tables, plus the same as an HTML page beside it):
+   minutes (two Markdown tables, plus the same as an HTML page beside it; a worker's unresolved confirmation questions
+   are appended to its questions cell, marked as open in the minutes language):
 
    ```
    [{ "issue": "<question or disagreement>", "raisedBy": "<worker>", "answer": "<your answer>", "result": "<settled | changed the plan | open>" }]
@@ -224,7 +228,8 @@ you check it against the plan. Pick a meeting id for the round (`[\w.-]{1,64}`).
 
 3. **Confirmation.** Resume each worker's session with `minutes.md` as the brief; the helper adds the request to end with
    `## Roundtable confirmation` and `Status: confirmed`, or `Status: open` and what is unresolved. Answer any `open` and
-   repeat from the minutes.
+   repeat from the minutes. A build refused for lack of a confirmed roundtable gets this same flow back from the helper:
+   hold the roundtable with `--meeting <new id>` and the build's `--allow`, then resume that session for the build.
 
    ```
    node "<helper>" codex --role <role> --meeting <id> --resume <session> --title "<one line>" --model <model> --effort <effort> --fast --cwd <worktree> --brief <minutes.md> --out <confirm.md> --allow '<same globs>'
@@ -283,8 +288,9 @@ node "<helper>" consolidate --cwd <repo> --meeting <id> --summary <summary.md>
 ```
 
 The helper appends it to the project memory under `## Round <n> · <meeting id> · <date time>`, where every later worker
-reads it first. Adjust the module-boundary files the round touched in the same round; the project memory itself is not
-committed. The next round's roundtable is refused until this is done.
+reads it first and the meeting is closed. `consolidate` is refused while a worker of that meeting still runs, so let the
+round's builds and review fixes end first. Adjust the module-boundary files the round touched in the same round; the
+project memory itself is not committed. The next round's roundtable (a new meeting id) is refused until this is done.
 
 ## Rules
 

@@ -70,7 +70,10 @@ no team folder, every rule here is off and the helper behaves as before.
   pid is not alive is stale: it is ignored and removed when seen. Checking the overlap and registering happen under one
   exclusive lock file in the folder, so two launches at the same moment cannot both pass.
 
-**`--meeting <id>`** (`[\w.-]{1,64}`) makes the run the roundtable for meeting `<id>`. Pass the role the worker will have at
+**`--meeting <id>`** (`[\w.-]{1,64}`) makes the run the roundtable for meeting `<id>`; it needs a git repository (there is
+no journal outside one). A meeting id belongs to one round: use a new one every round (`<topic>-r1`, `<topic>-r2`), keep it
+for that round's understanding, confirmation and minutes runs, and never reuse an id of an earlier round (refused). Once
+the round is consolidated the meeting is closed: its confirmations no longer open builds. Pass the role the worker will have at
 work (`--role 执行 --meeting …`); the event role Agentrix receives is `圆桌`, and the gates below still use the real role.
 Allowed with every role, not with `--read-only` (a resumed Codex keeps its first sandbox and the same session builds
 later; a Claude meeting runs with `--permission plan` and the build resumes it with `acceptEdits`). The worker must change
@@ -107,8 +110,10 @@ journaled and printed on the start line (` · roundtable skipped: <reason>`).
 **The minutes.** `node "<helper>" minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues <issues.json>] [--language zh|en]`
 writes `<minutes.md>` (two Markdown tables) and the same path with `.html` (the page for the owner), from the journal: the
 latest understanding of every session in the meeting and its latest status (`confirmed`, `open`, `understood`,
-`incomplete`, `invalid`). Rounds are numbered by the order in which meeting ids first appear in the journal. `--issues` is
-a file the lead writes, the second table:
+`incomplete`, `invalid`; a missing or unknown status shows as incomplete). A worker's unresolved confirmation questions
+(its `Status: open` bullets) are appended to its questions cell, prefixed `未解决：` (`Open: ` with `--language en`).
+Rounds are numbered by the order in which meeting ids first appear in the journal. `--issues` is a file the lead writes,
+the second table:
 
 ```
 [{ "issue": "Where do team.cjs and the page live?", "raisedBy": "Sol", "answer": "A new Team module", "result": "settled" }]
@@ -120,7 +125,8 @@ HTML page by path).
 
 **The consolidation.** `node "<helper>" consolidate --cwd <dir> --meeting <id> --summary <file.md>`: the summary must hold
 the headings `### Results` and `### Architecture changes` (the latter may say "none" with why). It is appended to
-`memory.md` under `## Round <n> · <meeting id> · <yyyy-mm-dd hh:mm>` and journaled. Both subcommands start no worker and
+`memory.md` under `## Round <n> · <meeting id> · <yyyy-mm-dd hh:mm>` and journaled, and the meeting is closed. It is
+refused while a worker of that meeting still runs: wait for the builds to end first. Both subcommands start no worker and
 exit 0, or 1 with one `[dispatch] …` line.
 
 **The gates.** Each refuses with `[dispatch] failed to start <id>: <reason>`, exit 1 and the usual unconfirmed start/end
@@ -132,11 +138,14 @@ events, before anything is launched. 调查 and 审查 runs are never gated.
 2. **Roundtable** — an 执行 run with `--allow` and without `--meeting` must `--resume` a session whose latest `meeting`
    entry is `confirmed` and whose meeting `allow` equals this run's `--allow` as a set (so repeat the same globs), or
    carry `--skip-meeting`. The reason says which is missing (no meeting for the session, not confirmed, scope differs
-   from the one agreed) and how to go on.
+   from the one agreed) and how to hold a roundtable: run the worker with `--meeting <new id>` and this run's `--allow`,
+   resume that session with the minutes until it is `confirmed`, then resume the same session for the build with the
+   same `--allow`. The confirmation of a closed (consolidated) meeting no longer counts.
 3. **Consolidation** — a `--meeting` run with a new id is refused while an earlier meeting has an `end` entry and no
    `consolidate` entry. The reason names that meeting and the `consolidate` command.
 
-**What every worker reads first** (when the team folder exists), before the ledger, boundary and allowed-files parts:
+**What every worker reads first** (when the team folder exists): the ledger first when `--ledger` is given, then these
+three parts, then the boundary and allowed-files parts:
 1. `# Project memory` — the path of `memory.md`, then its latest two `## Round` sections and everything after the last
    one, the newest text within 24 KB (cut at the start, marked `…`).
 2. `# Working now` — every other live board entry: `- <title> (<agent> <model>, <role>): <globs or "no file changes">`.
