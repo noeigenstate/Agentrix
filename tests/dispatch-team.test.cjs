@@ -9,6 +9,8 @@ const { once } = require('node:events');
 const { randomUUID } = require('node:crypto');
 const { setTimeout: delay } = require('node:timers/promises');
 const { run, argumentsOf, commandOf, briefOf } = require('../integration/dispatch.cjs');
+const { createRequire } = require('node:module');
+const vm = require('node:vm');
 const { projectTeam, understandingOf, confirmationOf, memoryExcerpt, minutesMarkdown } = require('../electron/features/team/team.cjs');
 const { createEventServer } = require('../electron/events.cjs');
 
@@ -83,12 +85,28 @@ async function start(f, { cwd = f.repo, role = 'exec', meeting, resume, allow = 
   child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
   const finished = once(child, 'close').then(([code]) => ({ code, stdout, stderr }));
   f.runs.push(finished);
-  return { child, finished, capture, out, args, session, releaseFile, stdout: () => stdout, release: () => fs.writeFile(releaseFile, '') };
+  return { child, finished, capture, out, args, env, prompt, session, releaseFile, stdout: () => stdout, release: () => fs.writeFile(releaseFile, '') };
 }
 
 function options(cwd, extra = []) {
   return argumentsOf(['codex', '--role', 'exec', '--title', 'Owner of A', '--model', 'gpt-6.1-sol', '--effort', 'max', '--fast',
     '--cwd', cwd, '--brief', 'brief.md', '--out', 'answer.md', ...extra]);
+}
+
+function load(file, replacements = {}) {
+  const loaded = { exports: {} }, localRequire = createRequire(file);
+  vm.runInNewContext(sync.readFileSync(file, 'utf8'), {
+    module: loaded, exports: loaded.exports, require: name => Object.hasOwn(replacements, name) ? replacements[name] : localRequire(name),
+    __dirname: path.dirname(file), __filename: file, process, Buffer, setTimeout, clearTimeout, setInterval, clearInterval,
+  }, { filename: file });
+  return loaded.exports;
+}
+
+async function invoke(prepared, extra = {}) {
+  let stdout = '';
+  const code = await run(prepared.args, { env: prepared.env, stdout: { write: text => { stdout += text; } },
+    resolveExecutable: (_, args) => ({ file: process.execPath, args: [worker, ...args] }), ...extra });
+  return { code, stdout };
 }
 
 test('team options reject ambiguity and never leak helper flags into CLI argv', () => {
@@ -115,6 +133,10 @@ test('understanding and confirmation parsing require complete final blocks', () 
   assert.equal(confirmationOf(confirmation).status, 'confirmed');
   for (const answer of ['', 'Status: confirmed', confirmation + '- still unresolved', '## Roundtable confirmation\nStatus: yes']) assert.equal(confirmationOf(answer).status, 'open');
   assert.deepEqual(confirmationOf('## Roundtable confirmation\nStatus: open\n- Answer my question.\n').confirmation.questions, ['Answer my question.']);
+  assert.equal(understandingOf(understanding + '\n' + understanding.replace('Coordinate safely', 'Latest goal')).understanding.goal, 'Latest goal');
+  assert.equal(understandingOf(understanding + '\n## Roundtable understanding\n- Goal: incomplete').status, 'incomplete');
+  assert.equal(confirmationOf(confirmation + '\n## Roundtable confirmation\nStatus: open\n- Latest question.').status, 'open');
+  assert.equal(confirmationOf('## Roundtable confirmation\nStatus: open\n- Old question.\n\n' + confirmation).status, 'confirmed');
 });
 
 test('worktrees share team state and outside git the helper behaves as before', async t => {
@@ -126,7 +148,7 @@ test('worktrees share team state and outside git the helper behaves as before', 
   assert.equal(await fs.readFile(peer.memory, 'utf8'), 'Shared decision.\n');
   assert.ok(team.directory.endsWith(path.join('.git', 'agentrix')));
   assert.equal(projectTeam(f.runtime, true), null);
-  const plain = await start(f, { cwd: f.runtime, meeting: 'ignored-outside-git', edits: [['a.js', 'outside git']] });
+  const plain = await start(f, { cwd: f.runtime, edits: [['a.js', 'outside git']] });
   const result = await output(plain), captured = await json(plain.capture);
   assert.equal(result.code, 0); assert.match(result.stdout, /scope unchecked/); assert.doesNotMatch(result.stdout, / · roundtable /);
   assert.equal(captured.brief, briefOf({ cwd: f.runtime, allow: ['src/a.js'] }, Buffer.from('Whole plan.\n')).toString());
@@ -263,7 +285,8 @@ test('new meetings wait for consolidation and round numbers follow first appeara
   await output(await start(f, { meeting: 'z-last-alphabetically', resume: session, session, answer: confirmation }));
   await output(await start(f, { resume: session, session, answer: 'Built.' }));
   const next = await start(f, { meeting: 'a-first-alphabetically' });
-  assert.match((await output(next)).stdout, /z-last-alphabetically is not consolidated.*dispatch.cjs consolidate.*--summary/);
+  assert.match((await output(next)).stdout, /z-last-alphabetically is not consolidated.*dispatch.cjs" consolidate.*--summary/);
+  assert.ok((await output(next)).stdout.includes('node "' + helper + '" consolidate'));
   assert.equal(exists(next.capture), false);
   const existing = await start(f, { meeting: 'z-last-alphabetically' });
   assert.equal((await output(existing)).code, 0);
@@ -304,7 +327,7 @@ test('briefs inject ledger first then recent memory live peers and bounded repos
   await fs.writeFile(team.memory, 'Old preface.\n## Round 1 · old\nobsolete\n## Round 2 · middle\nmiddle decision\n## Round 3 · new\nnew decision\n### Findings\nlatest finding\n');
   await team.admit(options(f.repo, ['--allow', 'src/b.js', '--skip-meeting', 'test']), id);
   for (let n = 0; n < 45; n++) await fs.writeFile(path.join(f.repo, `dirty-${String(n).padStart(2, '0')}.txt`), 'dirty');
-  const text = briefOf({ cwd: f.repo, allow: ['src/a.js'], ledger }, Buffer.from('Actual task.')).toString();
+  const text = briefOf({ cwd: f.repo, allow: ['src/a.js'], ledger }, Buffer.from('Actual task.'), team).toString();
   assert.ok(text.indexOf('# Shared context') < text.indexOf('# Project memory'));
   assert.ok(text.indexOf('# Project memory') < text.indexOf('# Working now'));
   assert.ok(text.indexOf('# Working now') < text.indexOf('# Repository'));
@@ -313,7 +336,7 @@ test('briefs inject ledger first then recent memory live peers and bounded repos
   assert.ok(text.includes(team.memory)); assert.match(text, /Owner of A \(codex gpt-6.1-sol, 执行\): src\/b.js/);
   assert.match(text, /… and 5 more/); assert.match(text, /[a-f0-9]+ base/);
   assert.match(text, /## Findings for the ledger/); assert.match(text, /# Task\n\nActual task\.$/);
-  const noLedger = briefOf({ cwd: f.repo, allow: [] }, Buffer.from('Read.')).toString();
+  const noLedger = briefOf({ cwd: f.repo, allow: [] }, Buffer.from('Read.'), team).toString();
   assert.match(noLedger, /# Handing back/);
   team.release(id);
   const excerpt = memoryExcerpt('## Round 1\nold\n## Round 2\n' + '汉字'.repeat(15000) + '\n## Round 3\n最新 finding\n');
@@ -410,4 +433,191 @@ test('Claude meetings use plan then acceptEdits on the resumed build', async t =
   assert.equal((await output(build)).code, 0);
   const args = (await json(build.capture)).args;
   assert.deepEqual(args.slice(0, 3), ['-p', '--resume', session]); assert.ok(args.includes('acceptEdits'));
+});
+
+test('meeting lifecycle closes consolidated ids blocks reused ids and tracks late ends', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true), session = randomUUID();
+  const entry = { type: 'meeting', meeting: 'r1', session, agent: 'codex', model: 'gpt-6.1-sol', role: '执行', title: 'Task A',
+    allow: ['src/a.js'], ...understandingOf(understanding), status: 'confirmed' };
+  team.append(entry);
+  team.append({ ...entry, meeting: 'already-seen-r2', session: randomUUID(), status: 'understood' });
+  team.append({ type: 'end', id: 'build', meeting: 'r1', session });
+  const reused = await start(f, { meeting: 'already-seen-r2', allow: ['src/b.js'] });
+  const refusal = await output(reused);
+  assert.equal(refusal.code, 1); assert.equal(exists(reused.capture), false);
+  assert.ok(refusal.stdout.includes('node "' + helper + '" consolidate'));
+  const active = randomUUID();
+  await team.admit(options(f.repo, ['--meeting', 'r1', '--allow', 'src/a.js']), active, helper);
+  const before = await fs.readFile(team.memory, 'utf8'), count = team.entries().length;
+  await assert.rejects(team.consolidate('r1', summary), /still has live workers/);
+  assert.equal(await fs.readFile(team.memory, 'utf8'), before); assert.equal(team.entries().length, count);
+  team.release(active); await team.consolidate('r1', summary);
+  await assert.rejects(team.admit(options(f.repo, ['--meeting', 'r1', '--allow', 'src/a.js']), randomUUID(), helper), /closed.*new --meeting/);
+  await assert.rejects(team.admit(options(f.repo, ['--resume', session, '--allow', 'src/a.js']), randomUUID(), helper), /closed.*--meeting <id>.*--resume.*--skip-meeting.*--help/);
+  team.append({ type: 'end', id: 'late-build', meeting: 'r1', session });
+  await assert.rejects(team.admit(options(f.repo, ['--meeting', 'already-seen-r2', '--allow', 'src/b.js']), randomUUID(), helper), /r1 is not consolidated/);
+  await team.consolidate('r1', summary);
+  const next = randomUUID();
+  await team.admit(options(f.repo, ['--meeting', 'already-seen-r2', '--allow', 'src/b.js']), next, helper);
+  team.release(next);
+});
+
+test('roundtables outside git are refused before any worker launches', async t => {
+  const f = await lab(t);
+  const meeting = await start(f, { cwd: f.runtime, meeting: 'r1' }), result = await output(meeting);
+  assert.equal(result.code, 1); assert.match(result.stdout, /roundtables need a git repository/);
+  assert.equal(exists(meeting.capture), false); assert.equal(projectTeam(f.runtime), null);
+});
+
+test('admission brief snapshot and log-open signals prevent launch', async t => {
+  const f = await lab(t), prepared = await start(f, { skip: 'signal regression' });
+  await output(prepared);
+  const team = projectTeam(f.repo), proto = Object.getPrototypeOf(team), admit = proto.admit;
+  const read = sync.readFileSync, stream = sync.createWriteStream;
+  const dirty = path.join(f.repo, 'src/a.js'); await fs.writeFile(dirty, 'dirty before snapshot\n');
+  for (const phase of ['admission', 'brief', 'snapshot', 'log']) {
+    let sent = false, calls = 0;
+    const send = () => { if (!sent) { sent = true; process.emit(phase === 'brief' ? 'SIGINT' : 'SIGTERM'); } };
+    let mocked;
+    if (phase === 'admission') mocked = t.mock.method(proto, 'admit', async function (...args) { const value = await admit.apply(this, args); send(); return value; });
+    else if (phase === 'log') mocked = t.mock.method(sync, 'createWriteStream', function (...args) { const value = stream.apply(this, args); queueMicrotask(send); return value; });
+    else mocked = t.mock.method(sync, 'readFileSync', function (file, ...args) {
+      const value = read.call(this, file, ...args);
+      if (String(file) === (phase === 'brief' ? prepared.prompt : dirty)) send();
+      return value;
+    });
+    try {
+      const result = await invoke(prepared, { launch: () => { calls++; assert.fail('cancelled admission launched a worker'); } });
+      assert.equal(sent, true, phase); assert.equal(calls, 0, phase); assert.equal(result.code, 1, phase);
+      assert.match(result.stdout, /interrupted before launch/); assert.deepEqual(team.live(), []);
+    } finally { mocked.mock.restore(); }
+  }
+});
+
+test('a signal between the launch check and spawn stops the new worker', async t => {
+  const f = await lab(t), prepared = await start(f, { skip: 'spawn signal regression' });
+  await output(prepared);
+  let pid;
+  const result = await invoke(prepared, { launch: (file, args, config) => {
+    process.emit('SIGTERM');
+    const child = spawn(file, args, config); pid = child.pid; return child;
+  } });
+  assert.ok(pid); assert.match(result.stdout, /reason (?:killed|unconfirmed)/);
+  assert.throws(() => process.kill(pid, 0));
+  assert.deepEqual(projectTeam(f.repo).live(), []);
+});
+
+test('bookkeeping failures preserve worker results and never retry findings', async t => {
+  const f = await lab(t), ledger = path.join(f.repo, 'ledger.md');
+  await fs.writeFile(ledger, '# Ledger\n');
+  const prepared = await start(f, { skip: 'bookkeeping regression', ledger, answer: 'Done.\n\n## Findings for the ledger\n\n- Once per result.\n' });
+  await output(prepared);
+  const team = projectTeam(f.repo), proto = Object.getPrototypeOf(team), append = proto.append, finish = proto.finish;
+  await fs.writeFile(team.memory, ''); await fs.writeFile(ledger, '# Ledger\n');
+  let calls = 0;
+  const failure = t.mock.method(proto, 'append', function (entry) {
+    if (entry.type === 'end') throw new Error('journal append failed');
+    return append.call(this, entry);
+  });
+  const attempted = t.mock.method(proto, 'finish', function (...args) { calls++; return finish.apply(this, args); });
+  try {
+    const result = await invoke(prepared);
+    assert.equal(result.code, 0); assert.match(result.stdout, /exit 0 reason exit.*WARNING: team bookkeeping failed: journal append failed/);
+    assert.equal(calls, 1);
+    for (const file of [team.memory, ledger]) assert.equal((await fs.readFile(file, 'utf8')).split('Once per result.').length, 2);
+  } finally { attempted.mock.restore(); failure.mock.restore(); }
+  const busy = t.mock.method(proto, 'finish', async () => { throw new Error('Team admission lock is busy'); });
+  try {
+    const result = await invoke(prepared);
+    assert.equal(result.code, 0); assert.match(result.stdout, /exit 0 reason exit.*WARNING: team bookkeeping failed: Team admission lock is busy/);
+    assert.deepEqual(team.live(), []);
+  } finally { busy.mock.restore(); }
+});
+
+test('gate refusals explain starting a roundtable and expose occupying board records', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true), id = randomUUID();
+  await assert.rejects(team.admit(options(f.repo, ['--allow', 'src/a.js']), randomUUID(), helper),
+    /--meeting <id> \(same --allow\).*--resume.*--skip-meeting <reason>.*--help/);
+  await team.admit(options(f.repo, ['--allow', 'src/a.js', '--skip-meeting', 'ghost diagnostic']), id, helper);
+  await assert.rejects(team.admit(options(f.repo, ['--allow', 'src/**', '--skip-meeting', 'test']), randomUUID(), helper), error => {
+    assert.ok(error.message.includes('pid ' + process.pid)); assert.ok(error.message.includes(path.join(team.board, id + '.json')));
+    return true;
+  });
+  team.release(id);
+});
+
+test('a fresh replacement lock survives stale-lock removal', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true), file = path.join(team.directory, 'lock');
+  await fs.writeFile(file, 'old'); const old = new Date(Date.now() - 11000); await fs.utimes(file, old, old);
+  const rename = sync.renameSync;
+  let replaced = false, entered = false;
+  const intercepted = t.mock.method(sync, 'renameSync', function (from, to) {
+    rename.call(this, from, to);
+    if (from === file) { assert.ok(to.endsWith('.stale')); replaced = true; sync.writeFileSync(file, 'fresh holder'); }
+  });
+  try {
+    const pending = team.locked(() => { entered = true; });
+    await delay(60);
+    assert.equal(replaced, true); assert.equal(entered, false); assert.equal(await fs.readFile(file, 'utf8'), 'fresh holder');
+    await fs.unlink(file); await pending;
+    assert.equal(entered, true); assert.equal(exists(file), false);
+  } finally { intercepted.mock.restore(); }
+});
+
+test('scoped dispatch reuses repository listings and snapshot status outside the admission lock', async t => {
+  const f = await lab(t), prepared = await start(f, { skip: 'git call budget' });
+  await output(prepared);
+  const boundaryFile = path.resolve(__dirname, '../electron/boundaries.cjs'), teamFile = path.resolve(__dirname, '../electron/features/team/team.cjs');
+  const calls = [], childProcess = require('node:child_process'), directory = projectTeam(f.repo).directory;
+  const children = { ...childProcess, execFileSync(file, args, config) {
+    calls.push(args);
+    assert.equal(exists(path.join(directory, 'lock')), false, 'Git runs outside the repository-wide lock');
+    return childProcess.execFileSync(file, args, config);
+  } };
+  const boundaries = load(boundaryFile, { 'node:child_process': children });
+  const teamModule = load(teamFile, { 'node:child_process': children, '../../boundaries.cjs': boundaries });
+  const dispatched = load(helper, { [boundaryFile]: boundaries, [teamFile]: teamModule });
+  assert.equal(dispatched.briefOf({ cwd: f.repo, allow: [] }, Buffer.from('plain')).toString(), 'plain');
+  assert.equal(calls.length, 0, 'briefOf has no hidden team discovery');
+  for (const withPeer of [false, true]) {
+    const team = projectTeam(f.repo), peer = randomUUID();
+    if (withPeer) await team.admit(options(f.repo, ['--allow', 'src/b.js', '--skip-meeting', 'peer']), peer, helper);
+    calls.length = 0;
+    let stdout = '';
+    const code = await dispatched.run(prepared.args, { env: prepared.env, stdout: { write: value => { stdout += value; } },
+      resolveExecutable: (_, args) => ({ file: process.execPath, args: [worker, ...args] }) });
+    assert.equal(code, 0, stdout);
+    assert.equal(calls.filter(args => args.includes('ls-files')).length, 1, 'one listing serves admission and boundaries');
+    assert.equal(calls.filter(args => args.includes('status')).length, 2, 'only the before/after snapshots read status');
+    if (withPeer) team.release(peer);
+  }
+});
+
+test('confirmation questions reach both minutes formats with their language prefix', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true);
+  const entry = { type: 'meeting', meeting: 'r1', session: 'session', agent: 'codex', model: 'model', role: '执行', title: 'Task',
+    ...understandingOf(understanding.replace('Questions and risks: none', 'Questions and risks: Original question.')) };
+  team.append(entry);
+  team.append({ ...entry, understanding: undefined, status: 'open', confirmation: { status: 'open', questions: ['New question <script>?', 'Another question.'] } });
+  const { minutesPage, stamp } = require('../electron/features/team/minutes-page.cjs');
+  for (const [language, prefix] of [['en', 'Open: '], ['zh', '未解决：']]) {
+    const data = team.minutes('r1', [], language);
+    assert.equal(data.rows[0].questions, 'Original question.\n' + prefix + 'New question <script>?\n' + prefix + 'Another question.');
+    const md = minutesMarkdown(data), html = minutesPage(data);
+    assert.ok(md.includes(prefix + 'New question')); assert.ok(html.includes(prefix + 'New question'));
+    assert.ok(!md.includes('<script>')); assert.ok(!html.includes('<script>'));
+    assert.ok(md.includes(stamp(data.generatedAt)));
+  }
+  assert.throws(() => team.minutes('r1', [{ issue: 'missing other fields' }]), /Issues must be an array/);
+  const unknown = minutesMarkdown({ ...team.minutes('r1'), language: 'constructor', rows: [{ title: ['none', 'line'], status: 'constructor' }], generatedAt: NaN });
+  assert.match(unknown, /子模型/); assert.match(unknown, /none<br>line/); assert.doesNotMatch(unknown, /native code/);
+});
+
+test('finish returns status data and sessionless failures do not count as workers', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true), opts = options(f.repo, ['--meeting', 'r1', '--allow', 'src/a.js']);
+  const result = await team.finish(opts, { id: randomUUID(), session: null, model: 'unreported', phase: 'understanding', reason: 'unconfirmed', answer: '', header: '' });
+  assert.deepEqual(result, { status: 'invalid' });
+  assert.equal(team.entries().at(-1).status, 'invalid');
+  const data = team.minutes('r1');
+  assert.deepEqual(data.rows, []); assert.match(minutesMarkdown(data), /已确认 0 \/ 0/);
 });

@@ -13,7 +13,7 @@ const { TokenRates } = require(path.join(runtime, 'features/agents/token-rate.cj
 const { agentSettings } = require(path.join(runtime, 'features/agents/agent-settings.cjs'));
 const { rolloutFiles, sessionMeta } = require(path.join(runtime, 'session-files.cjs'));
 const { TranscriptTail } = require(path.join(runtime, 'transcript-tail.cjs'));
-const { matches, snapshot, changedBetween, boundariesFor } = require(path.join(runtime, 'boundaries.cjs'));
+const { matches, snapshot, changedBetween, boundariesFor, repoFiles } = require(path.join(runtime, 'boundaries.cjs'));
 const { projectTeam, meetingRequest, recordFindings, minutesMarkdown, FINDINGS } = require(path.join(runtime, 'features/team/team.cjs'));
 const { minutesPage } = require(path.join(runtime, 'features/team/minutes-page.cjs'));
 const RUNTIME_FILES = ['boundaries.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
@@ -112,16 +112,16 @@ function commandOf(options) {
 
 // What the worker reads before the brief: the task's shared ledger, the boundaries of the modules it may change, the
 // paths it may change, and how to hand its findings back.
-function briefOf(options, brief, team = projectTeam(options.cwd), id, phase) {
+function briefOf(options, brief, team, { id, phase, repo, before } = {}) {
   const parts = [];
   if (options.ledger) {
     let ledger = '';
     try { ledger = fs.readFileSync(options.ledger, 'utf8').trim(); } catch {}
     if (ledger) parts.push(`# Shared context for this task\n\n${ledger}`);
   }
-  if (team) parts.push(...team.context(id));
+  if (team) parts.push(...team.context(id, before));
   if (options.allow.length) {
-    for (const boundary of boundariesFor(options.cwd, options.allow)) parts.push(`# Module boundary: ${boundary.file}\n\n${boundary.text.trim()}`);
+    for (const boundary of boundariesFor(options.cwd, options.allow, repo)) parts.push(`# Module boundary: ${boundary.file}\n\n${boundary.text.trim()}`);
     parts.push(`# Files you may change\n\n${options.allow.map(glob => `- \`${glob}\``).join('\n')}\n\nChange nothing else. Any other changed file is `
       + 'reported to the lead as out of scope and the work is rejected. If the task cannot be done within these paths, stop and say which file you would need and why.');
   }
@@ -138,9 +138,6 @@ async function teamCommand(argv, stdout) {
     if (options.agent === 'consolidate') await team.consolidate(options.meeting, fs.readFileSync(options.summary, 'utf8'));
     else {
       const issues = options.issues ? JSON.parse(fs.readFileSync(options.issues, 'utf8').replace(/^\uFEFF/, '')) : [];
-      if (!Array.isArray(issues) || issues.some(issue => !issue || ['issue', 'raisedBy', 'answer', 'result'].some(key => typeof issue[key] !== 'string'))) {
-        throw new Error('Issues must be an array of { issue, raisedBy, answer, result } strings');
-      }
       const html = path.join(path.dirname(options.out), path.parse(options.out).name + '.html');
       if (html === options.out) throw new Error('--out must name the Markdown minutes, not the HTML companion');
       const minutes = await team.locked(() => team.minutes(options.meeting, issues, options.language));
@@ -332,14 +329,26 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
   let options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, endSent = false;
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
-  let team = null, admission = null, teamFinished = false;
-  const teamLabel = (end = false) => !team ? '' : options.meeting ? ` · roundtable ${options.meeting}`
+  let team = null, admission = null, teamFinished = false, roundtable = false;
+  const teamLabel = (end = false) => !team ? '' : roundtable ? ` · roundtable ${options.meeting}`
     : options.skipMeeting && !end ? ` · roundtable skipped: ${options.skipMeeting}` : '';
+  const recordTeam = async report => {
+    if (!team || !admission || teamFinished) return {};
+    teamFinished = true;
+    try { return await team.finish(options, { id, session: output.sessionId, model: output.routing().model, ...admission, ...report }); }
+    catch (error) { return { warning: String(error.message || error).replace(/[\r\n]+/g, ' ') }; }
+  };
+  const teamEnd = ({ status, warning }) => {
+    let wording = '';
+    if (roundtable && status) wording = admission.phase === 'confirmation' ? (status === 'confirmed' ? 'confirmed' : 'open')
+      : `understanding ${status === 'understood' ? 'complete' : 'incomplete'}`;
+    return (wording ? ` · ${wording}` : '') + (warning ? ` · WARNING: team bookkeeping failed: ${warning}` : '');
+  };
   // Settles once the worker's output has been read to the end.
   const drained = new Promise(resolve => { drain = resolve; });
   const signal = line => stdout.write(`[dispatch] ${line}\n`);
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
-  const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: team && options.meeting ? '圆桌' : options.role, title: options.title,
+  const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
     cwd: options.cwd, brief: options.brief, out: options.out, sessionId: output.sessionId, startedAt: Date.now() });
   const failed = (reason, exitCode = null) => {
     if (unconfirmed || started) return;
@@ -394,17 +403,23 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     options = argumentsOf(argv);
     process.on('SIGINT', onInterrupt); process.on('SIGTERM', onTerminate); process.on('SIGHUP', onHangup);
     team = projectTeam(options.cwd, true);
-    if (team) admission = await team.admit(options, id);
+    roundtable = Boolean(team && options.meeting);
+    if (options.meeting && !team) throw new Error('roundtables need a git repository');
+    if (team) admission = await team.admit(options, id, __filename);
     if (killed) throw new Error('Dispatch interrupted before launch');
-    const brief = briefOf(options, fs.readFileSync(options.brief), team, id, admission?.phase);
+    const repo = admission?.repo || (options.allow.length ? repoFiles(options.cwd) : undefined);
+    const checking = options.allow.length > 0 || roundtable;
     // What the working tree held before the worker, so its own changes can be checked against --allow afterwards.
-    if (options.allow.length || team && options.meeting) before = snapshot(options.cwd);
-    if (team && options.meeting && !before) throw new Error('Cannot verify the roundtable working tree');
+    if (checking) before = snapshot(options.cwd, repo);
+    if (roundtable && !before) throw new Error('Cannot verify the roundtable working tree');
+    const brief = briefOf(options, fs.readFileSync(options.brief), team, { id, phase: admission?.phase, repo, before: checking ? before : undefined });
     log = fs.createWriteStream(options.out + '.log');
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
     const command = resolveExecutable(options.agent, commandOf(options), env);
+    if (killed) throw new Error('Dispatch interrupted before launch');
     child = launch(command.file, command.args, { cwd: options.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
       detached: process.platform !== 'win32' });
+    if (killed) stop('SIGTERM');
     log.on('error', error => { spawnError = error; stop('SIGTERM', false); });
     startTimer = setTimeout(() => { failed('session not reported within 30 s'); stop('SIGTERM', false); }, startTimeout);
     if (options.agent === 'codex') pollTimer = setInterval(() => { void rollout.read(); }, POLL_INTERVAL);
@@ -457,28 +472,30 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     clearTimeout(startTimer); clearTimeout(forceTimer);
     if (!started) failed(spawnError?.message || (output.capacity ? 'at capacity' : 'worker exited without a confirmed session'), result.code === 0 ? 1 : result.code);
     if (options.agent === 'claude' && output.result !== null && output.result !== undefined) fs.writeFileSync(options.out, output.result);
-    const checking = options.allow.length || team && options.meeting;
-    const after = checking ? snapshot(options.cwd) : null;
+    const after = checking ? snapshot(options.cwd, before) : null;
     // The helper's own files (the answer, its log, the ledger it appends to) are not the worker's changes.
     const own = after ? new Set([options.out, `${options.out}.log`, options.ledger, team?.memory].filter(Boolean).map(file => path.relative(after.root, file).split(path.sep).join('/'))) : null;
     const changed = (after && changedBetween(before, after)?.filter(file => !own.has(file))) ?? null;
-    const outOfScope = changed && (team && options.meeting ? changed : changed.filter(file => !matches(options.allow, file)));
+    const outOfScope = changed && (roundtable ? changed : changed.filter(file => !matches(options.allow, file)));
     const route = output.routing();
-    const reason = unconfirmed ? 'unconfirmed' : killed ? 'killed' : output.capacity ? 'capacity' : result.killedBy ? 'killed'
-      : team && options.meeting && outOfScope?.length ? 'scope' : spawnError || output.failed || result.code !== 0 || team && options.meeting && changed === null ? 'error' : outOfScope?.length ? 'scope' : 'exit';
+    let reason = 'exit';
+    if (unconfirmed) reason = 'unconfirmed';
+    else if (killed) reason = 'killed';
+    else if (output.capacity) reason = 'capacity';
+    else if (result.killedBy) reason = 'killed';
+    else if (roundtable && outOfScope?.length) reason = 'scope';
+    else if (spawnError || output.failed || result.code !== 0 || roundtable && changed === null) reason = 'error';
+    else if (outOfScope?.length) reason = 'scope';
     let answer = '';
     try { answer = fs.readFileSync(options.out, 'utf8'); } catch {}
     const header = `${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${options.title} · ${options.agent} ${route.model} · session ${output.sessionId || 'unreported'}`;
-    let meetingStatus = '';
-    if (team) {
-      meetingStatus = await team.finish(options, { id, session: output.sessionId, model: route.model, answer, header, reason, ...admission });
-      teamFinished = true;
-    } else { try { recordFindings(options, answer, header); } catch {} }
+    const bookkeeping = await recordTeam({ answer, header, reason });
+    if (!team) { try { recordFindings(options, answer, header); } catch {} }
     const scope = !checking ? '' : changed === null ? (team ? ' · scope unchecked (working tree unavailable)' : ' · scope unchecked (not a git working tree)')
       : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
-    const exitCode = Number.isInteger(result.code) ? (result.code === 0 && (unconfirmed || team && options.meeting && reason !== 'exit') ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
+    const exitCode = Number.isInteger(result.code) ? (result.code === 0 && (unconfirmed || roundtable && reason !== 'exit') ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
     const rate = output.outputTokens !== null && output.activeMs > 0 ? `${Math.round(output.outputTokens * 1000 / output.activeMs)} token/s (${output.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(output.activeMs / 1000)} s)` : 'token/s unreported';
-    signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${teamLabel(true)}${meetingStatus ? ` · ${meetingStatus}` : ''} · out ${options.out}`);
+    signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${teamLabel(true)}${teamEnd(bookkeeping)} · out ${options.out}`);
     if (!endSent) send({ type: 'dispatch-end', id, ...route, exitCode, reason, outputTokens: output.outputTokens, activeMs: output.activeMs,
       ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), endedAt: Date.now() });
     await new Promise(resolve => log.end(resolve));
@@ -488,11 +505,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (child?.pid) stop('SIGTERM', false);
     if (options) {
       const reason = unconfirmed ? 'unconfirmed' : 'error';
-      let meetingStatus = '';
-      if (admission && !teamFinished) {
-        try { meetingStatus = await team.finish(options, { id, session: output.sessionId, model: output.routing().model, answer: '', header: '', reason, ...admission }); } catch {}
-      }
-      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${teamLabel(true)}${meetingStatus ? ` · ${meetingStatus}` : ''} · out ${options.out}`);
+      const bookkeeping = await recordTeam({ answer: '', header: '', reason });
+      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${teamLabel(true)}${teamEnd(bookkeeping)} · out ${options.out}`);
       if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', outputTokens: null, activeMs: null, endedAt: Date.now() });
     }
     log?.destroy();

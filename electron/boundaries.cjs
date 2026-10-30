@@ -25,21 +25,23 @@ function repoFiles(cwd) {
   } catch { return null; }
 }
 
-// Content hashes of every file that differs from HEAD or is untracked, so a later snapshot shows what changed in between.
-function snapshot(cwd) {
-  let root;
-  try { root = git(cwd, ['rev-parse', '--show-toplevel']).toString('utf8').trim(); } catch { return null; }
+// Content hashes of dirty files for change checks, plus their status for the worker's repository brief.
+// A precomputed repository listing supplies the root without another Git lookup.
+function snapshot(cwd, repo) {
+  let root = repo?.root;
+  try { root ||= git(cwd, ['rev-parse', '--show-toplevel']).toString('utf8').trim(); } catch { return null; }
   const head = (() => { try { return git(root, ['rev-parse', 'HEAD']).toString('utf8').trim(); } catch { return null; } })();
   const dirty = git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']).toString('utf8').split('\0').filter(Boolean);
-  const files = new Map();
+  const files = new Map(), statuses = [];
   for (let i = 0; i < dirty.length; i++) {
     const entry = dirty[i], status = entry.slice(0, 2), file = entry.slice(3);
-    if (status[0] === 'R' || status[0] === 'C') i++; // the next field is the rename's source
+    const source = status[0] === 'R' || status[0] === 'C' ? dirty[++i] : undefined;
     let hash = 'deleted';
     try { hash = createHash('sha1').update(fs.readFileSync(path.join(root, file))).digest('hex'); } catch {}
     files.set(file, hash);
+    statuses.push({ status, file, ...(source ? { source } : {}) });
   }
-  return { root, head, files };
+  return { root, head, files, status: statuses };
 }
 
 // Files changed between two snapshots of the same working tree (commits made in between count by their diff).
@@ -63,8 +65,7 @@ function ownsOf(text) {
 }
 
 // The BOUNDARY.md files of the modules owning any file the worker may change, with their text.
-function boundariesFor(cwd, allow) {
-  const repo = repoFiles(cwd);
+function boundariesFor(cwd, allow, repo = repoFiles(cwd)) {
   if (!repo || !allow.length) return [];
   const allowed = repo.files.filter(file => matches(allow, file));
   return repo.files.filter(file => path.posix.basename(file) === 'BOUNDARY.md').flatMap(file => {
