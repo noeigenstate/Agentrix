@@ -76,7 +76,7 @@ function remember(dir, folder, rounds) {
 }
 
 async function conversation(agent, filename, cwd) {
-  const log = new ConversationLog(() => {}, 4000);
+  const log = new ConversationLog(() => {}, 4000, { pictures: false });
   const take = agent === 'claude' ? claudeConversation : codexConversation;
   for await (const record of records(filename, { historyWindow: true })) { try { take(log, record, cwd); } catch { } }
   return log.list;

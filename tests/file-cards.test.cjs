@@ -187,15 +187,14 @@ test('more than 32 queued pages keep their preview URLs alive and capture sequen
   assert.equal(most, 1); assert.equal(previews.sessions.size, 0);
 });
 
-test('outside absolute paths, sibling prefixes and junctions preview the selected real folder', async () => {
+test('outside absolute paths preview their folder while project junctions escaping it remain refused', async () => {
   const { project, previews } = fixture();
   const card = createFileCards({ previews, capture: async () => 'picture' });
   const outside = fs.mkdtempSync(project.path + '-outside-');
   fs.writeFileSync(path.join(outside, 'page.html'), '<h1>Outside</h1>');
   fs.symlinkSync(outside, path.join(project.path, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
-  for (const file of [path.join(outside, 'page.html'), 'linked/page.html']) {
-    assert.deepEqual(await card(project, file), { kind: 'html', path: fs.realpathSync(path.join(outside, 'page.html')), picture: 'picture' });
-  }
+  assert.deepEqual(await card(project, path.join(outside, 'page.html')), { kind: 'html', path: fs.realpathSync(path.join(outside, 'page.html')), picture: 'picture' });
+  await assert.rejects(card(project, 'linked/page.html'), { code: 'OUTSIDE_LINK' });
   await assert.rejects(card(project, '../outside.html'), /找不到这个文件/);
 });
 

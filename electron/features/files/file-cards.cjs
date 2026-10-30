@@ -1,16 +1,16 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { VIDEO_TYPES } = require('../../project-files.cjs');
-const { inside, previewLocation, localPath, checked, OUTSIDE, SSH_OUTSIDE } = require('./preview-location.cjs');
+const { inside, previewLocation, localPath, checked, failure, OUTSIDE, SSH_OUTSIDE } = require('./preview-location.cjs');
+const { cardKind, isImageFile } = require('./file-kind.cjs');
+const { PictureThumbnails, dataImage, FILE_LIMIT: IMAGE_BYTES } = require('./picture-thumbnail.cjs');
+const pictureValues = require('./picture-values.json');
 
 // What the reading view shows of a document, page, video or image an agent wrote or named: the start of a Markdown
 // file, a picture of an HTML page, a video to play, a small copy of the image. Cards are asked for only once they
 // scroll into view.
-const MARKDOWN = new Set(['.md', '.markdown', '.mdx']), HTML = new Set(['.html', '.htm']), IMAGES = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
 // A remote image travels over the SSH connection in pieces the size the remote worker reads at once.
-const EXCERPT = 8 * 1024, IMAGE_BYTES = 64 * 1024 * 1024, REMOTE_IMAGE_BYTES = 16 * 1024 * 1024, REMOTE_CHUNK = 256 * 1024, DOCUMENT_BYTES = 2 * 1024 * 1024;
-const cardKind = file => { const ext = path.extname(file).toLowerCase(); return MARKDOWN.has(ext) ? 'markdown' : HTML.has(ext) ? 'html' : VIDEO_TYPES[ext] ? 'video' : IMAGES.has(ext) ? 'image' : null; };
-const isImageFile = file => typeof file === 'string' && IMAGES.has(path.extname(file).toLowerCase());
+const EXCERPT = 8 * 1024, REMOTE_IMAGE_BYTES = 16 * 1024 * 1024, REMOTE_CHUNK = 256 * 1024, DOCUMENT_BYTES = 2 * 1024 * 1024;
 // Text read from the start of a file, without the half of a character its last bytes may cut.
 const utf8 = buffer => buffer.toString('utf8').replace(/�+$/, '');
 
@@ -27,7 +27,7 @@ async function readExcerpt(file, size, limit) {
 // a temporary folder). It is only shown, never served, so it is read wherever it is on the computer the project is on,
 // as a picture is: only Markdown, by its absolute path, at most limit bytes of it.
 async function outsideDocument(previews, project, file, limit) {
-  if (typeof file !== 'string' || !MARKDOWN.has(path.extname(file).toLowerCase())) throw new Error('只能预览 Markdown 文件。');
+  if (cardKind(file) !== 'markdown') throw new Error('只能预览 Markdown 文件。');
   if (project.kind === 'ssh') {
     if (!path.posix.isAbsolute(file)) throw new Error('只能预览 Markdown 文件。');
     const connection = previews.remote(project); await connection.ready;
@@ -35,6 +35,7 @@ async function outsideDocument(previews, project, file, limit) {
     return { text: utf8(Buffer.from(found.data, 'base64')), size: found.size };
   }
   if (!path.isAbsolute(file)) throw new Error('只能预览 Markdown 文件。');
+  localPath(file);
   const stat = await fs.stat(file).catch(() => null);
   if (!stat?.isFile()) throw new Error('找不到这个文件。');
   return { text: await readExcerpt(file, stat.size, limit), size: stat.size };
@@ -51,13 +52,14 @@ async function documentText(previews, project, file) {
 // an image (or null).
 function createFileCards({ previews, capture, shrink = () => null, shrinkBytes = () => null }) {
   const pictures = new Map();
+  const localPictures = new PictureThumbnails(shrink);
   let queue = Promise.resolve();
   const picture = (key, project, relative) => {
     if (pictures.has(key)) return pictures.get(key);
     // Allocate the short-lived URL only when capturing, so queued cards cannot expire it.
     const job = queue.then(async () => {
       const { url, previewId } = previews.open(project, relative, 'html');
-      try { return await capture(url); } finally { previews.close(previewId); }
+      try { return await capture(url, previews); } finally { previews.close(previewId); }
     }).catch(() => null).then(value => { if (!value && pictures.get(key) === job) pictures.delete(key); return value; });
     queue = job;
     pictures.set(key, job);
@@ -79,12 +81,12 @@ function createFileCards({ previews, capture, shrink = () => null, shrinkBytes =
     const absolute = path.posix.resolve(typeof cwd === 'string' && cwd.startsWith('/') ? cwd : root, value.replace(/\\/g, '/'));
     const relative = path.posix.relative(root, absolute);
     if (!relative || relative === '..' || relative.startsWith('../')) {
-      if (kind === 'html' || kind === 'video') throw new Error(SSH_OUTSIDE);
-      if (kind !== 'markdown' || !relative) throw new Error(OUTSIDE);
+      if (kind === 'html' || kind === 'video') throw failure('SSH_OUTSIDE', SSH_OUTSIDE);
+      if (kind !== 'markdown' || !relative) throw failure('OUTSIDE', OUTSIDE);
       return { kind, path: absolute, outside: true, excerpt: (await outsideDocument(previews, project, absolute, EXCERPT)).text };
     }
     const stat = await connection.request('stat', { path: relative }).catch(error => {
-      if ((kind === 'html' || kind === 'video') && error.message === '该链接指向远程项目目录之外。') throw new Error(SSH_OUTSIDE);
+      if (kind === 'html' || kind === 'video') throw error;
       return null;
     });
     if (!stat?.file) throw new Error(kind === 'image' ? '找不到这张图片。' : '这个文件没有预览卡片。');
@@ -111,11 +113,13 @@ function createFileCards({ previews, capture, shrink = () => null, shrinkBytes =
       const stat = await fs.stat(absolute).catch(() => null);
       if (!stat?.isFile()) throw new Error('找不到这张图片。');
       if (stat.size > IMAGE_BYTES) throw new Error('图片太大，无法预览。');
-      return { kind, path: absolute, picture: await thumbnail(`image|${absolute}|${stat.mtimeMs}|${stat.size}`, () => shrink(absolute)) };
+      const picture = localPictures.file(absolute);
+      if (!dataImage(picture)) throw new Error(picture === pictureValues.omitted ? '图片太大，无法预览。' : '无法读取这张图片。');
+      return { kind, path: absolute, picture };
     }
     const where = kind === 'markdown'
-      ? await inside(project, file, cwd).catch(error => { if (error.message === OUTSIDE) return null; throw error; })
-      : await previewLocation(project, file, cwd);
+      ? await inside(project, file, cwd).catch(error => { if (error.code === 'OUTSIDE') return null; throw error; })
+      : await previewLocation(project, file, cwd, previews.getProjects?.() || []);
     if (!where) {
       const absolute = path.resolve(localPath(cwd || project.path), localPath(file));
       return { kind, path: absolute, outside: true, excerpt: (await outsideDocument(previews, project, absolute, EXCERPT)).text };

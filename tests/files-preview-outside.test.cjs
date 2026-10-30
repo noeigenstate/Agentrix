@@ -79,11 +79,12 @@ test('outside videos support range seeking, selected-file isolation and project-
   await assert.rejects(previews.resolve(shown.url), /expired/); await assert.rejects(previews.resolve(popup.url), /expired/);
 });
 
-test('a selected junction resolves its real folder, and replacing an authorized folder revokes access', async t => {
+test('a project junction escaping its root is refused, and replacing an authorized folder revokes access', async t => {
   const { directory, project, folder, file, previews, handles, links } = await fixture(t);
   const linked = path.join(project.path, 'output');
   await fs.symlink(folder, linked, process.platform === 'win32' ? 'junction' : 'dir'); links.push(linked);
-  const popup = await handles.get('project:file')(project.id, path.join(linked, path.basename(file)));
+  await assert.rejects(handles.get('project:file')(project.id, path.join(linked, path.basename(file))), { code: 'OUTSIDE_LINK' });
+  const popup = await handles.get('project:file')(project.id, file);
   assert.equal((await previews.resolve(popup.url)).path, await fs.realpath(file));
   const replacement = path.join(directory, 'replacement'); await fs.mkdir(replacement);
   await fs.writeFile(path.join(replacement, path.basename(file)), '<h1>Unapproved</h1>');
@@ -97,9 +98,10 @@ test('SSH cards and popup reads explain that external pages and videos are not s
   const remote = { ready: Promise.resolve(), info: { root: project.path }, request: async () => { throw new Error('该链接指向远程项目目录之外。'); } };
   const previews = new PreviewResources({ remote: () => remote }), card = createFileCards({ previews, capture: async () => null });
   registerFilesIpc({ handle: (name, fn) => handles.set(name, fn), listen: () => {}, findProject: () => project, remoteFor: () => remote, previewResources: previews });
-  for (const file of ['/tmp/page.html', '/tmp/clip.mp4', '../output/page.html', 'linked/page.html']) {
+  for (const file of ['/tmp/page.html', '/tmp/clip.mp4', '../output/page.html', '..\\output\\page.html']) {
     await assert.rejects(card(project, file), /SSH 项目暂不支持预览项目目录外的页面和视频/);
     await assert.rejects(handles.get('project:file')(project.id, file), /SSH 项目暂不支持预览项目目录外的页面和视频/);
   }
+  await assert.rejects(card(project, 'linked/page.html'), /该链接指向远程项目目录之外/);
   assert.equal(previews.sessions.size, 0);
 });

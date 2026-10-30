@@ -5,9 +5,13 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { ConversationLog, codexConversation, claudeConversation, setThumbnailer } = require('../electron/conversation.cjs');
-const { ClaudeImageLine, IMAGE_LIMIT, IMAGE_OMITTED, readTranscriptChunk } = require('../electron/oversized-record.cjs');
+const { ClaudeImageLine, IMAGE_LIMIT, IMAGE_OMITTED: RAW_OMITTED, readTranscriptChunk } = require('../electron/oversized-record.cjs');
+const { omitted: IMAGE_OMITTED, unavailable: missing } = require('../electron/features/files/picture-values.json');
 
-const missing = 'agentrix-image:unavailable', small = 'data:image/jpeg;base64,SMALL';
+const small = 'data:image/jpeg;base64,SMALL';
+function png(width = 8, height = 8) {
+  const bytes = Buffer.alloc(24); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(bytes); bytes.writeUInt32BE(width, 16); bytes.writeUInt32BE(height, 20); return bytes;
+}
 const at = '2026-10-30T08:00:00.000Z';
 const item = (content, id = 'message') => ({ timestamp: at, type: 'event_msg', payload: { type: 'item_completed', item: { type: 'UserMessage', id, content } } });
 const response = content => ({ timestamp: at, type: 'response_item', payload: { type: 'message', role: 'user', content } });
@@ -16,7 +20,7 @@ function fixture(t) {
   const prefix = path.join(os.tmpdir(), 'agentrix-message-images-'), directory = fs.mkdtempSync(prefix);
   t.after(() => { setThumbnailer(() => null); assert.ok(path.resolve(directory).startsWith(prefix)); fs.rmSync(directory, { recursive: true, force: true }); });
   const file = path.join(directory, 'pasted 中文 #1.png');
-  fs.writeFileSync(file, 'synthetic pixels');
+  fs.writeFileSync(file, png());
   return { directory, file };
 }
 
@@ -31,21 +35,22 @@ test('Codex local_image messages show bounded thumbnails, including messages wit
     assert.equal(log.list[0].text, content.length === 1 ? '' : 'Look at this');
     assert.ok(!JSON.stringify(log.list[0].images).includes(file), 'file paths are never passed as image sources');
   }
-  assert.deepEqual(reads, [file, file]);
+  assert.deepEqual(reads, [file], 'replays reuse the file thumbnail');
 });
 
 test('older Codex events and input_image response items retain inline and local attachments', t => {
   const { file } = fixture(t);
   setThumbnailer(() => small, () => small);
   const records = [
-    { timestamp: at, type: 'event_msg', payload: { type: 'user_message', message: 'Look', images: ['data:image/png;base64,INLINE'], local_images: [file] } },
+    { timestamp: at, type: 'event_msg', payload: { type: 'user_message', message: 'Look', images: ['data:image/png;base64,' + png().toString('base64')], local_images: [file] } },
     { timestamp: at, type: 'event_msg', payload: { type: 'user_message', local_images: [{ path: file }] } },
     response([{ type: 'input_image', image_url: pathToFileURL(file).href }]),
-    response([{ type: 'input_text', text: 'Look' }, { type: 'input_image', image_url: { url: 'data:image/png;base64,INLINE' } }]),
+    response([{ type: 'input_text', text: 'Look' }, { type: 'input_image', image_url: { url: 'data:image/png;base64,' + png().toString('base64') } }]),
   ];
   for (const [index, record] of records.entries()) {
     const log = new ConversationLog();
     codexConversation(log, record);
+    if (record.type === 'response_item') codexConversation(log, item(record.payload.content));
     assert.equal(log.list.length, 1, String(index));
     assert.deepEqual(log.list[0].images, index === 0 ? [small, small] : [small]);
   }
@@ -53,7 +58,7 @@ test('older Codex events and input_image response items retain inline and local 
 
 test('missing, unreadable and oversized local images leave ordered tiles without retaining pixels', t => {
   const { directory, file } = fixture(t), large = path.join(directory, 'large.png');
-  fs.writeFileSync(large, ''); fs.truncateSync(large, 64 * 1024 * 1024 + 1);
+  fs.writeFileSync(large, ''); fs.truncateSync(large, 25 * 1024 * 1024 + 1);
   const reads = [];
   setThumbnailer(value => { reads.push(value); if (value === file) throw new Error('decode failed'); return small; });
   const log = new ConversationLog();
@@ -88,7 +93,7 @@ test('Claude oversized parsing retains only a marker for discarded pixels across
     assert.ok((line.data || []).reduce((size, part) => size + part.length, 0) <= IMAGE_LIMIT);
   }
   const parsed = line.record();
-  assert.equal(parsed.message.content[0].source.data, IMAGE_OMITTED);
+  assert.deepEqual(parsed.message.content[0].source.data, RAW_OMITTED);
   assert.ok(JSON.stringify(parsed).length < 512);
   const log = new ConversationLog(); claudeConversation(log, parsed);
   assert.deepEqual(log.list[0].images, [IMAGE_OMITTED]);
@@ -97,15 +102,17 @@ test('Claude oversized parsing retains only a marker for discarded pixels across
 test('large Codex input_image and images records survive the real oversized-line reader with bounded pixels', t => {
   fixture(t); setThumbnailer(() => null, () => small);
   for (const size of [1_200_000, IMAGE_LIMIT + 1]) {
-    const url = 'data:image/png;base64,' + 'A'.repeat(size);
+    const pixels = png().toString('base64') + 'A'.repeat(size - png().toString('base64').length);
+    const url = 'data:image/png;base64,' + pixels;
     const records = [
       response([{ type: 'input_text', text: 'Look' }, { type: 'input_image', image_url: url }]),
       { timestamp: at, type: 'event_msg', payload: { type: 'user_message', message: 'Look', images: [url, url] } },
-      item([{ type: 'text', text: 'Look' }, inline('A'.repeat(size))]),
+      item([{ type: 'text', text: 'Look' }, inline(pixels)]),
     ];
     for (const record of records) for (const chunkSize of [65537, 16 * 1024 * 1024]) {
       const reader = { buffer: Buffer.alloc(0) }, log = new ConversationLog(), bytes = Buffer.from(JSON.stringify(record) + '\n');
       for (let offset = 0; offset < bytes.length; offset += chunkSize) readTranscriptChunk(reader, bytes.subarray(offset, offset + chunkSize), value => codexConversation(log, value));
+      if (record.type === 'response_item') codexConversation(log, item(record.payload.content));
       assert.equal(log.list.length, 1);
       assert.equal(log.list[0].text, 'Look');
       assert.deepEqual(log.list[0].images, Array(record.payload.images ? 2 : 1).fill(size > IMAGE_LIMIT ? IMAGE_OMITTED : small));
@@ -141,11 +148,56 @@ test('text-only response mirrors add no user message, and image mirrors never di
   assert.deepEqual(pictures.list[0].images, ['data:image/png;base64,FIRST', 'data:image/png;base64,SECOND']);
 });
 
-test('different pictures accompanying the same words are not mistaken for duplicate records', () => {
+test('different encodings of the same user image pair by position, without creating a response bubble', () => {
   const log = new ConversationLog(), text = { type: 'input_text', text: 'Look' };
   codexConversation(log, item([text, inline('FIRST')]));
   codexConversation(log, response([text, inline('SECOND')]));
-  assert.equal(log.list.length, 2);
+  assert.equal(log.list.length, 1);
+  assert.deepEqual(log.list[0].images, ['data:image/png;base64,SECOND']);
+});
+
+test('real-shape Codex image wrappers are picture sources for one canonical user event in the same turn', t => {
+  const { file } = fixture(t);
+  let localDecodes = 0, inlineDecodes = 0;
+  setThumbnailer(() => { localDecodes++; return 'data:image/jpeg;base64,LOCAL'; }, () => { inlineDecodes++; return 'data:image/jpeg;base64,REENCODED'; });
+  const log = new ConversationLog();
+  const source = { timestamp: at, type: 'response_item', payload: { type: 'message', role: 'user', content: [
+    { type: 'input_text', text: '<image name=[Image #1] path="synthetic-picture.png">' },
+    { type: 'input_image', image_url: 'data:image/png;base64,' + png().toString('base64') },
+    { type: 'input_text', text: '</image>' }, { type: 'input_text', text: 'Describe this' },
+  ] } };
+  codexConversation(log, source);
+  assert.deepEqual(log.list, []); assert.equal(inlineDecodes, 0, 'unconfirmed sources do not decode or create bubbles');
+  codexConversation(log, { type: 'turn_context', payload: { turn_id: 'turn-1' } });
+  const canonical = item([{ type: 'local_image', path: file }, { type: 'text', text: 'Describe this' }], 'human-1');
+  codexConversation(log, canonical);
+  assert.equal(log.list.length, 1); assert.equal(log.list[0].id, 'u:human-1'); assert.equal(log.list[0].text, 'Describe this');
+  assert.deepEqual(log.list[0].images, ['data:image/jpeg;base64,REENCODED']);
+  assert.equal(inlineDecodes, 1); assert.equal(localDecodes, 0); assert.ok(!JSON.stringify(log.list).includes('<image'));
+  codexConversation(log, { type: 'event_msg', payload: { type: 'task_complete' } });
+  codexConversation(log, source);
+  codexConversation(log, { type: 'turn_context', payload: { turn_id: 'turn-2' } });
+  const next = item(canonical.payload.item.content, 'human-2'); codexConversation(log, next);
+  assert.equal(log.list.length, 2, 'the same caption in another turn is a separate user message');
+  assert.equal(inlineDecodes, 1, 'the second replay uses the hash cache');
+});
+
+test('injected view_image response items stay invisible and text-only logs retain no picture source', t => {
+  const { file } = fixture(t), source = response([{ type: 'input_image', image_url: 'data:image/png;base64,' + png().toString('base64') }]);
+  let calls = 0; setThumbnailer(() => { calls++; }, () => { calls++; });
+  const log = new ConversationLog(); codexConversation(log, source);
+  assert.deepEqual(log.list, []); assert.equal(log.codexPictures, undefined); assert.equal(calls, 0);
+  const text = new ConversationLog(() => {}, 400, { pictures: false });
+  codexConversation(text, item([{ type: 'local_image', path: file }, { type: 'text', text: 'Only the words' }]));
+  claudeConversation(text, { type: 'user', uuid: 'claude', timestamp: at, message: { content: [{ type: 'text', text: 'More words' }, inline('AAAA')] } });
+  assert.equal(calls, 0); assert.ok(text.list.every(entry => !entry.images)); assert.ok(!JSON.stringify(text).includes('base64'));
+});
+
+test('escaped image-like quotes in oversized user text never become pixel-string delimiters', () => {
+  const record = response([{ type: 'input_text', text: 'Quoted "data:image/png;base64,AAA" and \\"data:image/png;base64,BBB"\n'.repeat(20000) }, { type: 'input_image', image_url: 'data:image/png;base64,' + png().toString('base64') }]);
+  const bytes = Buffer.from(JSON.stringify(record) + '\n'), reader = { buffer: Buffer.alloc(0) }, parsed = [];
+  for (let at = 0; at < bytes.length; at += 65537) readTranscriptChunk(reader, bytes.subarray(at, at + 65537), value => parsed.push(value));
+  assert.deepEqual(parsed, [record]);
 });
 
 test('the paste cache removes recorded paths without duplicating thumbnails or exceeding four pictures', () => {

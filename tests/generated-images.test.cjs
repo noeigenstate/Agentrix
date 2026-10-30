@@ -1,5 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { ConversationLog, codexConversation, generatedImage, isGeneratedImage, setThumbnailer } = require('../electron/conversation.cjs');
 const { ActionLog } = require('../electron/agent-actions.cjs');
 
@@ -12,13 +15,18 @@ const record = { timestamp: '2026-10-10T03:38:31.000Z', type: 'event_msg', paylo
 
 test('a picture Codex generated shows in its answer as a small copy of the saved file, with its prompt', t => {
   const asked = [];
+  const prefix = path.join(os.tmpdir(), 'agentrix-generated-'), directory = fs.mkdtempSync(prefix);
+  const file = path.join(directory, 'generated_images', 'thread', 'picture.png');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const header = Buffer.alloc(24); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(header); header.writeUInt32BE(8, 16); header.writeUInt32BE(8, 20); fs.writeFileSync(file, header);
+  t.after(() => { assert.ok(path.resolve(directory).startsWith(prefix)); fs.rmSync(directory, { recursive: true, force: true }); });
   setThumbnailer(file => { asked.push(file); return 'data:image/jpeg;base64,THUMB'; });
   t.after(() => setThumbnailer(() => null));
   const log = new ConversationLog();
-  codexConversation(log, record, 'C:\\work');
+  codexConversation(log, { ...record, payload: { ...record.payload, item: { ...record.payload.item, savedPath: file } } }, 'C:\\work');
   assert.deepEqual(log.list, [{ id: 'g:exec-f90e4bcb-0fdf-4441-aae9-03dfb167f4eb', at: Date.parse(record.timestamp), role: 'assistant', text: '', images: ['data:image/jpeg;base64,THUMB'],
-    generated: { path: saved, prompt: 'A uniform deep navy background with one pink circular icon.' } }]);
-  assert.deepEqual(asked, [saved]);
+    generated: { path: file, prompt: 'A uniform deep navy background with one pink circular icon.' } }]);
+  assert.deepEqual(asked, [file]);
 });
 
 test('without a thumbnail a small result is shown as is; failures and unfinished pictures show nothing', () => {

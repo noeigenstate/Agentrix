@@ -1,8 +1,8 @@
 const { claudeAction, claudeOwnRecord, codexActions, codexFailed, resolvePath } = require('./agent-actions.cjs');
-const { IMAGE_LIMIT, IMAGE_OMITTED } = require('./oversized-record.cjs');
-const fs = require('node:fs');
+const { IMAGE_LIMIT } = require('./oversized-record.cjs');
 const path = require('node:path');
-const { fileURLToPath } = require('node:url');
+const { PictureThumbnails, dataImage } = require('./features/files/picture-thumbnail.cjs');
+const pictureValues = require('./features/files/picture-values.json');
 const { messageText, promptText, promptKey, promptCommand } = require('./prompt-queue.cjs');
 
 // The conversation of a terminal's agent, for the reading view: what the user asked, what the agent
@@ -22,42 +22,28 @@ const CLEAN_LIMIT = 60000;
 const PASTED = /<\/?pasted_content\b[^>]*>\n?/g;
 const clean = text => String(text || '').slice(0, CLEAN_LIMIT).replace(WRAPPERS, '').replace(PASTED, '').replace(/\[Image #\d+\]\s?/g, '').trim();
 // Four small pictures at most; unavailable pixels leave a marker in the same position, never a silent omission.
-const IMAGE_UNAVAILABLE = 'agentrix-image:unavailable', IMAGE_FILE_LIMIT = 64 * 1024 * 1024, IMAGE_URL_LIMIT = IMAGE_LIMIT + 128;
-const dataImage = value => typeof value === 'string' && /^data:image\/[\w.+-]+;base64,[A-Za-z0-9+/]/.test(value);
-let shrink = url => url;
+let thumbnails = new PictureThumbnails();
 function pictures(parts) {
   const found = [];
   for (const part of Array.isArray(parts) ? parts : []) {
     if (found.length >= 4) break;
     if (!['image', 'input_image', 'local_image'].includes(part?.type)) continue;
     let src = part.image_url?.url ?? part.image_url ?? part.url;
-    if (src === IMAGE_OMITTED) { found.push(IMAGE_OMITTED); continue; }
+    if (src?.omitted === true) { found.push(pictureValues.omitted); continue; }
     if (part.source?.type === 'base64') {
       const { data, media_type: mime } = part.source;
-      if (data === IMAGE_OMITTED || typeof data === 'string' && data.length > IMAGE_LIMIT) { found.push(IMAGE_OMITTED); continue; }
+      if (data?.omitted === true || typeof data === 'string' && data.length > IMAGE_LIMIT) { found.push(pictureValues.omitted); continue; }
       src = typeof data === 'string' && /^image\/[\w.+-]+$/.test(mime || '') ? `data:${mime};base64,${data}` : null;
     }
     if (dataImage(src)) {
-      if (src.length > IMAGE_URL_LIMIT) { found.push(IMAGE_OMITTED); continue; }
-      try { src = shrink(src) || src; } catch { }
-      found.push(dataImage(src) && src.length <= IMAGE_URL_LIMIT ? src : IMAGE_OMITTED);
+      found.push(thumbnails.data(src));
       continue;
     }
-    let file = part.path ?? part.image_path ?? src;
-    try {
-      if (typeof file !== 'string' || !file || file.length > 4096 || /[\0-\x1f]/.test(file)) throw new Error('Invalid image path');
-      if (file.startsWith('file:')) file = fileURLToPath(file);
-      if (!path.isAbsolute(file)) throw new Error('Image is not on this computer');
-      const stat = fs.statSync(file, { throwIfNoEntry: false });
-      if (!stat?.isFile()) throw new Error('Missing image');
-      if (stat.size > IMAGE_FILE_LIMIT) { found.push(IMAGE_OMITTED); continue; }
-      src = thumbnail(file);
-      found.push(dataImage(src) ? src.length <= IMAGE_URL_LIMIT ? src : IMAGE_OMITTED : IMAGE_UNAVAILABLE);
-    } catch { found.push(IMAGE_UNAVAILABLE); }
+    found.push(thumbnails.file(part.path ?? part.image_path ?? src));
   }
   return found;
 }
-const withImages = (entry, parts) => { const attached = pictures(parts); return attached.length ? { ...entry, images: attached } : entry; };
+const withImages = (entry, parts, log) => { const attached = log.pictures ? pictures(parts) : []; return attached.length ? { ...entry, images: attached } : entry; };
 
 // Older Codex events carry pictures beside their text. Normalize them before the prompt provenance check too,
 // so a local_image-only user message is a prompt, while system/tool records still fail that check.
@@ -65,57 +51,64 @@ function codexUserParts(content, item) {
   const parts = Array.isArray(content) ? [...content] : [{ type: 'text', text: typeof content === 'string' ? content : '' }];
   for (const values of [item.images, item.local_images]) {
     for (const value of Array.isArray(values) ? values.slice(0, 4) : []) {
-      if (typeof value === 'string') parts.push(dataImage(value) || value === IMAGE_OMITTED ? { type: 'input_image', image_url: value } : { type: 'local_image', path: value });
+      if (typeof value === 'string') parts.push(dataImage(value) ? { type: 'input_image', image_url: value } : { type: 'local_image', path: value });
+      else if (value?.omitted === true) parts.push({ type: 'input_image', image_url: value });
       else if (value && typeof value === 'object') parts.push({ ...value, type: value.type || (value.path ? 'local_image' : 'input_image') });
     }
   }
   return parts.map(part => part?.type === 'local_image' ? { ...part, type: 'input_image' } : part);
 }
 
-// A rollout can report the same prompt as an event and a response item. Pair the different representations once,
-// within the same turn; repeated user sends and turn boundaries must still create separate messages.
-function codexUser(log, entry, source) {
-  const previous = log.codexUser;
-  const shown = previous && log.list.find(item => item.id === previous.id);
-  const compatible = !shown?.images || !entry.images || entry.images.every((src, index) => !dataImage(src) || !dataImage(shown.images[index]) || src === shown.images[index]);
-  if (shown && (shown.images || entry.images) && compatible && !previous.sources.has(source) && previous.key === promptKey(entry.original)) {
-    previous.sources.add(source);
-    const images = Array.from({ length: Math.max(entry.images?.length || 0, shown.images?.length || 0) }, (_, index) => {
-      const src = entry.images?.[index];
-      return !src || src.startsWith('agentrix-image:') ? shown.images?.[index] || src : src;
-    });
-    log.put({ ...shown, ...entry, id: shown.id, at: shown.at, images });
-    return;
-  }
-  log.codexUser = { id: entry.id, key: promptKey(entry.original), sources: new Set([source]) };
-  log.put(entry);
+const imageTags = /<\/?image\b[^>]*>/gi;
+const imagePartsOf = parts => parts.filter(part => ['image', 'input_image'].includes(part?.type)).slice(0, 4);
+function pictureSources(preferred, fallback) {
+  const first = imagePartsOf(preferred), second = imagePartsOf(fallback);
+  return Array.from({ length: Math.min(4, Math.max(first.length, second.length)) }, (_, index) => first[index] || second[index]);
 }
-
 function codexUserMessage(log, record, item, id, source) {
-  const parts = codexUserParts(item.content ?? item.message, item), raw = messageText(parts), reply = questionReply(raw);
-  const original = reply === null ? promptText(parts, { ...record, ...record.payload, ...item }) : raw;
+  const parts = codexUserParts(item.content ?? item.message, item);
+  const textParts = parts.map(part => typeof part?.text === 'string' ? { ...part, text: part.text.replace(imageTags, '') } : part);
+  const raw = messageText(textParts).trim(), reply = questionReply(raw);
+  const original = reply === null ? promptText(textParts, { ...record, ...record.payload, ...item }) : raw;
   if (original === null) return;
   const text = reply ?? (promptCommand(original) || clean(original));
-  const entry = withImages({ id: `u:${id}`, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original, ...(reply !== null ? { answer: true } : {}) }, parts);
-  if (source === 'response' && !entry.images) return;
-  if (text || entry.images) codexUser(log, entry, source);
+  const key = promptKey(text), explicitTurn = item.turn_id || record.payload.turn_id || null, turn = explicitTurn || log.codexTurn;
+  const imageParts = imagePartsOf(parts);
+  if (source === 'response') {
+    // Codex also injects image-only user-role records for view_image. Only a canonical user event owns a bubble.
+    if (!imageParts.length || !raw && !/<image\b/i.test(messageText(parts))) return;
+    if (!log.pictures) return;
+    const pending = { key, turn: explicitTurn, parts: imageParts };
+    const previous = log.codexUser;
+    const shown = previous && log.list.find(entry => entry.id === previous.id);
+    if (shown && previous.key === key && (!previous.turn || !turn || previous.turn === turn) && !previous.response) {
+      const attached = pictures(pictureSources(imageParts, previous.parts));
+      log.put({ ...shown, images: attached }); previous.response = true;
+    } else log.codexPictures = pending;
+    return;
+  }
+  const pending = log.codexPictures;
+  const matched = pending && pending.key === key && (!pending.turn || !turn || pending.turn === turn);
+  const entry = withImages({ id: `u:${id}`, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original, ...(reply !== null ? { answer: true } : {}) }, matched ? pictureSources(pending.parts, parts) : parts, log);
+  if (matched) log.codexPictures = null;
+  log.codexUser = { id: entry.id, key, turn, response: !!matched, parts: log.pictures ? imageParts : [] };
+  if (text || entry.images) log.put(entry);
 }
 // A picture Codex generated (its image_gen tool) and saved under generated_images. The reading view shows a small copy
 // made from the saved file (the main process sets how, see setThumbnailer), never the full image inline, and opens
 // the file itself on a click.
 const GENERATED = /[\\/]generated_images[\\/][^\\/]+[\\/][^\\/]+\.(?:png|jpe?g|webp)$/i;
 // Codex records the path on the system it runs on; either form of an absolute path is read the same way everywhere.
-const isGeneratedImage = file => typeof file === 'string' && (require('node:path').win32.isAbsolute(file) || require('node:path').posix.isAbsolute(file)) && GENERATED.test(file);
-let thumbnail = () => null;
+const isGeneratedImage = file => typeof file === 'string' && !/^(?:[\\/]{2}|file:)/i.test(file) && (path.win32.isAbsolute(file) || path.posix.isAbsolute(file)) && GENERATED.test(file);
 // fromFile(path) and fromDataUrl(url) return a small data URL, or null to keep what there is.
-function setThumbnailer(fromFile, fromDataUrl = url => url) { thumbnail = fromFile; shrink = fromDataUrl; }
+function setThumbnailer(fromFile, fromDataUrl = url => url) { thumbnails = new PictureThumbnails(fromFile, fromDataUrl); }
 function generatedImage(item, at) {
   const kind = item?.type === 'Extension' ? item.kind : item?.type;
   if (!['image_gen.generation', 'imageGeneration'].includes(kind) || item.status !== 'completed' || !isGeneratedImage(item.savedPath)) return null;
   let src = null;
-  try { src = thumbnail(item.savedPath); } catch { }
-  if (!src && typeof item.result === 'string' && item.result.length <= IMAGE_LIMIT) src = `data:image/png;base64,${item.result}`;
-  if (!src) return null;
+  src = thumbnails.file(item.savedPath);
+  if (!dataImage(src) && typeof item.result === 'string' && item.result.length <= IMAGE_LIMIT) src = thumbnails.data(`data:image/png;base64,${item.result}`);
+  if (!dataImage(src)) return null;
   return { id: `g:${item.id}`, at, role: 'assistant', text: '', images: [src], generated: { path: item.savedPath, prompt: bounded(String(item.revisedPrompt || '')) } };
 }
 const bounded = text => text.length > TEXT_LIMIT ? `${text.slice(0, TEXT_LIMIT)}\n\n…` : text;
@@ -127,7 +120,8 @@ const brief = (action, cwd = action.cwd) => ({ kind: action.kind, tool: action.t
 // Entries keep their order; a later record about the same entry (a tool that finished) replaces it.
 class ConversationLog {
   // cwd: the folder Codex works in (its session's and each turn's), which relative file paths in its steps start from.
-  constructor(changed = () => {}, limit = 400) {
+  constructor(changed = () => {}, limit = 400, { pictures = true } = {}) {
+    this.pictures = pictures;
     this.changed = changed; this.limit = limit; this.list = []; this.cwd = null;
     this.queue = []; this.queueCount = 0; this.received = new Map(); this.deliveries = [];
   }
@@ -136,7 +130,7 @@ class ConversationLog {
   endHistory() { if (!this.loading) return; this.loading = false; this.changed({ reset: true }); }
   snapshot() { return this.loading ? [] : this.list; }
   reset() {
-    this.codexUser = null;
+    this.codexUser = null; this.codexPictures = null; this.codexTurn = null;
     this.queue = []; this.queueCount = 0; this.received.clear(); this.deliveries = [];
     if (!this.list.length) return;
     this.list = []; this.changed({ reset: true });
@@ -198,7 +192,7 @@ function claudeQueue(log, record, queueOnly) {
     // A slash command or shell line sent while it works is not a message (the reading view's isTypedCommand).
     const command = /^\s*<command-name>/.test(original || '') || (/^\/[^\s/]+(?:\s|$)/.test(text) || text.startsWith('!')) && !/[\r\n]/.test(text);
     if (original === null || command) return;
-    const entry = withImages({ id: `q:${record.timestamp}:${++log.queueCount}`, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original, queued: true }, record.content);
+    const entry = withImages({ id: `q:${record.timestamp}:${++log.queueCount}`, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original, queued: true }, record.content, log);
     log.queue.push(entry); log.put(entry);
     return;
   }
@@ -276,7 +270,7 @@ function claudeConversation(log, record, cwd, { queueOnly = false } = {}) {
       return;
     }
     const text = promptCommand(original) || clean(original);
-    const entry = withImages({ id: `u:${record.uuid || record.timestamp}`, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original }, queued.prompt);
+    const entry = withImages({ id: `u:${record.uuid || record.timestamp}`, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original }, queued.prompt, log);
     if (text || entry.images) receivedPrompt(log, entry, { fromQueue: true, queueOnly });
     return;
   }
@@ -294,7 +288,7 @@ function claudeConversation(log, record, cwd, { queueOnly = false } = {}) {
       return;
     }
     const text = promptCommand(original) || clean(original);
-    const entry = withImages({ id: `u:${base}`, at, role: 'user', text: bounded(text), original }, content);
+    const entry = withImages({ id: `u:${base}`, at, role: 'user', text: bounded(text), original }, content, log);
     // A conversation's first prompt, which Claude Code writes after the reply to it, goes before that reply.
     if (text || entry.images) receivedPrompt(log, entry, { inOrder: record.parentUuid === null, fromQueue: record.promptSource === 'queued', queueOnly });
     return;
@@ -326,9 +320,19 @@ function codexConversation(log, record, cwd) {
   if (!record?.payload) return;
   const payload = record.payload, at = Date.parse(record.timestamp) || Date.now();
   if (record.type === 'session_meta') { log.reset(); log.cwd = payload.cwd || cwd; return; }
-  if (record.type === 'turn_context') { log.cwd = payload.cwd || log.cwd; log.codexUser = null; return; }
+  if (record.type === 'turn_context') {
+    log.cwd = payload.cwd || log.cwd;
+    const turn = payload.turn_id || payload.id || null;
+    if (turn && log.codexTurn && turn !== log.codexTurn) log.codexUser = null;
+    if (turn && log.codexPictures) {
+      if (log.codexPictures.turn && log.codexPictures.turn !== turn) log.codexPictures = null;
+      else log.codexPictures.turn = turn;
+    }
+    if (turn) log.codexTurn = turn;
+    return;
+  }
   if (record.type === 'event_msg') {
-    const picture = payload.type === 'item_completed' ? generatedImage(payload.item, at) : null;
+    const picture = log.pictures && payload.type === 'item_completed' ? generatedImage(payload.item, at) : null;
     if (picture) log.put(picture);
     else if (payload.type === 'item_completed' && ['UserMessage', 'AgentMessage'].includes(payload.item?.type)) {
       if (payload.item.type === 'UserMessage') { codexUserMessage(log, record, payload.item, payload.item.id || at, 'item'); return; }
@@ -339,7 +343,7 @@ function codexConversation(log, record, cwd) {
       if (payload.type === 'user_message') { codexUserMessage(log, record, payload, id, 'event'); return; }
       const text = clean(original);
       if (text) log.put({ id: `a:${id}`, at, role: 'assistant', text: bounded(text), original });
-    } else if (['task_complete', 'turn_completed', 'turn_aborted', 'turn_interrupted'].includes(payload.type)) { log.codexUser = null; log.settle(); }
+    } else if (['task_complete', 'turn_completed', 'turn_aborted', 'turn_interrupted'].includes(payload.type)) { log.codexUser = null; log.codexPictures = null; log.settle(); }
     return;
   }
   if (record.type !== 'response_item') return;
