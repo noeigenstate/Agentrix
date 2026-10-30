@@ -55,3 +55,52 @@ test('the waiting card reuses the choice card frame and the 32px result button, 
   assert.match(css, /\.reading-waiting-heading \{[^}]*color: var\(--text-2\)/);
   assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b|rgba?\(/i, 'colours come from the theme tokens');
 });
+
+// The choice cards' styles, read as text: sizes on the scale, 32px hit areas, readable text in both themes.
+const strip = css => css.replace(/\/\*[\s\S]*?\*\//g, '');
+const rules = css => [...strip(css).matchAll(/([^{}]+)\{([^}]*)\}/g)].map(match => ({ selector: match[1].trim(), body: match[2] }));
+const cardRules = rules(fs.readFileSync(path.join(root, 'reading.css'), 'utf8')).filter(rule => /\.reading-(choice|question|waiting)/.test(rule.selector));
+const declarations = body => body.split(';').map(item => [item.slice(0, item.indexOf(':')).trim(), item.slice(item.indexOf(':') + 1).trim()]).filter(([name]) => name);
+
+test('the choice and question cards keep their spacing on the 2/4/8/12/16/20/24/32 scale', () => {
+  const scale = new Set([0, 2, 4, 8, 12, 16, 20, 24, 32]), off = [];
+  for (const rule of cardRules) for (const [name, value] of declarations(rule.body)) {
+    if (!/^(gap|margin(-[a-z]+)?|padding(-[a-z]+)?)$/.test(name)) continue;
+    for (const [, size] of value.matchAll(/(\d+(?:\.\d+)?)px/g)) if (!scale.has(Number(size))) off.push(`${rule.selector} { ${name}: ${value} }`);
+  }
+  assert.deepEqual(off, []);
+});
+
+test('the text actions of the choice and question cards have a 32px hit area, and the waiting card has one type size', () => {
+  const action = cardRules.find(rule => rule.selector.includes('.reading-choice-head') && rule.selector.endsWith('.text-button') && /min-height: 32px/.test(rule.body) && /min-width: 32px/.test(rule.body));
+  assert.ok(action, 'open terminal, cancel and chat about it share one rule');
+  assert.match(action.selector, /\.reading-question-head/); assert.match(action.selector, /\.reading-question-actions/);
+  assert.match(cardRules.find(rule => rule.selector === '.reading-question-head').body, /min-height: 32px/);
+  const waiting = rules(fs.readFileSync(path.join(root, 'choice-waiting.css'), 'utf8')).find(rule => rule.selector === '.reading-waiting .result-button');
+  assert.match(waiting.body, /font-size: inherit/, 'the 32px button speaks in the card\'s size, not its own 14px');
+});
+
+test('a disabled option dims through theme text, never through opacity', () => {
+  assert.doesNotMatch(cardRules.find(rule => rule.selector === '.reading-choice-option:disabled').body, /opacity/);
+});
+
+// WCAG contrast of the colours the cards put text in (a permission card's numbers, details, hints and actions).
+function luminance(hex) {
+  const [r, g, b] = [1, 3, 5].map(at => parseInt(hex.slice(at, at + 2), 16) / 255).map(value => value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+const contrast = (a, b) => { const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (high + 0.05) / (low + 0.05); };
+
+test('every text colour of the choice cards reads at 4.5:1 on its background in the dark and light themes', () => {
+  const themes = fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'styles', 'themes.css'), 'utf8');
+  const dark = /^:root \{([\s\S]*?)^\}/m.exec(themes)[1], light = /^:root\[data-theme="light"\] \{([\s\S]*?)^\}/m.exec(themes)[1];
+  // The highlighted option's number (accent) and detail (text-1 there), the context and hint rows, and the actions.
+  const pairs = [['--warning', '--bg-selected'], ['--text-1', '--bg-selected'], ['--text-2', '--bg-card'], ['--text-2', '--bg-app'], ['--text-3', '--bg-card'], ['--text-1', '--bg-card']];
+  for (const [name, block] of [['dark', dark], ['light', light]]) {
+    const token = key => new RegExp(`${key}:\\s*(#[0-9a-fA-F]{6})`).exec(block)?.[1];
+    for (const [text, background] of pairs) {
+      assert.ok(token(text) && token(background), `${name}: ${text} on ${background}`);
+      assert.ok(contrast(token(text), token(background)) >= 4.5, `${name}: ${text} on ${background} is ${contrast(token(text), token(background)).toFixed(2)}:1`);
+    }
+  }
+});
