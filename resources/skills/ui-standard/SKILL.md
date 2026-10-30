@@ -14,24 +14,31 @@ summary: 先出可点击设计稿再动手，按五个量化问题和灰度清�
 
 Read and follow this skill whenever you design, build, restyle or review any user interface: a new screen, a component,
 a theme, a table, an animation or a layout fix. It is not needed for a change that touches no visible interface.
-If the project has its own UI standard or design-system skill in skills/, .claude/skills/ or .codex/skills/, or names
-one as a word in its root AGENTS.md or CLAUDE.md, follow the project's standard instead; its tokens and palette win over
-the defaults below.
+Follow the user's instructions and the project's existing UI standard, design system, palette and component conventions,
+wherever they are documented. Use the defaults below only where those sources do not specify a rule. If project sources
+conflict, follow the currently accepted standard or the user's explicit choice and record the conflict.
 
 ## What to do
 
-1. **Show before building.** For anything more than a small fix, make a clickable HTML mockup with three toggles:
-   current, proposal and notes. For a restyle, draw several named concepts to pick from, each built as CSS and SVG and
-   never as a pasted picture. Record every decision the user makes and do not propose it again.
-2. **Measure the five questions** on the design (see "The five measured questions"). Answer with numbers, not taste.
+1. **Show before building.** For UI building beyond a small fix, show an interactive mockup appropriate to the target
+   platform, with current, proposal and notes views; mark current N/A for a new screen. For a restyle, present several
+   named concepts. Concept references may be images, but build the selected UI with the platform's interface
+   primitives. Record the user's decisions and do not re-propose them. A review of an existing UI does not require a
+   new mockup.
+2. **Measure the five questions** on the design (see "The five measured questions"). Record numeric measurements for
+   them. For visual judgments such as what stands out in the blurred image, record PASS or FAIL and explain the
+   evidence rather than inventing a numeric score.
 3. **Judge the grayscale checklist first**, with colour removed (see "Grayscale checklist"), then add colour on top of
    a layout that already works.
 4. **Build from the owning tokens.** Find the token or rule that owns a value before changing it (see "Styles") and
    change the source. Follow the palette, colour, size and rhythm rules below.
-5. **Make it crisp and calm:** whole-pixel sizes, one icon family, motion that respects reduced motion (see "Motion"
-   and "Crispness").
-6. **Verify in the running app** with screenshots from an isolated profile in light and dark, at the default, a mid
-   (about 1100px) and the minimum width. Another model accepts the screenshots, never their author.
+5. **Make it crisp and calm:** whole logical-pixel sizes, one icon family, motion that respects reduced motion (see
+   "Motion" and "Crispness").
+6. **Verify in the running app.** Use isolated or safe test data. Check the applicable default, hover, pressed,
+   disabled and busy states, keyboard focus and activation, scrolling and reduced motion. Capture every theme the
+   product ships at the default, an intermediate (about 1100px) and the minimum supported viewport; record unsupported
+   themes or sizes as N/A. Another model, or the user when no second model is available, accepts the screenshots, never
+   their author; report that acceptance as outstanding until one of them has accepted.
 
 ### The five measured questions
 
@@ -39,45 +46,69 @@ Measure the application's own interface only, not wallpapers, photos or brand ma
 
 | # | Question | Metric | Pass |
 | --- | --- | --- | --- |
-| 1 | Is there one clear focus? | Elements at the largest font size; the next size down | 1; at most 0.8x of it |
+| 1 | Is there one clear focus? | Visible text blocks at the largest font size; the next distinct font size down | 1; at most 0.8x of it |
 | | | Solid primary buttons in view | at most 1 |
 | | | A 12px-blurred grayscale screenshot | what stands out is the intended focus |
 | 2 | Is alignment uniform? | Distinct left edges per pane | at most 4 |
 | | | Near-misses (edges 1 to 3px apart) | 0 |
 | | | Vertical centres within one row | differ by at most 1px |
-| 3 | Is spacing regular? | Padding, margin and gap values off the scale | 0 |
+| 3 | Is spacing regular? | Padding, margin and gap values off the scale 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64 | 0 |
 | | | Distinct spacing values | at most 8 |
-| | | Repeated rows or cards | identical heights and gaps |
+| | | Repeated rows or cards | fixed-height groups have identical heights and gaps; content-driven groups may grow, with consistent gaps and padding |
 | 4 | Are colour and material restrained? | Chromatic hue families | at most 5 semantic colours |
 | | | Chromatic background area of a pane | at most 5% |
-| | | Backdrop filters, box shadows, translucent surfaces | at most 2, 3 and 4 |
+| | | Distinct non-none backdrop filters, non-none shadows and nonzero background alpha values | at most 2, 3 and 4 |
 | 5 | Is it one product? | Distinct border radii | at most 4, from one set |
 | | | Font sizes and weights | at most 6 and 3 |
-| | | Button variants and heights | at most 2 variants, one height |
+| | | Button variants and heights | at most 2 variants; one standard height and at most one compact height inside rows |
 | | | Transition duration and easing | one of each |
 | | | Icon family and sizes | one family, at most 3 sizes |
+| | | Token definitions across at least two relevant screens | one shared set; page-specific exceptions named |
 
-Name any deliberate exception in the report with its reason; never pass it silently.
+The default style rules below are stricter than these measurement ceilings: a design without glass, gradients or tinted
+panels passes the material limits by construction, and the ceilings only bound a project whose own rules allow such
+materials. Name any deliberate exception in the report with its reason; never pass it silently.
+
+Record the theme, state, viewport in logical pixels and device scale for each measurement. In a web UI, use browser
+developer tools, computed styles and bounding rectangles; in a native UI, use the platform's inspector or layout
+diagnostics. A screenshot ruler may measure geometry when its scale is known. Mark a property UNKNOWN, not PASS, if it
+cannot be measured.
+
+Count a visible text block once, excluding duplicated ancestor text. For alignment, count the first box in each row and
+each text column's left edge, rounding to the nearest logical pixel; an icon and text in one row share one line. Compare
+repeated rows or cards within adjacent runs of the same component type; a separator starts a new run.
+
+For colour, convert to HSL and count colours with saturation at least 25% and lightness from 12% through 92% in
+30-degree hue buckets. Exclude the pane's own surface and non-interface content. Measure coloured-background coverage as
+the union of clipped descendant background rectangles divided by the pane area. Count distinct material values, not
+instances. Exclude zero radius and count all pill radii as one value. Compare the shared token definitions across
+relevant screens; mark the comparison N/A if only one screen exists.
 
 ### Grayscale checklist
 
-Judge the page converted to grayscale, and the blurred screenshot, at the default size, a mid size and the minimum
-size. Report each item as PASS or FAIL with the screenshot and what was measured.
+Judge grayscale and 12px-blurred screenshots at the recorded default, intermediate and minimum supported sizes. Report
+each applicable item as PASS or FAIL with its evidence; use N/A for an absent component and UNKNOWN for an unmeasurable
+property.
 
-1. With the text ignored, the primary action area stands out first.
+1. If the screen has a primary action, its area stands out with the text ignored. Otherwise mark this item N/A and
+   identify the intended visual focus.
 2. Cards, inputs and buttons take their radii from one stated rule.
-3. Primary, secondary and placeholder text are clearly different in lightness, measured from pixels.
+3. Record the foreground-to-background contrast and grayscale lightness of primary, secondary and placeholder text when
+   present. Check that their intended hierarchy is distinguishable and explain the judgment.
 4. The selected item in a list is recognisable without any brand colour, by a fill and an indicator.
-5. Inputs, menus and buttons have a clear click area: visible bounds or a hover fill, at least 32px tall.
-6. At a small window there is no crowding and no abnormally clipped text.
-7. Every border is necessary: no double outlines (a box plus an inner field, a card plus a pane) and no heavy strokes.
+5. Inputs, menus and buttons have visible bounds or hover feedback and a hit area of at least 32 × 32 logical px. Follow
+   a larger platform touch-target requirement when applicable, and provide a visible keyboard focus indicator.
+6. At the minimum supported size, unrelated controls do not overlap and text is not accidentally clipped.
+7. Do not draw two outlines around the same visual container. Record the width and reason for any border judged
+   unusually heavy.
 
 ### Light theme
 
 - A light theme is not an inverted dark theme. It speaks the dark theme's visual language with its own values.
 - Borders and dividers are lighter than instinct says; text is never lightened to match them.
 - White carries content (cards, menus, a focused item); light grey marks what is interactive (hover, selected, inputs).
-- Use one soft hover shadow at most, for example `0 4px 12px rgb(0 0 0 / .05)`. No gradients, no glass, no tinted panels.
+- Follow the project's material rules. If none exist, use at most one soft hover shadow, for example
+  `0 4px 12px rgb(0 0 0 / .05)`, and default to surfaces without gradients, glass or tint.
 - Text contrast is at least 4.5:1 on every surface it sits on; check the selected and hover surfaces too.
 - Default reference palette, used only when the project has none of its own:
 
@@ -93,68 +124,88 @@ size. Report each item as PASS or FAIL with the screenshot and what was measured
 | Active border | #A8B7C9 |
 | Divider | #ECEDF0 |
 | Primary text | #24272D |
-| Secondary text | #69717D |
-| Success | #438F73 |
+| Secondary text | #69717D; use #636B77 (or primary text) on selected surfaces |
+| Success | #438F73 for indicators; #37745E for text |
 
 ### Colour
 
-- Everything is neutral grey except the semantic states (succeeded, running, needs attention, failed) and brand marks.
-- Colour goes on icons and indicators (a check, a cross, a dot, a ring, a bar), never as a fill of a pill, card or panel.
-- There is no separate accent colour: a checked switch, a picked option or the active tab uses the text colours.
+- By default, keep interface chrome and surfaces neutral, reserving colour for semantic indicators, status text and
+  brand marks. Do not recolour content such as photos, illustrations, code, diffs or charts. Avoid semantic-colour
+  fills on pills, cards and panels unless the project or user specifies them.
+- Put colour on icons and indicators (a check, a cross, a dot, a ring, a bar). Unless the project defines an accent, a
+  checked switch, a picked option or the active tab uses the text colours.
 - Every state also has a shape or a word, so it still reads in grayscale: a filled or hollow dot, a ring, a tag's text.
 
 ### Sizes and rhythm
 
-- Spacing comes from one scale: 4, 8, 12, 16, 24, 32, 40, 48, 64 (in logical px).
+- Spacing comes from one scale: 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64 logical px. Zero means no spacing; use at most
+  eight distinct nonzero values per screen.
 - One radius rule: a fixed radius per kind of element (region, card, container, control, tag), stated once and reused.
 - At most 6 font sizes and 3 weights. Hierarchy comes from size, contrast and spacing, not from heavier weights.
-- Controls are at least 32px tall. Use one icon family, with a stroke weight that matches the text beside it.
-- A component keeps the same radius, font, icon size, box and hover feedback at every width. When space runs out, hide
-  a label, ellipsize or wrap the row; never shrink a control or wrap text inside it.
+- Inputs, menus and buttons have visible bounds or hover feedback and a hit area of at least 32 × 32 logical px; follow
+  a larger platform touch-target requirement and show a visible keyboard focus indicator. Use one icon family, with a
+  stroke weight that matches the text beside it.
+- Keep component radius, font, icon size, minimum hit area and hover feedback consistent across widths. Let content
+  containers grow or rows wrap. An intentionally ellipsized label must expose its full text on focus or activation;
+  hiding a label must preserve its accessible name.
 
 ### Tables and lists
 
-- When a table scrolls sideways, pin the identifying column on the left and the status column on the right.
-- A status is a mark plus a word, never colour alone.
-- Keep an empty table with its headers; do not replace it with a blank area.
-- Wrap long paths after separators, one item per line.
+- For a horizontally scrolling table, keep its identifying column and, when present, its status column visible on
+  opposite edges if enough room remains for the data. Otherwise provide a readable alternative, such as a stacked view.
+  Label the scroll region and make it keyboard accessible.
+- Show status with a mark and a word, never colour alone.
+- Keep table headers when there are no rows and show an explicit empty-state message.
+- Render each path in its own block. Allow breaks after `/` or `\`, break long unseparated segments when necessary, and
+  indent continuation lines so separate paths remain distinguishable.
 - Counts and totals come from structured data, never parsed from displayed text.
 
 ### Motion
 
-- Never spin a border to mean busy. Send soft rings outward from the mark, fading as they spread.
-- A hover hop (a one-shot movement of an item) hangs its `:hover` on the element that does not move, never on the moving
-  item, or an item hopping out from under the pointer restarts forever.
-- Stop every loop and hop under reduced motion, and keep durations and easing to one set.
+- Follow the project's busy-state pattern; without one, avoid spinning borders and provide a static mark or text. If
+  using outward rings, fade them as they spread.
+- If using a hover hop, bind hover to a stationary hit area, arm the hop on pointer movement and disarm it during
+  scrolling until the pointer moves again. Check this with a stationary pointer while scrolling.
+- Stop nonessential loops and hops under reduced motion, and use one duration and easing set for the remaining
+  transitions.
 
 ### Crispness
 
-- Use whole-pixel sizes and positions; no fractional translate or scale on text or icons at rest.
-- An odd stroke width sits on half-pixel coordinates; icons are vectors, never bitmaps.
-- Check zoomed crops at 100%, 150% and 200% scaling: edges are sharp and no glow bleeds into text.
+- Prefer whole logical-pixel sizes and avoid fractional transforms on text or icons at rest. For axis-aligned strokes,
+  align to the device-pixel grid where practical: centre an odd-device-pixel-width stroke on a half-device-pixel
+  coordinate and an even-device-pixel-width stroke on a whole-device-pixel coordinate.
+- Use vector sources for interface glyphs where supported; provide raster resources at the sizes a platform requires.
+- Inspect screenshot crops at 100%, 150% and 200% device scaling when supported. Report unavailable scales and visible
+  blur or glow bleeding into text.
 
 ### Styles
 
 - Before changing a value, search the shared tokens and the feature styles for the owning token or rule.
 - Change the source rule or token; do not stack overrides on top of it.
-- When a token has per-theme or per-layout overrides, update every one of them together.
-- Verify computed styles in the running app, not by reading CSS: a change can build and still make no visible difference.
+- Inspect every affected per-theme and per-layout override; update those that need the change while preserving
+  intentional differences.
+- Verify the result in the running UI. Use computed styles for web interfaces or the platform's property inspector or
+  diagnostics for native interfaces; report any property that cannot be measured.
 
 ## Rules
 
-- Mockup first for anything beyond a small fix; the user's earlier decisions are kept and not re-proposed.
+- Mockup first for UI building beyond a small fix; the user's earlier decisions are kept and not re-proposed.
 - Measure with numbers; judge layout in grayscale before colour.
-- Colour only on icons and indicators for semantic states; no coloured fills, gradients, glass or tinted panels.
-- Spacing from the scale, at most 6 font sizes and 3 weights, controls at least 32px tall, one icon family.
+- Follow the project's palette and material rules; otherwise use neutral interface chrome and reserve colour for
+  semantic indicators, status text and brand marks.
+- Spacing from the scale, at most 6 font sizes and 3 weights, a hit area of at least 32 × 32 logical px, one icon family.
 - Change the owning token or rule, never stack overrides.
-- No spinning borders, honour reduced motion, and never let a text be clipped or the page scroll sideways.
-- The author never accepts their own screenshots; another model does.
+- Honour reduced motion and provide a non-motion status cue. Do not accidentally clip text or allow page-level
+  horizontal scrolling; a labelled, keyboard-accessible region may scroll horizontally.
+- The author never accepts their own screenshots; another model does, or the user when no second model is available.
 
 ## Done when
 
 - The mockup was shown and the user's decisions are recorded, or the change was small enough to need none.
-- The five questions have measured numbers that pass, and each grayscale item is PASS with a screenshot, or the
-  deliberate exception is named with its reason.
-- Screenshots from an isolated profile in light and dark at the default, a mid and the minimum width show no page-level
-  horizontal scroll and no clipped text, and computed styles in the running app match the intent.
-- Another model has accepted the screenshots. Report the files changed, the measured numbers and any exception.
+- The five questions have measured values and every applicable grayscale item has a PASS with evidence; absent items
+  are N/A and unmeasurable items are UNKNOWN. Deliberate exceptions are named with their reasons.
+- Every theme the product ships, at the recorded viewport sizes, has been inspected in the running UI. Page-level
+  horizontal scrolling and accidental clipping are absent; intentionally ellipsized text remains accessible in full.
+- Another model, or the user when no second model is available, has accepted the screenshots. Until one of them has,
+  or if a required check is unavailable, report it as outstanding rather than claiming completion. Report the changed
+  files, the measurements and any exception.
