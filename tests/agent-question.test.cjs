@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
+const { parseQuestion } = require('../src/features/agents/agent-question.ts');
 const { questionKeys, questionStops } = require('../src/features/reading/question-keys.ts');
 
 // Screens drawn by Claude Code 2.1.294 (AskUserQuestion) and Codex 0.161 (request_user_input in Plan mode).
@@ -84,6 +85,20 @@ test('a clipped Claude tab bar retains a complete visible question, but missing 
   const clipped = parseAgentScreen('claude', rows.slice(second));
   assert.equal(clipped.choice, null);
   assert.deepEqual(clipped.waiting, { title: null });
+});
+
+test('a missing Claude tab bar cannot include conversation, rules or inputs in the question title', () => {
+  const captured = fs.readFileSync(path.join(__dirname, 'fixtures/screens/claude-investigation-single.txt'), 'utf8')
+    .split('\n').map(row => row.replaceAll('☐', '□'));
+  const rows = read('claude-question');
+  const heading = rows.findIndex(row => row.trim() === '回收站怎么处理？');
+  for (const screenRows of [captured, ...['────────────────', '⏺ Previous answer', '● Previous answer', '⎿ Previous tool result', '❯ Previous prompt']
+    .map(row => [row, '', ...rows.slice(heading)])]) {
+    assert.equal(parseQuestion('claude', screenRows), null);
+  }
+  const screen = parseAgentScreen('claude', captured);
+  assert.equal(screen.choice, null);
+  assert.deepEqual(screen.waiting, { title: null });
 });
 
 test('Codex questions: position, two-column options, the last question and open notes', () => {
