@@ -363,7 +363,7 @@ class SkillsStore {
     }
     if (started && sessionId) {
       let recorded = false;
-      for (const skill of skills.filter(skill => skill.enabled && skill.firstRun)) {
+      for (const skill of skills.filter(skill => skill.firstRun)) {
         const runs = this.options[skill.id]?.firstOpenedProjects || {};
         if (runs[project.id]) continue;
         // Only an observed agent launch claims a first run, synchronously: simultaneous starts are first-wins.
