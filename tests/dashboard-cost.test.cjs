@@ -49,6 +49,12 @@ test('model ids match after trimming context and date suffixes and case', () => 
   assert.equal(estimateCost(run({ model: 'claude-sonnet-5' }), prices).basis, 'unknown');
 });
 
+test('the cost counts the output of the whole invocation, not only the timed replies behind the speed', () => {
+  const timed = estimateCost({ model: 'claude-sonnet-5-5', inputTokens: 0, cachedTokens: 0, outputTokens: 1_000_000 }, prices);
+  const whole = estimateCost({ model: 'claude-sonnet-5-5', inputTokens: 0, cachedTokens: 0, outputTokens: 1_000_000, totalOutputTokens: 2_000_000 }, prices);
+  assert.deepEqual([timed.usd, whole.usd], [15, 30]);
+});
+
 test('prices.json lists the routed models, and a source is present exactly when prices are', () => {
   assert.match(shipped.updated, /^\d{4}-\d{2}-\d{2}$/);
   assert.deepEqual(Object.keys(shipped.models).sort(), ['claude-haiku-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5', 'gpt-6.1-sol', 'gpt-6.1-terra']);

@@ -15,10 +15,13 @@ function priceOf(model, prices) {
 }
 
 // inputTokens is the input that missed the cache and cachedTokens the cache reads, so the three parts add up and no
-// token is charged twice. A run missing any count, or a model missing a price it needs, has no estimate: unknown, never 0.
+// token is charged twice. Output is the whole invocation's (totalOutputTokens); a run's outputTokens counts only the
+// timed replies behind its speed. A run missing any count, or a model missing a price it needs, has no estimate:
+// unknown, never 0.
 function estimateCost(run, prices) {
   if (count(run?.reportedCostUsd)) return { usd: run.reportedCostUsd, basis: 'reported' };
-  const { inputTokens, cachedTokens, outputTokens } = run ?? {};
+  const { inputTokens, cachedTokens } = run ?? {};
+  const outputTokens = run?.totalOutputTokens ?? run?.outputTokens;
   const price = priceOf(run?.model, prices);
   const priced = (tokens, perM) => tokens === 0 || Number.isFinite(perM);
   if (!price || ![inputTokens, cachedTokens, outputTokens].every(count)
