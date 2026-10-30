@@ -12,18 +12,20 @@ summary: 首次运行先审查现有代码，报告主要问题和分阶段计�
 
 ## When this applies
 
-Read and follow this skill before every task in every session. When the session note says "this is its first run in
-this project", review the existing code against these rules, report the most important problems and a staged plan, and
-ask whether to add this standard to the project (for example, copy it to skills/code-standard/). Change no code and
-write no file until the user agrees. In every other session, apply the rules to every code change, whether writing,
-changing or reviewing code.
+Read and follow this skill before every task in every session. The session note carries one line per skill; it is the
+first run only when the line telling you to read this file ends with "this is its first run in this project" (the same
+words after another skill's line are that skill's first run, not this one's). On the first run, review the existing code
+against these rules, report the most important problems and a staged plan, and ask whether to add this standard to the
+project (for example, copy it to skills/code-standard/). Change no code and write no file until the user agrees. In
+every other session, apply the rules to every code change, whether writing, changing or reviewing code.
 If the project has a code-standard skill in skills/, .claude/skills/ or .codex/skills/, or names it as a word in its
 root AGENTS.md or CLAUDE.md, follow the project's standard instead. Its conventions and linters take precedence.
 
 ## What to do
 
-1. If the session note says "this is its first run in this project", review the existing code against the rules below
-   without changing code or writing files. Otherwise skip to step 4 and apply the rules to every code change.
+1. If the session note's line telling you to read this file ends with "this is its first run in this project", review
+   the existing code against the rules below without changing code or writing files. Otherwise skip to step 4 and apply
+   the rules to every code change.
 2. Report the most important problems, with specific evidence, and a staged plan for addressing them.
 3. Ask whether to add this standard to the project, for example by copying it to skills/code-standard/. Change no code
    and write no file until the user agrees; wait for that agreement before adoption or implementation.
@@ -41,7 +43,7 @@ root AGENTS.md or CLAUDE.md, follow the project's standard instead. Its conventi
 - **Readability.** Use consistent naming and formatting. Comment complex business logic's reasons, remove meaningless comments, and match surrounding style and comment density.
 - **No code smells.** Fix duplication, overlong functions, oversized modules, over-design and unnecessary dependencies.
 - Preserve behavior, external interfaces and expected results. Prefer idiomatic language features; add no unnecessary abstractions, patterns or dependencies.
-- On the first run (the session note says so), do not change code or write any file until the user agrees to the proposed adoption and work.
+- On the first run (the session note's line for this file ends with "this is its first run in this project"), do not change code or write any file until the user agrees to the proposed adoption and work.
 - Apply the rules to every subsequent code change, verify each stage, and follow the project's own conventions where they differ.
 
 ## Done when

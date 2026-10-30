@@ -40,9 +40,9 @@ function RenderedText({ text }: { text: string }) {
 export function SkillDetailPane({ skill, detail, scopes, tab, now, actions }: {
   skill: SkillInfo; detail: SkillDetail | null; scopes: ScopeOption[]; tab: SkillTab; now: number; actions: SkillActions;
 }) {
-  const mine = skill.source === 'user', title = skillTitle(skill), summary = skillSummary(skill), needs = dependency(skill), pair = detail && latestTwo(detail.versions), proposal = detail?.pending ?? null;
-  const changeTab = pair ? 'diff' : 'pending', hasChanges = mine && (!!pair || proposal !== null), note = yieldNote(skill.yieldsTo);
-  const changes = mine && (tab === 'diff' || tab === 'pending') && (tab === 'pending' && proposal !== null
+  const mine = skill.source === 'user', title = skillTitle(skill), summary = skillSummary(skill), needs = dependency(skill), pair = mine && detail && latestTwo(detail.versions), proposal = detail?.pending ?? null;
+  const changeTab = pair ? 'diff' : 'pending', hasChanges = !!pair || proposal !== null, note = yieldNote(skill.yieldsTo);
+  const changes = (tab === 'diff' || tab === 'pending') && (tab === 'pending' && proposal !== null
     ? <Changes heading={t('当前 → Agent 的提议')} before={detail!.text} after={proposal} />
     : pair && <Changes heading={`v${pair[0].version} → v${pair[1].version} · ${changeSummary(skill, now)}`} before={pair[0].text} after={pair[1].text} />);
   const text = detail?.text ?? '';
