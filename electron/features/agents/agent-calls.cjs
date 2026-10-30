@@ -68,12 +68,12 @@ class AgentCalls {
     call.failure = event.reason === 'exit' && event.exitCode === 0 ? null
       : { reason: event.reason === 'exit' ? 'error' : event.reason, exitCode: event.exitCode, ...(event.outOfScope ? { files: event.outOfScope } : {}) };
     call.pendingReview = !!call.failure;
-    if (!call.failure) {
+    if (!call.failure || call.failure.reason === 'unconfirmed') {
       call.expiry = setTimeout(() => {
-        if (this.calls.get(event.id) !== call) return;
-        // Retain the receipt so a delayed duplicate start cannot resurrect a completed row.
+        if (this.calls.get(event.id) !== call || call.reviewed) return;
+        // Retain the receipt so a delayed duplicate start cannot resurrect a dismissed row.
         call.reviewed = true; this.changed();
-      }, 3000);
+      }, call.failure ? 5000 : 3000);
       call.expiry.unref();
     }
     return true;
