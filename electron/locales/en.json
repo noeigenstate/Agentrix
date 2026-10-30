@@ -1751,5 +1751,6 @@
   "无效的交付评分。": "Invalid delivery grade.",
   "评分终端与项目不匹配。": "The grading terminal does not belong to this project.",
   "终端里有一个需要你选择的界面": "The terminal shows a screen that needs your choice",
-  "打开终端": "Open terminal"
+  "打开终端": "Open terminal",
+  "还有问题没有回答": "Some questions are not answered yet"
 }
