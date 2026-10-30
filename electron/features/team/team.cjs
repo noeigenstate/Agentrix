@@ -224,19 +224,23 @@ class Team {
       throw new Error('Issues must be an array of { issue, raisedBy, answer, result } strings');
     }
     language = language === 'en' ? 'en' : 'zh';
+    const t = LABELS[language];
     const history = this.entries(), entries = history.filter(entry => entry.type === 'meeting' && entry.meeting === meeting);
     if (!entries.length) throw new Error(`No roundtable records for ${meeting}`);
-    const sessions = new Map();
+    // Titles identify retries; session aliases keep later confirmations attached when their run title changes.
+    const tasks = new Map(), sessionTitles = new Map();
     for (const entry of entries) {
-      if (!entry.session) continue;
-      const key = `${entry.agent}:${entry.session}`, previous = sessions.get(key);
-      sessions.set(key, { understanding: entry.understanding ? entry : previous?.understanding, latest: entry });
+      const session = entry.session && `${entry.agent}:${entry.session}`;
+      const title = sessionTitles.get(session) || entry.title, previous = tasks.get(title);
+      if (session) sessionTitles.set(session, title);
+      tasks.set(title, { understanding: entry.understanding ? entry : previous?.understanding,
+        latest: entry.session ? entry : { ...entry, status: 'invalid' } });
     }
-    const rows = [...sessions.values()].map(({ understanding, latest }) => {
+    const rows = [...tasks.values()].map(({ understanding, latest }) => {
       const entry = understanding || latest;
       const row = { who: [entry.model, entry.role].filter(Boolean).join(' · '), title: entry.title,
         ...Object.fromEntries(Object.values(fields).map(key => [key, entry.understanding?.[key] || ''])), status: latest.status };
-      const open = (latest.confirmation?.questions || []).map(question => (language === 'en' ? 'Open: ' : '未解决：') + question);
+      const open = (latest.confirmation?.questions || []).map(question => t.openPrefix + question);
       if (open.length) row.questions = [blank(row.questions) ? '' : row.questions, ...open].filter(Boolean).join('\n');
       return row;
     });

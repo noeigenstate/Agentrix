@@ -599,8 +599,10 @@ test('confirmation questions reach both minutes formats with their language pref
     ...understandingOf(understanding.replace('Questions and risks: none', 'Questions and risks: Original question.')) };
   team.append(entry);
   team.append({ ...entry, understanding: undefined, status: 'open', confirmation: { status: 'open', questions: ['New question <script>?', 'Another question.'] } });
-  const { minutesPage, stamp } = require('../electron/features/team/minutes-page.cjs');
-  for (const [language, prefix] of [['en', 'Open: '], ['zh', '未解决：']]) {
+  const { minutesPage, stamp, LABELS } = require('../electron/features/team/minutes-page.cjs');
+  for (const [language, expected] of [['en', 'Open: '], ['zh', '未解决：']]) {
+    const prefix = LABELS[language].openPrefix;
+    assert.equal(prefix, expected, 'the page and Team share the unresolved-question prefix');
     const data = team.minutes('r1', [], language);
     assert.equal(data.rows[0].questions, 'Original question.\n' + prefix + 'New question <script>?\n' + prefix + 'Another question.');
     const md = minutesMarkdown(data), html = minutesPage(data);
@@ -613,11 +615,53 @@ test('confirmation questions reach both minutes formats with their language pref
   assert.match(unknown, /子模型/); assert.match(unknown, /none<br>line/); assert.doesNotMatch(unknown, /native code/);
 });
 
-test('finish returns status data and sessionless failures do not count as workers', async t => {
+test('finish returns status data and sessionless failures count as invalid workers', async t => {
   const f = await lab(t), team = projectTeam(f.repo, true), opts = options(f.repo, ['--meeting', 'r1', '--allow', 'src/a.js']);
   const result = await team.finish(opts, { id: randomUUID(), session: null, model: 'unreported', phase: 'understanding', reason: 'unconfirmed', answer: '', header: '' });
   assert.deepEqual(result, { status: 'invalid' });
   assert.equal(team.entries().at(-1).status, 'invalid');
   const data = team.minutes('r1');
-  assert.deepEqual(data.rows, []); assert.match(minutesMarkdown(data), /已确认 0 \/ 0/);
+  assert.equal(data.rows.length, 1); assert.equal(data.rows[0].status, 'invalid'); assert.equal(data.rows[0].title, opts.title);
+  assert.match(minutesMarkdown(data), /已确认 0 \/ 1/);
+  const { minutesPage } = require('../electron/features/team/minutes-page.cjs');
+  assert.match(minutesPage({ ...data, language: 'en' }), /Confirmed 0 of 1/);
+});
+
+test('failed meetings are replaced by session-bearing retries with the same task title', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true);
+  const failed = { type: 'meeting', meeting: 'r1', title: 'Core task', agent: 'codex', model: 'unreported', role: '执行',
+    session: null, status: 'invalid', understanding: {} };
+  team.append(failed); team.append({ ...failed, id: 'another-failed-attempt' });
+  let data = team.minutes('r1');
+  assert.equal(data.rows.length, 1); assert.equal(data.rows[0].status, 'invalid');
+  assert.match(minutesMarkdown(data), /已确认 0 \/ 1/);
+  const retry = { ...failed, session: 'retry-session', model: 'gpt-6.1-sol', ...understandingOf(understanding) };
+  team.append(retry);
+  data = team.minutes('r1');
+  assert.equal(data.rows.length, 1); assert.equal(data.rows[0].status, 'understood');
+  assert.equal(data.rows[0].goal, 'Coordinate safely'); assert.equal(data.rows[0].who, 'gpt-6.1-sol · 执行');
+  team.append({ ...retry, title: 'Confirm minutes', understanding: undefined, status: 'confirmed' });
+  data = team.minutes('r1');
+  assert.equal(data.rows.length, 1); assert.equal(data.rows[0].status, 'confirmed'); assert.equal(data.rows[0].title, 'Core task');
+  assert.match(minutesMarkdown(data), /已确认 1 \/ 1/);
+  team.append({ ...failed, title: 'UI task' });
+  data = team.minutes('r1');
+  assert.equal(data.rows.length, 2); assert.equal(data.rows[1].status, 'invalid');
+  assert.match(minutesMarkdown(data), /已确认 1 \/ 2/);
+  const { minutesPage } = require('../electron/features/team/minutes-page.cjs');
+  assert.match(minutesPage({ ...data, language: 'en' }), /Confirmed 1 of 2/);
+});
+
+test('confirmation prefixes follow the shared page labels', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true);
+  team.append({ type: 'meeting', meeting: 'r1', title: 'Task', agent: 'codex', session: 'session', ...understandingOf(understanding) });
+  team.append({ type: 'meeting', meeting: 'r1', title: 'Confirm', agent: 'codex', session: 'session', status: 'open', confirmation: { questions: ['Who owns this?'] } });
+  const page = require('../electron/features/team/minutes-page.cjs');
+  const shared = { ...page, LABELS: {
+    zh: { ...page.LABELS.zh, openPrefix: '共享前缀：' },
+    en: { ...page.LABELS.en, openPrefix: 'Shared prefix: ' },
+  } };
+  const reader = load(path.resolve(__dirname, '../electron/features/team/team.cjs'), { './minutes-page.cjs': shared }).projectTeam(f.repo);
+  assert.equal(reader.minutes('r1', [], 'zh').rows[0].questions, '共享前缀：Who owns this?');
+  assert.equal(reader.minutes('r1', [], 'en').rows[0].questions, 'Shared prefix: Who owns this?');
 });
