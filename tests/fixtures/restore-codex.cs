@@ -7,6 +7,7 @@ using System.Web.Script.Serialization;
 
 class RestoreCodexFixture {
     static void Main(string[] args) {
+        if (args.Length > 0 && args[0] == "app-server") return;
         Console.OutputEncoding = new UTF8Encoding(false);
         var receipt = new { cwd = Directory.GetCurrentDirectory(), args = args };
         File.WriteAllText(Path.Combine(Directory.GetCurrentDirectory(), "resume-receipt.json"), new JavaScriptSerializer().Serialize(receipt), new UTF8Encoding(false));

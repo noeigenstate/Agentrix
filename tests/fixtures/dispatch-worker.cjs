@@ -4,6 +4,7 @@ const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 
 async function main() {
+  if (process.argv[2] === 'app-server') return;
   const fixture = JSON.parse(fs.readFileSync(process.env.DISPATCH_FIXTURE, 'utf8'));
   let brief = '';
   for await (const chunk of process.stdin) brief += chunk;

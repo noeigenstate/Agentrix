@@ -6,6 +6,7 @@ using System.Web.Script.Serialization;
 
 class MultiCodexFixture {
     static void Main(string[] args) {
+        if (args.Length > 0 && args[0] == "app-server") return;
         var id = Guid.NewGuid().ToString();
         for (int i = 0; i + 1 < args.Length; i++) {
             Guid candidate;
