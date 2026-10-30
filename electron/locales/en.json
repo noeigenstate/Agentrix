@@ -1713,5 +1713,5 @@
   "任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能和前端，Terra 验证界面。GPT 默认 max + fast，Claude 默认 high。": "Opus plans and reviews architecture, Sol handles core code, Sonnet handles routine work and the front end, and Terra verifies the interface. GPT defaults to max + fast, Claude to high.",
   "界面规范": "UI standard",
   "设计、实现、改版或审查界面时生效；项目已有自己的界面规范时以项目为准": "Applies when designing, building, restyling or reviewing an interface; the project's own UI standard takes precedence.",
-  "先出可点击设计稿再动手，按五个量化问题和灰度清单验收，颜色克制、间距成刻度；截图由另一个模型验收。": "Show a clickable mockup before building, accept by five measured questions and a grayscale checklist, keep colour restrained and spacing on a scale; another model accepts the screenshots."
+  "界面开发超出小修时先出可点击设计稿，按五个量化问题和灰度清单验收，颜色克制、间距成刻度；截图由另一个模型验收，没有时由用户验收。": "Before UI development beyond a small fix, show a clickable mockup; use five measured questions and a grayscale checklist, restrained colour and a spacing scale. Another model accepts the screenshots; if no second model is available, the user does."
 }
