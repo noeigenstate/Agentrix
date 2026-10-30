@@ -1644,7 +1644,6 @@
   "描述": "Description",
   "谁来做什么：Opus 规划与审查架构，GPT-6.1-Sol 写核心代码并调试，Sonnet 做日常与前端，GPT-6.1-Terra 验收界面并处理小任务。GPT 默认 max + fast，Claude 默认 high；只装了一个 Agent 时也有对应分工。": "Who does what: Opus plans and reviews the architecture, GPT-6.1-Sol writes the core code and debugs, Sonnet does routine work and the front end, GPT-6.1-Terra checks the interface and takes small tasks. GPT defaults to max + fast, Claude to high; there is a matching split when only one agent is installed.",
   "Agent 提议的修改尚未处理，保存会丢弃它。继续？": "An agent's proposed change has not been handled yet; saving discards it. Continue?",
-  "继续": "Continue",
   "原有版本": "Existing version",
   "设置 › 外观里可以缩放界面，默认按当前显示器自动调整，也可选 80%–150%，文字和终端一起按同一比例缩放。": "Settings › Appearance can zoom the interface: Auto fits the current display, or pick 80–150 %; text and terminals scale by the same ratio.",
   "技能管理": "Skills",
@@ -1703,5 +1702,13 @@
   "进入": "Open",
   "鼠标移到项目卡片的标题栏上会显示「进入」，点击进入会话；菜单里的「全屏查看」改叫「进入会话」，不再和窗口全屏混淆。": "Hovering a project card's title bar shows Open; clicking it opens the session. The menu's Expand is now Open session, no longer confused with full-screen window.",
   "快速子任务": "Fast workers",
-  "几秒内就做完的子任务也会显示「已完成」，不再误报「未能启动」；子任务启动后一秒内就能确认它在运行。": "A worker that finishes within seconds now shows Done instead of failing to start, and a running worker is confirmed within a second."
+  "几秒内就做完的子任务也会显示「已完成」，不再误报「未能启动」；子任务启动后一秒内就能确认它在运行。": "A worker that finishes within seconds now shows Done instead of failing to start, and a running worker is confirmed within a second.",
+  "圆桌会议": "Roundtable",
+  "分派子任务前可以先开圆桌会：每个子模型复述自己的任务，主模型逐条答复，大家确认后才开工；会议纪要以两张表给你看（网页和 Markdown）。": "Before workers start, the lead can hold a roundtable: each worker restates its task, the lead answers every question, and work starts only once all confirm. You see the minutes as two tables (a page and Markdown).",
+  "共享项目记忆": "Shared project memory",
+  "同一仓库的子模型共享一份项目记忆：开工时都能看到上一轮的整理、其他子模型的发现、此刻谁在改哪些文件；两个子任务改同一批文件会被拦下。": "Workers in the same repository share one project memory: each starts with the last round's summary, the other workers' findings and who is changing which files right now. Two tasks that would change the same files are stopped.",
+  "每轮整理": "Round consolidation",
+  "一轮开发结束后，主模型把结果和架构调整写进项目记忆；没整理完不能开下一轮的圆桌会。": "After each round the lead writes the results and architecture changes into the project memory; the next round's roundtable waits until that is done.",
+  "界面": "Interface",
+  "主模型卡片在还没开始任何一轮时不再显示「等待下一步」。": "The main model card no longer shows \"Waiting for the next step\" before its first round."
 }
