@@ -130,7 +130,8 @@ test('understanding and confirmation parsing require complete blocks', () => {
     goal: 'Coordinate safely', files: 'src/a.js', provides: 'team state', uses: 'minutesPage(minutes)', doneWhen: 'tests pass', questions: 'none',
   });
   for (const answer of ['', understanding.replace('- Uses: minutesPage(minutes)\n', ''), understanding.replace('- Uses: minutesPage(minutes)', '- Uses: '),
-    understanding + '- Goal: duplicate\n', understanding.replace('- Uses: minutesPage(minutes)', '- Uses:\n  \t'),
+    understanding + '- Goal: duplicate\n', understanding + '\n## Another section\nNo.\n',
+    understanding.replace('- Uses: minutesPage(minutes)', '- Uses:\n  \t'),
     understanding.replace('- Goal:', 'orphan before fields\n- Goal:')]) assert.equal(understandingOf(answer).status, 'incomplete');
   assert.equal(confirmationOf(confirmation).status, 'confirmed');
   for (const answer of ['', 'Status: confirmed', confirmation + '- still unresolved', '## Roundtable confirmation\nStatus: yes']) assert.equal(confirmationOf(answer).status, 'open');
@@ -145,13 +146,13 @@ test('understanding fields accept continuations and preserve them in the minutes
   const answer = understanding.replace('Goal: Coordinate safely', 'Goal: Coordinate safely\nand report findings')
     .replace('Files: src/a.js', 'Files: src/a.js\n  src/b.js')
     .replace('Uses: minutesPage(minutes)', 'Uses:\n  - first dependency\n  - second dependency')
-    .replace('Questions and risks: none', 'Questions and risks: none\n- Other: follow-up\n\n## Another section\nNo.');
+    .replace('Questions and risks: none', 'Questions and risks: none\n- Other: follow-up');
   const parsed = understandingOf(answer.replace(/\n/g, '\r\n'));
   assert.equal(parsed.status, 'understood');
   assert.equal(parsed.understanding.goal, 'Coordinate safely\nand report findings');
   assert.equal(parsed.understanding.files, 'src/a.js\n  src/b.js');
   assert.equal(parsed.understanding.uses, '- first dependency\n  - second dependency');
-  assert.equal(parsed.understanding.questions, 'none\n- Other: follow-up\n\n## Another section\nNo.');
+  assert.equal(parsed.understanding.questions, 'none\n- Other: follow-up');
   const minutes = { meeting: 'r1', round: 1, generatedAt: 0, language: 'en', issues: [],
     rows: [{ who: 'Terra', title: 'Task', ...parsed.understanding, status: parsed.status }] };
   const md = minutesMarkdown(minutes), html = minutesPage(minutes);
@@ -159,6 +160,18 @@ test('understanding fields accept continuations and preserve them in the minutes
   assert.match(md, /src\/a\.js<br>  src\/b\.js/);
   assert.match(html, /Coordinate safely\nand report findings/);
   assert.match(html, /src\/<wbr>a\.js<\/span><span class="file">src\/<wbr>b\.js/);
+});
+
+test('understanding rejects placeholder-only fields and trailing sections', () => {
+  for (const line of understanding.split('\n').filter(line => line.startsWith('- '))) {
+    const placeholder = line.slice(0, line.indexOf(':') + 1) + ' \u2026';
+    assert.equal(understandingOf(understanding.replace(line, placeholder)).status, 'incomplete', line);
+  }
+  assert.equal(understandingOf(understanding.replace('Goal: Coordinate safely', 'Goal: \u2026\n  Further detail')).status, 'understood');
+  for (const section of ['# End', '## Another section', '### Appendix', '#include']) {
+    assert.equal(understandingOf(understanding + '\n' + section + '\nNo.').status, 'incomplete', section);
+  }
+  assert.equal(understandingOf(understanding + '\n  # indented continuation').status, 'understood');
 });
 
 test('worktrees share team state and outside git the helper behaves as before', async t => {

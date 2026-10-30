@@ -30,6 +30,7 @@ for (const agent of agents) {
   try { git('rev-parse', '--git-dir'); } catch { git('init', '-b', 'main'); git('config', 'user.name', 'Reading Test'); git('config', 'user.email', 'reading@example.invalid'); await fs.writeFile(path.join(project.path, 'README.md'), '# Reading test\n'); git('add', '.'); git('commit', '-m', 'base'); }
   await fs.writeFile(path.join(project.path, 'notes.txt'), 'alpha\nbeta\ngamma\n');
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false, language: 'zh' } }));
+  // codex-home: real login on purpose (live scenario, run by hand)
   const env = { ...process.env, AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
   for (const name of Object.keys(env)) if (/^(CLAUDECODE|CLAUDE_CODE_|CLAUDE_EFFORT$|CLAUDE_PID$)/.test(name)) delete env[name];
   const app = await electron.launch({ executablePath: require('electron'), args: [root], cwd: root, env });

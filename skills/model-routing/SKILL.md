@@ -175,10 +175,11 @@ node "<helper>" codex --role 执行 --title "<one line>" --model <model> --effor
 node "<helper>" claude --role 审查 --title "<one line>" --model <model> --effort high --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md>
 ```
 
-Right after launching, read its `[dispatch] started …` line: it confirms the start and that routing is ok (the model,
-effort and mode the worker itself reports match what you declared). On `[dispatch] failed to start` fix the brief or
-relaunch; on `routing MISMATCH` stop the worker and relaunch with the intended settings, or tell the owner why the actual
-model is acceptable. While the worker runs, the activity pane shows its token/s live. When the task finishes, read the `[dispatch] ended …` line for the exit code, reason and the final average token/s.
+Right after launching, read its `[dispatch] started …` line: it confirms the start and shows which settings the worker
+actually reports. `routing ok` means reported values match, not that unverified settings are proven; `routing unverified`
+means the model itself is unreported. Verify missing settings before relying on them. On `[dispatch] failed to start` fix
+the brief or relaunch; on `routing MISMATCH` stop the worker and relaunch with the intended settings, or tell the owner
+why the actual model is acceptable. While the worker runs, the activity pane shows its token/s live. When the task finishes, read the `[dispatch] ended …` line for the exit code, reason and the final average token/s.
 
 - `--allow <glob>` for every worker that changes files: its task's file scope. The helper adds the module's
   `BOUNDARY.md` to the brief and checks the working tree afterwards; an end line with `OUT OF SCOPE: <files>` (pane: 越界)

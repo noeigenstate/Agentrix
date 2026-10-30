@@ -74,6 +74,7 @@ const rogueHome = path.join(lab, 'rogue-codex-home');
 await fs.mkdir(rogueHome, { recursive: true });
 
 const results = { model: MODEL, effort: EFFORT, runs: RUNS, startedAt: new Date().toISOString(), scenarios: [] };
+// codex-home: real login on purpose (live scenario, run by hand)
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile, AGENTRIX_TEST_ZOOM: 'auto' };
 for (const key of ['ELECTRON_RUN_AS_NODE', 'AGENTRIX_DEV_URL', 'AGENTRIX_BOOTSTRAP', 'AGENTRIX_READING_NOTE', 'AGENTRIX_READING_NOTE_FILE']) delete env[key];
 const project = { id: 'routing-lab', name: 'Routing lab', path: lab, kind: 'local', restore: { terminal: false, codex: false } };

@@ -29,8 +29,8 @@ print -r -- "STAND_IN_CODEX_DONE"
 `, { mode: 0o755 });
 await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', terminalRenderer: 'dom', autoSave: false, notifications: false, sound: false, announce: false, closeToTray: false, restoreSessions: false } }));
 
-const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, HOME: home, SHELL: '/bin/zsh' };
-for (const name of ['ELECTRON_RUN_AS_NODE', 'AGENTRIX_DEV_URL', 'ZDOTDIR', 'CODEX_HOME']) delete env[name];
+const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: await fs.mkdtemp(path.join(path.dirname(dataDir), 'codex-home-')), HOME: home, SHELL: '/bin/zsh' };
+for (const name of ['ELECTRON_RUN_AS_NODE', 'AGENTRIX_DEV_URL', 'ZDOTDIR']) delete env[name];
 const packaged = process.argv.includes('--packaged');
 const executablePath = packaged ? path.join(root, 'release/mac-arm64/Agentrix.app/Contents/MacOS/Agentrix') : require('electron');
 const errors = [];
