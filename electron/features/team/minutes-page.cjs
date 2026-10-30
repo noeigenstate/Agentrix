@@ -4,7 +4,8 @@
 //
 // minutes: { meeting, round, generatedAt (ms), language ('zh' | 'en'; anything else reads as zh),
 //   rows: [{ who, title, files, goal, provides, uses, doneWhen, questions,
-//     status: 'confirmed' | 'open' | 'understood' | 'incomplete' | 'invalid' }],
+//     status: 'confirmed' | 'open' | 'understood' | 'incomplete' | 'invalid',
+//     open: the latest confirmation's unresolved questions, only while the status is open (missing reads as none) }],
 //   issues: [{ issue, raisedBy, answer, result }] }
 // A value is text or a list of lines; empty or "none" shows as "—"; a missing or unknown status shows as incomplete,
 // with an unknown value written after it in parentheses. Both tables always show, with one note row when empty.
@@ -102,7 +103,7 @@ function minutesPage(minutes) {
 </section>`;
   // The pinned status cell says how many open questions the row's questions cell holds, so they are found from there.
   const statusCell = row => {
-    const open = lines(row.questions).split(/\r?\n/).filter(line => line.trim().startsWith(t.openPrefix)).length;
+    const open = Array.isArray(row.open) ? row.open.length : 0;
     return escape(statusWord(t, row.status)) + (open ? `<span class="open-count">${t.openCount(open)}</span>` : '');
   };
   const understanding = row => cells([
