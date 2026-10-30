@@ -102,7 +102,7 @@ test('each file is its own block, escaped first, with a break opportunity after 
   assert.ok(html.includes('<td class="files"><span class="file">a.cjs</span><span class="file">src/<wbr>&#60;b&#62;/<wbr>x&#38;y.cjs</span><span class="file">win\\<wbr>dir\\<wbr>f.cjs</span></td>'));
   assert.ok(minutesPage(minutes({ rows: [{ ...row('open'), files: 'a/b.cjs\nc/d.cjs' }] }))
     .includes('<span class="file">a/<wbr>b.cjs</span><span class="file">c/<wbr>d.cjs</span>'));
-  assert.match(html, /\.files \{[^}]*min-width: 18rem; overflow-wrap: break-word/);
+  assert.match(html, /\.files \{ overflow-wrap: break-word;/);
   assert.match(html, /\.file \{[^}]*padding-left: 16px; text-indent: -16px/);
 });
 
@@ -135,6 +135,45 @@ test('in the wide table the worker column sticks left and the status column righ
   assert.match(html, /border-collapse: separate/);
   assert.equal(html.match(/<table class="wide">/g).length, 1);
   assert.equal(html.match(/<table>/g).length, 1);
+});
+
+test('all eight columns fit at 1440 px: the wide table\'s minimum widths add up to less than the page', () => {
+  const html = minutesPage(minutes());
+  const rem = pattern => Number(html.match(pattern)[1]);
+  const cell = rem(/\n\.wide td \{ min-width: (\d+)rem;/), files = rem(/\n\.wide \.files \{ min-width: (\d+)rem;/);
+  const table = rem(/table\.wide \{ min-width: (\d+)rem;/);
+  assert.equal(cell, 7);
+  assert.equal(files, 14);
+  // Six plain cells, the files cell and a status cell about as wide as a plain one with a count line, plus 16 px padding each side.
+  const minimum = (7 * cell + files) * 16 + 8 * 32;
+  assert.ok(minimum <= 1440 - 2 * 24 - 2, `${minimum} px of minimums must fit the 1440 px page`);
+  assert.ok(table * 16 <= 1440 - 2 * 24 - 2);
+  assert.ok(table * 16 >= minimum - 16, 'the table minimum matches the columns');
+});
+
+test('the status cell counts the row\'s open questions under the status word, in both languages', () => {
+  const asked = (language, questions) => minutesPage(minutes({ language, rows: [{ ...row('open'), questions }] }));
+  const zh = asked('zh', ['一般的疑问', '未解决：第一个', ' 未解决：第二个']);
+  assert.ok(zh.includes('<td class="status">⚠️ 待澄清<span class="open-count">2 个未解决问题</span></td>'));
+  const en = asked('en', 'Open: first\nOpen: second\nOpen: third\nplain risk');
+  assert.ok(en.includes('<td class="status">⚠️ Open<span class="open-count">3 open questions</span></td>'));
+  assert.ok(asked('en', 'Open: only one').includes('<span class="open-count">1 open question</span>'));
+  assert.match(zh, /\.open-count \{[^}]*color: var\(--text-2\)/);
+});
+
+test('without open questions the status cell has no count, and only the page language\'s prefix counts', () => {
+  const body = (language, questions) => minutesPage(minutes({ language, rows: [{ ...row('open'), questions }] })).replace(/\.open-count \{[^}]*\}/, '');
+  for (const questions of ['q', 'none', '', undefined, ['a', 'b'], 'see 未解决：inside the line']) {
+    for (const language of ['zh', 'en']) assert.doesNotMatch(body(language, questions), /open-count/, `${language} ${JSON.stringify(questions)}`);
+  }
+  assert.doesNotMatch(body('en', '未解决：zh prefix'), /open-count/);
+  assert.doesNotMatch(body('zh', 'Open: en prefix'), /open-count/);
+});
+
+test('the open-question prefix is a shared label for both languages', () => {
+  const { LABELS } = require('../electron/features/team/minutes-page.cjs');
+  assert.equal(LABELS.zh.openPrefix, '未解决：');
+  assert.equal(LABELS.en.openPrefix, 'Open: ');
 });
 
 test('spacing follows the 8 px rhythm', () => {
