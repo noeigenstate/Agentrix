@@ -1,0 +1,10 @@
+{
+  "updated": "2026-10-30",
+  "models": {
+    "claude-opus-5-5": { "inputPerM": null, "cachedInputPerM": null, "outputPerM": null, "currency": "USD", "source": null, "checkedAt": null },
+    "claude-sonnet-5-5": { "inputPerM": null, "cachedInputPerM": null, "outputPerM": null, "currency": "USD", "source": null, "checkedAt": null },
+    "claude-haiku-5-5": { "inputPerM": null, "cachedInputPerM": null, "outputPerM": null, "currency": "USD", "source": null, "checkedAt": null },
+    "gpt-6.1-sol": { "inputPerM": null, "cachedInputPerM": null, "outputPerM": null, "currency": "USD", "source": null, "checkedAt": null },
+    "gpt-6.1-terra": { "inputPerM": null, "cachedInputPerM": null, "outputPerM": null, "currency": "USD", "source": null, "checkedAt": null }
+  }
+}

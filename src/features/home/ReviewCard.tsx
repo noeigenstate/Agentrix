@@ -12,7 +12,7 @@ import { parseDelivery } from './delivery';
 import { showPopup } from '../files/file-popup';
 import { VoiceButton } from '../voice/VoiceButton';
 import { useDictatedBox } from '../voice/voice-input';
-import { passed, recordAccepted, reviewHistory, sentBack } from './review-history';
+import { passed, recordAccepted, reportGrade, reviewHistory, sentBack } from './review-history';
 import { t } from '../../shared/i18n';
 
 export { acceptedToday } from './review-history';
@@ -48,6 +48,7 @@ export function ReviewCard({ decision, now, kind, onOpen, onDone, onError }: {
     const result = await window.agentrix.acknowledge(decision.projectId);
     setBusy(false);
     if (!result.ok) { onError(result.error); return; }
+    reportGrade({ projectId: decision.projectId, terminalId: decision.terminalId, outcome: 'passed', submission: history.submission });
     recordAccepted(); passed(decision.projectId);
     onDone(history.submission > 1 ? t('「{project}」第 {count} 次提交已通过；改动留在工作区，没有自动提交。', { project: decision.projectName, count: history.submission })
       : t('「{project}」这一轮已通过；改动留在工作区，没有自动提交。', { project: decision.projectName }));
@@ -62,6 +63,7 @@ export function ReviewCard({ decision, now, kind, onOpen, onDone, onError }: {
       const failed = await sendToAgent(decision.terminalId, decision.sessionId, decision.agent, text);
       if (failed) { onError(failed); return; }
       await window.agentrix.acknowledge(decision.projectId);
+      reportGrade({ projectId: decision.projectId, terminalId: decision.terminalId, outcome: 'sent-back', submission: history.submission, note: text });
       sentBack(decision.projectId, decision.title, text);
       setFeedback(''); setRevising(false);
       onDone(t('已打回「{project}」，批语已发给它，改完会再交上来。', { project: decision.projectName }));
