@@ -244,6 +244,19 @@ test('a user skill shows its version line and a 变更 tab with the line diff of
   assert.equal(h.all(node => node.props['data-diff']).length, 0);
 });
 
+test('a built-in skill has no 变更 tab, even with several versions or after a user skill left the diff open', async t => {
+  const h = mount(t, [builtinRouting({ version: 3 }), release], { details: { 'user:release': releaseV4, 'builtin:model-routing': releaseV4 } });
+  await h.settle();
+  h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
+  h.button('变更').props.onClick(); await h.settle();
+  assert.ok(h.all(node => node.props['data-diff']).length > 0);
+  h.all(node => node.props['data-skill-id'] === 'builtin:model-routing')[0].props.onClick(); await h.settle();
+  assert.equal(h.hasButton('变更'), false);
+  assert.equal(h.all(node => node.props['data-skill-changes']).length, 0);
+  assert.equal(h.all(node => node.props['data-diff']).length, 0);
+  assert.ok(h.page().includes('v3 · 随应用更新'));
+});
+
 test('each control makes its one call', async t => {
   const h = mount(t, [builtinRouting(), release], { details: { 'user:release': releaseV4 } });
   await h.settle();

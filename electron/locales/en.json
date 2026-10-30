@@ -1658,11 +1658,8 @@
   "状态修正": "Status fixes",
   "GPT 子代理显示 token/s，已停止的后台调用不再一直显示运行中，有命令失败时头像不再出现红圈。": "GPT sub-agents show their token/s, a stopped background call no longer stays “running”, and a failed command no longer rings the avatar.",
   "模型路由": "Model routing",
-  "每个任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能和前端，Terra 验证界面。GPT 默认 max + fast，Claude 默认 high。": "Route every task: Opus plans and reviews architecture, Sol handles core code, Sonnet handles routine work and the front end, and Terra verifies the interface. GPT defaults to max + fast, Claude to high.",
-  "每个任务开始前生效；项目已有同名技能时以项目为准": "Applies before every task; the project skill with the same name takes precedence.",
   "代码规范": "Code standard",
   "首次运行先审查现有代码，报告主要问题和分阶段计划，经用户同意后再加入项目。之后每次代码变更都减少冗余和复杂度，保持行为与接口不变。": "On first run, review existing code, report the main problems and a staged plan, and ask before adopting the standard. Afterwards, remove redundancy and reduce complexity on every code change while preserving behavior and interfaces.",
-  "首次在项目中启动会话、且项目里还没有这条规范时生效；之后写、改、审代码时按需生效": "Applies to the first session in a project without this standard; afterwards, use it when writing, changing or reviewing code.",
   "每个任务开始前": "Before every task",
   "描述匹配时": "When the description fits",
   "首次打开项目时": "When first opening the project",
@@ -1710,5 +1707,11 @@
   "每轮整理": "Round consolidation",
   "一轮开发结束后，主模型把结果和架构调整写进项目记忆；没整理完不能开下一轮的圆桌会。": "After each round the lead writes the results and architecture changes into the project memory; the next round's roundtable waits until that is done.",
   "界面": "Interface",
-  "主模型卡片在还没开始任何一轮时不再显示「等待下一步」。": "The main model card no longer shows \"Waiting for the next step\" before its first round."
+  "主模型卡片在还没开始任何一轮时不再显示「等待下一步」。": "The main model card no longer shows \"Waiting for the next step\" before its first round.",
+  "每个任务开始前生效；在项目里第一次运行时先审查现有代码并提出接入计划": "Applies before every task; on its first run in a project it first reviews the existing code and proposes an adoption plan.",
+  "任务需要规划、开发、调试、审查或发布时生效；项目已有同名技能时以项目为准": "Applies when a task needs planning, building, debugging, review or release; the project skill with the same name takes precedence.",
+  "任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能和前端，Terra 验证界面。GPT 默认 max + fast，Claude 默认 high。": "Opus plans and reviews architecture, Sol handles core code, Sonnet handles routine work and the front end, and Terra verifies the interface. GPT defaults to max + fast, Claude to high.",
+  "界面规范": "UI standard",
+  "设计、实现、改版或审查界面时生效；项目已有自己的界面规范时以项目为准": "Applies when designing, building, restyling or reviewing an interface; the project's own UI standard takes precedence.",
+  "先出可点击设计稿再动手，按五个量化问题和灰度清单验收，颜色克制、间距成刻度；截图由另一个模型验收。": "Show a clickable mockup before building, accept by five measured questions and a grayscale checklist, keep colour restrained and spacing on a scale; another model accepts the screenshots."
 }

@@ -26,7 +26,9 @@ Exactly these keys, in this order, each on one line, no other keys, no quotes un
 Claude Code and Codex read `description` to decide whether to use a skill.
 
 Triggers:
-- `always`: read and follow before every task in every session.
+- `always`: read and follow before every task in every session. The first agent session Agentrix starts in a project
+  also gets "this is its first run in this project" with it (claimed once per project, like `first-open`); the skill's
+  body says what the first run does, and every later session gets the plain instruction.
 - `auto`: listed with its description; read when a task fits it.
 - `first-open`: read and run before the first task of the first session Agentrix starts in a project, only when the
   project does not already have this skill; afterwards it behaves as `auto`.
@@ -42,8 +44,8 @@ project and the project's copy governs.
 English (agents read it), these sections in this order, each an `##` heading, no others at that level:
 
 1. `# <English title>` — one line.
-2. `## When this applies` — the trigger timing in full, including the yield-to-project rule and, for `first-open`,
-   what happens on that first run.
+2. `## When this applies` — the trigger timing in full, including the yield-to-project rule and, for `first-open`
+   and for an `always` skill with a first-run step, what happens on that first run.
 3. `## What to do` — numbered steps.
 4. `## Rules` — bullets; the non-negotiables.
 5. `## Done when` — checkable completion criteria and the report the agent gives.
