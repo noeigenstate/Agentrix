@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { TimelineStep } from './Timeline';
 import type { PendingPrompt } from './pending-prompts';
 import { withPictures } from './pasted-pictures';
-import { omitted as omittedPicture, unavailable as unavailablePicture } from '../../../electron/features/files/picture-values.json';
+import { omitted as omittedPicture, unavailable as unavailablePicture } from '../../shared/picture-values.json';
 import { showPopup } from '../files/file-popup';
 import { t } from '../../shared/i18n';
 import { UserAvatar } from '../../shared/UserAvatar';

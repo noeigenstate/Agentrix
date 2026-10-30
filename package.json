@@ -87,6 +87,7 @@
       "dist/**/*",
       "electron/**/*",
       "src/shared/conversation-blocks.mjs",
+      "src/shared/picture-values.json",
       "assets/**/*",
       "package.json",
       "LICENSE",

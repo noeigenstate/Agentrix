@@ -3,7 +3,7 @@ const { createHash } = require('node:crypto');
 const { fileURLToPath } = require('node:url');
 const path = require('node:path');
 const { localPath, projectFile } = require('./preview-location.cjs');
-const values = require('./picture-values.json');
+const values = require('../../../src/shared/picture-values.json');
 const { IMAGE_LIMIT: DATA_LIMIT } = require('../../oversized-record.cjs');
 const FILE_LIMIT = 25 * 1024 * 1024, HEADER_LIMIT = 64 * 1024, CACHE_LIMIT = 16 * 1024 * 1024;
 const JPEG_SCAN_LIMIT = 4 * 1024 * 1024;

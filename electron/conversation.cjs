@@ -3,7 +3,7 @@ const { IMAGE_LIMIT } = require('./oversized-record.cjs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { PictureThumbnails, dataImage } = require('./features/files/picture-thumbnail.cjs');
-const pictureValues = require('./features/files/picture-values.json');
+const pictureValues = require('../src/shared/picture-values.json');
 const { messageText, promptText, promptKey, promptCommand } = require('./prompt-queue.cjs');
 
 // The conversation of a terminal's agent, for the reading view: what the user asked, what the agent
