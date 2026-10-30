@@ -97,6 +97,29 @@ test('help prints all role aliases without launching a worker', async () => {
   }
 });
 
+test('dispatch emits kind and provider token and cost totals for the ledger', async t => {
+  const lines = structuredClone(codex);
+  for (const line of lines) {
+    const record = line.rollout;
+    const totals = record?.payload?.info?.total_token_usage || record?.payload?.thread_token_usage;
+    if (totals) Object.assign(totals, { input_tokens: totals.output_tokens * 10, cached_input_tokens: totals.output_tokens * 2 });
+  }
+  const codexRun = await fixture(t, lines, { extra: ['--kind', 'core'] });
+  assert.equal((await codexRun.finished).code, 0);
+  const end = codexRun.events.at(-1);
+  assert.equal(codexRun.events[0].kind, 'core'); assert.equal(end.inputTokens, 1200); assert.equal(end.cachedTokens, 300);
+  assert.equal(end.outputTokens, 150); assert.equal(end.reportedCostUsd, null); assert.equal(end.verdict, 'ok');
+  const claudeLines = structuredClone(claude).map(record => ({ record }));
+  const result = claudeLines.at(-1).record;
+  Object.assign(result.usage, { input_tokens: 100, cache_creation_input_tokens: 50, cache_read_input_tokens: 200 });
+  result.total_cost_usd = 0.125;
+  const claudeRun = await fixture(t, claudeLines, { agent: 'claude', role: '审查' });
+  assert.equal((await claudeRun.finished).code, 0);
+  const claudeEnd = claudeRun.events.at(-1);
+  assert.equal(claudeRun.events[0].kind, 'review'); assert.equal(claudeEnd.inputTokens, 150); assert.equal(claudeEnd.cachedTokens, 200);
+  assert.equal(claudeEnd.reportedCostUsd, 0.125); assert.equal(claudeEnd.verdict, 'ok');
+});
+
 test('Codex receives stdin/argv/cwd and reads its rollout for routing and final rate', async t => {
   const f = await fixture(t), result = await f.finished;
   assert.equal(result.code, 0); assert.equal(result.stderr, '');
@@ -109,6 +132,8 @@ test('Codex receives stdin/argv/cwd and reads its rollout for routing and final 
   const [start, end] = f.events;
   assert.equal(start.sessionId, session); assert.equal(start.title, 'Exact dispatch task'); assert.equal(start.declared, undefined);
   assert.equal(end.id, start.id); assert.equal(end.outputTokens, 150); assert.equal(end.activeMs, 4000);
+  assert.equal(start.kind, null); assert.equal(start.meeting, null); assert.equal(start.skipMeeting, null);
+  assert.equal(end.verdict, 'ok'); assert.equal(end.inputTokens, null); assert.equal(end.cachedTokens, null); assert.equal(end.reportedCostUsd, null);
   const capture = JSON.parse(await fs.readFile(f.capture, 'utf8'));
   assert.equal(capture.cwd, f.directory); assert.match(capture.brief, /Unicode: 执行/);
   assert.deepEqual(capture.args, commandOf(argumentsOf(f.args)));
@@ -276,7 +301,9 @@ test('no session, timeout and spawn failure print failed-start once and end unco
     assert.ok(!result.stdout.includes('[dispatch] started'));
     assert.deepEqual(f.events.map(event => event.type), ['dispatch-start', 'dispatch-end']);
     assert.equal(f.events[0].unconfirmed, true); assert.equal(f.events[0].sessionId, null);
-    assert.deepEqual([f.events[0].model, f.events[0].effort, f.events[0].fast], ['gpt-6.1-sol', 'max', true]);
+    assert.deepEqual([f.events[0].model, f.events[0].effort, f.events[0].fast], ['unreported', null, null]);
+    assert.deepEqual(f.events[0].declared, { model: 'gpt-6.1-sol', effort: 'max', fast: true });
+    assert.equal(f.events[1].verdict, 'unverified');
     assert.equal(f.events[1].reason, 'unconfirmed'); assert.equal(f.events[1].id, f.events[0].id);
   }
   const { run } = require('../integration/dispatch.cjs');

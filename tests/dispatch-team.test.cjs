@@ -95,6 +95,49 @@ function options(cwd, extra = []) {
     '--cwd', cwd, '--brief', 'brief.md', '--out', 'answer.md', ...extra]);
 }
 
+test('team records every role end and validates incidents and findings before consolidation writes', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true), meeting = 'ledger-r1';
+  for (const role of ['执行', '审查', '调查']) {
+    await team.finish({ role, title: 't'.repeat(400), allow: [], agent: 'codex' }, { id: randomUUID(), session: randomUUID(), meeting,
+      model: 'gpt-6.1-sol', kind: role === '审查' ? 'review' : 'core', reason: 'exit', outputTokens: 25, activeMs: 2000, answer: '', header: '' });
+  }
+  const ends = team.entries().filter(entry => entry.type === 'end');
+  assert.deepEqual(ends.map(entry => entry.role), ['执行', '审查', '调查']);
+  assert.ok(ends.every(entry => entry.title.length === 240 && entry.model === 'gpt-6.1-sol' && entry.reason === 'exit' && entry.outputTokens === 25 && entry.activeMs === 2000));
+  team.append({ type: 'meeting', meeting, status: 'confirmed' });
+  const incident = { model: 'gpt-6.1-sol', kind: 'test', cause: 'path assumption', fix: 'use native realpath', lead: 'missed', weight: { kind: 'test', from: 1, to: 0.5 } };
+  const finding = { author: 'gpt-6.1-sol', reviewer: 'claude-opus-5-5', category: 'boundary', severity: 'high', fixed: true, title: 't'.repeat(400) };
+  const before = [await fs.readFile(team.journal, 'utf8'), await fs.readFile(team.memory, 'utf8')];
+  for (const records of [{ incidents: {} }, { incidents: [{ ...incident, kind: 'invalid' }] }, { incidents: [{ ...incident, lead: 'unknown' }] },
+    { incidents: [{ ...incident, weight: { ...incident.weight, to: -1 } }] }, { incidents: [{ ...incident, secret: 'must not be stored' }] },
+    { incidents: [incident], findings: [{ ...finding, severity: 'critical' }] }, { findings: [{ ...finding, fixed: 'yes' }] },
+    { findings: [{ ...finding, category: 'other' }] }]) {
+    await assert.rejects(team.consolidate(meeting, summary, records), /incidents|findings/);
+    assert.deepEqual([await fs.readFile(team.journal, 'utf8'), await fs.readFile(team.memory, 'utf8')], before);
+  }
+  await team.consolidate(meeting, summary, { incidents: [incident], findings: [finding] });
+  const additions = team.entries().slice(-3);
+  assert.deepEqual(additions.map(entry => entry.type), ['incident', 'finding', 'consolidate']);
+  assert.ok(additions.every(entry => entry.meeting === meeting));
+  assert.equal(additions[0].weight.to, 0.5); assert.equal(additions[1].title.length, 240); assert.equal(additions[1].fixed, true);
+});
+
+test('consolidate CLI reads optional JSON files and rejects invalid JSON without writes', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true), meeting = 'ledger-cli-r1';
+  team.append({ type: 'meeting', meeting, status: 'confirmed' });
+  const summaryFile = path.join(f.runtime, 'summary.md'), incidents = path.join(f.runtime, 'incidents.json'), findings = path.join(f.runtime, 'findings.json');
+  await fs.writeFile(summaryFile, summary); await fs.writeFile(incidents, '[]'); await fs.writeFile(findings, '{bad json');
+  const args = ['consolidate', '--cwd', f.repo, '--meeting', meeting, '--summary', summaryFile, '--incidents', incidents, '--findings', findings];
+  const before = [await fs.readFile(team.journal, 'utf8'), await fs.readFile(team.memory, 'utf8')];
+  let stdout = '';
+  assert.equal(await run(args, { stdout: { write: value => { stdout += value; } } }), 1);
+  assert.match(stdout, /--findings must contain valid JSON/);
+  assert.deepEqual([await fs.readFile(team.journal, 'utf8'), await fs.readFile(team.memory, 'utf8')], before);
+  await fs.writeFile(findings, '[]');
+  assert.equal(await run(args, { stdout: { write() {} } }), 0);
+  assert.equal(team.entries().at(-1).type, 'consolidate');
+});
+
 function load(file, replacements = {}, globals = {}) {
   const loaded = { exports: {} }, localRequire = createRequire(file);
   vm.runInNewContext(sync.readFileSync(file, 'utf8'), {
@@ -264,6 +307,8 @@ test('execution requires a confirmed resumed session and the same scope set', as
   assert.match((await output(first)).stdout, /roundtable r1 · understanding complete/);
   assert.equal(team.entries().at(-1).status, 'understood');
   assert.equal(team.entries().at(-1).understanding.files, 'src/a.js\n  src/b.js');
+  const meetingEnd = team.entries().find(entry => entry.type === 'end' && entry.role === '圆桌');
+  assert.equal(meetingEnd.kind, 'roundtable'); assert.equal(meetingEnd.reason, 'exit'); assert.equal(meetingEnd.model, 'gpt-6.1-sol');
   assert.match((await json(first.capture)).brief, /fields may continue on following lines/);
   const notConfirmed = await start(f, { resume: session, allow });
   assert.match((await output(notConfirmed)).stdout, /roundtable not confirmed/);

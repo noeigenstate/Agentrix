@@ -35,6 +35,7 @@ const { remember, roundsOf } = require('./features/agents/project-memory.cjs');
 const { agentSettings } = require('./features/agents/agent-settings.cjs');
 const { UsageMeter, claudeProvider, codexProvider, claudeAccount, claudeAccountFiles } = require('./features/agents/agent-usage.cjs');
 const { AgentCalls } = require('./features/agents/agent-calls.cjs');
+const { DashboardRecords } = require('./features/dashboard/records.cjs');
 const { CodexAccountUsage } = require('./features/agents/codex-account-usage.cjs');
 const codexAccounts = new CodexAccountUsage();
 const { ClaudeAccountUsage, readClaudeAccount } = require('./features/agents/claude-account-usage.cjs');
@@ -90,12 +91,13 @@ const integrationDir = app.isPackaged ? path.join(process.resourcesPath, 'integr
 const { accountEnvironment } = require(path.join(integrationDir, 'codex-account-scope.cjs'));
 const devUrl = !app.isPackaged ? process.env.AGENTRIX_DEV_URL : null;
 const { installed, appUserModelId, relaunchDisplayName, voiceDirectory } = configureApplication(app);
+const dashboard = new DashboardRecords(app.getPath('userData'));
 registerAppSchemes(protocol);
 
 const { translate } = require('./i18n.cjs');
 // Text shown by the main process follows the language chosen in settings (Chinese source -> locales/en.json).
 const t = (text, values) => translate(store?.settings.language, text, values);
-let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom;
+let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, dashboardDraining = false;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
 function windowBackgroundColor() { return store.settings.theme === 'light' ? '#f8f9fb' : '#181818'; }
@@ -352,7 +354,10 @@ function noteSettings(s, agent, record) {
   const next = agentSettings(s.agentSettings || null, agent, record);
   if (next !== (s.agentSettings || null)) { s.agentSettings = next; scheduleState(); }
   const limits = s.usage?.limits;
-  if (s.usage?.apply(record) && (!s.usageHistory || s.usage.limits !== limits)) { scheduleState(); scheduleUsageRollover(); }
+  if (s.usage?.apply(record) && (!s.usageHistory || s.usage.limits !== limits)) {
+    if (!s.usageHistory) s.recordQuota?.(agent, s.usage.limits);
+    scheduleState(); scheduleUsageRollover();
+  }
   if (agent === 'codex' && record?.type === 'session_meta') s.bindUsageAccount?.();
   if (agent === 'codex' && !s.usageHistory && record?.type === 'event_msg') {
     if (record.payload?.type === 'token_count') s.usageAccount?.refresh(30000);
@@ -482,7 +487,7 @@ function usageHistory(s, ready) {
 // The called models belong to the terminal session, so workers dispatched from a plain shell, or before the agent
 // restarts, stay visible; the agent's usage meter shares them while it runs.
 function callsOf(s, project) {
-  return s.calls ||= new AgentCalls({ changed: () => scheduleState(), local: project.kind !== 'ssh' });
+  return s.calls ||= new AgentCalls({ changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh' });
 }
 function dispatchedOnly(s) {
   const calls = s?.calls?.snapshot(null) || [];
@@ -513,7 +518,9 @@ function startUsage(project, s, event) {
       if (s.usage !== usage || (s.usageAccount && binding === next)) return;
       s.usageAccount?.dispose(); binding = next;
       s.usageAccount = codexAccounts.watch(options, account => {
-        if (s.usage === usage && s.codexActive && sessions.get(s.terminalId) === s) { usage.codexAccount(account); scheduleState(); scheduleUsageRollover(); }
+        if (s.usage === usage && s.codexActive && sessions.get(s.terminalId) === s) {
+          usage.codexAccount(account); s.recordQuota?.('codex', usage.limits); scheduleState(); scheduleUsageRollover();
+        }
       });
     };
     s.bindUsageAccount();
@@ -596,7 +603,9 @@ async function refreshClaudeAccounts() {
   const pending = claudeAccountPending = Promise.resolve().then(() => claudeAccount(undefined, undefined, claudeAccounts.account)).then(account => {
     if (generation !== claudeAccountGeneration) return;
     let changed = false;
-    for (const s of localClaudeMeters()) if (s.usage.account(account, claudeAccounts.account)) changed = true;
+    for (const s of localClaudeMeters()) if (s.usage.account(account, claudeAccounts.account)) {
+      s.recordQuota?.('claude', s.usage.limits); changed = true;
+    }
     if (changed) { scheduleState(); scheduleUsageRollover(); }
   }).finally(() => {
     if (claudeAccountPending !== pending) return;
@@ -1118,6 +1127,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions));
   const s = {
     terminal, terminalId: id, projectId: project.id, sessionId, skillSessionId: nativeMode ? sessionId : null, sessionKey, bootstrapFile, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
+    recordRun: (call, event) => dashboard.run(project, call, event), recordQuota: (provider, limits) => dashboard.quota(provider, limits),
     // Command Prompt reports its prompts through markers in its output instead of the event pipe.
     usageEnv: project.kind === 'ssh' ? null : { ...env },
     prompts: !native && shellKind === 'cmd' ? new PromptMarkers() : null,
@@ -1266,6 +1276,7 @@ function registerIpc() {
   const { handle, listen } = createIpcAdapter({ ipcMain, getWindow: () => window, devUrl, t, report });
   registerSkillsIpc({ handle, skills, dialog, getWindow: () => window });
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
+    gradeDelivery: (grade, project, session) => dashboard.grade(grade, project, session),
     readingPage: (id, request) => readingHistory.page(id, request.key, request.cursor),
     getRestoreCwd: id => store.findTerminal(id)?.record.restore?.cwd, listClaudeSessions, listCodexSessions, followClaudeSession, listAgentCommands, t });
   registerSshIpc({ handle, getSSHInfo, sshAuth, addSSH: input => store.addSSH(input), hasSession: id => sessions.has(id), getSession: id => sessions.get(id),
@@ -1465,6 +1476,10 @@ app.on('before-quit', event => {
   if (runtimeDir) {
     // Only this launch's generated, now-empty runtime directory is removed.
     try { fs.rmdirSync(runtimeDir); } catch { }
+  }
+  if (dashboard.pending.size) {
+    event.preventDefault();
+    if (!dashboardDraining) { dashboardDraining = true; void dashboard.flush().then(() => app.quit()); }
   }
 });
 app.on('window-all-closed', () => { if (quitting) app.quit(); });

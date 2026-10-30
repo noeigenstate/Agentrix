@@ -9,6 +9,7 @@ const listen = (channel, callback) => {
 
 contextBridge.exposeInMainWorld('agentrix', {
   getState: () => ipcRenderer.invoke('workspace:state'),
+  gradeDelivery: grade => ipcRenderer.invoke('dashboard:grade', grade),
   getAgents: () => ipcRenderer.invoke('agents:status'),
   installAgent: agent => ipcRenderer.invoke('agents:install', agent),
   openNode: () => ipcRenderer.invoke('agents:open-node'),

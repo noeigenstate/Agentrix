@@ -120,6 +120,26 @@ test('reset cancels expiry callbacks from the old session', t => {
   assert.deepEqual(f.calls.snapshot(), []); assert.equal(f.changes(), 2);
 });
 
+test('dashboard event fields accept old helpers and reject malformed new metadata', t => {
+  assert.equal(validDispatch(start()), true);
+  const launch = start(undefined, { kind: 'core', meeting: 'dash-r1', skipMeeting: 'one bounded fix' });
+  assert.equal(validDispatch(launch), true);
+  const finish = end(launch.id, { inputTokens: 0, cachedTokens: 0, reportedCostUsd: 0, verdict: 'ok', outOfScopeCount: 100 });
+  assert.equal(validDispatch(finish), true);
+  for (const patch of [{ kind: 'invalid' }, { meeting: '../other' }, { skipMeeting: 'x'.repeat(1025) }]) assert.equal(validDispatch({ ...launch, ...patch }), false);
+  for (const patch of [{ inputTokens: -1 }, { cachedTokens: 0.5 }, { reportedCostUsd: Infinity }, { verdict: null }, { outOfScopeCount: -1 }]) {
+    assert.equal(validDispatch({ ...finish, ...patch }), false);
+  }
+  let records = 0;
+  const calls = new AgentCalls({ finished: () => records++ }); t.after(() => calls.reset());
+  assert.equal(acceptDispatch({ terminalId: 'terminal', sessionKey: 'test-key' }, launch, calls), true);
+  assert.equal(acceptDispatch({ terminalId: 'terminal', sessionKey: 'wrong' }, finish, calls), false);
+  assert.equal(records, 0);
+  assert.equal(acceptDispatch({ terminalId: 'terminal', sessionKey: 'test-key' }, finish, calls), true);
+  assert.equal(acceptDispatch({ terminalId: 'terminal', sessionKey: 'test-key' }, finish, calls), false);
+  assert.equal(records, 1);
+});
+
 test('roundtable is an authenticated role and does not change parent completion', t => {
   const f = session(t), launch = start(undefined, { role: '圆桌' });
   assert.equal(f.send(launch), true);

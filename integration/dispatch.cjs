@@ -30,6 +30,8 @@ const LIMIT = 4 * 1024 * 1024;
 const word = value => typeof value === 'string' && value.trim() ? value.trim() : null;
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const roles = new Map([['执行', '执行'], ['调查', '调查'], ['审查', '审查'], ['exec', '执行'], ['investigate', '调查'], ['review', '审查']]);
+const KINDS = ['core', 'frontend', 'test', 'ui-check', 'docs', 'small', 'review', 'investigate', 'roundtable'];
+const kindOf = (options, roundtable = false) => options.kind || (roundtable ? 'roundtable' : ({ 审查: 'review', 调查: 'investigate' }[options.role] || null));
 const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审查|exec|investigate|review>
   --title <task> --model <model> --effort <effort> --cwd <dir> --brief <file> --out <file>
   [--allow <glob> ...]    the only files it may change; any other change is reported as out of scope
@@ -37,11 +39,12 @@ const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审
   [--resume <session>]    continue that worker session (same context) instead of starting a new one
   [--meeting <id>]        roundtable before work; no file changes and no --read-only
   [--skip-meeting <reason>] execution with --allow may bypass confirmation; the reason is recorded
+  [--kind <${KINDS.join('|')}>] task category for long-term evaluation
   Codex: [--fast] [--image <file> ...] [--read-only]
   Claude: --permission <plan|acceptEdits>
 
   node dispatch.cjs minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues <issues.json>] [--language zh|en]
-  node dispatch.cjs consolidate --cwd <dir> --meeting <id> --summary <file.md>
+  node dispatch.cjs consolidate --cwd <dir> --meeting <id> --summary <file.md> [--incidents <file.json>] [--findings <file.json>]
 `;
 
 function argumentsOf(argv) {
@@ -49,8 +52,8 @@ function argumentsOf(argv) {
   const command = ['minutes', 'consolidate'].includes(agent);
   if (!command && !['codex', 'claude'].includes(agent)) throw new Error('Expected codex, claude, minutes or consolidate');
   const options = { agent, images: [], allow: [], fast: false, readOnly: false };
-  const keys = command ? ['cwd', 'meeting', ...(agent === 'minutes' ? ['out', 'issues', 'language'] : ['summary'])]
-    : ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out', 'permission', 'ledger', 'resume', 'meeting'];
+  const keys = command ? ['cwd', 'meeting', ...(agent === 'minutes' ? ['out', 'issues', 'language'] : ['summary', 'incidents', 'findings'])]
+    : ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out', 'permission', 'ledger', 'resume', 'meeting', 'kind'];
   const names = new Map(keys.map(key => [`--${key}`, key]));
   if (!command) names.set('--skip-meeting', 'skipMeeting');
   const seen = new Set();
@@ -75,12 +78,13 @@ function argumentsOf(argv) {
   if (options.meeting && !/^[\w.-]{1,64}$/.test(options.meeting)) throw new Error('Expected --meeting id with 1–64 letters, digits, _, . or -');
   if (command) {
     options.cwd = path.resolve(options.cwd);
-    for (const key of ['out', 'issues', 'summary']) if (options[key]) options[key] = path.resolve(options.cwd, options[key]);
+    for (const key of ['out', 'issues', 'summary', 'incidents', 'findings']) if (options[key]) options[key] = path.resolve(options.cwd, options[key]);
     if (options.language && !['zh', 'en'].includes(options.language)) throw new Error('Expected --language zh or en');
     return options;
   }
   if (!roles.has(options.role)) throw new Error('Expected --role 执行, 调查, 审查, exec, investigate or review');
   options.role = roles.get(options.role);
+  if (options.kind && !KINDS.includes(options.kind)) throw new Error(`Expected --kind ${KINDS.join(', ')}`);
   if (options.title.length > 1024 || options.model.length > 160 || options.effort.length > 32) throw new Error('Assignment is too long');
   if (agent === 'claude' && (options.fast || options.readOnly || options.images.length)) throw new Error('Claude supports --permission, not Codex options');
   if (agent === 'claude' && !['plan', 'acceptEdits'].includes(options.permission)) throw new Error('Expected --permission plan or acceptEdits');
@@ -133,9 +137,17 @@ function briefOf(options, brief, team, { id, phase, repo, before } = {}) {
 
 async function teamCommand(argv, stdout) {
   try {
-    const options = argumentsOf(argv), team = projectTeam(options.cwd, true);
+    const options = argumentsOf(argv), team = projectTeam(options.cwd, argv[0] !== 'consolidate');
     if (!team) throw new Error('Team commands require a git repository');
-    if (options.agent === 'consolidate') await team.consolidate(options.meeting, fs.readFileSync(options.summary, 'utf8'));
+    if (options.agent === 'consolidate') {
+      const records = {};
+      for (const kind of ['incidents', 'findings']) if (options[kind]) {
+        if (fs.statSync(options[kind]).size > 1024 * 1024) throw new Error(`--${kind} exceeds 1 MiB`);
+        try { records[kind] = JSON.parse(fs.readFileSync(options[kind], 'utf8').replace(/^\uFEFF/, '')); }
+        catch { throw new Error(`--${kind} must contain valid JSON`); }
+      }
+      await team.consolidate(options.meeting, fs.readFileSync(options.summary, 'utf8'), records);
+    }
     else {
       const issues = options.issues ? JSON.parse(fs.readFileSync(options.issues, 'utf8').replace(/^\uFEFF/, '')) : [];
       const html = path.join(path.dirname(options.out), path.parse(options.out).name + '.html');
@@ -186,6 +198,8 @@ class WorkerOutput {
     this.agent = agent; this.changed = changed; this.meter = new TokenRates(agent);
     this.model = null; this.effort = null; this.fast = null; this.sessionId = null;
     this.outputTokens = null; this.activeMs = null; this.failed = false; this.capacity = false; this.confirmed = false;
+    this.stdoutUsage = null; this.rolloutUsage = null; this.reportedCostUsd = null;
+    this.baseline = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 };
   }
   settings(value) {
     this.model = word(value.model) || this.model;
@@ -210,7 +224,30 @@ class WorkerOutput {
     Object.assign(this, settings);
     if (record.type === 'session_meta' || record.type === 'turn_context') this.settings(payload);
     if (record.type === 'turn_context') this.confirmed = true;
+    const totals = this.counters(record);
+    if (totals) {
+      const delta = key => count(totals[key]) !== null && count(this.baseline?.[key]) !== null && totals[key] >= this.baseline[key]
+        ? totals[key] - this.baseline[key] : null;
+      const input = delta('input_tokens'), cached = delta('cached_input_tokens');
+      const usage = { inputTokens: input !== null && cached !== null && input >= cached ? input - cached : null,
+        cachedTokens: cached, outputTokens: delta('output_tokens') };
+      if (Object.values(usage).some(value => value !== null)) this.rolloutUsage = usage;
+    }
     this.measure(record);
+  }
+  counters(record) {
+    if (record.type === 'event_msg' && record.payload?.type === 'token_count') return record.payload.info?.total_token_usage || null;
+    if (record.type === 'token_usage_record' || record.type === 'event_msg' && record.payload?.type === 'token_usage_record') return record.payload?.thread_token_usage || null;
+    return null;
+  }
+  usage() {
+    return { inputTokens: null, cachedTokens: null, outputTokens: this.outputTokens, ...(this.rolloutUsage || this.stdoutUsage),
+      activeMs: this.activeMs, reportedCostUsd: this.reportedCostUsd };
+  }
+  verdict(requested) {
+    const actual = this.routing();
+    if (Object.keys(actual).some(key => this[key] !== null && actual[key] !== requested[key])) return 'mismatch';
+    return this.model === null ? 'unverified' : 'ok';
   }
   line(line) {
     const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
@@ -241,6 +278,9 @@ class WorkerOutput {
       if (type === 'thread.started') this.sessionId = word(record.thread_id);
       if (type === 'turn.completed') {
         this.failed = false; this.capacity = false;
+        const input = count(record.usage?.input_tokens), cached = count(record.usage?.cached_input_tokens);
+        this.stdoutUsage = { inputTokens: input !== null && cached !== null && input >= cached ? input - cached : null,
+          cachedTokens: cached, outputTokens: count(record.usage?.output_tokens) };
         if (this.activeMs === null) this.outputTokens = count(record.usage?.output_tokens);
       }
     } else {
@@ -259,6 +299,10 @@ class WorkerOutput {
         const models = Object.keys(record.modelUsage || {});
         if (models.length === 1) this.model = models[0];
         this.result = typeof record.result === 'string' ? record.result : null;
+        const input = count(record.usage?.input_tokens), creation = count(record.usage?.cache_creation_input_tokens);
+        this.stdoutUsage = { inputTokens: input !== null && creation !== null ? input + creation : null,
+          cachedTokens: count(record.usage?.cache_read_input_tokens), outputTokens: count(record.usage?.output_tokens) };
+        this.reportedCostUsd = Number.isFinite(record.total_cost_usd) && record.total_cost_usd >= 0 ? record.total_cost_usd : null;
         if (!record.is_error && !/^error_/.test(record.subtype || '')) { this.failed = false; this.capacity = false; }
         // JSON-only/older CLIs may expose only these final API totals. Never time a whole process as a response.
         if (count(record.usage?.output_tokens) !== null) {
@@ -278,15 +322,38 @@ class CodexRollout {
     if (!this.pending) this.pending = this.update().catch(() => {}).finally(() => { this.pending = null; });
     return this.pending;
   }
+  async prepare(id) {
+    // Capture the old file boundary before launch. Old turns never prove this invocation started.
+    this.preparedId = id;
+    for (const filename of await this.files(id)) {
+      if ((await sessionMeta(filename))?.id !== id) continue;
+      this.tail = this.reader(filename);
+      this.output.baseline = null;
+      await this.tail.read(record => { const totals = this.output.counters(record); if (totals) this.output.baseline = totals; });
+      this.output.meter.reset(true);
+      this.output.meter.counter = count(this.output.baseline?.output_tokens);
+      return;
+    }
+  }
+  reader(filename) {
+    return new TranscriptTail(filename, { onReset: partial => {
+      this.output.meter.reset(partial); this.output.outputTokens = null; this.output.activeMs = null;
+    } });
+  }
   async update() {
     const id = this.output.sessionId;
     if (!id) return;
+    if (this.preparedId && id !== this.preparedId) {
+      this.tail = null; this.preparedId = null;
+      this.output.baseline = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 };
+      this.output.rolloutUsage = null; this.output.stdoutUsage = null; this.output.outputTokens = null; this.output.activeMs = null;
+      this.output.model = null; this.output.effort = null; this.output.fast = null; this.output.confirmed = false;
+      this.output.meter.reset();
+    }
     if (!this.tail) {
       for (const filename of await this.files(id)) {
         if ((await sessionMeta(filename))?.id !== id) continue;
-        this.tail = new TranscriptTail(filename, { onReset: partial => {
-          this.output.meter.reset(partial); this.output.outputTokens = null; this.output.activeMs = null;
-        } });
+        this.tail = this.reader(filename);
         break;
       }
     }
@@ -335,7 +402,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const recordTeam = async report => {
     if (!team || !admission || teamFinished) return {};
     teamFinished = true;
-    try { return await team.finish(options, { id, session: output.sessionId, model: output.routing().model, ...admission, ...report }); }
+    try { return await team.finish(options, { id, session: output.sessionId, model: unconfirmed ? 'unreported' : output.routing().model,
+      kind: kindOf(options, roundtable), ...output.usage(), ...admission, ...report }); }
     catch (error) { return { warning: String(error.message || error).replace(/[\r\n]+/g, ' ') }; }
   };
   const teamEnd = ({ status, warning }) => {
@@ -349,14 +417,16 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const signal = line => stdout.write(`[dispatch] ${line}\n`);
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
   const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
+    kind: kindOf(options, roundtable), meeting: admission?.meeting || options.meeting || null, skipMeeting: options.skipMeeting || null,
     cwd: options.cwd, brief: options.brief, out: options.out, sessionId: output.sessionId, startedAt: Date.now() });
   const failed = (reason, exitCode = null) => {
     if (unconfirmed || started) return;
     unconfirmed = true; signal(`failed to start ${id}: ${reason.replace(/[\r\n]+/g, ' ')}`);
     if (!options) return;
     // Even without a session, the pane needs a declared row before it can retain the failure.
-    send({ ...assignment(), ...declared(), unconfirmed: true });
-    send({ type: 'dispatch-end', id, ...declared(), exitCode, reason: 'unconfirmed', outputTokens: null, activeMs: null, endedAt: Date.now() });
+    send({ ...assignment(), model: 'unreported', effort: null, fast: null, declared: declared(), unconfirmed: true });
+    send({ type: 'dispatch-end', id, model: 'unreported', effort: null, fast: null, exitCode, reason: 'unconfirmed',
+      inputTokens: null, cachedTokens: null, reportedCostUsd: null, outputTokens: null, activeMs: null, verdict: 'unverified', endedAt: Date.now() });
     endSent = true;
   };
   const reported = () => {
@@ -419,6 +489,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     log = fs.createWriteStream(options.out + '.log');
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
     const command = resolveExecutable(options.agent, commandOf(options), env);
+    if (options.agent === 'codex' && options.resume) await rollout.prepare(options.resume);
     if (killed) throw new Error('Dispatch interrupted before launch');
     child = launch(command.file, command.args, { cwd: options.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
       detached: process.platform !== 'win32' });
@@ -499,7 +570,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     const exitCode = Number.isInteger(result.code) ? (result.code === 0 && (unconfirmed || roundtable && reason !== 'exit') ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
     const rate = output.outputTokens !== null && output.activeMs > 0 ? `${Math.round(output.outputTokens * 1000 / output.activeMs)} token/s (${output.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(output.activeMs / 1000)} s)` : 'token/s unreported';
     signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${teamLabel(true)}${teamEnd(bookkeeping)} · out ${options.out}`);
-    if (!endSent) send({ type: 'dispatch-end', id, ...route, exitCode, reason, outputTokens: output.outputTokens, activeMs: output.activeMs,
+    if (!endSent) send({ type: 'dispatch-end', id, ...route, exitCode, reason, ...output.usage(), verdict: output.verdict(declared()),
+      ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
       ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), endedAt: Date.now() });
     await new Promise(resolve => log.end(resolve));
     return exitCode;
@@ -510,7 +582,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       const reason = unconfirmed ? 'unconfirmed' : 'error';
       const bookkeeping = await recordTeam({ answer: '', header: '', reason });
       signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${teamLabel(true)}${teamEnd(bookkeeping)} · out ${options.out}`);
-      if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', outputTokens: null, activeMs: null, endedAt: Date.now() });
+      if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', ...output.usage(),
+        verdict: output.verdict(declared()), endedAt: Date.now() });
     }
     log?.destroy();
     return 1;

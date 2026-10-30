@@ -10,8 +10,8 @@ const enabled = value => value === true || value === 'true';
 const agentRoles = new Map(Object.entries({ Explore: '搜索', Plan: '规划', 'general-purpose': '通用', claude: '通用', none: '通用', fork: '分身' }));
 
 class AgentCalls {
-  constructor({ changed = () => {}, local = true } = {}) {
-    this.changed = changed; this.local = local; this.folder = null;
+  constructor({ changed = () => {}, finished = () => {}, local = true } = {}) {
+    this.changed = changed; this.finished = finished; this.local = local; this.folder = null;
     this.reset();
   }
   reset(preserveDispatch = false) {
@@ -48,8 +48,10 @@ class AgentCalls {
     const call = this.calls.get(event.id);
     if (event.type === 'dispatch-start') {
       if (call || this.calls.size >= 1024) return false;
-      this.calls.set(event.id, { dispatch: true, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
+      this.calls.set(event.id, { dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
         model: event.model, effort: event.effort, fast: event.fast, declared: event.declared,
+        kind: event.kind ?? ({ 审查: 'review', 调查: 'investigate', 圆桌: 'roundtable' }[event.role] || null),
+        meeting: event.meeting ?? null, skipMeeting: event.skipMeeting ?? null, unconfirmed: event.unconfirmed === true,
         role: event.role, title: event.title, task: short(event.title), sessionId: event.sessionId,
         startedAt: event.startedAt, done: false, rate: null, meter: new TokenRates(event.agent) });
       return true;
@@ -62,6 +64,7 @@ class AgentCalls {
     }
     if (event.type !== 'dispatch-end') return false;
     call.done = true; call.finishedAt = event.endedAt;
+    try { this.finished(call, event); } catch {}
     call.model = event.model; call.effort = event.effort; call.fast = event.fast;
     call.rate = event.outputTokens === null || event.activeMs === null ? null
       : call.meter.totals(call.model, event.outputTokens, event.activeMs, event.endedAt);

@@ -7,7 +7,7 @@ Coordinates dispatched workers through shared project memory, roundtable records
 - `electron/features/team/minutes-page.cjs`
 
 ## Interface
-- `projectTeam` (`electron/features/team/team.cjs`) — repository state, worker admission, context, meeting records, minutes data and consolidation
+- `projectTeam` (`electron/features/team/team.cjs`) — repository state, worker admission, context, meeting records, every-role end metadata, minutes data and consolidation with validated incidents and findings
 - `minutesMarkdown` (`electron/features/team/team.cjs`) — two Markdown tables from the minutes-page data contract
 - `minutesPage` (`electron/features/team/minutes-page.cjs`) — a self-contained HTML document from the same minutes data
 

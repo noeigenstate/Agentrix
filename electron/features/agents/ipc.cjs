@@ -1,4 +1,8 @@
-function registerAgentsIpc({ handle, agents, openExternal, getSession, findProject, getRestoreCwd, listClaudeSessions, listCodexSessions, followClaudeSession, listAgentCommands, readingPage, t }) {
+function registerAgentsIpc({ handle, agents, openExternal, getSession, findProject, getRestoreCwd, listClaudeSessions, listCodexSessions, followClaudeSession, listAgentCommands, readingPage, gradeDelivery, t }) {
+  handle('dashboard:grade', grade => {
+    const project = findProject(grade?.terminalId);
+    gradeDelivery(grade, project, getSession(grade.terminalId));
+  });
   handle('agents:status', () => agents.getState());
   handle('agents:install', agent => agents.install(agent));
   handle('agents:open-node', () => openExternal('https://nodejs.org/'));

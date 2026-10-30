@@ -12,6 +12,35 @@ const fields = { Goal: 'goal', Files: 'files', Provides: 'provides', Uses: 'uses
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
 const read = file => { try { return fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return ''; throw error; } };
 const sameScope = (a, b) => new Set(a).size === new Set(b).size && a.every(glob => b.includes(glob));
+const kinds = ['core', 'frontend', 'test', 'ui-check', 'docs', 'small', 'review', 'investigate', 'roundtable'];
+const boundedText = (value, limit) => typeof value === 'string' && value.trim().length > 0 && value.length <= limit && !/[\x00-\x1f\x7f]/.test(value);
+const shape = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
+const nonnegative = value => Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
+
+function roundRecords({ incidents = [], findings = [] }) {
+  for (const [name, values] of [['incidents', incidents], ['findings', findings]]) {
+    if (!Array.isArray(values) || values.length > 1000) throw new Error(`${name} must be an array of at most 1000 records`);
+  }
+  const result = [];
+  for (const [index, incident] of incidents.entries()) {
+    if (!shape(incident, ['model', 'kind', 'cause', 'fix', 'lead', 'weight']) || !boundedText(incident.model, 160) || !kinds.includes(incident.kind) ||
+      !boundedText(incident.cause, 240) || !boundedText(incident.fix, 240) || ![null, 'missed', 'copied'].includes(incident.lead) ||
+      incident.weight !== undefined && (!shape(incident.weight, ['kind', 'from', 'to']) || !kinds.includes(incident.weight.kind) ||
+        !nonnegative(incident.weight.from) || !nonnegative(incident.weight.to))) throw new Error(`Invalid incidents[${index}]: expected model, kind, cause, fix, lead and optional weight`);
+    result.push({ type: 'incident', model: incident.model, kind: incident.kind, cause: incident.cause, fix: incident.fix, lead: incident.lead,
+      ...(incident.weight ? { weight: { kind: incident.weight.kind, from: incident.weight.from, to: incident.weight.to } } : {}) });
+  }
+  for (const [index, finding] of findings.entries()) {
+    if (!shape(finding, ['author', 'reviewer', 'category', 'severity', 'fixed', 'title']) || !boundedText(finding.author, 160) ||
+      !boundedText(finding.reviewer, 160) || !['correctness', 'security', 'performance', 'boundary', 'ui'].includes(finding.category) ||
+      !['high', 'medium', 'low'].includes(finding.severity) || typeof finding.fixed !== 'boolean' || !boundedText(finding.title, 16384)) {
+      throw new Error(`Invalid findings[${index}]: expected author, reviewer, category, severity, fixed and title`);
+    }
+    result.push({ type: 'finding', author: finding.author, reviewer: finding.reviewer, category: finding.category,
+      severity: finding.severity, fixed: finding.fixed, title: finding.title.slice(0, 240) });
+  }
+  return result;
+}
 
 function blockOf(answer, heading) {
   const last = [...answer.matchAll(new RegExp('^## ' + heading + '[ \\t]*\\r?$', 'gm'))].at(-1);
@@ -21,7 +50,7 @@ function blockOf(answer, heading) {
 function pendingMeetings(history) {
   const pending = new Set();
   for (const entry of history) {
-    if (entry.type === 'end' && entry.meeting) pending.add(entry.meeting);
+    if (entry.type === 'end' && entry.meeting && entry.role !== '圆桌') pending.add(entry.meeting);
     if (entry.type === 'consolidate') pending.delete(entry.meeting);
   }
   return pending;
@@ -222,6 +251,10 @@ class Team {
   async finish(options, report) {
     return this.locked(() => {
       recordFindings({ ...options, memory: this.memory }, report.answer, report.header);
+      this.append({ type: 'end', id: report.id, title: String(options.title || '').slice(0, 240), session: report.session || options.resume || null,
+        meeting: report.meeting || options.meeting || null, role: options.meeting ? '圆桌' : options.role, kind: report.kind ?? null, model: report.model || 'unreported',
+        reason: report.reason, outputTokens: nonnegative(report.outputTokens) ? report.outputTokens : null,
+        activeMs: nonnegative(report.activeMs) ? report.activeMs : null });
       if (options.meeting) {
         const parsed = report.phase === 'confirmation' ? confirmationOf(report.answer) : understandingOf(report.answer);
         const status = report.reason === 'exit' ? parsed.status : 'invalid';
@@ -229,7 +262,6 @@ class Team {
           agent: options.agent, model: report.model, role: options.role, title: options.title, allow: options.allow, ...parsed, status });
         return { status };
       }
-      if (options.role === '执行') this.append({ type: 'end', id: report.id, title: options.title, session: report.session || options.resume || null, meeting: report.meeting });
       return { status: null };
     });
   }
@@ -261,7 +293,8 @@ class Team {
     return { meeting, round: this.round(history, meeting), generatedAt: Date.now(), language, rows, issues };
   }
   round(history, meeting) { return [...new Set(history.filter(entry => entry.type === 'meeting').map(entry => entry.meeting))].indexOf(meeting) + 1; }
-  async consolidate(meeting, summary) {
+  async consolidate(meeting, summary, records = {}) {
+    const entries = roundRecords(records);
     if (!/^### Results[ \t]*\r?$/m.test(summary) || !/^### Architecture changes[ \t]*\r?$/m.test(summary)) {
       throw new Error('Summary must contain ### Results and ### Architecture changes');
     }
@@ -271,6 +304,7 @@ class Team {
       const running = this.live().filter(entry => entry.meeting === meeting);
       if (running.length) throw new Error(`Meeting ${meeting} still has live workers: ${running.map(entry => entry.title).join(', ')}`);
       fs.appendFileSync(this.memory, `\n\n## Round ${round} · ${meeting} · ${stamp(Date.now())}\n\n${summary.trim()}\n`);
+      for (const entry of entries) this.append({ ...entry, meeting });
       this.append({ type: 'consolidate', meeting });
     });
   }

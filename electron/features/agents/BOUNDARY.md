@@ -23,7 +23,7 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 - `TokenRates` (`electron/features/agents/token-rate.cjs`) — output tokens over response time; the one rate calculation, also the dispatch helper's
 - `CodexAccountUsage` (`electron/features/agents/codex-account-usage.cjs`) — the read-only Codex plan-limit and reset-count client; main.cjs uses `openProject`/`closeProject` for private, serialized project-check lifetimes and a polling `watch` per active Codex session, sharing a verified account scope
 - `ClaudeAccountUsage` (`electron/features/agents/claude-account-usage.cjs`) — the read-only Claude plan-limit poller (with `readClaudeAccount`)
-- `dispatch` (`electron/features/agents/agent-calls.cjs`) — `AgentCalls.dispatch(event)`, reached as `session.usage.calls.dispatch` with events Dispatch has already authenticated and validated
+- `dispatch` (`electron/features/agents/agent-calls.cjs`) — `AgentCalls.dispatch(event)`, reached as `session.usage.calls.dispatch` with authenticated events; retains evaluation metadata and invokes the injected finished hook once per accepted end
 - `ReadingHistory` (`electron/reading-history.cjs`) — validates restored local transcript identities, prepares the latest page and serves `terminal:conversationPage(id, { key, cursor })` through agents IPC; `beforeCursor` alone indicates earlier history
 
 ## May import

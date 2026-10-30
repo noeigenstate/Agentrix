@@ -8,7 +8,7 @@ The dispatch helper that every command-line Codex or Claude worker is started th
 
 ## Interface
 - `USAGE` (`integration/dispatch.cjs`) — the helper's command line (`node dispatch.cjs <codex|claude> …`); sessions learn its path from the startup note (skills/agent-dispatch)
-- `[dispatch]` (`integration/dispatch.cjs`) — the started / failed to start / ended lines the lead reads on the helper's stdout
+- `[dispatch]` (`integration/dispatch.cjs`) — the started / failed to start / ended lines the lead reads on the helper's stdout; events carry kind, meeting, verified routing and this invocation's usage, with rollout counts preferred over stdout
 - `runtimeFiles` (`integration/dispatch.cjs`) — the electron modules the helper carries; copied by scripts/after-pack.cjs and electron/remote-connection.cjs
 - `acceptDispatch` (`electron/features/agents/dispatch-events.cjs`) — main.cjs hands it every dispatch-* event from a session's event pipe
 
