@@ -146,7 +146,7 @@ test('reported mismatches and missing settings never borrow the declaration', as
   assert.deepEqual(f.events[0].declared, { model: 'gpt-6.1-sol', effort: 'max', fast: true });
   const missing = await fixture(t, [codex[0], { rollout: rollout[0] }, { rollout: { type: 'turn_context', payload: {} } }]);
   const unreported = await missing.finished;
-  assert.match(unreported.stdout, /model unreported effort unreported fast unreported · routing ok \(model, effort, fast unverified\)/);
+  assert.match(unreported.stdout, /model unreported effort unreported fast unreported · routing unverified \(model, effort, fast\)/);
   assert.equal(missing.events[0].model, 'unreported'); assert.equal(missing.events[0].effort, null);
   assert.equal(missing.events[0].fast, null); assert.equal(missing.events[0].declared, undefined);
   assert.match(unreported.stdout, /token\/s unreported/);
@@ -156,6 +156,23 @@ test('reported mismatches and missing settings never borrow the declaration', as
   assert.match((await tier.finished).stdout, /model gpt-6\.1-sol effort max fast unreported · routing ok \(fast unverified\)/);
   assert.equal(tier.events[0].fast, null, 'global config and --fast are not session proof');
   assert.equal(tier.events[0].declared, undefined);
+});
+
+test('an unreported model leaves routing unverified unless a reported value mismatches', async t => {
+  const noModel = structuredClone(rollout);
+  const settings = noModel.find(record => record.payload?.thread_settings)?.payload.thread_settings;
+  const turn = noModel.find(record => record.type === 'turn_context').payload;
+  delete settings.model; delete turn.model; delete turn.collaboration_mode.settings.model;
+  const missing = await fixture(t, [codex[0], ...noModel.map(record => ({ rollout: record }))]);
+  const missingResult = await missing.finished;
+  assert.match(missingResult.stdout, /model unreported effort max fast on · routing unverified \(model\)/);
+  assert.equal(missing.events[0].model, 'unreported'); assert.equal(missing.events[0].declared, undefined);
+
+  settings.reasoning_effort = 'high'; turn.effort = 'high'; turn.collaboration_mode.settings.reasoning_effort = 'high';
+  const mixed = await fixture(t, [codex[0], ...noModel.map(record => ({ rollout: record }))]);
+  const mixedResult = await mixed.finished;
+  assert.match(mixedResult.stdout, /model unreported effort high fast on · routing MISMATCH \(declared gpt-6\.1-sol max fast on\) \(model unverified\)/);
+  assert.deepEqual(mixed.events[0].declared, { model: 'gpt-6.1-sol', effort: 'max', fast: true });
 });
 
 test('unreported Claude fields are unverified even alongside a reported mismatch', async t => {

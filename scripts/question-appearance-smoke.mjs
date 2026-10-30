@@ -11,7 +11,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), r
 const output = await testRun('question-appearance'), profile = path.join(output, 'profile'), project = path.join(output, 'project');
 await fs.mkdir(profile, { recursive: true }); await fs.mkdir(project);
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ id: 'questions', name: '问题主题对照', path: project, restore: { terminal: false, codex: false } }], settings: { language: 'zh', terminalRenderer: 'dom', fontSize: 10, restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: await fs.mkdtemp(path.join(path.dirname(profile), 'codex-home-')) }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const theme = 'grey', errors = [], results = []; let app, page;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
 const write = data => page.evaluate(data => window.agentrix.writeTerminal('questions', data), data);

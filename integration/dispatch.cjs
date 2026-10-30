@@ -373,8 +373,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     const actual = output.routing(), requested = declared();
     const unverified = Object.keys(requested).filter(key => output[key] === null);
     const mismatch = Object.keys(requested).some(key => !unverified.includes(key) && actual[key] !== requested[key]);
-    const verdict = mismatch ? `MISMATCH (declared ${requested.model} ${requested.effort} fast ${requested.fast ? 'on' : 'off'})` : 'ok';
-    const routing = verdict + (unverified.length ? ` (${unverified.join(', ')} unverified)` : '');
+    const verdict = mismatch ? `MISMATCH (declared ${requested.model} ${requested.effort} fast ${requested.fast ? 'on' : 'off'})`
+      : unverified.includes('model') ? 'unverified' : 'ok';
+    const routing = verdict + (unverified.length ? ` (${unverified.join(', ')}${verdict === 'unverified' ? '' : ' unverified'})` : '');
     signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}${teamLabel()}`);
     send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
     if (final) return;

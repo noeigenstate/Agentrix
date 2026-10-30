@@ -14,7 +14,7 @@ const { desktopGlassKind } = require('../electron/desktop-glass.cjs');
 const backend = desktopGlassKind(), output = await testRun('readability'), profile = path.join(output, 'profile'), project = path.join(output, 'project');
 await fs.mkdir(profile); await fs.mkdir(project);
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ id: 'readability', name: '字体对照', path: project, kind: 'local', restore: { terminal: false, codex: false } }], settings: { language: 'zh', surface: 'glass', glassBackground: backend ? 'desktop' : 'theme', glassTransparency: 0, fontSize: 16, terminalFontWeight: 400, terminalRenderer: 'gpu', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: await fs.mkdtemp(path.join(path.dirname(profile), 'codex-home-')) }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 let app, page; const errors = [], results = { backend, fonts: [], checks: [] };
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
 const write = data => page.evaluate(data => window.agentrix.writeTerminal('readability', data), data);

@@ -170,10 +170,11 @@ node "<helper>" consolidate --cwd <dir> --meeting <id> --summary <summary.md>
 - `--role` says what the worker does (execution, investigation or review; the helper's usage text lists the exact words).
 - Run the helper as a background command. It feeds the brief on stdin, exits with the worker's exit code and writes a log
   next to `--out` (`<out>.log`).
-- Right after launching, read its `[dispatch] started …` line: it names the model, effort and mode the worker itself
-  reports, and `routing ok` confirms they match what you asked for. On `[dispatch] failed to start` fix the brief or
-  relaunch; on `routing MISMATCH` stop the worker and relaunch with the intended settings, or tell the user why the
-  actual model is acceptable.
+- Right after launching, read its `[dispatch] started …` line: it confirms the start and names the settings the worker
+  reports. `routing ok` means reported values match, not that unverified settings are proven; `routing unverified` means
+  the model itself is unreported. Verify missing settings before relying on them. On `[dispatch] failed to start` fix the
+  brief or relaunch; on `routing MISMATCH` stop the worker and relaunch with the intended settings, or tell the user why
+  the actual model is acceptable.
 - While the worker runs, the activity pane shows its token/s live. When the task finishes, read the `[dispatch] ended …` line: its exit code, reason and the final average token/s.
 - `--allow <glob>` (repeatable) for every worker that changes files: the task's file scope. The helper adds any
   `BOUNDARY.md` of the modules involved to the brief and checks the git working tree afterwards. An end line with

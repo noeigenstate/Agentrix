@@ -54,7 +54,7 @@ await fs.writeFile(path.join(previewProject, 'assets', 'preview.mjs'), 'import {
 await fs.writeFile(path.join(previewProject, 'reports', 'preview.html'), '<!doctype html><html lang="zh-CN"><meta charset="UTF-8"><title>HTML preview fixture</title><link rel="stylesheet" href="../assets/preview.css"><main><h1>HTML 页面已渲染</h1><img src="../image-preview.png" alt="相对路径图片"><p id="script-status">Loading scripts</p><p id="data-status"></p><button id="increment">点击计数</button><output id="count">0</output></main><script type="module" src="../assets/preview.mjs"></script></html>');
 // These checks read the terminal's rows as HTML, so the compatible (DOM) renderer draws them; gpu-terminal-smoke covers the GPU one.
 await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { language: 'zh', terminalRenderer: 'dom', autoSave: false, notifications: false, sound: false, closeToTray: true, fontSize: 12 } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir };
+const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: await fs.mkdtemp(path.join(path.dirname(dataDir), 'codex-home-')) };
 env.NO_COLOR = '1';
 env.NODE_DISABLE_COLORS = '1';
 env.FORCE_COLOR = '0';

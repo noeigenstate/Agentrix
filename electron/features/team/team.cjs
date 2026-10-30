@@ -44,6 +44,7 @@ function understandingOf(answer) {
   const understanding = {};
   let key = null, complete = true;
   for (const line of block.split(/\r?\n/)) {
+    if (line.startsWith('#')) { complete = false; break; }
     const match = /^- (Goal|Files|Provides|Uses|Done when|Questions and risks):[ \t]*(.*)$/.exec(line);
     if (match) {
       key = fields[match[1]];
@@ -53,7 +54,7 @@ function understandingOf(answer) {
     else if (line.trim()) complete = false;
   }
   for (const key of Object.keys(understanding)) understanding[key] = understanding[key].trim();
-  return { understanding, status: complete && Object.values(fields).every(key => understanding[key]) ? 'understood' : 'incomplete' };
+  return { understanding, status: complete && Object.values(fields).every(key => understanding[key] && understanding[key] !== '…') ? 'understood' : 'incomplete' };
 }
 
 function confirmationOf(answer) {

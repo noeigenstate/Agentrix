@@ -25,7 +25,7 @@ await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ versio
   projects: [{ id: randomUUID(), name: '中文 项目', path: project, unread: 0, seenEvents: [], lastCompletedAt: null }],
   settings: { shell: 'bash', restoreSessions: true, terminalRenderer: 'dom', notifications: false, sound: false, announce: false, closeToTray: false } }));
 
-const env = { ...process.env, HOME: home, AGENTRIX_DATA_DIR: dataDir, AGENTRIX_TEST_RESTORE: '1' };
+const env = { ...process.env, HOME: home, AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: await fs.mkdtemp(path.join(path.dirname(dataDir), 'codex-home-')), AGENTRIX_TEST_RESTORE: '1' };
 for (const name of ['ELECTRON_RUN_AS_NODE', 'APPDIR', 'APPIMAGE', 'LD_LIBRARY_PATH']) delete env[name];
 // Reproduce a desktop launch, where proxy variables from the invoking terminal are absent.
 if (expectedProxy) {

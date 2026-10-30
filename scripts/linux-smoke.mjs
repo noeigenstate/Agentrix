@@ -38,8 +38,8 @@ setTimeout(() => import('node:child_process').then(({ spawnSync }) => {
 `, { mode: 0o755 });
 await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', shell: shellName, terminalRenderer: 'dom', autoSave: false, notifications: false, sound: false, announce: false, closeToTray: false, restoreSessions: false } }));
 
-const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, HOME: home, SHELL: `/bin/${shellName}` };
-for (const name of ['ELECTRON_RUN_AS_NODE', 'AGENTRIX_DEV_URL', 'ZDOTDIR', 'CODEX_HOME', 'PROMPT_COMMAND']) delete env[name];
+const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: await fs.mkdtemp(path.join(path.dirname(dataDir), 'codex-home-')), HOME: home, SHELL: `/bin/${shellName}` };
+for (const name of ['ELECTRON_RUN_AS_NODE', 'AGENTRIX_DEV_URL', 'ZDOTDIR', 'PROMPT_COMMAND']) delete env[name];
 const appImage = process.argv.includes('--appimage') ? path.resolve(process.argv[process.argv.indexOf('--appimage') + 1]) : null;
 const packaged = !!appImage || process.argv.includes('--packaged');
 const unpacked = process.arch === 'x64' ? 'linux-unpacked' : `linux-${process.arch}-unpacked`;

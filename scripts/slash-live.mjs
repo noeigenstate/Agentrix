@@ -25,6 +25,7 @@ try { git('rev-parse', '--git-dir'); } catch {
 }
 await fs.writeFile(path.join(project.path, 'notes.txt'), `changed ${new Date().toISOString()}\n`);
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false, language: 'zh' } }));
+// codex-home: real login on purpose (live scenario, run by hand)
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 // Started from inside Claude Code, the test would hand the CLI this session's markers (which turn transcripts off).
 for (const name of Object.keys(env)) if (/^(CLAUDECODE|CLAUDE_CODE_|CLAUDE_EFFORT$|CLAUDE_PID$)/.test(name)) delete env[name];

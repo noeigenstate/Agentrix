@@ -95,9 +95,10 @@ files it will change after the roundtable. The start line carries ` · roundtabl
   - Questions and risks: …
   ```
 
-  (`none` where empty). Each field may continue on following lines; a line that does not start a named field belongs to
-  the preceding field. Parsed into goal / files / provides / uses / doneWhen / questions: status `understood` when all
-  six are present and non-empty, with no duplicate fields; otherwise `incomplete`.
+  (`none` where empty). Each field may continue on following lines until a line starts with `#`; a trailing section
+  makes the block incomplete. Parsed into goal / files / provides / uses / doneWhen / questions: status `understood`
+  when all six are present and non-empty, with no duplicate fields or a field containing only the template placeholder;
+  otherwise `incomplete`.
 - A resumed session that already has an understanding in this meeting gets the **confirmation request**: the brief carries
   the minutes, the worker checks that the others' understanding of the interfaces it shares matches its own and that its
   questions are answered, and ends with `## Roundtable confirmation` and `Status: confirmed`, or `Status: open` followed
@@ -161,6 +162,7 @@ helper prints exactly one start line, then exactly one end line, on its stdout:
 
 ```
 [dispatch] started <id> codex model gpt-6.1-sol effort max fast on · routing ok · pid <n> session <session id>
+[dispatch] started <id> codex model unreported effort unreported fast unreported · routing unverified (model, effort, fast) · pid <n> session <session id>
 [dispatch] started <id> claude model claude-sonnet-5-5 effort unreported fast off · routing ok (effort unverified) · pid <n> session <session id>
 [dispatch] started <id> codex model gpt-6.1-terra effort high fast off · routing MISMATCH (declared gpt-6.1-sol max fast on) · …
 [dispatch] failed to start <id>: <reason>          (instead of "started"; the helper then exits non-zero)
@@ -170,9 +172,10 @@ helper prints exactly one start line, then exactly one end line, on its stdout:
 The start line proves that the worker started and states its reported model, effort and mode. The helper compares
 Codex's matching rollout (`turn_context` model and effort; recorded service tier) or Claude's `system/init` record
 (model, effort and fast-mode state when present) with the declaration. A reported difference gives
-`routing MISMATCH (declared ...)` with the reported values first; otherwise it says `routing ok`. A value the worker
-does not report stays `unreported` in the values and is listed as `unverified` after the verdict, including when another
-reported value mismatches. It is never assumed from the declaration, so verify an unreported setting before relying on it.
+`routing MISMATCH (declared ...)` with the reported values first. If no reported values differ and the model was not
+reported, the verdict is `routing unverified`; otherwise matching reported values give `routing ok`. A value the worker does not report stays
+`unreported` in the values and is listed after the verdict, including when another reported value mismatches. It is never
+assumed from the declaration, so verify an unreported setting before relying on it.
 "Started" is printed only from the worker's own records — its session reported (and
 Codex's turn context read from its session file) — within 30 seconds, else "failed to start". While the worker runs, its
 session file is read every 250 ms (today's and yesterday's `sessions/<y>/<m>/<d>` folders directly, so a new file is
@@ -229,7 +232,7 @@ confirmed worker runs.
   for a task too small for one.
 - A Claude worker (`claude -p`) can read only inside its `--cwd`: paste anything else it needs (a review report, a
   plan in the scratch folder) into the brief, or copy it into its worktree. A Codex worker can read outside it.
-- Right after launching, read the helper's start line; treat anything but `[dispatch] started … routing ok` as a launch
-  to fix before relying on the worker.
+- Right after launching, read the helper's start line. On `routing unverified`, establish the model before relying on
+  routing; on `routing ok`, check any unverified settings separately. Act on `failed to start` or `routing MISMATCH`.
 - Claude Code's own Agent tool calls stay as they are: their transcript records are already structured.
 - The app no longer parses Bash command lines, briefs or logs to find workers.

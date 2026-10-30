@@ -24,7 +24,7 @@ const projects = ['商城前端', '支付服务', '数据看板', '文档站点'
 for (const project of projects) await fs.mkdir(project.path, { recursive: true });
 await fs.mkdir(dataDir, { recursive: true });
 await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { language: 'zh', notifications: false, sound: false, announce: false, closeToTray: false, restoreSessions: true, guideVersion: '9.9.9', surface } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: await fs.mkdtemp(path.join(path.dirname(dataDir), 'codex-home-')) }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 
 const application = await electron.launch({ executablePath: require('electron'), args: [root], cwd: root, env, timeout: 30000 });
 try {

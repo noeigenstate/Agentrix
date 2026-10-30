@@ -252,7 +252,7 @@ try {
   else {
     await fs.mkdir(config.out, { recursive: true });
     const profile = await fs.mkdtemp(path.join(config.out, 'profile-'));
-    const env = { ...process.env, AGENTRIX_DATA_DIR: profile };
+    const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: await fs.mkdtemp(path.join(path.dirname(profile), 'codex-home-')) };
     delete env.ELECTRON_RUN_AS_NODE;
     const child = spawn(createRequire(import.meta.url)('electron'), [fileURLToPath(import.meta.url), ...args], { env, stdio: 'inherit', windowsHide: true });
     child.on('error', error => { console.error(error.message); process.exitCode = 1; });
