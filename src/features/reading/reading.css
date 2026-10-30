@@ -117,9 +117,9 @@
 .reading-choice:focus-visible { outline: 1px solid var(--choice-accent); outline-offset: -1px; }
 .reading-choice-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .reading-choice-head strong { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--choice-accent); }
-.reading-choice-head button { display: flex; flex: none; align-items: center; gap: 4px; font-size: calc(11px * var(--reading-text)); }
+.reading-choice-head button { display: flex; flex: none; align-items: center; font-size: calc(11px * var(--reading-text)); }
 /* The text actions of a card (open the terminal, cancel, chat about it) keep their look on a 32px hit area; the head's keep their text on the card's edge. */
-:is(.reading-choice-head, .reading-question-head, .reading-question-actions) .text-button { justify-content: center; min-width: 32px; min-height: 32px; padding: 0 8px; }
+:is(.reading-choice-head, .reading-question-head, .reading-question-actions) .text-button { justify-content: center; gap: 4px; min-width: 32px; min-height: 32px; padding: 0 8px; }
 :is(.reading-choice-head, .reading-question-head) .text-button { margin-right: -8px; }
 .reading-choice-context { margin: 0 0 8px; padding: 8px; max-height: 9.6em; overflow: auto; background: var(--bg-app); border-radius: 8px; font: 400 calc(11.5px * var(--reading-text))/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
 .reading-choice-options { display: flex; flex-direction: column; gap: 4px; }
@@ -128,7 +128,7 @@
 .reading-choice-option:hover:not(:disabled) { background: var(--bg-hover); }
 .reading-choice-option[data-highlighted="true"] { background: var(--bg-selected); }
 /* A disabled option (a permission card's, which only sends the reader to the terminal, or one waiting for its keys) keeps its theme text: fading it made the numbers unreadable. */
-.reading-choice-option:disabled { cursor: default; }
+.reading-choice-option:disabled { opacity: 1; cursor: default; }
 .reading-choice-number { flex: none; color: var(--choice-accent); font: 500 calc(11.5px * var(--reading-text)) var(--font-mono); }
 .reading-choice-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .reading-choice-label b { font-weight: 500; }
@@ -136,7 +136,7 @@
 .reading-choice-option[data-highlighted="true"] .reading-choice-label small { color: var(--text-1); }
 .reading-choice-option kbd { flex: none; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; font-size: calc(10px * var(--reading-text)); }
 .reading-choice-option svg { flex: none; align-self: center; color: var(--choice-accent); }
-.reading-choice-hint { display: block; margin-top: 8px; font-size: calc(10.5px * var(--reading-text)); color: var(--text-3); white-space: pre-wrap; }
+.reading-choice-hint { display: block; margin: 8px 0; font-size: calc(10.5px * var(--reading-text)); color: var(--text-3); white-space: pre-wrap; }
 /* A question with options (ReadingQuestion): its progress, the question as a title, options with a number or a tick,
    an own-answer or notes field, then Submit and Chat about this. */
 .reading-choice.is-question { padding: 12px 16px; }
@@ -146,7 +146,7 @@
 .reading-question-tab.is-answered { color: var(--text-1); background: var(--bg-selected); }
 .reading-question-spacer { flex: 1; }
 .reading-question-switch.icon-button { width: 32px; height: 32px; border-radius: 8px; }
-.reading-question-head .text-button { display: inline-flex; align-items: center; gap: 4px; font-size: calc(11.5px * var(--reading-text)); }
+.reading-question-head .text-button { display: inline-flex; align-items: center; font-size: calc(11.5px * var(--reading-text)); }
 .reading-question-title { display: block; margin: 2px 0 12px; font-size: 1.08em; font-weight: 700; line-height: 1.45; color: var(--text-1); overflow-wrap: anywhere; }
 .reading-question-review { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; }
 .reading-question-review > div { padding: 8px 12px; border-radius: 8px; background: var(--bg-input); }
@@ -156,7 +156,8 @@
 .reading-question-warning svg { flex: none; margin-top: 2px; color: var(--warning); }
 /* The review's rows, the options' numbers and the own-answer field all start 12px in from the card's content edge. */
 .reading-question-option { align-items: flex-start; padding: 8px 12px; border-radius: 8px; }
-.reading-question-mark { display: grid; place-items: center; flex: none; width: 20px; height: 20px; margin-top: 2px; border-radius: 8px; color: var(--choice-accent); font: 600 calc(11.5px * var(--reading-text)) var(--font-mono); box-shadow: inset 0 0 0 1px var(--border); }
+.reading-question-option .reading-choice-label b { display: block; line-height: 20px; }
+.reading-question-mark { display: grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 8px; color: var(--choice-accent); font: 600 calc(11.5px * var(--reading-text)) var(--font-mono); box-shadow: inset 0 0 0 1px var(--border); }
 .is-multi .reading-question-mark { border-radius: 4px; }
 :is(.reading-question-option, .reading-question-input).is-checked .reading-question-mark { color: var(--button-primary-text); background: var(--choice-accent); box-shadow: none; }
 .reading-question-option .reading-question-mark svg { color: inherit; }
