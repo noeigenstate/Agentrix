@@ -13,7 +13,8 @@ description: Publish a new Agentrix version — bump, update notes, the full loc
    no internals and no repeating the title. Add the English of every title and sentence to the end of
    `electron/locales/en.json` (keep the older entries). The notes show as a list in the guide, which opens on this page
    after an update, and on the About page; about seven fit the guide card, a longer list scrolls.
-4. **Local checks, in order.** `npm run build`, `npm test`, `python -m unittest discover -s tests -p '*_test.py'`,
+4. **Local checks, in order.** Prefer `node scripts/ci-preflight.mjs local` from the main checkout, which runs the Windows
+   CI job's own steps under CI conditions, then `node scripts/ci-preflight.mjs remote` before tagging. By hand: `npm run build`, `npm test`, `python -m unittest discover -s tests -p '*_test.py'`,
    then the sixteen desktop suites one at a time (each starts Electron with its own isolated profile; never run
    them in parallel or against the real app): `test:desktop`, `test:path-refresh`, `test:sessions`,
    `test:restore-slow`, `test:completion`, `test:gpu-terminal`, `test:workspace`, `test:editor-terminals`,
