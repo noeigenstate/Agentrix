@@ -18,6 +18,7 @@ const { minutesPage } = require('../electron/features/team/minutes-page.cjs');
 const helper = path.resolve(__dirname, '../integration/dispatch.cjs');
 const worker = path.resolve(__dirname, 'fixtures/dispatch-worker.cjs');
 const scale = Math.max(1, Number(process.env.AGENTRIX_TEST_TIMEOUT_SCALE) || 1);
+const staleTime = new Date('2000-01-01T00:00:00Z');
 const understanding = '# Task A\n\n## Roundtable understanding\n- Goal: Coordinate safely\n- Files: src/a.js\n- Provides: team state\n- Uses: minutesPage(minutes)\n- Done when: tests pass\n- Questions and risks: none\n';
 const confirmation = '## Roundtable confirmation\nStatus: confirmed\n';
 const summary = '### Results\n\nWorkers and tests passed.\n\n### Architecture changes\n\nNone: the agreed modules still fit.\n';
@@ -94,11 +95,11 @@ function options(cwd, extra = []) {
     '--cwd', cwd, '--brief', 'brief.md', '--out', 'answer.md', ...extra]);
 }
 
-function load(file, replacements = {}) {
+function load(file, replacements = {}, globals = {}) {
   const loaded = { exports: {} }, localRequire = createRequire(file);
   vm.runInNewContext(sync.readFileSync(file, 'utf8'), {
     module: loaded, exports: loaded.exports, require: name => Object.hasOwn(replacements, name) ? replacements[name] : localRequire(name),
-    __dirname: path.dirname(file), __filename: file, process, Buffer, setTimeout, clearTimeout, setInterval, clearInterval,
+    __dirname: path.dirname(file), __filename: file, process, Buffer, setTimeout, clearTimeout, setInterval, clearInterval, ...globals,
   }, { filename: file });
   return loaded.exports;
 }
@@ -228,15 +229,27 @@ test('dead board entries and stale locks are removed while a live lock is respec
   const f = await lab(t), team = projectTeam(f.repo, true);
   const dead = spawn(process.execPath, ['-e', ''], { windowsHide: true }); await once(dead, 'close');
   await fs.writeFile(path.join(team.board, 'dead.json'), JSON.stringify({ pid: dead.pid, allow: ['src/**'] }));
-  await fs.writeFile(path.join(team.directory, 'lock'), 'stale');
-  const old = new Date(Date.now() - 11000); await fs.utimes(path.join(team.directory, 'lock'), old, old);
+  const lock = path.join(team.directory, 'lock'); await fs.writeFile(lock, 'stale');
+  await fs.utimes(lock, staleTime, staleTime);
   const id = randomUUID(); await team.admit(options(f.repo, ['--allow', 'src/a.js', '--skip-meeting', 'test']), id);
   assert.equal(exists(path.join(team.board, 'dead.json')), false); team.release(id);
-  const lock = path.join(team.directory, 'lock'); await fs.writeFile(lock, 'held');
-  let entered = false;
+  sync.writeFileSync(lock, 'held');
+  let entered = false, observed;
+  const checked = new Promise(resolve => { observed = resolve; }), stat = sync.statSync;
+  const intercepted = t.mock.method(sync, 'statSync', function (file, ...args) {
+    const result = stat.call(this, file, ...args);
+    if (file === lock) observed();
+    return result;
+  });
   const pending = team.locked(() => { entered = true; });
-  await delay(60); assert.equal(entered, false);
-  await fs.unlink(lock); await pending; assert.equal(entered, true);
+  try {
+    await Promise.race([checked, pending.then(() => { throw new Error('Lock was not respected'); })]);
+    assert.equal(entered, false);
+    sync.unlinkSync(lock); await pending; assert.equal(entered, true);
+  } finally {
+    intercepted.mock.restore();
+    await fs.rm(lock, { force: true }); await pending.catch(() => {});
+  }
 });
 
 test('execution requires a confirmed resumed session and the same scope set', async t => {
@@ -586,21 +599,108 @@ test('gate refusals explain starting a roundtable and expose occupying board rec
 
 test('a fresh replacement lock survives stale-lock removal', async t => {
   const f = await lab(t), team = projectTeam(f.repo, true), file = path.join(team.directory, 'lock');
-  await fs.writeFile(file, 'old'); const old = new Date(Date.now() - 11000); await fs.utimes(file, old, old);
-  const rename = sync.renameSync;
-  let replaced = false, entered = false;
+  await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime);
+  const rename = sync.renameSync, stat = sync.statSync;
+  let replaced = false, entered = false, observed;
+  const checked = new Promise(resolve => { observed = resolve; });
   const intercepted = t.mock.method(sync, 'renameSync', function (from, to) {
     rename.call(this, from, to);
     if (from === file) { assert.ok(to.endsWith('.stale')); replaced = true; sync.writeFileSync(file, 'fresh holder'); }
   });
+  const checkedLock = t.mock.method(sync, 'statSync', function (name, ...args) {
+    const result = stat.call(this, name, ...args);
+    if (name === file && replaced) observed();
+    return result;
+  });
+  const pending = team.locked(() => { entered = true; });
   try {
-    const pending = team.locked(() => { entered = true; });
-    await delay(60);
-    assert.equal(replaced, true); assert.equal(entered, false); assert.equal(await fs.readFile(file, 'utf8'), 'fresh holder');
-    await fs.unlink(file); await pending;
+    await Promise.race([checked, pending.then(() => { throw new Error('Replacement lock was not respected'); })]);
+    assert.equal(replaced, true); assert.equal(entered, false); assert.equal(sync.readFileSync(file, 'utf8'), 'fresh holder');
+    sync.unlinkSync(file); await pending;
     assert.equal(entered, true); assert.equal(exists(file), false);
-  } finally { intercepted.mock.restore(); }
+  } finally {
+    intercepted.mock.restore(); checkedLock.mock.restore();
+    await fs.rm(file, { force: true }); await pending.catch(() => {});
+  }
 });
+
+for (const operation of ['renameSync', 'unlinkSync']) {
+  test(`stale-lock ${operation} retries only transient failures`, async t => {
+    const f = await lab(t), original = projectTeam(f.repo, true), file = path.join(original.directory, 'lock');
+    const applies = name => operation === 'renameSync' ? name === file : name.startsWith(file + '.') && name.endsWith('.stale');
+    const real = sync[operation];
+    let failures = ['EPERM', 'EBUSY'], attempts = 0;
+    const injected = { ...sync, [operation](...args) {
+      if (applies(args[0])) {
+        attempts++;
+        const code = failures.shift();
+        if (code) throw Object.assign(new Error('Injected lock failure'), { code });
+      }
+      return real(...args);
+    } };
+    const team = load(path.resolve(__dirname, '../electron/features/team/team.cjs'), { 'node:fs': injected }).projectTeam(f.repo);
+    await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime);
+    let entered = false;
+    await team.locked(() => { entered = true; });
+    assert.equal(entered, true); assert.equal(attempts, 3);
+    assert.equal(exists(file), false);
+    assert.deepEqual((await fs.readdir(team.directory)).filter(name => name.endsWith('.stale')), []);
+
+    await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime);
+    failures = ['EACCES']; entered = false;
+    await assert.rejects(team.locked(() => { entered = true; }), error => error.code === 'EACCES');
+    assert.equal(entered, false);
+  });
+
+  test(`stale-lock ${operation} stops retrying at the admission deadline`, async t => {
+    const f = await lab(t), original = projectTeam(f.repo, true), file = path.join(original.directory, 'lock');
+    const applies = name => operation === 'renameSync' ? name === file : name.startsWith(file + '.') && name.endsWith('.stale');
+    const real = sync[operation];
+    let now = Date.now(), attempts = 0;
+    const injected = { ...sync, [operation](...args) {
+      if (applies(args[0])) { attempts++; throw Object.assign(new Error('Injected lock contention'), { code: 'EPERM' }); }
+      return real(...args);
+    } };
+    const team = load(path.resolve(__dirname, '../electron/features/team/team.cjs'), {
+      'node:fs': injected, 'node:timers/promises': { setTimeout: async () => { now += 15001; } },
+    }, { Date: { now: () => now } }).projectTeam(f.repo);
+    await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime);
+    let entered = false;
+    await assert.rejects(team.locked(() => { entered = true; }), /Team admission lock is busy/);
+    assert.equal(entered, false); assert.equal(attempts, 1);
+  });
+
+  test(`a replacement lock survives transient stale-lock ${operation} failure`, async t => {
+    const f = await lab(t), original = projectTeam(f.repo, true), file = path.join(original.directory, 'lock');
+    const applies = name => operation === 'renameSync' ? name === file : name.startsWith(file + '.') && name.endsWith('.stale');
+    const real = sync[operation];
+    let replaced = false, entered = false, observed;
+    const checked = new Promise(resolve => { observed = resolve; });
+    const injected = { ...sync, [operation](...args) {
+      if (!replaced && applies(args[0])) {
+        if (operation === 'renameSync') sync.unlinkSync(file);
+        sync.writeFileSync(file, 'fresh holder'); replaced = true;
+        throw Object.assign(new Error('Injected lock contention'), { code: 'EBUSY' });
+      }
+      return real(...args);
+    }, statSync(name, ...args) {
+      const result = sync.statSync(name, ...args);
+      if (name === file && replaced) observed();
+      return result;
+    } };
+    const team = load(path.resolve(__dirname, '../electron/features/team/team.cjs'), { 'node:fs': injected }).projectTeam(f.repo);
+    await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime);
+    const pending = team.locked(() => { entered = true; });
+    try {
+      await Promise.race([checked, pending.then(() => { throw new Error('Replacement lock was not respected'); })]);
+      assert.equal(entered, false); assert.equal(sync.readFileSync(file, 'utf8'), 'fresh holder');
+      sync.unlinkSync(file); await pending;
+      assert.equal(entered, true); assert.equal(exists(file), false);
+    } finally {
+      await fs.rm(file, { force: true }); await pending.catch(() => {});
+    }
+  });
+}
 
 test('scoped dispatch reuses repository listings and snapshot status outside the admission lock', async t => {
   const f = await lab(t), prepared = await start(f, { skip: 'git call budget' });

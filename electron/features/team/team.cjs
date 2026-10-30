@@ -109,24 +109,35 @@ class Team {
   append(entry) { fs.appendFileSync(this.journal, JSON.stringify({ ...entry, time: Date.now() }) + '\n'); }
   async locked(action) {
     const file = path.join(this.directory, 'lock'), token = randomUUID(), deadline = Date.now() + 15000;
+    let stale;
     for (;;) {
-      try {
-        const fd = fs.openSync(file, 'wx');
-        try { fs.writeFileSync(fd, token); } finally { fs.closeSync(fd); }
-        break;
-      } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
+      if (stale) {
         try {
-          if (Date.now() - fs.statSync(file).mtimeMs > 10000) {
-            const stale = file + '.' + randomUUID() + '.stale';
-            fs.renameSync(file, stale);
-            fs.unlinkSync(stale);
-            continue;
-          }
-        } catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
-        if (Date.now() > deadline) throw new Error('Team admission lock is busy; retry the dispatch');
-        await delay(25);
+          fs.unlinkSync(stale); stale = null;
+        } catch (failure) {
+          if (failure.code === 'ENOENT') stale = null;
+          else if (failure.code !== 'EPERM' && failure.code !== 'EBUSY') throw failure;
+        }
       }
+      if (!stale) {
+        try {
+          const fd = fs.openSync(file, 'wx');
+          try { fs.writeFileSync(fd, token); } finally { fs.closeSync(fd); }
+          break;
+        } catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+          let expired = false;
+          try { expired = Date.now() - fs.statSync(file).mtimeMs > 10000; }
+          catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
+          if (expired) {
+            const candidate = file + '.' + randomUUID() + '.stale';
+            try { fs.renameSync(file, candidate); stale = candidate; continue; }
+            catch (failure) { if (!['ENOENT', 'EPERM', 'EBUSY'].includes(failure.code)) throw failure; }
+          }
+        }
+      }
+      if (Date.now() <= deadline) await delay(25);
+      if (Date.now() > deadline) throw new Error('Team admission lock is busy; retry the dispatch');
     }
     try { return await action(); } finally { if (read(file) === token) fs.unlinkSync(file); }
   }
