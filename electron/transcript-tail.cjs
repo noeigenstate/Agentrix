@@ -5,11 +5,12 @@ const { ClaudeImageLine, readTranscriptChunk } = require('./oversized-record.cjs
 
 // Follows a growing JSON-lines file from where the last read stopped, a bounded amount per call.
 class TranscriptTail {
-  constructor(filename, { onHistory = () => {}, onWorkRecord = null, onReset = () => {} } = {}) {
+  constructor(filename, { onHistory = () => {}, onWorkRecord = null, onReset = () => {}, catchUpHistory = false, isCurrent = () => true } = {}) {
     this.filename = filename; this.offset = 0; this.buffer = Buffer.alloc(0); this.skipping = false; this.oversized = null;
     this.onHistory = onHistory; this.historyPending = true; onHistory(false);
     this.onWorkRecord = onWorkRecord;
     this.onReset = onReset;
+    this.catchUpHistory = catchUpHistory; this.isCurrent = isCurrent;
   }
   async read(onRecord) {
     let file; try { file = await fs.open(this.filename, 'r'); } catch { return false; }
@@ -26,7 +27,9 @@ class TranscriptTail {
         await this.onReset(this.offset > 0, file);
       }
       this.fileIdentity = identity; this.fileSize = size;
-      if (this.workHistory && !await this.workHistory.read(file, this.onWorkRecord)) return;
+      if (this.workHistory && !await (this.catchUpHistory
+        ? this.workHistory.catchUp(file, this.onWorkRecord, this.isCurrent)
+        : this.workHistory.read(file, this.onWorkRecord))) return;
       const end = this.historyPending ? size : Math.min(size, this.offset + LIVE_READ_LIMIT);
       while (this.offset < end) {
         const chunk = Buffer.alloc(Math.min(65536, end - this.offset));

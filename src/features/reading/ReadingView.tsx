@@ -26,7 +26,7 @@ import { signInScreen } from '../agents/sign-in-screen';
 import { setChoiceVisible } from './reading-mode';
 import { isTyping, markTyping } from './typing';
 import { useStickToBottom } from './useStickToBottom';
-import { conversationKey, useReadingConversation } from './useReadingConversation';
+import { conversationKey, useReadingHistory } from './useReadingConversation';
 import { blocks, conversationTurns, useVisibleTail } from './useVisibleTail';
 import './reading.css';
 import './reading-flow.css';
@@ -141,7 +141,7 @@ function AssistantReply({ entry, agent, projectId, result = false, onError }: { 
   const words = entry.text ? <Markdown text={entry.text} /> : null;
   // The latest result shows its picture first with the words under it; anywhere else the words come first.
   const picture = entry.generated && entry.images?.[0] ? <GeneratedImage src={entry.images[0]} {...entry.generated} result={result}>{result && words}</GeneratedImage> : null;
-  return <div className={`reading-assistant is-${agent}`}>{result && picture}{!(result && picture) && words}
+  return <div data-reading-entry={entry.id} className={`reading-assistant is-${agent}`}>{result && picture}{!(result && picture) && words}
       {named.length > 0 && <FileCards projectId={projectId} files={named} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet />}
       {!result && picture}</div>;
 }
@@ -158,7 +158,7 @@ function ToolGroup({ entries, live, projectId, onError }: { entries: Conversatio
   // The files its edits changed, by name, a few of them on the pill itself.
   const edited = useMemo(() => [...new Set(entries.flatMap(entry => entry.tool?.kind === 'edit' ? entry.tool.written?.length ? entry.tool.written : entry.tool.target.split('、') : []))]
     .map(file => file.split(/[\\/]/).pop() || file).filter(Boolean), [entries]);
-  return <div className={`reading-tools${running ? ' is-running' : ''}${shown ? ' is-open' : ''}${failed ? ' has-failed' : ''}`}>
+  return <div data-reading-entry={entries[0]?.id} className={`reading-tools${running ? ' is-running' : ''}${shown ? ' is-open' : ''}${failed ? ' has-failed' : ''}`}>
     <button type="button" className="reading-tools-head" aria-expanded={shown} onClick={() => setOpen(!open)}>
       <StepState running={running} failed={failed > 0} />
       <span>{groupSummary(entries)}</span>
@@ -189,18 +189,20 @@ export function ReadingView(props: Parameters<typeof LegacyReadingView>[0]) {
 
 function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, active = true, onShowTerminal, onError, onOpenLink }: { projectId: string; terminal: ProjectTerminal; remote?: boolean; autoFocus: boolean; active?: boolean; onShowTerminal: () => void; onError: (message: string) => void; onOpenLink: (target: string) => void }) {
   const pathLinks = useReadingPaths(projectId, onError);
-  const kind = terminal.agent === 'claude' ? 'claude' : 'codex';
-  const conversationEntries = useReadingConversation(terminal.id, terminal.sessionId);
-  const [hidden, setHidden] = useState(() => cleared.get(conversationKey(terminal.id, terminal.sessionId)));
-  useEffect(() => { setHidden(cleared.get(conversationKey(terminal.id, terminal.sessionId))); }, [terminal.id, terminal.sessionId]);
+  const kind = (terminal.agent ?? terminal.readingHistory?.agent) === 'claude' ? 'claude' : 'codex';
+  const readingSession = terminal.readingHistory?.key || terminal.sessionId;
+  const historyPage = useReadingHistory(terminal.id, terminal.sessionId, terminal.readingHistory);
+  const conversationEntries = historyPage.entries;
+  const [hidden, setHidden] = useState(() => cleared.get(conversationKey(terminal.id, readingSession)));
+  useEffect(() => { setHidden(cleared.get(conversationKey(terminal.id, readingSession))); }, [terminal.id, readingSession]);
   // What /clear hid stays hidden only while that conversation is the one shown: once the agent has moved to another
   // (its new conversation came in), resuming the old one later shows it again rather than an empty page.
   useEffect(() => {
     if (!hidden || !conversationEntries.length || conversationEntries.some(entry => hidden.has(entry.id))) return;
-    cleared.delete(conversationKey(terminal.id, terminal.sessionId)); setHidden(undefined);
-  }, [conversationEntries, hidden]);
+    cleared.delete(conversationKey(terminal.id, readingSession)); setHidden(undefined);
+  }, [conversationEntries, hidden, terminal.id, readingSession]);
   const entries = useMemo(() => conversationEntries.filter(entry => !entry.queued && !hidden?.has(entry.id)), [conversationEntries, hidden]);
-  const { pending, echo, cancelEcho } = usePendingPrompts(terminal.id, terminal.sessionId, conversationEntries);
+  const { pending, echo, cancelEcho } = usePendingPrompts(terminal.id, readingSession, conversationEntries);
   // Queued records wait after the active turn, with or without a renderer echo. They never start a new agent turn.
   const cards = useMemo(() => pendingPromptCards(pending, conversationEntries.filter(entry => !hidden?.has(entry.id))), [pending, conversationEntries, hidden]);
   const queued = (prompt: PendingPrompt) => cards.queuedIds.has(prompt.id);
@@ -251,7 +253,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
   useLayoutEffect(() => {
     setTerminalPopup(null);
     return cancelSend;
-  }, [terminal.id, terminal.sessionId]);
+  }, [terminal.id, terminal.sessionId, readingSession]);
   const ownership = useRef({ active, autoFocus });
   useLayoutEffect(() => {
     const previous = ownership.current; ownership.current = { active, autoFocus };
@@ -261,8 +263,11 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
   // a message typed here would land in the question, so the box waits and the terminal shows the question instead.
   const unreadQuestion = !screen.choice && !!visibleScreen?.rows.some(row => /\benter to submit (?:answer|all)\b/i.test(row) || /^\s*Enter to select\b.*\bEsc to cancel\b/i.test(row));
   useEffect(() => { if (unreadQuestion) setTerminalPopup({ command: '' }); }, [unreadQuestion]);
-  const inputBlocked = sessionsOpen || !!screen.choice && screen.choice.kind !== 'menu' || unreadQuestion;
-  const conversation = conversationKey(terminal.id, terminal.sessionId);
+  const readySession = useRef<string | null>(null);
+  if (terminal.codexActive && terminal.sessionId && hasCliInput(kind, visibleScreen?.rows ?? [], screen)) readySession.current = conversationKey(terminal.sessionId, readingSession);
+  const preview = !!terminal.readingHistory && (!terminal.codexActive || !terminal.sessionId || readySession.current !== conversationKey(terminal.sessionId, readingSession));
+  const inputBlocked = preview || sessionsOpen || !!screen.choice && screen.choice.kind !== 'menu' || unreadQuestion;
+  const conversation = conversationKey(terminal.id, readingSession);
   const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, visibleEntries, conversation);
   // A step hops only when the pointer moves onto it: moving arms the hops, any scroll disarms them until it moves again,
   // so the steps sliding under a still pointer stay put (marked on the element itself, without a render).
@@ -334,10 +339,16 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
   // It is at its prompt even with an interrupted prompt put back in its input.
   const claudeIdle = terminal.agent === 'claude' && !!visibleScreen && isAtPrompt('claude', visibleScreen.rows, screen);
   const working = terminal.codexActive && terminal.codexActivity === 'working' && !claudeIdle;
-  const agent = terminal.agent === 'claude' ? 'Claude Code' : 'Codex';
+  const agent = kind === 'claude' ? 'Claude Code' : 'Codex';
   const grouped = useMemo(() => blocks(entries), [entries]);
-  const tail = useVisibleTail(grouped, conversation, scroller, stuck, holdPosition);
+  const tail = useVisibleTail(grouped, conversation, scroller, stuck, holdPosition, historyPage);
   const turns = useMemo(() => conversationTurns(grouped, tail.earlier), [grouped, tail.earlier]);
+  useEffect(() => {
+    const node = scroller.current, sentinel = node?.querySelector('.reading-earlier');
+    if (!node || !sentinel || !historyPage.paged || !tail.hasEarlier || historyPage.loading || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(([entry]) => { if (entry.isIntersecting && !stuck) void tail.showEarlier(); }, { root: node, rootMargin: '200px 0px 0px' });
+    observer.observe(sentinel); return () => observer.disconnect();
+  }, [conversation, tail.showEarlier, tail.hasEarlier, historyPage.loading, historyPage.paged, stuck]);
   // Returning from session A to B to A must not revive an earlier send's delayed keys.
   const ownsSend = (owner: number) => mounted.current && sendCounter.current === owner;
   const send = async (text = draft.trim(), own = true) => {
@@ -620,11 +631,12 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     screen={screen} starting={welcomeIsStarting} />;
   else {
     body = <>
-      {tail.earlier > 0 && <button type="button" className="text-button reading-earlier" onClick={tail.showEarlier}>{t('显示更早的对话（{count}）', { count: tail.earlier })}</button>}
+      {tail.hasEarlier && <button type="button" className="text-button reading-earlier" disabled={historyPage.loading} onClick={() => void tail.showEarlier()}>{historyPage.paged ? t('显示更早的对话') : t('显示更早的对话（{count}）', { count: tail.earlier })}</button>}
+      {historyPage.error && <p role="status">{t(historyPage.error)}</p>}
       {turns.map((turn, index) => {
         if (turn.kind === 'user') {
           return <TimelineStep key={turn.entry.id} at={turn.entry.at} kind="user" who={t('你')} latest={index === latestUser} mark={<UserAvatar />}>
-            <div className={`reading-user${turn.entry.answer ? ' is-answer' : ''}`}>
+            <div data-reading-entry={turn.entry.id} className={`reading-user${turn.entry.answer ? ' is-answer' : ''}`}>
               {turn.entry.answer && <span className="reading-user-label">{t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} /></div>
           </TimelineStep>;
         }
@@ -693,7 +705,7 @@ function LegacyReadingView({ projectId, terminal, remote = false, autoFocus, act
     </div>)}</div>}
     <div className={`reading-composer${sendingSoon ? ' is-sending-soon' : ''}`} style={terminal.agentCommand ? { display: 'none' } : undefined}>
       <MentionPalette mentions={mentions} />
-      <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} aria-expanded={palette || mentions.open} aria-controls={palette ? listId : mentions.open ? mentions.listId : undefined} aria-activedescendant={palette && selected ? optionId(selection) : mentions.open && mentions.files[mentions.selection] ? mentions.optionId(mentions.selection) : undefined} placeholder={result ? t('继续修改，或描述下一步…') : terminal.codexActive ? t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }) : t('输入命令，Enter 发送')} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
+      <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} aria-expanded={palette || mentions.open} aria-controls={palette ? listId : mentions.open ? mentions.listId : undefined} aria-activedescendant={palette && selected ? optionId(selection) : mentions.open && mentions.files[mentions.selection] ? mentions.optionId(mentions.selection) : undefined} placeholder={preview ? t('正在启动…') : result ? t('继续修改，或描述下一步…') : terminal.codexActive ? t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }) : t('输入命令，Enter 发送')} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
         onCompositionStart={() => dictationSend.cancel()} onFocus={() => window.agentrix.terminalFocus(terminal.id, false)} />
       {working && <button type="button" className="icon-button" disabled={inputBlocked} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={interrupt}><Stop size={15} weight="fill" /></button>}
       <button type="button" className="icon-button reading-send" title={t('发送')} aria-label={t('发送')} disabled={inputBlocked || (!draft.trim() && !attachedCount) || !terminal.sessionId} onClick={() => void send()}><PaperPlaneRight size={15} weight="fill" /></button>

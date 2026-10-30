@@ -1,9 +1,14 @@
-function registerAgentsIpc({ handle, agents, openExternal, getSession, findProject, getRestoreCwd, listClaudeSessions, listCodexSessions, followClaudeSession, listAgentCommands, t }) {
+function registerAgentsIpc({ handle, agents, openExternal, getSession, findProject, getRestoreCwd, listClaudeSessions, listCodexSessions, followClaudeSession, listAgentCommands, readingPage, t }) {
   handle('agents:status', () => agents.getState());
   handle('agents:install', agent => agents.install(agent));
   handle('agents:open-node', () => openExternal('https://nodejs.org/'));
   handle('terminal:actions', id => { findProject(id); return getSession(id)?.actions.list || []; });
   handle('terminal:conversation', id => { findProject(id); return getSession(id)?.conversation.snapshot() || []; });
+  handle('terminal:conversationPage', (id, request) => {
+    findProject(id);
+    if (!request || typeof request.key !== 'string' || request.cursor != null && typeof request.cursor !== 'string') throw new Error('无效的对话分页请求。');
+    return readingPage(id, request);
+  });
   handle('terminal:agentSessions', id => {
     const project = findProject(id), s = getSession(id);
     if (!s) return [];

@@ -53,29 +53,54 @@ export function visibleTail<T>(items: readonly T[], count = VISIBLE_TAIL_PAGE, a
 
 export function prependScrollTop(top: number, beforeHeight: number, afterHeight: number) { return top + afterHeight - beforeHeight; }
 
-export function useVisibleTail(grouped: readonly ConversationBlock[], conversation: string, container: RefObject<HTMLElement | null>, stuck: boolean, holdPosition: () => void) {
+export function useVisibleTail(grouped: readonly ConversationBlock[], conversation: string, container: RefObject<HTMLElement | null>, stuck: boolean, holdPosition: () => void,
+  remote?: { paged: boolean; hasEarlier: boolean; loading: boolean; loadEarlier: () => Promise<boolean | void> }) {
   const [page, setPage] = useState({ conversation, count: VISIBLE_TAIL_PAGE });
   const previous = useRef<{ conversation: string; first: string | undefined }>({ conversation, first: undefined });
-  const prepend = useRef<{ conversation: string; top: number; height: number } | null>(null);
+  const prepend = useRef<{ conversation: string; top: number; height: number; grouped: readonly ConversationBlock[]; anchor?: HTMLElement; y?: number } | null>(null);
+  const release = useRef<(() => void) | null>(null);
   const count = page.conversation === conversation ? page.count : VISIBLE_TAIL_PAGE;
   const first = !stuck && previous.current.conversation === conversation ? previous.current.first : undefined;
-  const tail = visibleTail(grouped, count, first === undefined ? undefined : block => blockId(block) === first);
+  const tail = remote?.paged ? { visible: grouped, earlier: 0 } : visibleTail(grouped, count, first === undefined ? undefined : block => blockId(block) === first);
+  useLayoutEffect(() => {
+    prepend.current = null; release.current?.(); release.current = null;
+    return () => { prepend.current = null; release.current?.(); release.current = null; };
+  }, [conversation]);
   useLayoutEffect(() => {
     const node = container.current, pending = prepend.current;
-    if (pending && node && pending.conversation === conversation) {
-      node.scrollTo({ top: prependScrollTop(pending.top, pending.height, node.scrollHeight), behavior: 'instant' });
+    if (pending && node && pending.conversation === conversation && (!remote?.paged || pending.grouped !== grouped)) {
+      const adjust = () => {
+        const top = pending.anchor?.isConnected && pending.y !== undefined
+          ? node.scrollTop + pending.anchor.getBoundingClientRect().top - pending.y
+          : prependScrollTop(pending.top, pending.height, node.scrollHeight);
+        node.scrollTo({ top, behavior: 'instant' });
+      };
+      adjust();
+      release.current?.();
+      if (pending.anchor && typeof ResizeObserver !== 'undefined') {
+        const observer = new ResizeObserver(adjust);
+        if (node.firstElementChild) observer.observe(node.firstElementChild);
+        const cancel = () => { observer.disconnect(); for (const event of ['wheel', 'touchstart', 'pointerdown', 'keydown']) node.removeEventListener(event, cancel); };
+        for (const event of ['wheel', 'touchstart', 'pointerdown', 'keydown']) node.addEventListener(event, cancel, { passive: true });
+        release.current = cancel;
+      }
+      prepend.current = null;
     }
-    prepend.current = null;
     previous.current = { conversation, first: tail.visible[0] ? blockId(tail.visible[0]) : undefined };
   });
   const showEarlier = () => {
     const node = container.current;
-    if (!node || !tail.earlier) return;
-    prepend.current = { conversation, top: node.scrollTop, height: node.scrollHeight };
+    if (!node || remote?.loading || !tail.earlier && !remote?.hasEarlier) return Promise.resolve();
+    release.current?.(); release.current = null;
+    const y = node.getBoundingClientRect?.().top;
+    const anchor = y === undefined ? undefined : Array.from(node.querySelectorAll<HTMLElement>('[data-reading-entry]')).find(element => element.getBoundingClientRect().bottom > y);
+    prepend.current = { conversation, top: node.scrollTop, height: node.scrollHeight, grouped, anchor, y: anchor?.getBoundingClientRect().top };
     holdPosition();
     // Release the streaming anchor for this prepend, then save the newly revealed first block.
     previous.current = { conversation, first: undefined };
+    if (remote?.paged) return remote.loadEarlier().then(loaded => { if (loaded === false) prepend.current = null; });
     setPage({ conversation, count: tail.visible.length + VISIBLE_TAIL_PAGE });
+    return Promise.resolve();
   };
-  return { ...tail, showEarlier };
+  return { ...tail, hasEarlier: tail.earlier > 0 || !!remote?.hasEarlier, showEarlier };
 }

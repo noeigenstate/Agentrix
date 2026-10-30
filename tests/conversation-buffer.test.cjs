@@ -54,3 +54,20 @@ test('cleanup cancels queued updates and ignores late snapshots and packets', t 
   t.mock.timers.tick(100);
   assert.deepEqual(updates, []);
 });
+
+test('paged buffers retain prepended history beyond 400 and merge only the new suffix of a live snapshot', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const updates = [], buffer = createConversationBuffer(entries => updates.push(entries), true);
+  const old = Array.from({ length: 500 }, (_, n) => ({ id: `old-${n}`, at: n, role: 'assistant', text: 'old' }));
+  const current = { id: 'current', at: 501, role: 'assistant', text: 'initial', images: ['data:image/png;base64,eA=='] };
+  buffer.snapshot([current]); t.mock.timers.tick(50);
+  buffer.prepend(old);
+  buffer.push({ list: [{ id: 'unloaded-prefix', at: 1, role: 'assistant' }, { ...current, text: 'updated' }, { id: 'live', at: 502, role: 'assistant' }] });
+  t.mock.timers.tick(50);
+  const result = updates.at(-1);
+  assert.equal(result.length, 502); assert.equal(result[0].id, 'old-0');
+  assert.equal(result.some(entry => entry.id === 'unloaded-prefix'), false);
+  assert.equal(result.at(-2).text, 'updated'); assert.deepEqual(result.at(-2).images, current.images);
+  buffer.prepend([{ ...current, text: 'older page must not overwrite live' }]);
+  assert.equal(updates.at(-1).at(-2).text, 'updated'); buffer.dispose();
+});

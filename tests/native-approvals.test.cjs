@@ -359,7 +359,7 @@ function mainExitFixture(terminal, native = true) {
   const s = { native: native ? terminal : null, status: 'codex', ready: true, codexActive: true, error: null,
     completionWork: new (require('../electron/completion-work.cjs').CompletionWork)() };
   const sessions = new Map([['terminal', s]]), restores = [], calls = [];
-  const context = vm.createContext({ terminal, s, sessions, id: 'terminal', project: { id: 'project' }, sessionId: 'generation', bootstrapFile: null, skillNoteFile: null, quitting: false,
+  const context = vm.createContext({ terminal, s, sessions, readingHistory: { close() {} }, id: 'terminal', project: { id: 'project' }, sessionId: 'generation', bootstrapFile: null, skillNoteFile: null, quitting: false,
     endSkillSession: () => calls.push('endSkillSession'), skills: { endSession: () => calls.push('endDelivery') },
     flush: () => calls.push('flush'), stopUsageAccount: () => calls.push('stopUsage'), restorePlans: new Map([['terminal', {}]]),
     store: { setRestore: (_id, value) => restores.push(value) }, broadcast: () => calls.push('broadcast'),

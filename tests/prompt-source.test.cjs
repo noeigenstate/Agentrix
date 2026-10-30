@@ -373,7 +373,7 @@ test('completion-smoke records defer the alert across queued work, batched reads
   for (const order of ['incremental', 'batched', 'late-prompt']) for (const notifyFirst of [false, true]) {
     const h = activityHarness(), { s, project, store, context } = h;
     Object.assign(context, { codexConversation, codexRecord, event: { cwd: project.path }, describeActions() {}, noteSettings() {} });
-    const start = main.indexOf('    const onRecord = record => {', main.indexOf('function onEvent('));
+    const start = main.indexOf('    const readCurrent =', main.indexOf('function onEvent('));
     const onRecord = vm.runInContext(main.slice(start, main.indexOf('    const remoteStatus =', start)) + '\nonRecord;', context);
     const reader = new CodexActivityReader(project.path, undefined, s.activitySince, { onRecord });
     reader.snapshot = { threadId: 'parent', turnId: null, state: 'unknown', updatedAt: 0 };

@@ -20,6 +20,9 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
   const terminals = project.terminals;
   const visible = visibleTerminals(terminals, focused);
   const visibleIds = new Set(visible.map(terminal => terminal.id));
+  if (!focused) for (const terminal of terminals) {
+    if (terminal.readingHistory && !visibleIds.has(terminal.id)) { visible.push(terminal); visibleIds.add(terminal.id); }
+  }
   const multiple = visible.length > 1;
   const columns = Math.min(Math.max(1, Math.ceil(Math.sqrt(visible.length))), width < 600 ? 1 : width < 1150 ? 2 : 3);
   const rows = Math.max(1, Math.ceil(visible.length / columns));
@@ -48,7 +51,7 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
   return <div ref={area} className={`panel-terminal-area terminal-grid ${multiple ? 'has-splits' : ''} ${reorder.drag ? 'is-reordering' : ''}`} style={{ '--terminal-columns': columns, '--terminal-rows': rows } as CSSProperties}
     onPointerDown={reorder.onPointerDown} onClickCapture={reorder.onClickCapture}>
     {shown.map(terminal => {
-      if (!focused && !terminal.sessionId) return null;
+      if (!focused && !terminal.sessionId && !terminal.readingHistory) return null;
       const stopped = terminal.status === 'stopped' || terminal.status === 'exited';
       const reading = readingShown(terminal, raw);
       const name = `${project.name} ${terminal.title}`;
@@ -64,7 +67,7 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
           {reading && <ReadingView projectId={project.id} terminal={terminal} remote={project.kind === 'ssh'} autoFocus={focused && selected === terminal.id} active={selected === terminal.id} onShowTerminal={() => setReading(terminal.id, false)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />}
           {terminal.sessionId ? <TerminalPane id={terminal.id} sessionId={terminal.sessionId} fontSize={fontSize} focused={focused && selected === terminal.id && !reading && !terminal.agentStarting} onError={onError} onOpenLink={(_id, target) => onOpenLink(project.id, target)} remote={project.kind === 'ssh'} />
             // A local project starts with the agent chosen here; an SSH project connects first, in its terminal.
-            : project.kind !== 'ssh' ? <AgentLauncher terminalId={terminal.id} projectId={project.id} onAction={onAction} onOpenTerminal={openTerminal} />
+            : reading ? null : project.kind !== 'ssh' ? <AgentLauncher terminalId={terminal.id} projectId={project.id} onAction={onAction} onOpenTerminal={openTerminal} />
             : sshEmpty(terminal.id)}
         </div>
         {multiple && stopped && terminal.sessionId && <button className="button secondary small terminal-split-restart" onClick={() => void onAction(window.agentrix.startTerminal(terminal.id))}>{t('重新启动')}</button>}

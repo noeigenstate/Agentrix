@@ -13,9 +13,12 @@ export function shouldStickToBottom(stuck: boolean, current: ScrollMetrics, prev
   return userInitiated && !resized && current.scrollTop < previous.scrollTop ? false : stuck;
 }
 
-// IDs also detect arrivals when the conversation's capped list stays the same length.
+// Count only the suffix after retained entries: a loaded history page is not a new message.
 export function countNewEntries(previous: ReadonlySet<string>, entries: readonly { id: string }[]): number {
-  return entries.filter(entry => !previous.has(entry.id)).length;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    if (previous.has(entries[index].id)) return entries.length - index - 1;
+  }
+  return entries.length;
 }
 
 // Explicit 'instant' also overrides a stylesheet's scroll-behavior: smooth.
