@@ -5,7 +5,7 @@ const { execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { setTimeout: delay } = require('node:timers/promises');
 const { matches, repoFiles } = require('../../boundaries.cjs');
-const { LABELS, ISSUE_KEYS, blank, stamp } = require('./minutes-page.cjs');
+const { LABELS, ISSUE_KEYS, blank, stamp, statusWord } = require('./minutes-page.cjs');
 
 const FINDINGS = '## Findings for the ledger';
 const fields = { Goal: 'goal', Files: 'files', Provides: 'provides', Uses: 'uses', 'Done when': 'doneWhen', 'Questions and risks': 'questions' };
@@ -269,7 +269,7 @@ function minutesMarkdown(minutes) {
   const table = (headings, rows) => [`| ${headings.join(' | ')} |`, `| ${headings.map(() => '---').join(' | ')} |`,
     ...rows.map(row => `| ${row.join(' | ')} |`)].join('\n');
   const rows = minutes.rows.map(row => [cell(row.who), `**${cell(row.title)}**<br>${cell(row.goal)}`,
-    ...['files', 'provides', 'uses', 'doneWhen', 'questions'].map(key => cell(row[key])), cell(Object.hasOwn(t.statuses, row.status) ? t.statuses[row.status] : row.status)]);
+    ...['files', 'provides', 'uses', 'doneWhen', 'questions'].map(key => cell(row[key])), cell(statusWord(t, row.status))]);
   const issues = minutes.issues.map(issue => ISSUE_KEYS.map(key => cell(issue[key])));
   const confirmed = minutes.rows.filter(row => row.status === 'confirmed').length;
   return `# ${t.round(minutes.round)} · ${cell(minutes.meeting)}\n\n${stamp(minutes.generatedAt)}\n\n`

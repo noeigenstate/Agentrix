@@ -71,6 +71,8 @@ const lines = value => (Array.isArray(value) ? value.join('\n') : String(value ?
 const blank = value => !lines(value) || /^none$/i.test(lines(value));
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
 const text = value => blank(value) ? '—' : escape(lines(value));
+// A status as its mark and word; anything unknown reads as incomplete, keeping the unknown value.
+const statusWord = (t, value) => Object.hasOwn(t.statuses, value) ? t.statuses[value] : `${t.statuses.incomplete}${blank(value) ? '' : ` (${lines(value)})`}`;
 const pad = number => String(number).padStart(2, '0');
 const stamp = ms => {
   const date = new Date(ms);
@@ -82,7 +84,6 @@ function minutesPage(minutes) {
   const t = minutes.language === 'en' ? EN : ZH;
   const rows = minutes.rows ?? [], issues = minutes.issues ?? [];
   const heading = `${t.round(text(minutes.round))} · ${text(minutes.meeting)}`;
-  const status = value => Object.hasOwn(t.statuses, value) ? t.statuses[value] : `${t.statuses.incomplete}${blank(value) ? '' : ` (${text(value)})`}`;
   // Each file is its own block, and a path may break after a separator, so a wrapped line is told from the next file.
   const files = value => blank(value) ? '—' : lines(value).split(/\r?\n/).filter(line => line.trim())
     .map(line => `<span class="file">${escape(line.trim()).replace(/[/\\]/g, '$&<wbr>')}</span>`).join('');
@@ -94,7 +95,7 @@ function minutesPage(minutes) {
 </section>`;
   const understanding = row => cells([
     text(row.who), `<strong>${text(row.title)}</strong><span class="goal">${text(row.goal)}</span>`, files(row.files),
-    text(row.provides), text(row.uses), text(row.doneWhen), text(row.questions), status(row.status),
+    text(row.provides), text(row.uses), text(row.doneWhen), text(row.questions), escape(statusWord(t, row.status)),
   ], ['', '', 'files', '', '', '', '', 'status']);
   return `<!DOCTYPE html>
 <html lang="${t.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${heading}</title><style>${STYLE}</style></head><body><main>
@@ -107,4 +108,4 @@ ${section(t.issues, t.issueColumns, issues, item => cells(ISSUE_KEYS.map(key => 
 `;
 }
 
-module.exports = { minutesPage, LABELS: { zh: ZH, en: EN }, ISSUE_KEYS, blank, stamp };
+module.exports = { minutesPage, LABELS: { zh: ZH, en: EN }, ISSUE_KEYS, blank, stamp, statusWord };
