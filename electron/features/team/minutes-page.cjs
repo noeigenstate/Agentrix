@@ -20,6 +20,8 @@ const ZH = {
   issueColumns: ['分歧或疑问', '谁提出', '主模型的答复', '结果'],
   noIssues: '没有分歧或疑问',
   statuses: { confirmed: '✅ 已确认', open: '⚠️ 待澄清', understood: '📝 已复述', incomplete: '✖ 不完整', invalid: '✖ 不完整' },
+  openPrefix: '未解决：',
+  openCount: count => `${count} 个未解决问题`,
 };
 const EN = {
   lang: 'en',
@@ -33,6 +35,8 @@ const EN = {
   issueColumns: ['Disagreement or question', 'Raised by', "Lead's answer", 'Result'],
   noIssues: 'No disagreements or questions',
   statuses: { confirmed: '✅ Confirmed', open: '⚠️ Open', understood: '📝 Understood', incomplete: '✖ Incomplete', invalid: '✖ Incomplete' },
+  openPrefix: 'Open: ',
+  openCount: count => `${count} open question${count === 1 ? '' : 's'}`,
 };
 
 // The app's own greys: dark by default, the light theme (白底黑字) when the viewer prefers it.
@@ -56,13 +60,16 @@ th, td { padding: 8px 16px; text-align: left; vertical-align: top; white-space: 
 td { min-width: 9rem; border-top: 1px solid var(--divider); background: var(--panel); }
 th { white-space: nowrap; font-weight: 600; color: var(--text-2); background: var(--well); }
 td.empty { min-width: 0; }
+.wide td { min-width: 7rem; }
 .wide :is(th, td):first-child:not(.empty) { position: sticky; left: 0; z-index: 1; box-shadow: inset -1px 0 var(--divider); }
 .wide :is(th, td):last-child:not(.empty) { position: sticky; right: 0; z-index: 1; box-shadow: inset 1px 0 var(--divider); }
 .goal { display: block; margin-top: 8px; color: var(--text-2); }
-.files { min-width: 18rem; overflow-wrap: break-word; font: 12px/1.5 ui-monospace, Consolas, monospace; }
+.files { overflow-wrap: break-word; font: 12px/1.5 ui-monospace, Consolas, monospace; }
+.wide .files { min-width: 14rem; }
 .file { display: block; padding-left: 16px; text-indent: -16px; }
 .file + .file { margin-top: 8px; }
 .status { white-space: nowrap; }
+.open-count { display: block; margin-top: 8px; color: var(--text-2); }
 `;
 
 // Shared with the Markdown minutes (team.cjs): the issue fields, what counts as empty, and the time format.
@@ -93,9 +100,14 @@ function minutesPage(minutes) {
 <div class="panel" role="region" aria-label="${title}" tabindex="0"><table${wide}><thead><tr>${columns.map(column => `<th>${column}</th>`).join('')}</tr></thead><tbody>${items.length
     ? items.map(item => `<tr>${row(item)}</tr>`).join('') : `<tr><td class="empty" colspan="${columns.length}">${empty}</td></tr>`}</tbody></table></div>
 </section>`;
+  // The pinned status cell says how many open questions the row's questions cell holds, so they are found from there.
+  const statusCell = row => {
+    const open = lines(row.questions).split(/\r?\n/).filter(line => line.trim().startsWith(t.openPrefix)).length;
+    return escape(statusWord(t, row.status)) + (open ? `<span class="open-count">${t.openCount(open)}</span>` : '');
+  };
   const understanding = row => cells([
     text(row.who), `<strong>${text(row.title)}</strong><span class="goal">${text(row.goal)}</span>`, files(row.files),
-    text(row.provides), text(row.uses), text(row.doneWhen), text(row.questions), escape(statusWord(t, row.status)),
+    text(row.provides), text(row.uses), text(row.doneWhen), text(row.questions), statusCell(row),
   ], ['', '', 'files', '', '', '', '', 'status']);
   return `<!DOCTYPE html>
 <html lang="${t.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${heading}</title><style>${STYLE}</style></head><body><main>
