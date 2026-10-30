@@ -218,6 +218,9 @@ rules, `--model gpt-6.1-terra`, attaching any screenshots with `--image`.
   light at several widths, wrapped in `withGuiLock` from `scripts/gui-lock.mjs`.
 - Never: the owner's real Agentrix, its sessions or the system clipboard; never commit, push or release.
 - Its report: files changed, checks with results, screenshot paths, measured numbers.
+- A helper-run Sonnet under `--permission acceptEdits` can edit files but every shell command (`node`, `npx`, `npm`)
+  is refused, and it cannot commit. Its brief says so: it writes the code and the tests, then the lead runs them in its
+  worktree, sends failures back by resuming the same session, and commits on its branch once they pass.
 
 ## 4. Integrate and review
 

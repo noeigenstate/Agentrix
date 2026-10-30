@@ -65,7 +65,9 @@ description: Publish a new Agentrix version — bump, update notes, the full loc
    completed/resumed fixture records distinct; use the actual conversation reader and store in the regression.
 15. **Isolated local installer output.** Build with `npm run dist -- --config.directories.output=<output>` in a new
    test-output folder, so packaging cannot overwrite a running checkout build. Validate the installer, update feed,
-   blockmap and packaged runtime there, and launch GUI checks with their own data profiles.
+   blockmap and packaged runtime there, and launch GUI checks with their own data profiles. Package from the main
+   checkout, not from a worktree whose `node_modules` is a junction to it: there electron-builder leaves out
+   `app.asar.unpacked`, and `verify-update-artifacts.cjs` fails on the missing `node-pty` `conpty.node`.
 16. **Injected provider transcripts.** A smoke that intercepts the conversation endpoint must model a provider switch
    explicitly: set the fixture snapshot to empty, publish an empty conversation packet, await the reader clearing,
    then publish the new provider's entries. The real main log may already be empty, so its no-op reset emits no packet.
