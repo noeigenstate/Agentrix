@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { CaretLeft, CaretRight, Check, CircleNotch, PaperPlaneRight } from '@phosphor-icons/react';
+import { CaretLeft, CaretRight, Check, CircleNotch, PaperPlaneRight, WarningCircle } from '@phosphor-icons/react';
 import type { ScreenChoice } from '../agents/agent-screen-types';
 import { questionCursor, questionKeys, type QuestionAction } from './question-keys';
 import { choiceContent, writeKeys } from './choice-keys';
@@ -12,6 +12,8 @@ const OWN_LABELS: Record<string, string> = {
 };
 const ownLabel = (label: string) => OWN_LABELS[label] ? t(OWN_LABELS[label]) : label;
 const placeholder = (label: string) => /^Type something\.?$/i.test(label);
+// The review page's warning rows ("⚠ You have not answered all questions"): the words stay beside the icon, never colour alone.
+const reviewNote = (row: string) => /^[⚠\s]*You have not answered all questions\.?$/i.test(row) ? t('还有问题没有回答') : row.replace(/^⚠\s*/, '');
 
 // A question the agent asked with options (Claude Code's AskUserQuestion, Codex's request_user_input), answered here
 // with the same keys the CLI takes: pick one, tick several and submit, type an own answer, switch questions or cancel.
@@ -110,6 +112,7 @@ export function ReadingQuestion({ choice, terminalId, onError }: { choice: Scree
       ? <>
         <strong className="reading-question-title">{t('检查你的回答')}</strong>
         <dl className="reading-question-review">{question.review.map(item => <div key={item.question}><dt>{item.question}</dt><dd>{item.answer}</dd></div>)}</dl>
+        {choice.context.map(row => <p key={row} className="reading-question-warning" role="status"><WarningCircle size={14} weight="fill" aria-hidden="true" /><span>{reviewNote(row)}</span></p>)}
       </>
       : <strong className="reading-question-title">{choice.title}</strong>}
     <div className="reading-choice-options">{answers.map(({ option, index }) => option.role === 'input'

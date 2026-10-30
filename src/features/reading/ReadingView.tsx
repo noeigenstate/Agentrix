@@ -9,7 +9,7 @@ import { createDictationSend } from './dictation-send';
 import { bindApproval, readScreen, useScreen } from '../terminal/terminal-screen';
 import { choiceIdentity, parseAgentScreen } from '../agents/agent-screen';
 import { cliDialogShown, cliInputDraft, hasCliInput, isAtPrompt } from './cli-panel';
-import { cliReady, endDialog, startDialog } from './reading-ready';
+import { cliReady, DIALOG_SETTLE, endDialog, rememberReady, startDialog } from './reading-ready';
 import { WaitingCard } from './WaitingCard';
 import { ReadingWelcome } from './ReadingWelcome';
 import { ReadingChoice } from './ReadingChoice';
@@ -222,8 +222,11 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     return { ...parsed, choice: bindApproval(parsed.choice, kind, visibleScreen) };
   }, [terminal.agent, visibleScreen]);
   // Readiness outlives this component: a dialog with no input box must still show after a trip to the raw terminal.
+  // Rendering only reads it; the effect remembers it.
   const inputShown = hasCliInput(kind, visibleScreen?.rows ?? [], parsedScreen);
-  const preview = !!terminal.readingHistory && !cliReady(terminal.id, terminal.sessionId, thread, terminal.codexActive, inputShown);
+  const run = { session: terminal.sessionId, thread, start: terminal.agentStartedAt, active: terminal.codexActive };
+  const preview = !!terminal.readingHistory && !cliReady(terminal.id, run, inputShown);
+  useEffect(() => rememberReady(terminal.id, run, inputShown));
   const screen = preview ? { ...parsedScreen, choice: null, waiting: null } : parsedScreen;
   // The CLI waits for a choice the screen has no card for: a dialog it drew (waiting), or only its attention notice with
   // no input box on screen. Either way the terminal is the place to answer, and a message typed here would land in it.
@@ -231,8 +234,8 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   const notified = !preview && !screen.choice && !waiting && terminal.needsInput !== null && !inputShown;
   const waitingShown = waiting !== null || notified;
   // The CLI signing in before its input exists (a link to open, a code to paste): a popup, never a stuck welcome.
-  const signIn = useMemo(() => terminal.codexActive && visibleScreen && !screen.choice && !hasCliInput(kind, visibleScreen.rows, screen) ? signInScreen(kind, visibleScreen.rows) : null,
-    [terminal.agent, terminal.codexActive, visibleScreen, screen]);
+  const signIn = useMemo(() => terminal.codexActive && visibleScreen && !screen.choice && !inputShown ? signInScreen(kind, visibleScreen.rows) : null,
+    [terminal.agent, terminal.codexActive, visibleScreen, screen.choice, inputShown]);
   const choiceKey = screen.choice ? `${terminal.sessionId}:${screen.choice.approval?.instance ?? ''}:${choiceIdentity(screen.choice)}` : null;
   const [sessionsOpen, setSessionsOpen] = useState(false);
   useEffect(() => { setSessionsOpen(false); }, [terminal.id, terminal.sessionId, terminal.agent, epoch]);
@@ -278,9 +281,15 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     if (previous.active && !active || previous.autoFocus && !autoFocus) { cancelSend(); setTerminalPopup(null); }
   }, [active, autoFocus]);
   // A dialog the screen shows with no card for it (a question taller than the view, one a CLI update added) opens the
-  // terminal once, however often the view mounts or the screen redraws; the card stays for the way back.
-  const dialog = waiting && (waiting.title ?? '');
-  useEffect(() => { if (dialog === null) endDialog(terminal.id); else if (startDialog(terminal.id, dialog)) setTerminalPopup({ command: '' }); }, [terminal.id, dialog]);
+  // terminal once while this is the view in use, however often it mounts or the screen redraws; the card stays for the
+  // way back. The dialog is over once the CLI's input is back, or the hint has been gone longer than a redraw takes.
+  const dialog = waiting && JSON.stringify([terminal.agentStartedAt, waiting.title]);
+  useEffect(() => {
+    if (dialog !== null) { if (active && startDialog(terminal.id, dialog)) setTerminalPopup({ command: '' }); return; }
+    if (inputShown) { endDialog(terminal.id); return; }
+    const timer = setTimeout(() => endDialog(terminal.id), DIALOG_SETTLE);
+    return () => clearTimeout(timer);
+  }, [terminal.id, dialog, active, inputShown]);
   const inputBlocked = preview || sessionsOpen || !!screen.choice && screen.choice.kind !== 'menu' || waitingShown;
   const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, entries, conversation);
   useEffect(() => { if (stuck) void historyPage.compact(); }, [stuck, conversationEntries, historyPage.compact]);

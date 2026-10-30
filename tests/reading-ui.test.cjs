@@ -56,7 +56,8 @@ function loadUI(name, overrides = {}) {
     if (key === './AgentCommandRun') return { AgentCommandRun: () => null };
     if (key === './NativeApprovalCard') return { NativeApprovalCard: () => null };
     if (key === './ManagedSession') return { ManagedSession: () => null };
-    if (key === './reading-ready') return require('../src/features/reading/reading-ready.ts');
+    // Its state is the point of it: every loaded view gets a fresh copy, so no test depends on another's terminals.
+    if (key === './reading-ready') return loadUI('features/reading/reading-ready.ts');
     if (key === './WaitingCard') return loadUI('features/reading/WaitingCard.tsx');
     if (key === './Timeline') return loadUI('features/reading/Timeline.tsx');
     if (key === './ResultCard') return loadUI('features/reading/ResultCard.tsx');
@@ -816,7 +817,7 @@ test('a dialog the screen has no card for shows the waiting card with its headin
   assert.equal(h.showTerminalButton(), false);
 });
 
-test('a dialog without a heading still shows the card, and the next dialog opens the terminal again', t => {
+test('a dialog without a heading still shows the card, and the next dialog opens the terminal again once the CLI has moved on', async t => {
   const h = waitingHarness(t);
   h.screen.waiting = { title: null };
   h.render(); h.render();
@@ -826,8 +827,70 @@ test('a dialog without a heading still shows the card, and the next dialog opens
   h.screen.waiting = null; h.render(); h.render();
   assert.equal(h.card(), undefined);
   assert.equal(h.render().props.disabled, false);
+  await h.tick(3000);
   h.screen.waiting = { title: null }; h.render(); h.render();
   assert.ok(h.popup(), 'a new dialog is a new notice');
+});
+
+test('a redraw frame without the hint never rearms the dialog; a seen prompt, or a real absence, does', async t => {
+  const h = waitingHarness(t);
+  h.screen.waiting = { title: 'Exit plan mode?' };
+  h.render(); h.render(); h.popup().props.onClose(); h.render();
+  // The hint row is missing for a frame or two while the CLI redraws.
+  h.screen.waiting = null; h.render(); await h.tick(1000); h.render();
+  h.screen.waiting = { title: 'Exit plan mode?' }; h.render(); h.render();
+  assert.equal(h.popup(), undefined, 'the same dialog, back after a short gap, stays closed');
+  // Gone longer than a redraw takes: the next one is new.
+  h.screen.waiting = null; h.render(); await h.tick(3000); h.render();
+  h.screen.waiting = { title: 'Exit plan mode?' }; h.render(); h.render();
+  assert.ok(h.popup(), 'after a real absence it opens once more');
+  h.popup().props.onClose(); h.render();
+  // The CLI's own input box drawn again is a real prompt: no waiting needed.
+  h.screen.waiting = null; h.view.rows = IDLE_ROWS; h.render(); h.render();
+  h.screen.waiting = { title: 'Exit plan mode?' }; h.view.rows = []; h.render(); h.render();
+  assert.ok(h.popup(), 'after the prompt it opens once more');
+  assert.equal(h.written.length, 0);
+});
+
+test('only the view in use opens the terminal for a dialog, and it opens once when it becomes the one in use', t => {
+  const h = waitingHarness(t);
+  h.props.active = false;
+  h.screen.waiting = { title: 'Review your answers' };
+  h.render(); h.render();
+  assert.equal(h.popup(), undefined, 'a view in another split leaves the terminal alone');
+  assert.ok(h.card(), 'its card still shows');
+  assert.equal(h.render().props.disabled, true);
+  h.props.active = true; h.render(); h.render();
+  assert.ok(h.popup());
+  h.popup().props.onClose(); h.props.active = false; h.render(); h.props.active = true; h.render(); h.render();
+  assert.equal(h.popup(), undefined, 'one dialog, one automatic opening');
+});
+
+test('a CLI that restarted into the same session while the view was away is not ready until its input is seen again', t => {
+  const h = waitingHarness(t, { rows: IDLE_ROWS });
+  Object.assign(h.props.terminal, { sessionId: 'runtime', codexActive: true, agentStartedAt: 100, readingHistory: restored('saved') });
+  assert.equal(h.render().props.disabled, false);
+  h.view.rows = ['Do you want to proceed?']; h.screen.choice = menuChoice();
+  h.render(); h.render();
+  assert.ok(h.choiceCard());
+  h.unmount(); h.props.terminal.agentStartedAt = 200;
+  h.remount();
+  assert.equal(h.choiceCard(), undefined, 'a different start of the CLI is not the one that was ready');
+  h.view.rows = IDLE_ROWS; h.render(); h.view.rows = ['Do you want to proceed?'];
+  h.remount();
+  assert.ok(h.choiceCard(), 'ready again once the restarted CLI has drawn its input');
+});
+
+test('rendering reads readiness without writing it: only the effect remembers', t => {
+  const ready = loadUI('features/reading/reading-ready.ts');
+  const h = waitingHarness(t, { rows: IDLE_ROWS, ready });
+  Object.assign(h.props.terminal, { sessionId: 'runtime', codexActive: true, readingHistory: restored('saved') });
+  const run = { session: 'runtime', thread: 'saved', start: undefined, active: true };
+  assert.equal(ready.cliReady('dictation', run, false), false);
+  h.render();
+  assert.equal(ready.cliReady('dictation', run, false), true, 'the effect of the render that saw the input remembered it');
+  assert.equal(ready.cliReady('dictation', { ...run, session: 'other' }, false), false);
+  assert.equal(ready.cliReady('dictation', run, false), true, 'asking never changes what is remembered');
 });
 
 test('a card read from the screen wins over waiting, and waiting never shows in a restored preview', t => {
@@ -1209,7 +1272,7 @@ test('unrelated user records cannot discard a stalled prompt; retries stay bound
 
 test('a question renders as its own card: progress, the question, options, an own answer or notes, Submit and Chat', () => {
   const icon = props => React.createElement('svg', { className: props.className });
-  const icons = { CircleNotch: icon, CaretLeft: icon, CaretRight: icon, Check: icon, PaperPlaneRight: icon };
+  const icons = { CircleNotch: icon, CaretLeft: icon, CaretRight: icon, Check: icon, PaperPlaneRight: icon, WarningCircle: icon };
   const { ReadingQuestion } = loadUI('features/reading/ReadingQuestion.tsx', { '@phosphor-icons/react': icons, './question-keys': require('../src/features/reading/question-keys.ts') });
   const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
   const screen = name => parseAgentScreen(name.startsWith('claude') ? 'claude' : 'codex', fs.readFileSync(path.join(__dirname, 'fixtures/questions', name + '.txt'), 'utf8').split('\n')).choice;
@@ -1222,6 +1285,23 @@ test('a question renders as its own card: progress, the question, options, an ow
   assert.match(review, /Review your answers/); assert.match(review, /node_modules, abc/); assert.match(review, /Submit answers/);
   const codex = render('codex-question');
   assert.match(codex, /Question 1\/2/); assert.match(codex, /Notes \(optional\)/); assert.doesNotMatch(codex, /Optionally, add details/);
+  assert.doesNotMatch(review, /reading-question-warning/, 'a complete review has no warning');
+});
+
+test('the review page shows the CLI\'s unanswered warning as words beside an icon, and nothing for an empty context', () => {
+  const icon = props => React.createElement('svg', { className: props.className });
+  const icons = { CircleNotch: icon, CaretLeft: icon, CaretRight: icon, Check: icon, PaperPlaneRight: icon, WarningCircle: icon };
+  const { ReadingQuestion } = loadUI('features/reading/ReadingQuestion.tsx', { '@phosphor-icons/react': icons, './question-keys': require('../src/features/reading/question-keys.ts') });
+  const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
+  const base = parseAgentScreen('claude', fs.readFileSync(path.join(__dirname, 'fixtures/questions/claude-question-review.txt'), 'utf8').split('\n')).choice;
+  const render = context => renderToStaticMarkup(React.createElement(ReadingQuestion, { choice: { ...base, context }, terminalId: 'terminal', onError: () => {} }));
+  const warned = render(['⚠ You have not answered all questions']);
+  const words = en['还有问题没有回答'] ?? '还有问题没有回答';
+  assert.match(warned, /<p class="reading-question-warning" role="status"><svg/);
+  assert.match(warned, new RegExp(`<span>${words}</span>`));
+  assert.doesNotMatch(warned, /⚠/, 'the icon replaces the CLI\'s glyph');
+  assert.match(render(['Something else the CLI says']), /<span>Something else the CLI says<\/span>/);
+  assert.doesNotMatch(render([]), /reading-question-warning/);
 });
 
 // A native editor with atomic image elements, following Claude 2.1.312's Mi cursor and Codex 0.165.0's TextArea.
