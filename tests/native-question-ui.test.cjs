@@ -74,10 +74,59 @@ test('typed form displays required flags and preserves false, numbers, defaults 
     type: 'object', properties: { enabled: { type: 'boolean', default: false }, count: { type: 'integer', minimum: 0, maximum: 5 }, note: { type: 'string' } }, required: ['enabled', 'count'],
   } } });
   const html = renderToStaticMarkup(h.render()); assert.match(html, /是或否/); assert.match(html, /整数/); assert.match(html, /选填/); assert.doesNotMatch(html, /boolean|integer|string/);
-  assert.equal(h.elements().find(node => node.type === 'select').props.value, 'false');
+  const radios = () => h.elements().filter(node => node.props.type === 'radio'), checked = () => radios().filter(node => node.props.checked).length;
+  assert.equal(h.elements().filter(node => node.type === 'select').length, 0, 'a boolean is a radio group, not a native select');
+  assert.equal(radios().length, 2); assert.equal(checked(), 1, 'the default false is the checked one');
   const numeric = h.elements().find(node => node.props.type === 'number'); assert.equal(numeric.props.step, 1); assert.equal(numeric.props.min, 0);
   numeric.props.onChange({ target: { value: '0' } }); h.submit(); await Promise.resolve();
   assert.deepEqual(h.writes[0].result, { action: 'accept', content: { enabled: false, count: 0 } });
+});
+
+test('a boolean is a keyboard-operable radio group: required has no empty choice, optional can be left empty again', async t => {
+  const h = fixture(t, form({ must: { type: 'boolean' }, may: { type: 'boolean' } }, ['must']));
+  const group = id => h.elements().find(node => node.props.role === 'radiogroup' && node.props.id.endsWith(`-${id}`));
+  const radios = id => nodes(group(id).props.children).filter(node => node.props.type === 'radio');
+  assert.equal(group(0).props['aria-required'], true); assert.equal(group(1).props['aria-required'], false);
+  assert.equal(radios(0).length, 2, 'a required boolean offers only yes and no'); assert.equal(radios(1).length, 3);
+  assert.ok(radios(0).every(node => !node.props.checked), 'a required boolean starts unanswered'); assert.equal(radios(1).filter(node => node.props.checked).length, 1, 'an optional one starts on leave-empty');
+  assert.equal(new Set(radios(0).map(node => node.props.name)).size, 1, 'one name per group, so the arrow keys move inside it');
+  assert.ok(h.elements().find(node => node.props.type === 'submit').props.disabled); h.enter('INPUT'); assert.deepEqual(h.reasons(), ['请选择']);
+  radios(1)[1].props.onChange(); radios(0)[1].props.onChange();
+  assert.deepEqual(radios(0).map(node => node.props.checked), [false, true]); assert.equal(group(0).props['aria-invalid'], undefined); assert.deepEqual(h.reasons(), []);
+  radios(1)[2].props.onChange(); assert.equal(radios(1)[2].props.checked, true);
+  h.submit(); await Promise.resolve();
+  assert.deepEqual(h.writes[0].result, { action: 'accept', content: { must: false } });
+});
+
+test('number keys 1 to 9 pick the option with that number while focus is inside its group', t => {
+  const options = Array.from({ length: 11 }, (_, index) => `o${index + 1}`);
+  const h = fixture(t, form({ one: { type: 'string', enum: options }, many: { type: 'array', items: { type: 'string', enum: ['a', 'b', 'c'] } } }, ['one']));
+  const group = index => h.elements().filter(node => classes(node).includes('reading-choice-options'))[index];
+  const press = (index, key, extra = {}) => { const focused = []; group(index).props.onKeyDown({ key, preventDefault() { this.prevented = true; }, currentTarget: { querySelectorAll: () => ({ [Number(key) - 1]: { focus: () => focused.push(key) } }) }, ...extra }); return focused; };
+  const checked = index => nodes(group(index).props.children).filter(node => node.props.checked).map(node => node.props.value);
+  assert.deepEqual(press(0, '3'), ['3']); assert.deepEqual(checked(0), ['o3']);
+  press(0, '9'); assert.deepEqual(checked(0), ['o9'], 'a single choice moves with the key');
+  press(0, '9'); assert.deepEqual(checked(0), ['o9'], 'the same key on a single choice keeps it');
+  press(1, '1'); press(1, '3'); assert.deepEqual(checked(1), ['a', 'c']); press(1, '1'); assert.deepEqual(checked(1), ['c'], 'a multi choice toggles');
+  const modified = press(0, '2', { ctrlKey: true }); assert.deepEqual(modified, []); assert.deepEqual(checked(0), ['o9'], 'a shortcut with a modifier is left alone');
+  press(0, '0'); press(0, 'a'); press(1, '5'); assert.deepEqual(checked(0), ['o9']); assert.deepEqual(checked(1), ['c'], 'a number without an option does nothing');
+  const badges = nodes(group(0).props.children).filter(node => classes(node).includes('native-question-number'));
+  assert.equal(badges.length, 9, 'only the options a key can reach carry a number'); assert.equal(badges.at(-1).props.children, 9);
+});
+
+test('an unfinished form scrolls its first unfinished field into view and focuses it only when asked', t => {
+  const h = fixture(t, form({ a: { type: 'string' }, b: { type: 'string' }, c: { type: 'string' } }, ['a', 'b', 'c']));
+  const moved = [];
+  const place = () => h.elements().filter(node => node.type === 'fieldset').forEach((node, index) => node.props.ref({ scrollIntoView: options => moved.push(['scroll', index, options.block]), querySelector: () => ({ focus: options => moved.push(['focus', index, options.preventScroll]) }) }));
+  place(); h.render(); assert.deepEqual(moved, [], 'nothing moves on appearance');
+  const jump = () => h.elements().find(node => node.type === 'button' && node.props.children === '前往第一项');
+  assert.match(h.text(h.elements().find(node => classes(node).includes('native-question-status'))), /还有 3 项未完成/);
+  h.enter('INPUT'); place(); h.render();
+  assert.deepEqual(moved, [['scroll', 0, 'nearest'], ['focus', 0, true]]); assert.deepEqual(h.reasons(), ['请填写', '请填写', '请填写']);
+  h.elements().find(node => node.props.type === 'text' && node.props.id.endsWith('-0')).props.onChange({ target: { value: 'x' } });
+  moved.length = 0; jump().props.onClick(); place(); h.render();
+  assert.deepEqual(moved, [['scroll', 1, 'nearest'], ['focus', 1, true]], 'the link jumps to the first one still unfinished');
+  assert.equal(jump().props.type, 'button', 'the link never submits');
 });
 
 test('secret free text uses a password input and is not exposed as a value elsewhere', t => {

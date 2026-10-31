@@ -70,6 +70,25 @@ test('the file cards and the pictures beside them keep their spacing on the scal
   assert.match(last(files, '.file-card-empty', 'font-size'), /calc\(12px /);
 });
 
+// The tokens of a theme, by block: the dark base on :root, the light overrides under :root[data-theme="light"]; a var() resolves through the same set.
+const themes = strip(fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'styles', 'themes.css'), 'utf8'));
+const tokens = block => Object.fromEntries([...themes.split(block)[1].split('\n}')[0].matchAll(/(--[\w-]+):\s*(#[0-9a-f]{6}|var\(--[\w-]+\))/g)].map(match => [match[1], match[2]]));
+const resolve = (set, name) => { const value = set[name]; return value.startsWith('var(') ? resolve(set, value.slice(4, -1)) : value; };
+const luminance = hex => { const [r, g, b] = [1, 3, 5].map(at => parseInt(hex.slice(at, at + 2), 16) / 255).map(v => v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4); return .2126 * r + .7152 * g + .0722 * b; };
+const contrast = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + .05) / (lo + .05); };
+
+test('a disabled .button is muted, not faded: its text stays 4.5:1 on its own fill in both themes, and a checked box is neutral', () => {
+  const css = strip(fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'styles', 'styles.css'), 'utf8')), disabled = css.match(/button\.button:disabled \{([^}]*)\}/);
+  assert.ok(disabled, 'one rule outranks every variant colour, the primary button included');
+  const style = Object.fromEntries(declarations(disabled[1]));
+  assert.equal(style.opacity, '1', 'opacity would fade text and fill together');
+  assert.equal(style.color, 'var(--text-3)'); assert.equal(style.background, 'var(--bg-control)');
+  const dark = tokens(':root {'), light = { ...dark, ...tokens(':root[data-theme="light"] {') };
+  for (const [theme, set] of [['mono', dark], ['light', light]]) assert.ok(contrast(resolve(set, '--text-3'), resolve(set, '--bg-control')) >= 4.5, `${theme}: disabled text on the control fill`);
+  const mark = last(card, ':is(.reading-question-option, .reading-question-input).is-checked .reading-question-mark', 'background');
+  assert.equal(mark, 'var(--text-1)', 'a checked box is filled with the text colour; the warning accent stays on the card edge');
+});
+
 test('the appearance smoke measures both themes under the GUI lock', () => {
   const smoke = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'question-appearance-smoke.mjs'), 'utf8');
   assert.match(smoke, /withGuiLock\('question-appearance'/);
