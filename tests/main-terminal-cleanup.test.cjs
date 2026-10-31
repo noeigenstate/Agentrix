@@ -21,7 +21,7 @@ function fixture(t) {
   const context = vm.createContext({ fs, path, sessions, readingHistory: { close() {} }, endSkillSession() {}, stopUsageAccount() {},
     skills: { endSession(project, session) { calls.push([project, session]); } }, clearTimeout, broadcast() {}, store: { setRestore() {} },
     restorePlans: new Map(), quitting: false, project: { id: s.projectId }, id, s, sessionId, bootstrapFile: s.bootstrapFile, skillNoteFile: s.skillNoteFile,
-    flush() {}, terminal: { onExit(fn) { context.onExit = fn; } }, t: () => '' });
+    report(error) { throw error; }, flush() {}, terminal: { onExit(fn) { context.onExit = fn; } }, t: () => '' });
   vm.runInContext(main.slice(main.indexOf('function cleanupTerminalFiles('), main.indexOf('function registerIpc(')), context);
   return { runtimeDir, files, sessionId, otherId, id, s, sessions, calls, context };
 }
@@ -45,4 +45,11 @@ test('normal terminal exit also removes abandoned settings so the runtime folder
   assert.deepEqual(fs.readdirSync(f.runtimeDir), []);
   fs.rmdirSync(f.runtimeDir);
   assert.equal(fs.existsSync(f.runtimeDir), false);
+});
+
+test('a runtime folder removed from outside does not make terminal cleanup throw in main', t => {
+  const f = fixture(t);
+  fs.rmSync(f.runtimeDir, { recursive: true, force: true });
+  assert.doesNotThrow(() => f.context.disposeTerminal(f.id));
+  assert.equal(f.sessions.has(f.id), false);
 });

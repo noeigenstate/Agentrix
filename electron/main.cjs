@@ -1281,7 +1281,10 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
 function cleanupTerminalFiles(s) {
   if (s.bootstrapFile) {
     const folder = path.dirname(s.bootstrapFile), prefix = `${s.sessionId}-claude-settings-`;
-    for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+    // Runs in pty exit callbacks and the quit loop: a vanished runtime folder must not throw there.
+    let entries = [];
+    try { entries = fs.readdirSync(folder, { withFileTypes: true }); } catch (error) { if (error.code !== 'ENOENT') report(error); }
+    for (const entry of entries) {
       if (!entry.isDirectory() && entry.name.startsWith(prefix)) fs.rmSync(path.join(folder, entry.name), { force: true });
     }
     fs.rmSync(s.bootstrapFile, { force: true });
