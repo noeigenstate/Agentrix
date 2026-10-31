@@ -83,17 +83,30 @@ function python() {
   throw new Error('No Python 3 interpreter found (tried python3, python, and py -3).');
 }
 
-function loggedProcess(command, args, env, logFile) {
+// A hung app (a main-process error dialog, say) keeps its whole tree alive: stop the tree, as GitHub does at the job limit.
+function stopTree(child) {
+  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+  else child.kill('SIGKILL');
+}
+
+function loggedProcess(command, args, env, logFile, timeoutMinutes) {
   return new Promise((resolve, reject) => {
     const log = fs.createWriteStream(logFile);
-    let tail = '', launchError;
+    let tail = '', launchError, timedOut = null;
     const child = spawn(command, args, { cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const append = chunk => { log.write(chunk); tail = (tail + chunk.toString()).slice(-65536); };
+    const timer = timeoutMinutes ? setTimeout(() => {
+      timedOut = `Stopped after the CI job limit of ${timeoutMinutes} minutes`;
+      append(Buffer.from(`\n${timedOut}\n`)); stopTree(child);
+    }, timeoutMinutes * 60_000) : null;
     child.stdout.on('data', append);
     child.stderr.on('data', append);
     child.on('error', error => { launchError = error.message; append(Buffer.from(`${error.message}\n`)); });
-    log.on('error', error => { child.kill(); reject(error); });
-    child.on('close', (code, signal) => log.end(() => resolve({ code: code ?? 1, tail, error: launchError || (signal ? `Stopped by ${signal}` : null) })));
+    log.on('error', error => { clearTimeout(timer); stopTree(child); reject(error); });
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      log.end(() => resolve({ code: timedOut ? 1 : code ?? 1, tail, error: launchError || timedOut || (signal ? `Stopped by ${signal}` : null) }));
+    });
   });
 }
 
@@ -126,7 +139,7 @@ async function executeLocalStep(step, index, { directory, temp, shell, sha, vers
     command = shell.command;
     args = [...shell.args, '-File', scriptFile];
   }
-  const execute = () => loggedProcess(command, args, env, logFile);
+  const execute = () => loggedProcess(command, args, env, logFile, step.timeoutMinutes);
   const started = Date.now();
   const result = step.kind === 'gui' ? await withGuiLock(`ci-preflight:${step.key}`, execute) : await execute();
   return { ...result, logFile, seconds: ((Date.now() - started) / 1000).toFixed(1) };
