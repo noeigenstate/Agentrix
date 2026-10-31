@@ -19,7 +19,7 @@ class NativeApprovals {
   expire() {
     for (const record of this.records.values()) if (record.pending && this.now() >= record.expires) { this.fault('approval-timeout'); break; }
   }
-  add(id, method, params, decisions, response) {
+  add(id, method, params, decisions, response, question) {
     if (this.closed) return null;
     if (!validId(id) || !object(params) || Buffer.byteLength(JSON.stringify(params)) > MAX_BYTES) { this.fault('invalid-request'); return null; }
     const key = keyOf(id), signature = fingerprint([method, params]), previous = this.records.get(key);
@@ -30,21 +30,22 @@ class NativeApprovals {
     if (this.records.size >= this.maxSeen || this.tokens.size >= this.maxPending) { this.fault('request-limit'); return null; }
     const token = randomUUID(), data = clone(params);
     const record = { id, signature, pending: true, token, method, params: data, decisions: [...decisions], response,
-      expires: this.now() + this.ttl, at: this.now() };
+      ...(question ? { question: clone(question) } : {}), expires: this.now() + this.ttl, at: this.now() };
     this.records.set(key, record); this.tokens.set(token, record); this.changed(); return record;
   }
   list() {
     this.expire();
     return [...this.tokens.values()].map(r => ({ ...this.binding, token: r.token, requestId: r.id, method: r.method,
-      params: clone(r.params), decisions: [...r.decisions], at: r.at }));
+      params: clone(r.params), decisions: [...r.decisions], ...(r.question ? { question: clone(r.question) } : {}), at: r.at }));
   }
   consume(record) { record.pending = false; this.tokens.delete(record.token); delete record.params; delete record.response; this.changed(); }
-  answer(binding, answer, write) {
+  answer(binding, answer, write, question = false) {
     this.expire();
-    if (!object(answer) || Object.keys(answer).sort().join(',') !== 'decision,token') throw new Error('Invalid native approval answer');
+    if (!object(answer) || Buffer.byteLength(JSON.stringify(answer)) > MAX_BYTES
+      || Object.keys(answer).sort().join(',') !== (question && answer.decision === 'submit' ? 'decision,token,values' : 'decision,token')) throw new Error('Invalid native approval answer');
     const r = this.tokens.get(answer.token);
-    if (this.closed || !r || Object.keys(this.binding).some(k => binding[k] !== this.binding[k]) || !r.decisions.includes(answer.decision)) throw new Error('Native approval expired or unsupported');
-    const message = r.response(answer.decision, r.id);
+    if (this.closed || !r || !!r.question !== question || Object.keys(this.binding).some(k => binding[k] !== this.binding[k]) || !r.decisions.includes(answer.decision)) throw new Error('Native approval expired or unsupported');
+    const message = r.response(answer.decision, r.id, answer.values);
     this.consume(r); // irrevocably claim before any synchronous write/callback
     if (this.closed) throw new Error('Native approval channel closed before response');
     try { write(message); } catch (error) { this.fault('response-write-failed'); throw error; }

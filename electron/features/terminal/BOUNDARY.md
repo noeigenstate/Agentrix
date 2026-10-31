@@ -2,7 +2,7 @@
 
 The main-process side of a project terminal: its IPC (start, attach, write, paste, resize, close), the input
 classification that tells a typed prompt from keys and protocol replies, the shell environment and start-up files, link
-resolution, title tracking, and the native (structured) Codex and Claude sessions with their approval channel.
+resolution, title tracking, and the native (structured) Codex and Claude sessions with their approval and question channels.
 
 ## Owns
 - `electron/features/terminal/**`
@@ -11,7 +11,7 @@ resolution, title tracking, and the native (structured) Codex and Claude session
 
 ## Interface
 - `registerTerminalIpc` (`electron/features/terminal/ipc.cjs`) — the terminal:* IPC handlers main.cjs registers, with every session dependency injected
-- `registerNativeIpc` (`electron/features/terminal/native-ipc.cjs`) — the native approval and managed-prompt IPC handlers
+- `registerNativeIpc` (`electron/features/terminal/native-ipc.cjs`) — the native approval, question-answer and managed-prompt IPC handlers
 - `ApprovalGuard` (`electron/features/terminal/approval-guard.cjs`) — a session's observation epochs; the file also exports approvalStamp
 - `createNativeSession` (`electron/features/terminal/native-session.cjs`) — a native Codex or Claude SDK session; the file also exports resolveCli for the probe script
 - `createTerminalEnvironment` (`electron/terminal-env.cjs`) — the environment a PTY starts with
@@ -29,9 +29,10 @@ resolution, title tracking, and the native (structured) Codex and Claude session
 ## Invariants
 - Only a submitted line arms completion; typing, an empty Enter and xterm's protocol replies never do — AGENTS.md: completion is never rearmed by idle or background input — test: `tests/terminal-input.test.cjs` › "completion is rearmed by submitted input, not typing, empty Enter or terminal reports"
 - Keys that answer a CLI signing in reach it as typed but never become a prompt, a queued message or a round — sign-in codes and API keys must not appear anywhere — test: `tests/terminal-input.test.cjs` › "answers to a CLI signing in reach it as typed but are never a prompt"
-- The legacy terminal:approval endpoint answers terminal-only for every key, identity and session state, and writes nothing — no screen observation can target a native TUI request — test: `tests/approval-aba.test.cjs` › "backend independently returns terminal-only for every key, identity, gate and session state"
-- An approval stamp works once and only for the current observation epoch; output, input, resize or a binding change invalidates it — a held card must never answer a newer, identical-looking request — test: `tests/approval-aba.test.cjs` › "observation guard still rejects stale epochs, competing transactions and consumed final stamps"
+- The legacy terminal:approval endpoint answers terminal-only and writes nothing, and an approval stamp works once and only for the current observation epoch — no screen observation can target a native TUI request, and a held card must never answer a newer, identical-looking request — test: `tests/approval-aba.test.cjs` › "backend independently returns terminal-only for every key, identity, gate and session state"
+; test: `tests/approval-aba.test.cjs` › "observation guard still rejects stale epochs, competing transactions and consumed final stamps"
 - Native approvals and managed prompts go only to a live, local, matching native session and never fall back to PTY keys — an SSH or replaced session has no channel that can be authorised — test: `tests/native-approvals.test.cjs` › "native IPC rejects legacy, SSH, stale managed sessions and never calls PTY fallback"
+- Native questions and forms keep the approvals' typed IDs, bindings, expiry, cancellation and single write; their answers are validated in main against the whole supported schema, and an unknown schema stays in the Codex TUI or becomes cancel-only in managed Claude — a renderer answer must never widen what the CLI asked for — test: `tests/native-questions.test.cjs` › "question fields cannot bypass enums, numeric bounds, required flags, lengths or multi selection limits"; test: `tests/native-questions.test.cjs` › "unknown schemas remain in Codex TUI and become cancellation-only explanations in managed Claude"
 - A PTY never inherits AGENTRIX_DATA_DIR, AGENTRIX_DEV_URL, ELECTRON_RUN_AS_NODE or a colour-disabling variable, in any letter case — a shell started from a test profile must not write to that profile, and agents must keep their colours — test: `tests/terminal-env.test.cjs` › "Windows environment casing cannot leave duplicate color-disabling variables"
 - A native session starts only the CLI it is given; tests inject a fake `cli` and never use the one installed on the machine — results must not depend on the developer's installed agents or accounts — test: `tests/boundary-terminal.test.cjs` › "native session tests inject a fake CLI and never start the one installed on the machine"
 - A terminal link opens only HTTP(S) addresses and files inside the project; executable protocols and paths that escape the project are refused — agent output is untrusted text — test: `tests/terminal-links.test.cjs` › "link resolution opens HTTP URLs and project files while rejecting executable protocols and escapes"

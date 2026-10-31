@@ -1,0 +1,19 @@
+.native-question { font-size: 13px; font-weight: 400; }
+.native-question .reading-choice-head strong { font-size: 14px; font-weight: 600; }
+.native-question-title { margin: 8px 0; overflow-wrap: anywhere; }
+.native-question-field { min-width: 0; padding: 0; margin: 16px 0; border: 0; }
+.native-question-field legend { padding: 0; font-weight: 600; overflow-wrap: anywhere; }
+.native-question-note { display: block; margin: 4px 0; font-size: 12px; font-weight: 400; color: var(--text-2); }
+.native-question .reading-choice-option { display: flex; align-items: flex-start; gap: 8px; min-height: 32px; padding: 8px; font-size: 13px; font-weight: 400; cursor: pointer; }
+.native-question .reading-choice-option > input { flex: none; margin: 2px 0 0; accent-color: var(--text-1); }
+.native-question .reading-choice-option > span { min-width: 0; overflow-wrap: anywhere; }
+.native-question .reading-choice-option.is-selected { background: var(--bg-selected); }
+.native-question .is-selected .native-question-note { color: var(--text-1); }
+.native-question-number { margin-left: auto; font-size: 12px; color: var(--text-2); }
+.native-question-input { display: block; box-sizing: border-box; width: 100%; min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: inherit; }
+.native-question-other { display: block; margin-top: 8px; }
+.native-question-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.native-question-actions button { min-height: 32px; min-width: 32px; font: inherit; }
+.native-question :is(input, select, button):focus-visible { outline: 2px solid var(--text-1); outline-offset: 2px; }
+.native-question fieldset:disabled { opacity: 1; }
+.native-question-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

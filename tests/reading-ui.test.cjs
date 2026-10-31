@@ -836,6 +836,115 @@ test('a permission redraw while composing never opens a terminal that would take
   assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
 });
 
+test('a native question at the normal prompt blocks composer sends without moving its focus', async t => {
+  const h = waitingHarness(t, { rows: IDLE_ROWS });
+  h.edit('keep this draft');
+  const request = { token: 'native-question', question: { title: 'Choose a plan', fields: [] } };
+  h.props.terminal.nativeApprovals = [request];
+  assert.equal(h.render().props.disabled, true);
+  assert.equal(document.activeElement, h.node);
+  assert.deepEqual(elements(h.tree()).filter(node => node.props.request).map(node => node.props.request), [request]);
+  h.press('Enter'); h.command('/status'); h.dictate('do not send this');
+  await h.tick(2000);
+  assert.equal(h.node.value, 'keep this draft');
+  assert.equal(document.activeElement, h.node);
+  assert.equal(h.popup(), undefined);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+  h.props.terminal.nativeApprovals = [];
+  assert.equal(h.render().props.disabled, false);
+  assert.equal(h.node.value, 'keep this draft');
+});
+
+for (const kind of ['question', 'menu', 'permission']) test(`a pending native question excludes the screen ${kind} card until it resolves`, async t => {
+  const h = waitingHarness(t, { rows: IDLE_ROWS });
+  h.edit('keep my message');
+  h.screen.choice = { ...fakeChoice(), kind };
+  const request = { token: 'native-question', question: { title: 'Choose a plan', fields: [] } };
+  h.props.terminal.nativeApprovals = [request];
+  h.render(); h.render();
+  assert.equal(elements(h.tree()).some(node => node.props.choice), false);
+  assert.deepEqual(elements(h.tree()).filter(node => node.props.request).map(node => node.props.request), [request]);
+  assert.equal(h.card(), undefined); assert.equal(h.popup(), undefined);
+  assert.equal(h.render().props.disabled, true);
+  assert.equal(document.activeElement, h.node);
+  h.press('Enter'); await h.tick(800);
+  assert.equal(h.popup(), undefined);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+  h.props.terminal.nativeApprovals = [];
+  h.render(); h.render();
+  assert.equal(elements(h.tree()).find(node => node.props.choice)?.props.choice.kind, kind);
+  assert.equal(elements(h.tree()).some(node => node.props.request), false);
+  assert.equal(document.activeElement, h.node);
+});
+
+test('a native question suppresses waiting cards and automatic popups without consuming the later screen handoff', async t => {
+  const h = waitingHarness(t);
+  h.screen.waiting = { title: 'Review your answers' };
+  h.props.terminal.nativeApprovals = [{ token: 'native-question', question: { title: 'Choose a plan', fields: [] } }];
+  h.render(); await h.tick(2000);
+  assert.equal(h.render().props.disabled, true);
+  assert.equal(h.card(), undefined); assert.equal(h.popup(), undefined);
+  assert.equal(document.activeElement, h.node);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+  h.props.terminal.nativeApprovals = [];
+  h.render(); h.render();
+  assert.equal(h.card().props.title, 'Review your answers');
+  assert.ok(h.popup(), 'the screen dialog can open once after the native request resolves');
+  h.popup().props.onClose(); h.render(); h.render();
+  assert.equal(h.popup(), undefined);
+});
+
+test('a native question closes an existing terminal popup and resolving it cannot revive that popup', t => {
+  const h = waitingHarness(t);
+  h.screen.waiting = { title: 'Review your answers' };
+  h.render(); h.render(); assert.ok(h.popup());
+  h.props.terminal.nativeApprovals = [{ token: 'native-question', question: { title: 'Choose a plan', fields: [] } }];
+  h.render();
+  assert.equal(h.popup(), undefined, 'the old popup is hidden on the first render of the native request');
+  h.render();
+  assert.equal(h.card(), undefined); assert.equal(h.popup(), undefined);
+  h.props.terminal.nativeApprovals = [];
+  h.render(); h.render();
+  assert.ok(h.card()); assert.equal(h.popup(), undefined);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+});
+
+test('a native question remembers composer typing across disabled blur and later waiting redraws', async t => {
+  const view = { rows: IDLE_ROWS };
+  const h = dictationHarness(t, {
+    './terminal-screen': { useScreen: () => ({ rows: view.rows }), readScreen: () => ({ rows: view.rows }) },
+    './typing': { markTyping() {}, isTyping: node => !!node?.value?.trim() },
+  });
+  h.edit('先别回答');
+  h.props.terminal.nativeApprovals = [{ token: 'native-question', question: { title: 'Choose a plan', fields: [] } }];
+  assert.equal(h.render().props.disabled, true);
+  assert.equal(document.activeElement, h.node);
+  document.activeElement = document.body;
+  view.rows = []; h.screen.waiting = { title: 'Review your answers' };
+  h.render(); await h.tick(2000);
+  assert.equal(named(h.tree(), 'WaitingCard'), undefined);
+  assert.equal(h.popup(), undefined);
+  h.props.terminal.nativeApprovals = [];
+  h.render(); await h.tick(2000);
+  assert.ok(named(h.tree(), 'WaitingCard'));
+  assert.equal(h.popup(), undefined, 'disabled blur must not let a later popup take the next Enter');
+  assert.equal(h.node.value, '先别回答');
+  h.press('Enter'); await h.tick(800);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+});
+
+test('a native question cancels the delayed composer Enter even if it resolves before that Enter was due', async t => {
+  const h = waitingHarness(t, { rows: IDLE_ROWS });
+  h.edit('send once'); h.press('Enter'); await h.tick(100);
+  assert.equal(h.pasted.length, 1); assert.deepEqual(h.written, []);
+  h.props.terminal.nativeApprovals = [{ token: 'native-question', question: { title: 'Choose a plan', fields: [] } }];
+  h.render();
+  h.props.terminal.nativeApprovals = [];
+  h.render(); await h.tick(2000);
+  assert.equal(h.popup(), undefined);
+  assert.deepEqual(h.written, []); assert.equal(h.pasted.length, 1);
+});
+
 test('a dialog the screen has no card for shows the waiting card with its heading, blocks the composer and opens the terminal once', t => {
   const h = waitingHarness(t);
   h.screen.waiting = { title: 'Exit plan mode?' };
