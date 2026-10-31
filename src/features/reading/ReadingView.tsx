@@ -259,7 +259,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // An SSH project's pictures for the next message: files saved on that computer. Their paths join the message only as
   // it is sent (both CLIs take a picture's path as the picture); the message box shows the words alone.
   const [serverPictures, setServerPictures] = useState<string[]>([]);
-  const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null);
+  const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null), composer = useRef<HTMLDivElement>(null);
   const [terminalPopup, setTerminalPopup] = useState<{ command: string } | null>(null);
   choiceVisible.current = hasChoice || terminalPopup !== null;
   const popupReady = useRef<(() => void) | null>(null);
@@ -316,14 +316,17 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   }
   useLayoutEffect(() => {
     setChoiceVisible(terminal.id, hasChoice || terminalPopup !== null);
-    if (hasChoice && terminalPopup === null) {
+    if (nativePending && terminalPopup !== null && active && document.activeElement === document.body) {
+      // The popup unmounted with focus; park it beside the disabled input until the native request ends.
+      restoreComposer.current = true; composer.current?.focus({ preventScroll: true });
+    } else if (hasChoice && terminalPopup === null) {
       if (restoreComposer.current && !typingAtChoice.current && (!wasChoice.current || document.activeElement === document.body)) (choiceHost.current?.firstElementChild as HTMLElement | null)?.focus();
     } else if (wasChoice.current) {
-      if (restoreComposer.current && document.activeElement === document.body) input.current?.focus();
+      if (restoreComposer.current && (document.activeElement === document.body || document.activeElement === composer.current)) input.current?.focus();
       restoreComposer.current = false;
     }
     wasChoice.current = hasChoice;
-  }, [terminal.id, hasChoice, choiceKey, terminalPopup]);
+  }, [terminal.id, hasChoice, choiceKey, terminalPopup, nativePending, active]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -733,7 +736,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     {palette && <div className="reading-commands is-inline" id={listId} role="listbox" aria-label={t('命令')}>{matches.map((command, index) => <div key={command.name} id={optionId(index)} role="option" aria-selected={selection === index} className="reading-command" onMouseDown={event => event.preventDefault()} onClick={() => complete(command)}>
         <code>{command.name}</code><span>{command.source === 'builtin' ? t(command.description) : command.description}</span>{command.source !== 'builtin' && <small>{command.source === 'project' ? t('项目') : command.source === 'user' ? t('用户') : t('技能')}</small>}
     </div>)}</div>}
-    <div className={`reading-composer${sendingSoon ? ' is-sending-soon' : ''}`} style={terminal.agentCommand ? { display: 'none' } : undefined}>
+    <div ref={composer} tabIndex={-1} className={`reading-composer${sendingSoon ? ' is-sending-soon' : ''}`} style={terminal.agentCommand ? { display: 'none' } : undefined}>
       <MentionPalette mentions={mentions} />
       <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} aria-expanded={palette || mentions.open} aria-controls={palette ? listId : mentions.open ? mentions.listId : undefined} aria-activedescendant={palette && selected ? optionId(selection) : mentions.open && mentions.files[mentions.selection] ? mentions.optionId(mentions.selection) : undefined} placeholder={preview ? t('正在启动…') : result ? t('继续修改，或描述下一步…') : terminal.codexActive ? t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }) : t('输入命令，Enter 发送')} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
         onCompositionStart={() => dictationSend.cancel()} onFocus={() => window.agentrix.terminalFocus(terminal.id, false)} />

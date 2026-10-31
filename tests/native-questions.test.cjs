@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { NativeApprovals } = require('../electron/features/terminal/native-approvals.cjs');
+const { NativeApprovals, MAX_BYTES } = require('../electron/features/terminal/native-approvals.cjs');
 const { CodexProtocol, ClaudeProtocol } = require('../electron/features/terminal/native-protocol.cjs');
 const { registerNativeIpc } = require('../electron/features/terminal/native-ipc.cjs');
 const { createNativeSession } = require('../electron/features/terminal/native-session.cjs');
@@ -26,9 +26,13 @@ function message(kind, id = 1) {
   return { type: 'control_request', request_id: String(id), request: { subtype: 'elicitation', mcp_server_name: 'probe', message: 'Local form', mode: 'form', requested_schema: form() } };
 }
 const valid = kind => kind.endsWith('form') ? content() : kind.startsWith('claude') ? { 'Choose a local option': ['One', 'Two'] } : { q: 'One' };
+async function waitFor(terminal, check) {
+  const end = Date.now() + 5000 * timeoutScale;
+  while (!check()) { if (terminal.error || Date.now() > end) throw new Error(terminal.error || 'Native question fixture timeout'); await new Promise(resolve => setTimeout(resolve, 10)); }
+}
 function harness(t, kind, options = {}) {
   const binding = { provider: kind.split('-')[0], projectId: 'project', terminalId: 'terminal', sessionId: 'generation' }, writes = [], failures = [];
-  const registry = new NativeApprovals(binding, { fail: reason => failures.push(reason), ...options });
+  const registry = new NativeApprovals(binding, { write: value => writes.push(value), fail: reason => failures.push(reason), ...options });
   const protocol = binding.provider === 'codex' ? new CodexProtocol(registry) : new ClaudeProtocol(registry);
   t.after(() => registry.close());
   const add = (m = message(kind)) => { protocol.server(m); return registry.list().at(-1); };
@@ -67,6 +71,20 @@ test('Claude elicitation uses SDK control response, not tool approval or termina
 });
 
 for (const kind of ['codex-question', 'codex-form', 'claude-question', 'claude-form']) {
+  test(`${kind}: validation refusals identify correctable answers and keep the same token live`, t => {
+    const h = harness(t, kind), r = h.add(), answer = { token: r.token, decision: 'submit', values: valid(kind) };
+    const circular = {}; circular.self = circular;
+    for (const invalid of [null, [], { token: r.token, decision: 'submit' }, { ...answer, extra: true },
+      { token: r.token, decision: 'unknown' }, { ...answer, values: {} }, { ...answer, values: { undeclared: true } },
+      { ...answer, values: 'x'.repeat(MAX_BYTES) }, { ...answer, values: 1n }, { ...answer, values: circular }]) {
+      assert.throws(() => h.registry.answer(h.binding, invalid, value => h.writes.push(value), true), { name: 'Error', message: /^Invalid native question/ });
+      assert.equal(h.registry.list()[0].token, r.token); assert.equal(h.registry.closed, false); assert.deepEqual(h.writes, []);
+    }
+    assert.throws(() => h.answer(r, valid(kind), 'submit', { token: 'unknown' }), { message: 'Native approval expired or unsupported' });
+    h.answer(r); assert.equal(h.writes.length, 1);
+    assert.throws(() => h.answer(r), { message: 'Native approval expired or unsupported' });
+  });
+
   test(`${kind}: typed capabilities reject forged fields, cross bindings, wrong endpoints and repeated answers`, t => {
     const h = harness(t, kind), r = h.add();
     for (const field of Object.keys(h.binding)) assert.throws(() => h.registry.answer({ ...h.binding, [field]: 'other' }, { token: r.token, decision: 'submit', values: valid(kind) }, () => assert.fail('cross binding'), true));
@@ -84,9 +102,20 @@ for (const kind of ['codex-question', 'codex-form', 'claude-question', 'claude-f
     other.add(changed); assert.equal(other.registry.closed, true);
   });
 
-  test(`${kind}: expiry, cancellation, new generation and channel loss revoke held callbacks`, t => {
-    let now = 0; const h = harness(t, kind, { ttl: 10, now: () => now }), r = h.add(); now = 10;
-    assert.throws(() => h.answer(r)); assert.equal(h.registry.closed, true);
+  test(`${kind}: expiry sends the card cancellation once and leaves the session and later requests live`, t => {
+    let now = 0; const h = harness(t, kind, { ttl: 10, now: () => now }), r = h.add();
+    now = 5; const next = h.add(message(kind, 2)); now = 10;
+    h.registry.expire(); h.registry.expire();
+    const manual = harness(t, kind); manual.answer(manual.add(), undefined, 'cancel');
+    assert.deepEqual(h.writes, manual.writes); assert.deepEqual(h.failures, []); assert.equal(h.registry.closed, false);
+    assert.throws(() => h.answer(r), { message: 'Native approval expired or unsupported' });
+    assert.equal(h.registry.list()[0].token, next.token); h.answer(next); assert.equal(h.writes.length, 2);
+    h.answer(h.add(message(kind, 3))); assert.equal(h.writes.length, 3);
+    if (kind.startsWith('codex')) assert.equal(h.protocol.client({ id: r.requestId, result: {} }), false, 'a late TUI reply cannot write a second response');
+  });
+
+  test(`${kind}: cancellation, new generation and channel loss revoke held callbacks`, t => {
+    const h = harness(t, kind), r = h.add(); h.answer(r, undefined, 'cancel');
     const fresh = harness(t, kind), next = fresh.add(); assert.throws(() => fresh.answer(r));
     fresh.protocol.server(kind.startsWith('codex') ? { method: 'serverRequest/resolved', params: { requestId: next.requestId, threadId: 'thread' } } : { type: 'control_cancel_request', request_id: next.requestId });
     assert.throws(() => fresh.answer(next)); const closed = fresh.add(message(kind, 2)); fresh.registry.close(); assert.throws(() => fresh.answer(closed));
@@ -111,7 +140,28 @@ for (const kind of ['codex-question', 'codex-form', 'claude-question', 'claude-f
     assert.throws(() => h.registry.answer(h.binding, { token: r.token, decision: 'submit', values: valid(kind) }, () => { attempts++; throw new Error('owned pipe failed'); }, true));
     assert.equal(attempts, 1); assert.throws(() => h.answer(r)); assert.throws(() => h.answer(next)); assert.deepEqual(h.failures, ['response-write-failed']);
   });
+
+  test(`${kind}: expiry write failure consumes first, closes the channel and never retries`, t => {
+    let now = 0, attempts = 0;
+    const h = harness(t, kind, { ttl: 10, now: () => now, write: () => { attempts++; throw new Error('owned pipe failed'); } });
+    const r = h.add(); h.add(message(kind, 2)); now = 10;
+    h.registry.expire(); h.registry.expire();
+    assert.equal(attempts, 1); assert.equal(h.registry.closed, true); assert.deepEqual(h.failures, ['response-write-failed']);
+    assert.throws(() => h.answer(r), { message: 'Native approval expired or unsupported' }); assert.deepEqual(h.writes, []);
+  });
 }
+
+test('synthetic Claude elicitation without a string message stays live as a server-titled cancellation-only card', t => {
+  for (const value of [undefined, null, 42, {}, []]) {
+    const h = harness(t, 'claude-form'), m = message('claude-form');
+    if (value === undefined) delete m.request.message; else m.request.message = value;
+    const r = h.add(m);
+    assert.equal(h.registry.closed, false); assert.deepEqual(h.failures, []);
+    assert.deepEqual(r.question, { title: 'probe', fields: [], unsupported: true }); assert.deepEqual(r.decisions, ['decline', 'cancel']);
+    assert.throws(() => h.answer(r), { message: /^Invalid native question/ }); h.answer(r, undefined, 'cancel');
+    assert.deepEqual(h.writes, [{ type: 'control_response', response: { subtype: 'success', request_id: '1', response: { action: 'cancel' } } }]);
+  }
+});
 
 test('Codex number 1 and string 1 stay distinct; TUI response wins or loses exactly once', t => {
   const h = harness(t, 'codex-question'), numeric = h.add(message('codex-question', 1)), string = h.add(message('codex-question', '1'));
@@ -175,7 +225,10 @@ test('native question IPC checks live local sessions, exact tokens and capabilit
   const payload = { token: r.token, decision: 'submit', values: { q: 'One' } };
   for (const s of [null, {}, { native: {}, approvalRemote: true }, { native: {}, status: 'exited' }]) { session = s; assert.throws(() => handles['terminal:native-question']('terminal', payload)); }
   session = { native: { answerQuestion: answer => h.registry.answer(h.binding, answer, value => h.writes.push(value), true) }, status: 'running', write: () => assert.fail('PTY fallback') };
-  assert.throws(() => handles['terminal:native-question']('other', payload)); handles['terminal:native-question']('terminal', payload);
+  assert.throws(() => handles['terminal:native-question']('other', payload));
+  assert.throws(() => handles['terminal:native-question']('terminal', { ...payload, values: { q: 'outside' } }), { name: 'Error', message: /^Invalid native question/ });
+  assert.equal(h.registry.list()[0].token, r.token); assert.equal(h.writes.length, 0);
+  handles['terminal:native-question']('terminal', payload);
   assert.equal(h.writes.length, 1); assert.throws(() => handles['terminal:native-question']('terminal', payload));
 });
 
@@ -184,9 +237,27 @@ test('owned Claude stdio carries a question, validated response and completion u
   const events = [], binding = { provider: 'claude', projectId: 'fixture', terminalId: 'fixture', sessionId: 'fixture' };
   const terminal = createNativeSession({ binding, mode: 'claude-sdk', cwd: __dirname, env: {}, cli: { file: process.execPath, prefix: ['-e', code, '--'], node: true }, event: value => events.push(value) });
   t.after(() => terminal.kill());
-  async function waitFor(check) { const end = Date.now() + 5000 * timeoutScale; while (!check()) { if (terminal.error || Date.now() > end) throw new Error(terminal.error || 'Native question fixture timeout'); await new Promise(resolve => setTimeout(resolve, 10)); } }
-  await waitFor(() => events.some(e => e.type === 'managed-ready')); terminal.prompt('Synthetic prompt'); await waitFor(() => terminal.registry.list().length > 0);
+  await waitFor(terminal, () => events.some(e => e.type === 'managed-ready')); terminal.prompt('Synthetic prompt'); await waitFor(terminal, () => terminal.registry.list().length > 0);
   const r = terminal.registry.list()[0]; terminal.answerQuestion({ token: r.token, decision: 'submit', values: valid('claude-question') });
-  await waitFor(() => events.some(e => e.type === 'result'));
+  await waitFor(terminal, () => events.some(e => e.type === 'result'));
   assert.equal(events.find(e => e.type === 'result').received.request_id, 'cli-native-id'); assert.equal(terminal.registry.list().length, 0);
+});
+
+test('owned Claude stdio cancels an expired form and accepts the next prompt using a fake Node CLI', async t => {
+  const code = `const r=require('node:readline').createInterface({input:process.stdin});let seq=0;r.on('line',line=>{const m=JSON.parse(line);const emit=v=>console.log(JSON.stringify(v));if(m.type==='control_request')emit({type:'control_response',response:{request_id:m.request_id,subtype:'success',response:{}}});if(m.type==='user')emit({...${JSON.stringify(message('claude-form'))},request_id:'cli-native-id-'+ ++seq});if(m.type==='control_response')emit({type:'result',received:m.response});});`;
+  const events = [], binding = { provider: 'claude', projectId: 'fixture', terminalId: 'fixture', sessionId: 'fixture' };
+  const terminal = createNativeSession({ binding, mode: 'claude-sdk', cwd: __dirname, env: {}, cli: { file: process.execPath, prefix: ['-e', code, '--'], node: true }, event: value => events.push(value) });
+  t.after(() => terminal.kill());
+  await waitFor(terminal, () => events.some(e => e.type === 'managed-ready')); terminal.prompt('Synthetic expiring form');
+  await waitFor(terminal, () => terminal.registry.list().length > 0);
+  const r = terminal.registry.list()[0], expires = terminal.registry.tokens.get(r.token).expires;
+  terminal.registry.now = () => expires; terminal.registry.expire(); terminal.registry.expire();
+  await waitFor(terminal, () => events.some(e => e.type === 'result'));
+  assert.deepEqual(events.find(e => e.type === 'result').received, { subtype: 'success', request_id: 'cli-native-id-1', response: { action: 'cancel' } });
+  assert.throws(() => terminal.answerQuestion({ token: r.token, decision: 'submit', values: content() }), { message: 'Native approval expired or unsupported' });
+  terminal.prompt('Next synthetic prompt'); await waitFor(terminal, () => terminal.registry.list().length > 0);
+  const next = terminal.registry.list()[0]; terminal.answerQuestion({ token: next.token, decision: 'submit', values: content() });
+  await waitFor(terminal, () => events.filter(e => e.type === 'result').length === 2);
+  assert.equal(terminal.registry.closed, false); assert.equal(terminal.error, undefined); assert.equal(terminal.registry.list().length, 0);
+  assert.deepEqual(events.filter(e => e.type === 'result')[1].received, { subtype: 'success', request_id: 'cli-native-id-2', response: { action: 'accept', content: content() } });
 });

@@ -148,7 +148,7 @@ function claudeQuestion(params) {
   if (params.subtype === 'can_use_tool' && params.tool_name === 'AskUserQuestion') question = questionFields(params.input.questions, 'claude');
   else if (params.subtype === 'elicitation' && (params.mode == null || params.mode === 'form') && text(params.message)) question = formQuestion(params.requested_schema, params.message);
   // SDK-managed Claude has no operable TUI. Keep an explicit native cancellation even for unknown schemas/modes.
-  question ||= { title: text(params.message) ? params.message : params.tool_name || 'elicitation', fields: [], unsupported: true };
+  question ||= { title: text(params.message) ? params.message : params.mcp_server_name || params.tool_name || 'elicitation', fields: [], unsupported: true };
   const ask = params.subtype === 'can_use_tool', input = ask ? JSON.parse(JSON.stringify(params.input)) : null;
   const decisions = ask ? question.unsupported ? ['cancel'] : ['submit', 'cancel'] : question.unsupported ? ['decline', 'cancel'] : ['submit', 'decline', 'cancel'];
   return { question, decisions, response: (decision, id, values) => {

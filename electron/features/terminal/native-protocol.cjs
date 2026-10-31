@@ -133,7 +133,7 @@ class ClaudeProtocol {
     const p = m.request;
     if (typeof m.request_id !== 'string' || !object(p)) { r.fault('unsupported-control-request'); return; }
     if (p.subtype === 'elicitation') {
-      if (typeof p.mcp_server_name !== 'string' || !p.mcp_server_name || typeof p.message !== 'string') { r.fault('invalid-elicitation'); return; }
+      if (typeof p.mcp_server_name !== 'string' || !p.mcp_server_name) { r.fault('invalid-elicitation'); return; }
       const shape = claudeQuestion(p);
       r.add(m.request_id, p.subtype, p, shape.decisions, shape.response, shape.question); return;
     }

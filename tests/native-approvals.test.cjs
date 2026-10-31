@@ -84,6 +84,7 @@ test('forged ID, altered input, extra binding fields and unsupported decisions n
 test('timeout, disconnect and restart generations revoke old capabilities', t => {
   let now = 1; const h = harness(t, { now: () => now, ttl: 10 }), a = h.add(1);
   now = 11; rejects(h, a.token); assert.equal(h.registry.closed, true);
+  assert.deepEqual(h.failures, ['approval-timeout']); assert.deepEqual(h.writes, []);
   const fresh = harness(t), next = fresh.add(1); rejects(fresh, a.token); fresh.registry.close(); rejects(fresh, next.token);
 });
 

@@ -8,16 +8,21 @@ const fingerprint = value => createHash('sha256').update(JSON.stringify(value)).
 
 // A capability addresses one native request; it is never used as the provider request ID.
 class NativeApprovals {
-  constructor(binding, { changed = () => {}, fail = () => {}, now = Date.now, ttl = 10 * 60 * 1000, maxPending = 64, maxSeen = 8192 } = {}) {
+  constructor(binding, { changed = () => {}, fail = () => {}, write = () => { throw new Error('Native channel unavailable'); }, now = Date.now, ttl = 10 * 60 * 1000, maxPending = 64, maxSeen = 8192 } = {}) {
     this.binding = Object.freeze({ ...binding });
-    Object.assign(this, { changed, fail, now, ttl, maxPending, maxSeen });
+    Object.assign(this, { changed, fail, write, now, ttl, maxPending, maxSeen });
     this.records = new Map(); this.tokens = new Map(); this.closed = false;
     this.timer = setInterval(() => this.expire(), Math.min(ttl, 1000)); this.timer.unref();
   }
   fault(reason) { if (this.closed) return; this.close(); this.fail(reason); }
   close() { if (this.closed) return; this.closed = true; clearInterval(this.timer); this.tokens.clear(); this.records.clear(); this.changed(); }
   expire() {
-    for (const record of this.records.values()) if (record.pending && this.now() >= record.expires) { this.fault('approval-timeout'); break; }
+    for (const record of this.tokens.values()) {
+      if (this.now() < record.expires) continue;
+      if (!record.question) { this.fault('approval-timeout'); return; }
+      try { this.respond(record, 'cancel', undefined, this.write); }
+      catch { this.fault('response-write-failed'); return; }
+    }
   }
   add(id, method, params, decisions, response, question) {
     if (this.closed) return null;
@@ -41,11 +46,18 @@ class NativeApprovals {
   consume(record) { record.pending = false; this.tokens.delete(record.token); delete record.params; delete record.response; this.changed(); }
   answer(binding, answer, write, question = false) {
     this.expire();
-    if (!object(answer) || Buffer.byteLength(JSON.stringify(answer)) > MAX_BYTES
-      || Object.keys(answer).sort().join(',') !== (question && answer.decision === 'submit' ? 'decision,token,values' : 'decision,token')) throw new Error('Invalid native approval answer');
+    let bytes = Infinity;
+    // Structured-cloneable answers can still contain cycles or BigInts, which are not wire JSON.
+    try { bytes = Buffer.byteLength(JSON.stringify(answer)); } catch { }
+    if (!object(answer) || bytes > MAX_BYTES
+      || Object.keys(answer).sort().join(',') !== (question && answer.decision === 'submit' ? 'decision,token,values' : 'decision,token')) throw new Error(`Invalid native ${question ? 'question' : 'approval'} answer`);
     const r = this.tokens.get(answer.token);
-    if (this.closed || !r || !!r.question !== question || Object.keys(this.binding).some(k => binding[k] !== this.binding[k]) || !r.decisions.includes(answer.decision)) throw new Error('Native approval expired or unsupported');
-    const message = r.response(answer.decision, r.id, answer.values);
+    if (this.closed || !r || !!r.question !== question || Object.keys(this.binding).some(k => binding[k] !== this.binding[k])) throw new Error('Native approval expired or unsupported');
+    if (!r.decisions.includes(answer.decision)) throw new Error(question ? 'Invalid native question decision' : 'Native approval expired or unsupported');
+    return this.respond(r, answer.decision, answer.values, write);
+  }
+  respond(r, decision, values, write) {
+    const message = r.response(decision, r.id, values);
     this.consume(r); // irrevocably claim before any synchronous write/callback
     if (this.closed) throw new Error('Native approval channel closed before response');
     try { write(message); } catch (error) { this.fault('response-write-failed'); throw error; }
