@@ -421,10 +421,11 @@ function dictationHarness(t, overrides = {}) {
   };
   hooks.useLayoutEffect = hooks.useEffect;
   const previousWindow = globalThis.window, previousDocument = globalThis.document;
-  const node = { value: '', selectionStart: 0, selectionEnd: 0, dataset: {},
-    focus() { document.activeElement = node; },
+  const node = { value: '', selectionStart: 0, selectionEnd: 0, dataset: {}, disabled: false,
+    focus() { if (!node.disabled) document.activeElement = node; },
     setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; },
   };
+  const composer = { focus() { document.activeElement = composer; } }, popupInput = { focus() { document.activeElement = popupInput; } };
   globalThis.document = { activeElement: node, body: {}, getElementById: () => null, createElement: () => ({ innerHTML: '', querySelectorAll: () => [] }) };
   globalThis.window = { addEventListener: (name, take) => listeners.set(name, take), removeEventListener: name => listeners.delete(name), agentrix: {
     terminalCommands: async () => ({ ok: true, value: [] }),
@@ -455,11 +456,16 @@ function dictationHarness(t, overrides = {}) {
     ...overrides,
   });
   const render = () => {
+    const hadPopup = root && elements(root).some(element => element.type?.name === 'ReadingTerminalPopup');
     cursor = 0; root = ReadingView(props);
     // The public component routes managed SDK sessions before mounting the legacy TUI reader.
     if (typeof root.type === 'function') root = root.type(root.props);
     const box = elements(root).find(element => element.type === 'textarea');
-    box.props.ref.current = node; node.value = box.props.value;
+    box.props.ref.current = node; node.value = box.props.value; node.disabled = box.props.disabled;
+    const composerBox = elements(root).find(element => /\breading-composer\b/.test(element.props.className));
+    if (composerBox.props.ref) composerBox.props.ref.current = composer;
+    // Removing the focused popup drops browser focus to body before the parent's layout effects run.
+    if (hadPopup && !elements(root).some(element => element.type?.name === 'ReadingTerminalPopup') && document.activeElement === popupInput) document.activeElement = document.body;
     while (effects.length) effects.shift()();
     elements(root).find(element => element.type?.name === 'ReadingTerminalPopup')?.props.onReady();
     return box;
@@ -469,7 +475,7 @@ function dictationHarness(t, overrides = {}) {
   const remount = () => { unmount(); slots.length = 0; effects.length = 0; render(); return render(); };
   t.after(() => { unmount(); globalThis.window = previousWindow; globalThis.document = previousDocument; });
   render(); render();
-  return { props, screen, node, written, pasted, echoed, render, unmount, remount, tree: () => root,
+  return { props, screen, node, composer, popupInput, written, pasted, echoed, render, unmount, remount, tree: () => root,
     popup: () => elements(root).find(element => element.type?.name === 'ReadingTerminalPopup'),
     command(text) { listeners.get('agentrix:command')({ detail: { terminalId: props.terminal.id, text }, preventDefault() {} }); render(); },
     dictate: (text, submit = true) => { insert(text, submit); render(); },
@@ -906,6 +912,34 @@ test('a native question closes an existing terminal popup and resolving it canno
   h.props.terminal.nativeApprovals = [];
   h.render(); h.render();
   assert.ok(h.card()); assert.equal(h.popup(), undefined);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+});
+
+test('a native request closing a manually opened terminal returns focus to the blocked composer, then its input', t => {
+  const h = waitingHarness(t);
+  h.screen.waiting = { title: 'Review your answers' }; h.render(); h.render();
+  h.popup().props.onClose(); h.render(); h.render();
+  h.card().props.onOpenTerminal(); h.render(); assert.ok(h.popup()); h.popupInput.focus();
+  h.props.terminal.nativeApprovals = [{ token: 'native-question', question: { title: 'Choose a plan', fields: [] } }];
+  assert.equal(h.render().props.disabled, true); assert.equal(h.popup(), undefined);
+  assert.equal(document.activeElement, h.composer, 'a disabled textarea cannot receive focus, so the composer container holds it');
+  assert.equal(elements(h.tree()).find(element => /\breading-composer\b/.test(element.props.className)).props.tabIndex, -1);
+  h.render(); assert.equal(document.activeElement, h.composer);
+  h.props.terminal.nativeApprovals = []; h.screen.waiting = null; h.view.rows = IDLE_ROWS;
+  h.render(); h.render(); assert.equal(document.activeElement, h.node);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+});
+
+for (const target of ['typing', 'button', 'inactive', 'no-popup']) test(`native popup focus recovery preserves the owner's ${target} focus`, t => {
+  const h = waitingHarness(t);
+  if (target !== 'no-popup') { h.screen.waiting = { title: 'Review your answers' }; h.render(); h.render(); assert.ok(h.popup()); }
+  const focused = target === 'typing' ? { value: 'keep writing here' } : target === 'button' ? {} : document.body;
+  document.activeElement = focused;
+  if (target === 'inactive') h.props.active = false;
+  h.props.terminal.nativeApprovals = [{ token: 'native-question', question: { title: 'Choose a plan', fields: [] } }];
+  h.render(); h.render(); assert.equal(h.popup(), undefined); assert.equal(document.activeElement, focused);
+  h.props.terminal.nativeApprovals = []; h.screen.waiting = null; h.view.rows = IDLE_ROWS;
+  h.render(); h.render(); assert.equal(document.activeElement, focused);
   assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
 });
 

@@ -37,8 +37,8 @@ function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {},
     socket?.terminate(); server?.close(); child?.stdin.destroy(); child?.kill(); tui?.kill();
     if (reason) terminal.error = reason; events.emit('exit', { exitCode }); changed();
   };
-  const registry = new NativeApprovals(binding, { changed, fail: reason => finish(reason) });
   const write = message => writeJson(child.stdin, message, reason => finish(reason));
+  const registry = new NativeApprovals(binding, { changed, write, fail: reason => finish(reason) });
   const terminal = {
     registry, mode,
     onData: callback => { events.on('data', callback); return { dispose: () => events.off('data', callback) }; },
