@@ -27,13 +27,17 @@ const codex = [
   { record: { type: 'turn.completed', usage: { output_tokens: 150, reasoning_output_tokens: 30 } } },
 ];
 
-async function fixture(t, lines = codex, { agent = 'codex', role = '执行', bootstrap = true, exitCode = 0, hold, timeout = 30000, extra = [], setup } = {}) {
-  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
+async function fixture(t, lines = codex, { agent = 'codex', role = '执行', bootstrap = true, exitCode = 0, hold, timeout = 30000, extra = [], setup, isolated = false } = {}) {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
+  const directory = isolated ? path.join(root, 'worker') : root;
+  if (isolated) {
+    const main = path.join(root, 'main'); await fs.mkdir(main); await setup(main);
+    execFileSync('git', ['worktree', 'add', '-qb', 'worker', directory], { cwd: main, stdio: 'ignore', windowsHide: true });
+  } else if (setup) await setup(directory);
   const events = [], server = await createEventServer(event => events.push({ ...event, receivedAt: Date.now() }));
   const brief = path.join(directory, 'brief.md'), out = path.join(directory, 'answer.md'), runner = path.join(directory, 'runner.cjs');
   const input = path.join(directory, 'fixture.json'), capture = path.join(directory, 'capture.json'), config = path.join(directory, 'bootstrap.json');
   await fs.writeFile(brief, '# A worker brief\nKeep Unicode: 执行.\n');
-  if (setup) await setup(directory);
   // The helper confirms a start only while the worker runs, and reads Codex's rollout asynchronously: a fixture with no
   // hold of its own stays until the helper has printed its start (or failed-start) line, so no runner is too slow for it.
   // Outside the worker's folder: the scope check reports any file that appears there.
@@ -51,6 +55,7 @@ run(process.argv.slice(2), {startTimeout:${timeout}, resolveExecutable:(_,args)=
     ...(extra.includes('--allow') ? ['--skip-meeting', 'Existing dispatch scope regression fixture'] : []), ...extra];
   const env = { ...process.env, CODEX_HOME: path.join(directory, 'codex'), DISPATCH_FIXTURE: input, DISPATCH_CAPTURE: capture };
   delete env.AGENTRIX_BOOTSTRAP;
+  delete env.AGENTRIX_READING_NOTE_FILE; delete env.AGENTRIX_READING_NOTE;
   if (bootstrap) env.AGENTRIX_BOOTSTRAP = config;
   const child = spawn(process.execPath, [runner, ...args], { env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
   let stdout = '', stderr = '';
@@ -60,7 +65,7 @@ run(process.argv.slice(2), {startTimeout:${timeout}, resolveExecutable:(_,args)=
   const finished = once(child, 'close').then(async ([code]) => { if (release) await fs.rm(release, { force: true }); return { code, stdout, stderr }; });
   t.after(async () => {
     if (child.exitCode === null) { child.send('SIGTERM'); await finished; }
-    server.close(); await fs.rm(directory, { recursive: true, force: true }); if (release) await fs.rm(release, { force: true });
+    server.close(); await fs.rm(root, { recursive: true, force: true }); if (release) await fs.rm(release, { force: true });
   });
   return { child, finished, events, directory, out, capture, args, stdout: () => stdout, releaseOn };
 }
@@ -547,7 +552,7 @@ test('a worker that stays within --allow ends with scope ok', async t => {
 test('dispatch restores unapproved skill edits and reports proposal counts on successful and failed runs', async t => {
   for (const exitCode of [0, 9]) {
     const f = await fixture(t, [...codex, { write: 'skills/sample/SKILL.md', text: 'Worker proposal.' }], {
-      exitCode, extra: ['--allow', 'skills/**'],
+      exitCode, extra: ['--allow', 'skills/**'], isolated: true,
       setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'skills/sample/SKILL.md': 'Pre-run contents.' }),
     });
     const result = await f.finished;
@@ -563,9 +568,21 @@ test('dispatch restores unapproved skill edits and reports proposal counts on su
 
 test('an unconfirmed exited worker restores its skill edits before the failure event', async t => {
   const f = await fixture(t, [{ write: 'skills/sample/SKILL.md', text: 'Unconfirmed proposal.' }], { hold: 0,
+    isolated: true,
     setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'skills/sample/SKILL.md': 'Pre-run contents.' }),
   });
   assert.notEqual((await f.finished).code, 0);
   assert.equal(f.events.at(-1).skillProposals, 1);
   assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Pre-run contents.');
+});
+
+test('dispatch reports shared-checkout changes without reverting them and prints snapshot-limit degradation', async t => {
+  const f = await fixture(t, [...codex, { write: 'skills/sample/SKILL.md', text: 'Concurrent live version.' }], {
+    extra: ['--allow', 'skills/**'],
+    setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'skills/sample/SKILL.md': 'x'.repeat(512 * 1024 + 1) }),
+  });
+  const result = await f.finished;
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /1 skill proposals pending lead approval · skill guard report-only: snapshot limits exceeded/);
+  assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Concurrent live version.');
 });

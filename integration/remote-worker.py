@@ -73,6 +73,35 @@ def write_skill_reference(filename, text):
     finally:
         if os.path.exists(temporary): os.unlink(temporary)
 
+def prune_skill_state(state_dir, current_key, now=None):
+    """References from a different bundle expire on spawn; receipts have a 30-day lifetime."""
+    cutoff = (time.time() if now is None else now) - 30 * 24 * 60 * 60
+    def entries(folder):
+        try:
+            info = os.lstat(folder)
+            if not stat.S_ISDIR(info.st_mode) or (hasattr(os, "getuid") and info.st_uid != os.getuid()): return []
+            return list(os.scandir(folder))
+        except OSError: return []
+    def remove_readonly(function, filename, error):
+        if not os.path.exists(filename): return
+        if not isinstance(error[1], PermissionError): raise error[1]
+        os.chmod(filename, 0o700 if os.path.isdir(filename) else 0o600)
+        function(filename)
+    for entry in entries(os.path.join(state_dir, "references")):
+        if re.fullmatch(r"[a-f0-9]{64}", entry.name) and entry.name != current_key and entry.is_dir(follow_symlinks=False):
+            try: shutil.rmtree(entry.path, onerror=remove_readonly)
+            except OSError: pass
+    def receipts(folder, depth):
+        for entry in entries(folder):
+            try:
+                if entry.is_file(follow_symlinks=False) and re.fullmatch(r"[a-f0-9]{32}(?:[a-f0-9]{32})?", entry.name):
+                    if entry.stat(follow_symlinks=False).st_mtime < cutoff: os.unlink(entry.path)
+                elif depth and entry.is_dir(follow_symlinks=False) and (entry.name == "claude" or re.fullmatch(r"[a-f0-9]{32}(?:[a-f0-9]{32})?", entry.name)):
+                    receipts(entry.path, depth - 1)
+                    if not os.listdir(entry.path): os.rmdir(entry.path)
+            except OSError: pass
+    receipts(os.path.join(state_dir, "delivered"), 2)
+
 def official_claude_route(route, cwd):
     if not isinstance(route, dict) or route.get("overridden") is not False: return False
     folders = [route.get("home"), route.get("configDir"), route.get("secureDir")]
@@ -166,7 +195,7 @@ class RemoteClaudeAccounts:
 
 NOTIFY_SOURCE = 'CLAUDE_ROUTE_ENV = ' + repr(tuple(sorted(CLAUDE_ROUTE_ENV))) + '\n' + r'''import hashlib,json,os,re,socket,stat,sys,time
 def deliver_skills(hook, identity):
-    if not re.fullmatch(r"[\w-]{1,100}", identity): return
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", identity): return
     source=hook.get("source")
     if source not in ("startup","resume","compact","clear"): return
     state_dir=os.environ.get("AGENTRIX_SKILL_STATE_DIR")
@@ -180,12 +209,19 @@ def deliver_skills(hook, identity):
     os.makedirs(state_dir,mode=0o700,exist_ok=True)
     info=os.lstat(state_dir)
     if not stat.S_ISDIR(info.st_mode) or (hasattr(os,"getuid") and (info.st_uid!=os.getuid() or info.st_mode&0o077)): return
-    filename=os.path.join(state_dir,hashlib.sha256((identity+":"+key).encode()).hexdigest())
+    folder=os.path.join(state_dir,"claude",hashlib.sha256(identity.encode()).hexdigest()[:32])
+    os.makedirs(folder,mode=0o700,exist_ok=True)
+    for directory in (os.path.dirname(folder),folder):
+        info=os.lstat(directory)
+        if not stat.S_ISDIR(info.st_mode) or (hasattr(os,"getuid") and (info.st_uid!=os.getuid() or info.st_mode&0o077)): return
+    filename=os.path.join(folder,key[:32])
+    if source in ("compact","clear"):
+        for name in os.listdir(folder):
+            if re.fullmatch(r"[a-f0-9]{32}",name): os.unlink(os.path.join(folder,name))
     try:
         descriptor=os.open(filename,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
         os.close(descriptor)
-    except FileExistsError:
-        if source not in ("compact","clear"): return
+    except FileExistsError: return
     print(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Agentrix skill instructions:\n"+instructions}}))
 try:
     mode=sys.argv[1]
@@ -276,8 +312,12 @@ PY
         current_note="${current_note%%" Agentrix skill delivery: "*} Agentrix delivers skill instructions through its SessionStart hook."
     fi
     [[ -n $current_note ]] && note=(--append-system-prompt "$current_note")
-    AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "$executable" --settings "$settings" "${note[@]}" "$@"
+    local settings_file
+    settings_file=$(mktemp "${__pg_note_file%/*}/claude-settings.XXXXXX") || return 1
+    printf '%s' "$settings" > "$settings_file"
+    AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "$executable" --settings "$settings_file" "${note[@]}" "$@"
     result=$?
+    rm -f -- "$settings_file"
     __pg_emit codex-exited "$result" claude
     return "$result"
 }
@@ -1218,6 +1258,8 @@ class Worker:
         self.temp = tempfile.mkdtemp(prefix="agentrix-")
         self.skill_state_dir = os.path.join(os.path.expanduser("~"), ".local", "state", "agentrix", "ssh-skills")
         reading_note = self.startup_note(reading_note)
+        with open(os.path.join(self.temp, "skill-key.txt"), encoding="utf-8") as source: current_key = source.read()
+        prune_skill_state(self.skill_state_dir, current_key)
         with open(os.path.join(self.temp, "skill-note.txt"), "w", encoding="utf-8") as output: output.write(reading_note)
         os.chmod(os.path.join(self.temp, "skill-note.txt"), 0o600)
         notify_file = os.path.join(self.temp, "notify.py")

@@ -131,7 +131,7 @@ function briefOf(options, brief, team, { id, phase, repo, before } = {}) {
       + 'reported to the lead as out of scope and the work is rejected. If the task cannot be done within these paths, stop and say which file you would need and why.');
   }
   parts.push('# Skill changes\n\nDo not edit, add or delete any SKILL.md unless --allow names that exact file without wildcards: that is the lead\'s approval. '
-    + 'Put suggested skill changes under ## Skill proposals in your answer. Unapproved file changes are preserved beside your answer as proposals and restored before the helper ends.');
+    + 'Put suggested skill changes under ## Skill proposals in your answer. Unapproved changes are preserved beside your answer; only an isolated worker worktree is restored. Shared or managed files are report-only because their author is unknown.');
   if (options.ledger || team) parts.push(`# Handing back\n\nEnd your final answer with a section headed exactly \`${FINDINGS}\`: bullets with the facts, decisions `
     + 'and pitfalls the next worker on this task must know (file:line where it helps). They are added to the shared context.');
   const prefixed = parts.length ? Buffer.concat([Buffer.from(`${parts.join('\n\n')}\n\n# Task\n\n`), brief]) : brief;
@@ -405,7 +405,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
   let team = null, admission = null, teamFinished = false, roundtable = false, skillGuard = null, skillProposals = 0;
   const restoreSkills = changedFiles => { if (skillGuard) skillProposals = skillGuard.finish(id, changedFiles); };
-  const proposalNote = () => skillProposals ? ` · ${skillProposals} skill proposals pending lead approval` : '';
+  const proposalNote = () => (skillProposals ? ` · ${skillProposals} skill proposals pending lead approval` : '')
+    + [...(skillGuard?.notes || [])].map(note => ` · ${note}`).join('');
   const teamLabel = (end = false) => !team ? '' : roundtable ? ` · roundtable ${options.meeting}`
     : options.skipMeeting && !end ? ` · roundtable skipped: ${options.skipMeeting}` : '';
   const recordTeam = async report => {
