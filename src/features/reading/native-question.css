@@ -2,7 +2,8 @@
 .reading-choice.native-question { display: flex; flex-direction: column; padding: 0; overflow: hidden; font-weight: 400; }
 .native-question-form { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
 .native-question-body { flex: 1 1 auto; min-height: 0; padding: 12px 16px 8px; overflow: auto; overscroll-behavior: contain; }
-.native-question-footer { flex: none; padding: 8px 16px 12px; border-top: 1px solid var(--divider); }
+/* The footer's 12px top padding and the 12px under the status line hold the jump link's focus ring: its 32px box overhangs the 18px line by 7px, the ring adds 4. */
+.native-question-footer { flex: none; padding: 12px 16px 12px; border-top: 1px solid var(--divider); }
 .native-question-message { margin: 0 0 12px; overflow-wrap: anywhere; }
 .native-question-source { margin: 0 0 12px; font-size: calc(12px * var(--reading-text)); color: var(--text-2); overflow-wrap: anywhere; }
 .native-question-field { min-width: 0; padding: 0; margin: 0; border: 0; }
@@ -23,7 +24,7 @@
 .native-question-other { display: block; margin-top: 8px; }
 .native-question-reason, .native-question-status { margin: 4px 0 0; font-size: calc(12px * var(--reading-text)); line-height: 1.5; overflow-wrap: anywhere; }
 .native-question-reason { color: var(--danger); }
-.native-question-footer .native-question-reason, .native-question-status { margin: 0 0 8px; }
+.native-question-footer .native-question-reason, .native-question-status { margin: 0 0 12px; }
 /* The summary's link to the first unfinished field keeps a 32px hit area without making the line taller. It is underlined and fills on hover, so it reads as an action rather than as part of the status text; the 8px left margin keeps its focus ring off the status text. */
 .native-question-status { display: flex; flex-wrap: wrap; align-items: center; color: var(--text-2); }
 .native-question-status .text-button { min-height: 32px; margin: -8px 0 -8px 8px; padding: 0 8px; border-radius: 8px; color: var(--text-1); text-decoration: underline; text-underline-offset: 2px; }

@@ -80,33 +80,37 @@ const measureModelButtons = () => [...document.querySelectorAll('.model-toggle')
   return { name: button.getAttribute('aria-label'), text: label.textContent, height: Math.round(button.getBoundingClientRect().height), lines: Math.round(label.getBoundingClientRect().height / parseFloat(style.lineHeight)), nowrap: style.whiteSpace === 'nowrap', cut: label.scrollWidth > label.clientWidth + 1 };
 });
 
-// For each scroll region at its first and last scroll position: the text of every cell that a pinned (sticky) cell of the same row sits over. `shoot(index)` is called
-// at the last position, where the pinned column is over the cells that scrolled under it.
+// A cell scrolling under a pinned column is normal; what must not happen is a cell that never shows whole. For each scroll region, at its first and its last scroll position,
+// every unpinned cell with text is "whole" when its text is inside the region and clear of every pinned cell of its row. A cell that is whole at neither position is reported.
+// `shoot(index, region)` is called at the last position, where the pinned column is over the cells that scrolled under it.
 async function measureObscured(page, shoot) {
-  const found = [], regions = await page.$$('.scroll');
+  const regions = await page.$$('.scroll'), whole = { start: new Map(), end: new Map() }, hidden = [];
   const settle = (region, at) => region.evaluate(async (node, at) => {
     node.scrollLeft = at === 'start' ? 0 : node.scrollWidth;
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   }, at);
-  for (const [index, region] of regions.entries()) for (const at of ['start', 'end']) {
-    await settle(region, at);
-    found.push(...await region.evaluate((node, at) => {
-      const view = node.getBoundingClientRect(), range = document.createRange(), hidden = [];
-      for (const row of node.querySelectorAll('tr')) {
-        const cells = [...row.children], pinned = cells.filter(cell => getComputedStyle(cell).position === 'sticky');
-        for (const pin of pinned) for (const cell of cells.filter(other => !pinned.includes(other))) {
-          const over = pin.getBoundingClientRect();
-          range.selectNodeContents(cell);
-          const text = range.getBoundingClientRect(), width = Math.min(text.right, view.right, over.right) - Math.max(text.left, view.left, over.left);
-          if (cell.textContent.trim() && width > 0.5 && Math.min(text.bottom, over.bottom) - Math.max(text.top, over.top) > 0.5) hidden.push({ region: node.getAttribute('aria-label').slice(0, 8), at, text: cell.textContent.trim().slice(0, 24), overlap: Math.round(width) });
+  for (const [index, region] of regions.entries()) {
+    for (const at of ['start', 'end']) {
+      await settle(region, at);
+      for (const [key, ok] of await region.evaluate((node, index) => {
+        const view = node.getBoundingClientRect(), range = document.createRange(), cells = new Map();
+        for (const [rowAt, row] of [...node.querySelectorAll('tr')].entries()) {
+          const all = [...row.children], pinned = all.filter(cell => getComputedStyle(cell).position === 'sticky');
+          for (const [cellAt, cell] of all.entries()) {
+            if (pinned.includes(cell) || !cell.textContent.trim()) continue;
+            range.selectNodeContents(cell);
+            const text = range.getBoundingClientRect(), inside = text.left >= view.left - 0.5 && text.right <= view.right + 0.5;
+            cells.set(`${index}:${rowAt}:${cellAt}:${cell.textContent.trim().slice(0, 24)}`, inside && pinned.every(pin => { const over = pin.getBoundingClientRect(); return text.right <= over.left + 0.5 || text.left >= over.right - 0.5 || text.bottom <= over.top || text.top >= over.bottom; }));
+          }
         }
-      }
-      return hidden;
-    }, at));
-    if (at === 'end' && shoot) await shoot(index);
+        return [...cells];
+      }, index)) whole[at].set(key, ok);
+      if (at === 'end' && shoot) await shoot(index, region);
+    }
     await settle(region, 'start');
   }
-  return found;
+  for (const [key, ok] of whole.start) if (!ok && !whole.end.get(key)) hidden.push(key);
+  return { hidden, cells: whole.start.size };
 }
 
 // The text in the selected (expanded) model row with the colour it is drawn in and the surface under it.
@@ -256,15 +260,16 @@ async function checkTheme(theme, output, results) {
         assert.ok(buttons.every(button => button.height <= 32 && button.lines === 1 && button.nowrap && button.name === button.text && button.cut === (button.name === LONG_MODEL)), `model buttons at ${width}×${height}: ${JSON.stringify(buttons)}`);
         assert.ok(name !== 'models' || buttons.some(button => button.name === LONG_MODEL && button.cut), 'the long model id is cut with an ellipsis');
         // The picture of each overflowing table at its end: its first column is pinned there, over the cells that scrolled under it.
-        const obscured = await measureObscured(dash, width === 820 ? index => shot(dash, `${theme}-${width}x${height}-${name}-scroll${index}-end`) : undefined);
-        assert.deepEqual(obscured, [], `text under a pinned column at ${width}×${height} on ${name}`);
+        const obscured = await measureObscured(dash, width === 820 ? async (index, region) => { if (!await region.isVisible()) return; await region.scrollIntoViewIfNeeded(); await shot(dash, `${theme}-${width}x${height}-${name}-scroll${index}-end`); } : undefined);
+        assert.deepEqual(obscured.hidden, [], `cells that never show whole at ${width}×${height} on ${name}`);
+        assert.ok(obscured.cells > 20, 'the tables have cells to check');
         if (name === 'models') {
           const selected = await dash.evaluate(measureSelectedRow), low = selected.map(({ text, color, surface }) => ({ text, ratio: contrast(color, surface) })).filter(({ ratio }) => ratio < 4.5);
           assert.ok(selected.length >= 4, 'the selected row has its text measured');
           assert.deepEqual(low, [], `text in the selected row under 4.5:1 at ${width}×${height} on ${theme}`);
           results.push({ theme, width, height, selectedRow: selected.map(({ text, color, surface }) => ({ text, ratio: +contrast(color, surface).toFixed(2) })) });
         }
-        await shot(dash, `${theme}-${width}x${height}-${name}`); results.push({ theme, width, height, page: name, ...layout, buttons, obscured: obscured.length });
+        await shot(dash, `${theme}-${width}x${height}-${name}`); results.push({ theme, width, height, page: name, ...layout, buttons, cellsChecked: obscured.cells, regions: await dash.locator('.scroll').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label').slice(0, 6))), neverWhole: obscured.hidden.length });
         if (name === 'models') {
           await tasks.scrollIntoViewIfNeeded();
           await shot(dash, `${theme}-${width}x${height}-model-tasks`);
