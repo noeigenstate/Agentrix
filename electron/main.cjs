@@ -101,7 +101,6 @@ const t = (text, values) => translate(store?.settings.language, text, values);
 let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, quitCleaned = false;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
-let titlebarOffset = 24;
 function windowBackgroundColor() { return store.settings.theme === 'light' ? '#f8f9fb' : '#181818'; }
 function updateStoreSettings(patch) {
   const { theme, uiZoom, language, shortcuts } = store.settings;
@@ -164,28 +163,6 @@ function findProject(id) {
   if (!project) throw new Error('项目不存在。');
   return project;
 }
-function menuBarHeight(display, previous = 24) {
-  const height = display?.workArea?.y - display?.bounds?.y;
-  return Number.isFinite(height) && height > 0 ? height : previous;
-}
-function registerTitlebarOffset() {
-  if (process.platform !== 'darwin') return;
-  const refresh = () => {
-    // Full screen can report no menu-bar inset; keep the last windowed measurement.
-    if (window.isDestroyed() || window.isFullScreen()) return;
-    const next = menuBarHeight(screen.getDisplayMatching(window.getBounds()), titlebarOffset);
-    if (next === titlebarOffset) return;
-    titlebarOffset = next;
-    broadcast();
-  };
-  refresh();
-  for (const event of ['move', 'leave-full-screen']) window.on(event, refresh);
-  const displayEvents = ['display-metrics-changed', 'display-added', 'display-removed'];
-  for (const event of displayEvents) screen.on(event, refresh);
-  window.once('closed', () => {
-    for (const event of displayEvents) screen.removeListener(event, refresh);
-  });
-}
 function publicState() {
   return {
     projects: store.projects.map(p => {
@@ -242,7 +219,6 @@ function publicState() {
     // In full screen the title bar slides away and returns when the pointer touches the top edge. The
     // desktop checks drive the title bar in full screen, so isolated test profiles keep it unless asked.
     autoHideTitlebar: !process.env.AGENTRIX_DATA_DIR || process.env.AGENTRIX_TEST_TITLEBAR === '1',
-    titlebarOffset: process.platform === 'darwin' ? titlebarOffset : 0,
     version: app.getVersion(),
     // The usage guide opens on first use and after each update. Isolated test profiles skip it unless asked.
     guide: store.settings.guideVersion !== app.getVersion() && (!process.env.AGENTRIX_DATA_DIR || process.env.AGENTRIX_TEST_GUIDE === '1'),
@@ -1474,7 +1450,6 @@ if (!app.requestSingleInstanceLock()) {
       relaunchDisplayName,
     });
     windowZoom = registerWindowZoom({ window, screen, getZoom: () => store.settings.uiZoom, broadcast });
-    registerTitlebarOffset();
     registerWindowContents({ window, Menu, clipboard, previewResources, pictureFrom, devUrl, t,
       getActiveTerminal: () => activeTerminal, getActiveFileTree: () => activeFileTree, getShortcuts: () => store.settings.shortcuts });
     registerWindowLifecycle({ window, getSettings: () => store.settings, isQuitting: () => quitting, hasTray: () => !!tray,

@@ -57,8 +57,8 @@ h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 .home-nav :is(button):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 /* Full screen: the title bar slides up out of the way; touching the top edge, tabbing into the bar or an open app menu (drawn on the page body) brings it back over the content.
    Only keyboard focus counts: the focus a click leaves on a button would keep the bar down after the pointer has gone.
-   --titlebar-offset comes from the main process's cached macOS menu-bar height, set on .app-shell by App.tsx (0 on other platforms). */
-.app-shell.titlebar-auto .titlebar { position: fixed; top: 0; left: 0; right: 0; z-index: 300; transform: translateY(-100%); }
+   --titlebar-offset is how far down it sits when shown, the one value to tune against macOS's own window-button strip (0 on every platform for now). */
+.app-shell.titlebar-auto .titlebar { --titlebar-offset: 0px; position: fixed; top: 0; left: 0; right: 0; z-index: 300; transform: translateY(-100%); }
 /* macOS slides the system menu bar over the page's top edge, which ends the pointer's hover there: the bar waits a moment before it goes (the shown state sets the delay to 0). */
 :root[data-platform="darwin"] .app-shell.titlebar-auto .titlebar { --titlebar-delay: 600ms; transition: transform .2s ease var(--titlebar-delay); }
 .app-shell.titlebar-auto .titlebar-reveal { position: fixed; top: 0; left: 0; right: 0; height: 4px; z-index: 299; }

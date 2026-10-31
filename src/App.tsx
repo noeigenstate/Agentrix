@@ -312,7 +312,7 @@ export function App() {
   const searchShown = !focusedId && (searchOpen || !!query);
   // On macOS the bar stays in flow while the search box is in use: floating, it would cover the card the search found.
   const autoHideTitlebar = fullScreen && workspace.autoHideTitlebar && !(isMac && searchShown);
-  return <div ref={focusMotionRoot} className={`app-shell ${focusedId ? 'focus-mode' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${autoHideTitlebar ? 'titlebar-auto' : ''}`} style={{ '--terminal-font-size': `${settings.fontSize}px`, '--titlebar-offset': `${isMac ? workspace.titlebarOffset : 0}px` } as CSSProperties}>
+  return <div ref={focusMotionRoot} className={`app-shell ${focusedId ? 'focus-mode' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${autoHideTitlebar ? 'titlebar-auto' : ''}`} style={{ '--terminal-font-size': `${settings.fontSize}px` } as CSSProperties}>
     {autoHideTitlebar && <div className="titlebar-reveal" aria-hidden="true" />}
     <div className="titlebar">
       {!isMac && <AppMenu fullScreen={fullScreen} canReturn={shownView !== 'workspace' || !!focusedId} updateReady={updates?.status === 'ready'}
