@@ -1916,5 +1916,16 @@
   "请按 2026-01-31 的格式填写日期": "Enter the date as 2026-01-31",
   "请按 2026-01-31T09:30:00Z 的格式填写日期和时间": "Enter the date and time as 2026-01-31T09:30:00Z",
   "还有 {count} 项未完成": "{count} left to complete",
-  "回答未被接受，请检查各项后重试。": "The answer was not accepted. Check each field and try again."
+  "回答未被接受，请检查各项后重试。": "The answer was not accepted. Check each field and try again.",
+  "时间": "Time",
+  "输出 token": "Output tokens",
+  "{model} 的任务": "Tasks for {model}",
+  "收起任务列表": "Collapse task list",
+  "按当前筛选，最多显示最近 50 条任务": "Up to 50 latest tasks matching the current filters",
+  "模型任务表，可横向滚动；任务列和结果列固定": "Model task table, scrolls sideways; task and result columns stay in view",
+  "没有任务": "No tasks",
+  "返工或退回": "Reworked or sent back",
+  "已记录的看板建议": "Recorded dashboard suggestion",
+  "{model} 的 {kind} 任务权重建议：从 {from} 调整为 {to}。此建议已不再生成，仍可撤销此决策。": "Task weight suggestion for {model} / {kind}: {from} to {to}. This suggestion is no longer generated; you can still withdraw the decision.",
+  "此建议已不再生成，仍可撤销此决策。": "This suggestion is no longer generated; you can still withdraw the decision."
 }
