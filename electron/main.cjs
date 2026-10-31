@@ -85,7 +85,7 @@ const { listAgentCommands, isLocalAgentCommand } = require('./agent-commands.cjs
 const { claudeConfigDir, findClaudeSession, listClaudeSessions } = require('./claude-sessions.cjs');
 const { listCodexSessions } = require('./codex-sessions.cjs');
 const { AgentsManager, onPath } = require('./agents.cjs');
-const { ZSH, linuxShell, shellEnvironment, zshEnvironment, bashArguments, withoutAppImage, terminalLocale } = require('./zsh-terminal.cjs');
+const { macShell, linuxShell, shellEnvironment, zshEnvironment, bashArguments, withoutAppImage, terminalLocale } = require('./zsh-terminal.cjs');
 
 const root = path.join(__dirname, '..');
 const integrationDir = app.isPackaged ? path.join(process.resourcesPath, 'integration') : path.join(root, 'integration');
@@ -214,8 +214,8 @@ function publicState() {
     desktopGlass: { supported: !!desktopGlassBackend, compatibility: desktopGlassBackend === 'windows-compat', active: desktopGlassActive, restart: store.settings.surface === 'glass' && store.settings.glassBackground === 'desktop' && !!desktopGlassBackend && !desktopGlassWindow, failed: desktopGlassWindow && !desktopGlassActive },
     warning: store.warning,
     platform: process.platform,
-    // Linux: the shell new local terminals use and whether zsh is installed, for the choice in Settings.
-    localShell: process.platform === 'linux' ? (({ kind, zsh }) => ({ kind, zsh }))(localShell()) : null,
+    // macOS and Linux: the shell new local terminals use and whether zsh is installed, for Settings.
+    localShell: ['darwin', 'linux'].includes(process.platform) ? (({ kind, zsh }) => ({ kind, zsh }))(localShell()) : null,
     // In full screen the title bar slides away and returns when the pointer touches the top edge. The
     // desktop checks drive the title bar in full screen, so isolated test profiles keep it unless asked.
     autoHideTitlebar: !process.env.AGENTRIX_DATA_DIR || process.env.AGENTRIX_TEST_TITLEBAR === '1',
@@ -1010,12 +1010,12 @@ function remoteFor(id) {
   return session.terminal;
 }
 
-// The local shell for a new terminal: PowerShell or Command Prompt on Windows, zsh on macOS, and on Linux
-// Bash or zsh as chosen in Settings (the login shell's kind until one is chosen).
+// New local terminals use the chosen shell: Bash by default on macOS, the login shell's kind on Linux,
+// PowerShell or Command Prompt on Windows.
 // Linux looks for the shells again whenever a terminal starts, so one installed meanwhile is used.
 let linuxShells = null;
 function localShell(fresh = false) {
-  if (process.platform === 'darwin') return { kind: 'zsh', file: ZSH };
+  if (process.platform === 'darwin') return macShell(store.settings.shell);
   if (process.platform !== 'linux') return { kind: store.settings.shell === 'cmd' ? 'cmd' : 'powershell', file: null };
   if (fresh || linuxShells?.choice !== store.settings.shell) linuxShells = { ...linuxShell(store.settings.shell), choice: store.settings.shell };
   return linuxShells;
@@ -1085,7 +1085,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   const sessionId = randomUUID();
   const sessionKey = randomUUID();
   const startPath = restorePlans.get(id)?.cwd || store.findTerminal(id)?.record.restore?.cwd || project.path;
-  // Local terminals use the shell chosen in settings (zsh on macOS); SSH projects always run Bash on the server.
+  // Local terminals use the shell chosen in settings; SSH projects always run Bash on the server.
   const shell = project.kind === 'ssh' ? { kind: 'bash', file: null } : localShell(true), shellKind = shell.kind;
   const bootstrapFile = project.kind !== 'ssh' ? path.join(runtimeDir, `${sessionId}.json`) : null;
   const skillNoteFile = project.kind === 'ssh' ? null : path.join(runtimeDir, `${sessionId}-skills.txt`);
@@ -1110,6 +1110,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   const local = project.kind !== 'ssh' && ['zsh', 'bash'].includes(shellKind);
   const integration = local && { folder: zshStartup, socket: eventServer.address, projectId: id, sessionKey, node: process.execPath,
     helper: path.join(integrationDir, 'agent-event.cjs'), startDir: startPath,
+    loginFiles: process.platform === 'darwin' && shellKind === 'bash',
     // Every glibc since 2.35 has C.UTF-8; a Linux desktop session normally sets LANG itself.
     locale: process.platform === 'darwin' ? terminalLocale(app.getPreferredSystemLanguages()) : 'C.UTF-8' };
   if (local) env = shellKind === 'zsh' ? zshEnvironment(env, integration) : shellEnvironment(env, integration);

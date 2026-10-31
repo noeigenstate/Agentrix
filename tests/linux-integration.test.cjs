@@ -110,7 +110,7 @@ test('the Linux file clipboard writes the formats file managers read and reads t
   assert.deepEqual(await readFileList({ env: {}, runTool: async () => null, electron: () => ({ clipboard: { read: async () => [] } }) }), []);
 });
 
-test('a real Bash terminal keeps the user start-up files and reports prompts, Codex and Claude Code', { skip: process.platform !== 'linux' || !findShell('bash'), timeout: 60000 }, async t => {
+test('a real Bash terminal keeps the user start-up files and reports prompts, Codex and Claude Code', { skip: !['linux', 'darwin'].includes(process.platform) || !findShell('bash'), timeout: 60000 }, async t => {
   const pty = require('node-pty');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pg-bash-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -132,7 +132,8 @@ test('a real Bash terminal keeps the user start-up files and reports prompts, Co
   t.after(() => server.close());
   const source = { ...process.env, HOME: home, PATH: '/usr/bin:/bin:/usr/sbin:/sbin', PG_TEST_NODE: process.execPath, PG_TEST_RECORDER: recorder, PG_TEST_LOG: log, AGENTRIX_READING_NOTE: NOTE };
   delete source.LANG; delete source.LC_ALL; delete source.LC_CTYPE; delete source.CODEX_HOME; delete source.PROMPT_COMMAND;
-  const env = shellEnvironment(createTerminalEnvironment(source, ''), { socket: server.address, projectId: 'project', sessionKey: 'key', node: process.execPath, helper, startDir: project, locale: 'C.UTF-8' });
+  const locale = process.platform === 'darwin' ? 'en_US.UTF-8' : 'C.UTF-8';
+  const env = shellEnvironment(createTerminalEnvironment(source, ''), { socket: server.address, projectId: 'project', sessionKey: 'key', node: process.execPath, helper, startDir: project, locale });
   const terminal = pty.spawn(findShell('bash'), bashArguments(integrationDir), { name: 'xterm-256color', cols: 120, rows: 30, cwd: project, env });
   cleanupTerminal(t, terminal);
   let output = '';
@@ -156,7 +157,7 @@ test('a real Bash terminal keeps the user start-up files and reports prompts, Co
   // command still sees the exit status of the last command.
   type('false');
   type('printf "%s\\n" "${AGENTRIX_SESSION_KEY-0}${AGENTRIX_SOCKET-0}${AGENTRIX_NODE-0}${AGENTRIX_READING_NOTE-0}|$PG_TEST_BASHRC|$PG_TEST_LAST|$LANG|$TERM_PROGRAM|$(bash -c \'type -t codex\' 2>/dev/null)" > "$PG_TEST_LOG/state"');
-  assert.equal(await readLog('state'), '0000|1|1|C.UTF-8|agentrix|file');
+  assert.equal(await readLog('state'), `0000|1|1|${locale}|agentrix|file`);
 
   // codex: started and exited around the real program, which gets notify and the title setting first.
   type('codex resume --last');
