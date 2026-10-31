@@ -609,6 +609,43 @@ test('the native style reader resolves installed families, weights, pixels and m
   assert.throws(() => addon.attach(Buffer.alloc(8), () => {}), /initialized macOS application/);
 });
 
+test('native traffic-light offsets keep a 16 pt gap across accessory origins, zoom and selection', {
+  skip: process.platform !== 'darwin' || !fs.existsSync(binary),
+}, () => {
+  const addon = require(binary);
+  addon.detach();
+  const items = [
+    { id: 'decisions', label: '决策', count: 0, selected: false },
+    { id: 'workspace', label: '工作台', selected: true },
+  ];
+  for (const scale of [0.5, 0.8, 1, 1.25, 2]) for (const count of [0, 2, 12345]) for (const pixels of [1, 2]) {
+    const style = styleFixture(); style.scale = scale;
+    items[0].count = count;
+    for (const sample of [
+      { mode: 'windowed', lightRight: 74, accessoryLeft: 0, accessoryBottom: 0 },
+      { mode: 'full-screen strip', lightRight: 69, accessoryLeft: 60, accessoryBottom: 900 },
+      { mode: 'windowed accessory after lights', lightRight: 74, accessoryLeft: 78, accessoryBottom: 10 },
+      { mode: 'focus outline must not widen the gap', lightRight: 69, accessoryLeft: 82, accessoryBottom: 0 },
+      { mode: 'screen to the left', lightRight: -1351, accessoryLeft: -1360, accessoryBottom: 750 },
+      { mode: 'screen to the right', lightRight: 1429, accessoryLeft: 1420, accessoryBottom: -940 },
+    ]) {
+      const layout = { ...sample, height: 96, lightCenter: sample.accessoryBottom + 48, pixels };
+      if (pixels === 2) {
+        layout.accessoryLeft += 0.5; layout.lightRight += 0.5;
+        layout.accessoryBottom += 0.5; layout.lightCenter += 0.5;
+      }
+      const result = addon.update({ items, style, layout });
+      const [x, y, , height] = result.layout.frames[0];
+      assert.equal(x + layout.accessoryLeft - layout.lightRight, 16, sample.mode);
+      assert.ok(Math.abs(y + height / 2 + layout.accessoryBottom - layout.lightCenter) <= 0.5,
+        `${sample.mode}: vertical alignment allows backing-pixel rounding`);
+      assert.equal(result.layout.height, layout.height, 'AppKit retains control of accessory height');
+      assert.deepEqual(result.selectionLayout, result.layout, 'selection must not move the items');
+      assert.deepEqual(result.relayout, result.layout, 'the offset must not accumulate on relayout');
+    }
+  }
+});
+
 test('native layout preserves AppKit height, light alignment and frames when selection changes', {
   skip: process.platform !== 'darwin' || !fs.existsSync(binary),
 }, () => {

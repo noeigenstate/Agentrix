@@ -36,8 +36,9 @@ void DeliverClick(napi_env env, napi_value callback, void*, void* data) {
   Napi::Function(env, callback).Call({Napi::String::New(env, click->id)});
 }
 
-NSRect ScreenFrame(NSView* view) {
-  return [view.window convertRectToScreen:[view convertRect:view.bounds toView:nil]];
+NSPoint PositionAfterTrafficLight(NSRect light, NSRect accessory) {
+  // Both frames use the strip window's base coordinates; AppKit already supplies the accessory's inset.
+  return NSMakePoint(NSMaxX(light) + kTrafficLightGap - NSMinX(accessory), NSMidY(light) - NSMinY(accessory));
 }
 
 struct TitlebarStyle {
@@ -388,7 +389,7 @@ AgentrixNavButton* MakeNavButton(NSString* identifier) {
 }
 
 void LayoutButtons(NSView* view, AgentrixNavButton* decisions, AgentrixNavButton* workspace,
-    CGFloat lightRight, CGFloat lightCenter, CGFloat pixels) {
+    NSPoint position, CGFloat pixels) {
   CGFloat buttonHeight = std::ceil(decisions.contentSize.height * pixels) / pixels;
   CGFloat outset = std::ceil(decisions.focusOutset * pixels) / pixels;
   // AppKit owns a left accessory's height. Requesting another height causes a relayout loop.
@@ -396,9 +397,10 @@ void LayoutButtons(NSView* view, AgentrixNavButton* decisions, AgentrixNavButton
   // If the full outline cannot fit, prioritise the button rather than shifting it for a partial outline.
   CGFloat margin = buttonHeight + 2 * outset <= height ? outset : 0;
   CGFloat half = std::min(buttonHeight / 2 + margin, height / 2);
-  CGFloat center = std::clamp(lightCenter, NSMinY(view.bounds) + half, NSMaxY(view.bounds) - half);
+  CGFloat center = std::clamp(position.y, NSMinY(view.bounds) + half, NSMaxY(view.bounds) - half);
   BOOL changed = NO;
-  CGFloat x = std::max(outset, lightRight + kTrafficLightGap);
+  // A clipped focus outline must not push the buttons away from the traffic lights.
+  CGFloat x = position.x;
   for (AgentrixNavButton* button in @[decisions, workspace]) {
     CGFloat width = std::ceil(button.contentSize.width * pixels) / pixels;
     NSRect frame = [view backingAlignedRect:NSMakeRect(x, center - buttonHeight / 2, width, buttonHeight)
@@ -522,18 +524,21 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
 - (void)alignButtons {
   NSWindow* host = host_;
   NSView* view = self.view;
-  if (layingOut_ || !host || !view.window) return;
+  NSWindow* strip = view.window;
+  if (layingOut_ || !host || !strip) return;
   layingOut_ = YES;
-  CGFloat right = -kTrafficLightGap;
-  CGFloat center = NSMidY(view.bounds);
-  NSButton* light = [host standardWindowButton:NSWindowZoomButton];
-  if (light.window) {
-    // Full screen can reparent the native strip: use screen coordinates across windows.
-    NSRect frame = [view convertRect:[view.window convertRectFromScreen:ScreenFrame(light)] fromView:nil];
-    right = NSMaxX(frame);
-    center = NSMidY(frame);
+  CGFloat pixels = strip.backingScaleFactor;
+  NSPoint position = NSMakePoint(std::ceil(decisions_.focusOutset * pixels) / pixels, NSMidY(view.bounds));
+  // Full screen has its own titlebar window and controls; the document window's lights can be stale.
+  NSButton* light = [strip standardWindowButton:NSWindowZoomButton];
+  if (!light && strip != host) light = [host standardWindowButton:NSWindowZoomButton];
+  if (light.window == strip) {
+    position = PositionAfterTrafficLight([light convertRect:light.bounds toView:nil],
+        [view convertRect:view.bounds toView:nil]);
+    position.x += NSMinX(view.bounds);
+    position.y += NSMinY(view.bounds);
   }
-  LayoutButtons(view, decisions_, workspace_, right, center, view.window.backingScaleFactor);
+  LayoutButtons(view, decisions_, workspace_, position, pixels);
   layingOut_ = NO;
 }
 
@@ -745,12 +750,16 @@ Napi::Value Update(const Napi::CallbackInfo& info) {
       Napi::Object layout;
       if (!controller && ReadObject(info[0].As<Napi::Object>(), "layout", layout)) {
         CGFloat height, right, center, pixels;
+        CGFloat left = 0, bottom = 0;
         if (!ReadNumber(layout, "height", height) || !ReadNumber(layout, "lightRight", right)
-            || !ReadNumber(layout, "lightCenter", center) || !ReadNumber(layout, "pixels", pixels) || pixels <= 0) {
-          Napi::TypeError::New(env, "layout requires height, lightRight, lightCenter and positive pixels").ThrowAsJavaScriptException();
+            || !ReadNumber(layout, "lightCenter", center) || !ReadNumber(layout, "pixels", pixels) || pixels <= 0
+            || (!layout.Get("accessoryLeft").IsUndefined() && !ReadNumber(layout, "accessoryLeft", left))
+            || (!layout.Get("accessoryBottom").IsUndefined() && !ReadNumber(layout, "accessoryBottom", bottom))) {
+          Napi::TypeError::New(env, "layout requires height, lightRight, lightCenter, positive pixels and optional numeric accessoryLeft/accessoryBottom").ThrowAsJavaScriptException();
           return env.Undefined();
         }
-        NSView* group = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 0, height)];
+        NSView* group = [[NSView alloc] initWithFrame:NSMakeRect(left, bottom, 0, height)];
+        NSRect light = NSMakeRect(right, center, 0, 0);
         NSArray<AgentrixNavButton*>* buttons = @[MakeNavButton(@"decisions"), MakeNavButton(@"workspace")];
         for (NSUInteger i = 0; i < buttons.count; i++) {
           [group addSubview:buttons[i]];
@@ -758,14 +767,14 @@ Napi::Value Update(const Napi::CallbackInfo& info) {
           [buttons[i] setLabel:[NSString stringWithUTF8String:parsed[i].label.c_str()]
               count:parsed[i].count selected:parsed[i].selected];
         }
-        LayoutButtons(group, buttons[0], buttons[1], right, center, pixels);
+        LayoutButtons(group, buttons[0], buttons[1], PositionAfterTrafficLight(light, group.frame), pixels);
         result.Set("layout", LayoutSnapshot(env, group, buttons));
         for (NSUInteger i = 0; i < buttons.count; i++) {
           [buttons[i] setLabel:[NSString stringWithUTF8String:parsed[i].label.c_str()]
               count:parsed[i].count selected:!parsed[i].selected];
         }
         result.Set("selectionLayout", LayoutSnapshot(env, group, buttons));
-        LayoutButtons(group, buttons[0], buttons[1], right, center, pixels);
+        LayoutButtons(group, buttons[0], buttons[1], PositionAfterTrafficLight(light, group.frame), pixels);
         result.Set("relayout", LayoutSnapshot(env, group, buttons));
       }
       return result;
