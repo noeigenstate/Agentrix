@@ -19,13 +19,17 @@ test('local thumbnails are version-cached and dimensions and 25 MB limit are che
   t.after(() => { assert.ok(path.resolve(root).startsWith(prefix)); fs.rmSync(root, { recursive: true, force: true }); });
   let calls = 0;
   const thumbnails = new PictureThumbnails(() => { calls++; return `data:image/png;base64,VERSION${calls}`; });
-  fs.writeFileSync(file, image(8));
+  // Each version gets its own modification time: two quick writes can share one on a coarse or fast file system, and the
+  // cache (path, size and times) cannot tell such twins apart.
+  let version = 0;
+  const write = content => { fs.writeFileSync(file, content); const at = new Date(Date.now() - 60000 + ++version * 1000); fs.utimesSync(file, at, at); };
+  write(image(8));
   assert.equal(thumbnails.file(file), 'data:image/png;base64,VERSION1');
   assert.equal(thumbnails.file(file), 'data:image/png;base64,VERSION1'); assert.equal(calls, 1);
-  fs.writeFileSync(file, Buffer.concat([image(16), Buffer.alloc(1)]));
+  write(Buffer.concat([image(16), Buffer.alloc(1)]));
   assert.equal(thumbnails.file(file), 'data:image/png;base64,VERSION2'); assert.equal(calls, 2);
-  fs.writeFileSync(file, image(20000)); assert.equal(thumbnails.file(file), values.omitted); assert.equal(calls, 2);
-  fs.writeFileSync(file, 'not an image'); assert.equal(thumbnails.file(file), values.unavailable); assert.equal(calls, 2);
+  write(image(20000)); assert.equal(thumbnails.file(file), values.omitted); assert.equal(calls, 2);
+  write('not an image'); assert.equal(thumbnails.file(file), values.unavailable); assert.equal(calls, 2);
   fs.truncateSync(file, FILE_LIMIT + 1); assert.equal(thumbnails.file(file), values.omitted); assert.equal(calls, 2);
 });
 

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
+const { parseQuestion } = require('../src/features/agents/agent-question.ts');
 const { questionKeys, questionStops } = require('../src/features/reading/question-keys.ts');
 
 // Screens drawn by Claude Code 2.1.294 (AskUserQuestion) and Codex 0.161 (request_user_input in Plan mode).
@@ -53,6 +54,51 @@ test('Claude review page lists the answers before Submit answers / Cancel', () =
   assert.equal(review.title, 'Ready to submit your answers?');
   assert.deepEqual(review.question.review, [{ question: '回收站怎么处理？', answer: '清空回收站' }, { question: '要清理哪些目录？', answer: 'node_modules, abc' }]);
   assert.deepEqual(review.options.map(item => [item.label, item.selected]), [['Submit answers', true], ['Cancel', false]]);
+});
+
+test('Claude Review accepts the real unanswered warning with zero or some answers, and wrapped summaries', () => {
+  const rows = read('claude-question-review');
+  const heading = rows.findIndex(row => row.trim() === 'Review your answers');
+  const ready = rows.findIndex(row => row.trim() === 'Ready to submit your answers?');
+  for (const summaries of [[], [' ● First question', '   continued question', '   → First answer', '     continued answer']]) {
+    const screen = parseAgentScreen('claude', [...rows.slice(0, heading + 1), '', '⚠ You have not answered all questions', '', ...summaries, '', ...rows.slice(ready)]);
+    assert.equal(screen.choice?.kind, 'question');
+    assert.equal(screen.waiting, undefined);
+    assert.deepEqual(screen.choice.context, ['⚠ You have not answered all questions']);
+    assert.deepEqual(screen.choice.question.review, summaries.length ? [{ question: 'First question continued question', answer: 'First answer continued answer' }] : []);
+    assert.deepEqual(screen.choice.options.map(item => item.label), ['Submit answers', 'Cancel']);
+  }
+});
+
+test('Claude bundle checkbox, tick and pointer variants keep tabs and selections', () => {
+  const rows = read('claude-question-multi-checked');
+  // Claude 2.1.314's symbol tables: U+2610/2612/2714 and [ ]/[×]/U+221A with pointer >.
+  const fallback = rows.map(row => row.replaceAll('☐', '[ ]').replaceAll('☒', '[×]').replaceAll('✔', '√').replaceAll('❯', '>'));
+  assert.deepEqual(parseAgentScreen('claude', fallback).choice, parse('claude-question-multi-checked'));
+});
+
+test('a clipped Claude tab bar retains a complete visible question, but missing option one waits', () => {
+  const rows = read('claude-question');
+  const heading = rows.findIndex(row => row.trim() === '回收站怎么处理？');
+  assert.deepEqual(parseAgentScreen('claude', rows.slice(heading)).choice, parse('claude-question'));
+  const second = rows.findIndex(row => /^\s*2\./.test(row));
+  const clipped = parseAgentScreen('claude', rows.slice(second));
+  assert.equal(clipped.choice, null);
+  assert.deepEqual(clipped.waiting, { title: null });
+});
+
+test('a missing Claude tab bar cannot include conversation, rules or inputs in the question title', () => {
+  const captured = fs.readFileSync(path.join(__dirname, 'fixtures/screens/claude-investigation-single.txt'), 'utf8')
+    .split('\n').map(row => row.replaceAll('☐', '□'));
+  const rows = read('claude-question');
+  const heading = rows.findIndex(row => row.trim() === '回收站怎么处理？');
+  for (const screenRows of [captured, ...['────────────────', '⏺ Previous answer', '● Previous answer', '⎿ Previous tool result', '❯ Previous prompt']
+    .map(row => [row, '', ...rows.slice(heading)])]) {
+    assert.equal(parseQuestion('claude', screenRows), null);
+  }
+  const screen = parseAgentScreen('claude', captured);
+  assert.equal(screen.choice, null);
+  assert.deepEqual(screen.waiting, { title: null });
 });
 
 test('Codex questions: position, two-column options, the last question and open notes', () => {

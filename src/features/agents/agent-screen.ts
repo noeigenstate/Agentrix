@@ -3,9 +3,12 @@ import { parseQuestion } from './agent-question.ts';
 
 const rule = (row: string) => /^[─╌]{2,}$/.test(row.trim());
 const optionRow = (row: string) => /^(\s*)([❯›>↓↑]?\s*)(\d+)\.\s+(.+)$/.exec(row);
-const inputRow = (agent: ScreenAgent, row: string) =>
-  (agent === 'claude' ? /^\s*❯(?:\s|$)/ : /^\s*›(?:\s|$)/).test(row) && !optionRow(row);
-const hintRow = (row: string) => /^(?:press\s+)?(?:enter|esc)\b.*(?:cancel|confirm|select|back|default|continue|skip|exit|close)/i.test(row.trim());
+const cursorRow = (agent: ScreenAgent, row: string) =>
+  (agent === 'claude' ? /^\s*❯(?:\s|$)/ : /^\s*›(?:\s|$)/).test(row);
+const inputRow = (agent: ScreenAgent, row: string) => cursorRow(agent, row) && !optionRow(row);
+const claudeComposer = (rows: string[], index: number) => cursorRow('claude', rows[index]) &&
+  (rule(rows[index - 1] ?? '') || rule(rows[index + 1] ?? ''));
+const hintRow = (row: string) => /^(?:press\s+)?(?:enter|esc|tab)\b.*(?:cancel|confirm|select|submit|back|default|continue|skip|exit|close)/i.test(row.trim());
 const menuExtra = (row: string) => /^(?:…\s*\+\d+ models|●\s+\S+ effort\b.*to adjust|Learn more:\s+\S+)$/.test(row.trim());
 
 // A terminal gives CJK and other wide characters two cells: a row's columns are counted in cells, not characters.
@@ -51,7 +54,8 @@ export function codexDialog(rows: string[]): string[] | null {
 }
 // Codex asks "Would you like to run the following command?", "…make the following edits?", "…grant these permissions?"
 // and "<server> needs your approval."; Claude "Do you want to create hello.txt?".
-const permissionTitle = (row: string) => /^(?:Do you want\b|Would you like to\b|Allow\b)|\bneeds your approval\.?$/i.test(row);
+const mcpUrlTitle = /^MCP server .+ wants to open a URL$/i;
+const permissionTitle = (row: string) => mcpUrlTitle.test(row) || /^(?:Do you want\b|Would you like to\b|Allow\b)|\bneeds your approval\.?$|^(?:Exit plan mode\?|Implement this plan\?|Action required)$/i.test(row);
 const choiceTitle = (row: string) => permissionTitle(row) || /^Select\b/i.test(row);
 
 // Claude surrounds its composer with rules; Codex puts its footer below the last composer.
@@ -60,13 +64,15 @@ function footerStart(agent: ScreenAgent, rows: string[]): number {
   if (agent === 'claude') {
     for (let index = rows.length - 1; index >= 1; index--) {
       if (/^─{2,}$/.test(rows[index].trim())) {
-        return inputRow(agent, rows[index - 1]) ? index + 1 : rows.length;
+        return cursorRow(agent, rows[index - 1]) ? index + 1 : rows.length;
       }
     }
   } else {
     for (let index = rows.length - 1; index >= 0; index--) {
       // Codex 0.163 replaces › with ! in its shell editor. This footer anchor is separate from shortcut/menu rows.
-      if (inputRow(agent, rows[index]) || /^\s*!(?:\s|$)/.test(rows[index])) return index + 1;
+      // A numbered draft is still the composer when the model footer follows it, rather than menu key hints.
+      if (inputRow(agent, rows[index]) || /^\s*!(?:\s|$)/.test(rows[index]) ||
+          cursorRow(agent, rows[index]) && parseStatus(agent, rows, index + 1).model !== null) return index + 1;
     }
   }
   return rows.length;
@@ -175,7 +181,7 @@ function parseOverlay(agent: ScreenAgent, rows: string[], start: number): AgentS
 const bareCursor = /^(\s*❯\s+(?:✔\s+)?)\S/, bareLabel = /^(\s*(?:✔\s+)?)[^\s⎿]/;
 const conversationRow = (row: string) => /^\s*[⎿⏺●]/.test(row);
 function bareChoice(rows: string[]): ScreenChoice | null {
-  if (rows.some((row, index) => /^\s*❯/.test(row) && (rule(rows[index - 1] ?? '') || rule(rows[index + 1] ?? '')))) return null;
+  if (rows.some((_, index) => claudeComposer(rows, index))) return null;
   const cursor = rows.findIndex(row => bareCursor.test(row));
   if (cursor < 0 || rows.some((row, index) => conversationRow(row) || index !== cursor && /^\s*❯/.test(row))) return null;
   const column = bareCursor.exec(rows[cursor])![1].length, lines = (index: number) => bareLabel.exec(rows[index] ?? '')?.[1].length === column;
@@ -206,7 +212,7 @@ function bareChoice(rows: string[]): ScreenChoice | null {
 // the dialog's rule (or the step it asks about) and that row explains it.
 const menuHint = (row: string) => hintRow(row) || /\b(?:esc|enter)\b[^·]*\bto (?:cancel|close|exit|go back|dismiss|select|confirm|continue)\b/i.test(row);
 function looseMenu(rows: string[]): ScreenChoice | null {
-  if (rows.some((row, index) => inputRow('claude', row) && (rule(rows[index - 1] ?? '') || rule(rows[index + 1] ?? '')))) return null;
+  if (rows.some((_, index) => claudeComposer(rows, index))) return null;
   let cursor = rows.length - 1;
   while (cursor >= 0 && !/^\s*❯\s*\d+\.\s/.test(rows[cursor])) cursor--;
   const hintAt = cursor < 0 ? -1 : rows.findIndex((row, index) => index > cursor && menuHint(row));
@@ -372,6 +378,61 @@ function parseResumePicker(rows: string[]): ScreenChoice | null {
     escape: escape && /start new/i.test(escape) ? 'new' : escape && /exit|back|close/i.test(escape) ? 'back' : null };
 }
 
+// Claude's URL elicitation uses a horizontal Accept / Decline row. This is an informative permission card;
+// its positions describe the screen and never authorize a PTY response.
+function claudeUrlChoice(rows: string[]): ScreenChoice | null {
+  let head = rows.length - 1;
+  while (head >= 0 && !mcpUrlTitle.test(rows[head].trim())) head--;
+  if (head < 0) return null;
+  let end = rows.length - 1;
+  while (end > head && !rows[end].trim()) end--;
+  if (!/^Esc to cancel · ←\/→ to switch$/i.test(rows[end].trim())) return null;
+  const at = rows.findIndex((row, index) => index > head && /^\s*(?:❯\s+)?Accept\s{2,}(?:❯\s+)?Decline\s*$/.test(row));
+  if (at < 0 || rows.slice(at + 1, end).some(row => row.trim())) return null;
+  const selected = /^\s*❯/.test(rows[at]) ? 0 : /\s❯\s+Decline/.test(rows[at]) ? 1 : -1;
+  if (selected < 0) return null;
+  return { kind: 'permission', title: rows[head].trim(), context: rows.slice(head + 1, at).map(row => row.trim()).filter(Boolean),
+    options: ['Accept', 'Decline'].map((label, index) => ({ number: index + 1, label, detail: '', hotkey: null, selected: index === selected })),
+    hint: rows[end].trim() };
+}
+
+// Only the live dialog's own closing controls establish waiting. Quoted hints above a returned input, an old
+// question followed by an answer, the working footer ("esc to interrupt") and silence cannot establish it.
+function parseWaiting(agent: ScreenAgent, rows: string[], dialog: string[] | null, inputAt: number): AgentScreen['waiting'] {
+  const content = dialog ?? rows;
+  let end = content.length - 1;
+  while (end >= 0 && !content[end].trim()) end--;
+  if (end < 0) return null;
+  const hint = content[end].trim();
+  const controls = /^(?:(?:press\s+)?(?:enter|esc|tab|space)\b|[←→↑↓]|Type to filter\b)/i.test(hint) &&
+    /\b(?:select|submit|cancel|confirm|navigate|switch|close|back)\b/i.test(hint);
+  const cursor = /^\s*[❯›>]\s*(?:\d+\.|[*◯◉]|Accept\b)/;
+  // These user-opened panels already belong to the terminal popup. Their own search/list cursors are not inputs.
+  const panelHead = content.findIndex((row, index) => agent === 'claude'
+    ? /^Settings\s{2,}Status\s{2,}Config\s{2,}Usage\s{2,}Stats$/.test(row.trim()) && /^▔{8,}/.test(content[index - 1]?.trim() ?? '')
+    : row.trim() === 'Update Model Permissions' || row.trim() === 'Plugins' && content[index + 1]?.trim() === 'Browse plugins from available marketplaces.');
+  let head = -1;
+  for (let index = end; index >= 0; index--) {
+    const text = content[index].trim();
+    if (!dialog && (agent === 'claude' ? claudeComposer(content, index) : index === inputAt)) break;
+    if (index === panelHead) return null;
+    if (permissionTitle(text) || /^Review your answers$|^Ready to submit your answers\?$|^MCP server .+ requests your input$|^(?:Question|Field) \d+\/\d+\b/.test(text)) { head = index; break; }
+    if (panelHead < 0 && inputRow(agent, content[index]) && !cursor.test(content[index])) break;
+    if (conversationRow(content[index])) break;
+  }
+  if (head >= 0 && (controls || content.slice(head + 1, end + 1).some(row => cursor.test(row)))) {
+    let title = content[head].trim();
+    if (/^(?:Question|Field) \d+\/\d+\b/.test(title)) title = content.slice(head + 1, end).find(row => row.trim())?.trim() ?? title;
+    return { title };
+  }
+  if (!controls) return null;
+  // One isolated Escape hint can occur in prose. A frame, a selector, or several key hints identify a dialog.
+  const framed = content.some(row => rule(row) || /^\s*▔{8,}/.test(row));
+  const selector = content.some(row => cursor.test(row));
+  if (!dialog && !framed && !selector && !/[·|]|↑|↓/.test(hint)) return null;
+  return { title: dialog?.find(row => row.trim())?.trim() ?? null };
+}
+
 export function parseAgentScreen(agent: ScreenAgent, rows: string[]): AgentScreen {
   // Retain leading/column whitespace for option alignment; normalize CRLF and terminal padding.
   const normalized = rows.map(row => row.replace(/[\s\r]+$/, ''));
@@ -384,10 +445,12 @@ export function parseAgentScreen(agent: ScreenAgent, rows: string[]): AgentScree
   let choice = picker;
   if (!choice && overlay === 'none') {
     choice = dialog ? parseChoice(agent, dialog)
-      : parseQuestion(agent, normalized) ?? parseChoice(agent, normalized) ?? (agent === 'claude' ? looseMenu(normalized) : null);
+      : parseQuestion(agent, normalized) ?? (agent === 'claude' ? claudeUrlChoice(normalized) : null) ??
+        parseChoice(agent, normalized) ?? (agent === 'claude' ? looseMenu(normalized) : null);
   }
+  const waiting = !choice && overlay === 'none' ? parseWaiting(agent, normalized, dialog, status.model !== null ? start - 1 : -1) : null;
   return { banner: parseBanner(agent, normalized, status), status,
-    choice, overlay: picker ? 'none' : overlay };
+    choice, overlay: picker ? 'none' : overlay, ...(waiting ? { waiting } : {}) };
 }
 
 // Display equivalence only: identical text is NOT a permission request identity (see approval-action.ts).

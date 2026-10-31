@@ -1,0 +1,51 @@
+
+ ▐▛███▛█   Claude Code v2.1.314
+▝▜██████▀  Sonnet 4.5 · API Usage Billing
+ ▝▝   ▝▝   <project-root>
+
+
+❯ CHOICE_PROBE web
+
+● Fetch(https://choice-probe.example.invalid/)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Fetch
+ Claude wants to fetch content from choice-probe.example.invalid
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ url: https://choice-probe.example.invalid/
+ prompt: Read the title only
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to allow Claude to fetch this content?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for choice-probe.example.invalid
+   3. No, and tell Claude what to do differently (esc)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

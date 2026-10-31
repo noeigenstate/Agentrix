@@ -48,7 +48,7 @@ function claudeEvent(input, projectId, sessionKey, kind) {
   if (!Object.hasOwn(CLAUDE_STATES, kind)) return null;
   const hook = JSON.parse(input);
   // Idle notifications must not turn a completed round back into a waiting one.
-  if (kind === 'notify' && !['permission_prompt', 'elicitation_dialog'].includes(hook?.notification_type)) return null;
+  if (kind === 'notify' && !['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog'].includes(hook?.notification_type)) return null;
   const sessionId = String(hook?.session_id ?? '');
   if (!sessionId) return null;
   const prompt = kind === 'start' && hook.prompt ? String(hook.prompt).slice(0, 2000) : null;

@@ -234,6 +234,12 @@ rules, `--model gpt-6.1-terra`, attaching any screenshots with `--image`.
   (`JSON.parse`) before `git commit`; never chain the commit after a resolving script on a separate line, where it runs even
   when the script fails.
 - When a suite fails, run it against the last commit in a `git worktree` to tell a regression from an old failure.
+- Before anything reaches `main`: from the main checkout, `node scripts/ci-preflight.mjs local` (the Windows CI job as
+  the workflow writes it: 8.3 short TEMP, timeout scale, packaged desktop suites), then `node scripts/ci-preflight.mjs
+  remote` (pushes `ci/preflight-<sha>` and runs the whole workflow on it: Linux, macOS, SSH). Fast-forward `main` only to
+  a commit whose remote preflight is green, so `main` never needs "fix CI" commits. Run the local one before `main`
+  moves at all (check the integration branch out in the main checkout, since packaging refuses a junctioned
+  `node_modules`): unit tests alone missed a reading-view regression that only the desktop suites catch.
 - Remove worktrees when done: `rmdir` the `node_modules` junction first, then `git worktree remove`, then delete the branches.
 
 ### Review

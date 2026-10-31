@@ -1,0 +1,51 @@
+
+ ▐▛███▛█   Claude Code v2.1.314
+▝▜██████▀  Sonnet 4.5 · API Usage Billing
+ ▝▝   ▝▝   <project-root>
+
+
+❯ CHOICE_PROBE bash
+
+  Local choice probe; cancel without running
+  ⎿  $ printf local-probe > choice-probe-write.txt
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Local choice probe; cancel without running
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ printf local-probe > choice-probe-write.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to proceed?
+ ❯ 1. Yes, and tell Claude what to do next
+   2. Yes, and always allow access to <project-root> from this
+   3. Nooject
+
+ Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

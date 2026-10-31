@@ -37,7 +37,7 @@ await fs.writeFile(path.join(project.path, '.claude/commands/fix-issue.md'), '--
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false, language: 'zh' } }));
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: home, CLAUDE_CONFIG_DIR: claudeHome }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const packaged = process.argv.includes('--packaged'), errors = [], checks = [], commandTargets = [];
-let app, page, terminalId = project.id;
+let app, page, terminalId = project.id, failure;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals.find(terminal => terminal.id === terminalId);
 const write = data => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: terminalId, data });
 const physicalRows = () => page.locator(`[data-terminal-id="${terminalId}"] .xterm-rows > div`).evaluateAll(nodes => nodes.map(node => node.textContent.replace(/\u00a0/g, ' ').trimEnd()));
@@ -377,6 +377,7 @@ try {
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, checks, errors, targeting: { plainTerminalId: project.id, plainSession, agentTerminalId: terminalId, commandTargets } }, null, 2));
   console.log(`PASS: reading palette, typed slash/shell commands, CLI keys, history and permission handoff. Evidence: ${output}`);
 } catch (error) {
+  failure = error;
   if (page && !page.isClosed()) {
     await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});
     await physicalRows().then(async rows => {
@@ -397,6 +398,13 @@ try {
         }
         await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals.every(terminal => terminal.status === 'exited'), 'isolated test shells exit');
       }
-    } finally { await app.close(); }
+    } catch (error) {
+      console.error('Reading fixture cleanup:', error);
+    } finally {
+      try { await app.close(); } catch (error) {
+        if (!failure) throw error;
+        console.error('Reading fixture close:', error);
+      }
+    }
   }
 }

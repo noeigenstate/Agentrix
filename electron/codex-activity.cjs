@@ -3,7 +3,7 @@ const { watch: watchFile } = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { interactiveSession } = require('./session-restore.cjs');
-const { rolloutFiles, sessionMeta } = require('./session-files.cjs');
+const { rolloutFiles, sessionMeta, nativeWatchPath } = require('./session-files.cjs');
 const { transcriptWindow, LIVE_READ_LIMIT, codexMetadata } = require('./transcript-window.cjs');
 const { readTranscriptChunk } = require('./oversized-record.cjs');
 const { sameThread } = require('./terminal-title.cjs');
@@ -122,7 +122,7 @@ function monitorActivity(read, onChange, { interval = 1000, watch = null, recurs
     watcher?.close(); watcher = null; watched = file;
     if (!file) return;
     try {
-      watcher = watchFile(file, { persistent: false, recursive }, () => { if (!soon && !stopped) soon = setTimeout(() => { soon = null; void poll(); }, debounce); });
+      watcher = watchFile(nativeWatchPath(file), { persistent: false, recursive }, () => { if (!soon && !stopped) soon = setTimeout(() => { soon = null; void poll(); }, debounce); });
       watcher.on('error', () => { watcher?.close(); watcher = null; });
     } catch { watcher = null; }
   };

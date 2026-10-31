@@ -1,0 +1,48 @@
+
+ ▐▛███▛█   Claude Code v2.1.314
+▝▜██████▀  Sonnet 4.5 · API Usage Billing
+ ▝▝   ▝▝   <project-root>
+
+
+❯ CHOICE_PROBE mcp-form
+
+  Calling localprobe · 10s…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  MCP server “localprobe” requests your input
+
+  Local MCP choice form
+
+  ❯ * Output format: ▾
+        ❯ ◯ Text
+          ◯ JSON
+
+      Include optional details: not set
+
+    Accept    Decline
+
+  Esc to cancel · ↑/↓ to navigate · Backspace to unset · Space to select

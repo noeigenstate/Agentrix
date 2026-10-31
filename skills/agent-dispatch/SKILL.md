@@ -240,5 +240,13 @@ confirmed worker runs.
 - A follow-up fix after review goes to a fresh session with a focused brief (findings, file:line, done-when), with
   `--skip-meeting "<review follow-up of round …>"` and the same module globs. Resuming a long build session costs far
   more (observed: about 50 min per resume against 5–8 min fresh).
+- A Codex worker that adds a dependency may pass its tests in its own sandbox while the package never reaches the
+  shared `node_modules` (worktrees link it as a junction): after merging, run `npm ci` in the main checkout and the
+  worker's tests again before trusting its "tests pass".
+- A worker that cannot run commands (a helper-run Claude under `acceptEdits`) ships untested code: tell it which test
+  loaders it must satisfy. Example: tests transpile `.ts` with JSX enabled, so `const f = <T>(…) =>` is read as a tag
+  and every test that loads the file fails; use `function f<T>(…)` there.
+- `--role 调查` with `--allow` writes only inside those globs and needs no roundtable; `--skip-meeting` is accepted only
+  for an execution role.
 - Claude Code's own Agent tool calls stay as they are: their transcript records are already structured.
 - The app no longer parses Bash command lines, briefs or logs to find workers.

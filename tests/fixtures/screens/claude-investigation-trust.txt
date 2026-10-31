@@ -1,0 +1,51 @@
+  AGENTRIX
+  Type codex to start, or codex resume to continue a session.
+
+PS <project-root>> claude --model claude-sonnet-4-5 'CHOICE_PROBE bas
+h'
+
+Resume this session with:
+claude --resume 66e80375-5181-473f-a8f0-9e5670a5b20a
+PS <project-root>> claude --model claude-sonnet-4-5 'CHOICE_PROBE sin
+gle'
+
+Resume this session with:
+claude --resume 9e281d98-2a32-4dd7-811e-19b18cf63234
+PS <project-root>> claude --model claude-sonnet-4-5 'CHOICE_PROBE edi
+t'
+
+Resume this session with:                                         claude --model claude-sonnet-4-5 --strict-mcp-conf
+ig --mcp-config '<repo-root>\.test-output\choice-investigation\runs\1793372204282\mcp.json' 'CHOIC
+E_PROBE mcp'ylc\Desktop\agentrix\.test-output\slash-live-project> c
+Error: Invalid MCP configuration:
+MCP config file not found: <project-root>\CHOICE_PROBE mcp
+PS <project-root>> ^C
+PS <project-root>> ^C
+PS <project-root>> claude --model claude-sonnet-4-5 --strict-mcp-conf
+ig --mcp-config '<repo-root>\.test-output\choice-investigation\runs\1793372204282\mcp.json' --allo
+wedTools mcp__localprobe__choice_probe 'CHOICE_PROBE mcp-form'
+PS <project-root>> codex
+Token usage: total=2 input=1 output=1
+To continue this session, run:
+  codex resume 01a18d51-d277-7652-bbac-036effef8df2
+PS <project-root>> codex
+PS <project-root>> claude --model claude-sonnet-4-5 'CHOICE_PROBE tru
+st'
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ <project-root>
+
+ Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source
+ project, or work from your team). If not, take a moment to review what's in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ Security guide
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
+

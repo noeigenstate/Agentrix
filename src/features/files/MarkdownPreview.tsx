@@ -1,13 +1,15 @@
 import { useMemo, useRef } from 'react';
-import { marked } from 'marked';
+import { Marked } from 'marked';
 import createDOMPurify from 'dompurify';
 import './markdown.css';
 import { t } from '../../shared/i18n';
+import { markdownEmphasis } from '../../shared/markdown-emphasis';
 
 const purifier = createDOMPurify(window);
+const previewMarked = new Marked(markdownEmphasis, { async: false, gfm: true });
 
 function renderMarkdown(content: string, baseUrl: string) {
-  const fragment = purifier.sanitize(marked.parse(content, { async: false, gfm: true }), {
+  const fragment = purifier.sanitize(previewMarked.parse(content, { async: false }), {
     RETURN_DOM_FRAGMENT: true,
     ALLOWED_TAGS: ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'ul', 'ol', 'li', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a', 'img', 'hr', 'br', 'em', 'strong', 's', 'del', 'input', 'sup', 'sub', 'kbd'],
     ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'colspan', 'rowspan', 'align', 'start', 'type', 'checked', 'disabled'],

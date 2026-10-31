@@ -1,0 +1,51 @@
+
+  >_ OpenAI Codex (v0.166.0)
+     ~\Desktop\agentrix\.test-output\slash-live-project
+
+
+› CHOICE_PROBE permissions
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Would you like to grant these permissions?
+
+  Environment: local
+
+  Reason: Local choice probe; cancel this grant
+
+  Permission rule: network
+
+
+› 1. Yes, grant these permissions for this turn (y)
+  2. Yes, grant for this turn with strict auto review (r)
+  3. Yes, grant these permissions for this session (a)
+  4. No, continue without permissions (d)
+
+  Press enter to confirm or esc to cancel
