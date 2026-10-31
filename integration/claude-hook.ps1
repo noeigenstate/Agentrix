@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Get-AgentrixSessionContext($hook) {
-    if ($hook.session_id -notmatch '^[\w-]{1,160}$' -or $hook.source -notin @('startup', 'resume', 'compact', 'clear') -or -not $NoteFile) { return }
+    if ($hook.session_id -notmatch '^[A-Za-z0-9_-]{1,160}$' -or $hook.source -notin @('startup', 'resume', 'compact', 'clear') -or -not $NoteFile) { return }
     $note = [IO.File]::ReadAllText($NoteFile, [Text.Encoding]::UTF8)
     $marker = [regex]::Match($note, ' Agentrix skill delivery: ([a-f0-9]{64}):([A-Za-z0-9_-]+)\.')
     if (-not $marker.Success) { return }

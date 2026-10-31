@@ -1,0 +1,22 @@
+{
+  "manifests": {
+    "alpha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "beta": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "steps": [
+    { "session": "one", "source": "startup", "key": "alpha", "deliver": true, "receipts": ["one/alpha"] },
+    { "session": "one", "source": "resume", "key": "alpha", "deliver": false, "receipts": ["one/alpha"] },
+    { "session": "one", "source": "resume", "key": "beta", "deliver": true, "receipts": ["one/alpha", "one/beta"] },
+    { "session": "two", "source": "startup", "key": "alpha", "deliver": true, "receipts": ["one/alpha", "one/beta", "two/alpha"] },
+    { "session": "one", "source": "compact", "key": "beta", "deliver": true, "receipts": ["one/beta", "two/alpha"] },
+    { "session": "one", "source": "resume", "key": "alpha", "deliver": true, "receipts": ["one/alpha", "one/beta", "two/alpha"] },
+    { "session": "one", "source": "clear", "key": "alpha", "deliver": true, "receipts": ["one/alpha", "two/alpha"] },
+    { "session": "one", "source": "resume", "key": "beta", "deliver": true, "receipts": ["one/alpha", "one/beta", "two/alpha"] },
+    { "session": "one", "source": "startup", "key": "alpha", "deliver": false, "receipts": ["one/alpha", "one/beta", "two/alpha"] },
+    { "session": "two", "source": "clear", "key": "beta", "deliver": true, "receipts": ["one/alpha", "one/beta", "two/beta"] },
+    { "session": "two", "source": "resume", "key": "alpha", "deliver": true, "receipts": ["one/alpha", "one/beta", "two/alpha", "two/beta"] },
+    { "session": "one", "source": "unknown", "key": "alpha", "deliver": false, "receipts": ["one/alpha", "one/beta", "two/alpha", "two/beta"] },
+    { "session": "../escape", "source": "startup", "key": "alpha", "deliver": false, "receipts": ["one/alpha", "one/beta", "two/alpha", "two/beta"] },
+    { "session": "会话", "source": "startup", "key": "alpha", "deliver": false, "receipts": ["one/alpha", "one/beta", "two/alpha", "two/beta"] }
+  ]
+}

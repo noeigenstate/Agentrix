@@ -134,8 +134,13 @@ claude() {
     current_note="${current_note%%" Agentrix skill delivery: "*} Agentrix delivers skill instructions through its SessionStart hook."
   fi
   [[ -n $current_note ]] && note=(--append-system-prompt "$current_note")
-  AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" --settings "$settings" "${note[@]}" "$@"
+  local session_folder=${__pg_note_file%/*} settings_file
+  [[ -n $__pg_note_file && $session_folder != "$__pg_note_file" ]] || session_folder=${TMPDIR:-/tmp}
+  settings_file=$(mktemp "$session_folder/claude-settings.XXXXXX") || return 1
+  printf '%s' "$settings" > "$settings_file"
+  AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" --settings "$settings_file" "${note[@]}" "$@"
   local code=$?
+  rm -f -- "$settings_file"
   __pg_send codex-exited $code claude
   return $code
 }

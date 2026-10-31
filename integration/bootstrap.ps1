@@ -194,9 +194,15 @@ function global:claude {
     ) -join ' '
     $hook = { param($kind) @{ hooks = @(@{ type = 'command'; command = ($hookCommand + ' -Kind ' + $kind); timeout = 10 }) } }
     $settings = @{ hooks = @{ UserPromptSubmit = @(& $hook 'start'); Stop = @(& $hook 'stop'); Notification = @(& $hook 'notify'); SessionStart = @(& $hook 'session') } } | ConvertTo-Json -Depth 6 -Compress
+    $sessionFolder = if ($env:AGENTRIX_BOOTSTRAP) { [IO.Path]::GetDirectoryName($env:AGENTRIX_BOOTSTRAP) } elseif ($env:AGENTRIX_READING_NOTE_FILE) { [IO.Path]::GetDirectoryName($env:AGENTRIX_READING_NOTE_FILE) } else { [IO.Path]::GetTempPath() }
+    $settingsFile = Join-Path $sessionFolder ('claude-settings-' + [Guid]::NewGuid().ToString('N') + '.json')
+    [IO.File]::WriteAllText($settingsFile, $settings, [Text.UTF8Encoding]::new($false))
     if (-not $global:AgentrixClaudeExecutable -or [IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -ne '.exe') {
-        try { & $global:AgentrixClaudeCommand --settings $settings @readingNote @args }
-        finally { Send-AgentrixEvent 'codex-exited' $global:LASTEXITCODE -Agent 'claude' }
+        try { & $global:AgentrixClaudeCommand --settings $settingsFile @readingNote @args }
+        finally {
+            Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue
+            Send-AgentrixEvent 'codex-exited' $global:LASTEXITCODE -Agent 'claude'
+        }
         return
     }
     $claudeExit = 0
@@ -204,7 +210,7 @@ function global:claude {
         $startInfo = [Diagnostics.ProcessStartInfo]::new()
         $startInfo.FileName = $global:AgentrixClaudeExecutable
         # What the reading view can show (electron/features/agents/reading-note.cjs); a later --append-system-prompt of the user's wins.
-        $startInfo.Arguments = ((@('--settings', $settings) + $readingNote + @($args)) | ForEach-Object { ConvertTo-AgentrixArgument ([string]$_) }) -join ' '
+        $startInfo.Arguments = ((@('--settings', $settingsFile) + $readingNote + @($args)) | ForEach-Object { ConvertTo-AgentrixArgument ([string]$_) }) -join ' '
         $startInfo.UseShellExecute = $false
         $startInfo.WorkingDirectory = (Get-Location).Path
         $claudeProcess = [Diagnostics.Process]::Start($startInfo)
@@ -214,6 +220,7 @@ function global:claude {
         Write-Error $_
         $claudeExit = 1
     } finally {
+        Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue
         Send-AgentrixEvent 'codex-exited' $claudeExit -Agent 'claude'
         $global:LASTEXITCODE = $claudeExit
     }

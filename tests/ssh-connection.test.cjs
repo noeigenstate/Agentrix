@@ -160,7 +160,7 @@ assert args[3].endswith("Agentrix delivers skill instructions through its Sessio
 assert "SSH skill instructions." not in args[3]
 assert "Agentrix skill delivery:" not in args[3]
 assert args[4:]==["--resume","fixture"]
-settings=json.loads(args[args.index("--settings")+1])
+with open(args[args.index("--settings")+1],encoding="utf-8") as source: settings=json.load(source)
 folder=os.path.join(os.path.expanduser("~/.claude"),"projects","fixture")
 os.makedirs(folder,exist_ok=True)
 filename=os.path.join(folder,"session.jsonl")

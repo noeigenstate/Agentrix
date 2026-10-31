@@ -35,8 +35,11 @@ role in events). `--help` lists all six values. `--title`: one line, what the wo
   It must not edit, add or delete any `SKILL.md` in project, built-in or global skill folders unless `--allow` names
   that exact file without wildcards. A broad scope such as `skills/**` does not approve skill edits. The helper
   snapshots skills before launch, preserves each unapproved new version under `<out>.skill-proposals-<run id>/`
-  (with `index.json` naming edits, creations and deletions), then restores the pre-run bytes, including uncommitted
-  contents. The end line reports `N skill proposals pending lead approval`; `dispatch-end.skillProposals` is the same
+  (with `index.json` naming edits, creations and deletions). Only files inside a worker's separate Git worktree are
+  restored to the pre-run bytes, including uncommitted contents. Global, built-in and shared-checkout changes are
+  report-only, marked "changed during the run, author unknown", and stay live. Scans skip node_modules and .git;
+  snapshot limits degrade to report-only with a note on the end line. The end line reports
+  `N skill proposals pending lead approval`; `dispatch-end.skillProposals` is the same
   count. Read the proposals and approve specific paths in a follow-up; proposals never apply themselves.
 
 - `--allow <glob>` (repeatable, relative to the git root): the only files the worker may change. The helper snapshots

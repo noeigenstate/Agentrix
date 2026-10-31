@@ -35,10 +35,12 @@ description: Use when changing how an SSH project's terminals talk to the server
   The desktop poller is bound to its live channel and discards cancelled or replaced-session answers. Dashboard quota
   scopes already separate SSH hosts from one another and from local accounts.
 - Claude skills have one delivery channel: SessionStart prints `hookSpecificOutput.additionalContext`. startup/resume
-  deduplicate by CLI session id and bundle `key`; compact/clear always deliver again. Startup arguments carry only a
-  short pointer. State and read-only skill references live below the remote worker's own
+  deduplicate by CLI session id and bundle `key`; compact/clear forget that session's other receipts and deliver again.
+  Startup arguments keep startup instructions and the manifest fallback; only the skills manifest uses the hook.
+  State and read-only skill references live below the remote worker's own
   `~/.local/state/agentrix/ssh-skills/`, outside Claude's files; fingerprinted references survive a closed terminal so
-  a resumed session's auto-skill paths still exist. The bundle remains `files/instructions/key`. Codex keeps its own
+  a resumed session's current-bundle auto-skill paths still exist. On each terminal spawn, all other reference keys
+  and receipts older than 30 days are pruned. The bundle remains `files/instructions/key`. Codex keeps its own
   delivery path; follow the skills module's measured protocol when changing it.
 
 ## Testing

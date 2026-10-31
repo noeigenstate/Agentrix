@@ -7,7 +7,8 @@ const { spawn } = require('node:child_process');
 const { SkillsStore } = require('../electron/features/skills/store.cjs');
 const { startupNote } = require('../electron/features/agents/handoff.cjs');
 const { READING_NOTE } = require('../electron/features/agents/reading-note.cjs');
-const { readDelivery, sessionContext } = require('../electron/features/skills/session.cjs');
+const { digest, deliveryMarker, readDelivery, sessionContext } = require('../electron/features/skills/session.cjs');
+const receiptFixture = require('./fixtures/skill-receipts/lifecycle.json');
 
 async function fixture(t, routingNote = () => '') {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-skill-session-')));
@@ -72,12 +73,12 @@ test('Codex resume keeps the current project manifest across terminal exits and 
   const reopened = new SkillsStore({ dataDir: f.store.dataDir, builtinDir: f.store.builtinDir, getProjects: () => [f.project] });
   t.after(() => reopened.close());
   assert.equal(fs.existsSync(first.manifest), true);
-  assert.equal(readDelivery(originalNote).instructions, originalSnapshot);
+  assert.equal(fs.existsSync(first.sessionManifest), false, 'startup prunes snapshots with no live session reference');
   await reopened.save('user:sample', { ...f.draft, description: 'Updated current instructions.' });
   const second = reopened.delivery(f.project, false, 'terminal-two', { agent: 'codex', started: true });
   assert.equal(second.manifest, first.manifest);
   assert.match(fs.readFileSync(first.manifest, 'utf8'), /Updated current instructions/);
-  assert.equal(fs.readFileSync(first.sessionManifest, 'utf8'), originalSnapshot, 'launch snapshots keep their original fingerprinted instructions');
+  assert.equal(fs.readFileSync(second.sessionManifest, 'utf8').includes('Updated current instructions.'), true);
   const current = fs.readFileSync(first.manifest, 'utf8');
   reopened.delivery(f.project, false, 'idle-shell');
   reopened.delivery(f.project, false, 'unobserved-codex', { agent: 'codex' });
@@ -86,6 +87,68 @@ test('Codex resume keeps the current project manifest across terminal exits and 
   assert.equal(fs.readFileSync(first.manifest, 'utf8'), current, 'previews and other agents do not replace the current Codex delivery');
   reopened.endSession(f.project.id, 'terminal-two');
   assert.equal(fs.readFileSync(first.manifest, 'utf8'), current);
+  assert.match(originalSnapshot, /First body|sample/);
+});
+
+test('startup prunes unused and 30-day-old snapshots and receipts while keeping current manifests and live snapshots', async t => {
+  const f = await fixture(t), live = f.delivery('live'), ended = f.delivery('ended');
+  f.store.endSession(f.project.id, 'ended');
+  const folder = path.dirname(live.manifest), now = Date.now(), old = new Date(now - 31 * 24 * 60 * 60 * 1000);
+  const expired = f.delivery('expired');
+  for (const file of [expired.sessionManifest, `${expired.sessionManifest}.json`]) fs.utimesSync(file, old, old);
+  sessionContext({ session_id: 'old-cli', source: 'startup' }, f.note('receipt'));
+  sessionContext({ session_id: 'recent-cli', source: 'startup' }, f.note('receipt'));
+  const oldReceiptFolder = path.join(folder, 'receipts/claude', digest('old-cli').slice(0, 32));
+  const oldReceipt = path.join(oldReceiptFolder, fs.readdirSync(oldReceiptFolder)[0]); fs.utimesSync(oldReceipt, old, old);
+  f.store.pruneDeliveryFiles(now);
+  for (const snapshot of [ended, expired]) {
+    assert.equal(fs.existsSync(snapshot.sessionManifest), false);
+    assert.equal(fs.existsSync(`${snapshot.sessionManifest}.json`), false);
+  }
+  assert.equal(fs.existsSync(live.sessionManifest), true);
+  assert.equal(fs.existsSync(`${live.sessionManifest}.json`), true);
+  assert.equal(fs.existsSync(oldReceiptFolder), false);
+  const recentFolder = path.join(folder, 'receipts/claude', digest('recent-cli').slice(0, 32));
+  assert.equal(fs.readdirSync(recentFolder).length, 1);
+  f.store.close();
+  const restarted = new SkillsStore({ dataDir: f.store.dataDir, builtinDir: f.store.builtinDir, getProjects: () => [f.project] });
+  t.after(() => restarted.close());
+  assert.equal(fs.existsSync(live.sessionManifest), true, 'recreating a watcher in the same process preserves still-live CLI references');
+  for (const session of ['live', 'expired', 'receipt']) restarted.endSession(f.project.id, session);
+  restarted.pruneDeliveryFiles();
+  assert.equal(fs.existsSync(live.sessionManifest), false);
+  assert.equal(fs.existsSync(live.manifest), true, 'stable current manifests survive restarts');
+  assert.equal(fs.readdirSync(recentFolder).length, 1);
+});
+
+function receiptPaths(folder) {
+  const result = [];
+  if (fs.existsSync(folder)) for (const session of fs.readdirSync(folder)) {
+    for (const key of fs.readdirSync(path.join(folder, session))) result.push(`${session}/${key}`);
+  }
+  return result.sort();
+}
+
+function expectedReceipts(step) {
+  return step.receipts.map(value => {
+    const [session, key] = value.split('/');
+    return `${digest(session).slice(0, 32)}/${receiptFixture.manifests[key].slice(0, 32)}`;
+  }).sort();
+}
+
+test('shared receipt lifecycle fixture matches Node SessionStart delivery and every remaining receipt', async t => {
+  const f = await fixture(t), folder = path.join(f.root, 'shared-receipts'); fs.mkdirSync(folder);
+  const notes = {};
+  for (const [name, fingerprint] of Object.entries(receiptFixture.manifests)) {
+    const manifest = path.join(folder, `${name}.md`); fs.writeFileSync(manifest, 'Shared instructions.');
+    notes[name] = `Note. ${deliveryMarker({ manifest, fingerprint })}`;
+  }
+  for (const step of receiptFixture.steps) {
+    const result = sessionContext({ session_id: step.session, source: step.source }, notes[step.key]);
+    assert.equal(Boolean(result), step.deliver, JSON.stringify(step));
+    if (result) assert.equal(result.hookSpecificOutput.additionalContext, 'Agentrix skill instructions:\nShared instructions.');
+    assert.deepEqual(receiptPaths(path.join(folder, 'receipts/claude')), expectedReceipts(step));
+  }
 });
 
 test('first-open launch snapshots stay correct when later sessions rewrite the current manifest', async t => {
@@ -107,7 +170,7 @@ test('first-open launch snapshots stay correct when later sessions rewrite the c
 
 function hookProcess(file, args, input, noteFile) {
   return new Promise((resolve, reject) => {
-    const child = spawn(file, args, { env: { ...process.env, AGENTRIX_READING_NOTE_FILE: noteFile }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(file, args, { env: { ...process.env, AGENTRIX_BOOTSTRAP: '', AGENTRIX_READING_NOTE_FILE: noteFile }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout.on('data', bytes => { stdout += bytes; }); child.stderr.on('data', bytes => { stderr += bytes; });
     child.once('error', reject); child.once('close', code => resolve({ code, stdout, stderr }));
@@ -136,7 +199,7 @@ test('Unix wrappers keep the startup note and manifest fallback on the command l
   const f = await fixture(t), bin = path.join(f.root, 'bin'), home = path.join(f.root, 'home'), noteFile = path.join(f.root, 'note.txt');
   fs.mkdirSync(bin); fs.mkdirSync(home); fs.writeFileSync(noteFile, f.note('unix'));
   const script = path.join(f.root, 'fake.cjs');
-  fs.writeFileSync(script, `require('node:fs').writeFileSync(require('node:path').join(process.env.CAPTURE_ROOT, process.argv[2]+'.json'),JSON.stringify({note:process.env.AGENTRIX_READING_NOTE_FILE,args:process.argv.slice(3)}));`);
+  fs.writeFileSync(script, `const fs=require('node:fs'),args=process.argv.slice(3);fs.writeFileSync(require('node:path').join(process.env.CAPTURE_ROOT, process.argv[2]+'.json'),JSON.stringify({note:process.env.AGENTRIX_READING_NOTE_FILE,args,settings:process.argv[2]==='claude'?JSON.parse(fs.readFileSync(args[1],'utf8')):null}));`);
   const quote = value => `'${value.replace(/'/g, "'\\''")}'`;
   for (const agent of ['claude', 'codex']) fs.writeFileSync(path.join(bin, agent), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(script)} ${agent} "$@"\n`, { mode: 0o700 });
   const shell = process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash';
@@ -156,8 +219,9 @@ test('Unix wrappers keep the startup note and manifest fallback on the command l
   assert.deepEqual(claude.args.slice(4), ['hello']);
   assert.ok(!JSON.stringify(claude.args).includes('中文说明'));
   assert.ok(JSON.stringify(codex.args).includes('中文说明'));
-  const settings = JSON.parse(claude.args[claude.args.indexOf('--settings') + 1]);
-  assert.ok(settings.hooks.SessionStart[0].hooks[0].command.includes(noteFile));
+  assert.ok(claude.settings.hooks.SessionStart[0].hooks[0].command.includes(noteFile));
+  assert.equal(path.dirname(claude.args[1]), f.root);
+  assert.equal(fs.existsSync(claude.args[1]), false, 'settings file is removed after exit');
 });
 
 test('PowerShell Claude wrapper keeps the startup note and fallback before intact resume arguments', { skip: process.platform !== 'win32' }, async t => {
@@ -175,13 +239,15 @@ function global:Send-AgentrixEvent {}
 function global:Get-AgentrixCommand {}
 $global:AgentrixSession = @{ powershellPath = 'powershell.exe'; claudeHookPath = 'fixture.ps1'; pipeName = 'absent'; projectId = 'project'; sessionKey = 'key' }
 $global:AgentrixClaudeExecutable = $null
-$global:AgentrixClaudeCommand = { ConvertTo-Json -InputObject @($args) -Compress }
+$global:AgentrixClaudeCommand = { @{ args = @($args); settings = (Get-Content -LiteralPath $args[1] -Raw | ConvertFrom-Json) } | ConvertTo-Json -Depth 10 -Compress }
 claude --resume fixture '继续'`;
   const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
   const result = await hookProcess(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {}, noteFile);
   assert.equal(result.code, 0); assert.equal(result.stderr, '');
-  const args = JSON.parse(result.stdout);
-  assert.equal(args[0], '--settings'); assert.doesNotThrow(() => JSON.parse(args[1]));
+  const { args, settings } = JSON.parse(result.stdout);
+  assert.equal(args[0], '--settings'); assert.ok(settings.hooks.SessionStart);
+  assert.equal(path.dirname(args[1]), f.root);
+  assert.equal(fs.existsSync(args[1]), false);
   assert.equal(args[2], '--append-system-prompt');
   assert.equal(args[3], note.split(' Agentrix skill delivery: ')[0] + ' Agentrix delivers skill instructions through its SessionStart hook.');
   assert.match(args[3], /^You run inside Agentrix/);
@@ -204,4 +270,65 @@ test('PowerShell and Node share receipts and force a delivery after compact/clea
     assert.equal(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, `Agentrix skill instructions:\n${readDelivery(note).instructions}`);
     assert.equal(sessionContext({ session_id: 'same-cli', source: 'resume' }, note), null);
   }
+});
+
+test('PowerShell 5.1 fallback passes a settings file through a real fake claude.cmd with the startup note intact', { skip: process.platform !== 'win32' }, async t => {
+  const f = await fixture(t), bin = path.join(f.root, 'shim with spaces'), noteFile = path.join(f.root, 'note.txt'); fs.mkdirSync(bin);
+  const note = f.note('cmd'); fs.writeFileSync(noteFile, note);
+  const captureFile = path.join(f.root, 'argv.json'), fake = path.join(bin, 'capture.cjs'), command = path.join(bin, 'claude.cmd');
+  fs.writeFileSync(fake, `const fs=require('node:fs'),args=process.argv.slice(2);fs.writeFileSync(${JSON.stringify(captureFile)},JSON.stringify({args,settings:JSON.parse(fs.readFileSync(args[1],'utf8'))}));`);
+  fs.writeFileSync(command, `@echo off\r\n"${process.execPath}" "${fake}" %*\r\n`);
+  const source = fs.readFileSync(path.join(__dirname, '../integration/bootstrap.ps1'), 'utf8');
+  const helper = source.slice(source.indexOf('function global:Get-AgentrixReadingNote'), source.indexOf('# Windows PowerShell 5'));
+  const wrapper = source.slice(source.indexOf('function global:claude'), source.indexOf('if ($global:AgentrixAgentOnly)'));
+  const quote = value => `'${value.replace(/'/g, "''")}'`;
+  const script = `$ProgressPreference = 'SilentlyContinue'\n${helper}\n${wrapper}\nfunction global:Send-AgentrixEvent {}\nfunction global:Get-AgentrixCommand {}
+$global:AgentrixSession = @{ powershellPath = 'powershell.exe'; claudeHookPath = 'fixture.ps1'; pipeName = 'absent'; projectId = 'project'; sessionKey = 'key' }
+$global:AgentrixClaudeExecutable = ${quote(command)}
+$global:AgentrixClaudeCommand = ${quote(command)}
+claude --resume fixture 'next task'`;
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
+  const result = await hookProcess(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {}, noteFile);
+  assert.equal(result.code, 0); assert.equal(result.stderr, '');
+  const { args, settings } = JSON.parse(fs.readFileSync(captureFile));
+  assert.equal(args[0], '--settings'); assert.equal(path.dirname(args[1]), f.root);
+  assert.ok(settings.hooks.SessionStart[0].hooks[0].command.includes('fixture.ps1'));
+  assert.equal(args[2], '--append-system-prompt');
+  assert.equal(args[3], note.split(' Agentrix skill delivery: ')[0] + ' Agentrix delivers skill instructions through its SessionStart hook.');
+  assert.deepEqual(args.slice(4), ['--resume', 'fixture', 'next task']);
+  assert.equal(fs.existsSync(args[1]), false);
+});
+
+test('shared receipt lifecycle fixture matches PowerShell SessionStart delivery and every remaining receipt', { skip: process.platform !== 'win32' }, async t => {
+  const f = await fixture(t), folder = path.join(f.root, 'powershell-receipts'); fs.mkdirSync(folder);
+  const notes = {};
+  for (const [key, fingerprint] of Object.entries(receiptFixture.manifests)) {
+    const manifest = path.join(folder, `${key}.md`), noteFile = path.join(folder, `${key}.txt`);
+    fs.writeFileSync(manifest, 'Shared instructions.'); fs.writeFileSync(noteFile, `Note. ${deliveryMarker({ manifest, fingerprint })}`);
+    notes[key] = noteFile;
+  }
+  const source = fs.readFileSync(path.join(__dirname, '../integration/claude-hook.ps1'), 'utf8');
+  const hook = source.slice(source.indexOf('function Get-AgentrixSessionContext'), source.indexOf('\ntry {'));
+  const quote = value => `'${value.replace(/'/g, "''")}'`;
+  const script = `$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$ErrorActionPreference = 'Stop'
+${hook}
+$fixture = ${quote(JSON.stringify(receiptFixture))} | ConvertFrom-Json
+$notes = ${quote(JSON.stringify(notes))} | ConvertFrom-Json
+$results = foreach ($step in $fixture.steps) {
+  $NoteFile = $notes.($step.key)
+  $context = Get-AgentrixSessionContext @{ session_id = $step.session; source = $step.source }
+  $receipts = @(foreach ($session in Get-ChildItem -LiteralPath ${quote(path.join(folder, 'receipts/claude'))} -Directory -ErrorAction SilentlyContinue) {
+    foreach ($file in Get-ChildItem -LiteralPath $session.FullName -File) { $session.Name + '/' + $file.Name }
+  })
+  @{ deliver = ($null -ne $context); receipts = @($receipts | Sort-Object) }
+}
+ConvertTo-Json -InputObject @($results) -Depth 6 -Compress`;
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
+  const result = await hookProcess(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {}, notes.alpha);
+  assert.equal(result.code, 0); assert.equal(result.stderr, '');
+  const results = JSON.parse(result.stdout);
+  assert.equal(results.length, receiptFixture.steps.length);
+  for (const [i, step] of receiptFixture.steps.entries()) assert.deepEqual(results[i], { deliver: step.deliver, receipts: expectedReceipts(step) }, JSON.stringify(step));
 });

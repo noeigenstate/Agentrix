@@ -5,9 +5,12 @@ const { SkillHistory, safeId } = require('./history.cjs');
 const { metadata, draftText, readJson, writeFile, checkedPath, readText, listFolder, folderSignature, importFiles } = require('./files.cjs');
 const { skillInstructions } = require('./delivery.cjs');
 const { digest } = require('./session.cjs');
+const { pruneDeliveryFiles } = require('./delivery-cleanup.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
 const { projectSkillTargets, projectSkillNames, projectSkillSignature } = require('./project-skills.cjs');
 const MAX_SSH_BUNDLE_BYTES = 512 * 1024;
+// Closing a library watcher does not end its CLI sessions. Keep their references across store recreation in this process.
+const liveSessionSnapshots = new Map();
 
 const defaults = entry => ({ enabled: true, trigger: entry.source === 'builtin' ? entry.trigger : 'auto', autoOptimize: entry.source !== 'builtin', confirmChanges: false, createdByAgent: false, reviewed: false, lastUsed: null });
 const triggerWhen = { always: '每个任务开始前', auto: '描述匹配时', 'first-open': '首次打开项目时' };
@@ -27,6 +30,7 @@ class SkillsStore {
     this.entries = new Map(); this.watchers = new Map(); this.writers = new Map();
     this.projectSkills = new Map();
     this.knownRoots = new Set(); this.baselines = new Set(); this.dirtyRoots = new Set(); this.deliveries = new Map();
+    this.pruneDeliveryFiles();
     for (const folder of [this.globalFolder, path.join(dataDir, 'skill-pending')]) {
       try { fs.mkdirSync(folder, { recursive: true }); } catch (error) { report(error); }
     }
@@ -66,6 +70,10 @@ class SkillsStore {
   projectName(id, fallback = null) { return this.getProjects().find(project => project.id === id)?.name || fallback; }
   record(entry, text, by, projectId = null) { return this.history.record(entry.id, text, by, this.projectName(projectId), Date.now(), projectId); }
   invalidateDelivery() { this.deliveries.clear(); }
+
+  pruneDeliveryFiles(now = Date.now()) {
+    pruneDeliveryFiles(path.join(this.dataDir, 'skill-delivery'), new Set([...liveSessionSnapshots.values()].flatMap(files => [...files])), this.report, now);
+  }
 
   pruneProjects() {
     const projects = new Set(this.getProjects().map(project => project.id));
@@ -374,6 +382,11 @@ class SkillsStore {
       try {
         writeFile(delivery.sessionManifest, instructions);
         writeFile(`${delivery.sessionManifest}.json`, JSON.stringify({ fingerprint: delivery.fingerprint, projectRoot: project.path, roots: [this.builtinDir, this.globalFolder] }));
+        if (sessionId) {
+          const sessionKey = JSON.stringify([canonical(this.dataDir), project.id, sessionId]);
+          if (!liveSessionSnapshots.has(sessionKey)) liveSessionSnapshots.set(sessionKey, new Set());
+          liveSessionSnapshots.get(sessionKey).add(delivery.sessionManifest);
+        }
       } catch (error) { this.report(error); }
     }
     if (started && sessionId) {
@@ -401,6 +414,7 @@ class SkillsStore {
 
   endSession(projectId, sessionId) {
     if (!sessionId) return;
+    liveSessionSnapshots.delete(JSON.stringify([canonical(this.dataDir), projectId, sessionId]));
     for (const key of this.deliveries.keys()) {
       const [project, , session] = JSON.parse(key);
       if (project === projectId && session === sessionId) this.deliveries.delete(key);

@@ -1,5 +1,5 @@
 const MAX_NOTE = 6000;
-const SSH_REFERENCE_NOTE = 'Shipped built-in and global skills are read-only reference copies for this SSH session, contain SKILL.md text only, and are deleted when it ends.';
+const SSH_REFERENCE_NOTE = 'Shipped built-in and global skills are read-only reference copies containing SKILL.md text only. The current bundle survives closed terminals for resume. Other bundles and receipts older than 30 days are pruned on the next SSH terminal start.';
 const plain = value => String(value || '').replace(/\\/g, '/').replace(/"/g, "'").replace(/[\x00-\x1f\x7f]+/g, ' ');
 
 function skillInstructions({ skills, yielded = [], globalFolder, agents, pendingPath, remote = false, skippedNote = '', routingNote = '' }) {

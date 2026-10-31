@@ -1,5 +1,6 @@
 import contextlib
 import concurrent.futures
+import hashlib
 import importlib.util
 import io
 import json
@@ -9,6 +10,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 import urllib.error
@@ -221,7 +223,49 @@ class RemoteClaudeTest(unittest.TestCase):
         self.assertIsNone(self.hook("resume")[0])
         self.assertIsNone(self.hook("unknown")[0])
         self.assertIsNone(self.hook(session="../../escape")[0])
-        self.assertEqual(len(list((self.home / "delivery").iterdir())), 3)
+        self.assertEqual(len([file for file in (self.home / "delivery").rglob("*") if file.is_file()]), 3)
+
+    def test_shared_receipt_lifecycle_fixture_matches_python_and_every_remaining_receipt(self):
+        fixture = json.loads((MODULE_PATH.parents[1] / "tests/fixtures/skill-receipts/lifecycle.json").read_text(encoding="utf-8"))
+        for key in fixture["manifests"].values():
+            manifest = self.home / "references" / key / "instructions.md"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("Shared instructions.", encoding="utf-8")
+        for revision, step in enumerate(fixture["steps"]):
+            (self.home / "key.txt").write_text(fixture["manifests"][step["key"]], encoding="utf-8")
+            os.utime(self.home / "key.txt", (1700000000 + revision, 1700000000 + revision))
+            result, _ = self.hook(step["source"], step["session"])
+            self.assertEqual(result is not None, step["deliver"], step)
+            if result: self.assertEqual(result["hookSpecificOutput"]["additionalContext"], "Agentrix skill instructions:\nShared instructions.")
+            expected = []
+            for value in step["receipts"]:
+                session, key = value.split("/")
+                expected.append("claude/" + hashlib.sha256(session.encode()).hexdigest()[:32] + "/" + fixture["manifests"][key][:32])
+            folder = self.home / "delivery"
+            actual = sorted(file.relative_to(folder).as_posix() for file in folder.rglob("*") if file.is_file())
+            self.assertEqual(actual, sorted(expected), step)
+
+    def test_spawn_pruning_removes_other_reference_keys_and_receipts_older_than_30_days(self):
+        state = self.home / "pruned-state"
+        current, stale = "c" * 64, "d" * 64
+        for key in (current, stale):
+            folder = state / "references" / key / "builtin/test"
+            folder.mkdir(parents=True)
+            remote.write_skill_reference(str(folder / "SKILL.md"), "Rules.")
+        now = time.time()
+        recent = state / "delivered/claude" / ("a" * 32) / ("b" * 32)
+        expired = state / "delivered/claude" / ("a" * 32) / ("c" * 32)
+        legacy = state / "delivered" / ("e" * 64)
+        for filename, age in ((recent, 29), (expired, 31), (legacy, 31)):
+            filename.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            filename.write_text("", encoding="utf-8")
+            os.utime(filename, (now - age * 86400, now - age * 86400))
+        remote.prune_skill_state(str(state), current, now=now)
+        self.assertFalse((state / "references" / stale).exists())
+        self.assertEqual((state / "references" / current / "builtin/test/SKILL.md").read_text(encoding="utf-8"), "Rules.")
+        self.assertTrue(recent.exists())
+        self.assertFalse(expired.exists()); self.assertFalse(legacy.exists())
+        (state / "references" / current / "builtin/test/SKILL.md").chmod(0o600)
 
     def test_hooks_register_only_remote_paths_and_override_presence_never_credential_values(self):
         _, event = self.hook(ANTHROPIC_AUTH_TOKEN="fake-secret-token", CLAUDE_CONFIG_DIR=str(self.config))

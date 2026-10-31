@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const { repoFiles } = require('../../boundaries.cjs');
 const { readDelivery } = require('./session.cjs');
 
@@ -15,6 +16,22 @@ function commonDir(cwd) {
     return canonical(fs.realpathSync.native(path.resolve(cwd, execFileSync('git', ['rev-parse', '--git-common-dir'],
       { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim())));
   } catch { return null; }
+}
+
+function isolatedWorktree(cwd) {
+  try {
+    const git = args => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
+    const root = fs.realpathSync.native(git(['rev-parse', '--show-toplevel']));
+    const main = fs.realpathSync.native(git(['worktree', 'list', '--porcelain', '-z']).split('\0')[0].slice('worktree '.length));
+    return canonical(root) !== canonical(main) ? root : null;
+  } catch { return null; }
+}
+
+function fileHash(file) {
+  const hash = createHash('sha256'), buffer = Buffer.alloc(64 * 1024), fd = fs.openSync(file, 'r');
+  try { for (let count; (count = fs.readSync(fd, buffer)) > 0;) hash.update(buffer.subarray(0, count)); }
+  finally { fs.closeSync(fd); }
+  return hash.digest('hex');
 }
 
 function managedRoots(cwd, env) {
@@ -44,10 +61,18 @@ class WorkerSkillProposals {
   constructor(options, env, repo = repoFiles(options.cwd)) {
     this.options = options; this.repo = repo;
     const root = repo?.root || options.cwd;
+    this.managed = managedRoots(options.cwd, env);
+    this.restoreRoot = isolatedWorktree(options.cwd);
     this.roots = [...new Set([root, options.cwd].flatMap(folder => ['skills', '.claude/skills', '.codex/skills'].map(name => path.join(folder, name)))
-      .concat(managedRoots(options.cwd, env)).map(folder => path.resolve(folder)))];
+      .concat(this.managed).map(folder => path.resolve(folder)))];
     this.approved = new Set(options.allow.filter(file => skillFile(file) && !/[*?[\]{}]/.test(file)).map(file => canonical(path.resolve(root, file))));
+    this.notes = new Set(); this.reportOnly = false;
     this.before = this.scan(); this.done = false; this.artifacts = new Set();
+  }
+
+  limited() {
+    this.reportOnly = true;
+    this.notes.add('skill guard report-only: snapshot limits exceeded');
   }
 
   scan(extraFiles = []) {
@@ -57,23 +82,31 @@ class WorkerSkillProposals {
       noLinks(root, path.dirname(file));
       const stat = exists(file);
       if (!stat) return;
+      if (files.has(canonical(file))) return;
       bytes += stat.size;
-      if (files.size >= 4096 || stat.size > 512 * 1024 || bytes > 20 * 1024 * 1024) throw new Error('Worker skill snapshot exceeds its size limit');
-      const value = stat.isSymbolicLink() ? { link: fs.readlinkSync(file) } : stat.isFile() ? { bytes: fs.readFileSync(file) } : { directory: true };
+      if (files.size >= 4096) { this.limited(); return; }
+      const large = stat.size > 512 * 1024 || bytes > 20 * 1024 * 1024;
+      if (large) this.limited();
+      const value = stat.isSymbolicLink() ? { link: fs.readlinkSync(file) } : stat.isFile()
+        ? large ? { hash: fileHash(file) } : { bytes: fs.readFileSync(file) } : { directory: true };
+      if (value.bytes) value.hash = createHash('sha256').update(value.bytes).digest('hex');
       files.set(canonical(file), { file, root, mode: stat.mode, ...value });
     };
     const walk = (root, anchor = root) => {
-      if (++visited > 8192) throw new Error('Worker skill roots exceed their directory limit');
+      if (++visited > 8192) { this.limited(); return; }
       const stat = exists(root);
       if (!stat?.isDirectory() || stat.isSymbolicLink()) return;
       for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+        if (entry.name === 'node_modules' || entry.name === '.git') continue;
         const file = path.join(root, entry.name);
         if (skillFile(file)) add(file, anchor);
         else if (entry.isDirectory() && !entry.isSymbolicLink()) walk(file, anchor);
       }
     };
     for (const root of this.roots) walk(root);
-    if (this.repo) for (const file of new Set([...this.repo.files, ...extraFiles])) if (skillFile(file)) add(path.join(this.repo.root, file), this.repo.root);
+    if (this.repo) for (const file of new Set([...this.repo.files, ...extraFiles])) {
+      if (skillFile(file) && !file.split(/[\\/]/).some(name => name === 'node_modules' || name === '.git')) add(path.join(this.repo.root, file), this.repo.root);
+    }
     return files;
   }
 
@@ -83,17 +116,24 @@ class WorkerSkillProposals {
     const folder = `${this.options.out}.skill-proposals-${id}`;
     for (const key of new Set([...this.before.keys(), ...after.keys()])) {
       const before = this.before.get(key), current = after.get(key);
-      if (this.approved.has(key) || before?.bytes && current?.bytes && before.bytes.equals(current.bytes)
+      if (this.approved.has(key) || before?.hash && before.hash === current?.hash
         || before?.link && before.link === current?.link || before?.directory && current?.directory) continue;
+      // A bounded scan cannot establish a deletion for a file it did not reach.
+      if (!current && before && exists(before.file)) continue;
       const entry = before || current;
-      const proposal = { path: entry.file, operation: !current ? 'delete' : !before ? 'create' : 'edit' };
+      const restored = !this.reportOnly && this.restoreRoot && within(this.restoreRoot, entry.file)
+        && !this.managed.some(root => within(root, entry.file)) && !current?.directory;
+      const proposal = { path: entry.file, operation: !current ? 'delete' : !before ? 'create' : 'edit', restored: Boolean(restored) };
+      if (!restored) proposal.note = 'changed during the run, author unknown';
       fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
-      if (current?.bytes) {
+      if (current?.bytes || current?.hash) {
         proposal.content = `${proposals.length + 1}.SKILL.md`;
-        fs.writeFileSync(path.join(folder, proposal.content), current.bytes, { flag: 'wx', mode: 0o600 });
+        const destination = path.join(folder, proposal.content);
+        if (current.bytes) fs.writeFileSync(destination, current.bytes, { flag: 'wx', mode: 0o600 });
+        else { fs.copyFileSync(current.file, destination, fs.constants.COPYFILE_EXCL); fs.chmodSync(destination, 0o600); }
         this.artifacts.add(path.join(folder, proposal.content));
       } else if (current?.link) proposal.symlink = current.link;
-      else if (current?.directory) throw new Error('A worker replaced SKILL.md with a directory; manual recovery required');
+      else if (current?.directory) proposal.directory = true;
       proposals.push(proposal);
     }
     // Preserve every proposed version before restoring any active file.
@@ -102,6 +142,7 @@ class WorkerSkillProposals {
       this.artifacts.add(path.join(folder, 'index.json'));
     }
     for (const proposal of proposals) {
+      if (!proposal.restored) continue;
       const key = canonical(proposal.path), before = this.before.get(key), entry = before || after.get(key);
       noLinks(entry.root, path.dirname(entry.file));
       if (exists(entry.file)) fs.unlinkSync(entry.file);
