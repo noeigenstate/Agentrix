@@ -163,6 +163,9 @@ jobs:
       - name: Verify the model dashboard window, its filters, adoption and layouts
         run: node scripts/retry.mjs npm run test:dashboard -- --packaged
 
+      - name: Verify the real native question card at the minimum window, its validation and jump link
+        run: node scripts/retry.mjs npm run test:native-question -- --packaged
+
       - name: Verify agent hierarchy, queued messages, paged popups and slow autosave
         run: node scripts/retry.mjs node scripts/reading-hierarchy-smoke.mjs --packaged
 

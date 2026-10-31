@@ -18,7 +18,7 @@ import { waitFor } from './wait.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
 const { minWidth, minHeight } = require('../electron/window-zoom.json');
-const THEMES = ['mono', 'light'];
+const THEMES = ['mono', 'light'], packaged = process.argv.includes('--packaged');
 
 // The stand-in CLI: a JSON-lines peer that confirms the SDK's initialize, then asks one form with a required boolean (no default) and an optional note.
 const FAKE_CLI = `
@@ -58,12 +58,17 @@ async function runTheme(theme, output) {
   await fs.writeFile(path.join(cli, 'cli.js'), FAKE_CLI);
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ id: 'questions', name: '原生问题', path: project, restore: { terminal: false, codex: false } }],
     settings: { language: 'zh', theme, terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false } }));
-  const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: path.join(dir, 'codex-home'), CLAUDE_CONFIG_DIR: path.join(dir, 'claude-home'), PATH: bin + path.delimiter + process.env.PATH };
+  const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: path.join(dir, 'codex-home'), CLAUDE_CONFIG_DIR: path.join(dir, 'claude-home') };
+  // Windows spells it Path: keep one key with the stand-in first, so the app cannot find a real CLI.
+  const searchPath = Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '';
+  for (const key of Object.keys(env)) if (key.toLowerCase() === 'path') delete env[key];
+  env[process.platform === 'win32' ? 'Path' : 'PATH'] = bin + path.delimiter + searchPath;
   delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
   const errors = [], results = { theme, steps: [] }, shot = (page, name) => page.screenshot({ path: path.join(dir, `${name}.png`) });
   let app;
   try {
-    app = await electron.launch({ executablePath: require('electron'), args: [root], cwd: root, env });
+    app = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'),
+      args: packaged ? [] : [root], cwd: root, env });
     const page = await app.firstWindow(); page.on('pageerror', error => errors.push(error.message));
     await app.evaluate(({ BrowserWindow }, [width, height]) => BrowserWindow.getAllWindows()[0].setContentSize(width, height), [minWidth, minHeight]);
     await waitFor(() => page.evaluate(([width, height]) => innerWidth <= width + 1 && innerHeight <= height + 1, [minWidth, minHeight]), 'the minimum window size');
