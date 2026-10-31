@@ -298,7 +298,7 @@ xattr -dr com.apple.quarantine "/Applications/Agentrix.app"
 
 ### macOS 终端与快捷键
 
-本地终端默认运行 Bash（`/bin/bash`），可在「设置 › 终端与编辑 › 终端」中改选 zsh（`/bin/zsh`），新开或重启的终端按当前选择启动。Bash 与 macOS 自带终端一样作为登录 shell 启动：读取 `/etc/profile`，再读 `~/.bash_profile`、`~/.bash_login`、`~/.profile` 中第一个存在的；不会自动读取 `~/.bashrc`，需要的话在 `~/.bash_profile` 里自行 `source ~/.bashrc`。Agentrix 会关闭 macOS 自带 Bash 的「默认 shell 已改为 zsh」提示。zsh 照常加载你自己的 `~/.zshenv`、`~/.zprofile`、`~/.zshrc` 和 `~/.zlogin`。Agentrix 在此基础上加入提示符状态报告和 `codex` / `claude` 包装层，支持轮次状态、Claude Code hooks、完成提醒和会话恢复，不修改任何用户文件。你为 `codex` 或 `claude` 定义的别名仍然有效。SSH 项目的用法与 Windows 相同。
+本地终端默认运行 Bash（`/bin/bash`），可在「设置 › 终端与编辑 › 终端」中改选 zsh（`/bin/zsh`），新开或重启的终端按当前选择启动。Bash 以交互式非登录 shell 启动（`--rcfile … -i`），但按登录 shell 的顺序读取启动文件：先 `/etc/profile`，再 `~/.bash_profile`、`~/.bash_login`、`~/.profile` 中第一个存在的；不会自动读取 `~/.bashrc`，需要的话在 `~/.bash_profile` 里自行 `source ~/.bashrc`。因为不是登录 shell，`shopt login_shell` 为 off，`logout` 不能用（请用 `exit`），`~/.bash_logout` 也不会运行。Agentrix 会关闭 macOS 自带 Bash 的「默认 shell 已改为 zsh」提示。从 zsh 转过来的用户请注意：写在 `~/.zshrc`、`~/.zprofile` 里的设置（别名、环境变量、Homebrew 的 `brew shellenv` 等）Bash 不会读取，请把它们放进 `~/.bash_profile`，或在设置里选择 zsh。zsh 照常加载你自己的 `~/.zshenv`、`~/.zprofile`、`~/.zshrc` 和 `~/.zlogin`。Agentrix 在此基础上加入提示符状态报告和 `codex` / `claude` 包装层，支持轮次状态、Claude Code hooks、完成提醒和会话恢复，不修改任何用户文件。你为 `codex` 或 `claude` 定义的别名仍然有效。SSH 项目的用法与 Windows 相同。
 
 终端中用 `⌘C` / `⌘V` / `⌘A` 复制、粘贴和全选，`Control+C` 中断命令，`⌘+点击`打开链接。`⌘Q` 退出（终端仍在运行时会先询问），`⌘H` 隐藏，`⌘M` 最小化。设置里的项目快捷键仍默认使用 Control，例如 `Control+Shift+N` 添加项目。
 
