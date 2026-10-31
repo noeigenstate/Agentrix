@@ -76,6 +76,11 @@ table.incident { min-width: 820px; }
    while the table overflows, so the first view would show half-hidden figures; the last column scrolls into view at the end instead. */
 .sticky tr { background: var(--bg-card); }
 .sticky :is(th, td):first-child { position: sticky; left: 0; z-index: 1; background: inherit; }
+/* Scrolling lands on column edges, with the edge of the pinned column as the start line, so a cell is either beside the pinned column in full or under it, never half-covered.
+   ScrollRegion sets --pin (the pinned column's width) and, while the table overflows, --last-min: the last column fills the room beside the pinned one, which makes the maximum scroll a column edge. */
+.scroll:has(> .sticky) { scroll-snap-type: x mandatory; scroll-padding-left: var(--pin, 0px); }
+.sticky :is(th, td):not(:first-child) { scroll-snap-align: start; }
+.sticky :is(th, td):last-child:not(:first-child) { min-width: var(--last-min, 0px); }
 .who { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .mk { flex: none; color: var(--text-2); }
 .cost-note { display: block; color: var(--text-2); font-size: 12px; white-space: nowrap; }

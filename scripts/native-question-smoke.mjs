@@ -20,7 +20,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), r
 const { minWidth, minHeight } = require('../electron/window-zoom.json');
 const THEMES = ['mono', 'light'], packaged = process.argv.includes('--packaged');
 
-// The stand-in CLI: a JSON-lines peer that confirms the SDK's initialize, then asks one form with a required boolean (no default) and an optional note.
+// The stand-in CLI: a JSON-lines peer that confirms the SDK's initialize, then asks one form with a required boolean (no default), a required text and an optional note.
 const FAKE_CLI = `
 let buffer = '';
 const send = message => process.stdout.write(JSON.stringify(message) + '\\n');
@@ -31,7 +31,7 @@ process.stdin.on('data', bytes => {
     if (message.type !== 'control_request' || message.request.subtype !== 'initialize') continue;
     send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } });
     send({ type: 'control_request', request_id: 'form-1', request: { subtype: 'elicitation', mode: 'form', mcp_server_name: 'deploy-helper', message: 'Configure the deployment',
-      requested_schema: { type: 'object', required: ['approve'], properties: { approve: { type: 'boolean', title: 'Approve the release' }, note: { type: 'string', title: 'Note for the log' } } } } });
+      requested_schema: { type: 'object', required: ['approve', 'reason'], properties: { approve: { type: 'boolean', title: 'Approve the release' }, reason: { type: 'string', title: 'Reason for the release' }, note: { type: 'string', title: 'Note for the log' } } } } });
   }
   buffer = buffer.slice(buffer.lastIndexOf('\\n') + 1);
 });
@@ -83,7 +83,7 @@ async function runTheme(theme, output) {
     const required = page.locator('.native-question-bool input[type="radio"]');
     assert.equal(await required.count(), 2, 'a required boolean offers yes and no only');
     assert.equal(await required.evaluateAll(nodes => nodes.filter(node => node.checked).length), 0, 'the boolean is left empty');
-    assert.match(await card.locator('.native-question-status').innerText(), /还有 1 项未完成/);
+    assert.match(await card.locator('.native-question-status').innerText(), /还有 2 项未完成/);
     await shot(page, 'card-initial');
 
     // Enter on the unfinished form: the reason shows and the first unfinished field takes focus.
@@ -94,7 +94,7 @@ async function runTheme(theme, output) {
     await shot(page, 'card-enter');
 
     // Tab to the link: radios of the group first, then the link.
-    for (let step = 0; step < 4 && await page.evaluate(() => document.activeElement.textContent !== '前往第一项'); step++) await page.keyboard.press('Tab');
+    for (let step = 0; step < 6 && await page.evaluate(() => document.activeElement.textContent !== '前往第一项'); step++) await page.keyboard.press('Tab');
     const link = await page.evaluate(measureLink);
     assert.equal(link.label, '前往第一项', 'Tab reaches the link');
     assert.deepEqual({ ...link, label: undefined }, { label: undefined, outline: '2px solid', hit: 32, underline: 'underline', overStatusText: false, overActions: false, clipped: false });
@@ -106,6 +106,21 @@ async function runTheme(theme, output) {
     await waitFor(() => page.evaluate(() => document.activeElement.type === 'radio'), 'the link focuses the first unfinished field');
     assert.equal(await page.evaluate(() => document.activeElement.closest('.native-question-field') === document.querySelector('.native-question-field')), true);
     await shot(page, 'card-after-jump');
+
+    // The mouse path. A radio clicked with the mouse answers its field; the link, clicked with the mouse, then takes focus to the next unfinished one and brings it into view
+    // (a click does not match :focus-visible, so focus and scroll position are checked, not the ring).
+    await page.locator('.native-question-body').evaluate(node => { node.scrollTop = 0; });
+    await card.locator('.native-question-bool label', { hasText: '是' }).click();
+    await waitFor(async () => /还有 1 项未完成/.test(await card.locator('.native-question-status').innerText()), 'a radio answered by mouse leaves one unfinished field');
+    assert.equal(await required.evaluateAll(nodes => nodes.filter(node => node.checked).length), 1, 'the clicked radio is checked');
+    await shot(page, 'card-mouse-radio');
+    await page.locator('.native-question-body').evaluate(node => { node.scrollTop = 0; });
+    await card.getByRole('button', { name: '前往第一项', exact: true }).click();
+    await waitFor(() => page.evaluate(() => document.activeElement === document.querySelectorAll('.native-question-field')[1]?.querySelector('input')), 'the mouse-clicked link focuses the first unfinished field');
+    const view = await page.evaluate(() => { const body = document.querySelector('.native-question-body').getBoundingClientRect(), field = document.querySelectorAll('.native-question-field')[1].getBoundingClientRect(); return { body: [body.top, body.bottom], field: [field.top, field.bottom] }; });
+    assert.ok(view.field[0] >= view.body[0] - 1 && view.field[1] <= view.body[1] + 1, `the unfinished field is scrolled into view: ${JSON.stringify(view)}`);
+    results.steps.push({ mouse: view });
+    await shot(page, 'card-mouse-jump');
     assert.deepEqual(errors, []);
   } finally {
     await fs.writeFile(path.join(dir, 'results.json'), JSON.stringify(results, null, 2));
@@ -115,4 +130,4 @@ async function runTheme(theme, output) {
 
 const output = await testRun('native-question');
 await withGuiLock('native-question', async () => { for (const theme of THEMES) await runTheme(theme, output); });
-console.log(`PASS: the real native question card at ${minWidth}×${minHeight}: empty required boolean, Enter, Tab to 前往第一项 and activating it, in the mono and light themes: ${output}`);
+console.log(`PASS: the real native question card at ${minWidth}×${minHeight}: empty required boolean, Enter, Tab to 前往第一项 and activating it by key and by mouse, in the mono and light themes: ${output}`);
