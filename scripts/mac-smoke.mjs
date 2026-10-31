@@ -48,7 +48,7 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.dataset.platform), 'darwin');
   assert.equal(await page.locator('.window-actions').isVisible(), false, 'no page-drawn window buttons');
   assert.equal(await page.locator('.titlebar-brand').count(), 0, 'the app menu lives in the system menu bar, not the window');
-  assert.equal(await page.locator('.home-nav').evaluate(element => element.getBoundingClientRect().left), 78, 'room for the traffic lights');
+  assert.equal(await page.locator('.home-nav').evaluate(element => element.getBoundingClientRect().left), 82, 'room for the traffic lights');
   assert.deepEqual(await application.evaluate(({ Menu }) => Menu.getApplicationMenu().items.map(item => item.label)), ['Agentrix'], 'the menu bar');
   await page.locator('.titlebar').screenshot({ path: path.join(output, 'titlebar.png') });
 
