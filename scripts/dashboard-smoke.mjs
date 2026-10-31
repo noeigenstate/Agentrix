@@ -80,37 +80,43 @@ const measureModelButtons = () => [...document.querySelectorAll('.model-toggle')
   return { name: button.getAttribute('aria-label'), text: label.textContent, height: Math.round(button.getBoundingClientRect().height), lines: Math.round(label.getBoundingClientRect().height / parseFloat(style.lineHeight)), nowrap: style.whiteSpace === 'nowrap', cut: label.scrollWidth > label.clientWidth + 1 };
 });
 
-// A cell scrolling under a pinned column is normal; what must not happen is a cell that never shows whole. For each scroll region, at its first and its last scroll position,
-// every unpinned cell with text is "whole" when its text is inside the region and clear of every pinned cell of its row. A cell that is whole at neither position is reported.
-// `shoot(index, region)` is called at the last position, where the pinned column is over the cells that scrolled under it.
+// A scroll region lands on column edges, so beside the pinned first column a cell is there in full or under it, never half-covered. Every scroll region is read at its start, one viewport
+// along (after it snaps) and its end: any cell with text, header cells included, whose box crosses the pinned column's right edge is reported. Only horizontally pinned cells are exempt.
+// `shoot(index, region, position)` is called at each position so the pictures show what the user lands on.
 async function measureObscured(page, shoot) {
-  const regions = await page.$$('.scroll'), whole = { start: new Map(), end: new Map() }, hidden = [];
-  const settle = (region, at) => region.evaluate(async (node, at) => {
-    node.scrollLeft = at === 'start' ? 0 : node.scrollWidth;
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  }, at);
+  const regions = await page.$$('.scroll'), covered = [], labels = [];
+  let cells = 0;
+  const settle = (region, move) => region.evaluate(async (node, move) => {
+    if (move === 'start') node.scrollLeft = 0;
+    else if (move === 'middle') node.scrollBy({ left: node.clientWidth, behavior: 'instant' });
+    else node.scrollLeft = node.scrollWidth;
+    for (let frame = 0; frame < 3; frame++) await new Promise(resolve => requestAnimationFrame(resolve));
+  }, move);
   for (const [index, region] of regions.entries()) {
-    for (const at of ['start', 'end']) {
-      await settle(region, at);
-      for (const [key, ok] of await region.evaluate((node, index) => {
-        const view = node.getBoundingClientRect(), range = document.createRange(), cells = new Map();
-        for (const [rowAt, row] of [...node.querySelectorAll('tr')].entries()) {
-          const all = [...row.children], pinned = all.filter(cell => getComputedStyle(cell).position === 'sticky');
-          for (const [cellAt, cell] of all.entries()) {
-            if (pinned.includes(cell) || !cell.textContent.trim()) continue;
-            range.selectNodeContents(cell);
-            const text = range.getBoundingClientRect(), inside = text.left >= view.left - 0.5 && text.right <= view.right + 0.5;
-            cells.set(`${index}:${rowAt}:${cellAt}:${cell.textContent.trim().slice(0, 24)}`, inside && pinned.every(pin => { const over = pin.getBoundingClientRect(); return text.right <= over.left + 0.5 || text.left >= over.right - 0.5 || text.bottom <= over.top || text.top >= over.bottom; }));
+    labels.push(await region.getAttribute('aria-label'));
+    for (const position of ['start', 'middle', 'end']) {
+      await settle(region, position);
+      const read = await region.evaluate((node, [index, position]) => {
+        const found = [];
+        let count = 0;
+        for (const row of node.querySelectorAll('tr')) {
+          const all = [...row.children], pinned = all.filter(cell => getComputedStyle(cell).position === 'sticky' && getComputedStyle(cell).left !== 'auto');
+          if (!pinned.length) continue;
+          const edge = Math.max(...pinned.map(cell => cell.getBoundingClientRect().right));
+          for (const cell of all.filter(other => !pinned.includes(other) && other.textContent.trim())) {
+            const box = cell.getBoundingClientRect();
+            count++;
+            if (box.left < edge - 0.5 && box.right > edge + 0.5) found.push({ region: index, position, text: cell.textContent.trim().slice(0, 24), underPin: Math.round(edge - box.left) });
           }
         }
-        return [...cells];
-      }, index)) whole[at].set(key, ok);
-      if (at === 'end' && shoot) await shoot(index, region);
+        return { found, count };
+      }, [index, position]);
+      covered.push(...read.found); cells = Math.max(cells, read.count);
+      if (shoot) await shoot(index, region, position);
     }
     await settle(region, 'start');
   }
-  for (const [key, ok] of whole.start) if (!ok && !whole.end.get(key)) hidden.push(key);
-  return { hidden, cells: whole.start.size };
+  return { covered, cells, labels };
 }
 
 // The text in the selected (expanded) model row with the colour it is drawn in and the surface under it.
@@ -124,9 +130,11 @@ const measureSelectedRow = () => {
 // The shared Select's states (the dashboard has no disabled Select of its own) built from its classes: a disabled trigger and a menu with an enabled, an active,
 // a selected, a disabled, a selected-and-disabled and an active-and-disabled item.
 const OPTION_STATES = { enabled: '', active: 'data-active="true"', selected: 'aria-selected="true"', disabled: 'aria-disabled="true"', 'selected-disabled': 'aria-selected="true" aria-disabled="true"', 'active-disabled': 'data-active="true" aria-disabled="true"' };
+// Select.tsx draws the selected option's check (Phosphor Check, bold, 14px) in .select-option-mark; the probe draws the same.
+const CHECK = '<svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M232.49,80.49l-128,128a12,12,0,0,1-17,0l-56-56a12,12,0,1,1,17-17L96,183,215.51,63.51a12,12,0,0,1,17,17Z"/></svg>';
 const SELECT_PROBE = `<div id="select-probe" style="position:fixed;z-index:900;top:96px;left:16px;display:flex;flex-direction:column;gap:8px;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--bg-app)">
   <button type="button" class="select-trigger" disabled style="width:240px"><span class="select-value">不可用的下拉</span></button>
-  <ul class="select-menu" role="listbox" style="position:static;width:240px">${Object.entries(OPTION_STATES).map(([state, attributes]) => `<li role="option" data-state="${state}" ${attributes}><span class="select-option-label">${state}</span><span class="select-option-mark"></span></li>`).join('')}</ul></div>`;
+  <ul class="select-menu" role="listbox" style="position:static;width:240px">${Object.entries(OPTION_STATES).map(([state, attributes]) => `<li role="option" data-state="${state}" ${attributes}><span class="select-option-label">${state}</span><span class="select-option-mark">${attributes.includes('aria-selected') ? CHECK : ''}</span></li>`).join('')}</ul></div>`;
 const measureSelectProbe = markup => {
   document.body.insertAdjacentHTML('beforeend', markup);
   // The colour a node's text is drawn on: the first ancestor background that is not transparent.
@@ -243,6 +251,16 @@ async function checkTheme(theme, output, results) {
       for (const [page, name] of [['模型评估', 'models'], ['协作报告', 'team']]) {
         await tab(page); await new Promise(resolve => setTimeout(resolve, 250));
         if (name === 'models') {
+          // The long id from the keyboard: Enter opens its task list, whose heading carries the whole name, wrapped if need be but never cut.
+          const longControl = dash.getByRole('button', { name: LONG_MODEL, exact: true });
+          await longControl.focus(); await longControl.press('Enter');
+          await tasks.waitFor();
+          const title = dash.locator('#dashboard-model-tasks-title');
+          await title.scrollIntoViewIfNeeded();
+          const heading = await title.evaluate(node => { const box = node.getBoundingClientRect(); return { text: node.textContent, cut: node.scrollWidth > node.clientWidth + 1, inside: box.left >= 0 && box.right <= innerWidth, lines: Math.round(box.height / parseFloat(getComputedStyle(node).lineHeight)) }; });
+          assert.ok(heading.text.includes(LONG_MODEL) && !heading.cut && heading.inside, `the long model's task heading at ${width}×${height}: ${JSON.stringify(heading)}`);
+          if (width !== 1180) await shot(dash, `${theme}-${width}x${height}-long-model-heading`);
+          results.push({ theme, width, height, longHeading: heading });
           await modelControl('gpt-6.1-sol').click();
           assert.equal(await tasks.locator('tbody tr').count(), EXPECTED.modelTasks30['gpt-6.1-sol']);
         }
@@ -259,9 +277,9 @@ async function checkTheme(theme, output, results) {
         // A label is cut only when it is the long id, never wrapped; the button names its model in full either way.
         assert.ok(buttons.every(button => button.height <= 32 && button.lines === 1 && button.nowrap && button.name === button.text && button.cut === (button.name === LONG_MODEL)), `model buttons at ${width}×${height}: ${JSON.stringify(buttons)}`);
         assert.ok(name !== 'models' || buttons.some(button => button.name === LONG_MODEL && button.cut), 'the long model id is cut with an ellipsis');
-        // The picture of each overflowing table at its end: its first column is pinned there, over the cells that scrolled under it.
-        const obscured = await measureObscured(dash, width === 820 ? async (index, region) => { if (!await region.isVisible()) return; await region.scrollIntoViewIfNeeded(); await shot(dash, `${theme}-${width}x${height}-${name}-scroll${index}-end`); } : undefined);
-        assert.deepEqual(obscured.hidden, [], `cells that never show whole at ${width}×${height} on ${name}`);
+        // Every scroll region at its start, one viewport along and its end; the pictures of the visible ones are kept at 820×600.
+        const obscured = await measureObscured(dash, width === 820 ? async (index, region, position) => { if (!await region.isVisible()) return; await region.scrollIntoViewIfNeeded(); await shot(dash, `${theme}-${width}x${height}-${name}-scroll${index}-${position}`); } : undefined);
+        assert.deepEqual(obscured.covered, [], `half-covered cells beside the pinned column at ${width}×${height} on ${name}`);
         assert.ok(obscured.cells > 20, 'the tables have cells to check');
         if (name === 'models') {
           const selected = await dash.evaluate(measureSelectedRow), low = selected.map(({ text, color, surface }) => ({ text, ratio: contrast(color, surface) })).filter(({ ratio }) => ratio < 4.5);
@@ -269,7 +287,7 @@ async function checkTheme(theme, output, results) {
           assert.deepEqual(low, [], `text in the selected row under 4.5:1 at ${width}×${height} on ${theme}`);
           results.push({ theme, width, height, selectedRow: selected.map(({ text, color, surface }) => ({ text, ratio: +contrast(color, surface).toFixed(2) })) });
         }
-        await shot(dash, `${theme}-${width}x${height}-${name}`); results.push({ theme, width, height, page: name, ...layout, buttons, cellsChecked: obscured.cells, regions: await dash.locator('.scroll').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label').slice(0, 6))), neverWhole: obscured.hidden.length });
+        await shot(dash, `${theme}-${width}x${height}-${name}`); results.push({ theme, width, height, page: name, ...layout, buttons, cellsChecked: obscured.cells, regions: obscured.labels.map(label => label.slice(0, 6)), halfCovered: obscured.covered.length });
         if (name === 'models') {
           await tasks.scrollIntoViewIfNeeded();
           await shot(dash, `${theme}-${width}x${height}-model-tasks`);
@@ -280,6 +298,13 @@ async function checkTheme(theme, output, results) {
     // The shared Select's four states, and the disabled ones in combination, keep their text readable (4.5:1 on their own surface) without fading.
     for (const [width, height] of [[900, 820], [820, 600]]) {
       await resize(width, height);
+      // The real Select, opened on the dashboard's own project filter: its selected item shows the check.
+      const filter = dash.getByRole('combobox', { name: '项目' });
+      await filter.click();
+      await dash.locator('.select-menu [aria-selected="true"] .select-option-mark svg').waitFor();
+      await shot(dash, `${theme}-${width}x${height}-select-open`);
+      await dash.keyboard.press('Escape');
+      await dash.locator('.select-menu').waitFor({ state: 'detached' });
       const probe = await dash.evaluate(measureSelectProbe, SELECT_PROBE);
       await shot(dash, `${theme}-${width}x${height}-select-disabled`);
       await dash.evaluate(() => document.getElementById('select-probe').remove());
