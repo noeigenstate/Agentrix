@@ -1,19 +1,28 @@
-.native-question { font-size: 13px; font-weight: 400; }
-.native-question .reading-choice-head strong { font-size: 14px; font-weight: 600; }
-.native-question-title { margin: 8px 0; overflow-wrap: anywhere; }
-.native-question-field { min-width: 0; padding: 0; margin: 16px 0; border: 0; }
+/* The card scrolls its body only (the one scrollbar); the status line and the actions below it always stay in view. Focus rings come from styles.css (--focus-ring); the paddings leave room for them at every edge of the scroller. */
+.reading-choice.native-question { display: flex; flex-direction: column; padding: 0; overflow: hidden; font-weight: 400; }
+.native-question-form { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+.native-question-body { flex: 1 1 auto; min-height: 0; padding: 12px 16px 8px; overflow: auto; overscroll-behavior: contain; }
+.native-question-footer { flex: none; padding: 8px 16px 12px; border-top: 1px solid var(--divider); }
+.native-question-message { margin: 0 0 12px; overflow-wrap: anywhere; }
+.native-question-source { margin: 0 0 12px; font-size: calc(12px * var(--reading-text)); color: var(--text-2); overflow-wrap: anywhere; }
+.native-question-field { min-width: 0; padding: 0; margin: 0; border: 0; }
+.native-question-field + .native-question-field { margin-top: 16px; }
 .native-question-field legend { padding: 0; font-weight: 600; overflow-wrap: anywhere; }
-.native-question-note { display: block; margin: 4px 0; font-size: 12px; font-weight: 400; color: var(--text-2); }
-.native-question .reading-choice-option { display: flex; align-items: flex-start; gap: 8px; min-height: 32px; padding: 8px; font-size: 13px; font-weight: 400; cursor: pointer; }
+.native-question-note { display: block; margin: 4px 0; font-size: calc(12px * var(--reading-text)); font-weight: 400; color: var(--text-2); }
+.native-question .reading-choice-option { align-items: flex-start; min-height: 32px; cursor: pointer; }
 .native-question .reading-choice-option > input { flex: none; margin: 2px 0 0; accent-color: var(--text-1); }
 .native-question .reading-choice-option > span { min-width: 0; overflow-wrap: anywhere; }
 .native-question .reading-choice-option.is-selected { background: var(--bg-selected); }
-.native-question .is-selected .native-question-note { color: var(--text-1); }
-.native-question-number { margin-left: auto; font-size: 12px; color: var(--text-2); }
+.native-question .is-selected :is(.native-question-note, .native-question-number) { color: var(--text-1); }
+.native-question-number { flex: none; margin-left: auto; font-size: calc(12px * var(--reading-text)); color: var(--text-2); }
 .native-question-input { display: block; box-sizing: border-box; width: 100%; min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: inherit; }
+.native-question-input[aria-invalid="true"] { border-color: var(--danger); }
 .native-question-other { display: block; margin-top: 8px; }
-.native-question-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.native-question-actions button { min-height: 32px; min-width: 32px; font: inherit; }
-.native-question :is(input, select, button):focus-visible { outline: 2px solid var(--text-1); outline-offset: 2px; }
+.native-question-reason, .native-question-status { margin: 4px 0 0; font-size: calc(12px * var(--reading-text)); line-height: 1.5; overflow-wrap: anywhere; }
+.native-question-reason { color: var(--danger); }
+.native-question-footer .native-question-reason, .native-question-status { margin: 0 0 8px; }
+.native-question-status { color: var(--text-2); }
+.native-question .native-question-actions { margin-top: 0; }
+.native-question-actions .native-question-source-link { margin: 0 -8px 0 auto; }
 .native-question fieldset:disabled { opacity: 1; }
 .native-question-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
