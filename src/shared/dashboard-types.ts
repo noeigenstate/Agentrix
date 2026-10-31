@@ -37,6 +37,12 @@ export type DashboardRound = {
   phases: { roundtable: number | null; build: number | null; review: number | null; rework: number | null };
 };
 export type DashboardFindingCell = { author: string; category: DashboardFindingCategory; count: number };
+// One run in a model's task list (a model row opens it): newest first, at most 50 per model, in the query's range and
+// project. firstPass is null when the run had no observable outcome.
+export type DashboardModelRun = {
+  model: string; at: number; project: string; title: string; kind: string | null; role: string | null; meeting: string | null;
+  firstPass: boolean | null; reason: string | null; activeMs: number | null; outputTokens: number | null; costUsd: number | null;
+};
 // Generated from the records by fixed rules; id is stable for the same evidence so an adoption survives a refresh.
 export type DashboardSuggestion = {
   id: string; kind: 'weight' | 'mechanism'; title: string; text: string; weight: DashboardWeight | null;
@@ -54,7 +60,7 @@ export type DashboardSummary = {
   kpis: DashboardKpis;
   models: DashboardModelRow[]; kinds: DashboardKindRate[]; speed: DashboardSpeedPoint[];
   incidents: DashboardIncident[]; rounds: DashboardRound[]; findings: DashboardFindingCell[];
-  suggestions: DashboardSuggestion[]; weights: DashboardWeight[];
+  suggestions: DashboardSuggestion[]; weights: DashboardWeight[]; modelRuns: DashboardModelRun[];
   // prices.json's date; models seen in runs without a price row are listed so the page can say so.
   prices: { updated: string; unpriced: string[] };
 };
