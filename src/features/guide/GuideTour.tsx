@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Project } from '../../shared/types';
 import { shortcut } from '../shortcuts/shortcuts';
 import { t } from '../../shared/i18n';
+import { isMac } from '../../shared/platform';
 import { observeBounds, type Bounds } from '../../shared/observeBounds';
 type Step = {
   id: string; title: string; body: string[];
@@ -44,8 +45,9 @@ export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects:
     },
     {
       id: 'settings', title: t('设置与更多'), interactive: false,
-      body: [t('标志和标题是应用菜单：新建项目、返回项目、全屏，以及设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）。'), t('按 {key} 添加更多项目。', { key: shortcut('addProject') })],
-      target: () => visible('.titlebar-brand'),
+      body: [isMac ? t('功能在屏幕顶部的菜单栏：Agentrix 菜单里有新建项目和设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）；前往里有决策、工作台、返回项目和搜索；显示里有活动栏和阅读视图。')
+        : t('标志和标题是应用菜单：新建项目、返回项目、全屏，以及设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）。'), t('按 {key} 添加更多项目。', { key: shortcut('addProject') })],
+      target: () => isMac ? null : visible('.titlebar-brand'),
     },
   ];
   const [index, setIndex] = useState(0);

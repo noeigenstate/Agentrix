@@ -323,12 +323,12 @@ export function App() {
   const closeGuide = () => { setGuide(null); if (settings.guideVersion !== workspace.version) setPreference({ guideVersion: workspace.version }); };
 
   const searchShown = !focusedId && (searchOpen || !!query);
-  // macOS full screen has the system menu bar and no title bar of its own; it floats over the content only while the search box is in use.
-  const macFullScreen = isMac && fullScreen;
+  // macOS full screen has the system menu bar and no title bar of its own; the search box brings the bar back, in flow.
+  const bareTitlebar = isMac && fullScreen && !searchShown;
   const autoHideTitlebar = fullScreen && !isMac && workspace.autoHideTitlebar;
-  return <div ref={focusMotionRoot} className={`app-shell ${focusedId ? 'focus-mode' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${autoHideTitlebar ? 'titlebar-auto' : ''} ${macFullScreen ? 'titlebar-bare' : ''}`} style={{ '--terminal-font-size': `${settings.fontSize}px` } as CSSProperties}>
+  return <div ref={focusMotionRoot} className={`app-shell ${focusedId ? 'focus-mode' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${autoHideTitlebar ? 'titlebar-auto' : ''} ${bareTitlebar ? 'titlebar-bare' : ''}`} style={{ '--terminal-font-size': `${settings.fontSize}px` } as CSSProperties}>
     {autoHideTitlebar && <div className="titlebar-reveal" aria-hidden="true" />}
-    {(!macFullScreen || searchShown) && <div className="titlebar">
+    {!bareTitlebar && <div className="titlebar">
       {!isMac && <AppMenu fullScreen={fullScreen} canReturn={canReturn} updateReady={updates?.status === 'ready'}
         onAddProject={() => setAddOpen(true)} onReturn={returnToGrid} onFullScreen={() => api.toggleFullScreen()} onSettings={() => setSettingsOpen(true)} onInstallUpdate={installUpdate} />}
       <nav className="home-nav" aria-label={t('页面')}>
