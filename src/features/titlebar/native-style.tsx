@@ -8,6 +8,8 @@ import { subscribeTheme } from '../../shared/themes';
 // The look of the native 决策 / 工作台 buttons (macOS), read from what the page itself draws: the real .home-nav rules and the theme tokens, so the
 // native drawing cannot drift from the CSS. The icons are the page's Phosphor icons as template masks: only their alpha is used, the native side tints them.
 const MASK_COLOR = 'white';
+// The nav's icon size in CSS px, for the page's own icons and the native ones alike.
+export const NAV_ICON_SIZE = 16;
 const ICONS: Record<TitlebarView, ComponentType<{ size: number }>> = { decisions: Stamp, workspace: CirclesFour };
 const TOKENS = { text: '--text-2', textSelected: '--text-1', hover: '--bg-hover', selected: '--bg-selected', badge: '--button-primary', badgeText: '--button-primary-text', focus: '--focus-ring' };
 
@@ -20,16 +22,19 @@ export function colorHex(color: string) {
   return `#${byte(r)}${byte(g)}${byte(b)}${a < 1 ? Math.round(a * 255).toString(16).padStart(2, '0') : ''}`;
 }
 
-type Computed = Pick<CSSStyleDeclaration, 'height' | 'paddingLeft' | 'columnGap' | 'borderTopLeftRadius' | 'fontSize' | 'fontWeight' | 'minWidth' | 'lineHeight'>;
+// The page is zoomed with the web contents' zoom factor, which Chromium's devicePixelRatio already includes: the glyph's device pixels need no scale of their own.
+export const iconPixels = (pixelRatio: number) => Math.round(NAV_ICON_SIZE * pixelRatio);
+
+type Computed = Pick<CSSStyleDeclaration, 'height' | 'paddingLeft' | 'columnGap' | 'borderTopLeftRadius' | 'fontFamily' | 'fontSize' | 'fontWeight' | 'minWidth' | 'lineHeight'>;
 type Measured = { scale: number; nav: Computed; button: Computed; badge: Computed; colors: TitlebarStyle['colors']; focus: { width: number; offset: number }; icons: TitlebarStyle['icons'] };
 
 export function styleFrom({ scale, nav, button, badge, colors, focus, icons }: Measured): TitlebarStyle {
   return {
-    scale, font: { size: parseFloat(button.fontSize), weight: Number(button.fontWeight) },
+    scale, font: { size: parseFloat(button.fontSize), weight: Number(button.fontWeight), family: button.fontFamily },
     metrics: {
       height: parseFloat(button.height), paddingX: parseFloat(button.paddingLeft), gap: parseFloat(button.columnGap), itemGap: parseFloat(nav.columnGap),
-      radius: parseFloat(button.borderTopLeftRadius), iconSize: 16, focusWidth: focus.width, focusOffset: focus.offset,
-      badge: { minWidth: parseFloat(badge.minWidth), paddingX: parseFloat(badge.paddingLeft), height: parseFloat(badge.lineHeight), fontSize: parseFloat(badge.fontSize) },
+      radius: parseFloat(button.borderTopLeftRadius), iconSize: NAV_ICON_SIZE, focusWidth: focus.width, focusOffset: focus.offset,
+      badge: { minWidth: parseFloat(badge.minWidth), paddingX: parseFloat(badge.paddingLeft), height: parseFloat(badge.lineHeight), fontSize: parseFloat(badge.fontSize), fontWeight: Number(badge.fontWeight) },
     },
     colors, icons,
   };
@@ -37,18 +42,22 @@ export function styleFrom({ scale, nav, button, badge, colors, focus, icons }: M
 
 // The focus ring's width and offset, from the real :focus-visible rule (a probe cannot be made keyboard-focused). The width sits in an `outline` shorthand with a var(), which CSSOM does not split.
 function focusRing() {
-  for (const sheet of document.styleSheets) for (const rule of sheet.cssRules) {
-    if (!(rule instanceof CSSStyleRule) || !rule.selectorText.includes('.home-nav') || !rule.selectorText.includes(':focus-visible')) continue;
-    const width = /(\d*\.?\d+)px/.exec(rule.style.getPropertyValue('outline'))?.[1], offset = parseFloat(rule.style.getPropertyValue('outline-offset'));
-    if (width && !Number.isNaN(offset)) return { width: Number(width), offset };
+  for (const sheet of document.styleSheets) {
+    let rules: CSSRuleList;
+    try { rules = sheet.cssRules; } catch { continue; } // a cross-origin sheet cannot be read, and must not hide the page's own
+    for (const rule of rules) {
+      if (!(rule instanceof CSSStyleRule) || !rule.selectorText.includes('.home-nav') || !rule.selectorText.includes(':focus-visible')) continue;
+      const width = /(\d*\.?\d+)px/.exec(rule.style.getPropertyValue('outline'))?.[1], offset = parseFloat(rule.style.getPropertyValue('outline-offset'));
+      if (width && !Number.isNaN(offset)) return { width: Number(width), offset };
+    }
   }
   throw new Error('The .home-nav focus ring rule was not found');
 }
 
 // A glyph as a transparent PNG with a solid mask, drawn at the pixels it will cover on screen.
-async function iconPng(Icon: ComponentType<{ size: number }>, size: number, pixels: number) {
+async function iconPng(Icon: ComponentType<{ size: number }>, pixels: number) {
   const host = document.createElement('div'), root = createRoot(host);
-  flushSync(() => root.render(<Icon size={size} />));
+  flushSync(() => root.render(<Icon size={NAV_ICON_SIZE} />));
   const svg = host.firstElementChild;
   root.unmount();
   if (!svg) throw new Error('The icon did not render');
@@ -77,10 +86,10 @@ async function measure(scale: number): Promise<TitlebarStyle> {
       host.style.color = `var(${token})`;
       return [name, colorHex(getComputedStyle(host).color)];
     })) as TitlebarStyle['colors'];
-    const pixels = Math.round(16 * scale * devicePixelRatio);
+    const pixels = iconPixels(devicePixelRatio);
     // Called from an effect, React cannot flush the icons' own render until its commit is over.
     await new Promise(resolve => setTimeout(resolve));
-    const icons = Object.fromEntries(await Promise.all(Object.entries(ICONS).map(async ([view, Icon]) => [view, await iconPng(Icon, 16, pixels)]))) as TitlebarStyle['icons'];
+    const icons = Object.fromEntries(await Promise.all(Object.entries(ICONS).map(async ([view, Icon]) => [view, await iconPng(Icon, pixels)]))) as TitlebarStyle['icons'];
     return styleFrom({ scale, nav, button, badge, colors, focus: focusRing(), icons });
   } finally {
     host.remove();
@@ -97,7 +106,8 @@ function watchPixelRatio(onChange: () => void) {
 }
 
 // The style for the native buttons, rebuilt when the theme, the interface zoom or the screen's pixel ratio changes; the same object while nothing differs.
-// null until it is ready, or when the page's own rules cannot be read: the native buttons then keep their system look.
+// null until the first measure succeeds; a failed one (the page's own rules cannot be read, an icon does not render) leaves the last good style in place and sends nothing new,
+// so the native buttons keep that look, or their system look if there never was one.
 export function useNativeTitlebarStyle(enabled: boolean, uiZoom: number | undefined) {
   const [style, setStyle] = useState<TitlebarStyle | null>(null);
   const [revision, setRevision] = useState(0);

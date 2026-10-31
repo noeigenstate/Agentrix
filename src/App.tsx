@@ -19,7 +19,7 @@ import { quickDictation } from './features/voice/voice-input';
 import { UsageGuide } from './features/guide/UsageGuide';
 import { GuideTour } from './features/guide/GuideTour';
 import { AppMenu } from './features/titlebar/AppMenu';
-import { useNativeTitlebarStyle } from './features/titlebar/native-style';
+import { NAV_ICON_SIZE, useNativeTitlebarStyle } from './features/titlebar/native-style';
 import { IconButton } from './shared/IconButton';
 import { ModeSwitch } from './features/reading/ModeSwitch';
 import { showPopup, usePopup } from './features/files/file-popup';
@@ -336,8 +336,8 @@ export function App() {
       {!isMac && <AppMenu fullScreen={fullScreen} canReturn={shownView !== 'workspace' || !!focusedId} updateReady={updates?.status === 'ready'}
         onAddProject={() => setAddOpen(true)} onReturn={returnToGrid} onFullScreen={() => api.toggleFullScreen()} onSettings={() => setSettingsOpen(true)} onInstallUpdate={installUpdate} />}
       {!nativeTitlebar && <nav className="home-nav" aria-label={t('页面')}>
-        <button type="button" aria-current={shownView === 'decisions' ? 'page' : undefined} title={t('回到决策 · {key}', { key: shortcut('decisions') })} onClick={() => setView('decisions')}><Stamp size={16} />{t('决策')}{decisions.length > 0 && <span className="home-nav-count" aria-label={t('{count} 件待决定', { count: decisions.length })}>{decisions.length}</span>}</button>
-        <button type="button" aria-current={shownView === 'workspace' ? 'page' : undefined} onClick={() => setView('workspace')}><CirclesFour size={16} />{t('工作台')}</button>
+        <button type="button" aria-current={shownView === 'decisions' ? 'page' : undefined} title={t('回到决策 · {key}', { key: shortcut('decisions') })} onClick={() => setView('decisions')}><Stamp size={NAV_ICON_SIZE} />{t('决策')}{decisions.length > 0 && <span className="home-nav-count" aria-label={t('{count} 件待决定', { count: decisions.length })}>{decisions.length}</span>}</button>
+        <button type="button" aria-current={shownView === 'workspace' ? 'page' : undefined} onClick={() => setView('workspace')}><CirclesFour size={NAV_ICON_SIZE} />{t('工作台')}</button>
       </nav>}
       <div className="titlebar-space" />
       <div className="titlebar-tools">
