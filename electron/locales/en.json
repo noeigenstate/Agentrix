@@ -1193,7 +1193,6 @@
   "上次完成 {time}": "last done {time}",
   "{count} 个工作中": "{count} working",
   "决策": "Decide",
-  "决策 ({count})": "Decide ({count})",
   "工作台": "Workbench",
   "任务": "Tasks",
   "启动时打开": "Open on start",
