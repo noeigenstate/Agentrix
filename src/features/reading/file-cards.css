@@ -1,5 +1,5 @@
 /* Cards for the documents, pages and videos a group of steps wrote: a row of small windows on the page. */
-.file-cards { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; margin: 6px 0 10px; }
+.file-cards { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin: 8px 0 12px; }
 .file-card { display: flex; flex-direction: column; width: 240px; border: 1px solid var(--divider); border-radius: 12px; overflow: hidden; background: var(--bg-app); contain: layout paint; }
 .file-card.is-video { width: 267px; }
 /* An image keeps its own shape, as large as a reader needs to see it; the frame waits at the usual size until it loads. */
@@ -13,10 +13,10 @@
 .file-card-view img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
 .file-card video { display: block; width: 100%; height: 150px; object-fit: contain; background: var(--bg-app); }
 /* A Markdown file laid out at half its size: the first screen of the document, faded at the bottom. */
-.file-card-doc { width: 200%; transform: scale(.5); transform-origin: top left; padding: 18px 22px; text-align: left; pointer-events: none;
+.file-card-doc { width: 200%; transform: scale(.5); transform-origin: top left; padding: 16px 24px; text-align: left; pointer-events: none;
   -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
-.file-card-empty { display: grid; place-items: center; gap: 6px; height: 100%; font-size: calc(11px * var(--reading-text)); color: var(--text-2); }
-.file-card-name { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 0; background: var(--bg-input); color: var(--text-1); font: 500 calc(12px * var(--reading-text)) var(--font-ui); text-align: left; cursor: pointer; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.file-card-empty { display: grid; place-items: center; gap: 8px; height: 100%; font-size: calc(12px * var(--reading-text)); color: var(--text-2); }
+.file-card-name { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 0; background: var(--bg-input); color: var(--text-1); font: 600 calc(12px * var(--reading-text)) var(--font-ui); text-align: left; cursor: pointer; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .file-card-name:hover { background: var(--bg-hover); }
 .file-card-name svg { flex: none; color: var(--text-2); }
 .file-cards-more { align-self: center; font-size: calc(12px * var(--reading-text)); }

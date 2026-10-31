@@ -1,4 +1,4 @@
-/* The generic "the terminal is waiting for a choice" card: the choice card's frame, the dialog's own heading and one 32px
-   button, all in the card's one type size (the result button's own 14px would make a second, larger one). */
+/* The generic "the terminal is waiting for a choice" card: the choice card's frame and title, the dialog's own heading and one 32px
+   button, the heading and the button in the card's body size (the result button's own 14px would make a second, larger one). */
 .reading-waiting-heading { margin: 0 0 8px; overflow-wrap: anywhere; color: var(--text-2); }
 .reading-waiting .result-button { font-size: inherit; }

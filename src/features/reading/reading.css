@@ -88,20 +88,20 @@
 }
 @keyframes reading-mark-pulse { 50% { opacity: .3; } }
 /* The message box at the foot. */
-.reading-composer { position: relative; display: flex; align-items: flex-end; gap: 6px; margin: 0 12px 12px; padding: 8px 8px 8px 16px; min-height: 48px; border-radius: 12px; background: var(--bg-input); border: 1px solid var(--border); }
-.reading-commands.dropdown { position: absolute; top: auto; bottom: calc(100% + 5px); left: 0; right: 0; width: auto; z-index: 3; padding: 4px; max-height: 266px; overflow-y: auto; transform-origin: bottom center; }
+.reading-composer { position: relative; display: flex; align-items: flex-end; gap: 8px; margin: 0 12px 12px; padding: 8px 8px 8px 16px; min-height: 48px; border-radius: 12px; background: var(--bg-input); border: 1px solid var(--border); }
+.reading-commands.dropdown { position: absolute; top: auto; bottom: calc(100% + 4px); left: 0; right: 0; width: auto; z-index: 3; padding: 4px; max-height: 266px; overflow-y: auto; transform-origin: bottom center; }
 /* Slash commands listed in the page, between the conversation and the message box. */
 .reading-commands.is-inline { flex: none; margin: 0 12px 8px; padding: 4px; max-height: min(266px, 40%); overflow-y: auto; border-radius: 12px; background: var(--bg-menu); border: 1px solid var(--border); }
-.reading-command { display: flex; align-items: center; gap: 9px; height: 32px; padding: 0 8px; border-radius: 8px; color: var(--text-1); font-size: calc(12px * var(--reading-text)); cursor: pointer; }
+.reading-command { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 8px; color: var(--text-1); font-size: calc(12px * var(--reading-text)); cursor: pointer; }
 .reading-command:hover { background: var(--bg-hover); }
 .reading-command[aria-selected="true"] { background: var(--bg-selected); }
 .reading-command code { flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 calc(12px * var(--reading-text)) var(--font-mono); color: var(--text-1); }
 .reading-command > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
-.reading-command small { flex: none; padding: 1px 5px; border-radius: 999px; background: var(--bg-selected); color: var(--text-1); font-size: calc(11px * var(--reading-text)); }
+.reading-command small { flex: none; padding: 2px 4px; border-radius: 999px; background: var(--bg-selected); color: var(--text-1); font-size: calc(11px * var(--reading-text)); }
 .reading-composer:focus-within { border-color: var(--focus-ring); }
-.reading-composer textarea { flex: 1; min-width: 0; max-height: 140px; field-sizing: content; resize: none; border: 0; outline: 0; padding: 5px 0; background: transparent; color: var(--text-1); font: 400 calc(14px * var(--reading-text))/1.5 var(--font-ui); }
+.reading-composer textarea { flex: 1; min-width: 0; max-height: 140px; field-sizing: content; resize: none; border: 0; outline: 0; padding: 4px 0; min-height: 32px; background: transparent; color: var(--text-1); font: 400 calc(14px * var(--reading-text))/calc(24px * var(--reading-text)) var(--font-ui); }
 .reading-composer textarea::placeholder { color: var(--text-2); }
-.reading-attachments { display: flex; align-items: center; gap: 6px; margin: 0 var(--reading-edge-right) 6px var(--reading-edge-left); font-size: calc(12px * var(--reading-text)); color: var(--text-2); }
+.reading-attachments { display: flex; align-items: center; gap: 8px; margin: 0 var(--reading-edge-right) 8px var(--reading-edge-left); font-size: calc(12px * var(--reading-text)); color: var(--text-2); }
 .reading-composer .icon-button { flex: none; width: 32px; height: 32px; border-radius: 8px; }
 .reading-send:not(:disabled) { color: var(--button-primary-text); background: var(--button-primary); }
 .has-splits .reading-view { --reading-left: calc(20px + var(--reading-em)); --reading-right: calc(20px + var(--reading-em)); }
@@ -113,15 +113,15 @@
 
 /* Native CLI prompts remain above the input until the CLI dismisses them. */
 .reading-choice-host { flex: 0 1 auto; min-height: 0; margin: 0 var(--reading-edge-right) 8px var(--reading-edge-left); overflow: auto; }
-.reading-choice { --choice-accent: var(--warning); padding: 12px; border-radius: 12px; background: var(--bg-card); border: 1px solid var(--border); box-shadow: inset 2px 0 0 var(--choice-accent); max-height: min(45vh, 380px); overflow: auto; color: var(--text-1); font-size: calc(12px * var(--reading-text)); }
+.reading-choice { --choice-accent: var(--warning); padding: 12px; border-radius: 12px; background: var(--bg-card); border: 1px solid var(--border); box-shadow: inset 2px 0 0 var(--choice-accent); max-height: min(45vh, 380px); overflow: auto; color: var(--text-1); font-size: calc(13px * var(--reading-text)); }
 .reading-choice:focus-visible { outline: 1px solid var(--choice-accent); outline-offset: -1px; }
 .reading-choice-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.reading-choice-head strong { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--choice-accent); }
-.reading-choice-head button { display: flex; flex: none; align-items: center; font-size: calc(11px * var(--reading-text)); }
+.reading-choice-head strong { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--choice-accent); font-size: calc(14px * var(--reading-text)); font-weight: 600; }
+.reading-choice-head button { display: flex; flex: none; align-items: center; font-size: calc(12px * var(--reading-text)); }
 /* The text actions of a card (open the terminal, cancel, chat about it) keep their look on a 32px hit area; the head's keep their text on the card's edge. */
 :is(.reading-choice-head, .reading-question-head, .reading-question-actions) .text-button { justify-content: center; gap: 4px; min-width: 32px; min-height: 32px; padding: 0 8px; }
 :is(.reading-choice-head, .reading-question-head) .text-button { margin-right: -8px; }
-.reading-choice-context { margin: 0 0 8px; padding: 8px; max-height: 9.6em; overflow: auto; background: var(--bg-app); border-radius: 8px; font: 400 calc(11.5px * var(--reading-text))/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
+.reading-choice-context { margin: 0 0 8px; padding: 8px; max-height: 9.6em; overflow: auto; background: var(--bg-app); border-radius: 8px; font: 400 calc(12px * var(--reading-text))/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
 .reading-choice-options { display: flex; flex-direction: column; gap: 4px; }
 .reading-choice-option { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text-1); text-align: left; }
 .reading-choice-option.is-cli-selected { box-shadow: inset 2px 0 0 var(--choice-accent); }
@@ -129,35 +129,35 @@
 .reading-choice-option[data-highlighted="true"] { background: var(--bg-selected); }
 /* A disabled option (a permission card's, which only sends the reader to the terminal, or one waiting for its keys) keeps its theme text: fading it made the numbers unreadable. */
 .reading-choice-option:disabled { opacity: 1; cursor: default; }
-.reading-choice-number { flex: none; color: var(--choice-accent); font: 500 calc(11.5px * var(--reading-text)) var(--font-mono); }
+.reading-choice-number { flex: none; color: var(--choice-accent); font: 600 calc(12px * var(--reading-text)) var(--font-mono); }
 .reading-choice-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.reading-choice-label b { font-weight: 500; }
-.reading-choice-label small { display: block; margin-top: 2px; font-size: calc(11px * var(--reading-text)); color: var(--text-2); }
+.reading-choice-label b { font-weight: 400; }
+.reading-choice-label small { display: block; margin-top: 2px; font-size: calc(12px * var(--reading-text)); color: var(--text-2); }
 .reading-choice-option[data-highlighted="true"] .reading-choice-label small { color: var(--text-1); }
-.reading-choice-option kbd { flex: none; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; font-size: calc(10px * var(--reading-text)); }
+.reading-choice-option kbd { flex: none; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; font-size: calc(12px * var(--reading-text)); }
 .reading-choice-option svg { flex: none; align-self: center; color: var(--choice-accent); }
-.reading-choice-hint { display: block; margin: 8px 0; font-size: calc(10.5px * var(--reading-text)); color: var(--text-3); white-space: pre-wrap; }
+.reading-choice-hint { display: block; margin: 8px 0; font-size: calc(12px * var(--reading-text)); color: var(--text-3); white-space: pre-wrap; }
 /* A question with options (ReadingQuestion): its progress, the question as a title, options with a number or a tick,
    an own-answer or notes field, then Submit and Chat about this. */
 .reading-choice.is-question { padding: 12px 16px; }
 .reading-question-head { display: flex; align-items: center; gap: 8px; min-height: 32px; margin-bottom: 8px; }
 .reading-question-tabs { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
-.reading-question-tab { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: var(--bg-input); color: var(--text-2); font-size: calc(11px * var(--reading-text)); line-height: 16px; white-space: nowrap; }
+.reading-question-tab { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: var(--bg-input); color: var(--text-2); font-size: calc(12px * var(--reading-text)); line-height: 16px; white-space: nowrap; }
 .reading-question-tab.is-answered { color: var(--text-1); background: var(--bg-selected); }
 .reading-question-spacer { flex: 1; }
 .reading-question-switch.icon-button { width: 32px; height: 32px; border-radius: 8px; }
-.reading-question-head .text-button { display: inline-flex; align-items: center; font-size: calc(11.5px * var(--reading-text)); }
-.reading-question-title { display: block; margin: 2px 0 12px; font-size: 1.08em; font-weight: 700; line-height: 1.45; color: var(--text-1); overflow-wrap: anywhere; }
+.reading-question-head .text-button { display: inline-flex; align-items: center; font-size: calc(12px * var(--reading-text)); }
+.reading-question-title { display: block; margin: 2px 0 12px; font-size: calc(14px * var(--reading-text)); font-weight: 600; line-height: 1.45; color: var(--text-1); overflow-wrap: anywhere; }
 .reading-question-review { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; }
 .reading-question-review > div { padding: 8px 12px; border-radius: 8px; background: var(--bg-input); }
-.reading-question-review dt { font-size: calc(11.5px * var(--reading-text)); color: var(--text-2); }
-.reading-question-review dd { margin: 2px 0 0; font-weight: 600; color: var(--text-1); }
-.reading-question-warning { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; font-weight: 600; line-height: 1.45; color: var(--text-1); overflow-wrap: anywhere; }
+.reading-question-review dt { font-size: calc(12px * var(--reading-text)); color: var(--text-2); }
+.reading-question-review dd { margin: 2px 0 0; color: var(--text-1); }
+.reading-question-warning { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; line-height: 1.45; color: var(--text-1); overflow-wrap: anywhere; }
 .reading-question-warning svg { flex: none; margin-top: 2px; color: var(--warning); }
 /* The review's rows, the options' numbers and the own-answer field all start 12px in from the card's content edge. */
 .reading-question-option { align-items: flex-start; padding: 8px 12px; border-radius: 8px; }
 .reading-question-option .reading-choice-label b { display: block; line-height: 20px; }
-.reading-question-mark { display: grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 8px; color: var(--choice-accent); font: 600 calc(11.5px * var(--reading-text)) var(--font-mono); box-shadow: inset 0 0 0 1px var(--border); }
+.reading-question-mark { display: grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 8px; color: var(--choice-accent); font: 600 calc(12px * var(--reading-text)) var(--font-mono); box-shadow: inset 0 0 0 1px var(--border); }
 .is-multi .reading-question-mark { border-radius: 4px; }
 :is(.reading-question-option, .reading-question-input).is-checked .reading-question-mark { color: var(--button-primary-text); background: var(--choice-accent); box-shadow: none; }
 .reading-question-option .reading-question-mark svg { color: inherit; }
@@ -174,17 +174,17 @@
 
 
 /* A picture the agent generated: large enough to judge, its prompt a two-line summary under it (13px on 1.6, as wide as the picture) with a quiet toggle for the whole text. */
-.reading-generated { margin: 6px 0 10px; max-width: min(100%, 520px); }
+.reading-generated { margin: 8px 0 12px; max-width: min(100%, 520px); }
 .reading-generated-picture { display: block; padding: 0; border: 0; border-radius: 8px; background: none; cursor: zoom-in; overflow: hidden; }
 .reading-generated img { display: block; width: 100%; height: auto; max-height: 520px; object-fit: contain; }
 .reading-generated :is(.reading-generated-picture, .reading-generated-toggle):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.reading-generated figcaption { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 10px; font-size: calc(12px * var(--reading-text)); line-height: 1.5; color: var(--text-3); overflow-wrap: anywhere; }
+.reading-generated figcaption { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 8px; font-size: calc(12px * var(--reading-text)); line-height: 1.5; color: var(--text-3); overflow-wrap: anywhere; }
 .reading-generated figcaption.is-expanded { display: block; overflow: visible; white-space: pre-wrap; }
 .reading-generated-toggle { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 0; border: 0; border-radius: 4px; background: none; font: 600 calc(12px * var(--reading-text))/1.5 var(--font-ui); color: var(--text-3); cursor: pointer; }
 .reading-generated-toggle:hover { color: var(--text-1); }
 
 /* A picture on its way: an indeterminate bar, the seconds so far and how long it usually takes. */
-.reading-generating { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 12px; row-gap: 4px; width: min(100%, 520px); margin: 6px 0 10px; padding: 16px; border-radius: 12px; background: var(--bg-card); font-size: calc(13px * var(--reading-text)); color: var(--text-1); }
+.reading-generating { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 12px; row-gap: 4px; width: min(100%, 520px); margin: 8px 0 12px; padding: 16px; border-radius: 12px; background: var(--bg-card); font-size: calc(13px * var(--reading-text)); color: var(--text-1); }
 .reading-generating small { grid-column: 2; font-size: calc(11.5px * var(--reading-text)); color: var(--text-3); }
 .reading-generating-bar { grid-row: span 2; position: relative; width: 120px; height: 6px; border-radius: 999px; background: var(--bg-input); overflow: hidden; }
 .reading-generating-bar i { position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: inherit; background: var(--running); animation: reading-generating 1.4s ease-in-out infinite; }
