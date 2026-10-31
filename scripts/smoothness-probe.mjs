@@ -123,8 +123,7 @@ try {
   await home.locator('.inbox-list').focus();
   await measure('inbox-select', () => page.keyboard.press('ArrowDown'), 600);
   await measure('inbox-click', () => home.locator('.inbox-row').nth(2).click(), 600);
-  const nav = name => page.locator('.home-nav button', { hasText: name });
-  await measure('to-workbench', () => nav('工作台').click(), 900);
+  await measure('to-workbench', () => page.keyboard.press('Control+Shift+G'), 900);
   const panels = page.locator('.project-panel');
   await measure('hover-cards', async () => {
     for (let index = 0; index < 4; index++) { const card = await panels.nth(index).boundingBox(); await page.mouse.move(card.x + card.width / 2, card.y + card.height / 2, { steps: 10 }); await sleep(200); }
@@ -145,7 +144,7 @@ try {
   await measure('idle', () => sleep(1400), 0);
   await measure('settings', async () => { await openSettings(page); await sleep(700); await page.keyboard.press('Escape'); }, 700);
   await measure('restore', () => page.locator('.focus-sidebar').getByRole('button', { name: /总览/ }).first().click({ timeout: 3000 }), 1000);
-  await measure('to-decisions', () => nav('决策').click(), 900);
+  await measure('to-decisions', () => page.keyboard.press('Control+Shift+D'), 900);
   const janky = results.filter(result => result.dropped);
   console.log(`theme ${theme}, display ${refresh.toFixed(1)} ms a frame: ${results.length} interactions, ${janky.length} dropped frames: ${janky.map(result => `${result.name} ${result.dropped}×, worst ${result.worst} ms`).join('; ') || 'none'}; ${results.reduce((sum, result) => sum + result.dropped, 0)} in all`);
   if (errors.length) console.log('page errors:', errors.slice(0, 5));

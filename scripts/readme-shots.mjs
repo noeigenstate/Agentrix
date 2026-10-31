@@ -222,7 +222,7 @@ background:radial-gradient(circle at 20% 15%,#ff7ab6 0,transparent 42%),radial-g
     await shot('overview.jpg');
 
     // The decision page: the cleanup waiting for approval, the finished round to review, every session beside them.
-    await page.locator('.home-nav button', { hasText: '决策' }).click();
+    await page.keyboard.press('Control+Shift+D');
     const inbox = page.getByRole('listbox', { name: '待决定的事', exact: true });
     await waitFor(async () => await inbox.getByRole('option').count() === projects.length, 'all fixture sessions reach the decision inbox');
     await inbox.getByRole('option').filter({ hasText: projects[5].name }).click();
@@ -232,7 +232,7 @@ background:radial-gradient(circle at 20% 15%,#ff7ab6 0,transparent 42%),radial-g
     await approval.locator('[data-approval-open-terminal]').waitFor();
     assert.equal(await inbox.locator('.inbox-tag.is-review').count(), 2, 'both unread completions remain available for review');
     await shot('decisions.jpg');
-    await page.locator('.home-nav button', { hasText: '工作台' }).click();
+    await page.keyboard.press('Control+Shift+G');
     await page.locator('.project-panel').first().waitFor();
 
     // The storefront, expanded: reading view with the activity pane.
