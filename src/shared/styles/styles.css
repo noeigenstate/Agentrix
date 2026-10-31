@@ -57,13 +57,13 @@ h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 .home-nav :is(button):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 /* Full screen: the title bar slides up out of the way; touching the top edge, tabbing into the bar or an open app menu (drawn on the page body) brings it back over the content.
    Only keyboard focus counts: the focus a click leaves on a button would keep the bar down after the pointer has gone.
-   --titlebar-offset is how far down it sits when shown (macOS: below the system menu bar, level with its window buttons). */
+   --titlebar-offset is how far down it sits when shown, the one value to tune against macOS's own window-button strip (0 on every platform for now). */
 .app-shell.titlebar-auto .titlebar { --titlebar-offset: 0px; position: fixed; top: 0; left: 0; right: 0; z-index: 300; transform: translateY(-100%); }
-/* macOS slides the system menu bar over the page's top edge, which ends the pointer's hover there: the bar waits a moment before it goes. */
-:root[data-platform="darwin"] .app-shell.titlebar-auto .titlebar { transition: transform .2s ease 600ms; }
+/* macOS slides the system menu bar over the page's top edge, which ends the pointer's hover there: the bar waits a moment before it goes (the shown state sets the delay to 0). */
+:root[data-platform="darwin"] .app-shell.titlebar-auto .titlebar { --titlebar-delay: 600ms; transition: transform .2s ease var(--titlebar-delay); }
 .app-shell.titlebar-auto .titlebar-reveal { position: fixed; top: 0; left: 0; right: 0; height: 4px; z-index: 299; }
-.app-shell.titlebar-auto:has(.titlebar-reveal:hover, .titlebar:hover, .titlebar :focus-visible, .titlebar-brand[aria-expanded="true"]) .titlebar { transform: translateY(var(--titlebar-offset)); transition-delay: 0s; }
-/* macOS draws its own window buttons at the left of the title bar (hidden in full screen), so the page's buttons go. */
+.app-shell.titlebar-auto:has(.titlebar-reveal:hover, .titlebar:hover, .titlebar :focus-visible, .titlebar-brand[aria-expanded="true"]) .titlebar { transform: translateY(var(--titlebar-offset)); --titlebar-delay: 0s; }
+/* macOS draws its own window buttons at the left of the title bar (in full screen they come back with the system strip, so the inset below stays under .titlebar-auto), so the page's buttons go. */
 :root[data-platform="darwin"] .window-actions { display: none; }
 :root[data-platform="darwin"] .app-shell:is(:not(.is-fullscreen), .titlebar-auto) .home-nav { margin-left: 78px; }
 :root[data-platform="darwin"] .titlebar-tools { margin-right: 14px; }
@@ -123,6 +123,9 @@ kbd { padding: 1px 4px; border: 1px solid var(--border); border-radius: 4px; fon
 /* Motion follows the app setting (src/shared/motion.ts): "off" always stops it, "system" follows Windows. Pseudo-elements are no part of :is(). */
 :root[data-motion="off"] *, :root[data-motion="off"] *::before, :root[data-motion="off"] *::after { animation: none !important; transition: none !important; will-change: auto !important; }
 @media (prefers-reduced-motion: reduce) { :root[data-motion="system"] *, :root[data-motion="system"] *::before, :root[data-motion="system"] *::after { animation: none !important; transition: none !important; will-change: auto !important; } }
+/* Without motion the macOS title bar still waits before it hides (no slide, only the wait): otherwise it goes as soon as the system menu bar covers it and its buttons cannot be reached. */
+:root[data-platform="darwin"][data-motion="off"] .app-shell.titlebar-auto .titlebar { transition: transform 0s var(--titlebar-delay) !important; }
+@media (prefers-reduced-motion: reduce) { :root[data-platform="darwin"][data-motion="system"] .app-shell.titlebar-auto .titlebar { transition: transform 0s var(--titlebar-delay) !important; } }
 
 /* Opaque colour cursors avoid the stock monochrome I-beam's XOR rendering over
    a Windows compatibility window. It stays transparent when its surface changes;
