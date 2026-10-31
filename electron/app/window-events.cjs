@@ -57,15 +57,17 @@ function registerWindowContents({ window, Menu, clipboard, previewResources, pic
   contents.session.setPermissionCheckHandler((source, permission, _origin, details) => allowPlayerFullscreen(source, permission, details) || permission === 'media' && isAppFrame(source, details) && details.mediaType === 'audio');
 }
 
-function registerWindowLifecycle({ window, getSettings, isQuitting, hasTray, requestQuit, report, send, clearAttention }) {
+function registerWindowLifecycle({ window, getSettings, isQuitting, hasTray, requestQuit, report, send, updateIndicators, clearAttention }) {
   // Native fullscreen can temporarily mark a visible window as occluded.
   // Keep its live terminals and zoom painting; throttle only after hiding it.
   for (const event of ['hide', 'minimize']) window.on(event, () => window.webContents.setBackgroundThrottling(true));
   for (const event of ['show', 'restore']) window.on(event, () => window.webContents.setBackgroundThrottling(false));
   window.once('ready-to-show', () => window.show());
   window.on('focus', () => { clearAttention(); window.flashFrame(false); });
-  window.on('enter-full-screen', () => send('window:fullscreen-changed', true));
-  window.on('leave-full-screen', () => send('window:fullscreen-changed', false));
+  for (const [event, fullscreen] of [['enter-full-screen', true], ['leave-full-screen', false]]) window.on(event, () => {
+    if (process.platform === 'darwin') updateIndicators();
+    send('window:fullscreen-changed', fullscreen);
+  });
   // The reason (crashed, oom, killed…) and exit code are kept in the log before the window loads again.
   window.webContents.on('render-process-gone', (_event, details) => {
     console.error(`Window renderer gone: ${JSON.stringify({ reason: details.reason, exitCode: details.exitCode, terminalRenderer: getSettings().terminalRenderer })}`);

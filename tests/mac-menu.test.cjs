@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
-const { DEFAULT_MENU_STATE, parseMenuState, buildMacMenuTemplate } = require('../electron/app/mac-menu.cjs');
+const { buildMacMenuTemplate } = require('../electron/app/mac-menu.cjs');
+const { registerWindowLifecycle } = require('../electron/app/window-events.cjs');
 const DEFAULT_SHORTCUTS = require('../electron/shortcuts.json');
 const { translate } = require('../electron/i18n.cjs');
 const { cleanSettings } = require('../electron/state.cjs');
@@ -14,96 +15,58 @@ const { registerWorkspaceIpc } = require('../electron/features/workspace/ipc.cjs
 function template(options = {}) {
   return buildMacMenuTemplate({ appName: 'Agentrix', t: (text, values) => translate('zh', text, values), ...options });
 }
-const labels = items => items.map(item => item.type === 'separator' ? '─' : item.label);
+const labels = items => items.filter(item => item.visible !== false).map(item => item.type === 'separator' ? '─' : item.label);
 
-test('default menu has the agreed order, initial state and unchanged native roles', () => {
+test('only the Agentrix app menu is visible with the agreed items and native roles', () => {
   const menus = template();
-  assert.deepEqual(labels(menus), ['Agentrix', '前往', '显示', '窗口']);
+  assert.deepEqual(labels(menus), ['Agentrix']);
+  assert.equal(menus.length, 1);
   assert.deepEqual(labels(menus[0].submenu), ['关于 Agentrix', '─', '新建项目', '设置…', '─', '隐藏 Agentrix', '隐藏其他', '全部显示', '─', '退出 Agentrix']);
-  assert.deepEqual(menus[0].submenu.filter(item => item.role).map(item => item.role), ['about', 'hide', 'hideOthers', 'unhide']);
-  const go = menus[1].submenu;
-  assert.deepEqual(labels(go), ['返回项目', '搜索项目']);
-  assert.deepEqual(go.map(item => item.type), [undefined, undefined]);
-  assert.equal(go[0].enabled, false); assert.equal(go[1].enabled, true);
-  assert.deepEqual(labels(menus[2].submenu), ['显示活动栏']);
-  assert.equal(menus[2].submenu[0].type, 'checkbox');
-  assert.equal(menus[2].submenu[0].enabled, false); assert.equal(menus[2].submenu[0].checked, false);
-  assert.deepEqual(labels(menus[3].submenu), ['最小化', '缩放', '切换全屏', '─', '关闭窗口']);
-  assert.deepEqual(menus[3].submenu.slice(0, 3).map(item => item.role), ['minimize', 'zoom', 'togglefullscreen']);
-  assert.equal(menus[0].submenu.at(-1).accelerator, 'Command+Q');
-  assert.equal(menus[3].submenu.at(-1).accelerator, 'Command+W');
-  assert.equal(menus[0].submenu.at(-1).registerAccelerator, undefined);
-  assert.equal(menus[3].submenu.at(-1).registerAccelerator, undefined);
+  assert.deepEqual(menus[0].submenu.filter(item => item.visible !== false && item.role).map(item => item.role), ['about', 'hide', 'hideOthers', 'unhide']);
+  assert.equal(menus[0].submenu.find(item => item.label === '退出 Agentrix').accelerator, 'Command+Q');
 });
 
-test('return, focus and activity state update menu availability and selection', () => {
-  const menus = template({ state: { ...DEFAULT_MENU_STATE, canReturn: true, focused: true, activityPane: true } });
-  const go = menus[1].submenu, activity = menus[2].submenu[0];
-  assert.equal(go[0].enabled, true); assert.equal(go[1].enabled, false);
-  assert.equal(activity.enabled, true); assert.equal(activity.checked, true);
-  const overview = template({ state: { ...DEFAULT_MENU_STATE, canReturn: true, activityPane: true } });
-  assert.equal(overview[1].submenu[0].enabled, true);
-  assert.equal(overview[2].submenu[0].enabled, false);
-  assert.equal(overview[2].submenu[0].checked, true);
-});
-
-test('reading and terminal form a radio pair only when a switch is available', () => {
-  for (const reading of [true, false]) {
-    const view = template({ state: { ...DEFAULT_MENU_STATE, reading } })[2].submenu;
-    assert.deepEqual(labels(view), ['显示活动栏', '─', '阅读视图', '终端']);
-    assert.deepEqual(view.slice(2).map(item => item.type), ['radio', 'radio']);
-    assert.deepEqual(view.slice(2).map(item => item.checked), [reading, !reading]);
+test('hidden window items retain native minimize and fullscreen roles and the custom close shortcut', () => {
+  let closed = 0;
+  const hidden = template({ close: () => closed++ })[0].submenu.filter(item => item.visible === false);
+  assert.deepEqual(hidden.map(item => [item.role, item.accelerator]), [
+    ['minimize', 'Command+M'], ['togglefullscreen', 'Control+Command+F'], [undefined, 'Command+W'],
+  ]);
+  for (const item of hidden) {
+    assert.notEqual(item.acceleratorWorksWhenHidden, false);
+    assert.notEqual(item.registerAccelerator, false);
   }
+  hidden[2].click(); assert.equal(closed, 1);
 });
 
 test('ready updates appear after settings and every application item sends its exact command', () => {
   const commands = [];
-  const menus = template({ updateReady: true, state: { ...DEFAULT_MENU_STATE, reading: true }, command: name => commands.push(name) });
+  const menus = template({ updateReady: true, command: name => commands.push(name) });
   assert.deepEqual(labels(menus[0].submenu).slice(0, 6), ['关于 Agentrix', '─', '新建项目', '设置…', '重启并安装更新', '─']);
-  for (const item of [...menus[0].submenu.slice(2, 5), ...menus[1].submenu, ...menus[2].submenu]) item.click?.();
-  assert.deepEqual(commands, ['addProject', 'settings', 'installUpdate', 'overview', 'search', 'activityPane', 'reading', 'terminal']);
+  for (const item of menus[0].submenu.slice(2, 5)) item.click();
+  assert.deepEqual(commands, ['addProject', 'settings', 'installUpdate']);
 });
 
 test('template accelerators merge custom bindings over defaults and set registerAccelerator false', () => {
-  const custom = { addProject: 'Alt+N', settings: 'Ctrl+Shift+S', overview: 'Alt+Left', search: 'Ctrl+Alt+F' };
-  for (const shortcuts of [undefined, custom, { search: 'Alt+F' }]) {
-    const menus = template({ shortcuts, updateReady: true, state: { ...DEFAULT_MENU_STATE, reading: false } });
+  const custom = { addProject: 'Alt+N', settings: 'Ctrl+Shift+S' };
+  for (const shortcuts of [undefined, custom, { settings: 'Alt+S' }]) {
+    const menus = template({ shortcuts, updateReady: true });
     const bindings = { ...DEFAULT_SHORTCUTS, ...shortcuts };
     for (const [item, action] of [
       [menus[0].submenu[2], 'addProject'], [menus[0].submenu[3], 'settings'],
-      [menus[1].submenu[0], 'overview'], [menus[1].submenu[1], 'search'],
     ]) {
       assert.equal(item.accelerator, bindings[action], action);
       assert.equal(item.registerAccelerator, false, action);
     }
-    for (const item of [menus[0].submenu[4], ...menus[2].submenu]) assert.equal(item.accelerator, undefined);
+    assert.equal(menus[0].submenu[4].accelerator, undefined);
   }
 });
 
 test('all menu labels use existing English vocabulary', () => {
-  const menus = template({ t: (text, values) => translate('en', text, values), updateReady: true,
-    state: { ...DEFAULT_MENU_STATE, reading: true } });
-  assert.deepEqual(labels(menus), ['Agentrix', 'Go', 'View', 'Window']);
-  assert.deepEqual(labels(menus[0].submenu).slice(2, 5), ['New project', 'Settings…', 'Restart and install update']);
-  assert.deepEqual(labels(menus[1].submenu), ['Back to projects', 'Search projects']);
-  assert.deepEqual(labels(menus[2].submenu), ['Show activity pane', '─', 'Reading view', 'Terminal']);
+  const menus = template({ t: (text, values) => translate('en', text, values), updateReady: true });
+  assert.deepEqual(labels(menus), ['Agentrix']);
+  assert.deepEqual(labels(menus[0].submenu), ['About Agentrix', '─', 'New project', 'Settings…', 'Restart and install update', '─', 'Hide Agentrix', 'Hide Others', 'Show All', '─', 'Quit Agentrix']);
   for (const menu of menus) for (const item of menu.submenu) if (item.label) assert.doesNotMatch(item.label, /[一-鿿]/);
-});
-
-const invalidStates = [undefined, null, [], 'workspace', false, 0, {},
-  ...['canReturn', 'focused', 'activityPane'].map(key => ({ ...DEFAULT_MENU_STATE, [key]: null })),
-  ...['canReturn', 'focused', 'activityPane', 'reading'].flatMap(key => [undefined, 0, 'true'].map(value => ({ ...DEFAULT_MENU_STATE, [key]: value }))),
-];
-test('state validation rejects malformed fields and copies only the contract fields', () => {
-  assert.deepEqual(DEFAULT_MENU_STATE, { canReturn: false, focused: false, activityPane: false, reading: null });
-  for (const state of invalidStates) assert.equal(parseMenuState(state), null);
-  for (const reading of [null, true, false]) {
-    const state = { ...DEFAULT_MENU_STATE, reading, view: [], decisions: -1, ignored: 'extra' };
-    const parsed = parseMenuState(state);
-    assert.deepEqual(parsed, { ...DEFAULT_MENU_STATE, reading });
-    state.focused = true;
-    assert.equal(parsed.focused, false);
-  }
 });
 
 const filename = path.join(__dirname, '../electron/main.cjs');
@@ -113,7 +76,8 @@ function optionCallback(callee, name) {
   let callback;
   function visit(node) {
     if ((ts.isCallExpression(node) || ts.isNewExpression(node)) && node.expression.getText(source) === callee) {
-      callback = node.arguments[0].properties.find(property => property.name?.getText(source) === name)?.initializer;
+      const property = node.arguments[0].properties.find(property => property.name?.getText(source) === name);
+      callback = property?.initializer || property?.name;
     }
     ts.forEachChild(node, visit);
   }
@@ -121,62 +85,46 @@ function optionCallback(callee, name) {
   assert.ok(callback, `${callee}.${name}`);
   return callback.getText(source);
 }
-const stateRegistration = functions.get('registerIpc').body.statements.find(node => node.getText(source).includes("listen('menu:state'"));
-assert.ok(stateRegistration);
+
+test('the main process no longer listens for menu state', () => {
+  assert.doesNotMatch(functions.get('registerIpc').getText(source), /['"]menu:state['"]/);
+});
 
 function mainFixture(platform = 'darwin') {
   const menus = [], messages = [], handlers = new Map(), calls = { quit: 0, close: 0, show: 0, tray: 0, broadcast: 0, updates: 0 };
-  const store = { settings: cleanSettings(), updateSettings(patch) { this.settings = cleanSettings({ ...this.settings, ...patch }); } };
+  const store = { settings: cleanSettings(), projects: [], updateSettings(patch) { this.settings = cleanSettings({ ...this.settings, ...patch }); } };
   const update = { status: 'idle' };
-  const context = vm.createContext({ DEFAULT_MENU_STATE, parseMenuState, buildMacMenuTemplate, menuState: DEFAULT_MENU_STATE,
-    menuUpdateReady: false,
+  const context = vm.createContext({ buildMacMenuTemplate, menuUpdateReady: false,
     store, t: (text, values) => translate(store.settings.language, text, values), app: { name: 'Agentrix' },
     process: { platform }, Menu: { buildFromTemplate: items => items, setApplicationMenu: menu => menus.push(menu) },
-    send: (...args) => messages.push(args), listen: (name, handler) => handlers.set(name, handler),
-    window: { close: () => calls.close++ }, desktopGlassActive: false, windowZoom: undefined,
+    send: (...args) => messages.push(args),
+    window: { close: () => calls.close++ }, tray: undefined, desktopGlassActive: false, windowZoom: undefined,
     updateManager: { getState: () => update }, updatesIpc: { onStateChange: () => calls.updates++ },
     showWindow: () => calls.show++, requestQuit: async () => { calls.quit++; }, report: assert.fail,
     trayMenu: () => calls.tray++,
   });
-  vm.runInContext(['macMenu', 'rebuildMacMenu', 'setMenuState', 'updateStoreSettings'].map(name => functions.get(name).getText(source)).join('\n'), context);
-  vm.runInContext(stateRegistration.getText(source), context);
+  vm.runInContext(['macMenu', 'rebuildMacMenu', 'updateStoreSettings', 'updateIndicators'].map(name => functions.get(name).getText(source)).join('\n'), context);
   const onUpdate = vm.runInContext(`(${optionCallback('UpdateManager', 'onChange')})`, context);
   registerWorkspaceIpc({ handle: (name, handler) => handlers.set(name, handler), getSettings: () => store.settings,
     updateStoreSettings: context.updateStoreSettings, broadcast: () => calls.broadcast++, chooseVoiceModel() {} });
   return { context, store, update, onUpdate, menus, messages, handlers, calls };
 }
 
-test('macOS IPC ignores invalid and identical states, rebuilding once for each changed field', () => {
-  const { handlers, menus, context } = mainFixture();
-  const receive = handlers.get('menu:state');
-  for (const state of [...invalidStates, { ...DEFAULT_MENU_STATE }]) receive(state);
-  assert.equal(menus.length, 0);
-  let state = { ...DEFAULT_MENU_STATE };
-  for (const [key, value] of Object.entries({ canReturn: true, focused: true, activityPane: true, reading: false })) {
-    const previous = menus.length;
-    state = { ...state, [key]: value }; receive(state);
-    assert.equal(menus.length, previous + 1, key);
-    receive({ ...state, view: 'decisions', decisions: 8, ignored: 'extra' });
-    assert.equal(menus.length, previous + 1, 'duplicate state');
-  }
-  assert.equal(menus.at(-1)[1].submenu[1].enabled, false);
-  state.canReturn = false;
-  assert.equal(context.menuState.canReturn, true, 'caller mutation cannot change the accepted state');
-});
-
 test('real menu wiring sends commands and retains quit and close behavior', () => {
   const { context, menus: rebuilt, messages, calls } = mainFixture();
   const menus = context.macMenu();
-  menus[0].submenu[2].click(); menus[1].submenu[1].click(); menus[0].submenu.at(-1).click(); menus[3].submenu.at(-1).click();
-  assert.deepEqual(messages, [['menu:command', 'addProject'], ['menu:command', 'search']]);
+  const items = menus[0].submenu;
+  items[2].click(); items[3].click();
+  items.find(item => item.accelerator === 'Command+Q').click();
+  items.find(item => item.accelerator === 'Command+W').click();
+  assert.deepEqual(messages, [['menu:command', 'addProject'], ['menu:command', 'settings']]);
   assert.equal(rebuilt.length, 2);
   assert.equal(calls.show, 3); assert.equal(calls.quit, 1); assert.equal(calls.close, 1);
 });
 
 test('every menu command shows a hidden window before dispatch and rebuilds the menu', () => {
-  const { context, handlers, update, menus, messages } = mainFixture();
+  const { context, update, menus, messages } = mainFixture();
   update.status = 'ready';
-  handlers.get('menu:state')({ ...DEFAULT_MENU_STATE, focused: true, canReturn: true, reading: true });
   const order = []; let visible = false;
   context.window = {
     isDestroyed: () => false, isMinimized: () => false,
@@ -189,56 +137,78 @@ test('every menu command shows a hidden window before dispatch and rebuilds the 
     order.push(channel); send(channel, command);
   };
   const menu = context.macMenu();
-  for (const item of [...menu[0].submenu.slice(2, 5), ...menu[1].submenu, ...menu[2].submenu]) {
-    if (!item.click) continue;
+  for (const item of menu[0].submenu.slice(2, 5)) {
     visible = false; order.length = 0;
     const before = menus.length;
     item.click();
     assert.deepEqual(order, ['show', 'focus', 'menu:command'], item.label);
     assert.equal(menus.length, before + 1, item.label);
   }
-  assert.equal(messages.length, 8);
+  assert.deepEqual(messages, [['menu:command', 'addProject'], ['menu:command', 'settings'], ['menu:command', 'installUpdate']]);
 });
 
-test('native automatic checks stay at the confirmed state when the renderer blocks a command', () => {
-  const { handlers, menus } = mainFixture();
-  handlers.get('menu:state')({ ...DEFAULT_MENU_STATE, focused: true, reading: true });
-  // Simulate Electron toggling its items before invoking click, with no renderer state update afterward.
-  const activity = menus.at(-1)[2].submenu[0];
-  activity.checked = true; activity.click();
-  assert.equal(menus.at(-1)[2].submenu[0].checked, false);
-  const view = menus.at(-1)[2].submenu;
-  view[2].checked = false; view[3].checked = true; view[3].click();
-  assert.equal(menus.at(-1)[2].submenu[2].checked, true);
-  assert.equal(menus.at(-1)[2].submenu[3].checked, false);
-  handlers.get('menu:state')({ ...DEFAULT_MENU_STATE, focused: true, activityPane: true, reading: false });
-  assert.equal(menus.at(-1)[2].submenu[0].checked, true);
-  assert.equal(menus.at(-1)[2].submenu[3].checked, true);
+for (const platform of ['darwin', 'win32', 'linux']) test(`${platform} fullscreen clears and restores the live title only on macOS`, () => {
+  assert.equal(optionCallback('registerWindowLifecycle', 'updateIndicators'), 'updateIndicators');
+  const { context, store, messages } = mainFixture(platform);
+  const titles = [], images = [], flashes = [];
+  let fullscreen = false;
+  const window = Object.assign(new EventEmitter(), {
+    webContents: new EventEmitter(), isDestroyed: () => false, isFullScreen: () => fullscreen,
+    setTitle: title => titles.push(title), flashFrame: value => flashes.push(value),
+  });
+  context.window = window;
+  context.tray = { isDestroyed: () => false, setImage: image => images.push(image), setToolTip() {} };
+  context.trayImage = name => name;
+  const register = vm.runInContext(`(${registerWindowLifecycle.toString()})`, context);
+  register({ window, send: context.send, updateIndicators: context.updateIndicators });
+  const mac = platform === 'darwin';
+
+  context.updateIndicators(); assert.equal(titles.at(-1), 'Agentrix');
+  store.projects = [{ unread: 2 }, { unread: 0 }, { unread: 5 }];
+  context.updateIndicators(); assert.equal(titles.at(-1), '(2) Agentrix');
+  fullscreen = true; window.emit('enter-full-screen');
+  assert.equal(titles.at(-1), mac ? '' : '(2) Agentrix');
+  assert.deepEqual(messages, [['window:fullscreen-changed', true]]);
+
+  store.projects = [{ unread: 1 }];
+  context.updateIndicators(); assert.equal(titles.at(-1), mac ? '' : '(1) Agentrix');
+  assert.equal(images.at(-1), 'icon-alert.png');
+  store.projects = [];
+  context.updateIndicators(); assert.equal(titles.at(-1), mac ? '' : 'Agentrix');
+  assert.equal(images.at(-1), 'icon.png'); assert.equal(flashes.at(-1), false);
+
+  store.projects = [{ unread: 3 }];
+  fullscreen = false; window.emit('leave-full-screen');
+  assert.equal(titles.at(-1), mac ? '(1) Agentrix' : 'Agentrix');
+  assert.deepEqual(messages, [['window:fullscreen-changed', true], ['window:fullscreen-changed', false]]);
+  context.updateIndicators(); assert.equal(titles.at(-1), '(1) Agentrix');
+  store.projects = [];
+  context.updateIndicators(); assert.equal(titles.at(-1), 'Agentrix');
 });
 
 test('settings refresh tray language on every platform and application menus only on macOS', () => {
   for (const platform of ['darwin', 'win32', 'linux']) {
     const { handlers, menus, calls } = mainFixture(platform);
     const mac = platform === 'darwin', settings = handlers.get('workspace:settings');
-    settings({ shortcuts: { overview: 'Alt+Left' } });
+    settings({ shortcuts: { addProject: 'Alt+N' } });
     assert.equal(menus.length, mac ? 1 : 0);
-    if (mac) assert.equal(menus.at(-1)[1].submenu[0].accelerator, 'Alt+Left');
+    if (mac) assert.equal(menus.at(-1)[0].submenu[2].accelerator, 'Alt+N');
     assert.equal(calls.tray, 0);
-    settings({ shortcuts: { overview: 'Alt+Left' }, sound: false });
+    settings({ shortcuts: { addProject: 'Alt+N' }, sound: false });
     assert.equal(menus.length, mac ? 1 : 0);
     assert.equal(calls.tray, 0);
     settings({ shortcuts: {}, language: 'zh' });
     assert.equal(menus.length, mac ? 2 : 0);
     if (mac) {
-      assert.equal(menus.at(-1)[1].label, '前往');
-      assert.equal(menus.at(-1)[1].submenu[0].accelerator, DEFAULT_SHORTCUTS.overview);
+      assert.equal(menus.at(-1)[0].submenu[3].label, '设置…');
+      assert.equal(menus.at(-1)[0].submenu[2].accelerator, DEFAULT_SHORTCUTS.addProject);
     }
     assert.equal(calls.tray, 1);
     settings({ language: 'zh' });
     assert.equal(menus.length, mac ? 2 : 0); assert.equal(calls.tray, 1);
     settings({ language: 'en' });
     assert.equal(menus.length, mac ? 3 : 0);
-    if (mac) assert.equal(menus.at(-1)[1].label, 'Go');
+    if (mac) assert.equal(menus.at(-1)[0].submenu[3].label, 'Settings…');
     assert.equal(calls.tray, 2); assert.equal(calls.broadcast, 5);
   }
 });
@@ -262,10 +232,9 @@ test('update callbacks rebuild only on ready transitions while still broadcastin
   assert.equal(messages.filter(([channel]) => channel === 'updates:changed').length, changes.length);
 });
 
-test('Windows and Linux do not register menu state IPC or rebuild the application menu', () => {
+test('Windows and Linux do not rebuild the application menu', () => {
   for (const platform of ['win32', 'linux']) {
     const { context, handlers, update, onUpdate, menus, calls } = mainFixture(platform);
-    assert.equal(handlers.has('menu:state'), false);
     context.rebuildMacMenu();
     handlers.get('workspace:settings')({ language: 'zh', shortcuts: { decisions: 'Alt+D' } });
     update.status = 'ready'; onUpdate(update);
@@ -273,22 +242,22 @@ test('Windows and Linux do not register menu state IPC or rebuild the applicatio
   }
 });
 
-test('preload exposes the Agentrix state sender and an unsubscribable menu command listener', () => {
-  const renderer = new EventEmitter(), sent = []; let bridge;
-  renderer.send = (...args) => sent.push(args);
+test('preload exposes no menu state sender and keeps an unsubscribable menu command listener', () => {
+  const renderer = new EventEmitter(); let bridge;
+  renderer.send = assert.fail;
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), {
     require: name => {
       assert.equal(name, 'electron');
       return { ipcRenderer: renderer, contextBridge: { exposeInMainWorld: (name, api) => { assert.equal(name, 'agentrix'); bridge = api; } } };
     },
   });
-  bridge.setMenuState(DEFAULT_MENU_STATE);
-  assert.deepEqual(sent, [['menu:state', DEFAULT_MENU_STATE]]);
+  assert.equal(bridge.setMenuState, undefined);
   const commands = [], other = [];
   const unsubscribe = bridge.onMenuCommand(command => commands.push(command));
   const stopOther = bridge.onMenuCommand(command => other.push(command));
   renderer.emit('menu:command', {}, 'settings');
-  unsubscribe(); renderer.emit('menu:command', {}, 'search');
-  assert.deepEqual(commands, ['settings']); assert.deepEqual(other, ['settings', 'search']);
+  renderer.emit('menu:command', {}, 'addProject');
+  unsubscribe(); renderer.emit('menu:command', {}, 'installUpdate');
+  assert.deepEqual(commands, ['settings', 'addProject']); assert.deepEqual(other, ['settings', 'addProject', 'installUpdate']);
   stopOther(); assert.equal(renderer.listenerCount('menu:command'), 0);
 });

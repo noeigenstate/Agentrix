@@ -3,7 +3,7 @@ const { registerAppSchemes, registerAppProtocols } = require('./app/protocols.cj
 const { configureApplication, prepareWindowIcon, prepareShellIntegration } = require('./app/platform-startup.cjs');
 const { registerWindowContents, registerWindowLifecycle } = require('./app/window-events.cjs');
 const { registerWindowZoom } = require('./app/window-zoom.cjs');
-const { DEFAULT_MENU_STATE, parseMenuState, buildMacMenuTemplate } = require('./app/mac-menu.cjs');
+const { buildMacMenuTemplate } = require('./app/mac-menu.cjs');
 const { minWidth, minHeight } = require('./window-zoom.json');
 const { createImageTools, registerImageIpc } = require('./app/images.cjs');
 const { createProjectHandoff } = require('./app/project-handoff.cjs');
@@ -99,7 +99,6 @@ const { translate } = require('./i18n.cjs');
 // Text shown by the main process follows the language chosen in settings (Chinese source -> locales/en.json).
 const t = (text, values) => translate(store?.settings.language, text, values);
 let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, quitCleaned = false;
-let menuState = DEFAULT_MENU_STATE;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
 function windowBackgroundColor() { return store.settings.theme === 'light' ? '#f8f9fb' : '#181818'; }
@@ -249,7 +248,7 @@ function disposeProjectTerminals(project) {
 function updateIndicators() {
   const unread = store.projects.filter(p => p.unread > 0).length;
   if (window && !window.isDestroyed()) {
-    window.setTitle(`${unread ? `(${unread}) ` : ''}${t('Agentrix')}`);
+    window.setTitle(process.platform === 'darwin' && window.isFullScreen() ? '' : `${unread ? `(${unread}) ` : ''}${t('Agentrix')}`);
     if (!unread) window.flashFrame(false);
   }
   if (tray && !tray.isDestroyed()) {
@@ -266,11 +265,10 @@ function trayImage(name) {
 // own key handling (before-input-event and the terminals), so there is no Edit menu to compete with it.
 function macMenu() {
   return Menu.buildFromTemplate(buildMacMenuTemplate({
-    appName: app.name, t, shortcuts: store?.settings.shortcuts, state: menuState,
+    appName: app.name, t, shortcuts: store?.settings.shortcuts,
     updateReady: updateManager?.getState().status === 'ready', command: command => {
       showWindow();
       send('menu:command', command);
-      // Native checks toggle before click; the renderer may reject the command while a dialog is open.
       rebuildMacMenu();
     },
     quit: () => { showWindow(); requestQuit().catch(report); }, close: () => window?.close(),
@@ -279,13 +277,6 @@ function macMenu() {
 
 function rebuildMacMenu() {
   if (process.platform === 'darwin') Menu.setApplicationMenu(macMenu());
-}
-
-function setMenuState(state) {
-  const next = parseMenuState(state);
-  if (!next || Object.keys(next).every(key => next[key] === menuState[key])) return;
-  menuState = next;
-  rebuildMacMenu();
 }
 
 // Rebuilt when the language changes; Electron menus keep the labels they were built with.
@@ -1379,7 +1370,6 @@ function registerIpc() {
     acknowledgeProject: id => store.acknowledge(id), expectCompletion: id => store.expectCompletion(id), scheduleState, applyActivity, pollAfterSubmission, send,
     getActiveTerminal: () => activeTerminal, setActiveTerminal: value => { activeTerminal = value; }, setActiveFileTree: value => { activeFileTree = value; } });
   registerClipboardIpc({ handle, clipboardWrites, clipboard });
-  if (process.platform === 'darwin') listen('menu:state', setMenuState);
   registerWindowIpc({ handle, listen, getWindow: () => window, requestQuit });
 }
 
@@ -1464,7 +1454,7 @@ if (!app.requestSingleInstanceLock()) {
     registerWindowContents({ window, Menu, clipboard, previewResources, pictureFrom, devUrl, t,
       getActiveTerminal: () => activeTerminal, getActiveFileTree: () => activeFileTree, getShortcuts: () => store.settings.shortcuts });
     registerWindowLifecycle({ window, getSettings: () => store.settings, isQuitting: () => quitting, hasTray: () => !!tray,
-      requestQuit, report, send, clearAttention: () => clearTimeout(attentionTimer) });
+      requestQuit, report, send, updateIndicators, clearAttention: () => clearTimeout(attentionTimer) });
     tray = new Tray(trayImage('icon.png'));
     tray.setToolTip(t('Agentrix'));
     trayMenu();
