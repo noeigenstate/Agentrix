@@ -5,8 +5,8 @@ and collaboration report pages, their tables and charts, and the suggestion butt
 contract in `src/shared/dashboard-types.ts`; every number there may be null and the page shows that as a dash, never as 0.
 
 Model cells are native buttons. They open one filtered task list beneath the comparison table; closing the list returns
-focus to its model button. Task titles and project names wrap, while the labelled scroll region keeps the title and
-outcome columns in view.
+focus to its model button. Task titles and project names wrap, while the labelled scroll region keeps the title column in
+view; no table pins a last column, which would cover cells while it overflows.
 
 One named exception to "the interface uses only theme tokens": the three chart series colours (`--chart-1..3` in `dashboard.css`, a pair of sets for dark and
 light). They are content, not interface; a model is also told apart by its shape, line style and bar texture, so colour is never the only cue.

@@ -11,7 +11,7 @@ export function ModelTasks({ model, runs, onClose }: { model: string; runs: Dash
       <button type="button" className="button" onClick={onClose}>{t('收起任务列表')}</button>
     </div>
     <p className="note">{t('按当前筛选，最多显示最近 50 条任务')}</p>
-    <ScrollRegion tall label={t('模型任务表，可横向滚动；任务列和结果列固定')}>
+    <ScrollRegion tall label={t('模型任务表，可横向滚动；任务列固定')}>
       <table className="sticky wide task-table">
         <thead><tr>{columns.map((name, index) => <th key={name} className={index >= 4 && index <= 6 ? 'num' : undefined}>{name}</th>)}</tr></thead>
         <tbody>

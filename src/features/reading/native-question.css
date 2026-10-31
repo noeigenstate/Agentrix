@@ -24,9 +24,10 @@
 .native-question-reason, .native-question-status { margin: 4px 0 0; font-size: calc(12px * var(--reading-text)); line-height: 1.5; overflow-wrap: anywhere; }
 .native-question-reason { color: var(--danger); }
 .native-question-footer .native-question-reason, .native-question-status { margin: 0 0 8px; }
-/* The summary's link to the first unfinished field keeps a 32px hit area without making the line taller. */
+/* The summary's link to the first unfinished field keeps a 32px hit area without making the line taller. It is underlined and fills on hover, so it reads as an action rather than as part of the status text; the 8px left margin keeps its focus ring off the status text. */
 .native-question-status { display: flex; flex-wrap: wrap; align-items: center; color: var(--text-2); }
-.native-question-status .text-button { min-height: 32px; margin: -8px 0; padding: 0 8px; }
+.native-question-status .text-button { min-height: 32px; margin: -8px 0 -8px 8px; padding: 0 8px; border-radius: 8px; color: var(--text-1); text-decoration: underline; text-underline-offset: 2px; }
+.native-question-status .text-button:hover:not(:disabled) { background: var(--bg-hover); }
 .native-question .native-question-actions { margin-top: 0; }
 .native-question-actions .native-question-source-link { margin: 0 -8px 0 auto; }
 .native-question fieldset:disabled { opacity: 1; }

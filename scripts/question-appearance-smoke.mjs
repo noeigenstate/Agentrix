@@ -59,12 +59,20 @@ const measureFileCards = markup => {
   return rows;
 };
 
+// The native question card's footer with the summary's jump action, from the card's own classes: the card needs a live MCP request, and what is measured is the stylesheet.
+const JUMP_PROBE = `<section id="jump-probe" class="reading-choice native-question" style="position:fixed;z-index:900;left:16px;bottom:16px;width:min(480px,calc(100vw - 32px))"><div class="native-question-footer"><p class="native-question-status">还有 1 项未完成<button type="button" class="text-button">前往第一项</button></p></div></section>`;
+const measureJump = markup => {
+  document.body.insertAdjacentHTML('beforeend', markup);
+  const button = document.querySelector('#jump-probe .text-button'), style = getComputedStyle(button), status = getComputedStyle(button.parentElement);
+  return { hit: Math.round(button.getBoundingClientRect().height), decoration: style.textDecorationLine, color: style.color, statusColor: status.color, background: style.backgroundColor };
+};
+
 async function runTheme(theme) {
   const dir = path.join(output, theme), profile = path.join(dir, 'profile'), project = path.join(dir, 'project');
   await fs.mkdir(profile, { recursive: true }); await fs.mkdir(project);
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ id: 'questions', name: '问题主题对照', path: project, restore: { terminal: false, codex: false } }], settings: { language: 'zh', theme, terminalRenderer: 'dom', fontSize: 10, restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false } }));
   const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: await fs.mkdtemp(path.join(dir, 'codex-home-')) }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
-  const errors = [], results = { theme, cards: [], composer: null, fileCards: null }; let app, page;
+  const errors = [], results = { theme, cards: [], composer: null, fileCards: null, jump: [] }; let app, page;
   const state = async () => (await page.evaluate(() => window.agentrix.getState())).value;
   const write = data => page.evaluate(data => window.agentrix.writeTerminal('questions', data), data);
   try {
@@ -82,6 +90,22 @@ async function runTheme(theme) {
       results.fileCards = await page.evaluate(measureFileCards, FILE_CARDS);
       await page.screenshot({ path: path.join(dir, 'file-cards.png') });
       await page.evaluate(() => document.getElementById('file-card-probe').remove());
+      // The jump action: underlined, a 32px hit area, a hover fill and the 2px keyboard ring, at the usual size and at two narrower ones.
+      results.jump = [];
+      for (const [width, height] of [[1800, 1200], [900, 820], [820, 600]]) {
+        await app.evaluate(({ BrowserWindow }, [width, height]) => BrowserWindow.getAllWindows()[0].setContentSize(width, height), [width, height]);
+        await waitFor(() => page.evaluate(([width, height]) => Math.abs(innerWidth - width) <= 1 && Math.abs(innerHeight - height) <= 1, [width, height]), `content size ${width}×${height}`);
+        const measured = await page.evaluate(measureJump, JUMP_PROBE), button = page.locator('#jump-probe .text-button');
+        // Focus by keyboard: a script's focus() alone does not match :focus-visible.
+        await button.focus(); await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab');
+        assert.equal(await button.evaluate(node => node === document.activeElement), true, 'Tab reaches the jump action');
+        const ring = await button.evaluate(node => ({ width: getComputedStyle(node).outlineWidth, style: getComputedStyle(node).outlineStyle }));
+        await button.hover();
+        const hover = await button.evaluate(node => getComputedStyle(node).backgroundColor);
+        await page.screenshot({ path: path.join(dir, `jump-${width}x${height}.png`) });
+        await page.evaluate(() => document.getElementById('jump-probe').remove());
+        results.jump.push({ width, height, ...measured, ring, hover });
+      }
     };
     for (const [at, { agent, dir: fixtures, file, card }] of FIXTURES.entries()) {
       await write("function global:prompt { 'question-fixture> ' }; Send-AgentrixEvent 'codex-started' -Agent '" + agent + "'\r");
@@ -114,7 +138,7 @@ async function runTheme(theme) {
 }
 
 // What the measurements must show; every violation is collected, so one run lists them all.
-function violations({ theme, cards, composer, composerTyped, fileCards }) {
+function violations({ theme, cards, composer, composerTyped, fileCards, jump }) {
   const bad = [], seen = new Set();
   for (const { file, levels, named } of cards) {
     for (const level of levels) {
@@ -134,6 +158,14 @@ function violations({ theme, cards, composer, composerTyped, fileCards }) {
     for (const part of ['cards', 'empty', 'name', 'doc']) for (const [name, value] of row[part]) if (!SPACING.includes(value)) bad.push(`${theme} file card ${row.where} ${part}.${name}: ${value}px is off the spacing scale`);
     if (row.emptySize < 12) bad.push(`${theme} file card ${row.where} empty text ${row.emptySize}px is under 12`);
     if (row.nameWeight !== 600) bad.push(`${theme} file card ${row.where} name weight ${row.nameWeight}, expected 600`);
+  }
+  for (const { width, height, hit, decoration, color, statusColor, background, ring, hover } of jump) {
+    const at = `${theme} jump action at ${width}×${height}`;
+    if (hit < 32) bad.push(`${at}: hit area ${hit}px, expected at least 32`);
+    if (!decoration.includes('underline')) bad.push(`${at}: text-decoration ${decoration}, expected underline`);
+    if (color === statusColor) bad.push(`${at}: same colour as the status text, it reads as status`);
+    if (hover === background) bad.push(`${at}: hovering changes nothing (${hover})`);
+    if (ring.width !== '2px' || ring.style !== 'solid') bad.push(`${at}: focus ring ${ring.width} ${ring.style}, expected 2px solid`);
   }
   return bad;
 }
