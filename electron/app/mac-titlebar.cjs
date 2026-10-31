@@ -8,46 +8,53 @@ function record(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function dimensions(value, names, maximum = 512) {
+function dimensions(value, names) {
   if (!record(value)) return;
   const result = {};
   for (const name of names) {
     const number = value[name];
-    if (!Number.isFinite(number) || number < 0 || number > maximum) return;
+    if (!Number.isFinite(number) || number < 0 || number > 64) return;
     result[name] = number;
   }
   return result;
 }
 
+function fontWeight(value) {
+  return Number.isFinite(value) && value >= 100 && value <= 900;
+}
+
 function validIcon(value) {
-  if (typeof value !== 'string' || value.length > 256 * 1024 || !value.startsWith(PNG_PREFIX)) return false;
+  if (typeof value !== 'string' || value.length > 64 * 1024 || !value.startsWith(PNG_PREFIX)) return false;
   const encoded = value.slice(PNG_PREFIX.length);
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded) || encoded.length % 4) return false;
   const data = Buffer.from(encoded, 'base64');
   return data.length >= 33 && data.subarray(0, 8).equals(PNG_SIGNATURE)
     && data.readUInt32BE(8) === 13 && data.toString('ascii', 12, 16) === 'IHDR'
-    && [data.readUInt32BE(16), data.readUInt32BE(20)].every(size => size > 0 && size <= 1024)
+    && [data.readUInt32BE(16), data.readUInt32BE(20)].every(size => size > 0 && size <= 256)
     && data.toString('base64') === encoded;
 }
 
 function titlebarStyle(value) {
-  if (!record(value) || !Number.isFinite(value.scale) || value.scale <= 0 || value.scale > 4) return;
-  const font = dimensions(value.font, ['size', 'weight'], 900);
+  if (!record(value) || !Number.isFinite(value.scale) || value.scale < 0.5 || value.scale > 2) return;
+  const font = dimensions(value.font, ['size']);
+  const family = value.font?.family, weight = value.font?.weight, badgeWeight = value.metrics?.badge?.fontWeight;
   const metrics = dimensions(value.metrics,
     ['height', 'paddingX', 'gap', 'itemGap', 'radius', 'iconSize', 'focusWidth', 'focusOffset']);
   const badge = dimensions(value.metrics?.badge, ['minWidth', 'paddingX', 'height', 'fontSize']);
-  if (!font || font.size <= 0 || font.size > 512 || font.weight < 100 || !metrics || metrics.height <= 0
+  if (!font || font.size <= 0 || typeof family !== 'string' || !family.trim() || family.length > 1024
+    || !fontWeight(weight) || !fontWeight(badgeWeight) || !metrics || metrics.height <= 0
     || metrics.iconSize <= 0 || !badge || badge.minWidth <= 0 || badge.height <= 0 || badge.fontSize <= 0
     || !record(value.colors) || !record(value.icons)) return;
   const colors = {};
   for (const name of ['text', 'textSelected', 'hover', 'selected', 'badge', 'badgeText', 'focus']) {
     const color = value.colors[name];
-    if (typeof color !== 'string' || !/^#(?:[\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i.test(color)) return;
-    colors[name] = (color.length <= 5 ? `#${[...color.slice(1)].map(digit => digit + digit).join('')}` : color).toLowerCase();
+    if (typeof color !== 'string' || !/^#(?:[\da-f]{6}|[\da-f]{8})$/i.test(color)) return;
+    colors[name] = color.toLowerCase();
   }
   const { decisions, workspace } = value.icons;
   if (!validIcon(decisions) || !validIcon(workspace)) return;
-  return { scale: value.scale, font, metrics: { ...metrics, badge }, colors,
+  return { scale: value.scale, font: { ...font, weight, family: family.trim() },
+    metrics: { ...metrics, badge: { ...badge, fontWeight: badgeWeight } }, colors,
     icons: { decisions, workspace } };
 }
 
@@ -82,7 +89,11 @@ function registerMacTitlebar({ window, t, send, broadcast, getShortcuts = () => 
     ];
     const next = JSON.stringify(items);
     if (next === rendered && style === renderedStyle) return;
-    addon.update(style !== renderedStyle ? { items, style } : { items });
+    const result = addon.update(style !== renderedStyle ? { items, style } : { items });
+    if (result === false) {
+      style = renderedStyle;
+      styleKey = style ? JSON.stringify(style) : undefined;
+    }
     rendered = next;
     renderedStyle = style;
   }

@@ -21,9 +21,9 @@ const mainFunction = name => main.statements.find(node => ts.isFunctionDeclarati
 const templateIcon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=';
 
 function styleFixture() {
-  return { scale: 1, font: { size: 13, weight: 600 },
+  return { scale: 1, font: { size: 13, weight: 600, family: "'PingFang SC', sans-serif" },
     metrics: { height: 28, paddingX: 12, gap: 6, itemGap: 4, radius: 8, iconSize: 16, focusWidth: 2, focusOffset: 2,
-      badge: { minWidth: 18, paddingX: 5, height: 17, fontSize: 11 } },
+      badge: { minWidth: 18, paddingX: 5, height: 17, fontSize: 11, fontWeight: 600 } },
     colors: { text: '#b5b5b5', textSelected: '#f2f2f2', hover: '#343434', selected: '#383838',
       badge: '#e5e5e5', badgeText: '#181818', focus: '#d0d0d0' },
     icons: { decisions: templateIcon, workspace: templateIcon } };
@@ -120,9 +120,9 @@ test('state and language updates reuse native style; theme and zoom changes rese
   assert.equal(f.updates.length, 5);
 });
 
-test('cached style is an owned snapshot and accepts CSS hex shorthand and alpha', () => {
+test('cached style is an owned snapshot and normalizes canonical CSS hex case and alpha', () => {
   const f = fixture(), style = styleFixture();
-  style.colors.text = '#ABC'; style.colors.focus = '#aBcD'; style.colors.hover = '#12345678';
+  style.colors.text = '#AABBCC'; style.colors.focus = '#aAbBcCdD'; style.colors.hover = '#12345678';
   f.controller.update({ view: 'workspace', decisions: 0, style });
   const sent = f.updates.at(-1).style;
   assert.equal(sent.colors.text, '#aabbcc');
@@ -141,23 +141,28 @@ test('malformed styles preserve the cached appearance while valid navigation and
   f.controller.update({ view: 'workspace', decisions: 0, style: styleFixture() });
   const mutations = [
     style => { delete style.font; }, style => { style.font = []; },
-    ...[0, -1, NaN, Infinity, 5, '1'].map(scale => style => { style.scale = scale; }),
-    ...[0, -1, NaN, 513, '13'].map(size => style => { style.font.size = size; }),
+    ...[0, 0.49, -1, NaN, Infinity, 2.01, '1'].map(scale => style => { style.scale = scale; }),
+    ...[0, -1, NaN, 65, '13'].map(size => style => { style.font.size = size; }),
     ...[0, 99, 901, '600'].map(weight => style => { style.font.weight = weight; }),
+    ...[undefined, null, 1, '', ' '.repeat(3), 'x'.repeat(1025)].map(family => style => { style.font.family = family; }),
     style => { delete style.metrics.focusWidth; }, style => { delete style.metrics.focusOffset; },
     style => { style.metrics.gap = -1; }, style => { style.metrics.height = 0; },
+    style => { style.metrics.height = 65; },
     style => { style.metrics.iconSize = Infinity; }, style => { style.metrics.badge = []; },
     style => { style.metrics.badge.fontSize = 0; }, style => { style.metrics.badge.paddingX = -1; },
+    style => { style.metrics.badge.minWidth = 65; },
+    ...[undefined, 99, 901, '600'].map(weight => style => { style.metrics.badge.fontWeight = weight; }),
     style => { style.colors.focus = 'var(--focus-ring)'; }, style => { style.colors.text = '#12345'; },
     style => { delete style.colors.badge; }, style => { style.colors = []; },
+    style => { style.colors.text = '#abc'; }, style => { style.colors.focus = '#abcd'; },
     style => { style.icons = null; }, style => { style.icons.workspace = '/tmp/icon.png'; },
     style => { style.icons.decisions = 'data:image/svg+xml;base64,PHN2Zy8+'; },
     style => { style.icons.decisions = 'data:image/png;base64,bm90IGEgcG5n'; },
     style => { style.icons.decisions += '!'; },
-    style => { style.icons.decisions = `data:image/png;base64,${'A'.repeat(256 * 1024)}`; },
+    style => { style.icons.decisions = `data:image/png;base64,${'A'.repeat(64 * 1024)}`; },
     style => {
       const data = Buffer.from(templateIcon.split(',')[1], 'base64');
-      data.writeUInt32BE(1025, 16);
+      data.writeUInt32BE(257, 16);
       style.icons.decisions = `data:image/png;base64,${data.toString('base64')}`;
     },
   ];
@@ -175,6 +180,33 @@ test('malformed styles preserve the cached appearance while valid navigation and
   assert.equal(f.updates.length, updates, 'the original cached style remains current');
   assert.equal(f.controller.attached, true);
   assert.deepEqual(f.warnings, []);
+});
+
+test('validation accepts the app zoom endpoints, maximum metric and independent font weights', () => {
+  const f = fixture();
+  for (const scale of [0.5, 2]) {
+    const style = styleFixture();
+    style.scale = scale; style.metrics.height = 64;
+    style.font.weight = 900; style.metrics.badge.fontWeight = 100;
+    f.controller.update({ view: 'workspace', decisions: 0, style });
+    assert.deepEqual(f.updates.at(-1).style, style);
+  }
+});
+
+test('a PNG rejected by the native decoder does not replace the last accepted style', () => {
+  const f = fixture(), previous = styleFixture();
+  f.controller.update({ view: 'workspace', decisions: 0, style: previous });
+  const update = f.addon.update;
+  f.addon.update = value => { update(value); return false; };
+  const next = styleFixture(); next.colors.text = '#24272d';
+  f.controller.update({ view: 'decisions', decisions: 1, style: next });
+  f.addon.update = update;
+  const updates = f.updates.length;
+  f.controller.update({ view: 'decisions', decisions: 1, style: previous });
+  assert.equal(f.updates.length, updates, 'the previous style remains cached');
+  f.controller.update({ view: 'workspace', decisions: 2 });
+  assert.equal('style' in f.updates.at(-1), false);
+  assert.equal(f.controller.attached, true);
 });
 
 test('invalid initial style keeps startup usable and does not prevent a later valid style', () => {
@@ -521,4 +553,44 @@ test('the compiled binary loads in plain Node and detached operations need no ap
   }
   assert.throws(() => addon.attach(Buffer.alloc(1), () => {}), /native window handle/);
   assert.throws(() => addon.update({ items: [] }), /decisions and workspace/);
+});
+
+test('the native style reader resolves installed families, weights, pixels and malformed styles without a window', {
+  skip: process.platform !== 'darwin' || !fs.existsSync(binary),
+}, () => {
+  const addon = require(binary), style = styleFixture();
+  const items = [
+    { id: 'decisions', label: '决策', selected: false },
+    { id: 'workspace', label: '工作台', selected: true },
+  ];
+  addon.detach();
+  style.scale = 1.25;
+  style.font.family = "'Agentrix Missing Font', 'PingFang SC', sans-serif";
+  style.metrics.badge.fontWeight = 400;
+  const result = addon.update({ items, style });
+  assert.equal(result.fontFamily, 'PingFang SC');
+  assert.match(result.fontName, /Semibold/i);
+  assert.match(result.badgeFontName, /Regular/i);
+  assert.equal(result.fontSize, 16.25);
+  assert.equal(result.badgeFontSize, 13.75);
+  assert.equal(result.height, 35);
+  assert.equal(result.focusOutset, 5);
+  assert.equal(result.iconSize, 20);
+  style.font.family = "'Helvetica Neue', 'PingFang SC'";
+  assert.equal(addon.update({ items, style }).fontFamily, 'Helvetica Neue', 'the first installed family wins');
+  style.font.family = 'system-ui';
+  const fallback = addon.update({ items, style });
+  style.font.family = 'Agentrix Missing Font';
+  assert.equal(addon.update({ items, style }).fontName, fallback.fontName);
+  for (const mutate of [
+    value => { value.scale = '1'; }, value => { value.font.family = 1; },
+    value => { value.metrics = []; }, value => { value.metrics.badge.fontWeight = '600'; },
+    value => { value.colors.text = 'not a color'; },
+    value => { value.icons.workspace = 'data:image/png;base64,AA=='; },
+  ]) {
+    const invalid = styleFixture(); mutate(invalid);
+    assert.equal(addon.update({ items, style: invalid }), false);
+  }
+  assert.equal(addon.update({ items }), undefined, 'state-only updates keep their existing return value');
+  assert.throws(() => addon.attach(Buffer.alloc(8), () => {}), /initialized macOS application/);
 });

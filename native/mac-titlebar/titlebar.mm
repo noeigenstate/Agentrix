@@ -63,11 +63,11 @@ bool ReadObject(Napi::Object parent, const char* name, Napi::Object& result) {
   return true;
 }
 
-bool ReadNumber(Napi::Object parent, const char* name, CGFloat& result, bool positive = false, CGFloat maximum = 512) {
+bool ReadNumber(Napi::Object parent, const char* name, CGFloat& result) {
   Napi::Value value = parent.Get(name);
   if (!value.IsNumber()) return false;
   double number = value.As<Napi::Number>().DoubleValue();
-  if (!std::isfinite(number) || number < 0 || (positive && number == 0) || number > maximum) return false;
+  if (!std::isfinite(number)) return false;
   result = number;
   return true;
 }
@@ -76,11 +76,6 @@ NSColor* ReadColor(Napi::Value value) {
   if (!value.IsString()) return nil;
   std::string hex = value.As<Napi::String>().Utf8Value();
   if (hex.empty() || hex[0] != '#') return nil;
-  if (hex.size() == 4 || hex.size() == 5) {
-    std::string expanded = "#";
-    for (size_t i = 1; i < hex.size(); i++) expanded.append(2, hex[i]);
-    hex = expanded;
-  }
   if (hex.size() != 7 && hex.size() != 9) return nil;
   if (hex.find_first_not_of("0123456789abcdefABCDEF", 1) != std::string::npos) return nil;
   unsigned long long rgba = std::strtoull(hex.c_str() + 1, nullptr, 16);
@@ -93,21 +88,15 @@ NSBitmapImageRep* ReadIcon(Napi::Value value) {
   if (!value.IsString()) return nil;
   std::string url = value.As<Napi::String>().Utf8Value();
   constexpr char prefix[] = "data:image/png;base64,";
-  if (url.size() > 256 * 1024 || url.compare(0, sizeof(prefix) - 1, prefix) != 0) return nil;
+  if (url.compare(0, sizeof(prefix) - 1, prefix) != 0) return nil;
   NSData* data = [[NSData alloc] initWithBase64EncodedString:
       [NSString stringWithUTF8String:url.c_str() + sizeof(prefix) - 1] options:0];
   constexpr uint8_t signature[] = {137, 80, 78, 71, 13, 10, 26, 10};
-  if (data.length < 33 || std::memcmp(data.bytes, signature, sizeof(signature)) != 0) return nil;
-  const auto* bytes = static_cast<const uint8_t*>(data.bytes);
-  for (size_t offset : {16, 20}) {
-    uint32_t size = (uint32_t(bytes[offset]) << 24) | (uint32_t(bytes[offset + 1]) << 16)
-        | (uint32_t(bytes[offset + 2]) << 8) | bytes[offset + 3];
-    if (size == 0 || size > 1024) return nil;
-  }
+  if (data.length < sizeof(signature) || std::memcmp(data.bytes, signature, sizeof(signature)) != 0) return nil;
   @try {
     NSBitmapImageRep* image = [[NSBitmapImageRep alloc] initWithData:data];
     return image.hasAlpha && image.CGImage ? image : nil;
-  } @catch (NSException* exception) {
+  } @catch (NSException* __unused exception) {
     // A corrupt mask must leave the last valid style and navigation intact.
     return nil;
   }
@@ -131,34 +120,52 @@ NSImage* TintIcon(CGImageRef mask, NSColor* color, CGFloat size) {
   return image;
 }
 
-NSFont* SystemFont(CGFloat size, CGFloat weight) {
+CGFloat FontWeight(CGFloat weight) {
   const CGFloat weights[] = {NSFontWeightUltraLight, NSFontWeightThin, NSFontWeightLight, NSFontWeightRegular,
       NSFontWeightMedium, NSFontWeightSemibold, NSFontWeightBold, NSFontWeightHeavy, NSFontWeightBlack};
-  return [NSFont systemFontOfSize:size weight:weights[std::clamp(int(std::round(weight / 100)) - 1, 0, 8)]];
+  return weights[std::clamp(int(std::round(weight / 100)) - 1, 0, 8)];
+}
+
+NSFont* ResolveFont(NSString* families, CGFloat size, CGFloat weight) {
+  NSFontManager* manager = NSFontManager.sharedFontManager;
+  NSCharacterSet* quotesAndSpace = [NSCharacterSet characterSetWithCharactersInString:@" \t\r\n\"'"];
+  for (NSString* name in [families componentsSeparatedByString:@","]) {
+    NSString* family = [name stringByTrimmingCharactersInSet:quotesAndSpace];
+    if ([@[@"system-ui", @"-apple-system", @"BlinkMacSystemFont", @"sans-serif"] containsObject:family]) break;
+    if (![manager availableMembersOfFontFamily:family].count) {
+      NSFont* named = [NSFont fontWithName:family size:size];
+      if (!named) continue;
+      family = named.familyName;
+    }
+    NSFontDescriptor* descriptor = [NSFontDescriptor fontDescriptorWithFontAttributes:
+        @{NSFontFamilyAttribute: family, NSFontTraitsAttribute: @{NSFontWeightTrait: @(FontWeight(weight))}}];
+    NSFont* font = [NSFont fontWithDescriptor:descriptor size:size];
+    if (font) return font;
+  }
+  return [NSFont systemFontOfSize:size weight:FontWeight(weight)];
 }
 
 std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   if (!value.IsObject() || value.IsArray()) return {};
   Napi::Object root = value.As<Napi::Object>(), font, metrics, badge, colors, icons;
-  CGFloat scale, fontSize, weight, badgeFontSize;
-  if (!ReadNumber(root, "scale", scale, true, 4) || !ReadObject(root, "font", font)
-      || !ReadNumber(font, "size", fontSize, true) || !ReadNumber(font, "weight", weight, true, 900) || weight < 100
+  CGFloat scale, fontSize, weight, badgeFontSize, badgeWeight;
+  if (!ReadNumber(root, "scale", scale) || !ReadObject(root, "font", font) || !font.Get("family").IsString()
+      || !ReadNumber(font, "size", fontSize) || !ReadNumber(font, "weight", weight)
       || !ReadObject(root, "metrics", metrics) || !ReadObject(metrics, "badge", badge)
       || !ReadObject(root, "colors", colors) || !ReadObject(root, "icons", icons)) return {};
   auto style = std::make_shared<TitlebarStyle>();
-  struct Dimension { const char* name; CGFloat* result; bool positive; };
-  const Dimension dimensions[] = {{"height", &style->height, true}, {"paddingX", &style->paddingX, false},
-      {"gap", &style->gap, false}, {"itemGap", &style->itemGap, false}, {"radius", &style->radius, false},
-      {"iconSize", &style->iconSize, true}, {"focusWidth", &style->focusWidth, false},
-      {"focusOffset", &style->focusOffset, false}};
+  struct Dimension { const char* name; CGFloat* result; };
+  const Dimension dimensions[] = {{"height", &style->height}, {"paddingX", &style->paddingX},
+      {"gap", &style->gap}, {"itemGap", &style->itemGap}, {"radius", &style->radius},
+      {"iconSize", &style->iconSize}, {"focusWidth", &style->focusWidth}, {"focusOffset", &style->focusOffset}};
   for (const Dimension& field : dimensions) {
-    if (!ReadNumber(metrics, field.name, *field.result, field.positive)) return {};
+    if (!ReadNumber(metrics, field.name, *field.result)) return {};
     *field.result *= scale;
   }
-  if (!ReadNumber(badge, "minWidth", style->badgeMinWidth, true)
+  if (!ReadNumber(badge, "minWidth", style->badgeMinWidth)
       || !ReadNumber(badge, "paddingX", style->badgePaddingX)
-      || !ReadNumber(badge, "height", style->badgeHeight, true)
-      || !ReadNumber(badge, "fontSize", badgeFontSize, true)) return {};
+      || !ReadNumber(badge, "height", style->badgeHeight)
+      || !ReadNumber(badge, "fontSize", badgeFontSize) || !ReadNumber(badge, "fontWeight", badgeWeight)) return {};
   style->badgeMinWidth *= scale;
   style->badgePaddingX *= scale;
   style->badgeHeight *= scale;
@@ -177,8 +184,9 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
     style->icons[i][1] = TintIcon(mask.CGImage, style->textSelected, style->iconSize);
     if (!style->icons[i][0] || !style->icons[i][1]) return {};
   }
-  style->font = SystemFont(fontSize * scale, weight);
-  style->badgeFont = SystemFont(badgeFontSize * scale, weight);
+  NSString* families = [NSString stringWithUTF8String:font.Get("family").As<Napi::String>().Utf8Value().c_str()];
+  style->font = ResolveFont(families, fontSize * scale, weight);
+  style->badgeFont = ResolveFont(families, badgeFontSize * scale, badgeWeight);
   return style;
 }
 }
@@ -187,10 +195,13 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   std::shared_ptr<const TitlebarStyle> style_;
   NSString* label_;
   NSString* badgeText_;
+  NSSize labelSize_;
+  NSSize badgeSize_;
+  NSSize contentSize_;
+  CGFloat badgeWidth_;
   NSTrackingArea* tracking_;
   BOOL selected_;
   BOOL hovered_;
-  BOOL keyboardFocus_;
   NSUInteger icon_;
 }
 @property(nonatomic, readonly) BOOL selected;
@@ -200,25 +211,30 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
 - (void)setLabel:(NSString*)label count:(uint64_t)count selected:(BOOL)selected;
 - (void)applyStyle:(std::shared_ptr<const TitlebarStyle>)style icon:(NSUInteger)icon;
 - (void)drawFocusRingInView:(NSView*)view;
+- (void)clearHover;
 @end
 
 @implementation AgentrixNavButton
 - (BOOL)isFlipped { return YES; }
 - (BOOL)wantsUpdateLayer { return style_ ? NO : super.wantsUpdateLayer; }
 - (BOOL)allowsVibrancy { return style_ ? NO : super.allowsVibrancy; }
-- (BOOL)acceptsFirstResponder { return self.enabled; }
 - (BOOL)selected { return selected_; }
 - (CGFloat)itemGap { return style_ ? style_->itemGap : kButtonGap; }
 - (CGFloat)focusOutset { return style_ ? style_->focusOffset + style_->focusWidth : 0; }
 
 - (void)setLabel:(NSString*)label count:(uint64_t)count selected:(BOOL)selected {
-  label_ = [label copy];
-  badgeText_ = count ? [NSString stringWithFormat:@"%llu", static_cast<unsigned long long>(count)] : @"";
-  self.title = count ? [NSString stringWithFormat:@"%@ %@", label_, badgeText_] : label_;
+  NSString* badge = count ? [NSString stringWithFormat:@"%llu", static_cast<unsigned long long>(count)] : @"";
+  BOOL changed = ![label_ isEqualToString:label] || ![badgeText_ isEqualToString:badge];
+  if (!changed && selected_ == selected) return;
+  if (changed) {
+    label_ = [label copy];
+    badgeText_ = badge;
+    self.title = count ? [NSString stringWithFormat:@"%@ %@", label_, badgeText_] : label_;
+    [self measureContent];
+  }
   selected_ = selected;
   self.state = selected ? NSControlStateValueOn : NSControlStateValueOff;
   self.needsDisplay = YES;
-  self.superview.needsDisplay = YES;
 }
 
 - (void)applyStyle:(std::shared_ptr<const TitlebarStyle>)style icon:(NSUInteger)icon {
@@ -226,25 +242,29 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   icon_ = icon;
   self.font = style_->font;
   self.focusRingType = NSFocusRingTypeNone;
+  [self measureContent];
   [self updateTrackingAreas];
   self.needsDisplay = YES;
   self.superview.needsDisplay = YES;
 }
 
-- (CGFloat)badgeWidth {
-  CGFloat textWidth = [badgeText_ sizeWithAttributes:@{NSFontAttributeName: style_->badgeFont}].width;
-  return std::max(style_->badgeMinWidth, textWidth + 2 * style_->badgePaddingX);
+- (void)measureContent {
+  if (!style_) {
+    NSSize size = super.fittingSize;
+    contentSize_ = NSMakeSize(std::max(CGFloat(54), size.width + 12), size.height);
+    return;
+  }
+  labelSize_ = [label_ sizeWithAttributes:@{NSFontAttributeName: style_->font}];
+  badgeSize_ = [badgeText_ sizeWithAttributes:@{NSFontAttributeName: style_->badgeFont}];
+  badgeWidth_ = std::max(style_->badgeMinWidth, badgeSize_.width + 2 * style_->badgePaddingX);
+  CGFloat width = 2 * style_->paddingX + style_->iconSize + style_->gap + labelSize_.width;
+  if (badgeText_.length) width += style_->gap + badgeWidth_;
+  contentSize_ = NSMakeSize(width, style_->height);
 }
 
 - (NSSize)contentSize {
-  if (!style_) {
-    NSSize size = super.fittingSize;
-    return NSMakeSize(std::max(CGFloat(54), size.width + 12), size.height);
-  }
-  CGFloat labelWidth = [label_ sizeWithAttributes:@{NSFontAttributeName: style_->font}].width;
-  CGFloat width = 2 * style_->paddingX + style_->iconSize + style_->gap + labelWidth;
-  if (badgeText_.length) width += style_->gap + self.badgeWidth;
-  return NSMakeSize(width, style_->height);
+  if (contentSize_.height == 0) [self measureContent];
+  return contentSize_;
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
@@ -258,26 +278,29 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   BOOL primary = selected_ || hovered_;
   NSColor* text = primary ? style.textSelected : style.text;
   CGFloat x = style.paddingX;
-  [style.icons[icon_][primary ? 1 : 0] drawInRect:NSMakeRect(x, (style.height - style.iconSize) / 2,
-      style.iconSize, style.iconSize) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver
+  CGFloat center = NSMidY(self.bounds);
+  NSRect icon = [self backingAlignedRect:NSMakeRect(x, center - style.iconSize / 2, style.iconSize, style.iconSize)
+      options:NSAlignAllEdgesNearest];
+  [style.icons[icon_][primary ? 1 : 0] drawInRect:icon fromRect:NSZeroRect operation:NSCompositingOperationSourceOver
       fraction:1 respectFlipped:YES hints:nil];
   x += style.iconSize + style.gap;
   NSDictionary* attributes = @{NSFontAttributeName: style.font, NSForegroundColorAttributeName: text};
-  NSSize labelSize = [label_ sizeWithAttributes:attributes];
-  [label_ drawAtPoint:NSMakePoint(x, (style.height - labelSize.height) / 2) withAttributes:attributes];
+  NSRect label = [self backingAlignedRect:NSMakeRect(x, center - labelSize_.height / 2, labelSize_.width, labelSize_.height)
+      options:NSAlignAllEdgesNearest];
+  [label_ drawAtPoint:label.origin withAttributes:attributes];
   if (!badgeText_.length) return;
-  NSRect badge = NSMakeRect(x + labelSize.width + style.gap, (style.height - style.badgeHeight) / 2,
-      self.badgeWidth, style.badgeHeight);
+  NSRect badge = [self backingAlignedRect:NSMakeRect(x + labelSize_.width + style.gap, center - style.badgeHeight / 2,
+      badgeWidth_, style.badgeHeight) options:NSAlignAllEdgesNearest];
   [style.badge setFill];
   [[NSBezierPath bezierPathWithRoundedRect:badge xRadius:style.badgeHeight / 2 yRadius:style.badgeHeight / 2] fill];
   NSDictionary* badgeAttributes = @{NSFontAttributeName: style.badgeFont, NSForegroundColorAttributeName: style.badgeText};
-  NSSize badgeSize = [badgeText_ sizeWithAttributes:badgeAttributes];
-  [badgeText_ drawAtPoint:NSMakePoint(NSMidX(badge) - badgeSize.width / 2, NSMidY(badge) - badgeSize.height / 2)
-      withAttributes:badgeAttributes];
+  NSRect badgeLabel = [self backingAlignedRect:NSMakeRect(NSMidX(badge) - badgeSize_.width / 2,
+      NSMidY(badge) - badgeSize_.height / 2, badgeSize_.width, badgeSize_.height) options:NSAlignAllEdgesNearest];
+  [badgeText_ drawAtPoint:badgeLabel.origin withAttributes:badgeAttributes];
 }
 
 - (void)drawFocusRingInView:(NSView*)view {
-  if (!style_ || !keyboardFocus_ || self.window.firstResponder != self || style_->focusWidth == 0) return;
+  if (!style_ || self.window.firstResponder != self || style_->focusWidth == 0) return;
   CGFloat outset = style_->focusOffset + style_->focusWidth / 2;
   NSRect rect = NSInsetRect([self convertRect:self.bounds toView:view], -outset, -outset);
   NSBezierPath* path = [NSBezierPath bezierPathWithRoundedRect:rect
@@ -295,46 +318,65 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   tracking_ = [[NSTrackingArea alloc] initWithRect:NSZeroRect
       options:NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect owner:self userInfo:nil];
   [self addTrackingArea:tracking_];
-  hovered_ = self.window && NSPointInRect([self convertPoint:self.window.mouseLocationOutsideOfEventStream fromView:nil], self.bounds);
+  [self setHovered:NSPointInRect([self convertPoint:self.window.mouseLocationOutsideOfEventStream fromView:nil], self.visibleRect)];
+}
+
+- (void)setHovered:(BOOL)hovered {
+  hovered = hovered && self.window.isVisible && (self.window.occlusionState & NSWindowOcclusionStateVisible)
+      && !self.hiddenOrHasHiddenAncestor && !NSIsEmptyRect(self.visibleRect);
+  if (hovered_ == hovered) return;
+  hovered_ = hovered;
   self.needsDisplay = YES;
 }
 
-- (void)mouseEntered:(NSEvent*)event { hovered_ = YES; self.needsDisplay = YES; }
-- (void)mouseExited:(NSEvent*)event { hovered_ = NO; self.needsDisplay = YES; }
+- (void)clearHover { [self setHovered:NO]; }
+- (void)mouseEntered:(NSEvent* __unused)event { [self setHovered:YES]; }
+- (void)mouseExited:(NSEvent* __unused)event { [self clearHover]; }
 
-- (void)mouseDown:(NSEvent*)event {
-  keyboardFocus_ = NO;
-  self.superview.needsDisplay = YES;
-  [super mouseDown:event];
+- (void)viewDidHide {
+  [super viewDidHide];
+  [self clearHover];
 }
 
-- (void)keyDown:(NSEvent*)event {
-  keyboardFocus_ = YES;
-  self.superview.needsDisplay = YES;
-  [super keyDown:event];
+- (void)viewDidUnhide {
+  [super viewDidUnhide];
+  [self updateTrackingAreas];
+}
+
+- (void)viewDidMoveToWindow {
+  [super viewDidMoveToWindow];
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  [center removeObserver:self name:NSWindowDidChangeOcclusionStateNotification object:nil];
+  if (self.window) [center addObserver:self selector:@selector(windowVisibilityChanged:)
+      name:NSWindowDidChangeOcclusionStateNotification object:self.window];
+  [self clearHover];
+}
+
+- (void)windowVisibilityChanged:(NSNotification* __unused)notification {
+  if (self.window.occlusionState & NSWindowOcclusionStateVisible) [self updateTrackingAreas];
+  else [self clearHover];
 }
 
 - (BOOL)becomeFirstResponder {
   if (![super becomeFirstResponder]) return NO;
-  keyboardFocus_ = NSApp.currentEvent.type == NSEventTypeKeyDown || NSApp.currentEvent.type == NSEventTypeKeyUp
-      || self.window.keyViewSelectionDirection != NSDirectSelection;
   self.superview.needsDisplay = YES;
   return YES;
 }
 
 - (BOOL)resignFirstResponder {
   if (![super resignFirstResponder]) return NO;
-  keyboardFocus_ = NO;
   self.superview.needsDisplay = YES;
   return YES;
 }
+
+- (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
 @end
 
 // Draw the outline in the group so it is not clipped to a button's hit area.
 @interface AgentrixNavGroup : NSView
 @end
 @implementation AgentrixNavGroup
-- (void)drawRect:(NSRect)dirtyRect {
+- (void)drawRect:(NSRect __unused)dirtyRect {
   for (AgentrixNavButton* button in self.subviews) [button drawFocusRingInView:self];
 }
 @end
@@ -345,6 +387,7 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   AgentrixNavButton* workspace_;
   BOOL layingOut_;
   BOOL observingTitle_;
+  CGFloat baseHeight_;
   std::shared_ptr<ClickState> clicks_;
 }
 - (instancetype)initWithWindow:(NSWindow*)window clicks:(std::shared_ptr<ClickState>)clicks;
@@ -363,8 +406,8 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   clicks_ = std::move(clicks);
   self.layoutAttribute = NSLayoutAttributeLeft;
   NSButton* light = [window standardWindowButton:NSWindowCloseButton];
-  CGFloat height = light ? NSHeight(light.superview.bounds) : 40;
-  self.view = [[AgentrixNavGroup alloc] initWithFrame:NSMakeRect(0, 0, 200, height)];
+  baseHeight_ = light ? NSHeight(light.superview.bounds) : 40;
+  self.view = [[AgentrixNavGroup alloc] initWithFrame:NSMakeRect(0, 0, 200, baseHeight_)];
   decisions_ = [self buttonWithID:@"decisions"];
   workspace_ = [self buttonWithID:@"workspace"];
   [self.view addSubview:decisions_];
@@ -403,7 +446,13 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   [self windowLayoutChanged:nil];
 }
 
-- (void)windowLayoutChanged:(NSNotification*)notification {
+- (void)viewDidDisappear {
+  [super viewDidDisappear];
+  [decisions_ clearHover];
+  [workspace_ clearHover];
+}
+
+- (void)windowLayoutChanged:(NSNotification* __unused)notification {
   [self alignButtons];
   // Electron also reapplies trafficLightPosition after setting the title.
   __weak AgentrixTitlebar* weakSelf = self;
@@ -420,7 +469,12 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   NSView* view = self.view;
   if (layingOut_ || !host || !view.window) return;
   layingOut_ = YES;
-  CGFloat outset = decisions_.focusOutset;
+  CGFloat pixels = view.window.backingScaleFactor;
+  CGFloat buttonHeight = std::ceil(decisions_.contentSize.height * pixels) / pixels;
+  CGFloat outset = std::ceil(decisions_.focusOutset * pixels) / pixels;
+  CGFloat height = std::ceil(std::max(baseHeight_, buttonHeight + 2 * outset) * pixels) / pixels;
+  BOOL changed = NSHeight(view.frame) != height;
+  if (changed) [view setFrameSize:NSMakeSize(NSWidth(view.frame), height)];
   CGFloat start = outset;
   CGFloat center = NSMidY(view.bounds);
   NSButton* light = [host standardWindowButton:NSWindowZoomButton];
@@ -430,18 +484,23 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
     start = std::max(outset, NSMaxX(frame) + kTrafficLightGap);
     center = NSMidY(frame);
   }
+  CGFloat half = buttonHeight / 2 + outset;
+  center = std::clamp(center + kVerticalOffset, half, height - half);
   CGFloat x = start;
   for (AgentrixNavButton* button in @[decisions_, workspace_]) {
     NSSize size = button.contentSize;
-    button.frame = NSMakeRect(x, center - size.height / 2 + kVerticalOffset, size.width, size.height);
-    x += size.width + button.itemGap;
+    CGFloat width = std::ceil(size.width * pixels) / pixels;
+    NSRect frame = [view backingAlignedRect:NSMakeRect(x, center - buttonHeight / 2, width, buttonHeight)
+        options:NSAlignAllEdgesNearest];
+    if (!NSEqualRects(button.frame, frame)) { button.frame = frame; changed = YES; }
+    x = NSMaxX(frame) + button.itemGap;
   }
-  CGFloat width = x - workspace_.itemGap + outset;
-  CGFloat height = std::max(NSHeight(view.frame), decisions_.contentSize.height + 2 * outset);
-  if (std::abs(NSWidth(view.frame) - width) > 0.5 || std::abs(NSHeight(view.frame) - height) > 0.5) {
+  CGFloat width = std::ceil((x - workspace_.itemGap + outset) * pixels) / pixels;
+  if (NSWidth(view.frame) != width) {
     [view setFrameSize:NSMakeSize(width, height)];
+    changed = YES;
   }
-  view.needsDisplay = YES;
+  if (changed) view.needsDisplay = YES;
   layingOut_ = NO;
 }
 
@@ -468,7 +527,7 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   if (napi_call_threadsafe_function(clicks_->callback, click, napi_tsfn_nonblocking) != napi_ok) delete click;
 }
 
-- (void)windowWillClose:(NSNotification*)notification { [self detach]; }
+- (void)windowWillClose:(NSNotification* __unused)notification { [self detach]; }
 
 - (void)stopObserving {
   if (observingTitle_) [host_ removeObserver:self forKeyPath:@"title" context:&kTitleObservation];
@@ -621,20 +680,36 @@ Napi::Value Update(const Napi::CallbackInfo& info) {
     return env.Undefined();
   }
   AgentrixTitlebar* controller = env.GetInstanceData<NativeState>()->controller;
-  if (!controller) return env.Undefined();
+  Napi::Value styleValue = info[0].As<Napi::Object>().Get("style");
   @try {
     // An incomplete style must not replace the last working appearance or detach navigation.
-    auto style = ReadStyle(info[0].As<Napi::Object>().Get("style"));
-    if (style) [controller applyStyle:style];
-    for (int i = 0; i < 2; i++) {
-      const Item& item = parsed[i];
-      [controller setItem:i == 0 ? @"decisions" : @"workspace"
-          label:[NSString stringWithUTF8String:item.label.c_str()]
-          toolTip:[NSString stringWithUTF8String:item.toolTip.c_str()]
-          accessibilityLabel:[NSString stringWithUTF8String:item.accessibilityLabel.c_str()]
-          count:item.count selected:item.selected];
+    auto style = ReadStyle(styleValue);
+    if (controller) {
+      if (style) [controller applyStyle:style];
+      for (int i = 0; i < 2; i++) {
+        const Item& item = parsed[i];
+        [controller setItem:i == 0 ? @"decisions" : @"workspace"
+            label:[NSString stringWithUTF8String:item.label.c_str()]
+            toolTip:[NSString stringWithUTF8String:item.toolTip.c_str()]
+            accessibilityLabel:[NSString stringWithUTF8String:item.accessibilityLabel.c_str()]
+            count:item.count selected:item.selected];
+      }
+      [controller alignButtons];
     }
-    [controller alignButtons];
+    // Report the decoded style even without a window, for headless font/scale verification.
+    if (style) {
+      Napi::Object result = Napi::Object::New(env);
+      result.Set("fontFamily", style->font.familyName.UTF8String);
+      result.Set("fontName", style->font.fontName.UTF8String);
+      result.Set("fontSize", style->font.pointSize);
+      result.Set("badgeFontName", style->badgeFont.fontName.UTF8String);
+      result.Set("badgeFontSize", style->badgeFont.pointSize);
+      result.Set("height", style->height);
+      result.Set("focusOutset", style->focusWidth + style->focusOffset);
+      result.Set("iconSize", style->icons[0][0].size.width);
+      return result;
+    }
+    if (!styleValue.IsUndefined()) return Napi::Boolean::New(env, false);
   } @catch (NSException* exception) {
     Napi::Error::New(env, exception.reason.UTF8String).ThrowAsJavaScriptException();
   }
