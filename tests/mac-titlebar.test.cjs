@@ -85,7 +85,7 @@ test('language changes refresh the latest count and selected page through the re
   const f = fixture();
   f.controller.update({ view: 'decisions', decisions: 3 });
   const store = { settings: { language: 'en' }, updateSettings(patch) { Object.assign(this.settings, patch); } };
-  const context = vm.createContext({ store, app: { macTitlebar: f.controller }, process: { platform: 'darwin' },
+  const context = vm.createContext({ store, macTitlebar: f.controller, process: { platform: 'darwin' },
     trayMenu() {}, rebuildMacMenu() {} });
   vm.runInContext(mainFunction('updateStoreSettings').getText(main), context);
   f.setLanguage('zh');
@@ -152,7 +152,7 @@ test('titlebar state uses the main-frame IPC guard and is registered only on mac
   for (const platform of ['darwin', 'win32', 'linux']) {
     const f = fixture(), ipcMain = new EventEmitter(), errors = [];
     const { listen } = createIpcAdapter({ ipcMain, getWindow: () => f.window, report: error => errors.push(error) });
-    vm.runInNewContext(statement.getText(main), { process: { platform }, app: { macTitlebar: f.controller }, listen });
+    vm.runInNewContext(statement.getText(main), { process: { platform }, macTitlebar: f.controller, listen });
     assert.equal(ipcMain.listenerCount('titlebar:state'), platform === 'darwin' ? 1 : 0);
     const event = { sender: f.window.webContents, senderFrame: f.window.webContents.mainFrame };
     ipcMain.emit('titlebar:state', { ...event, senderFrame: { url: 'agentrix://app/preview' } }, { view: 'decisions', decisions: 5 });
@@ -184,11 +184,11 @@ test('preload sends state and exposes an unsubscribable navigation listener with
 test('workspace availability follows the controller, including addon failure and window close', () => {
   const declaration = mainFunction('publicState').body.statements[0].expression.properties.find(node => node.name?.getText(main) === 'nativeTitlebar');
   assert.ok(declaration);
-  const f = fixture(), app = { macTitlebar: f.controller };
-  assert.equal(vm.runInNewContext(declaration.initializer.getText(main), { app }), true);
+  const f = fixture(), macTitlebar = f.controller;
+  assert.equal(vm.runInNewContext(declaration.initializer.getText(main), { macTitlebar }), true);
   f.window.emit('closed');
-  assert.equal(vm.runInNewContext(declaration.initializer.getText(main), { app }), false);
-  assert.equal(vm.runInNewContext(declaration.initializer.getText(main), { app: {} }), false);
+  assert.equal(vm.runInNewContext(declaration.initializer.getText(main), { macTitlebar }), false);
+  assert.equal(vm.runInNewContext(declaration.initializer.getText(main), { macTitlebar: null }), false);
 });
 
 test('packaging includes and unpacks only the macOS binary, keeping node-pty unpacking', () => {

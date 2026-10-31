@@ -195,7 +195,7 @@ test('closing a window releases all global display listeners and the pending deb
 test('settings IPC applies sanitized zoom before its single workspace broadcast and exposes the effective percentage', t => {
   const { state, window, controller, broadcast } = fixture(t);
   const store = { projects: [], get settings() { return state.settings; }, updateSettings: patch => { state.settings = cleanSettings({ ...state.settings, ...patch }); } };
-  const context = vm.createContext({ store, window, windowZoom: controller, desktopGlassActive: false, desktopGlassWindow: false, desktopGlassBackend: null,
+  const context = vm.createContext({ store, window, windowZoom: controller, macTitlebar: null, desktopGlassActive: false, desktopGlassWindow: false, desktopGlassBackend: null,
     process: { platform: 'win32', env: {} }, app: { getVersion: () => '1.0.0' } });
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   vm.runInContext(main.slice(main.indexOf('function updateStoreSettings('), main.indexOf('const sessions =')), context);

@@ -90,7 +90,7 @@ function mainFixture(platform = 'darwin') {
     store, t: (text, values) => translate(store.settings.language, text, values), app: { name: 'Agentrix' },
     process: { platform }, Menu: { buildFromTemplate: items => items, setApplicationMenu: menu => menus.push(menu) },
     send: (...args) => messages.push(args),
-    window: { close: () => calls.close++ }, tray: undefined, desktopGlassActive: false, windowZoom: undefined,
+    window: { close: () => calls.close++ }, tray: undefined, desktopGlassActive: false, windowZoom: undefined, macTitlebar: null,
     updateManager: { getState: () => update }, updatesIpc: { onStateChange: () => calls.updates++ },
     showWindow: () => calls.show++, requestQuit: async () => { calls.quit++; }, report: assert.fail,
     trayMenu: () => calls.tray++,
