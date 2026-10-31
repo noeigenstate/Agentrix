@@ -1,6 +1,6 @@
 const DEFAULT_SHORTCUTS = require('../shortcuts.json');
 
-function buildMacMenuTemplate({ appName, t, shortcuts, updateReady = false, command, quit, close }) {
+function buildMacMenuTemplate({ appName, t, shortcuts, updateReady = false, command, quit, close, openDashboard }) {
   const bindings = { ...DEFAULT_SHORTCUTS, ...shortcuts };
   const action = (name, label) => ({
     label, click: () => command(name),
@@ -12,6 +12,7 @@ function buildMacMenuTemplate({ appName, t, shortcuts, updateReady = false, comm
       { role: 'about', label: t('关于 Agentrix') }, { type: 'separator' },
       action('addProject', t('新建项目')),
       action('settings', t('设置…')),
+      { label: t('数据看板'), click: openDashboard },
       ...(updateReady ? [action('installUpdate', t('重启并安装更新'))] : []),
       { type: 'separator' },
       { role: 'hide', label: t('隐藏 Agentrix') }, { role: 'hideOthers', label: t('隐藏其他') }, { role: 'unhide', label: t('全部显示') }, { type: 'separator' },

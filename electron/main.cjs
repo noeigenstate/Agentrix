@@ -279,6 +279,8 @@ function macMenu() {
       send('menu:command', command);
     },
     quit: () => { showWindow(); requestQuit().catch(report); }, close: () => window?.close(),
+    // A separate window: no need to show the main one. Errors reach the main window like the other main-process failures.
+    openDashboard: () => dashboardWindow?.open().catch(report),
   }));
 }
 
