@@ -39,6 +39,8 @@ const run = (project, days, index) => ({ v: 1, at: ago(days), id: `run-${project
   activeMs: 480000 + index * 20000, outputTokens: 40000 + index * 1000, totalOutputTokens: 40000 + index * 1000, inputTokens: 90000, cachedTokens: 60000, reportedCostUsd: null,
   reason: 'exit', exitCode: 0, outOfScope: index === 2 ? 1 : 0, verdict: 'ok' });
 const grade = (project, days) => ({ v: 1, at: ago(days), projectId: project.id, project: project.name, terminalId: 't1', agent: 'claude', model: 'claude-opus-5-5', effort: 'high', sessionId: null, outcome: days > 10 ? 'sent-back' : 'passed', submission: 1 });
+// A model whose id is far wider than its button: the label must be cut with an ellipsis, not wrapped, and the button must still name it in full.
+const LONG_MODEL = 'vendor-experimental-reasoning-model-2026-10-preview-with-a-very-long-identifier';
 const quota = (days, percent) => ({ v: 1, at: ago(days), provider: 'codex', scope: 'fixture-scope', windows: [{ minutes: 300, percent: percent / 2, resetsAt: null }, { minutes: 10080, percent, resetsAt: null }] });
 
 const meeting = (name, days, model) => [
@@ -65,55 +67,69 @@ async function seed(output, theme) {
   }
   const runs = RUNS.flatMap(([id, ages]) => ages.map((days, index) => run(PROJECTS.find(project => project.id === id), days, index)));
   await fs.writeFile(path.join(profile, 'dashboard', 'runs.jsonl'), jsonl(runs));
-  await fs.writeFile(path.join(profile, 'dashboard', 'grades.jsonl'), jsonl([grade(PROJECTS[0], 2), grade(PROJECTS[0], 20), grade(PROJECTS[1], 4)]));
+  await fs.writeFile(path.join(profile, 'dashboard', 'grades.jsonl'), jsonl([grade(PROJECTS[0], 2), grade(PROJECTS[0], 20), grade(PROJECTS[1], 4), { ...grade(PROJECTS[0], 3), model: LONG_MODEL }]));
   await fs.writeFile(path.join(profile, 'dashboard', 'quota.jsonl'), jsonl([quota(5, 40), quota(0.1, 68)]));
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { language: 'zh', theme, terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false } }));
   return profile;
 }
 
 // ---- the narrow-layout probes, run inside the page -----------------------------------------------------------------------------
-// Every model button: its height, whether its label sits on one line and whether the label is cut.
+// Every model button: its height, whether its label sits on one line, whether the label is cut and the name a screen reader gets.
 const measureModelButtons = () => [...document.querySelectorAll('.model-toggle')].map(button => {
   const label = button.querySelector('.model-name'), style = getComputedStyle(label);
-  return { height: Math.round(button.getBoundingClientRect().height), lines: Math.round(label.getBoundingClientRect().height / parseFloat(style.lineHeight)), nowrap: style.whiteSpace === 'nowrap', cut: label.scrollWidth > label.clientWidth + 1 };
+  return { name: button.getAttribute('aria-label'), text: label.textContent, height: Math.round(button.getBoundingClientRect().height), lines: Math.round(label.getBoundingClientRect().height / parseFloat(style.lineHeight)), nowrap: style.whiteSpace === 'nowrap', cut: label.scrollWidth > label.clientWidth + 1 };
 });
 
-// The text of a table's other cells that its pinned last column sits over, at each region's first and last scroll position.
-async function measureObscured(page) {
-  const found = [];
-  for (const region of await page.$$('.scroll')) for (const at of ['start', 'end']) {
-    found.push(...await region.evaluate(async (node, at) => {
-      node.scrollLeft = at === 'start' ? 0 : node.scrollWidth;
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+// For each scroll region at its first and last scroll position: the text of every cell that a pinned (sticky) cell of the same row sits over. `shoot(index)` is called
+// at the last position, where the pinned column is over the cells that scrolled under it.
+async function measureObscured(page, shoot) {
+  const found = [], regions = await page.$$('.scroll');
+  const settle = (region, at) => region.evaluate(async (node, at) => {
+    node.scrollLeft = at === 'start' ? 0 : node.scrollWidth;
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  }, at);
+  for (const [index, region] of regions.entries()) for (const at of ['start', 'end']) {
+    await settle(region, at);
+    found.push(...await region.evaluate((node, at) => {
       const view = node.getBoundingClientRect(), range = document.createRange(), hidden = [];
       for (const row of node.querySelectorAll('tr')) {
-        const cells = [...row.children], last = cells.at(-1);
-        if (cells.length < 2 || getComputedStyle(last).position !== 'sticky') continue;
-        const pinned = last.getBoundingClientRect();
-        for (const cell of cells.slice(0, -1)) {
+        const cells = [...row.children], pinned = cells.filter(cell => getComputedStyle(cell).position === 'sticky');
+        for (const pin of pinned) for (const cell of cells.filter(other => !pinned.includes(other))) {
+          const over = pin.getBoundingClientRect();
           range.selectNodeContents(cell);
-          const text = range.getBoundingClientRect(), width = Math.min(text.right, view.right, pinned.right) - Math.max(text.left, view.left, pinned.left);
-          if (cell.textContent.trim() && width > 0.5 && Math.min(text.bottom, pinned.bottom) - Math.max(text.top, pinned.top) > 0.5) hidden.push({ at, text: cell.textContent.trim().slice(0, 24), overlap: Math.round(width) });
+          const text = range.getBoundingClientRect(), width = Math.min(text.right, view.right, over.right) - Math.max(text.left, view.left, over.left);
+          if (cell.textContent.trim() && width > 0.5 && Math.min(text.bottom, over.bottom) - Math.max(text.top, over.top) > 0.5) hidden.push({ region: node.getAttribute('aria-label').slice(0, 8), at, text: cell.textContent.trim().slice(0, 24), overlap: Math.round(width) });
         }
       }
-      node.scrollLeft = 0;
       return hidden;
     }, at));
+    if (at === 'end' && shoot) await shoot(index);
+    await settle(region, 'start');
   }
   return found;
 }
 
-// A disabled Select (the dashboard has none of its own) built from the shared classes: the trigger and a menu with a disabled item.
+// The text in the selected (expanded) model row with the colour it is drawn in and the surface under it.
+const measureSelectedRow = () => {
+  const surface = node => { for (let at = node; at; at = at.parentElement) { const color = getComputedStyle(at).backgroundColor; if (!/, 0\)$|transparent/.test(color)) return color; } return 'rgb(0, 0, 0)'; };
+  const row = document.querySelector('tr[data-expanded="true"]');
+  return [...row.querySelectorAll('*')].filter(node => [...node.childNodes].some(child => child.nodeType === 3 && child.textContent.trim()))
+    .map(node => ({ text: node.textContent.trim().slice(0, 24), size: getComputedStyle(node).fontSize, color: getComputedStyle(node).color, surface: surface(node) }));
+};
+
+// The shared Select's states (the dashboard has no disabled Select of its own) built from its classes: a disabled trigger and a menu with an enabled, an active,
+// a selected, a disabled, a selected-and-disabled and an active-and-disabled item.
+const OPTION_STATES = { enabled: '', active: 'data-active="true"', selected: 'aria-selected="true"', disabled: 'aria-disabled="true"', 'selected-disabled': 'aria-selected="true" aria-disabled="true"', 'active-disabled': 'data-active="true" aria-disabled="true"' };
 const SELECT_PROBE = `<div id="select-probe" style="position:fixed;z-index:900;top:96px;left:16px;display:flex;flex-direction:column;gap:8px;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--bg-app)">
-  <button type="button" class="select-trigger" disabled style="width:200px"><span class="select-value">不可用的下拉</span></button>
-  <ul class="select-menu" role="listbox" style="position:static;width:200px"><li role="option" aria-selected="true" data-active="true"><span class="select-option-label">可选项</span></li><li role="option" aria-selected="false" aria-disabled="true"><span class="select-option-label">不可用的选项</span></li></ul></div>`;
+  <button type="button" class="select-trigger" disabled style="width:240px"><span class="select-value">不可用的下拉</span></button>
+  <ul class="select-menu" role="listbox" style="position:static;width:240px">${Object.entries(OPTION_STATES).map(([state, attributes]) => `<li role="option" data-state="${state}" ${attributes}><span class="select-option-label">${state}</span><span class="select-option-mark"></span></li>`).join('')}</ul></div>`;
 const measureSelectProbe = markup => {
   document.body.insertAdjacentHTML('beforeend', markup);
   // The colour a node's text is drawn on: the first ancestor background that is not transparent.
   const surface = node => { for (let at = node; at; at = at.parentElement) { const color = getComputedStyle(at).backgroundColor; if (!/, 0\)$|transparent/.test(color)) return color; } return 'rgb(0, 0, 0)'; };
-  const read = node => ({ color: getComputedStyle(node).color, surface: surface(node), opacity: getComputedStyle(node).opacity, cursor: getComputedStyle(node).cursor });
+  const read = node => ({ color: getComputedStyle(node).color, surface: surface(node), opacity: getComputedStyle(node).opacity, cursor: getComputedStyle(node).cursor, weight: getComputedStyle(node).fontWeight });
   const probe = document.getElementById('select-probe');
-  return { trigger: read(probe.querySelector('.select-trigger')), option: read(probe.querySelector('[aria-disabled="true"]')), enabled: read(probe.querySelector('[aria-selected="true"]')) };
+  return { trigger: read(probe.querySelector('.select-trigger')), options: Object.fromEntries([...probe.querySelectorAll('li')].map(node => [node.dataset.state, read(node)])) };
 };
 
 // WCAG contrast of two computed rgb() colours.
@@ -235,10 +251,19 @@ async function checkTheme(theme, output, results) {
         if (name === 'models') { assert.equal(layout.wide, width > 1000); assert.equal(layout.stacked, width <= 1000); }
         // A control's text never wraps, and no text sits under a pinned last column at either end of the scroll.
         const buttons = name === 'models' ? await dash.evaluate(measureModelButtons) : [];
-        assert.ok(name !== 'models' || buttons.length >= 2, 'the model table lists its buttons');
-        assert.ok(buttons.every(button => button.height <= 32 && button.lines === 1 && button.nowrap && !button.cut), `model buttons at ${width}×${height}: ${JSON.stringify(buttons)}`);
-        const obscured = await measureObscured(dash);
+        assert.ok(name !== 'models' || buttons.length >= 4, 'the model table lists its buttons');
+        // A label is cut only when it is the long id, never wrapped; the button names its model in full either way.
+        assert.ok(buttons.every(button => button.height <= 32 && button.lines === 1 && button.nowrap && button.name === button.text && button.cut === (button.name === LONG_MODEL)), `model buttons at ${width}×${height}: ${JSON.stringify(buttons)}`);
+        assert.ok(name !== 'models' || buttons.some(button => button.name === LONG_MODEL && button.cut), 'the long model id is cut with an ellipsis');
+        // The picture of each overflowing table at its end: its first column is pinned there, over the cells that scrolled under it.
+        const obscured = await measureObscured(dash, width === 820 ? index => shot(dash, `${theme}-${width}x${height}-${name}-scroll${index}-end`) : undefined);
         assert.deepEqual(obscured, [], `text under a pinned column at ${width}×${height} on ${name}`);
+        if (name === 'models') {
+          const selected = await dash.evaluate(measureSelectedRow), low = selected.map(({ text, color, surface }) => ({ text, ratio: contrast(color, surface) })).filter(({ ratio }) => ratio < 4.5);
+          assert.ok(selected.length >= 4, 'the selected row has its text measured');
+          assert.deepEqual(low, [], `text in the selected row under 4.5:1 at ${width}×${height} on ${theme}`);
+          results.push({ theme, width, height, selectedRow: selected.map(({ text, color, surface }) => ({ text, ratio: +contrast(color, surface).toFixed(2) })) });
+        }
         await shot(dash, `${theme}-${width}x${height}-${name}`); results.push({ theme, width, height, page: name, ...layout, buttons, obscured: obscured.length });
         if (name === 'models') {
           await tasks.scrollIntoViewIfNeeded();
@@ -247,17 +272,20 @@ async function checkTheme(theme, output, results) {
       }
     }
 
-    // The shared Select's disabled states keep their text readable (4.5:1 on their own surface) without fading.
+    // The shared Select's four states, and the disabled ones in combination, keep their text readable (4.5:1 on their own surface) without fading.
     for (const [width, height] of [[900, 820], [820, 600]]) {
       await resize(width, height);
       const probe = await dash.evaluate(measureSelectProbe, SELECT_PROBE);
       await shot(dash, `${theme}-${width}x${height}-select-disabled`);
       await dash.evaluate(() => document.getElementById('select-probe').remove());
-      const ratios = { trigger: contrast(probe.trigger.color, probe.trigger.surface), option: contrast(probe.option.color, probe.option.surface), enabled: contrast(probe.enabled.color, probe.enabled.surface) };
-      assert.ok(ratios.trigger >= 4.5 && ratios.option >= 4.5, `disabled Select contrast ${JSON.stringify(ratios)} on ${theme}`);
-      assert.ok(probe.trigger.opacity === '1' && probe.option.opacity === '1' && probe.trigger.cursor === 'not-allowed' && probe.option.cursor === 'not-allowed', JSON.stringify(probe));
-      assert.notEqual(probe.option.color, probe.enabled.color, 'a disabled option reads differently from an enabled one');
-      results.push({ theme, width, height, selectContrast: ratios });
+      const ratios = { trigger: contrast(probe.trigger.color, probe.trigger.surface), ...Object.fromEntries(Object.entries(probe.options).map(([state, read]) => [state, contrast(read.color, read.surface)])) };
+      const low = Object.entries(ratios).filter(([, ratio]) => ratio < 4.5);
+      assert.deepEqual(low, [], `Select text under 4.5:1 on ${theme}: ${JSON.stringify(ratios)}`);
+      const disabled = [probe.trigger, probe.options.disabled, probe.options['selected-disabled'], probe.options['active-disabled']];
+      assert.ok(disabled.every(read => read.opacity === '1' && read.cursor === 'not-allowed'), JSON.stringify(probe));
+      assert.ok(probe.options.disabled.color !== probe.options.enabled.color && probe.options['selected-disabled'].color !== probe.options.selected.color, 'a disabled option reads differently from an enabled one');
+      assert.equal(probe.options['selected-disabled'].weight, probe.options.selected.weight, 'a selected disabled option keeps the selected weight');
+      results.push({ theme, width, height, selectContrast: Object.fromEntries(Object.entries(ratios).map(([state, ratio]) => [state, +ratio.toFixed(2)])) });
     }
 
     // The window buttons close the dashboard only.

@@ -88,6 +88,8 @@ table.incident { min-width: 820px; }
 .model-name { min-width: 0; max-width: 240px; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .model-toggle[aria-expanded="true"] .model-caret { transform: rotate(90deg); }
 .sticky tr[data-expanded="true"] { background: var(--bg-selected); }
+/* The selected fill is darker than the card, so the helper text on it takes the primary colour: the secondary tokens drop under 4.5:1 there in light (4.13). */
+.sticky tr[data-expanded="true"] :is(.muted, .cost-note) { color: var(--text-1); }
 .model-tasks { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--divider); }
 .model-tasks-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
 .model-tasks h3 { margin: 0; font-size: 14px; font-weight: 600; }

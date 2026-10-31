@@ -26,7 +26,7 @@ export function ModelTable({ summary }: { summary: DashboardSummary }) {
           {models.map(row => {
             const own = modelWeights(weights, row.model);
             return <tr key={row.model} data-expanded={expanded === row.model}>
-              <td><button type="button" className="button who model-toggle" title={modelLabel(row.model)} aria-expanded={expanded === row.model}
+              <td><button type="button" className="button who model-toggle" title={modelLabel(row.model)} aria-label={modelLabel(row.model)} aria-expanded={expanded === row.model}
                 aria-controls={expanded === row.model ? 'dashboard-model-tasks' : undefined}
                 onClick={event => { opener.current = event.currentTarget; setOpened(expanded === row.model ? null : row.model); }}>
                 <CaretRight className="model-caret" size={12} aria-hidden="true" />
