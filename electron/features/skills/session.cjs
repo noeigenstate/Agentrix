@@ -10,7 +10,8 @@ const MAX_MANIFEST = 2 * 1024 * 1024;
 const RECEIPT = 32;
 
 function deliveryMarker(delivery) {
-  return !delivery.remote && delivery.fingerprint
+  if (delivery.remote) return 'Agentrix skill delivery: remote. ';
+  return delivery.fingerprint
     ? `Agentrix skill delivery: ${delivery.fingerprint}:${Buffer.from(delivery.sessionManifest || delivery.manifest).toString('base64url')}. ` : '';
 }
 
@@ -20,7 +21,7 @@ function readDelivery(note) {
   const manifest = Buffer.from(match[2], 'base64url').toString('utf8');
   if (!path.isAbsolute(manifest) || fs.lstatSync(manifest).isSymbolicLink() || fs.statSync(manifest).size > MAX_MANIFEST) return null;
   const instructions = fs.readFileSync(manifest, 'utf8');
-  return { manifest, fingerprint: match[1], instructions, context: `${note.slice(0, match.index)} ${instructions}` };
+  return { manifest, fingerprint: match[1], instructions, context: `Agentrix skill instructions:\n${instructions}` };
 }
 
 function receiptPath(delivery, sessionId) {

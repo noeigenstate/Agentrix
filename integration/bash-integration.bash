@@ -128,7 +128,12 @@ claude() {
   local settings="{\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":$start,\"timeout\":10}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":$stop,\"timeout\":10}]}],\"Notification\":[{\"hooks\":[{\"type\":\"command\",\"command\":$notify,\"timeout\":10}]}],\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":$session,\"timeout\":10}]}]}}"
   __pg_send codex-started 0 claude "$(__pg_command "$@")"
   # What the reading view can show; a later --append-system-prompt of the user's wins.
-  local -a note=(--append-system-prompt 'Agentrix delivers this session instructions through its SessionStart hook.')
+  local -a note=()
+  local current_note=$(__pg_reading_note)
+  if [[ $current_note == *" Agentrix skill delivery: "* ]]; then
+    current_note="${current_note%%" Agentrix skill delivery: "*} Agentrix delivers skill instructions through its SessionStart hook."
+  fi
+  [[ -n $current_note ]] && note=(--append-system-prompt "$current_note")
   AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" --settings "$settings" "${note[@]}" "$@"
   local code=$?
   __pg_send codex-exited $code claude

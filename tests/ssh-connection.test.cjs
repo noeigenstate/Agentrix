@@ -154,8 +154,12 @@ test('Linux SSH Claude wrapper forwards hooks and reads compacted transcripts ov
 import json,os,subprocess,sys
 args=sys.argv[1:]
 if "--version" in args: sys.exit(7)
-assert args[args.index("--append-system-prompt")+1]=="Agentrix system skills are delivered by its SessionStart hook."
-assert "SSH reading note" not in args
+assert args[2]=="--append-system-prompt"
+assert args[3].startswith("You run inside Agentrix. SSH reading note.")
+assert args[3].endswith("Agentrix delivers skill instructions through its SessionStart hook.")
+assert "SSH skill instructions." not in args[3]
+assert "Agentrix skill delivery:" not in args[3]
+assert args[4:]==["--resume","fixture"]
 settings=json.loads(args[args.index("--settings")+1])
 folder=os.path.join(os.path.expanduser("~/.claude"),"projects","fixture")
 os.makedirs(folder,exist_ok=True)
@@ -166,7 +170,7 @@ def hook(name,**values):
     payload=dict(session_id="session",transcript_path=filename,**values)
     command=settings["hooks"][name][0]["hooks"][0]["command"]
     result=subprocess.run(command,shell=True,input=json.dumps(payload).encode(),stdout=subprocess.PIPE,check=True)
-    if name=="SessionStart": assert json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]=="SSH reading note"
+    if name=="SessionStart": assert json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]=="Agentrix skill instructions:\\nSSH skill instructions."
 write({"type":"user","uuid":"prompt","message":{"content":"Remote work"}})
 write({"type":"assistant","uuid":"reply","effort":"high","message":{"model":"claude-test","usage":{"speed":"fast"},"content":[{"type":"tool_use","id":"read","name":"Read","input":{"file_path":"/srv/project/a.py"}}]}})
 hook("SessionStart",source="startup")
@@ -177,14 +181,16 @@ write({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"
 hook("Stop")
 `;
   await fs.writeFile(path.join(fixture.home, 'bin', 'claude'), stub, { mode: 0o755 });
-  const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: 'test-claude-key', readingNote: 'SSH reading note', onEvent: event => events.push(event) });
+  const skills = { files: [], instructions: 'SSH skill instructions.', key: 'a'.repeat(64) };
+  const readingNote = 'You run inside Agentrix. SSH reading note. Agentrix skill delivery: remote. SSH skill instructions.';
+  const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: 'test-claude-key', readingNote, skills, onEvent: event => events.push(event) });
   t.after(async () => { connection.close(); auth.close(); await fixture.close(); });
   await connection.ready;
   await waitFor(() => events.some(event => event.type === 'shell-prompt' && event.claudeAvailable));
-  connection.write('claude\r');
+  connection.write('claude --resume fixture\r');
   await waitFor(() => events.some(event => event.type === 'codex-exited' && event.agent === 'claude'));
   const started = events.find(event => event.type === 'codex-started');
-  assert.equal(started.agent, 'claude'); assert.equal(started.command, undefined);
+  assert.equal(started.agent, 'claude'); assert.equal(started.command, '--resume');
   const hooks = events.filter(event => event.type === 'agent-activity');
   assert.deepEqual(hooks.map(event => event.state), ['session', 'working', 'attention', 'complete']);
   assert.equal(hooks[1].prompt, 'Remote work'); assert.equal(hooks[2].message, 'Permission');

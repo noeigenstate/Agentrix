@@ -55,7 +55,7 @@ function startupNote(readingNote, file, skills, delivery = null, dispatchHelper 
     + 'create or update a skill there: short, specific, and tested. Skills are committed to the repository and shared, so never write personal or private data into them: '
     + 'no names of people, email addresses, phone numbers, user names, home folder paths, host names or IP addresses, passwords, tokens or keys; write placeholders such as <home>, <user>, <host> or <secret> instead.';
   if (!delivery) return plain(note);
-  if (!delivery.remote) note += ` Current project skills manifest: ${delivery.manifest}. On resume, read it only if the skill instructions are missing from context; do not reload instructions already present.`;
+  note += ` Current project skills manifest: ${delivery.manifest}. On resume, read it only if the skill instructions are missing from context; do not reload instructions already present.`;
   const instructions = skillInstructions(delivery);
   // Large libraries travel by manifest, never as skill bodies in an environment variable/command line.
   // The manifest contains the selected always/auto list and permissions. Disclose SSH omissions in either form.

@@ -22,7 +22,7 @@ function Get-AgentrixSessionContext($hook) {
     if (-not [IO.Path]::IsPathRooted($manifest)) { return }
     $info = Get-Item -LiteralPath $manifest
     if ($info.Attributes -band [IO.FileAttributes]::ReparsePoint -or $info.Length -gt 2097152) { return }
-    $context = $note.Substring(0, $marker.Index) + ' ' + [IO.File]::ReadAllText($manifest, [Text.Encoding]::UTF8)
+    $context = "Agentrix skill instructions:`n" + [IO.File]::ReadAllText($manifest, [Text.Encoding]::UTF8)
     $parent = Join-Path ([IO.Path]::GetDirectoryName($manifest)) 'receipts'
     [void][IO.Directory]::CreateDirectory($parent)
     if ((Get-Item -LiteralPath $parent).Attributes -band [IO.FileAttributes]::ReparsePoint) { return }
