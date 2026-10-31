@@ -26,7 +26,7 @@ import { ReadingTerminalPopup } from './ReadingTerminalPopup';
 import { ReadingSignIn } from './ReadingSignIn';
 import { signInScreen } from '../agents/sign-in-screen';
 import { setChoiceVisible } from './reading-mode';
-import { isTyping, markTyping } from './typing';
+import { hasEditingFocus, isTyping, markTyping } from './typing';
 import { useStickToBottom } from './useStickToBottom';
 import { useReadingHistory } from './useReadingConversation';
 import { blocks, conversationTurns, useVisibleTail } from './useVisibleTail';
@@ -190,7 +190,7 @@ export function ReadingView(props: Parameters<typeof TerminalReadingView>[0]) {
 }
 
 function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, active = true, onShowTerminal, onError, onOpenLink }: { projectId: string; terminal: ProjectTerminal; remote?: boolean; autoFocus: boolean; active?: boolean; onShowTerminal: () => void; onError: (message: string) => void; onOpenLink: (target: string) => void }) {
-  const pathLinks = useReadingPaths(projectId, onError);
+  const pathLinks = useReadingPaths(projectId, onError), readingView = pathLinks.ref;
   const kind = (terminal.agent ?? terminal.readingHistory?.agent) === 'claude' ? 'claude' : 'codex';
   const readingSession = terminal.sessionId;
   const thread = terminal.readingHistory?.threadId;
@@ -244,7 +244,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // A notice alone (no dialog read from the screen) leaves the handoff to the terminal in reading-mode.ts running.
   const hasChoice = nativePending || screen.choice !== null || waiting !== null || sessionsOpen, choiceVisible = useRef(hasChoice);
   const mounted = useRef(true);
-  const choiceHost = useRef<HTMLDivElement>(null), restoreComposer = useRef(false), wasChoice = useRef(false), typingAtChoice = useRef(false);
+  const choiceHost = useRef<HTMLDivElement>(null), restoreComposer = useRef(false), wasChoice = useRef(false), editingAtChoice = useRef(false);
   const focusChoice = () => { restoreComposer.current = true; };
   const blurChoice = (event: FocusEvent<HTMLDivElement>) => {
     if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) restoreComposer.current = false;
@@ -288,8 +288,11 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   useEffect(() => {
     // A native request owns the reply surface and cancels any delayed terminal send.
     if (nativePending) { closePopup(false); return; }
-    // Disabling the composer can blur it before this effect: use the typing state captured during render.
-    if (dialog !== null) { if (active && !typingAtChoice.current && startDialog(terminal.id, dialog)) setTerminalPopup({ command: '' }); return; }
+    // Disabling the composer can blur it before this effect: keep its focus ownership captured during render.
+    if (dialog !== null) {
+      if (active && !editingAtChoice.current && !hasEditingFocus(readingView.current) && startDialog(terminal.id, dialog)) setTerminalPopup({ command: '' });
+      return;
+    }
     if (inputShown) { endDialog(terminal.id); return; }
     const timer = setTimeout(() => endDialog(terminal.id), DIALOG_SETTLE);
     return () => clearTimeout(timer);
@@ -312,7 +315,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // A card that comes while someone writes in the box never takes the keyboard: the next Enter would answer it.
   if (hasChoice && !wasChoice.current) {
     restoreComposer.current = document.activeElement === input.current || sessionsOpen;
-    typingAtChoice.current = isTyping(document.activeElement);
+    editingAtChoice.current = hasEditingFocus(readingView.current) || isTyping(document.activeElement);
   }
   useLayoutEffect(() => {
     setChoiceVisible(terminal.id, hasChoice || terminalPopup !== null);
@@ -320,7 +323,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
       // The popup unmounted with focus; park it beside the disabled input until the native request ends.
       restoreComposer.current = true; composer.current?.focus({ preventScroll: true });
     } else if (hasChoice && terminalPopup === null) {
-      if (restoreComposer.current && !typingAtChoice.current && (!wasChoice.current || document.activeElement === document.body)) (choiceHost.current?.firstElementChild as HTMLElement | null)?.focus();
+      if (restoreComposer.current && !editingAtChoice.current && (!wasChoice.current || document.activeElement === document.body)) (choiceHost.current?.firstElementChild as HTMLElement | null)?.focus();
     } else if (wasChoice.current) {
       if (restoreComposer.current && (document.activeElement === document.body || document.activeElement === composer.current)) input.current?.focus();
       restoreComposer.current = false;
@@ -361,7 +364,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   };
   const mentions = useMentions({ projectId, draft, input, disabled: inputBlocked || /^\/[^\s]*$/.test(draft), edit, onError });
   useEffect(() => {
-    if (!autoFocus) return;
+    if (!autoFocus || hasEditingFocus(readingView.current)) return;
     if (choiceVisible.current) { restoreComposer.current = true; (choiceHost.current?.firstElementChild as HTMLElement | null)?.focus(); }
     else if (terminalPopup === null) input.current?.focus();
   }, [terminal.id, autoFocus]);
@@ -394,12 +397,11 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // own: written in the composer here (it is cleared, with its pictures); otherwise a message sent again, which leaves
   // whatever is being written now alone and takes no pictures with it.
   const deliver = async (words: string, own: boolean, owner: number) => {
-    if (preview || nativePending) return;
+    if (inputBlocked) return;
     const attached = own ? images.map(image => image.src).filter(Boolean) : [], pictures = own ? serverPictures : [];
     const text = pictures.length ? (isTypedCommand(words) ? [words, ...pictures] : [...pictures, words]).filter(Boolean).join(' ') : words;
     if ((!text && !(own && images.length)) || !terminal.sessionId) return;
     if (usesSessionPicker(terminal, text, remote)) {
-      if (inputBlocked) return;
       choiceVisible.current = true; restoreComposer.current = document.activeElement === input.current;
       if (own) edit('');
       setSessionsOpen(true); return;
@@ -418,8 +420,10 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     // A closed popup can leave the CLI's dialog open. Looking is harmless; guessing a close key is not.
     const rows = readScreen(terminal.id)?.rows ?? [];
     const parsed = parseAgentScreen(kind, rows);
-    if (!hasCliInput(kind, rows, parsed) || cliDialogShown(kind, rows, parsed)) { setTerminalPopup({ command: '' }); return; }
-    if (inputBlocked) return;
+    if (!hasCliInput(kind, rows, parsed) || cliDialogShown(kind, rows, parsed)) {
+      if (!hasEditingFocus(readingView.current)) setTerminalPopup({ command: '' });
+      return;
+    }
     const pendingId = text ? echo(text, attached) : null;
     if (pendingId) toBottom();
     const left = text && !attached.length ? inputDraft(kind) : '';
