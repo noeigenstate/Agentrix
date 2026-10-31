@@ -72,10 +72,10 @@ table.incident { min-width: 820px; }
 .incident td { vertical-align: top; }
 .incident td:nth-child(-n+3), .incident td:last-child { white-space: nowrap; }
 .incident td:first-child { color: var(--text-2); }
-/* The identity column and the last column stay in view while the numbers between them scroll. */
+/* The identity column stays in view while the numbers scroll. Only the first column is pinned: a column pinned at the right edge covers whichever cells sit under it
+   while the table overflows, so the first view would show half-hidden figures; the last column scrolls into view at the end instead. */
 .sticky tr { background: var(--bg-card); }
 .sticky :is(th, td):first-child { position: sticky; left: 0; z-index: 1; background: inherit; }
-.sticky :is(th, td):last-child { position: sticky; right: 0; z-index: 1; background: inherit; }
 .who { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .mk { flex: none; color: var(--text-2); }
 .cost-note { display: block; color: var(--text-2); font-size: 12px; white-space: nowrap; }
@@ -84,8 +84,8 @@ table.incident { min-width: 820px; }
 .tag { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--bg-hover); color: var(--text-2); font-size: 12px; white-space: nowrap; }
 
 /* Model buttons use the shared control; selection also has a caret and a neutral row fill. */
-.dash .model-toggle { height: auto; min-height: 32px; padding: 4px 8px; }
-.model-name { max-width: 240px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+/* A control's text never wraps: the button keeps the shared 32px and a long model id is cut with an ellipsis (its full name is the button's title), so the table scrolls instead of squeezing the name. */
+.model-name { min-width: 0; max-width: 240px; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .model-toggle[aria-expanded="true"] .model-caret { transform: rotate(90deg); }
 .sticky tr[data-expanded="true"] { background: var(--bg-selected); }
 .model-tasks { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--divider); }
@@ -94,7 +94,7 @@ table.incident { min-width: 820px; }
 .model-tasks > .note { margin: 8px 0; }
 .task-table .task-title { min-width: 160px; max-width: 240px; white-space: normal; overflow-wrap: anywhere; }
 .task-table .task-project { min-width: 96px; max-width: 160px; white-space: normal; overflow-wrap: anywhere; }
-.task-table th:is(:first-child, :last-child) { z-index: 3; }
+.task-table th:first-child { z-index: 3; }
 
 /* Round phases: grey blocks in order, rework a different step, with its share written beside the bar. */
 .stagecell { display: flex; align-items: center; gap: 12px; min-width: 240px; }

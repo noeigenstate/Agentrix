@@ -26,7 +26,7 @@ export function RoundTable({ rounds, showProject }: { rounds: DashboardRound[]; 
     <div className="legend">
       <span><i className="swatch" />{t('圆桌 · 开发 · 审查')}</span><span><i className="swatch rework" />{t('返工')}</span>
     </div>
-    <ScrollRegion label={t('每轮经过表，可横向滚动；轮次列和用时条固定')}>
+    <ScrollRegion label={t('每轮经过表，可横向滚动；轮次列固定')}>
       <table className="sticky wide">
         <thead><tr>{columns.map((name, index) => <th key={name} className={index > 0 && index < 8 ? 'num' : undefined}>{name}</th>)}</tr></thead>
         <tbody>

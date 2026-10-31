@@ -469,7 +469,7 @@ test('model task details show time, project, title, named kind, three outcomes a
   assert.match(html, /<section id="dashboard-model-tasks"[^>]*aria-labelledby="dashboard-model-tasks-title"/);
   assert.match(html, /Sol · gpt-6\.1-sol 的任务/);
   assert.match(html, /收起任务列表/); assert.match(html, /按当前筛选，最多显示最近 50 条任务/);
-  assert.match(html, /class="scroll tall" role="region" aria-label="模型任务表，可横向滚动；任务列和结果列固定" tabindex="0"/);
+  assert.match(html, /class="scroll tall" role="region" aria-label="模型任务表，可横向滚动；任务列固定" tabindex="0"/);
   for (const column of ['任务', '时间', '项目', '任务类型', '用时', '输出 token', '成本', '结果']) assert.match(html, new RegExp(`<th[^>]*>${column}</th>`));
   assert.equal(count(html, /<tbody><tr>|<\/tr><tr>/g), 3);
   const latest = rowOf(html, 'Latest task');

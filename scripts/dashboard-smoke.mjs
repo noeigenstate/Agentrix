@@ -71,6 +71,58 @@ async function seed(output, theme) {
   return profile;
 }
 
+// ---- the narrow-layout probes, run inside the page -----------------------------------------------------------------------------
+// Every model button: its height, whether its label sits on one line and whether the label is cut.
+const measureModelButtons = () => [...document.querySelectorAll('.model-toggle')].map(button => {
+  const label = button.querySelector('.model-name'), style = getComputedStyle(label);
+  return { height: Math.round(button.getBoundingClientRect().height), lines: Math.round(label.getBoundingClientRect().height / parseFloat(style.lineHeight)), nowrap: style.whiteSpace === 'nowrap', cut: label.scrollWidth > label.clientWidth + 1 };
+});
+
+// The text of a table's other cells that its pinned last column sits over, at each region's first and last scroll position.
+async function measureObscured(page) {
+  const found = [];
+  for (const region of await page.$$('.scroll')) for (const at of ['start', 'end']) {
+    found.push(...await region.evaluate(async (node, at) => {
+      node.scrollLeft = at === 'start' ? 0 : node.scrollWidth;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const view = node.getBoundingClientRect(), range = document.createRange(), hidden = [];
+      for (const row of node.querySelectorAll('tr')) {
+        const cells = [...row.children], last = cells.at(-1);
+        if (cells.length < 2 || getComputedStyle(last).position !== 'sticky') continue;
+        const pinned = last.getBoundingClientRect();
+        for (const cell of cells.slice(0, -1)) {
+          range.selectNodeContents(cell);
+          const text = range.getBoundingClientRect(), width = Math.min(text.right, view.right, pinned.right) - Math.max(text.left, view.left, pinned.left);
+          if (cell.textContent.trim() && width > 0.5 && Math.min(text.bottom, pinned.bottom) - Math.max(text.top, pinned.top) > 0.5) hidden.push({ at, text: cell.textContent.trim().slice(0, 24), overlap: Math.round(width) });
+        }
+      }
+      node.scrollLeft = 0;
+      return hidden;
+    }, at));
+  }
+  return found;
+}
+
+// A disabled Select (the dashboard has none of its own) built from the shared classes: the trigger and a menu with a disabled item.
+const SELECT_PROBE = `<div id="select-probe" style="position:fixed;z-index:900;top:96px;left:16px;display:flex;flex-direction:column;gap:8px;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--bg-app)">
+  <button type="button" class="select-trigger" disabled style="width:200px"><span class="select-value">不可用的下拉</span></button>
+  <ul class="select-menu" role="listbox" style="position:static;width:200px"><li role="option" aria-selected="true" data-active="true"><span class="select-option-label">可选项</span></li><li role="option" aria-selected="false" aria-disabled="true"><span class="select-option-label">不可用的选项</span></li></ul></div>`;
+const measureSelectProbe = markup => {
+  document.body.insertAdjacentHTML('beforeend', markup);
+  // The colour a node's text is drawn on: the first ancestor background that is not transparent.
+  const surface = node => { for (let at = node; at; at = at.parentElement) { const color = getComputedStyle(at).backgroundColor; if (!/, 0\)$|transparent/.test(color)) return color; } return 'rgb(0, 0, 0)'; };
+  const read = node => ({ color: getComputedStyle(node).color, surface: surface(node), opacity: getComputedStyle(node).opacity, cursor: getComputedStyle(node).cursor });
+  const probe = document.getElementById('select-probe');
+  return { trigger: read(probe.querySelector('.select-trigger')), option: read(probe.querySelector('[aria-disabled="true"]')), enabled: read(probe.querySelector('[aria-selected="true"]')) };
+};
+
+// WCAG contrast of two computed rgb() colours.
+function contrast(foreground, background) {
+  const luminance = color => { const [r, g, b] = color.match(/[\d.]+/g).slice(0, 3).map(channel => { const value = Number(channel) / 255; return value <= .03928 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4; }); return .2126 * r + .7152 * g + .0722 * b; };
+  const [high, low] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+  return (high + .05) / (low + .05);
+}
+
 // ---- the checks ----------------------------------------------------------------------------------------------------------------
 const isDashboard = page => page.url().includes('dashboard.html');
 const dashboardWindows = app => app.windows().filter(isDashboard);
@@ -181,12 +233,31 @@ async function checkTheme(theme, output, results) {
         assert.equal(layout.overflow, 0, `no page-level horizontal scroll at ${width}×${height}`); assert.equal(layout.main, 0);
         assert.equal(layout.columns, width > 1000 ? 4 : 2, 'KPIs: four across, two by two below 1000'); assert.equal(layout.unlabelled, 0);
         if (name === 'models') { assert.equal(layout.wide, width > 1000); assert.equal(layout.stacked, width <= 1000); }
-        await shot(dash, `${theme}-${width}x${height}-${name}`); results.push({ theme, width, height, page: name, ...layout });
+        // A control's text never wraps, and no text sits under a pinned last column at either end of the scroll.
+        const buttons = name === 'models' ? await dash.evaluate(measureModelButtons) : [];
+        assert.ok(name !== 'models' || buttons.length >= 2, 'the model table lists its buttons');
+        assert.ok(buttons.every(button => button.height <= 32 && button.lines === 1 && button.nowrap && !button.cut), `model buttons at ${width}×${height}: ${JSON.stringify(buttons)}`);
+        const obscured = await measureObscured(dash);
+        assert.deepEqual(obscured, [], `text under a pinned column at ${width}×${height} on ${name}`);
+        await shot(dash, `${theme}-${width}x${height}-${name}`); results.push({ theme, width, height, page: name, ...layout, buttons, obscured: obscured.length });
         if (name === 'models') {
           await tasks.scrollIntoViewIfNeeded();
           await shot(dash, `${theme}-${width}x${height}-model-tasks`);
         }
       }
+    }
+
+    // The shared Select's disabled states keep their text readable (4.5:1 on their own surface) without fading.
+    for (const [width, height] of [[900, 820], [820, 600]]) {
+      await resize(width, height);
+      const probe = await dash.evaluate(measureSelectProbe, SELECT_PROBE);
+      await shot(dash, `${theme}-${width}x${height}-select-disabled`);
+      await dash.evaluate(() => document.getElementById('select-probe').remove());
+      const ratios = { trigger: contrast(probe.trigger.color, probe.trigger.surface), option: contrast(probe.option.color, probe.option.surface), enabled: contrast(probe.enabled.color, probe.enabled.surface) };
+      assert.ok(ratios.trigger >= 4.5 && ratios.option >= 4.5, `disabled Select contrast ${JSON.stringify(ratios)} on ${theme}`);
+      assert.ok(probe.trigger.opacity === '1' && probe.option.opacity === '1' && probe.trigger.cursor === 'not-allowed' && probe.option.cursor === 'not-allowed', JSON.stringify(probe));
+      assert.notEqual(probe.option.color, probe.enabled.color, 'a disabled option reads differently from an enabled one');
+      results.push({ theme, width, height, selectContrast: ratios });
     }
 
     // The window buttons close the dashboard only.
@@ -202,4 +273,4 @@ await withGuiLock('dashboard-smoke', async () => {
   for (const theme of themes.length ? themes : ['mono', 'light']) await checkTheme(theme, path.join(output, theme), results);
 });
 await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(results, null, 2));
-console.log(`PASS: dashboard window, both pages, model task lists, filters, adoption, focus rings and layouts at 1180×820, 900×820 and 820×600: ${output}`);
+console.log(`PASS: dashboard window, both pages, model task lists, filters, adoption, focus rings, one-line model buttons, no text under a pinned last column, disabled Select contrast and layouts at 1180×820, 900×820 and 820×600: ${output}`);
