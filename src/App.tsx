@@ -263,6 +263,17 @@ export function App() {
       if (!dialogOpen()) runAction(command);
     });
   }, [installUpdate, runAction]);
+  // macOS's native title-bar buttons (决策 / 工作台) show the page and the decision count from here and ask for a page through the same state.
+  const nativeTitlebar = !!workspace?.nativeTitlebar;
+  useEffect(() => {
+    if (nativeTitlebar) api.setTitlebarState({ view: shownView, decisions: decisions.length });
+  }, [nativeTitlebar, shownView, decisions.length]);
+  useEffect(() => {
+    if (!nativeTitlebar) return;
+    return api.onTitlebarNavigate(target => {
+      if (!dialogOpen()) setView(target);
+    });
+  }, [nativeTitlebar]);
   const seenDecisions = useRef<Set<string> | null>(null);
   useEffect(() => {
     const ids = new Set(decisions.map(decision => decision.id));
@@ -318,10 +329,10 @@ export function App() {
     {!bareTitlebar && <div className="titlebar">
       {!isMac && <AppMenu fullScreen={fullScreen} canReturn={shownView !== 'workspace' || !!focusedId} updateReady={updates?.status === 'ready'}
         onAddProject={() => setAddOpen(true)} onReturn={returnToGrid} onFullScreen={() => api.toggleFullScreen()} onSettings={() => setSettingsOpen(true)} onInstallUpdate={installUpdate} />}
-      <nav className="home-nav" aria-label={t('页面')}>
+      {!nativeTitlebar && <nav className="home-nav" aria-label={t('页面')}>
         <button type="button" aria-current={shownView === 'decisions' ? 'page' : undefined} title={t('回到决策 · {key}', { key: shortcut('decisions') })} onClick={() => setView('decisions')}><Stamp size={16} />{t('决策')}{decisions.length > 0 && <span className="home-nav-count" aria-label={t('{count} 件待决定', { count: decisions.length })}>{decisions.length}</span>}</button>
         <button type="button" aria-current={shownView === 'workspace' ? 'page' : undefined} onClick={() => setView('workspace')}><CirclesFour size={16} />{t('工作台')}</button>
-      </nav>
+      </nav>}
       <div className="titlebar-space" />
       <div className="titlebar-tools">
         {/* Search opens from its shortcut (Ctrl+Shift+F by default, configurable) and shows while in use. Settings and adding a project are in
@@ -376,7 +387,7 @@ export function App() {
     </div>
     {popup && <Suspense fallback={null}><FilePopup target={popup} onError={reportError} /></Suspense>}
     {error && <div className="error-toast" role="alert"><Info size={18} /><span>{error}</span><IconButton label={t('关闭提示')} onClick={() => setError(null)}><X size={16} /></IconButton></div>}
-    {guide === 'tour' && <GuideTour projects={projects} focusedId={focusedId} withAdd={tourWithAdd.current} onClose={closeGuide} />}
+    {guide === 'tour' && <GuideTour projects={projects} focusedId={focusedId} withAdd={tourWithAdd.current} nativeTitlebar={nativeTitlebar} onClose={closeGuide} />}
     {guide && guide !== 'tour' && <UsageGuide version={workspace.version} start={guide} onTour={startTour} onClose={closeGuide} />}
     {settingsOpen && <SettingsDialog settings={settings} projects={workspace.projects} desktopGlass={workspace.desktopGlass} uiZoom={workspace.uiZoom} localShell={workspace.localShell ?? null} agents={agents} onAgents={setAgents} initialSection={settingsSection} updates={updates} onGuide={() => { setSettingsOpen(false); setSettingsSection('appearance'); startTour(); }} onCheckUpdate={() => { perform(api.checkForUpdates()); }} onInstallUpdate={installUpdate} onDownloadPage={() => { perform(api.openDownloadPage()); }} close={() => { setSettingsOpen(false); setSettingsSection('appearance'); }} update={setPreference} quit={() => perform(api.quit())} />}
     {addOpen && <AddProjectDialog onClose={() => setAddOpen(false)} onAdded={() => setQuery('')} onError={reportError} />}
