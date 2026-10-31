@@ -20,8 +20,12 @@ const visible = (selector: string) => [...document.querySelectorAll<HTMLElement>
 // that place stays usable and the rest of the window is blocked until the step is done or skipped.
 // withAdd: the tutorial began with an empty workspace, so it starts by adding a project (and keeps that
 // step in its count after a project exists).
-export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects: Project[]; focusedId: string | null; withAdd: boolean; onClose: () => void }) {
+export function GuideTour({ projects, focusedId, withAdd, nativeTitlebar, onClose }: { projects: Project[]; focusedId: string | null; withAdd: boolean; nativeTitlebar: boolean; onClose: () => void }) {
   const project = projects.find(item => item.id === focusedId) || projects[0];
+  // macOS has its menus in the menu bar; the native title-bar buttons come back with the system strip in full screen, the page's own do not.
+  const settingsText = !isMac ? t('标志和标题是应用菜单：新建项目、返回项目、全屏，以及设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）。')
+    : nativeTitlebar ? t('功能在屏幕顶部的菜单栏：Agentrix 菜单里有新建项目和设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）；决策和工作台在窗口左上角红绿灯之后，全屏时把鼠标移到屏幕顶端，它们随系统标题条出现。')
+    : t('功能在屏幕顶部的菜单栏：Agentrix 菜单里有新建项目和设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）；决策和工作台在窗口左上角红绿灯之后；全屏时按 {decisions} 到决策，按 {overview} 回到工作台。', { decisions: shortcut('decisions'), overview: shortcut('overview') });
   const steps: Step[] = [
     ...(withAdd ? [{
       id: 'add', title: t('添加项目'), interactive: true,
@@ -45,8 +49,7 @@ export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects:
     },
     {
       id: 'settings', title: t('设置与更多'), interactive: false,
-      body: [isMac ? t('功能在屏幕顶部的菜单栏：Agentrix 菜单里有新建项目和设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）；决策和工作台在窗口左上角红绿灯之后；全屏时按 {decisions} 到决策，按 {overview} 回到工作台。', { decisions: shortcut('decisions'), overview: shortcut('overview') })
-        : t('标志和标题是应用菜单：新建项目、返回项目、全屏，以及设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）。'), t('按 {key} 添加更多项目。', { key: shortcut('addProject') })],
+      body: [settingsText, t('按 {key} 添加更多项目。', { key: shortcut('addProject') })],
       target: () => isMac ? null : visible('.titlebar-brand'),
     },
   ];

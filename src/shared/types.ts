@@ -47,6 +47,8 @@ export type RecentSSH = { host: string; path: string; name: string; lastOpenedAt
 export type SSHInfo = { hosts: string[]; configFile: string; configExists: boolean; sshPath: string; source: string };
 export type SSHAuthPrompt = { id: string; host: string; message: string; kind: 'secret' | 'confirm' };
 export type Workspace = { desktopGlass?: { supported: boolean; compatibility: boolean; active: boolean; restart: boolean; failed: boolean }; projects: Project[]; settings: Settings; warning: string | null; platform: string; version: string; guide: boolean; autoHideTitlebar: boolean;
+  // macOS: the native title-bar buttons 决策 / 工作台 are attached, so the page draws no copies of them.
+  nativeTitlebar: boolean;
   // macOS and Linux: the shell new local terminals use and whether zsh is installed.
   localShell: { kind: 'bash' | 'zsh'; zsh: boolean } | null;
   // The interface zoom in effect, in percent of the system scale: the chosen one, or what 自动 picked for the window's display.
@@ -129,6 +131,9 @@ export type FilePreview = { path: string; name: string; size: number; modifiedAt
 );
 // What the macOS menu bar's Agentrix menu asks the window to do.
 export type MenuCommand = 'addProject' | 'settings' | 'installUpdate';
+// The page shown and the decisions waiting, which the native title-bar buttons display; they send back the page asked for.
+export type TitlebarView = 'decisions' | 'workspace';
+export type TitlebarState = { view: TitlebarView; decisions: number };
 type Bridge = {
   getState(): Promise<Result<Workspace>>;
   getAgents(): Promise<Result<AgentsState>>;
@@ -249,5 +254,7 @@ type Bridge = {
   minimize(): void; maximize(): void; toggleFullScreen(): void; isFullScreen(): Promise<Result<boolean>>; onFullScreen(callback: (fullScreen: boolean) => void): () => void; terminalActions(id: string): Promise<Result<AgentAction[]>>; terminalConversation(id: string): Promise<Result<ConversationEntry[]>>; onTerminalConversation(callback: (packet: ConversationPacket) => void): () => void; close(): void;
   quit(): Promise<Result<boolean>>;
   onMenuCommand(callback: (command: MenuCommand) => void): () => void;
+  setTitlebarState(state: TitlebarState): void;
+  onTitlebarNavigate(callback: (view: TitlebarView) => void): () => void;
 };
 declare global { interface Window { agentrix: Bridge; } }
