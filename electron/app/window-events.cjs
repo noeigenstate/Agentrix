@@ -64,8 +64,10 @@ function registerWindowLifecycle({ window, getSettings, isQuitting, hasTray, req
   for (const event of ['show', 'restore']) window.on(event, () => window.webContents.setBackgroundThrottling(false));
   window.once('ready-to-show', () => window.show());
   window.on('focus', () => { clearAttention(); window.flashFrame(false); });
+  // Renderer reloads must preserve the fullscreen and unread-count titles owned by main.
+  window.on('page-title-updated', event => event.preventDefault());
   for (const [event, fullscreen] of [['enter-full-screen', true], ['leave-full-screen', false]]) window.on(event, () => {
-    if (process.platform === 'darwin') updateIndicators();
+    updateIndicators();
     send('window:fullscreen-changed', fullscreen);
   });
   // The reason (crashed, oom, killed…) and exit code are kept in the log before the window loads again.

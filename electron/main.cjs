@@ -269,7 +269,6 @@ function macMenu() {
     updateReady: updateManager?.getState().status === 'ready', command: command => {
       showWindow();
       send('menu:command', command);
-      rebuildMacMenu();
     },
     quit: () => { showWindow(); requestQuit().catch(report); }, close: () => window?.close(),
   }));

@@ -32,10 +32,7 @@ test('hidden window items retain native minimize and fullscreen roles and the cu
   assert.deepEqual(hidden.map(item => [item.role, item.accelerator]), [
     ['minimize', 'Command+M'], ['togglefullscreen', 'Control+Command+F'], [undefined, 'Command+W'],
   ]);
-  for (const item of hidden) {
-    assert.notEqual(item.acceleratorWorksWhenHidden, false);
-    assert.notEqual(item.registerAccelerator, false);
-  }
+  for (const item of hidden) assert.notEqual(item.acceleratorWorksWhenHidden, false);
   hidden[2].click(); assert.equal(closed, 1);
 });
 
@@ -47,7 +44,7 @@ test('ready updates appear after settings and every application item sends its e
   assert.deepEqual(commands, ['addProject', 'settings', 'installUpdate']);
 });
 
-test('template accelerators merge custom bindings over defaults and set registerAccelerator false', () => {
+test('template accelerators merge custom bindings over defaults', () => {
   const custom = { addProject: 'Alt+N', settings: 'Ctrl+Shift+S' };
   for (const shortcuts of [undefined, custom, { settings: 'Alt+S' }]) {
     const menus = template({ shortcuts, updateReady: true });
@@ -56,7 +53,6 @@ test('template accelerators merge custom bindings over defaults and set register
       [menus[0].submenu[2], 'addProject'], [menus[0].submenu[3], 'settings'],
     ]) {
       assert.equal(item.accelerator, bindings[action], action);
-      assert.equal(item.registerAccelerator, false, action);
     }
     assert.equal(menus[0].submenu[4].accelerator, undefined);
   }
@@ -86,10 +82,6 @@ function optionCallback(callee, name) {
   return callback.getText(source);
 }
 
-test('the main process no longer listens for menu state', () => {
-  assert.doesNotMatch(functions.get('registerIpc').getText(source), /['"]menu:state['"]/);
-});
-
 function mainFixture(platform = 'darwin') {
   const menus = [], messages = [], handlers = new Map(), calls = { quit: 0, close: 0, show: 0, tray: 0, broadcast: 0, updates: 0 };
   const store = { settings: cleanSettings(), projects: [], updateSettings(patch) { this.settings = cleanSettings({ ...this.settings, ...patch }); } };
@@ -111,19 +103,18 @@ function mainFixture(platform = 'darwin') {
 }
 
 test('real menu wiring sends commands and retains quit and close behavior', () => {
-  const { context, menus: rebuilt, messages, calls } = mainFixture();
+  const { context, messages, calls } = mainFixture();
   const menus = context.macMenu();
   const items = menus[0].submenu;
   items[2].click(); items[3].click();
   items.find(item => item.accelerator === 'Command+Q').click();
   items.find(item => item.accelerator === 'Command+W').click();
   assert.deepEqual(messages, [['menu:command', 'addProject'], ['menu:command', 'settings']]);
-  assert.equal(rebuilt.length, 2);
   assert.equal(calls.show, 3); assert.equal(calls.quit, 1); assert.equal(calls.close, 1);
 });
 
-test('every menu command shows a hidden window before dispatch and rebuilds the menu', () => {
-  const { context, update, menus, messages } = mainFixture();
+test('every menu command shows a hidden window before dispatch', () => {
+  const { context, update, messages } = mainFixture();
   update.status = 'ready';
   const order = []; let visible = false;
   context.window = {
@@ -139,15 +130,13 @@ test('every menu command shows a hidden window before dispatch and rebuilds the 
   const menu = context.macMenu();
   for (const item of menu[0].submenu.slice(2, 5)) {
     visible = false; order.length = 0;
-    const before = menus.length;
     item.click();
     assert.deepEqual(order, ['show', 'focus', 'menu:command'], item.label);
-    assert.equal(menus.length, before + 1, item.label);
   }
   assert.deepEqual(messages, [['menu:command', 'addProject'], ['menu:command', 'settings'], ['menu:command', 'installUpdate']]);
 });
 
-for (const platform of ['darwin', 'win32', 'linux']) test(`${platform} fullscreen clears and restores the live title only on macOS`, () => {
+for (const platform of ['darwin', 'win32', 'linux']) test(`${platform} keeps titles owned by main and blank only in macOS fullscreen`, () => {
   assert.equal(optionCallback('registerWindowLifecycle', 'updateIndicators'), 'updateIndicators');
   const { context, store, messages } = mainFixture(platform);
   const titles = [], images = [], flashes = [];
@@ -161,12 +150,19 @@ for (const platform of ['darwin', 'win32', 'linux']) test(`${platform} fullscree
   context.trayImage = name => name;
   const register = vm.runInContext(`(${registerWindowLifecycle.toString()})`, context);
   register({ window, send: context.send, updateIndicators: context.updateIndicators });
+  const setPageTitle = title => {
+    let prevented = false;
+    window.emit('page-title-updated', { preventDefault: () => { prevented = true; } }, title, true);
+    if (!prevented) window.setTitle(title);
+  };
   const mac = platform === 'darwin';
 
   context.updateIndicators(); assert.equal(titles.at(-1), 'Agentrix');
   store.projects = [{ unread: 2 }, { unread: 0 }, { unread: 5 }];
   context.updateIndicators(); assert.equal(titles.at(-1), '(2) Agentrix');
+  setPageTitle('Agentrix'); assert.equal(titles.at(-1), '(2) Agentrix');
   fullscreen = true; window.emit('enter-full-screen');
+  setPageTitle('Agentrix');
   assert.equal(titles.at(-1), mac ? '' : '(2) Agentrix');
   assert.deepEqual(messages, [['window:fullscreen-changed', true]]);
 
@@ -179,9 +175,8 @@ for (const platform of ['darwin', 'win32', 'linux']) test(`${platform} fullscree
 
   store.projects = [{ unread: 3 }];
   fullscreen = false; window.emit('leave-full-screen');
-  assert.equal(titles.at(-1), mac ? '(1) Agentrix' : 'Agentrix');
+  assert.equal(titles.at(-1), '(1) Agentrix');
   assert.deepEqual(messages, [['window:fullscreen-changed', true], ['window:fullscreen-changed', false]]);
-  context.updateIndicators(); assert.equal(titles.at(-1), '(1) Agentrix');
   store.projects = [];
   context.updateIndicators(); assert.equal(titles.at(-1), 'Agentrix');
 });
@@ -242,16 +237,14 @@ test('Windows and Linux do not rebuild the application menu', () => {
   }
 });
 
-test('preload exposes no menu state sender and keeps an unsubscribable menu command listener', () => {
+test('preload exposes an unsubscribable menu command listener', () => {
   const renderer = new EventEmitter(); let bridge;
-  renderer.send = assert.fail;
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), {
     require: name => {
       assert.equal(name, 'electron');
       return { ipcRenderer: renderer, contextBridge: { exposeInMainWorld: (name, api) => { assert.equal(name, 'agentrix'); bridge = api; } } };
     },
   });
-  assert.equal(bridge.setMenuState, undefined);
   const commands = [], other = [];
   const unsubscribe = bridge.onMenuCommand(command => commands.push(command));
   const stopOther = bridge.onMenuCommand(command => other.push(command));

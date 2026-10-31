@@ -4,9 +4,8 @@ function buildMacMenuTemplate({ appName, t, shortcuts, updateReady = false, comm
   const bindings = { ...DEFAULT_SHORTCUTS, ...shortcuts };
   const action = (name, label) => ({
     label, click: () => command(name),
-    // registerAccelerator only affects Linux/Windows; macOS accelerators remain native key equivalents.
-    // The page gets the key first; App.tsx's capture handler calls preventDefault to avoid double firing.
-    ...(bindings[name] ? { accelerator: bindings[name], registerAccelerator: false } : {}),
+    // The page's capture handler calls preventDefault first, so the menu's key equivalent does not fire twice.
+    ...(bindings[name] ? { accelerator: bindings[name] } : {}),
   });
   return [
     { label: appName, submenu: [
