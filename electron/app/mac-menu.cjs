@@ -1,13 +1,11 @@
 const DEFAULT_SHORTCUTS = require('../shortcuts.json');
 
 const DEFAULT_MENU_STATE = Object.freeze({
-  view: 'workspace', decisions: 0, canReturn: false, focused: false, activityPane: false, reading: null,
+  canReturn: false, focused: false, activityPane: false, reading: null,
 });
 
 function parseMenuState(state) {
   if (!state || typeof state !== 'object' || Array.isArray(state)
-    || !['workspace', 'decisions'].includes(state.view)
-    || !Number.isSafeInteger(state.decisions) || state.decisions < 0
     || ['canReturn', 'focused', 'activityPane'].some(key => typeof state[key] !== 'boolean')
     || state.reading !== null && typeof state.reading !== 'boolean') return null;
   return Object.fromEntries(Object.keys(DEFAULT_MENU_STATE).map(key => [key, state[key]]));
@@ -32,10 +30,6 @@ function buildMacMenuTemplate({ appName, t, shortcuts, state = DEFAULT_MENU_STAT
       { label: t('退出 Agentrix'), accelerator: 'Command+Q', click: quit },
     ] },
     { label: t('前往'), submenu: [
-      action('workspace', t('工作台'), { type: 'radio', checked: state.view === 'workspace' }),
-      action('decisions', state.decisions > 0 ? t('决策 ({count})', { count: state.decisions }) : t('决策'),
-        { type: 'radio', checked: state.view === 'decisions' }),
-      { type: 'separator' },
       action('overview', t('返回项目'), { enabled: state.canReturn }),
       action('search', t('搜索项目'), { enabled: !state.focused }),
     ] },
