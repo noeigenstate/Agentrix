@@ -1391,7 +1391,7 @@ if (!app.requestSingleInstanceLock()) {
   // Clicking the Dock icon brings back a window that was closed to the menu bar.
   app.on('activate', () => showWindow());
   app.whenReady().then(async () => {
-    if (process.platform === 'darwin' && !app.isPackaged) app.dock.setIcon(path.join(root, 'assets/icon-mac.png'));
+    if (process.platform === 'darwin' && !app.isPackaged && !process.env.AGENTRIX_DATA_DIR) app.dock.setIcon(path.join(root, 'assets/icon-mac.png'));
     fs.mkdirSync(app.getPath('userData'), { recursive: true });
     // Before any terminal or agent starts: they inherit the system proxy only through process.env.
     await adoptSystemProxy({ session: electronSession.defaultSession }).catch(error => console.warn('System proxy:', error.message));

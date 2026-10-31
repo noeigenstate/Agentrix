@@ -17,7 +17,7 @@ function menu({ open = '', readingTerminal = 'agent' } = {}) {
     document: { querySelector: selector => selector.split(', ').includes(open) ? {} : null },
     api: { settings: patch => { calls.push(['settings', { ...patch }]); return 'settings'; } },
     installUpdate: () => calls.push(['installUpdate']), perform: value => calls.push(['perform', value]),
-    setView: view => calls.push(['view', view]), setReading: (...args) => calls.push(['reading', ...args]),
+    setReading: (...args) => calls.push(['reading', ...args]),
     runAction: action => calls.push(['action', action]), activityPane: false, readingTerminal,
   });
   vm.runInContext(ts.transpileModule(`${guard}\nglobalThis.onCommand = ${handler};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);

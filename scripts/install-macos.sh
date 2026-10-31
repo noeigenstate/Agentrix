@@ -58,7 +58,7 @@ target="$destination/$app_name"
 # A running copy is asked to quit first; it asks about running terminals, and nothing is replaced until it has.
 if pgrep -f "/$app_name/Contents/MacOS/Agentrix" >/dev/null 2>&1; then
   printf 'Quitting the running Agentrix…\n'
-  osascript -e 'tell application "Agentrix" to quit' >/dev/null 2>&1 || fail 'Agentrix is running. Quit it, then run this again.'
+  osascript -e 'tell application id "local.projectgrid.desktop" to quit' >/dev/null 2>&1 || fail 'Agentrix is running. Quit it, then run this again.'
   for _ in $(seq 1 120); do pgrep -f "/$app_name/Contents/MacOS/Agentrix" >/dev/null 2>&1 || break; sleep 1; done
   pgrep -f "/$app_name/Contents/MacOS/Agentrix" >/dev/null 2>&1 && fail 'Agentrix is still running. Quit it, then run this again.'
 fi

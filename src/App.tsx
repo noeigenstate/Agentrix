@@ -58,7 +58,7 @@ export function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   useWorkspaceAppearance(workspace);
   const [agents, setAgents] = useState<AgentsState | null>(null);
-  // Native full screen (F11, or an expanded project): the title bar gets out of the way.
+  // Native full screen (F11 or expanded project): only Windows/Linux may auto-hide the title bar.
   const [fullScreen, setFullScreen] = useState(false);
   const [agentsDismissed, setAgentsDismissed] = useState(false);
   const [settingsSection, setSettingsSection] = useState('appearance');
