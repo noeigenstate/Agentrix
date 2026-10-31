@@ -152,7 +152,7 @@ async function teamCommand(argv, stdout) {
       await team.consolidate(options.meeting, fs.readFileSync(options.summary, 'utf8'), records);
     }
     else {
-      const issues = options.issues ? JSON.parse(fs.readFileSync(options.issues, 'utf8').replace(/^\uFEFF/, '')) : [];
+      const issues = options.issues ? JSON.parse(fs.readFileSync(options.issues, 'utf8').replace(/^\uFEFF/, '')) : undefined;
       const html = path.join(path.dirname(options.out), path.parse(options.out).name + '.html');
       if (html === options.out) throw new Error('--out must name the Markdown minutes, not the HTML companion');
       const minutes = await team.locked(() => team.minutes(options.meeting, issues, options.language));
