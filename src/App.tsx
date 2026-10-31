@@ -19,6 +19,7 @@ import { quickDictation } from './features/voice/voice-input';
 import { UsageGuide } from './features/guide/UsageGuide';
 import { GuideTour } from './features/guide/GuideTour';
 import { AppMenu } from './features/titlebar/AppMenu';
+import { useNativeTitlebarStyle } from './features/titlebar/native-style';
 import { IconButton } from './shared/IconButton';
 import { ModeSwitch } from './features/reading/ModeSwitch';
 import { showPopup, usePopup } from './features/files/file-popup';
@@ -265,9 +266,14 @@ export function App() {
   }, [installUpdate, runAction]);
   // macOS's native title-bar buttons (决策 / 工作台) show the page and the decision count from here and ask for a page through the same state.
   const nativeTitlebar = !!workspace?.nativeTitlebar;
+  const titlebarStyle = useNativeTitlebarStyle(nativeTitlebar, workspace?.uiZoom);
+  const sentStyle = useRef(titlebarStyle);
   useEffect(() => {
-    if (nativeTitlebar) api.setTitlebarState({ view: shownView, decisions: decisions.length });
-  }, [nativeTitlebar, shownView, decisions.length]);
+    if (!nativeTitlebar) return;
+    const style = titlebarStyle !== sentStyle.current && titlebarStyle;
+    sentStyle.current = titlebarStyle;
+    api.setTitlebarState({ view: shownView, decisions: decisions.length, ...(style && { style }) });
+  }, [nativeTitlebar, shownView, decisions.length, titlebarStyle]);
   useEffect(() => {
     if (!nativeTitlebar) return;
     return api.onTitlebarNavigate(target => {

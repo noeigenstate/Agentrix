@@ -139,7 +139,16 @@ export type FilePreview = { path: string; name: string; size: number; modifiedAt
 export type MenuCommand = 'addProject' | 'settings' | 'installUpdate';
 // The page shown and the decisions waiting, which the native title-bar buttons display; they send back the page asked for.
 export type TitlebarView = 'decisions' | 'workspace';
-export type TitlebarState = { view: TitlebarView; decisions: number };
+// How the native buttons are drawn, read by the page from its own CSS (colours are CSS hex, icons PNG data URLs used as template masks, lengths in CSS px before `scale`).
+export type TitlebarStyle = {
+  scale: number; font: { size: number; weight: number };
+  metrics: { height: number; paddingX: number; gap: number; itemGap: number; radius: number; iconSize: number; focusWidth: number; focusOffset: number;
+    badge: { minWidth: number; paddingX: number; height: number; fontSize: number } };
+  colors: Record<'text' | 'textSelected' | 'hover' | 'selected' | 'badge' | 'badgeText' | 'focus', string>;
+  icons: Record<TitlebarView, string>;
+};
+// `style` rides along only when it changed.
+export type TitlebarState = { view: TitlebarView; decisions: number; style?: TitlebarStyle };
 type Bridge = {
   getState(): Promise<Result<Workspace>>;
   getAgents(): Promise<Result<AgentsState>>;
