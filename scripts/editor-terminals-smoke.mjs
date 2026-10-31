@@ -62,9 +62,17 @@ try {
     await page.keyboard.type(`[IO.File]::WriteAllText('terminal-${index}.json', (@{Process=$PID;Value='INDEPENDENT_${index}'} | ConvertTo-Json -Compress))`);
     await page.keyboard.press('Enter');
   }
-  await waitFor(async () => fs.access(path.join(project.path, 'terminal-1.json')).then(() => true, () => false), 'independent commands');
   await waitFor(async () => (await state()).terminals.every(item => item.shellReady), 'both commands return to their own prompts');
-  const proofs = await Promise.all(ids.map((_id, index) => fs.readFile(path.join(project.path, `terminal-${index}.json`), 'utf8').then(JSON.parse)));
+  let proofs;
+  await waitFor(async () => {
+    try {
+      proofs = await Promise.all(ids.map((_id, index) => fs.readFile(path.join(project.path, `terminal-${index}.json`), 'utf8').then(JSON.parse)));
+      return true;
+    } catch (error) {
+      if (error.code === 'ENOENT' || error instanceof SyntaxError) return false;
+      throw error;
+    }
+  }, 'both independent commands write valid JSON');
   assert.equal(proofs[0].Value, 'INDEPENDENT_0'); assert.equal(proofs[1].Value, 'INDEPENDENT_1');
   assert.ok(proofs.every(proof => Number.isInteger(proof.Process) && proof.Process > 0));
   assert.notEqual(proofs[0].Process, proofs[1].Process, 'each split must own a distinct native shell process');
