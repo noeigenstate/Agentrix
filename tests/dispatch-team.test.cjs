@@ -261,7 +261,7 @@ test('worktrees share team state and outside git the helper behaves as before', 
   assert.equal(result.code, 0); assert.match(result.stdout, /scope unchecked/); assert.doesNotMatch(result.stdout, / · roundtable /);
   assert.equal(captured.brief, briefOf({ cwd: f.runtime, allow: ['src/a.js'] }, Buffer.from('Whole plan.\n')).toString());
   assert.doesNotMatch(captured.brief, /# Project memory|# Working now|# Roundtable before work/);
-  assert.equal(briefOf({ cwd: f.runtime, allow: [] }, Buffer.from('plain')).toString(), 'plain');
+  assert.match(briefOf({ cwd: f.runtime, allow: [] }, Buffer.from('plain')).toString(), /## Skill proposals[\s\S]*plain$/);
 });
 
 test('overlap checks tracked and untracked files and identical future globs across worktrees', async t => {
@@ -787,7 +787,7 @@ test('scoped dispatch reuses repository listings and snapshot status outside the
   const boundaries = load(boundaryFile, { 'node:child_process': children });
   const teamModule = load(teamFile, { 'node:child_process': children, '../../boundaries.cjs': boundaries });
   const dispatched = load(helper, { [boundaryFile]: boundaries, [teamFile]: teamModule });
-  assert.equal(dispatched.briefOf({ cwd: f.repo, allow: [] }, Buffer.from('plain')).toString(), 'plain');
+  assert.match(dispatched.briefOf({ cwd: f.repo, allow: [] }, Buffer.from('plain')).toString(), /## Skill proposals[\s\S]*plain$/);
   assert.equal(calls.length, 0, 'briefOf has no hidden team discovery');
   for (const withPeer of [false, true]) {
     const team = projectTeam(f.repo), peer = randomUUID();

@@ -4,6 +4,7 @@ const { monitorActivity } = require('../../codex-activity.cjs');
 const { SkillHistory, safeId } = require('./history.cjs');
 const { metadata, draftText, readJson, writeFile, checkedPath, readText, listFolder, folderSignature, importFiles } = require('./files.cjs');
 const { skillInstructions } = require('./delivery.cjs');
+const { digest } = require('./session.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
 const { projectSkillTargets, projectSkillNames, projectSkillSignature } = require('./project-skills.cjs');
 const MAX_SSH_BUNDLE_BYTES = 512 * 1024;
@@ -16,8 +17,8 @@ const canonical = file => {
 };
 
 class SkillsStore {
-  constructor({ dataDir, builtinDir, getProjects = () => [], getAgents = () => ({}), activeProjects = () => [], changed = () => {}, report = () => {} }) {
-    Object.assign(this, { dataDir, builtinDir, getProjects, getAgents, activeProjects, changed, report });
+  constructor({ dataDir, builtinDir, getProjects = () => [], getAgents = () => ({}), routingNote = () => '', activeProjects = () => [], changed = () => {}, report = () => {} }) {
+    Object.assign(this, { dataDir, builtinDir, getProjects, getAgents, routingNote, activeProjects, changed, report });
     this.globalFolder = path.join(dataDir, 'skills');
     this.optionsFile = path.join(dataDir, 'skills.json');
     this.options = readJson(this.optionsFile, {}, report, value => value && !Array.isArray(value) && typeof value === 'object'
@@ -26,12 +27,6 @@ class SkillsStore {
     this.entries = new Map(); this.watchers = new Map(); this.writers = new Map();
     this.projectSkills = new Map();
     this.knownRoots = new Set(); this.baselines = new Set(); this.dirtyRoots = new Set(); this.deliveries = new Map();
-    const deliveryFolder = path.join(dataDir, 'skill-delivery');
-    try {
-      for (const entry of fs.readdirSync(deliveryFolder, { withFileTypes: true })) {
-        if (entry.isFile() && /^[a-f0-9]{64}\.md$/.test(entry.name)) fs.rmSync(path.join(deliveryFolder, entry.name), { force: true });
-      }
-    } catch (error) { if (error.code !== 'ENOENT') report(error); }
     for (const folder of [this.globalFolder, path.join(dataDir, 'skill-pending')]) {
       try { fs.mkdirSync(folder, { recursive: true }); } catch (error) { report(error); }
     }
@@ -74,6 +69,16 @@ class SkillsStore {
 
   pruneProjects() {
     const projects = new Set(this.getProjects().map(project => project.id));
+    const retained = new Set([...projects].map(safeId)), folder = path.join(this.dataDir, 'skill-delivery');
+    if (!this.deliveryProjects || retained.size !== this.deliveryProjects.size || [...retained].some(id => !this.deliveryProjects.has(id))) {
+      try {
+        for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+          const match = /^([a-f0-9]{64})-(?:claude|codex|preview|[a-f0-9]{64})\.md(?:\.json)?$/.exec(entry.name);
+          if (entry.isFile() && match && !retained.has(match[1])) fs.rmSync(path.join(folder, entry.name), { force: true });
+        }
+        this.deliveryProjects = retained;
+      } catch (error) { if (error.code === 'ENOENT') this.deliveryProjects = retained; else this.report(error); }
+    }
     let modified = false;
     for (const options of Object.values(this.options)) {
       for (const id of Object.keys(options.firstOpenedProjects || {})) if (!projects.has(id)) { delete options.firstOpenedProjects[id]; modified = true; }
@@ -325,7 +330,8 @@ class SkillsStore {
     // A newly added or moved project can start a session before its watcher's first debounced scan.
     if (!remote && project.kind !== 'ssh' && this.projectSkills.get(project.id)?.path !== project.path
       && this.refreshProjectSkills(new Set())) this.invalidateDelivery();
-    const agents = this.getAgents(), key = JSON.stringify([project.id, remote, sessionId, agent, started, !!agents.claude?.installed, !!agents.codex?.installed]);
+    const agents = this.getAgents(), routingNote = String(this.routingNote() || '').slice(0, 8192);
+    const key = JSON.stringify([project.id, remote, sessionId, agent, started, !!agents.claude?.installed, !!agents.codex?.installed, routingNote]);
     if (this.deliveries.has(key)) return this.deliveries.get(key);
     const entries = [...this.entries.values()].filter(entry => entry.scope !== 'project' || !remote && entry.projectId === project.id);
     const remotePath = entry => `{AGENTRIX_SKILLS}/${entry.scope === 'builtin' ? 'builtin' : 'global'}/${entry.folder}/SKILL.md`;
@@ -340,9 +346,10 @@ class SkillsStore {
       }
       return { ...info, ...(remote ? { path: remotePath(this.entries.get(info.id)) } : {}) };
     });
-    const manifest = remote ? '{AGENTRIX_SKILLS}/instructions.md' : path.join(this.dataDir, 'skill-delivery', `${safeId(JSON.stringify([project.id, sessionId]))}.md`);
+    const manifest = remote ? '{AGENTRIX_SKILLS}/instructions.md' : path.join(this.dataDir, 'skill-delivery',
+      `${safeId(project.id)}-${agent === 'claude' || agent === 'codex' ? agent : 'preview'}.md`);
     const delivery = { skills, yielded: yielded.filter(info => info.enabled).map(info => ({ name: info.name, path: info.override })), remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
-      pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)), manifest };
+      pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)), manifest, routingNote };
     let bundle = null;
     if (remote) {
       const files = [], included = [], enabled = skills.filter(skill => skill.enabled);
@@ -359,7 +366,14 @@ class SkillsStore {
       bundle = { files, instructions: skillInstructions(delivery) };
       bundle.key = safeId(JSON.stringify(bundle));
     } else {
-      try { writeFile(manifest, skillInstructions(delivery)); } catch (error) { this.report(error); }
+      const instructions = skillInstructions(delivery);
+      delivery.fingerprint = digest(JSON.stringify([instructions, skills.filter(skill => skill.enabled).map(skill => [skill.id, this.entries.get(skill.id)?.text])]));
+      // Hooks need the launch's first-run details even if another session has already rewritten the current manifest.
+      delivery.sessionManifest = path.join(path.dirname(manifest), `${safeId(project.id)}-${safeId(JSON.stringify([sessionId, agent, delivery.fingerprint]))}.md`);
+      try {
+        writeFile(delivery.sessionManifest, instructions);
+        writeFile(`${delivery.sessionManifest}.json`, JSON.stringify({ fingerprint: delivery.fingerprint, projectRoot: project.path, roots: [this.builtinDir, this.globalFolder] }));
+      } catch (error) { this.report(error); }
     }
     if (started && sessionId) {
       let recorded = false;
@@ -373,6 +387,12 @@ class SkillsStore {
       }
       if (recorded) { this.invalidateDelivery(); this.persistOptions(); }
     }
+    if (!remote && (!agent || started && sessionId || !fs.existsSync(manifest))) {
+      // Resumed Codex replays its original developer note. Keep its current-project path alive, without replaying first-open claims.
+      const currentSkills = skills.map(skill => this.options[skill.id]?.firstOpenedProjects?.[project.id]
+        ? { ...skill, firstRun: false, trigger: skill.trigger === 'first-open' ? 'auto' : skill.trigger } : skill);
+      try { writeFile(manifest, skillInstructions({ ...delivery, skills: currentSkills })); } catch (error) { this.report(error); }
+    }
     const result = { ...delivery, bundle };
     this.deliveries.set(key, result);
     return result;
@@ -380,8 +400,6 @@ class SkillsStore {
 
   endSession(projectId, sessionId) {
     if (!sessionId) return;
-    try { fs.rmSync(path.join(this.dataDir, 'skill-delivery', `${safeId(JSON.stringify([projectId, sessionId]))}.md`), { force: true }); }
-    catch (error) { this.report(error); }
     for (const key of this.deliveries.keys()) {
       const [project, , session] = JSON.parse(key);
       if (project === projectId && session === sessionId) this.deliveries.delete(key);

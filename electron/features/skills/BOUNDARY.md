@@ -1,7 +1,6 @@
 # Boundary: Skills
 
-The skills library: built-in, global and project SKILL.md folders with their options, versions, pending proposals and
-usage, the instructions each agent session receives about them, and the settings page that shows and edits them.
+The skills library: built-in, global and project skills, their options, history and proposals, session instruction delivery, and the settings page that edits them.
 
 ## Owns
 - `electron/features/skills/**`
@@ -9,15 +8,14 @@ usage, the instructions each agent session receives about them, and the settings
 - `src/features/settings/skill-*.ts`
 
 ## Interface
-- `SkillsStore` (`electron/features/skills/store.cjs`) — the library for main: list, read, save, options, history, per-session delivery, usage and folder watching
-- `registerSkillsIpc` (`electron/features/skills/ipc.cjs`) — the nine `skills:*` IPC handlers behind the preload skills API
-- `nativeSkillActions` (`electron/features/skills/native-actions.cjs`) — feeds SDK and app-server tool reads into the action log so usage is recorded
-- `frontMatter` (`electron/features/skills/front-matter.cjs`) — the one front-matter decoder, shared with activity descriptions in agent-actions.cjs
-- `skillInstructions` (`electron/features/skills/delivery.cjs`) — the skill instruction text of a delivery, for the startup note in handoff.cjs
-- `SSH_REFERENCE_NOTE` (`electron/features/skills/delivery.cjs`) — the SSH reference-copy sentence the startup note repeats
-- `plain` (`electron/features/skills/delivery.cjs`) — flattens note text to one TOML-safe line
-- `MAX_NOTE` (`electron/features/skills/delivery.cjs`) — the startup note's length budget
-- `SkillsSettings` (`src/features/settings/SkillsSettings.tsx`) — the 技能 settings page
+- `SkillsStore` (`electron/features/skills/store.cjs`) — library operations, watching, current project/agent manifests, launch snapshots and injected routingNote(); local `<sessionManifest>.json` carries fingerprint, projectRoot and managed roots, and SSH creates equivalent metadata using bundle.key after remote path expansion
+- `registerSkillsIpc` (`electron/features/skills/ipc.cjs`) — the nine skills IPC handlers
+- `nativeSkillActions` (`electron/features/skills/native-actions.cjs`) — records successful SDK and app-server skill reads
+- `frontMatter` (`electron/features/skills/front-matter.cjs`) — the shared front-matter decoder
+- `skillInstructions` (`electron/features/skills/delivery.cjs`) — delivery text; also exports SSH_REFERENCE_NOTE, plain and MAX_NOTE for startup notes
+- `SkillsSettings` (`src/features/settings/SkillsSettings.tsx`) — the skills settings page
+- `sessionContext` (`electron/features/skills/session.cjs`) — fingerprinted SessionStart delivery and per-CLI receipts; also exports deliveryMarker, readDelivery and digest for the hook and startup note
+- `WorkerSkillProposals` (`electron/features/skills/worker-proposals.cjs`) — snapshots project and trusted managed skill roots, preserves proposals beside the answer, then restores unapproved changes
 
 ## May import
 - `src/shared/**`
@@ -25,23 +23,24 @@ usage, the instructions each agent session receives about them, and the settings
 - `electron/agent-actions.cjs`
 - `electron/codex-activity.cjs`
 - `electron/atomic-write.cjs`
+- `electron/boundaries.cjs`
 
 ## Invariants
-- Built-in skills are read-only: save, delete, revert, accepting a proposal and turning on autoOptimize or confirmChanges are refused — they ship with the app and are replaced on update — test: `tests/skills.test.cjs` › "skill defaults, exact public shape, read-only built-ins and local-only project scopes"
-- Built-in ids and names are defined only here, from the shipped folders; no other code (the settings UI included) names a `builtin:` id or a shipped skill name — a hard-coded id breaks silently when a built-in is renamed or added — test: `tests/boundary-skills.test.cjs` › "no code outside the skills backend names a built-in skill id or a shipped built-in name"
-- A built-in's defaults, timing and agent requirements come from its front matter, never from its name — a new built-in must work without code changes — test: `tests/builtin-skills.test.cjs` › "defaults, timing and requirements come from front matter for any built-in name"
-- Skill folders never escape managed storage: invalid names and symlinks are refused on read, save, import and delete — agents and imported folders supply these paths — test: `tests/skills.test.cjs` › "invalid names, imports and symlinked skill folders cannot escape managed storage"
-- An SSH session receives only enabled built-in and global skill text, never project skills or local paths — the remote host must not learn the local machine — test: `tests/skills.test.cjs` › "SSH bundle contains only enabled built-in/global files, never project skills or local paths"
-- An agent's proposed change waits in skill-pending and never changes the active file until the user accepts it — confirmChanges is the user's guarantee — test: `tests/skills.test.cjs` › "pending proposals do not change the active file; accept, reject and agent-created review"
-- An always or first-open skill's first run is claimed only by an observed agent launch, once per project, and only if enabled, not yielded and included in the delivery — a shell, preview, refresh or later agent in any terminal must not claim it; always stays always afterwards, first-open becomes auto — test: `tests/builtin-skills.test.cjs` › "first run is claimed by an agent, never a shell or refresh"
-- lastUsed is recorded only from a successful read of the skill file, never from a mention, a failed read or an unrelated path — the page shows it as fact — test: `tests/skills.test.cjs` › "successful Claude/Codex skill reads record lastUsed, failed/settled/mentioned/unrelated paths do not"
+- Built-in skills refuse save, delete, revert, accepting proposals and optimization options — shipped files are read-only and replaced on update — test: `tests/skills.test.cjs` › "skill defaults, exact public shape, read-only built-ins and local-only project scopes"
+- Built-in ids and names are defined only here; defaults, timing and requirements come from front matter — new built-ins must work without code changes or names hard-coded by callers — test: `tests/boundary-skills.test.cjs` › "no code outside the skills backend names a built-in skill id or a shipped built-in name"; test: `tests/builtin-skills.test.cjs` › "defaults, timing and requirements come from front matter for any built-in name"
+- Skill folders never escape managed storage; invalid names and symlinks are refused on read, save, import and delete — agents and imports supply these paths — test: `tests/skills.test.cjs` › "invalid names, imports and symlinked skill folders cannot escape managed storage"
+- SSH receives only enabled built-in/global text and optional adopted routing weights, never project skills or local paths — remote copies stay private to the remote session and weights stay outside committed files — test: `tests/skills.test.cjs` › "SSH bundle contains only enabled built-in/global files, never project skills or local paths"; test: `tests/skills-session.test.cjs` › "routing note is optional, current on a new delivery and included in bounded SSH manifests"
+- User-confirmed proposals wait in skill-pending; workers need a literal allowed SKILL.md path to apply an edit, and broad globs preserve proposals then restore pre-run bytes — the user and lead retain their respective approval controls — test: `tests/skills.test.cjs` › "pending proposals do not change the active file; accept, reject and agent-created review"; test: `tests/dispatch-skill-proposals.test.cjs` › "broad scope restores edited/new/deleted skills and preserves worker versions beside the answer"
+- Always/first-open first runs are claimed only by an observed launch, once per project, enabled and actually delivered; always stays always and first-open becomes auto — shells, previews and later agents cannot consume the first run — test: `tests/builtin-skills.test.cjs` › "first run is claimed by an agent, never a shell or refresh"
+- lastUsed records only a successful skill-file read, never a mention, failed read or unrelated path — the page shows usage as fact — test: `tests/skills.test.cjs` › "successful Claude/Codex skill reads record lastUsed, failed/settled/mentioned/unrelated paths do not"
+- Claude startup/resume deduplicate actual CLI session plus launch fingerprint and compact/clear force delivery; Codex's replayed note keeps a current project/agent manifest across terminal exits and app restarts, with immutable launch snapshots for first-run details, removed only with the project — instructions already in context are reused and owner prompts are never rewritten — test: `tests/skills-session.test.cjs` › "startup/resume deduplicate CLI session plus content fingerprint, compact/clear always deliver"; test: `tests/skills-session.test.cjs` › "Codex resume keeps the current project manifest across terminal exits and app restarts"
 
 ## Not ours
-- Scrubbing private data out of skill text — Activity pane (`electron/features/agents/skill-privacy.cjs`)
-- Composing the startup note around the skill instructions and its length budget — handoff (`electron/features/agents/handoff.cjs`, unowned)
-- The preload skills API and the SkillInfo / SkillDetail types — shared contract (`electron/preload.cjs`, `src/shared/types.ts`, unowned)
-- Rendering Markdown — Reading view (`Markdown` in `src/features/reading/ReadingView.tsx`)
-- The settings dialog and its other pages — settings shell (`src/features/settings/SettingsDialog.tsx`, unowned)
-- Polling and watching files — Completion (`monitorActivity` in `electron/codex-activity.cjs`)
-- Parsing agent tool calls into actions — `electron/agent-actions.cjs` (unowned)
-- Listing built-in commands in the reading view's command menu — Reading view
+- Scrubbing private data from skill text — Activity pane (skill-privacy.cjs)
+- Composing the startup note and its length budget — handoff (electron/features/agents/handoff.cjs)
+- Preload skills API and shared skill types — shared contract
+- Markdown rendering and built-in commands in the reading menu — Reading view
+- Settings dialog and other pages — Settings shell
+- Polling and watching files — Completion (monitorActivity)
+- Parsing tool calls into actions — electron/agent-actions.cjs
+- Forwarding the owner's unmodified prompts and PTY keys — Terminal input

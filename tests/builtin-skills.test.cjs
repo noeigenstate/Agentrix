@@ -349,7 +349,7 @@ for (const trigger of ['always', 'first-open']) test(`simultaneous launches clai
   assert.equal(store.options[id].firstOpenedProjects[project.id], first.skillSessionId);
   const claimedSession = first.skillSessionId;
   const firstManifest = start(store, project, first.skillSessionId).manifest;
-  context.endSkillSession(first); assert.equal(fs.existsSync(firstManifest), false);
+  context.endSkillSession(first); assert.equal(fs.existsSync(firstManifest), true);
   first.agent = 'claude'; context.startSkillSession(project, first, 2);
   assert.equal(first.sessionId, 'one'); assert.notEqual(first.skillSessionId, claimedSession);
   assert.equal(store.options[id].firstOpenedProjects[project.id], claimedSession);
@@ -430,16 +430,21 @@ test('CLAUDE.md symlinked to AGENTS.md is followed and its target changes are de
   store.refresh(); assert.deepEqual(store.info(store.entry('builtin:code-standard')).yieldsTo, []); assert.equal(errors.length, 0);
 });
 
-test('session manifests are removed on exit, startup sweeps stale hashes and removed projects are pruned', t => {
+test('project manifests and launch snapshots survive exits and restarts and are pruned only with their project', t => {
   const { store, projects, options, dataDir } = fixture(t), id = 'builtin:code-standard';
   const first = start(store, projects[0], 'first'), second = start(store, projects[1], 'second');
   store.invalidateDelivery(); store.endSession(projects[0].id, 'first');
-  assert.equal(fs.existsSync(first.manifest), false); assert.equal(fs.existsSync(second.manifest), true);
+  assert.equal(fs.existsSync(first.manifest), true); assert.equal(fs.existsSync(second.manifest), true);
+  assert.equal(fs.existsSync(first.sessionManifest), true); assert.equal(fs.existsSync(`${first.sessionManifest}.json`), true);
   const removed = projects.shift(); store.syncWatchers();
+  assert.equal(fs.existsSync(first.manifest), false); assert.equal(fs.existsSync(first.sessionManifest), false);
+  assert.equal(fs.existsSync(`${first.sessionManifest}.json`), false);
+  assert.equal(fs.existsSync(second.sessionManifest), true);
   assert.equal(store.options[id].firstOpenedProjects[removed.id], undefined);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'skills.json'), 'utf8'))[id].firstOpenedProjects[removed.id], undefined);
   const keep = path.join(dataDir, 'skill-delivery', 'keep.md'); put(keep, 'unrelated');
   store.close(); const reopened = new SkillsStore(options); t.after(() => reopened.close());
-  assert.equal(fs.existsSync(second.manifest), false); assert.equal(fs.readFileSync(keep, 'utf8'), 'unrelated');
+  assert.equal(fs.existsSync(second.manifest), true); assert.equal(fs.existsSync(second.sessionManifest), true);
+  assert.equal(fs.readFileSync(keep, 'utf8'), 'unrelated');
   assert.equal(reopened.options[id].firstOpenedProjects[projects[0].id], 'second');
 });

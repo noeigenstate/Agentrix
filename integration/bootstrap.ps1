@@ -180,13 +180,7 @@ function global:claude {
         return
     }
     Send-AgentrixEvent 'codex-started' -Agent 'claude' -Command (Get-AgentrixCommand $args)
-    $currentNote = Get-AgentrixReadingNote
-    $readingNote = if ($currentNote) { @('--append-system-prompt', $currentNote) } else { @() }
-    if (-not $global:AgentrixClaudeExecutable -or [IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -ne '.exe') {
-        try { & $global:AgentrixClaudeCommand @readingNote @args }
-        finally { Send-AgentrixEvent 'codex-exited' $global:LASTEXITCODE -Agent 'claude' }
-        return
-    }
+    $readingNote = @('--append-system-prompt', 'Agentrix delivers this session''s instructions through its SessionStart hook.')
     $hookCommand = @(
         ($global:AgentrixSession.powershellPath -replace '\\', '/'),
         '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass',
@@ -197,6 +191,11 @@ function global:claude {
     ) -join ' '
     $hook = { param($kind) @{ hooks = @(@{ type = 'command'; command = ($hookCommand + ' -Kind ' + $kind); timeout = 10 }) } }
     $settings = @{ hooks = @{ UserPromptSubmit = @(& $hook 'start'); Stop = @(& $hook 'stop'); Notification = @(& $hook 'notify'); SessionStart = @(& $hook 'session') } } | ConvertTo-Json -Depth 6 -Compress
+    if (-not $global:AgentrixClaudeExecutable -or [IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -ne '.exe') {
+        try { & $global:AgentrixClaudeCommand --settings $settings @readingNote @args }
+        finally { Send-AgentrixEvent 'codex-exited' $global:LASTEXITCODE -Agent 'claude' }
+        return
+    }
     $claudeExit = 0
     try {
         $startInfo = [Diagnostics.ProcessStartInfo]::new()

@@ -2,7 +2,7 @@ const MAX_NOTE = 6000;
 const SSH_REFERENCE_NOTE = 'Shipped built-in and global skills are read-only reference copies for this SSH session, contain SKILL.md text only, and are deleted when it ends.';
 const plain = value => String(value || '').replace(/\\/g, '/').replace(/"/g, "'").replace(/[\x00-\x1f\x7f]+/g, ' ');
 
-function skillInstructions({ skills, yielded = [], globalFolder, agents, pendingPath, remote = false, skippedNote = '' }) {
+function skillInstructions({ skills, yielded = [], globalFolder, agents, pendingPath, remote = false, skippedNote = '', routingNote = '' }) {
   const enabled = skills.filter(skill => skill.enabled), parts = [];
   parts.push(remote ? '{AGENTRIX_AGENTS}' : `Installed agents: Claude Code ${agents?.claude?.installed ? 'installed' : 'missing'}; Codex ${agents?.codex?.installed ? 'installed' : 'missing'}.`);
   for (const skill of enabled.filter(skill => skill.trigger === 'always')) parts.push(`Before any task, read and follow ${skill.path}${skill.firstRun ? '; this is its first run in this project' : ''}.`);
@@ -13,6 +13,7 @@ function skillInstructions({ skills, yielded = [], globalFolder, agents, pending
   parts.push(`Global user skills folder: ${globalFolder}.`);
   if (remote) parts.push(SSH_REFERENCE_NOTE);
   if (skippedNote) parts.push(skippedNote);
+  if (routingNote) parts.push(routingNote);
   for (const skill of enabled.filter(skill => !remote && skill.source === 'user')) {
     parts.push(`${skill.path}: ${!skill.autoOptimize ? 'must not change it' : skill.confirmChanges
       ? `propose edits only to ${pendingPath(skill)}; do not change the active file until the user accepts`
