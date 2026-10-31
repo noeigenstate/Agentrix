@@ -1927,5 +1927,7 @@
   "返工或退回": "Reworked or sent back",
   "已记录的看板建议": "Recorded dashboard suggestion",
   "{model} 的 {kind} 任务权重建议：从 {from} 调整为 {to}。此建议已不再生成，仍可撤销此决策。": "Task weight suggestion for {model} / {kind}: {from} to {to}. This suggestion is no longer generated; you can still withdraw the decision.",
-  "此建议已不再生成，仍可撤销此决策。": "This suggestion is no longer generated; you can still withdraw the decision."
+  "此建议已不再生成，仍可撤销此决策。": "This suggestion is no longer generated; you can still withdraw the decision.",
+  "不填": "Leave empty",
+  "前往第一项": "Go to the first one"
 }
