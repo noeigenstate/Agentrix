@@ -1262,7 +1262,6 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     s.native?.registry.close();
     endSkillSession(s);
     skills.endSession(project.id, sessionId);
-    if (skillNoteFile) fs.rmSync(skillNoteFile, { force: true });
     stopUsageAccount(s);
     s.status = 'exited'; s.ready = false; s.codexActive = false;
     readingHistory.close(id);
@@ -1272,11 +1271,22 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     restorePlans.delete(id);
     if (terminal.error || exitCode) s.error = terminal.error || t('终端已退出（代码 {code}）。', { code: exitCode });
     if (!quitting && !exitCode) store.setRestore(id, { terminal: false, codex: false });
-    if (bootstrapFile) fs.rmSync(bootstrapFile, { force: true });
+    if (bootstrapFile || skillNoteFile) cleanupTerminalFiles(s);
     broadcast();
   });
   captureBranch(project);
   broadcast();
+}
+
+function cleanupTerminalFiles(s) {
+  if (s.bootstrapFile) {
+    const folder = path.dirname(s.bootstrapFile), prefix = `${s.sessionId}-claude-settings-`;
+    for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+      if (!entry.isDirectory() && entry.name.startsWith(prefix)) fs.rmSync(path.join(folder, entry.name), { force: true });
+    }
+    fs.rmSync(s.bootstrapFile, { force: true });
+  }
+  if (s.skillNoteFile) fs.rmSync(s.skillNoteFile, { force: true });
 }
 
 function disposeTerminal(id) {
@@ -1292,8 +1302,7 @@ function disposeTerminal(id) {
   for (const timer of s.submissionPolls || []) clearTimeout(timer);
   s.activityMonitor?.stop(); s.gate.dispose(); s.promptQueue.reset(); s.completionWork?.reset();
   try { s.terminal.kill(); } catch { }
-  if (s.bootstrapFile) fs.rmSync(s.bootstrapFile, { force: true });
-  if (s.skillNoteFile) fs.rmSync(s.skillNoteFile, { force: true });
+  cleanupTerminalFiles(s);
 }
 
 function registerIpc() {

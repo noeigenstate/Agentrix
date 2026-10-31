@@ -11,6 +11,7 @@ const { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRoll
 const { execFileSync } = require('node:child_process');
 const { TokenRates } = require('../electron/features/agents/token-rate.cjs');
 const { createEventServer } = require('../electron/events.cjs');
+const { digest, deliveryMarker } = require('../electron/features/skills/session.cjs');
 
 const helper = path.resolve(__dirname, '../integration/dispatch.cjs');
 const worker = path.resolve(__dirname, 'fixtures/dispatch-worker.cjs');
@@ -27,7 +28,7 @@ const codex = [
   { record: { type: 'turn.completed', usage: { output_tokens: 150, reasoning_output_tokens: 30 } } },
 ];
 
-async function fixture(t, lines = codex, { agent = 'codex', role = '执行', bootstrap = true, exitCode = 0, hold, timeout = 30000, extra = [], setup, isolated = false } = {}) {
+async function fixture(t, lines = codex, { agent = 'codex', role = '执行', bootstrap = true, exitCode = 0, hold, timeout = 30000, extra = [], setup, isolated = false, environment = () => ({}) } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const directory = isolated ? path.join(root, 'worker') : root;
   if (isolated) {
@@ -56,6 +57,7 @@ run(process.argv.slice(2), {startTimeout:${timeout}, resolveExecutable:(_,args)=
   const env = { ...process.env, CODEX_HOME: path.join(directory, 'codex'), DISPATCH_FIXTURE: input, DISPATCH_CAPTURE: capture };
   delete env.AGENTRIX_BOOTSTRAP;
   delete env.AGENTRIX_READING_NOTE_FILE; delete env.AGENTRIX_READING_NOTE;
+  Object.assign(env, await environment(directory));
   if (bootstrap) env.AGENTRIX_BOOTSTRAP = config;
   const child = spawn(process.execPath, [runner, ...args], { env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
   let stdout = '', stderr = '';
@@ -557,8 +559,9 @@ test('dispatch restores unapproved skill edits and reports proposal counts on su
     });
     const result = await f.finished;
     assert.equal(result.code, exitCode);
-    assert.match(result.stdout, /1 skill proposals pending lead approval/);
+    assert.match(result.stdout, /1 skill proposals restored and awaiting the lead/);
     assert.equal(f.events.at(-1).skillProposals, 1);
+    assert.equal(f.events.at(-1).skillChangesLeftLive, 0);
     assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Pre-run contents.');
     const folder = (await fs.readdir(f.directory)).find(name => name.startsWith('answer.md.skill-proposals-'));
     assert.equal(await fs.readFile(path.join(f.directory, folder, '1.SKILL.md'), 'utf8'), 'Worker proposal.');
@@ -573,6 +576,7 @@ test('an unconfirmed exited worker restores its skill edits before the failure e
   });
   assert.notEqual((await f.finished).code, 0);
   assert.equal(f.events.at(-1).skillProposals, 1);
+  assert.equal(f.events.at(-1).skillChangesLeftLive, 0);
   assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Pre-run contents.');
 });
 
@@ -583,6 +587,29 @@ test('dispatch reports shared-checkout changes without reverting them and prints
   });
   const result = await f.finished;
   assert.equal(result.code, 0);
-  assert.match(result.stdout, /1 skill proposals pending lead approval · skill guard report-only: snapshot limits exceeded/);
+  assert.match(result.stdout, /1 skill changes left live \(author unknown\) · skill guard report-only: snapshot limits exceeded/);
+  assert.doesNotMatch(result.stdout, /awaiting the lead|pending lead approval/);
+  assert.equal(f.events.at(-1).skillProposals, 0);
+  assert.equal(f.events.at(-1).skillChangesLeftLive, 1);
   assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Concurrent live version.');
+});
+
+test('dispatch reports restored proposals and live managed changes separately in the same end line and event', async t => {
+  const f = await fixture(t, [...codex, { write: 'skills/sample/SKILL.md', text: 'Worker proposal.' }, { write: 'managed/sample/SKILL.md', text: 'Owner live change.' }], {
+    isolated: true, extra: ['--allow', 'skills/**', '--allow', 'managed/**'],
+    setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'skills/sample/SKILL.md': 'Original.', 'managed/sample/SKILL.md': 'Owner original.' }),
+    environment: async directory => {
+      const manifest = path.join(directory, 'manifest.md'), fingerprint = digest('mixed');
+      await fs.writeFile(manifest, 'Instructions.');
+      await fs.writeFile(`${manifest}.json`, JSON.stringify({ projectRoot: directory, fingerprint, roots: [path.join(directory, 'managed')] }));
+      return { AGENTRIX_READING_NOTE: `Note. ${deliveryMarker({ manifest, fingerprint })}` };
+    },
+  });
+  const result = await f.finished;
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /1 skill proposals restored and awaiting the lead · 1 skill changes left live \(author unknown\)/);
+  assert.equal(f.events.at(-1).skillProposals, 1);
+  assert.equal(f.events.at(-1).skillChangesLeftLive, 1);
+  assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Original.');
+  assert.equal(await fs.readFile(path.join(f.directory, 'managed/sample/SKILL.md'), 'utf8'), 'Owner live change.');
 });

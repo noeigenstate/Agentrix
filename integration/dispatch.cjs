@@ -403,9 +403,15 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
   let options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, endSent = false;
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
-  let team = null, admission = null, teamFinished = false, roundtable = false, skillGuard = null, skillProposals = 0;
-  const restoreSkills = changedFiles => { if (skillGuard) skillProposals = skillGuard.finish(id, changedFiles); };
-  const proposalNote = () => (skillProposals ? ` · ${skillProposals} skill proposals pending lead approval` : '')
+  let team = null, admission = null, teamFinished = false, roundtable = false, skillGuard = null, skillProposals = 0, skillChangesLeftLive = 0;
+  const restoreSkills = changedFiles => {
+    if (!skillGuard) return;
+    const total = skillGuard.finish(id, changedFiles);
+    skillProposals = skillGuard.restoredCount;
+    skillChangesLeftLive = total - skillProposals;
+  };
+  const proposalNote = () => (skillProposals ? ` · ${skillProposals} skill proposals restored and awaiting the lead` : '')
+    + (skillChangesLeftLive ? ` · ${skillChangesLeftLive} skill changes left live (author unknown)` : '')
     + [...(skillGuard?.notes || [])].map(note => ` · ${note}`).join('');
   const teamLabel = (end = false) => !team ? '' : roundtable ? ` · roundtable ${options.meeting}`
     : options.skipMeeting && !end ? ` · roundtable skipped: ${options.skipMeeting}` : '';
@@ -439,7 +445,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (child?.pid && !exited && child.exitCode === null) return;
     try { restoreSkills(); } catch {}
     send({ type: 'dispatch-end', id, model: 'unreported', effort: null, fast: null, exitCode, reason: 'unconfirmed',
-      inputTokens: null, cachedTokens: null, reportedCostUsd: null, outputTokens: null, totalOutputTokens: null, activeMs: null, verdict: 'unverified', skillProposals, endedAt: Date.now() });
+      inputTokens: null, cachedTokens: null, reportedCostUsd: null, outputTokens: null, totalOutputTokens: null, activeMs: null, verdict: 'unverified', skillProposals, skillChangesLeftLive, endedAt: Date.now() });
     endSent = true;
   };
   const reported = () => {
@@ -586,7 +592,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()} · out ${options.out}`);
     if (!endSent) send({ type: 'dispatch-end', id, ...route, exitCode, reason, ...output.usage(), verdict: routingVerdict(output, declared()),
       ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
-      ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), skillProposals, endedAt: Date.now() });
+      ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
     await new Promise(resolve => log.end(resolve));
     return exitCode;
   } catch (error) {
@@ -598,7 +604,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       const bookkeeping = await recordTeam({ answer: '', header: '', reason });
       signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()} · out ${options.out}`);
       if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', ...output.usage(),
-        verdict: routingVerdict(output, declared()), skillProposals, endedAt: Date.now() });
+        verdict: routingVerdict(output, declared()), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
     }
     log?.destroy();
     return 1;

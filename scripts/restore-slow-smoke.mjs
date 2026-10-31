@@ -109,7 +109,7 @@ async function runScenario(label, delay) {
         assert.equal(result.args[0], '--settings', `${label}: ${project.name} uses the Claude wrapper`);
         // The hooks travel as a settings file (Windows PowerShell does not escape JSON for claude.cmd); the wrapper deletes it
         // when Claude exits, so only its name is left to check here.
-        assert.match(result.args[1], /[\\/]claude-settings-[0-9a-f]{32}\.json$/, `${label}: ${project.name} receives a settings file`);
+        assert.match(result.args[1], /[\\/][\w-]+-claude-settings-(?:[0-9a-f]{32}\.json|[A-Za-z0-9]{6})$/, `${label}: ${project.name} receives a session-owned settings file`);
         // Then what the reading view can show (electron/features/agents/reading-note.cjs), before the resume arguments.
         assert.deepEqual([result.args[2], /^You run inside Agentrix/.test(result.args[3])], ['--append-system-prompt', true], `${label}: ${project.name} is told what the reading view shows`);
         assert.deepEqual(result.args.slice(4), ['--resume', project.sessionId, '继续'], `${label}: ${project.name} resumes intact`);

@@ -22,11 +22,15 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from email.utils import parsedate_tz, mktime_tz
+from contextlib import contextmanager
 
 PAGE_BYTES = 256 * 1024
 MAX_READ = 256 * 1024
 MAX_MESSAGE = 2 * 1024 * 1024
 PREFIX = "PGW1 "
+SKILL_STATE_LOCK = threading.Lock()
+SKILL_LEASE_SECONDS = 10 * 60
+SKILL_RETENTION_SECONDS = 30 * 24 * 60 * 60
 IMAGE_TYPES = {".png": "image/png", ".apng": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".jpe": "image/jpeg", ".jfif": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp", ".avif": "image/avif", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
 VIDEO_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".ogv": "video/ogg", ".ogg": "video/ogg", ".mov": "video/quicktime", ".mkv": "video/x-matroska", ".avi": "video/x-msvideo"}
 
@@ -73,9 +77,28 @@ def write_skill_reference(filename, text):
     finally:
         if os.path.exists(temporary): os.unlink(temporary)
 
+@contextmanager
+def skill_state_lock(state_dir):
+    """Serialize lease acquisition with pruning, including separate SSH connections on the Linux host."""
+    if not state_dir:
+        yield
+        return
+    with SKILL_STATE_LOCK:
+        os.makedirs(state_dir, mode=0o700, exist_ok=True)
+        info = os.lstat(state_dir)
+        if not stat.S_ISDIR(info.st_mode) or hasattr(os, "getuid") and info.st_uid != os.getuid(): raise ValueError("Unsafe remote skill state.")
+        descriptor = os.open(os.path.join(state_dir, ".lock"), os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        try:
+            if os.name == "posix":
+                import fcntl
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally: os.close(descriptor)
+
 def prune_skill_state(state_dir, current_key, now=None):
-    """References from a different bundle expire on spawn; receipts have a 30-day lifetime."""
-    cutoff = (time.time() if now is None else now) - 30 * 24 * 60 * 60
+    """Only expired, unleased references can be removed; receipts also retain their 30-day lifetime."""
+    now = time.time() if now is None else now
+    cutoff = now - SKILL_RETENTION_SECONDS
     def entries(folder):
         try:
             info = os.lstat(folder)
@@ -87,10 +110,6 @@ def prune_skill_state(state_dir, current_key, now=None):
         if not isinstance(error[1], PermissionError): raise error[1]
         os.chmod(filename, 0o700 if os.path.isdir(filename) else 0o600)
         function(filename)
-    for entry in entries(os.path.join(state_dir, "references")):
-        if re.fullmatch(r"[a-f0-9]{64}", entry.name) and entry.name != current_key and entry.is_dir(follow_symlinks=False):
-            try: shutil.rmtree(entry.path, onerror=remove_readonly)
-            except OSError: pass
     def receipts(folder, depth):
         for entry in entries(folder):
             try:
@@ -100,7 +119,16 @@ def prune_skill_state(state_dir, current_key, now=None):
                     receipts(entry.path, depth - 1)
                     if not os.listdir(entry.path): os.rmdir(entry.path)
             except OSError: pass
-    receipts(os.path.join(state_dir, "delivered"), 2)
+    with skill_state_lock(state_dir):
+        for entry in entries(os.path.join(state_dir, "references")):
+            if not re.fullmatch(r"[a-f0-9]{64}", entry.name) or entry.name == current_key or not entry.is_dir(follow_symlinks=False): continue
+            try:
+                if entry.stat(follow_symlinks=False).st_mtime >= cutoff: continue
+                if any(lease.name.startswith(".lease-") and lease.is_file(follow_symlinks=False)
+                       and lease.stat(follow_symlinks=False).st_mtime >= now - SKILL_LEASE_SECONDS for lease in entries(entry.path)): continue
+                shutil.rmtree(entry.path, onerror=remove_readonly)
+            except OSError: pass
+        receipts(os.path.join(state_dir, "delivered"), 2)
 
 def official_claude_route(route, cwd):
     if not isinstance(route, dict) or route.get("overridden") is not False: return False
@@ -784,6 +812,8 @@ class Worker:
         self.dispatch_note = None
         self.skill_paths = {}
         self.skill_state_dir = None
+        self.skill_leases = {}
+        self.skill_lease_next = 0
         self.skill_note_ready = threading.Event()
         self.skill_note_sequence = None
         self.master = None
@@ -1171,35 +1201,64 @@ class Worker:
 
     def install_skills(self, reading_note):
         """Private reference copies survive resume; project skills remain in the remote repository."""
-        bundle = self.skills_bundle if self.skills_bundle is not None else {}
-        if not isinstance(bundle, dict) or not isinstance(bundle.get("files", []), list): raise ValueError("Invalid remote skills bundle.")
-        key = bundle.get("key") or hashlib.sha256(json.dumps(bundle, sort_keys=True).encode()).hexdigest()
-        if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key): raise ValueError("Invalid remote skills key.")
-        folder = os.path.join(self.skill_state_dir, "references", key) if self.skill_state_dir else os.path.join(self.temp, "skills")
-        os.makedirs(folder, mode=0o700, exist_ok=True)
-        info = os.lstat(folder)
-        if not stat.S_ISDIR(info.st_mode) or hasattr(os, "getuid") and (info.st_uid != os.getuid() or info.st_mode & 0o077): raise ValueError("Unsafe remote skill folder.")
-        agents = "Installed agents: Claude Code %s; Codex %s." % tuple("installed" if shutil.which(name) else "missing" for name in ("claude", "codex"))
-        def expand(text):
-            return text.replace("{AGENTRIX_SKILLS}", folder.replace(os.sep, "/")).replace("{AGENTRIX_AGENTS}", agents)
-        self.skill_paths = {}
-        for skill in bundle.get("files", []):
-            if not isinstance(skill, dict) or not isinstance(skill.get("id"), str) or skill.get("assets"): raise ValueError("Only remote SKILL.md text is supported.")
-            name, scope, text = skill.get("name"), skill.get("scope"), skill.get("text")
-            if not isinstance(name, str) or not re.fullmatch(r"[\w][\w.-]{0,119}", name) or name.endswith(".") or scope not in ("builtin", "global"):
-                raise ValueError("Invalid remote skill.")
-            if not isinstance(text, str) or len(text.encode("utf-8")) > 512 * 1024: raise ValueError("Remote skill is too large.")
-            directory = os.path.join(folder, scope, name)
-            os.makedirs(directory, mode=0o700, exist_ok=True)
-            filename = os.path.join(directory, "SKILL.md")
-            write_skill_reference(filename, text)
-            self.skill_paths[skill["id"]] = filename.replace(os.sep, "/")
-        os.makedirs(os.path.join(folder, "global"), mode=0o700, exist_ok=True)
-        instructions = bundle.get("instructions", "")
-        if not isinstance(instructions, str) or len(instructions.encode("utf-8")) > 2 * 1024 * 1024: raise ValueError("Remote skill manifest is too large.")
-        write_skill_reference(os.path.join(folder, "instructions.md"), expand(instructions))
-        with open(os.path.join(self.temp, "skill-key.txt"), "w", encoding="utf-8") as output: output.write(key)
-        return expand(reading_note) if isinstance(reading_note, str) else ""
+        with self.lock, skill_state_lock(self.skill_state_dir):
+            if self.stopping: raise ValueError("Remote terminal is closed.")
+            bundle = self.skills_bundle if self.skills_bundle is not None else {}
+            if not isinstance(bundle, dict) or not isinstance(bundle.get("files", []), list): raise ValueError("Invalid remote skills bundle.")
+            key = bundle.get("key") or hashlib.sha256(json.dumps(bundle, sort_keys=True).encode()).hexdigest()
+            if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key): raise ValueError("Invalid remote skills key.")
+            folder = os.path.join(self.skill_state_dir, "references", key) if self.skill_state_dir else os.path.join(self.temp, "skills")
+            os.makedirs(folder, mode=0o700, exist_ok=True)
+            info = os.lstat(folder)
+            if not stat.S_ISDIR(info.st_mode) or hasattr(os, "getuid") and (info.st_uid != os.getuid() or info.st_mode & 0o077): raise ValueError("Unsafe remote skill folder.")
+            if self.skill_state_dir:
+                if folder not in self.skill_leases or not os.path.isfile(self.skill_leases[folder]):
+                    descriptor, lease = tempfile.mkstemp(prefix=".lease-", dir=folder)
+                    os.close(descriptor)
+                    self.skill_leases[folder] = lease
+                os.utime(self.skill_leases[folder], None)
+            agents = "Installed agents: Claude Code %s; Codex %s." % tuple("installed" if shutil.which(name) else "missing" for name in ("claude", "codex"))
+            def expand(text):
+                return text.replace("{AGENTRIX_SKILLS}", folder.replace(os.sep, "/")).replace("{AGENTRIX_AGENTS}", agents)
+            self.skill_paths = {}
+            for skill in bundle.get("files", []):
+                if not isinstance(skill, dict) or not isinstance(skill.get("id"), str) or skill.get("assets"): raise ValueError("Only remote SKILL.md text is supported.")
+                name, scope, text = skill.get("name"), skill.get("scope"), skill.get("text")
+                if not isinstance(name, str) or not re.fullmatch(r"[\w][\w.-]{0,119}", name) or name.endswith(".") or scope not in ("builtin", "global"):
+                    raise ValueError("Invalid remote skill.")
+                if not isinstance(text, str) or len(text.encode("utf-8")) > 512 * 1024: raise ValueError("Remote skill is too large.")
+                directory = os.path.join(folder, scope, name)
+                os.makedirs(directory, mode=0o700, exist_ok=True)
+                filename = os.path.join(directory, "SKILL.md")
+                write_skill_reference(filename, text)
+                self.skill_paths[skill["id"]] = filename.replace(os.sep, "/")
+            os.makedirs(os.path.join(folder, "global"), mode=0o700, exist_ok=True)
+            instructions = bundle.get("instructions", "")
+            if not isinstance(instructions, str) or len(instructions.encode("utf-8")) > 2 * 1024 * 1024: raise ValueError("Remote skill manifest is too large.")
+            write_skill_reference(os.path.join(folder, "instructions.md"), expand(instructions))
+            with open(os.path.join(self.temp, "skill-key.txt"), "w", encoding="utf-8") as output: output.write(key)
+            return expand(reading_note) if isinstance(reading_note, str) else ""
+
+    def refresh_skill_leases(self):
+        with self.lock:
+            now = time.monotonic()
+            if self.stopping or now < self.skill_lease_next: return
+            with skill_state_lock(self.skill_state_dir):
+                for lease in self.skill_leases.values():
+                    try: os.utime(lease, None)
+                    except OSError: pass
+            self.skill_lease_next = now + 60
+
+    def release_skill_leases(self):
+        with self.lock:
+            if not self.skill_leases: return
+            with skill_state_lock(self.skill_state_dir):
+                for folder, lease in self.skill_leases.items():
+                    try:
+                        os.unlink(lease)
+                        os.utime(folder, None)
+                    except OSError: pass
+                self.skill_leases.clear()
 
     def startup_note(self, reading_note):
         # Expand every placeholder before applying the shell's existing limit; long notes must not kill a channel.
@@ -1341,6 +1400,7 @@ class Worker:
         import select
         try:
             while not self.stopping:
+                self.refresh_skill_leases()
                 readable, _, _ = select.select([self.master], [], [], 0.5)
                 if not readable: continue
                 data = os.read(self.master, 32768)
@@ -1351,6 +1411,7 @@ class Worker:
             _, status = os.waitpid(self.child, 0)
             code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status)
             self.emit({"type": "exit", "code": code})
+        self.release_skill_leases()
 
     def resize(self, cols, rows):
         if type(cols) is not int or type(rows) is not int or not 2 <= cols <= 500 or not 1 <= rows <= 250: raise ValueError("无效的终端尺寸。")
@@ -1379,6 +1440,7 @@ class Worker:
             try: os.killpg(self.child, signal.SIGHUP)
             except OSError: pass
         if hasattr(self, "listener"): self.listener.close()
+        self.release_skill_leases()
         if self.temp and os.path.dirname(os.path.realpath(self.temp)) == os.path.realpath(tempfile.gettempdir()) and os.path.basename(self.temp).startswith("agentrix-"):
             shutil.rmtree(self.temp, ignore_errors=True)
 

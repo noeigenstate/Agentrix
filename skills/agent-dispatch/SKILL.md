@@ -39,8 +39,10 @@ role in events). `--help` lists all six values. `--title`: one line, what the wo
   restored to the pre-run bytes, including uncommitted contents. Global, built-in and shared-checkout changes are
   report-only, marked "changed during the run, author unknown", and stay live. Scans skip node_modules and .git;
   snapshot limits degrade to report-only with a note on the end line. The end line reports
-  `N skill proposals pending lead approval`; `dispatch-end.skillProposals` is the same
-  count. Read the proposals and approve specific paths in a follow-up; proposals never apply themselves.
+  `N skill proposals restored and awaiting the lead` and `M skill changes left live (author unknown)` separately.
+  `dispatch-end.skillProposals` counts only restored proposals; `dispatch-end.skillChangesLeftLive` counts changes
+  left live. Both come from `index.json`'s `proposal.restored`. Read the preserved versions and approve specific paths
+  in a follow-up; report-only changes remain live and their authorship is unknown.
 
 - `--allow <glob>` (repeatable, relative to the git root): the only files the worker may change. The helper snapshots
   the working tree before and after (its own answer, log and ledger excluded) and reports every other changed file as

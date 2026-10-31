@@ -151,7 +151,9 @@ class WorkerSkillProposals {
       if (before.link) fs.symlinkSync(before.link, entry.file);
       else if (before.bytes) fs.writeFileSync(entry.file, before.bytes, { flag: 'wx', mode: before.mode });
     }
-    this.count = proposals.length; this.done = true;
+    this.count = proposals.length;
+    this.restoredCount = proposals.filter(proposal => proposal.restored).length;
+    this.done = true;
     return this.count;
   }
 }
