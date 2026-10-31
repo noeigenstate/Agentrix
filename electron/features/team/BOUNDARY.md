@@ -7,7 +7,7 @@ Coordinates dispatched workers through shared project memory, roundtable records
 - `electron/features/team/minutes-page.cjs`
 
 ## Interface
-- `projectTeam` (`electron/features/team/team.cjs`) — repository state, worker admission, context, meeting records, every-role end metadata, minutes data and consolidation with validated incidents and findings
+- `projectTeam` (`electron/features/team/team.cjs`) — repository state, worker admission, context, meeting records, every-role end metadata, minutes with bounded latest issues snapshots and consolidation with validated incidents and findings
 - `minutesMarkdown` (`electron/features/team/team.cjs`) — two Markdown tables from the minutes-page data contract
 - `minutesPage` (`electron/features/team/minutes-page.cjs`) — a self-contained HTML document from the same minutes data
 
@@ -22,7 +22,7 @@ Coordinates dispatched workers through shared project memory, roundtable records
 - A different meeting waits for pending rounds; consolidated ids stay closed even after late ends and live workers prevent consolidation — resuming an old review must not block a new round — test: `tests/dispatch-team.test.cjs` › "meeting lifecycle keeps consolidated ids closed even after late ends"; test: `tests/dispatch-team.test.cjs` › "review and investigation resumed from a consolidated round do not block the next roundtable"
 - Only complete understanding and exact confirmation blocks advance a clean meeting; other ends are invalid — failed work cannot approve the next run — test: `tests/dispatch-team.test.cjs` › "failed meetings are invalid even when the answer confirms"
 - Briefs carry bounded recent memory, live peers and repository context; findings reach memory and any explicit ledger — workers need shared decisions and each other's findings — test: `tests/dispatch-team.test.cjs` › "briefs inject ledger first then recent memory live peers and bounded repository context"
-- Minutes retain each session's latest understanding, status and new confirmation questions with the agreed page shape — the owner sees the interfaces and unresolved questions — test: `tests/dispatch-team.test.cjs` › "minutes write two escaped Markdown tables and the HTML companion without a worker"; test: `tests/dispatch-team.test.cjs` › "confirmation questions reach both minutes formats with their language prefix"
+- Minutes retain each session's latest understanding, status and questions, and explicitly supplied issues append a bounded latest snapshot — the owner sees agreements and the dashboard distinguishes historical absence from zero issues — test: `tests/team-issues.test.cjs` › "minutes persist bounded latest issues snapshots and distinguish explicit zero from no snapshot"
 - Consolidation requires results and architecture headings and appends both memory and the journal — a prose-free completion cannot unlock the next round — test: `tests/dispatch-team.test.cjs` › "consolidation validates headings before appending memory and journal"
 
 ## Not ours

@@ -59,12 +59,29 @@ test('prices.json lists the routed models, and a source is present exactly when 
   assert.match(shipped.updated, /^\d{4}-\d{2}-\d{2}$/);
   assert.deepEqual(Object.keys(shipped.models).sort(), ['claude-haiku-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5', 'gpt-6.1-sol', 'gpt-6.1-terra']);
   for (const [id, price] of Object.entries(shipped.models)) {
-    assert.deepEqual(Object.keys(price).sort(), ['cachedInputPerM', 'checkedAt', 'currency', 'inputPerM', 'outputPerM', 'source'], id);
+    assert.deepEqual(Object.keys(price).sort(), ['cachedInputPerM', 'checkedAt', 'currency', 'fast', 'inputPerM', 'outputPerM', 'source'], id);
     assert.equal(price.currency, 'USD', id);
     const rates = [price.inputPerM, price.cachedInputPerM, price.outputPerM];
     assert.ok(rates.every(rate => rate === null || (Number.isFinite(rate) && rate >= 0)), id);
     const sourced = typeof price.source === 'string' && price.source.length > 0;
     assert.equal(sourced, rates.some(rate => rate !== null), `${id}: source exactly when a price is given`);
     assert.equal(typeof price.checkedAt === 'string', sourced, `${id}: checkedAt exactly when sourced`);
+    if (price.fast !== null) {
+      assert.deepEqual(Object.keys(price.fast).sort(), ['cachedInputPerM', 'inputPerM', 'outputPerM'], id);
+      assert.ok(Object.values(price.fast).every(value => Number.isFinite(value) && value >= 0), id);
+    }
   }
+});
+
+test('fast runs use their verified fast row and models without fast keep standard prices', () => {
+  const counts = { inputTokens: 1_000_000, cachedTokens: 1_000_000, totalOutputTokens: 1_000_000 };
+  for (const [model, standard, fast] of [
+    ['claude-opus-5-5', 24.2, 48.4], ['gpt-6.1-sol', 12.1, 24.2], ['gpt-6.1-terra', 6.05, 12.1],
+    ['claude-sonnet-5-5', 12.1, 12.1], ['claude-haiku-5-5', 0.61, 0.61],
+  ]) {
+    assert.ok(Math.abs(estimateCost({ model, ...counts, fast: false }, shipped).usd - standard) < 1e-9, model);
+    assert.ok(Math.abs(estimateCost({ model, ...counts, fast: true }, shipped).usd - fast) < 1e-9, model);
+    assert.ok(Math.abs(estimateCost({ model, ...counts, fast: null }, shipped).usd - standard) < 1e-9, model);
+  }
+  assert.equal(estimateCost({ model: 'gpt-6.1-sol', ...counts, fast: true, reportedCostUsd: 0 }, shipped).usd, 0);
 });
