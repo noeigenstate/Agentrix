@@ -14,11 +14,10 @@ const { nonnegative, text, modelOf, keyOf, execution, reviewFollowup, ratio, ave
 //   longest window. Previous periods are adjacent, equally long windows; all has no previous period.
 const DAY = 24 * 60 * 60 * 1000;
 
-function normalizeRuns(records, query, now) {
+function normalizeRuns(records, now) {
   const unique = new Map();
   for (const [index, record] of records.entries()) {
-    if (!nonnegative(record?.at) || record.at > now || query.projectId !== null && record.projectId !== query.projectId ||
-      !['codex', 'claude'].includes(record.agent)) continue;
+    if (!nonnegative(record?.at) || record.at > now || !['codex', 'claude'].includes(record.agent)) continue;
     const run = { ...record, model: modelOf(record.model), kind: text(record.kind, 32) || 'unreported' };
     unique.set(keyOf(record.projectId, record.id || index), run);
   }
@@ -57,24 +56,40 @@ function projectList(projects, records) {
   return [...list.values()].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }
 
+function kindRates(runs, passes) {
+  const groups = new Map();
+  for (const run of runs) {
+    const key = keyOf(run.kind, run.model);
+    if (!groups.has(key)) groups.set(key, { kind: run.kind, model: run.model, outcomes: [] });
+    const outcome = passes.get(run);
+    if (outcome !== null) groups.get(key).outcomes.push(outcome);
+  }
+  return [...groups.values()].map(({ kind, model, outcomes }) => ({ kind, model, runs: outcomes.length,
+    firstPassRate: ratio(outcomes.filter(Boolean).length, outcomes.length) }))
+    .sort((a, b) => a.kind.localeCompare(b.kind) || a.model.localeCompare(b.model));
+}
+
 function summarize({ records = {}, journals = [], projects = [], prices = {}, decisions = [], query = { projectId: null, range: '30d' }, now = 0, t } = {}) {
   const length = query.range === 'all' ? null : (query.range === '7d' ? 7 : 30) * DAY;
   const start = length === null ? 0 : now - length;
   const selected = record => nonnegative(record?.at) && record.at >= start && record.at <= now;
   const inProject = record => query.projectId === null || record.projectId === query.projectId;
-  const allRuns = normalizeRuns(records.runs || [], query, now);
+  const globalRuns = normalizeRuns(records.runs || [], now);
+  const globalEntries = journalEntries(journals, projects, null, now);
+  const globalRounds = roundData(globalEntries, globalRuns);
+  const passes = new Map(globalRuns.map(run => [run, workerPass(run, globalRounds.contexts)]));
+  const allRuns = globalRuns.filter(inProject);
   const allGrades = (records.grades || []).filter(grade => nonnegative(grade?.at) && grade.at <= now && inProject(grade) &&
     ['codex', 'claude'].includes(grade.agent) && ['passed', 'sent-back'].includes(grade.outcome)).map(grade => ({ ...grade, model: modelOf(grade.model) }));
-  const entries = journalEntries(journals, projects, query.projectId, now);
-  const { contexts, rounds: allRounds } = roundData(entries, allRuns);
+  const entries = query.projectId === null ? globalEntries : journalEntries(journals, projects, query.projectId, now);
+  const allRounds = query.projectId === null ? globalRounds.rounds : roundData(entries, allRuns).rounds;
   const runs = allRuns.filter(selected), grades = allGrades.filter(selected);
   const rounds = allRounds.filter(round => selected(round.row)).sort((a, b) => b.row.at - a.row.at || a.key.localeCompare(b.key));
   const incidents = entries.filter(entry => entry.type === 'incident' && selected(entry)).map(entry => ({ row: incidentOf(entry), key: entry.key }));
   const findings = entries.filter(entry => entry.type === 'finding' && selected(entry) && CATEGORIES.includes(entry.category) && entry.author !== 'unreported');
   const weights = currentWeights(decisions), quota = quotaData((records.quota || []).filter(selected).sort((a, b) => a.at - b.at));
-  const passes = new Map(runs.map(run => [run, workerPass(run, contexts)]));
   const leadPasses = grades.filter(grade => grade.submission === 1);
-  const observations = [...passes.values()].filter(value => value !== null).concat(leadPasses.map(grade => grade.outcome === 'passed'));
+  const observations = runs.map(run => passes.get(run)).filter(value => value !== null).concat(leadPasses.map(grade => grade.outcome === 'passed'));
   const modelNames = [...new Set([...runs, ...grades].map(value => value.model))].sort();
   const models = modelNames.map(model => {
     const modelRuns = runs.filter(run => run.model === model), modelGrades = grades.filter(grade => grade.model === model);
@@ -93,17 +108,13 @@ function summarize({ records = {}, journals = [], projects = [], prices = {}, de
       costUsd: costs.length ? costs.reduce((sum, cost) => sum + cost, 0) : null, costedRuns: costs.length,
       weight: modelWeights.length ? Math.min(...modelWeights.map(weight => weight.to)) : 1 };
   });
-  const groupedKinds = new Map(), groupedSpeed = new Map(), findingCells = new Map();
+  const groupedSpeed = new Map(), findingCells = new Map();
   for (const run of runs) {
-    const kind = keyOf(run.kind, run.model), day = keyOf(localDay(run.at), run.model);
-    if (!groupedKinds.has(kind)) groupedKinds.set(kind, []);
+    const day = keyOf(localDay(run.at), run.model);
     if (!groupedSpeed.has(day)) groupedSpeed.set(day, []);
-    groupedKinds.get(kind).push(run); groupedSpeed.get(day).push(run);
+    groupedSpeed.get(day).push(run);
   }
-  const kinds = [...groupedKinds.values()].map(group => {
-    const values = group.map(run => passes.get(run)).filter(value => value !== null);
-    return { kind: group[0].kind, model: group[0].model, runs: group.length, firstPassRate: ratio(values.filter(Boolean).length, values.length) };
-  }).sort((a, b) => a.kind.localeCompare(b.kind) || a.model.localeCompare(b.model));
+  const kinds = kindRates(runs, passes);
   const speed = [...groupedSpeed.values()].map(group => ({ day: localDay(group[0].at), model: group[0].model, tokensPerSecond: timedRate(group) }))
     .sort((a, b) => a.day.localeCompare(b.day) || a.model.localeCompare(b.model));
   for (const finding of findings) {
@@ -124,8 +135,8 @@ function summarize({ records = {}, journals = [], projects = [], prices = {}, de
       findingFixRate: ratio(knownFixes.filter(finding => finding.fixed).length, knownFixes.length) },
     models, kinds, speed, incidents: incidents.map(incident => incident.row).sort((a, b) => b.at - a.at), rounds: rounds.map(round => round.row),
     findings: [...findingCells.values()].sort((a, b) => a.author.localeCompare(b.author) || a.category.localeCompare(b.category)),
-    suggestions: suggestions({ incidents, kinds, rounds, decisions, t,
-      evidence: runs.map(run => ({ model: run.model, kind: run.kind, key: keyOf(run.projectId, run.id, run.at, passes.get(run)) })) }),
+    suggestions: suggestions({ incidents: globalEntries.filter(entry => entry.type === 'incident').map(entry => ({ row: incidentOf(entry), key: entry.key })),
+      kinds: kindRates(globalRuns, passes), rounds: globalRounds.rounds, decisions, t }),
     weights, prices: { updated: prices.updated || '', unpriced: [...new Set(runs.filter(run => !priceOf(run.model, prices)).map(run => run.model))].sort() } };
 }
 

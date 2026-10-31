@@ -193,6 +193,45 @@ test('weights are global, use the lowest adopted kind on a model row, and surviv
   assert.equal(model(result).weight, 0.8); assert.equal(result.weights.length, 2);
 });
 
+test('suggestions use all project and date evidence while displayed metrics follow the query', () => {
+  const terra = 'gpt-6.1-terra';
+  const runs = Array.from({ length: 5 }, (_, i) => [
+    run(`pass-${i}`, { at: now - 40 * DAY }),
+    run(`fail-${i}`, { projectId: 'b', model: terra, at: now - 10 * DAY, exitCode: 1 }),
+  ]).flat();
+  const journals = journal([entry('incident', 'old', { time: now - 40 * DAY, model: sol, kind: 'core',
+    weight: { kind: 'core', from: 1, to: 0.8 } }), entry('issues', 'old', { time: now - 40 * DAY,
+    issues: [{ issue: 'scope', raisedBy: sol, answer: 'split', result: 'changed the plan' }] })]);
+  const options = { records: { runs }, journals };
+  const first = summary(options);
+  assert.equal(first.kpis.runs, 0); assert.equal(first.suggestions.length, 3);
+  for (const projectId of [null, 'a', 'b']) for (const range of ['7d', '30d', 'all']) {
+    assert.deepEqual(summary({ ...options, query: { projectId, range } }).suggestions, first.suggestions);
+  }
+  const suggestion = first.suggestions.find(value => value.weight?.model === terra);
+  const decisions = [{ id: suggestion.id, state: 'adopted', at: now, weight: suggestion.weight }];
+  runs.push(run('one-more', { model: terra, exitCode: 1, projectId: 'b' }));
+  const next = summary({ ...options, decisions });
+  assert.equal(next.suggestions.length, first.suggestions.length);
+  assert.deepEqual(next.weights, [suggestion.weight]);
+  assert.equal(next.suggestions.find(value => value.id === suggestion.id).state, 'adopted');
+});
+
+test('first-pass sample thresholds exclude runs without an observed outcome on either model', () => {
+  for (const unknownModel of [sol, sonnet]) {
+    const runs = Array.from({ length: 5 }, (_, i) => [run(`good-${i}`), run(`bad-${i}`, { model: sonnet, agent: 'claude', exitCode: 1 })]).flat();
+    const unknown = runs.find(value => value.model === unknownModel);
+    unknown.exitCode = null;
+    runs.push(run('review', { model: unknownModel, role: '审查', kind: 'core' }));
+    const result = summary({ records: { runs } });
+    assert.equal(result.kpis.runs, 11);
+    assert.equal(result.kinds.find(row => row.model === unknownModel).runs, 4);
+    assert.deepEqual(result.suggestions, []);
+    unknown.exitCode = unknownModel === sol ? 0 : 1;
+    assert.equal(summary({ records: { runs } }).suggestions.length, 1);
+  }
+});
+
 test('worktrees sharing one common journal count once globally and remain selectable per project', () => {
   const entries = [entry('consolidate', 'shared')];
   const journals = [{ projectId: 'a', key: 'common', entries }, { projectId: 'b', key: 'common', entries }];

@@ -8,7 +8,7 @@ const STATES = ['open', 'adopted', 'dismissed'];
 const boundedText = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && !/[\x00-\x1f\x7f]/.test(value);
 function validWeight(weight) {
   return weight && !Array.isArray(weight) && Object.keys(weight).sort().join(',') === 'from,kind,model,to' &&
-    boundedText(weight.model) && TASK_KINDS.includes(weight.kind) && Number.isFinite(weight.from) && weight.from >= 0 &&
+    boundedText(weight.model) && /^[a-z0-9][a-z0-9.\-]{0,63}$/.test(weight.model) && TASK_KINDS.includes(weight.kind) && Number.isFinite(weight.from) && weight.from >= 0 &&
     Number.isFinite(weight.to) && weight.to >= 0.3 && weight.to <= 1.5;
 }
 function validDecision(record) {
