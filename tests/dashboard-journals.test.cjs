@@ -68,7 +68,7 @@ test('journal source probes only local repositories and drops watchers when proj
   projects = []; await source.sync(); assert.equal(source.watchers.size, 0); assert.ok(watchers.every(watcher => watcher.closed));
 });
 
-test('non-git results are cached per path until that project path is removed', async t => {
+test('non-git results are cached per path until the dashboard opens again or that project path is removed', async t => {
   const { directory } = lab(t);
   let projects = [{ id: 'a', path: directory }, { id: 'alias', path: directory }], probes = 0;
   const source = new DashboardJournals({ getProjects: () => projects, changed() {}, resolveCommon: async () => { probes++; return null; } });
@@ -76,8 +76,39 @@ test('non-git results are cached per path until that project path is removed', a
   await source.start(); await source.read(); await source.sync();
   assert.equal(probes, 1); assert.deepEqual(await source.read(), []);
   projects = [{ id: 'renamed', path: directory }]; await source.sync(); assert.equal(probes, 1);
+  await source.start(); await source.read(); await source.sync(); assert.equal(probes, 2);
   projects = []; await source.sync();
-  projects = [{ id: 'a', path: directory }]; await source.sync(); assert.equal(probes, 2);
+  projects = [{ id: 'a', path: directory }]; await source.sync(); assert.equal(probes, 3);
+});
+
+test('reopening the dashboard discovers a project initialized as Git after a cached miss and keeps successful probes', async t => {
+  const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-git-init-')));
+  const source = new DashboardJournals({ getProjects: () => [{ id: 'p', name: 'P', kind: 'local', path: directory }], changed() {} });
+  t.after(() => { source.stop(); fs.rmSync(directory, { recursive: true, force: true }); });
+  await source.start(); assert.deepEqual(await source.read(), []);
+  execFileSync('git', ['init', '-q'], { cwd: directory, windowsHide: true, stdio: 'ignore' });
+  const common = fs.realpathSync.native(path.join(directory, '.git')), journalDirectory = path.join(common, 'agentrix');
+  fs.mkdirSync(journalDirectory);
+  fs.writeFileSync(path.join(journalDirectory, 'journal.jsonl'), JSON.stringify({ type: 'consolidate', time: 100, meeting: 'initialized' }) + '\n');
+  await source.sync(); assert.deepEqual(await source.read(), [], 'background sync keeps the negative cache');
+  source.stop(); await source.start();
+  const histories = await source.read();
+  assert.equal(histories.length, 1); assert.equal(histories[0].key, common);
+  assert.equal(histories[0].entries[0].meeting, 'initialized'); assert.equal(source.watchers.size, 2);
+  source.resolveCommon = () => assert.fail('successful Git probes stay cached across opens');
+  await source.start(); await source.read();
+});
+
+test('concurrent dashboard opens share a re-probe after an in-flight cached miss', async t => {
+  const { directory, common } = lab(t);
+  let probes = 0, finish;
+  const source = new DashboardJournals({ getProjects: () => [{ id: 'a', path: directory }], changed() {},
+    resolveCommon: () => ++probes === 1 ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(common) });
+  t.after(() => source.stop());
+  const starting = source.start(), reopening = source.start(), alsoReopening = source.start();
+  finish(null); await Promise.all([starting, reopening, alsoReopening]);
+  assert.equal(probes, 2); assert.deepEqual(source.projects.map(project => project.id), ['a']);
+  await source.start(); assert.equal(probes, 2);
 });
 
 test('a project-list change during a pending Git probe is synchronized before the caller returns', async t => {

@@ -1877,7 +1877,7 @@ for (const agent of ['claude', 'codex']) {
     });
   }
 
-  test(agent + ': a dialog or missing prompt preserves focused composer ownership and opens the popup only without editable focus', async t => {
+  test(agent + ': an explicit send at a dialog or missing prompt opens and focuses the terminal while keeping the draft', async t => {
     let rows = composerRows(agent);
     const h = dictationHarness(t, { './terminal-screen': { useScreen: () => null, readScreen: () => rows && ({ rows }) }, './agent-screen': { parseAgentScreen } });
     h.props.terminal.agent = agent;
@@ -1892,9 +1892,9 @@ for (const agent of ['claude', 'codex']) {
       h.edit('keep this message'); document.activeElement = focused ? h.node : document.body;
       const focusCount = h.terminalFocused.length;
       h.press('Enter'); await h.tick(1000);
-      assert.equal(!!h.popup(), !focused); assert.equal(h.node.value, 'keep this message');
-      assert.equal(document.activeElement, focused ? h.node : h.popupInput);
-      assert.equal(h.terminalFocused.length, focusCount + (focused ? 0 : 1));
+      assert.ok(h.popup()); assert.equal(h.popup().props.command, ''); assert.equal(h.node.value, 'keep this message');
+      assert.equal(document.activeElement, h.popupInput);
+      assert.equal(h.terminalFocused.length, focusCount + 1);
       assert.ok(elements(h.tree()).some(element => element.props.className === 'reading-attachments'));
       assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []);
       h.popup()?.props.onClose(); h.render();

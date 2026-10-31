@@ -18,7 +18,14 @@ class DashboardJournals {
     this.getProjects = getProjects; this.changed = changed; this.resolveCommon = resolveCommon; this.watch = watch;
     this.cache = new Map(); this.watchers = new Map(); this.projects = []; this.active = false; this.syncing = null; this.resync = false;
   }
-  start() { this.active = true; return this.sync(); }
+  async start() {
+    this.active = true;
+    // Explicit opens retry missed repositories; broadcasts and successful probes keep their cache.
+    for (const [filename, pending] of [...this.cache]) {
+      if (!await pending && this.cache.get(filename) === pending) this.cache.delete(filename);
+    }
+    return this.sync();
+  }
   async sync() {
     this.resync = true;
     if (!this.syncing) this.syncing = (async () => {
