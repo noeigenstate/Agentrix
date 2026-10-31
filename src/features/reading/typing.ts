@@ -6,3 +6,9 @@ export function markTyping(node: HTMLElement) { node.dataset.typedAt = String(Da
 export function isTyping(node: Element | null) {
   return node instanceof HTMLTextAreaElement && (!!node.value.trim() || Date.now() - Number(node.dataset.typedAt || 0) < GRACE);
 }
+
+// Focus belongs to an editor even when it is empty and the typing grace has expired.
+export function hasEditingFocus(view: Element | null) {
+  const node = document.activeElement;
+  return !!node && !!view?.contains(node) && (node.matches('input, textarea, select') || (node as HTMLElement).isContentEditable);
+}

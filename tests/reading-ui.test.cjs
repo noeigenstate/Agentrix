@@ -50,7 +50,7 @@ function loadUI(name, overrides = {}) {
     if (key === './reply-files') return require('../src/features/reading/reply-files.ts');
     if (key === './reading-paths') return { pathTooltip: () => 'Ctrl+click to show in File Explorer', markReadingPaths() {} };
     if (key === './PathText') return { PathText: ({ text }) => text };
-    if (key === './useReadingPaths') return { useReadingPaths: () => ({}) };
+    if (key === './useReadingPaths') return { useReadingPaths: () => ({ ref: (overrides.react || React).useRef(null) }) };
     if (key === './ReadingTerminalPopup') return { ReadingTerminalPopup: function ReadingTerminalPopup() { return null; } };
     if (key === './ReadingSignIn') return { ReadingSignIn: () => null };
     if (key === './AgentCommandRun') return { AgentCommandRun: () => null };
@@ -397,7 +397,7 @@ const composerRows = (agent, activity = 'idle', draft = '') => [
 // Run ReadingView's composer handlers and effect cleanup without starting a browser or Electron.
 function dictationHarness(t, overrides = {}) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const slots = [], effects = [], written = [], pasted = [], echoed = [];
+  const slots = [], effects = [], written = [], pasted = [], echoed = [], terminalFocused = [];
   let cursor = 0, root, insert;
   const listeners = new Map();
   const hooks = {
@@ -420,12 +420,16 @@ function dictationHarness(t, overrides = {}) {
     },
   };
   hooks.useLayoutEffect = hooks.useEffect;
-  const previousWindow = globalThis.window, previousDocument = globalThis.document;
-  const node = { value: '', selectionStart: 0, selectionEnd: 0, dataset: {}, disabled: false,
+  const previousWindow = globalThis.window, previousDocument = globalThis.document, previousTextarea = globalThis.HTMLTextAreaElement;
+  globalThis.HTMLTextAreaElement = class {};
+  const node = Object.assign(new HTMLTextAreaElement(), { value: '', selectionStart: 0, selectionEnd: 0, dataset: {}, disabled: false,
+    matches: selector => selector.split(/,\s*/).includes('textarea'),
     focus() { if (!node.disabled) document.activeElement = node; },
     setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; },
-  };
-  const composer = { focus() { document.activeElement = composer; } }, popupInput = { focus() { document.activeElement = popupInput; } };
+  });
+  const composer = { matches: () => false, focus() { document.activeElement = composer; } };
+  const popupInput = { focus() { terminalFocused.push(props.terminal.id); document.activeElement = popupInput; } };
+  const editables = new Set([node, composer]), readingView = { contains: target => editables.has(target) };
   globalThis.document = { activeElement: node, body: {}, getElementById: () => null, createElement: () => ({ innerHTML: '', querySelectorAll: () => [] }) };
   globalThis.window = { addEventListener: (name, take) => listeners.set(name, take), removeEventListener: name => listeners.delete(name), agentrix: {
     terminalCommands: async () => ({ ok: true, value: [] }),
@@ -444,7 +448,7 @@ function dictationHarness(t, overrides = {}) {
     './terminal-screen': { useScreen: () => null, readScreen: () => ({ rows: ['› ', '', 'GPT-6.1-Sol high · C:\\work'] }) },
     './agent-screen': { parseAgentScreen: () => screen },
     './ReadingWelcome': {}, './ReadingChoice': {}, './ReadingQuestion': {}, './ReadingSessions': {},
-    './reading-mode': { setChoiceVisible() {} }, './typing': { markTyping() {}, isTyping: () => false },
+    './reading-mode': { setChoiceVisible() {} },
     './useStickToBottom': { useStickToBottom: () => ({ stuck: true, unseen: 0, ready: true, holdPosition() {}, toBottom() {} }) },
     './useReadingConversation': { conversationKey: (id, session) => JSON.stringify([id, session]), useReadingHistory: () => historySnapshot([]) },
     './useVisibleTail': { blocks: () => [], conversationTurns: () => [], useVisibleTail: () => ({ earlier: 0, visible: [] }) },
@@ -460,6 +464,7 @@ function dictationHarness(t, overrides = {}) {
     cursor = 0; root = ReadingView(props);
     // The public component routes managed SDK sessions before mounting the legacy TUI reader.
     if (typeof root.type === 'function') root = root.type(root.props);
+    if (root.props.ref) root.props.ref.current = readingView;
     const box = elements(root).find(element => element.type === 'textarea');
     box.props.ref.current = node; node.value = box.props.value; node.disabled = box.props.disabled;
     const composerBox = elements(root).find(element => /\breading-composer\b/.test(element.props.className));
@@ -467,15 +472,21 @@ function dictationHarness(t, overrides = {}) {
     // Removing the focused popup drops browser focus to body before the parent's layout effects run.
     if (hadPopup && !elements(root).some(element => element.type?.name === 'ReadingTerminalPopup') && document.activeElement === popupInput) document.activeElement = document.body;
     while (effects.length) effects.shift()();
-    elements(root).find(element => element.type?.name === 'ReadingTerminalPopup')?.props.onReady();
+    const popup = elements(root).find(element => element.type?.name === 'ReadingTerminalPopup');
+    // The real popup mounts xterm and calls terminal.focus() before onReady.
+    if (popup && !hadPopup) popupInput.focus();
+    popup?.props.onReady();
     return box;
   };
   const unmount = () => { for (const slot of slots) if (slot?.cleanup) { slot.cleanup(); slot.cleanup = undefined; } };
   // Mounting the same view again, as switching to the raw terminal and back does: the component's state is gone.
   const remount = () => { unmount(); slots.length = 0; effects.length = 0; render(); return render(); };
-  t.after(() => { unmount(); globalThis.window = previousWindow; globalThis.document = previousDocument; });
+  t.after(() => {
+    unmount(); globalThis.window = previousWindow; globalThis.document = previousDocument;
+    if (previousTextarea === undefined) delete globalThis.HTMLTextAreaElement; else globalThis.HTMLTextAreaElement = previousTextarea;
+  });
   render(); render();
-  return { props, screen, node, composer, popupInput, written, pasted, echoed, render, unmount, remount, tree: () => root,
+  return { props, screen, node, composer, popupInput, editables, terminalFocused, written, pasted, echoed, render, unmount, remount, tree: () => root,
     popup: () => elements(root).find(element => element.type?.name === 'ReadingTerminalPopup'),
     command(text) { listeners.get('agentrix:command')({ detail: { terminalId: props.terminal.id, text }, preventDefault() {} }); render(); },
     dictate: (text, submit = true) => { insert(text, submit); render(); },
@@ -794,13 +805,20 @@ test('a read-only preview suppresses stale screen choices and approval cards', t
 
 // Waiting dialogs: the harness reads the screen rows it is given and a fresh readiness module per test.
 const IDLE_ROWS = ['› Ask Codex to do anything', '', 'gpt-6.1-sol · high · 100% context left'];
+// Captured while PowerShell echoes the desktop fixture, before it draws the complete approval screen.
+const APPROVAL_ECHO_ROWS = [
+  " Clear-Host; Write-Host '  Would you like to run the following command?'; Write-Host ''; Write-Host '  $ npm test'; Write-Host ''; Write-Host '› 1. Yes, proceed (y)'; Write-Host '  2. No, an",
+  "d tell Codex what to do differently (esc)'; Write-Host ''; Write-Host '  Press enter to confirm or esc to cancel'; $global:ReadingFixtureClearOnPrompt = $true; Start-Sleep -Seconds 30",
+];
 const named = (tree, name) => elements(tree).find(node => node.type?.name === name);
-function waitingHarness(t, { rows = [], ready = loadUI('features/reading/reading-ready.ts') } = {}) {
+function waitingHarness(t, { rows = [], ready = loadUI('features/reading/reading-ready.ts'), parser } = {}) {
   const view = { rows };
   const h = dictationHarness(t, {
     './reading-ready': ready, './terminal-screen': { useScreen: () => ({ rows: view.rows }), readScreen: () => ({ rows: view.rows }) },
     './ReadingChoice': { ReadingChoice: function ReadingChoice() { return null; } },
+    ...(parser ? { './agent-screen': { parseAgentScreen: parser } } : {}),
   });
+  document.activeElement = document.body;
   return Object.assign(h, { view, card: () => named(h.tree(), 'WaitingCard'), choiceCard: () => named(h.tree(), 'ReadingChoice'),
     showTerminalButton: () => elements(h.tree()).some(node => node.type === 'button' && node.props.className === 'text-button') });
 }
@@ -812,14 +830,9 @@ test('a permission redraw while composing never opens a terminal that would take
   const h = dictationHarness(t, {
     './terminal-screen': { useScreen: () => ({ rows: view.rows }), readScreen: () => ({ rows: view.rows }) },
     './agent-screen': { parseAgentScreen },
-    './typing': { markTyping() {}, isTyping: node => !!node?.value?.trim() },
   });
   h.edit('先别批准');
-  // Captured before the desktop fixture draws its approval: PowerShell first echoes the wrapped command itself.
-  view.rows = [
-    " Clear-Host; Write-Host '  Would you like to run the following command?'; Write-Host ''; Write-Host '  $ npm test'; Write-Host ''; Write-Host '› 1. Yes, proceed (y)'; Write-Host '  2. No, an",
-    "d tell Codex what to do differently (esc)'; Write-Host ''; Write-Host '  Press enter to confirm or esc to cancel'; $global:ReadingFixtureClearOnPrompt = $true; Start-Sleep -Seconds 30",
-  ];
+  view.rows = APPROVAL_ECHO_ROWS;
   assert.ok(parseAgentScreen('codex', view.rows).waiting, 'the real parser sees a transient waiting screen');
   h.render(); h.render();
   assert.ok(named(h.tree(), 'WaitingCard'));
@@ -842,8 +855,77 @@ test('a permission redraw while composing never opens a terminal that would take
   assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
 });
 
+for (const [name, draft] of [['empty', ''], ['whitespace', ' \n\t '], ['non-empty', '先别批准']]) {
+  test(`a focused ${name} composer prevents automatic terminal focus after the typing grace expires`, async t => {
+    let clock = 10000;
+    t.mock.method(Date, 'now', () => clock);
+    const h = waitingHarness(t, { rows: IDLE_ROWS, parser: parseAgentScreen });
+    h.node.focus(); h.edit(draft); h.press('a');
+    clock += 3000; await h.tick(3000);
+    if (!draft.trim()) assert.equal(require('../src/features/reading/typing.ts').isTyping(h.node), false);
+    h.view.rows = APPROVAL_ECHO_ROWS;
+    assert.ok(parseAgentScreen('codex', h.view.rows).waiting);
+    h.render(); h.render();
+    assert.ok(h.card()); assert.equal(h.render().props.disabled, true);
+    assert.equal(h.node.value, draft); assert.equal(document.activeElement, h.node);
+    assert.equal(h.popup(), undefined); assert.deepEqual(h.terminalFocused, []);
+    // A disabled textarea can blur; changing selection and redrawing must preserve its captured ownership.
+    document.activeElement = document.body;
+    h.props.active = false; h.render(); h.props.active = true; h.render(); h.render();
+    h.press('Enter'); h.command('/status'); await h.tick(3000);
+    assert.equal(h.popup(), undefined); assert.deepEqual(h.terminalFocused, []);
+    assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+  });
+}
+
+for (const type of ['input', 'textarea', 'select', 'contenteditable']) {
+  test(`a focused ${type} in the reading view prevents automatic terminal focus`, async t => {
+    const h = waitingHarness(t, { rows: IDLE_ROWS, parser: parseAgentScreen });
+    const editable = { matches: selector => selector.split(/,\s*/).includes(type), isContentEditable: type === 'contenteditable' };
+    h.editables.add(editable); document.activeElement = editable;
+    h.view.rows = APPROVAL_ECHO_ROWS; h.render(); h.render(); await h.tick(3000);
+    assert.ok(h.card()); assert.equal(h.render().props.disabled, true);
+    assert.equal(document.activeElement, editable); assert.equal(h.popup(), undefined);
+    assert.deepEqual(h.terminalFocused, []); assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+  });
+}
+
+test('activating a waiting view rechecks editable focus before automatically opening its terminal', t => {
+  const h = waitingHarness(t, { rows: IDLE_ROWS, parser: parseAgentScreen });
+  h.props.active = false; h.view.rows = APPROVAL_ECHO_ROWS; h.render(); h.render();
+  const editable = { matches: selector => selector.split(/,\s*/).includes('input') };
+  h.editables.add(editable); document.activeElement = editable;
+  h.props.active = true; h.render(); h.render();
+  assert.equal(h.popup(), undefined); assert.equal(document.activeElement, editable);
+  assert.deepEqual(h.terminalFocused, []); assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+});
+
+test('without editable focus in the reading view a captured waiting screen still opens and focuses its terminal once', t => {
+  const h = waitingHarness(t, { rows: IDLE_ROWS, parser: parseAgentScreen });
+  // An editable control elsewhere does not belong to this reading view.
+  document.activeElement = { matches: selector => selector.split(/,\s*/).includes('input') };
+  h.view.rows = APPROVAL_ECHO_ROWS; h.render(); h.render();
+  assert.ok(h.popup()); assert.equal(document.activeElement, h.popupInput);
+  assert.deepEqual(h.terminalFocused, [h.props.terminal.id]);
+  h.popup().props.onClose(); h.render(); h.render();
+  h.props.active = false; h.render(); h.props.active = true; h.render(); h.render();
+  assert.equal(h.popup(), undefined); assert.deepEqual(h.terminalFocused, [h.props.terminal.id]);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+});
+
+test('the waiting card explicitly opens and focuses the terminal after composer focus suppressed its automatic popup', t => {
+  const h = waitingHarness(t, { rows: IDLE_ROWS, parser: parseAgentScreen });
+  h.node.focus(); h.view.rows = APPROVAL_ECHO_ROWS; h.render(); h.render();
+  assert.equal(h.popup(), undefined); assert.deepEqual(h.terminalFocused, []);
+  h.card().props.onOpenTerminal(); h.render();
+  assert.ok(h.popup()); assert.equal(document.activeElement, h.popupInput);
+  assert.deepEqual(h.terminalFocused, [h.props.terminal.id]);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+});
+
 test('a native question at the normal prompt blocks composer sends without moving its focus', async t => {
   const h = waitingHarness(t, { rows: IDLE_ROWS });
+  h.node.focus();
   h.edit('keep this draft');
   const request = { token: 'native-question', question: { title: 'Choose a plan', fields: [] } };
   h.props.terminal.nativeApprovals = [request];
@@ -863,6 +945,7 @@ test('a native question at the normal prompt blocks composer sends without movin
 
 for (const kind of ['question', 'menu', 'permission']) test(`a pending native question excludes the screen ${kind} card until it resolves`, async t => {
   const h = waitingHarness(t, { rows: IDLE_ROWS });
+  h.node.focus();
   h.edit('keep my message');
   h.screen.choice = { ...fakeChoice(), kind };
   const request = { token: 'native-question', question: { title: 'Choose a plan', fields: [] } };
@@ -890,7 +973,7 @@ test('a native question suppresses waiting cards and automatic popups without co
   h.render(); await h.tick(2000);
   assert.equal(h.render().props.disabled, true);
   assert.equal(h.card(), undefined); assert.equal(h.popup(), undefined);
-  assert.equal(document.activeElement, h.node);
+  assert.equal(document.activeElement, document.body);
   assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
   h.props.terminal.nativeApprovals = [];
   h.render(); h.render();
@@ -947,7 +1030,6 @@ test('a native question remembers composer typing across disabled blur and later
   const view = { rows: IDLE_ROWS };
   const h = dictationHarness(t, {
     './terminal-screen': { useScreen: () => ({ rows: view.rows }), readScreen: () => ({ rows: view.rows }) },
-    './typing': { markTyping() {}, isTyping: node => !!node?.value?.trim() },
   });
   h.edit('先别回答');
   h.props.terminal.nativeApprovals = [{ token: 'native-question', question: { title: 'Choose a plan', fields: [] } }];
@@ -1795,7 +1877,7 @@ for (const agent of ['claude', 'codex']) {
     });
   }
 
-  test(agent + ': a dialog or missing prompt opens the popup with the message and attachments still in the composer', async t => {
+  test(agent + ': a dialog or missing prompt preserves focused composer ownership and opens the popup only without editable focus', async t => {
     let rows = composerRows(agent);
     const h = dictationHarness(t, { './terminal-screen': { useScreen: () => null, readScreen: () => rows && ({ rows }) }, './agent-screen': { parseAgentScreen } });
     h.props.terminal.agent = agent;
@@ -1805,13 +1887,17 @@ for (const agent of ['claude', 'codex']) {
       : ['                Usage', '                Daily limit  75% left', '                esc close', ...composerRows(agent)];
     const picker = agent === 'claude' ? ['Select model', '❯ 1. Opus', '  2. Sonnet', 'Enter to confirm · Esc to cancel']
       : [...composerRows(agent), 'Copy user message', '↑/↓ select · Enter confirm · Esc cancel'];
-    for (const frame of [null, ['Settings', 'Esc to close'], dialog, picker]) {
+    for (const frame of [null, ['Settings', 'Esc to close'], dialog, picker]) for (const focused of [true, false]) {
       rows = frame;
-      h.edit('keep this message'); h.press('Enter'); await h.tick(1000);
-      assert.ok(h.popup()); assert.equal(h.node.value, 'keep this message');
+      h.edit('keep this message'); document.activeElement = focused ? h.node : document.body;
+      const focusCount = h.terminalFocused.length;
+      h.press('Enter'); await h.tick(1000);
+      assert.equal(!!h.popup(), !focused); assert.equal(h.node.value, 'keep this message');
+      assert.equal(document.activeElement, focused ? h.node : h.popupInput);
+      assert.equal(h.terminalFocused.length, focusCount + (focused ? 0 : 1));
       assert.ok(elements(h.tree()).some(element => element.props.className === 'reading-attachments'));
       assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []);
-      h.popup().props.onClose(); h.render();
+      h.popup()?.props.onClose(); h.render();
     }
   });
 }
