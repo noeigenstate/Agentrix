@@ -202,11 +202,15 @@ class RemoteClaudeTest(unittest.TestCase):
         return (json.loads(output.getvalue()) if output.getvalue() else None), json.loads(client.sendall.call_args[0][0])
 
     def test_session_start_delivers_once_per_cli_identity_and_fingerprint_but_after_every_compact_and_clear(self):
-        (self.home / "note.txt").write_text("System skills: read the enabled manifest.", encoding="utf-8")
+        (self.home / "note.txt").write_text("You run inside Agentrix. Startup instructions. Agentrix skill delivery: remote. System skills: read the enabled manifest.", encoding="utf-8")
+        for key in ("a" * 64, "b" * 64):
+            manifest = self.home / "references" / key / "instructions.md"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("System skills: read the enabled manifest.", encoding="utf-8")
         (self.home / "key.txt").write_text("a" * 64, encoding="utf-8")
         os.utime(self.home / "key.txt", (1700000000, 1700000000))
         first, event = self.hook()
-        self.assertEqual(first["hookSpecificOutput"], {"hookEventName": "SessionStart", "additionalContext": "System skills: read the enabled manifest."})
+        self.assertEqual(first["hookSpecificOutput"], {"hookEventName": "SessionStart", "additionalContext": "Agentrix skill instructions:\nSystem skills: read the enabled manifest."})
         self.assertEqual(event["state"], "session")
         for source in ("startup", "resume"): self.assertIsNone(self.hook(source)[0])
         for source in ("compact", "compact", "clear", "clear"): self.assertIsNotNone(self.hook(source)[0])
@@ -227,8 +231,9 @@ class RemoteClaudeTest(unittest.TestCase):
         self.assertNotIn("ANTHROPIC_AUTH_TOKEN", json.dumps(event))
         # The full skills body is emitted only by SessionStart, not repeated in CLI startup arguments.
         wrapper = remote.BASH_SOURCE.split("function claude {", 1)[1].split("__pg_prompt()", 1)[0]
-        self.assertNotIn('--append-system-prompt "$current_note"', wrapper)
-        self.assertIn("Agentrix system skills are delivered by its SessionStart hook.", wrapper)
+        self.assertIn('note=(--append-system-prompt "$current_note")', wrapper)
+        self.assertIn('current_note%%" Agentrix skill delivery: "*', wrapper)
+        self.assertIn("Agentrix delivers skill instructions through its SessionStart hook.", wrapper)
 
     def test_auto_skill_reference_paths_survive_a_closed_terminal_and_are_reused_on_resume(self):
         bundle = {"key": "c" * 64, "files": [{"id": "builtin:test", "name": "test", "scope": "builtin", "text": "---\nname: test\ndescription: Test.\n---\nRules."}],

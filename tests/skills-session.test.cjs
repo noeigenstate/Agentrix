@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { SkillsStore } = require('../electron/features/skills/store.cjs');
 const { startupNote } = require('../electron/features/agents/handoff.cjs');
+const { READING_NOTE } = require('../electron/features/agents/reading-note.cjs');
 const { readDelivery, sessionContext } = require('../electron/features/skills/session.cjs');
 
 async function fixture(t, routingNote = () => '') {
@@ -17,14 +18,14 @@ async function fixture(t, routingNote = () => '') {
   const draft = { name: 'sample', scope: 'global', projectId: null, description: 'Use when testing 中文说明.', text: 'First body.' };
   await store.save(null, draft);
   const delivery = id => store.delivery(project, false, id, { agent: 'claude', started: true });
-  const note = id => startupNote('Reading rules.', null, null, delivery(id));
+  const note = id => startupNote(READING_NOTE, path.join(root, 'handoff.md'), path.join(project.path, 'skills'), delivery(id), path.join(root, 'dispatch.cjs'));
   return { root, store, project, draft, delivery, note };
 }
 
 test('startup/resume deduplicate CLI session plus content fingerprint, compact/clear always deliver', async t => {
   const f = await fixture(t), first = f.note('terminal-first');
   const context = source => sessionContext({ session_id: 'cli-session', source }, first);
-  assert.match(context('startup').hookSpecificOutput.additionalContext, /sample/);
+  assert.equal(context('startup').hookSpecificOutput.additionalContext, `Agentrix skill instructions:\n${readDelivery(first).instructions}`);
   assert.equal(context('resume'), null);
   assert.equal(context('startup'), null);
   assert.ok(context('compact')); assert.ok(context('clear')); assert.equal(context('resume'), null);
@@ -55,6 +56,10 @@ test('routing note is optional, current on a new delivery and included in bounde
   assert.match(remote.bundle.instructions, /weight recommendation/);
   assert.doesNotMatch(remote.bundle.instructions, new RegExp(f.root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.deepEqual(Object.keys(remote.bundle).sort(), ['files', 'instructions', 'key']);
+  const [startup, instructions] = startupNote(READING_NOTE, null, null, remote).split(' Agentrix skill delivery: ');
+  assert.match(startup, /^You run inside Agentrix/);
+  assert.ok(startup.includes(`Current project skills manifest: ${remote.manifest}.`));
+  assert.equal(instructions, `remote. ${remote.bundle.instructions}`);
 });
 
 test('Codex resume keeps the current project manifest across terminal exits and app restarts', async t => {
@@ -118,7 +123,7 @@ test('Node SessionStart writes one JSON context even without Agentrix; other hoo
   assert.equal(first.code, 0); assert.equal(first.stderr, '');
   const output = JSON.parse(first.stdout);
   assert.equal(output.hookSpecificOutput.hookEventName, 'SessionStart');
-  assert.match(output.hookSpecificOutput.additionalContext, /Reading rules.*sample/);
+  assert.equal(output.hookSpecificOutput.additionalContext, `Agentrix skill instructions:\n${readDelivery(fs.readFileSync(noteFile, 'utf8')).instructions}`);
   const second = await hookProcess(process.execPath, [...args, 'session'], { session_id: 'hook-cli', source: 'resume' }, noteFile);
   assert.equal(second.stdout, '');
   const notify = await hookProcess(process.execPath, [...args, 'notify'], { session_id: 'hook-cli', notification_type: 'permission_prompt' }, noteFile);
@@ -127,7 +132,7 @@ test('Node SessionStart writes one JSON context even without Agentrix; other hoo
   assert.equal(simultaneous.filter(result => result.stdout).length, 1, 'concurrent hook processes share the exclusive receipt');
 });
 
-test('Unix wrappers pass the private note to child helpers and Claude receives only the SessionStart pointer', { skip: process.platform === 'win32' }, async t => {
+test('Unix wrappers keep the startup note and manifest fallback on the command line, with skills only in SessionStart', { skip: process.platform === 'win32' }, async t => {
   const f = await fixture(t), bin = path.join(f.root, 'bin'), home = path.join(f.root, 'home'), noteFile = path.join(f.root, 'note.txt');
   fs.mkdirSync(bin); fs.mkdirSync(home); fs.writeFileSync(noteFile, f.note('unix'));
   const script = path.join(f.root, 'fake.cjs');
@@ -145,11 +150,43 @@ test('Unix wrappers pass the private note to child helpers and Claude receives o
   });
   const claude = JSON.parse(fs.readFileSync(path.join(f.root, 'claude.json'))), codex = JSON.parse(fs.readFileSync(path.join(f.root, 'codex.json')));
   assert.equal(claude.note, noteFile); assert.equal(codex.note, noteFile);
-  assert.match(claude.args[claude.args.indexOf('--append-system-prompt') + 1], /SessionStart/);
+  assert.equal(claude.args[2], '--append-system-prompt');
+  assert.equal(claude.args[3], fs.readFileSync(noteFile, 'utf8').split(' Agentrix skill delivery: ')[0] + ' Agentrix delivers skill instructions through its SessionStart hook.');
+  assert.match(claude.args[3], /^You run inside Agentrix/);
+  assert.deepEqual(claude.args.slice(4), ['hello']);
   assert.ok(!JSON.stringify(claude.args).includes('中文说明'));
   assert.ok(JSON.stringify(codex.args).includes('中文说明'));
   const settings = JSON.parse(claude.args[claude.args.indexOf('--settings') + 1]);
   assert.ok(settings.hooks.SessionStart[0].hooks[0].command.includes(noteFile));
+});
+
+test('PowerShell Claude wrapper keeps the startup note and fallback before intact resume arguments', { skip: process.platform !== 'win32' }, async t => {
+  const f = await fixture(t), noteFile = path.join(f.root, 'note.txt'), note = f.note('wrapper');
+  fs.writeFileSync(noteFile, note);
+  const source = fs.readFileSync(path.join(__dirname, '../integration/bootstrap.ps1'), 'utf8');
+  const helper = source.slice(source.indexOf('function global:Get-AgentrixReadingNote'), source.indexOf('# Windows PowerShell 5'));
+  const wrapper = source.slice(source.indexOf('function global:claude'), source.indexOf('if ($global:AgentrixAgentOnly)'));
+  const script = `
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+${helper}
+${wrapper}
+function global:Send-AgentrixEvent {}
+function global:Get-AgentrixCommand {}
+$global:AgentrixSession = @{ powershellPath = 'powershell.exe'; claudeHookPath = 'fixture.ps1'; pipeName = 'absent'; projectId = 'project'; sessionKey = 'key' }
+$global:AgentrixClaudeExecutable = $null
+$global:AgentrixClaudeCommand = { ConvertTo-Json -InputObject @($args) -Compress }
+claude --resume fixture '继续'`;
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
+  const result = await hookProcess(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {}, noteFile);
+  assert.equal(result.code, 0); assert.equal(result.stderr, '');
+  const args = JSON.parse(result.stdout);
+  assert.equal(args[0], '--settings'); assert.doesNotThrow(() => JSON.parse(args[1]));
+  assert.equal(args[2], '--append-system-prompt');
+  assert.equal(args[3], note.split(' Agentrix skill delivery: ')[0] + ' Agentrix delivers skill instructions through its SessionStart hook.');
+  assert.match(args[3], /^You run inside Agentrix/);
+  assert.doesNotMatch(args[3], /中文说明|Agentrix skill delivery:/);
+  assert.deepEqual(args.slice(4), ['--resume', 'fixture', '继续']);
 });
 
 test('PowerShell and Node share receipts and force a delivery after compact/clear', { skip: process.platform !== 'win32' }, async t => {
@@ -164,7 +201,7 @@ test('PowerShell and Node share receipts and force a delivery after compact/clea
   for (const source of ['compact', 'clear']) {
     const result = await hookProcess(powershell, args, { session_id: 'same-cli', source }, noteFile);
     assert.equal(result.code, 0); assert.equal(result.stderr, '');
-    assert.match(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, /中文说明/);
+    assert.equal(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, `Agentrix skill instructions:\n${readDelivery(note).instructions}`);
     assert.equal(sessionContext({ session_id: 'same-cli', source: 'resume' }, note), null);
   }
 });

@@ -180,7 +180,10 @@ function global:claude {
         return
     }
     Send-AgentrixEvent 'codex-started' -Agent 'claude' -Command (Get-AgentrixCommand $args)
-    $readingNote = @('--append-system-prompt', 'Agentrix delivers this session''s instructions through its SessionStart hook.')
+    $currentNote = Get-AgentrixReadingNote
+    $marker = ([string]$currentNote).IndexOf(' Agentrix skill delivery: ')
+    if ($marker -ge 0) { $currentNote = $currentNote.Substring(0, $marker) + ' Agentrix delivers skill instructions through its SessionStart hook.' }
+    $readingNote = if ($currentNote) { @('--append-system-prompt', $currentNote) } else { @() }
     $hookCommand = @(
         ($global:AgentrixSession.powershellPath -replace '\\', '/'),
         '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass',

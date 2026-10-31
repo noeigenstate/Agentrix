@@ -169,13 +169,14 @@ def deliver_skills(hook, identity):
     if not re.fullmatch(r"[\w-]{1,100}", identity): return
     source=hook.get("source")
     if source not in ("startup","resume","compact","clear"): return
-    note_file=os.environ.get("AGENTRIX_READING_NOTE_FILE")
     state_dir=os.environ.get("AGENTRIX_SKILL_STATE_DIR")
     key_file=os.environ.get("AGENTRIX_SKILL_KEY_FILE")
-    if not note_file or not state_dir or not key_file: return
-    with open(note_file,encoding="utf-8") as source_file: note=source_file.read(2*1024*1024+1)
+    if not state_dir or not key_file: return
     with open(key_file,encoding="utf-8") as source_file: key=source_file.read(65)
-    if not note.strip() or len(note)>2*1024*1024 or not re.fullmatch(r"[a-f0-9]{64}",key): return
+    if not re.fullmatch(r"[a-f0-9]{64}",key): return
+    manifest=os.path.join(os.path.dirname(state_dir),"references",key,"instructions.md")
+    with open(manifest,encoding="utf-8") as source_file: instructions=source_file.read(2*1024*1024+1)
+    if not instructions.strip() or len(instructions)>2*1024*1024: return
     os.makedirs(state_dir,mode=0o700,exist_ok=True)
     info=os.lstat(state_dir)
     if not stat.S_ISDIR(info.st_mode) or (hasattr(os,"getuid") and (info.st_uid!=os.getuid() or info.st_mode&0o077)): return
@@ -185,7 +186,7 @@ def deliver_skills(hook, identity):
         os.close(descriptor)
     except FileExistsError:
         if source not in ("compact","clear"): return
-    print(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":note}}))
+    print(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Agentrix skill instructions:\n"+instructions}}))
 try:
     mode=sys.argv[1]
     event={"type":mode,"token":os.environ["AGENTRIX_TOKEN"],"cwd":os.getcwd(),"codexHome":os.environ.get("CODEX_HOME",os.path.expanduser("~/.codex")),"sentAt":int(time.time()*1000)}
@@ -269,7 +270,13 @@ hooks={name:[{"hooks":[{"type":"command","command":command+" "+kind}]}] for name
 print(json.dumps({"hooks":hooks}))
 PY
     )
-    AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "$executable" --settings "$settings" --append-system-prompt 'Agentrix system skills are delivered by its SessionStart hook.' "$@"
+    local -a note=()
+    local current_note=$(__pg_reading_note)
+    if [[ $current_note == *" Agentrix skill delivery: "* ]]; then
+        current_note="${current_note%%" Agentrix skill delivery: "*} Agentrix delivers skill instructions through its SessionStart hook."
+    fi
+    [[ -n $current_note ]] && note=(--append-system-prompt "$current_note")
+    AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "$executable" --settings "$settings" "${note[@]}" "$@"
     result=$?
     __pg_emit codex-exited "$result" claude
     return "$result"
