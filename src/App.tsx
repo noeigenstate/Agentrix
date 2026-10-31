@@ -20,7 +20,7 @@ import { UsageGuide } from './features/guide/UsageGuide';
 import { GuideTour } from './features/guide/GuideTour';
 import { AppMenu } from './features/titlebar/AppMenu';
 import { IconButton } from './shared/IconButton';
-import { ModeSwitch, useReadingSwitch } from './features/reading/ModeSwitch';
+import { ModeSwitch } from './features/reading/ModeSwitch';
 import { showPopup, usePopup } from './features/files/file-popup';
 import { ProjectPanel } from './features/workspace/ProjectPanel';
 import { SettingsDialog } from './features/settings/SettingsDialog';
@@ -253,29 +253,16 @@ export function App() {
   // Decisions across every project, for the home page, the count beside its tab and a notice when one arrives.
   const { decisions, snoozed } = useDecisions(workspace?.projects ?? NO_PROJECTS);
   const shownView = view ?? workspace?.settings.startView ?? 'workspace';
-  const focus = workspace?.projects.find(p => p.id === focusedId);
   const installUpdate = useCallback(() => { perform(api.installUpdate()); }, [perform]);
 
-  // macOS shows the app's menus in the system menu bar: tell it what is on screen, and run what it sends back.
-  const activityPane = workspace?.settings.activityPane ?? false;
-  const canReturn = shownView !== 'workspace' || !!focusedId;
-  const readingSwitch = useReadingSwitch(focus);
-  const readingTerminal = readingSwitch?.terminalId;
-  const reading = shownView === 'workspace' && !previewFile ? readingSwitch?.reading ?? null : null;
-  const focused = !!focusedId;
-  useEffect(() => {
-    if (isMac && api) api.setMenuState({ canReturn, focused, activityPane, reading });
-  }, [canReturn, focused, activityPane, reading]);
+  // The macOS menu bar's Agentrix menu: what it sends back runs here, as the matching shortcut would.
   useEffect(() => {
     if (!isMac || !api) return;
     return api.onMenuCommand((command: MenuCommand) => {
       if (command === 'installUpdate') return installUpdate();
-      if (dialogOpen()) return;
-      if (command === 'activityPane') perform(api.settings({ activityPane: !activityPane }));
-      else if (command === 'reading' || command === 'terminal') { if (readingTerminal) setReading(readingTerminal, command === 'reading'); }
-      else runAction(command);
+      if (!dialogOpen()) runAction(command);
     });
-  }, [installUpdate, perform, activityPane, readingTerminal, runAction]);
+  }, [installUpdate, runAction]);
   const seenDecisions = useRef<Set<string> | null>(null);
   useEffect(() => {
     const ids = new Set(decisions.map(decision => decision.id));
@@ -315,18 +302,18 @@ export function App() {
   const visibleIds = new Set(visible.map(p => p.id));
   const columns = gridColumns(visible.length);
   const rows = Math.max(1, Math.ceil(visible.length / columns));
+  const focus = projects.find(p => p.id === focusedId);
   navigation.current = (focusedId ? orderedProjects : orderedProjects.filter(project => visibleIds.has(project.id))).map(project => project.id);
   const switchProject = projectSwitch && projectRecords.get(projectSwitch.id);
   const switchPosition = projectSwitch ? navigation.current.indexOf(projectSwitch.id) + 1 : 0;
   const setPreference = (patch: Partial<Settings>) => { perform(api.settings(patch)); };
   const closeGuide = () => { setGuide(null); if (settings.guideVersion !== workspace.version) setPreference({ guideVersion: workspace.version }); };
 
-  // macOS keeps the title bar in full screen too (in flow, no slide-in: it would race the system menu bar).
-  const autoHideTitlebar = fullScreen && !isMac && workspace.autoHideTitlebar;
+  const autoHideTitlebar = fullScreen && workspace.autoHideTitlebar;
   return <div ref={focusMotionRoot} className={`app-shell ${focusedId ? 'focus-mode' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${autoHideTitlebar ? 'titlebar-auto' : ''}`} style={{ '--terminal-font-size': `${settings.fontSize}px` } as CSSProperties}>
     {autoHideTitlebar && <div className="titlebar-reveal" aria-hidden="true" />}
     <div className="titlebar">
-      {!isMac && <AppMenu fullScreen={fullScreen} canReturn={canReturn} updateReady={updates?.status === 'ready'}
+      {!isMac && <AppMenu fullScreen={fullScreen} canReturn={shownView !== 'workspace' || !!focusedId} updateReady={updates?.status === 'ready'}
         onAddProject={() => setAddOpen(true)} onReturn={returnToGrid} onFullScreen={() => api.toggleFullScreen()} onSettings={() => setSettingsOpen(true)} onInstallUpdate={installUpdate} />}
       <nav className="home-nav" aria-label={t('页面')}>
         <button type="button" aria-current={shownView === 'decisions' ? 'page' : undefined} title={t('回到决策 · {key}', { key: shortcut('decisions') })} onClick={() => setView('decisions')}><Stamp size={16} />{t('决策')}{decisions.length > 0 && <span className="home-nav-count" aria-label={t('{count} 件待决定', { count: decisions.length })}>{decisions.length}</span>}</button>

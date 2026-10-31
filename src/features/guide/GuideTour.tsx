@@ -45,7 +45,7 @@ export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects:
     },
     {
       id: 'settings', title: t('设置与更多'), interactive: false,
-      body: [isMac ? t('功能在屏幕顶部的菜单栏：Agentrix 菜单里有新建项目和设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）；前往里有返回项目和搜索；显示里有活动栏和阅读视图。决策和工作台在窗口顶部的标题栏。')
+      body: [isMac ? t('功能在屏幕顶部的菜单栏：Agentrix 菜单里有新建项目和设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）；决策和工作台在窗口左上角红绿灯之后，全屏时把鼠标移到屏幕顶端就会出现。')
         : t('标志和标题是应用菜单：新建项目、返回项目、全屏，以及设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）。'), t('按 {key} 添加更多项目。', { key: shortcut('addProject') })],
       target: () => isMac ? null : visible('.titlebar-brand'),
     },

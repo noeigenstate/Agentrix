@@ -127,9 +127,8 @@ export type FilePreview = { path: string; name: string; size: number; modifiedAt
   | { kind: 'image' | 'video'; mimeType: string; url: string; previewId: string }
   | { kind: 'html' | 'markdown'; content: string; page: TextPage; url: string; previewId: string }
 );
-// The application menu (macOS): what the renderer tells main to show, and the commands main sends back. `reading: null` = the project in view has no reading / terminal switch.
-export type MenuState = { canReturn: boolean; focused: boolean; activityPane: boolean; reading: boolean | null };
-export type MenuCommand = 'addProject' | 'settings' | 'installUpdate' | 'overview' | 'search' | 'activityPane' | 'reading' | 'terminal';
+// What the macOS menu bar's Agentrix menu asks the window to do.
+export type MenuCommand = 'addProject' | 'settings' | 'installUpdate';
 type Bridge = {
   getState(): Promise<Result<Workspace>>;
   getAgents(): Promise<Result<AgentsState>>;
@@ -249,7 +248,6 @@ type Bridge = {
   onError(callback: (message: string) => void): () => void;
   minimize(): void; maximize(): void; toggleFullScreen(): void; isFullScreen(): Promise<Result<boolean>>; onFullScreen(callback: (fullScreen: boolean) => void): () => void; terminalActions(id: string): Promise<Result<AgentAction[]>>; terminalConversation(id: string): Promise<Result<ConversationEntry[]>>; onTerminalConversation(callback: (packet: ConversationPacket) => void): () => void; close(): void;
   quit(): Promise<Result<boolean>>;
-  setMenuState(state: MenuState): void;
   onMenuCommand(callback: (command: MenuCommand) => void): () => void;
 };
 declare global { interface Window { agentrix: Bridge; } }

@@ -9,7 +9,7 @@ reading and the raw terminal.
 
 ## Interface
 - `ReadingView` (`src/features/reading/ReadingView.tsx`) — the reading view of one agent terminal; the file also exports Markdown, the renderer the review card and skill pane reuse
-- `ModeSwitch` (`src/features/reading/ModeSwitch.tsx`) — the title bar's reading / terminal switch for the terminal in use; the file also exports useReadingSwitch, the same state for the macOS menu bar
+- `ModeSwitch` (`src/features/reading/ModeSwitch.tsx`) — the title bar's reading / terminal switch for the terminal in use
 - `setReading` (`src/features/reading/reading-mode.ts`) — reading or raw terminal per terminal; the file also exports readingShown, syncReading and useTerminalChoice
 - `writeChoiceKeys` (`src/features/reading/choice-keys.ts`) — presses a choice by position; the file also exports selectedChoiceIndex and writeChoiceKeys
 - `hasCliInput` (`src/features/reading/cli-panel.ts`) — what the CLI's input line holds; the file also exports isAtPrompt, cliInputDraft and isCliIdle
