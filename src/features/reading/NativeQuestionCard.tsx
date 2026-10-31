@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { NativeApproval, NativeQuestionAnswer, NativeQuestionField, NativeQuestionValue } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import './native-question.css';
@@ -53,6 +53,8 @@ export function NativeQuestionCard({ request, source, onOpen, onError }: { reque
   // A reason shows once the owner has touched its field, or pressed Enter on an unfinished form.
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [state, setState] = useState<'idle' | 'sent' | 'failed'>('idle'), [refused, setRefused] = useState(false), sending = useRef(false);
+  // Counts the owner's explicit asks to see what is unfinished (Enter on an unfinished form, the summary's link); 0 until then, so nothing moves on appearance.
+  const [reveal, setReveal] = useState(0), fields = useRef<(HTMLFieldSetElement | null)[]>([]);
   const disabled = state !== 'idle';
   const touch = (...ids: string[]) => setTouched(previous => ({ ...previous, ...Object.fromEntries(ids.map(id => [id, true])) }));
   const edited = (id: string) => { touch(id); setRefused(false); };
@@ -69,7 +71,7 @@ export function NativeQuestionCard({ request, source, onOpen, onError }: { reque
     return answer === '' || Array.isArray(answer) && !answer.length ? undefined : answer;
   };
   const answered = question.fields.map(answerOf), problems = question.fields.map((field, index) => problem(field, answered[index]));
-  const unfinished = problems.filter(Boolean).length, shown = question.fields.map((field, index) => touched[field.id] ? problems[index] : undefined);
+  const first = problems.findIndex(Boolean), unfinished = problems.filter(Boolean).length, shown = question.fields.map((field, index) => touched[field.id] ? problems[index] : undefined);
   const send = async (decision: NativeQuestionAnswer['decision']) => {
     if (sending.current) return;
     sending.current = true; setState('sent');
@@ -82,33 +84,60 @@ export function NativeQuestionCard({ request, source, onOpen, onError }: { reque
       setState('failed'); onError(result.error);
     } catch (error) { setState('failed'); onError(String(error)); }
   };
+  // The reasons show first, then the first unfinished field comes into view with its reason and takes focus: the scrolling body can hide it.
+  const showUnfinished = () => { touch(...question.fields.map(field => field.id)); setReveal(count => count + 1); };
+  useEffect(() => {
+    const field = fields.current[first];
+    if (!reveal || !field) return;
+    field.scrollIntoView({ block: 'nearest' });
+    field.querySelector('input')?.focus({ preventScroll: true });
+  }, [reveal]);
   // The submit button is disabled while unfinished, so the browser never submits: Enter there shows what is missing instead.
   const enter = (event: KeyboardEvent<HTMLFormElement>) => {
-    if (event.key === 'Enter' && unfinished && !event.nativeEvent.isComposing && (event.target as HTMLElement).tagName === 'INPUT') touch(...question.fields.map(field => field.id));
+    if (event.key === 'Enter' && unfinished && !event.nativeEvent.isComposing && (event.target as HTMLElement).tagName === 'INPUT') showUnfinished();
+  };
+  const isSelected = (field: NativeQuestionField, option: string) => {
+    const value = values[field.id];
+    return field.type === 'multi' ? Array.isArray(value) && value.includes(option) : value === option && !other[field.id];
+  };
+  const choose = (field: NativeQuestionField, option: string) => {
+    if (field.type !== 'multi') { change(field.id, option); setOther(previous => ({ ...previous, [field.id]: '' })); return; }
+    const value = values[field.id], list = Array.isArray(value) ? value : [];
+    change(field.id, isSelected(field, option) ? list.filter(item => item !== option) : [...list, option]);
+  };
+  // Keys 1 to 9 pick the option with that number (the badge beside it) while focus is inside its group.
+  const pickByNumber = (field: NativeQuestionField, event: KeyboardEvent<HTMLElement>) => {
+    const at = /^[1-9]$/.test(event.key) && !event.ctrlKey && !event.metaKey && !event.altKey ? Number(event.key) - 1 : -1, option = field.options?.[at];
+    if (!option) return;
+    event.preventDefault(); choose(field, option.value);
+    event.currentTarget.querySelectorAll('input')[at]?.focus();
   };
   const control = (field: NativeQuestionField, index: number) => {
     const id = `native-${request.token}-${index}`, value = values[field.id], invalid = shown[index] ? true : undefined;
     if (field.options) return <>
-      <div className="reading-choice-options">{field.options.map((option, optionIndex) => {
-        const selected = field.type === 'multi' ? Array.isArray(value) && value.includes(option.value) : value === option.value && !other[field.id];
+      <div className="reading-choice-options" onKeyDown={event => pickByNumber(field, event)}>{field.options.map((option, optionIndex) => {
+        const selected = isSelected(field, option.value);
         return <label className={`reading-choice-option${selected ? ' is-selected' : ''}`} key={option.value}>
           <input type={field.type === 'multi' ? 'checkbox' : 'radio'} name={id} value={option.value} checked={selected} disabled={disabled}
-            onChange={() => {
-              if (field.type === 'multi') change(field.id, selected ? (value as string[]).filter(item => item !== option.value) : [...(Array.isArray(value) ? value : []), option.value]);
-              else { change(field.id, option.value); setOther(previous => ({ ...previous, [field.id]: '' })); }
-            }} />
+            onChange={() => choose(field, option.value)} />
           <span><span>{option.label}</span>{option.description && <span className="native-question-note">{option.description}</span>}
             {option.preview && <pre className="reading-choice-context">{option.preview}</pre>}</span>
-          <span className="native-question-number" aria-hidden="true">{optionIndex + 1}</span>
+          {optionIndex < 9 && <span className="native-question-number" aria-hidden="true">{optionIndex + 1}</span>}
         </label>;
       })}</div>
       {field.allowOther && <label className="native-question-other">{t('自己填写')}<input className="native-question-input" type={field.secret ? 'password' : 'text'} value={other[field.id] || ''} disabled={disabled} maxLength={8192} aria-invalid={invalid}
         onChange={event => { edited(field.id); setOther(previous => ({ ...previous, [field.id]: event.target.value })); if (field.type !== 'multi') change(field.id, undefined); }} /></label>}
     </>;
-    if (field.type === 'boolean') return <select id={id} className="native-question-input" value={value === undefined ? '' : String(value)} disabled={disabled} aria-required={field.required} aria-invalid={invalid}
-      onChange={event => change(field.id, event.target.value === '' ? undefined : event.target.value === 'true')}>
-      <option value="">{t('请选择')}</option><option value="true">{t('是')}</option><option value="false">{t('否')}</option>
-    </select>;
+    if (field.type === 'boolean') {
+      // Yes and no, and "leave empty" for an optional field: a radio group, so the arrow keys move between them.
+      const choices: [string, boolean | undefined][] = [[t('是'), true], [t('否'), false]];
+      if (!field.required) choices.push([t('不填'), undefined]);
+      return <div id={id} className="reading-choice-options native-question-bool" role="radiogroup" aria-label={field.label} aria-required={field.required} aria-invalid={invalid}>
+        {choices.map(([label, choice]) => <label className={`reading-choice-option${value === choice ? ' is-selected' : ''}`} key={label}>
+          <input type="radio" name={id} checked={value === choice} disabled={disabled} onChange={() => change(field.id, choice)} /><span>{label}</span>
+        </label>)}
+      </div>;
+    }
     const numeric = field.type === 'number' || field.type === 'integer';
     // Only the hard cap of what main accepts limits typing: a longer text shows its reason instead of being cut silently.
     return <input id={id} className="native-question-input" type={numeric ? 'number' : field.secret ? 'password' : field.format === 'email' ? 'email' : 'text'}
@@ -129,7 +158,7 @@ export function NativeQuestionCard({ request, source, onOpen, onError }: { reque
         {message && <p className="native-question-message">{message}</p>}
         {source && <p className="native-question-source">{source}</p>}
         {question.unsupported && <p className="native-question-message" role="status">{t('此表单暂不支持，请拒绝或取消后继续。')}</p>}
-        {question.fields.map((field, index) => <fieldset className="native-question-field" key={field.id} disabled={disabled} onBlur={() => touch(field.id)}
+        {question.fields.map((field, index) => <fieldset className="native-question-field" key={field.id} disabled={disabled} ref={node => { fields.current[index] = node; }} onBlur={() => touch(field.id)}
           aria-describedby={shown[index] ? `native-${request.token}-${index}-reason` : undefined}>
           <legend>{field.label} <span className="native-question-note">{field.required ? t('必填') : t('选填')} · {TYPE_NOTES[field.type]()}</span></legend>
           {field.description && <p className="native-question-note">{field.description}</p>}
@@ -140,7 +169,8 @@ export function NativeQuestionCard({ request, source, onOpen, onError }: { reque
       </div>
       <div className="native-question-footer">
         {state === 'idle' && refused && <p className="native-question-reason" role="alert">{t('回答未被接受，请检查各项后重试。')}</p>}
-        {note && <p className="native-question-status" id={statusId} role={state === 'idle' ? undefined : 'status'}>{note}</p>}
+        {note && <p className="native-question-status" id={statusId} role={state === 'idle' ? undefined : 'status'}>{note}
+          {state === 'idle' && unfinished > 0 && <button type="button" className="text-button" onClick={showUnfinished}>{t('前往第一项')}</button>}</p>}
         <div className="reading-question-actions native-question-actions">
           {request.decisions.includes('submit') && <button type="submit" className="button primary small" disabled={disabled || !!unfinished} aria-describedby={unfinished ? statusId : undefined}>{t('提交回答')}</button>}
           {request.decisions.includes('decline') && <button type="button" className="button small" disabled={disabled} onClick={() => void send('decline')}>{t('拒绝')}</button>}

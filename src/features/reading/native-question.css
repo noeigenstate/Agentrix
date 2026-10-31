@@ -10,6 +10,9 @@
 .native-question-field legend { padding: 0; font-weight: 600; overflow-wrap: anywhere; }
 .native-question-note { display: block; margin: 4px 0; font-size: calc(12px * var(--reading-text)); font-weight: 400; color: var(--text-2); }
 .native-question .reading-choice-option { align-items: flex-start; min-height: 32px; cursor: pointer; }
+/* Yes, no and leave-empty sit in one row: they are short, unlike the options of a choice. */
+.native-question .native-question-bool { flex-direction: row; flex-wrap: wrap; gap: 8px; }
+.native-question .native-question-bool .reading-choice-option { width: auto; }
 .native-question .reading-choice-option > input { flex: none; margin: 2px 0 0; accent-color: var(--text-1); }
 .native-question .reading-choice-option > span { min-width: 0; overflow-wrap: anywhere; }
 .native-question .reading-choice-option.is-selected { background: var(--bg-selected); }
@@ -21,7 +24,9 @@
 .native-question-reason, .native-question-status { margin: 4px 0 0; font-size: calc(12px * var(--reading-text)); line-height: 1.5; overflow-wrap: anywhere; }
 .native-question-reason { color: var(--danger); }
 .native-question-footer .native-question-reason, .native-question-status { margin: 0 0 8px; }
-.native-question-status { color: var(--text-2); }
+/* The summary's link to the first unfinished field keeps a 32px hit area without making the line taller. */
+.native-question-status { display: flex; flex-wrap: wrap; align-items: center; color: var(--text-2); }
+.native-question-status .text-button { min-height: 32px; margin: -8px 0; padding: 0 8px; }
 .native-question .native-question-actions { margin-top: 0; }
 .native-question-actions .native-question-source-link { margin: 0 -8px 0 auto; }
 .native-question fieldset:disabled { opacity: 1; }
