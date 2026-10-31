@@ -31,6 +31,14 @@ role in events). `--help` lists all six values. `--title`: one line, what the wo
 
 ## Scope, shared context and follow-ups
 
+- **Skill edits need the lead.** A worker must put suggested skill changes under `## Skill proposals` in its answer.
+  It must not edit, add or delete any `SKILL.md` in project, built-in or global skill folders unless `--allow` names
+  that exact file without wildcards. A broad scope such as `skills/**` does not approve skill edits. The helper
+  snapshots skills before launch, preserves each unapproved new version under `<out>.skill-proposals-<run id>/`
+  (with `index.json` naming edits, creations and deletions), then restores the pre-run bytes, including uncommitted
+  contents. The end line reports `N skill proposals pending lead approval`; `dispatch-end.skillProposals` is the same
+  count. Read the proposals and approve specific paths in a follow-up; proposals never apply themselves.
+
 - `--allow <glob>` (repeatable, relative to the git root): the only files the worker may change. The helper snapshots
   the working tree before and after (its own answer, log and ledger excluded) and reports every other changed file as
   out of scope: the end line says `· scope ok` or `· OUT OF SCOPE: <files>`, `dispatch-end` carries `outOfScope`, and

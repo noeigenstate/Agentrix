@@ -517,7 +517,7 @@ test('the worker reads the ledger, the boundaries of the modules it may change, 
   assert.match(text, /# Files you may change\n\n- `src\/\*\*`[\s\S]*out of scope/);
   assert.match(text, /## Findings for the ledger/);
   assert.match(text, /# Task\n\nDo the task\.$/);
-  assert.equal(briefOf({ cwd: directory, allow: [] }, Buffer.from('plain')).toString(), 'plain');
+  assert.match(briefOf({ cwd: directory, allow: [] }, Buffer.from('plain')).toString(), /## Skill proposals[\s\S]*plain$/);
   assert.equal(recordFindings(options, 'Done.\n\n## Findings for the ledger\n\n- `src/a.js:1` parses cents.\n', 'now · T'), true);
   assert.match(await fs.readFile(options.ledger, 'utf8'), /### now · T\n\n- `src\/a\.js:1` parses cents\./);
 });
@@ -542,4 +542,30 @@ test('a worker that stays within --allow ends with scope ok', async t => {
     extra: ['--allow', 'src/**'], setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'src/a.js': '' }),
   });
   assert.match((await finished).stdout, /reason exit · scope ok · out /);
+});
+
+test('dispatch restores unapproved skill edits and reports proposal counts on successful and failed runs', async t => {
+  for (const exitCode of [0, 9]) {
+    const f = await fixture(t, [...codex, { write: 'skills/sample/SKILL.md', text: 'Worker proposal.' }], {
+      exitCode, extra: ['--allow', 'skills/**'],
+      setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'skills/sample/SKILL.md': 'Pre-run contents.' }),
+    });
+    const result = await f.finished;
+    assert.equal(result.code, exitCode);
+    assert.match(result.stdout, /1 skill proposals pending lead approval/);
+    assert.equal(f.events.at(-1).skillProposals, 1);
+    assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Pre-run contents.');
+    const folder = (await fs.readdir(f.directory)).find(name => name.startsWith('answer.md.skill-proposals-'));
+    assert.equal(await fs.readFile(path.join(f.directory, folder, '1.SKILL.md'), 'utf8'), 'Worker proposal.');
+    assert.match(JSON.parse(await fs.readFile(f.capture, 'utf8')).brief, /## Skill proposals/);
+  }
+});
+
+test('an unconfirmed exited worker restores its skill edits before the failure event', async t => {
+  const f = await fixture(t, [{ write: 'skills/sample/SKILL.md', text: 'Unconfirmed proposal.' }], { hold: 0,
+    setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'skills/sample/SKILL.md': 'Pre-run contents.' }),
+  });
+  assert.notEqual((await f.finished).code, 0);
+  assert.equal(f.events.at(-1).skillProposals, 1);
+  assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Pre-run contents.');
 });

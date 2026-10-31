@@ -136,7 +136,7 @@ codex() {
   local -a note=()
   local current_note=$(__pg_reading_note)
   [[ -n $current_note ]] && note=(-c "developer_instructions=\"$current_note\"")
-  "${program[@]}" -c "notify=[$notify]" -c 'tui.terminal_title=["session-id"]' "${note[@]}" "$@"
+  AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" -c "notify=[$notify]" -c 'tui.terminal_title=["session-id"]' "${note[@]}" "$@"
   local code=$?
   __pg_send codex-exited $code
   return $code
@@ -157,14 +157,12 @@ claude() {
   __pg_json "$hook start"; start=$REPLY
   __pg_json "$hook stop"; stop=$REPLY
   __pg_json "$hook notify"; notify=$REPLY
-  __pg_json "$hook session"; session=$REPLY
+  __pg_json "$hook session ${(qq)__pg_note_file}"; session=$REPLY
   local settings="{\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":$start,\"timeout\":10}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":$stop,\"timeout\":10}]}],\"Notification\":[{\"hooks\":[{\"type\":\"command\",\"command\":$notify,\"timeout\":10}]}],\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":$session,\"timeout\":10}]}]}}"
   __pg_send codex-started 0 claude "$(__pg_command "$@")"
   # What the reading view can show; a later --append-system-prompt of the user's wins.
-  local -a note=()
-  local current_note=$(__pg_reading_note)
-  [[ -n $current_note ]] && note=(--append-system-prompt "$current_note")
-  "${program[@]}" --settings "$settings" "${note[@]}" "$@"
+  local -a note=(--append-system-prompt 'Agentrix delivers this session instructions through its SessionStart hook.')
+  AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" --settings "$settings" "${note[@]}" "$@"
   local code=$?
   __pg_send codex-exited $code claude
   return $code

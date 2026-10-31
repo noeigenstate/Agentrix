@@ -17,9 +17,11 @@ const { matches, snapshot, changedBetween, boundariesFor, repoFiles } = require(
 const { projectTeam, meetingRequest, recordFindings, minutesMarkdown, FINDINGS } = require(path.join(runtime, 'features/team/team.cjs'));
 const { minutesPage } = require(path.join(runtime, 'features/team/minutes-page.cjs'));
 const { TASK_KINDS, taskKind, routingVerdict } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
+const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
 const RUNTIME_FILES = ['boundaries.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs',
-  'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/dashboard/records-routing.cjs'];
+  'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/dashboard/records-routing.cjs',
+  'features/skills/session.cjs', 'features/skills/worker-proposals.cjs'];
 const runtimeFiles = () => Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
 
 const START_TIMEOUT = 30000;
@@ -128,6 +130,8 @@ function briefOf(options, brief, team, { id, phase, repo, before } = {}) {
     parts.push(`# Files you may change\n\n${options.allow.map(glob => `- \`${glob}\``).join('\n')}\n\nChange nothing else. Any other changed file is `
       + 'reported to the lead as out of scope and the work is rejected. If the task cannot be done within these paths, stop and say which file you would need and why.');
   }
+  parts.push('# Skill changes\n\nDo not edit, add or delete any SKILL.md unless --allow names that exact file without wildcards: that is the lead\'s approval. '
+    + 'Put suggested skill changes under ## Skill proposals in your answer. Unapproved file changes are preserved beside your answer as proposals and restored before the helper ends.');
   if (options.ledger || team) parts.push(`# Handing back\n\nEnd your final answer with a section headed exactly \`${FINDINGS}\`: bullets with the facts, decisions `
     + 'and pitfalls the next worker on this task must know (file:line where it helps). They are added to the shared context.');
   const prefixed = parts.length ? Buffer.concat([Buffer.from(`${parts.join('\n\n')}\n\n# Task\n\n`), brief]) : brief;
@@ -399,7 +403,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
   let options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, endSent = false;
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
-  let team = null, admission = null, teamFinished = false, roundtable = false;
+  let team = null, admission = null, teamFinished = false, roundtable = false, skillGuard = null, skillProposals = 0;
+  const restoreSkills = changedFiles => { if (skillGuard) skillProposals = skillGuard.finish(id, changedFiles); };
+  const proposalNote = () => skillProposals ? ` · ${skillProposals} skill proposals pending lead approval` : '';
   const teamLabel = (end = false) => !team ? '' : roundtable ? ` · roundtable ${options.meeting}`
     : options.skipMeeting && !end ? ` · roundtable skipped: ${options.skipMeeting}` : '';
   const recordTeam = async report => {
@@ -428,8 +434,11 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (!options) return;
     // Even without a session, the pane needs a declared row before it can retain the failure.
     send({ ...assignment(), model: 'unreported', effort: null, fast: null, declared: declared(), unconfirmed: true });
+    // A real timed-out process is stopped next; recover after it exits, before reporting its final proposal count.
+    if (child?.pid && !exited && child.exitCode === null) return;
+    try { restoreSkills(); } catch {}
     send({ type: 'dispatch-end', id, model: 'unreported', effort: null, fast: null, exitCode, reason: 'unconfirmed',
-      inputTokens: null, cachedTokens: null, reportedCostUsd: null, outputTokens: null, totalOutputTokens: null, activeMs: null, verdict: 'unverified', endedAt: Date.now() });
+      inputTokens: null, cachedTokens: null, reportedCostUsd: null, outputTokens: null, totalOutputTokens: null, activeMs: null, verdict: 'unverified', skillProposals, endedAt: Date.now() });
     endSent = true;
   };
   const reported = () => {
@@ -487,6 +496,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     // What the working tree held before the worker, so its own changes can be checked against --allow afterwards.
     if (checking) before = snapshot(options.cwd, repo);
     if (roundtable && !before) throw new Error('Cannot verify the roundtable working tree');
+    skillGuard = new WorkerSkillProposals(options, env, repo);
     const brief = briefOf(options, fs.readFileSync(options.brief), team, { id, phase: admission?.phase, repo, before: checking ? before : undefined });
     log = fs.createWriteStream(options.out + '.log');
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
@@ -550,9 +560,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (options.agent === 'claude' && output.result !== null && output.result !== undefined) fs.writeFileSync(options.out, output.result);
     const after = checking ? snapshot(options.cwd, before) : null;
     // The helper's own files (the answer, its log, the ledger it appends to) are not the worker's changes.
-    const own = after ? new Set([options.out, `${options.out}.log`, options.ledger, team?.memory].filter(Boolean).map(file => path.relative(after.root, file).split(path.sep).join('/'))) : null;
+    const own = after ? new Set([options.out, `${options.out}.log`, options.ledger, team?.memory, ...skillGuard.artifacts].filter(Boolean).map(file => path.relative(after.root, file).split(path.sep).join('/'))) : null;
     const changed = (after && changedBetween(before, after)?.filter(file => !own.has(file))) ?? null;
     const outOfScope = changed && (roundtable ? changed : changed.filter(file => !matches(options.allow, file)));
+    restoreSkills(after?.status.map(entry => entry.file));
     const route = output.routing();
     let reason = 'exit';
     if (unconfirmed) reason = 'unconfirmed';
@@ -571,21 +582,22 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
     const exitCode = Number.isInteger(result.code) ? (result.code === 0 && (unconfirmed || roundtable && reason !== 'exit') ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
     const rate = output.outputTokens !== null && output.activeMs > 0 ? `${Math.round(output.outputTokens * 1000 / output.activeMs)} token/s (${output.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(output.activeMs / 1000)} s)` : 'token/s unreported';
-    signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${teamLabel(true)}${teamEnd(bookkeeping)} · out ${options.out}`);
+    signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()} · out ${options.out}`);
     if (!endSent) send({ type: 'dispatch-end', id, ...route, exitCode, reason, ...output.usage(), verdict: routingVerdict(output, declared()),
       ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
-      ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), endedAt: Date.now() });
+      ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), skillProposals, endedAt: Date.now() });
     await new Promise(resolve => log.end(resolve));
     return exitCode;
   } catch (error) {
+    try { restoreSkills(); } catch (recovery) { signal(`skill recovery failed: ${String(recovery.message).replace(/[\r\n]+/g, ' ')}`); }
     failed(error.message, 1);
     if (child?.pid) stop('SIGTERM', false);
     if (options) {
       const reason = unconfirmed ? 'unconfirmed' : 'error';
       const bookkeeping = await recordTeam({ answer: '', header: '', reason });
-      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${teamLabel(true)}${teamEnd(bookkeeping)} · out ${options.out}`);
+      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()} · out ${options.out}`);
       if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', ...output.usage(),
-        verdict: routingVerdict(output, declared()), endedAt: Date.now() });
+        verdict: routingVerdict(output, declared()), skillProposals, endedAt: Date.now() });
     }
     log?.destroy();
     return 1;

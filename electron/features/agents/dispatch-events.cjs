@@ -23,7 +23,7 @@ function validDispatch(event) {
     (event.exitCode === null || Number.isSafeInteger(event.exitCode) && Math.abs(event.exitCode) <= 0xffffffff) && number(event.endedAt) &&
     (event.outputTokens === null || Number.isSafeInteger(event.outputTokens) && event.outputTokens >= 0) &&
     (event.activeMs === null || number(event.activeMs)) && optionalCount(event.inputTokens) && optionalCount(event.cachedTokens) && optionalCount(event.totalOutputTokens) &&
-    optionalCount(event.outOfScopeCount) && (event.reportedCostUsd == null || number(event.reportedCostUsd)) &&
+    optionalCount(event.outOfScopeCount) && optionalCount(event.skillProposals) && (event.reportedCostUsd == null || number(event.reportedCostUsd)) &&
     (event.verdict === undefined || ['ok', 'mismatch', 'unverified'].includes(event.verdict));
 }
 
