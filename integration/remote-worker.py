@@ -5,6 +5,7 @@ import concurrent.futures
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -17,7 +18,10 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
+from email.utils import parsedate_tz, mktime_tz
 
 PAGE_BYTES = 256 * 1024
 MAX_READ = 256 * 1024
@@ -26,7 +30,162 @@ PREFIX = "PGW1 "
 IMAGE_TYPES = {".png": "image/png", ".apng": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".jpe": "image/jpeg", ".jfif": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp", ".avif": "image/avif", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
 VIDEO_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".ogv": "video/ogg", ".ogg": "video/ogg", ".mov": "video/quicktime", ".mkv": "video/x-matroska", ".avi": "video/x-msvideo"}
 
-NOTIFY_SOURCE = r'''import hashlib,json,os,socket,sys,time
+# Presence of a route override is enough to reject the official-account query. Values never leave the CLI host.
+CLAUDE_ROUTE_ENV = frozenset("""ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS ANTHROPIC_UNIX_SOCKET
+ANTHROPIC_FOUNDRY_API_KEY ANTHROPIC_FOUNDRY_AUTH_TOKEN ANTHROPIC_AWS_API_KEY CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX
+CLAUDE_CODE_USE_FOUNDRY CLAUDE_CODE_USE_ANTHROPIC_AWS CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_GATEWAY
+CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR CLAUDE_CODE_SESSION_ACCESS_TOKEN
+CLAUDE_CODE_SESSIONS_OAUTH_TOKEN CCR_OAUTH_TOKEN_FILE CLAUDE_CODE_PROFILE ANTHROPIC_PROFILE CLAUDE_CODE_CUSTOM_OAUTH_URL CLAUDE_CODE_OAUTH_CLIENT_ID""".split())
+
+def finite_number(value):
+    return type(value) in (int, float) and math.isfinite(value)
+
+def read_account_json(filename):
+    try:
+        with open(filename, "rb") as source: data = source.read(1024 * 1024 + 1)
+    except FileNotFoundError: return None
+    if len(data) > 1024 * 1024: raise ValueError("account-size")
+    value = json.loads(data)
+    if not isinstance(value, dict): raise ValueError("account-shape")
+    return value
+
+def write_skill_reference(filename, text):
+    """The same fingerprint may be installed by several channels or SSH processes at once."""
+    data = text.encode("utf-8")
+    if os.path.islink(filename): raise ValueError("Unsafe remote skill reference.")
+    try:
+        with open(filename, "rb") as source:
+            if source.read(len(data) + 1) == data:
+                os.chmod(filename, 0o400)
+                return
+    except FileNotFoundError: pass
+    descriptor, temporary = tempfile.mkstemp(prefix=".skill-", dir=os.path.dirname(filename))
+    try:
+        with os.fdopen(descriptor, "wb") as target: target.write(data)
+        try: os.replace(temporary, filename)
+        except PermissionError:
+            # Windows cannot replace a read-only file. A competing identical install is already complete.
+            with open(filename, "rb") as source: same = source.read(len(data) + 1) == data
+            if not same:
+                os.chmod(filename, 0o600)
+                os.replace(temporary, filename)
+        os.chmod(filename, 0o400)
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+
+def official_claude_route(route, cwd):
+    if not isinstance(route, dict) or route.get("overridden") is not False: return False
+    folders = [route.get("home"), route.get("configDir"), route.get("secureDir")]
+    if not all(value is None or isinstance(value, str) and os.path.isabs(value) and len(value) <= 4096 and "\0" not in value for value in folders): return False
+    if not route.get("home"): return False
+    config = route.get("configDir") or os.path.join(route["home"], ".claude")
+    files = [os.path.join(config, "settings.json")]
+    if cwd: files.extend(os.path.join(cwd, ".claude", name) for name in ("settings.json", "settings.local.json"))
+    for filename in files:
+        settings = read_account_json(filename)
+        if settings is None: continue
+        env = settings.get("env") or {}
+        if not isinstance(env, dict) or any(str(key).upper() in CLAUDE_ROUTE_ENV for key in env): return False
+        if any(settings.get(key) is not None for key in ("apiKeyHelper", "inferenceCredentialHelper")): return False
+        if settings.get("forceLoginMethod") not in (None, "claudeai"): return False
+    return True
+
+class NoAccountRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs): return None
+
+def account_retry_after(value, now):
+    try:
+        if not isinstance(value, str): return 0
+        value = value.strip()
+        if re.fullmatch(r"\d+(?:\.\d+)?", value): delay = float(value) * 1000
+        else:
+            date = parsedate_tz(value)
+            delay = mktime_tz(date) * 1000 - now if date else 0
+        return min(900000, max(0, delay)) if math.isfinite(delay) else 0
+    except Exception: return 0
+
+def query_claude_account(route, now, open_url=None):
+    """One GET with a freshly read credential. Only numeric limits and fixed status words escape, even on errors."""
+    try:
+        folder = route.get("secureDir") or route.get("configDir") or os.path.join(route["home"], ".claude")
+        stored = read_account_json(os.path.join(folder, ".credentials.json"))
+        oauth = stored.get("claudeAiOauth") if stored else None
+        if not isinstance(oauth, dict): return {"state": "skipped", "reason": "credentials"}
+        token = oauth.get("accessToken")
+        if not isinstance(token, str) or not token.strip() or "\r" in token or "\n" in token: return {"state": "skipped", "reason": "credentials"}
+        scopes = oauth.get("scopes")
+        if not isinstance(scopes, list) or not all(scope in scopes for scope in ("user:inference", "user:profile")): return {"state": "skipped", "reason": "scope"}
+        if not finite_number(oauth.get("expiresAt")) or oauth["expiresAt"] <= now: return {"state": "skipped", "reason": "expired"}
+        request = urllib.request.Request("https://api.anthropic.com/api/oauth/usage", headers={
+            "Authorization": "Bearer " + token, "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-cli/2.1.312 (external, cli)",
+            "Content-Type": "application/json", "Accept": "application/json, text/plain, */*"}, method="GET")
+        opener = open_url or urllib.request.build_opener(NoAccountRedirect()).open
+        with opener(request, timeout=5) as response:
+            data = response.read(1024 * 1024 + 1)
+        if len(data) > 1024 * 1024: return {"state": "error", "reason": "response"}
+        body, limits = json.loads(data), []
+        if not isinstance(body, dict): return {"state": "error", "reason": "response"}
+        for key, minutes in (("five_hour", 300), ("seven_day", 10080)):
+            value = body.get(key)
+            if not isinstance(value, dict) or not finite_number(value.get("utilization")) or value["utilization"] < 0: continue
+            reset = record_time(value.get("resets_at")) if isinstance(value.get("resets_at"), str) else 0
+            limits.append({"minutes": minutes, "percent": value["utilization"], "resetsAt": reset or None})
+        return {"state": "ready", "account": {"limits": limits, "at": now, "source": "Claude"}} if limits else {"state": "error", "reason": "response"}
+    except urllib.error.HTTPError as error:
+        retry = error.headers.get("Retry-After", "") if error.headers else ""
+        try: error.close()
+        except Exception: pass
+        return {"state": "error", "reason": "http", "status": error.code,
+                "retryAfterMs": account_retry_after(retry, now) if error.code == 429 or error.code >= 500 else 0}
+    except (TimeoutError, socket.timeout): return {"state": "error", "reason": "timeout"}
+    except Exception: return {"state": "error", "reason": "query"}
+
+class RemoteClaudeAccounts:
+    def __init__(self, now=None, query=None):
+        self.now = now or (lambda: int(time.time() * 1000))
+        self.query = query or query_claude_account
+        self.lock, self.results = threading.Lock(), {}
+
+    def read(self, route, cwd):
+        try:
+            # Validate each project's live route before sharing any host-local numeric result.
+            if not official_claude_route(route, cwd): return {"state": "skipped", "reason": "route"}
+            key = tuple(route.get(name) for name in ("home", "configDir", "secureDir"))
+            with self.lock:
+                now = self.now()
+                cached = self.results.get(key)
+                if cached and now < cached[0]: return cached[1]
+                result = self.query(route, now)
+                transient = result.get("state") == "error" and (result.get("status") == 429 or result.get("status", 0) >= 500 or result.get("reason") in ("query", "timeout"))
+                failures = (cached[2] if cached else 0) + 1 if transient else 0
+                delay = max(min(900000, 60000 * 2 ** min(max(0, failures - 1), 4)), result.get("retryAfterMs", 0))
+                self.results[key] = (now + delay, result, failures)
+                if len(self.results) > 64: self.results.pop(next(iter(self.results)))
+                return result
+        except Exception: return {"state": "error", "reason": "query"}
+
+NOTIFY_SOURCE = 'CLAUDE_ROUTE_ENV = ' + repr(tuple(sorted(CLAUDE_ROUTE_ENV))) + '\n' + r'''import hashlib,json,os,re,socket,stat,sys,time
+def deliver_skills(hook, identity):
+    if not re.fullmatch(r"[\w-]{1,100}", identity): return
+    source=hook.get("source")
+    if source not in ("startup","resume","compact","clear"): return
+    note_file=os.environ.get("AGENTRIX_READING_NOTE_FILE")
+    state_dir=os.environ.get("AGENTRIX_SKILL_STATE_DIR")
+    key_file=os.environ.get("AGENTRIX_SKILL_KEY_FILE")
+    if not note_file or not state_dir or not key_file: return
+    with open(note_file,encoding="utf-8") as source_file: note=source_file.read(2*1024*1024+1)
+    with open(key_file,encoding="utf-8") as source_file: key=source_file.read(65)
+    if not note.strip() or len(note)>2*1024*1024 or not re.fullmatch(r"[a-f0-9]{64}",key): return
+    os.makedirs(state_dir,mode=0o700,exist_ok=True)
+    info=os.lstat(state_dir)
+    if not stat.S_ISDIR(info.st_mode) or (hasattr(os,"getuid") and (info.st_uid!=os.getuid() or info.st_mode&0o077)): return
+    filename=os.path.join(state_dir,hashlib.sha256((identity+":"+key).encode()).hexdigest())
+    try:
+        descriptor=os.open(filename,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+        os.close(descriptor)
+    except FileExistsError:
+        if source not in ("compact","clear"): return
+    print(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":note}}))
 try:
     mode=sys.argv[1]
     event={"type":mode,"token":os.environ["AGENTRIX_TOKEN"],"cwd":os.getcwd(),"codexHome":os.environ.get("CODEX_HOME",os.path.expanduser("~/.codex")),"sentAt":int(time.time()*1000)}
@@ -48,6 +207,9 @@ try:
                      transcriptPath=str(hook.get("transcript_path") or ""),eventId=identity+":"+kind+":"+str(time.time_ns() if hasattr(time,"time_ns") else int(time.time()*1000000000)),
                      message=str(hook.get("message") or "")[:300] if kind=="notify" else None,
                      prompt=str(hook["prompt"])[:2000] if kind=="start" and hook.get("prompt") else None)
+        if kind=="session":
+            try: deliver_skills(hook,identity)
+            except Exception: pass
     elif mode=="shell-prompt":
         event["codexAvailable"]=len(sys.argv)>2 and sys.argv[2]=="1"
         event["claudeAvailable"]=len(sys.argv)>3 and sys.argv[3]=="1"
@@ -55,6 +217,11 @@ try:
         event["agent"]="claude" if len(sys.argv)>3 and sys.argv[3]=="claude" else "codex"
         if mode=="codex-exited": event["exitCode"]=int(sys.argv[2])
         elif len(sys.argv)>2 and sys.argv[2]: event["command"]=sys.argv[2][:24]
+    if event.get("agent")=="claude":
+        home=os.path.expanduser("~")
+        event["accountRoute"]={"home":home,"configDir":os.environ.get("CLAUDE_CONFIG_DIR") or None,
+            "secureDir":(os.environ.get("CLAUDE_SECURESTORAGE_CONFIG_DIR") or os.path.join(home,".claude")) if "CLAUDE_SECURESTORAGE_CONFIG_DIR" in os.environ else None,
+            "overridden":any(name.upper() in CLAUDE_ROUTE_ENV for name in os.environ)}
     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
         client.settimeout(5 if mode == "codex-started" else 2)
         client.connect(os.environ["AGENTRIX_SOCKET"])
@@ -102,10 +269,7 @@ hooks={name:[{"hooks":[{"type":"command","command":command+" "+kind}]}] for name
 print(json.dumps({"hooks":hooks}))
 PY
     )
-    local -a note=()
-    local current_note=$(__pg_reading_note)
-    [ -n "$current_note" ] && note=(--append-system-prompt "$current_note")
-    "$executable" --settings "$settings" "${note[@]}" "$@"
+    AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "$executable" --settings "$settings" --append-system-prompt 'Agentrix system skills are delivered by its SessionStart hook.' "$@"
     result=$?
     __pg_emit codex-exited "$result" claude
     return "$result"
@@ -564,7 +728,7 @@ class CodexActivityReader:
             return dict(self.snapshot) if self.offset >= size else None
 
 class Worker:
-    def __init__(self, emit):
+    def __init__(self, emit, accounts=None):
         self.emit = emit
         self.root = None
         self.temp = None
@@ -572,6 +736,7 @@ class Worker:
         self.dispatch_source = None
         self.dispatch_note = None
         self.skill_paths = {}
+        self.skill_state_dir = None
         self.skill_note_ready = threading.Event()
         self.skill_note_sequence = None
         self.master = None
@@ -581,6 +746,8 @@ class Worker:
         self.sequence_lock = threading.Lock()
         self.codex_home = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
         self.claude_home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+        self.claude_route = None
+        self.claude_accounts = accounts or RemoteClaudeAccounts()
         self.uploads = {}
         self.activity_reader = None
         self.claude_reader = None
@@ -609,6 +776,12 @@ class Worker:
                 self.claude_reader = ClaudeTranscriptReader(filename, since)
             self.claude_reader.read()
             return self.claude_reader.take()
+
+    def claude_account(self):
+        route = self.claude_route
+        if self.stopping: return {"state": "skipped", "reason": "cancelled"}
+        result = self.claude_accounts.read(route, self.coding_root)
+        return result if not self.stopping and route is self.claude_route else {"state": "skipped", "reason": "cancelled"}
 
     def initialize(self, config):
         self.root = os.path.realpath(os.path.expanduser(config["path"]))
@@ -950,13 +1123,18 @@ class Worker:
         return path
 
     def install_skills(self, reading_note):
-        """Session-private SKILL.md reference copies. Project skills remain in the remote repository."""
-        folder = os.path.join(self.temp, "skills")
+        """Private reference copies survive resume; project skills remain in the remote repository."""
+        bundle = self.skills_bundle if self.skills_bundle is not None else {}
+        if not isinstance(bundle, dict) or not isinstance(bundle.get("files", []), list): raise ValueError("Invalid remote skills bundle.")
+        key = bundle.get("key") or hashlib.sha256(json.dumps(bundle, sort_keys=True).encode()).hexdigest()
+        if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key): raise ValueError("Invalid remote skills key.")
+        folder = os.path.join(self.skill_state_dir, "references", key) if self.skill_state_dir else os.path.join(self.temp, "skills")
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        info = os.lstat(folder)
+        if not stat.S_ISDIR(info.st_mode) or hasattr(os, "getuid") and (info.st_uid != os.getuid() or info.st_mode & 0o077): raise ValueError("Unsafe remote skill folder.")
         agents = "Installed agents: Claude Code %s; Codex %s." % tuple("installed" if shutil.which(name) else "missing" for name in ("claude", "codex"))
         def expand(text):
             return text.replace("{AGENTRIX_SKILLS}", folder.replace(os.sep, "/")).replace("{AGENTRIX_AGENTS}", agents)
-        bundle = self.skills_bundle if self.skills_bundle is not None else {}
-        if not isinstance(bundle, dict) or not isinstance(bundle.get("files", []), list): raise ValueError("Invalid remote skills bundle.")
         self.skill_paths = {}
         for skill in bundle.get("files", []):
             if not isinstance(skill, dict) or not isinstance(skill.get("id"), str) or skill.get("assets"): raise ValueError("Only remote SKILL.md text is supported.")
@@ -967,14 +1145,13 @@ class Worker:
             directory = os.path.join(folder, scope, name)
             os.makedirs(directory, mode=0o700, exist_ok=True)
             filename = os.path.join(directory, "SKILL.md")
-            if os.path.exists(filename): os.chmod(filename, 0o600)
-            with open(filename, "w", encoding="utf-8") as output: output.write(text)
-            os.chmod(filename, 0o400)
+            write_skill_reference(filename, text)
             self.skill_paths[skill["id"]] = filename.replace(os.sep, "/")
         os.makedirs(os.path.join(folder, "global"), mode=0o700, exist_ok=True)
         instructions = bundle.get("instructions", "")
         if not isinstance(instructions, str) or len(instructions.encode("utf-8")) > 2 * 1024 * 1024: raise ValueError("Remote skill manifest is too large.")
-        with open(os.path.join(folder, "instructions.md"), "w", encoding="utf-8") as output: output.write(expand(instructions))
+        write_skill_reference(os.path.join(folder, "instructions.md"), expand(instructions))
+        with open(os.path.join(self.temp, "skill-key.txt"), "w", encoding="utf-8") as output: output.write(key)
         return expand(reading_note) if isinstance(reading_note, str) else ""
 
     def startup_note(self, reading_note):
@@ -1032,7 +1209,10 @@ class Worker:
         bash = shutil.which("bash")
         if not bash: raise ValueError("远端没有找到 Bash。")
         self.temp = tempfile.mkdtemp(prefix="agentrix-")
+        self.skill_state_dir = os.path.join(os.path.expanduser("~"), ".local", "state", "agentrix", "ssh-skills")
         reading_note = self.startup_note(reading_note)
+        with open(os.path.join(self.temp, "skill-note.txt"), "w", encoding="utf-8") as output: output.write(reading_note)
+        os.chmod(os.path.join(self.temp, "skill-note.txt"), 0o600)
         notify_file = os.path.join(self.temp, "notify.py")
         rc_file = os.path.join(self.temp, "bashrc")
         for filename, content in ((notify_file, NOTIFY_SOURCE), (rc_file, BASH_SOURCE)):
@@ -1050,6 +1230,8 @@ class Worker:
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
         if reading_note: env["AGENTRIX_READING_NOTE"] = reading_note
         env["AGENTRIX_READING_NOTE_FILE"] = os.path.join(self.temp, "skill-note.txt")
+        env["AGENTRIX_SKILL_KEY_FILE"] = os.path.join(self.temp, "skill-key.txt")
+        env["AGENTRIX_SKILL_STATE_DIR"] = os.path.join(self.skill_state_dir, "delivered")
         for key in ("NO_COLOR", "NODE_DISABLE_COLORS"): env.pop(key, None)
         if env.get("FORCE_COLOR") == "0": env.pop("FORCE_COLOR", None)
         child, master = pty.fork()
@@ -1081,6 +1263,15 @@ class Worker:
                     if dispatch:
                         if event.pop("sessionKey", None) != self.token or event.get("projectId") != self.project_id: continue
                     elif event.pop("token", None) != self.token: continue
+                    route = event.pop("accountRoute", None)
+                    if not dispatch and event.get("agent") == "claude":
+                        # No credential values cross even the host-local socket. Never forward route paths to Agentrix.
+                        valid = isinstance(route, dict) and set(route) == {"home", "configDir", "secureDir", "overridden"} and type(route["overridden"]) is bool
+                        if valid and all(value is None or isinstance(value, str) and os.path.isabs(value) and len(value) <= 4096 and "\0" not in value
+                                         for value in (route["home"], route["configDir"], route["secureDir"])) and route["home"]:
+                            if self.claude_route != route: self.claude_route = route
+                            self.claude_home = route["configDir"] or os.path.join(route["home"], ".claude")
+                        else: self.claude_route = None
                     codex_home = event.pop("codexHome", None)
                     if event.get("type") in ("shell-prompt", "codex-started"):
                         if isinstance(codex_home, str) and os.path.isabs(codex_home): self.codex_home = codex_home
@@ -1146,8 +1337,8 @@ class Channel:
     """One terminal of the host: a worker of its own (folder, shell, readers), whose messages carry the channel's name
     both ways, so every terminal opened on the host shares this process and its SSH connection
     (electron/remote-connection.cjs)."""
-    def __init__(self, name, write):
-        self.worker = Worker(lambda message: write(dict(message, channel=name)))
+    def __init__(self, name, write, accounts=None):
+        self.worker = Worker(lambda message: write(dict(message, channel=name)), accounts)
         self.requests = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         self.typing = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
@@ -1183,6 +1374,7 @@ class Channel:
             elif op == "resume-info": value = recent_session(worker.coding_root, worker.codex_home, message.get("threadId"))
             elif op == "codex-status": value = worker.codex_status(message.get("since"), message.get("threadId"))
             elif op == "claude-status": value = worker.claude_status(message.get("path"), message.get("since"))
+            elif op == "claude-account": value = worker.claude_account()
             elif op == "history": value = history_records(worker.coding_root, worker.codex_home, os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
             elif op == "write-handoff": value = worker.write_handoff(message.get("text"))
             elif op == "skill-note": value = worker.update_skill_note(message.get("sequence"), message.get("note"), message.get("skills"))
@@ -1206,6 +1398,7 @@ class Channel:
 def serve(read_line, write, channels):
     """Runs the channels the lines read open ("open"), feed and close ("shutdown") until the input ends."""
     cached_key, cached_bundle = None, None
+    accounts = RemoteClaudeAccounts()
     try:
         while True:
             line = read_line(MAX_MESSAGE + 1)
@@ -1235,7 +1428,7 @@ def serve(read_line, write, channels):
                             if not isinstance(bundle, dict) or bundle.get("key") != key: raise ValueError("Invalid remote skills bundle.")
                             cached_key, cached_bundle = key, bundle
                     if channel is None:
-                        channels[name] = channel = Channel(name, write)
+                        channels[name] = channel = Channel(name, write, accounts)
                         # Its folder and Git are read in a thread of its own, so other terminals' keys go on meanwhile.
                         threading.Thread(target=channel.open, args=(message,), daemon=True).start()
                 elif channel is None: continue
