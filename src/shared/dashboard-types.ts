@@ -7,8 +7,9 @@ export type DashboardRange = '7d' | '30d' | 'all';
 export type DashboardQuery = { projectId: string | null; range: DashboardRange };
 export type DashboardFindingCategory = 'correctness' | 'security' | 'performance' | 'boundary' | 'ui';
 
-// First pass: an execution run that ended cleanly in scope, whose round had no review finding against its author, and
-// that the owner did not send back. Ratios are 0..1.
+// First pass: for a worker, an execution run that ended cleanly in scope, with no review finding against its author in
+// that round and no rework after it; for the lead's model, a delivery the owner passed at its first submission.
+// Ratios are 0..1. A model row's weight is the lowest of its adopted per-kind weights (1 when none).
 export type DashboardModelRow = {
   model: string; agent: 'codex' | 'claude'; runs: number; firstPassRate: number | null;
   avgActiveMs: number | null; tokensPerSecond: number | null; findingsPerRun: number | null;
@@ -28,9 +29,10 @@ export type DashboardIncident = {
   at: number; project: string; meeting: string | null; model: string; kind: string; cause: string; fix: string;
   lead: 'missed' | 'copied' | null; weight: DashboardWeight | null;
 };
-// durationMs and the phases come from journal timestamps; a phase with no runs is null.
+// durationMs is the journal timestamp span; phases are summed active time; a phase with no runs is null, and so is
+// questions for a round recorded before issues were journaled.
 export type DashboardRound = {
-  project: string; meeting: string; at: number; tasks: number; questions: number; findings: number;
+  project: string; meeting: string; at: number; tasks: number; questions: number | null; findings: number;
   rework: number; outOfScope: number; incidents: number; durationMs: number | null; firstConfirmed: boolean;
   phases: { roundtable: number | null; build: number | null; review: number | null; rework: number | null };
 };
