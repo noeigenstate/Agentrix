@@ -36,6 +36,7 @@
     "test:material": "node scripts/material-smoke.mjs",
     "test:composer": "node scripts/composer-smoke.mjs",
     "test:reading": "node scripts/reading-smoke.mjs",
+    "test:dashboard": "node scripts/dashboard-smoke.mjs",
     "test:reading-focus": "node scripts/reading-focus-smoke.mjs --startup",
     "test:path-refresh": "node scripts/path-refresh-smoke.mjs",
     "test:git": "node scripts/git-smoke.mjs",

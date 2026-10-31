@@ -160,6 +160,9 @@ jobs:
       - name: Verify reading commands, CLI keys and permission handoff
         run: node scripts/retry.mjs npm run test:reading -- --packaged
 
+      - name: Verify the model dashboard window, its filters, adoption and layouts
+        run: node scripts/retry.mjs npm run test:dashboard -- --packaged
+
       - name: Verify agent hierarchy, queued messages, paged popups and slow autosave
         run: node scripts/retry.mjs node scripts/reading-hierarchy-smoke.mjs --packaged
 

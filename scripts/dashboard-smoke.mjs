@@ -22,6 +22,7 @@ import { testRun } from './test-output.mjs';
 import { waitFor } from './wait.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
+const packaged = process.argv.includes('--packaged');
 const themes = process.argv.slice(2).filter(name => ['mono', 'light'].includes(name));
 const DAY = 86_400_000, now = Date.now(), ago = days => now - days * DAY;
 
@@ -79,7 +80,7 @@ async function checkTheme(theme, output, results) {
   const errors = [], shot = (page, name) => page.screenshot({ path: path.join(output, `${name}.png`) });
   let app;
   try {
-    app = await electron.launch({ executablePath: require('electron'), args: [root], cwd: root, env });
+    app = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'), args: packaged ? [] : [root], cwd: root, env });
     const main = await app.firstWindow(); main.on('pageerror', error => errors.push(error.message));
 
     // Opened once from the menu: a second click focuses the same window.
