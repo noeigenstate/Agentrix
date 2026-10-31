@@ -19,7 +19,7 @@ test('empty dashboard preserves unknown rates, costs, times and previous-round a
   const result = summary();
   assert.deepEqual(result.kpis, { firstPassRate: null, runs: 0, runsPrevious: 0, incidents: 0, quota: null,
     reworkPerRound: null, reworkPerRoundPrevious: null, rounds: 0, roundtableFirstConfirm: null, findingsPerRound: null, findingFixRate: null });
-  for (const key of ['models', 'kinds', 'speed', 'incidents', 'rounds', 'findings', 'suggestions', 'weights']) assert.deepEqual(result[key], [], key);
+  for (const key of ['models', 'modelRuns', 'kinds', 'speed', 'incidents', 'rounds', 'findings', 'suggestions', 'weights']) assert.deepEqual(result[key], [], key);
   assert.deepEqual(result.prices, { updated: prices.updated, unpriced: [] });
 });
 
@@ -37,6 +37,7 @@ test('worker first pass requires exit zero in scope and no finding against its a
   assert.equal(model(result).findingsPerRun, 1 / 7);
   assert.equal(result.kinds.find(row => row.kind === 'review').firstPassRate, null);
   assert.equal(result.kpis.findingFixRate, 0.5);
+  assert.deepEqual(result.modelRuns.map(row => row.firstPass), [null, null, false, false, false, false, true]);
 });
 
 test('rework follows review completion and explicit review follow-ups, with author and kind isolation', () => {
@@ -58,6 +59,50 @@ test('rework follows review completion and explicit review follow-ups, with auth
   assert.equal(result.rounds[0].tasks, 2); assert.equal(result.rounds[0].rework, 1);
   assert.equal(result.rounds[0].durationMs, 600, 'journal ends and app run records are not counted twice');
   assert.equal(result.rounds[0].questions, null);
+  assert.deepEqual(result.modelRuns.map(row => row.firstPass), [false, false, null, true, false]);
+});
+
+test('model task lists follow the range and project, newest first, with the same cost and outcome evidence', () => {
+  const recent = run('recent', { title: 'Latest task', at: now, fast: true, meeting: 'r',
+    inputTokens: 1e6, cachedTokens: 1e6, totalOutputTokens: 1e6 });
+  const boundary = run('boundary', { title: 'Boundary task', at: now - 7 * DAY });
+  const result = summary({ query: { ...query, projectId: 'a' }, records: { runs: [recent, boundary,
+    run('old', { at: now - 7 * DAY - 1 }), run('future', { at: now + 1 }),
+    run('beta', { projectId: 'b', project: 'Beta' })] } });
+  assert.deepEqual(result.modelRuns, [
+    { model: sol, at: now, project: 'Alpha', title: 'Latest task', kind: 'core', role: '执行', meeting: 'r',
+      firstPass: true, reason: 'exit', activeMs: 1000, outputTokens: 1e6, costUsd: 24.2 },
+    { model: sol, at: now - 7 * DAY, project: 'Alpha', title: 'Boundary task', kind: 'core', role: '执行', meeting: null,
+      firstPass: true, reason: 'exit', activeMs: 1000, outputTokens: 30, costUsd: 0.000381 },
+  ]);
+});
+
+test('model task lists cap each model at its latest 50 without truncating the model metrics or mutating records', () => {
+  const runs = [sol, sonnet].flatMap((model, m) => Array.from({ length: 55 + m * 5 }, (_, i) =>
+    run(`${m}-${i}`, { model, agent: m ? 'claude' : 'codex', at: now - i, title: `${m}-${i}` }))).reverse();
+  const before = JSON.stringify(runs);
+  const result = summary({ records: { runs: [...runs, runs[0]] } });
+  assert.equal(result.modelRuns.length, 100);
+  for (const [index, name] of [sol, sonnet].entries()) {
+    assert.deepEqual(result.modelRuns.filter(row => row.model === name).map(row => row.title),
+      Array.from({ length: 50 }, (_, i) => `${index}-${i}`));
+    assert.equal(model(result, name).runs, 55 + index * 5);
+  }
+  assert.ok(result.modelRuns.every((row, index, rows) => index === 0 || rows[index - 1].at >= row.at));
+  assert.equal(JSON.stringify(runs), before);
+});
+
+test('model task lists preserve unknown values, recorded zeros, and the legacy output-count fallback', () => {
+  const result = summary({ records: { runs: [
+    run('unknown', { model: 'custom', at: now, exitCode: null, title: null, role: null, kind: null, reason: null,
+      activeMs: -1, totalOutputTokens: null, outputTokens: null, inputTokens: null }),
+    run('zero', { title: 'zero', at: now - 1, activeMs: 0, totalOutputTokens: 0, outputTokens: 20, reportedCostUsd: 0 }),
+    run('legacy', { title: 'legacy', at: now - 2, totalOutputTokens: undefined }),
+  ] } });
+  assert.deepEqual(result.modelRuns[0], { model: 'custom', at: now, project: 'Alpha', title: '', kind: null, role: null,
+    meeting: null, firstPass: null, reason: null, activeMs: null, outputTokens: null, costUsd: null });
+  assert.deepEqual(result.modelRuns.slice(1).map(row => [row.activeMs, row.outputTokens, row.costUsd]),
+    [[0, 0, 0], [1000, 20, 0.000281]]);
 });
 
 test('a build already running when review ends is not rework', () => {

@@ -49,6 +49,8 @@ const at = (month, day, hour = 10) => new Date(2026, month - 1, day, hour).getTi
 const weight = { model: 'gpt-6.1-sol', kind: 'test', from: 1, to: 0.7 };
 const row = (model, agent, patch = {}) => ({ model, agent, runs: 10, firstPassRate: 0.8, avgActiveMs: 600000, tokensPerSecond: 90, findingsPerRun: 1.2, sentBack: 1, outOfScope: 0, incidents: 0,
   quotaPercent: 20, costUsd: 3.2, costedRuns: 10, weight: 1, ...patch });
+const task = (model, title, patch = {}) => ({ model, at: at(10, 30), project: 'agentrix', title, kind: 'core', role: '执行', meeting: null,
+  firstPass: true, reason: 'exit', activeMs: 600000, outputTokens: 2000, costUsd: 0.25, ...patch });
 function fixture(patch = {}) {
   return {
     generatedAt: at(10, 31, 14), query: { projectId: null, range: '30d' },
@@ -84,12 +86,15 @@ function fixture(patch = {}) {
       { id: 'b', kind: 'mechanism', title: 'Fresh sessions for review fixes', text: 'Rework is 22% of build time.', weight: null, state: 'adopted' },
       { id: 'c', kind: 'mechanism', title: 'Keep the roundtable', text: 'Two of five questions changed the plan.', weight: null, state: 'dismissed' },
     ],
+    modelRuns: [task('gpt-6.1-sol', 'Latest task'), task('gpt-6.1-sol', 'Needs rework', { firstPass: false, kind: 'test' }),
+      task('gpt-6.1-sol', 'Unknown outcome', { firstPass: null, activeMs: null, outputTokens: null, costUsd: null, kind: null }),
+      task('claude-sonnet-5-5', 'Site task', { project: 'site', kind: 'frontend' })],
     weights: [weight], prices: { updated: '2026-10-31', unpriced: ['mystery-model'] },
     ...patch,
   };
 }
 const emptySummary = () => fixture({ kpis: { firstPassRate: null, runs: 0, runsPrevious: null, incidents: 0, quota: null, reworkPerRound: null, reworkPerRoundPrevious: null, rounds: 0, roundtableFirstConfirm: null, findingsPerRound: null, findingFixRate: null },
-  models: [], kinds: [], speed: [], incidents: [], rounds: [], findings: [], suggestions: [], weights: [], prices: { updated: '2026-10-31', unpriced: [] } });
+  models: [], modelRuns: [], kinds: [], speed: [], incidents: [], rounds: [], findings: [], suggestions: [], weights: [], prices: { updated: '2026-10-31', unpriced: [] } });
 
 const view = (props = {}) => {
   const { DashboardView } = dashboard('Dashboard.tsx');
@@ -428,6 +433,63 @@ function hooks(initial = {}) {
 }
 const elements = node => Array.isArray(node) ? node.flatMap(elements) : React.isValidElement(node) ? [node, ...elements(node.props.children)] : [];
 const text = node => Array.isArray(node) ? node.map(text).join('') : typeof node === 'string' ? node : React.isValidElement(node) ? text(node.props.children) : '';
+
+test('model cells are native buttons, open one model task list at a time and return focus when it closes', () => {
+  const h = hooks(), loader = makeLoader({ react: h.api });
+  loader('shared/i18n.ts').applyLanguage('zh');
+  const { ModelTable } = loader('features/dashboard/ModelTable.tsx'), { ModelTasks } = loader('features/dashboard/ModelTasks.tsx');
+  let summary = fixture();
+  const tree = () => h.render(() => ModelTable({ summary }));
+  const controls = () => elements(tree()).filter(node => node.type === 'button' && 'aria-expanded' in node.props);
+  const detail = () => elements(tree()).find(node => node.type === ModelTasks);
+  const focused = [], sol = { focus: () => focused.push('sol') }, sonnet = { focus: () => focused.push('sonnet') };
+  assert.equal(controls().length, summary.models.length);
+  assert.ok(controls().every(node => node.props.type === 'button' && node.props['aria-expanded'] === false), 'native buttons supply Enter and Space activation');
+  assert.equal(detail(), undefined);
+  controls()[0].props.onClick({ currentTarget: sol });
+  assert.deepEqual(controls().map(node => node.props['aria-expanded']), [true, false, false, false]);
+  assert.equal(controls()[0].props['aria-controls'], 'dashboard-model-tasks');
+  assert.deepEqual(detail().props.runs.map(run => run.title), ['Latest task', 'Needs rework', 'Unknown outcome']);
+  controls()[1].props.onClick({ currentTarget: sonnet });
+  assert.deepEqual(controls().map(node => node.props['aria-expanded']), [false, true, false, false]);
+  assert.deepEqual(detail().props.runs.map(run => run.title), ['Site task']);
+  detail().props.onClose();
+  assert.equal(detail(), undefined); assert.deepEqual(focused, ['sonnet']);
+  controls()[0].props.onClick({ currentTarget: sol }); controls()[0].props.onClick({ currentTarget: sol });
+  assert.equal(detail(), undefined, 'activating the open row closes it too');
+  controls()[2].props.onClick({ currentTarget: sol });
+  assert.deepEqual(detail().props.runs, [], 'a model without worker runs still opens an empty list');
+  summary = fixture({ modelRuns: [task('gpt-6.1-terra', 'Filtered task')] });
+  assert.equal(detail().props.runs[0].title, 'Filtered task', 'an open list follows new filter results');
+});
+
+test('model task details show time, project, title, named kind, three outcomes and right-aligned numeric values', () => zh(() => {
+  const { ModelTasks } = dashboard('ModelTasks.tsx'), summary = fixture();
+  const html = renderToStaticMarkup(React.createElement(ModelTasks, { model: 'gpt-6.1-sol', runs: summary.modelRuns.filter(run => run.model === 'gpt-6.1-sol'), onClose() {} }));
+  assert.match(html, /<section id="dashboard-model-tasks"[^>]*aria-labelledby="dashboard-model-tasks-title"/);
+  assert.match(html, /Sol · gpt-6\.1-sol 的任务/);
+  assert.match(html, /收起任务列表/); assert.match(html, /按当前筛选，最多显示最近 50 条任务/);
+  assert.match(html, /class="scroll tall" role="region" aria-label="模型任务表，可横向滚动；任务列和结果列固定" tabindex="0"/);
+  for (const column of ['任务', '时间', '项目', '任务类型', '用时', '输出 token', '成本', '结果']) assert.match(html, new RegExp(`<th[^>]*>${column}</th>`));
+  assert.equal(count(html, /<tbody><tr>|<\/tr><tr>/g), 3);
+  const latest = rowOf(html, 'Latest task');
+  assert.match(latest, /<time dateTime="[^"]+">2026-10-30 10:00<\/time>/);
+  assert.match(latest, /agentrix/); assert.match(latest, />复杂代码</); assert.match(latest, />一次通过</);
+  assert.match(latest, /<td class="num">10 分<\/td><td class="num">2000<\/td><td class="num">≈ \$0\.25<\/td>/);
+  assert.match(rowOf(html, 'Needs rework'), />测试</); assert.match(rowOf(html, 'Needs rework'), />返工或退回</);
+  const unknown = rowOf(html, 'Unknown outcome');
+  assert.equal(count(unknown, />—</g), 5, 'unknown kind, outcome, duration, count and cost are dashes');
+  assert.doesNotMatch(html, /Site task/);
+  const zero = renderToStaticMarkup(React.createElement(ModelTasks, { model: 'custom', runs: [task('custom', 'A < B', { outputTokens: 0, costUsd: 0 })], onClose() {} }));
+  assert.match(zero, /A &lt; B/); assert.match(zero, /<td class="num">0<\/td><td class="num">≈ \$0\.00<\/td>/);
+}));
+
+test('an empty model task list keeps every header and says 没有任务', () => zh(() => {
+  const { ModelTasks } = dashboard('ModelTasks.tsx');
+  const html = renderToStaticMarkup(React.createElement(ModelTasks, { model: 'claude-opus-5-5', runs: [], onClose() {} }));
+  assert.equal(count(html, /<th[ >]/g), 8);
+  assert.match(html, /<td colSpan="8" class="muted">没有任务<\/td>/);
+}));
 
 test('采纳 / 不采纳 / 撤销 call decide with the suggestion id and the state they mean, and the status line answers', async () => {
   const h = hooks(), loader = makeLoader({ react: h.api }), { Suggestions } = loader('features/dashboard/Suggestions.tsx');

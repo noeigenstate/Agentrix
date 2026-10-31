@@ -82,7 +82,7 @@ export function weightChange(weight: DashboardWeight) {
 // The weights the owner adopted for one model, or its default.
 export const modelWeights = (weights: DashboardWeight[], model: string) => weights.filter(weight => weight.model === model);
 
-export const costValue = (row: DashboardModelRow) => row.costUsd === null ? NONE : `≈ $${row.costUsd >= 100 ? row.costUsd.toFixed(0) : row.costUsd.toFixed(2)}`;
+export const costValue = (row: Pick<DashboardModelRow, 'costUsd'>) => row.costUsd === null ? NONE : `≈ $${row.costUsd >= 100 ? row.costUsd.toFixed(0) : row.costUsd.toFixed(2)}`;
 export const costCoverage = (row: DashboardModelRow) => row.costedRuns === 0 ? t('没有价格') : t('{total} 次中 {priced} 次有价格', { total: row.runs, priced: row.costedRuns });
 
 export function quotaNote(quota: DashboardKpis['quota']) {
