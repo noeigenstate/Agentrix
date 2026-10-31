@@ -42,6 +42,8 @@ test('remote polling is read-only, rate limited, aborted on disposal and rejects
   const remote = { request(op, data, options) { requests.push({ op, data, options }); return new Promise(done => { resolve = done; }); } };
   const poller = watchRemoteClaudeAccount(remote, account => received.push(account), { ...time, current: () => current });
   await time.tick(250);
+  // main.cjs feeds every terminal chunk to a session's account watcher, as it does Codex's.
+  assert.doesNotThrow(() => poller.output('remote terminal output'));
   assert.equal(requests.length, 1); assert.equal(requests[0].op, 'claude-account'); assert.deepEqual(requests[0].data, {});
   assert.equal(requests[0].options.timeout, 7000);
   resolve(ready()); await flush();

@@ -33,7 +33,8 @@ function watchRemoteClaudeAccount(remote, changed, { current = () => true, ...op
     changed: account => { if (current()) changed(account); },
   });
   poller.setActive(true);
-  return poller;
+  // A session's account watcher (s.usageAccount) is also fed each terminal chunk; Claude's limits come only from the poll.
+  return { get account() { return poller.account; }, refresh: () => poller.refresh(), output() {}, dispose: () => poller.dispose() };
 }
 
 module.exports = { remoteClaudeResult, watchRemoteClaudeAccount };
