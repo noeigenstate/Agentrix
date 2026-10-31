@@ -17,7 +17,8 @@ function buildMacMenuTemplate({ appName, t, shortcuts, state = DEFAULT_MENU_STAT
   const bindings = { ...DEFAULT_SHORTCUTS, ...shortcuts };
   const action = (name, label, options = {}) => ({
     label, ...options, click: () => command(name),
-    // App.tsx owns shortcut execution; the native menu only displays the current binding.
+    // registerAccelerator only affects Linux/Windows; macOS accelerators remain native key equivalents.
+    // The page gets the key first; App.tsx's capture handler calls preventDefault to avoid double firing.
     ...(bindings[name] ? { accelerator: bindings[name], registerAccelerator: false } : {}),
   });
   return [

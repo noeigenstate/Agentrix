@@ -110,7 +110,9 @@ function updateStoreSettings(patch) {
   if (theme !== store.settings.theme && window && !window.isDestroyed() && !desktopGlassActive) window.setBackgroundColor(windowBackgroundColor());
   // The settings IPC broadcasts after applying the window's new zoom.
   if (uiZoom !== store.settings.uiZoom) windowZoom?.update();
-  if (process.platform === 'darwin' && (language !== store.settings.language
+  const languageChanged = language !== store.settings.language;
+  if (languageChanged) trayMenu();
+  if (process.platform === 'darwin' && (languageChanged
     || JSON.stringify(shortcuts) !== JSON.stringify(store.settings.shortcuts))) rebuildMacMenu();
 }
 const sessions = new Map();
@@ -266,9 +268,10 @@ function macMenu() {
   return Menu.buildFromTemplate(buildMacMenuTemplate({
     appName: app.name, t, shortcuts: store?.settings.shortcuts, state: menuState,
     updateReady: updateManager?.getState().status === 'ready', command: command => {
+      showWindow();
       send('menu:command', command);
       // Native checks toggle before click; the renderer may reject the command while a dialog is open.
-      if (['workspace', 'decisions', 'activityPane', 'reading', 'terminal'].includes(command)) rebuildMacMenu();
+      rebuildMacMenu();
     },
     quit: () => { showWindow(); requestQuit().catch(report); }, close: () => window?.close(),
   }));
@@ -1313,7 +1316,6 @@ function registerIpc() {
     },
     listProjectImageCandidates: folder => projectImageCandidates(folder, 6, store.settings.theme),
     getSettings: () => store.settings, updateStoreSettings,
-    rebuildMenus: () => trayMenu(),
     clearRestorePlans: () => restorePlans.clear(), chooseVoiceModel: model => voiceManager.choose(model) });
   filesIpc = registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperations, clipboardWrites, clipboard, previewResources, affectsEditor, allowEditorClose, shell,
     getActiveFileTree: () => activeFileTree, setActiveFileTree: value => { activeFileTree = value; }, setActiveTerminal: value => { activeTerminal = value; }, send });

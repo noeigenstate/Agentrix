@@ -66,7 +66,7 @@ test('ready updates appear after settings and every application item sends its e
   assert.deepEqual(commands, ['addProject', 'settings', 'installUpdate', 'workspace', 'decisions', 'overview', 'search', 'activityPane', 'reading', 'terminal']);
 });
 
-test('application accelerators display current custom bindings over defaults without registering keys', () => {
+test('template accelerators merge custom bindings over defaults and set registerAccelerator false', () => {
   const custom = { addProject: 'Alt+N', settings: 'Ctrl+Shift+S', decisions: 'Alt+D', overview: 'Alt+Left', search: 'Ctrl+Alt+F' };
   for (const shortcuts of [undefined, custom, { decisions: 'Alt+D' }]) {
     const menus = template({ shortcuts, updateReady: true, state: { ...DEFAULT_MENU_STATE, reading: false } });
@@ -143,9 +143,8 @@ function mainFixture(platform = 'darwin') {
   vm.runInContext(['macMenu', 'rebuildMacMenu', 'setMenuState', 'updateStoreSettings'].map(name => functions.get(name).getText(source)).join('\n'), context);
   vm.runInContext(stateRegistration.getText(source), context);
   const onUpdate = vm.runInContext(`(${optionCallback('UpdateManager', 'onChange')})`, context);
-  const rebuildMenus = vm.runInContext(`(${optionCallback('registerWorkspaceIpc', 'rebuildMenus')})`, context);
   registerWorkspaceIpc({ handle: (name, handler) => handlers.set(name, handler), getSettings: () => store.settings,
-    updateStoreSettings: context.updateStoreSettings, broadcast: () => calls.broadcast++, rebuildMenus, chooseVoiceModel() {} });
+    updateStoreSettings: context.updateStoreSettings, broadcast: () => calls.broadcast++, chooseVoiceModel() {} });
   return { context, store, update, onUpdate, menus, messages, handlers, calls };
 }
 
@@ -168,11 +167,39 @@ test('macOS IPC ignores invalid and identical states, rebuilding once for each c
 });
 
 test('real menu wiring sends commands and retains quit and close behavior', () => {
-  const { context, messages, calls } = mainFixture();
+  const { context, menus: rebuilt, messages, calls } = mainFixture();
   const menus = context.macMenu();
   menus[0].submenu[2].click(); menus[1].submenu[1].click(); menus[0].submenu.at(-1).click(); menus[3].submenu.at(-1).click();
   assert.deepEqual(messages, [['menu:command', 'addProject'], ['menu:command', 'decisions']]);
-  assert.equal(calls.show, 1); assert.equal(calls.quit, 1); assert.equal(calls.close, 1);
+  assert.equal(rebuilt.length, 2);
+  assert.equal(calls.show, 3); assert.equal(calls.quit, 1); assert.equal(calls.close, 1);
+});
+
+test('every menu command shows a hidden window before dispatch and rebuilds the menu', () => {
+  const { context, handlers, update, menus, messages } = mainFixture();
+  update.status = 'ready';
+  handlers.get('menu:state')({ ...DEFAULT_MENU_STATE, focused: true, canReturn: true, reading: true });
+  const order = []; let visible = false;
+  context.window = {
+    isDestroyed: () => false, isMinimized: () => false,
+    show: () => { visible = true; order.push('show'); }, focus: () => order.push('focus'),
+  };
+  context.showWindow = vm.runInContext(`(${functions.get('showWindow').getText(source)})`, context);
+  const send = context.send;
+  context.send = (channel, command) => {
+    assert.equal(visible, true, command);
+    order.push(channel); send(channel, command);
+  };
+  const menu = context.macMenu();
+  for (const item of [...menu[0].submenu.slice(2, 5), ...menu[1].submenu, ...menu[2].submenu]) {
+    if (!item.click) continue;
+    visible = false; order.length = 0;
+    const before = menus.length;
+    item.click();
+    assert.deepEqual(order, ['show', 'focus', 'menu:command'], item.label);
+    assert.equal(menus.length, before + 1, item.label);
+  }
+  assert.equal(messages.length, 10);
 });
 
 test('native automatic checks stay at the confirmed state when the renderer blocks a command', () => {
@@ -196,22 +223,31 @@ test('native automatic checks stay at the confirmed state when the renderer bloc
   assert.equal(menus.at(-1)[2].submenu[3].checked, true);
 });
 
-test('settings changes refresh accelerators and language without rebuilding for unrelated settings', () => {
-  const { handlers, menus, calls } = mainFixture();
-  const settings = handlers.get('workspace:settings');
-  settings({ shortcuts: { decisions: 'Alt+D' } });
-  assert.equal(menus.length, 1);
-  assert.equal(menus.at(-1)[1].submenu[1].accelerator, 'Alt+D');
-  settings({ shortcuts: { decisions: 'Alt+D' }, sound: false });
-  assert.equal(menus.length, 1);
-  settings({ shortcuts: {}, language: 'zh' });
-  assert.equal(menus.length, 2);
-  assert.equal(menus.at(-1)[1].label, '前往');
-  assert.equal(menus.at(-1)[1].submenu[1].accelerator, DEFAULT_SHORTCUTS.decisions);
-  assert.equal(calls.tray, 1);
-  settings({ language: 'en' });
-  assert.equal(menus.length, 3); assert.equal(menus.at(-1)[1].label, 'Go');
-  assert.equal(calls.tray, 2); assert.equal(calls.broadcast, 4);
+test('settings refresh tray language on every platform and application menus only on macOS', () => {
+  for (const platform of ['darwin', 'win32', 'linux']) {
+    const { handlers, menus, calls } = mainFixture(platform);
+    const mac = platform === 'darwin', settings = handlers.get('workspace:settings');
+    settings({ shortcuts: { decisions: 'Alt+D' } });
+    assert.equal(menus.length, mac ? 1 : 0);
+    if (mac) assert.equal(menus.at(-1)[1].submenu[1].accelerator, 'Alt+D');
+    assert.equal(calls.tray, 0);
+    settings({ shortcuts: { decisions: 'Alt+D' }, sound: false });
+    assert.equal(menus.length, mac ? 1 : 0);
+    assert.equal(calls.tray, 0);
+    settings({ shortcuts: {}, language: 'zh' });
+    assert.equal(menus.length, mac ? 2 : 0);
+    if (mac) {
+      assert.equal(menus.at(-1)[1].label, '前往');
+      assert.equal(menus.at(-1)[1].submenu[1].accelerator, DEFAULT_SHORTCUTS.decisions);
+    }
+    assert.equal(calls.tray, 1);
+    settings({ language: 'zh' });
+    assert.equal(menus.length, mac ? 2 : 0); assert.equal(calls.tray, 1);
+    settings({ language: 'en' });
+    assert.equal(menus.length, mac ? 3 : 0);
+    if (mac) assert.equal(menus.at(-1)[1].label, 'Go');
+    assert.equal(calls.tray, 2); assert.equal(calls.broadcast, 5);
+  }
 });
 
 test('update callbacks rebuild only on ready transitions while still broadcasting every progress update', () => {
@@ -228,7 +264,6 @@ test('update callbacks rebuild only on ready transitions while still broadcastin
     assert.equal(menus.length, rebuilds, `${status} ${percent}%`);
     const item = (menus.at(-1) || initial)[0].submenu.find(item => item.label === 'Restart and install update');
     assert.equal(!!item, status === 'ready', status);
-    if (item) { item.click(); assert.deepEqual(messages.at(-1), ['menu:command', 'installUpdate']); }
   }
   assert.equal(calls.updates, changes.length);
   assert.equal(messages.filter(([channel]) => channel === 'updates:changed').length, changes.length);
