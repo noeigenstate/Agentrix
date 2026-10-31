@@ -19,4 +19,4 @@ export const openLinkInPopup = (projectId: string, link: string, onError: (messa
   window.agentrix.openLink(projectId, link).then(result => {
     if (!result.ok) onError(result.error);
     else if (result.value.kind !== 'external') showPopup({ kind: result.value.kind === 'file' ? 'file' : 'folder', projectId, path: result.value.path });
-  });
+  }).catch(error => onError(String(error)));

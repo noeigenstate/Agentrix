@@ -47,7 +47,9 @@ try {
   // macOS draws the window buttons; the page leaves room for them and has none of its own.
   assert.equal(await page.evaluate(() => document.documentElement.dataset.platform), 'darwin');
   assert.equal(await page.locator('.window-actions').isVisible(), false, 'no page-drawn window buttons');
-  assert.equal(await page.locator('.brand-mark').evaluate(element => element.getBoundingClientRect().left), 86, 'room for the traffic lights');
+  assert.equal(await page.locator('.titlebar-brand').count(), 0, 'the app menu lives in the system menu bar, not the window');
+  assert.equal(await page.locator('.home-nav').evaluate(element => element.getBoundingClientRect().left), 78, 'room for the traffic lights');
+  assert.deepEqual(await application.evaluate(({ Menu }) => Menu.getApplicationMenu().items.map(item => item.label)), ['Agentrix', '前往', '显示', '窗口'], 'the menu bar');
   await page.locator('.titlebar').screenshot({ path: path.join(output, 'titlebar.png') });
 
   await page.getByRole('button', { name: '只打开终端', exact: true }).click();

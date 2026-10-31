@@ -63,8 +63,7 @@ h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 /* macOS draws its own window buttons at the left of the title bar (hidden in full screen), so the page's buttons go. */
 :root[data-platform="darwin"] .window-actions { display: none; }
 :root[data-platform="darwin"] .app-shell:not(.is-fullscreen) .home-nav { margin-left: 78px; }
-/* macOS full screen has no title bar of its own; the search box brings one that floats over the content. */
-.app-shell.titlebar-bare .titlebar { position: fixed; top: 0; left: 0; right: 0; z-index: 300; }
+/* macOS full screen has no title bar of its own (the divider under it goes too); the search box brings it back. */
 .app-shell.titlebar-bare .workspace-layout::before { display: none; }
 :root[data-platform="darwin"] .titlebar-tools { margin-right: 14px; }
 

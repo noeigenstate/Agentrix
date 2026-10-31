@@ -108,7 +108,7 @@ export function ResultActions({ result, projectId, remote, canSend, onContinue, 
   const run: Record<ResultAction, () => void> = {
     enlarge: () => showPopup({ kind: 'image', path: result.picture!.path }),
     save: () => void window.agentrix.saveImageAs(result.picture!.path).then(saved => { if (!saved.ok) onError(saved.error); }),
-    open: () => void openLinkInPopup(projectId, result.written[0], onError).catch(error => onError(String(error))),
+    open: () => void openLinkInPopup(projectId, result.written[0], onError),
     continue: () => onContinue(result.kind === 'picture' ? t('在这张图的基础上：') : undefined),
     ask: () => onContinue(), copy: () => copied(result.reply), retry: onRetry,
   };
