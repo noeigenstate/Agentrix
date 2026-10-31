@@ -47,7 +47,7 @@ export type RecentSSH = { host: string; path: string; name: string; lastOpenedAt
 export type SSHInfo = { hosts: string[]; configFile: string; configExists: boolean; sshPath: string; source: string };
 export type SSHAuthPrompt = { id: string; host: string; message: string; kind: 'secret' | 'confirm' };
 export type Workspace = { desktopGlass?: { supported: boolean; compatibility: boolean; active: boolean; restart: boolean; failed: boolean }; projects: Project[]; settings: Settings; warning: string | null; platform: string; version: string; guide: boolean; autoHideTitlebar: boolean;
-  // Linux: the shell new local terminals use and whether zsh is installed.
+  // macOS and Linux: the shell new local terminals use and whether zsh is installed.
   localShell: { kind: 'bash' | 'zsh'; zsh: boolean } | null;
   // The interface zoom in effect, in percent of the system scale: the chosen one, or what 自动 picked for the window's display.
   uiZoom: number };
