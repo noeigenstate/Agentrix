@@ -310,11 +310,12 @@ export function App() {
   const closeGuide = () => { setGuide(null); if (settings.guideVersion !== workspace.version) setPreference({ guideVersion: workspace.version }); };
 
   const searchShown = !focusedId && (searchOpen || !!query);
-  // On macOS the bar stays in flow while the search box is in use: floating, it would cover the card the search found.
-  const autoHideTitlebar = fullScreen && workspace.autoHideTitlebar && !(isMac && searchShown);
-  return <div ref={focusMotionRoot} className={`app-shell ${focusedId ? 'focus-mode' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${autoHideTitlebar ? 'titlebar-auto' : ''}`} style={{ '--terminal-font-size': `${settings.fontSize}px` } as CSSProperties}>
+  // macOS full screen has no title bar of its own (the system menu bar slides over the page's top edge, so a bar that hid there would only flash); the search box brings it back, in flow.
+  const bareTitlebar = isMac && fullScreen && !searchShown;
+  const autoHideTitlebar = fullScreen && !isMac && workspace.autoHideTitlebar;
+  return <div ref={focusMotionRoot} className={`app-shell ${focusedId ? 'focus-mode' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${autoHideTitlebar ? 'titlebar-auto' : ''} ${bareTitlebar ? 'titlebar-bare' : ''}`} style={{ '--terminal-font-size': `${settings.fontSize}px` } as CSSProperties}>
     {autoHideTitlebar && <div className="titlebar-reveal" aria-hidden="true" />}
-    <div className="titlebar">
+    {!bareTitlebar && <div className="titlebar">
       {!isMac && <AppMenu fullScreen={fullScreen} canReturn={shownView !== 'workspace' || !!focusedId} updateReady={updates?.status === 'ready'}
         onAddProject={() => setAddOpen(true)} onReturn={returnToGrid} onFullScreen={() => api.toggleFullScreen()} onSettings={() => setSettingsOpen(true)} onInstallUpdate={installUpdate} />}
       <nav className="home-nav" aria-label={t('页面')}>
@@ -330,7 +331,7 @@ export function App() {
         {shownView === 'workspace' && focus && !previewFile && <IconButton label={settings.activityPane ? t('隐藏活动栏') : t('显示活动栏：它正在做什么')} className={`activity-toggle ${settings.activityPane ? 'is-active' : ''}`} onClick={() => setPreference({ activityPane: !settings.activityPane })}><ListChecks size={16} /></IconButton>}
       </div>
       <div className="window-actions"><IconButton label={t('最小化')} onClick={() => api.minimize()}><Minus size={16} /></IconButton><IconButton label={t('最大化或还原')} onClick={() => api.maximize()}><Square size={12} /></IconButton><IconButton label={t('关闭窗口')} className="window-close" onClick={() => api.close()}><X size={17} /></IconButton></div>
-    </div>
+    </div>}
     <div className="workspace-layout">
       {focus && <ProjectExplorer key={focus.id} project={focus} collapsed={settings.explorerCollapsed} hideNoise={settings.hideTreeNoise} onHideNoiseChange={hideTreeNoise => setPreference({ hideTreeNoise })}
         onFilesRemoved={paths => setPreviewFile(current => current?.projectId === focus.id && paths.some(path => current.path === path || current.path.startsWith(path + '/')) ? null : current)}

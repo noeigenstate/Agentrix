@@ -653,7 +653,7 @@
   "按 {key} 返回总览。": "{key} returns to the overview.",
   "设置与更多": "Settings and more",
   "标志和标题是应用菜单：新建项目、返回项目、全屏，以及设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）。": "The logo and title are the app menu: new project, back to projects, full screen, and Settings (themes, notices, shortcuts, one-click install of Codex and Claude Code, and this tutorial again).",
-  "功能在屏幕顶部的菜单栏：Agentrix 菜单里有新建项目和设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）；决策和工作台在窗口左上角红绿灯之后，全屏时把鼠标移到屏幕顶端就会出现。": "The features are in the menu bar at the top of the screen: the Agentrix menu has New project and Settings (themes, notices, shortcuts, one-click install of Codex and Claude Code, and this tutorial again); Decide and Workbench sit at the top left of the window after the traffic lights, and in full screen they appear when the pointer reaches the top edge.",
+  "功能在屏幕顶部的菜单栏：Agentrix 菜单里有新建项目和设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）；决策和工作台在窗口左上角红绿灯之后；全屏时按 {decisions} 到决策，按 {overview} 回到工作台。": "The features are in the menu bar at the top of the screen: the Agentrix menu has New project and Settings (themes, notices, shortcuts, one-click install of Codex and Claude Code, and this tutorial again); Decide and Workbench sit at the top left of the window after the traffic lights; in full screen, {decisions} goes to Decide and {overview} returns to the Workbench.",
   "应用菜单": "App menu",
   "新建项目": "New project",
   "返回项目": "Back to projects",
