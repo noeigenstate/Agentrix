@@ -141,9 +141,9 @@ export type MenuCommand = 'addProject' | 'settings' | 'installUpdate';
 export type TitlebarView = 'decisions' | 'workspace';
 // How the native buttons are drawn, read by the page from its own CSS (colours are CSS hex, icons PNG data URLs used as template masks, lengths in CSS px before `scale`).
 export type TitlebarStyle = {
-  scale: number; font: { size: number; weight: number };
+  scale: number; font: { size: number; weight: number; family: string };
   metrics: { height: number; paddingX: number; gap: number; itemGap: number; radius: number; iconSize: number; focusWidth: number; focusOffset: number;
-    badge: { minWidth: number; paddingX: number; height: number; fontSize: number } };
+    badge: { minWidth: number; paddingX: number; height: number; fontSize: number; fontWeight: number } };
   colors: Record<'text' | 'textSelected' | 'hover' | 'selected' | 'badge' | 'badgeText' | 'focus', string>;
   icons: Record<TitlebarView, string>;
 };
