@@ -421,7 +421,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     const rows = readScreen(terminal.id)?.rows ?? [];
     const parsed = parseAgentScreen(kind, rows);
     if (!hasCliInput(kind, rows, parsed) || cliDialogShown(kind, rows, parsed)) {
-      if (!hasEditingFocus(readingView.current)) setTerminalPopup({ command: '' });
+      setTerminalPopup({ command: '' });
       return;
     }
     const pendingId = text ? echo(text, attached) : null;

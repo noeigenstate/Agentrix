@@ -226,6 +226,17 @@ test('dashboard broadcasts resync journals only when project ids, kinds or paths
   projects = []; dashboard.sync(); assert.equal(syncs, 5);
 });
 
+test('every explicit dashboard open restarts journal discovery without doing so on broadcasts', async t => {
+  const { dashboard, journals, created, ipcMain, main } = await lab(t);
+  await dashboard.open(); assert.equal(journals.starts, 1);
+  for (let i = 0; i < 10; i++) dashboard.sync();
+  assert.equal(journals.starts, 1);
+  await dashboard.open(); assert.equal(journals.starts, 2); assert.equal(created.length, 1);
+  created[0].close();
+  assert.equal((await ipcMain.invoke('dashboard:open', sender(main))).ok, true);
+  assert.equal(journals.starts, 3); assert.equal(created.length, 2);
+});
+
 test('a failed decision write returns failure and leaves adoption unapplied', async t => {
   const decisions = { async read() { return []; }, async decide() { return false; } };
   const { dashboard, journals } = await lab(t, { decisions });
