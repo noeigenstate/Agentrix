@@ -100,6 +100,20 @@ test('style can arrive after attachment without a state change; equivalent style
   assert.equal(f.broadcasts, 0);
 });
 
+test('switching pages only flips selection, preserving labels, counts and the cached style', () => {
+  const f = fixture();
+  f.controller.update({ view: 'workspace', decisions: 0, style: styleFixture() });
+  const geometry = items => items.map(({ selected, ...item }) => item);
+  const initial = geometry(f.updates.at(-1).items);
+  for (const view of ['decisions', 'workspace', 'decisions', 'workspace']) {
+    f.controller.update({ view, decisions: 0 });
+    const update = f.updates.at(-1);
+    assert.deepEqual(geometry(update.items), initial);
+    assert.equal(update.items.find(item => item.id === view).selected, true);
+    assert.equal('style' in update, false);
+  }
+});
+
 test('state and language updates reuse native style; theme and zoom changes resend it without rescaling the metrics', () => {
   const f = fixture();
   f.controller.update({ view: 'workspace', decisions: 0, style: styleFixture() });
@@ -592,5 +606,36 @@ test('the native style reader resolves installed families, weights, pixels and m
     assert.equal(addon.update({ items, style: invalid }), false);
   }
   assert.equal(addon.update({ items }), undefined, 'state-only updates keep their existing return value');
+  assert.throws(() => addon.attach(Buffer.alloc(8), () => {}), /initialized macOS application/);
+});
+
+test('native layout preserves AppKit height, light alignment and frames when selection changes', {
+  skip: process.platform !== 'darwin' || !fs.existsSync(binary),
+}, () => {
+  const addon = require(binary);
+  addon.detach();
+  const items = [
+    { id: 'decisions', label: '决策', count: 0, selected: false },
+    { id: 'workspace', label: '工作台', selected: true },
+  ];
+  for (const count of [0, 2, 12345]) for (const pixels of [1, 2]) for (const sample of [
+    { scale: 1, height: 32, lightCenter: 16, expectedCenter: 16 },
+    { scale: 1, height: 32, lightCenter: 17, expectedCenter: 17 },
+    { scale: 1, height: 40, lightCenter: 19, expectedCenter: 19 },
+    { scale: 1.25, height: 50, lightCenter: 19, expectedCenter: 22.5 },
+    { scale: 2, height: 80, lightCenter: 19, expectedCenter: 36 },
+  ]) {
+    const style = styleFixture(); style.scale = sample.scale;
+    items[0].count = count;
+    const layout = { height: sample.height, lightRight: 74, lightCenter: sample.lightCenter, pixels };
+    const result = addon.update({ items, style, layout });
+    assert.deepEqual(result.selectionLayout, result.layout, 'changing native button state must not move its frame or icon');
+    assert.deepEqual(result.relayout, result.layout, 'another layout pass must be a fixed point');
+    assert.equal(result.layout.height, layout.height, 'a left accessory must preserve the height assigned by AppKit');
+    for (const frame of result.layout.frames) {
+      assert.equal(frame[1] + frame[3] / 2, sample.expectedCenter);
+      assert.ok(frame[1] >= 0 && frame[1] + frame[3] <= layout.height);
+    }
+  }
   assert.throws(() => addon.attach(Buffer.alloc(8), () => {}), /initialized macOS application/);
 });

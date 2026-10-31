@@ -9,7 +9,6 @@
 #include <string>
 
 namespace {
-constexpr CGFloat kVerticalOffset = 0;
 constexpr CGFloat kButtonGap = 4;
 constexpr CGFloat kTrafficLightGap = 16;
 char kTitleObservation;
@@ -208,7 +207,8 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
 @property(nonatomic, readonly) NSSize contentSize;
 @property(nonatomic, readonly) CGFloat itemGap;
 @property(nonatomic, readonly) CGFloat focusOutset;
-- (void)setLabel:(NSString*)label count:(uint64_t)count selected:(BOOL)selected;
+@property(nonatomic, readonly) NSRect iconRect;
+- (BOOL)setLabel:(NSString*)label count:(uint64_t)count selected:(BOOL)selected;
 - (void)applyStyle:(std::shared_ptr<const TitlebarStyle>)style icon:(NSUInteger)icon;
 - (void)drawFocusRingInView:(NSView*)view;
 - (void)clearHover;
@@ -222,10 +222,10 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
 - (CGFloat)itemGap { return style_ ? style_->itemGap : kButtonGap; }
 - (CGFloat)focusOutset { return style_ ? style_->focusOffset + style_->focusWidth : 0; }
 
-- (void)setLabel:(NSString*)label count:(uint64_t)count selected:(BOOL)selected {
+- (BOOL)setLabel:(NSString*)label count:(uint64_t)count selected:(BOOL)selected {
   NSString* badge = count ? [NSString stringWithFormat:@"%llu", static_cast<unsigned long long>(count)] : @"";
   BOOL changed = ![label_ isEqualToString:label] || ![badgeText_ isEqualToString:badge];
-  if (!changed && selected_ == selected) return;
+  if (!changed && selected_ == selected) return NO;
   if (changed) {
     label_ = [label copy];
     badgeText_ = badge;
@@ -235,6 +235,7 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   selected_ = selected;
   self.state = selected ? NSControlStateValueOn : NSControlStateValueOff;
   self.needsDisplay = YES;
+  return changed;
 }
 
 - (void)applyStyle:(std::shared_ptr<const TitlebarStyle>)style icon:(NSUInteger)icon {
@@ -267,6 +268,11 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   return contentSize_;
 }
 
+- (NSRect)iconRect {
+  return [self backingAlignedRect:NSMakeRect(style_->paddingX, NSMidY(self.bounds) - style_->iconSize / 2,
+      style_->iconSize, style_->iconSize) options:NSAlignAllEdgesNearest];
+}
+
 - (void)drawRect:(NSRect)dirtyRect {
   if (!style_) { [super drawRect:dirtyRect]; return; }
   const TitlebarStyle& style = *style_;
@@ -279,9 +285,7 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   NSColor* text = primary ? style.textSelected : style.text;
   CGFloat x = style.paddingX;
   CGFloat center = NSMidY(self.bounds);
-  NSRect icon = [self backingAlignedRect:NSMakeRect(x, center - style.iconSize / 2, style.iconSize, style.iconSize)
-      options:NSAlignAllEdgesNearest];
-  [style.icons[icon_][primary ? 1 : 0] drawInRect:icon fromRect:NSZeroRect operation:NSCompositingOperationSourceOver
+  [style.icons[icon_][primary ? 1 : 0] drawInRect:self.iconRect fromRect:NSZeroRect operation:NSCompositingOperationSourceOver
       fraction:1 respectFlipped:YES hints:nil];
   x += style.iconSize + style.gap;
   NSDictionary* attributes = @{NSFontAttributeName: style.font, NSForegroundColorAttributeName: text};
@@ -372,6 +376,63 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
 - (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
 @end
 
+namespace {
+AgentrixNavButton* MakeNavButton(NSString* identifier) {
+  AgentrixNavButton* button = [[AgentrixNavButton alloc] initWithFrame:NSZeroRect];
+  button.identifier = identifier;
+  button.bezelStyle = NSBezelStyleToolbar;
+  button.buttonType = NSButtonTypePushOnPushOff;
+  button.controlSize = NSControlSizeSmall;
+  button.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+  return button;
+}
+
+void LayoutButtons(NSView* view, AgentrixNavButton* decisions, AgentrixNavButton* workspace,
+    CGFloat lightRight, CGFloat lightCenter, CGFloat pixels) {
+  CGFloat buttonHeight = std::ceil(decisions.contentSize.height * pixels) / pixels;
+  CGFloat outset = std::ceil(decisions.focusOutset * pixels) / pixels;
+  // AppKit owns a left accessory's height. Requesting another height causes a relayout loop.
+  CGFloat height = NSHeight(view.bounds);
+  // If the full outline cannot fit, prioritise the button rather than shifting it for a partial outline.
+  CGFloat margin = buttonHeight + 2 * outset <= height ? outset : 0;
+  CGFloat half = std::min(buttonHeight / 2 + margin, height / 2);
+  CGFloat center = std::clamp(lightCenter, NSMinY(view.bounds) + half, NSMaxY(view.bounds) - half);
+  BOOL changed = NO;
+  CGFloat x = std::max(outset, lightRight + kTrafficLightGap);
+  for (AgentrixNavButton* button in @[decisions, workspace]) {
+    CGFloat width = std::ceil(button.contentSize.width * pixels) / pixels;
+    NSRect frame = [view backingAlignedRect:NSMakeRect(x, center - buttonHeight / 2, width, buttonHeight)
+        options:NSAlignAllEdgesNearest];
+    if (!NSEqualRects(button.frame, frame)) { button.frame = frame; changed = YES; }
+    x = NSMaxX(frame) + button.itemGap;
+  }
+  CGFloat width = std::ceil((x - workspace.itemGap + outset) * pixels) / pixels;
+  if (NSWidth(view.frame) != width) {
+    [view setFrameSize:NSMakeSize(width, NSHeight(view.frame))];
+    changed = YES;
+  }
+  if (changed) view.needsDisplay = YES;
+}
+
+Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButton*>* buttons) {
+  Napi::Object result = Napi::Object::New(env);
+  result.Set("height", NSHeight(view.frame));
+  for (const char* name : {"frames", "icons"}) {
+    Napi::Array frames = Napi::Array::New(env, buttons.count);
+    for (NSUInteger i = 0; i < buttons.count; i++) {
+      AgentrixNavButton* button = buttons[i];
+      NSRect rect = std::strcmp(name, "frames") == 0 ? button.frame : [button convertRect:button.iconRect toView:view];
+      Napi::Array values = Napi::Array::New(env, 4);
+      values.Set(uint32_t(0), rect.origin.x); values.Set(1, rect.origin.y);
+      values.Set(2, rect.size.width); values.Set(3, rect.size.height);
+      frames.Set(uint32_t(i), values);
+    }
+    result.Set(name, frames);
+  }
+  return result;
+}
+}
+
 // Draw the outline in the group so it is not clipped to a button's hit area.
 @interface AgentrixNavGroup : NSView
 @end
@@ -387,14 +448,13 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   AgentrixNavButton* workspace_;
   BOOL layingOut_;
   BOOL observingTitle_;
-  CGFloat baseHeight_;
   std::shared_ptr<ClickState> clicks_;
 }
 - (instancetype)initWithWindow:(NSWindow*)window clicks:(std::shared_ptr<ClickState>)clicks;
 - (void)detach;
 - (void)alignButtons;
 - (void)applyStyle:(std::shared_ptr<const TitlebarStyle>)style;
-- (void)setItem:(NSString*)identifier label:(NSString*)label toolTip:(NSString*)toolTip
+- (BOOL)setItem:(NSString*)identifier label:(NSString*)label toolTip:(NSString*)toolTip
     accessibilityLabel:(NSString*)accessibilityLabel count:(uint64_t)count selected:(BOOL)selected;
 @end
 
@@ -406,8 +466,8 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   clicks_ = std::move(clicks);
   self.layoutAttribute = NSLayoutAttributeLeft;
   NSButton* light = [window standardWindowButton:NSWindowCloseButton];
-  baseHeight_ = light ? NSHeight(light.superview.bounds) : 40;
-  self.view = [[AgentrixNavGroup alloc] initWithFrame:NSMakeRect(0, 0, 200, baseHeight_)];
+  CGFloat height = light ? NSHeight(light.superview.bounds) : 40;
+  self.view = [[AgentrixNavGroup alloc] initWithFrame:NSMakeRect(0, 0, 200, height)];
   decisions_ = [self buttonWithID:@"decisions"];
   workspace_ = [self buttonWithID:@"workspace"];
   [self.view addSubview:decisions_];
@@ -425,12 +485,7 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
 }
 
 - (AgentrixNavButton*)buttonWithID:(NSString*)identifier {
-  AgentrixNavButton* button = [[AgentrixNavButton alloc] initWithFrame:NSZeroRect];
-  button.identifier = identifier;
-  button.bezelStyle = NSBezelStyleToolbar;
-  button.buttonType = NSButtonTypePushOnPushOff;
-  button.controlSize = NSControlSizeSmall;
-  button.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+  AgentrixNavButton* button = MakeNavButton(identifier);
   button.target = self;
   button.action = @selector(navigate:);
   return button;
@@ -469,38 +524,16 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   NSView* view = self.view;
   if (layingOut_ || !host || !view.window) return;
   layingOut_ = YES;
-  CGFloat pixels = view.window.backingScaleFactor;
-  CGFloat buttonHeight = std::ceil(decisions_.contentSize.height * pixels) / pixels;
-  CGFloat outset = std::ceil(decisions_.focusOutset * pixels) / pixels;
-  CGFloat height = std::ceil(std::max(baseHeight_, buttonHeight + 2 * outset) * pixels) / pixels;
-  BOOL changed = NSHeight(view.frame) != height;
-  if (changed) [view setFrameSize:NSMakeSize(NSWidth(view.frame), height)];
-  CGFloat start = outset;
+  CGFloat right = -kTrafficLightGap;
   CGFloat center = NSMidY(view.bounds);
   NSButton* light = [host standardWindowButton:NSWindowZoomButton];
   if (light.window) {
     // Full screen can reparent the native strip: use screen coordinates across windows.
     NSRect frame = [view convertRect:[view.window convertRectFromScreen:ScreenFrame(light)] fromView:nil];
-    start = std::max(outset, NSMaxX(frame) + kTrafficLightGap);
+    right = NSMaxX(frame);
     center = NSMidY(frame);
   }
-  CGFloat half = buttonHeight / 2 + outset;
-  center = std::clamp(center + kVerticalOffset, half, height - half);
-  CGFloat x = start;
-  for (AgentrixNavButton* button in @[decisions_, workspace_]) {
-    NSSize size = button.contentSize;
-    CGFloat width = std::ceil(size.width * pixels) / pixels;
-    NSRect frame = [view backingAlignedRect:NSMakeRect(x, center - buttonHeight / 2, width, buttonHeight)
-        options:NSAlignAllEdgesNearest];
-    if (!NSEqualRects(button.frame, frame)) { button.frame = frame; changed = YES; }
-    x = NSMaxX(frame) + button.itemGap;
-  }
-  CGFloat width = std::ceil((x - workspace_.itemGap + outset) * pixels) / pixels;
-  if (NSWidth(view.frame) != width) {
-    [view setFrameSize:NSMakeSize(width, height)];
-    changed = YES;
-  }
-  if (changed) view.needsDisplay = YES;
+  LayoutButtons(view, decisions_, workspace_, right, center, view.window.backingScaleFactor);
   layingOut_ = NO;
 }
 
@@ -509,12 +542,13 @@ std::shared_ptr<const TitlebarStyle> ReadStyle(Napi::Value value) {
   [workspace_ applyStyle:style icon:1];
 }
 
-- (void)setItem:(NSString*)identifier label:(NSString*)label toolTip:(NSString*)toolTip
+- (BOOL)setItem:(NSString*)identifier label:(NSString*)label toolTip:(NSString*)toolTip
     accessibilityLabel:(NSString*)accessibilityLabel count:(uint64_t)count selected:(BOOL)selected {
   AgentrixNavButton* button = [identifier isEqualToString:@"decisions"] ? decisions_ : workspace_;
-  [button setLabel:label count:count selected:selected];
+  BOOL changed = [button setLabel:label count:count selected:selected];
   button.toolTip = toolTip;
   button.accessibilityLabel = accessibilityLabel;
+  return changed;
 }
 
 - (void)navigate:(NSButton*)sender {
@@ -685,16 +719,17 @@ Napi::Value Update(const Napi::CallbackInfo& info) {
     // An incomplete style must not replace the last working appearance or detach navigation.
     auto style = ReadStyle(styleValue);
     if (controller) {
+      BOOL geometryChanged = style != nullptr;
       if (style) [controller applyStyle:style];
       for (int i = 0; i < 2; i++) {
         const Item& item = parsed[i];
-        [controller setItem:i == 0 ? @"decisions" : @"workspace"
+        if ([controller setItem:i == 0 ? @"decisions" : @"workspace"
             label:[NSString stringWithUTF8String:item.label.c_str()]
             toolTip:[NSString stringWithUTF8String:item.toolTip.c_str()]
             accessibilityLabel:[NSString stringWithUTF8String:item.accessibilityLabel.c_str()]
-            count:item.count selected:item.selected];
+            count:item.count selected:item.selected]) geometryChanged = YES;
       }
-      [controller alignButtons];
+      if (geometryChanged) [controller alignButtons];
     }
     // Report the decoded style even without a window, for headless font/scale verification.
     if (style) {
@@ -707,6 +742,32 @@ Napi::Value Update(const Napi::CallbackInfo& info) {
       result.Set("height", style->height);
       result.Set("focusOutset", style->focusWidth + style->focusOffset);
       result.Set("iconSize", style->icons[0][0].size.width);
+      Napi::Object layout;
+      if (!controller && ReadObject(info[0].As<Napi::Object>(), "layout", layout)) {
+        CGFloat height, right, center, pixels;
+        if (!ReadNumber(layout, "height", height) || !ReadNumber(layout, "lightRight", right)
+            || !ReadNumber(layout, "lightCenter", center) || !ReadNumber(layout, "pixels", pixels) || pixels <= 0) {
+          Napi::TypeError::New(env, "layout requires height, lightRight, lightCenter and positive pixels").ThrowAsJavaScriptException();
+          return env.Undefined();
+        }
+        NSView* group = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 0, height)];
+        NSArray<AgentrixNavButton*>* buttons = @[MakeNavButton(@"decisions"), MakeNavButton(@"workspace")];
+        for (NSUInteger i = 0; i < buttons.count; i++) {
+          [group addSubview:buttons[i]];
+          [buttons[i] applyStyle:style icon:i];
+          [buttons[i] setLabel:[NSString stringWithUTF8String:parsed[i].label.c_str()]
+              count:parsed[i].count selected:parsed[i].selected];
+        }
+        LayoutButtons(group, buttons[0], buttons[1], right, center, pixels);
+        result.Set("layout", LayoutSnapshot(env, group, buttons));
+        for (NSUInteger i = 0; i < buttons.count; i++) {
+          [buttons[i] setLabel:[NSString stringWithUTF8String:parsed[i].label.c_str()]
+              count:parsed[i].count selected:!parsed[i].selected];
+        }
+        result.Set("selectionLayout", LayoutSnapshot(env, group, buttons));
+        LayoutButtons(group, buttons[0], buttons[1], right, center, pixels);
+        result.Set("relayout", LayoutSnapshot(env, group, buttons));
+      }
       return result;
     }
     if (!styleValue.IsUndefined()) return Napi::Boolean::New(env, false);
