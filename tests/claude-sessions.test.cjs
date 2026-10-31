@@ -358,7 +358,7 @@ test('Claude restore keeps the same read-only preview in broadcasts until its CL
     terminalIds: () => ['terminal'], shownTerminalIds: () => ['terminal'], startupErrors: new Map(),
     dispatchedOnly: () => null, getBranch: () => '', t: text => text, localShell: () => ({ kind: 'powershell' }),
     process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: f.home } }, app: { getVersion: () => 'test' },
-    desktopGlassBackend: null, desktopGlassWindow: false, desktopGlassActive: false, windowZoom: null,
+    desktopGlassBackend: null, desktopGlassWindow: false, desktopGlassActive: false, windowZoom: null, windowTitlebar: null,
   });
   h.store.settings = {};
   vm.runInContext(main.slice(main.indexOf('function publicState('), main.indexOf('function terminalIds(')), h.context);
