@@ -116,21 +116,28 @@ test('a real Bash terminal keeps the user start-up files and reports prompts, Co
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home'), bin = path.join(home, 'bin'), log = path.join(root, 'log');
   const project = path.join(root, "项目 空格 'q' $x");
-  for (const folder of [bin, log, project]) fs.mkdirSync(folder, { recursive: true });
+  const sessionFolder = path.join(root, "sessions 'quoted'"), noteFile = path.join(sessionFolder, 'terminal-skills.txt');
+  for (const folder of [bin, log, project, sessionFolder]) fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(noteFile, NOTE);
   // The user's own ~/.bashrc puts codex and claude on PATH, aliases claude, keeps its own prompt command and
   // moves elsewhere.
   fs.writeFileSync(path.join(home, '.bashrc'), [
     'export PATH="$HOME/bin:$PATH"', "alias claude='claude --model opus'", 'PG_TEST_BASHRC=1', "PROMPT_COMMAND='PG_TEST_LAST=$?'", 'cd /', '',
   ].join('\n'));
   const recorder = path.join(root, 'recorder.cjs');
-  fs.writeFileSync(recorder, "require('fs').writeFileSync(require('path').join(process.env.PG_TEST_LOG, process.argv[2] + '.json'), JSON.stringify(process.argv.slice(3))); process.exitCode = Number(process.env.PG_TEST_EXIT || 0);\n");
+  fs.writeFileSync(recorder, `const fs = require('node:fs'), path = require('node:path');
+const [agent, ...args] = process.argv.slice(2);
+fs.writeFileSync(path.join(process.env.PG_TEST_LOG, agent + '.json'), JSON.stringify(args));
+if (agent === 'claude') fs.copyFileSync(args[args.indexOf('--settings') + 1], path.join(process.env.PG_TEST_LOG, 'claude-settings.json'));
+process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
+`);
   fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\nPG_TEST_EXIT=3 exec "$PG_TEST_NODE" "$PG_TEST_RECORDER" codex "$@"\n', { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\nexec "$PG_TEST_NODE" "$PG_TEST_RECORDER" claude "$@"\n', { mode: 0o755 });
 
   const events = [];
   const server = await createEventServer(event => events.push(event));
   t.after(() => server.close());
-  const source = { ...process.env, HOME: home, PATH: '/usr/bin:/bin:/usr/sbin:/sbin', PG_TEST_NODE: process.execPath, PG_TEST_RECORDER: recorder, PG_TEST_LOG: log, AGENTRIX_READING_NOTE: NOTE };
+  const source = { ...process.env, HOME: home, TMPDIR: sessionFolder, PATH: '/usr/bin:/bin:/usr/sbin:/sbin', PG_TEST_NODE: process.execPath, PG_TEST_RECORDER: recorder, PG_TEST_LOG: log, AGENTRIX_READING_NOTE: NOTE, AGENTRIX_READING_NOTE_FILE: noteFile };
   delete source.LANG; delete source.LC_ALL; delete source.LC_CTYPE; delete source.CODEX_HOME; delete source.PROMPT_COMMAND;
   const env = shellEnvironment(createTerminalEnvironment(source, ''), { socket: server.address, projectId: 'project', sessionKey: 'key', node: process.execPath, helper, startDir: project, locale: 'C.UTF-8' });
   const terminal = pty.spawn(findShell('bash'), bashArguments(integrationDir), { name: 'xterm-256color', cols: 120, rows: 30, cwd: project, env });
@@ -174,18 +181,34 @@ test('a real Bash terminal keeps the user start-up files and reports prompts, Co
 
   // claude: the user's alias still applies, and the hooks it is given report each turn.
   type('claude -p "中文 prompt"');
-  await waitEvent(event => event.type === 'codex-exited' && event.agent === 'claude', 'claude to exit');
+  const claudeExited = await waitEvent(event => event.type === 'codex-exited' && event.agent === 'claude', 'claude to exit');
+  assert.equal(claudeExited.exitCode, 0);
   assert.ok(events.some(event => event.type === 'codex-started' && event.agent === 'claude' && event.command === '-p'));
   const claudeArgs = JSON.parse(fs.readFileSync(path.join(log, 'claude.json'), 'utf8'));
   assert.deepEqual([claudeArgs.slice(0, 2), claudeArgs.slice(4)], [['--model', 'opus'], ['--append-system-prompt', NOTE, '-p', '中文 prompt']]);
   assert.equal(claudeArgs[2], '--settings');
-  const hooks = JSON.parse(claudeArgs[3]).hooks;
+  assert.equal(path.dirname(claudeArgs[3]), sessionFolder);
+  assert.match(path.basename(claudeArgs[3]), /^terminal-claude-settings-[A-Za-z0-9]{6}$/);
+  assert.equal(fs.existsSync(claudeArgs[3]), false, 'the session settings file is removed after Claude exits');
+  const hooks = JSON.parse(fs.readFileSync(path.join(log, 'claude-settings.json'), 'utf8')).hooks;
   const input = { session_id: 'session-1', transcript_path: '/claude/session-1.jsonl', prompt: '修复 "登录" $HOME `x`' };
   assert.deepEqual(await runHook(hooks.UserPromptSubmit[0].hooks[0].command, input), { code: 0, output: '' }, 'a hook prints nothing');
   const working = await waitEvent(event => event.type === 'agent-activity' && event.state === 'working', 'the working hook');
   assert.equal(working.prompt, input.prompt); assert.equal(working.transcriptPath, input.transcript_path); assert.equal(working.sessionKey, 'key');
   await runHook(hooks.Stop[0].hooks[0].command, input);
   await waitEvent(event => event.type === 'agent-activity' && event.state === 'complete', 'the stop hook');
+
+  // Without a note file the wrapper uses a named file in TMPDIR, and also cleans up after a failed CLI.
+  type('__pg_note_file=; PG_TEST_EXIT=7 claude --version');
+  const failed = await waitEvent(event => event.type === 'codex-exited' && event.agent === 'claude' && event.sequence > claudeExited.sequence, 'claude to exit without a note file');
+  assert.equal(failed.exitCode, 7);
+  const fallbackArgs = JSON.parse(fs.readFileSync(path.join(log, 'claude.json'), 'utf8'));
+  assert.equal(path.dirname(fallbackArgs[3]), sessionFolder);
+  assert.match(path.basename(fallbackArgs[3]), /^agentrix-claude-settings-[A-Za-z0-9]{6}$/);
+  assert.equal(fs.existsSync(fallbackArgs[3]), false, 'the fallback settings file is removed after a failed CLI');
+  const fallbackHooks = JSON.parse(fs.readFileSync(path.join(log, 'claude-settings.json'), 'utf8')).hooks;
+  assert.deepEqual(Object.keys(fallbackHooks), Object.keys(hooks));
+  assert.match(fallbackHooks.SessionStart[0].hooks[0].command, / session ''$/);
 
   // Every report from this shell is newer than the one before it.
   const sequences = events.filter(event => typeof event.sequence === 'number').map(event => event.sequence);

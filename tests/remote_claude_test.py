@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import stat
 import sys
 import tempfile
 import threading
@@ -244,6 +245,26 @@ class RemoteClaudeTest(unittest.TestCase):
             folder = self.home / "delivery"
             actual = sorted(file.relative_to(folder).as_posix() for file in folder.rglob("*") if file.is_file())
             self.assertEqual(actual, sorted(expected), step)
+
+    def test_session_start_repairs_the_legacy_provider_directory_before_delivering(self):
+        manifest = self.home / "references" / ("a" * 64) / "instructions.md"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text("Only the skills manifest.", encoding="utf-8")
+        (self.home / "key.txt").write_text("a" * 64, encoding="utf-8")
+        state = self.home / "delivery"
+        state.mkdir(mode=0o700)
+        provider = state / "claude"
+        provider.mkdir(mode=0o755)
+        with mock.patch.object(remote.os, "chmod", wraps=os.chmod) as chmod:
+            result, event = self.hook()
+        self.assertEqual(result["hookSpecificOutput"]["additionalContext"], "Agentrix skill instructions:\nOnly the skills manifest.")
+        self.assertEqual(event["state"], "session")
+        # Windows cannot enforce POSIX modes; still verify the repair reaches the filesystem boundary.
+        chmod.assert_any_call(str(provider), 0o700)
+        if os.name == "posix":
+            for folder in (state, provider, next(provider.iterdir())):
+                self.assertEqual(stat.S_IMODE(folder.stat().st_mode), 0o700)
+        self.assertIsNone(self.hook("resume")[0], "repair must retain the CLI session's receipt")
 
     def test_spawn_pruning_removes_expired_unleased_reference_keys_and_receipts(self):
         state = self.home / "pruned-state"

@@ -160,7 +160,11 @@ assert args[3].endswith("Agentrix delivers skill instructions through its Sessio
 assert "SSH skill instructions." not in args[3]
 assert "Agentrix skill delivery:" not in args[3]
 assert args[4:]==["--resume","fixture"]
-with open(args[args.index("--settings")+1],encoding="utf-8") as source: settings=json.load(source)
+settings_file=args[args.index("--settings")+1]
+assert os.path.dirname(settings_file)==os.path.dirname(os.environ["AGENTRIX_READING_NOTE_FILE"])
+assert os.path.basename(settings_file).startswith("claude-settings.")
+with open(settings_file,encoding="utf-8") as source: settings=json.load(source)
+with open("claude-settings.json","w",encoding="utf-8") as output: json.dump({"path":settings_file,"settings":settings},output)
 folder=os.path.join(os.path.expanduser("~/.claude"),"projects","fixture")
 os.makedirs(folder,exist_ok=True)
 filename=os.path.join(folder,"session.jsonl")
@@ -170,10 +174,13 @@ def hook(name,**values):
     payload=dict(session_id="session",transcript_path=filename,**values)
     command=settings["hooks"][name][0]["hooks"][0]["command"]
     result=subprocess.run(command,shell=True,input=json.dumps(payload).encode(),stdout=subprocess.PIPE,check=True)
-    if name=="SessionStart": assert json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]=="Agentrix skill instructions:\\nSSH skill instructions."
+    return result.stdout
 write({"type":"user","uuid":"prompt","message":{"content":"Remote work"}})
 write({"type":"assistant","uuid":"reply","effort":"high","message":{"model":"claude-test","usage":{"speed":"fast"},"content":[{"type":"tool_use","id":"read","name":"Read","input":{"file_path":"/srv/project/a.py"}}]}})
-hook("SessionStart",source="startup")
+context={"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Agentrix skill instructions:\\nSSH skill instructions."}}
+assert json.loads(hook("SessionStart",source="startup"))==context
+assert hook("SessionStart",source="resume")==b""
+assert json.loads(hook("SessionStart",source="compact"))==context
 hook("UserPromptSubmit",prompt="Remote work")
 hook("Notification",notification_type="idle_prompt",message="Idle")
 hook("Notification",notification_type="permission_prompt",message="Permission")
@@ -184,16 +191,22 @@ hook("Stop")
   const skills = { files: [], instructions: 'SSH skill instructions.', key: 'a'.repeat(64) };
   const readingNote = 'You run inside Agentrix. SSH reading note. Agentrix skill delivery: remote. SSH skill instructions.';
   const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: 'test-claude-key', readingNote, skills, onEvent: event => events.push(event) });
+  let output = '';
+  connection.onData(data => { output += data; });
   t.after(async () => { connection.close(); auth.close(); await fixture.close(); });
   await connection.ready;
   await waitFor(() => events.some(event => event.type === 'shell-prompt' && event.claudeAvailable));
   connection.write('claude --resume fixture\r');
   await waitFor(() => events.some(event => event.type === 'codex-exited' && event.agent === 'claude'));
+  const exited = events.find(event => event.type === 'codex-exited' && event.agent === 'claude');
+  assert.equal(exited.exitCode, 0, output);
+  const settings = JSON.parse(await fs.readFile(path.join(fixture.project, 'claude-settings.json'), 'utf8'));
+  await assert.rejects(fs.stat(settings.path), { code: 'ENOENT' }, 'the SSH wrapper removes its settings file after exit');
   const started = events.find(event => event.type === 'codex-started');
   assert.equal(started.agent, 'claude'); assert.equal(started.command, '--resume');
   const hooks = events.filter(event => event.type === 'agent-activity');
-  assert.deepEqual(hooks.map(event => event.state), ['session', 'working', 'attention', 'complete']);
-  assert.equal(hooks[1].prompt, 'Remote work'); assert.equal(hooks[2].message, 'Permission');
+  assert.deepEqual(hooks.map(event => event.state), ['session', 'session', 'session', 'working', 'attention', 'complete']);
+  assert.equal(hooks[3].prompt, 'Remote work'); assert.equal(hooks[4].message, 'Permission');
   assert.ok(hooks.every(event => event.projectId === project.id && event.sessionKey === 'test-claude-key'));
   const args = { path: hooks[0].transcriptPath, since: started.sentAt };
   const status = await connection.request('claude-status', args);
