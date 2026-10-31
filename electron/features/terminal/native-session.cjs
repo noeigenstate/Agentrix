@@ -45,6 +45,7 @@ function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {},
     onExit: callback => { events.on('exit', callback); return { dispose: () => events.off('exit', callback) }; },
     resize: (cols, rows) => tui?.resize(cols, rows), kill: () => finish(null, 0),
     answer: answer => registry.answer(binding, answer, write),
+    answerQuestion: answer => registry.answer(binding, answer, write, true),
     prompt: text => {
       if (mode !== 'claude-sdk' || ended || !sdkReady || managedBusy || registry.tokens.size || typeof text !== 'string' || !text.trim() || Buffer.byteLength(text) > 65536) throw new Error('Managed session is not ready for this prompt');
       managedBusy = true;

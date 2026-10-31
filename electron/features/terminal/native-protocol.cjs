@@ -1,5 +1,6 @@
 const { TextDecoder } = require('node:util');
 const { MAX_BYTES, object, validId, fingerprint } = require('./native-approvals.cjs');
+const { codexQuestion, claudeQuestion } = require('./native-questions.cjs');
 const validRpc = m => object(m) && (m.jsonrpc === undefined || m.jsonrpc === '2.0') && (Object.hasOwn(m, 'method')
   ? typeof m.method === 'string' && m.method.length > 0 && m.method.length <= 256 && (!Object.hasOwn(m, 'id') || validId(m.id))
   : validId(m.id) && Object.hasOwn(m, 'result') !== Object.hasOwn(m, 'error'));
@@ -79,6 +80,15 @@ class CodexProtocol {
     if (m.method === 'turn/started' && typeof p?.threadId === 'string') {
       for (const entry of r.tokens.values()) if (entry.params.threadId === p.threadId && entry.params.turnId !== p.turn?.id) r.consume(entry);
     }
+    if (['item/tool/requestUserInput', 'mcpServer/elicitation/request'].includes(m.method)) {
+      const names = m.method === 'item/tool/requestUserInput' ? ['threadId', 'turnId', 'itemId'] : ['threadId', 'serverName'];
+      if (!validId(m.id) || !object(p) || names.some(key => typeof p[key] !== 'string' || !p[key] || p[key].length > 256)
+        || p.turnId != null && (typeof p.turnId !== 'string' || !p.turnId || p.turnId.length > 256)) { r.fault('invalid-question'); return false; }
+      const shape = codexQuestion(m.method, p);
+      if (!shape) return true;
+      const added = r.add(m.id, m.method, p, shape.decisions, shape.response, shape.question);
+      return !!added && !added.duplicate;
+    }
     if (!['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval'].includes(m.method)) return true;
     if (!validId(m.id) || !object(p) || !['threadId', 'turnId', 'itemId'].every(k => typeof p[k] === 'string' && p[k].length > 0 && p[k].length <= 256)) { r.fault('invalid-approval'); return false; }
     if (m.method === 'item/permissions/requestApproval') {
@@ -121,7 +131,17 @@ class ClaudeProtocol {
     if (m.type === 'result') for (const entry of r.tokens.values()) r.consume(entry);
     if (m.type !== 'control_request') return;
     const p = m.request;
-    if (typeof m.request_id !== 'string' || !object(p) || p.subtype !== 'can_use_tool' || typeof p.tool_name !== 'string' || !object(p.input) || (p.tool_use_id !== undefined && typeof p.tool_use_id !== 'string')) { r.fault('unsupported-control-request'); return; }
+    if (typeof m.request_id !== 'string' || !object(p)) { r.fault('unsupported-control-request'); return; }
+    if (p.subtype === 'elicitation') {
+      if (typeof p.mcp_server_name !== 'string' || !p.mcp_server_name || typeof p.message !== 'string') { r.fault('invalid-elicitation'); return; }
+      const shape = claudeQuestion(p);
+      r.add(m.request_id, p.subtype, p, shape.decisions, shape.response, shape.question); return;
+    }
+    if (p.subtype !== 'can_use_tool' || typeof p.tool_name !== 'string' || !object(p.input) || (p.tool_use_id !== undefined && typeof p.tool_use_id !== 'string')) { r.fault('unsupported-control-request'); return; }
+    if (p.tool_name === 'AskUserQuestion') {
+      const shape = claudeQuestion(p);
+      r.add(m.request_id, p.subtype, p, shape.decisions, shape.response, shape.question); return;
+    }
     const input = JSON.parse(JSON.stringify(p.input));
     r.add(m.request_id, p.subtype, p, ['allow', 'deny'], (decision, id) => ({ type: 'control_response', response: {
       subtype: 'success', request_id: id,

@@ -53,7 +53,13 @@ export type Workspace = { desktopGlass?: { supported: boolean; compatibility: bo
   uiZoom: number };
 // A backend observation epoch; no native Claude Code/Codex approval request ID is exposed by terminal mode.
 export type ApprovalStamp = { sessionId: string; revision: number };
-export type NativeApproval = { provider: 'codex' | 'claude'; projectId: string; terminalId: string; sessionId: string; token: string; requestId: string | number; method: string; params: Record<string, unknown>; decisions: string[]; at: number };
+export type NativeQuestionValue = string | number | boolean | string[];
+export type NativeQuestionField = { id: string; label: string; description?: string; type: 'string' | 'single' | 'multi' | 'number' | 'integer' | 'boolean'; required: boolean;
+  options?: { value: string; label: string; description?: string; preview?: string }[]; allowOther?: boolean; secret?: boolean; default?: NativeQuestionValue;
+  minLength?: number; maxLength?: number; minimum?: number; maximum?: number; minItems?: number; maxItems?: number; format?: 'email' | 'uri' | 'date' | 'date-time' };
+export type NativeQuestion = { title: string; fields: NativeQuestionField[]; unsupported?: boolean };
+export type NativeQuestionAnswer = { token: string; decision: 'submit'; values: Record<string, NativeQuestionValue> } | { token: string; decision: 'decline' | 'cancel' };
+export type NativeApproval = { provider: 'codex' | 'claude'; projectId: string; terminalId: string; sessionId: string; token: string; requestId: string | number; method: string; params: Record<string, unknown>; decisions: string[]; at: number; question?: NativeQuestion };
 export type ApprovalResult = { mode: 'terminal-only'; reason: 'native-request-identity-unavailable' };
 type TerminalSnapshot = { sessionId: string | null; seq: number; data: string; approval?: ApprovalStamp };
 export type TerminalPacket = TerminalSnapshot & { id: string };
@@ -229,6 +235,7 @@ type Bridge = {
   importSkill(scope: 'global' | 'project', projectId: string | null): Promise<Result<SkillInfo | null>>;
   onSkills(callback: (skills: SkillInfo[]) => void): () => void;
   answerNativeApproval(id: string, answer: { token: string; decision: string }): Promise<Result<{ mode: 'native'; requestId: string | number }>>;
+  answerNativeQuestion(id: string, answer: NativeQuestionAnswer): Promise<Result<{ mode: 'native'; requestId: string | number }>>;
   managedPrompt(id: string, sessionId: string, text: string): Promise<Result<boolean>>;
   terminalConversationPage(id: string, request: { key: string; cursor?: string | null }): Promise<Result<ConversationPage>>;
   agentSessions(id: string): Promise<Result<AgentSession[]>>;
