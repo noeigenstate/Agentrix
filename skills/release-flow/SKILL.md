@@ -106,3 +106,14 @@ description: Publish a new Agentrix version — bump, update notes, the full loc
    helper's start line, from a release file outside the worker's folder, since the scope check reports any file inside it).
    Prove it at the extreme (hold 0) and at the CI scales (`AGENTRIX_TEST_TIMEOUT_SCALE=2` and `3`), compare each test's
    duration with the previous version, and run all of `npm test` at scale 2 before tagging.
+28. **A desktop step that hangs with the app idle.** If the app stops answering `page.evaluate` and `app.evaluate` and its
+   Electron process uses no CPU, it is blocked, not looping: a visible `#32770` window titled `Error` on that process is
+   Electron's dialog for an uncaught main-process exception. Read the window list (class and title; never screenshot the
+   desktop), then run a temporary copy of the smoke that, right after launch, records the stack:
+   `app.evaluate(() => process.on('uncaughtException', e => (globalThis.errors ??= []).push(e.stack)))`. Delete the copy
+   afterwards. `ci-preflight local` stops each step at the CI job's `timeout-minutes`, so such a hang fails in the job time
+   instead of holding the run open. Objects main.cjs keeps per session (for example `s.usageAccount`, which receives every
+   terminal chunk through `output()`) must keep the whole interface; a unit test calls each method main calls.
+29. **Owner forbids the system clipboard.** `test:sessions`, `test:composer`, `test:workspace`, `test:editor-terminals` and
+   `test:clipboard` write the system clipboard. Then run every other local step with `--only` (not a full `local` run)
+   and leave those five suites to `ci-preflight remote`, which must be green before main moves.
