@@ -139,7 +139,9 @@ async function executeLocalStep(step, index, { directory, temp, shell, sha, vers
     command = shell.command;
     args = [...shell.args, '-File', scriptFile];
   }
-  const execute = () => loggedProcess(command, args, env, logFile, step.timeoutMinutes);
+  // Read at launch: inside withGuiLock a GUI step's smokes inherit the held lock instead of waiting on it.
+  const execute = () => loggedProcess(command, args, process.env.AGENTRIX_GUI_LOCK ? { ...env, AGENTRIX_GUI_LOCK: process.env.AGENTRIX_GUI_LOCK } : env,
+    logFile, step.timeoutMinutes);
   const started = Date.now();
   const result = step.kind === 'gui' ? await withGuiLock(`ci-preflight:${step.key}`, execute) : await execute();
   return { ...result, logFile, seconds: ((Date.now() - started) / 1000).toFixed(1) };
