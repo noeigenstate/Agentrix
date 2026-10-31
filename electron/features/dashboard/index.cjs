@@ -1,6 +1,6 @@
 const path = require('node:path');
 const { DashboardRecords } = require('./records.cjs');
-const { DashboardDecisions, routingNote } = require('./decisions.cjs');
+const { DashboardDecisions } = require('./decisions.cjs');
 const { DashboardJournals } = require('./journals.cjs');
 const { createDashboardWindow } = require('./window.cjs');
 const { registerDashboardIpc } = require('./ipc.cjs');
@@ -21,7 +21,8 @@ function createDashboard({ app, userData = app.getPath('userData'), root = path.
   getMainWindow, BrowserWindow, ipcMain, devUrl = null, getUiZoom, backgroundColor, records = new DashboardRecords(userData),
   decisions = new DashboardDecisions(userData), now = Date.now, t = (source, values) => translate(getSettings().language, source, values),
   journals: suppliedJournals, platform = process.platform }) {
-  let timer = null, disposed = false;
+  let timer = null, disposed = false, projectKey = '';
+  const projectsKey = () => JSON.stringify(getProjects().map(project => [project.id, project.path, project.kind]).sort((a, b) => a[0].localeCompare(b[0])));
   const changed = () => {
     if (disposed || timer || !dashboardWindow.getWindow()) return;
     timer = setTimeout(() => {
@@ -52,12 +53,17 @@ function createDashboard({ app, userData = app.getPath('userData'), root = path.
   }
   async function open() {
     if (disposed) return;
+    projectKey = projectsKey();
     const watching = Promise.resolve(journals.start());
     try { await Promise.all([dashboardWindow.open(), watching]); } catch (error) { journals.stop(); throw error; }
   }
   const releaseIpc = registerDashboardIpc({ ipcMain, dashboardWindow, getMainWindow, summary, decide, open, devUrl, t });
-  return { open, summary, decide, sync() { dashboardWindow.sync(); if (dashboardWindow.getWindow()) void journals.sync(); },
-    routingNote: () => routingNote(userData),
+  return { open, summary, decide, sync() {
+    dashboardWindow.sync();
+    if (!dashboardWindow.getWindow()) return;
+    const key = projectsKey();
+    if (key !== projectKey) { projectKey = key; void journals.sync(); }
+  },
     dispose() {
       disposed = true; clearTimeout(timer); timer = null; unsubscribe(); releaseIpc(); journals.stop();
       const window = dashboardWindow.getWindow();

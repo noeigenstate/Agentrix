@@ -16,12 +16,14 @@ async function gitCommon(projectPath) {
 class DashboardJournals {
   constructor({ getProjects, changed, resolveCommon = gitCommon, watch = fs.watch }) {
     this.getProjects = getProjects; this.changed = changed; this.resolveCommon = resolveCommon; this.watch = watch;
-    this.cache = new Map(); this.watchers = new Map(); this.projects = []; this.active = false; this.syncing = null;
+    this.cache = new Map(); this.watchers = new Map(); this.projects = []; this.active = false; this.syncing = null; this.resync = false;
   }
   start() { this.active = true; return this.sync(); }
   async sync() {
-    if (this.syncing) { await this.syncing; return; }
-    this.syncing = this.refresh().finally(() => { this.syncing = null; });
+    this.resync = true;
+    if (!this.syncing) this.syncing = (async () => {
+      do { this.resync = false; await this.refresh(); } while (this.resync);
+    })().finally(() => { this.syncing = null; });
     await this.syncing;
   }
   async refresh() {
@@ -30,9 +32,9 @@ class DashboardJournals {
     // Keep Git probes bounded even when the workspace contains many projects.
     for (let offset = 0; offset < projects.length; offset += 4) {
       const batch = await Promise.all(projects.slice(offset, offset + 4).map(async project => {
-        const common = this.cache.get(project.path) || await this.resolveCommon(project.path);
+        if (!this.cache.has(project.path)) this.cache.set(project.path, this.resolveCommon(project.path));
+        const common = await this.cache.get(project.path);
         if (!common) return null;
-        this.cache.set(project.path, common);
         return { id: project.id, name: project.name, common, directory: path.join(common, 'agentrix') };
       }));
       selected.push(...batch.filter(Boolean));

@@ -68,6 +68,36 @@ test('journal source probes only local repositories and drops watchers when proj
   projects = []; await source.sync(); assert.equal(source.watchers.size, 0); assert.ok(watchers.every(watcher => watcher.closed));
 });
 
+test('non-git results are cached per path until that project path is removed', async t => {
+  const { directory } = lab(t);
+  let projects = [{ id: 'a', path: directory }, { id: 'alias', path: directory }], probes = 0;
+  const source = new DashboardJournals({ getProjects: () => projects, changed() {}, resolveCommon: async () => { probes++; return null; } });
+  t.after(() => source.stop());
+  await source.start(); await source.read(); await source.sync();
+  assert.equal(probes, 1); assert.deepEqual(await source.read(), []);
+  projects = [{ id: 'renamed', path: directory }]; await source.sync(); assert.equal(probes, 1);
+  projects = []; await source.sync();
+  projects = [{ id: 'a', path: directory }]; await source.sync(); assert.equal(probes, 2);
+});
+
+test('a project-list change during a pending Git probe is synchronized before the caller returns', async t => {
+  const { directory, common } = lab(t);
+  let projects = [{ id: 'old', path: directory }], finish;
+  const paths = [];
+  const source = new DashboardJournals({ getProjects: () => projects, changed() {},
+    resolveCommon: filename => {
+      paths.push(filename);
+      return paths.length === 1 ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(common);
+    } });
+  t.after(() => source.stop());
+  const starting = source.start();
+  projects = [{ id: 'new', path: path.join(directory, 'next') }];
+  const changed = source.sync(); finish(null);
+  await Promise.all([starting, changed]);
+  assert.deepEqual(paths, [directory, projects[0].path]);
+  assert.deepEqual(source.projects.map(project => project.id), ['new']);
+});
+
 test('the default journal resolver reads an isolated real Git common directory without creating evaluation files', async t => {
   const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-git-')));
   execFileSync('git', ['init', '-q'], { cwd: directory, windowsHide: true, stdio: 'ignore' });

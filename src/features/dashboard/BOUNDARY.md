@@ -9,15 +9,18 @@ light). They are content, not interface; a model is also told apart by its shape
 
 ## Owns
 - `src/features/dashboard/**`
+- `src/features/titlebar/AppMenu.tsx`
 
 ## Interface
 - `Dashboard` (`src/features/dashboard/Dashboard.tsx`) — the page for a bridge; the file also exports DashboardView, the same page from a summary
 - `createDashboardStore` (`src/features/dashboard/dashboard-store.ts`) — the query, summary and appearance the page holds, read through a bridge
 - `modelLabel` (`src/features/dashboard/format.ts`) — how numbers, models, task kinds and weights are written; the file also exports percent and duration
 - `chartSeries` (`src/features/dashboard/chart-math.ts`) — which models a chart draws and the arithmetic of its plot
+- `AppMenu` (`src/features/titlebar/AppMenu.tsx`) — the main window's app menu, including the entry that calls openDashboard
 
 ## May import
 - `src/shared/**`
+- `src/features/shortcuts/shortcuts.ts`
 
 ## Invariants
 - A number the records do not support reads as a dash, never as 0, and an unpriced run is counted as unpriced rather than free — a made-up zero would pass for a measured one — test: `tests/dashboard-ui.test.cjs` › "numbers the records do not support read as a dash, never as 0"
@@ -27,10 +30,9 @@ light). They are content, not interface; a model is also told apart by its shape
 - A chart draws at most three models; the others stay in its data table and the legend says so, and a model keeps one shape everywhere — a crowded plot cannot be read — test: `tests/dashboard-ui.test.cjs` › "series: the first three models with data are drawn, the rest only in the table; a model keeps its shape"
 - Every scrolling table sits in a labelled region the keyboard can focus — a wide table must stay reachable without a pointer — test: `tests/dashboard-ui.test.cjs` › "every scrolling table sits in a labelled, keyboard-focusable region"
 - The stylesheet keeps the product scale (spacing 2/4/8/12/16/24/32, sizes 48/16/14/13/12, weights 400/600, three radii) and takes every colour from the theme tokens apart from the chart series — the page must read as one product with the app — test: `tests/dashboard-ui.test.cjs` › "the dashboard stylesheet keeps the product scale: spacing, type, radii, controls, and tokens for every colour but the chart series"
-- `dashboard.html` carries the same Content-Security-Policy as `index.html` and the build lists both pages — the window loads under the app's own protocol rules — test: `tests/dashboard-ui.test.cjs` › "the two pages share one CSP and the build lists both"
+- `dashboard.html` permits only its own scripts, styles, images and fonts, inline styles and the development socket; media and embedded pages are blocked and the build lists both pages — the dashboard has no external image or preview access — test: `tests/dashboard-ui.test.cjs` › "the dashboard CSP allows its own assets and dev socket without external images or embedded pages"
 
 ## Not ours
 - The window, its IPC, the summary, suggestions and decisions — Dashboard records (`electron/features/dashboard`)
 - The contract between the page and the main process — `src/shared/dashboard-types.ts` (changed only through the lead)
-- The 「数据看板」 entry of the app menu — the title bar (`src/features/titlebar/AppMenu.tsx`)
 - The theme tokens, the shared buttons, title bar and Select — `src/shared`

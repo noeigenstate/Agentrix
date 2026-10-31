@@ -8,6 +8,7 @@ const vm = require('node:vm');
 const { createDashboardWindow } = require('../electron/features/dashboard/window.cjs');
 const { createDashboard } = require('../electron/features/dashboard/index.cjs');
 const { DashboardRecords } = require('../electron/features/dashboard/records.cjs');
+const { routingNote } = require('../electron/features/dashboard/decisions.cjs');
 
 class Contents extends EventEmitter {
   constructor(url = 'agentrix://app/index.html') { super(); this.mainFrame = { url }; this.zoom = 1; this.messages = []; }
@@ -167,8 +168,27 @@ test('window button events are sender checked and maximize toggles without addin
   ipcMain.emit('dashboard:close', sender(own)); assert.equal(own.destroyed, true);
 });
 
+test('all dashboard handlers and buttons reject subframes, navigated pages and destroyed windows', async t => {
+  const { ipcMain, main, created, dashboard } = await lab(t); await dashboard.open(); const own = created[0];
+  const requests = [['dashboard:summary', [query]], ['dashboard:appearance', []], ['dashboard:decide', ['0'.repeat(32), 'adopted', query]]];
+  for (const url of ['agentrix://app/index.html', 'agentrix://other/dashboard.html', 'https://app/dashboard.html']) {
+    own.webContents.mainFrame.url = url;
+    for (const [channel, args] of requests) assert.equal((await ipcMain.invoke(channel, sender(own), ...args)).ok, false);
+    for (const action of ['minimize', 'maximize', 'close']) ipcMain.emit(`dashboard:${action}`, sender(own));
+    assert.equal(own.minimized, undefined); assert.equal(own.maximized, undefined); assert.equal(own.destroyed, undefined);
+  }
+  own.webContents.mainFrame.url = own.url;
+  const child = { ...sender(own), senderFrame: { url: own.url } };
+  for (const action of ['minimize', 'maximize', 'close']) ipcMain.emit(`dashboard:${action}`, child);
+  assert.equal(own.destroyed, undefined); assert.equal(own.minimized, undefined); assert.equal(own.maximized, undefined);
+  own.destroyed = true;
+  for (const [channel, args] of requests) assert.equal((await ipcMain.invoke(channel, sender(own), ...args)).ok, false);
+  main.webContents.mainFrame.url = own.url;
+  assert.equal((await ipcMain.invoke('dashboard:open', sender(main))).ok, false);
+});
+
 test('decide resolves server-generated evidence, persists adoption and returns the same query with current weights', async t => {
-  const { dashboard, journals, ipcMain, created } = await lab(t);
+  const { dashboard, journals, ipcMain, created, directory } = await lab(t);
   journals.history = [{ projectId: 'p', entries: [{ type: 'incident', time: 5000, meeting: 'r', model: 'gpt-6.1-sol', kind: 'core',
     cause: 'failed verification', fix: 'added coverage', lead: 'missed', weight: { kind: 'core', from: 1, to: 0.8 } }] }];
   await dashboard.open(); const own = created[0];
@@ -178,7 +198,10 @@ test('decide resolves server-generated evidence, persists adoption and returns t
   const adopted = await ipcMain.invoke('dashboard:decide', sender(own), id, 'adopted', query, { to: 1.5 });
   assert.equal(adopted.ok, true); assert.deepEqual(adopted.value.query, query);
   assert.deepEqual(adopted.value.weights, [{ model: 'gpt-6.1-sol', kind: 'core', from: 1, to: 0.8 }]);
-  assert.equal(adopted.value.suggestions[0].state, 'adopted'); assert.match(dashboard.routingNote(), /core: 0\.8/);
+  assert.equal(adopted.value.suggestions[0].state, 'adopted'); assert.match(routingNote(directory), /core: 0\.8/);
+  assert.equal('routingNote' in dashboard, false);
+  journals.history = [];
+  assert.equal((await dashboard.summary({ projectId: 'other', range: '7d' })).suggestions[0].id, id);
   const reopened = await ipcMain.invoke('dashboard:decide', sender(own), id, 'open', query);
   assert.equal(reopened.value.weights.length, 0);
   assert.equal((await ipcMain.invoke('dashboard:decide', sender(own), '0'.repeat(32), 'adopted', query)).ok, false);
@@ -186,6 +209,21 @@ test('decide resolves server-generated evidence, persists adoption and returns t
   for (const bad of [null, {}, { projectId: null, range: 'year' }, { ...query, path: 'not accepted' }, { ...query, projectId: '' }]) {
     assert.equal((await ipcMain.invoke('dashboard:summary', sender(own), bad)).ok, false);
   }
+});
+
+test('dashboard broadcasts resync journals only when project ids, kinds or paths change', async t => {
+  let projects = [{ id: 'p', name: 'Project', kind: 'local', path: 'first' }], syncs = 0;
+  const { dashboard, journals, settings } = await lab(t, { getProjects: () => projects });
+  journals.sync = async () => { syncs++; };
+  await dashboard.open();
+  for (let i = 0; i < 10; i++) { projects = projects.map(project => ({ ...project })); dashboard.sync(); }
+  settings.theme = 'light'; dashboard.sync(); assert.equal(syncs, 0);
+  projects = [...projects, { id: 'second', path: 'second' }]; dashboard.sync(); assert.equal(syncs, 1);
+  projects.reverse(); dashboard.sync(); assert.equal(syncs, 1);
+  projects[0].path = 'changed'; dashboard.sync(); assert.equal(syncs, 2);
+  projects[0].id = 'new-id'; dashboard.sync(); assert.equal(syncs, 3);
+  projects[0].kind = 'ssh'; dashboard.sync(); assert.equal(syncs, 4);
+  projects = []; dashboard.sync(); assert.equal(syncs, 5);
 });
 
 test('a failed decision write returns failure and leaves adoption unapplied', async t => {

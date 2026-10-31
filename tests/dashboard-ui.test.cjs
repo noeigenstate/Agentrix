@@ -471,9 +471,9 @@ test('the app menu offers 数据看板 after 设置, before any update item, and
 });
 
 // ---- build and style rules ----------------------------------------------------------------------------------------------------
-test('the two pages share one CSP and the build lists both', () => {
+test('the dashboard CSP allows its own assets and dev socket without external images or embedded pages', () => {
   const policy = file => /Content-Security-Policy" content="([^"]+)"/.exec(fs.readFileSync(path.join(root, file), 'utf8'))?.[1];
-  assert.ok(policy('index.html')); assert.equal(policy('dashboard.html'), policy('index.html'));
+  assert.equal(policy('dashboard.html'), "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self' ws://127.0.0.1:5178; object-src 'none'; base-uri 'none'; frame-src 'none'");
   const html = fs.readFileSync(path.join(root, 'dashboard.html'), 'utf8');
   assert.match(html, /<script type="module" src="\/src\/features\/dashboard\/main\.tsx"><\/script>/); assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)/, 'no inline script');
   const config = fs.readFileSync(path.join(root, 'vite.config.ts'), 'utf8');
