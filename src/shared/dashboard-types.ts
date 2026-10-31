@@ -21,6 +21,7 @@ export type DashboardModelRow = {
   // 1 unless the owner adopted a weight suggestion for this model; the per-kind values are in weights.
   weight: number;
 };
+// runs counts only the runs whose outcome is known (the first-pass sample), so it can be below the model row's runs.
 export type DashboardKindRate = { kind: string; model: string; runs: number; firstPassRate: number | null };
 // day is the local calendar day, yyyy-mm-dd. Rate from timed replies only (outputTokens / activeMs).
 export type DashboardSpeedPoint = { day: string; model: string; tokensPerSecond: number | null };
