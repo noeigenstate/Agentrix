@@ -36,6 +36,8 @@ const { agentSettings } = require('./features/agents/agent-settings.cjs');
 const { UsageMeter, claudeProvider, codexProvider, claudeAccount, claudeAccountFiles } = require('./features/agents/agent-usage.cjs');
 const { AgentCalls } = require('./features/agents/agent-calls.cjs');
 const { DashboardRecords, quotaScope } = require('./features/dashboard/records.cjs');
+const { createDashboard } = require('./features/dashboard/index.cjs');
+const { routingNote } = require('./features/dashboard/decisions.cjs');
 const { CodexAccountUsage } = require('./features/agents/codex-account-usage.cjs');
 const codexAccounts = new CodexAccountUsage();
 const { ClaudeAccountUsage, readClaudeAccount } = require('./features/agents/claude-account-usage.cjs');
@@ -98,7 +100,7 @@ registerAppSchemes(protocol);
 const { translate } = require('./i18n.cjs');
 // Text shown by the main process follows the language chosen in settings (Chinese source -> locales/en.json).
 const t = (text, values) => translate(store?.settings.language, text, values);
-let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, quitCleaned = false;
+let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, dashboardWindow = null, quitCleaned = false;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
 function windowBackgroundColor() { return store.settings.theme === 'light' ? '#f8f9fb' : '#181818'; }
@@ -284,6 +286,7 @@ function trayMenu() {
 }
 
 function broadcast() {
+  dashboardWindow?.sync();
   skills?.syncWatchers();
   clearTimeout(stateTimer);
   stateTimer = null;
@@ -1406,7 +1409,8 @@ if (!app.requestSingleInstanceLock()) {
     }
     skills = new SkillsStore({ dataDir: app.getPath('userData'), builtinDir: app.isPackaged ? path.join(process.resourcesPath, 'skills') : path.join(root, 'resources', 'skills'),
       getProjects: () => store.projects, getAgents: () => agents.getState(), activeProjects: () => [...sessions.values()].filter(s => s.codexActive).map(s => s.projectId),
-      changed: (infos, { deliveryChanged }) => { send('skills:changed', infos); if (deliveryChanged) refreshSkillNotes(); }, report });
+      changed: (infos, { deliveryChanged }) => { send('skills:changed', infos); if (deliveryChanged) refreshSkillNotes(); }, report,
+      routingNote: () => routingNote(app.getPath('userData')) });
     skills.syncWatchers();
     projectImageAuto = createProjectImageAuto({
       getProject: id => quitting ? null : store.projects.find(project => project.id === id),
@@ -1455,6 +1459,9 @@ if (!app.requestSingleInstanceLock()) {
       relaunchDisplayName,
     });
     windowZoom = registerWindowZoom({ window, screen, getZoom: () => store.settings.uiZoom, broadcast });
+    dashboardWindow = createDashboard({ app, root, BrowserWindow, ipcMain, devUrl, t, records: dashboard,
+      getProjects: () => store.projects, getSettings: () => store.settings, getMainWindow: () => window,
+      getUiZoom: () => windowZoom?.percent ?? 100, backgroundColor: windowBackgroundColor });
     registerWindowContents({ window, Menu, clipboard, previewResources, pictureFrom, devUrl, t,
       getActiveTerminal: () => activeTerminal, getActiveFileTree: () => activeFileTree, getShortcuts: () => store.settings.shortcuts });
     registerWindowLifecycle({ window, getSettings: () => store.settings, isQuitting: () => quitting, hasTray: () => !!tray,
@@ -1481,6 +1488,7 @@ app.on('before-quit', event => {
   if (process.platform === 'darwin' && !quitting && window && !window.isDestroyed()) { event.preventDefault(); showWindow(); requestQuit().catch(report); return; }
   if (!quitCleaned) {
     quitCleaned = true;
+    dashboardWindow?.dispose();
     clearTimeout(attentionTimer);
     voiceManager?.close(); fileOperations?.cancel();
     skills?.close();

@@ -225,7 +225,7 @@ test('main quit cleanup runs once and a late dashboard append cannot prevent the
   const vm = require('node:vm'), { records } = await lab(t);
   const source = await fs.readFile(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   let handler, cleanups = 0, quits = 0, prevented = 0;
-  vm.runInNewContext('let quitting = false, quitCleaned = false;\n' + source.slice(source.indexOf("app.on('before-quit',"), source.indexOf("app.on('window-all-closed',")), {
+  vm.runInNewContext('let quitting = false, quitCleaned = false, dashboardWindow = null;\n' + source.slice(source.indexOf("app.on('before-quit',"), source.indexOf("app.on('window-all-closed',")), {
     app: { on: (_, listener) => { handler = listener; }, quit: () => quits++ }, process: { platform: 'win32' }, dashboard: records,
     clearTimeout, attentionTimer: null, voiceManager: null, fileOperations: null, skills: { close: () => cleanups++ },
     updateManager: null, codexAccounts: { dispose() {} }, claudeAccounts: { dispose() {} }, disposeClaudeAccounts() {},
