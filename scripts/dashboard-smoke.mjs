@@ -29,7 +29,7 @@ const DAY = 86_400_000, now = Date.now(), ago = days => now - days * DAY;
 // Execution runs per project and age: agentrix 4 in the last week, 3 more within 30 days, 2 older; site 2, 1 and 1. So the
 // counts are: 7 days 6, 30 days 10, all 13; site alone in 30 days 3.
 const PROJECTS = [{ id: 'p-agentrix', name: 'agentrix' }, { id: 'p-site', name: 'site' }];
-const RUNS = [['p-agentrix', [1, 2, 3, 5, 12, 18, 25, 40, 60]], ['p-site', [2, 15, 45]]];
+const RUNS = [['p-agentrix', [1, 2, 3, 5, 12, 18, 25, 40, 60]], ['p-site', [2, 4, 15, 45]]];
 const EXPECTED = { runs: { '7 天': 6, '30 天': 10, 全部: 13 }, siteRuns30: 3, rounds: { '7 天': 2, '30 天': 3, 全部: 4 }, siteRounds30: 1 };
 
 const run = (project, days, index) => ({ v: 1, at: ago(days), id: `run-${project.id}-${index}`, projectId: project.id, project: project.name, agent: 'codex', model: index % 3 ? 'gpt-6.1-sol' : 'gpt-6.1-terra',
@@ -112,17 +112,20 @@ async function checkTheme(theme, output, results) {
     await tab('30 天'); await pick(dash, dash.getByRole('combobox', { name: '项目' }), 'p-site'); await read('轮次', EXPECTED.siteRounds30);
     await pick(dash, dash.getByRole('combobox', { name: '项目' }), ''); await read('轮次', EXPECTED.rounds['30 天']);
     assert.equal(await dash.locator('.panel', { has: dash.getByRole('heading', { name: /每轮经过/ }) }).locator('tbody tr').count(), EXPECTED.rounds['30 天']);
+    // Only the model table: the incident table shows the incident's own suggested weight change as well.
+    const modelWeight = () => dash.locator('.panel', { has: dash.getByRole('heading', { name: /模型对比/ }) }).locator('tr', { hasText: 'gpt-6.1-sol' }).locator('.weight', { hasText: '降权' });
+    await tab('模型评估'); assert.equal(await modelWeight().count(), 0, 'no adopted weight before 采纳'); await tab('协作报告');
     const weightItem = dash.locator('.advice-item', { has: dash.locator('.tag', { hasText: '路由权重' }) }).first();
     await weightItem.waitFor();
     await weightItem.getByRole('button', { name: '采纳', exact: true }).click();
     await weightItem.getByText('已采纳 ✓').waitFor();
     await tab('模型评估');
-    await dash.locator('tr', { hasText: 'gpt-6.1-sol' }).locator('.weight', { hasText: '降权' }).first().waitFor();
+    await modelWeight().first().waitFor();
     await tab('协作报告');
     await weightItem.getByRole('button', { name: '撤销', exact: true }).click();
     await weightItem.getByRole('button', { name: '采纳', exact: true }).waitFor();
     await tab('模型评估');
-    await waitFor(async () => !(await dash.locator('tr', { hasText: 'gpt-6.1-sol' }).locator('.weight', { hasText: '降权' }).count()), 'taking the suggestion back clears the weight');
+    await waitFor(async () => !(await modelWeight().count()), 'taking the suggestion back clears the weight');
 
     // Keyboard: every control reached by Tab shows a 2px focus ring; the title bar drags and its buttons do not.
     await dash.locator('.dash').click({ position: { x: 4, y: 100 } });
