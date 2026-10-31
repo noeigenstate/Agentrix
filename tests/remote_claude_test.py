@@ -245,7 +245,7 @@ class RemoteClaudeTest(unittest.TestCase):
             actual = sorted(file.relative_to(folder).as_posix() for file in folder.rglob("*") if file.is_file())
             self.assertEqual(actual, sorted(expected), step)
 
-    def test_spawn_pruning_removes_other_reference_keys_and_receipts_older_than_30_days(self):
+    def test_spawn_pruning_removes_expired_unleased_reference_keys_and_receipts(self):
         state = self.home / "pruned-state"
         current, stale = "c" * 64, "d" * 64
         for key in (current, stale):
@@ -253,6 +253,8 @@ class RemoteClaudeTest(unittest.TestCase):
             folder.mkdir(parents=True)
             remote.write_skill_reference(str(folder / "SKILL.md"), "Rules.")
         now = time.time()
+        old = now - 31 * 86400
+        for key in (current, stale): os.utime(state / "references" / key, (old, old))
         recent = state / "delivered/claude" / ("a" * 32) / ("b" * 32)
         expired = state / "delivered/claude" / ("a" * 32) / ("c" * 32)
         legacy = state / "delivered" / ("e" * 64)

@@ -29,6 +29,7 @@ test('broad scope restores edited/new/deleted skills and preserves worker versio
   const guard = new WorkerSkillProposals(f.options, {}, null);
   put(f.file, 'Worker version.'); fs.unlinkSync(removed); put(added, 'New skill.');
   assert.equal(guard.finish('run'), 3); assert.equal(guard.finish('run'), 3, 'recovery is idempotent');
+  assert.equal(guard.restoredCount, 3);
   assert.equal(fs.readFileSync(f.file, 'utf8'), 'Existing uncommitted contents.\r\n');
   assert.equal(fs.readFileSync(removed, 'utf8'), 'Original removed file.'); assert.equal(fs.existsSync(added), false);
   const folder = `${f.options.out}.skill-proposals-run`, { proposals } = JSON.parse(fs.readFileSync(path.join(folder, 'index.json')));
@@ -54,6 +55,7 @@ test('concurrent owner edits to global and built-in skills are report-only, unre
   const guard = new WorkerSkillProposals(f.options, { AGENTRIX_READING_NOTE_FILE: note }, null);
   put(global, 'Owner saved global.'); put(builtin, 'App updated built in.');
   assert.equal(guard.finish('managed'), 2); assert.equal(fs.readFileSync(global, 'utf8'), 'Owner saved global.'); assert.equal(fs.readFileSync(builtin, 'utf8'), 'App updated built in.');
+  assert.equal(guard.restoredCount, 0);
   const { proposals } = JSON.parse(fs.readFileSync(`${f.options.out}.skill-proposals-managed/index.json`));
   assert.ok(proposals.every(p => !p.restored && p.note === 'changed during the run, author unknown'));
   assert.deepEqual(proposals.map(p => fs.readFileSync(`${f.options.out}.skill-proposals-managed/${p.content}`, 'utf8')).sort(), ['App updated built in.', 'Owner saved global.']);
@@ -66,11 +68,26 @@ test('concurrent lead edits in a shared checkout are preserved and reported with
   const f = fixture(t, ['skills/**'], false), guard = new WorkerSkillProposals(f.options, {});
   put(f.file, 'Lead live version.');
   assert.equal(guard.finish('shared'), 1);
+  assert.equal(guard.restoredCount, 0);
   assert.equal(fs.readFileSync(f.file, 'utf8'), 'Lead live version.');
   const { proposals } = JSON.parse(fs.readFileSync(`${f.options.out}.skill-proposals-shared/index.json`));
   assert.equal(proposals[0].note, 'changed during the run, author unknown');
   assert.equal(proposals[0].restored, false);
   assert.equal(fs.readFileSync(`${f.options.out}.skill-proposals-shared/${proposals[0].content}`, 'utf8'), 'Lead live version.');
+});
+
+test('mixed project proposals and managed changes count only the restored versions as awaiting the lead', t => {
+  const f = fixture(t), managed = path.join(f.parent, 'managed'), global = path.join(managed, 'sample/SKILL.md');
+  put(global, 'Owner original.');
+  const manifest = path.join(f.root, 'delivery/manifest.md'), fingerprint = digest('mixed'); put(manifest, 'Instructions.');
+  put(`${manifest}.json`, JSON.stringify({ projectRoot: f.root, fingerprint, roots: [managed] }));
+  const guard = new WorkerSkillProposals(f.options, { AGENTRIX_READING_NOTE: `Note. ${deliveryMarker({ manifest, fingerprint })}` });
+  put(f.file, 'Worker proposal.'); put(global, 'Owner live change.');
+  assert.equal(guard.finish('mixed'), 2);
+  assert.equal(guard.restoredCount, 1);
+  assert.equal(guard.finish('mixed') - guard.restoredCount, 1);
+  assert.equal(fs.readFileSync(f.file, 'utf8'), 'Existing uncommitted contents.\r\n');
+  assert.equal(fs.readFileSync(global, 'utf8'), 'Owner live change.');
 });
 
 test('snapshot size limits degrade to report-only and preserve large proposals without blocking a worker', t => {

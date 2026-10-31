@@ -196,7 +196,8 @@ test('Node SessionStart writes one JSON context even without Agentrix; other hoo
 });
 
 test('Unix wrappers keep the startup note and manifest fallback on the command line, with skills only in SessionStart', { skip: process.platform === 'win32' }, async t => {
-  const f = await fixture(t), bin = path.join(f.root, 'bin'), home = path.join(f.root, 'home'), noteFile = path.join(f.root, 'note.txt');
+  const terminalSession = '11111111-1111-4111-8111-111111111111';
+  const f = await fixture(t), bin = path.join(f.root, 'bin'), home = path.join(f.root, 'home'), noteFile = path.join(f.root, `${terminalSession}-skills.txt`);
   fs.mkdirSync(bin); fs.mkdirSync(home); fs.writeFileSync(noteFile, f.note('unix'));
   const script = path.join(f.root, 'fake.cjs');
   fs.writeFileSync(script, `const fs=require('node:fs'),args=process.argv.slice(3);fs.writeFileSync(require('node:path').join(process.env.CAPTURE_ROOT, process.argv[2]+'.json'),JSON.stringify({note:process.env.AGENTRIX_READING_NOTE_FILE,args,settings:process.argv[2]==='claude'?JSON.parse(fs.readFileSync(args[1],'utf8')):null}));`);
@@ -221,11 +222,13 @@ test('Unix wrappers keep the startup note and manifest fallback on the command l
   assert.ok(JSON.stringify(codex.args).includes('中文说明'));
   assert.ok(claude.settings.hooks.SessionStart[0].hooks[0].command.includes(noteFile));
   assert.equal(path.dirname(claude.args[1]), f.root);
+  assert.ok(path.basename(claude.args[1]).startsWith(`${terminalSession}-claude-settings-`));
   assert.equal(fs.existsSync(claude.args[1]), false, 'settings file is removed after exit');
 });
 
 test('PowerShell Claude wrapper keeps the startup note and fallback before intact resume arguments', { skip: process.platform !== 'win32' }, async t => {
-  const f = await fixture(t), noteFile = path.join(f.root, 'note.txt'), note = f.note('wrapper');
+  const terminalSession = '11111111-1111-4111-8111-111111111111';
+  const f = await fixture(t), noteFile = path.join(f.root, `${terminalSession}-skills.txt`), note = f.note('wrapper');
   fs.writeFileSync(noteFile, note);
   const source = fs.readFileSync(path.join(__dirname, '../integration/bootstrap.ps1'), 'utf8');
   const helper = source.slice(source.indexOf('function global:Get-AgentrixReadingNote'), source.indexOf('# Windows PowerShell 5'));
@@ -247,6 +250,7 @@ claude --resume fixture '继续'`;
   const { args, settings } = JSON.parse(result.stdout);
   assert.equal(args[0], '--settings'); assert.ok(settings.hooks.SessionStart);
   assert.equal(path.dirname(args[1]), f.root);
+  assert.match(path.basename(args[1]), new RegExp(`^${terminalSession}-claude-settings-[0-9a-f]{32}\\.json$`));
   assert.equal(fs.existsSync(args[1]), false);
   assert.equal(args[2], '--append-system-prompt');
   assert.equal(args[3], note.split(' Agentrix skill delivery: ')[0] + ' Agentrix delivers skill instructions through its SessionStart hook.');
@@ -273,7 +277,8 @@ test('PowerShell and Node share receipts and force a delivery after compact/clea
 });
 
 test('PowerShell 5.1 fallback passes a settings file through a real fake claude.cmd with the startup note intact', { skip: process.platform !== 'win32' }, async t => {
-  const f = await fixture(t), bin = path.join(f.root, 'shim with spaces'), noteFile = path.join(f.root, 'note.txt'); fs.mkdirSync(bin);
+  const terminalSession = '11111111-1111-4111-8111-111111111111';
+  const f = await fixture(t), bin = path.join(f.root, 'shim with spaces'), noteFile = path.join(f.root, `${terminalSession}-skills.txt`); fs.mkdirSync(bin);
   const note = f.note('cmd'); fs.writeFileSync(noteFile, note);
   const captureFile = path.join(f.root, 'argv.json'), fake = path.join(bin, 'capture.cjs'), command = path.join(bin, 'claude.cmd');
   fs.writeFileSync(fake, `const fs=require('node:fs'),args=process.argv.slice(2);fs.writeFileSync(${JSON.stringify(captureFile)},JSON.stringify({args,settings:JSON.parse(fs.readFileSync(args[1],'utf8'))}));`);
@@ -292,6 +297,7 @@ claude --resume fixture 'next task'`;
   assert.equal(result.code, 0); assert.equal(result.stderr, '');
   const { args, settings } = JSON.parse(fs.readFileSync(captureFile));
   assert.equal(args[0], '--settings'); assert.equal(path.dirname(args[1]), f.root);
+  assert.match(path.basename(args[1]), new RegExp(`^${terminalSession}-claude-settings-[0-9a-f]{32}\\.json$`));
   assert.ok(settings.hooks.SessionStart[0].hooks[0].command.includes('fixture.ps1'));
   assert.equal(args[2], '--append-system-prompt');
   assert.equal(args[3], note.split(' Agentrix skill delivery: ')[0] + ' Agentrix delivers skill instructions through its SessionStart hook.');
