@@ -26,11 +26,11 @@ function menu({ open = '', readingTerminal = 'agent' } = {}) {
 
 test('menu commands run what the shortcuts run, the switch and the pane toggle act on their own state', () => {
   const { send, calls } = menu();
-  for (const command of ['addProject', 'settings', 'decisions', 'overview', 'search']) send(command);
-  send('workspace'); send('activityPane'); send('reading'); send('terminal');
+  for (const command of ['addProject', 'settings', 'overview', 'search', 'activityPane']) send(command);
+  send('reading'); send('terminal');
   assert.deepEqual(calls, [
-    ['action', 'addProject'], ['action', 'settings'], ['action', 'decisions'], ['action', 'overview'], ['action', 'search'],
-    ['view', 'workspace'], ['settings', { activityPane: true }], ['perform', 'settings'],
+    ['action', 'addProject'], ['action', 'settings'], ['action', 'overview'], ['action', 'search'],
+    ['settings', { activityPane: true }], ['perform', 'settings'],
     ['reading', 'agent', true], ['reading', 'agent', false],
   ]);
 });
@@ -38,7 +38,7 @@ test('menu commands run what the shortcuts run, the switch and the pane toggle a
 test('a dialog or the tour blocks every menu command except installUpdate', () => {
   for (const open of ['dialog[open]', '.tour-layer']) {
     const { send, calls } = menu({ open });
-    for (const command of ['addProject', 'settings', 'decisions', 'overview', 'search', 'workspace', 'activityPane', 'reading', 'terminal']) send(command);
+    for (const command of ['addProject', 'settings', 'overview', 'search', 'activityPane', 'reading', 'terminal']) send(command);
     assert.deepEqual(calls, [], `${open} blocks the commands`);
     send('installUpdate');
     assert.deepEqual(calls, [['installUpdate']], `${open} does not block installUpdate`);

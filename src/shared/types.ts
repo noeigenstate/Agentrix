@@ -128,8 +128,8 @@ export type FilePreview = { path: string; name: string; size: number; modifiedAt
   | { kind: 'html' | 'markdown'; content: string; page: TextPage; url: string; previewId: string }
 );
 // The application menu (macOS): what the renderer tells main to show, and the commands main sends back. `reading: null` = the project in view has no reading / terminal switch.
-export type MenuState = { view: 'workspace' | 'decisions'; decisions: number; canReturn: boolean; focused: boolean; activityPane: boolean; reading: boolean | null };
-export type MenuCommand = 'addProject' | 'settings' | 'installUpdate' | 'workspace' | 'decisions' | 'overview' | 'search' | 'activityPane' | 'reading' | 'terminal';
+export type MenuState = { canReturn: boolean; focused: boolean; activityPane: boolean; reading: boolean | null };
+export type MenuCommand = 'addProject' | 'settings' | 'installUpdate' | 'overview' | 'search' | 'activityPane' | 'reading' | 'terminal';
 type Bridge = {
   getState(): Promise<Result<Workspace>>;
   getAgents(): Promise<Result<AgentsState>>;

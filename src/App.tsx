@@ -264,15 +264,14 @@ export function App() {
   const reading = shownView === 'workspace' && !previewFile ? readingSwitch?.reading ?? null : null;
   const focused = !!focusedId;
   useEffect(() => {
-    if (isMac && api) api.setMenuState({ view: shownView, decisions: decisions.length, canReturn, focused, activityPane, reading });
-  }, [shownView, decisions.length, canReturn, focused, activityPane, reading]);
+    if (isMac && api) api.setMenuState({ canReturn, focused, activityPane, reading });
+  }, [canReturn, focused, activityPane, reading]);
   useEffect(() => {
     if (!isMac || !api) return;
     return api.onMenuCommand((command: MenuCommand) => {
       if (command === 'installUpdate') return installUpdate();
       if (dialogOpen()) return;
-      if (command === 'workspace') setView('workspace');
-      else if (command === 'activityPane') perform(api.settings({ activityPane: !activityPane }));
+      if (command === 'activityPane') perform(api.settings({ activityPane: !activityPane }));
       else if (command === 'reading' || command === 'terminal') { if (readingTerminal) setReading(readingTerminal, command === 'reading'); }
       else runAction(command);
     });
@@ -322,13 +321,11 @@ export function App() {
   const setPreference = (patch: Partial<Settings>) => { perform(api.settings(patch)); };
   const closeGuide = () => { setGuide(null); if (settings.guideVersion !== workspace.version) setPreference({ guideVersion: workspace.version }); };
 
-  const searchShown = !focusedId && (searchOpen || !!query);
-  // macOS full screen has the system menu bar and no title bar of its own; the search box brings the bar back, in flow.
-  const bareTitlebar = isMac && fullScreen && !searchShown;
+  // macOS keeps the title bar in full screen too (in flow, no slide-in: it would race the system menu bar).
   const autoHideTitlebar = fullScreen && !isMac && workspace.autoHideTitlebar;
-  return <div ref={focusMotionRoot} className={`app-shell ${focusedId ? 'focus-mode' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${autoHideTitlebar ? 'titlebar-auto' : ''} ${bareTitlebar ? 'titlebar-bare' : ''}`} style={{ '--terminal-font-size': `${settings.fontSize}px` } as CSSProperties}>
+  return <div ref={focusMotionRoot} className={`app-shell ${focusedId ? 'focus-mode' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${autoHideTitlebar ? 'titlebar-auto' : ''}`} style={{ '--terminal-font-size': `${settings.fontSize}px` } as CSSProperties}>
     {autoHideTitlebar && <div className="titlebar-reveal" aria-hidden="true" />}
-    {!bareTitlebar && <div className="titlebar">
+    <div className="titlebar">
       {!isMac && <AppMenu fullScreen={fullScreen} canReturn={canReturn} updateReady={updates?.status === 'ready'}
         onAddProject={() => setAddOpen(true)} onReturn={returnToGrid} onFullScreen={() => api.toggleFullScreen()} onSettings={() => setSettingsOpen(true)} onInstallUpdate={installUpdate} />}
       <nav className="home-nav" aria-label={t('页面')}>
@@ -339,12 +336,12 @@ export function App() {
       <div className="titlebar-tools">
         {/* Search opens from its shortcut (Ctrl+Shift+F by default, configurable) and shows while in use. Settings and adding a project are in
             the app menu; with a project open, the activity pane's toggle sits here, where the pane is also hidden below 1001px (workspace.css). */}
-        {searchShown && <div className="search-input"><MagnifyingGlass size={15} /><input ref={queryInput} placeholder={t('搜索项目或路径…')} aria-label={t('搜索项目')} value={query} onChange={e => setQuery(e.target.value)} onBlur={() => { if (!query) setSearchOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); } }} />{query ? <IconButton label={t('清除搜索')} onClick={() => setQuery('')}><X size={13} /></IconButton> : <kbd>{shortcut('search')}</kbd>}</div>}
+        {!focusedId && (searchOpen || query) && <div className="search-input"><MagnifyingGlass size={15} /><input ref={queryInput} placeholder={t('搜索项目或路径…')} aria-label={t('搜索项目')} value={query} onChange={e => setQuery(e.target.value)} onBlur={() => { if (!query) setSearchOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); } }} />{query ? <IconButton label={t('清除搜索')} onClick={() => setQuery('')}><X size={13} /></IconButton> : <kbd>{shortcut('search')}</kbd>}</div>}
         {shownView === 'workspace' && focus && !previewFile && <ModeSwitch project={focus} />}
         {shownView === 'workspace' && focus && !previewFile && <IconButton label={settings.activityPane ? t('隐藏活动栏') : t('显示活动栏：它正在做什么')} className={`activity-toggle ${settings.activityPane ? 'is-active' : ''}`} onClick={() => setPreference({ activityPane: !settings.activityPane })}><ListChecks size={16} /></IconButton>}
       </div>
       <div className="window-actions"><IconButton label={t('最小化')} onClick={() => api.minimize()}><Minus size={16} /></IconButton><IconButton label={t('最大化或还原')} onClick={() => api.maximize()}><Square size={12} /></IconButton><IconButton label={t('关闭窗口')} className="window-close" onClick={() => api.close()}><X size={17} /></IconButton></div>
-    </div>}
+    </div>
     <div className="workspace-layout">
       {focus && <ProjectExplorer key={focus.id} project={focus} collapsed={settings.explorerCollapsed} hideNoise={settings.hideTreeNoise} onHideNoiseChange={hideTreeNoise => setPreference({ hideTreeNoise })}
         onFilesRemoved={paths => setPreviewFile(current => current?.projectId === focus.id && paths.some(path => current.path === path || current.path.startsWith(path + '/')) ? null : current)}
