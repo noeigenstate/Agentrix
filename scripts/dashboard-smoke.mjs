@@ -80,8 +80,25 @@ const measureModelButtons = () => [...document.querySelectorAll('.model-toggle')
   return { name: button.getAttribute('aria-label'), text: label.textContent, height: Math.round(button.getBoundingClientRect().height), lines: Math.round(label.getBoundingClientRect().height / parseFloat(style.lineHeight)), nowrap: style.whiteSpace === 'nowrap', cut: label.scrollWidth > label.clientWidth + 1 };
 });
 
-// A scroll region lands on column edges, so beside the pinned first column a cell is there in full or under it, never half-covered. Every scroll region is read at its start, one viewport
-// along (after it snaps) and its end: any cell with text, header cells included, whose box crosses the pinned column's right edge is reported. Only horizontally pinned cells are exempt.
+// What a scroll region shows at its current position, read in the page: every text cell, header cells included, whose box crosses the pinned first column's right edge is `covered`
+// (a cell is beside the pinned column in full or under it, never half-covered); `headers` says which unpinned column headers are whole, between the pinned edge and the region's right edge.
+const readPinned = node => {
+  const view = node.getBoundingClientRect(), covered = [], headers = [];
+  let count = 0;
+  for (const row of node.querySelectorAll('tr')) {
+    const all = [...row.children], pinned = all.filter(cell => getComputedStyle(cell).position === 'sticky' && getComputedStyle(cell).left !== 'auto');
+    const edge = pinned.length ? Math.max(...pinned.map(cell => cell.getBoundingClientRect().right)) : view.left;
+    for (const cell of all.filter(other => !pinned.includes(other) && other.textContent.trim())) {
+      const box = cell.getBoundingClientRect(), text = cell.textContent.trim().slice(0, 24);
+      count++;
+      if (pinned.length && box.left < edge - 0.5 && box.right > edge + 0.5) covered.push({ text, underPin: Math.round(edge - box.left) });
+      if (cell.tagName === 'TH') headers.push({ text, whole: box.left >= edge - 0.5 && box.right <= view.right + 0.5 });
+    }
+  }
+  return { covered, headers, count, left: Math.round(node.scrollLeft), max: Math.round(node.scrollWidth - node.clientWidth) };
+};
+
+// Each scroll region set to its start, one viewport along (after it snaps) and its end. `cells` totals the text cells of every region at its start.
 // `shoot(index, region, position)` is called at each position so the pictures show what the user lands on.
 async function measureObscured(page, shoot) {
   const regions = await page.$$('.scroll'), covered = [], labels = [];
@@ -96,27 +113,55 @@ async function measureObscured(page, shoot) {
     labels.push(await region.getAttribute('aria-label'));
     for (const position of ['start', 'middle', 'end']) {
       await settle(region, position);
-      const read = await region.evaluate((node, [index, position]) => {
-        const found = [];
-        let count = 0;
-        for (const row of node.querySelectorAll('tr')) {
-          const all = [...row.children], pinned = all.filter(cell => getComputedStyle(cell).position === 'sticky' && getComputedStyle(cell).left !== 'auto');
-          if (!pinned.length) continue;
-          const edge = Math.max(...pinned.map(cell => cell.getBoundingClientRect().right));
-          for (const cell of all.filter(other => !pinned.includes(other) && other.textContent.trim())) {
-            const box = cell.getBoundingClientRect();
-            count++;
-            if (box.left < edge - 0.5 && box.right > edge + 0.5) found.push({ region: index, position, text: cell.textContent.trim().slice(0, 24), underPin: Math.round(edge - box.left) });
-          }
-        }
-        return { found, count };
-      }, [index, position]);
-      covered.push(...read.found); cells = Math.max(cells, read.count);
+      const read = await region.evaluate(readPinned);
+      covered.push(...read.covered.map(cell => ({ region: index, position, ...cell })));
+      if (position === 'start') cells += read.count;
       if (shoot) await shoot(index, region, position);
     }
     await settle(region, 'start');
   }
   return { covered, cells, labels };
+}
+
+// The way a keyboard user scrolls: focus each visible region and press ArrowRight until the scroll stops, then ArrowLeft back. At every position the pinned edge must cover no
+// cell, and every column header must have been whole at some position (so the snap neither skips a column nor sticks). `shoot(index, region)` is called at the first position
+// past the middle of the scroll.
+async function measureArrowScroll(page, shoot) {
+  const result = { covered: [], neverWhole: [], notAtEnd: [], notBack: [], regions: {} };
+  for (const [index, region] of (await page.$$('.scroll')).entries()) {
+    if (!await region.isVisible()) continue;
+    await region.scrollIntoViewIfNeeded(); await region.focus();
+    const label = (await region.getAttribute('aria-label')).split('，')[0], seen = new Map(), positions = [];
+    // The key's scroll is animated: read once the position has stood still for a few frames.
+    const read = async () => {
+      await region.evaluate(async node => { let last = -1, still = 0; for (let frame = 0; frame < 120 && (frame < 3 || still < 6); frame++) { await new Promise(resolve => requestAnimationFrame(resolve)); still = node.scrollLeft === last ? still + 1 : 0; last = node.scrollLeft; } });
+      const state = await region.evaluate(readPinned);
+      result.covered.push(...state.covered.map(cell => ({ region: label, at: state.left, ...cell })));
+      for (const { text, whole } of state.headers) seen.set(text, seen.get(text) || whole);
+      return state;
+    };
+    const press = async key => { await page.keyboard.press(key); return read(); };
+    let state = await read(), shot = false;
+    positions.push(state.left);
+    for (let step = 0; step < 60; step++) {
+      let next = await press('ArrowRight');
+      if (next.left === state.left) next = await press('ArrowRight');
+      if (next.left === state.left) break;
+      state = next; positions.push(state.left);
+      if (shoot && !shot && state.left >= state.max / 2) { shot = true; await shoot(index, region); }
+    }
+    if (Math.abs(state.left - state.max) > 1) result.notAtEnd.push({ region: label, left: state.left, max: state.max });
+    for (let step = 0; step < 60 && state.left > 0; step++) {
+      let next = await press('ArrowLeft');
+      if (next.left === state.left) next = await press('ArrowLeft');
+      if (next.left === state.left) break;
+      state = next;
+    }
+    if (state.left !== 0) result.notBack.push({ region: label, left: state.left });
+    result.neverWhole.push(...[...seen].filter(([, whole]) => !whole).map(([text]) => ({ region: label, text })));
+    result.regions[label] = { positions, headers: Object.fromEntries(seen) };
+  }
+  return result;
 }
 
 // The text in the selected (expanded) model row with the colour it is drawn in and the surface under it.
@@ -252,13 +297,18 @@ async function checkTheme(theme, output, results) {
         await tab(page); await new Promise(resolve => setTimeout(resolve, 250));
         if (name === 'models') {
           // The long id from the keyboard: Enter opens its task list, whose heading carries the whole name, wrapped if need be but never cut.
+          // Measured as it stands right after Enter: the test scrolls nothing, so the page itself must bring the heading into view.
           const longControl = dash.getByRole('button', { name: LONG_MODEL, exact: true });
+          await dash.locator('.dash-main').evaluate(node => { node.scrollTop = 0; });
           await longControl.focus(); await longControl.press('Enter');
           await tasks.waitFor();
-          const title = dash.locator('#dashboard-model-tasks-title');
-          await title.scrollIntoViewIfNeeded();
-          const heading = await title.evaluate(node => { const box = node.getBoundingClientRect(); return { text: node.textContent, cut: node.scrollWidth > node.clientWidth + 1, inside: box.left >= 0 && box.right <= innerWidth, lines: Math.round(box.height / parseFloat(getComputedStyle(node).lineHeight)) }; });
-          assert.ok(heading.text.includes(LONG_MODEL) && !heading.cut && heading.inside, `the long model's task heading at ${width}×${height}: ${JSON.stringify(heading)}`);
+          await dash.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          const heading = await dash.locator('#dashboard-model-tasks-title').evaluate(node => {
+            const box = node.getBoundingClientRect(), main = document.querySelector('.dash-main').getBoundingClientRect();
+            return { text: node.textContent, cut: node.scrollWidth > node.clientWidth + 1, inside: box.left >= 0 && box.right <= innerWidth && box.top >= main.top && box.bottom <= main.bottom,
+              lines: Math.round(box.height / parseFloat(getComputedStyle(node).lineHeight)), focusOnButton: document.activeElement.getAttribute('aria-expanded') === 'true' };
+          });
+          assert.ok(heading.text.includes(LONG_MODEL) && !heading.cut && heading.inside && heading.focusOnButton, `the long model's task heading right after Enter at ${width}×${height}: ${JSON.stringify(heading)}`);
           if (width !== 1180) await shot(dash, `${theme}-${width}x${height}-long-model-heading`);
           results.push({ theme, width, height, longHeading: heading });
           await modelControl('gpt-6.1-sol').click();
@@ -280,6 +330,17 @@ async function checkTheme(theme, output, results) {
         // Every scroll region at its start, one viewport along and its end; the pictures of the visible ones are kept at 820×600.
         const obscured = await measureObscured(dash, width === 820 ? async (index, region, position) => { if (!await region.isVisible()) return; await region.scrollIntoViewIfNeeded(); await shot(dash, `${theme}-${width}x${height}-${name}-scroll${index}-${position}`); } : undefined);
         assert.deepEqual(obscured.covered, [], `half-covered cells beside the pinned column at ${width}×${height} on ${name}`);
+        // And by keyboard, where overflow is the rule (at 1180 the tables fit).
+        const arrows = width <= 900 ? await measureArrowScroll(dash, width === 820 ? async (index, region) => { await shot(dash, `${theme}-${width}x${height}-${name}-arrow${index}-mid`); } : undefined) : null;
+        if (arrows) {
+          assert.deepEqual([arrows.covered, arrows.neverWhole, arrows.notAtEnd, arrows.notBack], [[], [], [], []], `arrow-key scrolling at ${width}×${height} on ${name}: ${JSON.stringify(arrows)}`);
+          const headersOf = prefix => Object.entries(arrows.regions).find(([label]) => label.startsWith(prefix))?.[1].headers ?? {};
+          if (name === 'models') {
+            for (const header of ['越界', '事故', '额度', '成本']) assert.equal(headersOf('模型对比表')[header], true, `the model table shows ${header} whole at some position`);
+            assert.equal(headersOf('模型任务表')['结果'], true, 'the task table shows 结果 whole at some position');
+          }
+          results.push({ theme, width, height, page: name, arrowScroll: arrows.regions });
+        }
         assert.ok(obscured.cells > 20, 'the tables have cells to check');
         if (name === 'models') {
           const selected = await dash.evaluate(measureSelectedRow), low = selected.map(({ text, color, surface }) => ({ text, ratio: contrast(color, surface) })).filter(({ ratio }) => ratio < 4.5);
