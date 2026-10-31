@@ -1,10 +1,10 @@
 {
   "updated": "2026-10-31",
   "models": {
-    "claude-opus-5-5": { "inputPerM": 4, "cachedInputPerM": 0.2, "outputPerM": 20, "currency": "USD", "source": "https://platform.claude.com/docs/en/about-claude/pricing", "checkedAt": "2026-10-31" },
-    "claude-sonnet-5-5": { "inputPerM": 2, "cachedInputPerM": 0.1, "outputPerM": 10, "currency": "USD", "source": "https://platform.claude.com/docs/en/about-claude/pricing", "checkedAt": "2026-10-31" },
-    "claude-haiku-5-5": { "inputPerM": 0.1, "cachedInputPerM": 0.01, "outputPerM": 0.5, "currency": "USD", "source": "https://platform.claude.com/docs/en/about-claude/pricing", "checkedAt": "2026-10-31" },
-    "gpt-6.1-sol": { "inputPerM": 2, "cachedInputPerM": 0.1, "outputPerM": 10, "currency": "USD", "source": "https://developers.openai.com/api/docs/pricing", "checkedAt": "2026-10-31" },
-    "gpt-6.1-terra": { "inputPerM": 1, "cachedInputPerM": 0.05, "outputPerM": 5, "currency": "USD", "source": "https://developers.openai.com/api/docs/pricing", "checkedAt": "2026-10-31" }
+    "claude-opus-5-5": { "inputPerM": 4, "cachedInputPerM": 0.2, "outputPerM": 20, "fast": { "inputPerM": 8, "cachedInputPerM": 0.4, "outputPerM": 40 }, "currency": "USD", "source": "https://platform.claude.com/docs/en/about-claude/pricing", "checkedAt": "2026-10-31" },
+    "claude-sonnet-5-5": { "inputPerM": 2, "cachedInputPerM": 0.1, "outputPerM": 10, "fast": null, "currency": "USD", "source": "https://platform.claude.com/docs/en/about-claude/pricing", "checkedAt": "2026-10-31" },
+    "claude-haiku-5-5": { "inputPerM": 0.1, "cachedInputPerM": 0.01, "outputPerM": 0.5, "fast": null, "currency": "USD", "source": "https://platform.claude.com/docs/en/about-claude/pricing", "checkedAt": "2026-10-31" },
+    "gpt-6.1-sol": { "inputPerM": 2, "cachedInputPerM": 0.1, "outputPerM": 10, "fast": { "inputPerM": 4, "cachedInputPerM": 0.2, "outputPerM": 20 }, "currency": "USD", "source": "https://developers.openai.com/api/docs/pricing", "checkedAt": "2026-10-31" },
+    "gpt-6.1-terra": { "inputPerM": 1, "cachedInputPerM": 0.05, "outputPerM": 5, "fast": { "inputPerM": 2, "cachedInputPerM": 0.1, "outputPerM": 10 }, "currency": "USD", "source": "https://developers.openai.com/api/docs/pricing", "checkedAt": "2026-10-31" }
   }
 }

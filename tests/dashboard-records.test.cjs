@@ -17,6 +17,18 @@ async function lab(t, options) {
   return { directory, records };
 }
 
+test('record subscribers observe successful persisted writes and unsubscribe without affecting recording', async t => {
+  const { records } = await lab(t), changes = [];
+  const stop = records.subscribe(kind => changes.push(kind));
+  records.subscribe(() => { throw new Error('a subscriber cannot reject a write'); });
+  assert.equal(await records.append('runs', { one: 1 }), true);
+  assert.equal(await records.append('grades', { one: 1 }), true);
+  assert.equal(await records.append('quota', { one: 1 }), true);
+  assert.equal(await records.append('runs', { oversized: 'x'.repeat(LINE_LIMIT) }), false);
+  stop(); await records.append('runs', { two: 2 });
+  assert.deepEqual(changes, ['runs', 'grades', 'quota']);
+});
+
 test('append queues valid lines and rotates one generation', async t => {
   let now = 100;
   const { records } = await lab(t, { now: () => now++ });

@@ -1,16 +1,17 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { runRecord, gradeRecord, quotaWindows, quotaScope } = require('./records-values.cjs');
+const { readJsonl, FILE_LIMIT, LINE_LIMIT, READ_LIMIT } = require('./jsonl.cjs');
 
 const KINDS = ['runs', 'grades', 'quota'];
-const FILE_LIMIT = 20 * 1024 * 1024, LINE_LIMIT = 16 * 1024;
-const READ_LIMIT = 10000, QUOTA_INTERVAL = 10 * 60 * 1000, QUIT_DRAIN_MS = 2000;
+const QUOTA_INTERVAL = 10 * 60 * 1000, QUIT_DRAIN_MS = 2000;
 
 // Each store has one ordered I/O queue. Recording never propagates a disk failure to its caller.
 class DashboardRecords {
   constructor(userData, { now = Date.now, log = message => console.warn(message) } = {}) {
     this.directory = path.join(userData, 'dashboard'); this.now = now; this.log = log;
     this.pending = new Map(); this.quotas = new Map(); this.warned = false;
+    this.listeners = new Set();
     this.quitAttempted = false; this.quitDrain = null;
   }
   file(kind, previous = false) {
@@ -32,6 +33,7 @@ class DashboardRecords {
         if (size) await fs.rename(file, this.file(kind, true));
       }
       await fs.appendFile(file, line, { mode: 0o600 });
+      for (const listener of this.listeners) { try { listener(kind); } catch {} }
       return true;
     }).catch(() => {
       if (!this.warned) { this.warned = true; try { this.log('Dashboard records could not be written.'); } catch {} }
@@ -42,6 +44,7 @@ class DashboardRecords {
     return pending;
   }
   run(project, call, event) { void this.append('runs', runRecord(project, call, event)); }
+  subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   grade(grade, project, session) { void this.append('grades', gradeRecord(grade, project, session)); }
   quota(provider, limits, scope = quotaScope(provider, { kind: 'local' }, {})) {
     if (this.quitAttempted || !['claude', 'codex'].includes(provider)) return;
@@ -88,34 +91,8 @@ class DashboardRecords {
     const files = [this.file(kind, true), this.file(kind)];
     if (!Number.isFinite(since) || since < 0) return [];
     await this.flush();
-    const records = [];
-    // At most two bounded file tails, 10000 returned records and 16 KiB per line.
-    for (const filename of files) {
-      let file;
-      try {
-        file = await fs.open(filename, 'r');
-        const { size } = await file.stat(), start = Math.max(0, size - FILE_LIMIT);
-        const buffer = Buffer.alloc(Math.min(size, FILE_LIMIT));
-        let offset = 0;
-        while (offset < buffer.length) {
-          const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, start + offset);
-          if (!bytesRead) break;
-          offset += bytesRead;
-        }
-        const lines = buffer.subarray(0, offset).toString('utf8').split('\n');
-        if (start) lines.shift();
-        // A torn last write is not a record, even if its prefix happens to parse.
-        lines.pop();
-        for (const line of lines) {
-          if (Buffer.byteLength(line) > LINE_LIMIT) continue;
-          let record; try { record = JSON.parse(line); } catch { continue; }
-          if (record?.v !== 1 || !Number.isFinite(record.at) || record.at < since) continue;
-          records.push(record);
-          if (records.length > READ_LIMIT * 2) records.splice(0, READ_LIMIT);
-        }
-      } catch {} finally { await file?.close().catch(() => {}); }
-    }
-    return records.slice(-READ_LIMIT);
+    const records = await Promise.all(files.map(filename => readJsonl(filename, { since })));
+    return records.flat().slice(-READ_LIMIT);
   }
 }
 
