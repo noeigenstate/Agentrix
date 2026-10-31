@@ -18,6 +18,16 @@ const workspaceTooltip = language => translate(language,
   en['回到工作台 · {key}'] ? '回到工作台 · {key}' : '工作台', { key: 'Ctrl+Shift+G' });
 const main = ts.createSourceFile('main.cjs', fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 const mainFunction = name => main.statements.find(node => ts.isFunctionDeclaration(node) && node.name.text === name);
+const templateIcon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=';
+
+function styleFixture() {
+  return { scale: 1, font: { size: 13, weight: 600 },
+    metrics: { height: 28, paddingX: 12, gap: 6, itemGap: 4, radius: 8, iconSize: 16, focusWidth: 2, focusOffset: 2,
+      badge: { minWidth: 18, paddingX: 5, height: 17, fontSize: 11 } },
+    colors: { text: '#b5b5b5', textSelected: '#f2f2f2', hover: '#343434', selected: '#383838',
+      badge: '#e5e5e5', badgeText: '#181818', focus: '#d0d0d0' },
+    icons: { decisions: templateIcon, workspace: templateIcon } };
+}
 
 function fixture(options = {}) {
   const updates = [], messages = [], warnings = [];
@@ -46,7 +56,7 @@ test('attach publishes native availability only after initializing both translat
   assert.equal(f.attached, 1);
   assert.equal(f.controller.attached, true);
   assert.deepEqual(f.updates, [{ items: [
-    { id: 'decisions', label: 'Decide', selected: false,
+    { id: 'decisions', label: 'Decide', count: 0, selected: false,
       toolTip: 'Back to decisions · Ctrl+Shift+D', accessibilityLabel: 'Decide, 0 to decide' },
     { id: 'workspace', label: 'Workbench', selected: true, toolTip: workspaceTooltip('en'), accessibilityLabel: 'Workbench' },
   ] }]);
@@ -63,7 +73,7 @@ test('validated state updates count and selection; identical snapshots and extra
   assert.equal(f.updates.length, 1);
   f.controller.update({ view: 'decisions', decisions: 2, ignored: true });
   assert.deepEqual(f.updates.at(-1), { items: [
-    { id: 'decisions', label: 'Decide 2', selected: true,
+    { id: 'decisions', label: 'Decide', count: 2, selected: true,
       toolTip: 'Back to decisions · Ctrl+Shift+D', accessibilityLabel: 'Decide, 2 to decide' },
     { id: 'workspace', label: 'Workbench', selected: false, toolTip: workspaceTooltip('en'), accessibilityLabel: 'Workbench' },
   ] });
@@ -71,7 +81,118 @@ test('validated state updates count and selection; identical snapshots and extra
   f.controller.refresh();
   assert.equal(f.updates.length, 2);
   f.controller.update({ view: 'workspace', decisions: 0 });
-  assert.equal(f.updates.at(-1).items[0].label, 'Decide', 'zero has no badge suffix');
+  assert.equal(f.updates.at(-1).items[0].count, 0, 'zero hides the badge');
+});
+
+test('style can arrive after attachment without a state change; equivalent styles are sent only once', () => {
+  const f = fixture(), style = styleFixture();
+  assert.equal('style' in f.updates[0], false, 'startup keeps the system appearance');
+  f.controller.update({ view: 'workspace', decisions: 0, style });
+  assert.deepEqual(f.updates[1].style, style);
+  assert.equal(f.controller.attached, true);
+  const equivalent = styleFixture();
+  equivalent.colors.textSelected = '#F2F2F2';
+  equivalent.metrics.ignored = 123;
+  equivalent.ignored = true;
+  f.controller.update({ view: 'workspace', decisions: 0, style: equivalent });
+  f.controller.refresh();
+  assert.equal(f.updates.length, 2);
+  assert.equal(f.broadcasts, 0);
+});
+
+test('state and language updates reuse native style; theme and zoom changes resend it without rescaling the metrics', () => {
+  const f = fixture();
+  f.controller.update({ view: 'workspace', decisions: 0, style: styleFixture() });
+  f.controller.update({ view: 'decisions', decisions: 8 });
+  assert.equal('style' in f.updates.at(-1), false);
+  assert.equal(f.updates.at(-1).items[0].count, 8);
+  assert.equal(f.updates.at(-1).items[0].label, 'Decide');
+  f.setLanguage('zh'); f.controller.refresh();
+  assert.equal('style' in f.updates.at(-1), false);
+  assert.equal(f.updates.at(-1).items[0].label, '决策');
+  const style = styleFixture();
+  style.scale = 0.8;
+  style.colors.selected = '#e9ebef';
+  f.controller.update({ view: 'decisions', decisions: 8, style });
+  assert.deepEqual(f.updates.at(-1).style, style);
+  assert.equal(f.updates.at(-1).style.metrics.height, 28, 'only native drawing applies scale');
+  f.controller.update({ view: 'decisions', decisions: 8 });
+  assert.equal(f.updates.length, 5);
+});
+
+test('cached style is an owned snapshot and accepts CSS hex shorthand and alpha', () => {
+  const f = fixture(), style = styleFixture();
+  style.colors.text = '#ABC'; style.colors.focus = '#aBcD'; style.colors.hover = '#12345678';
+  f.controller.update({ view: 'workspace', decisions: 0, style });
+  const sent = f.updates.at(-1).style;
+  assert.equal(sent.colors.text, '#aabbcc');
+  assert.equal(sent.colors.focus, '#aabbccdd');
+  assert.equal(sent.colors.hover, '#12345678');
+  style.metrics.badge.height = 0; style.font.size = 0; style.colors.text = 'red'; style.icons.workspace = '';
+  f.controller.refresh();
+  assert.equal(f.updates.length, 2);
+  assert.equal(sent.metrics.badge.height, 17);
+  assert.equal(sent.font.size, 13);
+  assert.equal(sent.icons.workspace, templateIcon);
+});
+
+test('malformed styles preserve the cached appearance while valid navigation and counts continue', () => {
+  const f = fixture();
+  f.controller.update({ view: 'workspace', decisions: 0, style: styleFixture() });
+  const mutations = [
+    style => { delete style.font; }, style => { style.font = []; },
+    ...[0, -1, NaN, Infinity, 5, '1'].map(scale => style => { style.scale = scale; }),
+    ...[0, -1, NaN, 513, '13'].map(size => style => { style.font.size = size; }),
+    ...[0, 99, 901, '600'].map(weight => style => { style.font.weight = weight; }),
+    style => { delete style.metrics.focusWidth; }, style => { delete style.metrics.focusOffset; },
+    style => { style.metrics.gap = -1; }, style => { style.metrics.height = 0; },
+    style => { style.metrics.iconSize = Infinity; }, style => { style.metrics.badge = []; },
+    style => { style.metrics.badge.fontSize = 0; }, style => { style.metrics.badge.paddingX = -1; },
+    style => { style.colors.focus = 'var(--focus-ring)'; }, style => { style.colors.text = '#12345'; },
+    style => { delete style.colors.badge; }, style => { style.colors = []; },
+    style => { style.icons = null; }, style => { style.icons.workspace = '/tmp/icon.png'; },
+    style => { style.icons.decisions = 'data:image/svg+xml;base64,PHN2Zy8+'; },
+    style => { style.icons.decisions = 'data:image/png;base64,bm90IGEgcG5n'; },
+    style => { style.icons.decisions += '!'; },
+    style => { style.icons.decisions = `data:image/png;base64,${'A'.repeat(256 * 1024)}`; },
+    style => {
+      const data = Buffer.from(templateIcon.split(',')[1], 'base64');
+      data.writeUInt32BE(1025, 16);
+      style.icons.decisions = `data:image/png;base64,${data.toString('base64')}`;
+    },
+  ];
+  const invalid = [null, [], 1, {}, ...mutations.map(mutate => {
+    const style = styleFixture(); mutate(style); return style;
+  })];
+  invalid.forEach((style, index) => {
+    f.controller.update({ view: 'decisions', decisions: index + 1, style });
+    const sent = f.updates.at(-1);
+    assert.equal(sent.items[0].count, index + 1);
+    assert.equal('style' in sent, false, `invalid style ${index} must not replace the cached style`);
+  });
+  const updates = f.updates.length;
+  f.controller.update({ view: 'decisions', decisions: invalid.length, style: styleFixture() });
+  assert.equal(f.updates.length, updates, 'the original cached style remains current');
+  assert.equal(f.controller.attached, true);
+  assert.deepEqual(f.warnings, []);
+});
+
+test('invalid initial style keeps startup usable and does not prevent a later valid style', () => {
+  const f = fixture();
+  f.controller.update({ view: 'decisions', decisions: 1, style: {} });
+  assert.equal('style' in f.updates.at(-1), false);
+  f.controller.update({ view: 'decisions', decisions: 1, style: styleFixture() });
+  assert.deepEqual(f.updates.at(-1).style, styleFixture());
+  assert.equal(f.controller.attached, true);
+});
+
+test('failure applying the first style restores web navigation even when state has not changed', () => {
+  const f = fixture();
+  f.fail();
+  f.controller.update({ view: 'workspace', decisions: 0, style: styleFixture() });
+  assert.equal(f.controller.attached, false);
+  assert.equal(f.detached, 1);
+  assert.equal(f.broadcasts, 1);
 });
 
 test('clicks request navigation without selecting a page that a dialog may reject', () => {
@@ -95,7 +216,7 @@ test('language changes refresh the latest count and selected page through the re
   f.setLanguage('zh');
   context.updateStoreSettings({ language: 'zh' });
   assert.deepEqual(f.updates.at(-1), { items: [
-    { id: 'decisions', label: '决策 3', selected: true,
+    { id: 'decisions', label: '决策', count: 3, selected: true,
       toolTip: '回到决策 · Ctrl+Shift+D', accessibilityLabel: '决策, 3 件待决定' },
     { id: 'workspace', label: '工作台', selected: false, toolTip: workspaceTooltip('zh'), accessibilityLabel: '工作台' },
   ] });
@@ -383,7 +504,7 @@ test('the compiled binary loads in plain Node and detached operations need no ap
   assert.deepEqual(Object.keys(addon).sort(), ['attach', 'detach', 'update']);
   addon.detach(); addon.detach();
   addon.update({ items: [
-    { id: 'decisions', label: '决策 2', selected: true, toolTip: '回到决策 · Ctrl+Shift+D', accessibilityLabel: '决策, 2 件待决定' },
+    { id: 'decisions', label: '决策', count: 2, selected: true, toolTip: '回到决策 · Ctrl+Shift+D', accessibilityLabel: '决策, 2 件待决定' },
     { id: 'workspace', label: '工作台', selected: false, toolTip: '工作台', accessibilityLabel: '工作台' },
   ] });
   for (const name of ['toolTip', 'accessibilityLabel']) {
@@ -391,6 +512,12 @@ test('the compiled binary loads in plain Node and detached operations need no ap
       { id: 'decisions', label: '决策', selected: true, [name]: 12 },
       { id: 'workspace', label: '工作台', selected: false },
     ] }), /optional text metadata/);
+  }
+  for (const count of [-1, 0.5, NaN, Infinity, '2', Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => addon.update({ items: [
+      { id: 'decisions', label: '决策', count, selected: true },
+      { id: 'workspace', label: '工作台', selected: false },
+    ] }), /safe-integer count/);
   }
   assert.throws(() => addon.attach(Buffer.alloc(1), () => {}), /native window handle/);
   assert.throws(() => addon.update({ items: [] }), /decisions and workspace/);
