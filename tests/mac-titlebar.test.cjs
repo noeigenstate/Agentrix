@@ -8,12 +8,14 @@ const vm = require('node:vm');
 const ts = require('typescript');
 const { registerMacTitlebar } = require('../electron/app/mac-titlebar.cjs');
 const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
-const { translate } = require('../electron/i18n.cjs');
+const { translate, en } = require('../electron/i18n.cjs');
 const { buildMacTitlebar } = require('../scripts/build-mac-titlebar.cjs');
 
 const root = path.join(__dirname, '..');
 const binary = path.join(root, 'native/mac-titlebar/build/Release/mac_titlebar.node');
 const script = path.join(root, 'scripts/build-mac-titlebar.cjs');
+const workspaceTooltip = language => translate(language,
+  en['回到工作台 · {key}'] ? '回到工作台 · {key}' : '工作台', { key: 'Ctrl+Shift+G' });
 const main = ts.createSourceFile('main.cjs', fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 const mainFunction = name => main.statements.find(node => ts.isFunctionDeclaration(node) && node.name.text === name);
 
@@ -32,7 +34,7 @@ function fixture(options = {}) {
     detach: () => detached++,
   };
   const controller = registerMacTitlebar({ window, platform: 'darwin',
-    t: text => translate(language, text), send: (...args) => messages.push(args),
+    t: (text, values) => translate(language, text, values), send: (...args) => messages.push(args),
     broadcast: () => broadcasts++, loadAddon: () => addon, warn: message => warnings.push(message), ...options });
   return { controller, window, addon, updates, messages, warnings, click: id => click(id),
     setLanguage: value => { language = value; }, fail: () => { failure = new Error('update failed'); },
@@ -44,8 +46,9 @@ test('attach publishes native availability only after initializing both translat
   assert.equal(f.attached, 1);
   assert.equal(f.controller.attached, true);
   assert.deepEqual(f.updates, [{ items: [
-    { id: 'decisions', label: 'Decide', selected: false },
-    { id: 'workspace', label: 'Workbench', selected: true },
+    { id: 'decisions', label: 'Decide', selected: false,
+      toolTip: 'Back to decisions · Ctrl+Shift+D', accessibilityLabel: 'Decide, 0 to decide' },
+    { id: 'workspace', label: 'Workbench', selected: true, toolTip: workspaceTooltip('en'), accessibilityLabel: 'Workbench' },
   ] }]);
   assert.equal(f.broadcasts, 0, 'the initial workspace snapshot already contains availability');
   assert.deepEqual(f.warnings, []);
@@ -60,8 +63,9 @@ test('validated state updates count and selection; identical snapshots and extra
   assert.equal(f.updates.length, 1);
   f.controller.update({ view: 'decisions', decisions: 2, ignored: true });
   assert.deepEqual(f.updates.at(-1), { items: [
-    { id: 'decisions', label: 'Decide 2', selected: true },
-    { id: 'workspace', label: 'Workbench', selected: false },
+    { id: 'decisions', label: 'Decide 2', selected: true,
+      toolTip: 'Back to decisions · Ctrl+Shift+D', accessibilityLabel: 'Decide, 2 to decide' },
+    { id: 'workspace', label: 'Workbench', selected: false, toolTip: workspaceTooltip('en'), accessibilityLabel: 'Workbench' },
   ] });
   f.controller.update({ view: 'decisions', decisions: 2 });
   f.controller.refresh();
@@ -91,11 +95,42 @@ test('language changes refresh the latest count and selected page through the re
   f.setLanguage('zh');
   context.updateStoreSettings({ language: 'zh' });
   assert.deepEqual(f.updates.at(-1), { items: [
-    { id: 'decisions', label: '决策 3', selected: true },
-    { id: 'workspace', label: '工作台', selected: false },
+    { id: 'decisions', label: '决策 3', selected: true,
+      toolTip: '回到决策 · Ctrl+Shift+D', accessibilityLabel: '决策, 3 件待决定' },
+    { id: 'workspace', label: '工作台', selected: false, toolTip: workspaceTooltip('zh'), accessibilityLabel: '工作台' },
   ] });
   context.updateStoreSettings({ language: 'zh' });
   assert.equal(f.updates.length, 3);
+});
+
+test('shortcut settings refresh native hints without changing the selected page or count', () => {
+  const store = { settings: { shortcuts: { decisions: 'Alt+D' } }, updateSettings(patch) { Object.assign(this.settings, patch); } };
+  const f = fixture({ getShortcuts: () => store.settings.shortcuts });
+  f.controller.update({ view: 'decisions', decisions: 4 });
+  assert.equal(f.updates.at(-1).items[0].toolTip, 'Back to decisions · Alt+D');
+  const context = vm.createContext({ store, macTitlebar: f.controller, process: { platform: 'darwin' }, rebuildMacMenu() {} });
+  vm.runInContext(mainFunction('updateStoreSettings').getText(main), context);
+  context.updateStoreSettings({ shortcuts: { decisions: 'Ctrl+Alt+D' } });
+  const item = f.updates.at(-1).items[0];
+  assert.equal(item.toolTip, 'Back to decisions · Ctrl+Alt+D');
+  assert.equal(item.accessibilityLabel, 'Decide, 4 to decide');
+  assert.equal(item.selected, true);
+  assert.equal(f.updates.length, 3);
+  context.updateStoreSettings({ shortcuts: { decisions: 'Ctrl+Alt+D' } });
+  assert.equal(f.updates.length, 3);
+});
+
+test('the workbench falls back to its label, then uses its overview shortcut when translated', t => {
+  const key = '回到工作台 · {key}', previous = en[key];
+  t.after(() => { if (previous === undefined) delete en[key]; else en[key] = previous; });
+  delete en[key];
+  const f = fixture({ getShortcuts: () => ({ overview: 'Alt+G' }) });
+  assert.equal(f.updates[0].items[1].toolTip, 'Workbench');
+  en[key] = 'Back to workbench · {key}';
+  f.controller.refresh();
+  assert.equal(f.updates.at(-1).items[1].toolTip, 'Back to workbench · Alt+G');
+  f.setLanguage('zh'); f.controller.refresh();
+  assert.equal(f.updates.at(-1).items[1].toolTip, '回到工作台 · Alt+G');
 });
 
 test('closing releases the addon once and ignores queued clicks and subsequent state updates', () => {
@@ -209,7 +244,18 @@ test('packaging includes and unpacks only the macOS binary, keeping node-pty unp
   }
 });
 
-function buildFixture(t) {
+function setEnvironment(t, values) {
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  const apply = entries => {
+    for (const [key, value] of Object.entries(entries)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  };
+  apply(values);
+  t.after(() => apply(previous));
+}
+
+function buildFixture(t, environment = {}) {
   const buildRoot = path.join(root, 'native/mac-titlebar/build');
   fs.mkdirSync(buildRoot, { recursive: true });
   const directory = fs.mkdtempSync(path.join(buildRoot, 'test-'));
@@ -220,15 +266,18 @@ function buildFixture(t) {
   const headers = path.join(directory, 'headers');
   fs.mkdirSync(path.join(headers, 'include/node'), { recursive: true });
   for (const file of ['node_api.h', 'common.gypi', 'config.gypi']) fs.writeFileSync(path.join(headers, 'include/node', file), 'test headers');
-  const previous = process.env.npm_config_nodedir;
-  process.env.npm_config_nodedir = headers;
-  t.after(() => { if (previous === undefined) delete process.env.npm_config_nodedir; else process.env.npm_config_nodedir = previous; });
+  setEnvironment(t, { npm_config_nodedir: headers, ...environment });
   return { root: directory, source, output: path.join(source, 'build/Release/mac_titlebar.node') };
 }
 
-test('build is offline with local headers, then a no-op; changed sources or architecture rebuild it', t => {
+test('build is offline with local headers, then a no-op; changed sources or architecture rebuild it', { skip: process.platform !== 'darwin' }, t => {
   const f = buildFixture(t), calls = [];
   const run = (node, args, options) => {
+    if (node === '/usr/bin/xcode-select') {
+      assert.deepEqual(args, ['-p']);
+      assert.equal(options.stdio, 'ignore');
+      return;
+    }
     calls.push(args);
     assert.equal(node, process.execPath);
     assert.equal(options.cwd, f.source);
@@ -254,12 +303,61 @@ test('build is offline with local headers, then a no-op; changed sources or arch
   assert.equal(calls.length, 3);
 });
 
-test('failed rebuild removes a stale binary so optional startup uses the web fallback', t => {
+test('failed rebuild removes a stale binary so optional startup uses the web fallback', { skip: process.platform !== 'darwin' }, t => {
   const f = buildFixture(t);
   fs.mkdirSync(path.dirname(f.output), { recursive: true });
   fs.writeFileSync(f.output, 'stale binary');
-  assert.throws(() => buildMacTitlebar({ root: f.root, platform: 'darwin', run: () => { throw new Error('compiler missing'); } }), /compiler missing/);
+  assert.throws(() => buildMacTitlebar({ root: f.root, run: file => {
+    if (file === process.execPath) throw new Error('compiler missing');
+  } }), /compiler missing/);
   assert.equal(fs.existsSync(f.output), false);
+});
+
+test('without Xcode tools optional builds are quiet and preserve existing output; strict and CI builds fail', { skip: process.platform !== 'darwin' }, t => {
+  const f = buildFixture(t), calls = [], output = [];
+  setEnvironment(t, { CI: undefined });
+  t.mock.method(console, 'log', text => output.push(text));
+  t.mock.method(console, 'warn', text => output.push(text));
+  fs.mkdirSync(path.dirname(f.output), { recursive: true });
+  fs.writeFileSync(f.output, 'existing binary');
+  const run = (file, args, options) => {
+    calls.push(file);
+    assert.equal(file, '/usr/bin/xcode-select');
+    assert.deepEqual(args, ['-p']);
+    assert.equal(options.stdio, 'ignore');
+    throw new Error('no developer directory');
+  };
+  assert.equal(buildMacTitlebar({ root: f.root, optional: true, run }), undefined);
+  assert.deepEqual(output, []);
+  assert.deepEqual(calls, ['/usr/bin/xcode-select']);
+  assert.equal(fs.readFileSync(f.output, 'utf8'), 'existing binary');
+  assert.throws(() => buildMacTitlebar({ root: f.root, run }), /Xcode command-line tools/);
+  process.env.CI = 'true';
+  assert.throws(() => buildMacTitlebar({ root: f.root, optional: true, run }), /Xcode command-line tools/);
+});
+
+test('header downloads inherit mirror settings without a dist-url override', { skip: process.platform !== 'darwin' }, t => {
+  const f = buildFixture(t, { npm_config_nodedir: undefined, npm_package_config_node_gyp_nodedir: undefined,
+    NODEJS_ORG_MIRROR: undefined, npm_config_disturl: undefined }), exists = fs.existsSync;
+  t.mock.method(fs, 'existsSync', file => String(file).endsWith(path.join('include/node', 'node_api.h')) ? false : exists(file));
+  for (const [variable, arch] of [['NODEJS_ORG_MIRROR', 'arm64'], ['npm_config_disturl', 'x64']]) {
+    process.env[variable] = 'https://headers.example.test/node/';
+    const calls = [];
+    buildMacTitlebar({ root: f.root, arch, run: (file, args, options) => {
+      if (file === '/usr/bin/xcode-select') return;
+      calls.push(args);
+      assert.equal(options.env[variable], process.env[variable]);
+      assert.ok(!args.some(argument => argument.startsWith('--dist-url')));
+      if (args.includes('build')) {
+        fs.mkdirSync(path.dirname(f.output), { recursive: true });
+        fs.writeFileSync(f.output, 'test binary');
+      }
+    } });
+    assert.equal(calls.length, 2);
+    assert.ok(calls[0].includes('install'));
+    assert.ok(calls[1].includes('build'));
+    delete process.env[variable];
+  }
 });
 
 test('the build script does nothing on Windows or Linux, including when sources are missing', () => {
@@ -285,9 +383,15 @@ test('the compiled binary loads in plain Node and detached operations need no ap
   assert.deepEqual(Object.keys(addon).sort(), ['attach', 'detach', 'update']);
   addon.detach(); addon.detach();
   addon.update({ items: [
-    { id: 'decisions', label: '决策 2', selected: true },
-    { id: 'workspace', label: '工作台', selected: false },
+    { id: 'decisions', label: '决策 2', selected: true, toolTip: '回到决策 · Ctrl+Shift+D', accessibilityLabel: '决策, 2 件待决定' },
+    { id: 'workspace', label: '工作台', selected: false, toolTip: '工作台', accessibilityLabel: '工作台' },
   ] });
+  for (const name of ['toolTip', 'accessibilityLabel']) {
+    assert.throws(() => addon.update({ items: [
+      { id: 'decisions', label: '决策', selected: true, [name]: 12 },
+      { id: 'workspace', label: '工作台', selected: false },
+    ] }), /optional text metadata/);
+  }
   assert.throws(() => addon.attach(Buffer.alloc(1), () => {}), /native window handle/);
   assert.throws(() => addon.update({ items: [] }), /decisions and workspace/);
 });

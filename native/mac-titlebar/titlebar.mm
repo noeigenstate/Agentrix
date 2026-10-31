@@ -9,9 +9,9 @@
 
 namespace {
 constexpr CGFloat kVerticalOffset = 0;
-constexpr CGFloat kButtonHeight = 24;
 constexpr CGFloat kButtonGap = 4;
-constexpr CGFloat kTrafficLightGap = 12;
+constexpr CGFloat kTrafficLightGap = 16;
+char kTitleObservation;
 
 struct ClickState {
   napi_threadsafe_function callback = nullptr;
@@ -48,12 +48,14 @@ NSRect ScreenFrame(NSView* view) {
   BOOL decisionsSelected_;
   BOOL workspaceSelected_;
   BOOL layingOut_;
+  BOOL observingTitle_;
   std::shared_ptr<ClickState> clicks_;
 }
 - (instancetype)initWithWindow:(NSWindow*)window clicks:(std::shared_ptr<ClickState>)clicks;
 - (void)detach;
 - (void)alignButtons;
-- (void)setItem:(NSString*)identifier label:(NSString*)label selected:(BOOL)selected;
+- (void)setItem:(NSString*)identifier label:(NSString*)label toolTip:(NSString*)toolTip
+    accessibilityLabel:(NSString*)accessibilityLabel selected:(BOOL)selected;
 @end
 
 @implementation AgentrixTitlebar
@@ -77,13 +79,15 @@ NSRect ScreenFrame(NSView* view) {
     [center addObserver:self selector:@selector(windowLayoutChanged:) name:name object:window];
   }
   [center addObserver:self selector:@selector(windowWillClose:) name:NSWindowWillCloseNotification object:window];
+  [window addObserver:self forKeyPath:@"title" options:0 context:&kTitleObservation];
+  observingTitle_ = YES;
   return self;
 }
 
 - (NSButton*)buttonWithID:(NSString*)identifier {
   NSButton* button = [[NSButton alloc] initWithFrame:NSZeroRect];
   button.identifier = identifier;
-  button.bezelStyle = NSBezelStyleTexturedRounded;
+  button.bezelStyle = NSBezelStyleToolbar;
   button.buttonType = NSButtonTypePushOnPushOff;
   button.controlSize = NSControlSizeSmall;
   button.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
@@ -104,9 +108,14 @@ NSRect ScreenFrame(NSView* view) {
 
 - (void)windowLayoutChanged:(NSNotification*)notification {
   [self alignButtons];
-  // Electron applies its trafficLightPosition during the same window notification.
+  // Electron also reapplies trafficLightPosition after setting the title.
   __weak AgentrixTitlebar* weakSelf = self;
   dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf alignButtons]; });
+}
+
+- (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)object change:(NSDictionary*)change context:(void*)context {
+  if (context == &kTitleObservation) [self windowLayoutChanged:nil];
+  else [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
 }
 
 - (void)alignButtons {
@@ -125,8 +134,9 @@ NSRect ScreenFrame(NSView* view) {
   }
   CGFloat x = start;
   for (NSButton* button in @[decisions_, workspace_]) {
-    CGFloat width = std::max(CGFloat(54), button.fittingSize.width + 12);
-    button.frame = NSMakeRect(x, center - kButtonHeight / 2 + kVerticalOffset, width, kButtonHeight);
+    NSSize size = button.fittingSize;
+    CGFloat width = std::max(CGFloat(54), size.width + 12);
+    button.frame = NSMakeRect(x, center - size.height / 2 + kVerticalOffset, width, size.height);
     x += width + kButtonGap;
   }
   CGFloat width = x - kButtonGap;
@@ -136,14 +146,15 @@ NSRect ScreenFrame(NSView* view) {
   layingOut_ = NO;
 }
 
-- (void)setItem:(NSString*)identifier label:(NSString*)label selected:(BOOL)selected {
+- (void)setItem:(NSString*)identifier label:(NSString*)label toolTip:(NSString*)toolTip
+    accessibilityLabel:(NSString*)accessibilityLabel selected:(BOOL)selected {
   NSButton* button = [identifier isEqualToString:@"decisions"] ? decisions_ : workspace_;
   button.title = label;
-  button.accessibilityLabel = label;
+  button.toolTip = toolTip;
+  button.accessibilityLabel = accessibilityLabel;
   button.state = selected ? NSControlStateValueOn : NSControlStateValueOff;
   if (button == decisions_) decisionsSelected_ = selected;
   else workspaceSelected_ = selected;
-  [self alignButtons];
 }
 
 - (void)navigate:(NSButton*)sender {
@@ -157,9 +168,15 @@ NSRect ScreenFrame(NSView* view) {
 
 - (void)windowWillClose:(NSNotification*)notification { [self detach]; }
 
+- (void)stopObserving {
+  if (observingTitle_) [host_ removeObserver:self forKeyPath:@"title" context:&kTitleObservation];
+  observingTitle_ = NO;
+  [NSNotificationCenter.defaultCenter removeObserver:self];
+}
+
 - (void)detach {
   if (clicks_) clicks_->stop();
-  [NSNotificationCenter.defaultCenter removeObserver:self];
+  [self stopObserving];
   decisions_.target = nil;
   workspace_.target = nil;
   NSWindow* host = host_;
@@ -170,7 +187,7 @@ NSRect ScreenFrame(NSView* view) {
 
 - (void)dealloc {
   if (clicks_) clicks_->stop();
-  [NSNotificationCenter.defaultCenter removeObserver:self];
+  [self stopObserving];
 }
 @end
 
@@ -264,8 +281,10 @@ Napi::Value Update(const Napi::CallbackInfo& info) {
     return env.Undefined();
   }
   Napi::Array items = info[0].As<Napi::Object>().Get("items").As<Napi::Array>();
-  std::string labels[2];
-  bool selected[2];
+  struct Item {
+    std::string label, toolTip, accessibilityLabel;
+    bool selected;
+  } parsed[2];
   bool seen[2] = {false, false};
   bool valid = items.Length() == 2;
   for (uint32_t i = 0; valid && i < items.Length(); i++) {
@@ -273,22 +292,33 @@ Napi::Value Update(const Napi::CallbackInfo& info) {
     if (!value.IsObject()) { valid = false; break; }
     Napi::Object item = value.As<Napi::Object>();
     Napi::Value id = item.Get("id"), label = item.Get("label"), selection = item.Get("selected");
-    if (!id.IsString() || !label.IsString() || !selection.IsBoolean()) { valid = false; break; }
+    Napi::Value toolTip = item.Get("toolTip"), accessibilityLabel = item.Get("accessibilityLabel");
+    if (!id.IsString() || !label.IsString() || !selection.IsBoolean()
+        || (!toolTip.IsUndefined() && !toolTip.IsString())
+        || (!accessibilityLabel.IsUndefined() && !accessibilityLabel.IsString())) { valid = false; break; }
     std::string name = id.As<Napi::String>().Utf8Value();
     int index = name == "decisions" ? 0 : name == "workspace" ? 1 : -1;
     if (index < 0 || seen[index]) { valid = false; break; }
     seen[index] = true;
-    labels[index] = label.As<Napi::String>().Utf8Value();
-    selected[index] = selection.As<Napi::Boolean>().Value();
+    parsed[index].label = label.As<Napi::String>().Utf8Value();
+    parsed[index].toolTip = toolTip.IsString() ? toolTip.As<Napi::String>().Utf8Value() : parsed[index].label;
+    parsed[index].accessibilityLabel = accessibilityLabel.IsString() ? accessibilityLabel.As<Napi::String>().Utf8Value() : parsed[index].label;
+    parsed[index].selected = selection.As<Napi::Boolean>().Value();
   }
   if (!valid) {
-    Napi::TypeError::New(env, "update requires decisions and workspace items with label and selected").ThrowAsJavaScriptException();
+    Napi::TypeError::New(env, "update requires decisions and workspace items with label, selected and optional text metadata").ThrowAsJavaScriptException();
     return env.Undefined();
   }
   AgentrixTitlebar* controller = env.GetInstanceData<NativeState>()->controller;
   @try {
-    [controller setItem:@"decisions" label:[NSString stringWithUTF8String:labels[0].c_str()] selected:selected[0]];
-    [controller setItem:@"workspace" label:[NSString stringWithUTF8String:labels[1].c_str()] selected:selected[1]];
+    for (int i = 0; i < 2; i++) {
+      const Item& item = parsed[i];
+      [controller setItem:i == 0 ? @"decisions" : @"workspace"
+          label:[NSString stringWithUTF8String:item.label.c_str()]
+          toolTip:[NSString stringWithUTF8String:item.toolTip.c_str()]
+          accessibilityLabel:[NSString stringWithUTF8String:item.accessibilityLabel.c_str()] selected:item.selected];
+    }
+    [controller alignButtons];
   } @catch (NSException* exception) {
     Napi::Error::New(env, exception.reason.UTF8String).ThrowAsJavaScriptException();
   }

@@ -18,7 +18,7 @@ function nodeHeaders(cache) {
   return headers;
 }
 
-function buildMacTitlebar({ root = path.join(__dirname, '..'), platform = process.platform, arch = process.arch, run = execFileSync } = {}) {
+function buildMacTitlebar({ root = path.join(__dirname, '..'), platform = process.platform, arch = process.arch, optional = false, run = execFileSync } = {}) {
   if (platform !== 'darwin') return;
   if (!['arm64', 'x64'].includes(arch)) throw new Error(`Unsupported macOS architecture: ${arch}`);
   const directory = path.join(root, 'native/mac-titlebar');
@@ -36,6 +36,11 @@ function buildMacTitlebar({ root = path.join(__dirname, '..'), platform = proces
     console.log(`mac-titlebar: up to date (${arch}, N-API 8)`);
     return output;
   }
+  try { run('/usr/bin/xcode-select', ['-p'], { stdio: 'ignore' }); }
+  catch {
+    if (optional && !process.env.CI) return;
+    throw new Error('Xcode command-line tools are required to build mac-titlebar');
+  }
   const cache = path.join(build, 'node-headers');
   const temporary = path.join(build, 'tmp');
   fs.mkdirSync(temporary, { recursive: true });
@@ -48,15 +53,14 @@ function buildMacTitlebar({ root = path.join(__dirname, '..'), platform = proces
     let headers = nodeHeaders(cache);
     console.log(`mac-titlebar: building ${arch} (${headers ? `local headers: ${headers}` : 'download Node headers if not cached'})`);
     if (!headers) {
-      run(process.execPath, [nodeGyp, 'install', `--target=${process.versions.node}`, `--devdir=${cache}`,
-        '--dist-url=https://nodejs.org/download/release'], options);
+      run(process.execPath, [nodeGyp, 'install', `--target=${process.versions.node}`, `--devdir=${cache}`], options);
       headers = path.join(cache, process.versions.node);
     }
     // gyp's make generator does not quote absolute include paths containing spaces.
     for (const [name, target] of [['node-include', headers], ['node-addon-api', addonApi]]) {
       const link = path.join(build, name);
       try { fs.unlinkSync(link); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      fs.symlinkSync(path.resolve(target), link, process.platform === 'win32' ? 'junction' : 'dir');
+      fs.symlinkSync(path.resolve(target), link, 'dir');
     }
     run(process.execPath, [nodeGyp, 'configure', 'build', `--arch=${arch}`, `--target=${process.versions.node}`,
       `--devdir=${cache}`, '--nodedir=build/node-include'], options);
@@ -76,7 +80,7 @@ if (require.main === module) {
   try {
     const arch = process.argv.find(argument => argument.startsWith('--arch='))?.slice(7)
       || process.env.npm_config_arch || process.arch;
-    buildMacTitlebar({ arch });
+    buildMacTitlebar({ arch, optional: process.argv.includes('--optional') });
   } catch (error) {
     console.warn(`mac-titlebar: ${error.message}`);
     if (!process.argv.includes('--optional') || process.env.CI) process.exitCode = 1;

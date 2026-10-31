@@ -112,12 +112,11 @@ function updateStoreSettings(patch) {
   // The settings IPC broadcasts after applying the window's new zoom.
   if (uiZoom !== store.settings.uiZoom) windowZoom?.update();
   const languageChanged = language !== store.settings.language;
-  if (languageChanged) {
-    trayMenu();
+  if (languageChanged) trayMenu();
+  if (languageChanged || JSON.stringify(shortcuts) !== JSON.stringify(store.settings.shortcuts)) {
     macTitlebar?.refresh();
+    if (process.platform === 'darwin') rebuildMacMenu();
   }
-  if (process.platform === 'darwin' && (languageChanged
-    || JSON.stringify(shortcuts) !== JSON.stringify(store.settings.shortcuts))) rebuildMacMenu();
 }
 const sessions = new Map();
 const readingHistory = new ReadingHistory(() => { if (window && store && !quitting) broadcast(); });
@@ -1451,7 +1450,7 @@ if (!app.requestSingleInstanceLock()) {
       show: false, icon: path.join(root, 'assets/icon.png'),
       webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, nodeIntegrationInSubFrames: false, contextIsolation: true, sandbox: true, spellcheck: false, backgroundThrottling: false },
     });
-    macTitlebar = registerMacTitlebar({ window, t, send, broadcast });
+    macTitlebar = registerMacTitlebar({ window, t, send, broadcast, getShortcuts: () => store.settings.shortcuts });
     if (desktopGlassWindow) {
       try { await applyDesktopGlass(window, runtimeDir, desktopGlassBackend); desktopGlassActive = true; }
       catch { window.setBackgroundColor(windowBackgroundColor()); }

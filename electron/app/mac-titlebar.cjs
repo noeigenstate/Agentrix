@@ -1,4 +1,8 @@
-function registerMacTitlebar({ window, t, send, broadcast, platform = process.platform,
+const DEFAULT_SHORTCUTS = require('../shortcuts.json');
+const { en } = require('../i18n.cjs');
+const WORKSPACE_TOOLTIP = '回到工作台 · {key}';
+
+function registerMacTitlebar({ window, t, send, broadcast, getShortcuts = () => ({}), platform = process.platform,
   loadAddon = () => require('../../native/mac-titlebar/build/Release/mac_titlebar.node'), warn = console.warn }) {
   let addon, attached = false, warned = false, rendered;
   let state = { view: 'workspace', decisions: 0 };
@@ -17,9 +21,15 @@ function registerMacTitlebar({ window, t, send, broadcast, platform = process.pl
   }
 
   function updateNative() {
+    const shortcuts = { ...DEFAULT_SHORTCUTS, ...getShortcuts() };
+    const decisionsLabel = t('决策'), workspaceLabel = t('工作台');
     const items = [
-      { id: 'decisions', label: `${t('决策')}${state.decisions ? ` ${state.decisions}` : ''}`, selected: state.view === 'decisions' },
-      { id: 'workspace', label: t('工作台'), selected: state.view === 'workspace' },
+      { id: 'decisions', label: `${decisionsLabel}${state.decisions ? ` ${state.decisions}` : ''}`, selected: state.view === 'decisions',
+        toolTip: t('回到决策 · {key}', { key: shortcuts.decisions }),
+        accessibilityLabel: `${decisionsLabel}, ${t('{count} 件待决定', { count: state.decisions })}` },
+      { id: 'workspace', label: workspaceLabel, selected: state.view === 'workspace',
+        toolTip: en[WORKSPACE_TOOLTIP] ? t(WORKSPACE_TOOLTIP, { key: shortcuts.overview }) : workspaceLabel,
+        accessibilityLabel: workspaceLabel },
     ];
     const next = JSON.stringify(items);
     if (next === rendered) return;
