@@ -17,7 +17,7 @@ export function ManagedSession({ projectId, terminal, onError }: { projectId: st
     finally { sending.current = false; setBusy(false); }
   };
   return <div className="reading-view" data-agent="claude" {...pathLinks}>
-    <header className="reading-choice"><strong>Claude SDK · Managed session</strong><p>Structured conversation and native tool approvals. Interactive TUI commands, session resume and terminal input are unavailable in this mode.</p></header>
+    <header className="reading-choice"><strong>Claude SDK · Managed session</strong><p>Structured conversation, native questions and tool approvals. Interactive TUI commands, session resume and terminal input are unavailable in this mode.</p></header>
     <div className="reading-scroll"><div className="reading-content">{terminal.nativeMessages?.map((message, index) => <section key={index}><strong>{message.role}</strong><pre style={{ whiteSpace: 'pre-wrap' }}><PathText text={message.text} /></pre></section>)}</div></div>
     {terminal.nativeApprovals?.map(request => <NativeApprovalCard key={request.token} request={request} onError={onError} />)}
     {terminal.error && <p role="alert">{terminal.error}</p>}

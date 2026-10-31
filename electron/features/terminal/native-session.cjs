@@ -37,14 +37,15 @@ function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {},
     socket?.terminate(); server?.close(); child?.stdin.destroy(); child?.kill(); tui?.kill();
     if (reason) terminal.error = reason; events.emit('exit', { exitCode }); changed();
   };
-  const registry = new NativeApprovals(binding, { changed, fail: reason => finish(reason) });
   const write = message => writeJson(child.stdin, message, reason => finish(reason));
+  const registry = new NativeApprovals(binding, { changed, write, fail: reason => finish(reason) });
   const terminal = {
     registry, mode,
     onData: callback => { events.on('data', callback); return { dispose: () => events.off('data', callback) }; },
     onExit: callback => { events.on('exit', callback); return { dispose: () => events.off('exit', callback) }; },
     resize: (cols, rows) => tui?.resize(cols, rows), kill: () => finish(null, 0),
     answer: answer => registry.answer(binding, answer, write),
+    answerQuestion: answer => registry.answer(binding, answer, write, true),
     prompt: text => {
       if (mode !== 'claude-sdk' || ended || !sdkReady || managedBusy || registry.tokens.size || typeof text !== 'string' || !text.trim() || Buffer.byteLength(text) > 65536) throw new Error('Managed session is not ready for this prompt');
       managedBusy = true;

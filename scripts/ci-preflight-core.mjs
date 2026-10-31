@@ -35,6 +35,8 @@ export function localPlan(workflow) {
     shell: step.shell || job.defaults?.run?.shell || workflow.defaults?.run?.shell || 'pwsh',
     env: { ...workflow.env, ...job.env, ...step.env },
     skip: skipReason(step),
+    // GitHub cancels the whole job at this limit, so no local step may outlast it.
+    timeoutMinutes: step['timeout-minutes'] ?? job['timeout-minutes'] ?? null,
     kind: isNpmTest(step.run) ? 'unit' : /\bnpm run test:|\bnode scripts\/[\w-]+-smoke\.mjs\b/.test(step.run || '') ? 'gui' : 'command',
   }));
 }

@@ -5,10 +5,13 @@
 //        agent-event.cjs claude-hook <socket> <projectId> <sessionKey> start|stop|notify|session   (the hook's JSON on stdin)
 //        agent-event.cjs shell-event <socket> <projectId> <sessionKey> <type> <sequence> <exitCode> <agent>
 //                        <codexAvailable> <claudeAvailable> <codexHome> <cwd>
-// Claude adds anything a hook prints to the conversation, so this writes nothing, and a closed Agentrix
-// never delays or fails a turn.
+// Only SessionStart prints instruction JSON. The other hooks stay silent, and a closed Agentrix never fails a turn.
 const net = require('node:net');
+const fs = require('node:fs');
+const path = require('node:path');
 const { createHash } = require('node:crypto');
+const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
+const { sessionContext } = require(path.join(runtime, 'features/skills/session.cjs'));
 
 function send(socket, event) {
   return new Promise(resolve => {
@@ -78,8 +81,16 @@ function shellEvent([type, sequence, exitCode, agent, codex, claude, codexHome, 
 
 async function main([action, socket, projectId, sessionKey, argument, ...rest]) {
   if (!socket || !projectId || !sessionKey) return;
+  const input = action === 'claude-hook' ? await readInput() : null;
+  if (action === 'claude-hook' && argument === 'session') {
+    try {
+      const noteFile = rest[0] || process.env.AGENTRIX_READING_NOTE_FILE;
+      const context = noteFile && sessionContext(JSON.parse(input), fs.readFileSync(noteFile, 'utf8'));
+      if (context) process.stdout.write(JSON.stringify(context) + '\n');
+    } catch {}
+  }
   const event = action === 'codex-notify' ? codexEvent(argument, projectId, sessionKey)
-    : action === 'claude-hook' ? claudeEvent(await readInput(), projectId, sessionKey, argument)
+    : action === 'claude-hook' ? claudeEvent(input, projectId, sessionKey, argument)
       : action === 'shell-event' ? shellEvent([argument, ...rest], projectId, sessionKey) : null;
   if (event) await send(socket, event);
 }
@@ -87,7 +98,7 @@ async function main([action, socket, projectId, sessionKey, argument, ...rest]) 
 if (require.main === module) {
   // Whatever happens, the agent continues: no output, exit code 0, and never longer than a few seconds.
   setTimeout(() => process.exit(0), 5000).unref();
-  main(process.argv.slice(2)).catch(() => {}).finally(() => process.exit(0));
+  main(process.argv.slice(2)).catch(() => {}).finally(() => { process.exitCode = 0; });
 }
 
 module.exports = { codexEvent, claudeEvent, shellEvent };

@@ -109,7 +109,7 @@
 .reading-tools-tree li.is-failed > code { font-weight: 600; }
 /* What the steps wrote (cards, a picture being drawn) sits under the pill or inside the opened card. */
 .reading-tools > :is(.file-cards, .reading-generating) { margin-left: 0; }
-.reading-tools.is-open > :is(.file-cards, .reading-generating) { margin: 0 14px 12px; }
+.reading-tools.is-open > :is(.file-cards, .reading-generating) { margin: 0 12px 12px; }
 
 /* An answer to the agent's own question: labelled as such, its "question → answer" lines under the label. */
 .reading-user-label { font-size: calc(12px * var(--reading-text)); font-weight: 600; color: var(--flow-muted); }

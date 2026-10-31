@@ -38,6 +38,8 @@ const { agentSettings } = require('./features/agents/agent-settings.cjs');
 const { UsageMeter, claudeProvider, codexProvider, claudeAccount, claudeAccountFiles } = require('./features/agents/agent-usage.cjs');
 const { AgentCalls } = require('./features/agents/agent-calls.cjs');
 const { DashboardRecords, quotaScope } = require('./features/dashboard/records.cjs');
+const { createDashboard } = require('./features/dashboard/index.cjs');
+const { routingNote } = require('./features/dashboard/decisions.cjs');
 const { CodexAccountUsage } = require('./features/agents/codex-account-usage.cjs');
 const codexAccounts = new CodexAccountUsage();
 const { ClaudeAccountUsage, readClaudeAccount } = require('./features/agents/claude-account-usage.cjs');
@@ -72,6 +74,7 @@ const { UpdateManager, isInstalledBuild, distributionOf } = require('./updates.c
 const { getSSHInfo } = require('./ssh-config.cjs');
 const { SSHAuthServer } = require('./ssh-auth.cjs');
 const { RemoteConnection } = require('./remote-connection.cjs');
+const { watchRemoteClaudeAccount } = require('./features/ssh/claude-account.cjs');
 const { recentSession, resumeCommand, claudeResumeCommand } = require('./session-restore.cjs');
 const { CodexActivityReader, monitorActivity } = require('./codex-activity.cjs');
 const { TerminalTitleTracker, wholeThread } = require('./terminal-title.cjs');
@@ -99,7 +102,7 @@ registerAppSchemes(protocol);
 const { translate } = require('./i18n.cjs');
 // Text shown by the main process follows the language chosen in settings (Chinese source -> locales/en.json).
 const t = (text, values) => translate(store?.settings.language, text, values);
-let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, quitCleaned = false;
+let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, dashboardWindow = null, quitCleaned = false;
 let macTitlebar = null;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
@@ -294,6 +297,7 @@ function trayMenu() {
 }
 
 function broadcast() {
+  dashboardWindow?.sync();
   skills?.syncWatchers();
   clearTimeout(stateTimer);
   stateTimer = null;
@@ -536,12 +540,27 @@ function startUsage(project, s, event) {
     };
     s.bindUsageAccount();
   }
-  if (project.kind === 'ssh') return;
+  if (project.kind === 'ssh') {
+    if (s.agent === 'claude') bindRemoteClaudeAccount(s);
+    return;
+  }
   const named = update => { if (s.usage === usage) { update(); scheduleState(); } };
   if (s.agent === 'claude') {
     void claudeProvider(event.cwd || project.path, claudeConfigDir()).then(provider => named(() => { usage.provider = provider; })).catch(() => {});
     void refreshClaudeAccounts();
   } else void codexProvider(event.codexHome || s.codexHome).then(names => named(() => { usage.names = names; })).catch(() => {});
+}
+function bindRemoteClaudeAccount(s) {
+  const usage = s.usage;
+  s.usageAccount?.dispose();
+  s.usageAccount = watchRemoteClaudeAccount(s.terminal, account => {
+    // The observation uses the worker's clock; API reset timestamps already use the server's absolute time.
+    const observed = { ...account, at: account.at + (Number.isFinite(s.activityClockOffset) ? s.activityClockOffset : 0) };
+    usage.provider = 'Anthropic';
+    if (usage.account(observed, observed)) {
+      s.recordQuota?.('claude', usage.limits); scheduleState(); scheduleUsageRollover();
+    }
+  }, { current: () => s.usage === usage && s.codexActive && s.agent === 'claude' && sessions.get(s.terminalId) === s });
 }
 function stopUsageAccount(s) {
   s.bindUsageAccount = null; s.usageAccount?.dispose(); s.usageAccount = null;
@@ -847,6 +866,7 @@ function onEvent(event) {
     startSkillSession(project, s, event.sequence);
     if (!keepClaudeHistory) { s.activityMonitor?.stop(); s.activityMonitor = null; }
     if (!keepClaudeHistory || !s.usage) startUsage(project, s, event);
+    else if (project.kind === 'ssh') bindRemoteClaudeAccount(s);
     // A terminal restores the agent it last ran. Switching agents drops the other one's conversation id.
     const previousAgent = store.findTerminal(s.terminalId)?.record.restore?.agent || 'codex';
     const agentRestore = { agent: s.agent, ...(previousAgent !== s.agent ? { threadId: null, interrupted: false } : {}) };
@@ -1256,7 +1276,6 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     s.native?.registry.close();
     endSkillSession(s);
     skills.endSession(project.id, sessionId);
-    if (skillNoteFile) fs.rmSync(skillNoteFile, { force: true });
     stopUsageAccount(s);
     s.status = 'exited'; s.ready = false; s.codexActive = false;
     readingHistory.close(id);
@@ -1266,11 +1285,25 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     restorePlans.delete(id);
     if (terminal.error || exitCode) s.error = terminal.error || t('终端已退出（代码 {code}）。', { code: exitCode });
     if (!quitting && !exitCode) store.setRestore(id, { terminal: false, codex: false });
-    if (bootstrapFile) fs.rmSync(bootstrapFile, { force: true });
+    if (bootstrapFile || skillNoteFile) cleanupTerminalFiles(s);
     broadcast();
   });
   captureBranch(project);
   broadcast();
+}
+
+function cleanupTerminalFiles(s) {
+  if (s.bootstrapFile) {
+    const folder = path.dirname(s.bootstrapFile), prefix = `${s.sessionId}-claude-settings-`;
+    // Runs in pty exit callbacks and the quit loop: a vanished runtime folder must not throw there.
+    let entries = [];
+    try { entries = fs.readdirSync(folder, { withFileTypes: true }); } catch (error) { if (error.code !== 'ENOENT') report(error); }
+    for (const entry of entries) {
+      if (!entry.isDirectory() && entry.name.startsWith(prefix)) fs.rmSync(path.join(folder, entry.name), { force: true });
+    }
+    fs.rmSync(s.bootstrapFile, { force: true });
+  }
+  if (s.skillNoteFile) fs.rmSync(s.skillNoteFile, { force: true });
 }
 
 function disposeTerminal(id) {
@@ -1286,8 +1319,7 @@ function disposeTerminal(id) {
   for (const timer of s.submissionPolls || []) clearTimeout(timer);
   s.activityMonitor?.stop(); s.gate.dispose(); s.promptQueue.reset(); s.completionWork?.reset();
   try { s.terminal.kill(); } catch { }
-  if (s.bootstrapFile) fs.rmSync(s.bootstrapFile, { force: true });
-  if (s.skillNoteFile) fs.rmSync(s.skillNoteFile, { force: true });
+  cleanupTerminalFiles(s);
 }
 
 function registerIpc() {
@@ -1404,7 +1436,8 @@ if (!app.requestSingleInstanceLock()) {
     }
     skills = new SkillsStore({ dataDir: app.getPath('userData'), builtinDir: app.isPackaged ? path.join(process.resourcesPath, 'skills') : path.join(root, 'resources', 'skills'),
       getProjects: () => store.projects, getAgents: () => agents.getState(), activeProjects: () => [...sessions.values()].filter(s => s.codexActive).map(s => s.projectId),
-      changed: (infos, { deliveryChanged }) => { send('skills:changed', infos); if (deliveryChanged) refreshSkillNotes(); }, report });
+      changed: (infos, { deliveryChanged }) => { send('skills:changed', infos); if (deliveryChanged) refreshSkillNotes(); }, report,
+      routingNote: () => routingNote(app.getPath('userData')) });
     skills.syncWatchers();
     projectImageAuto = createProjectImageAuto({
       getProject: id => quitting ? null : store.projects.find(project => project.id === id),
@@ -1460,6 +1493,9 @@ if (!app.requestSingleInstanceLock()) {
       relaunchDisplayName,
     });
     windowZoom = registerWindowZoom({ window, screen, getZoom: () => store.settings.uiZoom, broadcast });
+    dashboardWindow = createDashboard({ app, root, BrowserWindow, ipcMain, devUrl, t, records: dashboard,
+      getProjects: () => store.projects, getSettings: () => store.settings, getMainWindow: () => window,
+      getUiZoom: () => windowZoom?.percent ?? 100, backgroundColor: windowBackgroundColor });
     registerWindowContents({ window, Menu, clipboard, previewResources, pictureFrom, devUrl, t,
       getActiveTerminal: () => activeTerminal, getActiveFileTree: () => activeFileTree, getShortcuts: () => store.settings.shortcuts });
     registerWindowLifecycle({ window, getSettings: () => store.settings, isQuitting: () => quitting, hasTray: () => !!tray,
@@ -1486,6 +1522,7 @@ app.on('before-quit', event => {
   if (process.platform === 'darwin' && !quitting && window && !window.isDestroyed()) { event.preventDefault(); showWindow(); requestQuit().catch(report); return; }
   if (!quitCleaned) {
     quitCleaned = true;
+    dashboardWindow?.dispose();
     clearTimeout(attentionTimer);
     voiceManager?.close(); fileOperations?.cancel();
     skills?.close();

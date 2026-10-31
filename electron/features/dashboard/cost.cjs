@@ -22,7 +22,8 @@ function estimateCost(run, prices) {
   if (count(run?.reportedCostUsd)) return { usd: run.reportedCostUsd, basis: 'reported' };
   const { inputTokens, cachedTokens } = run ?? {};
   const outputTokens = run?.totalOutputTokens ?? run?.outputTokens;
-  const price = priceOf(run?.model, prices);
+  const row = priceOf(run?.model, prices);
+  const price = run?.fast === true && row?.fast ? row.fast : row;
   const priced = (tokens, perM) => tokens === 0 || Number.isFinite(perM);
   if (!price || ![inputTokens, cachedTokens, outputTokens].every(count)
     || !priced(inputTokens, price.inputPerM) || !priced(cachedTokens, price.cachedInputPerM) || !priced(outputTokens, price.outputPerM)) {
@@ -33,4 +34,4 @@ function estimateCost(run, prices) {
   return { usd, basis: 'estimated' };
 }
 
-module.exports = { estimateCost };
+module.exports = { estimateCost, priceOf, modelKey };

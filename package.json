@@ -36,6 +36,7 @@
     "test:material": "node scripts/material-smoke.mjs",
     "test:composer": "node scripts/composer-smoke.mjs",
     "test:reading": "node scripts/reading-smoke.mjs",
+    "test:dashboard": "node scripts/dashboard-smoke.mjs",
     "test:reading-focus": "node scripts/reading-focus-smoke.mjs --startup",
     "test:path-refresh": "node scripts/path-refresh-smoke.mjs",
     "test:git": "node scripts/git-smoke.mjs",
@@ -48,7 +49,8 @@
     "pack:linux": "node -e \"require('electron')\" && npm run build && electron-builder --linux dir",
     "test:readability": "node scripts/readability-smoke.mjs",
     "test:appearance": "node scripts/appearance-smoke.mjs",
-    "test:question-appearance": "node scripts/question-appearance-smoke.mjs"
+    "test:question-appearance": "node scripts/question-appearance-smoke.mjs",
+    "test:native-question": "node scripts/native-question-smoke.mjs"
   },
   "dependencies": {
     "electron-updater": "6.8.9",

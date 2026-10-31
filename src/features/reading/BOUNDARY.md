@@ -16,7 +16,7 @@ reading and the raw terminal.
 - `sameMessage` (`src/features/reading/pending-prompts.ts`) — whether a sent message is the one still in the CLI input
 - `lastRound` (`src/features/reading/result-round.ts`) — the latest round of a conversation; the file also exports CHECKS and changeLabel
 - `ReadingQuestion` (`src/features/reading/ReadingQuestion.tsx`) — the card for an agent's question, reused on the decision page
-- `NativeApprovalCard` (`src/features/reading/NativeApprovalCard.tsx`) — the card for a native approval request
+- `NativeApprovalCard` (`src/features/reading/NativeApprovalCard.tsx`) — the native request entry; questions and forms use internal `NativeQuestionCard` (`src/features/reading/NativeQuestionCard.tsx`), with edits local until an explicit native answer
 - `terminalApprovalCopy` (`src/features/reading/approval-action.ts`) — the text that sends a screen permission request to its terminal
 - `FileCards` (`src/features/reading/FileCards.tsx`) — the preview cards of the files a reply names; the file also exports previewable
 - `replyFiles` (`src/features/reading/reply-files.ts`) — the local pictures, pages and videos a reply names
@@ -35,7 +35,7 @@ reading and the raw terminal.
 
 ## Invariants
 - A permission card drawn from the screen never sends approval keys, whatever identity it holds; it only sends the reader to the terminal — screen text cannot target a native request — test: `tests/approval-aba.test.cjs` › "retained permission dispatch rejects all targets even with fresh, absent or fabricated identity"
-- A native approval card sends the backend's exact token and a supported decision once, never through the screen parser or PTY keys — test: `tests/native-approval-ui.test.cjs` › "native UI sends exact backend token and supported decision once, without parser or PTY"
+- Native cards send the backend's exact token and a supported decision once; pending requests block the composer, screen cards and terminal popups without taking typing focus — a native answer must never become PTY keys — test: `tests/native-approval-ui.test.cjs` › "native UI sends exact backend token and supported decision once, without parser or PTY"; test: `tests/reading-ui.test.cjs` › "a native question at the normal prompt blocks composer sends without moving its focus"; "a native question remembers composer typing across disabled blur and later waiting redraws"
 - Enter on a focused button presses that button, never the highlighted option; Cancel never approves — a keyboard user must not approve by accident — test: `tests/reading-ui.test.cjs` › "Enter on a focused button presses that button, never the highlighted option (Cancel never approves)"
 - A session change (A to B to A), another split's selection or unmounting cancels every delayed key — keys meant for one session must never reach another — test: `tests/reading-ui.test.cjs` › "session A to B to A, terminal selection and unmount cancel every delayed command key"
 - A message the agent queued is never sent again, and a stalled send retries a bounded number of times — a resend runs the task twice — test: `tests/reading-ui.test.cjs` › "unrelated user records cannot discard a stalled prompt; retries stay bounded and queued prompts never resend"

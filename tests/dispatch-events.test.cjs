@@ -141,6 +141,22 @@ test('dashboard event fields accept old helpers and reject malformed new metadat
   assert.equal(records, 1);
 });
 
+test('dispatch-end accepts optional skill proposal counts without breaking old helpers', () => {
+  const finish = end(randomUUID());
+  assert.equal(validDispatch(finish), true);
+  for (const skillProposals of [null, 0, 3, Number.MAX_SAFE_INTEGER]) {
+    const event = { ...finish, skillProposals };
+    let accepted;
+    assert.equal(acceptDispatch({ terminalId: 'terminal', sessionKey: 'test-key' }, event, {
+      dispatch: value => { accepted = value; return true; },
+    }), true);
+    assert.equal(accepted.skillProposals, skillProposals);
+  }
+  for (const skillProposals of [-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, '3', false, {}]) {
+    assert.equal(validDispatch({ ...finish, skillProposals }), false);
+  }
+});
+
 test('roundtable is an authenticated role and does not change parent completion', t => {
   const f = session(t), launch = start(undefined, { role: '圆桌' });
   assert.equal(f.send(launch), true);

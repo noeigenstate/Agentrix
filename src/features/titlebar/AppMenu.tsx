@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowCircleUp, ArrowLeft, CornersIn, CornersOut, FolderSimplePlus, GearSix } from '@phosphor-icons/react';
+import { ArrowCircleUp, ArrowLeft, ChartBar, CornersIn, CornersOut, FolderSimplePlus, GearSix } from '@phosphor-icons/react';
 import { shortcut } from '../shortcuts/shortcuts';
 import { t } from '../../shared/i18n';
 
 const MENU_GAP = 4;
+
+// The dashboard is its own window; a failure to open it has nowhere better to go than the console.
+const openDashboard = () => window.agentrix.openDashboard().then(result => { if (!result.ok) console.error(result.error); }, console.error);
 
 function Item({ icon, label, keys, disabled, onSelect }: { icon: ReactNode; label: string; keys?: string; disabled?: boolean; onSelect: () => void }) {
   return <button type="button" role="menuitem" disabled={disabled} onClick={onSelect}>{icon}{label}{keys && <span className="menu-shortcut" aria-hidden="true">{keys}</span>}</button>;
@@ -65,6 +68,7 @@ export function AppMenu({ fullScreen, canReturn, updateReady, onAddProject, onRe
       <div className="menu-divider" role="separator" />
       <Item icon={fullScreen ? <CornersIn size={16} /> : <CornersOut size={16} />} label={fullScreen ? t('退出全屏') : t('全屏')} keys={shortcut('fullscreen')} onSelect={() => choose(onFullScreen)} />
       <Item icon={<GearSix size={16} />} label={t('设置')} keys={shortcut('settings')} onSelect={() => choose(onSettings)} />
+      <Item icon={<ChartBar size={16} />} label={t('数据看板')} onSelect={() => choose(openDashboard)} />
       {updateReady && <>
         <div className="menu-divider" role="separator" />
         <Item icon={<ArrowCircleUp size={16} />} label={t('重启并安装更新')} onSelect={() => choose(onInstallUpdate)} />

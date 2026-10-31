@@ -26,7 +26,7 @@ import { ReadingTerminalPopup } from './ReadingTerminalPopup';
 import { ReadingSignIn } from './ReadingSignIn';
 import { signInScreen } from '../agents/sign-in-screen';
 import { setChoiceVisible } from './reading-mode';
-import { isTyping, markTyping } from './typing';
+import { hasEditingFocus, isTyping, markTyping } from './typing';
 import { useStickToBottom } from './useStickToBottom';
 import { useReadingHistory } from './useReadingConversation';
 import { blocks, conversationTurns, useVisibleTail } from './useVisibleTail';
@@ -190,7 +190,7 @@ export function ReadingView(props: Parameters<typeof TerminalReadingView>[0]) {
 }
 
 function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, active = true, onShowTerminal, onError, onOpenLink }: { projectId: string; terminal: ProjectTerminal; remote?: boolean; autoFocus: boolean; active?: boolean; onShowTerminal: () => void; onError: (message: string) => void; onOpenLink: (target: string) => void }) {
-  const pathLinks = useReadingPaths(projectId, onError);
+  const pathLinks = useReadingPaths(projectId, onError), readingView = pathLinks.ref;
   const kind = (terminal.agent ?? terminal.readingHistory?.agent) === 'claude' ? 'claude' : 'codex';
   const readingSession = terminal.sessionId;
   const thread = terminal.readingHistory?.threadId;
@@ -228,6 +228,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   const preview = !!terminal.readingHistory && !cliReady(terminal.id, run, inputShown);
   useEffect(() => rememberReady(terminal.id, run, inputShown));
   const screen = preview ? { ...parsedScreen, choice: null, waiting: null } : parsedScreen;
+  const nativePending = !!terminal.nativeApprovals?.length;
   // The CLI waits for a choice the screen has no card for: a dialog it drew (waiting), or only its attention notice with
   // no input box on screen. Either way the terminal is the place to answer, and a message typed here would land in it.
   const waiting = screen.choice ? null : screen.waiting ?? null;
@@ -241,9 +242,9 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   useEffect(() => { setSessionsOpen(false); }, [terminal.id, terminal.sessionId, terminal.agent, epoch]);
   const welcomeIsStarting = useWelcomeStarting(terminal.agentStartedAt, screen);
   // A notice alone (no dialog read from the screen) leaves the handoff to the terminal in reading-mode.ts running.
-  const hasChoice = screen.choice !== null || waiting !== null || sessionsOpen, choiceVisible = useRef(hasChoice);
+  const hasChoice = nativePending || screen.choice !== null || waiting !== null || sessionsOpen, choiceVisible = useRef(hasChoice);
   const mounted = useRef(true);
-  const choiceHost = useRef<HTMLDivElement>(null), restoreComposer = useRef(false), wasChoice = useRef(false), typingAtChoice = useRef(false);
+  const choiceHost = useRef<HTMLDivElement>(null), restoreComposer = useRef(false), wasChoice = useRef(false), editingAtChoice = useRef(false);
   const focusChoice = () => { restoreComposer.current = true; };
   const blurChoice = (event: FocusEvent<HTMLDivElement>) => {
     if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) restoreComposer.current = false;
@@ -258,7 +259,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // An SSH project's pictures for the next message: files saved on that computer. Their paths join the message only as
   // it is sent (both CLIs take a picture's path as the picture); the message box shows the words alone.
   const [serverPictures, setServerPictures] = useState<string[]>([]);
-  const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null);
+  const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null), composer = useRef<HTMLDivElement>(null);
   const [terminalPopup, setTerminalPopup] = useState<{ command: string } | null>(null);
   choiceVisible.current = hasChoice || terminalPopup !== null;
   const popupReady = useRef<(() => void) | null>(null);
@@ -285,13 +286,18 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // way back. The dialog is over once the CLI's input is back, or the hint has been gone longer than a redraw takes.
   const dialog = waiting && JSON.stringify([terminal.agentStartedAt, waiting.title]);
   useEffect(() => {
-    // Disabling the composer can blur it before this effect: use the typing state captured during render.
-    if (dialog !== null) { if (active && !typingAtChoice.current && startDialog(terminal.id, dialog)) setTerminalPopup({ command: '' }); return; }
+    // A native request owns the reply surface and cancels any delayed terminal send.
+    if (nativePending) { closePopup(false); return; }
+    // Disabling the composer can blur it before this effect: keep its focus ownership captured during render.
+    if (dialog !== null) {
+      if (active && !editingAtChoice.current && !hasEditingFocus(readingView.current) && startDialog(terminal.id, dialog)) setTerminalPopup({ command: '' });
+      return;
+    }
     if (inputShown) { endDialog(terminal.id); return; }
     const timer = setTimeout(() => endDialog(terminal.id), DIALOG_SETTLE);
     return () => clearTimeout(timer);
-  }, [terminal.id, dialog, active, inputShown]);
-  const inputBlocked = preview || sessionsOpen || !!screen.choice && screen.choice.kind !== 'menu' || waitingShown;
+  }, [terminal.id, dialog, active, inputShown, nativePending]);
+  const inputBlocked = preview || nativePending || sessionsOpen || !!screen.choice && screen.choice.kind !== 'menu' || waitingShown;
   const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, entries, conversation);
   useEffect(() => { if (stuck) void historyPage.compact(); }, [stuck, conversationEntries, historyPage.compact]);
   // A step hops only when the pointer moves onto it: moving arms the hops, any scroll disarms them until it moves again,
@@ -309,18 +315,21 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // A card that comes while someone writes in the box never takes the keyboard: the next Enter would answer it.
   if (hasChoice && !wasChoice.current) {
     restoreComposer.current = document.activeElement === input.current || sessionsOpen;
-    typingAtChoice.current = isTyping(document.activeElement);
+    editingAtChoice.current = hasEditingFocus(readingView.current) || isTyping(document.activeElement);
   }
   useLayoutEffect(() => {
     setChoiceVisible(terminal.id, hasChoice || terminalPopup !== null);
-    if (hasChoice && terminalPopup === null) {
-      if (restoreComposer.current && !typingAtChoice.current && (!wasChoice.current || document.activeElement === document.body)) (choiceHost.current?.firstElementChild as HTMLElement | null)?.focus();
+    if (nativePending && terminalPopup !== null && active && document.activeElement === document.body) {
+      // The popup unmounted with focus; park it beside the disabled input until the native request ends.
+      restoreComposer.current = true; composer.current?.focus({ preventScroll: true });
+    } else if (hasChoice && terminalPopup === null) {
+      if (restoreComposer.current && !editingAtChoice.current && (!wasChoice.current || document.activeElement === document.body)) (choiceHost.current?.firstElementChild as HTMLElement | null)?.focus();
     } else if (wasChoice.current) {
-      if (restoreComposer.current && document.activeElement === document.body) input.current?.focus();
+      if (restoreComposer.current && (document.activeElement === document.body || document.activeElement === composer.current)) input.current?.focus();
       restoreComposer.current = false;
     }
     wasChoice.current = hasChoice;
-  }, [terminal.id, hasChoice, choiceKey, terminalPopup]);
+  }, [terminal.id, hasChoice, choiceKey, terminalPopup, nativePending, active]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -355,7 +364,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   };
   const mentions = useMentions({ projectId, draft, input, disabled: inputBlocked || /^\/[^\s]*$/.test(draft), edit, onError });
   useEffect(() => {
-    if (!autoFocus) return;
+    if (!autoFocus || hasEditingFocus(readingView.current)) return;
     if (choiceVisible.current) { restoreComposer.current = true; (choiceHost.current?.firstElementChild as HTMLElement | null)?.focus(); }
     else if (terminalPopup === null) input.current?.focus();
   }, [terminal.id, autoFocus]);
@@ -388,12 +397,11 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // own: written in the composer here (it is cleared, with its pictures); otherwise a message sent again, which leaves
   // whatever is being written now alone and takes no pictures with it.
   const deliver = async (words: string, own: boolean, owner: number) => {
-    if (preview) return;
+    if (inputBlocked) return;
     const attached = own ? images.map(image => image.src).filter(Boolean) : [], pictures = own ? serverPictures : [];
     const text = pictures.length ? (isTypedCommand(words) ? [words, ...pictures] : [...pictures, words]).filter(Boolean).join(' ') : words;
     if ((!text && !(own && images.length)) || !terminal.sessionId) return;
     if (usesSessionPicker(terminal, text, remote)) {
-      if (inputBlocked) return;
       choiceVisible.current = true; restoreComposer.current = document.activeElement === input.current;
       if (own) edit('');
       setSessionsOpen(true); return;
@@ -412,8 +420,10 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     // A closed popup can leave the CLI's dialog open. Looking is harmless; guessing a close key is not.
     const rows = readScreen(terminal.id)?.rows ?? [];
     const parsed = parseAgentScreen(kind, rows);
-    if (!hasCliInput(kind, rows, parsed) || cliDialogShown(kind, rows, parsed)) { setTerminalPopup({ command: '' }); return; }
-    if (inputBlocked) return;
+    if (!hasCliInput(kind, rows, parsed) || cliDialogShown(kind, rows, parsed)) {
+      setTerminalPopup({ command: '' });
+      return;
+    }
     const pendingId = text ? echo(text, attached) : null;
     if (pendingId) toBottom();
     const left = text && !attached.length ? inputDraft(kind) : '';
@@ -716,13 +726,13 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
         <button type="button" className="icon-button reading-jump" title={t('跳到最新消息')} aria-label={t('跳到最新消息')} onClick={() => toBottom('smooth')}><ArrowDown size={18} /></button>
       </div>}
     </div>
-    {terminalPopup !== null && <ReadingTerminalPopup key={sendCounter.current} terminalId={terminal.id} sessionId={terminal.sessionId} command={terminalPopup.command} onReady={readyPopup} onClose={closePopup} onError={onError} />}
+    {!nativePending && terminalPopup !== null && <ReadingTerminalPopup key={sendCounter.current} terminalId={terminal.id} sessionId={terminal.sessionId} command={terminalPopup.command} onReady={readyPopup} onClose={closePopup} onError={onError} />}
     {attachedCount > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: attachedCount })}<UserImages images={shownImages} numbers={imageNumbers} onRemove={index => void removeImage(index)} /></div>}
     {!preview && terminal.nativeApprovals?.map(request => <NativeApprovalCard key={request.token} request={request} onError={onError} />)}
-    {screen.choice && !(screen.choice.kind === 'permission' && terminal.nativeApprovals?.length) && !sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}>{screen.choice.kind === 'question'
+    {screen.choice && !nativePending && !sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}>{screen.choice.kind === 'question'
       ? <ReadingQuestion key={choiceKey} choice={screen.choice} terminalId={terminal.id} onError={onError} />
       : <ReadingChoice key={choiceKey} choice={screen.choice} terminalId={terminal.id} agent={kind} onShowTerminal={onShowTerminal} onError={onError} />}</div>}
-    {waitingShown && !terminal.nativeApprovals?.length && !sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}><WaitingCard title={waiting?.title ?? null} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
+    {waitingShown && !nativePending && !sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}><WaitingCard title={waiting?.title ?? null} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
     {sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}><ReadingSessions key={`${terminal.id}-${terminal.sessionId}`} terminalId={terminal.id} agent={terminal.agent === 'codex' ? 'codex' : 'claude'} onError={onError} onClose={() => setSessionsOpen(false)} onSent={text => {
       history.set(terminal.id, [...(history.get(terminal.id) || []), text].slice(-50)); setImages([]); toBottom();
     }} /></div>}
@@ -730,7 +740,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     {palette && <div className="reading-commands is-inline" id={listId} role="listbox" aria-label={t('命令')}>{matches.map((command, index) => <div key={command.name} id={optionId(index)} role="option" aria-selected={selection === index} className="reading-command" onMouseDown={event => event.preventDefault()} onClick={() => complete(command)}>
         <code>{command.name}</code><span>{command.source === 'builtin' ? t(command.description) : command.description}</span>{command.source !== 'builtin' && <small>{command.source === 'project' ? t('项目') : command.source === 'user' ? t('用户') : t('技能')}</small>}
     </div>)}</div>}
-    <div className={`reading-composer${sendingSoon ? ' is-sending-soon' : ''}`} style={terminal.agentCommand ? { display: 'none' } : undefined}>
+    <div ref={composer} tabIndex={-1} className={`reading-composer${sendingSoon ? ' is-sending-soon' : ''}`} style={terminal.agentCommand ? { display: 'none' } : undefined}>
       <MentionPalette mentions={mentions} />
       <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} aria-expanded={palette || mentions.open} aria-controls={palette ? listId : mentions.open ? mentions.listId : undefined} aria-activedescendant={palette && selected ? optionId(selection) : mentions.open && mentions.files[mentions.selection] ? mentions.optionId(mentions.selection) : undefined} placeholder={preview ? t('正在启动…') : result ? t('继续修改，或描述下一步…') : terminal.codexActive ? t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }) : t('输入命令，Enter 发送')} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
         onCompositionStart={() => dictationSend.cancel()} onFocus={() => window.agentrix.terminalFocus(terminal.id, false)} />

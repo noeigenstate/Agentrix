@@ -33,6 +33,74 @@ test('local thumbnails are version-cached and dimensions and 25 MB limit are che
   fs.truncateSync(file, FILE_LIMIT + 1); assert.equal(thumbnails.file(file), values.omitted); assert.equal(calls, 2);
 });
 
+test('recent equal-stat rewrites revalidate the full file and keep cache accounting bounded', t => {
+  const prefix = path.join(os.tmpdir(), 'agentrix-thumbnail-race-'), root = fs.mkdtempSync(prefix), file = path.join(root, 'image.png');
+  t.after(() => { assert.ok(path.resolve(root).startsWith(prefix)); fs.rmSync(root, { recursive: true, force: true }); });
+  const at = new Date(), stat = fs.statSync;
+  const write = byte => { fs.writeFileSync(file, Buffer.concat([image(8), Buffer.alloc(130000, byte)])); fs.utimesSync(file, at, at); };
+  write(0);
+  const initial = stat(file);
+  let now = initial.mtimeMs + 100;
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(fs, 'statSync', (name, options) => {
+    const value = stat(name, options);
+    return name === file ? { isFile: () => value.isFile(), size: value.size, mtimeMs: value.mtimeMs, ctimeMs: initial.ctimeMs } : value;
+  });
+  let calls = 0;
+  const thumbnails = new PictureThumbnails(() => `data:image/png;base64,VERSION${++calls}`);
+  assert.equal(thumbnails.file(file), 'data:image/png;base64,VERSION1');
+  assert.equal(thumbnails.file(file), 'data:image/png;base64,VERSION1');
+  assert.equal(calls, 1, 'unchanged content does not require another decode');
+  for (const byte of [1, 2]) {
+    write(byte);
+    const current = fs.statSync(file);
+    assert.deepEqual([current.size, current.mtimeMs, current.ctimeMs], [initial.size, initial.mtimeMs, initial.ctimeMs]);
+    assert.equal(thumbnails.file(file), `data:image/png;base64,VERSION${byte + 1}`);
+  }
+  now += 60000; write(3);
+  assert.equal(thumbnails.file(file), 'data:image/png;base64,VERSION4', 'an entry racy when cached remains verified');
+  assert.equal(thumbnails.cache.size, 1);
+  assert.equal(thumbnails.bytes, 'data:image/png;base64,VERSION4'.length);
+});
+
+test('older equal-stat thumbnails trust stat without rehashing', t => {
+  const prefix = path.join(os.tmpdir(), 'agentrix-thumbnail-old-'), root = fs.mkdtempSync(prefix), file = path.join(root, 'image.png');
+  t.after(() => { assert.ok(path.resolve(root).startsWith(prefix)); fs.rmSync(root, { recursive: true, force: true }); });
+  const at = new Date(Date.now() - 60000), stat = fs.statSync, read = fs.readSync;
+  const write = width => { fs.writeFileSync(file, image(width)); fs.utimesSync(file, at, at); };
+  write(8);
+  const initial = stat(file);
+  t.mock.method(fs, 'statSync', (name, options) => {
+    const value = stat(name, options);
+    return name === file ? { isFile: () => value.isFile(), size: value.size, mtimeMs: value.mtimeMs, ctimeMs: initial.ctimeMs } : value;
+  });
+  let reads = 0, calls = 0;
+  t.mock.method(fs, 'readSync', (...args) => { reads++; return read(...args); });
+  const thumbnails = new PictureThumbnails(() => `data:image/png;base64,VERSION${++calls}`);
+  assert.equal(thumbnails.file(file), 'data:image/png;base64,VERSION1');
+  write(16);
+  reads = 0;
+  assert.equal(thumbnails.file(file), 'data:image/png;base64,VERSION1');
+  assert.equal(reads, 0);
+  assert.equal(calls, 1);
+});
+
+test('a recent file changed during decoding is not cached under the wrong hash', t => {
+  const prefix = path.join(os.tmpdir(), 'agentrix-thumbnail-change-'), root = fs.mkdtempSync(prefix), file = path.join(root, 'image.png');
+  t.after(() => { assert.ok(path.resolve(root).startsWith(prefix)); fs.rmSync(root, { recursive: true, force: true }); });
+  fs.writeFileSync(file, image(8));
+  const now = fs.statSync(file).mtimeMs + 100;
+  t.mock.method(Date, 'now', () => now);
+  let calls = 0;
+  const thumbnails = new PictureThumbnails(() => {
+    if (++calls === 1) fs.writeFileSync(file, image(16));
+    return `data:image/png;base64,VERSION${calls}`;
+  });
+  assert.equal(thumbnails.file(file), values.unavailable);
+  assert.equal(thumbnails.cache.size, 0);
+  assert.equal(thumbnails.file(file), 'data:image/png;base64,VERSION2');
+});
+
 test('data thumbnails use bounded hash keys and cache bytes and entries stay bounded', () => {
   let calls = 0;
   const thumbnails = new PictureThumbnails(() => null, () => { calls++; return 'data:image/png;base64,' + 'A'.repeat(300000); });
@@ -59,6 +127,7 @@ test('JPEG thumbnails find SOF after 64 KiB with bounded segment reads, includin
   let decodes = 0;
   const shrink = () => { decodes++; return 'data:image/jpeg;base64,THUMBNAIL'; }, thumbnails = new PictureThumbnails(shrink);
   fs.writeFileSync(file, jpeg(1200, 800));
+  const old = new Date(Date.now() - 60000); fs.utimesSync(file, old, old);
   assert.equal(thumbnails.file(file), 'data:image/jpeg;base64,THUMBNAIL');
   assert.equal(thumbnails.file(file), 'data:image/jpeg;base64,THUMBNAIL'); assert.equal(decodes, 1);
   assert.ok(reads.some(value => value.position > 64 * 1024), 'SOF is read past the initial header');

@@ -17,6 +17,18 @@ async function lab(t, options) {
   return { directory, records };
 }
 
+test('record subscribers observe successful persisted writes and unsubscribe without affecting recording', async t => {
+  const { records } = await lab(t), changes = [];
+  const stop = records.subscribe(kind => changes.push(kind));
+  records.subscribe(() => { throw new Error('a subscriber cannot reject a write'); });
+  assert.equal(await records.append('runs', { one: 1 }), true);
+  assert.equal(await records.append('grades', { one: 1 }), true);
+  assert.equal(await records.append('quota', { one: 1 }), true);
+  assert.equal(await records.append('runs', { oversized: 'x'.repeat(LINE_LIMIT) }), false);
+  stop(); await records.append('runs', { two: 2 });
+  assert.deepEqual(changes, ['runs', 'grades', 'quota']);
+});
+
 test('append queues valid lines and rotates one generation', async t => {
   let now = 100;
   const { records } = await lab(t, { now: () => now++ });
@@ -213,7 +225,7 @@ test('main quit cleanup runs once and a late dashboard append cannot prevent the
   const vm = require('node:vm'), { records } = await lab(t);
   const source = await fs.readFile(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   let handler, cleanups = 0, quits = 0, prevented = 0;
-  vm.runInNewContext('let quitting = false, quitCleaned = false;\n' + source.slice(source.indexOf("app.on('before-quit',"), source.indexOf("app.on('window-all-closed',")), {
+  vm.runInNewContext('let quitting = false, quitCleaned = false, dashboardWindow = null;\n' + source.slice(source.indexOf("app.on('before-quit',"), source.indexOf("app.on('window-all-closed',")), {
     app: { on: (_, listener) => { handler = listener; }, quit: () => quits++ }, process: { platform: 'win32' }, dashboard: records,
     clearTimeout, attentionTimer: null, voiceManager: null, fileOperations: null, skills: { close: () => cleanups++ },
     updateManager: null, codexAccounts: { dispose() {} }, claudeAccounts: { dispose() {} }, disposeClaudeAccounts() {},

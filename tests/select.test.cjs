@@ -52,3 +52,10 @@ test('the window bounds override a trigger wider than the available menu space',
   assert.equal(menuWidth(420, 2000, 320), 304);
   assert.equal(selectMenuLeft(8, 304, 320), 8);
 });
+
+test('the selected option carries a check in a fixed column, and the trigger pads on the spacing scale', () => {
+  const source = fs.readFileSync(filename, 'utf8'), css = fs.readFileSync(path.join(__dirname, '../src/shared/Select.css'), 'utf8');
+  assert.match(source, /className="select-option-mark" aria-hidden="true">\{index === selected && <Check size/, 'only the selected row draws the check, and it is hidden from the reader (aria-selected says it)');
+  assert.match(css, /\.select-option-mark \{[^}]*flex: none; width: 16px/, 'the slot is 16px on every row, so labels stay aligned');
+  assert.match(css, /\.select-trigger \{[^}]*padding: 0 12px;/);
+});

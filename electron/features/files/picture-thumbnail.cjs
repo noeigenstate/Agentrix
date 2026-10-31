@@ -49,13 +49,31 @@ const safeDimensions = size => size && size.every(side => side > 0 && side <= 16
 // The limit applies to base64 pixels, as it does in the transcript parser; MIME prefixes do not consume it.
 const payloadSize = url => url.length - url.indexOf(',') - 1;
 
+function fileHash(file, size) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const hash = createHash('sha256'), buffer = Buffer.alloc(Math.min(size, HEADER_LIMIT));
+    for (let at = 0; at < size;) {
+      const read = fs.readSync(fd, buffer, 0, Math.min(buffer.length, size - at), at);
+      if (!read) throw new Error('Picture changed while hashing');
+      hash.update(buffer.subarray(0, read)); at += read;
+    }
+    if (fs.fstatSync(fd).size !== size) throw new Error('Picture changed while hashing');
+    return hash.digest('hex');
+  } finally { fs.closeSync(fd); }
+}
+
 class PictureThumbnails {
   constructor(fromFile = () => null, fromData = value => value) { this.fromFile = fromFile; this.fromData = fromData; this.cache = new Map(); this.bytes = 0; }
-  remember(key, value) {
+  forget(key) {
+    const entry = this.cache.get(key);
+    if (entry) { this.bytes -= entry.value.length; this.cache.delete(key); }
+  }
+  remember(key, value, hash = null) {
     if (!dataImage(value)) return values.unavailable;
     if (payloadSize(value) > DATA_LIMIT) return values.omitted;
-    this.cache.set(key, value); this.bytes += value.length;
-    while (this.cache.size > 64 || this.bytes > CACHE_LIMIT) { const oldest = this.cache.keys().next().value; this.bytes -= this.cache.get(oldest).length; this.cache.delete(oldest); }
+    this.cache.set(key, { value, hash }); this.bytes += value.length;
+    while (this.cache.size > 64 || this.bytes > CACHE_LIMIT) this.forget(this.cache.keys().next().value);
     return value;
   }
   file(input, { projectRoot } = {}) {
@@ -68,7 +86,13 @@ class PictureThumbnails {
       if (!stat?.isFile()) return values.unavailable;
       if (stat.size > FILE_LIMIT) return values.omitted;
       const key = `file:${file}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-      if (this.cache.has(key)) return this.cache.get(key);
+      const cached = this.cache.get(key);
+      if (cached && (!cached.hash || cached.hash === fileHash(file, stat.size))) {
+        // Verified once the timestamp is outside the racy window: any later rewrite changes the key.
+        if (cached.hash && stat.mtimeMs < Date.now() - 2000) cached.hash = null;
+        return cached.value;
+      }
+      if (cached) this.forget(key);
       const fd = fs.openSync(file, 'r');
       let size;
       try {
@@ -82,15 +106,18 @@ class PictureThumbnails {
       finally { fs.closeSync(fd); }
       if (!size) return values.unavailable;
       if (!safeDimensions(size)) return values.omitted;
+      // A coarse timestamp can hide a rewrite made near cache insertion: such an entry is checked by content until verified.
+      const hash = stat.mtimeMs >= Date.now() - 2000 ? fileHash(file, stat.size) : null;
       const thumbnail = this.fromFile(file);
-      return thumbnail ? this.remember(key, thumbnail) : values.unavailable;
+      if (!thumbnail || hash && hash !== fileHash(file, stat.size)) return values.unavailable;
+      return this.remember(key, thumbnail, hash);
     } catch { return values.unavailable; }
   }
   data(url) {
     if (!dataImage(url)) return values.unavailable;
     if (payloadSize(url) > DATA_LIMIT) return values.omitted;
     const key = 'data:' + createHash('sha256').update(url).digest('hex');
-    if (this.cache.has(key)) return this.cache.get(key);
+    if (this.cache.has(key)) return this.cache.get(key).value;
     const size = dimensions(Buffer.from(url.slice(url.indexOf(',') + 1, url.indexOf(',') + 1 + Math.ceil(HEADER_LIMIT / 3) * 4), 'base64'));
     if (!size) return this.remember(key, url);
     if (!safeDimensions(size)) return values.omitted;

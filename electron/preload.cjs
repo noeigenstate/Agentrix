@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('agentrix', {
   setTitlebarState: state => ipcRenderer.send('titlebar:state', state),
   onTitlebarNavigate: callback => listen('titlebar:navigate', callback),
   gradeDelivery: grade => ipcRenderer.invoke('dashboard:grade', grade),
+  openDashboard: () => ipcRenderer.invoke('dashboard:open'),
   getAgents: () => ipcRenderer.invoke('agents:status'),
   installAgent: agent => ipcRenderer.invoke('agents:install', agent),
   openNode: () => ipcRenderer.invoke('agents:open-node'),
@@ -95,6 +96,7 @@ contextBridge.exposeInMainWorld('agentrix', {
   // Compatibility endpoint for retained cards; main always returns terminal-only and never writes keys.
   writeApproval: (id, key, stamp, actionId) => ipcRenderer.invoke('terminal:approval', id, key, stamp, actionId),
   answerNativeApproval: (id, answer) => ipcRenderer.invoke('terminal:native-approval', id, answer),
+  answerNativeQuestion: (id, answer) => ipcRenderer.invoke('terminal:native-question', id, answer),
   managedPrompt: (id, sessionId, text) => ipcRenderer.invoke('terminal:managed-prompt', id, sessionId, text),
   answerTerminal: (id, data) => ipcRenderer.send('terminal:write', id, data, true),
   resizeTerminal: (id, cols, rows) => ipcRenderer.send('terminal:resize', id, cols, rows),

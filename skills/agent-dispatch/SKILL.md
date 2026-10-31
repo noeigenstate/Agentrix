@@ -31,6 +31,19 @@ role in events). `--help` lists all six values. `--title`: one line, what the wo
 
 ## Scope, shared context and follow-ups
 
+- **Skill edits need the lead.** A worker must put suggested skill changes under `## Skill proposals` in its answer.
+  It must not edit, add or delete any `SKILL.md` in project, built-in or global skill folders unless `--allow` names
+  that exact file without wildcards. A broad scope such as `skills/**` does not approve skill edits. The helper
+  snapshots skills before launch, preserves each unapproved new version under `<out>.skill-proposals-<run id>/`
+  (with `index.json` naming edits, creations and deletions). Only files inside a worker's separate Git worktree are
+  restored to the pre-run bytes, including uncommitted contents. Global, built-in and shared-checkout changes are
+  report-only, marked "changed during the run, author unknown", and stay live. Scans skip node_modules and .git;
+  snapshot limits degrade to report-only with a note on the end line. The end line reports
+  `N skill proposals restored and awaiting the lead` and `M skill changes left live (author unknown)` separately.
+  `dispatch-end.skillProposals` counts only restored proposals; `dispatch-end.skillChangesLeftLive` counts changes
+  left live. Both come from `index.json`'s `proposal.restored`. Read the preserved versions and approve specific paths
+  in a follow-up; report-only changes remain live and their authorship is unknown.
+
 - `--allow <glob>` (repeatable, relative to the git root): the only files the worker may change. The helper snapshots
   the working tree before and after (its own answer, log and ledger excluded) and reports every other changed file as
   out of scope: the end line says `· scope ok` or `· OUT OF SCOPE: <files>`, `dispatch-end` carries `outOfScope`, and

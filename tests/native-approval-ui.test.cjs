@@ -18,7 +18,7 @@ function loadComponent(filename) {
   };
   const file = path.join(__dirname, '..', filename), mod = new Module(file, module);
   mod.filename = file; mod.paths = Module._nodeModulePaths(path.dirname(file));
-  const original = mod.require.bind(mod); mod.require = name => name === 'react' ? hooks : original(name);
+  const original = mod.require.bind(mod); mod.require = name => name === 'react' ? hooks : name === './NativeQuestionCard' ? { NativeQuestionCard: () => null } : original(name);
   mod._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, file);
   return props => { cursor = 0; return mod.exports.NativeApprovalCard(props); };
 }

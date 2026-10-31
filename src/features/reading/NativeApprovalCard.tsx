@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import type { NativeApproval } from '../../shared/types';
+import { NativeQuestionCard } from './NativeQuestionCard';
 
 const LABELS: Record<string, string> = { accept: 'Allow once', decline: 'Deny', cancel: 'Cancel turn', allow: 'Allow once', deny: 'Deny', grant: 'Grant requested permissions for this turn' };
 const evidenceText = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
@@ -13,6 +14,7 @@ export function NativeApprovalCard({ request, source, onOpen, onError }: { reque
     ['File changes', p.changes ?? p.fileChanges], ['Access root', p.grantRoot],
   ].filter(([, value]) => value != null);
   const sending = useRef(false), [state, setState] = useState<'idle' | 'sent' | 'failed'>('idle');
+  if (request.question) return <NativeQuestionCard request={request} source={source} onOpen={onOpen} onError={onError} />;
   const answer = async (decision: string) => {
     if (sending.current) return;
     sending.current = true; setState('sent');

@@ -266,14 +266,22 @@ class Team {
       return { status: null };
     });
   }
-  minutes(meeting, issues = [], language = 'zh') {
+  minutes(meeting, issues, language = 'zh') {
+    const supplied = issues !== undefined;
+    issues ??= [];
     if (!Array.isArray(issues) || issues.some(issue => !issue || ISSUE_KEYS.some(key => typeof issue[key] !== 'string'))) {
       throw new Error('Issues must be an array of { issue, raisedBy, answer, result } strings');
     }
+    if (issues.length > 100 || Buffer.byteLength(JSON.stringify(issues)) > 12 * 1024 ||
+      issues.some(issue => ISSUE_KEYS.some(key => issue[key].length > 2000))) throw new Error('Issues exceed the bounded journal snapshot');
     language = language === 'en' ? 'en' : 'zh';
     const t = LABELS[language];
     const history = this.entries(), entries = history.filter(entry => entry.type === 'meeting' && entry.meeting === meeting);
     if (!entries.length) throw new Error(`No roundtable records for ${meeting}`);
+    if (supplied) {
+      issues = issues.map(issue => Object.fromEntries(ISSUE_KEYS.map(key => [key, issue[key]])));
+      this.append({ type: 'issues', meeting, issues });
+    } else issues = history.findLast(entry => entry.type === 'issues' && entry.meeting === meeting)?.issues || [];
     // Only matching task identities replace sessionless failures; workers with sessions remain separate.
     const tasks = new Map();
     for (const entry of entries) {

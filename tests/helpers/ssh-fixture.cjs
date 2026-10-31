@@ -7,7 +7,7 @@ const { Server, utils } = require('ssh2');
 const { listDirectory, readProjectFile, saveProjectFile, resolveProjectPath } = require('../../electron/project-files.cjs');
 const { readGitRaw } = require('../../electron/project-git.cjs');
 
-async function createSSHFixture({ password = false, unknownHost = false, nativeWorker = process.platform !== 'win32' } = {}) {
+async function createSSHFixture({ password = false, unknownHost = false, nativeWorker = process.platform !== 'win32', claudeAccount = { state: 'skipped', reason: 'credentials' } } = {}) {
   const prefix = path.join(os.tmpdir(), 'agentrix-ssh-test-');
   const directory = await fs.mkdtemp(prefix);
   const hostKey = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs1', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } }).privateKey;
@@ -40,7 +40,8 @@ async function createSSHFixture({ password = false, unknownHost = false, nativeW
         const channel = accept();
         workers++;
         if (nativeWorker) {
-          const child = spawn('/bin/sh', ['-c', info.command], { cwd: project, env: { ...process.env, HOME: home, CODEX_HOME: path.join(home, '.codex') }, stdio: ['pipe', 'pipe', 'pipe'] });
+          const child = spawn('/bin/sh', ['-c', info.command], { cwd: project, env: { ...process.env, HOME: home, CODEX_HOME: path.join(home, '.codex'),
+            CLAUDE_CONFIG_DIR: path.join(home, '.claude'), CLAUDE_SECURESTORAGE_CONFIG_DIR: path.join(home, '.claude') }, stdio: ['pipe', 'pipe', 'pipe'] });
           children.add(child);
           channel.pipe(child.stdin); child.stdout.pipe(channel, { end: false }); child.stderr.pipe(channel.stderr, { end: false });
           child.stdin.on('error', () => {}); channel.on('error', () => {});
@@ -53,6 +54,7 @@ async function createSSHFixture({ password = false, unknownHost = false, nativeW
           let buffer = ''; let started = false;
           const send = (name, value) => channel.write('PGW1 ' + JSON.stringify({ ...value, channel: name }) + '\n');
           const request = async message => {
+            if (message.op === 'claude-account') return claudeAccount;
             const local = { path: project };
             if (message.op === 'directory') return listDirectory(local, message.path, message.offset || 0);
             if (message.op === 'git') return readGitRaw(project, message.action, message.value);

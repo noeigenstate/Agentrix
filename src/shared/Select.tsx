@@ -1,7 +1,7 @@
 import './Select.css';
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CaretDown } from '@phosphor-icons/react';
+import { CaretDown, Check } from '@phosphor-icons/react';
 
 export interface SelectOption { value: string; label: ReactNode; disabled?: boolean }
 
@@ -91,7 +91,7 @@ export function Select({ value, options, onChange, label, className = '', disabl
     {open && createPortal(<ul ref={menu} id={id} role="listbox" aria-label={label} className="select-menu"
       style={{ left: place?.left, width: 'max-content', minWidth: place?.minWidth, maxWidth: place?.maxWidth, top: place?.top, bottom: place?.bottom, maxHeight: place?.maxHeight, visibility: place ? undefined : 'hidden' }}>
       {options.map((option, index) => <li key={option.value} role="option" aria-selected={index === selected} aria-disabled={option.disabled || undefined} data-value={option.value} data-active={index === active} title={typeof option.label === 'string' ? option.label : undefined}
-        onPointerEnter={() => !option.disabled && setActive(index)} onPointerDown={event => event.preventDefault()} onClick={() => choose(index)}><span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{option.label}</span></li>)}
+        onPointerEnter={() => !option.disabled && setActive(index)} onPointerDown={event => event.preventDefault()} onClick={() => choose(index)}><span className="select-option-label">{option.label}</span><span className="select-option-mark" aria-hidden="true">{index === selected && <Check size={14} weight="bold" />}</span></li>)}
     </ul>, host)}
   </>;
 }

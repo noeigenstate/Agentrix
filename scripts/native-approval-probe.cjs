@@ -26,7 +26,7 @@ function cancellationDecision(request) {
 }
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function runInstalled(provider) {
+async function runInstalled(provider, scenario = 'approval') {
   const output = path.join(__dirname, '../.test-output/native-approval-probe');
   fs.mkdirSync(output, { recursive: true });
   const run = fs.mkdtempSync(path.join(output, `${provider}-`));
@@ -34,7 +34,7 @@ async function runInstalled(provider) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-native-probe-'));
   const cwd = path.join(workspace, 'project'), home = path.join(workspace, 'home'), owned = new Set();
   for (const folder of [cwd, home]) fs.mkdirSync(folder, { recursive: true });
-  const env = isolatedEnvironment(home), model = createStandin();
+  const env = isolatedEnvironment(home), model = createStandin({ scenario });
   env.TEMP = env.TMP = path.join(workspace, 'tmp'); fs.mkdirSync(env.TMP);
   const report = { provider, run, workspace, cwd, executed: true, installedCliProof: false, version: null, nativeRequest: null };
   let terminal, exited = false, resolved = false, aborted = false, deadline;
@@ -51,6 +51,9 @@ async function runInstalled(provider) {
     }
   };
   const launch = (file, args, options) => {
+    if (scenario === 'elicitation' && args.includes('--input-format')) args = [...args, '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: {
+      native_probe: { command: process.execPath, args: [path.join(__dirname, 'native-approval-mcp.cjs')] },
+    } })];
     const child = spawn(file, args, { ...options, detached: process.platform !== 'win32' }); owned.add(child);
     child.once('close', () => owned.delete(child)); return child;
   };
@@ -103,11 +106,20 @@ async function runInstalled(provider) {
     if (provider === 'claude') { await waitFor(() => ready, 'SDK initialize'); terminal.prompt('NATIVE_REQUEST_PROBE'); }
     else { await delay(4000); terminal.write('NATIVE_REQUEST_PROBE'); await delay(500); terminal.write('\r'); }
     await waitFor(() => terminal.registry.list().length > 0, 'CLI-issued native approval');
-    const request = terminal.registry.list()[0], decision = cancellationDecision(request);
+    let request = terminal.registry.list()[0];
+    if (scenario === 'elicitation' && request.params.tool_name === 'mcp__native_probe__request_input') {
+      terminal.answer({ token: request.token, decision: 'allow' });
+      await waitFor(() => terminal.registry.list().length > 0, 'CLI-issued native elicitation'); request = terminal.registry.list()[0];
+    }
+    const decision = scenario !== 'approval' && request.question && !request.question.unsupported ? 'submit' : cancellationDecision(request);
     report.nativeRequest = { requestId: request.requestId, requestIdType: typeof request.requestId, method: request.method, decisions: request.decisions, toolUseId: request.params.tool_use_id };
+    if (scenario !== 'approval') { report.nativeRequest.params = request.params; report.questionSchema = model.questionSchema; }
     report.decision = decision;
-    const answer = terminal.answer({ token: request.token, decision }); assert.equal(answer.requestId, request.requestId);
-    assert.throws(() => terminal.answer({ token: request.token, decision })); report.duplicateBlocked = true;
+    const payload = { token: request.token, decision, ...(decision === 'submit' ? { values: Object.fromEntries(request.question.fields.map(field => [field.id,
+      field.type === 'multi' ? [field.options[0].value] : field.options ? field.options[0].value : field.type === 'boolean' ? false : 'local probe answer'])) } : {}) };
+    const respond = request.question ? terminal.answerQuestion : terminal.answer;
+    const answer = respond(payload); assert.equal(answer.requestId, request.requestId);
+    assert.throws(() => respond(payload)); report.duplicateBlocked = true;
     await waitFor(() => resolved, 'native response resolution');
     assert.equal(fs.existsSync(path.join(cwd, 'native-proof.txt')), false, 'Denied tool unexpectedly created the probe file');
     report.installedCliProof = true;
@@ -127,8 +139,8 @@ async function runInstalled(provider) {
 
 async function main(args = process.argv.slice(2)) {
   if (!args.includes('--run-installed')) return { executed: false, installedCliProof: false, usage: 'node scripts/native-approval-probe.cjs codex|claude --run-installed' };
-  if (args.length !== 2 || !['codex', 'claude'].includes(args[0]) || args[1] !== '--run-installed') throw new Error('Usage: node scripts/native-approval-probe.cjs codex|claude --run-installed');
-  return runInstalled(args[0]);
+  if (![2, 3].includes(args.length) || !['codex', 'claude'].includes(args[0]) || args[1] !== '--run-installed' || args.length === 3 && (args[0] !== 'claude' || !['--questions', '--elicitation'].includes(args[2]))) throw new Error('Usage: node scripts/native-approval-probe.cjs codex|claude --run-installed [--questions|--elicitation (Claude)]');
+  return runInstalled(args[0], args[2] === '--questions' ? 'question' : args[2] === '--elicitation' ? 'elicitation' : 'approval');
 }
 if (require.main === module) main().then(report => { console.log(JSON.stringify(report, null, 2)); if (report.error) process.exitCode = 1; }).catch(error => { console.error(error.message); process.exitCode = 1; });
 module.exports = { main, isolatedEnvironment, cancellationDecision };

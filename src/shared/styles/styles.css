@@ -7,6 +7,9 @@ body { font-size: 13px; font-weight: 400; }
 button, input, select { font: inherit; }
 button { color: inherit; cursor: pointer; -webkit-app-region: no-drag; }
 button:disabled { opacity: .45; cursor: default; }
+/* A disabled .button shows muted text on the control fill instead of fading: opacity pulled its text under 4.5:1. A primary one gives up its fill.
+   Written as button.button so it outranks the variants that set their own colour (.button.primary, .dash .button). */
+button.button:disabled { opacity: 1; border-color: var(--border); color: var(--text-3); background: var(--bg-control); }
 button, input, select { -webkit-tap-highlight-color: transparent; }
 :is(button, select, input, textarea, [role="menuitem"], [role="treeitem"]):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 input { color: var(--text-1); }

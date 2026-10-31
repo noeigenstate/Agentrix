@@ -15,8 +15,8 @@ test('local plan reads every real Windows workflow step in order with CI environ
   const parsed = await workflow();
   const steps = localPlan(parsed);
   assert.deepEqual(steps.map(step => step.name), parsed.jobs.windows.steps.map(step => step.name));
-  assert.equal(steps.length, 31);
-  assert.deepEqual(steps.map(step => step.number), Array.from({ length: 31 }, (_, index) => index + 1));
+  assert.equal(steps.length, 33);
+  assert.deepEqual(steps.map(step => step.number), Array.from({ length: 33 }, (_, index) => index + 1));
   const skipped = steps.filter(step => step.skip);
   assert.deepEqual(skipped.map(step => step.name), [
     'Check out source', 'Set up Node.js', 'Validate release version', 'Install locked dependencies',
@@ -33,8 +33,10 @@ test('local plan reads every real Windows workflow step in order with CI environ
     assert.equal(step.env.CSC_IDENTITY_AUTO_DISCOVERY, 'false');
     assert.equal(step.env.AGENTRIX_TEST_TIMEOUT_SCALE, '3');
   }
+  // A hung step fails at the Windows job's limit, as on GitHub, instead of holding the local run open.
+  assert.ok(steps.every(step => step.timeoutMinutes === parsed.jobs.windows['timeout-minutes'] && step.timeoutMinutes > 0));
   assert.equal(steps.find(step => step.run === 'npm test').kind, 'unit');
-  assert.equal(steps.filter(step => step.kind === 'gui').length, 19);
+  assert.equal(steps.filter(step => step.kind === 'gui').length, 21);
   assert.equal(steps.find(step => step.name === 'Build Windows installer').kind, 'command');
   assert.equal(steps.find(step => step.name === 'Create checksum and build notes').skip, null);
 });
