@@ -154,7 +154,8 @@ test('Linux SSH Claude wrapper forwards hooks and reads compacted transcripts ov
 import json,os,subprocess,sys
 args=sys.argv[1:]
 if "--version" in args: sys.exit(7)
-assert args[args.index("--append-system-prompt")+1]=="SSH reading note"
+assert args[args.index("--append-system-prompt")+1]=="Agentrix system skills are delivered by its SessionStart hook."
+assert "SSH reading note" not in args
 settings=json.loads(args[args.index("--settings")+1])
 folder=os.path.join(os.path.expanduser("~/.claude"),"projects","fixture")
 os.makedirs(folder,exist_ok=True)
@@ -164,10 +165,11 @@ def write(record):
 def hook(name,**values):
     payload=dict(session_id="session",transcript_path=filename,**values)
     command=settings["hooks"][name][0]["hooks"][0]["command"]
-    subprocess.run(command,shell=True,input=json.dumps(payload).encode(),check=True)
+    result=subprocess.run(command,shell=True,input=json.dumps(payload).encode(),stdout=subprocess.PIPE,check=True)
+    if name=="SessionStart": assert json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]=="SSH reading note"
 write({"type":"user","uuid":"prompt","message":{"content":"Remote work"}})
 write({"type":"assistant","uuid":"reply","effort":"high","message":{"model":"claude-test","usage":{"speed":"fast"},"content":[{"type":"tool_use","id":"read","name":"Read","input":{"file_path":"/srv/project/a.py"}}]}})
-hook("SessionStart")
+hook("SessionStart",source="startup")
 hook("UserPromptSubmit",prompt="Remote work")
 hook("Notification",notification_type="idle_prompt",message="Idle")
 hook("Notification",notification_type="permission_prompt",message="Permission")

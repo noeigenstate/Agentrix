@@ -145,7 +145,6 @@ class RemoteConnection {
       case 'response': {
         const request = this.pending.get(message.id);
         if (!request) return;
-        this.pending.delete(message.id); clearTimeout(request.timer);
         if (message.ok === true) request.resolve(message.value);
         else request.reject(new Error(String(message.error || '远程请求失败。')));
       }
@@ -154,14 +153,21 @@ class RemoteConnection {
   send(message) {
     if (!this.closed) this.link.send({ ...message, channel: this.channel });
   }
-  async request(op, data = {}) {
+  async request(op, data = {}, { signal, timeout = 30000 } = {}) {
     await this.ready;
+    if (signal?.aborted) throw new Error('Remote request cancelled');
     if (this.closed) throw new Error('SSH 连接已断开，请重新连接。');
     if (this.pending.size >= 64) throw new Error('远程请求较多，请稍后重试。');
     return new Promise((resolve, reject) => {
       const id = ++this.nextId;
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('读取远程文件超时，请重试。')); }, 30000);
-      timer.unref?.(); this.pending.set(id, { resolve, reject, timer });
+      const finish = (callback, value) => {
+        if (!this.pending.delete(id)) return;
+        clearTimeout(timer); signal?.removeEventListener('abort', cancel); callback(value);
+      };
+      const cancel = () => finish(reject, new Error('Remote request cancelled'));
+      const timer = setTimeout(() => finish(reject, new Error('读取远程文件超时，请重试。')), timeout);
+      timer.unref?.(); this.pending.set(id, { resolve: value => finish(resolve, value), reject: error => finish(reject, error), timer });
+      signal?.addEventListener('abort', cancel, { once: true });
       this.send({ ...data, op, id });
     });
   }

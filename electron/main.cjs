@@ -70,6 +70,7 @@ const { UpdateManager, isInstalledBuild, distributionOf } = require('./updates.c
 const { getSSHInfo } = require('./ssh-config.cjs');
 const { SSHAuthServer } = require('./ssh-auth.cjs');
 const { RemoteConnection } = require('./remote-connection.cjs');
+const { watchRemoteClaudeAccount } = require('./features/ssh/claude-account.cjs');
 const { recentSession, resumeCommand, claudeResumeCommand } = require('./session-restore.cjs');
 const { CodexActivityReader, monitorActivity } = require('./codex-activity.cjs');
 const { TerminalTitleTracker, wholeThread } = require('./terminal-title.cjs');
@@ -525,12 +526,27 @@ function startUsage(project, s, event) {
     };
     s.bindUsageAccount();
   }
-  if (project.kind === 'ssh') return;
+  if (project.kind === 'ssh') {
+    if (s.agent === 'claude') bindRemoteClaudeAccount(s);
+    return;
+  }
   const named = update => { if (s.usage === usage) { update(); scheduleState(); } };
   if (s.agent === 'claude') {
     void claudeProvider(event.cwd || project.path, claudeConfigDir()).then(provider => named(() => { usage.provider = provider; })).catch(() => {});
     void refreshClaudeAccounts();
   } else void codexProvider(event.codexHome || s.codexHome).then(names => named(() => { usage.names = names; })).catch(() => {});
+}
+function bindRemoteClaudeAccount(s) {
+  const usage = s.usage;
+  s.usageAccount?.dispose();
+  s.usageAccount = watchRemoteClaudeAccount(s.terminal, account => {
+    // The observation uses the worker's clock; API reset timestamps already use the server's absolute time.
+    const observed = { ...account, at: account.at + (Number.isFinite(s.activityClockOffset) ? s.activityClockOffset : 0) };
+    usage.provider = 'Anthropic';
+    if (usage.account(observed, observed)) {
+      s.recordQuota?.('claude', usage.limits); scheduleState(); scheduleUsageRollover();
+    }
+  }, { current: () => s.usage === usage && s.codexActive && s.agent === 'claude' && sessions.get(s.terminalId) === s });
 }
 function stopUsageAccount(s) {
   s.bindUsageAccount = null; s.usageAccount?.dispose(); s.usageAccount = null;
@@ -836,6 +852,7 @@ function onEvent(event) {
     startSkillSession(project, s, event.sequence);
     if (!keepClaudeHistory) { s.activityMonitor?.stop(); s.activityMonitor = null; }
     if (!keepClaudeHistory || !s.usage) startUsage(project, s, event);
+    else if (project.kind === 'ssh') bindRemoteClaudeAccount(s);
     // A terminal restores the agent it last ran. Switching agents drops the other one's conversation id.
     const previousAgent = store.findTerminal(s.terminalId)?.record.restore?.agent || 'codex';
     const agentRestore = { agent: s.agent, ...(previousAgent !== s.agent ? { threadId: null, interrupted: false } : {}) };
