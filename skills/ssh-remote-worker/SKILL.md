@@ -39,8 +39,9 @@ description: Use when changing how an SSH project's terminals talk to the server
   Startup arguments keep startup instructions and the manifest fallback; only the skills manifest uses the hook.
   State and read-only skill references live below the remote worker's own
   `~/.local/state/agentrix/ssh-skills/`, outside Claude's files; fingerprinted references survive a closed terminal so
-  a resumed session's current-bundle auto-skill paths still exist. On each terminal spawn, all other reference keys
-  and receipts older than 30 days are pruned. The bundle remains `files/instructions/key`. Codex keeps its own
+  a resumed session's current-bundle auto-skill paths still exist. Each live terminal holds a `.lease-*` file in the
+  references it uses, refreshed every few minutes; on each terminal spawn, other reference keys untouched for 30 days
+  with no lease fresher than 10 minutes, and receipts older than 30 days, are pruned. The bundle remains `files/instructions/key`. Codex keeps its own
   delivery path; follow the skills module's measured protocol when changing it.
 
 ## Testing
