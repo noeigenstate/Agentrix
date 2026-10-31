@@ -234,14 +234,15 @@ def deliver_skills(hook, identity):
     manifest=os.path.join(os.path.dirname(state_dir),"references",key,"instructions.md")
     with open(manifest,encoding="utf-8") as source_file: instructions=source_file.read(2*1024*1024+1)
     if not instructions.strip() or len(instructions)>2*1024*1024: return
-    os.makedirs(state_dir,mode=0o700,exist_ok=True)
-    info=os.lstat(state_dir)
-    if not stat.S_ISDIR(info.st_mode) or (hasattr(os,"getuid") and (info.st_uid!=os.getuid() or info.st_mode&0o077)): return
-    folder=os.path.join(state_dir,"claude",hashlib.sha256(identity.encode()).hexdigest()[:32])
-    os.makedirs(folder,mode=0o700,exist_ok=True)
-    for directory in (os.path.dirname(folder),folder):
+    provider=os.path.join(state_dir,"claude")
+    folder=os.path.join(provider,hashlib.sha256(identity.encode()).hexdigest()[:32])
+    for directory in (state_dir,provider,folder):
+        os.makedirs(directory,mode=0o700,exist_ok=True)
         info=os.lstat(directory)
-        if not stat.S_ISDIR(info.st_mode) or (hasattr(os,"getuid") and (info.st_uid!=os.getuid() or info.st_mode&0o077)): return
+        if not stat.S_ISDIR(info.st_mode) or (hasattr(os,"getuid") and info.st_uid!=os.getuid()): return
+        # Older recursive mkdir calls gave this intermediate directory the default umask's permissions.
+        if directory==provider: os.chmod(directory,0o700)
+        elif hasattr(os,"getuid") and info.st_mode&0o077: return
     filename=os.path.join(folder,key[:32])
     if source in ("compact","clear"):
         for name in os.listdir(folder):

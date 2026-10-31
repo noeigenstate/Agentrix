@@ -136,7 +136,8 @@ claude() {
   [[ -n $current_note ]] && note=(--append-system-prompt "$current_note")
   local session_folder=${__pg_note_file%/*} session_name=${__pg_note_file##*/} settings_file
   [[ -n $__pg_note_file && $session_folder != "$__pg_note_file" ]] || session_folder=${TMPDIR:-/tmp}
-  settings_file=$(mktemp "$session_folder/${session_name%-skills.txt}-claude-settings-XXXXXX") || return 1
+  session_name=${session_name%-skills.txt}
+  settings_file=$(mktemp "$session_folder/${session_name:-agentrix}-claude-settings-XXXXXX") || return 1
   printf '%s' "$settings" > "$settings_file"
   AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" --settings "$settings_file" "${note[@]}" "$@"
   local code=$?
