@@ -44,7 +44,7 @@ async function grid() {
   if (await page.locator('.focus-mode').count()) {
     await page.keyboard.press('Control+Shift+Enter'); await settled();
   }
-  await page.getByRole('button', { name: '工作台', exact: true }).click();
+  await page.keyboard.press('Control+Shift+G');
 }
 async function agent(id, kind) {
   await waitFor(async () => (await state()).projects.flatMap(project => project.terminals).find(item => item.id === id)?.shellReady, `${kind} shell ready`);
@@ -187,7 +187,7 @@ try {
       await sample(`${kind}-${entry}-return`, [id], () => page.keyboard.press('Control+Shift+Enter'));
     }
     await grid();
-    await page.getByRole('button', { name: '决策', exact: true }).click();
+    await page.keyboard.press('Control+Shift+D');
     await page.locator('.inbox-row').filter({ hasText: projects[index].name }).click();
     await sample(`${kind}-decision`, [id], () => page.locator('.session-open').click());
     await settled();
