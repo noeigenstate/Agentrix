@@ -1,6 +1,6 @@
 // The model dashboard window, in the real app: opened once from the app menu, both pages showing seeded numbers, the project
 // and range filters changing them, 采纳 changing a routing weight and 撤销 taking it back, keyboard focus visible, dark and light,
-// 1180 and 900 wide. Needs the main-process side (electron/features/dashboard) to be wired in main.cjs.
+// 1180×820, 900×820 and the 820×600 minimum. Needs the main-process side (electron/features/dashboard) to be wired in main.cjs.
 //
 //   node scripts/dashboard-smoke.mjs          # both themes
 //   node scripts/dashboard-smoke.mjs light    # one theme: mono (dark) or light
@@ -31,7 +31,8 @@ const DAY = 86_400_000, now = Date.now(), ago = days => now - days * DAY;
 // counts are: 7 days 6, 30 days 10, all 13; site alone in 30 days 3.
 const PROJECTS = [{ id: 'p-agentrix', name: 'agentrix' }, { id: 'p-site', name: 'site' }];
 const RUNS = [['p-agentrix', [1, 2, 3, 5, 12, 18, 25, 40, 60]], ['p-site', [2, 4, 15, 45]]];
-const EXPECTED = { runs: { '7 天': 6, '30 天': 10, 全部: 13 }, siteRuns30: 3, rounds: { '7 天': 2, '30 天': 3, 全部: 4 }, siteRounds30: 1 };
+const EXPECTED = { runs: { '7 天': 6, '30 天': 10, 全部: 13 }, siteRuns30: 3, rounds: { '7 天': 2, '30 天': 3, 全部: 4 }, siteRounds30: 1,
+  modelTasks30: { 'gpt-6.1-sol': 6, 'gpt-6.1-terra': 4, 'claude-opus-5-5': 0 } };
 
 const run = (project, days, index) => ({ v: 1, at: ago(days), id: `run-${project.id}-${index}`, projectId: project.id, project: project.name, agent: 'codex', model: index % 3 ? 'gpt-6.1-sol' : 'gpt-6.1-terra',
   effort: 'max', role: '执行', kind: index % 3 ? 'core' : 'ui-check', title: `fixture ${index}`, meeting: days <= 3 ? 'r-recent' : null, startedAt: ago(days) - 600000, endedAt: ago(days),
@@ -95,7 +96,11 @@ async function checkTheme(theme, output, results) {
     const read = (label, expected) => waitFor(async () => (await kpi(label)) === String(expected), `${label} reads ${expected}`);
     const tab = name => dash.getByRole('button', { name, exact: true }).click();
     const bounds = size => app.evaluate(({ BrowserWindow }, [width, height]) => BrowserWindow.getAllWindows().find(window => window.webContents.getURL().includes('dashboard.html')).setContentSize(width, height), size);
-    const resize = async width => { await bounds([width, 820]); await dash.waitForFunction(width => innerWidth <= width + 1, width); await new Promise(resolve => setTimeout(resolve, 250)); };
+    const resize = async (width, height) => {
+      await bounds([width, height]);
+      await waitFor(() => dash.evaluate(([width, height]) => Math.abs(innerWidth - width) <= 1 && Math.abs(innerHeight - height) <= 1, [width, height]), `dashboard content size ${width}×${height}`);
+      await new Promise(resolve => setTimeout(resolve, 250));
+    };
     assert.deepEqual(await dash.evaluate(() => [document.documentElement.dataset.theme, document.documentElement.lang]), [theme, 'zh-CN']);
 
     // The model page and its filters.
@@ -106,6 +111,25 @@ async function checkTheme(theme, output, results) {
     assert.match(await kpi('一次通过率'), /^\d+%$|^—$/);
     assert.ok(await dash.locator('.panel', { has: dash.getByRole('heading', { name: /模型对比/ }) }).locator('tbody tr').count() >= 2, 'the model table lists the seeded models');
     assert.equal(await dash.locator('.kpi.hero').count(), 1, 'one hero figure per page');
+
+    // Model cells: mouse, Enter and Space open exactly that model's tasks; closing restores the owning control's focus.
+    const modelControl = model => dash.locator('.model-toggle', { hasText: model === 'claude-opus-5-5' ? 'Opus 5.5' : model });
+    const tasks = dash.locator('.model-tasks');
+    for (const [index, [model, expected]] of Object.entries(EXPECTED.modelTasks30).entries()) {
+      const control = modelControl(model);
+      if (index === 0) await control.click();
+      else { await control.focus(); await control.press(index === 1 ? 'Enter' : 'Space'); }
+      await tasks.waitFor();
+      assert.equal(await control.getAttribute('aria-expanded'), 'true');
+      assert.equal(await dash.locator('.model-toggle[aria-expanded="true"]').count(), 1);
+      if (expected) assert.equal(await tasks.locator('tbody tr').count(), expected, `${model}: fixture task count`);
+      else assert.equal(await tasks.getByText('没有任务', { exact: true }).count(), 1, 'a grade-only model has no worker tasks');
+      results.push({ theme, model, tasks: expected });
+    }
+    const lastControl = modelControl('claude-opus-5-5');
+    await tasks.getByRole('button', { name: '收起任务列表', exact: true }).click();
+    assert.equal(await lastControl.evaluate(node => node === document.activeElement), true, 'closing returns focus to the model');
+    assert.equal(await tasks.count(), 0);
 
     // The collaboration page: rounds per range and project, then adopt a weight and take it back.
     await tab('协作报告');
@@ -138,21 +162,30 @@ async function checkTheme(theme, output, results) {
     assert.ok(rings.every(ring => ring.width === '2px' && ring.style === 'solid'), JSON.stringify(rings));
     const region = await dash.evaluate(() => ({ bar: getComputedStyle(document.querySelector('.titlebar')).webkitAppRegion, button: getComputedStyle(document.querySelector('.window-actions button')).webkitAppRegion }));
     assert.deepEqual(region, process.platform === 'darwin' ? region : { bar: 'drag', button: 'no-drag' });
-    const heights = await dash.evaluate(() => [...document.querySelectorAll('.toolbar .button, .toolbar .select-trigger, details.data summary')].map(node => Math.round(node.getBoundingClientRect().height)));
+    const heights = await dash.evaluate(() => [...document.querySelectorAll('.toolbar .button, .toolbar .select-trigger, details.data summary, .model-toggle')].map(node => Math.round(node.getBoundingClientRect().height)));
     assert.ok(heights.length >= 6 && heights.every(height => height === 32), JSON.stringify(heights));
 
-    // Both widths and both pages: no sideways page scroll, the narrow layout below 1000, screenshots for the acceptance.
-    for (const width of [1180, 900]) {
-      await resize(width);
+    // All three sizes and both pages, including 820×600: no sideways page scroll, with the model details open as well.
+    for (const [width, height] of [[1180, 820], [900, 820], [820, 600]]) {
+      await resize(width, height);
       for (const [page, name] of [['模型评估', 'models'], ['协作报告', 'team']]) {
         await tab(page); await new Promise(resolve => setTimeout(resolve, 250));
+        if (name === 'models') {
+          await modelControl('gpt-6.1-sol').click();
+          assert.equal(await tasks.locator('tbody tr').count(), EXPECTED.modelTasks30['gpt-6.1-sol']);
+        }
+        await dash.locator('.dash-main').evaluate(node => { node.scrollTop = 0; });
         const layout = await dash.evaluate(() => ({ overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth, main: document.querySelector('.dash-main').scrollWidth - document.querySelector('.dash-main').clientWidth,
           columns: getComputedStyle(document.querySelector('.kpis')).gridTemplateColumns.split(' ').length, wide: !!document.querySelector('.wide-only') && getComputedStyle(document.querySelector('.wide-only')).display !== 'none',
           stacked: !!document.querySelector('.stack-only') && getComputedStyle(document.querySelector('.stack-only')).display !== 'none', unlabelled: [...document.querySelectorAll('.scroll')].filter(node => !node.getAttribute('aria-label') || node.tabIndex !== 0).length }));
-        assert.equal(layout.overflow, 0, `no page-level horizontal scroll at ${width}`); assert.equal(layout.main, 0);
+        assert.equal(layout.overflow, 0, `no page-level horizontal scroll at ${width}×${height}`); assert.equal(layout.main, 0);
         assert.equal(layout.columns, width > 1000 ? 4 : 2, 'KPIs: four across, two by two below 1000'); assert.equal(layout.unlabelled, 0);
         if (name === 'models') { assert.equal(layout.wide, width > 1000); assert.equal(layout.stacked, width <= 1000); }
-        await shot(dash, `${theme}-${width}-${name}`); results.push({ theme, width, page: name, ...layout });
+        await shot(dash, `${theme}-${width}x${height}-${name}`); results.push({ theme, width, height, page: name, ...layout });
+        if (name === 'models') {
+          await tasks.scrollIntoViewIfNeeded();
+          await shot(dash, `${theme}-${width}x${height}-model-tasks`);
+        }
       }
     }
 
@@ -169,4 +202,4 @@ await withGuiLock('dashboard-smoke', async () => {
   for (const theme of themes.length ? themes : ['mono', 'light']) await checkTheme(theme, path.join(output, theme), results);
 });
 await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(results, null, 2));
-console.log(`PASS: dashboard window, both pages, filters, adoption, focus rings and layouts at 1180 and 900: ${output}`);
+console.log(`PASS: dashboard window, both pages, model task lists, filters, adoption, focus rings and layouts at 1180×820, 900×820 and 820×600: ${output}`);

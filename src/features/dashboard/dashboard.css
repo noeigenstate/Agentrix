@@ -83,6 +83,19 @@ table.incident { min-width: 820px; }
 .advice-item p .weight { margin-top: 4px; }
 .tag { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--bg-hover); color: var(--text-2); font-size: 12px; white-space: nowrap; }
 
+/* Model buttons use the shared control; selection also has a caret and a neutral row fill. */
+.dash .model-toggle { height: auto; min-height: 32px; padding: 4px 8px; }
+.model-name { max-width: 240px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.model-toggle[aria-expanded="true"] .model-caret { transform: rotate(90deg); }
+.sticky tr[data-expanded="true"] { background: var(--bg-selected); }
+.model-tasks { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--divider); }
+.model-tasks-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.model-tasks h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.model-tasks > .note { margin: 8px 0; }
+.task-table .task-title { min-width: 160px; max-width: 240px; white-space: normal; overflow-wrap: anywhere; }
+.task-table .task-project { min-width: 96px; max-width: 160px; white-space: normal; overflow-wrap: anywhere; }
+.task-table th:is(:first-child, :last-child) { z-index: 3; }
+
 /* Round phases: grey blocks in order, rework a different step, with its share written beside the bar. */
 .stagecell { display: flex; align-items: center; gap: 12px; min-width: 240px; }
 .stagebar { display: flex; flex: 1; gap: 2px; height: 8px; }

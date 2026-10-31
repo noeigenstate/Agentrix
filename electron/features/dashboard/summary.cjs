@@ -69,6 +69,23 @@ function kindRates(runs, passes) {
     .sort((a, b) => a.kind.localeCompare(b.kind) || a.model.localeCompare(b.model));
 }
 
+function taskList(runs, passes, prices) {
+  const counts = new Map(), rows = [];
+  for (let index = runs.length - 1; index >= 0; index--) {
+    const run = runs[index], count = counts.get(run.model) || 0;
+    if (count >= 50) continue;
+    counts.set(run.model, count + 1);
+    // A task's count covers the whole invocation, rather than only the timed replies used for speed.
+    const outputTokens = run.totalOutputTokens ?? run.outputTokens;
+    rows.push({ model: run.model, at: run.at, project: text(run.project, 240), title: text(run.title, 240),
+      kind: run.kind === 'unreported' ? null : run.kind, role: text(run.role, 32) || null, meeting: text(run.meeting, 64) || null,
+      firstPass: passes.get(run), reason: text(run.reason, 32) || null,
+      activeMs: nonnegative(run.activeMs) ? run.activeMs : null, outputTokens: nonnegative(outputTokens) ? outputTokens : null,
+      costUsd: estimateCost(run, prices).usd });
+  }
+  return rows;
+}
+
 function summarize({ records = {}, journals = [], projects = [], prices = {}, decisions = [], query = { projectId: null, range: '30d' }, now = 0, t } = {}) {
   const length = query.range === 'all' ? null : (query.range === '7d' ? 7 : 30) * DAY;
   const start = length === null ? 0 : now - length;
@@ -133,7 +150,8 @@ function summarize({ records = {}, journals = [], projects = [], prices = {}, de
       roundtableFirstConfirm: ratio(rounds.filter(round => round.row.firstConfirmed).length, rounds.length),
       findingsPerRound: ratio(rounds.reduce((sum, round) => sum + round.row.findings, 0), rounds.length),
       findingFixRate: ratio(knownFixes.filter(finding => finding.fixed).length, knownFixes.length) },
-    models, kinds, speed, incidents: incidents.map(incident => incident.row).sort((a, b) => b.at - a.at), rounds: rounds.map(round => round.row),
+    models, modelRuns: taskList(runs, passes, prices), kinds, speed,
+    incidents: incidents.map(incident => incident.row).sort((a, b) => b.at - a.at), rounds: rounds.map(round => round.row),
     findings: [...findingCells.values()].sort((a, b) => a.author.localeCompare(b.author) || a.category.localeCompare(b.category)),
     suggestions: suggestions({ incidents: globalEntries.filter(entry => entry.type === 'incident').map(entry => ({ row: incidentOf(entry), key: entry.key })),
       kinds: kindRates(globalRuns, passes), rounds: globalRounds.rounds, decisions, t }),
