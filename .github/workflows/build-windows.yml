@@ -298,6 +298,9 @@ jobs:
           codesign --verify --deep --strict "$app"
           codesign -dv "$app" 2>&1 | grep -q 'Signature=adhoc'
           test -x "$app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper"
+          titlebar="$app/Contents/Resources/app.asar.unpacked/native/mac-titlebar/build/Release/mac_titlebar.node"
+          test -f "$titlebar"
+          lipo -verify_arch arm64 "$titlebar"
           test ! -e "$app/Contents/Resources/app.asar.unpacked/node_modules/sherpa-onnx-darwin-arm64"
           packed=$(npx --no-install @electron/asar list "$app/Contents/Resources/app.asar" --is-pack)
           if grep -E '/node_modules/sherpa-onnx-(win|darwin|linux)-' <<< "$packed"; then echo 'Speech engines are in the macOS app.'; exit 1; fi

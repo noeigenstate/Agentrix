@@ -4,6 +4,7 @@ const { configureApplication, prepareWindowIcon, prepareShellIntegration } = req
 const { registerWindowContents, registerWindowLifecycle } = require('./app/window-events.cjs');
 const { registerWindowZoom } = require('./app/window-zoom.cjs');
 const { buildMacMenuTemplate } = require('./app/mac-menu.cjs');
+const { registerMacTitlebar } = require('./app/mac-titlebar.cjs');
 const { minWidth, minHeight } = require('./window-zoom.json');
 const { createImageTools, registerImageIpc } = require('./app/images.cjs');
 const { createProjectHandoff } = require('./app/project-handoff.cjs');
@@ -110,7 +111,10 @@ function updateStoreSettings(patch) {
   // The settings IPC broadcasts after applying the window's new zoom.
   if (uiZoom !== store.settings.uiZoom) windowZoom?.update();
   const languageChanged = language !== store.settings.language;
-  if (languageChanged) trayMenu();
+  if (languageChanged) {
+    trayMenu();
+    app.macTitlebar?.refresh();
+  }
   if (process.platform === 'darwin' && (languageChanged
     || JSON.stringify(shortcuts) !== JSON.stringify(store.settings.shortcuts))) rebuildMacMenu();
 }
@@ -214,6 +218,7 @@ function publicState() {
     desktopGlass: { supported: !!desktopGlassBackend, compatibility: desktopGlassBackend === 'windows-compat', active: desktopGlassActive, restart: store.settings.surface === 'glass' && store.settings.glassBackground === 'desktop' && !!desktopGlassBackend && !desktopGlassWindow, failed: desktopGlassWindow && !desktopGlassActive },
     warning: store.warning,
     platform: process.platform,
+    nativeTitlebar: app.macTitlebar?.attached === true,
     // macOS and Linux: the shell new local terminals use and whether zsh is installed, for Settings.
     localShell: ['darwin', 'linux'].includes(process.platform) ? (({ kind, zsh }) => ({ kind, zsh }))(localShell()) : null,
     // In full screen the title bar slides away and returns when the pointer touches the top edge. The
@@ -1287,6 +1292,7 @@ function disposeTerminal(id) {
 
 function registerIpc() {
   const { handle, listen } = createIpcAdapter({ ipcMain, getWindow: () => window, devUrl, t, report });
+  if (process.platform === 'darwin') listen('titlebar:state', state => app.macTitlebar?.update(state));
   registerSkillsIpc({ handle, skills, dialog, getWindow: () => window });
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
     gradeDelivery: (grade, project, session) => dashboard.grade(grade, project, session),
@@ -1444,6 +1450,7 @@ if (!app.requestSingleInstanceLock()) {
       show: false, icon: path.join(root, 'assets/icon.png'),
       webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, nodeIntegrationInSubFrames: false, contextIsolation: true, sandbox: true, spellcheck: false, backgroundThrottling: false },
     });
+    app.macTitlebar = registerMacTitlebar({ window, t, send, broadcast });
     if (desktopGlassWindow) {
       try { await applyDesktopGlass(window, runtimeDir, desktopGlassBackend); desktopGlassActive = true; }
       catch { window.setBackgroundColor(windowBackgroundColor()); }

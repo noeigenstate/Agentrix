@@ -14,10 +14,10 @@
   "main": "electron/main.cjs",
   "desktopName": "agentrix.desktop",
   "scripts": {
-    "start": "node scripts/start.mjs",
-    "dev": "node scripts/start.mjs --dev",
-    "build": "node scripts/build-ssh-askpass.cjs && tsc --noEmit && vite build",
-    "test": "node scripts/build-ssh-askpass.cjs && node --test tests/*.test.cjs",
+    "start": "node scripts/build-mac-titlebar.cjs --optional && node scripts/start.mjs",
+    "dev": "node scripts/build-mac-titlebar.cjs --optional && node scripts/start.mjs --dev",
+    "build": "node scripts/build-ssh-askpass.cjs && node scripts/build-mac-titlebar.cjs && tsc --noEmit && vite build",
+    "test": "node scripts/build-ssh-askpass.cjs && node scripts/build-mac-titlebar.cjs --optional && node --test tests/*.test.cjs",
     "audit:design": "node scripts/design-audit.mjs",
     "clean:test-output": "node scripts/clean-test-output.mjs",
     "test:desktop": "node scripts/smoke.mjs",
@@ -42,8 +42,8 @@
     "test:cmd": "node scripts/cmd-smoke.mjs",
     "dist": "node -e \"require('electron')\" && npm run build && electron-builder --win --x64 --publish never",
     "pack": "node -e \"require('electron')\" && npm run build && electron-builder --win --dir --x64",
-    "dist:mac": "node -e \"require('electron')\" && npm run build && electron-builder --mac --arm64 --publish never",
-    "pack:mac": "node -e \"require('electron')\" && npm run build && electron-builder --mac dir --arm64",
+    "dist:mac": "node -e \"require('electron')\" && npm run build && node scripts/build-mac-titlebar.cjs --arch=arm64 && electron-builder --mac --arm64 --publish never",
+    "pack:mac": "node -e \"require('electron')\" && npm run build && node scripts/build-mac-titlebar.cjs --arch=arm64 && electron-builder --mac dir --arm64",
     "dist:linux": "node -e \"require('electron')\" && npm run build && electron-builder --linux --publish never",
     "pack:linux": "node -e \"require('electron')\" && npm run build && electron-builder --linux dir",
     "test:readability": "node scripts/readability-smoke.mjs",
@@ -160,6 +160,12 @@
       ]
     },
     "mac": {
+      "files": [
+        "native/mac-titlebar/build/Release/mac_titlebar.node"
+      ],
+      "asarUnpack": [
+        "native/mac-titlebar/build/Release/mac_titlebar.node"
+      ],
       "icon": "assets/icon-mac.png",
       "category": "public.app-category.developer-tools",
       "target": [
