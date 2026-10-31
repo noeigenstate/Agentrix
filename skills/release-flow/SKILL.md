@@ -117,3 +117,8 @@ description: Publish a new Agentrix version — bump, update notes, the full loc
 29. **Owner forbids the system clipboard.** `test:sessions`, `test:composer`, `test:workspace`, `test:editor-terminals` and
    `test:clipboard` write the system clipboard. Then run every other local step with `--only` (not a full `local` run)
    and leave those five suites to `ci-preflight remote`, which must be green before main moves.
+30. **Wrapper changes on a Windows machine.** The Bash/zsh wrapper tests (`linux-integration`, `zsh-integration`) and the
+   real SSH worker test (`ssh-connection` with the native worker) run only on Linux and macOS, so `npm test` here skips them.
+   After any change to `integration/*.bash`, `integration/*.zsh` or `remote-worker.py`, run `ci-preflight remote` before
+   integrating further, and read the failed jobs' logs (`/actions/jobs/<id>/logs`) for the `✖` lines. Python's
+   `os.makedirs(path, mode)` applies `mode` only to the last folder: create a private tree one folder at a time.
