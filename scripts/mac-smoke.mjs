@@ -1,7 +1,7 @@
-// macOS desktop check: the app starts a zsh terminal through the integration, runs a command, follows codex
-// from start to finish (with a stand-in codex that calls the real notify command), keeps macOS window buttons
-// and copies terminal text with ⌘C. Runs with an isolated profile and its own HOME, so the user's start-up
-// files and agents are never touched. Usage: node scripts/mac-smoke.mjs [--packaged]
+// macOS desktop check: the app starts a Bash (the default) or zsh terminal through the integration, runs a command,
+// follows codex from start to finish (with a stand-in codex that calls the real notify command), keeps macOS window
+// buttons and copies terminal text with ⌘C. Runs with an isolated profile and its own HOME, so the user's start-up
+// files and agents are never touched. Usage: node scripts/mac-smoke.mjs [--packaged] [--shell zsh]
 import { testRun } from './test-output.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -14,10 +14,16 @@ import { waitFor } from './wait.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const output = await testRun('mac');
+const shellName = process.argv.includes('--shell') ? process.argv[process.argv.indexOf('--shell') + 1] : 'bash';
+assert.ok(['bash', 'zsh'].includes(shellName), 'the shell is bash or zsh');
+const output = await testRun(`mac-${shellName}`);
 const dataDir = path.join(output, 'user-data'), home = path.join(output, 'home'), bin = path.join(home, 'bin');
 const project = { id: randomUUID(), name: '中文 项目', path: path.join(output, 'projects', '中文 项目'), unread: 0, seenEvents: [], lastCompletedAt: null };
 for (const folder of [dataDir, bin, project.path]) await fs.mkdir(folder, { recursive: true });
+// The user's own start-up files put the stand-in codex on PATH. A macOS terminal's Bash is a login shell: it reads
+// .bash_profile and leaves .bashrc alone unless that file sources it (this one does not, and .bashrc must stay unread).
+await fs.writeFile(path.join(home, '.bash_profile'), 'export PATH="$HOME/bin:$PATH"\n');
+await fs.writeFile(path.join(home, '.bashrc'), 'export PG_BASHRC=read\n');
 await fs.writeFile(path.join(home, '.zprofile'), 'path=("$HOME/bin" $path)\n');
 // A stand-in for Codex: it stays a moment, then runs its notify command for one finished turn, as Codex does.
 await fs.writeFile(path.join(bin, 'codex'), `#!/bin/zsh
@@ -27,9 +33,9 @@ eval "command=($(print -r -- \${notify:1:-1} | sed 's/,/ /g'))"
 "\${command[@]}" '{"type":"agent-turn-complete","thread-id":"thread","turn-id":"turn"}'
 print -r -- "STAND_IN_CODEX_DONE"
 `, { mode: 0o755 });
-await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', terminalRenderer: 'dom', autoSave: false, notifications: false, sound: false, announce: false, closeToTray: false, restoreSessions: false } }));
+await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', ...(shellName === 'zsh' && { shell: 'zsh' }), terminalRenderer: 'dom', autoSave: false, notifications: false, sound: false, announce: false, closeToTray: false, restoreSessions: false } }));
 
-const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: await fs.mkdtemp(path.join(path.dirname(dataDir), 'codex-home-')), HOME: home, SHELL: '/bin/zsh' };
+const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: await fs.mkdtemp(path.join(path.dirname(dataDir), 'codex-home-')), HOME: home, SHELL: '/bin/zsh' }; // The login shell is zsh on purpose: the default terminal is Bash whatever $SHELL says.
 for (const name of ['ELECTRON_RUN_AS_NODE', 'AGENTRIX_DEV_URL', 'ZDOTDIR']) delete env[name];
 const packaged = process.argv.includes('--packaged');
 const executablePath = packaged ? path.join(root, 'release/mac-arm64/Agentrix.app/Contents/MacOS/Agentrix') : require('electron');
@@ -53,13 +59,16 @@ try {
   await page.locator('.titlebar').screenshot({ path: path.join(output, 'titlebar.png') });
 
   await page.getByRole('button', { name: '只打开终端', exact: true }).click();
-  await waitFor(async () => { const value = await state(); return value.terminals[0].status === 'shell' && value.terminals[0].shellReady && value.codexAvailable === true; }, 'zsh reports its prompt with codex available');
-  assert.equal((await state()).terminals[0].shell, 'zsh');
+  await waitFor(async () => { const value = await state(); return value.terminals[0].status === 'shell' && value.terminals[0].shellReady && value.codexAvailable === true; }, `${shellName} reports its prompt with codex available`);
+  assert.equal((await state()).terminals[0].shell, shellName);
   const terminal = page.locator('.project-panel .xterm');
   await terminal.click();
-  await page.keyboard.type('echo PG_MAC_$((6*7)) "$LANG" "${ZDOTDIR-no-zdotdir}"');
+  // Bash must not have read .bashrc; zsh must not have been pointed at another ZDOTDIR.
+  const [variable, unset] = shellName === 'zsh' ? ['ZDOTDIR', 'no-zdotdir'] : ['PG_BASHRC', 'no-bashrc'];
+  await page.keyboard.type(`echo PG_MAC_$((6*7)) "$LANG" "\${${variable}-${unset}}"`);
   await page.keyboard.press('Enter');
-  await waitFor(async () => /PG_MAC_42 \S+\.UTF-8 no-zdotdir/.test(await terminal.innerText()), 'the command runs in a UTF-8 zsh that starts nested shells normally');
+  await waitFor(async () => new RegExp(`PG_MAC_42 \\S+\\.UTF-8 ${unset}`).test(await terminal.innerText()), `the command runs in a UTF-8 ${shellName} that starts nested shells normally`);
+  assert.doesNotMatch(await terminal.innerText(), /default interactive shell is now zsh/, 'no deprecation banner');
 
   await page.keyboard.type('codex');
   await page.keyboard.press('Enter');
@@ -85,7 +94,7 @@ try {
   await waitFor(async () => /\nAFTER_INTERRUPT/.test(await terminal.innerText()), 'Control+C interrupts the running command');
 
   assert.deepEqual(errors, []);
-  console.log(`PASS: macOS ${packaged ? 'packaged' : 'development'} app runs a zsh terminal with codex reporting; screenshots: ${output}`);
+  console.log(`PASS: macOS ${packaged ? 'packaged' : 'development'} app runs a ${shellName} terminal with codex reporting; screenshots: ${output}`);
 } finally {
   if (application) {
     if (savedClipboard !== null) await application.evaluate(({ clipboard }, text) => clipboard.writeText(text), savedClipboard).catch(() => {});

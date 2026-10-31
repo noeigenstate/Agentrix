@@ -298,7 +298,7 @@ xattr -dr com.apple.quarantine "/Applications/Agentrix.app"
 
 ### macOS 终端与快捷键
 
-本地终端以登录 shell 方式运行 zsh（`/bin/zsh`），照常加载你自己的 `~/.zshenv`、`~/.zprofile`、`~/.zshrc` 和 `~/.zlogin`。Agentrix 在此基础上加入提示符状态报告和 `codex` / `claude` 包装层，支持轮次状态、Claude Code hooks、完成提醒和会话恢复，不修改任何用户文件。你为 `codex` 或 `claude` 定义的别名仍然有效。SSH 项目的用法与 Windows 相同。
+本地终端默认运行 Bash（`/bin/bash`），可在「设置 › 终端与编辑 › 终端」中改选 zsh（`/bin/zsh`），新开或重启的终端按当前选择启动。Bash 与 macOS 自带终端一样作为登录 shell 启动：读取 `/etc/profile`，再读 `~/.bash_profile`、`~/.bash_login`、`~/.profile` 中第一个存在的；不会自动读取 `~/.bashrc`，需要的话在 `~/.bash_profile` 里自行 `source ~/.bashrc`。Agentrix 会关闭 macOS 自带 Bash 的「默认 shell 已改为 zsh」提示。zsh 照常加载你自己的 `~/.zshenv`、`~/.zprofile`、`~/.zshrc` 和 `~/.zlogin`。Agentrix 在此基础上加入提示符状态报告和 `codex` / `claude` 包装层，支持轮次状态、Claude Code hooks、完成提醒和会话恢复，不修改任何用户文件。你为 `codex` 或 `claude` 定义的别名仍然有效。SSH 项目的用法与 Windows 相同。
 
 终端中用 `⌘C` / `⌘V` / `⌘A` 复制、粘贴和全选，`Control+C` 中断命令，`⌘+点击`打开链接。`⌘Q` 退出（终端仍在运行时会先询问），`⌘H` 隐藏，`⌘M` 最小化。设置里的项目快捷键仍默认使用 Control，例如 `Control+Shift+N` 添加项目。
 
@@ -325,7 +325,7 @@ chmod +x Agentrix-*-linux-*.AppImage
 
 ## 运行条件与范围
 
-- Windows 10/11 x64（本地终端为 Windows PowerShell 或命令提示符，基于 ConPTY）；Apple 芯片 Mac，macOS 12 或更高（zsh）；64 位 Linux 桌面，x64 或 arm64（Bash 或 zsh）。
+- Windows 10/11 x64（本地终端为 Windows PowerShell 或命令提示符，基于 ConPTY）；Apple 芯片 Mac，macOS 12 或更高（Bash 或 zsh）；64 位 Linux 桌面，x64 或 arm64（Bash 或 zsh）。
 - Codex CLI 或 Claude Code 至少一个已安装并在 PATH 中；当前在 Codex CLI 0.162 与 Claude Code 2.1.294 上验证。
 - 支持标准 npm 安装和原生 `codex.exe`。
 - 本应用为所选目录创建独立终端。VS Code 中已经运行的终端不会被直接搬入这个窗口。
@@ -366,6 +366,7 @@ npm run dist
 - `test:themes-markdown`：验证灰阶界面离线显示与重启后的外观、终端颜色、会话与草稿；检查自动编辑及本地/SSH Markdown 的渲染、保存、相对资源、链接和脚本过滤。
 - `test:git`：在隔离配置与 Git 仓库中验证目录标记、已暂存／工作区更改、提交合并关系、提交文件、自动刷新和失败退避、目录收起、未保存保护及本地／SSH 切换。支持 `-- --packaged`，截图与结果在 `.test-output/git-*/`。
 - `node scripts/verify-update-artifacts.cjs`：校验安装包、SHA-512、更新清单和应用内置更新源。
+- `node scripts/mac-smoke.mjs [--packaged] [--shell zsh]`：在 macOS 上以隔离配置和独立 HOME 启动应用，验证 Bash（默认）或 zsh 终端、Codex 开始与结束状态、`⌘C` 复制和 `Control+C` 中断。
 - `node scripts/linux-smoke.mjs [--packaged] [--shell zsh]`：在 Linux 上以隔离配置和独立 HOME 启动应用，验证 Bash 或 zsh 终端、Codex 开始与结束状态、`Ctrl+Shift+C` 复制和 `Ctrl+C` 中断；`node scripts/appimage-smoke.mjs <AppImage>` 启动 AppImage，确认终端环境不含 AppImage 的目录和变量。
 - `node scripts/verify-installer-payload.cjs`：从实际 NSIS 安装包提取程序，核对可执行文件与应用资源；动画检查可用 `node scripts/focus-motion-smoke.mjs --executable 路径` 直接验证提取出的程序，不添加专用渲染开关，并清除测试工具默认的动态效果模拟，使用真实 Windows 偏好。
 
