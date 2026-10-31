@@ -49,11 +49,12 @@ function focusRing() {
 async function iconPng(Icon: ComponentType<{ size: number }>, size: number, pixels: number) {
   const host = document.createElement('div'), root = createRoot(host);
   flushSync(() => root.render(<Icon size={size} />));
-  const svg = host.firstElementChild!;
+  const svg = host.firstElementChild;
+  root.unmount();
+  if (!svg) throw new Error('The icon did not render');
   svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
   const image = new Image();
   image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.outerHTML)}`;
-  root.unmount();
   await image.decode();
   const canvas = document.createElement('canvas'), context = canvas.getContext('2d')!;
   canvas.width = canvas.height = pixels;
@@ -77,6 +78,8 @@ async function measure(scale: number): Promise<TitlebarStyle> {
       return [name, colorHex(getComputedStyle(host).color)];
     })) as TitlebarStyle['colors'];
     const pixels = Math.round(16 * scale * devicePixelRatio);
+    // Called from an effect, React cannot flush the icons' own render until its commit is over.
+    await new Promise(resolve => setTimeout(resolve));
     const icons = Object.fromEntries(await Promise.all(Object.entries(ICONS).map(async ([view, Icon]) => [view, await iconPng(Icon, 16, pixels)]))) as TitlebarStyle['icons'];
     return styleFrom({ scale, nav, button, badge, colors, focus: focusRing(), icons });
   } finally {
