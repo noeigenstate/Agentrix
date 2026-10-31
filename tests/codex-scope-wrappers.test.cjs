@@ -138,7 +138,8 @@ process.stdout.write(ok?'FORWARD_OK\\n':'FORWARD_FAILED\\n');process.exitCode=ok
       const executable = shellQuote(program.replace(/\\/g, '/'));
       fs.writeFileSync(path.join(home, kind === 'bash' ? '.bashrc' : '.zshrc'), [
         `alias codex=${shellQuote(executable)}`,
-        `if [[ $QUOTA_ALIAS == profile ]]; then alias codex=${shellQuote(executable + ' --profile work')}; fi`, '',
+        `if [[ $QUOTA_ALIAS == profile ]]; then alias codex=${shellQuote(executable + ' --profile work')}; fi`,
+        ...(kind === 'bash' ? ['set -u'] : []), '',
       ].join('\n'));
       fs.writeFileSync(probe, `
 export AGENTRIX_ACCOUNT_BASELINE=$("$QUOTA_NODE" -e 'process.stdout.write(JSON.stringify(require(process.env.QUOTA_SCOPE).accountEnvironment(process.env)))')

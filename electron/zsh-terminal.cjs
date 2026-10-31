@@ -44,6 +44,7 @@ function zshEnvironment(env, options) {
 // --rcfile installs the integration; it sources Linux's ~/.bashrc or macOS's login files.
 function bashArguments(integrationDir) { return ['--rcfile', path.posix.join(integrationDir, 'bash-integration.bash'), '-i']; }
 
+// macOS uses system Bash by default; only an explicit zsh choice keeps the existing zsh path.
 function macShell(choice, { find = findShell } = {}) {
   const useZsh = choice === 'zsh';
   return { kind: useZsh ? 'zsh' : 'bash', file: useZsh ? ZSH : find('bash', { platform: 'darwin' }) || '/bin/bash', zsh: !!find('zsh', { platform: 'darwin' }) };

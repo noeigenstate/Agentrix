@@ -285,6 +285,7 @@ jobs:
           export AGENTRIX_TEST_BASH="$(brew --prefix bash)/bin/bash"
           "$AGENTRIX_TEST_BASH" --version
           npm test
+          AGENTRIX_TEST_BASH=/bin/bash node --test --test-name-pattern='^bash wrapper' tests/codex-scope-wrappers.test.cjs
 
       - name: Build the macOS app, DMG and zip
         run: npm run dist:mac

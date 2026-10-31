@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { ZSH, macShell, shellEnvironment, zshEnvironment } = require('../electron/zsh-terminal.cjs');
@@ -16,6 +17,28 @@ test('macOS defaults to system Bash and only an explicit zsh choice selects the 
   }
   assert.deepEqual(macShell('zsh', { find }), { kind: 'zsh', file: ZSH, zsh: true });
   assert.deepEqual(macShell('bash', { find: () => null }), { kind: 'bash', file: '/bin/bash', zsh: false });
+});
+
+test('main caches macOS and Linux shell discovery until the choice changes or a terminal starts', () => {
+  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const source = main.slice(main.indexOf('let localShells = null;'), main.indexOf('\nfunction nativeSessionEvent('));
+  for (const platform of ['darwin', 'linux']) {
+    const settings = { shell: 'bash' }, calls = [];
+    const choose = choice => { calls.push(choice); return { kind: choice, file: `/bin/${choice}`, zsh: true }; };
+    const context = vm.createContext({ process: { platform }, store: { settings }, macShell: choose, linuxShell: choose });
+    vm.runInContext(source, context);
+    const bash = context.localShell();
+    assert.equal(context.localShell(), bash);
+    assert.deepEqual(calls, ['bash']);
+    settings.shell = 'zsh';
+    const zsh = context.localShell();
+    assert.equal(zsh.kind, 'zsh');
+    assert.notEqual(zsh, bash);
+    assert.equal(context.localShell(), zsh);
+    assert.deepEqual(calls, ['bash', 'zsh']);
+    assert.notEqual(context.localShell(true), zsh);
+    assert.deepEqual(calls, ['bash', 'zsh', 'zsh']);
+  }
 });
 
 test('macOS Bash requests login files and silences Apple\'s banner without changing other shell environments', () => {

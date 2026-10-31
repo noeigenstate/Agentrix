@@ -115,7 +115,8 @@ codex() {
   local -a note=()
   local current_note=$(__pg_reading_note)
   [[ -n $current_note ]] && note=(-c "developer_instructions=\"$current_note\"")
-  "${program[@]}" -c "notify=[$notify]" -c 'tui.terminal_title=["session-id"]' "${note[@]}" "$@"
+  # Bash 3.2 treats an empty array as unset under nounset.
+  "${program[@]}" -c "notify=[$notify]" -c 'tui.terminal_title=["session-id"]' ${note[@]+"${note[@]}"} "$@"
   local code=$?
   __pg_send codex-exited $code
   return $code
@@ -144,7 +145,7 @@ claude() {
   local -a note=()
   local current_note=$(__pg_reading_note)
   [[ -n $current_note ]] && note=(--append-system-prompt "$current_note")
-  "${program[@]}" --settings "$settings" "${note[@]}" "$@"
+  "${program[@]}" --settings "$settings" ${note[@]+"${note[@]}"} "$@"
   local code=$?
   __pg_send codex-exited $code claude
   return $code

@@ -1012,13 +1012,15 @@ function remoteFor(id) {
 
 // New local terminals use the chosen shell: Bash by default on macOS, the login shell's kind on Linux,
 // PowerShell or Command Prompt on Windows.
-// Linux looks for the shells again whenever a terminal starts, so one installed meanwhile is used.
-let linuxShells = null;
+// Recheck macOS and Linux shells when a terminal starts, so one installed meanwhile is used.
+let localShells = null;
 function localShell(fresh = false) {
-  if (process.platform === 'darwin') return macShell(store.settings.shell);
-  if (process.platform !== 'linux') return { kind: store.settings.shell === 'cmd' ? 'cmd' : 'powershell', file: null };
-  if (fresh || linuxShells?.choice !== store.settings.shell) linuxShells = { ...linuxShell(store.settings.shell), choice: store.settings.shell };
-  return linuxShells;
+  if (!['darwin', 'linux'].includes(process.platform)) return { kind: store.settings.shell === 'cmd' ? 'cmd' : 'powershell', file: null };
+  if (fresh || localShells?.choice !== store.settings.shell) {
+    const choose = process.platform === 'darwin' ? macShell : linuxShell;
+    localShells = { ...choose(store.settings.shell), choice: store.settings.shell };
+  }
+  return localShells;
 }
 
 function nativeSessionEvent(id, sessionId, message) {
