@@ -6,6 +6,8 @@ const { createHash } = require('node:crypto');
 const digest = value => createHash('sha256').update(value).digest('hex');
 const MARKER = / Agentrix skill delivery: ([a-f0-9]{64}):([A-Za-z0-9_-]+)\./;
 const MAX_MANIFEST = 2 * 1024 * 1024;
+// Receipt names keep 128 bits of each digest: the full pair made paths past Windows PowerShell's 260-character limit.
+const RECEIPT = 32;
 
 function deliveryMarker(delivery) {
   return !delivery.remote && delivery.fingerprint
@@ -29,17 +31,17 @@ function receiptPath(delivery, sessionId) {
   const providerFolder = path.join(parent, 'claude');
   fs.mkdirSync(providerFolder, { recursive: true, mode: 0o700 });
   if (fs.lstatSync(providerFolder).isSymbolicLink()) throw new Error('Invalid skill receipt folder');
-  const folder = path.join(providerFolder, digest(sessionId));
+  const folder = path.join(providerFolder, digest(sessionId).slice(0, RECEIPT));
   fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
   if (fs.lstatSync(folder).isSymbolicLink()) throw new Error('Invalid skill receipt folder');
-  const receipt = path.join(folder, delivery.fingerprint);
+  const receipt = path.join(folder, delivery.fingerprint.slice(0, RECEIPT));
   try { if (fs.lstatSync(receipt).isSymbolicLink()) throw new Error('Invalid skill receipt'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   return receipt;
 }
 
 function forgetReceipts(receipt) {
   const folder = path.dirname(receipt);
-  for (const file of fs.readdirSync(folder)) if (/^[a-f0-9]{64}$/.test(file)) fs.rmSync(path.join(folder, file), { force: true });
+  for (const file of fs.readdirSync(folder)) if (/^[a-f0-9]{32}$/.test(file)) fs.rmSync(path.join(folder, file), { force: true });
 }
 
 function sessionContext(hook, note) {

@@ -30,15 +30,15 @@ function Get-AgentrixSessionContext($hook) {
     [void][IO.Directory]::CreateDirectory($folder)
     if ((Get-Item -LiteralPath $folder).Attributes -band [IO.FileAttributes]::ReparsePoint) { return }
     $hash = [Security.Cryptography.SHA256]::Create()
-    try { $name = [BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes([string]$hook.session_id))).Replace('-', '').ToLowerInvariant() }
+    try { $name = [BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes([string]$hook.session_id))).Replace('-', '').ToLowerInvariant().Substring(0, 32) }
     finally { $hash.Dispose() }
     $folder = Join-Path $folder $name
     [void][IO.Directory]::CreateDirectory($folder)
     if ((Get-Item -LiteralPath $folder).Attributes -band [IO.FileAttributes]::ReparsePoint) { return }
-    $receipt = Join-Path $folder $marker.Groups[1].Value
+    $receipt = Join-Path $folder $marker.Groups[1].Value.Substring(0, 32)
     if ((Test-Path -LiteralPath $receipt) -and ((Get-Item -LiteralPath $receipt).Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
     if ($hook.source -in @('compact', 'clear')) {
-        foreach ($entry in Get-ChildItem -LiteralPath $folder -File) { if ($entry.Name -match '^[a-f0-9]{64}$') { [IO.File]::Delete($entry.FullName) } }
+        foreach ($entry in Get-ChildItem -LiteralPath $folder -File) { if ($entry.Name -match '^[a-f0-9]{32}$') { [IO.File]::Delete($entry.FullName) } }
     }
     $mode = if ($hook.source -in @('compact', 'clear')) { [IO.FileMode]::Create } else { [IO.FileMode]::CreateNew }
     try { $file = [IO.File]::Open($receipt, $mode, [IO.FileAccess]::Write, [IO.FileShare]::None); $file.Dispose() }
