@@ -105,12 +105,14 @@ test('the conclusion names the leader, a tie, or says there is not enough; the c
   const runs = (arm, passing, cost) => tasks.flatMap((item, index) => [1, 2, 3].map(repeat => run(item.id, arm, repeat, { state: index < passing ? 'passed' : 'failed', costUsd: cost })));
   const lead = experiment({ tasks, arms: ['orchestrated', 'opus'], runs: [...runs('orchestrated', 3, 1), ...runs('opus', 2, 0.5)] });
   assert.deepEqual(conclude(lead), { kind: 'lead', leader: 'orchestrated', other: 'opus', leaderPassed: 3, otherPassed: 2, tasks: 3, costRatio: 2 });
-  assert.equal(conclusionText(conclude(lead)), '编排在 3 个任务中通过 3 个，Opus 5.5 单独通过 2 个；成本是其 2.0 倍。');
+  assert.equal(conclusionText(conclude(lead)), '编排在 3 个任务中通过 3 个，Opus 5.5 单独通过 2 个；成本为 Opus 5.5 的 2.0 倍。');
   const unpriced = experiment({ tasks, arms: ['orchestrated', 'opus'], runs: [...runs('orchestrated', 3, 1), ...runs('opus', 2, null)] });
   assert.equal(conclude(unpriced).costRatio, null);
   assert.doesNotMatch(conclusionText(conclude(unpriced)), /成本/);
   const tie = experiment({ tasks, arms: ['opus', 'sol'], runs: [...runs('opus', 2, 1), ...runs('sol', 2, 1)] });
   assert.equal(conclude(tie).kind, 'tie');
+  assert.equal(conclusionText(conclude(tie)), 'Opus 5.5 单独与 GPT-6.1-Sol 单独在 3 个任务中都通过了 2 个。', 'a tie reads without stray spaces beside a name');
+  assert.equal(conclusionText({ kind: 'tie', arms: ['orchestrated', 'opus'], passed: 2, tasks: 3 }), '编排与 Opus 5.5 单独在 3 个任务中都通过了 2 个。');
   assert.equal(conclude(experiment({ arms: ['opus', 'sol'], runs: [] })).kind, 'none');
 }));
 
@@ -162,7 +164,6 @@ test('the form needs a project, a task, two approaches and a budget before each 
   assert.deepEqual([w.clampRepeats(9), w.clampRepeats(-1), w.clampRepeats(0), w.clampRepeats(2), w.clampRepeats(NaN)], [5, 1, 1, 2, 3]);
   assert.equal(w.proposedBudget({ runs: 1, minutes: 1, costUsd: 0.2, basis: 'default' }), 5);
   assert.equal(w.proposedBudget({ runs: 1, minutes: 1, costUsd: 35, basis: 'history' }), 55);
-  assert.equal(w.MAX_RUNS, 200);
   assert.equal(w.toInput(draft, 'n').source, 'history');
 });
 
@@ -218,16 +219,19 @@ test('the source step: only the history source is open; the other two say "下�
   assert.match(html(React.createElement(steps.ArmStep, { arms: ['sol'], onToggle() {} })), /至少选 2 个方案做对比/);
 }));
 
-test('the estimate step shows three gauges, the basis, and turns the cost ring red-flagged when it is over the budget', () => zh(() => {
+test('the estimate step shows runs, time and cost as large figures and one ring for the budget share, which is flagged when over', () => zh(() => {
   const { ScaleStep } = lab('WizardSteps.tsx');
   const draft = { ...lab('wizard-math.ts').emptyDraft(), projectId: 'p1', tasks: [task('t1', 'core')], budgetUsd: 10 };
   const show = estimate => html(React.createElement(ScaleStep, { draft, estimate, error: null, defaultName: 'agentrix · 10 月 28 日', onRepeats() {}, onBudget() {}, onName() {} }));
   const fine = show({ runs: 18, minutes: 111, costUsd: 8, basis: 'history' });
-  assert.equal(count(fine, /class="gauge /g), 3); assert.match(fine, />18</); assert.match(fine, /1h51m/); assert.match(fine, /\$8\.00/);
+  assert.equal(count(fine, /class="stat"/g), 3, 'runs, time and cost'); assert.equal(count(fine, /class="gauge /g), 1, 'one ring only');
+  assert.match(fine, /<b class="figure">18<\/b>/); assert.match(fine, /<b class="figure">1 小时 51 分<\/b>/); assert.match(fine, /<b class="figure">\$8\.00<\/b>/); assert.match(fine, />80%</);
   assert.match(fine, /按你自己的运行记录估算/); assert.doesNotMatch(fine, /gauge over/);
   assert.match(show({ runs: 18, minutes: 111, costUsd: 12, basis: 'default' }), /gauge over/);
-  const waiting = show(null); assert.equal(count(waiting, /—/g), 3, 'no estimate yet: dashes, not zeros');
+  const waiting = show(null); assert.equal(count(waiting, /—/g), 4, 'no estimate yet: dashes, not zeros');
   assert.match(fine, /placeholder="agentrix · 10 月 28 日"/);
+  assert.equal(count(fine, /class="control"/g), 3, 'the stepper and both inputs sit in one column of controls');
+  assert.doesNotMatch(fine, /独立的工作树/, 'said once, in the form’s footer');
 }));
 
 test('results: a ring card per approach, four figures, and no Artificial Analysis section for a history experiment', () => zh(() => {
@@ -236,18 +240,95 @@ test('results: a ring card per approach, four figures, and no Artificial Analysi
   const runs = tasks.flatMap(item => arms.flatMap(arm => [1, 2, 3].map(repeat => run(item.id, arm, repeat, {
     state: arm !== 'orchestrated' && item.id === 't3' ? 'failed' : 'passed', testsPassed: arm !== 'orchestrated' && item.id === 't3' ? 1 : 4, costUsd: arm === 'orchestrated' ? 1 : 0.4,
     rework: arm === 'orchestrated' ? 2 : null, phases: arm === 'orchestrated' ? phases([60000, 120000, 300000, 90000, 60000]) : undefined }))));
+  Object.assign(runs.find(item => item.taskId === 't1' && item.arm === 'orchestrated' && item.repeat === 3), { state: 'failed', testsPassed: 1 });
   const out = view({ experiments: [experiment({ tasks, arms, runs })] }, { kind: 'experiment', id: 'e1' });
   assert.equal(count(out, /class="arm-card /g), 4);
   assert.equal(count(out, /class="ring"/g), 4);
   for (const figure of ['能力比较', '质量 × 成本', '任务 × 方案', '编排协作流程']) assert.match(out, new RegExp(figure));
   assert.doesNotMatch(out, /Artificial Analysis|AA 参考|实测与 AA/);
   assert.equal(count(out, /<svg class="chart"/g), 3, 'one small plot per task kind (two) and the scatter');
-  assert.match(out, /<svg class="chart flow/);
+  assert.match(out, /class="flow arm-orchestrated"/);
   assert.equal(count(out, /class="dot"/g), 8 + 4, 'a dot per approach in each of two kinds, and in the scatter');
-  assert.equal(count(out, /class="bar"/g), 8, 'three repeats: every dot has an error bar');
+  assert.equal(count(out, /class="bar"/g), 1, 'only the dot whose repeats differ has an error bar');
   assert.match(out, /编排在 3 个任务中通过 3 个/);
   assert.equal(count(out, /<details class="data"/g), 1);
-  assert.equal(count(out, /role="region"/g), 2, 'the data table and the matrix scroll in labelled regions');
+  assert.equal(count(out, /role="region"/g), 3, 'the data table, the scatter’s table and the matrix scroll in labelled regions');
+}));
+
+test('quality × cost: no per-point labels (the legend and shapes name the approaches), the values in a table, one cost format, headroom above 100%', () => zh(() => {
+  const arms = ['orchestrated', 'opus'], tasks = [task('t1', 'core'), task('t2', 'core')];
+  const runs = tasks.flatMap(item => arms.flatMap(arm => [1, 2, 3].map(repeat => run(item.id, arm, repeat, { costUsd: arm === 'orchestrated' ? 1.2 : 0.6 }))));
+  const out = view({ experiments: [experiment({ tasks, arms, runs })] }, { kind: 'experiment', id: 'e1' });
+  const scatter = out.slice(out.indexOf('质量 × 成本'), out.indexOf('任务 × 方案'));
+  assert.doesNotMatch(scatter, /class="end"/);
+  assert.equal(count(scatter, /class="dot"/g), 2);
+  assert.match(scatter, /<title>编排 · 完整路由 · \$7\.20 · 100%<\/title>/, 'the tooltip uses the same money() format as the cards');
+  assert.match(scatter, /\$7\.20/); assert.match(scatter, /\$3\.60/); assert.doesNotMatch(scatter, /7\.2 美元|\$7\.2</);
+  assert.match(scatter, /aria-label="各方案的成本与任务通过率"/);
+  // The plot is drawn at its own width, so its 12px text is never scaled.
+  assert.match(scatter, /<svg class="chart" width="560" height="\d+" viewBox="0 0 560 \d+"/);
+  const { linear } = lab('chart-math.ts');
+  assert.ok(linear([0, 1.1], [100, 10])(1) > 10, 'a marker at 100% sits below the top edge of the plot');
+}));
+
+test('times are written one way: seconds, minutes, then hours with minutes', () => zh(() => {
+  const { duration, minutesLabel, DASH } = lab('format.ts');
+  assert.deepEqual([duration(null), duration(0), duration(45000), duration(60000), duration(44 * 60000), duration(111 * 60000), duration(120 * 60000), duration(59.6 * 1000)], [DASH, '0 分', '45 秒', '1 分', '44 分', '1 小时 51 分', '2 小时', '1 分']);
+  assert.equal(minutesLabel(112), '1 小时 52 分');
+  const source = fs.readdirSync(labDir).filter(name => /\.tsx?$/.test(name)).map(name => read(path.join(labDir, name))).join('\n');
+  assert.doesNotMatch(source, /padStart\(2/, 'no second, English-style time format');
+}));
+
+test('the orchestration flow writes each phase’s time inside its block, counts under the blocks, and evenly spaced ticks in whole minutes', () => zh(() => {
+  const { timeTicks } = lab('chart-math.ts');
+  assert.deepEqual(timeTicks(630000), [0, 120000, 240000, 360000, 480000, 600000]);
+  assert.deepEqual(timeTicks(40000), [0, 10000, 20000, 30000]);
+  const out = view({ experiments: [experiment({ arms: ['orchestrated', 'opus'], repeats: 1, runs: ['t1', 't2'].flatMap(id => ['orchestrated', 'opus'].map(arm => run(id, arm, 1, { phases: arm === 'orchestrated' ? phases([60000, 120000, 300000, 90000, 60000]) : undefined }))) })] }, { kind: 'experiment', id: 'e1' });
+  const flow = out.slice(out.indexOf('class="flow arm-orchestrated"'));
+  assert.equal(count(flow, /<div class="phase /g), 5);
+  assert.match(flow, /<span>计划<\/span><b>1 分<\/b>/); assert.match(flow, /<span>编写<\/span><b>5 分<\/b>/);
+  assert.equal(count(flow, /数量 \d/g), 3 + 3, 'the counts of three phases, once as a title and once under the block');
+  assert.match(flow, /class="flow-axis"><span[^>]*>0 分<\/span><span[^>]*>2 分<\/span>/);
+  assert.doesNotMatch(flow, /<svg/, 'laid out, not a scaled drawing');
+}));
+
+test('engine messages are shown in plain words with a next step, and other messages are translated as they are', () => zh(() => {
+  const { friendlyError } = lab('format.ts');
+  assert.match(friendlyError('worktree 创建失败'), /无法创建独立工作区。请重试/);
+  assert.match(friendlyError('Git: fatal: not a git repository'), /无法创建独立工作区/);
+  assert.equal(friendlyError('实验运行超时。'), '实验运行超时。');
+  applyLanguage('en');
+  try { assert.match(friendlyError('worktree 创建失败'), /Could not create the separate workspace\. Try again/); } finally { applyLanguage('zh'); }
+}));
+
+test('the back button is one component with its chevron, the same on the form and on an experiment', () => zh(() => {
+  const button = text => /<button type="button" class="button small back">.*?<\/button>/.exec(text)?.[0];
+  const form = button(view({ experiments: [] }, { kind: 'new' })), experimentPage = button(view({ experiments: [experiment()] }, { kind: 'experiment', id: 'e1' }));
+  assert.ok(form); assert.equal(form, experimentPage);
+  assert.match(read(path.join(labDir, 'Marks.tsx')), /<CaretLeft size=\{12\} \/>\{t\('返回实验列表'\)\}/);
+}));
+
+test('home cards: no unlabelled footer, delete is a quiet icon action, and a running card charts each approach’s progress', () => zh(() => {
+  const home = view({ experiments: [experiment(), experiment({ state: 'running', patch: { id: 'e2', name: '跑着的' }, runs: [run('t1', 'orchestrated', 1), run('t1', 'orchestrated', 2, { state: 'running' }), run('t1', 'opus', 1, { state: 'queued' })] })] });
+  assert.doesNotMatch(home, /card-foot/);
+  assert.equal(count(home, /class="icon-button card-delete"/g), 2);
+  assert.match(home, /各方案的运行进度/); assert.match(home, /<b>1\/2<\/b>/); assert.match(home, /<b>0\/1<\/b>/);
+  assert.match(home, /title="先停止实验" aria-label="先停止实验" disabled=""/);
+  assert.equal(count(home, /class="button primary"/g), 1, 'one strong action on the page');
+}));
+
+test('a ring’s caption is outside the ring, so a figure like "通过 100%" never has to fit the hole', () => zh(() => {
+  const out = view({ experiments: [experiment()] }, { kind: 'experiment', id: 'e1' });
+  assert.match(out, /<div class="ring-text"><b class="figure">2\/2<\/b><\/div><\/div><p class="muted ring-caption">任务通过 100%<\/p>/);
+}));
+
+test('the running screen: a finished approach says 已完成, a live one without a model name is still live, and nothing blue stands for a model', () => zh(() => {
+  const ended = (arm, id, repeat) => run(id, arm, repeat, { state: 'passed' });
+  const runs = [ended('opus', 't1', 1), ended('opus', 't2', 1), run('t1', 'sol', 1, { state: 'running', activeModel: null }), run('t2', 'sol', 1, { state: 'queued' })];
+  const out = view({ experiments: [experiment({ arms: ['opus', 'sol'], repeats: 1, state: 'running', runs })] }, { kind: 'experiment', id: 'e1' });
+  assert.match(out, /data-active="false"[^]*?已完成/); assert.doesNotMatch(out, /等待中/);
+  assert.equal(count(out, /data-active="true"/g), 1);
+  assert.doesNotMatch(css(), /var\(--running\)/, 'the interface never borrows the running blue, which could read as an approach');
 }));
 
 test('results never show 0 for what is unknown, say unpriced runs, and mark an unfinished experiment', () => zh(() => {
@@ -371,3 +452,40 @@ test('English results translate persisted engine errors and sampling explanation
     assert.match(out, /Across 2 modules · 40 lines changed/); assert.doesNotMatch(out, /跨 2 个模块/);
   } finally { applyLanguage('zh'); }
 });
+
+// ---- money, and starting on a current estimate ------------------------------------------------------------------------------
+test('a cost is always dollars and cents; only an axis tick may drop the cents of a whole dollar', () => zh(() => {
+  const { money, moneyTick, DASH } = lab('format.ts');
+  assert.deepEqual([money(12.9), money(35), money(8.47), money(0), money(120), money(null)], ['$12.90', '$35.00', '$8.47', '$0.00', '$120.00', DASH]);
+  assert.deepEqual([moneyTick(5), moneyTick(0), moneyTick(2.5)], ['$5', '$0', '$2.50']);
+  const priced = ['t1', 't2'].flatMap(id => ['orchestrated', 'opus'].flatMap(arm => [1, 2, 3].map(repeat => run(id, arm, repeat, { costUsd: 2.15 }))));
+  const results = view({ experiments: [experiment({ arms: ['orchestrated', 'opus'], runs: priced })] }, { kind: 'experiment', id: 'e1' });
+  assert.match(results, /<dd>\$12\.90<\/dd>/, 'a card shows the cost with cents'); assert.match(results, /<td class="num">\$12\.90<\/td>/, 'and so does the table beside the scatter');
+  assert.doesNotMatch(results, /\$12\.9</);
+  const running = view({ experiments: [experiment({ state: 'running', patch: { spentUsd: 21.4, budgetUsd: 20 } })] }, { kind: 'experiment', id: 'e1' });
+  assert.match(running, /已花 \$21\.40/); assert.match(running, /预算 \$20\.00/);
+}));
+
+test('the form starts only with a current, successful estimate for exactly the draft', () => zh(() => {
+  const w = lab('wizard-math.ts'), estimate = { runs: 12, minutes: 30, costUsd: 5, basis: 'default' };
+  const answer = patch => ({ fresh: true, loading: false, value: estimate, error: null, ...patch });
+  assert.deepEqual(w.currentEstimate(answer()), { value: estimate, error: null });
+  assert.equal(w.currentEstimate(answer({ fresh: false })).value, null, 'an answer to an earlier draft (tasks, approaches or repeats changed) does not count');
+  assert.equal(w.currentEstimate(answer({ loading: true })).value, null, 'one still on its way does not count');
+  assert.deepEqual(w.currentEstimate(answer({ value: null, error: 'boom' })), { value: null, error: 'boom' });
+  assert.equal(w.currentEstimate(answer({ fresh: false, value: null, error: 'old' })).error, null, 'a failure of an earlier draft is not shown for this one');
+  assert.equal(w.canStart(null, estimate, false), true);
+  assert.equal(w.canStart(null, null, false), false, 'no estimate yet, or a failed one');
+  assert.equal(w.canStart('budget', estimate, false), false); assert.equal(w.canStart(null, estimate, true), false);
+
+  const wizard = read(path.join(labDir, 'Wizard.tsx'));
+  assert.match(wizard, /disabled=\{!canStart\(lack, estimated, starting\)\}/); assert.match(wizard, /if \(!canStart\(lack, estimated, starting\)\) return;/);
+  assert.match(wizard, /\[ready, projectId, tasks\.map\(task => task\.id\)\.join\(\), draft\.arms\.join\(\), draft\.repeats\]/, 'the estimate is asked again when any of these changes');
+  assert.match(read(path.join(labDir, 'useResult.ts')), /fresh: state\.answered === asked/);
+
+  const { ScaleStep } = lab('WizardSteps.tsx'), draft = { ...w.emptyDraft(), projectId: 'p1', tasks: [task('t1', 'core')], budgetUsd: 10 };
+  const show = error => html(React.createElement(ScaleStep, { draft, estimate: null, error, onRetry() {}, defaultName: 'x', onRepeats() {}, onBudget() {}, onName() {} }));
+  const failed = show('boom');
+  assert.match(failed, /估算失败：boom/); assert.match(failed, /<button type="button" class="button small">重试<\/button>/);
+  assert.doesNotMatch(show(null), /估算失败/);
+}));

@@ -33,3 +33,10 @@ export function shapePath(shape: 'circle' | 'square' | 'diamond' | 'triangle', c
   if (shape === 'diamond') return `M${f(cx)} ${f(cy - 1.2 * r)}L${f(cx + 1.2 * r)} ${f(cy)}L${f(cx)} ${f(cy + 1.2 * r)}L${f(cx - 1.2 * r)} ${f(cy)}Z`;
   return `M${f(cx)} ${f(cy - 1.15 * r)}L${f(cx + 1.15 * r)} ${f(cy + 0.9 * r)}L${f(cx - 1.15 * r)} ${f(cy + 0.9 * r)}Z`;
 }
+
+// Evenly spaced ticks (in ms) from 0 up to, not including, `total`: a step of whole seconds or minutes, the smallest that gives about six ticks.
+export function timeTicks(total: number) {
+  const steps = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400].map(seconds => seconds * 1000);
+  const step = steps.find(candidate => candidate * 6 >= total) ?? steps[steps.length - 1];
+  return Array.from({ length: Math.ceil(total / step) }, (_, index) => index * step);
+}

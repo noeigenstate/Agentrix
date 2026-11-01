@@ -1,13 +1,15 @@
 // The Virtual Lab window's page. It reads only through window.agentrixLab (electron/features/lab/preload.cjs) and draws whatever the main process
 // sends; every number there may be null, and the page shows that as "—".
 import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { CaretLeft, Minus, Square, X } from '@phosphor-icons/react';
+import { Minus, Square, X } from '@phosphor-icons/react';
 import type { LabBridge, LabExperiment } from '../../shared/lab-types';
 import { applyLanguage, t } from '../../shared/i18n';
 import { IconButton } from '../../shared/IconButton';
 import { applyTheme } from '../../shared/themes';
+import { friendlyError } from './format';
 import { Home } from './Home';
 import { createLabStore, type LabState, type LabStore } from './lab-store';
+import { BackButton } from './Marks';
 import { Results } from './Results';
 import { Running } from './Running';
 import { Wizard } from './Wizard';
@@ -36,7 +38,7 @@ function Experiment({ experiment, onStop, onBack }: { experiment: LabExperiment 
   if (!experiment) return <p className="empty">{t('找不到这个实验。')}</p>;
   return <>
     <div className="toolbar">
-      <button type="button" className="button small" onClick={onBack}><CaretLeft size={12} />{t('返回实验列表')}</button>
+      <BackButton onClick={onBack} />
       <h2>{experiment.name}</h2>
     </div>
     {experiment.state === 'running' ? <Running experiment={experiment} onStop={() => onStop(experiment.id)} /> : <Results experiment={experiment} />}
@@ -51,7 +53,7 @@ export function LabView({ state, store, bridge, named, actions, initial = { kind
   return <div className="lab">
     <TitleBar title={t('虚拟实验室')} note={note} named={named} actions={actions} />
     <main className="lab-main">
-      {state.error && <p className="banner" role="alert">{t('读取数据失败：{message}', { message: state.error })} <button type="button" className="button small" onClick={() => void store.refresh()}>{t('重试')}</button></p>}
+      {state.error && <p className="banner" role="alert">{t('读取数据失败：{message}', { message: friendlyError(state.error) })} <button type="button" className="button small" onClick={() => void store.refresh()}>{t('重试')}</button></p>}
       {view.kind === 'home' && <Home experiments={state.experiments} onNew={() => setView({ kind: 'new' })} onOpen={id => setView({ kind: 'experiment', id })} onRemove={store.remove} />}
       {view.kind === 'new' && <Wizard projects={state.projects} api={bridge} begin={store.begin} onClose={home} onStarted={id => setView({ kind: 'experiment', id })} />}
       {view.kind === 'experiment' && <Experiment experiment={experiment} onStop={store.stopExperiment} onBack={home} />}

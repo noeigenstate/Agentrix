@@ -4,7 +4,7 @@ import { Check, Minus, Stop, Warning, X } from '@phosphor-icons/react';
 import type { LabExperiment, LabRun } from '../../shared/lab-types';
 import { t } from '../../shared/i18n';
 import { useNow } from '../../shared/useNow';
-import { duration, money, outOf, stateLabel } from './format';
+import { duration, friendlyError, money, outOf, stateLabel } from './format';
 import { ArmName, Panel, Ring, ScrollRegion, Tag } from './Marks';
 import { isDone, progress, ranArms, runsFor } from './results-math';
 
@@ -17,16 +17,18 @@ const KEY_RUN: LabRun = { id: '', taskId: '', arm: 'opus', repeat: 1, state: 'qu
 
 export function Tile({ run }: { run: LabRun }) {
   const Icon = run.state in TILE_ICONS ? TILE_ICONS[run.state as keyof typeof TILE_ICONS] : null, label = TILE_NAMES[run.state]();
-  return <span className={`tile ${run.state}`} role="img" aria-label={label} title={run.error ? `${label}: ${run.error}` : label}>{Icon && <Icon size={12} weight="bold" />}</span>;
+  return <span className={`tile ${run.state}`} role="img" aria-label={label} title={run.error ? `${label}: ${friendlyError(run.error)}` : label}>{Icon && <Icon size={12} weight="bold" />}</span>;
 }
 
 function ArmCard({ experiment, arm }: { experiment: LabExperiment; arm: LabExperiment['arms'][number] }) {
   const runs = runsFor(experiment, arm), done = runs.filter(isDone).length;
-  const models = [...new Set(runs.filter(run => run.state === 'running').map(run => run.activeModel).filter((model): model is string => model !== null))];
-  return <section className={`arm-card running-card arm-${arm}`} data-active={models.length > 0}>
-    <div className="card-head"><ArmName arm={arm} long />{models.length > 0 && <span className="live"><i />{t('运行中')}</span>}</div>
+  const working = runs.filter(run => run.state === 'running'), finished = runs.length > 0 && done === runs.length;
+  // A run being worked on may not have said its model yet: the card is live all the same.
+  const models = [...new Set(working.map(run => run.activeModel).filter((model): model is string => model !== null))];
+  return <section className={`arm-card running-card arm-${arm}`} data-active={working.length > 0}>
+    <div className="card-head"><ArmName arm={arm} long />{working.length > 0 && <span className="live"><i />{t('运行中')}</span>}</div>
     <Ring share={runs.length ? done / runs.length : 0} size={96} stroke={8}><b className="small-figure">{outOf(done, runs.length)}</b></Ring>
-    <div className="models">{models.length ? models.map(model => <Tag key={model}>{model}</Tag>) : <span className="muted">{done === runs.length && runs.length ? t('已完成') : t('等待中')}</span>}</div>
+    <div className="models">{models.map(model => <Tag key={model}>{model}</Tag>)}{working.length === 0 && <span className="muted">{finished ? t('已完成') : t('等待中')}</span>}</div>
   </section>;
 }
 
@@ -41,7 +43,7 @@ export function Running({ experiment, onStop }: { experiment: LabExperiment; onS
         <h2>{stateLabel(experiment.state)}</h2>
         <p>{t('已用 {elapsed} · 预计还需 {left} · 已花 {spent}', { elapsed: duration(pace.elapsedMs), left: duration(pace.remainingMs), spent: money(experiment.spentUsd) })}</p>
         <p className="muted">{t('预算 {budget}：只阻止新的运行开始，不会中断已经开始的运行。', { budget: money(experiment.budgetUsd) })}</p>
-        {error && <p className="banner" role="alert">{t('停止失败：{message}', { message: error })}</p>}
+        {error && <p className="banner" role="alert">{t('停止失败：{message}', { message: friendlyError(error) })}</p>}
       </div>
       <button type="button" className="button" disabled={stopping || experiment.state !== 'running'} onClick={() => void stop()}><Stop size={16} weight="fill" />{t('停止')}</button>
     </section>

@@ -3,10 +3,10 @@ import type { ReactNode } from 'react';
 import { ChartLineUp, Check, GitCommit, GithubLogo, Minus, Plus } from '@phosphor-icons/react';
 import type { LabArm, LabEstimate, LabTask } from '../../shared/lab-types';
 import { t } from '../../shared/i18n';
-import { armName, kindLabel, minutesLabel, money, DASH } from './format';
+import { armName, DASH, kindLabel, minutesLabel, money, percent } from './format';
 import { ArmMark, Ring, Tag } from './Marks';
 import { ALL_ARMS } from './results-math';
-import { MAX_RUNS, MIN_ARMS, REPEATS, SIZE, type Draft } from './wizard-math';
+import { MIN_ARMS, REPEATS, SIZE, type Draft } from './wizard-math';
 
 const Tick = () => <span className="tick" aria-hidden="true"><Check size={12} weight="bold" /></span>;
 
@@ -28,11 +28,11 @@ export function SourceStep() {
 
 export function Stepper({ label, hint, value, min, max, onChange }: { label: string; hint: string; value: number; min: number; max: number; onChange: (value: number) => void }) {
   return <div className="field"><div><b>{label}</b><p className="muted">{hint}</p></div>
-    <div className="stepper" role="group" aria-label={label}>
+    <div className="control"><div className="stepper" role="group" aria-label={label}>
       <button type="button" className="icon-button" aria-label={t('减少')} disabled={value <= min} onClick={() => onChange(value - 1)}><Minus size={16} /></button>
       <output aria-live="polite">{value}</output>
       <button type="button" className="icon-button" aria-label={t('增加')} disabled={value >= max} onClick={() => onChange(value + 1)}><Plus size={16} /></button>
-    </div></div>;
+    </div></div></div>;
 }
 
 export type Sampling = { size: number; preferShortComplex: boolean };
@@ -91,34 +91,35 @@ export function ArmStep({ arms, onToggle }: { arms: LabArm[]; onToggle: (arm: La
   </div>;
 }
 
-function Gauge({ share, value, label, over = false }: { share: number; value: string; label: string; over?: boolean }) {
-  return <div className={`gauge ${over ? 'over' : ''}`}><Ring share={share} size={112} stroke={10}><b className="small-figure">{value}</b></Ring><span className="muted">{label}</span></div>;
-}
+// The estimate as three large numbers; the one ring says how much of the budget the estimated cost is.
+const Stat = ({ value, label }: { value: string; label: string }) => <div className="stat"><b className="figure">{value}</b><span className="muted">{label}</span></div>;
 
-export function ScaleStep({ draft, estimate, error, onRepeats, onBudget, onName, defaultName }: {
-  draft: Draft; estimate: LabEstimate | null; error: string | null; defaultName: string;
+export function ScaleStep({ draft, estimate, error, onRetry, onRepeats, onBudget, onName, defaultName }: {
+  draft: Draft; estimate: LabEstimate | null; error: string | null; defaultName: string; onRetry: () => void;
   onRepeats: (value: number) => void; onBudget: (value: number) => void; onName: (value: string) => void;
 }) {
-  const size = estimate ? Math.min(1, estimate.runs / MAX_RUNS) : null;
-  const over = estimate !== null && draft.budgetUsd > 0 && estimate.costUsd > draft.budgetUsd;
-  return <div className="two scale">
-    <section className="panel">
-      <Stepper label={t('每个问题重复几次')} hint={t('结果有随机性，{min}–{max} 次', { min: REPEATS.min, max: REPEATS.max })} value={draft.repeats} min={REPEATS.min} max={REPEATS.max} onChange={onRepeats} />
-      <label className="field"><div><b>{t('预算（美元）')}</b><p className="muted">{t('花到这个数就不再开始新的运行；已经开始的运行不会被中断。')}</p></div>
-        <input className="input" type="number" min={1} step={1} inputMode="decimal" aria-label={t('预算（美元）')} value={draft.budgetUsd || ''} onChange={event => onBudget(Number(event.target.value))} /></label>
-      <label className="field"><div><b>{t('实验名称')}</b><p className="muted">{t('留空则用默认名称')}</p></div>
-        <input className="input wide" type="text" placeholder={defaultName} aria-label={t('实验名称')} value={draft.name} onChange={event => onName(event.target.value)} /></label>
-      <p className="note">{t('{tasks} 个问题 × {arms} 种方案 × {repeats} 次', { tasks: draft.tasks.length, arms: draft.arms.length, repeats: draft.repeats })} · {t('每次运行都在独立的工作树中进行')}</p>
-    </section>
+  const share = estimate && draft.budgetUsd > 0 ? estimate.costUsd / draft.budgetUsd : null, over = share !== null && share > 1;
+  return <>
     <section className="panel">
       <h2>{t('预估')}<span className="hint">{estimate ? (estimate.basis === 'history' ? t('按你自己的运行记录估算') : t('还没有运行记录，按默认值估算')) : t('估算值')}</span></h2>
-      {error && <p className="banner" role="alert">{t('估算失败：{message}', { message: error })}</p>}
-      <div className="gauges">
-        <Gauge share={size ?? 0} value={estimate ? String(estimate.runs) : DASH} label={t('次运行')} />
-        <Gauge share={size ?? 0} value={estimate ? minutesLabel(estimate.minutes) : DASH} label={t('用时')} />
-        <Gauge share={estimate && draft.budgetUsd > 0 ? Math.min(1, estimate.costUsd / draft.budgetUsd) : 0} value={estimate ? money(estimate.costUsd) : DASH} label={over ? t('超出预算') : t('占预算的比例')} over={over} />
+      {error && <p className="banner" role="alert">{t('估算失败：{message}', { message: error })} <button type="button" className="button small" onClick={onRetry}>{t('重试')}</button></p>}
+      <div className="estimate">
+        <Stat value={estimate ? String(estimate.runs) : DASH} label={t('次运行')} />
+        <Stat value={estimate ? minutesLabel(estimate.minutes) : DASH} label={t('用时')} />
+        <Stat value={estimate ? money(estimate.costUsd) : DASH} label={t('费用')} />
+        <div className={`gauge ${over ? 'over' : ''}`}>
+          <Ring share={share === null ? 0 : Math.min(1, share)} size={112} stroke={10}><b className="small-figure">{percent(share)}</b></Ring>
+          <span className="muted">{over ? t('超出预算') : t('占预算的比例')}</span>
+        </div>
       </div>
-      <p className="note">{t('前两个圆环是占本表单允许的最大规模（{n} 次运行）的比例，第三个是预估费用占预算的比例。', { n: MAX_RUNS })}</p>
     </section>
-  </div>;
+    <section className="panel fields">
+      <Stepper label={t('每个问题重复几次')} hint={t('结果有随机性，{min}–{max} 次', { min: REPEATS.min, max: REPEATS.max })} value={draft.repeats} min={REPEATS.min} max={REPEATS.max} onChange={onRepeats} />
+      <label className="field"><div><b>{t('预算（美元）')}</b><p className="muted">{t('花到这个数就不再开始新的运行；已经开始的运行不会被中断。')}</p></div>
+        <div className="control"><input className="input" type="number" min={1} step={1} inputMode="decimal" aria-label={t('预算（美元）')} value={draft.budgetUsd || ''} onChange={event => onBudget(Number(event.target.value))} /></div></label>
+      <label className="field"><div><b>{t('实验名称')}</b><p className="muted">{t('留空则用默认名称')}</p></div>
+        <div className="control"><input className="input" type="text" placeholder={defaultName} aria-label={t('实验名称')} value={draft.name} onChange={event => onName(event.target.value)} /></div></label>
+      <p className="note">{t('{tasks} 个问题 × {arms} 种方案 × {repeats} 次', { tasks: draft.tasks.length, arms: draft.arms.length, repeats: draft.repeats })}</p>
+    </section>
+  </>;
 }

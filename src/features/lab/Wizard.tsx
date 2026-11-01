@@ -5,10 +5,11 @@ import { Check } from '@phosphor-icons/react';
 import type { LabBridge, LabExperimentInput } from '../../shared/lab-types';
 import type { Result } from '../../shared/types';
 import { t } from '../../shared/i18n';
-import { dateLabel } from './format';
+import { dateLabel, friendlyError } from './format';
+import { BackButton } from './Marks';
 import { useResult } from './useResult';
 import { ArmStep, ProjectStep, ScaleStep, SourceStep, type Sampling } from './WizardSteps';
-import { clampRepeats, clampSize, defaultName, emptyDraft, missing, proposedBudget, toggleArm, toInput, type Draft, type Step } from './wizard-math';
+import { canStart, clampRepeats, clampSize, currentEstimate, defaultName, emptyDraft, missing, proposedBudget, toggleArm, toInput, type Draft, type Step } from './wizard-math';
 
 type Api = Pick<LabBridge, 'sample' | 'estimate'>;
 
@@ -44,8 +45,11 @@ export function Wizard({ projects, api, begin, onClose, onStarted }: {
   const ready = step === 4 && !missing(3, draft);
   const estimate = useResult(() => ready ? api.estimate({ projectId, source: 'history', tasks, arms: draft.arms, repeats: draft.repeats }) : null,
     [ready, projectId, tasks.map(task => task.id).join(), draft.arms.join(), draft.repeats]);
+  // An estimate counts only while it answers the draft as it is now (tasks, approaches, repeats); the moment one of them changes it stops counting, and the
+  // experiment cannot start until the new one has arrived. A failed estimate does not count either: it is shown with a retry.
+  const { value: estimated, error: failed } = currentEstimate(estimate);
 
-  useEffect(() => { if (estimate.value && !budgetTouched) setBase(current => ({ ...current, budgetUsd: proposedBudget(estimate.value!) })); }, [estimate.value, budgetTouched]);
+  useEffect(() => { if (estimated && !budgetTouched) setBase(previous => ({ ...previous, budgetUsd: proposedBudget(estimated) })); }, [estimated, budgetTouched]);
 
   const patch = (change: Partial<Draft>) => setBase(current => ({ ...current, ...change }));
   const go = (next: Step) => { setStep(next); setReached(current => Math.max(current, next) as Step); };
@@ -54,6 +58,7 @@ export function Wizard({ projects, api, begin, onClose, onStarted }: {
   const exhausted = exclude.length > 0 && !sample.loading && !sample.error && tasks.length === 0;
 
   async function start() {
+    if (!canStart(lack, estimated, starting)) return;
     setStarting(true); setStartError(null);
     const result = await begin(toInput(draft, draft.name.trim() || defaultName(projectName, dateLabel(Date.now()))));
     setStarting(false);
@@ -61,21 +66,21 @@ export function Wizard({ projects, api, begin, onClose, onStarted }: {
   }
 
   return <div className="wizard">
-    <button type="button" className="button small back" onClick={onClose}>{t('返回实验列表')}</button>
+    <div className="toolbar"><BackButton onClick={onClose} /></div>
     <StepNav step={step} onGo={go} />
     <div className="step-body">
       {step === 1 && <SourceStep />}
       {step === 2 && <ProjectStep projects={projects} projectId={projectId} sampling={sampling} onProject={id => { patch({ projectId: id }); setExclude([]); }} onSampling={resample}
-        sample={{ tasks, loading: sample.loading, error: sample.error, exhausted }} onShuffle={() => setExclude(tasks.map(task => task.id))} onRetry={() => { if (exclude.length) setExclude([]); else sample.reload(); }} />}
+        sample={{ tasks, loading: sample.loading, error: sample.error && friendlyError(sample.error), exhausted }} onShuffle={() => setExclude(tasks.map(task => task.id))} onRetry={() => { if (exclude.length) setExclude([]); else sample.reload(); }} />}
       {step === 3 && <ArmStep arms={draft.arms} onToggle={arm => patch({ arms: toggleArm(draft.arms, arm) })} />}
-      {step === 4 && <ScaleStep draft={draft} estimate={estimate.value} error={estimate.error} defaultName={defaultName(projectName, dateLabel(Date.now()))}
+      {step === 4 && <ScaleStep draft={draft} estimate={estimated} error={failed && friendlyError(failed)} onRetry={estimate.reload} defaultName={defaultName(projectName, dateLabel(Date.now()))}
         onRepeats={value => patch({ repeats: clampRepeats(value) })} onBudget={value => { setBudgetTouched(true); patch({ budgetUsd: Math.max(0, value) }); }} onName={name => patch({ name })} />}
     </div>
     <footer className="wizard-foot">
       <button type="button" className="button" disabled={step === 1} onClick={() => go((step - 1) as Step)}>{t('上一步')}</button>
-      <span className="muted" role="status">{lack ? MISSING_TEXT[lack]() : startError ? t('开始失败：{message}', { message: startError }) : step < 4 ? t('第 {n} / 4 步', { n: step }) : t('每次运行都在独立的工作树中进行')}</span>
+      <span className="muted" role="status">{lack ? MISSING_TEXT[lack]() : startError ? t('开始失败：{message}', { message: friendlyError(startError) }) : step < 4 ? t('第 {n} / 4 步', { n: step }) : estimated ? t('每次运行都在独立的工作树中进行') : failed ? t('估算没有成功，不能开始。') : t('正在估算…')}</span>
       {step < 4 ? <button type="button" className="button primary" disabled={!!lack || sample.loading} onClick={() => go((step + 1) as Step)}>{t('下一步')}</button>
-        : <button type="button" className="button primary" disabled={!!lack || starting} onClick={() => void start()}>{t('开始')}</button>}
+        : <button type="button" className="button primary" disabled={!canStart(lack, estimated, starting)} onClick={() => void start()}>{t('开始')}</button>}
     </footer>
   </div>;
 }

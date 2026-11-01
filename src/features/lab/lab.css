@@ -36,12 +36,9 @@
 .panel { padding: 16px; }
 .panel h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 8px; font-size: 14px; line-height: 20px; font-weight: 600; }
 .panel h2 .hint { color: var(--text-3); font-size: 12px; font-weight: 400; }
-.two { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; }
-.two > * { min-width: 0; }
-.two.scale { grid-template-columns: 1fr 1fr; }
 .tag { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--bg-hover); color: var(--text-2); font-size: 12px; white-space: nowrap; }
 
-/* Marks and rings. The ring's colour is --ink; unmarked rings (the overall one) use the running colour. */
+/* Marks and rings. The ring's colour is --ink; a ring that belongs to no approach (the overall one, the budget share) is neutral, so it never reads as one of them. */
 .mark { flex: none; fill: var(--ink); }
 .who { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 8px; color: var(--text-2); font-size: 12px; }
@@ -49,8 +46,9 @@
 .ring svg { display: block; }
 .ring-track { fill: none; stroke: var(--bg-selected); }
 .ring-fill { fill: none; stroke: var(--ink); stroke-linecap: round; }
-.overall .ring, .gauge .ring { --ink: var(--running); }
+.overall .ring, .gauge .ring { --ink: var(--text-1); }
 .gauge.over .ring { --ink: var(--danger); }
+.ring-caption { text-align: center; }
 .ring-text { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
 .figure { font-size: 48px; line-height: 56px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .small-figure { font-size: 16px; line-height: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -61,12 +59,18 @@
 .exp-card { position: relative; display: flex; flex-direction: column; gap: 12px; padding: 16px; }
 .exp-card:hover { border-color: var(--border-hover); }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; }
-.card-head h2 { min-width: 0; font-size: 14px; line-height: 20px; font-weight: 600; }
+.card-head h2 { flex: 1; min-width: 0; font-size: 14px; line-height: 20px; font-weight: 600; }
 .card-open { padding: 0; border: 0; background: none; color: var(--text-1); font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
 .card-open::after { content: ""; position: absolute; inset: 0; border-radius: 12px; }
+/* Deleting is quiet: the button shows when the card is hovered or has focus, and sits above the stretched title link. */
+.exp-card .card-delete { position: relative; z-index: 1; margin: -4px -8px -4px 0; opacity: 0; }
+.exp-card:is(:hover, :focus-within) .card-delete { opacity: 1; }
+.exp-card .card-delete:disabled { color: var(--text-disabled); cursor: default; }
+.card-confirm { position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 12px; border-top: 1px solid var(--divider); }
+.card-confirm span { flex: 1; min-width: 160px; }
 .status { display: inline-flex; flex: none; align-items: center; gap: 8px; color: var(--text-2); font-size: 12px; }
 .status i, .live i { width: 8px; height: 8px; border-radius: 999px; background: var(--text-3); }
-.status.tone-running i, .live i { background: var(--running); }
+.status.tone-running i, .live i { background: var(--text-1); }
 .status.tone-success i { background: var(--success); }
 .status.tone-warning i { background: var(--warning); }
 .status.tone-danger i { background: var(--danger); }
@@ -75,9 +79,6 @@
 .bar-row b { text-align: right; font-variant-numeric: tabular-nums; }
 .track { display: block; height: 8px; overflow: hidden; border-radius: 999px; background: var(--bg-selected); }
 .track i { display: block; height: 100%; background: var(--ink); }
-.track i.neutral { background: var(--running); }
-.card-foot { position: relative; z-index: 1; display: flex; align-items: center; gap: 8px; margin-top: auto; }
-.card-foot .mark { fill: var(--ink); }
 .empty-state { display: flex; flex-direction: column; align-items: center; gap: 12px; max-width: 560px; margin: 32px auto; padding: 32px; border: 1px solid var(--panel-line); border-radius: 12px; background: var(--bg-card); text-align: center; }
 .empty-state h2 { font-size: 16px; line-height: 24px; font-weight: 600; }
 .marks { display: flex; gap: 16px; }
@@ -115,28 +116,34 @@
 .sample-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .task-list { display: flex; flex-direction: column; }
 .task-list li { display: grid; grid-template-columns: 8px 1fr auto; align-items: start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--divider); }
-.task-list li > i { width: 8px; height: 8px; margin-top: 8px; border-radius: 999px; background: var(--running); }
+.task-list li > i { width: 8px; height: 8px; margin-top: 8px; border-radius: 999px; background: var(--text-2); }
 .task-list p { font-size: 12px; }
+/* A form row: the words at the left, its control in a column of one width at the right, so every input and stepper lines up. */
 .field { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 0; }
 .field p { font-size: 12px; }
+.control { display: flex; flex: none; justify-content: flex-end; width: 200px; }
+.fields { display: flex; flex-direction: column; }
 .stepper { display: inline-flex; align-items: center; gap: 4px; padding: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-control); }
 .stepper output { min-width: 32px; font-size: 16px; line-height: 24px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; }
 .stepper .icon-button:disabled { color: var(--text-disabled); }
-.input { width: 96px; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: inherit; text-align: right; }
-.input.wide { width: 200px; text-align: left; }
+.input { box-sizing: border-box; width: 100%; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: inherit; }
 .input:hover { border-color: var(--border-hover); }
 .check { display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); }
 .check input { width: 16px; height: 16px; margin: 0; accent-color: var(--text-2); }
-.gauges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; justify-items: center; padding: 8px 0; }
+/* The estimate: three large figures and one ring, filling the width of the card. */
+.estimate { display: grid; grid-template-columns: repeat(3, 1fr) auto; gap: 16px 32px; align-items: center; padding: 8px 0; }
+.stat { display: flex; flex-direction: column; min-width: 0; }
+.stat .figure { overflow-wrap: anywhere; }
 .gauge { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .arm-step { display: flex; flex-direction: column; gap: 16px; }
 .diagram { display: block; width: 100%; height: auto; max-height: 240px; }
-.diagram rect { fill: var(--bg-hover); stroke: var(--running); stroke-width: 1.5; }
+.diagram { --ink: var(--lab-arm-orchestrated); }
+.diagram rect { fill: var(--bg-hover); stroke: var(--ink); stroke-width: 1.5; }
 .diagram text { fill: var(--text-1); font: 600 13px var(--font-ui); }
 .diagram text.note { fill: var(--text-2); font-weight: 400; }
-.diagram .links path, .diagram .loop { fill: none; stroke: var(--running); stroke-width: 1.5; }
+.diagram .links path, .diagram .loop { fill: none; stroke: var(--ink); stroke-width: 1.5; }
 .diagram .loop { stroke-dasharray: 6 4; }
-.diagram marker path { fill: var(--running); stroke: none; }
+.diagram marker path { fill: var(--ink); stroke: none; }
 
 /* Running. */
 .overall { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 24px; }
@@ -160,8 +167,8 @@
 .tile-row { display: inline-flex; gap: 4px; }
 .tile { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border: 1px solid var(--border-hover); border-radius: 8px; color: var(--text-1); }
 .tile.queued { border-style: dashed; border-color: var(--border); }
-.tile.running { border-color: var(--running); background: var(--bg-selected); }
-.tile.running::after { content: ""; width: 6px; height: 6px; border-radius: 999px; background: var(--running); }
+.tile.running { border-color: var(--text-1); background: var(--bg-selected); }
+.tile.running::after { content: ""; width: 6px; height: 6px; border-radius: 999px; background: var(--text-1); }
 .tile.passed { border-color: var(--success); background: var(--success); color: var(--bg-app); }
 .tile.failed { border-color: var(--danger); background: var(--danger); color: var(--bg-app); }
 .tile.error { border-color: var(--warning); background: var(--warning); color: var(--bg-app); }
@@ -172,8 +179,9 @@
 @media (prefers-reduced-motion: no-preference) { .tile.running::after { animation: lab-pulse 1.4s ease-in-out infinite; } }
 @keyframes lab-pulse { 50% { opacity: .3; } }
 
-/* Figures. Text in a chart is the app's own 12px; the data table beneath each gives the numbers. */
-svg.chart { display: block; width: 100%; height: auto; }
+/* Figures. A chart is drawn at the width of its box (see useWidth), so its text is the app's own 12px and never scaled; a table gives the numbers. */
+.plot { min-width: 0; }
+svg.chart { display: block; max-width: 100%; }
 svg.chart text { fill: var(--text-3); font-size: 12px; font-family: var(--font-ui); }
 svg.chart text.strong { fill: var(--text-1); font-weight: 600; }
 svg.chart text.row { fill: var(--text-2); }
@@ -183,12 +191,23 @@ svg.chart text.end { fill: var(--text-1); font-weight: 600; }
 .chart .axis { stroke: var(--text-3); }
 .chart .dot { fill: var(--ink); stroke: var(--bg-card); stroke-width: 1.5; }
 .chart .bar line { stroke: var(--ink); stroke-width: 2; }
-.small-multiples { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
-.chart.flow .phase { fill: var(--ink); }
-.chart.flow .phase.outline { fill: none; stroke: var(--ink); stroke-width: 2; }
-.chart.flow text.phase-text { fill: var(--bg-card); font-weight: 600; }
-.chart.flow text.phase-text.out { fill: var(--text-1); }
-.phase-list { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; color: var(--text-2); font-size: 12px; }
+/* A row per task kind fills the width: as many columns as kinds up to four, then it wraps. */
+.small-multiples { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px 24px; }
+.scatter { display: grid; grid-template-columns: minmax(0, 1fr) 280px; align-items: start; gap: 16px 24px; }
+
+/* The orchestration flow: blocks as wide as the time they took, their counts under them, an evenly spaced axis. */
+.flow { display: flex; flex-direction: column; gap: 4px; }
+.flow-row { display: flex; gap: 2px; }
+/* A block has no padding or border of its own (they would stop a short phase being as narrow as its time); its text is padded instead. */
+.flow .phase { display: flex; flex-direction: column; flex-basis: 0; min-width: 0; overflow: hidden; border-radius: 8px; background: var(--ink); color: var(--bg-card); }
+.flow .phase.outline { background: none; box-shadow: inset 0 0 0 2px var(--ink); color: var(--text-1); }
+.flow .phase span, .flow .phase b { overflow: hidden; padding: 0 8px; text-overflow: ellipsis; white-space: nowrap; }
+.flow .phase span { padding-top: 4px; }
+.flow .phase b { padding-bottom: 4px; font-weight: 600; }
+.flow .counts span { flex-basis: 0; min-width: 0; overflow: hidden; text-align: center; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.flow-axis { position: relative; height: 20px; margin-top: 4px; border-top: 1px solid var(--text-3); color: var(--text-3); font-size: 12px; }
+.flow-axis span { position: absolute; top: 4px; transform: translateX(-50%); white-space: nowrap; }
+.flow-axis span:first-child { transform: none; }
 
 /* Tables: numbers right-aligned in tabular figures, text left; a wide table scrolls in its labelled region. */
 .scroll { overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--border-hover) transparent; }
@@ -215,7 +234,8 @@ details.data .scroll { margin-top: 8px; }
 
 /* Narrow window (the minimum is 820): side-by-side panels stack and the choices wrap. */
 @media (max-width: 1000px) {
-  .two, .two.scale { grid-template-columns: 1fr; }
+  .scatter { grid-template-columns: minmax(0, 1fr); }
+  .estimate { grid-template-columns: repeat(2, 1fr); }
   .choices.three, .choices.four { grid-template-columns: repeat(2, 1fr); }
   .steps li > button { white-space: normal; }
 }

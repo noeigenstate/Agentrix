@@ -1,6 +1,8 @@
 // The small drawn parts every screen shares: an approach's marker (its shape and colour), a ring, a legend, a tag and the labelled scroll region.
 import type { ReactNode } from 'react';
+import { CaretLeft } from '@phosphor-icons/react';
 import type { LabArm } from '../../shared/lab-types';
+import { t } from '../../shared/i18n';
 import { arc, shapePath } from './chart-math';
 import { armName } from './format';
 import { SHAPES } from './results-math';
@@ -27,7 +29,11 @@ export function Ring({ share, size, stroke = 8, children }: { share: number | nu
   </div>;
 }
 
-export const Tag = ({ children, tone }: { children: ReactNode; tone?: 'running' | 'success' | 'warning' | 'danger' }) =>
+// The way back to the list: one button, the same on every screen that has one.
+export const BackButton = ({ onClick }: { onClick: () => void }) =>
+  <button type="button" className="button small back" onClick={onClick}><CaretLeft size={12} />{t('返回实验列表')}</button>;
+
+export const Tag =({ children, tone }: { children: ReactNode; tone?: 'running' | 'success' | 'warning' | 'danger' }) =>
   <span className={`tag ${tone ? `tone-${tone}` : ''}`}>{children}</span>;
 
 // Every region that scrolls is labelled and can take the keyboard's focus, so a wide table stays reachable without a pointer.

@@ -4,17 +4,27 @@ import { currentLanguage, t } from '../../shared/i18n';
 
 export const DASH = '—';
 
-export const money = (usd: number | null) => usd === null ? DASH : `$${usd < 10 ? usd.toFixed(2) : usd < 100 ? usd.toFixed(1) : usd.toFixed(0)}`;
+// A cost is always dollars and cents ("$12.90", "$0.00"), on a card, in a table, in a header. Only an axis tick may drop the cents of a whole dollar.
+export const money = (usd: number | null) => usd === null ? DASH : `$${usd.toFixed(2)}`;
+export const moneyTick = (usd: number) => Number.isInteger(usd) ? `$${usd}` : money(usd);
 export const percent = (share: number | null) => share === null ? DASH : `${Math.round(share * 100)}%`;
 export const decimal = (value: number | null) => value === null ? DASH : value.toFixed(1);
 export const outOf = (part: number | null, whole: number | null) => part === null || whole === null ? DASH : `${part}/${whole}`;
 
+// One way to write a time everywhere: "45 秒", "44 分", "1 小时 52 分" (and "2 小时" on the hour). Zero is "0 分" so an axis can start there.
 export function duration(ms: number | null) {
   if (ms === null) return DASH;
   const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return t('{n} 秒', { n: seconds });
-  const minutes = Math.round(seconds / 60);
-  return minutes < 60 ? t('{n} 分钟', { n: minutes }) : `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m`;
+  if (seconds > 0 && seconds < 60) return t('{n} 秒', { n: seconds });
+  const minutes = Math.round(seconds / 60), hours = Math.floor(minutes / 60), rest = minutes % 60;
+  if (hours === 0) return t('{n} 分', { n: minutes });
+  return rest === 0 ? t('{n} 小时', { n: hours }) : t('{h} 小时 {m} 分', { h: hours, m: rest });
+}
+
+// What the page says for an engine message: the ones that mean "the project's Git would not give us a workspace" are put in plain words with a next step;
+// every other message is the engine's own sentence, translated.
+export function friendlyError(message: string) {
+  return /worktree|^Git:|工作区/i.test(message) ? t('无法创建独立工作区。请重试；仍然失败时，先检查这个项目的 Git 状态，再新建实验。') : t(message);
 }
 
 // An estimate is given in minutes.
@@ -47,4 +57,4 @@ export function stateLabel(state: LabExperiment['state']) {
 // In a sentence a single model is "<name> alone" and the orchestration is just its name.
 export const sentenceName = (arm: LabArm) => armName(arm, arm !== 'orchestrated');
 
-export const taskCount =(experiment: LabExperiment) => t('{n} 个任务 · 每项 {r} 次 · {date}', { n: experiment.tasks.length, r: experiment.repeats, date: dateLabel(experiment.createdAt) });
+export const taskCount = (experiment: LabExperiment) => t('{n} 个任务 · 每项 {r} 次 · {date}', { n: experiment.tasks.length, r: experiment.repeats, date: dateLabel(experiment.createdAt) });

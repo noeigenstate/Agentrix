@@ -5,8 +5,6 @@ import { clamp } from './chart-math';
 export const SIZE = { min: 1, max: 10, standard: 3 };
 export const REPEATS = { min: 1, max: 5, standard: 3 };
 export const MIN_ARMS = 2;
-// The largest experiment the form allows: the gauges show a plan's size against it.
-export const MAX_RUNS = SIZE.max * 4 * REPEATS.max;
 
 export type Draft = { projectId: string; tasks: LabTask[]; arms: LabArm[]; repeats: number; budgetUsd: number; name: string };
 export const emptyDraft = (): Draft => ({ projectId: '', tasks: [], arms: ['orchestrated', 'opus'], repeats: REPEATS.standard, budgetUsd: 0, name: '' });
@@ -36,3 +34,13 @@ export const defaultName = (projectName: string, date: string) => `${projectName
 export function toInput(draft: Draft, name: string): LabExperimentInput {
   return { name, projectId: draft.projectId, source: 'history', tasks: draft.tasks, arms: draft.arms, repeats: draft.repeats, budgetUsd: draft.budgetUsd };
 }
+
+// What the form may use of an estimate: only an answer to the draft as it is now that has finished. An answer to an earlier draft, one still on its way
+// and a failure all count as no estimate; a failure is shown with a retry.
+export function currentEstimate<T>(result: { fresh: boolean; loading: boolean; value: T | null; error: string | null }) {
+  const settled = result.fresh && !result.loading;
+  return { value: settled ? result.value : null, error: settled ? result.error : null };
+}
+
+// The experiment starts only with everything filled in and a current estimate in hand.
+export const canStart = (lack: Missing, estimate: LabEstimate | null, starting: boolean) => lack === null && estimate !== null && !starting;
