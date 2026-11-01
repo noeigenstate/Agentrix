@@ -487,7 +487,9 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
   NSPoint lights_;
   BOOL hasLights_;
   BOOL fullScreenTransition_;
+  NSUInteger fullScreenTransitionGeneration_;
   BOOL layingOut_;
+  BOOL realignPending_;
   BOOL observingTitle_;
   std::shared_ptr<ClickState> clicks_;
 }
@@ -553,6 +555,10 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
 }
 
 - (void)windowLayoutChanged:(NSNotification* __unused)notification {
+  if (layingOut_) {
+    realignPending_ = YES;
+    return;
+  }
   [self alignButtons];
   // Electron also reapplies trafficLightPosition after setting the title.
   __weak AgentrixTitlebar* weakSelf = self;
@@ -560,9 +566,22 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
 }
 
 - (void)fullScreenTransition:(NSNotification*)notification {
-  fullScreenTransition_ = [notification.name isEqualToString:NSWindowWillEnterFullScreenNotification]
+  BOOL entering = [notification.name isEqualToString:NSWindowWillEnterFullScreenNotification];
+  fullScreenTransition_ = entering
       || [notification.name isEqualToString:NSWindowWillExitFullScreenNotification];
+  NSUInteger generation = ++fullScreenTransitionGeneration_;
   [self windowLayoutChanged:notification];
+  if (!fullScreenTransition_) return;
+  // Failed transitions only reach the delegate; recover once the window is back in its source state.
+  __weak AgentrixTitlebar* weakSelf = self;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    AgentrixTitlebar* controller = weakSelf;
+    if (!controller || controller->fullScreenTransitionGeneration_ != generation) return;
+    NSWindow* window = controller->host_;
+    if (!window || window.inLiveResize || ((window.styleMask & NSWindowStyleMaskFullScreen) != 0) == entering) return;
+    controller->fullScreenTransition_ = NO;
+    [controller alignButtons];
+  });
 }
 
 - (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)object change:(NSDictionary*)change context:(void*)context {
@@ -596,6 +615,10 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
   }
   LayoutButtons(view, decisions_, workspace_, position, pixels);
   layingOut_ = NO;
+  if (!realignPending_) return;
+  realignPending_ = NO;
+  __weak AgentrixTitlebar* weakSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf alignButtons]; });
 }
 
 // AppKit moves or resizes views it owns without laying the accessory out: the accessory's container (revealing the
@@ -614,7 +637,6 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
 - (void)setLights:(NSPoint)lights {
   lights_ = lights;
   hasLights_ = YES;
-  [self alignButtons];
 }
 
 - (void)applyStyle:(std::shared_ptr<const TitlebarStyle>)style {
@@ -811,11 +833,11 @@ Napi::Value Update(const Napi::CallbackInfo& info) {
             accessibilityLabel:[NSString stringWithUTF8String:item.accessibilityLabel.c_str()]
             count:item.count selected:item.selected]) geometryChanged = YES;
       }
-      if (geometryChanged) [controller alignButtons];
       Napi::Object lights;
       CGFloat x, y;
       if (style && ReadObject(info[0].As<Napi::Object>(), "lights", lights) && ReadNumber(lights, "x", x)
           && ReadNumber(lights, "y", y)) [controller setLights:NSMakePoint(x, y)];
+      if (geometryChanged) [controller alignButtons];
     }
     // Report the decoded style even without a window, for headless font/scale verification.
     if (style) {
