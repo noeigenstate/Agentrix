@@ -2120,5 +2120,11 @@
   "隐藏测试文件不能是链接。": "Hidden test files cannot be links.",
   "隐藏测试无法完整运行，请查看测试日志。": "Hidden tests could not complete. Check the test log.",
   "隐藏测试目录不能是链接。": "Hidden test directories cannot be links.",
-  "隐藏测试结果无效。": "Invalid hidden test results."
+  "隐藏测试结果无效。": "Invalid hidden test results.",
+  "参考测试未通过，尚未启动模型。请换一组任务。": "Reference tests failed. No model workers were started. Choose another sample.",
+  "实验数据目录必须位于原项目之外。": "Experiment data must be outside the original project.",
+  "历史修复未通过完整参考测试：{details}": "The historical fix failed its full reference tests: {details}",
+  "启动模型前必须先通过参考测试。": "Reference tests must pass before starting any model.",
+  "本次运行已超过剩余预算，模型已停止。": "This run exceeded the remaining budget. Its model workers were stopped.",
+  "无法登录 Claude": "Couldn't sign in to Claude"
 }
