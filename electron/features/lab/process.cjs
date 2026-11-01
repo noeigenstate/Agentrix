@@ -5,6 +5,17 @@ const { promisify } = require('node:util');
 const execute = promisify(execFile);
 const OUTPUT_LIMIT = 8 * 1024 * 1024;
 
+function gitEnvironment(environment = process.env) {
+  const env = { ...environment };
+  for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
+  delete env.SSH_AUTH_SOCK; delete env.SSH_AGENT_PID;
+  return {
+    ...env, GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0',
+    GIT_NO_LAZY_FETCH: '1', GIT_ASKPASS: process.platform === 'win32' ? 'false' : '/usr/bin/false',
+  };
+}
+
 async function markedPids(marker, job) {
   if (!/^[a-f0-9-]{36}$/.test(marker)) throw new Error('Invalid lab process marker.');
   if (process.platform === 'darwin') {
@@ -89,6 +100,7 @@ async function command(file, args, {
   raw = false,
 } = {}) {
   aborted(signal);
+  env = gitEnvironment(env);
   const output = log ? await fs.open(log, 'w', 0o600) : null;
   let child, timer, stopping = null, failure = null, stdout = '', stderr = '', bytes = 0;
   const binary = [];
@@ -139,19 +151,11 @@ async function command(file, args, {
 }
 
 async function git(cwd, args, options) {
-  const env = {
-    ...(options?.env || process.env), GIT_CONFIG_NOSYSTEM: '1', GIT_NO_LAZY_FETCH: '1',
-    GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-  };
-  const unsafe = /^GIT_(?:DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|TEMPLATE_DIR|CONFIG_COUNT|CONFIG_KEY_|CONFIG_VALUE_)/;
-  for (const key of Object.keys(env)) if (unsafe.test(key)) {
-    delete env[key];
-  }
   const result = await command('git', [
     '--no-optional-locks', '-c', 'core.hooksPath=', '-c', 'core.fsmonitor=false', ...args,
-  ], { cwd, ...options, env });
+  ], { cwd, ...options });
   if (result.code !== 0) throw new Error(`Git: ${result.stderr.trim().slice(0, 500) || result.code}`);
   return result.stdout;
 }
 
-module.exports = { command, git, aborted, stopTree, markedPids, killMarked };
+module.exports = { command, git, gitEnvironment, aborted, stopTree, markedPids, killMarked };

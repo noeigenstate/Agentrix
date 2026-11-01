@@ -5,6 +5,28 @@ const { aborted } = require('./process.cjs');
 const { MODELS, TASK_KINDS } = require('./values.cjs');
 const { modelKey } = require('../dashboard/cost.cjs');
 
+const CLAUDE_LOGIN_ERROR = '无法登录 Claude';
+
+async function claudeLoginFailed(result, out) {
+  const login = new RegExp([
+    'authentication_error', 'invalid_api_key', 'not logged in',
+    'authentication (?:failed|error)', '(?:failed|unable) to (?:authenticate|log in|sign in)',
+    '(?:please|must) (?:run |use )?(?:/login|claude auth login)',
+    '(?:oauth|refresh token).*(?:expired|invalid)', 'unauthorized.*401',
+  ].join('|'), 'i');
+  if (login.test(result.stdout + '\n' + result.stderr)) return true;
+  let file;
+  try {
+    file = await fs.open(out + '.log', 'r');
+    const buffer = Buffer.alloc(256 * 1024);
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    return login.test(buffer.toString('utf8', 0, bytesRead));
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  } finally { await file?.close(); }
+}
+
 function workerArguments({ arm, cwd, brief, out, helper, kind = 'core', review = false }) {
   const codex = arm === 'sol' && !review;
   const mode = codex ? ['--fast'] : ['--permission', review ? 'plan' : 'acceptEdits'];
@@ -74,7 +96,10 @@ async function dispatch({ arm, cwd, directory, session, usage, signal, timeoutMs
       },
     });
     const failed = /\bOUT OF SCOPE:|\[dispatch\] failed to start| · exit -?\d+ reason (?:error|scope|unconfirmed|capacity|killed)/;
-    if (result.code !== 0 || failed.test(result.stdout)) throw new Error('实验模型执行失败，请查看运行日志。');
+    if (result.code !== 0 || failed.test(result.stdout)) {
+      if ((review || arm !== 'sol') && await claudeLoginFailed(result, out)) throw new Error(CLAUDE_LOGIN_ERROR);
+      throw new Error('实验模型执行失败，请查看运行日志。');
+    }
     const call = [...usage.calls.values()].findLast(call => call.cwd === cwd && call.role === (review ? '审查' : '执行'));
     const actual = reportedModel || call?.model;
     if (!actual || actual === 'unreported' || modelKey(actual) !== MODELS[review ? 'opus' : arm]) {
@@ -90,4 +115,4 @@ async function dispatch({ arm, cwd, directory, session, usage, signal, timeoutMs
   }
 }
 
-module.exports = { dispatch, workerArguments, taskBrief };
+module.exports = { dispatch, workerArguments, taskBrief, claudeLoginFailed, CLAUDE_LOGIN_ERROR };

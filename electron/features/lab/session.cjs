@@ -4,7 +4,10 @@ const net = require('node:net');
 const { randomUUID } = require('node:crypto');
 const { command, killMarked, aborted } = require('./process.cjs');
 const { inside, cleanupWorktrees } = require('./workspace.cjs');
-const { sandboxProfile, channelAddress, cliHomes, requireIsolation } = require('./sandbox.cjs');
+const {
+  sandboxProfile, channelAddress, cliHomes, requireIsolation,
+  credentialAccess, gitCredentialPaths, gitCredentialHelpers, physicalPath,
+} = require('./sandbox.cjs');
 
 async function copyHelper(helper, directory) {
   const source = await fs.readFile(helper, 'utf8'), destination = path.join(directory, 'runtime.json');
@@ -22,6 +25,10 @@ async function copyHelper(helper, directory) {
       "path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron')",
       "path.join(__dirname, 'electron')",
     );
+    const settings = "const settings = ['-m', options.model,";
+    if (!instrumented.includes(settings)) throw new Error('The dispatch helper cannot select the shared credential store.');
+    instrumented = instrumented.replace(settings,
+      "const settings = ['-c', 'cli_auth_credentials_store=\"file\"', '-m', options.model,");
     const root = await fs.stat(path.join(path.dirname(helper), 'electron')).catch(() => null)
       ? path.join(path.dirname(helper), 'electron') : path.resolve(path.dirname(helper), '../electron');
     for (const [, file] of runtime[1].matchAll(/'([^']+)'/g)) {
@@ -61,6 +68,12 @@ class LabSession {
   }
   async start() {
     await requireIsolation();
+    this.credentialPaths = await Promise.all([
+      ...gitCredentialPaths(), ...(this.credentialPaths || []),
+    ].map(physicalPath));
+    this.deniedExecutables = [
+      ...await gitCredentialHelpers(), ...(this.deniedExecutables || []),
+    ];
     for (const directory of [this.privateDirectory, this.tools, this.control]) {
       await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     }
@@ -164,7 +177,8 @@ class LabSession {
   }) {
     const folder = review ? path.join(cwd, '.control') : path.join(this.control, job);
     await fs.mkdir(folder, { recursive: true, mode: 0o700 });
-    const env = await cliHomes(this.env, path.join(folder, 'home'), !executable);
+    const access = await credentialAccess(this.env, !executable);
+    const env = await cliHomes(this.env, path.join(folder, 'home'), !executable, access);
     Object.assign(env, { AGENTRIX_LAB_RUN: this.runId, AGENTRIX_LAB_JOB: job });
     if (this.usage?.bootstrap) env.AGENTRIX_BOOTSTRAP = this.usage.bootstrap;
     const sockets = [await fs.realpath(this.channel.address)];
@@ -175,6 +189,7 @@ class LabSession {
     const writeRoots = review ? [cwd, ...sockets] : [this.workspaceRoot, ...sockets];
     const profile = sandboxProfile({
       labRoot: this.labRoot, readRoots, writeRoots, protectedPaths: this.protectedPaths,
+      credentialPaths: this.credentialPaths, deniedExecutables: this.deniedExecutables, ...access,
     });
     const config = path.join(this.privateDirectory, job + '.json');
     await fs.writeFile(config, JSON.stringify({
