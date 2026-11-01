@@ -69,7 +69,7 @@ test('lab window has one sandboxed instance, its own preload and synchronized ap
   assert.equal(own.url, 'agentrix://app/lab.html');
   assert.equal(options.webPreferences.sandbox, true); assert.equal(options.webPreferences.contextIsolation, true);
   assert.equal(options.webPreferences.nodeIntegration, false); assert.equal(options.webPreferences.nodeIntegrationInSubFrames, false);
-  assert.ok(options.webPreferences.preload.endsWith('lab/preload.cjs'));
+  assert.equal(options.webPreferences.preload, path.resolve(__dirname, '../electron/features/lab/preload.cjs'));
   assert.equal(options.frame, false); assert.equal(own.webContents.zoom, 0.9);
   own.webContents.messages = [];
   settings.theme = 'light'; settings.language = 'en'; zoom = 110; lab.sync(); lab.sync();
@@ -81,6 +81,31 @@ test('lab window has one sandboxed instance, its own preload and synchronized ap
   assert.deepEqual(own.webContents.openHandler({ url: 'https://example.test' }), { action: 'deny' });
   own.minimized = true; await lab.open(); assert.equal(own.minimized, false);
   assert.equal(main.focused, 0); own.close(); await lab.open(); assert.equal(created.length, 2);
+});
+
+test('lab preload resolves to its own feature directory with both POSIX and Windows path rules', async () => {
+  const source = await fs.readFile(path.join(__dirname, '../electron/features/lab/window.cjs'), 'utf8');
+  for (const [paths, root, platform] of [
+    [path.posix, '/Applications/Agentrix', 'darwin'],
+    [path.win32, 'C:\\Program Files\\Agentrix', 'win32'],
+  ]) {
+    const module = { exports: {} }, feature = paths.join(root, 'electron', 'features', 'lab');
+    vm.runInNewContext(source, {
+      module, __dirname: feature, process: { platform },
+      require(name) { assert.equal(name, 'node:path'); return paths; },
+    });
+    let options;
+    const window = module.exports.createLabWindow({
+      BrowserWindow: class extends Window { constructor(value) { super(value); options = value; } },
+      getSettings: () => ({ theme: 'dark', language: 'zh', uiZoom: 100 }), getMainWindow: () => null, t: value => value,
+    });
+    await window.open();
+    assert.equal(options.webPreferences.preload, paths.join(feature, 'preload.cjs'));
+    assert.equal(paths.isAbsolute(options.webPreferences.preload), true);
+    assert.equal(options.icon, paths.join(root, 'assets', 'icon.png'));
+    assert.equal(options.webPreferences.sandbox, true); assert.equal(options.webPreferences.nodeIntegration, false);
+    window.getWindow().close();
+  }
 });
 
 test('macOS lab window keeps native traffic lights and failed loads can be retried', async () => {

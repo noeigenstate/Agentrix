@@ -27,7 +27,8 @@ async function electronRuntime(app, overrides = {}) {
 }
 
 test('an Electron host selects independent Node from PATH without probing or exposing its app runtime', {
-  skip: !process.allowedNodeEnvironmentFlags.has('--disable-sigusr1') ? 'a supported Node runtime is required' : false,
+  skip: process.platform !== 'darwin' ? 'standalone Node lookup runs only after macOS isolation is authorized' :
+    !process.allowedNodeEnvironmentFlags.has('--disable-sigusr1') ? 'a supported Node runtime is required' : false,
 }, async t => {
   const { root, app } = await temporary(t), commands = [];
   const { command } = require('../electron/features/lab/process.cjs');
