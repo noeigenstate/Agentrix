@@ -388,6 +388,15 @@ AgentrixNavButton* MakeNavButton(NSString* identifier) {
   return button;
 }
 
+// backingAlignedRect uses the main screen's scale for a view without a window (the layout diagnostic), so align each
+// edge in window coordinates to the scale the layout was given, which is the strip window's backing scale.
+NSRect AlignToPixels(NSView* view, NSRect rect, CGFloat pixels) {
+  NSRect base = [view convertRect:rect toView:nil];
+  auto nearest = [pixels](CGFloat value) { return std::round(value * pixels) / pixels; };
+  CGFloat left = nearest(NSMinX(base)), bottom = nearest(NSMinY(base));
+  return [view convertRect:NSMakeRect(left, bottom, nearest(NSMaxX(base)) - left, nearest(NSMaxY(base)) - bottom) fromView:nil];
+}
+
 void LayoutButtons(NSView* view, AgentrixNavButton* decisions, AgentrixNavButton* workspace,
     NSPoint position, CGFloat pixels) {
   CGFloat buttonHeight = std::ceil(decisions.contentSize.height * pixels) / pixels;
@@ -403,8 +412,7 @@ void LayoutButtons(NSView* view, AgentrixNavButton* decisions, AgentrixNavButton
   CGFloat x = position.x;
   for (AgentrixNavButton* button in @[decisions, workspace]) {
     CGFloat width = std::ceil(button.contentSize.width * pixels) / pixels;
-    NSRect frame = [view backingAlignedRect:NSMakeRect(x, center - buttonHeight / 2, width, buttonHeight)
-        options:NSAlignAllEdgesNearest];
+    NSRect frame = AlignToPixels(view, NSMakeRect(x, center - buttonHeight / 2, width, buttonHeight), pixels);
     if (!NSEqualRects(button.frame, frame)) { button.frame = frame; changed = YES; }
     x = NSMaxX(frame) + button.itemGap;
   }
@@ -448,6 +456,7 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
   __weak NSWindow* host_;
   AgentrixNavButton* decisions_;
   AgentrixNavButton* workspace_;
+  __weak NSView* container_;
   BOOL layingOut_;
   BOOL observingTitle_;
   std::shared_ptr<ClickState> clicks_;
@@ -526,6 +535,7 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
   NSView* view = self.view;
   NSWindow* strip = view.window;
   if (layingOut_ || !host || !strip) return;
+  [self followContainer:view.superview];
   layingOut_ = YES;
   CGFloat pixels = strip.backingScaleFactor;
   NSPoint position = NSMakePoint(std::ceil(decisions_.focusOutset * pixels) / pixels, NSMidY(view.bounds));
@@ -540,6 +550,18 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
   }
   LayoutButtons(view, decisions_, workspace_, position, pixels);
   layingOut_ = NO;
+}
+
+// AppKit moves the accessory's container without laying the accessory out (revealing the full-screen strip moves it
+// from x=18 to x=78), so the buttons realign whenever that container moves.
+- (void)followContainer:(NSView*)container {
+  if (container == container_) return;
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  if (NSView* previous = container_) [center removeObserver:self name:NSViewFrameDidChangeNotification object:previous];
+  container_ = container;
+  if (!container) return;
+  container.postsFrameChangedNotifications = YES;
+  [center addObserver:self selector:@selector(windowLayoutChanged:) name:NSViewFrameDidChangeNotification object:container];
 }
 
 - (void)applyStyle:(std::shared_ptr<const TitlebarStyle>)style {
@@ -571,6 +593,7 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
 - (void)stopObserving {
   if (observingTitle_) [host_ removeObserver:self forKeyPath:@"title" context:&kTitleObservation];
   observingTitle_ = NO;
+  container_ = nil;
   [NSNotificationCenter.defaultCenter removeObserver:self];
 }
 
