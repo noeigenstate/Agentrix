@@ -297,8 +297,14 @@ test('engine messages are shown in plain words with a next step, and other messa
   assert.match(friendlyError('worktree 创建失败'), /无法创建独立工作区。请重试/);
   assert.match(friendlyError('Git: fatal: not a git repository'), /无法创建独立工作区/);
   assert.equal(friendlyError('实验运行超时。'), '实验运行超时。');
+  assert.equal(friendlyError('Secure lab execution is unavailable on this platform. No workers were started.'), '虚拟实验室目前只支持 macOS。');
+  assert.equal(friendlyError('Reliable lab process isolation is unavailable on this platform.'), '虚拟实验室目前只支持 macOS。');
+  assert.equal(friendlyError('虚拟实验室目前只支持 macOS。'), '虚拟实验室目前只支持 macOS。');
   applyLanguage('en');
-  try { assert.match(friendlyError('worktree 创建失败'), /Could not create the separate workspace\. Try again/); } finally { applyLanguage('zh'); }
+  try {
+    assert.match(friendlyError('worktree 创建失败'), /Could not create the separate workspace\. Try again/);
+    assert.equal(friendlyError('Secure lab execution is unavailable on this platform.'), 'The Virtual Lab only works on macOS for now.');
+  } finally { applyLanguage('zh'); }
 }));
 
 test('the back button is one component with its chevron, the same on the form and on an experiment', () => zh(() => {
@@ -358,7 +364,7 @@ test('running: an overall ring, a card per approach naming the model working now
   assert.match(out, /gpt-6\.1-sol/); assert.match(out, /data-active="true"/); assert.match(out, /data-active="false"/);
   assert.equal(count(out, /class="tile (passed|failed|error|running|queued)"/g), 8 + 5, 'a tile per run, plus one per state in the key');
   assert.match(out, /class="tile passed" role="img" aria-label="通过"/);
-  assert.match(out, />停止</); assert.match(out, /只阻止新的运行开始/);
+  assert.match(out, />停止</); assert.match(out, /花到这个数就停止，不再开始新的运行，正在进行的运行也会在超出时停下/);
   assert.equal(count(out, /role="region"/g), 1);
 }));
 

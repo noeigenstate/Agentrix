@@ -115,7 +115,7 @@ export function ScaleStep({ draft, estimate, error, onRetry, onRepeats, onBudget
     </section>
     <section className="panel fields">
       <Stepper label={t('每个问题重复几次')} hint={t('结果有随机性，{min}–{max} 次', { min: REPEATS.min, max: REPEATS.max })} value={draft.repeats} min={REPEATS.min} max={REPEATS.max} onChange={onRepeats} />
-      <label className="field"><div><b>{t('预算（美元）')}</b><p className="muted">{t('花到这个数就不再开始新的运行；已经开始的运行不会被中断。')}</p></div>
+      <label className="field"><div><b>{t('预算（美元）')}</b><p className="muted">{t('花到这个数就停止：不再开始新的运行，正在进行的运行也会在超出时停下。')}</p></div>
         <div className="control"><input className="input" type="number" min={1} step={1} inputMode="decimal" aria-label={t('预算（美元）')} value={draft.budgetUsd || ''} onChange={event => onBudget(Number(event.target.value))} /></div></label>
       <label className="field"><div><b>{t('实验名称')}</b><p className="muted">{t('留空则用默认名称')}</p></div>
         <div className="control"><input className="input" type="text" placeholder={defaultName} aria-label={t('实验名称')} value={draft.name} onChange={event => onName(event.target.value)} /></div></label>

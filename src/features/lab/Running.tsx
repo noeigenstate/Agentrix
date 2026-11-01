@@ -42,7 +42,7 @@ export function Running({ experiment, onStop }: { experiment: LabExperiment; onS
       <div className="overall-text">
         <h2>{stateLabel(experiment.state)}</h2>
         <p>{t('已用 {elapsed} · 预计还需 {left} · 已花 {spent}', { elapsed: duration(pace.elapsedMs), left: duration(pace.remainingMs), spent: money(experiment.spentUsd) })}</p>
-        <p className="muted">{t('预算 {budget}：只阻止新的运行开始，不会中断已经开始的运行。', { budget: money(experiment.budgetUsd) })}</p>
+        <p className="muted">{t('预算 {budget}：花到这个数就停止，不再开始新的运行，正在进行的运行也会在超出时停下。', { budget: money(experiment.budgetUsd) })}</p>
         {error && <p className="banner" role="alert">{t('停止失败：{message}', { message: friendlyError(error) })}</p>}
       </div>
       <button type="button" className="button" disabled={stopping || experiment.state !== 'running'} onClick={() => void stop()}><Stop size={16} weight="fill" />{t('停止')}</button>
