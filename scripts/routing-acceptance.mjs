@@ -5,7 +5,7 @@
 //   3 enforce   — a worker that does change files outside --allow is reported out of scope (a scripted rogue CLI);
 //   4 continuity— a --resume follow-up that says only "the function you just wrote" changes that same function;
 //   5 write-back— the first worker's findings are appended to the ledger for the next one.
-// Usage: node scripts/routing-acceptance.mjs [--runs 3] [--model gpt-6.1-terra] [--effort max]
+// Usage: node scripts/routing-acceptance.mjs [--runs 3] [--model gpt-6.1-sol] [--effort max]
 // Writes results.json and report.html (with pane screenshots) to a new .test-output/routing-acceptance-* folder.
 import fs from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
@@ -21,7 +21,7 @@ import { testRun } from './test-output.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const option = (name, fallback) => { const at = process.argv.indexOf(name); return at > 0 ? process.argv[at + 1] : fallback; };
-const RUNS = Number(option('--runs', 3)), MODEL = option('--model', 'gpt-6.1-terra'), EFFORT = option('--effort', 'max');
+const RUNS = Number(option('--runs', 3)), MODEL = option('--model', 'gpt-6.1-sol'), EFFORT = option('--effort', 'max');
 const helper = path.join(root, 'integration/dispatch.cjs');
 const output = await testRun('routing-acceptance');
 const lab = path.join(os.tmpdir(), `routing-lab-${Date.now()}`), profile = path.join(output, 'profile');

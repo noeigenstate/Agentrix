@@ -1,6 +1,6 @@
 ---
 name: model-routing
-description: Who does what in this project (with a fallback table for when only Claude Code or only Codex is installed) — the lead orchestrates; Opus 5.5 is the architect, GPT-6.1-Sol the core engineer (complex code, refactors, debugging, test fixes), Sonnet 5.5 the execution engineer (routine features, front end, tests, docs), GPT-6.1-Terra the visual and verification engineer (UI checks, screenshots, interface driving, small tasks). Five steps — Opus plans by module; every worker holds a roundtable with the lead before work and the owner sees the minutes as tables; Sol and Sonnet build in separate worktrees; Opus integrates and runs the tests, Opus reviews the architecture and GPT-6.1-Terra accepts the UI and interaction; the lead consolidates the round into the shared project memory; then final acceptance. GPT models always run at max effort in fast mode, Claude models at high effort. Use at the start of every task, before doing any of it yourself.
+description: Who does what in this project (with a fallback table for when only Claude Code or only Codex is installed) — the lead orchestrates; Opus 5.5 is the architect, GPT-6.1-Sol the core engineer (complex code, refactors, debugging, test fixes), Sonnet 5.5 the execution engineer (routine features, front end, tests, docs) and the visual and verification engineer (UI checks, screenshots, interface driving, small tasks). Five steps — Opus plans by module; every worker holds a roundtable with the lead before work and the owner sees the minutes as tables; Sol and Sonnet build in separate worktrees; Opus integrates and runs the tests, Opus reviews the architecture and a fresh Sonnet accepts the UI and interaction; the lead consolidates the round into the shared project memory; then final acceptance. GPT models always run at max effort in fast mode, Claude models at high effort. Use at the start of every task, before doing any of it yourself.
 ---
 
 # Routing work between models
@@ -15,17 +15,16 @@ holds the permissions (commits, pushes, releases, the GUI lock, secrets). Worker
 | --- | --- | --- |
 | Claude Opus 5.5 | Architect / planner | Technology choices, complex design, task breakdown, architecture consistency (stage 1 and the stage 4 architecture review) |
 | GPT-6.1-Sol | Core engineer | Complex implementation, cross-module refactors, debugging, fixing failing tests |
-| Claude Sonnet 5.5 | Efficient execution engineer | Routine features, front-end components and polish, unit tests, code maintenance, docs |
-| GPT-6.1-Terra | Visual and verification engineer | UI checks, reading screenshots, driving the interface (probe scripts under the GUI lock), small quick tasks |
+| Claude Sonnet 5.5 | Efficient execution, visual and verification engineer | Routine features, front-end components and polish, unit tests, code maintenance, docs; UI checks, reading screenshots, driving the interface (probe scripts under the GUI lock), small quick tasks |
 
 Pick by the task, not by the side of the code: a hard cross-module change in the renderer still goes to Sol, a routine
-main-process tweak or a doc edit to Sonnet, a one-line fix or a screenshot check to Terra. Review is cross-model: no
-model accepts its own work (Opus reviews what Sol and Sonnet built, Terra verifies what anyone changed on screen).
+main-process tweak, a doc edit, a one-line fix or a screenshot check to Sonnet. Review is cross-model: no
+model accepts its own work (Opus reviews what Sol and Sonnet built, a fresh Sonnet verifies what anyone changed on screen).
 
 ## Stages
 
 The owner's pipeline, one round of five steps. Every task goes through these; skip a step only when the task has nothing
-for it (a back-end-only fix has no 3B and no Terra pass, a CSS-only change has no 3A; a task too small for a roundtable,
+for it (a back-end-only fix has no 3B and no UI acceptance, a CSS-only change has no 3A; a task too small for a roundtable,
 such as one worker and a one-line fix, runs with `--skip-meeting <reason>`).
 
 | Step | Who | What it produces |
@@ -35,7 +34,7 @@ such as one worker and a one-line fix, runs with `--skip-meeting <reason>`).
 | 3A Core | GPT-6.1-Sol (Codex) in worktree A | Complex logic (main process, data, parsing), cross-module refactors, CI diagnosis, all debugging, failing-test fixes |
 | 3B Routine and front end | Sonnet subagent in worktree B | Routine features, React components, CSS, layout and polish, unit tests, maintenance, docs |
 | 4a Integration and automated tests | Lead | Both branches merged in dependency order; build, unit tests, desktop suites |
-| 4b Cross review | Opus 5.5 subagent + GPT-6.1-Terra (Codex) | Opus: cross-module architecture review. Terra: UI and interaction acceptance |
+| 4b Cross review | Opus 5.5 subagent + a fresh Sonnet 5.5 subagent | Opus: cross-module architecture review. Sonnet: UI and interaction acceptance |
 | 5 Consolidation | Lead | The round's results and architecture changes written into the shared project memory; BOUNDARY.md files adjusted |
 | Final acceptance | Lead, then the owner | Tests pass + every review finding resolved + the owner confirms key changes |
 
@@ -44,7 +43,7 @@ Concept images to choose from still come from Codex's image tool (see `design-po
 
 ## Model settings (fixed)
 
-- **GPT models** (Sol, Terra, and any other `gpt-*`): default `model_reasoning_effort=max` and `service_tier="fast"`.
+- **GPT models** (Sol and any other `gpt-*`): default `model_reasoning_effort=max` and `service_tier="fast"`.
 - **Claude models** (Sonnet and Opus subagents): default `effort: "high"` on the Agent call (`--effort high` for a command-line Claude worker).
 - **First run in a project, whenever Codex is installed** (every case in the table below, including a Codex lead
   session): before the first task, ask the owner with options, not an open question. In Claude Code use the
@@ -55,7 +54,7 @@ Concept images to choose from still come from Codex's image tool (see `design-po
 
   Use the answer for every Codex run in that project. If the session's startup note (Agentrix) already carries this
   project's choice, use it and don't ask again; otherwise keep it for the session and ask again in the next one.
-- **The owner can change these at any time in conversation** ("Terra 用 high", "关掉 fast", "Sonnet 用 max"): apply the
+- **The owner can change these at any time in conversation** ("Sol 用 high", "关掉 fast", "Sonnet 用 max"): apply the
   change from the next worker on, per model or per family, and state the settings in use when you launch a worker.
   Without an instruction, the defaults above hold.
 
@@ -70,22 +69,22 @@ never by the author's own context: a fresh worker reviews.
 | Orchestrator | Lead session | Lead Claude session | Lead Codex session |
 | Architect / planner | Opus 5.5 | Opus 5.5 (lead, or an `opus` subagent) | GPT-6.1-Sol (lead) |
 | Core engineer | GPT-6.1-Sol | Opus 5.5 subagent | GPT-6.1-Sol via the dispatch helper |
-| Execution engineer | Sonnet 5.5 subagent | Sonnet 5.5 subagent | GPT-6.1-Terra via the dispatch helper |
-| Visual and verification | GPT-6.1-Terra | Sonnet 5.5 subagent (reads screenshots) | GPT-6.1-Terra via the dispatch helper with `--image <png>` |
-| Small quick tasks | GPT-6.1-Terra | Haiku 5.5 subagent | GPT-6.1-Terra |
+| Execution engineer | Sonnet 5.5 subagent | Sonnet 5.5 subagent | GPT-6.1-Sol via the dispatch helper |
+| Visual and verification | Sonnet 5.5 subagent (fresh, reads screenshots) | Sonnet 5.5 subagent (fresh, reads screenshots) | GPT-6.1-Sol via the dispatch helper with `--image <png>` (separate session) |
+| Small quick tasks | Sonnet 5.5 subagent | Sonnet 5.5 subagent | GPT-6.1-Sol |
 | Architecture review | Opus 5.5 subagent | Opus 5.5 subagent (fresh) | GPT-6.1-Sol via the dispatch helper with `--read-only` (fresh) |
-| UI acceptance | GPT-6.1-Terra | Sonnet 5.5 subagent (fresh, not the builder) | GPT-6.1-Terra (fresh, not the builder) |
+| UI acceptance | Sonnet 5.5 subagent (fresh, not the builder) | Sonnet 5.5 subagent (fresh, not the builder) | GPT-6.1-Sol (fresh session, not the builder) |
 
 - **Claude Code only:** every worker is an Agent call with `model` set and `effort: "high"`; worktrees through
   `isolation: "worktree"`. Opus takes Sol's hard work; Sonnet keeps routine work and front end and also does the visual
-  checks Terra would; Haiku takes one-line fixes and lookups.
+  checks and the one-line fixes and lookups.
 - **Codex only:** every worker is a background Codex run through the dispatch helper
-  (`--model <model> --effort max --fast --cwd <worktree>`); Sol takes architecture, core code, debugging and the architecture review; Terra takes routine
-  work, front end, small tasks and UI checks. The author never reviews its own change: Sol reviews Terra's code, Terra
-  checks the screens of Sol's.
+  (`--model <model> --effort max --fast --cwd <worktree>`); Sol takes architecture, core code, debugging, routine
+  work, front end, small tasks, UI checks and the architecture review, each review in a separate session. The author
+  never reviews its own change: a fresh Sol session reviews and accepts.
 - **Settings stay fixed** in every case: GPT max + fast, Claude high.
 - **A model missing from the account** (e.g. no Opus access): use the next one down in the same family for that role
-  (Opus → Sonnet, Sol → Terra) and say so in the plan.
+  (Opus → Sonnet) and say so in the plan.
 
 ## 1. Plan (lead)
 
@@ -94,7 +93,7 @@ Write the plan before any worker starts:
   both. A good split lets each worker stay inside its own module without touching the others.
 - The interface contract between them: shared types (`src/shared/types.ts`), IPC payloads, CSS class names, test
   hooks. The lead writes shared types itself before 3A and 3B start, so both build against the same shape.
-- Acceptance criteria that can be checked: test names, measured numbers, the screenshots and states Terra must see.
+- Acceptance criteria that can be checked: test names, measured numbers, the screenshots and states the UI acceptance must see.
 - Each task's module and its `BOUNDARY.md` (`skills/module-boundary`): the task's file scope is that module's Owns (or
   a part of it). A task that needs to change another module is split, or the boundary is changed first by the architect.
 - A ledger for the task (`<scratch>/<topic>-ledger.md`, or in the repo when it should be kept): the owner's words that
@@ -165,7 +164,7 @@ cmd /c mklink /J <scratch>\wt-a\node_modules <repo>\node_modules
 
 A task with only one side may run in the repo itself; worktrees are for parallel 3A + 3B work.
 
-**Launching command-line workers.** Sol, Terra (and Opus or Sonnet when Codex leads) start only through Agentrix's
+**Launching command-line workers.** Sol (and Opus or Sonnet when Codex leads) start only through Agentrix's
 dispatch helper (`skills/agent-dispatch/SKILL.md`), never by typing `codex exec` or `claude -p`. The helper's path is in
 the session's startup note (`Dispatch helper: node "<path>/dispatch.cjs"`); outside Agentrix the same workers may be
 started directly with `codex exec` / `claude -p` and the same settings. Run it as a background command:
@@ -206,8 +205,8 @@ Codex runs with no approvals and full access, so the scope comes from the prompt
 - Its report: the root cause with evidence, the change, the tests it ran.
 - An "at capacity" error at the end of a run can come after the work is done: check the outputs before rerunning.
 
-A small quick task (a one-line fix, a rename, a screenshot question) goes to Terra with the same command and the same
-rules, `--model gpt-6.1-terra`, attaching any screenshots with `--image`.
+A small quick task (a one-line fix, a rename, a screenshot question) goes to a Sonnet subagent; when Codex alone is
+installed, to Sol with the same command and the same rules, attaching any screenshots with `--image`.
 
 **3B, Sonnet.** Agent tool with `model: "sonnet"`, `effort: "high"`, working in worktree B (pass its path in the brief, or
 `isolation: "worktree"`); a Sonnet that took part in the roundtable through the helper builds as
@@ -249,11 +248,9 @@ Run both in parallel on the merged result:
 - **Opus 5.5, architecture.** Agent tool with `model: "opus"`, `effort: "high"`, read-only. Give it the diff range and the
   stage-1 contract, not the lead's conclusions. It checks module boundaries, data flow across main/renderer/IPC,
   duplication, and accuracy rules (e.g. main vs sub-agent data never mixed). Findings: file:line, the failure, severity.
-- **GPT-6.1-Terra, UI and interaction.** Read-only Codex run with the screenshots attached:
-
-  ```
-  node "<helper>" codex --role 审查 --title "UI acceptance" --model gpt-6.1-terra --effort max --fast --read-only --cwd <repo> --image <shot1.png> --image <shot2.png> --brief <scratch>/terra-prompt.md --out <scratch>/terra.md
-  ```
+- **Sonnet 5.5, UI and interaction.** A fresh Sonnet that did not build the change: Agent tool with `model: "sonnet"`,
+  `effort: "high"`, read-only, reading the screenshot files (paths in the brief). When Codex alone is installed, a fresh
+  Sol session instead: `node "<helper>" codex --role 审查 --title "UI acceptance" --model gpt-6.1-sol --effort max --fast --read-only --cwd <repo> --image <shot1.png> --image <shot2.png> --brief <scratch>/ui-prompt.md --out <scratch>/ui.md`.
 
   The prompt gives the acceptance criteria, the states each screenshot shows, the `design-acceptance` checklist and the
   interaction rules in AGENTS.md (small cards, completion glow). Findings: what is wrong, where, which rule.

@@ -112,7 +112,7 @@ function mount(t, skills, { details = {}, failure = null, language = 'zh' } = {}
 }
 
 const now = Date.now();
-const routingSummary = '谁来做什么：Opus 规划与审查架构，GPT-6.1-Sol 写核心代码并调试，Sonnet 做日常与前端，GPT-6.1-Terra 验收界面并处理小任务。GPT 默认 max + fast，Claude 默认 high；只装了一个 Agent 时也有对应分工。';
+const routingSummary = '谁来做什么：Opus 规划与审查架构，GPT-6.1-Sol 写核心代码并调试，Sonnet 做日常与前端并验收界面、处理小任务。GPT 默认 max + fast，Claude 默认 high；只装了一个 Agent 时也有对应分工。';
 const builtinRouting = over => skill({ id: 'builtin:model-routing', name: 'model-routing', description: 'Who does what on a task, in English, seven lines long.', title: '模型路由', summary: routingSummary, source: 'builtin', scope: 'builtin', trigger: 'auto', autoOptimize: false, requires: { codex: true, claude: true }, ...over });
 function skill(over = {}) {
   const named = { name: '发布流程', description: '发布新版本', ...over };

@@ -5,7 +5,7 @@ trigger: auto
 when: 任务需要规划、开发、调试、审查或发布时生效；项目已有同名技能时以项目为准
 requires: any-agent
 title: 模型路由
-summary: 任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能和前端，Terra 验证界面。GPT 默认 max + fast，Claude 默认 high。
+summary: 任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能、前端并验证界面。GPT 默认 max + fast，Claude 默认 high。
 ---
 
 # Routing work between models
@@ -62,7 +62,7 @@ and a one-line fix, skips it with a recorded reason).
 
 ### Model settings
 
-- **GPT models** (Sol, Terra and any other `gpt-*`): default `model_reasoning_effort=max` and `service_tier="fast"`.
+- **GPT models** (Sol and any other `gpt-*`): default `model_reasoning_effort=max` and `service_tier="fast"`.
 - **Claude models** (Opus, Sonnet, Haiku): default effort `high` (`effort: "high"` on an Agent call, `--effort high` for a command-line Claude worker).
 - **Whenever Codex is installed**, before the first task of a project, ask the user with options, not an open question
   (the AskUserQuestion tool in Claude Code, a numbered list in Codex):
@@ -72,10 +72,10 @@ and a one-line fix, skips it with a recorded reason).
 
   Use the answer for every Codex run in that project. If the session's startup note already carries the project's choice,
   use it and do not ask again; otherwise keep the answer for the session.
-- **The user can change these at any time in conversation** ("Terra on high", "turn fast off", "Sonnet on max"): apply the
+- **The user can change these at any time in conversation** ("Sol on high", "turn fast off", "Sonnet on max"): apply the
   change from the next worker on, per model or per family, and state the settings in use when you launch a worker.
   Without an instruction the defaults hold.
-- A model missing from the account: use the next one down in the same family for that role (Opus to Sonnet, Sol to Terra)
+- A model missing from the account: use the next one down in the same family for that role (Opus to Sonnet)
   and say so in the plan.
 
 ### Which setup you are in
@@ -90,7 +90,7 @@ Check first: `claude --version` and `codex --version` (a startup note may alread
 | Architect and architecture review | Opus (the lead, or a fresh `opus` subagent for the review) |
 | Core engineer | GPT-6.1-Sol, a Codex worker (see Launching workers) |
 | Execution engineer | Sonnet subagent |
-| Visual and verification, small tasks | GPT-6.1-Terra, a Codex worker |
+| Visual and verification, small tasks | A fresh Sonnet subagent that reads screenshots |
 
 - Sonnet: an Agent call with `model: "sonnet"`, `effort: "high"`, working in worktree B (`isolation: "worktree"` or its path in the brief).
 - Sol, as a background command, brief in a file:
@@ -99,8 +99,7 @@ Check first: `claude --version` and `codex --version` (a startup note may alread
   node "<helper>" codex --role <role> --title "<one line>" --model gpt-6.1-sol --effort max --fast --cwd <worktree-a> --brief <prompt.md> --out <out.md>
   ```
 
-- Terra takes small tasks the same way with `--model gpt-6.1-terra`, and UI acceptance read-only with the screenshots attached:
-  `--role <role> --read-only --image <shot1.png> --image <shot2.png>`.
+- Visual checks, small tasks and UI acceptance go to a Sonnet subagent the same way; UI acceptance by one that did not build the change, given the screenshot paths.
 
 #### 2. Codex leads, both installed
 
@@ -109,7 +108,7 @@ Check first: `claude --version` and `codex --version` (a startup note may alread
 | Orchestrator and core engineer | GPT-6.1-Sol (the lead session; a Codex worker for a separate core worker) |
 | Architect and architecture review | Opus, a Claude worker |
 | Execution engineer | Sonnet, a Claude worker run inside worktree B |
-| Visual and verification, small tasks | GPT-6.1-Terra, a Codex worker |
+| Visual and verification, small tasks | Sonnet, a Claude worker (fresh for UI acceptance) |
 
 - Opus, read-only, brief in a file and the answer in a file:
 
@@ -123,8 +122,7 @@ Check first: `claude --version` and `codex --version` (a startup note may alread
   node "<helper>" claude --role <role> --title "<one line>" --model sonnet --effort high --permission acceptEdits --cwd <worktree-b> --brief <brief.md> --out <report.md>
   ```
 
-- Terra: `node "<helper>" codex --role <role> --title "<one line>" --model gpt-6.1-terra --effort max --fast --cwd <dir> --brief <prompt.md> --out <out.md>`;
-  for UI acceptance add `--read-only --image <screenshot.png>`.
+- Visual checks and UI acceptance: the same Sonnet command, `--permission plan` and the screenshot paths in the brief.
 
 #### 3. Claude Code only
 
@@ -146,10 +144,9 @@ Every worker is a background Codex worker (`node "<helper>" codex --model <model
 | Role | Model |
 | --- | --- |
 | Orchestrator, architect, core engineer, architecture review | GPT-6.1-Sol |
-| Execution engineer (routine work, front end), visual and verification, small tasks | GPT-6.1-Terra |
+| Execution engineer, visual and verification, small tasks | GPT-6.1-Sol, in a separate session |
 
-The author never reviews its own change: Sol reviews Terra's code (`--read-only`), Terra checks the screens of Sol's work
-(`--read-only --image <png>`), each as a fresh run.
+The author never reviews its own change: review and UI acceptance are a fresh Sol run (`--read-only`, with `--image <png>` for screens).
 
 ### Launching workers
 
