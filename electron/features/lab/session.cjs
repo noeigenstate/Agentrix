@@ -5,6 +5,7 @@ const { randomUUID } = require('node:crypto');
 const { command, killMarked, aborted } = require('./process.cjs');
 const { inside, cleanupWorktrees } = require('./workspace.cjs');
 const { removePath } = require('./disk.cjs');
+const { resolveNode } = require('./runtime.cjs');
 const {
   sandboxProfile, channelAddress, cliHomes, requireIsolation,
   credentialAccess, gitCredentialPaths, gitCredentialHelpers, physicalPath,
@@ -69,6 +70,9 @@ class LabSession {
   }
   async start() {
     await requireIsolation();
+    this.nodePath = await resolveNode({
+      nodePath: this.nodePath, env: this.env, protectedPaths: this.protectedPaths, signal: this.signal, t: this.t,
+    });
     this.credentialPaths = await Promise.all([
       ...gitCredentialPaths(), ...(this.credentialPaths || []),
     ].map(physicalPath));
@@ -180,6 +184,8 @@ class LabSession {
     await fs.mkdir(folder, { recursive: true, mode: 0o700 });
     const access = await credentialAccess(this.env, !executable);
     const env = await cliHomes(this.env, path.join(folder, 'home'), !executable, access);
+    const search = Object.keys(env).find(key => key.toLowerCase() === 'path') || 'PATH';
+    env[search] = [path.dirname(this.nodePath), env[search]].filter(Boolean).join(path.delimiter);
     Object.assign(env, { AGENTRIX_LAB_RUN: this.runId, AGENTRIX_LAB_JOB: job });
     if (this.usage?.bootstrap) env.AGENTRIX_BOOTSTRAP = this.usage.bootstrap;
     const sockets = [await fs.realpath(this.channel.address)];

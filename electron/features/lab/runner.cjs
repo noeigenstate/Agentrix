@@ -9,6 +9,7 @@ const { gradeTests, gradeReview } = require('./grading.cjs');
 const { gradingFiles } = require('./history.cjs');
 const { removePath } = require('./disk.cjs');
 const { translate } = require('../../i18n.cjs');
+const { recordTestFailure, testLogMessage, failureMessage } = require('./logs.cjs');
 const {
   ownerState, assertOwner, inside, prepareWorktree, verifyWorktree, captureDiff, cleanupWorktrees,
 } = require('./workspace.cjs');
@@ -32,20 +33,23 @@ async function sessionOptions(options, before, workspaceRoot) {
   if (protectedPaths.some(root => inside(root, directory))) throw new Error(t('实验数据目录必须位于原项目之外。'));
   return {
     directory, labRoot: socketDirectory, workspaceRoot, runId: run.id, helper,
-    env: options.env, nodePath: options.nodePath, protectedPaths,
+    env: options.env, nodePath: options.nodePath, protectedPaths, signal: options.signal, t,
     allowDelegation: run.arm === 'orchestrated',
   };
 }
 
 async function validateReference({
-  project, task, socketDirectory, signal, nodePath = process.execPath, env, testTimeoutMs = 120000,
+  project, task, socketDirectory, artifactDirectory, signal, nodePath, env, testTimeoutMs = 120000,
   t = (source, values) => translate('zh', source, values),
 }) {
   const id = randomUUID(), directory = path.join(socketDirectory, 'references', id);
+  artifactDirectory ||= path.join(socketDirectory, 'reference-logs', id);
+  const log = path.join(artifactDirectory, 'tests.log');
   const workspaceRoot = path.join(directory, 'workspaces'), before = await ownerState(project.path);
   await fs.mkdir(workspaceRoot, { recursive: true, mode: 0o700 });
+  await fs.mkdir(artifactDirectory, { recursive: true, mode: 0o700 });
   const session = new LabSession(await sessionOptions({
-    project, directory, socketDirectory, run: { id }, env, nodePath, t,
+    project, directory, socketDirectory, run: { id }, env, nodePath, signal, t,
   }, before, workspaceRoot));
   let result, failure;
   try {
@@ -55,17 +59,32 @@ async function validateReference({
     signal?.addEventListener('abort', abort, { once: true });
     try {
       if (signal?.aborted) session.controller.abort();
-      const workspace = await prepareWorktree(project.path, workspaceRoot, { base: task.commit }, signal);
-      const grade = await gradeTests({
-        projectPath: project.path, cwd: workspace.cwd, task, directory,
-        signal, nodePath, session, timeoutMs: testTimeoutMs, restore: false,
-      });
-      if (grade.testsPassed !== grade.testsTotal ||
-        grade.names.some(name => task.hiddenTests.some(file => name === file || name.endsWith('/' + file)))) {
-        const details = await fs.readFile(path.join(directory, 'tests.log'), 'utf8');
-        throw new Error(t('历史修复未通过完整参考测试：{details}', { details: details.slice(0, 2500) }));
+      let workspace = await prepareWorktree(project.path, workspaceRoot, { base: task.commit }, signal);
+      const check = async () => {
+        const grade = await gradeTests({
+          projectPath: project.path, cwd: workspace.cwd, task, directory: artifactDirectory,
+          signal, nodePath, session, timeoutMs: testTimeoutMs, restore: false,
+        });
+        if (grade.testsPassed !== grade.testsTotal ||
+          grade.names.some(name => task.hiddenTests.some(file => name === file || name.endsWith('/' + file)))) {
+          throw new Error(t('未通过'));
+        }
+        return grade;
+      };
+      let grade, electronDist = false;
+      try { grade = await check(); }
+      catch (error) {
+        if (signal?.aborted || error.infrastructure ||
+          !await fs.stat(path.join(project.path, 'node_modules/electron/dist')).catch(() => null)) throw error;
+        // A passing compact reference proves the runtime is unnecessary. A failure must be checked with full dependencies.
+        await fs.rename(log, path.join(artifactDirectory, 'tests-compact.log'));
+        try {
+          await cleanupWorktrees(directory);
+          workspace = await prepareWorktree(project.path, workspaceRoot, { base: task.commit }, signal, { electronDist: true });
+        } catch (copyError) { copyError.infrastructure = true; throw copyError; }
+        electronDist = true; grade = await check();
       }
-      result = { total: grade.testsTotal, names: grade.names, files: await gradingFiles(project.path, task) };
+      result = { total: grade.testsTotal, names: grade.names, files: await gradingFiles(project.path, task), electronDist };
     } finally { signal?.removeEventListener('abort', abort); }
   } catch (error) { failure = error; }
   finally {
@@ -76,14 +95,14 @@ async function validateReference({
       try { await cleanup(); } catch (error) { if (!failure || error.ownerChanged) failure = error; }
     }
   }
-  if (failure) throw failure;
+  if (failure) throw await recordTestFailure(failure, log);
   return result;
 }
 
 async function runTask(options) {
   const {
     project, task, run, directory, socketDirectory, helper, prices, signal, changed, reference,
-    nodePath = process.execPath, env = process.env, timeoutMs = 20 * 60000,
+    nodePath, env = process.env, timeoutMs = 20 * 60000,
     testTimeoutMs = 120000, reviewTimeoutMs = 5 * 60000, budgetCeiling = Infinity,
     t = (source, values) => translate('zh', source, values),
   } = options;
@@ -110,7 +129,7 @@ async function runTask(options) {
   try {
     if (!reference) throw new Error(t('启动模型前必须先通过参考测试。'));
     await session.start(); await usage.start();
-    workspace = await prepareWorktree(project.path, workspaceRoot, task, control.signal);
+    workspace = await prepareWorktree(project.path, workspaceRoot, task, control.signal, { electronDist: reference.electronDist });
     await dispatch({
       arm: run.arm, cwd: workspace.cwd, directory: artifacts, session, usage,
       task, signal: control.signal, timeoutMs,
@@ -123,6 +142,9 @@ async function runTask(options) {
       signal: control.signal, nodePath, session, reference, timeoutMs: testTimeoutMs,
     });
     result.testsPassed = grade.testsPassed; result.testsTotal = grade.testsTotal;
+    if (grade.testsPassed !== grade.testsTotal) {
+      result.error = testLogMessage(t('未通过'), path.join(artifacts, 'tests.log'), t);
+    }
     result.reviewIssues = await gradeReview({
       task, diff, directory: artifacts, session, usage, signal: control.signal, timeoutMs: reviewTimeoutMs,
     });
@@ -175,7 +197,7 @@ async function runTask(options) {
   } else if (signal.aborted) result.state = 'stopped';
   else if (failure) {
     result.state = 'error';
-    result.error = control.signal.aborted ? '实验运行超时。' : String(failure.message || failure).slice(0, 1000);
+    result.error = failureMessage(control.signal.aborted ? { ...failure, message: '实验运行超时。' } : failure, t);
   } else result.state = result.testsTotal > 0 && result.testsPassed === result.testsTotal ? 'passed' : 'failed';
   return result;
 }

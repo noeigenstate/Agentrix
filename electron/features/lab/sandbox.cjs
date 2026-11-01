@@ -12,7 +12,7 @@ function cleanEnvironment(environment = process.env) {
 }
 
 async function requireIsolation() {
-  if (process.platform !== 'darwin' || !process.allowedNodeEnvironmentFlags.has('--disable-sigusr1')) {
+  if (process.platform !== 'darwin') {
     throw new Error('Secure lab execution is unavailable on this platform. No workers were started.');
   }
   const probe = await command('/usr/bin/sandbox-exec', [

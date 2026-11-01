@@ -4,6 +4,7 @@ const { randomUUID } = require('node:crypto');
 const { git } = require('./process.cjs');
 const { safePath, testFile } = require('./history.cjs');
 const { dispatch } = require('./dispatch.cjs');
+const { recordTestFailure } = require('./logs.cjs');
 
 async function restoreTests(projectPath, cwd, task, signal, files = task.hiddenTests.map(file => ({ file }))) {
   for (const { file, deleted } of files) {
@@ -56,12 +57,15 @@ async function gradeTests({
   projectPath, cwd, task, directory, signal, nodePath = process.execPath, session,
   timeoutMs = 120000, reference, restore = true,
 }) {
-  if (task.hiddenTests.some(file => !safePath(file) || !testFile(file))) throw new Error('无效的隐藏测试路径。');
-  if (restore) await restoreTests(projectPath, cwd, task, signal, reference?.files);
-  const result = await session.execute(nodePath, ['--test', '--test-reporter=tap', ...task.hiddenTests], {
-    cwd, timeoutMs, log: path.join(directory, 'tests.log'),
-  });
-  return testResult(result.stdout + '\n' + result.stderr, result.code, reference);
+  const log = path.join(directory, 'tests.log');
+  try {
+    if (task.hiddenTests.some(file => !safePath(file) || !testFile(file))) throw new Error('无效的隐藏测试路径。');
+    if (restore) await restoreTests(projectPath, cwd, task, signal, reference?.files);
+    const result = await session.execute(session.nodePath || nodePath, ['--test', '--test-reporter=tap', ...task.hiddenTests], {
+      cwd, timeoutMs, log,
+    });
+    return testResult(result.stdout + '\n' + result.stderr, result.code, reference);
+  } catch (error) { throw await recordTestFailure(error, log); }
 }
 
 function reviewResult(answer) {

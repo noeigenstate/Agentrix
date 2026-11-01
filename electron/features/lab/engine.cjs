@@ -10,6 +10,7 @@ const { runTask, validateReference, recoverRuns, cleanupWorktrees } = require('.
 const { aborted, killMarked } = require('./process.cjs');
 const { inside } = require('./workspace.cjs');
 const { translate } = require('../../i18n.cjs');
+const { failureMessage } = require('./logs.cjs');
 
 function stopRemaining(experiment, now, error) {
   for (const run of experiment.runs) if (['queued', 'running'].includes(run.state)) {
@@ -29,7 +30,7 @@ class LabEngine {
       nodePath, env, timeoutMs, testTimeoutMs, reviewTimeoutMs, t,
     });
     this.experiments = []; this.listeners = new Set(); this.active = null;
-    this.starting = false; this.closed = false; this.quitWaited = false;
+    this.starting = false; this.startingId = null; this.closed = false; this.quitWaited = false;
     this.referenceFailures = new Map(); this.ready = this.load();
   }
   async load() {
@@ -81,20 +82,21 @@ class LabEngine {
     const checked = await this.canonical(input, true);
     return estimateExperiment(checked.input, await this.history(), this.prices, this.experiments);
   }
-  async references(project, tasks, signal) {
+  async references(project, tasks, signal, directory) {
     const references = new Map(), rejected = [];
     for (const task of tasks) {
       aborted(signal);
       try {
         references.set(task.id, await this.referenceRunner({
           project, task, socketDirectory: this.store.directory, signal,
+          artifactDirectory: path.join(directory, 'references', task.id),
           nodePath: this.nodePath, env: this.env, testTimeoutMs: this.testTimeoutMs, t: this.t,
         }));
       } catch (error) {
         if (signal.aborted || error.ownerChanged || error.infrastructure) throw error;
         const failed = this.referenceFailures.get(project.id) || new Set();
         failed.add(task.id); this.referenceFailures.set(project.id, failed);
-        rejected.push(task.title + '：' + this.t(String(error.message || error)));
+        rejected.push(task.title + '：' + failureMessage(error, this.t));
       }
     }
     if (rejected.length) throw new Error(
@@ -106,7 +108,7 @@ class LabEngine {
     if (this.closed || this.active || this.starting) return Promise.reject(new Error('已有实验正在运行。'));
     this.starting = true; this.startController = new AbortController();
     this.startDone = this.prepareStart(value, this.startController.signal).finally(() => {
-      this.starting = false; this.startController = null; this.startDone = null;
+      this.starting = false; this.startingId = null; this.startController = null; this.startDone = null;
     });
     return this.startDone;
   }
@@ -118,7 +120,6 @@ class LabEngine {
     if (inside(project.path, path.join(userData, path.basename(this.store.directory)))) {
       throw new Error(this.t('实验数据目录必须位于原项目之外。'));
     }
-    const references = await this.references(project, input.tasks, signal);
     const history = await this.history(), context = { experiments: this.experiments, projectId: project.id };
     const estimates = new Map(input.arms.map(arm => [arm, armEstimate(arm, history, this.prices, context)]));
     const experiment = {
@@ -132,11 +133,19 @@ class LabEngine {
         costUsd: null, outputTokens: null, rework: null,
       });
     }
-    aborted(signal);
     await this.store.save(experiment); this.experiments.unshift(experiment);
-    if (this.closed) {
-      experiment.state = 'stopped'; stopRemaining(experiment, this.now());
-      await this.store.save(experiment); throw new Error('实验室已关闭。');
+    this.startingId = id; this.changed();
+    let references;
+    try {
+      references = await this.references(project, input.tasks, signal, this.store.folder(id));
+      aborted(signal);
+    } catch (error) {
+      const message = this.closed ? this.t('实验室已关闭。') : failureMessage(error, this.t, Infinity);
+      experiment.state = signal.aborted ? 'stopped' : 'error';
+      stopRemaining(experiment, this.now(), message);
+      await this.store.save(experiment); this.changed();
+      error.message = message;
+      throw error;
     }
     const active = { id, controller: new AbortController(), done: null };
     this.active = active;
@@ -185,6 +194,9 @@ class LabEngine {
     if (!this.experiments.some(experiment => experiment.id === id)) throw new Error('实验不存在。');
     const active = this.active;
     if (active?.id === id) { active.controller.abort(); await active.done; }
+    else if (this.startingId === id) {
+      this.startController.abort(); await this.startDone.catch(() => {});
+    }
   }
   async remove(id) {
     if (!validId(id)) throw new Error('无效的实验编号。');

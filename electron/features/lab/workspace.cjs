@@ -45,7 +45,7 @@ async function validateLinks(directory, root) {
   }
 }
 
-async function copyDependencies(projectPath, destination, signal) {
+async function copyDependencies(projectPath, destination, signal, { electronDist = false } = {}) {
   const original = path.join(projectPath, 'node_modules');
   const stat = await fs.stat(original).catch(error => {
     if (error.code === 'ENOENT') return null;
@@ -58,7 +58,7 @@ async function copyDependencies(projectPath, destination, signal) {
   if (process.platform === 'darwin') {
     await fs.mkdir(destination, { recursive: true });
     const entries = await fs.readdir(source, { withFileTypes: true });
-    const electron = entries.find(entry => entry.name === 'electron' && entry.isDirectory());
+    const electron = !electronDist && entries.find(entry => entry.name === 'electron' && entry.isDirectory());
     const roots = entries.filter(entry => entry !== electron).map(entry => path.join(source, entry.name));
     const batches = [[roots, destination]];
     if (electron) {
@@ -79,7 +79,7 @@ async function copyDependencies(projectPath, destination, signal) {
       recursive: true, dereference: false, verbatimSymlinks: true, mode: cloneMode,
       filter(file) {
         const relative = path.relative(source, file).split(path.sep).join('/');
-        return !/(?:^|\/)electron\/dist(?:\/|$)/.test(relative);
+        return electronDist || !/(?:^|\/)electron\/dist(?:\/|$)/.test(relative);
       },
     });
   }
@@ -88,7 +88,7 @@ async function copyDependencies(projectPath, destination, signal) {
   return source;
 }
 
-async function archiveSnapshot(projectPath, revision, destination, { signal, dependencies = true } = {}) {
+async function archiveSnapshot(projectPath, revision, destination, { signal, dependencies = true, electronDist = false } = {}) {
   aborted(signal);
   await fs.mkdir(destination, { recursive: true, mode: 0o700 });
   const archive = destination + '.tar';
@@ -100,14 +100,14 @@ async function archiveSnapshot(projectPath, revision, destination, { signal, dep
     if (extracted.code !== 0) throw new Error('Could not extract the project snapshot.');
     await validateLinks(destination);
     const dependencySource = dependencies
-      ? await copyDependencies(projectPath, path.join(destination, 'node_modules'), signal) : null;
+      ? await copyDependencies(projectPath, path.join(destination, 'node_modules'), signal, { electronDist }) : null;
     return { files: names, dependencySource };
   } finally { await removePath(archive); }
 }
 
-async function prepareWorktree(projectPath, directory, task, signal) {
+async function prepareWorktree(projectPath, directory, task, signal, { electronDist = false } = {}) {
   let cwd = path.join(directory, 'worktree');
-  const snapshot = await archiveSnapshot(projectPath, task.base, cwd, { signal });
+  const snapshot = await archiveSnapshot(projectPath, task.base, cwd, { signal, electronDist });
   cwd = await fs.realpath(cwd);
   await git(cwd, ['init', '--initial-branch=lab-base'], { signal });
   for (let offset = 0; offset < snapshot.files.length; offset += 100) {

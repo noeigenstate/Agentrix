@@ -306,6 +306,7 @@ isolatedTest('a fake helper runs, grades and saves both arms without changing th
     assert.match(diff, /src\/new\/helper.cjs/); assert.doesNotMatch(diff, /node_modules/);
     assert.doesNotMatch(diff, /LEAD_NOTE_ONLY/);
     assert.match(await fs.readFile(path.join(folder, 'artifacts/tests.log'), 'utf8'), /# tests 1/);
+    if (run.state === 'failed') assert.ok(run.error.includes(path.join(folder, 'artifacts/tests.log')));
     for (const name of ['worktree', 'repository.git']) assert.equal(await fs.stat(path.join(folder, name)).catch(() => null), null);
     assert.equal(run.rework, null); assert.equal(run.activeModel, null);
   }
@@ -520,6 +521,24 @@ test('closing the lab during initial persistence prevents a late experiment laun
   assert.deepEqual(await f.readCalls(), []);
 });
 
+test('stop cancels the persisted reference stage without starting any model', async t => {
+  let entered;
+  const checking = new Promise(resolve => { entered = resolve; });
+  const f = await fixture(t, { referenceRunner: ({ signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(Object.assign(new Error('实验已停止。'), { name: 'AbortError' })), { once: true });
+    entered();
+  }) });
+  const pending = f.engine.start(f.input).catch(error => error);
+  await checking;
+  const experiment = (await f.engine.list())[0];
+  assert.equal(experiment.state, 'running'); assert.ok(experiment.runs.every(run => run.state === 'queued'));
+  await f.engine.stop(experiment.id);
+  assert.equal((await pending).name, 'AbortError');
+  assert.equal((await f.engine.list())[0].state, 'stopped');
+  assert.ok((await f.engine.list())[0].runs.every(run => run.state === 'stopped'));
+  assert.deepEqual(await f.readCalls(), []);
+});
+
 isolatedTest('archives isolate owner refs, fix objects, other worktrees, dependencies and the metering capability', async t => {
   const f = await fixture(t), other = path.join(f.directory, 'other');
   await f.git('worktree', 'add', '--detach', other, 'HEAD');
@@ -579,10 +598,73 @@ isolatedTest('a failing reference rejects start with its reason and is excluded 
     "const { test } = require('node:test');\ntest('bad reference', () => { throw new Error('reference is broken'); });\n");
   await f.git('add', '.'); await f.git('commit', '-m', 'Invalid historical reference');
   const task = await profileTask(f.projectPath, await f.git('rev-parse', 'HEAD'));
-  await assert.rejects(f.engine.start({ ...f.input, tasks: [task] }), /参考测试未通过[\s\S]*Invalid historical reference/);
+  const failure = await f.engine.start({ ...f.input, tasks: [task] }).catch(error => error);
+  assert.match(failure.message, /参考测试未通过[\s\S]*Invalid historical reference/);
   assert.deepEqual(await f.readCalls(), []); assert.equal(f.engine.active, null);
+  const experiment = (await f.engine.list())[0];
+  const log = path.join(f.engine.store.folder(experiment.id), 'references', task.id, 'tests.log');
+  assert.equal(experiment.state, 'error'); assert.ok(experiment.runs.every(run => run.state === 'stopped'));
+  assert.ok(failure.message.includes(log)); assert.ok(experiment.runs.every(run => run.error.includes(log)));
+  assert.doesNotMatch(failure.message, /workspaces\/worktree/);
+  assert.match(await fs.readFile(log, 'utf8'), /reference is broken/);
+  const reopened = new LabEngine({ userData: f.userData, getProjects: () => [f.project], prices });
+  assert.equal((await reopened.list())[0].state, 'error');
+  assert.match(await fs.readFile(log, 'utf8'), /reference is broken/);
   const next = await f.engine.sample({ projectId: 'p', size: 3, preferShortComplex: true });
   assert.ok(next.every(candidate => candidate.id !== task.id));
+});
+
+isolatedTest('a reference needing Node and its package runs outside protected application dependencies', async t => {
+  const f = await fixture(t);
+  const app = path.join(f.projectPath, 'node_modules/electron/dist/fixture.app/Contents/MacOS/Electron');
+  const bin = path.join(f.projectPath, 'node_modules/.bin');
+  await fs.mkdir(path.dirname(app), { recursive: true }); await fs.mkdir(bin);
+  await fs.writeFile(path.join(f.projectPath, 'node_modules/fixture-pkg/package.json'), '{"main":"index.cjs"}');
+  for (const file of [app, path.join(bin, 'node')]) await fs.writeFile(file, '#!/bin/sh\nexit 42\n', { mode: 0o700 });
+  const testFile = path.join(f.projectPath, 'tests/value.test.cjs');
+  await fs.appendFile(testFile, "test('standalone Node and package', () => {\n" +
+    "assert.equal(require('fixture-pkg'), 11); assert.equal(process.versions.electron, undefined);\n" +
+    "const answer = require('node:child_process').execFileSync('node', ['-p', 'process.versions.electron || 42'], { encoding: 'utf8' });\n" +
+    "assert.equal(answer.trim(), '42');\n});\n");
+  await fs.writeFile(path.join(f.projectPath, 'src/b/support.cjs'), 'module.exports = false;\n');
+  await f.git('add', '.'); await f.git('commit', '-m', 'Reference requires a standalone Node runtime and package');
+  const task = await profileTask(f.projectPath, await f.git('rev-parse', 'HEAD'));
+  const artifactDirectory = path.join(f.userData, 'lab', randomUUID(), 'references', task.id);
+  const reference = await require('../electron/features/lab/runner.cjs').validateReference({
+    project: f.project, task, socketDirectory: f.engine.store.directory, artifactDirectory, nodePath: app,
+    env: { ...f.engine.env, PATH: bin + path.delimiter + f.engine.env.PATH },
+  });
+  assert.equal(reference.total, 2);
+  assert.match(await fs.readFile(path.join(artifactDirectory, 'tests.log'), 'utf8'), /# pass 2/);
+  assert.equal(await fs.stat(path.join(f.engine.store.directory, 'references')).then(async () =>
+    (await fs.readdir(path.join(f.engine.store.directory, 'references'))).length), 0);
+  assert.deepEqual(await f.readCalls(), []);
+});
+
+isolatedTest('a hidden test needing Electron distribution data retries the reference and gives every arm full dependencies', async t => {
+  const f = await fixture(t), electron = path.join(f.projectPath, 'node_modules/electron');
+  await fs.mkdir(path.join(electron, 'dist'), { recursive: true });
+  await fs.writeFile(path.join(electron, 'package.json'), '{"main":"index.cjs"}');
+  await fs.writeFile(path.join(electron, 'index.cjs'),
+    "module.exports = require('node:fs').readFileSync(require('node:path').join(__dirname, 'dist/fixture.txt'), 'utf8');\n");
+  await fs.writeFile(path.join(electron, 'dist/fixture.txt'), 'runtime fixture');
+  await fs.appendFile(path.join(f.projectPath, 'tests/value.test.cjs'),
+    "test('Electron distribution data', () => assert.equal(require('electron'), 'runtime fixture'));\n" +
+    "test('pristine snapshot', () => { const fs = require('node:fs');\n" +
+    "assert.equal(fs.existsSync('.reference-marker'), false); fs.writeFileSync('.reference-marker', 'attempted'); });\n");
+  await fs.writeFile(path.join(f.projectPath, 'src/b/support.cjs'), 'module.exports = false;\n');
+  await f.git('add', '.'); await f.git('commit', '-m', 'Hidden test needs Electron package data');
+  const task = await profileTask(f.projectPath, await f.git('rev-parse', 'HEAD'));
+  const validate = f.engine.referenceRunner;
+  let reference;
+  f.engine.referenceRunner = async options => (reference = await validate(options));
+  const id = await f.engine.start({ ...f.input, tasks: [task] }); await f.engine.active.done;
+  const experiment = (await f.engine.list())[0], artifacts = path.join(f.engine.store.folder(id), 'references', task.id);
+  assert.equal(reference.electronDist, true); assert.equal(reference.total, 3);
+  assert.match(await fs.readFile(path.join(artifacts, 'tests-compact.log'), 'utf8'), /ENOENT/);
+  assert.match(await fs.readFile(path.join(artifacts, 'tests.log'), 'utf8'), /# pass 3/);
+  assert.deepEqual(experiment.runs.map(run => [run.state, run.testsPassed, run.testsTotal]),
+    [['passed', 3, 3], ['failed', 2, 3]]);
 });
 
 test('reference infrastructure cleanup errors do not blacklist a valid task', async t => {
@@ -615,6 +697,10 @@ isolatedTest('an early exit cannot pass a validated reference even with a zero p
   const experiment = (await f.engine.list())[0];
   assert.ok(experiment.runs.every(run => run.state === 'error'));
   assert.ok(experiment.runs.every(run => /reference suite/.test(run.error)));
+  for (const run of experiment.runs) {
+    const log = path.join(f.engine.store.folder(experiment.id), 'runs', run.id, 'artifacts/tests.log');
+    assert.ok(run.error.includes(log)); assert.match(await fs.readFile(log, 'utf8'), /reference suite/);
+  }
   assert.ok((await f.readCalls()).every(args => args[args.indexOf('--role') + 1] === '执行'));
 });
 
