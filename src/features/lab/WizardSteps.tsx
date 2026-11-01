@@ -57,7 +57,7 @@ export function ProjectStep({ projects, projectId, sampling, sample, onProject, 
       {!sample.loading && !sample.error && !sample.tasks.length && <p className="muted">{sample.exhausted ? t('没有更多可换的任务了。') : t('这个项目里没有带测试的历史改动可以挑选。')}</p>}
       <ul className="task-list">{sample.tasks.map(task => <li key={task.id}>
         <i aria-hidden="true" />
-        <div><b>{task.title}</b><p className="muted">{task.why}</p></div>
+        <div><b>{task.title}</b><p className="muted">{t(task.why)}</p></div>
         <Tag>{kindLabel(task.kind)}</Tag>
       </li>)}</ul>
     </section>}

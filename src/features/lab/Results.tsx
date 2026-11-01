@@ -38,7 +38,7 @@ function ArmCard({ experiment, arm }: { experiment: LabExperiment; arm: LabExper
 export function Results({ experiment }: { experiment: LabExperiment }) {
   const partial = experiment.state !== 'done', failed = experiment.runs.find(run => run.error)?.error;
   return <div className="content">
-    {partial && <p className="banner" role="status">{experiment.state === 'error' ? t('实验出错：{message}', { message: failed ?? DASH }) : t('实验没有跑完：缺少的运行按未通过计算，成本只含已完成的运行。')}</p>}
+    {partial && <p className="banner" role="status">{experiment.state === 'error' ? t('实验出错：{message}', { message: failed ? t(failed) : DASH }) : t('实验没有跑完：缺少的运行按未通过计算，成本只含已完成的运行。')}</p>}
     <p className="conclusion" role="status">{conclusionText(conclude(experiment))}</p>
     <div className="arm-cards">{ranArms(experiment).map(arm => <ArmCard key={arm} experiment={experiment} arm={arm} />)}</div>
     <div className="two"><DotPlots experiment={experiment} /><Scatter experiment={experiment} /></div>

@@ -221,12 +221,14 @@ test('quit returns promptly for flushed and empty stores and preserves trailing 
   assert.equal(empty.waitForQuit(), null);
 });
 
-test('main quit cleanup runs once and a late dashboard append cannot prevent the next quit', async t => {
+test('main quit cleanup runs once and a late dashboard append cannot prevent the next quit', { timeout: 5000 }, async t => {
   const vm = require('node:vm'), { records } = await lab(t);
   const source = await fs.readFile(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  let handler, cleanups = 0, quits = 0, prevented = 0;
+  let handler, cleanups = 0, quits = 0, prevented = 0, labDisposals = 0, labWaits = 0, releaseLab, notifyQuit;
+  const labDrain = new Promise(resolve => { releaseLab = resolve; }), quit = new Promise(resolve => { notifyQuit = resolve; });
+  const labWindow = { dispose: () => labDisposals++, waitForQuit: () => labWaits++ === 0 ? labDrain : null };
   vm.runInNewContext('let quitting = false, quitCleaned = false, dashboardWindow = null;\n' + source.slice(source.indexOf("app.on('before-quit',"), source.indexOf("app.on('window-all-closed',")), {
-    app: { on: (_, listener) => { handler = listener; }, quit: () => quits++ }, process: { platform: 'win32' }, dashboard: records,
+    app: { on: (_, listener) => { handler = listener; }, quit: () => { quits++; notifyQuit(); } }, process: { platform: 'win32' }, dashboard: records, labWindow,
     clearTimeout, attentionTimer: null, voiceManager: null, fileOperations: null, skills: { close: () => cleanups++ },
     updateManager: null, codexAccounts: { dispose() {} }, claudeAccounts: { dispose() {} }, disposeClaudeAccounts() {},
     usageRolloverTimer: null, stateTimer: null, sessions: new Map(), sshAuth: null, eventServer: null, tray: null, cleanupAskpass() {}, runtimeDir: null,
@@ -234,11 +236,13 @@ test('main quit cleanup runs once and a late dashboard append cannot prevent the
   const first = records.append('runs', { index: 1 });
   handler({ preventDefault: () => prevented++ });
   const drain = records.quitDrain;
-  assert.equal(prevented, 1); assert.equal(cleanups, 1);
+  assert.equal(prevented, 1); assert.equal(cleanups, 1); assert.equal(labDisposals, 1); assert.equal(labWaits, 1);
   await drain; await first;
+  assert.equal(quits, 0, 'the lab still has a worker to stop');
+  releaseLab(); await quit;
   assert.equal(quits, 1);
   const late = records.append('grades', { index: 2 });
   handler({ preventDefault: () => prevented++ });
-  assert.equal(prevented, 1); assert.equal(cleanups, 1);
+  assert.equal(prevented, 1); assert.equal(cleanups, 1); assert.equal(labDisposals, 1); assert.equal(labWaits, 2);
   await late;
 });

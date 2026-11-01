@@ -28,7 +28,7 @@ function makeLoader() {
       if (name === '@phosphor-icons/react') return new Proxy({}, { get: () => () => null });
       return name.startsWith('.') ? load(resolve(filename, name)) : original(name);
     };
-    mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, filename);
+    mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { fileName: filename, compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, filename);
     return mod.exports;
   }
   return relative => load(path.join(src, relative));
@@ -139,7 +139,9 @@ test('chart math: round axis ticks, linear scales, clipped error bars, a shape p
   assert.deepEqual(niceScale(0, 4), { max: 1, ticks: [0, 1] });
   assert.deepEqual(niceScale(100, 4).ticks, [0, 25, 50, 75, 100]);
   assert.equal(linear([0, 10], [100, 200])(5), 150); assert.equal(linear([3, 3], [100, 200])(3), 100);
-  assert.deepEqual(barEnds(0.9, 0.3), [0.6, 1]); assert.deepEqual(barEnds(0.1, 0.3), [0, 0.4]);
+  const upper = barEnds(0.9, 0.3), lower = barEnds(0.1, 0.3);
+  assert.ok(Math.abs(upper[0] - 0.6) < 1e-12); assert.equal(upper[1], 1);
+  assert.equal(lower[0], 0); assert.ok(Math.abs(lower[1] - 0.4) < 1e-12);
   assert.match(arc(10, 0.5), /^31\.42 62\.83$/); assert.match(arc(10, 2), /^62\.83 62\.83$/);
   const { SHAPES, ALL_ARMS } = lab('results-math.ts');
   assert.equal(new Set(ALL_ARMS.map(arm => shapePath(SHAPES[arm], 8, 8, 6))).size, 4, 'four approaches, four different outlines');
@@ -156,8 +158,8 @@ test('the form needs a project, a task, two approaches and a budget before each 
   assert.equal(w.missing(4, { ...draft, budgetUsd: 0 }), 'budget');
   assert.equal(w.missing(4, draft), null);
   assert.deepEqual(w.toggleArm(['opus', 'sol'], 'opus'), ['sol']); assert.deepEqual(w.toggleArm(['opus'], 'sonnet'), ['opus', 'sonnet']);
-  assert.deepEqual([w.clampSize(0), w.clampSize(11), w.clampSize(4.4), w.clampSize(NaN)], [1, 10, 4, 3]);
-  assert.deepEqual([w.clampRepeats(9), w.clampRepeats(-1), w.clampRepeats(2)], [5, 1, 2]);
+  assert.deepEqual([w.clampSize(0), w.clampSize(0.4), w.clampSize(11), w.clampSize(4.4), w.clampSize(NaN)], [1, 1, 10, 4, 3]);
+  assert.deepEqual([w.clampRepeats(9), w.clampRepeats(-1), w.clampRepeats(0), w.clampRepeats(2), w.clampRepeats(NaN)], [5, 1, 1, 2, 3]);
   assert.equal(w.proposedBudget({ runs: 1, minutes: 1, costUsd: 0.2, basis: 'default' }), 5);
   assert.equal(w.proposedBudget({ runs: 1, minutes: 1, costUsd: 35, basis: 'history' }), 55);
   assert.equal(w.MAX_RUNS, 200);
@@ -232,7 +234,7 @@ test('results: a ring card per approach, four figures, and no Artificial Analysi
   const tasks = [task('t1', 'core'), task('t2', 'frontend'), task('t3', 'frontend')];
   const arms = ['orchestrated', 'opus', 'sol', 'sonnet'];
   const runs = tasks.flatMap(item => arms.flatMap(arm => [1, 2, 3].map(repeat => run(item.id, arm, repeat, {
-    state: arm === 'sonnet' && item.id === 't3' ? 'failed' : 'passed', testsPassed: arm === 'sonnet' && item.id === 't3' ? 1 : 4, costUsd: arm === 'orchestrated' ? 1 : 0.4,
+    state: arm !== 'orchestrated' && item.id === 't3' ? 'failed' : 'passed', testsPassed: arm !== 'orchestrated' && item.id === 't3' ? 1 : 4, costUsd: arm === 'orchestrated' ? 1 : 0.4,
     rework: arm === 'orchestrated' ? 2 : null, phases: arm === 'orchestrated' ? phases([60000, 120000, 300000, 90000, 60000]) : undefined }))));
   const out = view({ experiments: [experiment({ tasks, arms, runs })] }, { kind: 'experiment', id: 'e1' });
   assert.equal(count(out, /class="arm-card /g), 4);
@@ -252,7 +254,7 @@ test('results never show 0 for what is unknown, say unpriced runs, and mark an u
   const noCost = experiment({ state: 'stopped', repeats: 1, runs: [run('t1', 'orchestrated', 1, { costUsd: null, reviewIssues: null, startedAt: null, endedAt: null }), run('t1', 'opus', 1, { costUsd: null, reviewIssues: null, startedAt: null, endedAt: null }),
     run('t2', 'orchestrated', 1, { state: 'stopped', testsPassed: null, testsTotal: null, costUsd: null }), run('t2', 'opus', 1, { state: 'stopped', testsPassed: null, testsTotal: null, costUsd: null })] });
   const out = view({ experiments: [noCost] }, { kind: 'experiment', id: 'e1' });
-  assert.match(out, /2 次运行未计价/); assert.doesNotMatch(out, /\$0\.00|\$0</);
+  assert.equal(count(out, /1 次运行未计价/g), 2, 'each approach reports its own unpriced run'); assert.doesNotMatch(out, /\$0\.00|\$0</);
   assert.match(out, /实验没有跑完/); assert.match(out, /没有记录到编排运行的阶段时间/);
   assert.match(out, /成本不完整，没有画出来/);
   assert.match(view({ experiments: [{ ...noCost, state: 'error', runs: [run('t1', 'opus', 1, { state: 'error', error: '起不来' })] }] }, { kind: 'experiment', id: 'e1' }), /实验出错：起不来/);
@@ -312,7 +314,7 @@ test('the lab stylesheet keeps the product scale and takes every colour from the
   for (const { name, value } of declarations) {
     if (name === 'font-size') sizes.add(value);
     if (name === 'font-weight') weights.add(value);
-    if (name === 'font') { sizes.add(/(\d+)px/.exec(value)?.[1] + 'px'); weights.add(/^(\d+)/.exec(value)?.[1]); }
+    if (name === 'font' && value !== 'inherit') { sizes.add(/(\d+)px/.exec(value)?.[1] + 'px'); weights.add(/^(\d+)/.exec(value)?.[1]); }
     if (name === 'border-radius') radii.add(value);
   }
   assert.deepEqual([...sizes].sort(), ['12px', '13px', '14px', '16px', '48px']); assert.deepEqual([...weights].sort(), ['400', '600']);
@@ -349,6 +351,23 @@ test('every lab phrase has an English translation and shape-bearing words are no
   for (const name of fs.readdirSync(labDir).filter(file => /\.tsx?$/.test(file))) {
     for (const match of read(path.join(labDir, name)).matchAll(/\bt\(\s*'((?:[^'\\]|\\.)*)'/g)) if (/[一-鿿]/.test(match[1]) && !(match[1] in en)) missing.push(`${name}: ${match[1]}`);
   }
+  const engineDir = path.join(root, 'electron/features/lab');
+  for (const name of fs.readdirSync(engineDir).filter(file => file.endsWith('.cjs'))) {
+    for (const match of read(path.join(engineDir, name)).matchAll(/new Error\('([^']+)'/g)) if (/[一-鿿]/.test(match[1]) && !(match[1] in en)) missing.push(name + ': ' + match[1]);
+  }
   assert.deepEqual(missing, []);
   assert.equal(en['虚拟实验室'], 'Virtual Lab');
+});
+
+test('English results translate persisted engine errors and sampling explanations', () => {
+  applyLanguage('en');
+  try {
+    const failed = experiment({ state: 'error', runs: [run('t1', 'opus', 1, { state: 'error', error: '实验运行超时。' })] });
+    assert.match(view({ experiments: [failed] }, { kind: 'experiment', id: 'e1' }), /The experiment failed: The experiment run timed out\./);
+    const { ProjectStep } = lab('WizardSteps.tsx');
+    const out = html(React.createElement(ProjectStep, { projects: [{ id: 'p1', name: 'agentrix' }], projectId: 'p1',
+      sampling: { size: 3, preferShortComplex: true }, sample: { tasks: [task('t1', 'core')], loading: false, error: null, exhausted: false },
+      onProject() {}, onSampling() {}, onShuffle() {}, onRetry() {} }));
+    assert.match(out, /Across 2 modules · 40 lines changed/); assert.doesNotMatch(out, /跨 2 个模块/);
+  } finally { applyLanguage('zh'); }
 });

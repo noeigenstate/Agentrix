@@ -23,7 +23,7 @@ export function Scatter({ experiment }: { experiment: LabExperiment }) {
   });
   return <Panel title={t('质量 × 成本')} hint={t('越靠左上越好：花得少，通过得多')}>
     <Legend arms={rows.map(row => row.arm)} />
-    <svg className="chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={t('质量与成本的散点图')}>
+    {drawn.length > 0 && <svg className="chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={t('质量与成本的散点图')}>
       {[0, 0.25, 0.5, 0.75, 1].map(tick => <g key={tick}><line className="grid" x1={L} x2={W - R} y1={y(tick)} y2={y(tick)} /><text x={L - 8} y={y(tick) + 4} textAnchor="end">{tick * 100}%</text></g>)}
       {axis.ticks.map(tick => <g key={tick}><line className="grid" x1={x(tick)} x2={x(tick)} y1={T} y2={H - B} /><text x={x(tick)} y={H - B + 18} textAnchor="middle">{money(tick)}</text></g>)}
       <text x={(L + W - R) / 2} y={H - 8} textAnchor="middle">{t('成本（美元）')}</text>
@@ -33,7 +33,7 @@ export function Scatter({ experiment }: { experiment: LabExperiment }) {
         <path className="dot" d={shapePath(SHAPES[row.arm], px, y(row.rate!), 8)} />
         <text className="end" x={end ? px - 4 : px + 4} y={ly} textAnchor={end ? 'end' : 'start'}>{`${armName(row.arm)} (${money(row.costUsd)}, ${percent(row.rate)})`}</text>
       </g>)}
-    </svg>
+    </svg>}
     {hidden.length > 0 && <p className="note">{t('{names}：成本不完整，没有画出来。', { names: hidden.map(row => armName(row.arm)).join('、') })}</p>}
   </Panel>;
 }

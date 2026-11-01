@@ -21,7 +21,7 @@ test('only the Agentrix app menu is visible with the agreed items and native rol
   const menus = template();
   assert.deepEqual(labels(menus), ['Agentrix']);
   assert.equal(menus.length, 1);
-  assert.deepEqual(labels(menus[0].submenu), ['关于 Agentrix', '─', '新建项目', '设置…', '数据看板', '─', '隐藏 Agentrix', '隐藏其他', '全部显示', '─', '退出 Agentrix']);
+  assert.deepEqual(labels(menus[0].submenu), ['关于 Agentrix', '─', '新建项目', '设置…', '虚拟实验室', '数据看板', '─', '隐藏 Agentrix', '隐藏其他', '全部显示', '─', '退出 Agentrix']);
   assert.deepEqual(menus[0].submenu.filter(item => item.visible !== false && item.role).map(item => item.role), ['about', 'hide', 'hideOthers', 'unhide']);
   assert.equal(menus[0].submenu.find(item => item.label === '退出 Agentrix').accelerator, 'Command+Q');
 });
@@ -37,19 +37,22 @@ test('hidden window items retain native minimize and fullscreen roles and the cu
 });
 
 test('ready updates appear after settings and every application item sends its exact command', () => {
-  const commands = [];
-  const menus = template({ updateReady: true, command: name => commands.push(name) });
-  assert.deepEqual(labels(menus[0].submenu).slice(0, 7), ['关于 Agentrix', '─', '新建项目', '设置…', '数据看板', '重启并安装更新', '─']);
-  for (const item of menus[0].submenu.slice(2, 6).filter(item => item.label !== '数据看板')) item.click();
+  const commands = [], opened = [];
+  const menus = template({ updateReady: true, command: name => commands.push(name), openLab: () => opened.push('lab'), openDashboard: () => opened.push('dashboard') });
+  assert.deepEqual(labels(menus[0].submenu).slice(0, 8), ['关于 Agentrix', '─', '新建项目', '设置…', '虚拟实验室', '数据看板', '重启并安装更新', '─']);
+  for (const label of ['新建项目', '设置…', '虚拟实验室', '数据看板', '重启并安装更新']) menus[0].submenu.find(item => item.label === label).click();
   assert.deepEqual(commands, ['addProject', 'settings', 'installUpdate']);
+  assert.deepEqual(opened, ['lab', 'dashboard']);
 });
 
 test('the dashboard item sits after settings and calls the injected opener without sending a command', () => {
-  let opened = 0; const commands = [];
-  const item = template({ command: name => commands.push(name), openDashboard: () => opened++ })[0].submenu[4];
-  assert.equal(item.label, '数据看板'); assert.equal(item.accelerator, undefined);
-  item.click();
-  assert.equal(opened, 1); assert.deepEqual(commands, []);
+  const opened = [], commands = [];
+  const items = template({ command: name => commands.push(name), openLab: () => opened.push('lab'), openDashboard: () => opened.push('dashboard') })[0].submenu;
+  const settings = items.findIndex(item => item.label === '设置…'), lab = items[settings + 1], dashboard = items[settings + 2];
+  assert.equal(lab.label, '虚拟实验室'); assert.equal(lab.accelerator, undefined);
+  assert.equal(dashboard.label, '数据看板'); assert.equal(dashboard.accelerator, undefined);
+  lab.click(); dashboard.click();
+  assert.deepEqual(opened, ['lab', 'dashboard']); assert.deepEqual(commands, []);
 });
 
 test('template accelerators merge custom bindings over defaults', () => {
@@ -62,15 +65,14 @@ test('template accelerators merge custom bindings over defaults', () => {
     ]) {
       assert.equal(item.accelerator, bindings[action], action);
     }
-    assert.equal(menus[0].submenu[4].accelerator, undefined);
-    assert.equal(menus[0].submenu[5].accelerator, undefined);
+    for (const label of ['虚拟实验室', '数据看板', '重启并安装更新']) assert.equal(menus[0].submenu.find(item => item.label === label).accelerator, undefined);
   }
 });
 
 test('all menu labels use existing English vocabulary', () => {
   const menus = template({ t: (text, values) => translate('en', text, values), updateReady: true });
   assert.deepEqual(labels(menus), ['Agentrix']);
-  assert.deepEqual(labels(menus[0].submenu), ['About Agentrix', '─', 'New project', 'Settings…', 'Dashboard', 'Restart and install update', '─', 'Hide Agentrix', 'Hide Others', 'Show All', '─', 'Quit Agentrix']);
+  assert.deepEqual(labels(menus[0].submenu), ['About Agentrix', '─', 'New project', 'Settings…', 'Virtual Lab', 'Dashboard', 'Restart and install update', '─', 'Hide Agentrix', 'Hide Others', 'Show All', '─', 'Quit Agentrix']);
   for (const menu of menus) for (const item of menu.submenu) if (item.label) assert.doesNotMatch(item.label, /[一-鿿]/);
 });
 
@@ -99,7 +101,7 @@ function mainFixture(platform = 'darwin') {
     store, t: (text, values) => translate(store.settings.language, text, values), app: { name: 'Agentrix' },
     process: { platform }, Menu: { buildFromTemplate: items => items, setApplicationMenu: menu => menus.push(menu) },
     send: (...args) => messages.push(args),
-    window: { close: () => calls.close++ }, tray: undefined, dashboardWindow: null, desktopGlassActive: false, windowZoom: undefined, macTitlebar: null,
+    window: { close: () => calls.close++ }, tray: undefined, dashboardWindow: null, labWindow: null, desktopGlassActive: false, windowZoom: undefined, macTitlebar: null,
     updateManager: { getState: () => update }, updatesIpc: { onStateChange: () => calls.updates++ },
     showWindow: () => calls.show++, requestQuit: async () => { calls.quit++; }, report: assert.fail,
     trayMenu: () => calls.tray++,
@@ -124,14 +126,16 @@ test('real menu wiring sends commands and retains quit and close behavior', () =
 
 test('real menu wiring opens the dashboard without showing the main window and reports failures', async () => {
   const { context, messages, calls } = mainFixture();
-  const errors = []; let opened = 0, fail = false;
-  context.dashboardWindow = { open: async () => { opened++; if (fail) throw new Error('boom'); } };
-  context.report = error => errors.push(error.message);
-  const item = context.macMenu()[0].submenu.find(item => item.label === 'Dashboard');
-  await item.click();
-  fail = true; await item.click();
-  assert.equal(opened, 2); assert.deepEqual(errors, ['boom']);
-  assert.deepEqual(messages, []); assert.equal(calls.show, 0);
+  for (const [label, key] of [['Dashboard', 'dashboardWindow'], ['Virtual Lab', 'labWindow']]) {
+    const errors = []; let opened = 0, fail = false;
+    context[key] = { open: async () => { opened++; if (fail) throw new Error('boom'); } };
+    context.report = error => errors.push(error.message);
+    const item = context.macMenu()[0].submenu.find(item => item.label === label);
+    await item.click();
+    fail = true; await item.click();
+    assert.equal(opened, 2); assert.deepEqual(errors, ['boom']);
+    assert.deepEqual(messages, []); assert.equal(calls.show, 0);
+  }
 });
 
 test('every menu command shows a hidden window before dispatch', () => {
@@ -149,7 +153,8 @@ test('every menu command shows a hidden window before dispatch', () => {
     order.push(channel); send(channel, command);
   };
   const menu = context.macMenu();
-  for (const item of menu[0].submenu.slice(2, 6).filter(item => item.label !== 'Dashboard')) {
+  for (const label of ['New project', 'Settings…', 'Restart and install update']) {
+    const item = menu[0].submenu.find(item => item.label === label);
     visible = false; order.length = 0;
     item.click();
     assert.deepEqual(order, ['show', 'focus', 'menu:command'], item.label);

@@ -511,21 +511,27 @@ test('采纳 / 不采纳 / 撤销 call decide with the suggestion id and the sta
 
 test('the app menu offers 数据看板 after 设置, before any update item, and opening it closes the menu first', async () => {
   const h = hooks({ 0: { left: 0, top: 0 } }), logged = [], previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window'), original = console.error;
-  const opened = [];
-  Object.defineProperty(globalThis, 'window', { configurable: true, value: { agentrix: { openDashboard: () => { opened.push(h.slots[0]); return Promise.resolve(opened.length === 1 ? { ok: true, value: undefined } : { ok: false, error: 'no window' }); } } } });
+  const opened = [], labOpened = [];
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { agentrix: {
+    openDashboard: () => { opened.push(h.slots[0]); return Promise.resolve(opened.length === 1 ? { ok: true, value: undefined } : { ok: false, error: 'no window' }); },
+    openLab: () => { labOpened.push(h.slots[0]); return Promise.resolve({ ok: true, value: undefined }); },
+  } } });
   console.error = (...args) => logged.push(args.join(' '));
   try {
     const loader = makeLoader({ react: h.api, 'react-dom': { createPortal: node => node }, '../shortcuts/shortcuts': { shortcut: () => '' } }), { AppMenu } = loader('features/titlebar/AppMenu.tsx');
     loader('shared/i18n.ts').applyLanguage('zh');
     const props = { fullScreen: false, canReturn: true, updateReady: true, onAddProject() {}, onReturn() {}, onFullScreen() {}, onSettings() {}, onInstallUpdate() {} };
     const items = () => elements(h.render(() => AppMenu(props))).filter(node => node.props.label !== undefined);
-    assert.deepEqual(items().map(node => node.props.label), ['新建项目', '返回项目', '全屏', '设置', '数据看板', '重启并安装更新']);
+    assert.deepEqual(items().map(node => node.props.label), ['新建项目', '返回项目', '全屏', '设置', '虚拟实验室', '数据看板', '重启并安装更新']);
     const entry = () => items().find(node => node.props.label === '数据看板');
     h.slots[0] = { left: 0, top: 0 }; entry().props.onSelect(); await settle();
     assert.deepEqual(opened, [null], 'the menu was already closed when the dashboard was asked to open');
     assert.deepEqual(logged, [], 'opening succeeded: nothing to report');
     h.slots[0] = { left: 0, top: 0 }; entry().props.onSelect(); await settle();
     assert.deepEqual(logged, ['no window'], 'a failure only goes to the console');
+    h.slots[0] = { left: 0, top: 0 }; items().find(node => node.props.label === '虚拟实验室').props.onSelect(); await settle();
+    assert.deepEqual(labOpened, [null], 'the menu is also closed before the lab opens');
+    assert.deepEqual(logged, ['no window'], 'opening the lab succeeded');
   } finally {
     console.error = original;
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow); else delete globalThis.window;
@@ -539,7 +545,7 @@ test('the dashboard CSP allows its own assets and dev socket without external im
   const html = fs.readFileSync(path.join(root, 'dashboard.html'), 'utf8');
   assert.match(html, /<script type="module" src="\/src\/features\/dashboard\/main\.tsx"><\/script>/); assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)/, 'no inline script');
   const config = fs.readFileSync(path.join(root, 'vite.config.ts'), 'utf8');
-  assert.match(config, /input: \{ main: 'index\.html', dashboard: 'dashboard\.html' \}/); assert.match(config, /entries: \['index\.html', 'dashboard\.html'\]/);
+  assert.match(config, /input: \{ main: 'index\.html', dashboard: 'dashboard\.html', lab: 'lab\.html' \}/); assert.match(config, /entries: \['index\.html', 'dashboard\.html', 'lab\.html'\]/);
 });
 
 test('the dashboard stylesheet keeps the product scale: spacing, type, radii, controls, and tokens for every colour but the chart series', () => {

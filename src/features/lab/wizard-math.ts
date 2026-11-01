@@ -11,8 +11,8 @@ export const MAX_RUNS = SIZE.max * 4 * REPEATS.max;
 export type Draft = { projectId: string; tasks: LabTask[]; arms: LabArm[]; repeats: number; budgetUsd: number; name: string };
 export const emptyDraft = (): Draft => ({ projectId: '', tasks: [], arms: ['orchestrated', 'opus'], repeats: REPEATS.standard, budgetUsd: 0, name: '' });
 
-export const clampSize = (size: number) => clamp(Math.round(size) || SIZE.standard, SIZE.min, SIZE.max);
-export const clampRepeats = (repeats: number) => clamp(Math.round(repeats) || REPEATS.standard, REPEATS.min, REPEATS.max);
+export const clampSize = (size: number) => clamp(Number.isFinite(size) ? Math.round(size) : SIZE.standard, SIZE.min, SIZE.max);
+export const clampRepeats = (repeats: number) => clamp(Number.isFinite(repeats) ? Math.round(repeats) : REPEATS.standard, REPEATS.min, REPEATS.max);
 
 export type Step = 1 | 2 | 3 | 4;
 export type Missing = 'project' | 'tasks' | 'arms' | 'budget' | null;

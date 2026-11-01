@@ -115,7 +115,7 @@
 .sample-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .task-list { display: flex; flex-direction: column; }
 .task-list li { display: grid; grid-template-columns: 8px 1fr auto; align-items: start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--divider); }
-.task-list li > i { width: 8px; height: 8px; margin-top: 6px; border-radius: 999px; background: var(--running); }
+.task-list li > i { width: 8px; height: 8px; margin-top: 8px; border-radius: 999px; background: var(--running); }
 .task-list p { font-size: 12px; }
 .field { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 0; }
 .field p { font-size: 12px; }

@@ -5,7 +5,7 @@ import { CaretLeft, Minus, Square, X } from '@phosphor-icons/react';
 import type { LabBridge, LabExperiment } from '../../shared/lab-types';
 import { applyLanguage, t } from '../../shared/i18n';
 import { IconButton } from '../../shared/IconButton';
-import { applyTheme, THEMES } from '../../shared/themes';
+import { applyTheme } from '../../shared/themes';
 import { Home } from './Home';
 import { createLabStore, type LabState, type LabStore } from './lab-store';
 import { Results } from './Results';
@@ -65,8 +65,7 @@ export function Lab({ bridge }: { bridge: LabBridge }) {
   useEffect(() => { store.start(); return () => store.stop(); }, [store]);
   // The language is set while rendering, before the children read it, as the main window does.
   applyLanguage(state.appearance?.language);
-  // The contract types the theme as a string; only an id the app knows is applied, anything else leaves the default.
-  const theme = THEMES.find(item => item.id === state.appearance?.theme)?.id;
+  const theme = state.appearance?.theme;
   useLayoutEffect(() => applyTheme(theme), [theme]);
   return <LabView state={state} store={store} bridge={bridge} named={state.appearance !== null} actions={{ minimize: () => bridge.minimize(), maximize: () => bridge.maximize(), close: () => bridge.close() }} />;
 }
