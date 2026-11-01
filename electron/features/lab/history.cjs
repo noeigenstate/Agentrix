@@ -8,6 +8,19 @@ const safePath = file => typeof file === 'string' && file.length <= 1024 && !/[\
   !file.startsWith('/') && file.split('/').every(part => part && part !== '.' && part !== '..' && part !== '.git');
 const sourceFile = file => !testFile(file) && /\.(?:[cm]?[jt]sx?|c[cp]?|cpp|h|hpp|rs|go|py|java|swift|mm|m|css|scss|html|vue|svelte)$/.test(file) &&
   !/^(?:tests|docs|resources|node_modules|vendor)\//.test(file);
+const sizeBand = lines => lines <= 50 ? 'small' : lines <= 200 ? 'medium' : 'large';
+
+async function gradingFiles(projectPath, task) {
+  const changed = (await git(projectPath, [
+    'diff', '--name-only', '--no-renames', '-z', task.base, task.commit, '--', 'tests/',
+  ])).split('\0').filter(Boolean);
+  if (changed.some(file => !safePath(file))) throw new Error('无效的隐藏测试路径。');
+  const entries = (await git(projectPath, ['ls-tree', '-r', '-z', task.commit, '--', ...changed]))
+    .split('\0').filter(Boolean);
+  if (entries.some(entry => !/^100(?:644|755) blob /.test(entry))) throw new Error('隐藏测试文件不能是链接。');
+  const present = new Set(entries.map(entry => entry.slice(entry.indexOf('\t') + 1)));
+  return changed.map(file => ({ file, deleted: !present.has(file) }));
+}
 
 function category(files, subject) {
   if (/\b(?:fix|bug|regression)\b|修复|故障/i.test(subject)) return 'core';
@@ -42,7 +55,8 @@ async function profileTask(projectPath, commit, { signal, t = (source, values) =
     .filter(file => file.endsWith('/BOUNDARY.md')).map(file => path.posix.dirname(file)).sort((a, b) => b.length - a.length);
   const modules = [...new Set(files.filter(sourceFile).map(file => {
     const parts = file.split('/'), depth = ['src', 'electron'].includes(parts[0]) ? parts[1] === 'features' ? 3 : 2 : 1;
-    return boundaries.find(folder => file.startsWith(folder + '/')) || (parts.length > 1 ? parts.slice(0, Math.min(depth, parts.length - 1)).join('/') : 'root');
+    return boundaries.find(folder => file.startsWith(folder + '/')) ||
+      (parts.length > 1 ? parts.slice(0, Math.min(depth, parts.length - 1)).join('/') : 'root');
   }))].sort();
   const linesChanged = changes.reduce((sum, change) => sum + change.lines, 0), title = message.split('\n')[0];
   return { id: commit, title, text: message, commit, base, modules, linesChanged, hiddenTests: tests, kind: category(files, title),
@@ -55,20 +69,22 @@ function selectTasks(tasks, size, preferShortComplex, exclude = []) {
   while (selected.length < size && candidates.length) {
     let best = 0, score = -Infinity;
     for (const [index, task] of candidates.entries()) {
-      const band = task.linesChanged <= 50 ? 'small' : task.linesChanged <= 200 ? 'medium' : 'large';
+      const band = sizeBand(task.linesChanged);
       const value = Math.min(3, task.modules.filter(module => !modules.has(module)).length) * 4 + (bands.has(band) ? 0 : 3) +
         (preferShortComplex && task.modules.length >= 2 ? 10 / (1 + task.linesChanged / 50) : 0) - index / 1000;
       if (value > score) { score = value; best = index; }
     }
     const [task] = candidates.splice(best, 1); selected.push(task);
     for (const module of task.modules) modules.add(module);
-    bands.add(task.linesChanged <= 50 ? 'small' : task.linesChanged <= 200 ? 'medium' : 'large');
+    bands.add(sizeBand(task.linesChanged));
   }
   return selected;
 }
 
 async function sampleHistory(projectPath, input, { signal, t, limit = 120 } = {}) {
-  const request = sampleRequest(input), commits = (await git(projectPath, ['log', '--no-merges', `--max-count=${limit}`, '--format=%H', 'HEAD'], { signal })).trim().split('\n');
+  const request = sampleRequest(input);
+  const commits = (await git(projectPath, ['log', '--no-merges', `--max-count=${limit}`, '--format=%H', 'HEAD'], { signal }))
+    .trim().split('\n');
   const tasks = [];
   for (const commit of commits) {
     if (!hash(commit) || request.exclude.includes(commit)) continue;
@@ -78,4 +94,4 @@ async function sampleHistory(projectPath, input, { signal, t, limit = 120 } = {}
   return selectTasks(tasks, request.size, request.preferShortComplex, request.exclude);
 }
 
-module.exports = { sampleHistory, profileTask, selectTasks, testFile, safePath };
+module.exports = { sampleHistory, profileTask, selectTasks, testFile, safePath, gradingFiles };
