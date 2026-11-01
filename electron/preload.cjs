@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('agentrix', {
   onTitlebarNavigate: callback => listen('titlebar:navigate', callback),
   gradeDelivery: grade => ipcRenderer.invoke('dashboard:grade', grade),
   openDashboard: () => ipcRenderer.invoke('dashboard:open'),
+  openLab: () => ipcRenderer.invoke('lab:open'),
   getAgents: () => ipcRenderer.invoke('agents:status'),
   installAgent: agent => ipcRenderer.invoke('agents:install', agent),
   openNode: () => ipcRenderer.invoke('agents:open-node'),
