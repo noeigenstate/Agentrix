@@ -2127,5 +2127,10 @@
   "启动模型前必须先通过参考测试。": "Reference tests must pass before starting any model.",
   "本次运行已超过剩余预算，模型已停止。": "This run exceeded the remaining budget. Its model workers were stopped.",
   "无法登录 Claude": "Couldn't sign in to Claude",
-  "测试日志：{path}": "Test log: {path}"
+  "测试日志：{path}": "Test log: {path}",
+  "粘贴图片": "Pasted pictures",
+  "技能页放大": "Larger skills page",
+  "Agentrix 菜单新增「虚拟实验室」：用项目过去带测试的改动，比较编排和单独模型的通过率、评审问题、用时与费用，结果以图表显示。": "The Agentrix menu has a new Virtual Lab: it compares orchestration with single models on a project's past changes that came with tests, and charts the pass rate, review issues, time and cost.",
+  "粘贴到输入框的图片现在能送到 Claude；助手没收到时，图片和文字会留在输入框，并告诉你怎么做。": "Pictures pasted into the message box now reach Claude; if the assistant does not receive one, the picture and your text stay in the box with a note on what to do.",
+  "设置里「技能」页的右上角新增放大按钮，设置窗口会铺满应用窗口，方便看技能内容。": "The Skills page in Settings has an enlarge button at the top right that makes Settings fill the app window, so skills are easier to read."
 }
