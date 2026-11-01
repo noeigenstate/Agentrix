@@ -202,6 +202,36 @@ export function expectedRemoteJobs(workflow) {
 
 export const installerArtifacts = ['Agentrix-windows-x64', 'Agentrix-macos-arm64', 'Agentrix-linux-x64', 'Agentrix-linux-arm64'];
 
+async function listWorkflowResults(read, endpoint, key) {
+  const result = [];
+  for (let page = 1; ; page++) {
+    const response = await read(`${endpoint}${endpoint.includes('?') ? '&' : '?'}per_page=100&page=${page}`);
+    if (!Array.isArray(response[key]) || !Number.isSafeInteger(response.total_count) || response.total_count < 0) {
+      throw new Error(`Incomplete ${key} response.`);
+    }
+    result.push(...response[key]);
+    if (result.length >= response.total_count) return result;
+    if (!response[key].length) throw new Error(`Incomplete ${key} pagination.`);
+  }
+}
+
+export async function findInstallerArtifactIds(read, { repository, sha, runId, now = Date.now }) {
+  const artifacts = await listWorkflowResults(read, `/repos/${repository}/actions/runs/${runId}/artifacts`, 'artifacts');
+  // Leave enough time for a release to download and verify the selected immutable artifacts.
+  const expiresAfter = now() + 60 * 60_000;
+  const ids = [];
+  for (const name of installerArtifacts) {
+    const matches = artifacts.filter(artifact => artifact.name === name);
+    if (matches.length !== 1) return null;
+    const artifact = matches[0];
+    if (!Number.isSafeInteger(artifact.id) || artifact.id <= 0 || artifact.expired !== false
+      || !(Date.parse(artifact.expires_at) >= expiresAfter) || !(artifact.size_in_bytes > 0)
+      || artifact.workflow_run?.id !== runId || artifact.workflow_run?.head_sha !== sha) return null;
+    ids.push(artifact.id);
+  }
+  return new Set(ids).size === installerArtifacts.length ? ids : null;
+}
+
 // Only real build/test runs qualify. A green run that merely reused another run's artifacts is not evidence itself.
 export async function findReusableRun(read, { repository, sha, runId, requiredJobs, now = Date.now }) {
   if (!Array.isArray(requiredJobs) || !requiredJobs.length || new Set(requiredJobs).size !== requiredJobs.length) {
@@ -217,36 +247,19 @@ export async function findReusableRun(read, { repository, sha, runId, requiredJo
     && sameWorkflow(run) && run.status === 'completed' && run.conclusion === 'success'
     && ['workflow_dispatch', 'push'].includes(run.event);
 
-  async function list(endpoint, key) {
-    const result = [];
-    for (let page = 1; ; page++) {
-      const response = await read(`${root}${endpoint}${endpoint.includes('?') ? '&' : '?'}per_page=100&page=${page}`);
-      if (!Array.isArray(response[key]) || !Number.isSafeInteger(response.total_count) || response.total_count < 0) {
-        throw new Error(`Incomplete ${key} response.`);
-      }
-      result.push(...response[key]);
-      if (result.length >= response.total_count) return result;
-      if (!response[key].length) throw new Error(`Incomplete ${key} pagination.`);
-    }
-  }
-
-  const runs = await list(`/actions/workflows/${workflowFile.split('/').at(-1)}/runs?head_sha=${sha}&status=success`, 'workflow_runs');
+  const runs = await listWorkflowResults(read, `${root}/actions/workflows/${workflowFile.split('/').at(-1)}/runs?head_sha=${sha}&status=success`, 'workflow_runs');
   for (const run of runs) {
     if (!eligible(run)) continue;
-    const jobs = await list(`/actions/runs/${run.id}/jobs?filter=latest`, 'jobs');
+    const jobs = await listWorkflowResults(read, `${root}/actions/runs/${run.id}/jobs?filter=latest`, 'jobs');
     if (!requiredJobs.every(name => {
       const matches = jobs.filter(job => job.name === name);
       return matches.length === 1 && matches[0].status === 'completed' && matches[0].conclusion === 'success';
     })) continue;
-    const artifacts = await list(`/actions/runs/${run.id}/artifacts`, 'artifacts');
-    if (!installerArtifacts.every(name => {
-      const matches = artifacts.filter(artifact => artifact.name === name);
-      return matches.length === 1 && matches[0].expired === false && Date.parse(matches[0].expires_at) > now()
-        && matches[0].size_in_bytes > 0 && matches[0].workflow_run?.id === run.id && matches[0].workflow_run?.head_sha === sha;
-    })) continue;
+    const artifactIds = await findInstallerArtifactIds(read, { repository, sha, runId: run.id, now });
+    if (!artifactIds) continue;
     // A rerun can have started while the jobs/artifacts were being inspected.
     const checked = await read(`${root}/actions/runs/${run.id}`);
-    if (eligible(checked) && checked.id === run.id && checked.run_attempt === run.run_attempt) return run.id;
+    if (eligible(checked) && checked.id === run.id && checked.run_attempt === run.run_attempt) return { runId: run.id, artifactIds };
   }
   return null;
 }

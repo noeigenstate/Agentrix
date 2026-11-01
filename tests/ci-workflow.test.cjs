@@ -2,7 +2,9 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const vm = require('node:vm');
+const { spawnSync } = require('node:child_process');
 
 const helpers = import('../scripts/ci-preflight-core.mjs');
 const source = fs.readFileSync(path.join(__dirname, '../.github/workflows/build-windows.yml'), 'utf8');
@@ -129,6 +131,10 @@ test('desktop shards consume the one Windows build with the same tools and envir
   assert.ok(build.steps.some(step => step.run === 'node scripts/verify-update-artifacts.cjs'));
   assert.ok(build.steps.some(step => step.name === 'Verify voice packaging'));
   assert.ok(!desktop.steps.some(step => /npm run dist|^npm test$/m.test(step.run || '')));
+  const setup = desktop.steps.find(step => step.run === 'node scripts/build-ssh-askpass.cjs');
+  assert.ok(setup, 'Fresh shards must compile file-clipboard.exe and ssh-askpass.exe for the test harness');
+  assert.equal(setup.if, undefined);
+  assert.ok(desktop.steps.indexOf(setup) < desktop.steps.findIndex(step => step.run?.includes('scripts/retry.mjs')));
   const upload = build.steps.find(step => step.with?.name === 'Agentrix-windows-unpacked');
   assert.equal(upload.with.path, 'release/win-unpacked/');
   assert.equal(upload.with['include-hidden-files'], true);
@@ -231,21 +237,27 @@ test('reuse is queried only for main pushes, version tags and requested dry runs
     assert.equal(evaluate(parsed.jobs[id].if), true);
     assert.equal(evaluate(parsed.jobs[id].if, { reused: true }), false);
   }
-  assert.match(selection.run, /catch\s*\{[\s\S]*running all builds and tests/);
-  assert.doesNotMatch(selection.run, /console\.(?:log|error)\([^\n]*(?:GH_TOKEN|error|stderr|stdout)/);
+  assert.equal(selection.run, 'node scripts/ci-select-build.mjs');
+  assert.equal(parsed.jobs.reuse.outputs['artifact-ids'], '${{ steps.select.outputs.artifact-ids }}');
 });
 
-test('release downloads all four original artifact names from the selected run and verifies their hashes and version', async () => {
-  const { installerArtifacts } = await helpers;
+test('release downloads the four pinned artifact IDs in one step and verifies their hashes and version', async () => {
   const parsed = await workflow();
   const release = parsed.jobs.release;
   const downloads = release.steps.filter(step => step.uses?.startsWith('actions/download-artifact@'));
-  assert.deepEqual(downloads.map(step => step.with.name), installerArtifacts);
-  for (const step of downloads) {
-    assert.equal(step.with['run-id'], "${{ needs.reuse.outputs['run-id'] || github.run_id }}");
-    assert.equal(step.with['github-token'], '${{ github.token }}');
-    assert.equal(step.with.path, 'release-assets');
-  }
+  assert.equal(downloads.length, 1);
+  const download = downloads[0];
+  assert.equal(download.with['artifact-ids'], "${{ needs.reuse.outputs['artifact-ids'] || steps.artifacts.outputs['artifact-ids'] }}");
+  assert.equal(download.with['merge-multiple'], true);
+  assert.equal(download.with.name, undefined);
+  assert.equal(download.with.pattern, undefined);
+  assert.equal(download.with['run-id'], "${{ needs.reuse.outputs['run-id'] || github.run_id }}");
+  assert.equal(download.with['github-token'], '${{ github.token }}');
+  assert.equal(download.with.path, 'release-assets');
+  const current = release.steps.find(step => step.id === 'artifacts');
+  assert.equal(current.if, "needs.reuse.outputs['run-id'] == ''");
+  assert.equal(current.run, 'node scripts/ci-select-build.mjs --current-run');
+  assert.ok(release.steps.indexOf(current) < release.steps.indexOf(download));
   assert.equal(release.permissions.actions, 'read');
   const version = release.steps.find(step => step.id === 'version');
   assert.match(version.run, /require\('\.\/package\.json'\)\.version/);
@@ -258,9 +270,25 @@ test('release downloads all four original artifact names from the selected run a
   assert.match(verify.run, /\$changes\n/);
   assert.doesNotMatch(verify.run, /A new light theme/);
   for (const file of ['SHA256SUMS.txt', 'SHA256SUMS-mac.txt', 'SHA256SUMS-linux-x64.txt', 'SHA256SUMS-linux-arm64.txt']) assert.ok(verify.run.includes(file));
-  assert.match(verify.run, /grep -Fx "Commit: \$GITHUB_SHA" BUILD-INFO.txt/);
+  assert.match(verify.run, /tr -d '\\r' < BUILD-INFO\.txt \| grep -Fx "Commit: \$GITHUB_SHA"/);
+  assert.doesNotMatch(verify.run, /test "\$RELEASE_TAG" = "v\$RELEASE_VERSION"/);
   assert.match(verify.run, /cat release-assets.txt\n\s*cat release-notes.md/);
   assert.ok(Object.values(verify.env).every(value => !String(value).includes('needs.windows.outputs')));
+  assert.equal(release.env.RELEASE_DRY_RUN, "${{ github.event_name == 'workflow_dispatch' && inputs.release_dry_run }}");
+  assert.ok(release.steps.every(step => !Object.hasOwn(step.env || {}, 'RELEASE_DRY_RUN')));
+});
+
+test('release commit verification accepts Windows CRLF build notes and rejects a different commit', { skip: process.platform === 'win32' }, async () => {
+  const release = (await workflow()).jobs.release;
+  const verify = release.steps.find(step => step.name === 'Verify release assets and prepare notes');
+  const check = verify.run.split('\n').find(line => line.includes('grep -Fx "Commit: $GITHUB_SHA"'));
+  const command = check.replace(' < BUILD-INFO.txt', '');
+  const sha = 'a'.repeat(40);
+  const run = commit => spawnSync('bash', ['-c', command], {
+    input: `Agentrix — Windows x64 installer\r\nCommit: ${commit}\r\n`, encoding: 'utf8', env: { ...process.env, GITHUB_SHA: sha },
+  });
+  assert.equal(run(sha).status, 0);
+  assert.equal(run('b'.repeat(40)).status, 1);
 });
 
 async function reuseFixture() {
@@ -271,7 +299,7 @@ async function reuseFixture() {
     repository: { full_name: repository }, head_repository: { full_name: repository },
     event: 'workflow_dispatch', status: 'completed', conclusion: 'success' };
   const jobs = requiredJobs.map(name => ({ name, status: 'completed', conclusion: 'success' }));
-  const artifacts = installerArtifacts.map(name => ({ name, size_in_bytes: 100, expired: false,
+  const artifacts = installerArtifacts.map((name, index) => ({ id: index + 1001, name, size_in_bytes: 100, expired: false,
     expires_at: '2026-11-10T00:00:00Z', workflow_run: { id: run.id, head_sha: sha } }));
   const data = { current: { ...run, id: runId }, runs: [run], byRun: { [run.id]: { jobs, artifacts } }, checked: {} };
   const reads = [];
@@ -302,7 +330,7 @@ test('reuse accepts only completed successful dispatch/push runs of this workflo
     const fixture = await reuseFixture();
     fixture.data.runs[0].event = event;
     fixture.data.runs[0].path += '@refs/heads/main';
-    assert.equal(await findReusableRun(fixture.read, fixture.options), 101);
+    assert.deepEqual(await findReusableRun(fixture.read, fixture.options), { runId: 101, artifactIds: [1001, 1002, 1003, 1004] });
   }
   const invalid = [
     { id: 500 }, { id: '101' }, { run_attempt: undefined }, { head_sha: 'b'.repeat(40) }, { workflow_id: 8 },
@@ -337,7 +365,8 @@ test('reuse rejects any missing, expired, empty or mismatched installer artifact
   const { findReusableRun } = await helpers;
   for (let index = 0; index < 4; index++) {
     for (const change of [null, { expired: true }, { expires_at: '2026-10-31T00:00:00Z' }, { expires_at: 'invalid' },
-      { size_in_bytes: 0 }, { workflow_run: { id: 102, head_sha: 'a'.repeat(40) } }, { workflow_run: { id: 101, head_sha: 'b'.repeat(40) } }]) {
+      { id: undefined }, { id: '1001' }, { id: 0 }, { size_in_bytes: 0 },
+      { workflow_run: { id: 102, head_sha: 'a'.repeat(40) } }, { workflow_run: { id: 101, head_sha: 'b'.repeat(40) } }]) {
       const fixture = await reuseFixture();
       const artifacts = fixture.data.byRun[101].artifacts;
       if (change) Object.assign(artifacts[index], change);
@@ -348,6 +377,73 @@ test('reuse rejects any missing, expired, empty or mismatched installer artifact
   const fixture = await reuseFixture();
   fixture.data.byRun[101].artifacts.push(fixture.data.byRun[101].artifacts[0]);
   assert.equal(await findReusableRun(fixture.read, fixture.options), null);
+});
+
+test('reuse requires at least an hour of artifact lifetime and four distinct IDs', async () => {
+  const { findReusableRun } = await helpers;
+  for (let index = 0; index < 4; index++) {
+    const fixture = await reuseFixture();
+    fixture.data.byRun[101].artifacts[index].expires_at = new Date(fixture.options.now() + 60 * 60_000 - 1).toISOString();
+    assert.equal(await findReusableRun(fixture.read, fixture.options), null);
+  }
+  const fixture = await reuseFixture();
+  for (const artifact of fixture.data.byRun[101].artifacts) artifact.expires_at = new Date(fixture.options.now() + 60 * 60_000).toISOString();
+  assert.deepEqual(await findReusableRun(fixture.read, fixture.options), { runId: 101, artifactIds: [1001, 1002, 1003, 1004] });
+  fixture.data.byRun[101].artifacts[1].id = 1001;
+  assert.equal(await findReusableRun(fixture.read, fixture.options), null);
+});
+
+test('selection retains the original immutable IDs when names are replaced after artifact inspection', async () => {
+  const { findReusableRun } = await helpers;
+  const fixture = await reuseFixture();
+  const read = async endpoint => {
+    const result = await fixture.read(endpoint);
+    if (endpoint.endsWith('/actions/runs/101')) {
+      for (const artifact of fixture.data.byRun[101].artifacts) artifact.id += 1000;
+    }
+    return result;
+  };
+  assert.deepEqual(await findReusableRun(read, fixture.options), { runId: 101, artifactIds: [1001, 1002, 1003, 1004] });
+  assert.deepEqual(fixture.data.byRun[101].artifacts.map(artifact => artifact.id), [2001, 2002, 2003, 2004]);
+});
+
+test('the extracted selector returns IDs for reuse and selects only current-run artifacts after a full build', async () => {
+  const { selectBuild } = await import('../scripts/ci-select-build.mjs');
+  const fixture = await reuseFixture();
+  for (const artifact of fixture.data.byRun[101].artifacts) artifact.expires_at = '2099-11-10T00:00:00Z';
+  const env = { GITHUB_REPOSITORY: fixture.options.repository, GITHUB_SHA: fixture.options.sha,
+    GITHUB_RUN_ID: String(fixture.options.runId), REQUIRED_JOBS: JSON.stringify(fixture.options.requiredJobs) };
+  assert.deepEqual(await selectBuild({ read: fixture.read, env }), { runId: 101, artifactIds: [1001, 1002, 1003, 1004] });
+  fixture.data.byRun[500] = { artifacts: fixture.data.byRun[101].artifacts.map(artifact => ({
+    ...artifact, id: artifact.id + 1000, workflow_run: { id: 500, head_sha: fixture.options.sha },
+  })) };
+  fixture.reads.length = 0;
+  assert.deepEqual(await selectBuild({ currentRun: true, read: fixture.read, env }), { runId: 500, artifactIds: [2001, 2002, 2003, 2004] });
+  assert.equal(fixture.reads.length, 1);
+  assert.match(fixture.reads[0], /\/runs\/500\/artifacts\?/);
+  fixture.data.byRun[500].artifacts.pop();
+  await assert.rejects(selectBuild({ currentRun: true, read: fixture.read, env }), /no complete, unexpired installer artifacts/);
+  assert.equal(await selectBuild({ read: () => { throw new Error('Private credential-bearing failure'); }, env }), null);
+});
+
+test('selector CLI falls back with empty outputs on lookup failure but fails current-run selection without leaking errors', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-ci-select-build-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const output = path.join(directory, 'reuse-output');
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path')), PATH: '',
+    GH_TOKEN: 'private-test-token', GITHUB_REPOSITORY: 'owner/Agentrix', GITHUB_SHA: 'a'.repeat(40),
+    GITHUB_RUN_ID: '500', REQUIRED_JOBS: '["Required build"]', GITHUB_OUTPUT: output };
+  const script = path.join(__dirname, '../scripts/ci-select-build.mjs');
+  const reuse = spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
+  assert.equal(reuse.status, 0, reuse.stderr);
+  assert.equal(fs.readFileSync(output, 'utf8'), 'run-id=\nartifact-ids=\n');
+  assert.match(reuse.stdout, /Building and testing this commit/);
+  const currentOutput = path.join(directory, 'current-output');
+  const current = spawnSync(process.execPath, [script, '--current-run'], { env: { ...env, GITHUB_OUTPUT: currentOutput }, encoding: 'utf8' });
+  assert.equal(current.status, 1);
+  assert.equal(fs.existsSync(currentOutput), false);
+  assert.equal(current.stderr.trim(), 'Unable to select the verified installer artifacts.');
+  for (const result of [reuse, current]) assert.doesNotMatch(result.stdout + result.stderr, /private-test-token|ENOENT|execFileSync/);
 });
 
 test('reuse checks later candidates and paginates jobs before accepting a complete build', async () => {
@@ -364,7 +460,7 @@ test('reuse checks later candidates and paginates jobs before accepting a comple
     }
     return fixture.read(endpoint);
   };
-  assert.equal(await findReusableRun(read, fixture.options), 101);
+  assert.deepEqual(await findReusableRun(read, fixture.options), { runId: 101, artifactIds: [1001, 1002, 1003, 1004] });
 });
 
 test('reuse rejects a rerun started during inspection and fails closed on incomplete API responses', async () => {
