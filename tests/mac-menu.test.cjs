@@ -202,6 +202,25 @@ for (const platform of ['darwin', 'win32', 'linux']) test(`${platform} keeps tit
   context.updateIndicators(); assert.equal(titles.at(-1), 'Agentrix');
 });
 
+for (const platform of ['darwin', 'win32', 'linux']) test(`${platform} close hides to the tray${platform === 'darwin' ? ' after leaving fullscreen' : ''}`, () => {
+  const order = [];
+  let fullscreen = true;
+  const window = Object.assign(new EventEmitter(), {
+    webContents: new EventEmitter(), isDestroyed: () => false, isFullScreen: () => fullscreen, hide: () => order.push('hide'),
+    setFullScreen: value => { order.push(`fullscreen:${value}`); fullscreen = value; window.emit('leave-full-screen'); },
+  });
+  const register = vm.runInContext(`(${registerWindowLifecycle.toString()})`, vm.createContext({ process: { platform } }));
+  register({ window, getSettings: () => ({ closeToTray: true }), isQuitting: () => false, hasTray: () => true,
+    send() {}, updateIndicators() {}, requestQuit: assert.fail });
+  let prevented = false;
+  window.emit('close', { preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.deepEqual(order, platform === 'darwin' ? ['fullscreen:false', 'hide'] : ['hide']);
+  order.length = 0;
+  window.emit('close', { preventDefault() {} });
+  assert.deepEqual(order, ['hide']);
+});
+
 test('settings refresh tray language on every platform and application menus only on macOS', () => {
   for (const platform of ['darwin', 'win32', 'linux']) {
     const { handlers, menus, calls } = mainFixture(platform);

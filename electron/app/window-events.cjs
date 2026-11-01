@@ -78,8 +78,12 @@ function registerWindowLifecycle({ window, getSettings, isQuitting, hasTray, req
   window.on('close', event => {
     if (isQuitting()) return;
     event.preventDefault();
-    if (getSettings().closeToTray && hasTray()) window.hide();
-    else requestQuit().catch(report);
+    if (!getSettings().closeToTray || !hasTray()) requestQuit().catch(report);
+    // A window hidden in macOS full screen leaves its Space black until the Dock reopens it, so leave full screen first.
+    else if (process.platform === 'darwin' && window.isFullScreen()) {
+      window.once('leave-full-screen', () => { if (!window.isDestroyed()) window.hide(); });
+      window.setFullScreen(false);
+    } else window.hide();
   });
 }
 
