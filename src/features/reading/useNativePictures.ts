@@ -1,12 +1,11 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { currentLanguage, t } from '../../shared/i18n';
+import { t } from '../../shared/i18n';
 import { isWindows } from '../../shared/platform';
 import { dataUrl, thumbnail } from '../../shared/image-thumbnail';
 import { parseAgentScreen } from '../agents/agent-screen';
 import { readScreen } from '../terminal/terminal-screen';
 import { cliDialogShown, cliInputDraft, hasCliInput } from './cli-panel';
 import { imageRemoval, inputImageLabels } from './image-input';
-import { pictureInputCopy } from './picture-input-copy.ts';
 
 export type NativeImage = { id: number; src: string };
 type Paste = { before?: string[]; label?: string; ready?: Promise<void>; conflicted?: boolean };
@@ -58,14 +57,14 @@ export function useNativePictures({ owner, terminalId, agent, sending, interacti
     if (images.length && !observe()) {
       // A second clipboard makes the pending paste's bytes uncertain. It remains removable without guessing keys.
       for (const image of images) { const pending = context.pastes.get(image.id); if (pending && !pending.label) pending.conflicted = true; }
-      onError(pictureInputCopy(currentLanguage()).unaccepted); return;
+      onError(t('图片未发送。请在输入框中移除后重新粘贴。')); return;
     }
     const id = ++sequence.current, entry: Paste = {}, image: NativeImage = { id, src: '' }, intent = interaction.current;
     context.pastes.set(id, entry);
     setSnapshot(previous => ({ context, images: [...(previous.context === context ? previous.images : []), image] }));
     const retained = () => valid() && context.pastes.get(id) === entry;
     const canWrite = () => retained() && !entry.conflicted && interaction.current === intent && !blocked();
-    const fail = () => { if (retained()) { discard(id); onError(pictureInputCopy(currentLanguage()).failed); } };
+    const fail = () => { if (retained()) { discard(id); onError(t('图片未能附加，已从输入框移除。请等终端准备好后重新粘贴。')); } };
     const left = !images.length ? readInput()?.text ?? '' : '';
     const clearFirst = !!left && !inputImageLabels(left).length && !preserveDraft(left);
     const pressPaste = () => {
@@ -75,6 +74,7 @@ export function useNativePictures({ owner, terminalId, agent, sending, interacti
       entry.before = inputImageLabels(current.text);
       // Claude uses Alt+V only on Windows; macOS/Linux and Codex use Ctrl+V.
       window.agentrix.writeTerminal(terminalId, agent === 'claude' && isWindows ? '\x1bv' : '\x16');
+      // Record any chip already visible; Send checks acceptance again after asynchronous CLI redraws.
       observe([...images, image]);
     };
     if (clearFirst) entry.ready = clearInput(canWrite).then(() => new Promise<void>(resolve => setTimeout(resolve, 60))).then(pressPaste);
@@ -87,7 +87,7 @@ export function useNativePictures({ owner, terminalId, agent, sending, interacti
     if (sending.current || !valid()) return;
     const image = images[index];
     if (!image) return;
-    if (!observe()) { discard(image.id); onError(pictureInputCopy(currentLanguage()).removed); return; }
+    if (!observe()) { discard(image.id); onError(t('已从输入框移除，请检查终端中是否还留有图片。')); return; }
     const current = readInput()!;
     const labels = inputImageLabels(current.text), removal = imageRemoval(agent, current.text, labels.length - images.length + index, current.rows.length);
     if (!removal) { onError(t('请在终端中检查并移除这张图片。')); return; }

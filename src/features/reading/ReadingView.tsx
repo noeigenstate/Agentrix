@@ -20,7 +20,6 @@ import { ReadingSessions } from './ReadingSessions';
 import { typeReadingCommand, usesSessionPicker } from './reading-sessions';
 import { dataUrl, thumbnail } from '../../shared/image-thumbnail';
 import { useNativePictures } from './useNativePictures';
-import { pictureInputCopy } from './picture-input-copy.ts';
 import { rememberPicture } from './pasted-pictures';
 import { useWelcomeStarting } from './reading-welcome';
 import { ReadingTerminalPopup } from './ReadingTerminalPopup';
@@ -391,7 +390,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // Returning from session A to B to A must not revive an earlier send's delayed keys.
   const ownsSend = (owner: number) => mounted.current && sendCounter.current === owner;
   const ownsPicture = (generation: number) => mounted.current && pictureGeneration.current === generation;
-  const pictureNotAccepted = () => onError(pictureInputCopy(currentLanguage()).unaccepted);
+  const pictureNotAccepted = () => onError(t('图片未发送。请在输入框中移除后重新粘贴。'));
   const send = async (text = draft.trim(), own = true) => {
     if (own) dictationSend.cancel();
     if (sending.current) return;
@@ -405,7 +404,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // whatever is being written now alone and takes no pictures with it.
   const deliver = async (words: string, own: boolean, owner: number) => {
     if (inputBlocked) return;
-    if (!own && images.length) { onError(pictureInputCopy(currentLanguage()).pending); return; }
+    if (!own && images.length) { onError(t('请先发送或移除输入框中的图片，再发送这条消息。')); return; }
     const batch = own ? images : [], uploads = own ? serverPictures.current.slice() : [];
     const pictureSend = !!(batch.length || uploads.length);
     if (uploads.length) {
@@ -418,7 +417,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     const text = pictures.length ? (isTypedCommand(words) ? [words, ...pictures] : [...pictures, words]).filter(Boolean).join(' ') : words;
     if ((!text && !batch.length) || !terminal.sessionId) return;
     // Commands clear the native input; they cannot silently consume pictures waiting for a normal message.
-    if (batch.length && isTypedCommand(text)) { onError(pictureInputCopy(currentLanguage()).pending); return; }
+    if (batch.length && isTypedCommand(text)) { onError(t('请先发送或移除输入框中的图片，再发送这条消息。')); return; }
     if (usesSessionPicker(terminal, text, remote)) {
       choiceVisible.current = true; restoreComposer.current = document.activeElement === input.current;
       if (own) edit('');
@@ -540,7 +539,9 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   });
   const undelivered = (prompt: PendingPrompt) => idle && !prompt.sending && !queued(prompt) && (!!prompt.imageCount || (resent.get(prompt.text) ?? 0) >= 2);
   const resend = (prompt: PendingPrompt) => {
-    if (prompt.imageCount || images.length) { onError(pictureInputCopy(currentLanguage())[prompt.imageCount ? 'receipt' : 'pending']); return; }
+    if (prompt.imageCount || images.length) {
+      onError(prompt.imageCount ? t('图片是否送达尚未确认。请先在终端中检查对话，再决定是否重新发送。') : t('请先发送或移除输入框中的图片，再发送这条消息。')); return;
+    }
     cancelEcho(prompt.id); void send(prompt.text, false);
   };
   // Dictation into this terminal lands here while the reading view shows: the words appear at the cursor as
