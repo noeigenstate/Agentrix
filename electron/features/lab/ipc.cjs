@@ -6,7 +6,8 @@ function registerLabIpc({ ipcMain, labWindow, getMainWindow, engine, open, devUr
     const window = lab ? labWindow.getWindow() : getMainWindow();
     if (!window || window.isDestroyed()) return null;
     const source = new URL(window.webContents.mainFrame.url), expected = new URL(lab ? labWindow.url : mainUrl);
-    const paths = lab || !devUrl ? [expected.pathname] : [expected.pathname, `${expected.pathname.replace(/\/$/, '')}/`, `${expected.pathname.replace(/\/$/, '')}/index.html`];
+    const prefix = expected.pathname.replace(/\/$/, '');
+    const paths = lab || !devUrl ? [expected.pathname] : [expected.pathname, prefix + '/', prefix + '/index.html'];
     if (source.protocol !== expected.protocol || source.host !== expected.host || !paths.includes(source.pathname)) throw new Error('实验室请求来源无效。');
     return window;
   }
