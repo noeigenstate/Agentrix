@@ -1940,5 +1940,10 @@
   "菜单栏": "Menu bar",
   "macOS 屏幕顶部的菜单栏现在只剩 Agentrix 一个菜单，设置、数据看板等入口都收在里面。": "The macOS menu bar now has only the Agentrix menu, with Settings, Dashboard and the other entries inside it.",
   "macOS 全屏时窗口不再有自己的标题栏和「Agentrix」字样，按搜索会把它请回来；点红色关闭按钮会先退出全屏再隐藏，不再黑屏。": "In macOS full screen the window no longer has a title bar of its own or the Agentrix title, and searching brings it back; the red close button now leaves full screen before hiding the window instead of leaving a black screen.",
-  "结果卡片上的「打开文件」现在会直接打开文件，不再提示「无效的项目文件路径」。": "Open file on the result card now opens the file instead of showing \"Invalid project file path\"."
+  "结果卡片上的「打开文件」现在会直接打开文件，不再提示「无效的项目文件路径」。": "Open file on the result card now opens the file instead of showing \"Invalid project file path\".",
+  "标题栏居中": "Centred title bar",
+  "深色全屏": "Dark full screen",
+  "macOS 窗口的红黄绿按钮和「决策」「工作台」现在在顶栏里上下居中，拖动窗口时也不再跳动。": "On macOS the red, yellow and green buttons and Decide and Workbench now sit in the vertical middle of the top bar and no longer jump while you drag the window.",
+  "深色主题下，macOS 全屏时顶部的系统栏是深色的，菜单和对话框也跟着主题走。": "With a dark theme, the system bar at the top of macOS full screen is dark, and menus and dialogs follow the theme too.",
+  "自带的模型路由不再使用 GPT-6.1-Terra：界面验收和小任务改由 Sonnet 负责，只装了 Codex 时由 Sol 负责。": "The built-in model routing no longer uses GPT-6.1-Terra: Sonnet now takes interface acceptance and small tasks, and Sol does when only Codex is installed."
 }
