@@ -22,7 +22,7 @@ const templateIcon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYA
 
 function styleFixture() {
   return { scale: 1, font: { size: 13, weight: 600, family: "'PingFang SC', sans-serif" },
-    metrics: { height: 28, paddingX: 12, gap: 6, itemGap: 4, radius: 8, iconSize: 16, focusWidth: 2, focusOffset: 2,
+    metrics: { height: 28, paddingX: 12, gap: 6, itemGap: 4, radius: 8, iconSize: 16, focusWidth: 2, focusOffset: 2, barHeight: 40,
       badge: { minWidth: 18, paddingX: 5, height: 17, fontSize: 11, fontWeight: 600 } },
     colors: { text: '#b5b5b5', textSelected: '#f2f2f2', hover: '#343434', selected: '#383838',
       badge: '#e5e5e5', badgeText: '#181818', focus: '#d0d0d0' },
@@ -30,12 +30,13 @@ function styleFixture() {
 }
 
 function fixture(options = {}) {
-  const updates = [], messages = [], warnings = [];
+  const updates = [], messages = [], warnings = [], lights = [];
   let click, detached = 0, attached = 0, broadcasts = 0, language = 'en', failure;
   const handle = Buffer.alloc(8);
   const frame = { url: 'agentrix://app/index.html' };
   const window = Object.assign(new EventEmitter(), {
     getNativeWindowHandle: () => handle, isDestroyed: () => false,
+    getWindowButtonPosition: () => ({ x: 16, y: 12 }), setWindowButtonPosition: position => lights.push(position),
     webContents: { mainFrame: frame },
   });
   const addon = {
@@ -46,7 +47,7 @@ function fixture(options = {}) {
   const controller = registerMacTitlebar({ window, platform: 'darwin',
     t: (text, values) => translate(language, text, values), send: (...args) => messages.push(args),
     broadcast: () => broadcasts++, loadAddon: () => addon, warn: message => warnings.push(message), ...options });
-  return { controller, window, addon, updates, messages, warnings, click: id => click(id),
+  return { controller, window, addon, updates, messages, warnings, lights, click: id => click(id),
     setLanguage: value => { language = value; }, fail: () => { failure = new Error('update failed'); },
     get attached() { return attached; }, get detached() { return detached; }, get broadcasts() { return broadcasts; } };
 }
@@ -98,6 +99,25 @@ test('style can arrive after attachment without a state change; equivalent style
   f.controller.refresh();
   assert.equal(f.updates.length, 2);
   assert.equal(f.broadcasts, 0);
+});
+
+test('the traffic lights centre on the page title bar at its zoom, in Electron and the addon alike', () => {
+  const f = fixture(), style = styleFixture();
+  f.controller.update({ view: 'workspace', decisions: 0, style });
+  assert.deepEqual(f.updates.at(-1).lights, { x: 16, y: 13 }, 'a 40pt bar: 13 + 14 + 13');
+  assert.deepEqual(f.lights, [{ x: 16, y: 13 }]);
+  f.controller.update({ view: 'decisions', decisions: 1 });
+  assert.equal('lights' in f.updates.at(-1), false, 'state alone does not move them');
+  f.controller.update({ view: 'decisions', decisions: 1, style: { ...style, scale: 0.9 } });
+  assert.deepEqual(f.updates.at(-1).lights, { x: 16, y: 11 }, 'a 36pt bar at 90%');
+  const update = f.addon.update;
+  f.addon.update = value => { update(value); return false; };
+  f.controller.update({ view: 'decisions', decisions: 1, style: { ...style, scale: 0.8 } });
+  assert.deepEqual(f.lights, [{ x: 16, y: 13 }, { x: 16, y: 11 }], 'a rejected style leaves Electron where the addon is');
+  for (const barHeight of [0, -1, 65, undefined]) {
+    f.controller.update({ view: 'workspace', decisions: 0, style: { ...style, metrics: { ...style.metrics, barHeight } } });
+  }
+  assert.equal(f.lights.length, 2, 'a style without a usable bar height is not accepted');
 });
 
 test('switching pages only flips selection, preserving labels, counts and the cached style', () => {

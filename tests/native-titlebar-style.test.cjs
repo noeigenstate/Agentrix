@@ -34,12 +34,12 @@ test('the style carries the nav rules as numbers, the colours and the icons unto
   const colors = { text: '#b5b5b5', textSelected: '#f2f2f2', hover: '#343434', selected: '#383838', badge: '#e5e5e5', badgeText: '#181818', focus: '#d0d0d0' };
   const icons = { decisions: 'data:image/png;base64,AA', workspace: 'data:image/png;base64,BB' };
   const style = styleFrom({
-    scale: 0.9, nav: { columnGap: '4px' }, button, colors, icons, focus: { width: 2, offset: 2 },
+    scale: 0.9, bar: { height: '40px' }, nav: { columnGap: '4px' }, button, colors, icons, focus: { width: 2, offset: 2 },
     badge: { minWidth: '18px', paddingLeft: '5px', lineHeight: '17px', fontSize: '11px', fontWeight: '600' },
   });
   assert.deepEqual(style, {
     scale: 0.9, font: { size: 13, weight: 600, family: '"PingFang SC", sans-serif' },
-    metrics: { height: 28, paddingX: 12, gap: 6, itemGap: 4, radius: 8, iconSize: 16, focusWidth: 2, focusOffset: 2, badge: { minWidth: 18, paddingX: 5, height: 17, fontSize: 11, fontWeight: 600 } },
+    metrics: { height: 28, paddingX: 12, gap: 6, itemGap: 4, radius: 8, iconSize: 16, focusWidth: 2, focusOffset: 2, barHeight: 40, badge: { minWidth: 18, paddingX: 5, height: 17, fontSize: 11, fontWeight: 600 } },
     colors, icons,
   });
 });

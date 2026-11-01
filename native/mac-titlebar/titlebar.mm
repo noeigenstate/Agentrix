@@ -424,6 +424,32 @@ void LayoutButtons(NSView* view, AgentrixNavButton* decisions, AgentrixNavButton
   if (changed) view.needsDisplay = YES;
 }
 
+// Electron's trafficLightPosition layout (its WindowButtonsProxy): the title-bar container is the buttons' height plus
+// the margin above and below, and the buttons start at the left inset. AppKit restores its own layout whenever an
+// accessory changes size and Electron reapplies its own only on some events, so without this the buttons jumped.
+// Neither centres vertically: the buttons and the 32pt accessory container (which clips) are centred here.
+void PlaceTitlebar(NSWindow* window, NSView* accessories, NSPoint margin) {
+  NSButton* close = [window standardWindowButton:NSWindowCloseButton];
+  NSButton* mini = [window standardWindowButton:NSWindowMiniaturizeButton];
+  NSButton* zoom = [window standardWindowButton:NSWindowZoomButton];
+  NSView* container = close.superview.superview;
+  if (!mini || !zoom || !container) return;
+  CGFloat height = NSHeight(close.frame) + 2 * margin.y;
+  if (NSHeight(container.frame) != height) {
+    container.frame = NSMakeRect(NSMinX(container.frame), NSHeight(window.frame) - height, NSWidth(container.frame), height);
+  }
+  auto centre = [](NSView* view, CGFloat x) {
+    NSPoint origin = NSMakePoint(x, (NSHeight(view.superview.bounds) - NSHeight(view.frame)) / 2);
+    if (!NSEqualPoints(view.frame.origin, origin)) [view setFrameOrigin:origin];
+  };
+  CGFloat x = margin.x, spacing = NSMinX(mini.frame) - NSMaxX(close.frame);
+  for (NSButton* button in @[close, mini, zoom]) {
+    centre(button, x);
+    x += NSWidth(button.frame) + spacing;
+  }
+  if (accessories.superview == close.superview) centre(accessories, NSMinX(accessories.frame));
+}
+
 Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButton*>* buttons) {
   Napi::Object result = Napi::Object::New(env);
   result.Set("height", NSHeight(view.frame));
@@ -457,6 +483,10 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
   AgentrixNavButton* decisions_;
   AgentrixNavButton* workspace_;
   __weak NSView* container_;
+  __weak NSView* titlebar_;
+  NSPoint lights_;
+  BOOL hasLights_;
+  BOOL fullScreenTransition_;
   BOOL layingOut_;
   BOOL observingTitle_;
   std::shared_ptr<ClickState> clicks_;
@@ -465,6 +495,7 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
 - (void)detach;
 - (void)alignButtons;
 - (void)applyStyle:(std::shared_ptr<const TitlebarStyle>)style;
+- (void)setLights:(NSPoint)lights;
 - (BOOL)setItem:(NSString*)identifier label:(NSString*)label toolTip:(NSString*)toolTip
     accessibilityLabel:(NSString*)accessibilityLabel count:(uint64_t)count selected:(BOOL)selected;
 @end
@@ -485,9 +516,12 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
   [self.view addSubview:workspace_];
   NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
   for (NSNotificationName name in @[NSWindowDidResizeNotification, NSWindowDidMoveNotification,
-      NSWindowDidChangeScreenNotification, NSWindowDidEnterFullScreenNotification,
-      NSWindowDidExitFullScreenNotification]) {
+      NSWindowDidChangeScreenNotification]) {
     [center addObserver:self selector:@selector(windowLayoutChanged:) name:name object:window];
+  }
+  for (NSNotificationName name in @[NSWindowWillEnterFullScreenNotification, NSWindowWillExitFullScreenNotification,
+      NSWindowDidEnterFullScreenNotification, NSWindowDidExitFullScreenNotification]) {
+    [center addObserver:self selector:@selector(fullScreenTransition:) name:name object:window];
   }
   [center addObserver:self selector:@selector(windowWillClose:) name:NSWindowWillCloseNotification object:window];
   [window addObserver:self forKeyPath:@"title" options:0 context:&kTitleObservation];
@@ -525,6 +559,12 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
   dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf alignButtons]; });
 }
 
+- (void)fullScreenTransition:(NSNotification*)notification {
+  fullScreenTransition_ = [notification.name isEqualToString:NSWindowWillEnterFullScreenNotification]
+      || [notification.name isEqualToString:NSWindowWillExitFullScreenNotification];
+  [self windowLayoutChanged:notification];
+}
+
 - (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)object change:(NSDictionary*)change context:(void*)context {
   if (context == &kTitleObservation) [self windowLayoutChanged:nil];
   else [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
@@ -535,8 +575,14 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
   NSView* view = self.view;
   NSWindow* strip = view.window;
   if (layingOut_ || !host || !strip) return;
-  [self followContainer:view.superview];
+  container_ = [self follow:view.superview instead:container_];
+  titlebar_ = [self follow:[host standardWindowButton:NSWindowCloseButton].superview.superview instead:titlebar_];
   layingOut_ = YES;
+  // Only a window outside full screen: AppKit places the full-screen strip's buttons, and while it sets up or takes
+  // down full screen it re-sizes the title-bar container in response to every change, so placing them then recursed.
+  if (hasLights_ && strip == host && !fullScreenTransition_ && !(host.styleMask & NSWindowStyleMaskFullScreen)) {
+    PlaceTitlebar(host, view.superview, lights_);
+  }
   CGFloat pixels = strip.backingScaleFactor;
   NSPoint position = NSMakePoint(std::ceil(decisions_.focusOutset * pixels) / pixels, NSMidY(view.bounds));
   // Full screen has its own titlebar window and controls; the document window's lights can be stale.
@@ -552,16 +598,23 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
   layingOut_ = NO;
 }
 
-// AppKit moves the accessory's container without laying the accessory out (revealing the full-screen strip moves it
-// from x=18 to x=78), so the buttons realign whenever that container moves.
-- (void)followContainer:(NSView*)container {
-  if (container == container_) return;
+// AppKit moves or resizes views it owns without laying the accessory out: the accessory's container (revealing the
+// full-screen strip moves it from x=18 to x=78) and the window's title-bar container (an accessory resize restores
+// AppKit's own traffic-light layout). The buttons realign whenever either changes.
+- (NSView*)follow:(NSView*)view instead:(NSView*)previous {
+  if (view == previous) return view;
   NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
-  if (NSView* previous = container_) [center removeObserver:self name:NSViewFrameDidChangeNotification object:previous];
-  container_ = container;
-  if (!container) return;
-  container.postsFrameChangedNotifications = YES;
-  [center addObserver:self selector:@selector(windowLayoutChanged:) name:NSViewFrameDidChangeNotification object:container];
+  if (previous) [center removeObserver:self name:NSViewFrameDidChangeNotification object:previous];
+  if (!view) return nil;
+  view.postsFrameChangedNotifications = YES;
+  [center addObserver:self selector:@selector(windowLayoutChanged:) name:NSViewFrameDidChangeNotification object:view];
+  return view;
+}
+
+- (void)setLights:(NSPoint)lights {
+  lights_ = lights;
+  hasLights_ = YES;
+  [self alignButtons];
 }
 
 - (void)applyStyle:(std::shared_ptr<const TitlebarStyle>)style {
@@ -594,6 +647,7 @@ Napi::Object LayoutSnapshot(Napi::Env env, NSView* view, NSArray<AgentrixNavButt
   if (observingTitle_) [host_ removeObserver:self forKeyPath:@"title" context:&kTitleObservation];
   observingTitle_ = NO;
   container_ = nil;
+  titlebar_ = nil;
   [NSNotificationCenter.defaultCenter removeObserver:self];
 }
 
@@ -758,6 +812,10 @@ Napi::Value Update(const Napi::CallbackInfo& info) {
             count:item.count selected:item.selected]) geometryChanged = YES;
       }
       if (geometryChanged) [controller alignButtons];
+      Napi::Object lights;
+      CGFloat x, y;
+      if (style && ReadObject(info[0].As<Napi::Object>(), "lights", lights) && ReadNumber(lights, "x", x)
+          && ReadNumber(lights, "y", y)) [controller setLights:NSMakePoint(x, y)];
     }
     // Report the decoded style even without a window, for headless font/scale verification.
     if (style) {

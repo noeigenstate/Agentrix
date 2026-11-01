@@ -26,14 +26,14 @@ export function colorHex(color: string) {
 export const iconPixels = (pixelRatio: number) => Math.round(NAV_ICON_SIZE * pixelRatio);
 
 type Computed = Pick<CSSStyleDeclaration, 'height' | 'paddingLeft' | 'columnGap' | 'borderTopLeftRadius' | 'fontFamily' | 'fontSize' | 'fontWeight' | 'minWidth' | 'lineHeight'>;
-type Measured = { scale: number; nav: Computed; button: Computed; badge: Computed; colors: TitlebarStyle['colors']; focus: { width: number; offset: number }; icons: TitlebarStyle['icons'] };
+type Measured = { scale: number; bar: Computed; nav: Computed; button: Computed; badge: Computed; colors: TitlebarStyle['colors']; focus: { width: number; offset: number }; icons: TitlebarStyle['icons'] };
 
-export function styleFrom({ scale, nav, button, badge, colors, focus, icons }: Measured): TitlebarStyle {
+export function styleFrom({ scale, bar, nav, button, badge, colors, focus, icons }: Measured): TitlebarStyle {
   return {
     scale, font: { size: parseFloat(button.fontSize), weight: Number(button.fontWeight), family: button.fontFamily },
     metrics: {
       height: parseFloat(button.height), paddingX: parseFloat(button.paddingLeft), gap: parseFloat(button.columnGap), itemGap: parseFloat(nav.columnGap),
-      radius: parseFloat(button.borderTopLeftRadius), iconSize: NAV_ICON_SIZE, focusWidth: focus.width, focusOffset: focus.offset,
+      radius: parseFloat(button.borderTopLeftRadius), iconSize: NAV_ICON_SIZE, focusWidth: focus.width, focusOffset: focus.offset, barHeight: parseFloat(bar.height),
       badge: { minWidth: parseFloat(badge.minWidth), paddingX: parseFloat(badge.paddingLeft), height: parseFloat(badge.lineHeight), fontSize: parseFloat(badge.fontSize), fontWeight: Number(badge.fontWeight) },
     },
     colors, icons,
@@ -75,13 +75,13 @@ async function iconPng(Icon: ComponentType<{ size: number }>, pixels: number) {
 }
 
 async function measure(scale: number): Promise<TitlebarStyle> {
-  // An off-screen copy of the nav: the rules apply to it as to the real one, which the native buttons replace.
+  // Off-screen copies of the nav and the title bar: the rules apply to them as to the real ones; the native buttons replace the nav and centre in the bar.
   const host = document.createElement('div');
   host.style.cssText = 'position: fixed; left: -9999px; top: 0; visibility: hidden; pointer-events: none';
-  host.innerHTML = '<nav class="home-nav"><button type="button">x<span class="home-nav-count">1</span></button></nav>';
+  host.innerHTML = '<nav class="home-nav"><button type="button">x<span class="home-nav-count">1</span></button></nav><div class="titlebar"></div>';
   document.body.append(host);
   try {
-    const nav = getComputedStyle(host.firstElementChild!), button = getComputedStyle(host.querySelector('button')!), badge = getComputedStyle(host.querySelector('.home-nav-count')!);
+    const bar = getComputedStyle(host.querySelector('.titlebar')!), nav = getComputedStyle(host.firstElementChild!), button = getComputedStyle(host.querySelector('button')!), badge = getComputedStyle(host.querySelector('.home-nav-count')!);
     const colors = Object.fromEntries(Object.entries(TOKENS).map(([name, token]) => {
       host.style.color = `var(${token})`;
       return [name, colorHex(getComputedStyle(host).color)];
@@ -90,7 +90,7 @@ async function measure(scale: number): Promise<TitlebarStyle> {
     // Called from an effect, React cannot flush the icons' own render until its commit is over.
     await new Promise(resolve => setTimeout(resolve));
     const icons = Object.fromEntries(await Promise.all(Object.entries(ICONS).map(async ([view, Icon]) => [view, await iconPng(Icon, pixels)]))) as TitlebarStyle['icons'];
-    return styleFrom({ scale, nav, button, badge, colors, focus: focusRing(), icons });
+    return styleFrom({ scale, bar, nav, button, badge, colors, focus: focusRing(), icons });
   } finally {
     host.remove();
   }

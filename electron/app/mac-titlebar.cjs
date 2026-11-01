@@ -3,6 +3,8 @@ const { en } = require('../i18n.cjs');
 const WORKSPACE_TOOLTIP = '回到工作台 · {key}';
 const PNG_PREFIX = 'data:image/png;base64,';
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+// macOS window buttons are 14pt tall.
+const LIGHT_SIZE = 14;
 
 function record(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -39,10 +41,10 @@ function titlebarStyle(value) {
   const font = dimensions(value.font, ['size']);
   const family = value.font?.family, weight = value.font?.weight, badgeWeight = value.metrics?.badge?.fontWeight;
   const metrics = dimensions(value.metrics,
-    ['height', 'paddingX', 'gap', 'itemGap', 'radius', 'iconSize', 'focusWidth', 'focusOffset']);
+    ['height', 'paddingX', 'gap', 'itemGap', 'radius', 'iconSize', 'focusWidth', 'focusOffset', 'barHeight']);
   const badge = dimensions(value.metrics?.badge, ['minWidth', 'paddingX', 'height', 'fontSize']);
   if (!font || font.size <= 0 || typeof family !== 'string' || !family.trim() || family.length > 1024
-    || !fontWeight(weight) || !fontWeight(badgeWeight) || !metrics || metrics.height <= 0
+    || !fontWeight(weight) || !fontWeight(badgeWeight) || !metrics || metrics.height <= 0 || metrics.barHeight <= 0
     || metrics.iconSize <= 0 || !badge || badge.minWidth <= 0 || badge.height <= 0 || badge.fontSize <= 0
     || !record(value.colors) || !record(value.icons)) return;
   const colors = {};
@@ -61,7 +63,7 @@ function titlebarStyle(value) {
 function registerMacTitlebar({ window, t, send, broadcast, getShortcuts = () => ({}), platform = process.platform,
   loadAddon = () => require('../../native/mac-titlebar/build/Release/mac_titlebar.node'), warn = console.warn }) {
   let addon, attached = false, warned = false, rendered, style, styleKey, renderedStyle;
-  let state = { view: 'workspace', decisions: 0 };
+  let state = { view: 'workspace', decisions: 0 }, inset = 0;
 
   function warnOnce(error) {
     if (warned) return;
@@ -89,11 +91,15 @@ function registerMacTitlebar({ window, t, send, broadcast, getShortcuts = () => 
     ];
     const next = JSON.stringify(items);
     if (next === rendered && style === renderedStyle) return;
-    const result = addon.update(style !== renderedStyle ? { items, style } : { items });
+    // The traffic lights sit on the page title bar's middle line (at the page zoom), and the native buttons centre on them.
+    // Electron and the addon get the same position: Electron reapplies its own on some events, the addon after AppKit's.
+    const lights = style !== renderedStyle
+      ? { x: inset, y: Math.max(0, Math.round((style.metrics.barHeight * style.scale - LIGHT_SIZE) / 2)) } : undefined;
+    const result = addon.update(lights ? { items, style, lights } : { items });
     if (result === false) {
       style = renderedStyle;
       styleKey = style ? JSON.stringify(style) : undefined;
-    }
+    } else if (lights) window.setWindowButtonPosition(lights);
     rendered = next;
     renderedStyle = style;
   }
@@ -120,6 +126,7 @@ function registerMacTitlebar({ window, t, send, broadcast, getShortcuts = () => 
     refresh,
   };
   if (platform !== 'darwin') return controller;
+  inset = window.getWindowButtonPosition()?.x ?? 0;
   try {
     const native = loadAddon();
     if (!native || !['attach', 'update', 'detach'].every(name => typeof native[name] === 'function')) throw new Error('Invalid addon exports');

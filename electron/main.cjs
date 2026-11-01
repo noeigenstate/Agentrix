@@ -52,7 +52,7 @@ const { setThumbnailer, isGeneratedImage } = require('./conversation.cjs');
 const { saveDialogOptions, saveTarget } = require('./image-save.cjs');
 const { registerVoiceIpc } = require('./features/voice/ipc.cjs');
 const { createIpcAdapter } = require('./shared/ipc.cjs');
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage, Notification, clipboard, shell, screen, protocol, session: electronSession, net: electronNet } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage, Notification, clipboard, shell, screen, protocol, session: electronSession, net: electronNet, nativeTheme } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -107,9 +107,12 @@ let macTitlebar = null;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
 function windowBackgroundColor() { return store.settings.theme === 'light' ? '#f8f9fb' : '#181818'; }
+// macOS draws its own window parts (the full-screen title strip, menus, dialogs) in the system appearance unless given the theme's.
+function applyNativeTheme() { if (process.platform === 'darwin') nativeTheme.themeSource = store.settings.theme === 'light' ? 'light' : 'dark'; }
 function updateStoreSettings(patch) {
   const { theme, uiZoom, language, shortcuts } = store.settings;
   store.updateSettings(patch);
+  if (theme !== store.settings.theme) applyNativeTheme();
   // An active system backdrop needs its transparent ground, including when the theme changes.
   if (theme !== store.settings.theme && window && !window.isDestroyed() && !desktopGlassActive) window.setBackgroundColor(windowBackgroundColor());
   // The settings IPC broadcasts after applying the window's new zoom.
@@ -1476,6 +1479,7 @@ if (!app.requestSingleInstanceLock()) {
     registerAppProtocols({ protocol, root, electronNet, previewResources, t });
     registerIpc();
     desktopGlassWindow = store.settings.surface === 'glass' && store.settings.glassBackground === 'desktop' && !!desktopGlassBackend;
+    applyNativeTheme();
     window = new BrowserWindow({
       width: 1500, height: 940, minWidth, minHeight,
       title: t('Agentrix'), backgroundColor: windowBackgroundColor(),
