@@ -39,6 +39,7 @@ const { UsageMeter, claudeProvider, codexProvider, claudeAccount, claudeAccountF
 const { AgentCalls } = require('./features/agents/agent-calls.cjs');
 const { DashboardRecords, quotaScope } = require('./features/dashboard/records.cjs');
 const { createDashboard } = require('./features/dashboard/index.cjs');
+const { createLab } = require('./features/lab/index.cjs');
 const { routingNote } = require('./features/dashboard/decisions.cjs');
 const { CodexAccountUsage } = require('./features/agents/codex-account-usage.cjs');
 const codexAccounts = new CodexAccountUsage();
@@ -102,7 +103,7 @@ registerAppSchemes(protocol);
 const { translate } = require('./i18n.cjs');
 // Text shown by the main process follows the language chosen in settings (Chinese source -> locales/en.json).
 const t = (text, values) => translate(store?.settings.language, text, values);
-let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, dashboardWindow = null, quitCleaned = false;
+let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, dashboardWindow = null, labWindow = null, quitCleaned = false;
 let macTitlebar = null;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
@@ -284,6 +285,7 @@ function macMenu() {
     quit: () => { showWindow(); requestQuit().catch(report); }, close: () => window?.close(),
     // A separate window: no need to show the main one. Errors reach the main window like the other main-process failures.
     openDashboard: () => dashboardWindow?.open().catch(report),
+    openLab: () => labWindow?.open().catch(report),
   }));
 }
 
@@ -303,6 +305,7 @@ function trayMenu() {
 
 function broadcast() {
   dashboardWindow?.sync();
+  labWindow?.sync();
   skills?.syncWatchers();
   clearTimeout(stateTimer);
   stateTimer = null;
@@ -1502,6 +1505,9 @@ if (!app.requestSingleInstanceLock()) {
     dashboardWindow = createDashboard({ app, root, BrowserWindow, ipcMain, devUrl, t, records: dashboard,
       getProjects: () => store.projects, getSettings: () => store.settings, getMainWindow: () => window,
       getUiZoom: () => windowZoom?.percent ?? 100, backgroundColor: windowBackgroundColor });
+    labWindow = createLab({ app, root, BrowserWindow, ipcMain, devUrl, t, records: dashboard, helper: path.join(integrationDir, 'dispatch.cjs'),
+      getProjects: () => store.projects, getSettings: () => store.settings, getMainWindow: () => window,
+      getUiZoom: () => windowZoom?.percent ?? 100, backgroundColor: windowBackgroundColor });
     registerWindowContents({ window, Menu, clipboard, previewResources, pictureFrom, devUrl, t,
       getActiveTerminal: () => activeTerminal, getActiveFileTree: () => activeFileTree, getShortcuts: () => store.settings.shortcuts });
     registerWindowLifecycle({ window, getSettings: () => store.settings, isQuitting: () => quitting, hasTray: () => !!tray,
@@ -1529,6 +1535,7 @@ app.on('before-quit', event => {
   if (!quitCleaned) {
     quitCleaned = true;
     dashboardWindow?.dispose();
+    labWindow?.dispose();
     clearTimeout(attentionTimer);
     voiceManager?.close(); fileOperations?.cancel();
     skills?.close();
@@ -1549,10 +1556,10 @@ app.on('before-quit', event => {
       try { fs.rmdirSync(runtimeDir); } catch { }
     }
   }
-  const drain = dashboard.waitForQuit();
-  if (drain) {
+  const drains = [dashboard.waitForQuit(), labWindow?.waitForQuit()].filter(Boolean);
+  if (drains.length) {
     event.preventDefault();
-    void drain.then(() => app.quit());
+    void Promise.allSettled(drains).then(() => app.quit());
   }
 });
 app.on('window-all-closed', () => { if (quitting) app.quit(); });
