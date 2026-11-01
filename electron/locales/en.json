@@ -2126,5 +2126,6 @@
   "历史修复未通过完整参考测试：{details}": "The historical fix failed its full reference tests: {details}",
   "启动模型前必须先通过参考测试。": "Reference tests must pass before starting any model.",
   "本次运行已超过剩余预算，模型已停止。": "This run exceeded the remaining budget. Its model workers were stopped.",
-  "无法登录 Claude": "Couldn't sign in to Claude"
+  "无法登录 Claude": "Couldn't sign in to Claude",
+  "测试日志：{path}": "Test log: {path}"
 }
