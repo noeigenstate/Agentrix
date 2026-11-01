@@ -502,10 +502,9 @@ function dictationHarness(t, overrides = {}) {
 }
 
 test('submitted dictation appears at the caret for half a second, then uses the composer send with pictures', async t => {
-  const h = dictationHarness(t);
+  const h = imageComposerHarness(t, 'codex');
   h.edit('before replace after'); h.node.setSelectionRange(7, 14);
-  h.render().props.onPaste({ preventDefault() {}, clipboardData: { getData: () => '', items: [{ kind: 'file', type: 'image/png', getAsFile: () => ({ size: 1 }) }] } });
-  await h.tick(0);
+  await h.paste(1);
   h.dictate('spoken');
   assert.equal(h.node.value, 'before spoken after');
   assert.equal(document.activeElement, h.node);
@@ -514,7 +513,7 @@ test('submitted dictation appears at the caret for half a second, then uses the 
   await h.tick(499); assert.deepEqual(h.pasted, []);
   await h.tick(1);
   assert.deepEqual(h.pasted, [{ id: 'dictation', text: 'before spoken after' }]);
-  assert.deepEqual(h.echoed, [{ text: 'before spoken after', images: ['data:image/png;base64,picture'] }]);
+  assert.deepEqual(h.echoed, [{ text: 'before spoken after', images: ['data:image/png;base64,1'] }]);
   assert.equal(h.pending(), false); assert.equal(h.node.value, '');
   await h.tick(2000); assert.equal(h.pasted.length, 1);
 });
@@ -1531,6 +1530,47 @@ test('unrelated user records cannot discard a stalled prompt; retries stay bound
   assert.equal(h.pasted.length, 3, 'the previous session cannot exhaust the new session retry budget');
 });
 
+test('a matching text receipt cannot acknowledge missing pictures, and a later image update can', () => {
+  const prompts = require('../src/features/reading/pending-prompts.ts');
+  const state = prompts.addPendingPrompt(prompts.createPendingPrompts('session'), 'pictures', 'describe both', 1000, [], 2);
+  const record = { id: 'receipt', role: 'user', text: 'describe both', at: 1100, images: ['one'] };
+  assert.equal(prompts.reconcilePendingPrompts(state, 'session', [record], 1200), state);
+  const expired = prompts.reconcilePendingPrompts(state, 'session', [record], 22000);
+  assert.equal(expired.prompts.length, 1); assert.equal(expired.prompts[0].sending, false);
+  assert.ok(!expired.seen.includes(record.id));
+  record.images.push('two');
+  assert.equal(prompts.reconcilePendingPrompts(expired, 'session', [record], 23000).prompts.length, 0);
+});
+
+test('an image-only send has a pending receipt until the transcript carries its image', () => {
+  const prompts = require('../src/features/reading/pending-prompts.ts');
+  const state = prompts.addPendingPrompt(prompts.createPendingPrompts('session'), 'picture-only', '', 1000, [], 1);
+  assert.equal(state.prompts.length, 1);
+  assert.equal(prompts.reconcilePendingPrompts(state, 'session', [{ id: 'image', role: 'user', text: '', at: 1100, images: ['one'] }], 1200).prompts.length, 0);
+});
+
+test('an unconfirmed image receipt stays visible and cannot retry or resend as text only', async t => {
+  const prompts = require('../src/features/reading/pending-prompts.ts');
+  let clock = 30000;
+  t.mock.method(Date, 'now', () => clock);
+  const records = [{ id: 'text-only', role: 'user', text: 'describe this', at: 1100 }], errors = [];
+  let state = prompts.addPendingPrompt(prompts.createPendingPrompts('session'), 'image-send', 'describe this', 1000, ['picture']);
+  const h = dictationHarness(t, {
+    './useReadingConversation': { useReadingHistory: () => historySnapshot(records) },
+    './usePendingPrompts': { usePendingPrompts: () => {
+      state = prompts.reconcilePendingPrompts(state, 'session', records, clock);
+      return { pending: state.prompts, echo: () => assert.fail('image receipt was resent'), cancelEcho: () => assert.fail('image receipt was discarded') };
+    } },
+  });
+  h.props.onError = error => errors.push(error);
+  clock += 6000; await h.tick(6000);
+  assert.deepEqual(h.pasted, []); assert.equal(state.prompts.length, 1);
+  const card = elements(h.tree()).find(element => element.props?.undelivered);
+  assert.equal(card.props.undelivered(state.prompts[0]), true);
+  card.props.onResend(state.prompts[0]);
+  assert.equal(errors.length, 1); assert.deepEqual(h.pasted, []);
+});
+
 test('a question renders as its own card: progress, the question, options, an own answer or notes, Submit and Chat', () => {
   const icon = props => React.createElement('svg', { className: props.className });
   const icons = { CircleNotch: icon, CaretLeft: icon, CaretRight: icon, Check: icon, PaperPlaneRight: icon, WarningCircle: icon };
@@ -1574,9 +1614,9 @@ const PASTE_KEYS = {
   codex: { win32: '\x16', darwin: '\x16', linux: '\x16' },
 };
 const PLATFORMS = { win32: { isMac: false, isLinux: false, isWindows: true }, darwin: { isMac: true, isLinux: false, isWindows: false }, linux: { isMac: false, isLinux: true, isWindows: false } };
-function imageComposerHarness(t, agent, { decode = file => Promise.resolve(file.preview), remote = false, platform = 'darwin' } = {}) {
+function imageComposerHarness(t, agent, { decode = file => Promise.resolve(file.preview), remote = false, platform = 'darwin', pasteMode = 'accept' } = {}) {
   let text = '', cursor = 0, next = 0, heldScreen = null;
-  const attached = [];
+  const attached = [], waitingPastes = [];
   const rows = () => composerRows(agent, 'idle', heldScreen ?? text);
   const h = dictationHarness(t, {
     './terminal-screen': { useScreen: () => null, readScreen: () => ({ rows: rows() }) },
@@ -1586,12 +1626,18 @@ function imageComposerHarness(t, agent, { decode = file => Promise.resolve(file.
   const pasteKey = PASTE_KEYS[agent][platform];
   const chips = () => [...text.matchAll(/\[Image #(\d+)\]/g)];
   const insert = value => { text = text.slice(0, cursor) + value + text.slice(cursor); cursor += value.length; };
+  const acceptPaste = image => {
+    const number = agent === 'claude' ? ++next : attached.length + 1;
+    attached.push({ number, image }); insert((text ? ' ' : '') + `[Image #${number}]`);
+  };
   window.agentrix.writeTerminal = (id, keys) => {
     h.written.push({ id, text: keys });
     if (keys === pasteKey) {
-      const number = agent === 'claude' ? ++next : attached.length + 1;
-      attached.push({ number, image: h.pasting }); insert((text ? ' ' : '') + `[Image #${number}]`); return;
+      if (pasteMode === 'accept') acceptPaste(h.pasting);
+      else if (pasteMode === 'defer') waitingPastes.push(h.pasting);
+      return;
     }
+    if (keys === '\x15') { text = ''; cursor = 0; attached.length = 0; return; }
     const events = keys.match(/\x1b\[1;5[CD]|\x1b\[[HFC]|[\x01\x05\x7f\r]/g) ?? [];
     assert.equal(events.join(''), keys, 'only navigation, one Backspace and submission are allowed');
     for (const event of events) {
@@ -1627,9 +1673,11 @@ function imageComposerHarness(t, agent, { decode = file => Promise.resolve(file.
   const previews = () => elements(h.tree()).find(element => element.props.onRemove && element.props.images);
   return Object.assign(h, {
     picturePath,
-    previews: () => previews().props.images,
-    numbers: () => previews().props.numbers,
+    previews: () => previews()?.props.images ?? [],
+    numbers: () => previews()?.props.numbers ?? [],
     remove(index) { h.render(); previews().props.onRemove(index); h.render(); },
+    setPasteMode(mode) { pasteMode = mode; },
+    acceptPaste() { assert.ok(waitingPastes.length); acceptPaste(waitingPastes.shift()); h.render(); },
     async paste(image) {
       h.pasting = image;
       const file = { size: 1, type: 'image/png', preview: `data:image/png;base64,${image}`, arrayBuffer: async () => new Uint8Array([image]).buffer };
@@ -1662,6 +1710,176 @@ test('composer thumbnails each have the decision page remove label and 12px bold
 });
 
 for (const agent of ['claude', 'codex']) {
+  test(agent + ': an unaccepted picture stays in the composer instead of sending a false image echo', async t => {
+    const h = imageComposerHarness(t, agent, { pasteMode: 'ignore' }), errors = [];
+    h.props.onError = error => errors.push(error);
+    await h.paste(1); h.edit('describe this'); h.press('Enter'); await h.tick(0);
+    for (let attempt = 0; attempt < 12; attempt++) await h.tick(80);
+    assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []);
+    assert.equal(h.received, undefined); assert.equal(h.node.value, 'describe this');
+    assert.equal(h.previews().length, 1); assert.equal(errors.length, 1);
+    assert.ok(h.written.every(({ text }) => text !== '\r' && text !== '\x15'));
+  });
+
+  test(agent + ': an old native image cannot acknowledge another picture whose paste was refused', async t => {
+    const h = imageComposerHarness(t, agent), errors = [];
+    h.props.onError = error => errors.push(error);
+    await h.paste(1); h.setPasteMode('ignore'); await h.paste(2);
+    h.edit('both pictures'); h.press('Enter'); await h.tick(0);
+    for (let attempt = 0; attempt < 12; attempt++) await h.tick(80);
+    assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []);
+    assert.deepEqual(h.native().images, [1]); assert.equal(h.previews().length, 2);
+    assert.equal(h.node.value, 'both pictures'); assert.equal(errors.length, 1);
+  });
+
+  test(agent + ': sending waits for a delayed native picture acknowledgment', async t => {
+    const h = imageComposerHarness(t, agent, { pasteMode: 'defer' });
+    await h.paste(1); h.edit('wait for the picture'); h.press('Enter'); await h.tick(0);
+    assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []);
+    h.acceptPaste(); await h.tick(80);
+    assert.deepEqual(h.pasted.map(item => item.text), ['wait for the picture']);
+    await h.tick(400);
+    assert.deepEqual(h.received.images, [1]); assert.equal(h.previews().length, 0);
+  });
+
+  test(agent + ': Send waits for the first picture paste after clearing a leftover native draft', async t => {
+    const h = imageComposerHarness(t, agent);
+    h.editNative('left over after interruption'); await h.paste(1);
+    h.edit('new words'); h.press('Enter'); await h.tick(0);
+    assert.deepEqual(h.pasted, []);
+    await h.tick(80); await h.tick(60); await h.tick(0);
+    assert.deepEqual(h.pasted.map(item => item.text), ['new words']);
+    await h.tick(400);
+    assert.deepEqual(h.received.images, [1]); assert.ok(h.received.text.endsWith('new words'));
+  });
+
+  test(agent + ': a picture accepted after the timeout can be sent without reading the clipboard again', async t => {
+    const h = imageComposerHarness(t, agent, { pasteMode: 'defer' }), errors = [];
+    h.props.onError = error => errors.push(error);
+    await h.paste(1); h.edit('try once accepted'); h.press('Enter'); await h.tick(0);
+    for (let attempt = 0; attempt < 12; attempt++) await h.tick(80);
+    assert.equal(errors.length, 1); assert.equal(h.previews().length, 1);
+    h.acceptPaste(); h.press('Enter'); await h.tick(0); await h.tick(400);
+    assert.deepEqual(h.received.images, [1]);
+    assert.equal(h.written.filter(item => item.text === PASTE_KEYS[agent].darwin).length, 1);
+  });
+
+  for (const clearFirst of [false, true]) test(`${agent}: another paste during uncertain acceptance cannot substitute clipboard contents (${clearFirst ? 'clearing' : 'waiting'})`, async t => {
+    const h = imageComposerHarness(t, agent, { pasteMode: 'defer' }), errors = [];
+    h.props.onError = error => errors.push(error);
+    if (clearFirst) h.editNative('old draft');
+    await h.paste(1); await h.paste(2);
+    assert.equal(errors.length, 1); assert.equal(h.previews().length, 1);
+    await h.tick(80); await h.tick(60);
+    if (!clearFirst) h.acceptPaste();
+    h.edit('keep the original picture'); h.press('Enter'); await h.tick(0);
+    for (let attempt = 0; attempt < 12; attempt++) await h.tick(80);
+    assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []); assert.equal(h.received, undefined);
+    assert.equal(h.written.filter(item => item.text === PASTE_KEYS[agent].darwin).length, clearFirst ? 0 : 1);
+    assert.equal(h.previews().length, 1); assert.equal(h.node.value, 'keep the original picture');
+  });
+
+  test(agent + ': a failed message paste preserves the acknowledged picture and the text', async t => {
+    const h = imageComposerHarness(t, agent), errors = [];
+    h.props.onError = error => errors.push(error);
+    await h.paste(1);
+    window.agentrix.pasteTerminal = async () => ({ ok: false, error: 'message paste failed' });
+    h.edit('keep both'); h.press('Enter'); await h.tick(0);
+    assert.deepEqual(errors, ['message paste failed']); assert.equal(h.node.value, 'keep both');
+    assert.equal(h.previews().length, 1); assert.deepEqual(h.native().images, [1]);
+    assert.equal(h.received, undefined);
+  });
+
+  for (const command of ['/status', 'another task']) test(`${agent}: an external ${command} cannot consume a picture waiting in the composer`, async t => {
+    const h = imageComposerHarness(t, agent), errors = [];
+    h.props.onError = error => errors.push(error);
+    await h.paste(1); h.edit('my picture message'); h.command(command); await h.tick(0);
+    assert.equal(errors.length, 1); assert.deepEqual(h.native().images, [1]);
+    assert.deepEqual(h.written.map(item => item.text), [PASTE_KEYS[agent].darwin]);
+    assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []);
+    assert.equal(h.node.value, 'my picture message');
+    h.press('Enter'); await h.tick(0); await h.tick(400);
+    assert.deepEqual(h.received.images, [1]); assert.ok(h.received.text.endsWith('my picture message'));
+  });
+
+  test(agent + ': losing the native picture before Enter keeps it visibly unsent', async t => {
+    const h = imageComposerHarness(t, agent), errors = [];
+    h.props.onError = error => errors.push(error);
+    await h.paste(1); h.edit('keep this picture'); h.press('Enter'); await h.tick(0);
+    h.editNative('keep this picture'); await h.tick(400);
+    assert.equal(h.received, undefined); assert.equal(h.previews().length, 1);
+    assert.equal(h.node.value, 'keep this picture'); assert.equal(errors.length, 1);
+  });
+
+  test(agent + ': waiting for native picture acknowledgment cannot send keys after session A to B to A', async t => {
+    const h = imageComposerHarness(t, agent, { pasteMode: 'defer' });
+    await h.paste(1); h.edit('cancel this send'); h.press('Enter'); await h.tick(0);
+    const written = h.written.length;
+    h.props.terminal.sessionId = 'B'; h.render(); h.props.terminal.sessionId = 'session'; h.render();
+    h.acceptPaste(); await h.tick(80); await h.tick(400); await h.tick(1000);
+    assert.equal(h.written.length, written); assert.equal(h.received, undefined);
+    assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []);
+  });
+
+  test(agent + ': SSH Send waits for pending uploads and keeps their paste order', async t => {
+    const h = imageComposerHarness(t, agent, { remote: true }), uploads = new Map();
+    window.agentrix.saveImage = (id, bytes) => new Promise(resolve => uploads.set(new Uint8Array(bytes)[0], resolve));
+    for (const image of [1, 2]) await h.paste(image);
+    h.edit('describe both'); h.press('Enter'); await h.tick(0);
+    assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []);
+    uploads.get(2)({ ok: true, value: h.picturePath(2) }); await h.tick(0);
+    assert.deepEqual(h.pasted, []);
+    uploads.get(1)({ ok: true, value: h.picturePath(1) }); await h.tick(0);
+    assert.deepEqual(h.pasted.map(item => item.text), [`${h.picturePath(1)} ${h.picturePath(2)} describe both`]);
+    await h.tick(400);
+    assert.equal(h.received.text, `${h.picturePath(1)} ${h.picturePath(2)} describe both`);
+    assert.equal(h.previews().length, 0);
+  });
+
+  test(agent + ': SSH upload failure preserves the picture and text instead of sending text alone', async t => {
+    const h = imageComposerHarness(t, agent, { remote: true }), errors = [];
+    h.props.onError = error => errors.push(error);
+    let finish;
+    window.agentrix.saveImage = () => new Promise(resolve => { finish = resolve; });
+    await h.paste(1); h.edit('keep this upload'); h.press('Enter'); await h.tick(0);
+    finish({ ok: false, error: 'upload failed' }); await h.tick(0); await h.tick(1000);
+    assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []); assert.equal(h.received, undefined);
+    assert.equal(h.node.value, 'keep this upload'); assert.equal(h.previews().length, 1);
+    assert.ok(errors.includes('upload failed'));
+  });
+
+  test(agent + ': removing a pending SSH picture prevents a late upload from reviving it', async t => {
+    const h = imageComposerHarness(t, agent, { remote: true });
+    let finish;
+    window.agentrix.saveImage = () => new Promise(resolve => { finish = resolve; });
+    await h.paste(1); assert.equal(h.previews().length, 1); h.remove(0);
+    finish({ ok: true, value: h.picturePath(1) }); await h.tick(0);
+    assert.equal(h.previews().length, 0);
+    h.edit('words only'); h.press('Enter'); await h.tick(0);
+    assert.deepEqual(h.pasted.map(item => item.text), ['words only']);
+  });
+
+  test(agent + ': an SSH thumbnail decoded after submission still decorates its recorded remote path', async t => {
+    let decode;
+    const h = imageComposerHarness(t, agent, { remote: true, decode: () => new Promise(resolve => { decode = resolve; }) });
+    await h.paste(1); h.edit('describe'); h.press('Enter'); await h.tick(0); await h.tick(400);
+    assert.equal(h.previews().length, 0);
+    decode('data:image/png;base64,late'); await h.tick(0);
+    assert.deepEqual(require('../src/features/reading/pasted-pictures.ts').withPictures(h.picturePath(1)).images, ['data:image/png;base64,late']);
+  });
+
+  for (const change of ['session', 'selection', 'unmount']) test(`${agent}: pending SSH upload is cancelled by ${change} without late submission`, async t => {
+    const h = imageComposerHarness(t, agent, { remote: true });
+    let finish;
+    window.agentrix.saveImage = () => new Promise(resolve => { finish = resolve; });
+    await h.paste(1); h.edit('cancel upload send'); h.press('Enter'); await h.tick(0);
+    if (change === 'session') { h.props.terminal.sessionId = 'B'; h.render(); h.props.terminal.sessionId = 'session'; h.render(); }
+    if (change === 'selection') { h.props.active = false; h.render(); h.props.active = true; h.render(); }
+    if (change === 'unmount') h.unmount();
+    finish({ ok: true, value: h.picturePath(1) }); await h.tick(0); await h.tick(400); await h.tick(1000);
+    assert.deepEqual(h.pasted, []); assert.deepEqual(h.written, []); assert.deepEqual(h.echoed, []);
+  });
+
   test(agent + ': removing the second native image preserves the other attachments and typed composer text on send', async t => {
     const h = imageComposerHarness(t, agent);
     for (const image of [1, 2, 3]) await h.paste(image);

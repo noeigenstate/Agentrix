@@ -59,7 +59,7 @@ export function PendingPromptEntries({ prompts, queued = () => false, undelivere
       <UserMessage text={prompt.text} images={prompt.images} />
       {waiting ? <small role="status">{t('已送达，排队中：当前这一步完成后它就会读到')}</small> : prompt.sending && <small role="status">{t('发送中')}</small>}
       {lost && <div className="reading-undelivered" role="alert"><small>{t('未送达：助手没有收到这条消息')}</small>
-        <button type="button" className="text-button" onClick={() => onResend?.(prompt)}>{t('重新发送')}</button>
+        {prompt.imageCount ? <small>{t('请在终端中检查并移除这张图片。')}</small> : <button type="button" className="text-button" onClick={() => onResend?.(prompt)}>{t('重新发送')}</button>}
         <button type="button" className="text-button" onClick={() => onDiscard?.(prompt)}>{t('移除')}</button></div>}
     </div></TimelineStep>;
   });

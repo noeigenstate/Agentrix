@@ -3,7 +3,7 @@ export const PENDING_PROMPT_TIMEOUT = 20_000;
 // The reading view keeps 400 entries; the user records seen are bounded well above that.
 const SEEN_LIMIT = 1000;
 type UserRecord = { id: string; role: string; text?: string; original?: string; at?: number; receivedAt?: number; queued?: boolean; cancelled?: boolean; images?: string[] };
-export type PendingPrompt = { id: string; role: 'user'; text: string; at: number; sending: boolean; images?: string[] };
+export type PendingPrompt = { id: string; role: 'user'; text: string; at: number; sending: boolean; images?: string[]; imageCount?: number };
 export type PendingPrompts = { sessionId: string | null; prompts: readonly PendingPrompt[]; seen: readonly string[] };
 
 export const normalizePrompt = (text: string) => text.trim().replace(/\s+/g, ' ');
@@ -65,12 +65,14 @@ export function reconcilePendingPrompts(state: PendingPrompts, sessionId: string
   let changed = false;
   for (const entry of entries) {
     if (entry.role !== 'user' || entry.queued && !entry.cancelled || seen.has(entry.id)) continue;
-    seen.add(entry.id); changed = true;
     // The echo with the same text, or one this record ends with: a prompt Claude put back after an interrupt can
     // precede what was sent.
     const text = normalizePrompt(entry.text ?? '');
     let index = prompts.findIndex(prompt => timely(prompt, entry) && transcriptMatches(prompt.text, entry.text ?? '', entry.original));
     if (index < 0) index = prompts.findIndex(prompt => timely(prompt, entry) && text.endsWith(normalizePrompt(prompt.text)));
+    // A matching text receipt cannot acknowledge pictures. Leave it unseen so a later thumbnail update can confirm it.
+    if (index >= 0 && (entry.images?.length ?? 0) < (prompts[index].imageCount ?? 0)) continue;
+    seen.add(entry.id); changed = true;
     if (index >= 0) prompts.splice(index, 1);
   }
   for (let index = 0; index < prompts.length; index++) {
@@ -82,9 +84,9 @@ export function reconcilePendingPrompts(state: PendingPrompts, sessionId: string
   return changed ? { ...state, prompts, seen: [...seen].slice(-SEEN_LIMIT) } : state;
 }
 
-export function addPendingPrompt(state: PendingPrompts, id: string, text: string, now: number, images: string[] = []): PendingPrompts {
-  if (!normalizePrompt(text) || isTypedCommand(text)) return state;
-  return { ...state, prompts: [...state.prompts, { id, role: 'user', text, at: now, sending: true, ...(images.length ? { images } : {}) }] };
+export function addPendingPrompt(state: PendingPrompts, id: string, text: string, now: number, images: string[] = [], imageCount = images.length): PendingPrompts {
+  if ((!normalizePrompt(text) && !imageCount) || isTypedCommand(text)) return state;
+  return { ...state, prompts: [...state.prompts, { id, role: 'user', text, at: now, sending: true, ...(images.length ? { images } : {}), ...(imageCount ? { imageCount } : {}) }] };
 }
 
 export function removePendingPrompt(state: PendingPrompts, id: string): PendingPrompts {

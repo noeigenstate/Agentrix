@@ -20,7 +20,7 @@ import { ReadingSessions } from './ReadingSessions';
 import { typeReadingCommand, usesSessionPicker } from './reading-sessions';
 import { dataUrl, thumbnail } from '../../shared/image-thumbnail';
 import { imageRemoval, inputImageLabels } from './image-input';
-import { rememberPicture, withPictures } from './pasted-pictures';
+import { rememberPicture } from './pasted-pictures';
 import { useWelcomeStarting } from './reading-welcome';
 import { ReadingTerminalPopup } from './ReadingTerminalPopup';
 import { ReadingSignIn } from './ReadingSignIn';
@@ -58,6 +58,9 @@ export { groupSummary } from './ResultCard';
 const purifier = createDOMPurify(window);
 // Switching to the CLI unmounts the composer; sent messages still belong to that terminal.
 const history = new Map<string, string[]>();
+type ComposerImage = { id: number; src: string };
+type NativePicture = { generation: number; before?: string[]; label?: string; ready?: Promise<void>; conflicted?: boolean };
+type ServerPicture = { generation: number; src: string; path?: string; error?: string; ready?: Promise<void>; sent?: boolean };
 // The entries on screen when /clear (or Codex's /new) was sent from here, per conversation. The agent starts a new
 // conversation at once, but its file only appears with the next message; until then these stay hidden.
 const cleared = new Map<string, ReadonlySet<string>>();
@@ -256,16 +259,17 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   const [dismissed, setDismissed] = useState(false), [selection, setSelection] = useState(0);
   const historyAt = useRef<number | null>(null), unsent = useRef(''), caret = useRef<number | null>(null), sending = useRef(false);
   // Reserve an image's place before decoding it, so slow previews cannot reorder attachments or revive a removed one.
-  const [images, setImages] = useState<{ id: number; src: string }[]>([]), imageSequence = useRef(0);
-  // An SSH project's pictures for the next message: files saved on that computer. Their paths join the message only as
-  // it is sent (both CLIs take a picture's path as the picture); the message box shows the words alone.
-  const [serverPictures, setServerPictures] = useState<string[]>([]);
+  const [images, setImages] = useState<ComposerImage[]>([]), imageSequence = useRef(0);
+  const nativePictures = useRef(new Map<number, NativePicture>()), pictureGeneration = useRef(0);
+  // Reserve remote slots at paste time, so Send can await uploads in order without a stale render's path list.
+  const serverPictures = useRef<ServerPicture[]>([]), [, setPictureTick] = useState(0);
+  const clearPictures = () => { setImages([]); nativePictures.current.clear(); serverPictures.current = []; setPictureTick(tick => tick + 1); };
   const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null), composer = useRef<HTMLDivElement>(null);
   const [terminalPopup, setTerminalPopup] = useState<{ command: string } | null>(null);
   choiceVisible.current = hasChoice || terminalPopup !== null;
   const popupReady = useRef<(() => void) | null>(null);
   const readyPopup = () => { popupReady.current?.(); popupReady.current = null; };
-  const cancelSend = () => { sendCounter.current++; sending.current = false; readyPopup(); };
+  const cancelSend = () => { sendCounter.current++; pictureGeneration.current++; sending.current = false; readyPopup(); };
   const closePopup = (restoreFocus = true) => {
     cancelSend(); setTerminalPopup(null);
     if (restoreFocus) {
@@ -386,6 +390,8 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   }, [conversation, tail.showEarlier, tail.hasEarlier, historyPage.loading, historyPage.paged, stuck]);
   // Returning from session A to B to A must not revive an earlier send's delayed keys.
   const ownsSend = (owner: number) => mounted.current && sendCounter.current === owner;
+  const ownsPicture = (generation: number) => mounted.current && pictureGeneration.current === generation;
+  const pictureNotAccepted = () => onError(`${t('未送达：助手没有收到这条消息')} ${t('请在终端中检查并移除这张图片。')}`);
   const send = async (text = draft.trim(), own = true) => {
     if (own) dictationSend.cancel();
     if (sending.current) return;
@@ -399,9 +405,19 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // whatever is being written now alone and takes no pictures with it.
   const deliver = async (words: string, own: boolean, owner: number) => {
     if (inputBlocked) return;
-    const attached = own ? images.map(image => image.src).filter(Boolean) : [], pictures = own ? serverPictures : [];
+    if (!own && images.length) { pictureNotAccepted(); return; }
+    const batch = own ? images : [], uploads = own ? serverPictures.current.slice() : [];
+    if (uploads.length) {
+      await Promise.all(uploads.map(picture => picture.ready));
+      if (!ownsSend(owner) || choiceVisible.current) return;
+      const failed = uploads.find(picture => !ownsPicture(picture.generation) || !picture.path);
+      if (failed) { onError(failed.error ?? t('未送达：助手没有收到这条消息')); return; }
+    }
+    const attached = batch.map(image => image.src).filter(Boolean), pictures = uploads.map(picture => picture.path!);
     const text = pictures.length ? (isTypedCommand(words) ? [words, ...pictures] : [...pictures, words]).filter(Boolean).join(' ') : words;
-    if ((!text && !(own && images.length)) || !terminal.sessionId) return;
+    if ((!text && !batch.length) || !terminal.sessionId) return;
+    // Commands clear the native input; they cannot silently consume pictures waiting for a normal message.
+    if (batch.length && isTypedCommand(text)) { pictureNotAccepted(); return; }
     if (usesSessionPicker(terminal, text, remote)) {
       choiceVisible.current = true; restoreComposer.current = document.activeElement === input.current;
       if (own) edit('');
@@ -409,7 +425,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     }
     const remember = () => { if (words) history.set(terminal.id, [...(history.get(terminal.id) || []), words].slice(-50)); };
     if (isTypedCommand(text)) {
-      if (own) { edit(''); setImages([]); setServerPictures([]); }
+      if (own) { edit(''); clearPictures(); }
       remember();
       const ready = new Promise<void>(resolve => { popupReady.current = resolve; });
       setTerminalPopup({ command: text });
@@ -425,30 +441,52 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
       setTerminalPopup({ command: '' });
       return;
     }
-    const pendingId = text ? echo(text, attached) : null;
+    if (batch.length) {
+      await Promise.all(batch.map(image => nativePictures.current.get(image.id)?.ready));
+      for (let attempt = 0; ; attempt++) {
+        if (!ownsSend(owner) || choiceVisible.current) return;
+        if (acknowledgePictures(batch)) break;
+        if (attempt === 10) { pictureNotAccepted(); return; }
+        await new Promise(resolve => setTimeout(resolve, 80));
+      }
+    }
+    const pendingId = text || batch.length ? echo(text, attached, batch.length) : null;
     if (pendingId) toBottom();
-    const left = text && !attached.length ? inputDraft(kind) : '';
-    if (own) { edit(''); setImages([]); setServerPictures([]); }
+    const left = text && !batch.length ? inputDraft(kind) : '';
+    const clearDraft = () => { if (own && input.current?.value.trim() === words) edit(''); };
     if (left && sameMessage(text, left)) {
+      uploads.forEach(picture => { picture.sent = true; });
+      clearDraft(); if (own) clearPictures();
       toBottom(); window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(kind, text, owner);
       remember(); return;
     }
     if (left && pending.some(prompt => sameMessage(prompt.text, left))) { window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(kind, left, owner); }
-    else if (left && !IMAGE_PLACEHOLDER.test(left)) await clearInput(kind, owner);
+    else if (left && !IMAGE_PLACEHOLDER.test(left)) await clearInput(kind, () => ownsSend(owner));
     if (!ownsSend(owner)) return;
     if (text) {
       const pasted = await window.agentrix.pasteTerminal(terminal.id, text, terminal.sessionId);
       if (!ownsSend(owner)) return;
       if (!pasted.ok) {
         if (pendingId) cancelEcho(pendingId);
-        if (own && !input.current?.value) { edit(words); setServerPictures(pictures); }
         onError(pasted.error); return;
       }
       remember();
     }
+    clearDraft();
     toBottom();
     if (text) await new Promise(resolve => setTimeout(resolve, 400));
-    if (!ownsSend(owner) || choiceVisible.current) return;
+    if (!ownsSend(owner) || choiceVisible.current) {
+      if (pendingId) cancelEcho(pendingId);
+      if (ownsSend(owner) && own && !input.current?.value) edit(words);
+      return;
+    }
+    if (batch.length && !acknowledgePictures(batch)) {
+      if (pendingId) cancelEcho(pendingId);
+      if (own && !input.current?.value) edit(words);
+      pictureNotAccepted(); return;
+    }
+    uploads.forEach(picture => { picture.sent = true; });
+    if (own) clearPictures();
     window.agentrix.writeTerminal(terminal.id, '\r');
     if (text) await submitted(kind, text, owner);
   };
@@ -460,10 +498,24 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     return { rows: current.rows, screen, text: cliInputDraft(agent, current.rows, screen) };
   };
   const inputDraft = (agent: 'claude' | 'codex') => readInput(agent)?.text ?? '';
+  // A preview is not a receipt. Only one additional chip beyond this paste's exact baseline acknowledges it.
+  // Serialize unacknowledged pastes so a later successful one cannot stand in for a refused earlier picture.
+  const acknowledgePictures = (batch: readonly ComposerImage[]) => {
+    const current = readInput(kind);
+    if (!current || !hasCliInput(kind, current.rows, current.screen) || cliDialogShown(kind, current.rows, current.screen)) return false;
+    const labels = inputImageLabels(current.text), pastes = batch.map(image => nativePictures.current.get(image.id));
+    for (const paste of pastes) {
+      if (!paste || paste.conflicted || !ownsPicture(paste.generation)) return false;
+      const before = paste.before;
+      if (!paste.label && before && labels.length === before.length + 1 && before.every((label, index) => labels[index] === label)
+        && !before.includes(labels[labels.length - 1])) paste.label = labels[labels.length - 1];
+    }
+    return pastes.every((paste, index) => !!paste?.label && labels[labels.length - pastes.length + index] === paste.label);
+  };
   // Ctrl+U clears a row of the CLI's input: Claude Code clears only the visual row of a long draft wrapped over several,
   // so it is pressed again until the input is empty (a few more than the rows, at most).
-  const clearInput = async (agent: 'claude' | 'codex', owner: number) => {
-    for (let tries = 0; tries < 30 && ownsSend(owner) && inputDraft(agent); tries++) { window.agentrix.writeTerminal(terminal.id, '\x15'); await new Promise(resolve => setTimeout(resolve, 80)); }
+  const clearInput = async (agent: 'claude' | 'codex', owns: () => boolean) => {
+    for (let tries = 0; tries < 30 && owns() && inputDraft(agent); tries++) { window.agentrix.writeTerminal(terminal.id, '\x15'); await new Promise(resolve => setTimeout(resolve, 80)); }
   };
   // A message is sent once it has left the CLI's input. An Enter the CLI did not take (it arrived while the CLI was
   // busy redrawing, compacting or taking the paste) leaves it there: Enter again, a few times.
@@ -499,10 +551,11 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // A message in Claude Code's queue has arrived: it is taken up when the current step is done, never sent again.
   const stalled = pending.filter(prompt => !prompt.sending && !queued(prompt)), idle = !preview && !working && terminalPopup === null && !hasChoice && Date.now() - idleSince >= 5000;
   useEffect(() => {
-    if (preview || !stalled.length || working || terminalPopup !== null || hasChoice) return;
+    if (preview || !stalled.length || working || terminalPopup !== null || hasChoice || images.length) return;
     const wait = idleSince + 5000 - Date.now();
     if (wait > 0) { const timer = setTimeout(() => setTick(tick => tick + 1), wait + 50); return () => clearTimeout(timer); }
     for (const prompt of stalled) {
+      if (prompt.imageCount) continue; // Native image bytes cannot be reconstructed by retrying its text.
       const tries = resent.get(prompt.text) ?? 0;
       if (tries >= 2 || sending.current) continue;
       resent.set(prompt.text, tries + 1);
@@ -510,8 +563,8 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
       break;
     }
   });
-  const undelivered = (prompt: PendingPrompt) => idle && !prompt.sending && !queued(prompt) && (resent.get(prompt.text) ?? 0) >= 2;
-  const resend = (prompt: PendingPrompt) => { cancelEcho(prompt.id); void send(prompt.text, false); };
+  const undelivered = (prompt: PendingPrompt) => idle && !prompt.sending && !queued(prompt) && (!!prompt.imageCount || (resent.get(prompt.text) ?? 0) >= 2);
+  const resend = (prompt: PendingPrompt) => { if (prompt.imageCount || images.length) { pictureNotAccepted(); return; } cancelEcho(prompt.id); void send(prompt.text, false); };
   // Dictation into this terminal lands here while the reading view shows: the words appear at the cursor as
   // soon as they are recognised. Enter (or the shortcut again) allows a second to edit before sending normally.
   useEffect(() => dictateInto(terminal.id, (text, submit) => {
@@ -522,10 +575,9 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     caret.current = at + text.length; edit(next); node?.focus();
     if (submit) dictationSend.start();
   }), [terminal.id]);
-  // An image pasted here goes to the agent the way it takes one in its own input: it reads the clipboard on its
-  // paste key (Ctrl+V in Codex, Alt+V in Claude Code on Windows) and attaches the image to the next message.
+  // Local CLIs read their clipboard on Ctrl+V (Claude uses Alt+V on Windows); SSH receives a saved file instead.
   const pasteImage = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const owner = sendCounter.current;
+    const generation = pictureGeneration.current;
     const data = event.clipboardData;
     if (data.getData('text/plain')) return;
     const item = [...data.items].find(item => item.kind === 'file' && item.type.startsWith('image/'));
@@ -537,51 +589,68 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     if (!file) return;
     if (!remote && file.size > 25 * 1024 * 1024) { onError(t('图片太大（超过 25 MB），请压缩后再粘贴。')); return; }
     // A fifth native paste would leave an invisible attachment behind when the four-preview window rolls over.
-    if (!remote && images.length >= 4) { onError(t('最多附加 4 张图片，请先移除一张。')); return; }
+    if (images.length + serverPictures.current.length >= 4) { onError(t('最多附加 4 张图片，请先移除一张。')); return; }
+    if (!remote && images.length && !acknowledgePictures(images)) {
+      // Another clipboard may now be active. A delayed first key or chip can no longer identify its original bytes.
+      for (const image of images) { const paste = nativePictures.current.get(image.id); if (paste && !paste.label) paste.conflicted = true; }
+      pictureNotAccepted(); return;
+    }
     // The first picture goes into a clean input: text left there (a prompt Claude put back after an interrupt) would be
     // sent with this message, and once pictures are in it Ctrl+U would take them too. One of ours still waiting stays.
     const left = !images.length && !remote ? inputDraft(kind) : '';
     const clearFirst = !!left && !IMAGE_PLACEHOLDER.test(left) && !pending.some(prompt => sameMessage(prompt.text, left));
-    // The clipboard is read during the event; clearing the input and pressing the paste key follow it.
-    const cleared = clearFirst ? clearInput(kind, owner) : Promise.resolve();
     // Over SSH the CLI cannot reach this computer's clipboard: the picture goes over as a file on that computer, whose
     // path joins the message when it is sent (serverPictures).
     if (remote) {
-      void file.arrayBuffer().then(bytes => window.agentrix.saveImage(terminal.id, bytes, file.type)).then(saved => {
-        if (!ownsSend(owner)) return;
-        if (!saved.ok) { onError(saved.error); return; }
-        // The picture shows as itself (in the box above the composer and in the message), never as its long path.
-        void thumbnail(file).catch(() => dataUrl(file)).then(small => { if (ownsSend(owner)) { rememberPicture(saved.value, small); setPictureTick(tick => tick + 1); } }).catch(() => {});
-        setServerPictures(list => [...list, saved.value].slice(-4));
-      }).catch(error => onError(String(error)));
+      const picture: ServerPicture = { generation, src: '' };
+      serverPictures.current.push(picture); setPictureTick(tick => tick + 1);
+      const retained = () => ownsPicture(generation) && (picture.sent || serverPictures.current.includes(picture));
+      picture.ready = file.arrayBuffer().then(bytes => window.agentrix.saveImage(terminal.id, bytes, file.type)).then(saved => {
+        if (!retained()) return;
+        if (!saved.ok) throw new Error(saved.error);
+        picture.path = saved.value;
+        if (picture.src) rememberPicture(saved.value, picture.src);
+      }).catch(error => { if (retained()) { picture.error = String(error instanceof Error ? error.message : error); if (!sending.current) onError(picture.error); } });
+      void thumbnail(file).catch(() => dataUrl(file)).then(small => {
+        if (!retained()) return;
+        picture.src = small;
+        if (picture.path) rememberPicture(picture.path, small);
+        setPictureTick(tick => tick + 1);
+      }).catch(() => { if (retained()) onError(t('无法读取这张图片。')); });
       return;
     }
     const id = ++imageSequence.current;
+    const picture: NativePicture = { generation };
+    nativePictures.current.set(id, picture);
     setImages(list => [...list, { id, src: '' }].slice(-4));
-    // Claude Code binds picture paste to Alt+V on Windows only; macOS and Linux use Ctrl+V, as Codex does everywhere.
+    const cleared = clearFirst ? clearInput(kind, () => ownsPicture(generation) && !picture.conflicted) : Promise.resolve();
     const pasteKey = terminal.agent === 'claude' && isWindows ? '\x1bv' : '\x16';
-    if (clearFirst) void cleared.then(() => setTimeout(() => { if (ownsSend(owner)) window.agentrix.writeTerminal(terminal.id, pasteKey); }, 60));
-    else window.agentrix.writeTerminal(terminal.id, pasteKey);
-    // The agent takes the picture from the clipboard; a copy is kept here to show in the message, small (a 4K
-    // screenshot decoded at full size costs tens of megabytes per copy).
-    // A picture this window cannot decode still went to the agent: it is listed as it came.
+    const pressPaste = () => {
+      if (!ownsPicture(generation) || picture.conflicted || choiceVisible.current || nativePictures.current.get(id) !== picture) return;
+      const current = readInput(kind);
+      if (!current || !hasCliInput(kind, current.rows, current.screen) || cliDialogShown(kind, current.rows, current.screen)) return;
+      if (clearFirst && current.text) return;
+      picture.before = inputImageLabels(current.text);
+      window.agentrix.writeTerminal(terminal.id, pasteKey);
+    };
+    if (clearFirst) picture.ready = cleared.then(() => new Promise<void>(resolve => setTimeout(resolve, 60))).then(pressPaste);
+    else pressPaste();
+    // Keep a small preview while native acceptance is checked independently (a full 4K decode costs tens of MB).
     void thumbnail(file).catch(() => dataUrl(file)).then(small => {
-      if (ownsSend(owner)) setImages(list => list.map(image => image.id === id ? { ...image, src: small } : image));
-    }).catch(() => onError(t('无法读取这张图片。')));
+      if (ownsPicture(generation)) setImages(list => list.map(image => image.id === id ? { ...image, src: small } : image));
+    }).catch(() => { if (ownsPicture(generation) && nativePictures.current.has(id)) onError(t('无法读取这张图片。')); });
   };
-  // Resolve SSH previews per path, in attachment order, even when they finish decoding in a different order.
-  const [, setPictureTick] = useState(0);
-  const shownImages = [...images.map(image => image.src), ...serverPictures.map(path => withPictures(path).images[0] ?? '')];
+  const shownImages = [...images.map(image => image.src), ...serverPictures.current.map(picture => picture.src)];
   const imageNumbers = images.length ? inputImageLabels(inputDraft(kind)).slice(-images.length).map(label => Number(label.match(/\d+/)![0])) : undefined;
-  const attachedCount = images.length + serverPictures.length;
+  const attachedCount = images.length + serverPictures.current.length;
   const removeImage = async (index: number) => {
     input.current?.focus();
     if (sending.current) return;
-    if (index >= images.length) { setServerPictures(list => list.filter((_, at) => at !== index - images.length)); return; }
+    if (index >= images.length) { serverPictures.current.splice(index - images.length, 1); setPictureTick(tick => tick + 1); return; }
     const current = readInput(kind);
     if (choiceVisible.current || !current || !hasCliInput(kind, current.rows, current.screen) || cliDialogShown(kind, current.rows, current.screen)) return;
     const labels = inputImageLabels(current.text);
-    const removal = labels.length >= images.length ? imageRemoval(kind, current.text, labels.length - images.length + index, current.rows.length) : null;
+    const removal = acknowledgePictures(images) ? imageRemoval(kind, current.text, labels.length - images.length + index, current.rows.length) : null;
     if (!removal) { onError(t('请在终端中检查并移除这张图片。')); return; }
     const owner = sendCounter.current, id = images[index].id;
     sending.current = true;
@@ -593,7 +662,10 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
         const current = readInput(kind);
         if (!current || !hasCliInput(kind, current.rows, current.screen) || cliDialogShown(kind, current.rows, current.screen)) continue;
         if (JSON.stringify(inputImageLabels(current.text)) !== JSON.stringify(removal.labels)) continue;
-        setImages(list => list.filter(image => image.id !== id)); return;
+        const kept = images.filter(image => image.id !== id), remaining = removal.labels.slice(-kept.length);
+        nativePictures.current.delete(id);
+        kept.forEach((image, index) => { nativePictures.current.get(image.id)!.label = remaining[index]; });
+        setImages(kept); return;
       }
       onError(t('请在终端中检查并移除这张图片。'));
     } catch (error) { if (ownsSend(owner)) onError(String(error)); }
@@ -736,7 +808,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
       : <ReadingChoice key={choiceKey} choice={screen.choice} terminalId={terminal.id} agent={kind} onShowTerminal={onShowTerminal} onError={onError} />}</div>}
     {waitingShown && !nativePending && !sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}><WaitingCard title={waiting?.title ?? null} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
     {sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}><ReadingSessions key={`${terminal.id}-${terminal.sessionId}`} terminalId={terminal.id} agent={terminal.agent === 'codex' ? 'codex' : 'claude'} onError={onError} onClose={() => setSessionsOpen(false)} onSent={text => {
-      history.set(terminal.id, [...(history.get(terminal.id) || []), text].slice(-50)); setImages([]); toBottom();
+      history.set(terminal.id, [...(history.get(terminal.id) || []), text].slice(-50)); clearPictures(); toBottom();
     }} /></div>}
     {/* The command list is part of the page, above the message box, not a popup over the conversation. */}
     {palette && <div className="reading-commands is-inline" id={listId} role="listbox" aria-label={t('命令')}>{matches.map((command, index) => <div key={command.name} id={optionId(index)} role="option" aria-selected={selection === index} className="reading-command" onMouseDown={event => event.preventDefault()} onClick={() => complete(command)}>
