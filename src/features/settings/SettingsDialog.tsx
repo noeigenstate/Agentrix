@@ -46,7 +46,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, uiZoom, 
     const index = sections.findIndex(section => section.id === current.id), next = sections[(index + (event.key === 'ArrowDown' ? 1 : sections.length - 1)) % sections.length];
     choose(next.id); dialog.current?.querySelector<HTMLElement>(`[data-settings-tab="${next.id}"]`)?.focus();
   };
-  return <dialog className={`settings-dialog settings-paned${enlarged && current.id === 'skills' ? ' is-enlarged' : ''}`} ref={dialog} onCancel={close} onClick={event => { if (event.target === event.currentTarget) close(); }}>
+  return <dialog className={`settings-dialog settings-paned${enlarged ? ' is-enlarged' : ''}`} ref={dialog} onCancel={close} onClick={event => { if (event.target === event.currentTarget) close(); }}>
     <div className="settings-shell">
       <aside className="settings-sidebar">
         <div className="settings-brand"><span className="eyebrow">{t('设置')}</span><h2>{t('工作台设置')}</h2></div>
@@ -54,7 +54,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, uiZoom, 
         <div className="settings-sidebar-footer"><button className="text-button" onClick={onGuide}><BookOpen size={15} />{t('使用指南')}</button><button className="text-button danger-text" onClick={quit}><Power size={15} />{t('退出应用')}</button></div>
       </aside>
       <div className="settings-main">
-        <header className={`settings-main-head${current.id === 'skills' ? ' has-tools' : ''}`}><h3>{projectImages ? t('项目缩略图') : current.title}</h3><p>{projectImages ? t('自动选择、固定图片与原有编号') : current.hint}</p>{current.id === 'skills' && <button type="button" className="icon-button settings-enlarge" aria-label={enlarged ? t('退出全屏') : t('全屏')} title={enlarged ? t('退出全屏') : t('全屏')} aria-pressed={enlarged} onClick={() => setEnlarged(value => !value)}>{enlarged ? <ArrowsIn size={18} /> : <ArrowsOut size={18} />}</button>}<button type="button" className="icon-button settings-close" aria-label={t('关闭设置')} title={t('关闭设置')} onClick={close}><X size={18} /></button></header>
+        <header className={`settings-main-head${current.id === 'skills' ? ' has-tools' : ''}`}><h3>{projectImages ? t('项目缩略图') : current.title}</h3><p>{projectImages ? t('自动选择、固定图片与原有编号') : current.hint}</p>{current.id === 'skills' && <button type="button" className="icon-button settings-enlarge" aria-label={t('放大')} title={enlarged ? t('恢复大小') : t('放大')} aria-pressed={enlarged} onClick={() => setEnlarged(value => !value)}>{enlarged ? <ArrowsIn size={18} /> : <ArrowsOut size={18} />}</button>}<button type="button" className="icon-button settings-close" aria-label={t('关闭设置')} title={t('关闭设置')} onClick={close}><X size={18} /></button></header>
         <div className="settings-pane" ref={pane}>
       <section className="settings-section" id="settings-appearance" aria-label={t('外观')} hidden={current.id !== 'appearance' || projectImages}>
       <ThemeSetting theme={settings.theme} update={theme => update({ theme })} />

@@ -91,7 +91,7 @@ dialog { color: var(--text-1); }
 .settings-enlarge { position: absolute; top: 16px; right: 64px; }
 .settings-main-head.has-tools { padding-right: 120px; }
 /* The skills page enlarged: the dialog takes the window with the same 20px gap, below the 40px title bar (which is absent or floating in full screen). */
-.settings-dialog.settings-paned.is-enlarged { width: auto; height: auto; max-height: none; inset: 60px 20px 20px; margin: 0; }
+.settings-dialog.settings-paned.is-enlarged { width: auto; height: auto; inset: 60px 20px 20px; margin: 0; }
 .app-shell:is(.titlebar-bare, .titlebar-auto) .settings-dialog.settings-paned.is-enlarged { top: 20px; }
 .settings-pane { flex: 1; min-height: 0; overflow: auto; padding: 8px 40px 32px; }
 .settings-pane > * { max-width: 800px; margin-inline: auto; }

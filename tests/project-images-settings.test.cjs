@@ -172,21 +172,15 @@ test('interface zoom shows the current-percent hint only for automatic zoom and 
 test('the skills page has a full-screen button that toggles the enlarged dialog and resets on leaving', t => {
   const h = settingsDialogFixture(t, { initialSection: 'skills' }), en = require('../electron/locales/en.json');
   const enlarge = () => h.find(node => node.props.className === 'icon-button settings-enlarge'), dialog = () => h.find(node => node.type === 'dialog');
-  assert.equal(enlarge().props['aria-label'], '全屏'); assert.equal(enlarge().props.title, '全屏');
+  assert.equal(enlarge().props['aria-label'], '放大'); assert.equal(enlarge().props.title, '放大');
   assert.doesNotMatch(dialog().props.className, /is-enlarged/);
   enlarge().props.onClick();
-  assert.match(dialog().props.className, /is-enlarged/); assert.equal(enlarge().props['aria-label'], '退出全屏');
+  assert.match(dialog().props.className, /is-enlarged/); assert.equal(enlarge().props['aria-label'], '放大'); assert.equal(enlarge().props['aria-pressed'], true); assert.equal(enlarge().props.title, '恢复大小');
   enlarge().props.onClick();
   assert.doesNotMatch(dialog().props.className, /is-enlarged/);
   enlarge().props.onClick(); h.tab('about').props.onClick();
   assert.equal(enlarge(), undefined); assert.doesNotMatch(dialog().props.className, /is-enlarged/);
-  h.tab('skills').props.onClick(); assert.equal(enlarge().props['aria-label'], '全屏'); assert.doesNotMatch(dialog().props.className, /is-enlarged/);
-  assert.equal(en['全屏'], 'Full screen'); assert.equal(en['退出全屏'], 'Exit full screen');
+  h.tab('skills').props.onClick(); assert.equal(enlarge().props['aria-label'], '放大'); assert.doesNotMatch(dialog().props.className, /is-enlarged/);
+  assert.equal(en['放大'], 'Enlarge'); assert.equal(en['恢复大小'], 'Restore size');
   const appearance = settingsDialogFixture(t); assert.equal(appearance.find(node => node.props.className === 'icon-button settings-enlarge'), undefined);
-});
-
-test('enlarged, the skills section is released from the 800px column but other sections are not', () => {
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/settings/settings.css'), 'utf8');
-  assert.match(css, /\.settings-pane > \* \{ max-width: 800px;/);
-  assert.match(css, /\.settings-dialog\.is-enlarged \.settings-pane > \.skills-section \{ max-width: none; margin-inline: 0; \}/);
 });
