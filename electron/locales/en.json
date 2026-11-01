@@ -1929,5 +1929,16 @@
   "{model} 的 {kind} 任务权重建议：从 {from} 调整为 {to}。此建议已不再生成，仍可撤销此决策。": "Task weight suggestion for {model} / {kind}: {from} to {to}. This suggestion is no longer generated; you can still withdraw the decision.",
   "此建议已不再生成，仍可撤销此决策。": "This suggestion is no longer generated; you can still withdraw the decision.",
   "不填": "Leave empty",
-  "前往第一项": "Go to the first one"
+  "前往第一项": "Go to the first one",
+  "终端默认": "Terminal default",
+  "macOS 的终端现在默认启动 Bash，可在设置的「终端」里改回 zsh；原来用 zsh 的话，请把个人配置移到 ~/.bash_profile，或直接选 zsh。": "Terminals on macOS now start Bash by default, and Settings > Terminal can switch back to zsh; if you used zsh, move your own settings to ~/.bash_profile or just choose zsh.",
+  "回答卡片": "Answer cards",
+  "助手需要你选择或回答问题时，阅读视图里会直接出现卡片，点选或填写后提交即可，不必再切到终端。": "When an assistant needs you to choose or answer a question, a card appears right in the reading view, so you can pick or fill it in and submit without switching to the terminal.",
+  "Agentrix 菜单新增「数据看板」，在单独的窗口里查看各模型的任务表现和协作报告，并可采纳或不采纳调整建议。": "The Agentrix menu has a new Dashboard that opens in its own window, showing each model's task results and a collaboration report, where you can adopt or dismiss suggested adjustments.",
+  "标题栏按钮": "Title bar buttons",
+  "macOS 窗口标题栏的红黄绿按钮右边现在是原生的「决策」和「工作台」按钮，样子和网页里的一致，全屏时也在。": "On macOS, native Decide and Workbench buttons now sit right after the red, yellow and green window buttons, looking like the ones on the page, and they stay in full screen.",
+  "菜单栏": "Menu bar",
+  "macOS 屏幕顶部的菜单栏现在只剩 Agentrix 一个菜单，设置、数据看板等入口都收在里面。": "The macOS menu bar now has only the Agentrix menu, with Settings, Dashboard and the other entries inside it.",
+  "macOS 全屏时窗口不再有自己的标题栏，也不显示「Agentrix」字样；按搜索会把标题栏请回来。": "In macOS full screen the window no longer has a title bar of its own or the Agentrix title, and searching brings the title bar back.",
+  "结果卡片上的「打开文件」现在会直接打开文件，不再提示「无效的项目文件路径」。": "Open file on the result card now opens the file instead of showing \"Invalid project file path\"."
 }
