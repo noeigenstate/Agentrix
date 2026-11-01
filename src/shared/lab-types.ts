@@ -1,3 +1,5 @@
+import type { Result } from './types';
+
 // The Virtual Lab (虚拟实验室): experiments that compare orchestrated work with single models on tasks whose right
 // answer is known. Shared by the lab window (src/features/lab) and its main-process engine (electron/features/lab).
 
@@ -35,15 +37,18 @@ export type LabExperiment = {
 
 export type LabAppearance = { theme: string; language: 'zh' | 'en'; uiZoom: number };
 
-// The lab window's preload exposes only this.
+// The lab window's preload exposes only this, shaped like the dashboard's bridge.
 export type LabBridge = {
-  list(): Promise<LabExperiment[]>;
-  projects(): Promise<{ id: string; name: string }[]>;
-  sample(request: LabSampleRequest): Promise<LabTask[]>;
-  estimate(input: Omit<LabExperimentInput, 'name' | 'budgetUsd'>): Promise<LabEstimate>;
-  start(input: LabExperimentInput): Promise<string>;
-  stop(id: string): Promise<void>;
-  remove(id: string): Promise<void>;
-  onChange(listener: (experiments: LabExperiment[]) => void): () => void;
-  onAppearance(listener: (appearance: LabAppearance) => void): () => void;
+  list(): Promise<Result<LabExperiment[]>>;
+  projects(): Promise<Result<{ id: string; name: string }[]>>;
+  sample(request: LabSampleRequest): Promise<Result<LabTask[]>>;
+  estimate(input: Omit<LabExperimentInput, 'name' | 'budgetUsd'>): Promise<Result<LabEstimate>>;
+  start(input: LabExperimentInput): Promise<Result<string>>;
+  stop(id: string): Promise<Result<void>>;
+  remove(id: string): Promise<Result<void>>;
+  appearance(): Promise<Result<LabAppearance>>;
+  onAppearance(callback: (appearance: LabAppearance) => void): () => void;
+  onChange(callback: (experiments: LabExperiment[]) => void): () => void;
+  close(): void; minimize(): void; maximize(): void;
 };
+declare global { interface Window { agentrixLab?: LabBridge; } }

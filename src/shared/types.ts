@@ -185,6 +185,7 @@ type Bridge = {
   gradeDelivery(grade: DeliveryGrade): Promise<Result<void>>;
   // Opens the model dashboard window, or focuses it when it is already open.
   openDashboard(): Promise<Result<void>>;
+  openLab(): Promise<Result<void>>;
   settings(patch: Partial<Settings>): Promise<Result<void>>;
   listDirectory(id: string, relativePath?: string, offset?: number): Promise<Result<DirectoryListing>>;
   findFiles(projectId: string, query: string): Promise<Result<MentionFile[]>>;
