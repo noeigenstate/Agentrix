@@ -23,21 +23,34 @@ description: Publish a new Agentrix version — bump, update notes, the full loc
    For a follow-up changing only test fixtures, docs and version metadata after a recorded full pass, verify that
    `electron/`, `src/`, `integration/`, `assets/` and dependency definitions are unchanged. Reuse the unaffected local
    desktop results; rerun the changed unit/fixture tests and their packaged desktop cases in the failing environment.
-   Rebuild and verify the new version's artifacts. The entire CI matrix must still pass before publication.
+   Rebuild and verify the new version's artifacts. The entire CI matrix must still pass before publication; a green
+   `remote` preflight on the release commit is that pass, and the tag's release is published from its builds (step 7).
 5. **Look at the pictures.** `test:workspace` saves `guide-whats-new.png` and `guide-shortcuts.png` in its
    `.test-output/workspace-*` folder: check the notes fit and read well before committing.
 6. **Commit.** Stage everything except local-only files (`.claude/`, personal product drafts under `docs/`), scan
    the staged diff for personal data (user names, home paths, host addresses, emails, secrets) and commit as
    `Release X.Y.Z: <the user-visible changes>` with a bulleted body.
-7. **Tag and push.** `git tag vX.Y.Z`, push `main`, then push the tag. Both pushes run the build workflow; only the
-   tag's run adds the "Publish GitHub Release" job, which waits for every build and uploads the installers.
+7. **Tag and push.** `git tag vX.Y.Z`, push `main`, then push the tag. Both pushes first run a "reuse" job that looks
+   for a successful run of this workflow on exactly this commit (the `remote` preflight's dispatch run, every build and
+   test job really run, installer artifacts not expired). If it finds one, the build and test jobs are skipped; only
+   the tag's run adds the "Publish GitHub Release" job, which downloads that run's installers, checks their sha256
+   sums and the version, and publishes exactly the tested files in about 1–2 minutes. If no such run exists (no
+   preflight on this commit, a failed or expired one) the run builds and tests everything as before, ~14 minutes.
+   The release page's "## Changes in X.Y.Z" list is printed from `WHATS_NEW` by `node scripts/release-notes.mjs
+   --version X.Y.Z` (the English of each note); it fails if a note has no English.
 8. **CI.** Query the runs for the full commit SHA (`/actions/runs?head_sha=<full sha>`; a short SHA returns
-   nothing). Read the token from `git credential fill` inside the script and never print it. The jobs: Windows x64,
-   Linux x64, Linux arm64, macOS Apple silicon, and Linux SSH integration (the real-ssh check of the remote worker).
-   Wait for both runs, then confirm the release lists its assets.
+   nothing). Read the token from `git credential fill` inside the script and never print it. The jobs: Windows x64
+   (build, then the `windows-desktop` shards that run the packaged desktop suites in parallel against the uploaded
+   `win-unpacked`), Linux x64, Linux arm64, macOS Apple silicon, and Linux SSH integration (the real-ssh check of the
+   remote worker). Wait for both runs, then confirm the release lists its assets. To rehearse the release without
+   publishing, dispatch the workflow on the release commit with `release_dry_run=true`: it runs the reuse check, the
+   download, the sha256 and version checks and the notes, prints what it would publish and creates or edits nothing.
 9. **A failed job.** The tag's release is published only if every build passes. Read the failed step from the job
    log (`/actions/jobs/<id>/logs`; search for `Error:` and `Timed out`, since passing test names also contain
-   "failed"), and download the run's `desktop-test-screenshots` artifact: each smoke saves `failure.png` when it fails.
+   "failed"), and download the failing job's screenshot artifact: each smoke saves `failure.png` when it fails. The
+   Windows suites are split over the `windows-desktop` shards, each uploading its own artifact; the shard that runs
+   `test:workspace` keeps the name `desktop-test-screenshots` (also where `guide-whats-new.png` is), the others are
+   named for their shard.
    A passing branch run alone does not prove a tag failure is environmental: allocator-dependent transcript loss can
    appear only on one runner. Reproduce the exact assertion before deciding. Rerun unchanged jobs only for a diagnosed
    environment or timing failure, within the session's publication authorization; ask only if that authorization is

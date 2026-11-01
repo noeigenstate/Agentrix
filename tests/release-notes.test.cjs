@@ -29,3 +29,34 @@ test('the guide and the About page share one list: left-aligned, one marker colo
   assert.match(guide, /\.guide-notes \{ max-height: min\(440px, 52vh\); overflow-y: auto; \}/);
   assert.doesNotMatch(read('src/features/settings/settings.css'), /about-notes/);
 });
+
+const script = path.join(__dirname, '..', 'scripts', 'release-notes.mjs');
+const load = () => import(require('node:url').pathToFileURL(script).href);
+const run = (...args) => require('node:child_process').spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
+
+test('the release body lists every update note in English, in the guide order, under the version', async () => {
+  const { releaseNotes } = await load();
+  const notes = [{ title: '甲', text: '一句话' }, { title: '乙', text: '另一句话' }];
+  const english = { 甲: 'Alpha', 一句话: 'Does a thing.', 乙: 'Beta', 另一句话: 'Does another thing.' };
+  assert.equal(releaseNotes(notes, english, '2.0.1-rc.1'), '## Changes in 2.0.1-rc.1\n\n- **Alpha** Does a thing.\n- **Beta** Does another thing.');
+});
+
+test('the release body refuses a missing translation, an empty list and a malformed version', async () => {
+  const { releaseNotes } = await load();
+  const notes = [{ title: '甲', text: '一句话' }], english = { 甲: 'Alpha', 一句话: 'Does a thing.' };
+  assert.throws(() => releaseNotes(notes, { 甲: 'Alpha' }, '1.0.0'), /No English for: 一句话/);
+  assert.throws(() => releaseNotes(notes, { 一句话: 'Does a thing.' }, '1.0.0'), /No English for: 甲/);
+  assert.throws(() => releaseNotes([], english, '1.0.0'), /empty/);
+  for (const version of [undefined, '', '1.3', 'v1.3.24', '1.3.24 ', '1.3.24\n- x']) assert.throws(() => releaseNotes(notes, english, version), /Invalid version/);
+});
+
+test('the script prints the real English notes for the version and fails on bad arguments', () => {
+  const result = run('--version', '1.3.24');
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, `## Changes in 1.3.24\n\n${WHATS_NEW.map(({ title, text }) => `- **${en[title]}** ${en[text]}`).join('\n')}\n`);
+  for (const args of [[], ['--version'], ['--version', 'x'], ['--version', '1.3.24', 'extra'], ['1.3.24']]) {
+    const failed = run(...args);
+    assert.notEqual(failed.status, 0, args.join(' '));
+    assert.equal(failed.stdout, ''); assert.notEqual(failed.stderr, '');
+  }
+});
