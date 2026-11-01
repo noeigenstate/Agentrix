@@ -10,6 +10,7 @@ const { accountEnvironment } = require('../integration/codex-account-scope.cjs')
 const { createEventServer } = require('../electron/events.cjs');
 const exec = promisify(execFile), integration = path.resolve(__dirname, '../integration');
 const scopeHelper = path.join(integration, 'codex-account-scope.cjs');
+const shellQuote = value => `'${value.replace(/'/g, `'\\''`)}'`;
 const cases = [
   { args: [], safe: true },
   { args: ['-m', 'gpt-test'], safe: true },
@@ -132,13 +133,18 @@ for (const kind of ['bash', 'zsh']) {
       fs.writeFileSync(recorder, `const a=process.argv.slice(2),e=JSON.parse(process.env.QUOTA_EXPECTED),prefix=process.env.QUOTA_ALIAS?['--profile','work']:[],n=prefix.length;
 const ok=a.length===e.length+4+n&&prefix.every((v,i)=>a[i]===v)&&a[n]==='-c'&&a[n+2]==='-c'&&a[n+3]==='tui.terminal_title=["session-id"]'&&a.slice(n+4).every((v,i)=>v===e[i]);
 process.stdout.write(ok?'FORWARD_OK\\n':'FORWARD_FAILED\\n');process.exitCode=ok?3:7;`);
-      const program = path.join(root, 'codex-fixture');
+      const program = path.join(root, "codex fixture 'q'");
       fs.writeFileSync(program, '#!/bin/sh\nexec "$QUOTA_NODE" "$QUOTA_RECORDER" "$@"\n', { mode: 0o755 });
+      const executable = shellQuote(program.replace(/\\/g, '/'));
+      fs.writeFileSync(path.join(home, kind === 'bash' ? '.bashrc' : '.zshrc'), [
+        `alias codex=${shellQuote(executable)}`,
+        `if [[ $QUOTA_ALIAS == profile ]]; then alias codex=${shellQuote(executable + ' --profile work')}; fi`,
+        ...(kind === 'bash' ? ['set -u'] : []), '',
+      ].join('\n'));
       fs.writeFileSync(probe, `
 export AGENTRIX_ACCOUNT_BASELINE=$("$QUOTA_NODE" -e 'process.stdout.write(JSON.stringify(require(process.env.QUOTA_SCOPE).accountEnvironment(process.env)))')
 builtin source "$QUOTA_COPY" ${kind === 'zsh' ? 'zshrc' : ''}
 __pg_send() { if [[ $1 == codex-started ]]; then printf 'SCOPE=%s\\nCOMMAND=%s\\n' "$5" "$4"; fi; }
-__pg_program() { ${kind === 'bash' ? '__pg_words' : 'reply'}=("$QUOTA_PROGRAM"); if [[ $QUOTA_ALIAS == profile ]]; then ${kind === 'bash' ? '__pg_words' : 'reply'}+=(--profile work); fi; }
 if [[ $QUOTA_CHANGE == profile ]]; then export CODEX_PROFILE=fixture; fi
 if [[ $QUOTA_CHANGE == home ]]; then export CODEX_HOME="$HOME/other"; fi
 codex "$@"
@@ -147,7 +153,7 @@ codex "$@"
       for (const [i, item] of [...cases, { args: ['-m', 'gpt-test'], alias: 'profile', safe: false }].entries()) {
         const env = { ...safeEnv(home), AGENTRIX_NODE: process.execPath, AGENTRIX_EVENT_HELPER: path.join(integration, 'agent-event.cjs').replace(/\\/g, '/'),
           AGENTRIX_START_DIR: root, QUOTA_NODE: process.execPath, QUOTA_SCOPE: scopeHelper, QUOTA_COPY: copy,
-          QUOTA_PROGRAM: program, QUOTA_RECORDER: recorder, QUOTA_EXPECTED: JSON.stringify(item.args),
+          QUOTA_RECORDER: recorder, QUOTA_EXPECTED: JSON.stringify(item.args),
           QUOTA_CHANGE: item.change || '', QUOTA_ALIAS: item.alias || '' };
         const result = await exec(shell, kind === 'bash' ? ['--noprofile', '--norc', probe, ...item.args] : ['-f', probe, ...item.args],
           { env, cwd: root, windowsHide: true, timeout: 7000 * timeoutScale, maxBuffer: 4096 });

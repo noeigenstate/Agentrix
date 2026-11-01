@@ -101,8 +101,8 @@ function cleanSettings(input = {}) {
     // The offline recognizer for dictation (voice.cjs).
     voiceModel: Object.hasOwn(VOICE_MODELS, input.voiceModel) ? input.voiceModel : defaults.voiceModel,
     shortcuts: cleanShortcuts(input.shortcuts),
-    // Shell for local terminals: PowerShell or Command Prompt on Windows, Bash or zsh on Linux (until one is
-    // chosen there, the login shell's kind). SSH projects always use Bash on the server.
+    // Local terminals: PowerShell or Command Prompt on Windows, Bash or zsh on macOS and Linux. Until chosen,
+    // macOS uses Bash and Linux the login shell's kind. SSH projects always use Bash on the server.
     shell: ['cmd', 'bash', 'zsh'].includes(input.shell) ? input.shell : 'powershell',
     // The app version whose usage guide was last shown; a newer version shows it again.
     guideVersion: typeof input.guideVersion === 'string' && /^\d+\.\d+\.\d+(-[\w.-]+)?$/.test(input.guideVersion) ? input.guideVersion : '',

@@ -10,6 +10,7 @@ docs/project-view.png
 test-results/
 integration/ssh-askpass.exe
 integration/file-clipboard.exe
+native/mac-titlebar/build/
 __pycache__/
 
 # Promotional video project (HyperFrames sources, captures, renders); kept out of the app repo.

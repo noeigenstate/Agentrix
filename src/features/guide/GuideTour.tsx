@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Project } from '../../shared/types';
 import { shortcut } from '../shortcuts/shortcuts';
 import { t } from '../../shared/i18n';
+import { isMac } from '../../shared/platform';
 import { observeBounds, type Bounds } from '../../shared/observeBounds';
 type Step = {
   id: string; title: string; body: string[];
@@ -15,11 +16,18 @@ type Step = {
 
 const visible = (selector: string) => [...document.querySelectorAll<HTMLElement>(selector)].find(element => element.getClientRects().length) || null;
 
+// What the last step says about the app menu: the logo menu on Windows and Linux; on macOS the menu bar, with 决策 / 工作台 as native title-bar buttons that come back with the system strip in full screen (the page's own do not).
+function settingsText(nativeTitlebar: boolean) {
+  if (!isMac) return t('标志和标题是应用菜单：新建项目、返回项目、全屏，以及设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）。');
+  if (nativeTitlebar) return t('功能在屏幕顶部的菜单栏：Agentrix 菜单里有新建项目和设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）；决策和工作台在窗口左上角红绿灯之后，全屏时把鼠标移到屏幕顶端，它们随系统标题条出现。');
+  return t('功能在屏幕顶部的菜单栏：Agentrix 菜单里有新建项目和设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）；决策和工作台在窗口左上角红绿灯之后；全屏时按 {decisions} 到决策，按 {overview} 回到工作台。', { decisions: shortcut('decisions'), overview: shortcut('overview') });
+}
+
 // The tutorial happens in the window itself: one step at a time, a bubble points at the place to act,
 // that place stays usable and the rest of the window is blocked until the step is done or skipped.
 // withAdd: the tutorial began with an empty workspace, so it starts by adding a project (and keeps that
 // step in its count after a project exists).
-export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects: Project[]; focusedId: string | null; withAdd: boolean; onClose: () => void }) {
+export function GuideTour({ projects, focusedId, withAdd, nativeTitlebar, onClose }: { projects: Project[]; focusedId: string | null; withAdd: boolean; nativeTitlebar: boolean; onClose: () => void }) {
   const project = projects.find(item => item.id === focusedId) || projects[0];
   const steps: Step[] = [
     ...(withAdd ? [{
@@ -44,8 +52,8 @@ export function GuideTour({ projects, focusedId, withAdd, onClose }: { projects:
     },
     {
       id: 'settings', title: t('设置与更多'), interactive: false,
-      body: [t('标志和标题是应用菜单：新建项目、返回项目、全屏，以及设置（主题、提醒、快捷键，一键安装 Codex 和 Claude Code，还能再看一遍这个教程）。'), t('按 {key} 添加更多项目。', { key: shortcut('addProject') })],
-      target: () => visible('.titlebar-brand'),
+      body: [settingsText(nativeTitlebar), t('按 {key} 添加更多项目。', { key: shortcut('addProject') })],
+      target: () => isMac ? null : visible('.titlebar-brand'),
     },
   ];
   const [index, setIndex] = useState(0);

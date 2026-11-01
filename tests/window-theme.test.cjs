@@ -19,7 +19,7 @@ function fixture(t, theme, glass = false) {
   store.updateSettings({ theme });
   const context = vm.createContext({ store: new WorkspaceStore(file), desktopGlassActive: glass, desktopGlassWindow: glass,
     desktopGlassBackend: 'windows', desktopGlassOptions, minWidth, minHeight, path, root: directory, __dirname: directory, t: text => text,
-    process: { platform: 'win32' },
+    process: { platform: 'win32' }, macTitlebar: null, registerMacTitlebar: () => null, send() {}, broadcast() {},
     BrowserWindow: class {
       constructor(options) { this.options = options; this.backgrounds = []; }
       isDestroyed() { return !!this.destroyed; }

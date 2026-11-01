@@ -2,10 +2,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 
-// Local terminals on macOS run zsh with the user's own start-up files and Agentrix's integration
-// (integration/zsh-integration.zsh). zsh reads its start-up files from ZDOTDIR, so that names a folder of
-// stubs, and each stub sources the integration with its phase. On Linux the user chooses zsh or Bash
-// (integration/bash-integration.bash, started with --rcfile).
+// Local terminals on macOS and Linux run Bash or zsh with the user's own start-up files and Agentrix's
+// integration. zsh reads stubs from ZDOTDIR; each sources zsh-integration.zsh with its phase. Bash starts
+// bash-integration.bash with --rcfile; macOS defaults to Bash and reads its login files there.
 
 // The program for a shell name: the usual system places first, then PATH; null when it is not installed.
 function findShell(name, { platform = process.platform, env = process.env, exists = isExecutable } = {}) {
@@ -30,19 +29,26 @@ function prepareZshStartup(folder, integrationDir) {
 
 // The environment of one terminal: what the integration needs, plus a UTF-8 locale. Programs started from
 // the Dock have no LANG, and zsh, git and Codex would then treat Chinese text as unknown bytes.
-function shellEnvironment(env, { socket, projectId, sessionKey, node, helper, startDir, locale }) {
+function shellEnvironment(env, { socket, projectId, sessionKey, node, helper, startDir, locale, loginFiles }) {
   return {
     ...env,
     ...(!env.LANG && !env.LC_ALL && !env.LC_CTYPE ? { LANG: locale || 'en_US.UTF-8' } : {}),
     AGENTRIX_SOCKET: socket, AGENTRIX_PROJECT_ID: projectId, AGENTRIX_SESSION_KEY: sessionKey,
     AGENTRIX_NODE: node, AGENTRIX_EVENT_HELPER: helper, AGENTRIX_START_DIR: startDir,
+    ...(loginFiles ? { AGENTRIX_LOGIN_FILES: '1', BASH_SILENCE_DEPRECATION_WARNING: '1' } : {}),
   };
 }
 function zshEnvironment(env, options) {
   return { ...shellEnvironment(env, options), ZDOTDIR: options.folder, AGENTRIX_USER_ZDOTDIR: env.ZDOTDIR || '' };
 }
-// Bash reads /etc/bash.bashrc (where the system has one) and then the --rcfile, which sources ~/.bashrc.
+// --rcfile installs the integration; it sources Linux's ~/.bashrc or macOS's login files.
 function bashArguments(integrationDir) { return ['--rcfile', path.posix.join(integrationDir, 'bash-integration.bash'), '-i']; }
+
+// macOS uses system Bash by default; only an explicit zsh choice keeps the existing zsh path.
+function macShell(choice, { find = findShell } = {}) {
+  const useZsh = choice === 'zsh';
+  return { kind: useZsh ? 'zsh' : 'bash', file: useZsh ? ZSH : find('bash', { platform: 'darwin' }) || '/bin/bash', zsh: !!find('zsh', { platform: 'darwin' }) };
+}
 
 // The local shell on Linux: the one chosen in Settings when it is installed, else the login shell's kind
 // (zsh when $SHELL is zsh and zsh is installed), else Bash.
@@ -100,4 +106,4 @@ function mergePath(login, current) {
   return [...new Set(folders)].join(':');
 }
 
-module.exports = { ZSH, findShell, linuxShell, prepareZshStartup, shellEnvironment, zshEnvironment, bashArguments, withoutAppImage, terminalLocale, loginShellPath, mergePath };
+module.exports = { ZSH, findShell, macShell, linuxShell, prepareZshStartup, shellEnvironment, zshEnvironment, bashArguments, withoutAppImage, terminalLocale, loginShellPath, mergePath };

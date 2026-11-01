@@ -110,20 +110,25 @@ test('the Linux file clipboard writes the formats file managers read and reads t
   assert.deepEqual(await readFileList({ env: {}, runTool: async () => null, electron: () => ({ clipboard: { read: async () => [] } }) }), []);
 });
 
-test('a real Bash terminal keeps the user start-up files and reports prompts, Codex and Claude Code', { skip: process.platform !== 'linux' || !findShell('bash'), timeout: 60000 }, async t => {
+for (const loginFiles of [false, true]) test(loginFiles
+  ? 'a real macOS login Bash keeps aliases and prompt commands under nounset with no reading note'
+  : 'a real Bash terminal keeps the user start-up files and reports prompts, Codex and Claude Code',
+{ skip: loginFiles ? process.platform !== 'darwin' : !['linux', 'darwin'].includes(process.platform) || !findShell('bash'), timeout: 60000 }, async t => {
   const pty = require('node-pty');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pg-bash-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home'), bin = path.join(home, 'bin'), log = path.join(root, 'log');
   const project = path.join(root, "项目 空格 'q' $x");
   const sessionFolder = path.join(root, "sessions 'quoted'"), noteFile = path.join(sessionFolder, 'terminal-skills.txt');
+  const readingNote = loginFiles ? '' : NOTE;
   for (const folder of [bin, log, project, sessionFolder]) fs.mkdirSync(folder, { recursive: true });
-  fs.writeFileSync(noteFile, NOTE);
-  // The user's own ~/.bashrc puts codex and claude on PATH, aliases claude, keeps its own prompt command and
-  // moves elsewhere.
-  fs.writeFileSync(path.join(home, '.bashrc'), [
-    'export PATH="$HOME/bin:$PATH"', "alias claude='claude --model opus'", 'PG_TEST_BASHRC=1', "PROMPT_COMMAND='PG_TEST_LAST=$?'", 'cd /', '',
+  fs.writeFileSync(noteFile, readingNote);
+  const startupFile = loginFiles ? '.bash_profile' : '.bashrc';
+  fs.writeFileSync(path.join(home, startupFile), [
+    'export PATH="$HOME/bin:$PATH"', "alias claude='claude --model opus'", 'PG_TEST_STARTUP=1', "PROMPT_COMMAND='PG_TEST_LAST=$?'", 'cd /',
+    ...(loginFiles ? ["alias codex='codex --model login-model'", 'set -u'] : []), '',
   ].join('\n'));
+  if (loginFiles) fs.writeFileSync(path.join(home, '.bashrc'), 'echo unexpected-bashrc\nexit 98\n');
   const recorder = path.join(root, 'recorder.cjs');
   fs.writeFileSync(recorder, `const fs = require('node:fs'), path = require('node:path');
 const [agent, ...args] = process.argv.slice(2);
@@ -137,10 +142,11 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
   const events = [];
   const server = await createEventServer(event => events.push(event));
   t.after(() => server.close());
-  const source = { ...process.env, HOME: home, TMPDIR: sessionFolder, PATH: '/usr/bin:/bin:/usr/sbin:/sbin', PG_TEST_NODE: process.execPath, PG_TEST_RECORDER: recorder, PG_TEST_LOG: log, AGENTRIX_READING_NOTE: NOTE, AGENTRIX_READING_NOTE_FILE: noteFile };
+  const source = { ...process.env, HOME: home, TMPDIR: sessionFolder, PATH: '/usr/bin:/bin:/usr/sbin:/sbin', PG_TEST_NODE: process.execPath, PG_TEST_RECORDER: recorder, PG_TEST_LOG: log, AGENTRIX_READING_NOTE: readingNote, AGENTRIX_READING_NOTE_FILE: noteFile };
   delete source.LANG; delete source.LC_ALL; delete source.LC_CTYPE; delete source.CODEX_HOME; delete source.PROMPT_COMMAND;
-  const env = shellEnvironment(createTerminalEnvironment(source, ''), { socket: server.address, projectId: 'project', sessionKey: 'key', node: process.execPath, helper, startDir: project, locale: 'C.UTF-8' });
-  const terminal = pty.spawn(findShell('bash'), bashArguments(integrationDir), { name: 'xterm-256color', cols: 120, rows: 30, cwd: project, env });
+  const locale = process.platform === 'darwin' ? 'en_US.UTF-8' : 'C.UTF-8';
+  const env = shellEnvironment(createTerminalEnvironment(source, ''), { socket: server.address, projectId: 'project', sessionKey: 'key', node: process.execPath, helper, startDir: project, locale, loginFiles });
+  const terminal = pty.spawn(loginFiles ? '/bin/bash' : findShell('bash'), bashArguments(integrationDir), { name: 'xterm-256color', cols: 120, rows: 30, cwd: project, env });
   cleanupTerminal(t, terminal);
   let output = '';
   terminal.onData(data => { output += data; });
@@ -153,28 +159,32 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
   assert.ok(prompt.sequence > ready.sequence);
   for (const event of [ready, prompt]) {
     assert.equal(event.projectId, 'project'); assert.equal(event.sessionKey, 'key');
-    assert.equal(event.cwd, project, 'the terminal opens in the project even though .bashrc moved');
+    assert.equal(event.cwd, project, `the terminal opens in the project even though ${startupFile} moved`);
     assert.equal(event.codexAvailable, true); assert.equal(event.claudeAvailable, true);
     assert.equal(event.codexHome, path.join(home, '.codex'));
   }
   assert.match(output, /AGENTRIX/);
+  if (loginFiles) assert.doesNotMatch(output, /default interactive shell is now zsh/);
 
   // The user's file ran, nothing of Agentrix leaks into programs started here, and the user's own prompt
   // command still sees the exit status of the last command.
   type('false');
-  type('printf "%s\\n" "${AGENTRIX_SESSION_KEY-0}${AGENTRIX_SOCKET-0}${AGENTRIX_NODE-0}${AGENTRIX_READING_NOTE-0}|$PG_TEST_BASHRC|$PG_TEST_LAST|$LANG|$TERM_PROGRAM|$(bash -c \'type -t codex\' 2>/dev/null)" > "$PG_TEST_LOG/state"');
-  assert.equal(await readLog('state'), '0000|1|1|C.UTF-8|agentrix|file');
+  type('printf "%s\\n" "${AGENTRIX_SESSION_KEY-0}${AGENTRIX_SOCKET-0}${AGENTRIX_NODE-0}${AGENTRIX_READING_NOTE-0}${AGENTRIX_LOGIN_FILES-0}|$PG_TEST_STARTUP|$PG_TEST_LAST|$LANG|$TERM_PROGRAM|$(bash -c \'type -t codex\' 2>/dev/null)" > "$PG_TEST_LOG/state"');
+  assert.equal(await readLog('state'), `00000|1|1|${locale}|agentrix|file`);
 
   // codex: started and exited around the real program, which gets notify and the title setting first.
   type('codex resume --last');
   const exited = await waitEvent(event => event.type === 'codex-exited', 'codex-exited');
   const started = events.find(event => event.type === 'codex-started');
   assert.ok(started && started.sequence < exited.sequence); assert.equal(started.agent, 'codex'); assert.equal(started.command, 'resume', 'the first word goes with it (agent-command.cjs)'); assert.equal(exited.exitCode, 3);
+  await waitEvent(event => event.type === 'shell-prompt' && event.sequence > exited.sequence, 'the prompt after Codex exits');
   const codexArgs = JSON.parse(fs.readFileSync(path.join(log, 'codex.json'), 'utf8'));
+  const prefix = loginFiles ? 2 : 0;
+  if (loginFiles) assert.deepEqual(codexArgs.slice(0, prefix), ['--model', 'login-model']);
   // What the reading view can show comes next, before the user's own arguments.
-  assert.deepEqual(codexArgs.slice(2), ['-c', 'tui.terminal_title=["session-id"]', '-c', `developer_instructions="${NOTE}"`, 'resume', '--last']);
-  assert.equal(codexArgs[0], '-c');
-  const notify = JSON.parse(codexArgs[1].replace(/^notify=/, ''));
+  assert.deepEqual(codexArgs.slice(prefix + 2), ['-c', 'tui.terminal_title=["session-id"]', ...(readingNote ? ['-c', `developer_instructions="${readingNote}"`] : []), 'resume', '--last']);
+  assert.equal(codexArgs[prefix], '-c');
+  const notify = JSON.parse(codexArgs[prefix + 1].replace(/^notify=/, ''));
   assert.deepEqual(notify, ['/usr/bin/env', 'ELECTRON_RUN_AS_NODE=1', process.execPath, helper, 'codex-notify', server.address, 'project', 'key']);
   await promisify(execFile)(notify[0], [...notify.slice(1), JSON.stringify({ type: 'agent-turn-complete', 'thread-id': 'thread', 'turn-id': 'turn' })]);
   await waitEvent(event => event.type === 'turn-complete' && event.eventId === 'thread:turn', 'turn-complete');
@@ -182,10 +192,11 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
   // claude: the user's alias still applies, and the hooks it is given report each turn.
   type('claude -p "中文 prompt"');
   const claudeExited = await waitEvent(event => event.type === 'codex-exited' && event.agent === 'claude', 'claude to exit');
+  await waitEvent(event => event.type === 'shell-prompt' && event.sequence > claudeExited.sequence, 'the prompt after Claude exits');
   assert.equal(claudeExited.exitCode, 0);
   assert.ok(events.some(event => event.type === 'codex-started' && event.agent === 'claude' && event.command === '-p'));
   const claudeArgs = JSON.parse(fs.readFileSync(path.join(log, 'claude.json'), 'utf8'));
-  assert.deepEqual([claudeArgs.slice(0, 2), claudeArgs.slice(4)], [['--model', 'opus'], ['--append-system-prompt', NOTE, '-p', '中文 prompt']]);
+  assert.deepEqual([claudeArgs.slice(0, 2), claudeArgs.slice(4)], [['--model', 'opus'], [...(readingNote ? ['--append-system-prompt', readingNote] : []), '-p', '中文 prompt']]);
   assert.equal(claudeArgs[2], '--settings');
   assert.equal(path.dirname(claudeArgs[3]), sessionFolder);
   assert.match(path.basename(claudeArgs[3]), /^terminal-claude-settings-[A-Za-z0-9]{6}$/);

@@ -274,20 +274,20 @@ curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/
 
 可以在管道后的 `bash` 前设置这些变量；以下指定版本示例需等对应 Release 发布后再使用：
 
-- `AGENTRIX_VERSION=1.3.22`：安装指定版本。
+- `AGENTRIX_VERSION=1.3.23`：安装指定版本。
 - `AGENTRIX_INSTALL_DIR=~/Applications`：指定安装目录。
 - `AGENTRIX_OPEN=0`：安装后不打开应用。
 
-例如，安装 1.3.22：
+例如，安装 1.3.23：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | AGENTRIX_VERSION=1.3.22 bash
+curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | AGENTRIX_VERSION=1.3.23 bash
 ```
 
 如果已经下载了 ZIP，也可以用本地的安装脚本安装：
 
 ```bash
-bash install-macos.sh ~/Downloads/Agentrix-1.3.22-mac-arm64.zip
+bash install-macos.sh ~/Downloads/Agentrix-1.3.23-mac-arm64.zip
 ```
 
 应用使用临时签名（ad-hoc），没有 Apple Developer ID，也未经过 Apple 公证。如果用浏览器下载 DMG，再将应用拖到「应用程序」，首次打开时 macOS 会提示「无法验证开发者」。在「系统设置 › 隐私与安全性」中点一次「仍要打开」，或运行：
@@ -298,9 +298,11 @@ xattr -dr com.apple.quarantine "/Applications/Agentrix.app"
 
 ### macOS 终端与快捷键
 
-本地终端以登录 shell 方式运行 zsh（`/bin/zsh`），照常加载你自己的 `~/.zshenv`、`~/.zprofile`、`~/.zshrc` 和 `~/.zlogin`。Agentrix 在此基础上加入提示符状态报告和 `codex` / `claude` 包装层，支持轮次状态、Claude Code hooks、完成提醒和会话恢复，不修改任何用户文件。你为 `codex` 或 `claude` 定义的别名仍然有效。SSH 项目的用法与 Windows 相同。
+本地终端默认运行 Bash（`/bin/bash`），可在「设置 › 终端与编辑 › 终端」中改选 zsh（`/bin/zsh`），新开或重启的终端按当前选择启动。Bash 以交互式非登录 shell 启动（`--rcfile … -i`），但按登录 shell 的顺序读取启动文件：先 `/etc/profile`，再 `~/.bash_profile`、`~/.bash_login`、`~/.profile` 中第一个存在的；不会自动读取 `~/.bashrc`，需要的话在 `~/.bash_profile` 里自行 `source ~/.bashrc`。因为不是登录 shell，`shopt login_shell` 为 off，`logout` 不能用（请用 `exit`），`~/.bash_logout` 也不会运行。Agentrix 会关闭 macOS 自带 Bash 的「默认 shell 已改为 zsh」提示。从 zsh 转过来的用户请注意：写在 `~/.zshrc`、`~/.zprofile` 里的设置（别名、环境变量、Homebrew 的 `brew shellenv` 等）Bash 不会读取，请把它们放进 `~/.bash_profile`，或在设置里选择 zsh。zsh 照常加载你自己的 `~/.zshenv`、`~/.zprofile`、`~/.zshrc` 和 `~/.zlogin`。Agentrix 在此基础上加入提示符状态报告和 `codex` / `claude` 包装层，支持轮次状态、Claude Code hooks、完成提醒和会话恢复，不修改任何用户文件。你为 `codex` 或 `claude` 定义的别名仍然有效。SSH 项目的用法与 Windows 相同。
 
 终端中用 `⌘C` / `⌘V` / `⌘A` 复制、粘贴和全选，`Control+C` 中断命令，`⌘+点击`打开链接。`⌘Q` 退出（终端仍在运行时会先询问），`⌘H` 隐藏，`⌘M` 最小化。设置里的项目快捷键仍默认使用 Control，例如 `Control+Shift+N` 添加项目。
+
+窗口标题栏里红绿灯之后的「决策」「工作台」是 macOS 原生按钮，显示待决定数量并标出当前页面；全屏时把鼠标移到屏幕顶端，系统标题条出现，它们也在其中。原生部分缺失或构建失败时，会退回网页里的同名按钮，此时全屏下只能用快捷键。
 
 放大项目只会在当前窗口内展开，不会切换到全屏空间（Space）。需要全屏时，使用窗口的绿色按钮或全屏快捷键。
 
@@ -325,7 +327,7 @@ chmod +x Agentrix-*-linux-*.AppImage
 
 ## 运行条件与范围
 
-- Windows 10/11 x64（本地终端为 Windows PowerShell 或命令提示符，基于 ConPTY）；Apple 芯片 Mac，macOS 12 或更高（zsh）；64 位 Linux 桌面，x64 或 arm64（Bash 或 zsh）。
+- Windows 10/11 x64（本地终端为 Windows PowerShell 或命令提示符，基于 ConPTY）；Apple 芯片 Mac，macOS 12 或更高（Bash 或 zsh）；64 位 Linux 桌面，x64 或 arm64（Bash 或 zsh）。
 - Codex CLI 或 Claude Code 至少一个已安装并在 PATH 中；当前在 Codex CLI 0.162 与 Claude Code 2.1.294 上验证。
 - 支持标准 npm 安装和原生 `codex.exe`。
 - 本应用为所选目录创建独立终端。VS Code 中已经运行的终端不会被直接搬入这个窗口。
@@ -366,6 +368,7 @@ npm run dist
 - `test:themes-markdown`：验证灰阶界面离线显示与重启后的外观、终端颜色、会话与草稿；检查自动编辑及本地/SSH Markdown 的渲染、保存、相对资源、链接和脚本过滤。
 - `test:git`：在隔离配置与 Git 仓库中验证目录标记、已暂存／工作区更改、提交合并关系、提交文件、自动刷新和失败退避、目录收起、未保存保护及本地／SSH 切换。支持 `-- --packaged`，截图与结果在 `.test-output/git-*/`。
 - `node scripts/verify-update-artifacts.cjs`：校验安装包、SHA-512、更新清单和应用内置更新源。
+- `node scripts/mac-smoke.mjs [--packaged] [--shell zsh]`：在 macOS 上以隔离配置和独立 HOME 启动应用，验证 Bash（默认）或 zsh 终端、Codex 开始与结束状态、`⌘C` 复制和 `Control+C` 中断。
 - `node scripts/linux-smoke.mjs [--packaged] [--shell zsh]`：在 Linux 上以隔离配置和独立 HOME 启动应用，验证 Bash 或 zsh 终端、Codex 开始与结束状态、`Ctrl+Shift+C` 复制和 `Ctrl+C` 中断；`node scripts/appimage-smoke.mjs <AppImage>` 启动 AppImage，确认终端环境不含 AppImage 的目录和变量。
 - `node scripts/verify-installer-payload.cjs`：从实际 NSIS 安装包提取程序，核对可执行文件与应用资源；动画检查可用 `node scripts/focus-motion-smoke.mjs --executable 路径` 直接验证提取出的程序，不添加专用渲染开关，并清除测试工具默认的动态效果模拟，使用真实 Windows 偏好。
 

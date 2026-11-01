@@ -1,7 +1,7 @@
 {
   "name": "agentrix",
   "productName": "Agentrix",
-  "version": "1.3.22",
+  "version": "1.3.23",
   "description": "面向未来的 AI 编辑器：任何 AI 编程命令行工具都能接入，多个项目并排开工，对话排成可读的文档，完成即提醒。",
   "author": "Agentrix",
   "license": "MIT",
@@ -14,10 +14,10 @@
   "main": "electron/main.cjs",
   "desktopName": "agentrix.desktop",
   "scripts": {
-    "start": "node scripts/start.mjs",
-    "dev": "node scripts/start.mjs --dev",
-    "build": "node scripts/build-ssh-askpass.cjs && tsc --noEmit && vite build",
-    "test": "node scripts/build-ssh-askpass.cjs && node --test tests/*.test.cjs",
+    "start": "node scripts/build-mac-titlebar.cjs --optional && node scripts/start.mjs",
+    "dev": "node scripts/build-mac-titlebar.cjs --optional && node scripts/start.mjs --dev",
+    "build": "node scripts/build-ssh-askpass.cjs && node scripts/build-mac-titlebar.cjs && tsc --noEmit && vite build",
+    "test": "node scripts/build-ssh-askpass.cjs && node scripts/build-mac-titlebar.cjs --optional && node --test tests/*.test.cjs",
     "audit:design": "node scripts/design-audit.mjs",
     "clean:test-output": "node scripts/clean-test-output.mjs",
     "test:desktop": "node scripts/smoke.mjs",
@@ -43,8 +43,8 @@
     "test:cmd": "node scripts/cmd-smoke.mjs",
     "dist": "node -e \"require('electron')\" && npm run build && electron-builder --win --x64 --publish never",
     "pack": "node -e \"require('electron')\" && npm run build && electron-builder --win --dir --x64",
-    "dist:mac": "node -e \"require('electron')\" && npm run build && electron-builder --mac --arm64 --publish never",
-    "pack:mac": "node -e \"require('electron')\" && npm run build && electron-builder --mac dir --arm64",
+    "dist:mac": "node -e \"require('electron')\" && npm run build && node scripts/build-mac-titlebar.cjs --arch=arm64 && electron-builder --mac --arm64 --publish never",
+    "pack:mac": "node -e \"require('electron')\" && npm run build && node scripts/build-mac-titlebar.cjs --arch=arm64 && electron-builder --mac dir --arm64",
     "dist:linux": "node -e \"require('electron')\" && npm run build && electron-builder --linux --publish never",
     "pack:linux": "node -e \"require('electron')\" && npm run build && electron-builder --linux dir",
     "test:readability": "node scripts/readability-smoke.mjs",
@@ -72,6 +72,8 @@
     "electron-builder": "26.15.3",
     "marked": "18.0.13",
     "marked-cjk-friendly": "0.1.3",
+    "node-addon-api": "7.1.1",
+    "node-gyp": "12.4.0",
     "playwright-core": "1.63.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
@@ -162,6 +164,12 @@
       ]
     },
     "mac": {
+      "files": [
+        "native/mac-titlebar/build/Release/mac_titlebar.node"
+      ],
+      "asarUnpack": [
+        "native/mac-titlebar/build/Release/mac_titlebar.node"
+      ],
       "icon": "assets/icon-mac.png",
       "category": "public.app-category.developer-tools",
       "target": [

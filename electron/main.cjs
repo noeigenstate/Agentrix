@@ -3,6 +3,8 @@ const { registerAppSchemes, registerAppProtocols } = require('./app/protocols.cj
 const { configureApplication, prepareWindowIcon, prepareShellIntegration } = require('./app/platform-startup.cjs');
 const { registerWindowContents, registerWindowLifecycle } = require('./app/window-events.cjs');
 const { registerWindowZoom } = require('./app/window-zoom.cjs');
+const { buildMacMenuTemplate } = require('./app/mac-menu.cjs');
+const { registerMacTitlebar } = require('./app/mac-titlebar.cjs');
 const { minWidth, minHeight } = require('./window-zoom.json');
 const { createImageTools, registerImageIpc } = require('./app/images.cjs');
 const { createProjectHandoff } = require('./app/project-handoff.cjs');
@@ -87,7 +89,7 @@ const { listAgentCommands, isLocalAgentCommand } = require('./agent-commands.cjs
 const { claudeConfigDir, findClaudeSession, listClaudeSessions } = require('./claude-sessions.cjs');
 const { listCodexSessions } = require('./codex-sessions.cjs');
 const { AgentsManager, onPath } = require('./agents.cjs');
-const { ZSH, linuxShell, shellEnvironment, zshEnvironment, bashArguments, withoutAppImage, terminalLocale } = require('./zsh-terminal.cjs');
+const { macShell, linuxShell, shellEnvironment, zshEnvironment, bashArguments, withoutAppImage, terminalLocale } = require('./zsh-terminal.cjs');
 
 const root = path.join(__dirname, '..');
 const integrationDir = app.isPackaged ? path.join(process.resourcesPath, 'integration') : path.join(root, 'integration');
@@ -101,16 +103,23 @@ const { translate } = require('./i18n.cjs');
 // Text shown by the main process follows the language chosen in settings (Chinese source -> locales/en.json).
 const t = (text, values) => translate(store?.settings.language, text, values);
 let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, dashboardWindow = null, quitCleaned = false;
+let macTitlebar = null;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
 function windowBackgroundColor() { return store.settings.theme === 'light' ? '#f8f9fb' : '#181818'; }
 function updateStoreSettings(patch) {
-  const { theme, uiZoom } = store.settings;
+  const { theme, uiZoom, language, shortcuts } = store.settings;
   store.updateSettings(patch);
   // An active system backdrop needs its transparent ground, including when the theme changes.
   if (theme !== store.settings.theme && window && !window.isDestroyed() && !desktopGlassActive) window.setBackgroundColor(windowBackgroundColor());
   // The settings IPC broadcasts after applying the window's new zoom.
   if (uiZoom !== store.settings.uiZoom) windowZoom?.update();
+  const languageChanged = language !== store.settings.language;
+  if (languageChanged) trayMenu();
+  if (languageChanged || JSON.stringify(shortcuts) !== JSON.stringify(store.settings.shortcuts)) {
+    macTitlebar?.refresh();
+    if (process.platform === 'darwin') rebuildMacMenu();
+  }
 }
 const sessions = new Map();
 const readingHistory = new ReadingHistory(() => { if (window && store && !quitting) broadcast(); });
@@ -212,8 +221,9 @@ function publicState() {
     desktopGlass: { supported: !!desktopGlassBackend, compatibility: desktopGlassBackend === 'windows-compat', active: desktopGlassActive, restart: store.settings.surface === 'glass' && store.settings.glassBackground === 'desktop' && !!desktopGlassBackend && !desktopGlassWindow, failed: desktopGlassWindow && !desktopGlassActive },
     warning: store.warning,
     platform: process.platform,
-    // Linux: the shell new local terminals use and whether zsh is installed, for the choice in Settings.
-    localShell: process.platform === 'linux' ? (({ kind, zsh }) => ({ kind, zsh }))(localShell()) : null,
+    nativeTitlebar: macTitlebar?.attached === true,
+    // macOS and Linux: the shell new local terminals use and whether zsh is installed, for Settings.
+    localShell: ['darwin', 'linux'].includes(process.platform) ? (({ kind, zsh }) => ({ kind, zsh }))(localShell()) : null,
     // In full screen the title bar slides away and returns when the pointer touches the top edge. The
     // desktop checks drive the title bar in full screen, so isolated test profiles keep it unless asked.
     autoHideTitlebar: !process.env.AGENTRIX_DATA_DIR || process.env.AGENTRIX_TEST_TITLEBAR === '1',
@@ -246,7 +256,7 @@ function disposeProjectTerminals(project) {
 function updateIndicators() {
   const unread = store.projects.filter(p => p.unread > 0).length;
   if (window && !window.isDestroyed()) {
-    window.setTitle(`${unread ? `(${unread}) ` : ''}${t('Agentrix')}`);
+    window.setTitle(process.platform === 'darwin' && window.isFullScreen() ? '' : `${unread ? `(${unread}) ` : ''}${t('Agentrix')}`);
     if (!unread) window.flashFrame(false);
   }
   if (tray && !tray.isDestroyed()) {
@@ -262,17 +272,20 @@ function trayImage(name) {
 // macOS: the application menu gives ⌘Q, ⌘H and ⌘M their usual meaning. Copy and paste stay with the window's
 // own key handling (before-input-event and the terminals), so there is no Edit menu to compete with it.
 function macMenu() {
-  return Menu.buildFromTemplate([
-    { label: app.name, submenu: [
-      { role: 'about', label: t('关于 Agentrix') }, { type: 'separator' },
-      { role: 'hide', label: t('隐藏 Agentrix') }, { role: 'hideOthers', label: t('隐藏其他') }, { role: 'unhide', label: t('全部显示') }, { type: 'separator' },
-      { label: t('退出 Agentrix'), accelerator: 'Command+Q', click: () => { showWindow(); requestQuit().catch(report); } },
-    ] },
-    { label: t('窗口'), submenu: [
-      { role: 'minimize', label: t('最小化') }, { role: 'zoom', label: t('缩放') }, { role: 'togglefullscreen', label: t('切换全屏') },
-      { type: 'separator' }, { label: t('关闭窗口'), accelerator: 'Command+W', click: () => window?.close() },
-    ] },
-  ]);
+  return Menu.buildFromTemplate(buildMacMenuTemplate({
+    appName: app.name, t, shortcuts: store?.settings.shortcuts,
+    updateReady: updateManager?.getState().status === 'ready', command: command => {
+      showWindow();
+      send('menu:command', command);
+    },
+    quit: () => { showWindow(); requestQuit().catch(report); }, close: () => window?.close(),
+    // A separate window: no need to show the main one. Errors reach the main window like the other main-process failures.
+    openDashboard: () => dashboardWindow?.open().catch(report),
+  }));
+}
+
+function rebuildMacMenu() {
+  if (process.platform === 'darwin') Menu.setApplicationMenu(macMenu());
 }
 
 // Rebuilt when the language changes; Electron menus keep the labels they were built with.
@@ -1024,15 +1037,17 @@ function remoteFor(id) {
   return session.terminal;
 }
 
-// The local shell for a new terminal: PowerShell or Command Prompt on Windows, zsh on macOS, and on Linux
-// Bash or zsh as chosen in Settings (the login shell's kind until one is chosen).
-// Linux looks for the shells again whenever a terminal starts, so one installed meanwhile is used.
-let linuxShells = null;
+// New local terminals use the chosen shell: Bash by default on macOS, the login shell's kind on Linux,
+// PowerShell or Command Prompt on Windows.
+// Recheck macOS and Linux shells when a terminal starts, so one installed meanwhile is used.
+let localShells = null;
 function localShell(fresh = false) {
-  if (process.platform === 'darwin') return { kind: 'zsh', file: ZSH };
-  if (process.platform !== 'linux') return { kind: store.settings.shell === 'cmd' ? 'cmd' : 'powershell', file: null };
-  if (fresh || linuxShells?.choice !== store.settings.shell) linuxShells = { ...linuxShell(store.settings.shell), choice: store.settings.shell };
-  return linuxShells;
+  if (!['darwin', 'linux'].includes(process.platform)) return { kind: store.settings.shell === 'cmd' ? 'cmd' : 'powershell', file: null };
+  if (fresh || localShells?.choice !== store.settings.shell) {
+    const choose = process.platform === 'darwin' ? macShell : linuxShell;
+    localShells = { ...choose(store.settings.shell), choice: store.settings.shell };
+  }
+  return localShells;
 }
 
 function nativeSessionEvent(id, sessionId, message) {
@@ -1099,7 +1114,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   const sessionId = randomUUID();
   const sessionKey = randomUUID();
   const startPath = restorePlans.get(id)?.cwd || store.findTerminal(id)?.record.restore?.cwd || project.path;
-  // Local terminals use the shell chosen in settings (zsh on macOS); SSH projects always run Bash on the server.
+  // Local terminals use the shell chosen in settings; SSH projects always run Bash on the server.
   const shell = project.kind === 'ssh' ? { kind: 'bash', file: null } : localShell(true), shellKind = shell.kind;
   const bootstrapFile = project.kind !== 'ssh' ? path.join(runtimeDir, `${sessionId}.json`) : null;
   const skillNoteFile = project.kind === 'ssh' ? null : path.join(runtimeDir, `${sessionId}-skills.txt`);
@@ -1124,6 +1139,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   const local = project.kind !== 'ssh' && ['zsh', 'bash'].includes(shellKind);
   const integration = local && { folder: zshStartup, socket: eventServer.address, projectId: id, sessionKey, node: process.execPath,
     helper: path.join(integrationDir, 'agent-event.cjs'), startDir: startPath,
+    loginFiles: process.platform === 'darwin' && shellKind === 'bash',
     // Every glibc since 2.35 has C.UTF-8; a Linux desktop session normally sets LANG itself.
     locale: process.platform === 'darwin' ? terminalLocale(app.getPreferredSystemLanguages()) : 'C.UTF-8' };
   if (local) env = shellKind === 'zsh' ? zshEnvironment(env, integration) : shellEnvironment(env, integration);
@@ -1310,6 +1326,7 @@ function disposeTerminal(id) {
 
 function registerIpc() {
   const { handle, listen } = createIpcAdapter({ ipcMain, getWindow: () => window, devUrl, t, report });
+  if (process.platform === 'darwin') listen('titlebar:state', state => macTitlebar?.update(state));
   registerSkillsIpc({ handle, skills, dialog, getWindow: () => window });
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
     gradeDelivery: (grade, project, session) => dashboard.grade(grade, project, session),
@@ -1332,7 +1349,6 @@ function registerIpc() {
     },
     listProjectImageCandidates: folder => projectImageCandidates(folder, 6, store.settings.theme),
     getSettings: () => store.settings, updateStoreSettings,
-    rebuildMenus: () => { trayMenu(); if (process.platform === 'darwin') Menu.setApplicationMenu(macMenu()); },
     clearRestorePlans: () => restorePlans.clear(), chooseVoiceModel: model => voiceManager.choose(model) });
   filesIpc = registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperations, clipboardWrites, clipboard, previewResources, affectsEditor, allowEditorClose, shell,
     getActiveFileTree: () => activeFileTree, setActiveFileTree: value => { activeFileTree = value; }, setActiveTerminal: value => { activeTerminal = value; }, send });
@@ -1407,6 +1423,7 @@ if (!app.requestSingleInstanceLock()) {
   // Clicking the Dock icon brings back a window that was closed to the menu bar.
   app.on('activate', () => showWindow());
   app.whenReady().then(async () => {
+    if (process.platform === 'darwin' && !app.isPackaged && !process.env.AGENTRIX_DATA_DIR) app.dock.setIcon(path.join(root, 'assets/icon-mac.png'));
     fs.mkdirSync(app.getPath('userData'), { recursive: true });
     // Before any terminal or agent starts: they inherit the system proxy only through process.env.
     await adoptSystemProxy({ session: electronSession.defaultSession }).catch(error => console.warn('System proxy:', error.message));
@@ -1443,11 +1460,17 @@ if (!app.requestSingleInstanceLock()) {
     runtimeDir = fs.mkdtempSync(path.join(app.getPath('userData'), 'runtime-'));
     eventServer = await createEventServer(onEvent);
     sshAuth = await new SSHAuthServer(queue => send('ssh:auth-changed', queue)).start();
+    let menuUpdateReady = false;
     updateManager = new UpdateManager({
       updater: isInstalledBuild(app.isPackaged, process.execPath) ? require('electron-updater').autoUpdater : null,
       version: app.getVersion(), distribution: distributionOf({ isPackaged: app.isPackaged, platform: process.platform, installed }), onChange: state => {
         updatesIpc?.onStateChange(state);
         send('updates:changed', state);
+        const ready = state.status === 'ready';
+        if (ready !== menuUpdateReady) {
+          menuUpdateReady = ready;
+          rebuildMacMenu();
+        }
       },
     });
     registerAppProtocols({ protocol, root, electronNet, previewResources, t });
@@ -1462,6 +1485,7 @@ if (!app.requestSingleInstanceLock()) {
       show: false, icon: path.join(root, 'assets/icon.png'),
       webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, nodeIntegrationInSubFrames: false, contextIsolation: true, sandbox: true, spellcheck: false, backgroundThrottling: false },
     });
+    macTitlebar = registerMacTitlebar({ window, t, send, broadcast, getShortcuts: () => store.settings.shortcuts });
     if (desktopGlassWindow) {
       try { await applyDesktopGlass(window, runtimeDir, desktopGlassBackend); desktopGlassActive = true; }
       catch { window.setBackgroundColor(windowBackgroundColor()); }
@@ -1477,7 +1501,7 @@ if (!app.requestSingleInstanceLock()) {
     registerWindowContents({ window, Menu, clipboard, previewResources, pictureFrom, devUrl, t,
       getActiveTerminal: () => activeTerminal, getActiveFileTree: () => activeFileTree, getShortcuts: () => store.settings.shortcuts });
     registerWindowLifecycle({ window, getSettings: () => store.settings, isQuitting: () => quitting, hasTray: () => !!tray,
-      requestQuit, report, send, clearAttention: () => clearTimeout(attentionTimer) });
+      requestQuit, report, send, updateIndicators, clearAttention: () => clearTimeout(attentionTimer) });
     tray = new Tray(trayImage('icon.png'));
     tray.setToolTip(t('Agentrix'));
     trayMenu();

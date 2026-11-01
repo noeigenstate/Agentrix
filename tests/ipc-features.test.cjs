@@ -220,16 +220,16 @@ test('SSH askpass helper stays lazy, uses short paths once and retains fallback 
   runtime.cleanupAskpass(); assert.deepEqual(calls.at(-1), ['rmdir', '/temp/agentrix-ssh-123']);
 });
 
-test('workspace settings keep live language, broadcast, menu, restore and voice ordering', () => {
+test('workspace settings delegate updates before broadcast, restore and live voice selection', () => {
   const h = handlers(), calls = []; let settings = { language: 'zh', voiceModel: 'first' };
   require('../electron/features/workspace/ipc.cjs').registerWorkspaceIpc({ ...h, getSettings: () => settings,
     updateStoreSettings: patch => { calls.push('settings'); settings = { ...settings, ...patch }; }, broadcast: () => calls.push('broadcast'),
-    rebuildMenus: () => calls.push('menus'), clearRestorePlans: () => calls.push('restore'), chooseVoiceModel: model => calls.push(['voice', model]),
+    clearRestorePlans: () => calls.push('restore'), chooseVoiceModel: model => calls.push(['voice', model]),
   });
   const update = h.handles.get('workspace:settings');
   for (const value of [null, 'bad', []]) assert.throws(() => update(value), /无效的设置/);
   update({ language: 'en', restoreSessions: false, voiceModel: 'second' });
-  assert.deepEqual(calls, ['settings', 'broadcast', 'menus', 'restore', ['voice', 'second']]);
+  assert.deepEqual(calls, ['settings', 'broadcast', 'restore', ['voice', 'second']]);
   calls.length = 0; update({}); assert.deepEqual(calls, ['settings', 'broadcast', ['voice', 'second']]);
 });
 

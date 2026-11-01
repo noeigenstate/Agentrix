@@ -1,21 +1,30 @@
-# Agentrix shell integration for Bash, a local terminal on Linux.
-# Bash starts with --rcfile naming this file, after the system's /etc/bash.bashrc where it has one. This sources
-# the user's own ~/.bashrc, unchanged, then adds what zsh-integration.zsh adds to zsh: a report at every prompt
-# and the codex and claude wrappers. No user file is modified.
+# Agentrix shell integration for Bash, a local terminal on Linux and macOS.
+# Bash starts with --rcfile naming this file. Linux keeps ~/.bashrc; macOS reads the login files here because
+# --login would ignore --rcfile. Then add prompt reports and the codex and claude wrappers. No user file is modified.
 
 # Keep shell integration private; the bootstrap path is inherited by dispatch helpers.
 __pg_socket=$AGENTRIX_SOCKET __pg_project=$AGENTRIX_PROJECT_ID __pg_key=$AGENTRIX_SESSION_KEY
 __pg_node=$AGENTRIX_NODE __pg_helper=$AGENTRIX_EVENT_HELPER __pg_start=$AGENTRIX_START_DIR __pg_note=$AGENTRIX_READING_NOTE
 __pg_note_file=$AGENTRIX_READING_NOTE_FILE
 __pg_account_baseline=$AGENTRIX_ACCOUNT_BASELINE
+__pg_login_files=$AGENTRIX_LOGIN_FILES
 __pg_sequence=0
-unset AGENTRIX_SOCKET AGENTRIX_PROJECT_ID AGENTRIX_SESSION_KEY AGENTRIX_NODE AGENTRIX_EVENT_HELPER AGENTRIX_START_DIR AGENTRIX_READING_NOTE AGENTRIX_READING_NOTE_FILE AGENTRIX_ACCOUNT_BASELINE
+unset AGENTRIX_SOCKET AGENTRIX_PROJECT_ID AGENTRIX_SESSION_KEY AGENTRIX_NODE AGENTRIX_EVENT_HELPER AGENTRIX_START_DIR AGENTRIX_READING_NOTE AGENTRIX_READING_NOTE_FILE AGENTRIX_ACCOUNT_BASELINE AGENTRIX_LOGIN_FILES
 
 __pg_reading_note() {
   if [[ -n $__pg_note_file && -r $__pg_note_file ]]; then cat -- "$__pg_note_file"; else printf '%s' "$__pg_note"; fi
 }
 
-[[ -r ~/.bashrc ]] && builtin source ~/.bashrc
+if [[ $__pg_login_files == 1 ]]; then
+  [[ -r /etc/profile ]] && builtin source /etc/profile
+  for __pg_profile in ~/.bash_profile ~/.bash_login ~/.profile; do
+    if [[ -r $__pg_profile ]]; then builtin source "$__pg_profile"; break; fi
+  done
+  unset __pg_profile
+else
+  [[ -r ~/.bashrc ]] && builtin source ~/.bashrc
+fi
+unset __pg_login_files
 
 # A JSON string (also a TOML basic string) for $1, in REPLY.
 __pg_json() {
@@ -38,16 +47,20 @@ __pg_quote() { REPLY="'${1//\'/\'\\\'\'}'"; }
 
 # An alias for codex or claude from the user's start-up files (alias claude=~/.claude/local/claude, or
 # alias claude='claude --model opus') would bypass the wrappers below. Each wrapper runs the alias's words instead.
-declare -A __pg_aliases=()
+__pg_alias_codex= __pg_alias_claude=
 for __pg_name in codex claude; do
-  if [[ -n ${BASH_ALIASES[$__pg_name]+set} ]]; then __pg_aliases[$__pg_name]=${BASH_ALIASES[$__pg_name]}; unalias "$__pg_name"; fi
+  if __pg_alias=$(builtin alias "$__pg_name" 2>/dev/null); then
+    eval "__pg_alias_$__pg_name=${__pg_alias#*=}"
+    builtin unalias "$__pg_name"
+  fi
 done
-unset __pg_name
+unset __pg_name __pg_alias
 
 # The words that run codex or claude ($1), in __pg_words; fails when neither the alias nor PATH has a program.
 __pg_program() {
+  local alias_name=__pg_alias_$1
   __pg_words=()
-  [[ -n ${__pg_aliases[$1]+set} ]] && eval "__pg_words=(${__pg_aliases[$1]})" 2>/dev/null
+  [[ -n ${!alias_name} ]] && eval "__pg_words=(${!alias_name})" 2>/dev/null
   (( ${#__pg_words[@]} )) || __pg_words=("$1")
   [[ ${__pg_words[0]} == '~'* ]] && __pg_words[0]=$HOME${__pg_words[0]:1}
   if [[ ${__pg_words[0]} == */* ]]; then [[ -x ${__pg_words[0]} ]]
@@ -102,7 +115,8 @@ codex() {
   local -a note=()
   local current_note=$(__pg_reading_note)
   [[ -n $current_note ]] && note=(-c "developer_instructions=\"$current_note\"")
-  AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" -c "notify=[$notify]" -c 'tui.terminal_title=["session-id"]' "${note[@]}" "$@"
+  # Bash 3.2 treats an empty array as unset under nounset.
+  AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" -c "notify=[$notify]" -c 'tui.terminal_title=["session-id"]' ${note[@]+"${note[@]}"} "$@"
   local code=$?
   __pg_send codex-exited $code
   return $code
@@ -139,7 +153,7 @@ claude() {
   session_name=${session_name%-skills.txt}
   settings_file=$(mktemp "$session_folder/${session_name:-agentrix}-claude-settings-XXXXXX") || return 1
   printf '%s' "$settings" > "$settings_file"
-  AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" --settings "$settings_file" "${note[@]}" "$@"
+  AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" --settings "$settings_file" ${note[@]+"${note[@]}"} "$@"
   local code=$?
   rm -f -- "$settings_file"
   __pg_send codex-exited $code claude

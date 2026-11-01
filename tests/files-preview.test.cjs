@@ -6,6 +6,21 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 
+function popupModule(bridge) {
+  const filename = path.resolve('src/features/files/file-popup.ts'), mod = new Module(filename, module);
+  mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
+  const original = mod.require.bind(mod);
+  mod.require = dependency => dependency === 'react' ? { useSyncExternalStore: (subscribe, snapshot) => {
+    subscribe(() => { const target = snapshot(); if (target) bridge.showPopup?.(target); else bridge.closePopup?.(); });
+    return snapshot();
+  } } : original(dependency);
+  mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, filename);
+  mod.exports.usePopup();
+  return mod.exports;
+}
+
 // Exercise the real component's handlers, effects and async continuations without Electron or a desktop.
 // Only React's hook host and unrelated child renderers are substituted; no save/load logic is copied here.
 function component(file, name, props, bridge) {
@@ -52,7 +67,7 @@ function component(file, name, props, bridge) {
     : dependency === './CodeEditor' ? { CodeEditor() {}, findConflicts: () => [] }
     : dependency === './editor-commands' || dependency.endsWith('.css') ? {}
     : dependency === './FilePreview' ? { TextContent: function TextContent() {} }
-    : dependency === './file-popup' ? { closePopup: () => bridge.closePopup?.(), showPopup: target => bridge.showPopup?.(target) }
+    : dependency === './file-popup' ? popupModule(bridge)
     : dependency.endsWith('/i18n') ? { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (_, key) => values[key]) }
     : original(dependency);
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
@@ -254,15 +269,15 @@ test('old file failures and late reads do not overwrite the new file session', a
 });
 
 function popup() {
-  const reads = [], closed = [], navigation = [], closes = [];
+  const reads = [], closed = [], navigation = [], closes = [], links = [];
   const target = { kind: 'file', projectId: 'p', path: 'large.md' };
   const ui = component('FilePopup.tsx', 'FilePopup', { target, onError() {} }, {
     readFile(...args) { const pending = deferred(); reads.push({ ...pending, args }); return pending.promise; },
     closePreview: async id => { closed.push(id); },
-    openLink: async (_, link) => ({ ok: true, value: { kind: 'file', path: link } }),
+    openLink: async (id, link) => { links.push([id, link]); return { ok: true, value: { kind: 'file', path: link } }; },
     showPopup: value => navigation.push(value), closePopup: () => closes.push(true),
   });
-  return Object.assign(ui, { reads, closed, navigation, closes, target });
+  return Object.assign(ui, { reads, closed, navigation, closes, links, target });
 }
 const pageForm = ui => find(ui, node => node.type === 'form');
 function jump(ui, page) {
@@ -297,6 +312,7 @@ test('Markdown pages keep link behavior and release each preview exactly once on
   let markdown = find(ui, node => node.type?.name === 'Markdown');
   assert.equal(markdown.props.content, '# First');
   markdown.props.onOpenLink('linked.txt'); await ui.settle();
+  assert.deepEqual(ui.links, [['p', 'linked.txt']]);
   assert.deepEqual(ui.navigation, [{ kind: 'file', projectId: 'p', path: 'linked.txt' }]);
   button(ui, '下一页').props.onClick(); ui.render(); assert.deepEqual(ui.closed, ['md0']);
   assert.deepEqual(ui.reads[1].args, ['p', 'large.md', 1]);

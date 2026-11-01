@@ -9,6 +9,9 @@ const listen = (channel, callback) => {
 
 contextBridge.exposeInMainWorld('agentrix', {
   getState: () => ipcRenderer.invoke('workspace:state'),
+  onMenuCommand: callback => listen('menu:command', callback),
+  setTitlebarState: state => ipcRenderer.send('titlebar:state', state),
+  onTitlebarNavigate: callback => listen('titlebar:navigate', callback),
   gradeDelivery: grade => ipcRenderer.invoke('dashboard:grade', grade),
   openDashboard: () => ipcRenderer.invoke('dashboard:open'),
   getAgents: () => ipcRenderer.invoke('agents:status'),
