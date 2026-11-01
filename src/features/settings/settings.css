@@ -88,12 +88,20 @@ dialog { color: var(--text-1); }
 .settings-main-head h3 { margin: 0; font-size: 24px; font-weight: 600; line-height: 32px; }
 .settings-main-head p { margin: 4px 0 0; font-size: 13px; line-height: 20px; color: var(--text-2); }
 .settings-close { position: absolute; top: 16px; right: 24px; }
+.settings-enlarge { position: absolute; top: 16px; right: 64px; }
+.settings-main-head.has-tools { padding-right: 120px; }
+/* The skills page enlarged: the dialog takes the window with the same 20px gap, below the 40px title bar (which is absent or floating in full screen). */
+.settings-dialog.settings-paned.is-enlarged { width: auto; height: auto; max-height: none; inset: 60px 20px 20px; margin: 0; }
+.app-shell:is(.titlebar-bare, .titlebar-auto) .settings-dialog.settings-paned.is-enlarged { top: 20px; }
 .settings-pane { flex: 1; min-height: 0; overflow: auto; padding: 8px 40px 32px; }
 .settings-pane > * { max-width: 800px; margin-inline: auto; }
+/* Enlarged, the skills page uses the whole pane: the list keeps its width, the detail takes the rest, and its text keeps a reading width. */
+.settings-dialog.is-enlarged .settings-pane > .skills-section { max-width: none; margin-inline: 0; }
+.settings-dialog.is-enlarged .skills-detail > * { max-width: 800px; }
 /* Buttons in Settings are 36px (the app's own are 32); the categories' rows already are. */
 .settings-paned .button { height: 36px; }
 .settings-pane > .settings-section:first-child > .setting-row:first-child { margin-top: 8px; }
-@media (max-width: 900px) { .settings-shell { grid-template-columns: 216px minmax(0, 1fr); } .settings-main-head, .settings-pane { padding-inline: 24px; } .settings-main-head { padding-right: 64px; } }
+@media (max-width: 900px) { .settings-shell { grid-template-columns: 216px minmax(0, 1fr); } .settings-main-head, .settings-pane { padding-inline: 24px; } .settings-main-head { padding-right: 64px; } .settings-main-head.has-tools { padding-right: 104px; } }
 @media (max-width: 640px) {
   .settings-shell { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
   .settings-sidebar { padding: 16px 12px 8px; border-right: 0; }

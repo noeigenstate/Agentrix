@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, House, ArrowsOutSimple, Terminal as TerminalIcon, Power, ArrowCounterClockwise, Monitor, Cpu, Info, SpeakerHigh, Globe, MagnifyingGlassPlus, Microphone, BookOpen, FloppyDisk, Palette, Robot, Lightning, Keyboard, ImageSquare, ArrowLeft, X } from '@phosphor-icons/react';
+import { Bell, House, ArrowsOutSimple, Terminal as TerminalIcon, Power, ArrowCounterClockwise, Monitor, Cpu, Info, SpeakerHigh, Globe, MagnifyingGlassPlus, Microphone, BookOpen, FloppyDisk, Palette, Robot, Lightning, Keyboard, ImageSquare, ArrowLeft, ArrowsOut, ArrowsIn, X } from '@phosphor-icons/react';
 import type { AgentsState, AppUpdateState, Project, Settings, Workspace } from '../../shared/types';
 import { VoiceModelSetting } from '../voice/VoiceButton';
 import { currentLanguage, t } from '../../shared/i18n';
@@ -25,6 +25,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, uiZoom, 
   const pane = useRef<HTMLDivElement>(null);
   const [activeSection, setActiveSection] = useState(initialSection);
   const [projectImages, setProjectImages] = useState(false);
+  const [enlarged, setEnlarged] = useState(false);
   // One category at a time: the sidebar chooses it and the pane beside it shows only that category.
   const sections = [
     { id: 'appearance', title: t('外观'), hint: t('主题、语言、材质与动画'), icon: <Palette size={17} /> },
@@ -36,7 +37,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, uiZoom, 
     { id: 'about', title: t('更新与关于'), hint: t('版本信息、应用更新与相关资源'), icon: <Info size={17} /> },
   ];
   const current = sections.find(section => section.id === activeSection) || sections[0];
-  const choose = (id: string) => { setProjectImages(false); setActiveSection(id); pane.current?.scrollTo({ top: 0 }); };
+  const choose = (id: string) => { setProjectImages(false); setEnlarged(false); setActiveSection(id); pane.current?.scrollTo({ top: 0 }); };
   useEffect(() => { dialog.current?.showModal(); }, []);
   // Up and down move between categories while the sidebar has focus.
   const navKeys = (event: React.KeyboardEvent) => {
@@ -45,7 +46,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, uiZoom, 
     const index = sections.findIndex(section => section.id === current.id), next = sections[(index + (event.key === 'ArrowDown' ? 1 : sections.length - 1)) % sections.length];
     choose(next.id); dialog.current?.querySelector<HTMLElement>(`[data-settings-tab="${next.id}"]`)?.focus();
   };
-  return <dialog className="settings-dialog settings-paned" ref={dialog} onCancel={close} onClick={event => { if (event.target === event.currentTarget) close(); }}>
+  return <dialog className={`settings-dialog settings-paned${enlarged && current.id === 'skills' ? ' is-enlarged' : ''}`} ref={dialog} onCancel={close} onClick={event => { if (event.target === event.currentTarget) close(); }}>
     <div className="settings-shell">
       <aside className="settings-sidebar">
         <div className="settings-brand"><span className="eyebrow">{t('设置')}</span><h2>{t('工作台设置')}</h2></div>
@@ -53,7 +54,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, uiZoom, 
         <div className="settings-sidebar-footer"><button className="text-button" onClick={onGuide}><BookOpen size={15} />{t('使用指南')}</button><button className="text-button danger-text" onClick={quit}><Power size={15} />{t('退出应用')}</button></div>
       </aside>
       <div className="settings-main">
-        <header className="settings-main-head"><h3>{projectImages ? t('项目缩略图') : current.title}</h3><p>{projectImages ? t('自动选择、固定图片与原有编号') : current.hint}</p><button type="button" className="icon-button settings-close" aria-label={t('关闭设置')} title={t('关闭设置')} onClick={close}><X size={18} /></button></header>
+        <header className={`settings-main-head${current.id === 'skills' ? ' has-tools' : ''}`}><h3>{projectImages ? t('项目缩略图') : current.title}</h3><p>{projectImages ? t('自动选择、固定图片与原有编号') : current.hint}</p>{current.id === 'skills' && <button type="button" className="icon-button settings-enlarge" aria-label={enlarged ? t('退出全屏') : t('全屏')} title={enlarged ? t('退出全屏') : t('全屏')} aria-pressed={enlarged} onClick={() => setEnlarged(value => !value)}>{enlarged ? <ArrowsIn size={18} /> : <ArrowsOut size={18} />}</button>}<button type="button" className="icon-button settings-close" aria-label={t('关闭设置')} title={t('关闭设置')} onClick={close}><X size={18} /></button></header>
         <div className="settings-pane" ref={pane}>
       <section className="settings-section" id="settings-appearance" aria-label={t('外观')} hidden={current.id !== 'appearance' || projectImages}>
       <ThemeSetting theme={settings.theme} update={theme => update({ theme })} />
