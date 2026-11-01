@@ -18,7 +18,8 @@ const usage = `Usage:
 
 Step selectors accept a workflow step number, name, key, or unique name fragment.
 Example: node scripts/ci-preflight.mjs local --only "npm test"
-Local mode reuses installed dependencies and CLIs. Full local runs include GUI tests.
+Local mode replays the Windows build followed by each desktop shard in matrix order,
+reusing installed dependencies, CLIs and the local build. Full local runs include GUI tests.
 TEMP uses COM ShortPath on a new long-named folder. If 8.3 aliases are disabled,
 a verified short-leaf fallback is used with a warning that runner-alias fidelity is reduced.
 Remote mode defaults to ci/preflight-<12-character HEAD SHA> and dispatches GitHub Actions.
@@ -162,6 +163,7 @@ async function local(options, workflow) {
   const summary = path.join(directory, 'step-summary.md');
   await fsp.writeFile(summary, '');
   console.log(`Workflow: ${workflowFile}\nLogs: ${directory}\nTEMP/TMP: ${temp}`);
+  console.log(`Windows desktop shard order: ${workflow.jobs['windows-desktop'].strategy.matrix.include.map(entry => entry.shard).join(', ')}.`);
   const nodeVersion = workflow.jobs.windows.steps.find(step => step.uses?.startsWith('actions/setup-node@'))?.with?.['node-version'];
   if (nodeVersion && Number(String(nodeVersion).split('.')[0]) !== Number(process.versions.node.split('.')[0])) {
     console.warn(`WARNING: workflow Node.js ${nodeVersion}; local Node.js ${process.versions.node}. Runtime installation is skipped.`);
@@ -287,7 +289,10 @@ async function remote(options, workflow) {
       },
     });
     const completed = await jobs(runId);
-    console.table(completed.map(job => ({ job: job.name, status: job.status, conclusion: job.conclusion })));
+    console.table(completed.map(job => ({
+      job: job.name, status: job.status, conclusion: job.conclusion,
+      minutes: job.started_at && job.completed_at ? ((Date.parse(job.completed_at) - Date.parse(job.started_at)) / 60_000).toFixed(2) : '',
+    })));
     const assessment = assessRemoteJobs(completed, expected, run.conclusion);
     for (const job of completed.filter(job => job.conclusion && !['success', 'skipped'].includes(job.conclusion))) await printLog(job);
     if (!assessment.success) throw new Error(`Remote preflight failed:\n${assessment.problems.join('\n')}`);

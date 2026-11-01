@@ -1,9 +1,12 @@
-import yaml from 'js-yaml';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 
 export const workflowFile = '.github/workflows/build-windows.yml';
 
 export function parseWorkflow(source) {
-  const workflow = yaml.load(source);
+  // Artifact selection also imports this module, before any dependencies are installed.
+  const workflow = require('js-yaml').load(source);
   if (!workflow?.jobs?.windows?.steps) throw new Error('The workflow has no Windows steps.');
   return workflow;
 }
@@ -16,6 +19,7 @@ function skipReason(step) {
     if (step.uses.startsWith('actions/checkout@')) return 'Use the current checkout; no checkout or reset.';
     if (step.uses.startsWith('actions/setup-node@')) return 'Use the installed Node.js; no runtime installation.';
     if (step.uses.startsWith('actions/upload-artifact@')) return 'Keep local artifacts and logs; no upload.';
+    if (step.uses.startsWith('actions/download-artifact@')) return 'Use the preceding local Windows build; no download.';
     throw new Error(`Unsupported workflow action in ${step.name}: ${step.uses}`);
   }
   if (step.id === 'version' && step.name === 'Validate release version') return 'Skip release/tag validation; supply the package version locally.';
@@ -26,19 +30,39 @@ function skipReason(step) {
 }
 
 export function localPlan(workflow) {
-  const job = workflow.jobs.windows;
-  return job.steps.map((step, index) => ({
-    number: index + 1,
-    key: `windows/${slug(step.name || `step-${index + 1}`)}`,
-    name: step.name || `Step ${index + 1}`,
-    run: step.run || '',
-    shell: step.shell || job.defaults?.run?.shell || workflow.defaults?.run?.shell || 'pwsh',
-    env: { ...workflow.env, ...job.env, ...step.env },
-    skip: skipReason(step),
-    // GitHub cancels the whole job at this limit, so no local step may outlast it.
-    timeoutMinutes: step['timeout-minutes'] ?? job['timeout-minutes'] ?? null,
-    kind: isNpmTest(step.run) ? 'unit' : /\bnpm run test:|\bnode scripts\/[\w-]+-smoke\.mjs\b/.test(step.run || '') ? 'gui' : 'command',
-  }));
+  const desktop = workflow.jobs['windows-desktop'];
+  if (!desktop?.steps) throw new Error('The workflow has no Windows desktop shard steps.');
+  const entries = desktop.strategy?.matrix?.include;
+  if (!Array.isArray(entries) || !entries.length || Object.keys(desktop.strategy.matrix).some(key => key !== 'include')
+    || entries.some(entry => !/^[a-z-]+$/.test(entry.shard)) || new Set(entries.map(entry => entry.shard)).size !== entries.length) {
+    throw new Error('Windows desktop shards require an include-only matrix.');
+  }
+  const jobs = [{ id: 'windows', job: workflow.jobs.windows }, ...entries.map(matrix => ({
+    id: `windows-desktop/${matrix.shard}`, job: desktop, matrix,
+  }))];
+  const plan = [];
+  for (const { id, job, matrix } of jobs) {
+    for (const [index, step] of job.steps.entries()) {
+      if (step.if && step.if !== 'always()') {
+        const match = /^matrix\.shard == '([a-z-]+)'$/.exec(step.if);
+        if (!matrix || !match) throw new Error(`Unsupported local step condition in ${step.name}: ${step.if}`);
+        if (matrix.shard !== match[1]) continue;
+      }
+      plan.push({
+        number: plan.length + 1,
+        key: `${id}/${slug(step.name || `step-${index + 1}`)}`,
+        name: step.name || `Step ${index + 1}`,
+        run: step.run || '',
+        shell: step.shell || job.defaults?.run?.shell || workflow.defaults?.run?.shell || 'pwsh',
+        env: { ...workflow.env, ...job.env, ...step.env },
+        skip: skipReason(step),
+        // GitHub cancels the whole job at this limit, so no local step may outlast it.
+        timeoutMinutes: step['timeout-minutes'] ?? job['timeout-minutes'] ?? null,
+        kind: isNpmTest(step.run) ? 'unit' : /\bnpm run test:|\bnode scripts\/[\w-]+-smoke\.mjs\b/.test(step.run || '') ? 'gui' : 'command',
+      });
+    }
+  }
+  return plan;
 }
 
 export function selectSteps(steps, { from, only } = {}) {
@@ -134,12 +158,27 @@ export function pushArguments(sha, branch, remove = false) {
   return ['push', '--porcelain', '--no-follow-tags', '--recurse-submodules=no', `--force-with-lease=${ref}:${remove ? sha : ''}`, 'origin', remove ? `:${ref}` : `${sha}:${ref}`];
 }
 
+const tagCondition = "startsWith(github.ref, 'refs/tags/v')";
+const dryRunCondition = "(github.event_name == 'workflow_dispatch' && inputs.release_dry_run)";
+export const releaseMutationCondition = `${tagCondition} && !${dryRunCondition}`;
+export const releaseJobCondition = [
+  `always() && !cancelled() && (${tagCondition} || ${dryRunCondition}) &&`,
+  "needs.reuse.result == 'success' && (needs.reuse.outputs['run-id'] != '' ||",
+  "(needs.windows.result == 'success' && needs['windows-desktop'].result == 'success' && needs.macos.result == 'success' && needs.linux.result == 'success' && needs['remote-linux'].result == 'success'))",
+].join(' ');
+
+const condition = value => typeof value === 'string' ? value.replace(/^\$\{\{\s*|\s*\}\}$/g, '').replace(/\s+/g, ' ').trim() : '';
+
 export function expectedRemoteJobs(workflow) {
-  for (const id of ['windows', 'macos', 'linux', 'remote-linux', 'release']) {
+  for (const id of ['reuse', 'windows', 'windows-desktop', 'macos', 'linux', 'remote-linux', 'release']) {
     if (!workflow.jobs[id]) throw new Error(`Required workflow job is missing: ${id}`);
   }
-  const guard = workflow.jobs.release.if?.replace(/^\$\{\{\s*|\s*\}\}$/g, '').trim();
-  if (!/^startsWith\(github\.ref,\s*'refs\/tags\/v'\)$/.test(guard || '')) throw new Error('Release must remain restricted to version tags before remote preflight.');
+  const release = workflow.jobs.release;
+  if (condition(release.if) !== releaseJobCondition) throw new Error('Release must remain restricted to version tags or explicit dispatch dry runs, with successful builds or verified reuse.');
+  const mutations = release.steps.filter(step => /\bgh\s+release\s+(?:create|upload|edit|delete)\b/.test(step.run || ''));
+  if (!mutations.length || mutations.some(step => condition(step.if) !== releaseMutationCondition)) {
+    throw new Error('Every release mutation must be restricted to version tags and exclude dispatch dry runs.');
+  }
   const expected = [];
   for (const [id, job] of Object.entries(workflow.jobs)) {
     const matrix = job.strategy?.matrix;
@@ -159,6 +198,57 @@ export function expectedRemoteJobs(workflow) {
   }
   if (new Set(expected.map(job => job.name)).size !== expected.length) throw new Error('Workflow job names must be unique for remote verification.');
   return expected;
+}
+
+export const installerArtifacts = ['Agentrix-windows-x64', 'Agentrix-macos-arm64', 'Agentrix-linux-x64', 'Agentrix-linux-arm64'];
+
+// Only real build/test runs qualify. A green run that merely reused another run's artifacts is not evidence itself.
+export async function findReusableRun(read, { repository, sha, runId, requiredJobs, now = Date.now }) {
+  if (!Array.isArray(requiredJobs) || !requiredJobs.length || new Set(requiredJobs).size !== requiredJobs.length) {
+    throw new Error('Reuse requires a nonempty, unique list of build/test jobs.');
+  }
+  const root = `/repos/${repository}`;
+  const current = await read(`${root}/actions/runs/${runId}`);
+  const sameWorkflow = run => run.repository?.full_name === repository && run.head_repository?.full_name === repository
+    && run.head_sha === sha && run.workflow_id === current.workflow_id && run.path?.split('@', 1)[0] === workflowFile;
+  if (!Number.isSafeInteger(current.workflow_id) || !sameWorkflow(current) || current.id !== runId) throw new Error('Current workflow identity does not match.');
+  const eligible = run => Number.isSafeInteger(run.id) && run.id > 0 && run.id !== runId
+    && Number.isSafeInteger(run.run_attempt) && run.run_attempt > 0
+    && sameWorkflow(run) && run.status === 'completed' && run.conclusion === 'success'
+    && ['workflow_dispatch', 'push'].includes(run.event);
+
+  async function list(endpoint, key) {
+    const result = [];
+    for (let page = 1; ; page++) {
+      const response = await read(`${root}${endpoint}${endpoint.includes('?') ? '&' : '?'}per_page=100&page=${page}`);
+      if (!Array.isArray(response[key]) || !Number.isSafeInteger(response.total_count) || response.total_count < 0) {
+        throw new Error(`Incomplete ${key} response.`);
+      }
+      result.push(...response[key]);
+      if (result.length >= response.total_count) return result;
+      if (!response[key].length) throw new Error(`Incomplete ${key} pagination.`);
+    }
+  }
+
+  const runs = await list(`/actions/workflows/${workflowFile.split('/').at(-1)}/runs?head_sha=${sha}&status=success`, 'workflow_runs');
+  for (const run of runs) {
+    if (!eligible(run)) continue;
+    const jobs = await list(`/actions/runs/${run.id}/jobs?filter=latest`, 'jobs');
+    if (!requiredJobs.every(name => {
+      const matches = jobs.filter(job => job.name === name);
+      return matches.length === 1 && matches[0].status === 'completed' && matches[0].conclusion === 'success';
+    })) continue;
+    const artifacts = await list(`/actions/runs/${run.id}/artifacts`, 'artifacts');
+    if (!installerArtifacts.every(name => {
+      const matches = artifacts.filter(artifact => artifact.name === name);
+      return matches.length === 1 && matches[0].expired === false && Date.parse(matches[0].expires_at) > now()
+        && matches[0].size_in_bytes > 0 && matches[0].workflow_run?.id === run.id && matches[0].workflow_run?.head_sha === sha;
+    })) continue;
+    // A rerun can have started while the jobs/artifacts were being inspected.
+    const checked = await read(`${root}/actions/runs/${run.id}`);
+    if (eligible(checked) && checked.id === run.id && checked.run_attempt === run.run_attempt) return run.id;
+  }
+  return null;
 }
 
 export function verifyDispatchedRun(run, { runId, sha, branch }) {

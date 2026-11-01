@@ -10,31 +10,33 @@ const sha = 'a'.repeat(40);
 const branch = `ci/preflight-${sha.slice(0, 12)}`;
 const workflow = async () => (await helpers).parseWorkflow(source);
 
-test('local plan reads every real Windows workflow step in order with CI environment and explicit skip reasons', async () => {
+test('local plan replays the Windows build followed by every desktop shard in matrix order', async () => {
   const { localPlan } = await helpers;
   const parsed = await workflow();
   const steps = localPlan(parsed);
-  assert.deepEqual(steps.map(step => step.name), parsed.jobs.windows.steps.map(step => step.name));
-  assert.equal(steps.length, 33);
-  assert.deepEqual(steps.map(step => step.number), Array.from({ length: 33 }, (_, index) => index + 1));
+  const desktop = parsed.jobs['windows-desktop'];
+  const ordered = [...parsed.jobs.windows.steps, ...desktop.strategy.matrix.include.flatMap(({ shard }) =>
+    desktop.steps.filter(step => !step.if || step.if === 'always()' || step.if === `matrix.shard == '${shard}'`))];
+  assert.deepEqual(steps.map(step => step.name), ordered.map(step => step.name));
+  assert.equal(steps.length, 52);
+  assert.deepEqual(steps.map(step => step.number), Array.from({ length: steps.length }, (_, index) => index + 1));
+  assert.equal(new Set(steps.map(step => step.key)).size, steps.length);
   const skipped = steps.filter(step => step.skip);
-  assert.deepEqual(skipped.map(step => step.name), [
-    'Check out source', 'Set up Node.js', 'Validate release version', 'Install locked dependencies',
-    'Install Codex CLI for offline startup checks', 'Upload verified executable', 'Upload desktop test screenshots',
-  ]);
-  assert.match(skipped[0].skip, /current checkout/);
-  assert.match(skipped[1].skip, /installed Node/);
-  assert.match(skipped[2].skip, /release\/tag/);
-  assert.match(skipped[3].skip, /no npm ci/);
-  assert.match(skipped[4].skip, /no global installation/);
-  assert.ok(skipped.slice(5).every(step => /no upload/.test(step.skip)));
+  assert.match(skipped.find(step => step.name === 'Check out source').skip, /current checkout/);
+  assert.match(skipped.find(step => step.name === 'Set up Node.js').skip, /installed Node/);
+  assert.match(skipped.find(step => step.name === 'Validate release version').skip, /release\/tag/);
+  assert.match(skipped.find(step => step.name === 'Install locked dependencies').skip, /no npm ci/);
+  assert.match(skipped.find(step => step.name === 'Install Codex CLI for offline startup checks').skip, /no global installation/);
+  assert.ok(skipped.filter(step => step.name.startsWith('Upload')).every(step => /no upload/.test(step.skip)));
+  assert.ok(skipped.filter(step => step.name.startsWith('Download')).every(step => /no download/.test(step.skip)));
+  assert.equal(skipped.filter(step => step.name.startsWith('Download')).length, 4);
   for (const step of steps) {
     assert.equal(step.env.CI, 'true');
     assert.equal(step.env.CSC_IDENTITY_AUTO_DISCOVERY, 'false');
     assert.equal(step.env.AGENTRIX_TEST_TIMEOUT_SCALE, '3');
+    const job = step.key.startsWith('windows/') ? parsed.jobs.windows : desktop;
+    assert.equal(step.timeoutMinutes, job['timeout-minutes']);
   }
-  // A hung step fails at the Windows job's limit, as on GitHub, instead of holding the local run open.
-  assert.ok(steps.every(step => step.timeoutMinutes === parsed.jobs.windows['timeout-minutes'] && step.timeoutMinutes > 0));
   assert.equal(steps.find(step => step.run === 'npm test').kind, 'unit');
   assert.equal(steps.filter(step => step.kind === 'gui').length, 21);
   assert.equal(steps.find(step => step.name === 'Build Windows installer').kind, 'command');
@@ -49,6 +51,21 @@ test('workflow planning refuses unsupported actions and absent commands instead 
   assert.throws(() => localPlan(parsed), /Unsupported workflow action/);
   parsed.jobs.windows.steps = [{ name: 'Empty' }];
   assert.throws(() => localPlan(parsed), /Missing run command/);
+});
+
+test('local planning rejects unknown conditions and non-include or duplicated desktop shards', async () => {
+  const { localPlan } = await helpers;
+  const parsed = await workflow();
+  const desktop = parsed.jobs['windows-desktop'];
+  desktop.steps.push({ name: 'Unknown condition', if: 'inputs.skip_tests', run: 'echo unsafe' });
+  assert.throws(() => localPlan(parsed), /Unsupported local step condition/);
+  desktop.steps.pop();
+  desktop.strategy.matrix.include.push(desktop.strategy.matrix.include[0]);
+  assert.throws(() => localPlan(parsed), /include-only matrix/);
+  desktop.strategy.matrix = { shard: ['one', 'two'] };
+  assert.throws(() => localPlan(parsed), /include-only matrix/);
+  delete parsed.jobs['windows-desktop'];
+  assert.throws(() => localPlan(parsed), /no Windows desktop shard steps/);
 });
 
 test('--only and --from select real workflow numbers, names, commands and unique fragments without adding steps', async () => {
@@ -179,21 +196,26 @@ test('push uses a short-SHA default or safe destination and absent/exact-full-SH
   for (const invalid of ['HEAD', 'a'.repeat(12), 'a'.repeat(39) + ';', sha.toUpperCase()]) assert.throws(() => preflightBranch(invalid), /full lowercase HEAD SHA/);
 });
 
-test('remote expectations expand both real Linux architectures and require every platform plus only the tag-skipped release', async () => {
+test('remote expectations expand both Linux architectures and all three Windows desktop shards', async () => {
   const { expectedRemoteJobs } = await helpers;
   const parsed = await workflow();
   const expected = expectedRemoteJobs(parsed);
   assert.deepEqual(expected, [
+    { name: 'Select tested build', conclusion: 'success' },
     { name: 'Linux SSH integration', conclusion: 'success' },
-    { name: 'Windows x64 build and desktop tests', conclusion: 'success' },
+    { name: 'Windows x64 build', conclusion: 'success' },
+    { name: 'Windows desktop interaction', conclusion: 'success' },
+    { name: 'Windows desktop terminals', conclusion: 'success' },
+    { name: 'Windows desktop reading', conclusion: 'success' },
     { name: 'macOS Apple silicon build and desktop test', conclusion: 'success' },
     { name: 'Linux x64 build and desktop tests', conclusion: 'success' },
     { name: 'Linux arm64 build and desktop tests', conclusion: 'success' },
     { name: 'Publish GitHub Release', conclusion: 'skipped' },
   ]);
+  const releaseIf = parsed.jobs.release.if;
   parsed.jobs.release.if = 'always()';
   assert.throws(() => expectedRemoteJobs(parsed), /restricted to version tags/);
-  parsed.jobs.release.if = "startsWith(github.ref, 'refs/tags/v')";
+  parsed.jobs.release.if = releaseIf;
   parsed.jobs.linux.strategy.matrix = { arch: ['x64', 'arm64'] };
   assert.throws(() => expectedRemoteJobs(parsed), /Unsupported matrix/);
 });
