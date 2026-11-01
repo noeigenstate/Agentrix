@@ -43,6 +43,7 @@ function loadUI(name, overrides = {}) {
     // Every icon renders as a plain svg carrying its class name.
     if (name === '@phosphor-icons/react') return new Proxy({}, { get: () => props => React.createElement('svg', { className: props.className }) });
     if (key === './i18n') return { currentLanguage: () => 'en', t: (text, values = {}) => (en[text] ?? text).replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match) };
+    if (key === './platform') return { isMac: true, isLinux: false, isWindows: false };
     if (key === './choice-keys') return require('../src/features/reading/choice-keys.ts');
     if (key === './approval-action') return require('../src/features/reading/approval-action.ts');
     if (key === './dictation-send') return require('../src/features/reading/dictation-send.ts');
@@ -1567,16 +1568,22 @@ test('the review page shows the CLI\'s unanswered warning as words beside an ico
 // A native editor with atomic image elements, following Claude 2.1.312's Mi cursor and Codex 0.165.0's TextArea.
 // It retains actual attachment identities separately from their labels, so renumbering cannot hide a wrong deletion.
 let imageComposerSequence = 0;
-function imageComposerHarness(t, agent, { decode = file => Promise.resolve(file.preview), remote = false } = {}) {
+// The key each CLI binds to "paste the clipboard picture", from https://code.claude.com/docs/en/keybindings#chat-actions.
+const PASTE_KEYS = {
+  claude: { win32: '\x1bv', darwin: '\x16', linux: '\x16' },
+  codex: { win32: '\x16', darwin: '\x16', linux: '\x16' },
+};
+const PLATFORMS = { win32: { isMac: false, isLinux: false, isWindows: true }, darwin: { isMac: true, isLinux: false, isWindows: false }, linux: { isMac: false, isLinux: true, isWindows: false } };
+function imageComposerHarness(t, agent, { decode = file => Promise.resolve(file.preview), remote = false, platform = 'darwin' } = {}) {
   let text = '', cursor = 0, next = 0, heldScreen = null;
   const attached = [];
   const rows = () => composerRows(agent, 'idle', heldScreen ?? text);
   const h = dictationHarness(t, {
     './terminal-screen': { useScreen: () => null, readScreen: () => ({ rows: rows() }) },
-    './agent-screen': { parseAgentScreen }, './image-thumbnail': { thumbnail: decode },
+    './agent-screen': { parseAgentScreen }, './image-thumbnail': { thumbnail: decode }, './platform': PLATFORMS[platform],
   });
   h.props.terminal.agent = agent; h.props.remote = remote;
-  const pasteKey = agent === 'claude' ? '\x1bv' : '\x16';
+  const pasteKey = PASTE_KEYS[agent][platform];
   const chips = () => [...text.matchAll(/\[Image #(\d+)\]/g)];
   const insert = value => { text = text.slice(0, cursor) + value + text.slice(cursor); cursor += value.length; };
   window.agentrix.writeTerminal = (id, keys) => {
@@ -1781,11 +1788,12 @@ for (const agent of ['claude', 'codex']) {
     for (const picture of ['none', 'ready', 'loading']) {
       test(`${agent}: a ${picture} picture and message send while ${activity} without opening the popup`, async t => {
         let draft = '';
-        const actions = [], received = [], pasteKey = agent === 'claude' ? '\x1bv' : '\x16';
+        const actions = [], received = [], pasteKey = PASTE_KEYS[agent].darwin;
         const h = dictationHarness(t, {
           './terminal-screen': { useScreen: () => null, readScreen: () => ({ rows: composerRows(agent, activity, draft) }) },
           './agent-screen': { parseAgentScreen },
           './image-thumbnail': { thumbnail: () => picture === 'loading' ? new Promise(() => {}) : Promise.resolve('data:image/png;base64,picture') },
+          './platform': PLATFORMS.darwin,
         });
         h.props.terminal.agent = agent; h.props.terminal.codexActivity = activity === 'idle' ? 'idle' : 'working';
         window.agentrix.writeTerminal = (id, key) => {
@@ -1820,7 +1828,7 @@ for (const agent of ['claude', 'codex']) {
     let draft = '';
     const h = dictationHarness(t, {
       './terminal-screen': { useScreen: () => null, readScreen: () => ({ rows: composerRows(agent, 'working', draft) }) },
-      './agent-screen': { parseAgentScreen }, './image-thumbnail': { thumbnail: () => new Promise(() => {}) },
+      './agent-screen': { parseAgentScreen }, './image-thumbnail': { thumbnail: () => new Promise(() => {}) }, './platform': PLATFORMS.darwin,
     });
     h.props.terminal.agent = agent;
     window.agentrix.writeTerminal = (id, key) => {
@@ -1833,7 +1841,7 @@ for (const agent of ['claude', 'codex']) {
       await h.tick(0);
     }
     await h.tick(1000);
-    assert.deepEqual(h.written.map(item => item.text), [agent === 'claude' ? '\x1bv' : '\x16', agent === 'claude' ? '\x1bv' : '\x16']);
+    assert.deepEqual(h.written.map(item => item.text), [PASTE_KEYS[agent].darwin, PASTE_KEYS[agent].darwin]);
     assert.equal(draft, '[Image #1][Image #2]');
   });
 
@@ -1900,6 +1908,17 @@ for (const agent of ['claude', 'codex']) {
       h.popup()?.props.onClose(); h.render();
     }
   });
+}
+
+for (const [agent, keys] of Object.entries(PASTE_KEYS)) {
+  for (const [platform, expected] of Object.entries(keys)) {
+    test(`${agent} on ${platform}: a pasted picture presses ${JSON.stringify(expected)} to attach it`, async t => {
+      const h = imageComposerHarness(t, agent, { platform });
+      await h.paste(1);
+      assert.deepEqual(h.written.map(item => item.text), [expected]);
+      assert.equal(h.numbers().length, 1, 'the CLI acknowledged the key with a picture');
+    });
+  }
 }
 
 test('Claude paste IDs can begin above one and remain visible after deleting the middle image', async t => {

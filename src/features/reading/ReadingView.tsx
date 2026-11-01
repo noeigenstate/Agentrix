@@ -33,6 +33,7 @@ import { blocks, conversationTurns, useVisibleTail } from './useVisibleTail';
 import './reading.css';
 import './reading-flow.css';
 import { currentLanguage, t } from '../../shared/i18n';
+import { isWindows } from '../../shared/platform';
 import { UserAvatar } from '../../shared/UserAvatar';
 import { useMentions } from './useMentions';
 import { QUICK, useLongMarkdown } from './useLongMarkdown.ts';
@@ -557,7 +558,8 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     }
     const id = ++imageSequence.current;
     setImages(list => [...list, { id, src: '' }].slice(-4));
-    const pasteKey = terminal.agent === 'claude' ? '\x1bv' : '\x16';
+    // Claude Code binds picture paste to Alt+V on Windows only; macOS and Linux use Ctrl+V, as Codex does everywhere.
+    const pasteKey = terminal.agent === 'claude' && isWindows ? '\x1bv' : '\x16';
     if (clearFirst) void cleared.then(() => setTimeout(() => { if (ownsSend(owner)) window.agentrix.writeTerminal(terminal.id, pasteKey); }, 60));
     else window.agentrix.writeTerminal(terminal.id, pasteKey);
     // The agent takes the picture from the clipboard; a copy is kept here to show in the message, small (a 4K
