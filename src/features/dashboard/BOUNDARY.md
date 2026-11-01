@@ -20,7 +20,7 @@ light). They are content, not interface; a model is also told apart by its shape
 - `createDashboardStore` (`src/features/dashboard/dashboard-store.ts`) — the query, summary and appearance the page holds, read through a bridge
 - `modelLabel` (`src/features/dashboard/format.ts`) — how numbers, models, task kinds and weights are written; the file also exports percent and duration
 - `chartSeries` (`src/features/dashboard/chart-math.ts`) — which models a chart draws and the arithmetic of its plot
-- `AppMenu` (`src/features/titlebar/AppMenu.tsx`) — the main window's app menu, including the entry that calls openDashboard
+- `AppMenu` (`src/features/titlebar/AppMenu.tsx`) — the main window's app menu, including the entries that call openDashboard and openLab
 
 ## May import
 - `src/shared/**`

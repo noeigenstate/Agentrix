@@ -1,4 +1,4 @@
-import type { Result } from './types';
+import type { Result, Settings } from './types';
 
 // The Virtual Lab (虚拟实验室): experiments that compare orchestrated work with single models on tasks whose right
 // answer is known. Shared by the lab window (src/features/lab) and its main-process engine (electron/features/lab).
@@ -35,7 +35,7 @@ export type LabExperiment = {
   state: 'running' | 'done' | 'stopped' | 'error'; runs: LabRun[]; spentUsd: number;
 };
 
-export type LabAppearance = { theme: string; language: 'zh' | 'en'; uiZoom: number };
+export type LabAppearance = { theme: Settings['theme']; language: Settings['language']; uiZoom: number };
 
 // The lab window's preload exposes only this, shaped like the dashboard's bridge.
 export type LabBridge = {

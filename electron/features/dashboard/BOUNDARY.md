@@ -12,6 +12,7 @@ Keeps private evaluation records, summarizes local model and collaboration evide
 - `taskKind` (`electron/features/dashboard/records-routing.cjs`) — task kind from an explicit category, roundtable or role default
 - `routingVerdict` (`electron/features/dashboard/records-routing.cjs`) — the shared declared-versus-reported routing decision
 - `estimateCost` (`electron/features/dashboard/cost.cjs`) — pure public-price equivalent with standard and Fast rows
+- `models` (`electron/features/dashboard/prices.json`) — the public per-model price table, read by the dashboard and the Virtual Lab
 - `summarize` (`electron/features/dashboard/summary.cjs`) — pure DashboardSummary from bounded records, project journals, decisions, query and time
 - `DashboardDecisions` (`electron/features/dashboard/decisions.cjs`) — serialized bounded append-only decisions with live-state checkpoints at rotation
 - `routingNote` (`electron/features/dashboard/decisions.cjs`) — synchronous English paragraph listing currently adopted model and task-kind weights
