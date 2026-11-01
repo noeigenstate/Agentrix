@@ -11,12 +11,23 @@ import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
 const require = createRequire(import.meta.url), exec = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
+const { hasCliInput } = require('../src/features/reading/cli-panel.ts');
+function completionFixtureSource(source) {
+  const ready = 'Console.WriteLine("RESTORE_FIXTURE_READY");';
+  if (!source.includes(ready)) throw new Error('The completion fixture is missing its ready marker');
+  // The shared restore fixture only logs keys. This smoke also needs a live composer, without acknowledging images.
+  return source.replace(ready, String.raw`${ready}
+        Console.WriteLine("\u203A \r\n\r\nGPT-6.1-Sol high \u00B7 completion-fixture\r\n? for shortcuts");`);
+}
 const output = await testRun('completion'), dataDir = path.join(output, 'profile');
 const home = path.join(output, 'codex-home'), bin = path.join(output, 'bin');
 const project = { id: randomUUID(), name: 'Parent task status', path: path.join(output, 'project'), kind: 'local', restore: { terminal: false, codex: false } };
 for (const directory of [dataDir, project.path, bin, path.join(home, 'sessions')]) await fs.mkdir(directory, { recursive: true });
-await exec(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'), ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'codex.exe')}`, path.join(root, 'tests/fixtures/restore-codex.cs')], { windowsHide: true });
-await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', notifications: true, restoreSessions: false, closeToTray: false } }));
+const fixture = path.join(output, 'completion-codex.cs');
+await fs.writeFile(fixture, completionFixtureSource(await fs.readFile(path.join(root, 'tests/fixtures/restore-codex.cs'), 'utf8')));
+await exec(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'), ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'codex.exe')}`, fixture], { windowsHide: true });
+await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', terminalRenderer: 'dom', notifications: true, restoreSessions: false, closeToTray: false } }));
 const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: home }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path'); env[pathKey] = bin + path.delimiter + env[pathKey];
 const packaged = process.argv.includes('--packaged');
@@ -129,12 +140,25 @@ try {
   // While Codex runs, its conversation shows as a document by default; the title-bar switch shows the terminal.
   const reading = page.locator('.project-panel .reading-view');
   assert.ok(await reading.isVisible(), 'the reading view is the default while the agent runs');
-  // An image pasted into the message box goes to Codex on its own paste key and is announced above the box.
+  // Hidden xterm renderers may pause; inspect the visible terminal before returning to the composer.
+  await page.getByRole('button', { name: '切换到终端', exact: true }).click();
+  await waitFor(async () => !await reading.count(), 'show the terminal for fixture readiness');
+  await waitFor(async () => {
+    const rows = await page.locator('.project-panel .xterm-rows > div').allTextContents();
+    return hasCliInput('codex', rows, parseAgentScreen('codex', rows));
+  }, 'the stand-in Codex draws its live input before image paste');
+  await page.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click(); await reading.waitFor();
+  const receivedKeys = async () => { try { return (await fs.readFile(path.join(project.path, 'key-receipt.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch { return []; } };
+  const pasteKeysBefore = (await receivedKeys()).filter(key => key.character === 22).length;
+  // Even this undecodable thumbnail is announced as pending and forwarded on Ctrl+V. The fixture never acknowledges
+  // an image chip; reading-ui tests cover refusing Send until the CLI does, without touching the system clipboard.
   await reading.locator('textarea').evaluate(node => {
     const data = new DataTransfer(); data.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' }));
     node.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
   });
   await reading.locator('.reading-attachments').waitFor();
+  assert.ok((await reading.locator('.reading-attachments').innerText()).includes('已附加 1 张图片'));
+  await waitFor(async () => (await receivedKeys()).filter(key => key.character === 22).length > pasteKeysBefore, 'the stand-in Codex receives the image paste key');
   await page.getByRole('button', { name: '切换到终端', exact: true }).click();
   await waitFor(async () => !await reading.count(), 'the toggle shows the terminal');
   await page.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click(); await reading.waitFor();
