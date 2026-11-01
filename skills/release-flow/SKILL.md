@@ -45,6 +45,8 @@ description: Publish a new Agentrix version — bump, update notes, the full loc
    remote worker). Wait for both runs, then confirm the release lists its assets. To rehearse the release without
    publishing, dispatch the workflow on the release commit with `release_dry_run=true`: it runs the reuse check, the
    download, the sha256 and version checks and the notes, prints what it would publish and creates or edits nothing.
+   Dispatch it only after the preflight run on that commit has finished, and never on a tag whose run is still
+   building: a run on the same ref cancels the one in progress (main and tag pushes are different refs).
 9. **A failed job.** The tag's release is published only if every build passes. Read the failed step from the job
    log (`/actions/jobs/<id>/logs`; search for `Error:` and `Timed out`, since passing test names also contain
    "failed"), and download the failing job's screenshot artifact: each smoke saves `failure.png` when it fails. The
