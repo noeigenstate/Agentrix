@@ -372,6 +372,49 @@ isolatedTest('unknown real cost remains null while budget accounting reserves th
   assert.deepEqual(experiment.runs.map(run => run.state), ['passed', 'stopped'], JSON.stringify(experiment.runs));
 });
 
+isolatedTest('a helper failure before any model spawn does not charge a reserved estimate', async t => {
+  const f = await fixture(t);
+  await fs.writeFile(f.helper, `module.exports.run = async () => {
+    console.log('{"type":"lab-model-started"}'); return 1;
+  };`);
+  const id = await f.engine.start(f.input); await f.engine.active.done;
+  const experiment = (await f.engine.list())[0];
+  assert.equal(experiment.spentUsd, 0);
+  assert.deepEqual(experiment.runs.map(run => run.state), ['error', 'error']);
+  for (const run of experiment.runs) {
+    const measured = JSON.parse(await fs.readFile(path.join(f.engine.store.folder(id), 'runs', run.id,
+      'artifacts/measurements.json'), 'utf8'));
+    assert.equal(measured.modelStarted, false); assert.deepEqual(measured.calls, []);
+    assert.equal(run.costUsd, null); assert.equal('modelStarted' in run, false);
+  }
+  const reopened = new LabEngine({ userData: f.userData, getProjects: () => [f.project], prices });
+  assert.equal((await reopened.list())[0].spentUsd, 0);
+});
+
+isolatedTest('an actually spawned fake model with lost usage still reserves the unknown cost', async t => {
+  const f = await fixture(t);
+  await fs.writeFile(f.helper, `module.exports.run = async (args, { env, launch }) => {
+    const child = launch(process.execPath, ['-e', 'process.stdout.write("fake-model");'], {
+      env, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr);
+    return new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+  };`);
+  await f.engine.start({ ...f.input, budgetUsd: 0.7 }); await f.engine.active.done;
+  const experiment = (await f.engine.list())[0];
+  assert.equal(experiment.spentUsd, 0.62);
+  assert.deepEqual(experiment.runs.map(run => run.state), ['error', 'stopped']);
+});
+
+test('known spending survives even when the model-start flag is false', async t => {
+  const f = await fixture(t, {
+    referenceRunner: async () => ({ total: 1, names: ['value'], files: [] }),
+    runner: async () => ({ state: 'error', costUsd: null, knownCostUsd: 0.1, modelStarted: false }),
+  });
+  await f.engine.start(f.input); await f.engine.active.done;
+  assert.equal((await f.engine.list())[0].spentUsd, 0.2);
+});
+
 isolatedTest('stop kills detached descendants before worktree cleanup and marks the remaining runs stopped', async t => {
   const f = await fixture(t), pidFile = path.join(f.directory, 'child.pid');
   f.engine.env.LAB_FAKE_HANG = 'yes'; f.engine.env.LAB_FAKE_CHILD = pidFile;

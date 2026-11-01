@@ -160,11 +160,12 @@ async function runTask(options) {
   } finally {
     clearTimeout(deadline); signal.removeEventListener('abort', abort);
     try { await session.close(); } catch (error) { failure ||= error; }
+    try { await usage.close(); } catch (error) { failure ||= error; }
+    const measured = usage.measurements();
+    result.costUsd = measured.costUsd; result.knownCostUsd = measured.knownCostUsd;
+    result.modelStarted = session.modelStarted || measured.calls.some(call => call.unconfirmed !== true);
+    result.outputTokens = measured.outputTokens;
     try {
-      await usage.close();
-      const measured = usage.measurements();
-      result.costUsd = measured.costUsd; result.knownCostUsd = measured.knownCostUsd;
-      result.outputTokens = measured.outputTokens;
       const journal = workspace && path.join(workspace.gitDirectory, 'agentrix/journal.jsonl');
       if (run.arm === 'orchestrated' && journal) {
         const text = await fs.readFile(journal, 'utf8').catch(error => {
@@ -177,7 +178,8 @@ async function runTask(options) {
         Object.assign(result, phaseEvidence(entries, measured.calls));
         await fs.writeFile(path.join(artifacts, 'journal.jsonl'), text, { mode: 0o600 });
       }
-      await fs.writeFile(path.join(artifacts, 'measurements.json'), JSON.stringify(measured), { mode: 0o600 });
+      await fs.writeFile(path.join(artifacts, 'measurements.json'),
+        JSON.stringify({ ...measured, modelStarted: result.modelStarted }), { mode: 0o600 });
     } catch (error) { failure ||= error; }
     try { await cleanupWorktrees(directory); } catch (error) { failure ||= error; }
     try {

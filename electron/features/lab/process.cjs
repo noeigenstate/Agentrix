@@ -97,7 +97,7 @@ async function stopTree(child) {
 
 async function command(file, args, {
   cwd, env = process.env, signal, timeoutMs = 30000, log, onLine, maxOutput = OUTPUT_LIMIT, ipc = false,
-  raw = false,
+  raw = false, onMessage,
 } = {}) {
   aborted(signal);
   env = gitEnvironment(env);
@@ -111,6 +111,7 @@ async function command(file, args, {
       cwd, env, stdio: ['ignore', 'pipe', 'pipe', ...(ipc ? ['ipc'] : [])],
       windowsHide: true, detached: ipc && process.platform !== 'win32',
     });
+    if (onMessage) child.on('message', message => { try { onMessage(message); } catch (error) { stop(error); } });
     const closed = new Promise(resolve => {
       child.once('error', error => { failure ||= error; });
       child.once('close', (code, signal) => resolve({ code, signal }));

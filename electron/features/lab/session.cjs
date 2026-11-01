@@ -66,7 +66,7 @@ class LabSession {
     this.tools = path.join(this.labRoot, 'tools', this.runId);
     this.control = path.join(this.workspaceRoot, 'control');
     this.sockets = new Set(); this.jobs = new Set(); this.controller = new AbortController();
-    this.capability = randomUUID(); this.invocations = 0; this.active = false; this.closed = false;
+    this.capability = randomUUID(); this.invocations = 0; this.active = false; this.closed = false; this.modelStarted = false;
   }
   async start() {
     await requireIsolation();
@@ -206,6 +206,7 @@ class LabSession {
     const running = command(this.nodePath || process.execPath, [path.join(this.privateDirectory, 'host.cjs'), config], {
       cwd, env, signal: signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal,
       timeoutMs, log, onLine, ipc: true,
+      onMessage: message => { if (message?.type === 'lab-model-started') this.modelStarted = true; },
     });
     try { return await running; }
     finally {

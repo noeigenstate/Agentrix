@@ -20,8 +20,15 @@ const bootstrap = process.env.AGENTRIX_BOOTSTRAP
   ? JSON.parse(fs.readFileSync(process.env.AGENTRIX_BOOTSTRAP, 'utf8')) : null;
 const child = spawn('/usr/bin/sandbox-exec', [
   '-p', config.profile, process.execPath, '--disable-sigusr1', config.executor,
-], { cwd: config.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
+], { cwd: config.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] });
 child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr);
+let modelStarted = false;
+child.stdio[4].on('error', () => {});
+child.stdio[4].on('data', () => {
+  if (modelStarted) return;
+  modelStarted = true;
+  if (process.connected) process.send({ type: 'lab-model-started' }, () => {});
+});
 child.stdio[3].on('error', () => {});
 child.stdio[3].end(JSON.stringify({ config, bootstrap, modules }));
 child.once('error', error => { console.error(error.message); process.exitCode = 1; });

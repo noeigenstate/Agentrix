@@ -30,10 +30,13 @@ function memoryModules(sources) {
   return load('dispatch.cjs');
 }
 
-function launch(file, args, options) {
+function launch(file, args, options, model = false) {
   const env = { ...options.env };
   delete env.AGENTRIX_BOOTSTRAP; delete env.NODE_OPTIONS; delete env.NODE_PATH;
-  return spawn(file, args, { ...options, env, detached: false });
+  const child = spawn(file, args, { ...options, env, detached: false });
+  // Only the trusted launcher can write this pipe; native model processes inherit stdio 0..2 only.
+  if (model) child.once('spawn', () => fs.writeSync(4, '1'));
+  return child;
 }
 
 async function execute(payload) {
@@ -42,7 +45,9 @@ async function execute(payload) {
   if (bootstrap && !await globalThis.__AGENTRIX_LAB_SINK({ type: 'lab-handshake' })) {
     throw new Error('Authenticated lab metering is unavailable. No model worker was started.');
   }
-  if (!config.command) return memoryModules(modules).run(config.args, { env: process.env, launch });
+  if (!config.command) return memoryModules(modules).run(config.args, {
+    env: process.env, launch: (file, args, options) => launch(file, args, options, true),
+  });
   const child = launch(config.command.file, config.command.args, {
     cwd: config.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'],
   });

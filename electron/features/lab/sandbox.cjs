@@ -65,7 +65,7 @@ async function channelAddress(directory, prefix) {
     await fs.mkdir(temporary, { recursive: true });
     alias = path.join(temporary, name);
     await fs.symlink(await fs.realpath(directory), alias, 'dir');
-    address = path.join(alias, 'socket');
+    address = path.join(alias, name);
   }
   return {
     address,

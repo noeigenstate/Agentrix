@@ -175,9 +175,9 @@ class LabEngine {
         testTimeoutMs: this.testTimeoutMs, reviewTimeoutMs: this.reviewTimeoutMs, t: this.t,
         changed: model => { run.activeModel = model; this.changed(); },
       });
-      const { ownerChanged, budgetStopped, knownCostUsd = 0, ...measured } = result;
+      const { ownerChanged, budgetStopped, knownCostUsd = 0, modelStarted, ...measured } = result;
       Object.assign(run, measured, { activeModel: null, endedAt: this.now() });
-      experiment.spentUsd += finite(run.costUsd) ? run.costUsd : Math.max(knownCostUsd, expected);
+      experiment.spentUsd += finite(run.costUsd) ? run.costUsd : Math.max(knownCostUsd, modelStarted === false ? 0 : expected);
       if (ownerChanged || budgetStopped) {
         experiment.state = ownerChanged ? 'error' : 'stopped';
         stopRemaining(experiment, this.now(), run.error);
