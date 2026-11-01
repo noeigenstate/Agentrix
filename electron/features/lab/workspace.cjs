@@ -1,4 +1,4 @@
-const fs = require('node:fs/promises');
+const { fs, removePath, cloneMode } = require('./disk.cjs');
 const path = require('node:path');
 const { command, git, aborted } = require('./process.cjs');
 const { safePath } = require('./history.cjs');
@@ -56,13 +56,34 @@ async function copyDependencies(projectPath, destination, signal) {
   const source = await fs.realpath(original);
   let copied = false;
   if (process.platform === 'darwin') {
-    const result = await command('/bin/cp', ['-cR', source, destination], { signal, timeoutMs: 5 * 60000 });
-    copied = result.code === 0;
+    await fs.mkdir(destination, { recursive: true });
+    const entries = await fs.readdir(source, { withFileTypes: true });
+    const electron = entries.find(entry => entry.name === 'electron' && entry.isDirectory());
+    const roots = entries.filter(entry => entry !== electron).map(entry => path.join(source, entry.name));
+    const batches = [[roots, destination]];
+    if (electron) {
+      const packageRoot = path.join(source, electron.name), target = path.join(destination, electron.name);
+      await fs.mkdir(target);
+      const metadata = (await fs.readdir(packageRoot)).filter(name => name !== 'dist').map(name => path.join(packageRoot, name));
+      batches.push([metadata, target]);
+    }
+    copied = true;
+    for (const [files, target] of batches) if (files.length) {
+      const result = await command('/bin/cp', ['-cR', ...files, target], { signal, timeoutMs: 5 * 60000 });
+      if (result.code !== 0) { copied = false; break; }
+    }
   }
   if (!copied) {
-    await fs.rm(destination, { recursive: true, force: true });
-    await fs.cp(source, destination, { recursive: true, dereference: false });
+    await removePath(destination);
+    await fs.cp(source, destination, {
+      recursive: true, dereference: false, verbatimSymlinks: true, mode: cloneMode,
+      filter(file) {
+        const relative = path.relative(source, file).split(path.sep).join('/');
+        return !/(?:^|\/)electron\/dist(?:\/|$)/.test(relative);
+      },
+    });
   }
+  aborted(signal);
   await validateLinks(destination);
   return source;
 }
@@ -81,7 +102,7 @@ async function archiveSnapshot(projectPath, revision, destination, { signal, dep
     const dependencySource = dependencies
       ? await copyDependencies(projectPath, path.join(destination, 'node_modules'), signal) : null;
     return { files: names, dependencySource };
-  } finally { await fs.rm(archive, { force: true }); }
+  } finally { await removePath(archive); }
 }
 
 async function prepareWorktree(projectPath, directory, task, signal) {
@@ -155,7 +176,7 @@ async function captureDiff(workspace, referenceFiles = [], signal) {
 async function cleanupWorktrees(directory) {
   // Archives have private Git metadata; removing a run never invokes an owner's Git repository.
   for (const name of ['worktree', 'workers', 'workspaces', 'repository.git', 'runtime']) {
-    await fs.rm(path.join(directory, name), { recursive: true, force: true });
+    await removePath(path.join(directory, name));
   }
 }
 

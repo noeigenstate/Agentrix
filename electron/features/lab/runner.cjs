@@ -7,12 +7,15 @@ const { LabSession, recoverRuns } = require('./session.cjs');
 const { dispatch } = require('./dispatch.cjs');
 const { gradeTests, gradeReview } = require('./grading.cjs');
 const { gradingFiles } = require('./history.cjs');
+const { removePath } = require('./disk.cjs');
+const { translate } = require('../../i18n.cjs');
 const {
   ownerState, assertOwner, inside, prepareWorktree, verifyWorktree, captureDiff, cleanupWorktrees,
 } = require('./workspace.cjs');
 
 async function sessionOptions(options, before, workspaceRoot) {
-  const { project, helper, directory, socketDirectory, run } = options;
+  const { project, helper, directory, socketDirectory, run,
+    t = (source, values) => translate('zh', source, values) } = options;
   const dependencies = await fs.realpath(path.join(project.path, 'node_modules')).catch(error => {
     if (error.code === 'ENOENT') return null;
     throw error;
@@ -26,7 +29,7 @@ async function sessionOptions(options, before, workspaceRoot) {
   const protectedPaths = [project.path, before.common, ...otherTrees, ...privateHistory];
   if (dependencies) protectedPaths.push(dependencies);
   if (helper) protectedPaths.push(await fs.realpath(helper));
-  if (protectedPaths.some(root => inside(root, directory))) throw new Error('Lab data must be outside the original project.');
+  if (protectedPaths.some(root => inside(root, directory))) throw new Error(t('实验数据目录必须位于原项目之外。'));
   return {
     directory, labRoot: socketDirectory, workspaceRoot, runId: run.id, helper,
     env: options.env, nodePath: options.nodePath, protectedPaths,
@@ -36,14 +39,15 @@ async function sessionOptions(options, before, workspaceRoot) {
 
 async function validateReference({
   project, task, socketDirectory, signal, nodePath = process.execPath, env, testTimeoutMs = 120000,
+  t = (source, values) => translate('zh', source, values),
 }) {
   const id = randomUUID(), directory = path.join(socketDirectory, 'references', id);
   const workspaceRoot = path.join(directory, 'workspaces'), before = await ownerState(project.path);
   await fs.mkdir(workspaceRoot, { recursive: true, mode: 0o700 });
   const session = new LabSession(await sessionOptions({
-    project, directory, socketDirectory, run: { id }, env, nodePath,
+    project, directory, socketDirectory, run: { id }, env, nodePath, t,
   }, before, workspaceRoot));
-  let result;
+  let result, failure;
   try {
     await session.start();
     session.signal = signal;
@@ -59,16 +63,20 @@ async function validateReference({
       if (grade.testsPassed !== grade.testsTotal ||
         grade.names.some(name => task.hiddenTests.some(file => name === file || name.endsWith('/' + file)))) {
         const details = await fs.readFile(path.join(directory, 'tests.log'), 'utf8');
-        throw new Error('The historical fix does not pass its full reference tests: ' + details.slice(0, 2500));
+        throw new Error(t('历史修复未通过完整参考测试：{details}', { details: details.slice(0, 2500) }));
       }
       result = { total: grade.testsTotal, names: grade.names, files: await gradingFiles(project.path, task) };
     } finally { signal?.removeEventListener('abort', abort); }
-  } finally {
-    await session.close();
-    await cleanupWorktrees(directory);
-    await fs.rm(directory, { recursive: true, force: true });
-    await assertOwner(project.path, before);
+  } catch (error) { failure = error; }
+  finally {
+    for (const cleanup of [
+      () => session.close(), () => cleanupWorktrees(directory), () => removePath(directory),
+      () => assertOwner(project.path, before),
+    ]) {
+      try { await cleanup(); } catch (error) { if (!failure || error.ownerChanged) failure = error; }
+    }
   }
+  if (failure) throw failure;
   return result;
 }
 
@@ -77,6 +85,7 @@ async function runTask(options) {
     project, task, run, directory, socketDirectory, helper, prices, signal, changed, reference,
     nodePath = process.execPath, env = process.env, timeoutMs = 20 * 60000,
     testTimeoutMs = 120000, reviewTimeoutMs = 5 * 60000, budgetCeiling = Infinity,
+    t = (source, values) => translate('zh', source, values),
   } = options;
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   const artifacts = path.join(directory, 'artifacts'), workspaceRoot = path.join(directory, 'workspaces');
@@ -99,7 +108,7 @@ async function runTask(options) {
   session.usage = usage;
   await fs.writeFile(path.join(artifacts, 'owner-before.json'), JSON.stringify(before), { mode: 0o600 });
   try {
-    if (!reference) throw new Error('A validated reference suite is required before any model runs.');
+    if (!reference) throw new Error(t('启动模型前必须先通过参考测试。'));
     await session.start(); await usage.start();
     workspace = await prepareWorktree(project.path, workspaceRoot, task, control.signal);
     await dispatch({
@@ -162,7 +171,7 @@ async function runTask(options) {
   if (result.ownerChanged) { result.state = 'error'; result.error = failure.message; }
   else if (budgetStopped) {
     result.state = 'stopped'; result.budgetStopped = true;
-    result.error = 'The run reached the remaining experiment budget. Its workers have been stopped.';
+    result.error = t('本次运行已超过剩余预算，模型已停止。');
   } else if (signal.aborted) result.state = 'stopped';
   else if (failure) {
     result.state = 'error';

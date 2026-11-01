@@ -9,6 +9,7 @@ const {
 const { runTask, validateReference, recoverRuns, cleanupWorktrees } = require('./runner.cjs');
 const { aborted, killMarked } = require('./process.cjs');
 const { inside } = require('./workspace.cjs');
+const { translate } = require('../../i18n.cjs');
 
 function stopRemaining(experiment, now, error) {
   for (const run of experiment.runs) if (['queued', 'running'].includes(run.state)) {
@@ -20,7 +21,8 @@ function stopRemaining(experiment, now, error) {
 class LabEngine {
   constructor({
     userData, getProjects, helper, prices, records, now = Date.now, store = new LabStore(userData),
-    runner = runTask, referenceRunner = validateReference, nodePath, env, timeoutMs, testTimeoutMs, reviewTimeoutMs, t,
+    runner = runTask, referenceRunner = validateReference, nodePath, env, timeoutMs, testTimeoutMs, reviewTimeoutMs,
+    t = (source, values) => translate('zh', source, values),
   }) {
     Object.assign(this, {
       store, getProjects, helper, prices, records, now, runner, referenceRunner,
@@ -86,17 +88,17 @@ class LabEngine {
       try {
         references.set(task.id, await this.referenceRunner({
           project, task, socketDirectory: this.store.directory, signal,
-          nodePath: this.nodePath, env: this.env, testTimeoutMs: this.testTimeoutMs,
+          nodePath: this.nodePath, env: this.env, testTimeoutMs: this.testTimeoutMs, t: this.t,
         }));
       } catch (error) {
-        if (signal.aborted || error.ownerChanged) throw error;
+        if (signal.aborted || error.ownerChanged || error.infrastructure) throw error;
         const failed = this.referenceFailures.get(project.id) || new Set();
         failed.add(task.id); this.referenceFailures.set(project.id, failed);
-        rejected.push(task.title + ': ' + String(error.message || error));
+        rejected.push(task.title + '：' + this.t(String(error.message || error)));
       }
     }
     if (rejected.length) throw new Error(
-      'Reference tests rejected these tasks. No model workers were started; choose another sample.\n' + rejected.join('\n'),
+      this.t('参考测试未通过，尚未启动模型。请换一组任务。') + '\n' + rejected.join('\n'),
     );
     return references;
   }
@@ -114,7 +116,7 @@ class LabEngine {
     const { input, project } = await this.canonical(value), id = randomUUID(), createdAt = this.now();
     const userData = await fs.realpath(path.dirname(this.store.directory));
     if (inside(project.path, path.join(userData, path.basename(this.store.directory)))) {
-      throw new Error('Lab data must be outside the original project.');
+      throw new Error(this.t('实验数据目录必须位于原项目之外。'));
     }
     const references = await this.references(project, input.tasks, signal);
     const history = await this.history(), context = { experiments: this.experiments, projectId: project.id };
@@ -161,7 +163,7 @@ class LabEngine {
         socketDirectory: this.store.directory, helper: this.helper, prices: this.prices, signal,
         reference: references.get(run.taskId), budgetCeiling: remaining,
         nodePath: this.nodePath, env: this.env, timeoutMs: this.timeoutMs,
-        testTimeoutMs: this.testTimeoutMs, reviewTimeoutMs: this.reviewTimeoutMs,
+        testTimeoutMs: this.testTimeoutMs, reviewTimeoutMs: this.reviewTimeoutMs, t: this.t,
         changed: model => { run.activeModel = model; this.changed(); },
       });
       const { ownerChanged, budgetStopped, knownCostUsd = 0, ...measured } = result;

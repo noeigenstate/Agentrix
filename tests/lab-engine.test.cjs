@@ -579,10 +579,33 @@ isolatedTest('a failing reference rejects start with its reason and is excluded 
     "const { test } = require('node:test');\ntest('bad reference', () => { throw new Error('reference is broken'); });\n");
   await f.git('add', '.'); await f.git('commit', '-m', 'Invalid historical reference');
   const task = await profileTask(f.projectPath, await f.git('rev-parse', 'HEAD'));
-  await assert.rejects(f.engine.start({ ...f.input, tasks: [task] }), /Reference tests rejected[\s\S]*Invalid historical reference/);
+  await assert.rejects(f.engine.start({ ...f.input, tasks: [task] }), /参考测试未通过[\s\S]*Invalid historical reference/);
   assert.deepEqual(await f.readCalls(), []); assert.equal(f.engine.active, null);
   const next = await f.engine.sample({ projectId: 'p', size: 3, preferShortComplex: true });
   assert.ok(next.every(candidate => candidate.id !== task.id));
+});
+
+test('reference infrastructure cleanup errors do not blacklist a valid task', async t => {
+  const f = await fixture(t, {
+    referenceRunner: async () => { throw Object.assign(new Error('temporary cleanup failure'), { infrastructure: true }); },
+  });
+  await assert.rejects(f.engine.start(f.input), /temporary cleanup failure/);
+  assert.equal(f.engine.referenceFailures.size, 0);
+  const sample = await f.engine.sample({ projectId: 'p', size: 1, preferShortComplex: true });
+  assert.equal(sample[0].id, f.task.id);
+});
+
+test('reference rejection goes through t with Chinese source text and preserves the task-specific reason', async t => {
+  const seen = [];
+  const f = await fixture(t, {
+    referenceRunner: async () => { throw new Error('fixture reference reason'); },
+    t(source, values) {
+      seen.push(source);
+      return source === '参考测试未通过，尚未启动模型。请换一组任务。' ? 'Translated reference rejection.' : source;
+    },
+  });
+  await assert.rejects(f.engine.start(f.input), /Translated reference rejection\.[\s\S]*fixture reference reason/);
+  assert.ok(seen.includes('参考测试未通过，尚未启动模型。请换一组任务。'));
 });
 
 isolatedTest('an early exit cannot pass a validated reference even with a zero process exit status', async t => {
@@ -611,7 +634,7 @@ isolatedTest('live authenticated spending stops the run and charges its known co
   assert.equal(experiment.state, 'stopped');
   assert.deepEqual(experiment.runs.map(run => run.state), ['stopped', 'stopped']);
   assert.equal(experiment.runs[0].costUsd, null); assert.equal(experiment.spentUsd, 2);
-  assert.match(experiment.runs[0].error, /budget/);
+  assert.match(experiment.runs[0].error, /预算/);
   const pid = await orphanPid(f);
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
 });

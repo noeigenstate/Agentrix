@@ -4,6 +4,7 @@ const net = require('node:net');
 const { randomUUID } = require('node:crypto');
 const { command, killMarked, aborted } = require('./process.cjs');
 const { inside, cleanupWorktrees } = require('./workspace.cjs');
+const { removePath } = require('./disk.cjs');
 const {
   sandboxProfile, channelAddress, cliHomes, requireIsolation,
   credentialAccess, gitCredentialPaths, gitCredentialHelpers, physicalPath,
@@ -228,9 +229,9 @@ class LabSession {
       this.server = null;
     }
     await this.channel?.close();
-    await fs.rm(this.tools, { recursive: true, force: true });
-    await fs.rm(path.join(this.labRoot, 'reviews', this.runId), { recursive: true, force: true });
-    await fs.rm(this.privateDirectory, { recursive: true, force: true });
+    await removePath(this.tools);
+    await removePath(path.join(this.labRoot, 'reviews', this.runId));
+    await removePath(this.privateDirectory);
   }
 }
 
@@ -250,8 +251,18 @@ async function recoverRuns(labRoot) {
       await cleanupWorktrees(manifest.directory);
     }
     for (const root of ['private', 'tools', 'reviews', 'references']) {
-      await fs.rm(path.join(labRoot, root, entry.name), { recursive: true, force: true });
+      await removePath(path.join(labRoot, root, entry.name));
     }
+  }
+  // A previous cleanup can fail after its session manifest was removed. Those reference folders still need recovery.
+  const references = path.join(labRoot, 'references');
+  const stale = await fs.readdir(references, { withFileTypes: true }).catch(error => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  for (const entry of stale) if (entry.isDirectory() && /^[a-f0-9-]{36}$/.test(entry.name)) {
+    await killMarked(entry.name);
+    await removePath(path.join(references, entry.name));
   }
 }
 

@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { validId } = require('./values.cjs');
+const { removePath } = require('./disk.cjs');
 
 const MAX_EXPERIMENTS = 100, MAX_STATE = 16 * 1024 * 1024;
 
@@ -41,7 +42,7 @@ class LabStore {
   }
   async remove(id) {
     await this.pending;
-    await fs.rm(this.folder(id), { recursive: true, force: true });
+    await removePath(this.folder(id));
   }
 }
 
