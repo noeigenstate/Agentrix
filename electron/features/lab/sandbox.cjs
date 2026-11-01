@@ -3,12 +3,17 @@ const path = require('node:path');
 const os = require('node:os');
 const { command, gitEnvironment } = require('./process.cjs');
 
+// Inherited shell variables can contain credentials under arbitrary names. Jobs receive only process essentials.
+const INHERITED_ENV = new Set([
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP',
+  'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'LC_MESSAGES', 'LC_COLLATE', 'LC_MONETARY', 'LC_NUMERIC', 'LC_TIME', 'TZ',
+  'TERM', 'COLORTERM', 'COLUMNS', 'LINES', 'NO_COLOR', 'FORCE_COLOR', 'CLICOLOR', 'CLICOLOR_FORCE',
+  'SYSTEMROOT', 'WINDIR', 'PATHEXT', 'COMSPEC', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA',
+  '__CF_USER_TEXT_ENCODING', 'SECURITYSESSIONID', 'XPC_FLAGS', 'XPC_SERVICE_NAME',
+]);
+
 function cleanEnvironment(environment = process.env) {
-  const env = { ...environment };
-  for (const key of Object.keys(env)) {
-    if (/^(?:AGENTRIX_|GIT_|NODE_TEST_|NODE_OPTIONS$|NODE_PATH$|LD_|DYLD_)/.test(key)) delete env[key];
-  }
-  return gitEnvironment(env);
+  return gitEnvironment(Object.fromEntries(Object.entries(environment).filter(([key]) => INHERITED_ENV.has(key.toUpperCase()))));
 }
 
 async function requireIsolation() {
@@ -132,9 +137,6 @@ async function cliHomes(environment = process.env, directory, credentials = true
   await fs.mkdir(temporary, { recursive: true });
   const search = Object.keys(env).find(key => key.toLowerCase() === 'path') || 'PATH';
   env[search] = String(env[search] || '').split(path.delimiter).filter(path.isAbsolute).join(path.delimiter);
-  if (!credentials) {
-    for (const key of Object.keys(env)) if (/(?:API_KEY|OAUTH_TOKEN|ACCESS_TOKEN)$/.test(key)) delete env[key];
-  }
   return {
     ...env, CODEX_HOME: codex, CLAUDE_CONFIG_DIR: claude,
     CLAUDE_SECURESTORAGE_CONFIG_DIR: credentials ? secure : claude, ELECTRON_RUN_AS_NODE: '1',

@@ -26,7 +26,7 @@ const isolatedTest = (name, run) => test(name, {
   skip: process.platform !== 'darwin' ? 'macOS filesystem isolation is required' : false,
 }, run);
 
-function fakeDispatchModule() {
+function fakeDispatchModule(settingsFile) {
   const fs = require('node:fs');
   const path = require('node:path');
   const net = require('node:net');
@@ -114,6 +114,7 @@ function fakeDispatchModule() {
     tell({ kind: 'answer', text: 'Done' });
   }
   module.exports.run = async function(args, { env, launch }) {
+    env = { ...env, ...JSON.parse(fs.readFileSync(settingsFile, 'utf8')) };
     const value = name => args[args.indexOf(name) + 1], id = randomUUID();
     const cwd = value('--cwd'), out = value('--out'), model = value('--model'), role = value('--role');
     const send = event => globalThis.__AGENTRIX_LAB_SINK(event);
@@ -161,7 +162,6 @@ function fakeDispatchModule() {
     return 0;
   };
 }
-const fakeHelper = '(' + fakeDispatchModule.toString() + ')();\n';
 
 async function temporary(t) {
   const base = process.platform === 'darwin' ? path.join(os.homedir(), '.ctmp') : os.tmpdir();
@@ -199,15 +199,21 @@ async function fixture(t, options = {}) {
     (options.twoTests ? "test('second', () => assert.equal(1, 1));\n" : ''));
   await git('add', '.'); await git('commit', '-m', 'Fix a cross-module calculation', '-m', 'Return the expected result while keeping the public interface.');
   const commit = await git('rev-parse', 'HEAD'), helper = path.join(directory, 'fake-dispatch.cjs');
-  await fs.writeFile(helper, fakeHelper);
+  const settingsFile = path.join(directory, 'fake-settings.json');
+  await fs.writeFile(helper, '(' + fakeDispatchModule.toString() + ')(' + JSON.stringify(settingsFile) + ');\n');
   const project = { id: 'p', name: 'Fixture', path: projectPath, kind: 'local' }, recorded = [];
   const records = { async read() { return []; }, run(...args) { recorded.push(args); } };
   const env = {
     ...cleanEnvironment(process.env), CODEX_HOME: path.join(directory, 'fake-codex'),
     CLAUDE_CONFIG_DIR: path.join(directory, 'fake-claude'),
   };
-  for (const key of Object.keys(env)) if (/(?:API_KEY|OAUTH_TOKEN|ACCESS_TOKEN)$/.test(key)) delete env[key];
   const engine = new LabEngine({ userData, getProjects: () => [project], helper, prices, records, env, ...options });
+  const runner = engine.runner;
+  engine.runner = async run => {
+    const settings = Object.fromEntries(Object.entries(run.env || {}).filter(([key]) => key.startsWith('LAB_FAKE_')));
+    await fs.writeFile(settingsFile, JSON.stringify(settings), { mode: 0o600 });
+    return runner(run);
+  };
   t.after(async () => { engine.close(); await engine.active?.done; });
   const task = await profileTask(projectPath, commit);
   const input = { projectId: 'p', source: 'history', tasks: [task], arms: ['sol', 'sonnet'], repeats: 1, budgetUsd: 10 };

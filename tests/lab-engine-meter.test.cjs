@@ -12,7 +12,7 @@ const isolatedTest = (name, run) => test(name, {
   skip: process.platform !== 'darwin' ? 'macOS filesystem isolation is required' : false,
 }, run);
 
-async function pipeline(t, helperSource) {
+async function pipeline(t, helperSource, inherited = {}) {
   const base = process.platform === 'darwin' ? path.join(os.homedir(), '.ctmp') : os.tmpdir();
   await fs.mkdir(base, { recursive: true });
   const root = await fs.mkdtemp(path.join(base, 'lab-meter-'));
@@ -24,7 +24,7 @@ async function pipeline(t, helperSource) {
   const session = new LabSession({
     directory, labRoot, workspaceRoot: path.join(directory, 'workspaces'), runId, helper,
     nodePath: process.execPath, protectedPaths: helper ? [helper] : [],
-    env: { ...process.env, CODEX_HOME: path.join(root, 'fake-codex'), CLAUDE_CONFIG_DIR: path.join(root, 'fake-claude') },
+    env: { ...process.env, ...inherited, CODEX_HOME: path.join(root, 'fake-codex'), CLAUDE_CONFIG_DIR: path.join(root, 'fake-claude') },
   });
   const usage = new LabUsage({
     directory: artifacts, privateDirectory: session.privateDirectory, socketDirectory: labRoot,
@@ -93,4 +93,20 @@ isolatedTest('helper stdout cannot fake a model start and a spawn failure does n
   `);
   const result = await session.root(['codex'], { cwd: session.workspaceRoot, log: path.join(artifacts, 'helper.log') });
   assert.equal(result.code, 1); assert.equal(session.modelStarted, false); assert.equal(usage.calls.size, 0);
+});
+
+isolatedTest('real helper and native launch environments receive no inherited push or model credentials', async t => {
+  const names = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'SSH_ASKPASS',
+    'SSH_AUTH_SOCK', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPAQUE_DEPLOYMENT_SETTING'];
+  const native = 'console.log(JSON.stringify({nativeLeaks:' + JSON.stringify(names) + '.filter(key => process.env[key])}));';
+  const helper = `module.exports.run = async (args, { env, launch }) => {
+    console.log(JSON.stringify({helperLeaks: ${JSON.stringify(names)}.filter(key => env[key])}));
+    const child = launch(process.execPath, ['-e', ${JSON.stringify(native)}], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr);
+    return new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+  };`;
+  const { session, artifacts } = await pipeline(t, helper, Object.fromEntries(names.map(key => [key, 'fixture-secret'])));
+  const result = await session.root(['codex'], { cwd: session.workspaceRoot, log: path.join(artifacts, 'credentials.log') });
+  assert.equal(result.code, 0);
+  assert.deepEqual(result.stdout.trim().split('\n').map(line => JSON.parse(line)), [{ helperLeaks: [] }, { nativeLeaks: [] }]);
 });

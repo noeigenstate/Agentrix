@@ -17,6 +17,36 @@ async function temporary(t) {
   return root;
 }
 
+test('job environments inherit only process essentials and remove named and opaque credentials', async t => {
+  const root = await temporary(t);
+  const credentials = {
+    GH_TOKEN: 'github-secret', GITHUB_TOKEN: 'github-secret', GH_ENTERPRISE_TOKEN: 'enterprise-secret',
+    GITHUB_ENTERPRISE_TOKEN: 'enterprise-secret', github_token: 'mixed-case-secret',
+    GIT_ASKPASS: 'owner-credential-helper', SSH_ASKPASS: 'owner-credential-helper', SSH_ASKPASS_REQUIRE: 'force',
+    SSH_AUTH_SOCK: '/owner/ssh-agent', SSH_AGENT_PID: '123', GIT_CONFIG_VALUE_0: 'owner-credential',
+    OPENAI_API_KEY: 'model-secret', ANTHROPIC_API_KEY: 'model-secret', CLAUDE_CODE_OAUTH_TOKEN: 'model-secret',
+    AWS_ACCESS_KEY_ID: 'cloud-secret', AWS_SECRET_ACCESS_KEY: 'cloud-secret', NPM_TOKEN: 'registry-secret',
+    HTTPS_PROXY: 'https://owner:proxy-secret@example.invalid', OPAQUE_DEPLOYMENT_SETTING: 'unlabelled-secret',
+    LC_ACCESS_TOKEN: 'locale-shaped-secret', AGENTRIX_BOOTSTRAP: '/owner/bootstrap', NODE_OPTIONS: '--require=/owner/hook',
+  };
+  const input = { ...credentials, HOME: root, PATH: path.dirname(process.execPath), LANG: 'en_US.UTF-8', LC_CTYPE: 'UTF-8' };
+  const askpass = process.platform === 'win32' ? 'false' : '/usr/bin/false';
+  for (const env of [cleanEnvironment(input),
+    await cliHomes({ ...input, CODEX_HOME: path.join(root, 'codex'), CLAUDE_CONFIG_DIR: path.join(root, 'claude') }, path.join(root, 'model')),
+    await cliHomes(input, path.join(root, 'grading'), false)]) {
+    for (const key of Object.keys(credentials)) assert.equal(env[key], key === 'GIT_ASKPASS' ? askpass : undefined, key);
+    assert.equal(env.HOME, root); assert.equal(env.PATH, input.PATH); assert.equal(env.LANG, input.LANG);
+    assert.equal(env.LC_CTYPE, input.LC_CTYPE);
+    const result = await command(process.execPath, ['-e',
+      'console.log(JSON.stringify(Object.fromEntries(' + JSON.stringify(Object.keys(credentials)) +
+        '.map(key => [key, process.env[key] ?? null]))));',
+    ], { env });
+    assert.equal(result.code, 0);
+    assert.deepEqual(JSON.parse(result.stdout), Object.fromEntries(Object.keys(credentials).map(key =>
+      [key, key === 'GIT_ASKPASS' ? askpass : null])));
+  }
+});
+
 test('every run process ignores global Git config, disables prompts and optional locks, and drops the SSH agent', async t => {
   const root = await temporary(t), global = path.join(root, 'gitconfig');
   await fs.writeFile(global, '[credential]\n\thelper = forbidden-owner-helper\n');
