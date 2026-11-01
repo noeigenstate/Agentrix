@@ -4,7 +4,8 @@ import type { PendingPrompt } from './pending-prompts';
 import { withPictures } from './pasted-pictures';
 import { omitted as omittedPicture, unavailable as unavailablePicture } from '../../../electron/picture-values.json';
 import { showPopup } from '../files/file-popup';
-import { t } from '../../shared/i18n';
+import { currentLanguage, t } from '../../shared/i18n';
+import { pictureInputCopy } from './picture-input-copy.ts';
 import { UserAvatar } from '../../shared/UserAvatar';
 import { Image as ImageIcon, X } from '@phosphor-icons/react';
 import './pending-prompts.css';
@@ -58,8 +59,8 @@ export function PendingPromptEntries({ prompts, queued = () => false, undelivere
     return <TimelineStep key={prompt.id} at={prompt.at} kind="user" who={t('你')} mark={<UserAvatar />}><div className={`reading-user reading-pending${prompt.sending && !waiting ? ' is-sending' : ''}${waiting ? ' is-queued' : ''}${lost ? ' is-undelivered' : ''}`}>
       <UserMessage text={prompt.text} images={prompt.images} />
       {waiting ? <small role="status">{t('已送达，排队中：当前这一步完成后它就会读到')}</small> : prompt.sending && <small role="status">{t('发送中')}</small>}
-      {lost && <div className="reading-undelivered" role="alert"><small>{t('未送达：助手没有收到这条消息')}</small>
-        {prompt.imageCount ? <small>{t('请在终端中检查并移除这张图片。')}</small> : <button type="button" className="text-button" onClick={() => onResend?.(prompt)}>{t('重新发送')}</button>}
+      {lost && <div className="reading-undelivered" role="alert"><small>{prompt.imageCount ? pictureInputCopy(currentLanguage()).receipt : t('未送达：助手没有收到这条消息')}</small>
+        {!prompt.imageCount && <button type="button" className="text-button" onClick={() => onResend?.(prompt)}>{t('重新发送')}</button>}
         <button type="button" className="text-button" onClick={() => onDiscard?.(prompt)}>{t('移除')}</button></div>}
     </div></TimelineStep>;
   });
