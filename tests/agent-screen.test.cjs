@@ -269,6 +269,16 @@ const capturedChoices = {
 };
 
 const expected = {
+  // Sign-in gates have no versioned banner, status footer or parsed choice. The reading popup still handles their input.
+  'claude-sign-in': emptyScreen,
+  'codex-sign-in': emptyScreen,
+  'codex-trust-folder': { ...emptyScreen, choice: {
+    kind: 'menu', title: 'Do you trust the files in this folder?', context: ['C:\\synthetic\\project'],
+    options: [
+      option(1, 'Yes, proceed', true),
+      option(2, 'No, exit'),
+    ], hint: 'Press enter to confirm or esc to cancel',
+  } },
   "claude-investigation-api-key": { ...emptyScreen, choice: capturedChoices["claude-api-key"] },
   "claude-investigation-bash-amend": capturedClaude({ choice: capturedChoices["claude-bash-amend"] }),
   "claude-investigation-bash": capturedClaude({ choice: capturedChoices["claude-bash"] }),
