@@ -9,6 +9,7 @@ import { Markdown } from './Markdown';
 import { PathText } from './PathText';
 import { useReadingPaths } from './useReadingPaths';
 import { UserMessage } from './PendingPromptEntries';
+import { QuoteAction } from './ReadingQuote';
 import { AgentMark, AgentTurnItem, stepTime, TimelineStep } from './Timeline';
 import { groupSummary, ImageProgress, StepState } from './ResultCard';
 import { latestResult, writtenBy } from './result-round';
@@ -19,8 +20,10 @@ import './reading.css';
 import './reading-flow.css';
 
 // The interactive reader supplies presentation slots; standalone feeds need no reader, terminal or composer.
+// quote: the reader's 引用 action (disabled holds the reason it cannot be used now); a feed without it offers none.
 export const ConversationDecorations = createContext<{
   start: number; status: ReactNode; running: boolean; anchor?: string; beforeResult: ReactNode; afterResult: ReactNode;
+  quote?: { disabled: string | null; pick: (who: string, text: string) => void };
 } | null>(null);
 
 // A picture the agent generated, shown where it answered; a click shows it full size in a popup. Its prompt is a two-line summary
@@ -51,6 +54,12 @@ function GeneratedImage({ src, path, prompt, result = false, children }: { src: 
   </figure>;
 }
 
+// A message with words of its own can be quoted; one that was left out for size, or holds only a picture, cannot.
+function QuoteOf({ entry, who }: { entry: ConversationEntry; who: string }) {
+  const quote = useContext(ConversationDecorations)?.quote;
+  return quote && entry.text && !entry.omitted ? <QuoteAction who={who} text={entry.text} disabled={quote.disabled} onQuote={quote.pick} /> : null;
+}
+
 // A reply card inside its agent's turn, with the local pictures, pages and videos it names shown under it
 // (the agents are told they can show one this way: reading-note.cjs).
 function AssistantReply({ entry, agent, projectId, result = false, onError }: { entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; result?: boolean; onError: (message: string) => void }) {
@@ -60,7 +69,7 @@ function AssistantReply({ entry, agent, projectId, result = false, onError }: { 
   const picture = entry.generated && entry.images?.[0] ? <GeneratedImage src={entry.images[0]} {...entry.generated} result={result}>{result && words}</GeneratedImage> : null;
   return <div data-reading-entry={entry.id} className={`reading-assistant is-${agent}`}>{result && picture}{!(result && picture) && words}
       {named.length > 0 && <FileCards projectId={projectId} files={named} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet />}
-      {!result && picture}</div>;
+      {!result && picture}<QuoteOf entry={entry} who={agent === 'claude' ? 'Claude Code' : 'Codex'} /></div>;
 }
 
 function ToolGroup({ entries, live, projectId, onError }: { entries: ConversationEntry[]; live: boolean; projectId: string; onError: (message: string) => void }) {
@@ -124,7 +133,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, onErro
         if (turn.kind === 'user') {
           return <TimelineStep key={turn.entry.id} at={turn.entry.at} kind="user" who={t('你')} latest={index === latestUser} mark={<UserAvatar />}>
             <div data-reading-entry={turn.entry.id} className={`reading-user${turn.entry.answer ? ' is-answer' : ''}`}>
-              {turn.entry.answer && <span className="reading-user-label">{t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} /></div>
+              {turn.entry.answer && <span className="reading-user-label">{t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} /><QuoteOf entry={turn.entry} who={t('你')} /></div>
           </TimelineStep>;
         }
         const liveStatus = index === turns.length - 1 ? decorations?.status : null;
