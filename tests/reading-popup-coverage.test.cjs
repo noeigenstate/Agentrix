@@ -46,6 +46,7 @@ function popupHarness(t, agent = 'codex', rows = idle[agent]) {
     './agent-screen': { parseAgentScreen }, './cli-panel': panel,
     './reading-mode': { setChoiceVisible() {} }, './reading.css': {}, './reading-flow.css': {},
     './Markdown': { Markdown: noop }, './ConversationFeed': { ConversationFeed },
+    './ReadingQuote': { QuoteChip: noop }, './message-quote': require('../src/features/reading/message-quote.ts'),
     './ReadingTerminalPopup': { ReadingTerminalPopup }, './WaitingCard': { WaitingCard: function WaitingCard() {} },
     './ReadingWelcome': { ReadingWelcome: noop }, './reading-welcome': { useWelcomeStarting: () => false },
     './reading-ready': require('../src/features/reading/reading-ready.ts'),

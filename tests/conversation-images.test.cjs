@@ -230,6 +230,7 @@ test('image placeholders have readable labels and cannot open broken image popup
   mod.require = name => name === '@phosphor-icons/react' ? { Image: () => null, X: () => null }
     : name === './Timeline' || name === './pasted-pictures' || name.endsWith('/UserAvatar') || name.endsWith('.css') ? {}
     : name.endsWith('/file-popup') ? { showPopup: target => opened.push(target) }
+    : name === './message-quote' ? require('../src/features/reading/message-quote.ts')
     : name.endsWith('/i18n') ? { t: (text, values) => text.replace(/\{(\w+)\}/g, (_, key) => values[key]) } : originalRequire(name);
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
   const images = [IMAGE_OMITTED, missing, small], element = mod.exports.UserImages({ images });

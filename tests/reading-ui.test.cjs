@@ -74,6 +74,9 @@ function loadUI(name, overrides = {}) {
     if (key === './markdown-escape') return require('../src/features/reading/markdown-escape.ts');
     if (key === './pasted-pictures') return require('../src/features/reading/pasted-pictures.ts');
     if (key === './sign-in-screen') return require('../src/features/agents/sign-in-screen.ts');
+    // Module B's split pane and its state are not under test here.
+    if (key === './SubagentPane') return { SubagentPane: () => null };
+    if (key === './subagent-splits.ts') return { closeSplit() {}, limitSplits() {}, splitLimit: () => 2, splitsOf: () => [], useSplits: () => [] };
     if (key === './UserAvatar') return { UserAvatar: () => React.createElement('svg') };
     if (key === './file-popup') return { showPopup: () => {}, closePopup: () => {}, usePopup: () => null };
     return originalRequire(name);
@@ -2139,16 +2142,18 @@ test('the quote is dropped when the terminal or session changes', t => {
   assert.equal(chip(), undefined);
 });
 
-test('a failed paste returns the quote with the draft, unless a newer quote was picked', async t => {
-  const { h, pick, chip } = quoteHarness(t);
+for (const newer of [false, true]) test(`a failed paste returns the quote with the draft${newer ? ' unless a newer quote was picked' : ''}`, async t => {
+  const { h, pick, chip } = quoteHarness(t), errors = [];
   let fail;
+  h.props.onError = error => errors.push(error);
   window.agentrix.pasteTerminal = () => new Promise(resolve => { fail = resolve; });
   pick('Codex', 'first');
   h.edit('words'); h.press('Enter');
   assert.equal(chip(), undefined);
-  pick('Codex', 'newer');
+  if (newer) pick('Codex', 'newer');
   fail({ ok: false, error: 'no paste' }); await h.tick(0);
-  assert.equal(chip().props.quote.excerpt, 'newer');
+  assert.deepEqual(errors, ['no paste']);
+  assert.equal(chip().props.quote.excerpt, newer ? 'newer' : 'first');
 });
 
 test('only a message with words of its own offers 引用, and the standalone feed offers none', t => {
