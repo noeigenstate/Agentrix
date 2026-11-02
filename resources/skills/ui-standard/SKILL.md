@@ -1,8 +1,8 @@
 ---
 name: ui-standard
-description: Use when designing, building, restyling or reviewing any user interface, unless the project has its own UI standard; for UI building beyond a small fix, show a clickable mockup; judge the result with five measured questions and a grayscale checklist, keep colour and material restrained, use regular spacing and one set of sizes, and have another model accept the screenshots, or the user when no second model is available.
+description: Use when designing, building, changing, debugging, restyling or reviewing any user interface, a small fix included, unless the project has its own UI standard; for UI building beyond a small fix, show a clickable mockup; judge the result with five measured questions and a grayscale checklist, keep colour and material restrained, use regular spacing and one set of sizes, and have another model accept the screenshots, or the user when no second model is available.
 trigger: auto
-when: 设计、实现、改版或审查界面时生效；项目已有自己的界面规范时以项目为准
+when: 设计、新增或修改、调试、改版或审查界面时生效，小改动也算；项目已有自己的界面规范时以项目为准
 requires: none
 title: 界面规范
 summary: 界面开发超出小修时先出可点击设计稿，按五个量化问题和灰度清单验收，颜色克制、间距成刻度；截图由另一个模型验收，没有时由用户验收。

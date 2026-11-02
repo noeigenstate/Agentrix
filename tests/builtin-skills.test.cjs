@@ -128,16 +128,16 @@ test('shipped descriptions include trigger timing and project precedence', () =>
   const fields = name => builtinMetadata(fs.readFileSync(path.join(resources, name, 'SKILL.md'), 'utf8'), name);
   const routing = fields('model-routing'), standard = fields('code-standard'), ui = fields('ui-standard');
   assert.equal(routing.trigger, 'auto');
-  assert.match(routing.description, /^Use before any task that is more than a quick answer or a one-line change/);
+  assert.match(routing.description, /^Use before any task that changes the project, however small \(a new feature or a change to one, a bug fix or debugging/);
   assert.match(routing.description, /unless the project has its own model-routing skill/);
-  assert.equal(routing.when, '任务需要规划、开发、调试、审查或发布时生效；项目已有同名技能时以项目为准');
+  assert.equal(routing.when, '新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算；项目已有同名技能时以项目为准');
   assert.equal(standard.trigger, 'always');
   assert.match(standard.description, /^Use before every task in any project that has no code standard of its own/);
   assert.match(standard.description, /on its first run in a project/);
   assert.match(standard.description, /yield to the project's own standard/);
   assert.equal(standard.when, '每个任务开始前生效；在项目里第一次运行时先审查现有代码并提出接入计划');
   assert.deepEqual([ui.trigger, ui.requires, ui.title], ['auto', 'none', '界面规范']);
-  assert.match(ui.description, /^Use when designing, building, restyling or reviewing any user interface/);
+  assert.match(ui.description, /^Use when designing, building, changing, debugging, restyling or reviewing any user interface, a small fix included/);
 });
 
 test('invalid built-ins warn and skip only the invalid file, including an invalid replacement', t => {

@@ -1,8 +1,8 @@
 ---
 name: model-routing
-description: Use before any task that is more than a quick answer or a one-line change, before doing any of it yourself, unless the project has its own model-routing skill; route the task among an architect, core engineer, execution engineer and visual verifier, with fallbacks for either installed agent, fixed model settings and cross review.
+description: Use before any task that changes the project, however small (a new feature or a change to one, a bug fix or debugging, a UI tweak, tests, a refactor, a review or a release), before doing any of it yourself, unless the project has its own model-routing skill; route the task among an architect, core engineer, execution engineer and visual verifier, with fallbacks for either installed agent, fixed model settings and cross review.
 trigger: auto
-when: 任务需要规划、开发、调试、审查或发布时生效；项目已有同名技能时以项目为准
+when: 新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算；项目已有同名技能时以项目为准
 requires: any-agent
 title: 模型路由
 summary: 任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能、前端并验证界面。GPT 默认 max + fast，Claude 默认 high。
