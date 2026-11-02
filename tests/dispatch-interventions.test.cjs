@@ -1,0 +1,190 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { randomUUID } = require('node:crypto');
+const { spawn, execFileSync } = require('node:child_process');
+const { run, argumentsOf } = require('../integration/dispatch.cjs');
+const { projectTeam } = require('../electron/features/team/team.cjs');
+const { createInterventions } = require('../electron/features/agents/interventions.cjs');
+const { createEventServer } = require('../electron/events.cjs');
+
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(predicate) {
+  const end = Date.now() + 15000;
+  while (!predicate()) { if (Date.now() > end) throw new Error('Timed out waiting for synthetic intervention worker'); await pause(20); }
+}
+
+const fakeWorker = `
+const fs = require('node:fs'), path = require('node:path'), {spawn} = require('node:child_process');
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+(async () => {
+  const fixture = JSON.parse(fs.readFileSync(process.env.OWNER_FIXTURE, 'utf8'));
+  let brief = ''; for await (const chunk of process.stdin) brief += chunk;
+  const countFile = path.join(fixture.root, 'count');
+  const round = (fs.existsSync(countFile) ? Number(fs.readFileSync(countFile, 'utf8')) : 0) + 1;
+  fs.writeFileSync(countFile, String(round));
+  fs.appendFileSync(path.join(fixture.root, 'captures'), JSON.stringify({ round, args: process.argv.slice(2), brief, pid: process.pid }) + '\\n');
+  const id = round > 1 && fixture.badSession ? fixture.otherSession : fixture.session;
+  if (fixture.agent === 'codex') {
+    const directory = path.join(process.env.CODEX_HOME, 'sessions/2026/01/01'); fs.mkdirSync(directory, {recursive:true});
+    const records = structuredClone(fixture.rollout);
+    for (const record of records) {
+      if (record.type === 'session_meta') record.payload.id = id;
+      if (record.timestamp) record.timestamp = new Date(Date.parse(record.timestamp) + (round - 1) * 60000).toISOString();
+      const payload = record.payload || {};
+      if (payload.item?.completed_at_ms) payload.item.completed_at_ms += (round - 1) * 60000;
+      for (const usage of [payload.info?.total_token_usage, payload.thread_token_usage]) if (usage) usage.output_tokens += (round - 1) * 150;
+    }
+    fs.appendFileSync(path.join(directory, 'rollout-fixture-' + id + '.jsonl'), records.filter(record => round === 1 || record.type !== 'session_meta').map(record => JSON.stringify(record) + '\\n').join(''));
+    process.stdout.write(JSON.stringify({type:'thread.started',thread_id:id}) + '\\n');
+  } else process.stdout.write(JSON.stringify({type:'system',subtype:'init',session_id:id,model:'claude-sonnet-5-5',effort:'high',fast_mode:false}) + '\\n');
+  const claudeResult = () => process.stdout.write(JSON.stringify({type:'result',subtype:'success',session_id:id,result:'done '+round,usage:{input_tokens:5,cache_creation_input_tokens:2,cache_read_input_tokens:3,output_tokens:10},...(fixture.untimedRound === round ? {} : {duration_api_ms:1000}),total_cost_usd:0.01}) + '\\n');
+  if (fixture.agent === 'claude' && fixture.untimedRound === round) claudeResult();
+  if (round === 1 && fixture.descendant) {
+    const descendant = spawn(process.execPath, ['-e', "const fs=require('node:fs');process.on('SIGTERM',()=>{});setInterval(()=>fs.writeFileSync(process.argv[1],String(Date.now())),30)", path.join(fixture.root,'heartbeat')], {stdio:'ignore',windowsHide:true});
+    fs.writeFileSync(path.join(fixture.root,'descendant'), String(descendant.pid));
+  }
+  for (const end = Date.now() + 15000; !fs.existsSync(path.join(fixture.root, 'release-' + round)) && Date.now() < end;) await pause(20);
+  if (round === 1 && fixture.outsideScope) fs.writeFileSync('outside.txt', 'Synthetic unauthorized change');
+  if (fixture.agent === 'claude') { if (fixture.untimedRound !== round) claudeResult(); }
+  else { fs.writeFileSync(process.argv[process.argv.indexOf('-o') + 1], 'done '+round); process.stdout.write(JSON.stringify({type:'turn.completed',usage:{output_tokens:150}})+'\\n'); }
+})().catch(error => {process.stderr.write(String(error));process.exitCode=1;});
+`;
+
+async function fixture(t, { agent = 'codex', descendant = false, badSession = false, outsideScope = false, readOnly = false, untimedRound = null } = {}) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-owner-dispatch-'))), repo = path.join(root, 'repo');
+  fs.mkdirSync(path.join(repo, 'src'), { recursive: true }); fs.writeFileSync(path.join(repo, '.gitignore'), '.dispatch/\n'); fs.writeFileSync(path.join(repo, 'src/a.js'), 'base');
+  const git = args => execFileSync('git', args, { cwd: repo, stdio: 'ignore', windowsHide: true });
+  git(['init', '-q']); git(['add', '-A']); git(['-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', 'commit', '-qm', 'base']);
+  const team = projectTeam(repo, true), events = [], server = await createEventServer(event => events.push(event));
+  const worker = path.join(root, 'worker.cjs'), brief = path.join(root, 'brief.md'), out = path.join(repo, '.dispatch/answer.md');
+  fs.mkdirSync(path.dirname(out)); fs.writeFileSync(worker, fakeWorker); fs.writeFileSync(brief, 'Original synthetic scope.');
+  const session = randomUUID(), config = path.join(root, 'fixture.json'), bootstrap = path.join(root, 'bootstrap.json');
+  fs.writeFileSync(config, JSON.stringify({ root, agent, session, otherSession: randomUUID(), descendant, badSession, outsideScope, untimedRound,
+    rollout: fs.readFileSync(path.join(__dirname, 'fixtures/codex-dispatch-rollout.jsonl'), 'utf8').trim().split('\n').map(JSON.parse) }));
+  fs.writeFileSync(bootstrap, JSON.stringify({pipeName:server.address,projectId:'synthetic-terminal',sessionKey:'synthetic-owner-fixture'}));
+  const home = path.join(root, 'home'); fs.mkdirSync(home);
+  const env = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: home, CODEX_HOME: path.join(home, 'codex'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'), AGENTRIX_BOOTSTRAP: bootstrap, OWNER_FIXTURE: config };
+  delete env.AGENTRIX_READING_NOTE; delete env.AGENTRIX_READING_NOTE_FILE;
+  const args = [agent, '--role', 'exec', '--title', 'Synthetic worker', '--model', agent === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5',
+    '--effort', agent === 'codex' ? 'max' : 'high', '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**', '--skip-meeting', 'Synthetic intervention fixture',
+    ...(agent === 'codex' ? ['--fast', ...(readOnly ? ['--read-only'] : [])] : ['--permission', 'plan'])];
+  let stdout = '', finished = false;
+  const children = [];
+  const result = run(args, { env, rateInterval: 30, stdout: { write: text => { stdout += text; } },
+    resolveExecutable: (_, argv) => ({ file: process.execPath, args: [worker, ...argv] }),
+    launch: (file, argv, options) => { const child = spawn(file, argv, options); children.push(child); return child; },
+  }).finally(() => { finished = true; });
+  const release = round => fs.writeFileSync(path.join(root, 'release-' + round), '');
+  t.after(async () => {
+    if (!finished) {
+      for (const entry of team.live()) if (entry.controls && !entry.closing) {
+        await team.queueControl(entry.id, { id: randomUUID(), type: 'stop', at: Date.now(), noResume: true }).catch(() => {});
+      }
+      for (let round = 1; round <= 10; round++) release(round);
+    }
+    await result; server.close(); fs.rmSync(root, { recursive: true, force: true });
+  });
+  await until(() => stdout.includes('[dispatch] started '));
+  const id = /\[dispatch\] started ([\w-]+)/.exec(stdout)[1], notifications = [];
+  const target = { terminalId:'terminal',callId:'dispatch:'+id,route:'dispatch',runId:id,cwd:repo,projectPath:repo,title:'Synthetic worker',parentSessionId:'planner',confirmed:true,done:false,local:true };
+  const api = createInterventions({resolve:()=>target,sendParentPrompt:(_,text)=>{notifications.push(text);}});
+  const captures = () => fs.existsSync(path.join(root, 'captures')) ? fs.readFileSync(path.join(root, 'captures'), 'utf8').trim().split('\n').map(JSON.parse) : [];
+  return { root, repo, team, id, api, target, notifications, result, events, children, release, captures, stdout: () => stdout, out, session };
+}
+
+test('default send leaves the child running and joins ordered messages in same-session resumes', async t => {
+  for (const agent of ['codex', 'claude']) {
+    const f = await fixture(t, { agent, readOnly: agent === 'codex' });
+    const firstPid = f.captures()[0].pid;
+    await f.api.interveneAgent('terminal', f.target.callId, 'First change.');
+    await f.api.interveneAgent('terminal', f.target.callId, '第二条\nKeep the scope.');
+    await until(() => f.stdout().includes('Keep the scope.'));
+    assert.equal(f.children[0].exitCode, null); assert.equal(f.captures().length, 1);
+    assert.equal(f.captures()[0].pid, firstPid);
+    f.release(1); await until(() => f.captures().length === 2);
+    const resumed = f.captures()[1];
+    assert.match(resumed.brief, /业主插话：First change\.[\s\S]*业主插话：第二条\nKeep the scope\.[\s\S]*继续执行当前任务。/);
+    assert.match(resumed.brief, /src\/\*\*/);
+    assert.deepEqual(resumed.args.slice(0, 3), agent === 'codex' ? ['exec', 'resume', f.session] : ['-p', '--resume', f.session]);
+    assert.ok(resumed.args.includes(agent === 'codex' ? 'model_reasoning_effort=max' : 'plan'));
+    if (agent === 'codex') { assert.ok(!resumed.args.includes('-s')); assert.ok(resumed.args.includes('service_tier="fast"')); }
+    await f.api.interveneAgent('terminal', f.target.callId, 'During the resumed run.');
+    assert.equal(f.children[1].exitCode, null);
+    f.release(2); await until(() => f.captures().length === 3); f.release(3);
+    assert.equal(await f.result, 0);
+    await until(() => f.events.some(event => event.type === 'dispatch-end'));
+    assert.equal(f.events.filter(event => event.type === 'dispatch-start').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'dispatch-end').length, 1);
+    const end = f.events.at(-1);
+    assert.equal(end.outputTokens, agent === 'codex' ? 450 : 30); assert.equal(end.activeMs, agent === 'codex' ? 12000 : 3000);
+    const rates = f.events.filter(event => event.type === 'dispatch-rate');
+    if (agent === 'codex') {
+      assert.ok(rates.length >= 2);
+      for (let index = 1; index < rates.length; index++) {
+        assert.ok(rates[index].outputTokens >= rates[index - 1].outputTokens);
+        assert.ok(rates[index].activeMs >= rates[index - 1].activeMs);
+      }
+    }
+    assert.equal(f.team.entries().filter(entry => entry.type === 'end').length, 1);
+    assert.equal(f.team.entries().filter(entry => entry.type === 'intervention').length, 3);
+    assert.match(f.stdout(), /owner intervened 3/); assert.equal(f.team.live().length, 0);
+    assert.equal(fs.readFileSync(f.out, 'utf8'), 'done 3');
+  }
+});
+
+test('explicit stop terminates the old process tree before resuming queued work', async t => {
+  const f = await fixture(t, { descendant: true });
+  await until(() => fs.existsSync(path.join(f.root, 'heartbeat')));
+  await f.api.interveneAgent('terminal', f.target.callId, 'Change the conflicting approach.');
+  await f.api.stopAgent('terminal', f.target.callId);
+  await until(() => f.captures().length === 2);
+  assert.notEqual(f.children[0].exitCode, null);
+  const beat = fs.readFileSync(path.join(f.root, 'heartbeat'), 'utf8'); await pause(150);
+  assert.equal(fs.readFileSync(path.join(f.root, 'heartbeat'), 'utf8'), beat, 'old descendant cannot keep working after resume');
+  f.release(2); assert.equal(await f.result, 0);
+  assert.match(f.stdout(), /owner intervened 1 · owner stopped 1/);
+  assert.equal(f.team.entries().filter(entry => entry.type === 'stop').length, 1);
+});
+
+test('an untimed resumed reply never borrows the preceding segment duration for a live rate', async t => {
+  const f = await fixture(t, { agent: 'claude', untimedRound: 2 });
+  await f.api.interveneAgent('terminal', f.target.callId, 'Continue without timing evidence.');
+  f.release(1); await until(() => f.captures().length === 2); await pause(200);
+  assert.ok(f.events.filter(event => event.type === 'dispatch-rate').every(event => event.outputTokens === 10 && event.activeMs === 1000));
+  f.release(2); assert.equal(await f.result, 0);
+  await until(() => f.events.some(event => event.type === 'dispatch-end'));
+  const end = f.events.at(-1); assert.equal(end.outputTokens, 20); assert.equal(end.totalOutputTokens, 20); assert.equal(end.activeMs, null);
+  assert.match(f.stdout(), /token\/s unreported/);
+});
+
+test('stop CLI accepts reason and no-resume, never launches a worker itself, and refuses ended runs', async t => {
+  const f = await fixture(t);
+  await f.api.interveneAgent('terminal', f.target.callId, 'This stays pending after no-resume.');
+  let stdout = '';
+  const code = await run(['stop', f.id, '--cwd', f.repo, '--reason', 'Explicit owner cancellation', '--no-resume'],
+    { stdout: {write:text=>{stdout+=text;}}, launch: () => assert.fail('stop launched a worker') });
+  assert.equal(code, 0); assert.match(stdout, /stop queued/);
+  assert.notEqual(await f.result, 0); assert.equal(f.captures().length, 1);
+  assert.match(f.stdout(), /no resume/); assert.match(f.stdout(), /reason killed/);
+  const stop = f.team.entries().find(entry => entry.type === 'stop'); assert.equal(stop.noResume, true); assert.equal(stop.reason, 'Explicit owner cancellation');
+  assert.equal(await run(['stop', f.id, '--cwd', f.repo], {stdout:{write(){}},launch:()=>assert.fail('ended stop launched')}), 1);
+  for (const suffix of [['--unknown'], ['--reason'], ['--reason',' '], ['--no-resume','--no-resume']]) assert.throws(() => argumentsOf(['stop', f.id, ...suffix]));
+  assert.throws(() => argumentsOf(['stop', '../outside']));
+});
+
+test('scope violations stop queued continuation and a resumed session mismatch fails visibly', async t => {
+  const scoped = await fixture(t, { outsideScope: true });
+  await scoped.api.interveneAgent('terminal', scoped.target.callId, 'Continue only within scope.');
+  scoped.release(1); await scoped.result;
+  assert.equal(scoped.captures().length, 1); assert.match(scoped.stdout(), /OUT OF SCOPE: outside.txt/);
+  const mismatch = await fixture(t, { badSession: true });
+  await mismatch.api.interveneAgent('terminal', mismatch.target.callId, 'Continue the same session.');
+  mismatch.release(1); await until(() => mismatch.captures().length === 2);
+  assert.notEqual(await mismatch.result, 0); assert.match(mismatch.stdout(), /reason error/);
+  assert.match(mismatch.stdout(), /resume failed .*different session/);
+  assert.equal(mismatch.team.entries().filter(entry => entry.type === 'end').length, 1);
+  assert.equal(mismatch.team.entries().find(entry => entry.type === 'end').session, mismatch.session);
+});
