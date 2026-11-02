@@ -716,3 +716,12 @@ test('the page reads only the dashboard bridge and never the main window’s', (
   const imports = files.flatMap(name => [...fs.readFileSync(path.join(dashboardDir, name), 'utf8').matchAll(/from '(\.\.\/\.\.\/[^']+|\.\.\/[^']+)'/g)].map(match => match[1]));
   assert.deepEqual([...new Set(imports.filter(spec => !spec.startsWith('../../shared/')))], [], 'only src/shared is imported from outside the feature');
 });
+
+test('the page keeps time with the shared clock hook, not a copy of its own', () => {
+  assert.equal(fs.existsSync(path.join(dashboardDir, 'use-now.ts')), false, 'the duplicate hook is gone');
+  const asked = [], clockLoad = makeLoader({ '../../shared/useNow': { useNow: initial => { asked.push(initial); return at(10, 31, 14); } } });
+  const { DashboardView } = clockLoad('features/dashboard/Dashboard.tsx');
+  zh(() => renderToStaticMarkup(React.createElement(DashboardView, { summary: fixture(), query: { projectId: null, range: '30d' }, error: null, tab: 'models', named: true,
+    onTab() {}, onQuery() {}, decide: async () => null, actions: { minimize() {}, maximize() {}, close() {} } })));
+  assert.deepEqual(asked, [Date.now], 'the page starts the shared clock at Date.now');
+});
