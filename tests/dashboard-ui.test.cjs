@@ -47,8 +47,10 @@ const zh = (run) => { applyLanguage('zh'); return run(); };
 // ---- fixtures ------------------------------------------------------------------------------------------------------------
 const at = (month, day, hour = 10) => new Date(2026, month - 1, day, hour).getTime();
 const weight = { model: 'gpt-6.1-sol', kind: 'test', from: 1, to: 0.7 };
+const trend = (...tail) => [...Array(14 - tail.length).fill(0), ...tail];
 const row = (model, agent, patch = {}) => ({ model, agent, runs: 10, firstPassRate: 0.8, avgActiveMs: 600000, tokensPerSecond: 90, findingsPerRun: 1.2, sentBack: 1, outOfScope: 0, incidents: 0,
-  quotaPercent: 20, costUsd: 3.2, costedRuns: 10, weight: 1, ...patch });
+  quotaPercent: 20, costUsd: 3.2, costedRuns: 10, weight: 1, trend: trend(0, 2, 1, 3), ...patch });
+const live = (id, model, patch = {}) => ({ id, project: 'p1', agent: 'Codex', model, title: 'Refactor the grid', role: '执行', startedAt: at(10, 31, 13), tokensPerSecond: 96.4, ...patch });
 const task = (model, title, patch = {}) => ({ model, at: at(10, 30), project: 'agentrix', title, kind: 'core', role: '执行', meeting: null,
   firstPass: true, reason: 'exit', activeMs: 600000, outputTokens: 2000, costUsd: 0.25, ...patch });
 function fixture(patch = {}) {
@@ -73,6 +75,13 @@ function fixture(patch = {}) {
       { day: '2026-10-28', model: 'claude-sonnet-5-5', tokensPerSecond: 70 }, { day: '2026-10-29', model: 'claude-sonnet-5-5', tokensPerSecond: null }, { day: '2026-10-30', model: 'claude-sonnet-5-5', tokensPerSecond: 72 },
       ...['2026-10-28', '2026-10-29', '2026-10-30'].map((day, index) => ({ day, model: 'gpt-6.1-terra', tokensPerSecond: [132, 138, 141][index] })),
     ],
+    daily: [
+      { day: '2026-10-29', model: 'gpt-6.1-sol', runs: 3, firstPass: 2, costUsd: 1.2, activeMs: 600000 },
+      { day: '2026-10-30', model: 'gpt-6.1-sol', runs: 5, firstPass: 4, costUsd: null, activeMs: null },
+      { day: '2026-10-30', model: 'claude-sonnet-5-5', runs: 2, firstPass: 1, costUsd: 0.5, activeMs: 300000 },
+      { day: '2026-10-31', model: 'gpt-6.1-terra', runs: 4, firstPass: 3, costUsd: 0.8, activeMs: 400000 },
+    ],
+    live: { running: [live('dispatch:a', 'gpt-6.1-sol'), live('agent:b', 'claude-sonnet-5-5', { project: 'p2', agent: 'Claude Code', title: 'Check the colours', role: '审查', startedAt: null, tokensPerSecond: null })], at: at(10, 31, 14) },
     incidents: [{ at: at(10, 30), project: 'agentrix', meeting: 'open-r1', model: 'gpt-6.1-sol', kind: 'test', cause: 'tests only passed on Windows', fix: 'cross-platform test skill', lead: 'missed', weight }],
     rounds: [
       { project: 'agentrix', meeting: 'open-r1', at: at(10, 30), tasks: 5, questions: null, findings: 13, rework: 2, outOfScope: 0, incidents: 2, durationMs: 6.4 * 3600000, firstConfirmed: true,
@@ -94,15 +103,16 @@ function fixture(patch = {}) {
   };
 }
 const emptySummary = () => fixture({ kpis: { firstPassRate: null, runs: 0, runsPrevious: null, incidents: 0, quota: null, reworkPerRound: null, reworkPerRoundPrevious: null, rounds: 0, roundtableFirstConfirm: null, findingsPerRound: null, findingFixRate: null },
-  models: [], modelRuns: [], kinds: [], speed: [], incidents: [], rounds: [], findings: [], suggestions: [], weights: [], prices: { updated: '2026-10-31', unpriced: [] } });
+  models: [], modelRuns: [], kinds: [], speed: [], daily: [], live: { running: [], at: 0 }, incidents: [], rounds: [], findings: [], suggestions: [], weights: [], prices: { updated: '2026-10-31', unpriced: [] } });
 
+// The page's clock is the moment the fixture was generated, so elapsed times and the age of the numbers are fixed.
 const view = (props = {}) => {
   const { DashboardView } = dashboard('Dashboard.tsx');
-  return renderToStaticMarkup(React.createElement(DashboardView, { summary: fixture(), query: { projectId: null, range: '30d' }, error: null, tab: 'models', named: true,
+  return renderToStaticMarkup(React.createElement(DashboardView, { summary: fixture(), query: { projectId: null, range: '30d' }, error: null, now: at(10, 31, 14), tab: 'models', named: true,
     onTab() {}, onQuery() {}, decide: async () => null, actions: { minimize() {}, maximize() {}, close() {} }, ...props }));
 };
 const count = (html, pattern) => (html.match(pattern) ?? []).length;
-const rowOf = (html, text) => html.split('<tr').map(part => part.slice(0, part.indexOf('</tr>'))).find(part => part.includes(text));
+const rowOf = (html, text) => html.split('<tr').slice(1).map(part => part.slice(0, part.indexOf('</tr>'))).find(part => part.includes(text));
 
 // ---- format ------------------------------------------------------------------------------------------------------------------
 test('numbers the records do not support read as a dash, never as 0', () => zh(() => {
@@ -131,7 +141,7 @@ test('models, kinds and weights are named the way the owner writes them', () => 
   assert.equal(f.weightChange(weight), '测试 1.0 → 0.7 ↓ 降权');
   assert.equal(f.weightChange({ ...weight, to: 1.2 }), '测试 1.0 → 1.2 ↑ 升权');
   assert.equal(f.weightChange({ ...weight, to: 1 }), '测试 1.0 → 1.0');
-  assert.equal(f.dayLabel('2026-10-30'), '10-30'); assert.equal(f.dateLabel(at(3, 4)), '03-04'); assert.equal(f.timeLabel(at(10, 31, 9)), '09:00');
+  assert.equal(f.dayLabel('2026-10-30'), '10-30'); assert.equal(f.dateLabel(at(3, 4)), '03-04');
   assert.equal(f.hasNoRecords(emptySummary()), true); assert.equal(f.hasNoRecords(fixture()), false);
 }));
 
@@ -159,15 +169,24 @@ test('a missing reading breaks a line; a run of one is a lone mark', () => {
   assert.equal(m.nearest([10, 50, 90], 62), 1); assert.equal(m.nearest([10, 50, 90], 400), 2);
 });
 
-test('series: the first three models with data are drawn, the rest only in the table; a model keeps its shape', () => {
-  const m = dashboard('chart-math.ts'), models = fixture().models;
-  const four = m.chartSeries(models, new Set(models.map(item => item.model)));
-  assert.deepEqual(four.series.map(item => [item.label, item.shape, item.slot]), [['Sol', 'circle', 0], ['Sonnet', 'square', 1], ['Terra', 'diamond', 2]]);
-  assert.equal(four.hidden, 1); assert.equal(four.all.length, 4);
-  const without = m.chartSeries(models, new Set(['claude-opus-5-5', 'gpt-6.1-terra']));
-  assert.deepEqual(without.series.map(item => [item.label, item.shape, item.slot]), [['Terra', 'diamond', 0], ['Opus', 'triangle', 1]], 'shape follows the model, line style the chart slot');
-  assert.equal(m.shapeOf(models, 'not-a-listed-model'), 'circle');
-  assert.deepEqual(m.DASHES.length, 3); assert.equal(new Set(m.SHAPES).size, 4);
+test('every model keeps one colour and one shape for the whole page, whichever models are shown', () => {
+  const m = dashboard('chart-math.ts'), ids = ['gpt-6.1-luna', 'claude-haiku-5-5', 'gpt-6.1-terra', 'gpt-6.1-sol', 'claude-sonnet-5-5', 'claude-opus-5-5'];
+  const all = m.modelLooks(ids);
+  assert.deepEqual(['claude-opus-5-5', 'claude-sonnet-5-5', 'gpt-6.1-sol', 'gpt-6.1-terra', 'claude-haiku-5-5', 'gpt-6.1-luna'].map(id => [all.get(id).colour, all.get(id).shape]),
+    [[0, 'circle'], [1, 'square'], [2, 'diamond'], [3, 'triangle'], [4, 'inverted'], [5, 'hexagon']], 'the six models told apart so far keep the slots they always had');
+  assert.deepEqual(m.modelLooks(['gpt-6.1-sol']).get('gpt-6.1-sol'), all.get('gpt-6.1-sol'), 'a filter that leaves fewer models does not repaint the others');
+  assert.equal(m.PALETTE, 6); assert.equal(new Set(m.SHAPES).size, 6);
+});
+
+test('a model past the six takes a free slot, and no two models share both colour and shape', () => {
+  const m = dashboard('chart-math.ts');
+  const looks = m.modelLooks(['zeta', 'alpha', 'gpt-6.1-sol', 'claude-opus-5-5', 'claude-opus-5-6']);
+  assert.deepEqual([looks.get('gpt-6.1-sol').slot, looks.get('claude-opus-5-5').slot], [2, 0]);
+  assert.deepEqual(['alpha', 'claude-opus-5-6', 'zeta'].map(id => looks.get(id).slot), [6, 7, 8], 'the second Opus and models the page never met follow in name order');
+  const pairs = new Set([...looks.values()].map(look => `${look.colour}/${look.shape}`));
+  assert.equal(pairs.size, looks.size);
+  assert.equal(new Set(Array.from({ length: 36 }, (_, slot) => { const look = m.lookOf(slot); return `${look.colour}/${look.shape}`; })).size, 36, 'colour repeats past six, but with another shape');
+  assert.deepEqual(m.summaryModels({ models: [{ model: 'a' }], daily: [{ model: 'b' }], kinds: [{ model: 'c' }], speed: [{ model: 'd' }], live: { running: [{ model: 'e' }] } }), ['a', 'b', 'c', 'd', 'e']);
 });
 
 test('speed rows and kind groups are built from the records, nulls kept', () => {
@@ -178,11 +197,28 @@ test('speed rows and kind groups are built from the records, nulls kept', () => 
   assert.deepEqual(m.speedByDay([{ day: '2026-10-30', model: 'a', tokensPerSecond: 1 }, { day: '2026-10-28', model: 'a', tokensPerSecond: 2 }]).map(item => item.day), ['2026-10-28', '2026-10-30']);
   assert.deepEqual(m.kindGroups(data.kinds).map(item => item.kind), ['core', 'frontend', 'test', 'docs'], 'usual order of the task kinds');
   assert.deepEqual(m.kindGroups([{ kind: 'zzz', model: 'a', runs: 1, firstPassRate: 1 }, { kind: 'aaa', model: 'a', runs: 1, firstPassRate: 1 }, { kind: 'core', model: 'a', runs: 1, firstPassRate: 1 }]).map(item => item.kind), ['core', 'aaa', 'zzz']);
-  assert.deepEqual([...m.modelsWithRate(data.kinds)].sort(), ['claude-sonnet-5-5', 'gpt-6.1-sol', 'gpt-6.1-terra']);
   assert.deepEqual([...m.modelsWithSpeed(data.speed)].sort(), ['claude-sonnet-5-5', 'gpt-6.1-sol', 'gpt-6.1-terra']);
   const shares = m.phaseShares({ roundtable: 1, build: 2, review: 1, rework: null });
   assert.deepEqual(shares, { roundtable: 0.25, build: 0.5, review: 0.25, rework: 0 });
   assert.deepEqual(Object.values(m.phaseShares({ a: null, b: null })), [0, 0]);
+});
+
+test('daily runs group by local day with the confirmed passes, and the last fourteen days end today', () => {
+  const m = dashboard('chart-math.ts'), days = m.runsByDay(fixture().daily);
+  assert.deepEqual(days.map(day => [day.day, day.total, day.passes]), [['2026-10-29', 3, 2], ['2026-10-30', 7, 5], ['2026-10-31', 4, 3]]);
+  assert.deepEqual(days[1].runs, { 'gpt-6.1-sol': 5, 'claude-sonnet-5-5': 2 });
+  assert.deepEqual(m.runsByDay([{ day: '2026-10-30', model: 'a', runs: 1, firstPass: 0, costUsd: null, activeMs: null }, { day: '2026-10-28', model: 'a', runs: 2, firstPass: 1, costUsd: null, activeMs: null }]).map(day => day.day), ['2026-10-28', '2026-10-30'], 'oldest first');
+  assert.deepEqual(m.runsByDay([]), []);
+  assert.equal(m.localDay(at(3, 4, 23)), '2026-03-04');
+  const recent = m.recentDays(at(3, 2), 14);
+  assert.equal(recent.length, 14); assert.equal(recent.at(-1), '2026-03-02'); assert.equal(recent[0], '2026-02-17', 'across the month end, oldest first');
+});
+
+test('heat steps: a rate spans 45%..100% over five steps and a count spans 0..the largest', () => {
+  const m = dashboard('chart-math.ts');
+  assert.deepEqual([0.3, 0.45, 0.46, 0.6, 0.8, 0.9, 1].map(m.rateStep), [1, 1, 1, 2, 4, 5, 5]);
+  assert.deepEqual([0, 1, 3, 6, 9].map(count => m.countStep(count, 9)), [1, 1, 2, 4, 5]);
+  assert.equal(m.countStep(0, 0), 1, 'no findings at all is the lightest step, not a division by zero');
 });
 
 // ---- the store -----------------------------------------------------------------------------------------------------------------
@@ -216,6 +252,22 @@ test('the store reads the appearance and the default summary on start and follow
   assert.deepEqual(store.getState().query, { projectId: 'p2', range: '7d' });
   bridge.fireChanged(); await settle();
   assert.deepEqual(bridge.calls.at(-1), ['summary', { projectId: 'p2', range: '7d' }], 'new records re-read the current query');
+});
+
+test('a read in flight is loading, the refresh button reads the current query again, and a failed read stops loading', async () => {
+  const pending = [], bridge = stubBridge({ summary: query => new Promise(resolve => pending.push(() => resolve({ ok: true, value: { ...fixture(), query } }))) });
+  const store = newStore(bridge);
+  assert.equal(store.getState().loading, false);
+  store.start(); assert.equal(store.getState().loading, true);
+  pending[0](); await settle(); assert.equal(store.getState().loading, false);
+  store.setQuery({ projectId: 'p1' }); store.refresh();
+  assert.equal(pending.length, 3, 'refresh asks again for the same query');
+  assert.equal(store.getState().loading, true);
+  pending[2](); await settle(); assert.equal(store.getState().loading, false);
+  pending[1](); await settle(); assert.equal(store.getState().summary.query.projectId, 'p1', 'the older read does not clear or replace the newer one');
+  const failing = newStore(stubBridge({ summary: async () => ({ ok: false, error: 'boom' }) }));
+  failing.start(); await settle();
+  assert.deepEqual([failing.getState().loading, failing.getState().error], [false, 'boom']);
 });
 
 test('subscribers hear every change and stop hearing when they leave', async () => {
@@ -277,12 +329,17 @@ test('an appearance pushed by the main window is not overwritten by the first re
 });
 
 // ---- the page --------------------------------------------------------------------------------------------------------------
-test('the model page shows the fixture numbers: one hero figure, the comparison table and the cost wording', () => zh(() => {
+test('the model page shows the fixture numbers: one hero figure, the tiles with their small charts, the comparison table and the cost wording', () => zh(() => {
   const html = view();
   assert.equal(count(html, /class="kpi hero"/g), 1);
-  assert.match(html, /<div class="label">一次通过率<\/div><div class="value">80%<\/div>/);
-  assert.match(html, /<div class="label">子任务<\/div><div class="value">50<\/div><div class="delta">上 30 天 38<\/div>/);
-  assert.match(html, /<div class="label">额度消耗<\/div><div class="value">68%<\/div><div class="delta">Codex · 7 天额度窗口<\/div>/);
+  assert.match(html, /<div class="label">一次通过率<\/div><div class="hero-split"><div><div class="value">80%<\/div><div class="delta">审查和你都没退回<\/div>/);
+  assert.match(html, /<div class="label">子任务<\/div><div class="value">50<\/div><div class="delta">▲ 12 · 上 30 天 38<\/div>/);
+  assert.match(html, /<div class="label">额度消耗<\/div><div class="value">68%<\/div><div class="delta">Codex · 7 天额度窗口<\/div><div class="meter" role="img" aria-label="额度已用 68%"><b style="width:68%">/);
+  assert.equal(count(html, /class="spark"/g), 3, 'the first-pass, run and incident tiles each carry small bars');
+  // four units of width per day: the three days of the daily series, then the fourteen days of the run and incident trends
+  for (const [label, width] of [['每天一次通过的子任务数', 12], ['近 14 天每天子任务', 56], ['近 14 天每天事故', 56]]) assert.match(html, new RegExp(`<svg class="spark" viewBox="0 0 ${width} 24" preserveAspectRatio="none" role="img" aria-label="${label}">`));
+  assert.match(html, /aria-label="各模型一次通过率"/);
+  assert.match(html, /<span class="who"><svg[^>]*>[^]*?<\/svg>Opus<\/span><i><b style="width:0%;background:var\(--m-0\)"><\/b><\/i><span>—<\/span>/, 'a model without a measured rate has an empty bar and a dash, never 0');
   const sol = rowOf(html, 'Sol · gpt-6.1-sol');
   assert.match(sol, /<td class="num">18<\/td><td class="num">72%<\/td><td class="num">34 分<\/td><td class="num">96 tok\/s<\/td><td class="num">2\.4<\/td>/);
   assert.match(sol, /≈ \$12\.40<\/span><small class="cost-note">18 次中 16 次有价格/);
@@ -296,37 +353,68 @@ test('the model page shows the fixture numbers: one hero figure, the comparison 
   assert.match(html, /Sonnet 5\.5/); assert.match(html, /Terra · gpt-6\.1-terra/);
 }));
 
-test('the charts have a legend, a direct label, a text alternative and a data table, and tell models apart without colour', () => zh(() => {
+test('the charts name every model in words, have a text alternative and a data table, and share one colour per model', () => zh(() => {
   const html = view();
-  assert.equal(count(html, /<svg class="chart"/g), 2);
-  assert.match(html, /role="img" aria-label="一次通过率按任务类型，数据见下方数据表"/);
-  assert.match(html, /role="img" aria-label="每天输出速度，数据见下方数据表"/);
+  assert.equal(count(html, /<svg class="chart"/g), 3, 'cost and speed, runs per day, speed per day');
+  for (const label of ['成本与速度散点图，数据见模型对比表', '每天子任务，数据见下方数据表', '每天输出速度，数据见下方数据表', '各模型子任务占比']) assert.match(html, new RegExp(`role="img" aria-label="${label}"`));
   assert.equal(count(html, /<details class="data"><summary>查看数据表<\/summary>/g), 2);
-  assert.equal(count(html, /class="legend"/g) >= 2, true);
-  for (const name of ['Sol', 'Sonnet', 'Terra']) assert.match(html, new RegExp(`<text class="end"[^>]*>${name} \\d+</text>`));
+  assert.equal(count(html, /class="legend"/g), 2);
+  for (const [name, value] of [['Sol', 101], ['Sonnet', 72], ['Terra', 141]]) assert.match(html, new RegExp(`<text class="end"[^>]*>${name} ${value}</text>`), 'a line is named at its end');
   // lines: Sol and Terra have three readings (one polyline each), Sonnet's two readings are lone marks around its gap
   assert.equal(count(html, /<polyline/g), 2);
-  assert.equal(count(html, /stroke-dasharray="6 4"/g) >= 1, true, 'the second series is dashed in the legend');
-  assert.match(html, /<polygon|<rect x=/); assert.match(html, /<circle/);
-  // bars: three textures, every bar filled from a pattern
-  assert.match(html, /fill="url\(#dash-pattern-0\)"/); assert.match(html, /fill="url\(#dash-pattern-1\)"/); assert.match(html, /fill="url\(#dash-pattern-2\)"/);
-  assert.match(html, /<pattern id="dash-pattern-2"/);
-  // the data table of the kind chart lists every model and the task kinds, nulls as dashes
-  assert.match(html, /<th>任务类型<\/th>/); assert.match(html, /55% · 5 次/);
-  const docs = rowOf(html, '<td>文档</td>');
-  assert.match(docs, />—</);
-  // 28 / 30 October as axis labels
-  assert.match(html, />10-28</); assert.match(html, />10-30</);
+  for (const slot of [1, 2, 3]) assert.match(html, new RegExp(`stroke="var\\(--m-${slot}\\)"`), `model slot ${slot} draws in its own colour`);
+  assert.match(html, /<polygon/); assert.match(html, /<circle/);
+  assert.equal(count(html, /fill="url\(#/g), 0, 'no textures: a model is told apart by colour and mark, and named beside them');
+  // bubbles: cost per run against speed; Opus has neither, so it is named under the chart instead of drawn at zero
+  assert.equal(count(html, /class="bubble"/g), 3);
+  assert.match(html, /没有价格或速度的模型不画：Opus/);
+  // the stacked daily bars: the days of the daily series as axis labels, the 2px gap made by a shorter segment
+  assert.match(html, />10-29</); assert.match(html, />10-31</);
+  assert.equal(count(html, /class="seg /g), 4);
+  // the run share: one arc per model that ran, the total in the middle
+  assert.match(html, /<title>Sol · gpt-6\.1-sol · 18 次 · 36%<\/title>/); assert.match(html, /class="centre"[^>]*>50<\/text>/);
+  // the data table of the daily bars lists the days newest first, with zeros for idle days
+  const day = html.split('<tr').find(part => part.includes('<td>10-30</td>') && part.includes('class="num"'));
+  assert.match(day, /<td class="num">5<\/td><td class="num">2<\/td><td class="num muted">0<\/td>/);
 }));
 
-test('a fourth model is named in the legend note and kept in the data tables only', () => zh(() => {
+test('the first-pass heat map shades each model-kind cell on five steps, says the number in every cell and shows a dash for no record', () => zh(() => {
+  const html = view();
+  assert.match(html, /<table class="heat narrow">/); assert.match(html, /<th>任务类型<\/th>/);
+  assert.match(html, /<td class="cell step-1" title="测试 · Sol：55%（5 次）">55<\/td>/);
+  assert.match(html, /<td class="cell step-3" title="复杂代码 · Sol：70%（10 次）">70<\/td>/);
+  assert.match(html, /<td class="cell step-5" title="前端 · Terra：90%（4 次）">90<\/td>/);
+  const docs = rowOf(html, '<td>文档</td>');
+  assert.match(docs, /<td class="cell na" title="没有记录">—<\/td>/); assert.match(docs, /<td class="num muted">2 次<\/td>/, 'the sample column counts the runs even when no rate is known');
+  assert.match(html, /<div class="scale"><span>45%<\/span><span class="ramp"><i class="step-1"><\/i>.*<i class="step-5"><\/i><\/span><span>100%<\/span><span>· 无记录显示为 —<\/span><\/div>/);
+}));
+
+test('there is no limit to the models drawn: a fourth model gets its own colour, mark and end label', () => zh(() => {
   const data = fixture();
   data.speed.push({ day: '2026-10-30', model: 'claude-opus-5-5', tokensPerSecond: 58 });
   data.kinds.push({ kind: 'review', model: 'claude-opus-5-5', runs: 7, firstPassRate: 1 });
   const html = view({ summary: data });
-  assert.equal(count(html, /另有 1 个模型只在数据表里/g), 2);
-  assert.doesNotMatch(html, /<text class="end"[^>]*>Opus/);
-  assert.match(rowOf(html, '<td>10-30</td>'), />58</);
+  assert.match(html, /<text class="end"[^>]*>Opus 58<\/text>/); assert.match(html, /stroke="var\(--m-0\)"/);
+  assert.doesNotMatch(html, /另有/);
+  assert.ok(html.split('<tr').some(part => part.includes('<td>10-30</td>') && part.includes('>58<')), 'and a row of the speed data table');
+  assert.match(rowOf(html, '<td>审查</td>'), /title="审查 · Opus：100%（7 次）">100<\/td>/);
+}));
+
+test('picking a model in the key dims every other model across the page, and picking it again lifts the dimming', () => zh(() => {
+  const h = hooks(), loader = makeLoader({ react: h.api });
+  loader('shared/i18n.ts').applyLanguage('zh');
+  const { ModelKey } = loader('features/dashboard/ModelKey.tsx'), { ModelPageProvider } = loader('features/dashboard/model-look.tsx'), { modelLooks } = loader('features/dashboard/chart-math.ts');
+  const models = fixture().models, picked = [], looks = modelLooks(models.map(item => item.model));
+  const chips = focus => { ModelPageProvider._currentValue = { looks, focus }; return elements(h.render(() => ModelKey({ models, onFocus: model => picked.push(model) }))).filter(node => node.type === 'button'); };
+  assert.deepEqual(chips(null).map(node => node.props['aria-pressed']), [false, false, false, false]);
+  chips(null)[1].props.onClick(); chips('claude-sonnet-5-5')[1].props.onClick();
+  assert.deepEqual(picked, ['claude-sonnet-5-5', null], 'the second click on the same chip lifts it');
+  assert.deepEqual(chips('claude-sonnet-5-5').map(node => node.props['aria-pressed']), [false, true, false, false]);
+  const { useModels } = loader('features/dashboard/model-look.tsx');
+  const dim = model => { ModelPageProvider._currentValue = { looks, focus: 'claude-sonnet-5-5' }; return h.render(() => useModels().of(model).dim); };
+  assert.deepEqual(['claude-sonnet-5-5', 'gpt-6.1-sol'].map(dim), ['', 'dim']);
+  const html = view();
+  assert.doesNotMatch(html, /class="dim"/, 'with nothing picked nothing is dim');
 }));
 
 test('the incident table and its stacked twin say which model, what cause, what fix and what weight change', () => zh(() => {
@@ -353,8 +441,10 @@ test('the collaboration page: rounds with phase bars, findings by author, sugges
   assert.match(first, /<td class="num">5<\/td><td class="num">—<\/td><td class="num">13<\/td>/, 'a round before issues were journaled has no question count');
   const second = rowOf(html, 'skills-r2');
   assert.doesNotMatch(second, /class="stagebar"/); assert.match(second, /<td class="num">—<\/td><td><span class="muted">—<\/span><\/td>/);
-  assert.match(html, /<th>作者<\/th><th class="num">正确性<\/th><th class="num">安全<\/th><th class="num">性能<\/th><th class="num">边界\/规范<\/th><th class="num">界面<\/th>/);
-  assert.match(html, /Sol<\/span><\/td><td class="num">9<\/td><td class="num">3<\/td><td class="num">0<\/td><td class="num">0<\/td><td class="num">0<\/td>/);
+  assert.match(html, /<th>作者<\/th><th class="num">正确性<\/th><th class="num">安全<\/th><th class="num">性能<\/th><th class="num">边界\/规范<\/th><th class="num">界面<\/th><th class="num">合计<\/th>/);
+  assert.match(html, /Sol<\/span><\/td><td class="cell step-5" title="Sol · 正确性：9 条">9<\/td><td class="cell step-2" title="Sol · 安全：3 条">3<\/td><td class="cell step-1" title="Sol · 性能：0 条">0<\/td><td class="cell step-1"[^>]*>0<\/td><td class="cell step-1"[^>]*>0<\/td><td class="num muted">12 条<\/td>/,
+    'findings are shaded by count, a known zero is a 0 on the lightest step');
+  assert.match(html, /<i class="swatch rework"><\/i>返工（斜纹）/); assert.match(first, /<i class="rework" style="width:14\.\d+%"><\/i>/, 'rework is the hatched step of the phase bar');
   assert.match(html, /Lower Sol on tests/); assert.match(html, /Fresh sessions for review fixes/);
   assert.equal(count(html, /已采纳 ✓/g), 1); assert.equal(count(html, />撤销</g), 2, 'adopted and dismissed ones can be taken back');
   assert.equal(count(html, />采纳</g), 1); assert.equal(count(html, />不采纳</g), 2, 'one open suggestion has the dismiss button, one dismissed one wears the tag');
@@ -370,8 +460,35 @@ test('the toolbar: tabs, project Select with all projects, the three ranges, eac
   assert.match(html, /<button type="button" class="button" aria-pressed="true">模型评估<\/button><button type="button" class="button" aria-pressed="false">协作报告<\/button>/);
   assert.match(html, /aria-pressed="false">7 天<\/button><button type="button" class="button" aria-pressed="true">30 天<\/button><button type="button" class="button" aria-pressed="false">全部<\/button>/);
   assert.match(view({ tab: 'team', query: { projectId: null, range: 'all' } }), /aria-pressed="true">全部<\/button>/);
-  assert.match(html, /role="status">近 30 天 · 全部项目 · 更新于 14:00<\/span>/);
-  assert.match(view({ query: { projectId: 'p2', range: '7d' } }), /近 7 天 · site · 更新于/);
+  assert.match(html, /role="status">近 30 天 · 全部项目<\/span>/);
+  assert.match(view({ query: { projectId: 'p2', range: '7d' } }), /role="status">近 7 天 · site<\/span>/);
+}));
+
+test('the live strip lists the running workers with their elapsed time and speed, filtered by project, and says when none run', () => zh(() => {
+  const html = view();
+  assert.match(html, /<h2>正在运行<span class="hint"><span class="tag run"><i class="live-dot"><\/i>2 个子任务<\/span> 来自活动面板里调用的模型<\/span><\/h2>/);
+  assert.equal(count(html, /class="live-item /g), 2);
+  assert.match(html, /<div class="l1">[^]*?Sol<\/span><span class="tag">执行<\/span><\/div><div class="r1">已运行 <span>1:00:00<\/span><\/div><div class="l2" title="Refactor the grid">Refactor the grid<\/div><div class="r2"><b>96 tok\/s<\/b><\/div>/);
+  assert.match(html, /Check the colours<\/div><div class="r2"><b>—<\/b><\/div>/); assert.match(html, /已运行 <span>—<\/span>/, 'a start the records do not give is a dash, not 0:00');
+  const onlyP2 = view({ summary: fixture({ query: { projectId: 'p2', range: '30d' } }) });
+  assert.match(onlyP2, /Check the colours/); assert.doesNotMatch(onlyP2, /Refactor the grid/);
+  const none = view({ summary: fixture({ live: { running: [], at: 0 } }) });
+  assert.match(none, /现在没有子任务在运行/); assert.doesNotMatch(none, /class="live-item /);
+  assert.match(view({ now: at(10, 31, 14) + 61_000 }), /已运行 <span>1:01:01<\/span>/, 'the clock moves with the page clock');
+}));
+
+test('the freshness chip says live, refreshing or stale with the age of the numbers, and the button reads again', () => zh(() => {
+  const html = view();
+  assert.match(html, /<div class="fresh" data-state="live"><span class="state"><i class="live-dot is-live"><\/i><b role="status">实时<\/b><span class="muted">更新于 刚刚<\/span><\/span><button type="button" class="refresh" aria-label="立即刷新">刷新<\/button><\/div>/);
+  assert.match(view({ now: at(10, 31, 14) + 30_000 }), /更新于 30 秒前/); assert.match(view({ now: at(10, 31, 14) + 90_000 }), /更新于 1 分钟前/);
+  const refreshing = view({ loading: true });
+  assert.match(refreshing, /data-state="refetch"[^]*?刷新中…/); assert.match(refreshing, /<button type="button" class="refresh" aria-label="立即刷新" disabled="">/); assert.match(refreshing, /class="dash-main is-refetch"/);
+  assert.match(view({ now: at(10, 31, 14) + 121_000 }), /data-state="stale"[^]*?已过期[^]*?更新于 2 分钟前/, 'no change and no minute tick for two minutes');
+  assert.match(view({ error: 'boom' }), /data-state="stale"/); assert.doesNotMatch(view({ summary: null }), /class="fresh"/, 'nothing to be fresh about before the first read');
+  const chip = dashboard('FreshnessChip.tsx'), refreshed = [];
+  const button = elements(chip.FreshnessChip({ generatedAt: 0, now: 1000, loading: false, failed: false, onRefresh: () => refreshed.push('now') })).find(node => node.type === 'button');
+  button.props.onClick(); assert.deepEqual(refreshed, ['now']);
+  assert.deepEqual([[0, 119_999, false, false], [0, 120_000, false, false], [0, 1, true, false], [0, 1, false, true], [0, 500_000, true, false]].map(args => chip.freshness(...args)), ['live', 'stale', 'refetch', 'stale', 'refetch']);
 }));
 
 test('the title bar has the window buttons and the page says what is wrong, what is loading and what is empty', () => zh(() => {
@@ -409,7 +526,7 @@ test('English mode writes the same page in English, with the sentence templates 
     applyLanguage('en');
     const html = view();
     assert.match(html, /First-pass rate/); assert.match(html, /Model comparison/); assert.match(html, /16 of 18 runs priced/);
-    assert.match(html, /Codex · 7 days limit window/); assert.match(html, /previous 30 days: 38/); assert.match(html, /Last 30 days · All projects · updated 14:00/);
+    assert.match(html, /Codex · 7 days limit window/); assert.match(html, /previous 30 days: 38/); assert.match(html, /Last 30 days · All projects</);
     assert.match(html, /Models without a price: mystery-model; they are left out of the cost\./);
     assert.match(html, /Tests 1\.0 → 0\.7 ↓ lowered/); assert.match(html, /View data table/);
     assert.equal(document.documentElement.lang, 'en');
@@ -427,7 +544,7 @@ function hooks(initial = {}) {
     ...React,
     useState(start) { const slot = index++; if (!(slot in slots)) slots[slot] = slot in initial ? initial[slot] : typeof start === 'function' ? start() : start; return [slots[slot], value => { slots[slot] = typeof value === 'function' ? value(slots[slot]) : value; }]; },
     useRef(start) { const slot = index++; slots[slot] ??= { current: start }; return slots[slot]; },
-    useEffect() {}, useLayoutEffect() {},
+    useEffect() {}, useLayoutEffect() {}, useContext: context => context._currentValue,
   };
   return { api, slots, render(run) { index = 0; return run(); } };
 }
@@ -566,12 +683,31 @@ test('the dashboard stylesheet keeps the product scale: spacing, type, radii, co
   }
   assert.deepEqual([...sizes].sort(), ['12px', '13px', '14px', '16px', '48px']); assert.deepEqual([...weights].sort(), ['400', '600']);
   assert.deepEqual([...radii].sort(), ['12px', '8px', '999px']);
-  const literal = declarations.filter(({ name, value }) => /#[0-9a-f]{3,8}\b/i.test(value) && !/^--chart-[123]$/.test(name));
-  assert.deepEqual(literal, [], 'colours come from the theme tokens; only --chart-1..3 are literal');
-  assert.match(css, /\.dash \{ --chart-1: #3987e5; --chart-2: #d95926; --chart-3: #199e70;/);
-  assert.match(css, /:root\[data-theme="light"\] \.dash \{ --chart-1: #2a78d6; --chart-2: #eb6834; --chart-3: #1baf7a; \}/);
+  const literal = declarations.filter(({ name, value }) => /#[0-9a-f]{3,8}\b/i.test(value) && !/^--(m-[0-5]|r[1-5]|rework)$/.test(name));
+  assert.deepEqual(literal, [], 'colours come from the theme tokens; only the six model colours, the five-step slate ramp and the rework red are literal');
+  assert.match(css, /\.dash \{ --m-0: #3987e5; --m-1: #d95926; --m-2: #199e70; --m-3: #c98500; --m-4: #d55181; --m-5: #9085e9;/);
+  assert.match(css, /:root\[data-theme="light"\] \.dash \{ --m-0: #2a78d6; --m-1: #eb6834; --m-2: #1baf7a; --m-3: #eda100; --m-4: #e87ba4; --m-5: #6250d6;/);
+  assert.doesNotMatch(css, /--chart-[123]|dash-pattern|pattern-ink/, 'the three-series colours and the bar textures are gone');
   assert.equal(declarations.find(({ selector, name }) => selector === 'details.data summary' && name === 'height').value, '32px', 'the data-table toggle is a 32px control');
   assert.match(fs.readFileSync(path.join(src, 'shared/styles/styles.css'), 'utf8'), /\.button \{[^}]*height: 32px/);
+});
+
+// WCAG contrast of the page's own colours, from the stylesheet and the base tokens of themes.css (the dashboard window is outside the workbench).
+test('every heat step has an ink that reads on it at 4.5:1 in both themes, and the model colours hold 3:1 in dark', () => {
+  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const luminance = hex => { const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const ratio = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+  const block = selector => css.slice(css.indexOf(selector) + selector.length, css.indexOf('}', css.indexOf(selector)));
+  const tokens = { dark: { 'text-1': '#f2f2f2', 'bg-app': '#181818', 'bg-card': '#262626' }, light: { 'text-1': '#24272d', 'bg-app': '#f8f9fb', 'bg-card': '#ffffff' } };
+  const themes = { dark: block('.dash {'), light: block(':root[data-theme="light"] .dash {') };
+  const value = (theme, name) => themes[theme].match(new RegExp(`--${name}: ([^;]+);`))?.[1] ?? (theme === 'light' ? value('dark', name) : undefined);
+  const hex = (theme, name) => { const raw = value(theme, name); return raw.startsWith('var(') ? tokens[theme][raw.slice(6, -1)] : raw; };
+  for (const theme of ['dark', 'light']) for (const step of [1, 2, 3, 4, 5]) {
+    assert.ok(ratio(hex(theme, `r${step}`), hex(theme, `r-ink-${step}`)) >= 4.5, `${theme} step ${step} ink ${ratio(hex(theme, `r${step}`), hex(theme, `r-ink-${step}`)).toFixed(2)}`);
+  }
+  for (let slot = 0; slot < 6; slot++) assert.ok(ratio(hex('dark', `m-${slot}`), tokens.dark['bg-card']) >= 3, `dark model colour ${slot} on the card`);
+  // On white, green, yellow and pink fall under 3:1, which is why no chart relies on colour alone: each carries a mark and the name, and has a data table.
+  assert.deepEqual([0, 1, 2, 3, 4, 5].filter(slot => ratio(hex('light', `m-${slot}`), tokens.light['bg-card']) < 3), [2, 3, 4]);
 });
 
 test('the page reads only the dashboard bridge and never the main window’s', () => {

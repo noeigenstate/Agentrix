@@ -111,7 +111,7 @@ function mainHarness(t, f) {
   // Reads here happen when the test asks: a write told by the file watch (codex-activity.test.cjs) would start one
   // while a large file is still being written.
   const context = vm.createContext({ path, sessions, store,
-    readingHistory: { summary: () => null, close() {} }, prepareReading: async () => {}, TranscriptTail, AgentCalls: require('../electron/features/agents/agent-calls.cjs').AgentCalls, monitorActivity: (read, changed, options) => monitorActivity(read, changed, { ...options, watch: null }), claudeConversation, claudeRecord,
+    readingHistory: { summary: () => null, close() {} }, prepareReading: async () => {}, TranscriptTail, AgentCalls: require('../electron/features/agents/agent-calls.cjs').AgentCalls, createInterventions: require('../electron/features/agents/interventions.cjs').createInterventions, monitorActivity: (read, changed, options) => monitorActivity(read, changed, { ...options, watch: null }), claudeConversation, claudeRecord,
     claudeConfigDir: () => f.home, findClaudeSession: (cwd, id) => findClaudeSession(cwd, id, f.home),
     describeActions() {}, skills: null, findProject: () => project, broadcast() {}, scheduleState() {}, acceptShellEvent: () => true, noteSettings() {}, readEvery: () => 1000,
     startSkillSession() {}, endSkillSession() {},

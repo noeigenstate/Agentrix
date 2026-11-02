@@ -133,6 +133,8 @@
 .focus-mode .terminal-split { background: var(--bg-app); }
 .terminal-slot { position: relative; display: flex; min-width: 0; min-height: 0; }
 .terminal-slot > .terminal-split { flex: 1; }
+/* A sub-agent's read-only view takes a cell of the terminal grid: no grip, no restart or close tools, and it is never reordered or saved. */
+.subagent-slot { position: relative; display: flex; min-width: 0; min-height: 0; }
 .terminal-split-body { position: relative; flex: 1; min-height: 0; overflow: hidden; }
 .has-splits .is-active-terminal::after { content: ''; position: absolute; inset: 0; z-index: 2; box-shadow: inset 0 0 0 1px var(--border-hover); pointer-events: none; }
 .terminal-split-tools { position: absolute; top: 6px; right: 16px; z-index: 3; display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 8px; background: color-mix(in srgb, var(--bg-card) 88%, transparent); opacity: 0; pointer-events: none; transition: opacity .12s linear; }

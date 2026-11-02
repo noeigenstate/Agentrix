@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ArrowCounterClockwise, DotsSixVertical, Play, Terminal as TerminalIcon, X } from '@phosphor-icons/react';
+import { SubagentPane } from '../agents/SubagentPane';
+import { closeSplit, limitSplits, splitLimit, splitsOf, useSplits } from '../agents/subagent-splits.ts';
 import { AgentLauncher } from './AgentLauncher';
 import { TerminalPane } from './TerminalPane';
 import { terminalInUse, visibleTerminals } from './terminal-visibility.ts';
@@ -22,14 +24,21 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
   const visible = terminals.filter(terminal => base.has(terminal.id) || !focused && terminal.readingHistory);
   const visibleIds = new Set(visible.map(terminal => terminal.id));
   const multiple = visible.length > 1;
-  const columns = Math.min(Math.max(1, Math.ceil(Math.sqrt(visible.length))), width < 600 ? 1 : width < 1150 ? 2 : 3);
-  const rows = Math.max(1, Math.ceil(visible.length / columns));
+  // The sub-agent views the owner opened beside the conversation take cells of the same grid, only while the project is expanded.
+  const openViews = useSplits(), views = focused ? terminals.flatMap(terminal => splitsOf(openViews, terminal.id)) : [];
+  const cells = visible.length + views.length;
+  const columns = Math.min(Math.max(1, Math.ceil(Math.sqrt(cells))), width < 600 ? 1 : width < 1150 ? 2 : 3);
+  const rows = Math.max(1, Math.ceil(cells / columns));
+  // One conversation with two views: the conversation keeps the whole left column and the views stack on the right.
+  const tall = visible.length === 1 && views.length === 2 && columns === 2;
   const selected = terminalInUse(visible, activeId)?.id ?? null;
   const launcherTerminal = terminals.find(terminal => !terminal.sessionId || terminal.status === 'exited') ?? terminals[0];
   const runningCount = terminals.filter(terminal => terminal.sessionId && terminal.status !== 'exited' && terminal.status !== 'stopped').length;
   const openTerminal = (id: string) => { setActiveId(id); if (!focused) onExpand(); };
   const raw = useTerminalChoice();
   useEffect(() => { terminals.forEach(syncReading); }, [terminals, raw]);
+  // A centre too narrow for two views keeps the newest one.
+  useEffect(() => { terminals.forEach(terminal => limitSplits(terminal.id, splitLimit(width))); }, [terminals, openViews, width]);
   useEffect(() => {
     const node = area.current; if (!node) return;
     const observer = new ResizeObserver(() => setWidth(node.clientWidth));
@@ -46,14 +55,14 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
       ? <button className="text-button agent-launcher-running" onClick={onExpand}>{t('{count} 个终端运行中 · 点击展开', { count })}</button>
       : <button className="button secondary small" onClick={async () => { await onAction(window.agentrix.startTerminal(terminalId)); openTerminal(terminalId); }}><Play size={13} weight="fill" />{t('启动终端')}</button>}
   </div>;
-  return <div ref={area} className={`panel-terminal-area terminal-grid ${multiple ? 'has-splits' : ''} ${reorder.drag ? 'is-reordering' : ''}`} style={{ '--terminal-columns': columns, '--terminal-rows': rows } as CSSProperties}
+  return <div ref={area} className={`panel-terminal-area terminal-grid ${cells > 1 ? 'has-splits' : ''} ${reorder.drag ? 'is-reordering' : ''}`} style={{ '--terminal-columns': columns, '--terminal-rows': rows } as CSSProperties}
     onPointerDown={reorder.onPointerDown} onClickCapture={reorder.onClickCapture}>
     {shown.map(terminal => {
       if (!focused && !terminal.sessionId && !terminal.readingHistory) return null;
       const stopped = terminal.status === 'stopped' || terminal.status === 'exited';
       const reading = readingShown(terminal, raw);
       const name = `${project.name} ${terminal.title}`;
-      return <div key={terminal.id} className={`terminal-slot ${reorder.drag?.id === terminal.id ? 'drag-placeholder' : ''}`} data-terminal-slot={terminal.id} style={{ display: visibleIds.has(terminal.id) ? undefined : 'none' }}>
+      return <div key={terminal.id} className={`terminal-slot ${reorder.drag?.id === terminal.id ? 'drag-placeholder' : ''}`} data-terminal-slot={terminal.id} style={{ display: visibleIds.has(terminal.id) ? undefined : 'none', gridRow: tall ? '1 / span 2' : undefined }}>
       <section className={`terminal-split ${selected === terminal.id ? 'is-active-terminal' : ''} ${reorder.drag?.id === terminal.id ? 'drag-source' : ''} ${reorder.drag?.targetId === terminal.id ? 'drop-target' : ''}`} data-terminal-id={terminal.id} data-session-id={terminal.sessionId || ''} data-codex-active={terminal.codexActive} aria-label={name} onPointerDownCapture={() => setActiveId(terminal.id)} onFocusCapture={() => setActiveId(terminal.id)}>
         {/* Only with several splits, and only while the pointer or the keyboard is in one: its drag grip (splits are reordered by it), restart and close, in its corner. */}
         {multiple && <div className="terminal-split-tools">
@@ -71,6 +80,9 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
         {multiple && stopped && terminal.sessionId && <button className="button secondary small terminal-split-restart" onClick={() => void onAction(window.agentrix.startTerminal(terminal.id))}>{t('重新启动')}</button>}
       </section></div>;
     })}
+    {views.map(view => <div key={`${view.terminalId}/${view.callId}`} className="subagent-slot">
+      <SubagentPane terminalId={view.terminalId} callId={view.callId} projectId={project.id} onClose={() => closeSplit(view.terminalId, view.callId)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />
+    </div>)}
     {!focused && !visible.length && (project.kind === 'ssh' ? sshEmpty(launcherTerminal.id, runningCount)
       : <AgentLauncher terminalId={launcherTerminal.id} projectId={project.id} onAction={onAction} onOpenTerminal={openTerminal} runningCount={runningCount} onExpand={onExpand} />)}
   </div>;

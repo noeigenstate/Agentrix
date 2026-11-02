@@ -36,6 +36,25 @@ export function previousNote(range: DashboardRange, previous: number | string | 
   return t('上 {range} {value}', { range: range === '7d' ? t('7 天') : t('30 天'), value: previous ?? NONE });
 }
 
+// A count with its direction against the previous period ("▲ 12 · 上 30 天 38"); without a previous figure, just the hint.
+export function changeNote(range: DashboardRange, value: number, previous: number | null) {
+  const note = previousNote(range, previous);
+  return range === 'all' || previous === null ? note : `${value >= previous ? '▲' : '▼'} ${Math.abs(value - previous)} · ${note}`;
+}
+
+// How long ago, in the words a status chip uses.
+export function age(ms: number) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  return seconds < 5 ? t('刚刚') : seconds < 60 ? t('{count} 秒前', { count: seconds }) : t('{count} 分钟前', { count: Math.floor(seconds / 60) });
+}
+
+// An elapsed time as m:ss, or h:mm:ss from an hour on; a start the records do not give reads "—".
+export function clock(ms: number | null) {
+  if (ms === null) return NONE;
+  const seconds = Math.max(0, Math.floor(ms / 1000)), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60);
+  return hours ? `${hours}:${pad(minutes)}:${pad(seconds % 60)}` : `${minutes}:${pad(seconds % 60)}`;
+}
+
 const capital = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 const CLAUDE = /^claude-([a-z]+)-(\d+)-(\d+)$/, GPT = /^gpt-[\d.]+-([a-z]+)$/;
 
