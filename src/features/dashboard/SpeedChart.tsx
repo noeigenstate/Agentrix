@@ -1,4 +1,5 @@
-// Output speed per local day: one line per model in its colour and mark, the last value written at the line's end.
+// Output speed per local day: one line per model in its colour and mark. The last value of each is written in a gutter right of the plot, tied to its line's end by a thin tail,
+// so a label never sits among the marks and lines (every mark ends within MARK of the plot's right edge, every label starts GUTTER past it).
 import { useState } from 'react';
 import type { DashboardSpeedPoint } from '../../shared/dashboard-types';
 import { t } from '../../shared/i18n';
@@ -9,7 +10,8 @@ import { useModels } from './model-look';
 import { Empty } from './Panel';
 import { ScrollRegion } from './ScrollRegion';
 
-const HEIGHT = 240, LEFT = 40, RIGHT = 96, TOP = 20, BOTTOM = 28, PLOT = HEIGHT - TOP - BOTTOM, LABEL_GAP = 14;
+const HEIGHT = 240, LEFT = 40, RIGHT = 120, TOP = 20, BOTTOM = 28, PLOT = HEIGHT - TOP - BOTTOM, LABEL_GAP = 14, MARK = 5, GUTTER = 24, NAME_MAX = 12;
+const clip = (name: string) => name.length > NAME_MAX ? `${name.slice(0, NAME_MAX - 1)}…` : name;
 
 export function SpeedChart({ speed, models }: { speed: DashboardSpeedPoint[]; models: string[] }) {
   const [ref, width] = useWidth<SVGSVGElement>(), tip = useTip(), [hover, setHover] = useState<number | null>(null), { of } = useModels();
@@ -22,6 +24,8 @@ export function SpeedChart({ speed, models }: { speed: DashboardSpeedPoint[]; mo
   const values = drawn.map(model => days.map(({ values: day }) => day[model] ?? null));
   const ends = values.map(list => list.map((value, index) => ({ value, index })).filter(point => point.value !== null).at(-1)!);
   const labelY = spreadLabels(ends.map(end => y(end.value!) + 4), LABEL_GAP, TOP + 8, TOP + PLOT + 4);
+  // From just past the end mark, level to the gutter's edge, then to the label's middle.
+  const tail = (row: number) => { const end = ends[row], edge = width - RIGHT + GUTTER; return [[xs[end.index] + MARK + 2, y(end.value!)], [edge - 10, y(end.value!)], [edge - 4, labelY[row] - 4]].map(point => point.join(',')).join(' '); };
   const every = markerEvery(days.length);
   const axisDays = [...new Set([0, Math.floor((days.length - 1) / 2), days.length - 1])];
   return <>
@@ -34,8 +38,9 @@ export function SpeedChart({ speed, models }: { speed: DashboardSpeedPoint[]; mo
         return <g key={model} className={style.dim} stroke={style.colour} fill={style.colour}>
           {runs(values[row]).map(run => run.length > 1 && <polyline key={run[0]} className="line" points={run.map(index => `${xs[index]},${y(values[row][index]!)}`).join(' ')} />)}
           {values[row].map((value, index) => value !== null && (index % every === 0 || index === ends[row].index) &&
-            <g key={index} className="marker"><MarkShape shape={style.look.shape} cx={xs[index]} cy={y(value)} r={5} /></g>)}
-          <text className="end" stroke="none" x={xs[ends[row].index] + 12} y={labelY[row]}>{modelShort(model)} {Math.round(ends[row].value!)}</text>
+            <g key={index} className="marker"><MarkShape shape={style.look.shape} cx={xs[index]} cy={y(value)} r={MARK} /></g>)}
+          <polyline className="tail" points={tail(row)} />
+          <text className="end" stroke="none" x={width - RIGHT + GUTTER} y={labelY[row]}>{clip(modelShort(model))} {Math.round(ends[row].value!)}</text>
         </g>;
       })}
       {hover !== null && xs[hover] !== undefined && <line className="cross" x1={xs[hover] + 0.5} x2={xs[hover] + 0.5} y1={TOP} y2={TOP + PLOT} />}

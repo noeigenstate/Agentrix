@@ -2,7 +2,8 @@
 .subagent-input { display: flex; flex: none; flex-direction: column; gap: 4px; padding: 8px 24px; border-top: 1px solid var(--divider); }
 .subagent-input-row { display: flex; align-items: flex-end; gap: 8px; }
 .subagent-input textarea { flex: 1; min-width: 0; min-height: 36px; max-height: 120px; field-sizing: content; resize: none; padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: 400 14px/22px var(--font-ui); }
-.subagent-input textarea::placeholder { color: var(--text-2); }
+/* The hint stays on one line and ends in an ellipsis at any width, so the empty box keeps its 36px (field-sizing would otherwise size it to the wrapped hint); typed text still wraps and grows. */
+.subagent-input textarea::placeholder { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .subagent-input textarea:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .subagent-input textarea:disabled { cursor: not-allowed; }
 .subagent-input-note { margin: 0; color: var(--text-2); font-size: 12px; }

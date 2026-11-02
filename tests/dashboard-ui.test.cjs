@@ -376,7 +376,7 @@ test('the charts name every model in words, have a text alternative and a data t
   assert.equal(count(html, /class="legend"/g), 2);
   for (const [name, value] of [['Sol', 101], ['Sonnet', 72], ['Terra', 141]]) assert.match(html, new RegExp(`<text class="end"[^>]*>${name} ${value}</text>`), 'a line is named at its end');
   // lines: Sol and Terra have three readings (one polyline each), Sonnet's two readings are lone marks around its gap
-  assert.equal(count(html, /<polyline/g), 2);
+  assert.equal(count(html, /<polyline class="line"/g), 2);
   for (const slot of [1, 2, 3]) assert.match(html, new RegExp(`stroke="var\\(--m-${slot}\\)"`), `model slot ${slot} draws in its own colour`);
   assert.match(html, /<polygon/); assert.match(html, /<circle/);
   assert.equal(count(html, /fill="url\(#/g), 0, 'no textures: a model is told apart by colour and mark, and named beside them');
@@ -761,4 +761,58 @@ test('the page keeps time with the shared clock hook, not a copy of its own', ()
   zh(() => renderToStaticMarkup(React.createElement(DashboardView, { summary: fixture(), query: { projectId: null, range: '30d' }, error: null, tab: 'models', named: true,
     onTab() {}, onQuery() {}, decide: async () => null, actions: { minimize() {}, maximize() {}, close() {} } })));
   assert.deepEqual(asked, [Date.now], 'the page starts the shared clock at Date.now');
+});
+
+// ---- round r7 acceptance: labels clear of marks, whole cells, an opaque key -----------------------------------------------------
+test('the speed chart writes every end label in a gutter right of the plot, level with a tail to its line, clear of every mark and line', () => zh(() => {
+  const html = view(), chart = html.slice(html.lastIndexOf('<svg class="chart"'), html.lastIndexOf('</svg>') + 6);
+  const labels = [...chart.matchAll(/<text class="end"[^>]*x="([\d.]+)" y="([\d.]+)"[^>]*>([^<]+)<\/text>/g)].map(match => ({ x: +match[1], y: +match[2], text: match[3] }));
+  assert.equal(labels.length, 3, 'Sol, Sonnet and Terra each named once');
+  const width = 640, plotRight = width - 120;
+  assert.deepEqual([...new Set(labels.map(label => label.x))], [plotRight + 24], 'one column, 24px past the plot');
+  // every mark (circle, square or polygon) and every line stays inside the plot plus the mark's radius; no label reaches back over them
+  const xs = [...chart.matchAll(/(?:cx|x)="([\d.]+)"|points="([^"]+)"/g)].flatMap(match => match[1] ? [+match[1]] : match[2].split(' ').map(point => +point.split(',')[0]));
+  const markXs = xs.filter(x => x < plotRight + 24 - 4);
+  assert.ok(Math.max(...markXs) + 5 < plotRight + 24, 'the right-most mark ends before the gutter');
+  const ys = labels.map(label => label.y).sort((p, q) => p - q);
+  for (let i = 1; i < ys.length; i++) assert.ok(ys[i] - ys[i - 1] >= 14, 'labels a line apart');
+  const tails = [...chart.matchAll(/<polyline class="tail" points="([^"]+)"/g)].map(match => match[1].split(' ').map(point => point.split(',').map(Number)));
+  assert.equal(tails.length, 3, 'a tail from each line\'s last mark');
+  for (const tail of tails) {
+    assert.equal(tail.length, 3); assert.equal(tail[0][1], tail[1][1], 'level with the mark first');
+    assert.ok(tail[2][0] < plotRight + 24 && tail[2][0] > tail[1][0], 'then into the gutter, short of the text');
+  }
+  assert.ok(labels.every(label => label.text.length <= 16), 'a long name is cut');
+  const chartMath = fs.readFileSync(path.join(dashboardDir, 'SpeedChart.tsx'), 'utf8');
+  assert.match(chartMath, /const clip = \(name: string\) => name\.length > NAME_MAX/, 'with an ellipsis');
+  assert.match(fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8'), /\.chart \.tail \{ fill: none; stroke-width: 1; stroke-dasharray: 2 3;/);
+}));
+
+test('a table the region cuts through hides the cut columns until they are whole in view: nothing half-shown beside the pinned column or at the right edge', () => {
+  // A region 400 wide from x = 0 with a pinned first column of 100 and five more of 100 each; the scroll moves everything but the pinned column.
+  const { hideCutColumns } = dashboard('ScrollRegion.tsx'), classes = new Set();
+  const cell = (index, scrolled) => {
+    const left = index === 0 ? 0 : 100 * index - scrolled, right = left + 100;
+    return { getBoundingClientRect: () => ({ left, right, width: 100 }), classList: { toggle: (name, on) => on ? classes.add(`${name}:${index}`) : classes.delete(`${name}:${index}`) } };
+  };
+  const cut = scrolled => {
+    const row = () => ({ children: [0, 1, 2, 3, 4, 5].map(index => cell(index, scrolled)) }), head = row(), body = row();
+    classes.clear();
+    hideCutColumns({ clientWidth: 400, getBoundingClientRect: () => ({ left: 0 }), querySelectorAll: selector => selector === '.sticky th' ? head.children : [head, body] });
+    return [...classes].map(entry => entry.split(':')[1]).sort().filter((index, at, all) => all.indexOf(index) === at).join('');
+  };
+  assert.equal(cut(0), '45', 'at the start columns 1 to 3 are whole beside the pin; the fourth is cut by the right edge, and the fifth is beyond it');
+  assert.equal(cut(100), '15', 'scrolled one column: column 1 is under the pin, 2 to 4 are whole, 5 is cut');
+  assert.equal(cut(150), '125', 'between column edges, the columns half under the pin are cut as well as the one at the right edge');
+  assert.equal(cut(200), '12', 'at the end of the scroll, 3 to 5 are whole and only those under the pin are cut');
+  assert.equal(cut(0).includes('0'), false, 'the pinned column is never hidden');
+  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8');
+  assert.match(css, /\.sticky \.is-cut \{ color: transparent; \}\s*\.sticky \.is-cut \* \{ visibility: hidden; \}/, 'its cells keep their lines and show no value');
+});
+
+test('the key is opaque to the top of the scroll area: the page has no top padding to show through, and the key carries the 16px', () => {
+  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8');
+  assert.match(css, /\.dash-main \{[^}]*padding: 0 16px 16px;/, 'a sticky box stops at the padding, so there is none above it');
+  assert.match(css, /\.dash-main > :first-child \{ margin-top: 16px; \}/, 'the toolbar keeps its 16px as a margin');
+  assert.match(css, /\.keybar \{ position: sticky; top: 0;[^}]*margin-top: -16px; padding: 24px 0 8px; background: var\(--bg-app\); \}/, 'its own top padding covers what scrolls under it, up to its top edge');
 });
