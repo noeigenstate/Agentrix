@@ -2210,5 +2210,9 @@
   "已请它停下": "Asked it to stop",
   "它已结束或不可用，不能再发消息": "It has finished or is unavailable and takes no more messages",
   "给 {name} 发消息": "Message {name}",
-  "给它发消息 · Enter 发送，Shift+Enter 换行": "Message it · Enter to send, Shift+Enter for a new line"
+  "给它发消息 · Enter 发送，Shift+Enter 换行": "Message it · Enter to send, Shift+Enter for a new line",
+  "引用这条消息": "Quote this message",
+  "引用的消息": "Quoted message",
+  "移除引用": "Remove the quote",
+  "输入框暂时不可用，等它可用后再引用": "The message box is unavailable for now; quote once it is available"
 }

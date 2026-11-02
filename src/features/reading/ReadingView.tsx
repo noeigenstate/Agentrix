@@ -34,6 +34,8 @@ import { ResultActions, ResultChecks, ResultStatus, WorkingLine } from './Result
 import { latestResult } from './result-round';
 import { AgentCommandRun } from './AgentCommandRun';
 import { onComposerPrefill } from './composer-prefill';
+import { QuoteChip } from './ReadingQuote';
+import { quoteExcerpt, withQuote, type MessageQuote } from './message-quote';
 
 import { ConversationDecorations, ConversationFeed } from './ConversationFeed';
 export { Markdown } from './Markdown';
@@ -117,6 +119,10 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const serverPictures = useRef<ServerPicture[]>([]), [, setPictureTick] = useState(0);
   const clearPictures = () => { native.clear(); serverPictures.current = []; setPictureTick(tick => tick + 1); };
   useLayoutEffect(() => { pictureGeneration.current++; serverPictures.current = []; setPictureTick(tick => tick + 1); }, [conversation]);
+  // One quoted message waits for the next message; the newest wins. The ref is what a send in flight reads.
+  const [quote, setQuote] = useState<MessageQuote | null>(null), quoteRef = useRef<MessageQuote | null>(null);
+  const holdQuote = (next: MessageQuote | null) => { quoteRef.current = next; setQuote(next); };
+  useLayoutEffect(() => { holdQuote(null); }, [conversation]);
   const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null), composer = useRef<HTMLDivElement>(null);
   const [terminalPopup, setTerminalPopup] = useState<{ command: string; focus?: boolean } | null>(null);
   const inputBlocked = preview || !live || !idleInput || working || hasChoice || terminalPopup !== null;
@@ -261,7 +267,11 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       if (failed) { onError(failed.error ?? t('未送达：助手没有收到这条消息')); return; }
     }
     const attached = batch.map(image => image.src).filter(Boolean), pictures = uploads.map(picture => picture.path!);
-    const text = pictures.length ? (isTypedCommand(words) ? [words, ...pictures] : [...pictures, words]).filter(Boolean).join(' ') : words;
+    const plain = pictures.length ? (isTypedCommand(words) ? [words, ...pictures] : [...pictures, words]).filter(Boolean).join(' ') : words;
+    // The quote goes only with the owner's own ordinary message: a command is typed as it is and leaves it for the next
+    // message, and a message sent again (own = false) already carries its quote.
+    const carried = own && words && !isTypedCommand(words) ? quoteRef.current : null;
+    const text = withQuote(carried?.excerpt, plain);
     if ((!text && !batch.length) || !terminal.sessionId) return;
     // Commands clear the native input; they cannot silently consume pictures waiting for a normal message.
     if (batch.length && isTypedCommand(text)) { onError(t('请先发送或移除输入框中的图片，再发送这条消息。')); return; }
@@ -293,6 +303,9 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     }
     const pendingId = text || batch.length ? echo(text, attached, batch.length) : null;
     if (pendingId) toBottom();
+    // From here the message shows as sent; the quote went with it, and returns with the draft if the send fails.
+    if (carried && quoteRef.current === carried) holdQuote(null);
+    const restoreQuote = () => { if (carried && !quoteRef.current && ownsSend(owner)) holdQuote(carried); };
     const left = text && !batch.length ? inputDraft() : '';
     const clearDraft = () => { if (own && input.current?.value.trim() === words) edit(''); };
     if (own && !pictureSend) edit('');
@@ -310,6 +323,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       if (!ownsSend(owner)) return;
       if (!pasted.ok) {
         if (pendingId) cancelEcho(pendingId);
+        restoreQuote();
         if (own && !pictureSend && !input.current?.value) edit(words);
         onError(pasted.error); return;
       }
@@ -320,11 +334,13 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (text) await new Promise(resolve => setTimeout(resolve, 400));
     if (!ownsSend(owner) || choiceVisible.current) {
       if (pendingId) cancelEcho(pendingId);
+      restoreQuote();
       if (ownsSend(owner) && own && !input.current?.value) edit(words);
       return;
     }
     if (batch.length && !native.observe(batch)) {
       if (pendingId) cancelEcho(pendingId);
+      restoreQuote();
       if (own && !input.current?.value) edit(words);
       pictureNotAccepted(); return;
     }
@@ -489,6 +505,11 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // works or waits, and nothing for earlier rounds.
   const settled = !status && !statusRunning && terminal.codexActive && !cards.prompts.length && !hasChoice, interrupted = terminal.codexActivity === 'interrupted';
   const result = useMemo(() => latestResult(entries, { idle: settled, interrupted }), [entries, settled, interrupted]);
+  // Only the owner's click on a message's 引用 gets here, so only it moves the keyboard to the message box.
+  const quoteMessage = (who: string, text: string) => {
+    const excerpt = quoteExcerpt(text);
+    if (excerpt) { holdQuote({ who, excerpt }); input.current?.focus(); }
+  };
   const continueWith = (prefill?: string) => {
     if (prefill && !draft.trim()) { caret.current = prefill.length; edit(prefill); }
     input.current?.focus();
@@ -506,7 +527,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   else body = <>
     {tail.hasEarlier && <button type="button" className="text-button reading-earlier" disabled={historyPage.loading} onClick={() => void tail.showEarlier()}>{historyPage.paged ? t('显示更早的对话') : t('显示更早的对话（{count}）', { count: tail.earlier })}</button>}
     {historyPage.error && <p role="status">{t(historyPage.error)}</p>}
-    <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: statusRunning, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions }}>
+    <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: statusRunning, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions, quote: { disabled: inputBlocked ? t('输入框暂时不可用，等它可用后再引用') : null, pick: quoteMessage } }}>
       <ConversationFeed entries={entries} agent={kind} projectId={projectId} live={!settled} onError={onError} onOpenLink={onOpenLink} />
     </ConversationDecorations.Provider>
   </>;
@@ -521,6 +542,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     </div>
     {terminalPopup !== null && <ReadingTerminalPopup key={sendCounter.current} terminalId={terminal.id} sessionId={terminal.sessionId} command={terminalPopup.command} focus={terminalPopup.focus} onReady={readyPopup} onClose={closePopup} onError={onError} />}
     {attachedCount > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: attachedCount })}<UserImages images={shownImages} numbers={imageNumbers} onRemove={index => void removeImage(index)} /></div>}
+    {quote && <QuoteChip quote={quote} onRemove={() => { holdQuote(null); input.current?.focus(); }} />}
     {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waiting?.title ?? null} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
     {/* The command list is part of the page, above the message box, not a popup over the conversation. */}
     {palette && <div className="reading-commands is-inline" id={listId} role="listbox" aria-label={t('命令')}>{matches.map((command, index) => <div key={command.name} id={optionId(index)} role="option" aria-selected={selection === index} className="reading-command" onMouseDown={event => event.preventDefault()} onClick={() => complete(command)}>

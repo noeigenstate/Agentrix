@@ -2,6 +2,8 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { TimelineStep } from './Timeline';
 import type { PendingPrompt } from './pending-prompts';
 import { withPictures } from './pasted-pictures';
+import { splitQuote } from './message-quote';
+import './reading-quote.css';
 import { omitted as omittedPicture, unavailable as unavailablePicture } from '../../../electron/picture-values.json';
 import { showPopup } from '../files/file-popup';
 import { t } from '../../shared/i18n';
@@ -28,11 +30,12 @@ export function UserText({ text }: { text: string }) {
   </>;
 }
 
-// The pictures a message carried, small, under its text.
-// A message's words and pictures; the path of a picture pasted for an SSH project shows as that picture.
+// A message's quote (the "> " lines it began with), words and pictures; the path of a picture pasted for an SSH project
+// shows as that picture. Only the words fold: the quote is bounded when it is made.
 export function UserMessage({ text, images }: { text: string; images?: readonly string[] }) {
-  const shown = withPictures(text, images);
-  return <>{shown.text && <UserText text={shown.text} />}{shown.images.length > 0 && <UserImages images={shown.images} />}</>;
+  const { quote, rest } = splitQuote(text), shown = withPictures(rest, images);
+  return <>{quote && <blockquote className="reading-user-quote">{quote}</blockquote>}
+    {shown.text && <UserText text={shown.text} />}{shown.images.length > 0 && <UserImages images={shown.images} />}</>;
 }
 
 // A click shows the picture larger, in the popup over the conversation.

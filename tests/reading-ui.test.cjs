@@ -58,6 +58,8 @@ function loadUI(name, overrides = {}) {
     if (key === './useLongMarkdown') return loadUI('features/reading/useLongMarkdown.ts', overrides);
     if (key === './useVisibleTail') return loadUI('features/reading/useVisibleTail.ts', overrides);
     if (key === './PendingPromptEntries') return loadUI('features/reading/PendingPromptEntries.tsx', overrides);
+    if (key === './ReadingQuote') return loadUI('features/reading/ReadingQuote.tsx', overrides);
+    if (key === './message-quote') return require('../src/features/reading/message-quote.ts');
     // Its state is the point of it: every loaded view gets a fresh copy, so no test depends on another's terminals.
     if (key === './reading-ready') return loadUI('features/reading/reading-ready.ts');
     if (key === './WaitingCard') return loadUI('features/reading/WaitingCard.tsx');
@@ -72,6 +74,9 @@ function loadUI(name, overrides = {}) {
     if (key === './markdown-escape') return require('../src/features/reading/markdown-escape.ts');
     if (key === './pasted-pictures') return require('../src/features/reading/pasted-pictures.ts');
     if (key === './sign-in-screen') return require('../src/features/agents/sign-in-screen.ts');
+    // Module B's split pane and its state are not under test here.
+    if (key === './SubagentPane') return { SubagentPane: () => null };
+    if (key === './subagent-splits.ts') return { closeSplit() {}, limitSplits() {}, splitLimit: () => 2, splitsOf: () => [], useSplits: () => [] };
     if (key === './UserAvatar') return { UserAvatar: () => React.createElement('svg') };
     if (key === './file-popup') return { showPopup: () => {}, closePopup: () => {}, usePopup: () => null };
     return originalRequire(name);
@@ -685,7 +690,7 @@ function readingHarness(t, entries = [], overrides = {}) {
   });
   const state = { entries, pending: [], terminal: { id: 'terminal', sessionId: 'session', agent: 'codex', codexActive: true, needsInput: null } };
   const parsed = [], icon = () => React.createElement('svg');
-  const { ReadingView, Markdown } = loadUI('features/reading/ReadingView.tsx', {
+  const environment = {
     './markdown-escape': { readingMarked: { parse: text => { parsed.push(text); return text; } } },
     dompurify: { default: () => ({ sanitize: html => html }) },
     '@phosphor-icons/react': new Proxy({}, { get: () => icon }),
@@ -708,12 +713,13 @@ function readingHarness(t, entries = [], overrides = {}) {
     './cli-panel': require('../src/features/reading/cli-panel.ts'),
     './i18n': { currentLanguage: () => 'en', t: (text, values) => (en[text] ?? text).replace(/\{(\w+)\}/g, (_, name) => String(values?.[name] ?? name)) },
     ...overrides,
-  });
+  };
+  const { ReadingView, Markdown } = loadUI('features/reading/ReadingView.tsx', environment);
   const render = () => renderToStaticMarkup(React.createElement(ReadingView, {
     projectId: 'project', terminal: state.terminal,
     autoFocus: false, onShowTerminal() {}, onError() {}, onOpenLink() {},
   }));
-  return { state, render, parsed, ReadingView, Markdown };
+  return { state, render, parsed, ReadingView, Markdown, environment };
 }
 
 test('Markdown can opt into soft line breaks without changing the reading view default', t => {
@@ -2057,4 +2063,119 @@ test('a popup also preserves focus in another project composer after its typing 
   h.view.rows = ['Unknown dialog']; h.render(); h.tick(3000);
   assert.ok(h.popup()); assert.equal(h.popup().props.focus, false); assert.equal(document.activeElement, editable);
   assert.deepEqual(h.writes, []);
+});
+
+// Message quotes (round r7 F). A quote is a bounded "> " block the next ordinary message carries.
+function quoteHarness(t, overrides = {}) {
+  const records = [{ id: 'u1', role: 'user', text: 'earlier', at: 1000 }];
+  const h = dictationHarness(t, {
+    './useReadingConversation': { conversationKey: (id, session) => session, useReadingHistory: () => historySnapshot(records) },
+    ...overrides,
+  });
+  // The reader hands every message the same 引用 action through the feed's decorations.
+  const pick = (who, text) => { elements(h.tree()).find(element => element.props.value?.quote).props.value.quote.pick(who, text); h.render(); };
+  const chip = () => elements(h.tree()).find(element => element.type?.name === 'QuoteChip');
+  return { h, pick, chip };
+}
+
+test('a quote goes before the words of the next ordinary message once, and the pending echo carries it', async t => {
+  const { h, pick, chip } = quoteHarness(t);
+  pick('Codex', 'the plan:\n\nstep one\nstep two');
+  assert.deepEqual(chip().props.quote, { who: 'Codex', excerpt: 'the plan:\nstep one\nstep two' });
+  h.edit('please fix'); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(h.pasted.map(item => item.text), ['> the plan:\n> step one\n> step two\n\nplease fix']);
+  assert.equal(h.echoed[0].text, h.pasted[0].text);
+  assert.equal(chip(), undefined);
+});
+
+test('one quote at a time: the newest wins and the chip removes it', t => {
+  const { h, pick, chip } = quoteHarness(t);
+  pick('你', 'first'); pick('Codex', 'second');
+  assert.equal(chip().props.quote.excerpt, 'second');
+  chip().props.onRemove(); h.render();
+  assert.equal(chip(), undefined);
+});
+
+test('a command is typed as it is and keeps the quote for the next message', async t => {
+  const { h, pick, chip } = quoteHarness(t);
+  pick('Codex', 'keep me');
+  h.edit('/status'); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(h.written.map(item => item.text), ['\x15']);
+  assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []);
+  assert.equal(chip().props.quote.excerpt, 'keep me');
+});
+
+test('a quote without words of its own is not sent', async t => {
+  const { h, pick, chip } = quoteHarness(t);
+  pick('Codex', 'alone');
+  h.press('Enter'); await h.tick(0);
+  assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []);
+  assert.equal(chip().props.quote.excerpt, 'alone');
+});
+
+test('a message sent again carries its own quote and takes no second one', async t => {
+  const prompts = require('../src/features/reading/pending-prompts.ts');
+  let clock = 30000;
+  t.mock.method(Date, 'now', () => clock);
+  const records = [{ id: 'unrelated', role: 'user', text: 'DIFFERENT_MESSAGE', at: 2000 }];
+  let state = prompts.addPendingPrompt(prompts.createPendingPrompts('session'), 'lost', 'NEVER_DELIVERED', 1000);
+  state = prompts.reconcilePendingPrompts(state, 'session', records, clock);
+  const { h, pick, chip } = quoteHarness(t, {
+    './useReadingConversation': { conversationKey: (id, session) => session, useReadingHistory: () => historySnapshot(records) },
+    './usePendingPrompts': { usePendingPrompts: () => {
+      state = prompts.reconcilePendingPrompts(state, 'session', records, clock);
+      return { pending: state.prompts, echo(text, images) { state = prompts.addPendingPrompt(state, 'again', text, clock, images); return 'again'; },
+        cancelEcho(id) { state = prompts.removePendingPrompt(state, id); } };
+    } },
+  });
+  pick('Codex', 'for the next message');
+  h.props.terminal.codexActivity = 'idle';
+  clock += 6000; await h.tick(6000);
+  assert.deepEqual(h.pasted.map(item => item.text), ['NEVER_DELIVERED']);
+  assert.equal(chip().props.quote.excerpt, 'for the next message');
+});
+
+test('the quote is dropped when the terminal or session changes', t => {
+  const { h, pick, chip } = quoteHarness(t);
+  pick('Codex', 'old session');
+  h.props.terminal.sessionId = 'other'; h.render(); h.render();
+  assert.equal(chip(), undefined);
+});
+
+for (const newer of [false, true]) test(`a failed paste returns the quote with the draft${newer ? ' unless a newer quote was picked' : ''}`, async t => {
+  const { h, pick, chip } = quoteHarness(t), errors = [];
+  let fail;
+  h.props.onError = error => errors.push(error);
+  window.agentrix.pasteTerminal = () => new Promise(resolve => { fail = resolve; });
+  pick('Codex', 'first');
+  h.edit('words'); h.press('Enter');
+  assert.equal(chip(), undefined);
+  if (newer) pick('Codex', 'newer');
+  fail({ ok: false, error: 'no paste' }); await h.tick(0);
+  assert.deepEqual(errors, ['no paste']);
+  assert.equal(chip().props.quote.excerpt, newer ? 'newer' : 'first');
+});
+
+test('only a message with words of its own offers 引用, and the standalone feed offers none', t => {
+  const { state, render, environment } = readingHarness(t, [
+    readingEntry('u1', 'user', 10, { text: 'first prompt' }), readingTool('cmd', 11),
+    readingEntry('a1', 'assistant', 12, { text: 'a reply' }), readingEntry('a2', 'assistant', 13, { text: 'too big', omitted: true }),
+    readingEntry('a3', 'assistant', 14, { images: ['picture'] }),
+  ]);
+  assert.equal((render().match(/class="icon-button reading-quote-action"/g) || []).length, 2);
+  state.terminal.codexActive = false;
+  assert.equal((render().match(/reading-quote-action"[^>]*disabled=""/g) || []).length, 2, 'unavailable composer: disabled, not hidden');
+  const { ConversationFeed } = loadUI('features/reading/ConversationFeed.tsx', environment);
+  const html = renderToStaticMarkup(React.createElement(ConversationFeed, { entries: state.entries, agent: 'codex', projectId: 'project', live: false, onError() {} }));
+  assert.match(html, /a reply/); assert.doesNotMatch(html, /reading-quote-action/);
+});
+
+test('a sent message shows its quote as a block, in the timeline and while pending', t => {
+  const { state, render } = readingHarness(t, [readingEntry('u1', 'user', 10, { text: '> quoted line\n> second\n\nmy question' })]);
+  state.pending = [{ id: 'p', role: 'user', text: '> pending quote\n\nmy echo', at: new Date(2026, 9, 17, 16, 20).getTime(), sending: true }];
+  const html = render();
+  assert.match(html, /<blockquote class="reading-user-quote">quoted line\nsecond<\/blockquote>/);
+  assert.match(html, /<blockquote class="reading-user-quote">pending quote<\/blockquote>/);
+  assert.match(html, /my question/); assert.match(html, /my echo/);
+  assert.doesNotMatch(html, /&gt; quoted|&gt; pending/);
 });
