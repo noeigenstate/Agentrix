@@ -87,8 +87,7 @@ const { ConversationLog, claudeConversation, codexConversation } = require('./co
 const { ReadingHistory } = require('./reading-history.cjs');
 const { conversationBatchDelay, pollAfterSubmission } = require('./conversation-timing.cjs');
 const { listAgentCommands, isLocalAgentCommand } = require('./agent-commands.cjs');
-const { claudeConfigDir, findClaudeSession, listClaudeSessions } = require('./claude-sessions.cjs');
-const { listCodexSessions } = require('./codex-sessions.cjs');
+const { claudeConfigDir, findClaudeSession } = require('./claude-sessions.cjs');
 const { AgentsManager, onPath } = require('./agents.cjs');
 const { macShell, linuxShell, shellEnvironment, zshEnvironment, bashArguments, withoutAppImage, terminalLocale } = require('./zsh-terminal.cjs');
 
@@ -681,7 +680,7 @@ function scheduleUsageRollover(skip) {
   usageRolloverTimer.unref?.();
 }
 
-// Restores and the reading-view picker know the id before Claude emits its next prompt hook.
+// Restores know the id before Claude emits its next prompt hook.
 async function followClaudeSession(project, s, id) {
   if (project.kind === 'ssh') return false;
   const request = s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
@@ -1337,7 +1336,7 @@ function registerIpc() {
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
     gradeDelivery: (grade, project, session) => dashboard.grade(grade, project, session),
     readingPage: (id, request) => readingHistory.page(id, request.key, request.cursor),
-    getRestoreCwd: id => store.findTerminal(id)?.record.restore?.cwd, listClaudeSessions, listCodexSessions, followClaudeSession, listAgentCommands, t });
+    listAgentCommands, t });
   registerSshIpc({ handle, getSSHInfo, sshAuth, addSSH: input => store.addSSH(input), hasSession: id => sessions.has(id), getSession: id => sessions.get(id),
     startTerminal, setStartupError: (id, message) => startupErrors.set(id, message), broadcast });
   updatesIpc = registerUpdatesIpc({ handle, updateManager, openExternal: url => shell.openExternal(url), getWindow: () => window, dialog, t,

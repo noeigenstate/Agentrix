@@ -487,23 +487,3 @@ test('SessionStart after clear/resume and process exit retire old background wor
   assert.equal(h.s.completionWork.tasks.size, 0); assert.equal(h.s.codexActive, false); assert.equal(h.s.activitySnapshot, null);
   assert.deepEqual(changes, [false, false, false]);
 });
-
-test('session IPC lists Codex conversations its own way and only follows active local Claude terminals', async t => {
-  const f = await fixture(t); await f.write('current', [user('current')]); await f.write('other', [user('other')]);
-  const h = mainHarness(t, f), handlers = {};
-  h.s.claudeSessionId = 'current';
-  require('../electron/features/agents/ipc.cjs').registerAgentsIpc({ handle: (name, handler) => { handlers[name] = handler; },
-    findProject: () => h.project, getSession: id => h.sessions.get(id), getRestoreCwd: id => h.context.store.findTerminal(id)?.record.restore?.cwd,
-    followClaudeSession: (...args) => h.context.followClaudeSession(...args), listClaudeSessions: (cwd, id) => listClaudeSessions(cwd, id, f.home),
-    listCodexSessions: async (cwd, id) => [{ id: 'codex-other', cwd, current: id }] });
-  assert.deepEqual((await handlers['terminal:agentSessions']('terminal')).map(item => item.id), ['other']);
-  h.s.claudeSessionId = null; h.restore.threadId = 'current';
-  assert.equal((await handlers['terminal:agentSessions']('terminal')).length, 2, 'an old restore id is not the current fresh session');
-  assert.equal(await handlers['terminal:followAgentSession']('terminal', 'other'), true);
-  h.s.agent = 'codex'; h.s.rootThreadId = 'codex-current';
-  assert.deepEqual((await handlers['terminal:agentSessions']('terminal')).map(item => [item.id, item.current]), [['codex-other', 'codex-current']], 'Codex lists its own, leaving out the one it is in');
-  assert.equal(await handlers['terminal:followAgentSession']('terminal', 'other'), false);
-  h.s.agent = 'claude'; h.project.kind = 'ssh';
-  assert.equal((await handlers['terminal:agentSessions']('terminal')).length, 0);
-  assert.equal(await handlers['terminal:followAgentSession']('terminal', 'other'), false);
-});

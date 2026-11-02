@@ -1,4 +1,4 @@
-function registerAgentsIpc({ handle, agents, openExternal, getSession, findProject, getRestoreCwd, listClaudeSessions, listCodexSessions, followClaudeSession, listAgentCommands, readingPage, gradeDelivery, t }) {
+function registerAgentsIpc({ handle, agents, openExternal, getSession, findProject, listAgentCommands, readingPage, gradeDelivery, t }) {
   handle('dashboard:grade', grade => {
     const project = findProject(grade?.terminalId);
     gradeDelivery(grade, project, getSession(grade.terminalId));
@@ -12,22 +12,6 @@ function registerAgentsIpc({ handle, agents, openExternal, getSession, findProje
     findProject(id);
     if (!request || typeof request.key !== 'string' || request.cursor != null && typeof request.cursor !== 'string') throw new Error('无效的对话分页请求。');
     return readingPage(id, request);
-  });
-  handle('terminal:agentSessions', id => {
-    const project = findProject(id), s = getSession(id);
-    if (!s) return [];
-    // Over SSH the CLI's own list is used, shown by the reading view (reading-sessions.ts).
-    if (project.kind === 'ssh') return [];
-    const cwd = getRestoreCwd(id) || project.path;
-    // Codex's own list leaves out the conversation it is in; so does this one.
-    if (s.agent === 'codex') return listCodexSessions(cwd, s.rootThreadId || s.reportedThreadId, s.codexHome);
-    if (s.agent !== 'claude') return [];
-    return listClaudeSessions(cwd, s.codexActive ? s.claudeSessionId : s.claudeResumeId);
-  });
-  handle('terminal:followAgentSession', async (id, sessionId) => {
-    const project = findProject(id), s = getSession(id);
-    if (project.kind === 'ssh' || !s?.codexActive || s.agent !== 'claude') return false;
-    return followClaudeSession(project, s, sessionId);
   });
   handle('terminal:commands', async id => {
     const project = findProject(id), s = getSession(id);

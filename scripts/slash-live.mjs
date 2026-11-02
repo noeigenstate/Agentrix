@@ -47,9 +47,8 @@ const screenText = async () => strip((await page.evaluate(id => window.agentrix.
 const visible = locator => locator.first().isVisible().catch(() => false);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const view = async () => ({
-  choice: await visible(terminal.locator('.reading-choice:not(.reading-sessions)')),
+  choice: await visible(terminal.locator('.reading-choice')),
   panel: await visible(terminal.locator('.reading-terminal-popup')),
-  sessions: await visible(terminal.locator('.reading-sessions')),
   composer: await visible(composer),
   enabled: await composer.isEnabled().catch(() => false),
 });
@@ -70,7 +69,7 @@ async function quiet(agent, timeout = 30000) {
   let leftSince = 0;
   while (Date.now() < until) {
     const v = await view(), cli = await cliState(agent);
-    if (v.panel || v.choice || v.sessions) { await dismiss(); continue; }
+    if (v.panel || v.choice) { await dismiss(); continue; }
     if (cli.left) { leftSince ||= Date.now(); if (Date.now() - leftSince > 1500) { await write('\x15'); leftSince = 0; } }
     else leftSince = 0;
     if (!cli.busy && !cli.left && v.composer && v.enabled) return true;
@@ -85,9 +84,9 @@ async function settle(agent, startup = false) {
   for (let round = 0; round < 40; round++) {
     const s = await state(), v = await view();
     if (s.codexActive && v.composer && v.enabled && !v.choice && !v.panel) return;
-    if (v.panel || v.sessions || (v.choice && !startup)) await dismiss();
+    if (v.panel || (v.choice && !startup)) await dismiss();
     else if (v.choice) {
-      const first = terminal.locator('.reading-choice:not(.reading-sessions)').first();
+      const first = terminal.locator('.reading-choice').first();
       await first.focus(); await page.keyboard.press('Enter');
     } else if (s.codexActive && !v.composer) {
       // Handed off to the raw terminal for a prompt: take its default, then return to reading.
@@ -113,11 +112,10 @@ async function start(agent) {
 async function dismiss(command = '') {
   for (let round = 0; round < 6; round++) {
     const v = await view();
-    if (v.sessions) { await terminal.locator('.reading-sessions').getByRole('button', { name: /关闭|取消/ }).first().click().catch(async () => { await page.keyboard.press('Escape'); }); await sleep(600); continue; }
     const s = await state();
     if (!s.codexActive) return 'exited';
     if (v.composer && v.enabled && !v.choice && !v.panel && s.codexActivity !== 'working') return 'ready';
-    const target = terminal.locator(v.panel ? '.reading-terminal-popup' : '.reading-choice:not(.reading-sessions)').first();
+    const target = terminal.locator(v.panel ? '.reading-terminal-popup' : '.reading-choice').first();
     if (v.panel) {
       await target.locator('.xterm-helper-textarea').focus();
       await page.keyboard.press(command === '/side' ? 'Control+c' : command === '/diff' ? 'q' : 'Escape');
@@ -138,18 +136,17 @@ async function run(agent, command) {
   await composer.press('Enter');
   // The palette may complete the name first; a second Enter sends it.
   if ((await composer.inputValue()).trim() === command) await composer.press('Enter');
-  if (!LAST.has(command)) await terminal.locator(command === '/resume' ? '.reading-sessions' : '.reading-terminal-popup').waitFor();
-  const seen = { panel: false, choice: false, sessions: false, working: false };
+  if (!LAST.has(command)) await terminal.locator('.reading-terminal-popup').waitFor();
+  const seen = { panel: false, choice: false, working: false };
   const until = Date.now() + (MODEL.has(command) ? 12000 : 7000);
   let panelText = '', choiceText = '';
   while (Date.now() < until) {
     const v = await view(), s = await state();
     if (v.panel) { seen.panel = true; panelText = await text('.reading-terminal-popup .xterm-rows'); }
-    if (v.choice) { seen.choice = true; choiceText = await text('.reading-choice:not(.reading-sessions)'); }
-    if (v.sessions) seen.sessions = true;
+    if (v.choice) { seen.choice = true; choiceText = await text('.reading-choice'); }
     if (s.codexActivity === 'working') seen.working = true;
     if (!s.codexActive) break;
-    if ((seen.panel || seen.choice || seen.sessions) && Date.now() > until - 4000) break;
+    if ((seen.panel || seen.choice) && Date.now() > until - 4000) break;
     await sleep(300);
   }
   const shot = path.join(output, `${agent}-${command.replace(/[^a-z-]/gi, '')}.png`);
@@ -160,7 +157,7 @@ async function run(agent, command) {
   const unknown = new RegExp(`(Unknown (slash )?command:? |Unrecognized command '?)/${name}(?![\\w-])`, 'i').test(screen + panelText);
   let after = LAST.has(command) ? ((await state()).codexActive ? 'still running' : 'exited') : await dismiss(command);
   if (after === 'ready' && !await quiet(agent)) after = 'CLI never went idle';
-  const shown = seen.sessions ? 'session picker' : seen.choice ? 'choice' : seen.panel ? 'live terminal' : seen.working ? 'agent turn' : 'nothing';
+  const shown = seen.choice ? 'choice' : seen.panel ? 'live terminal' : seen.working ? 'agent turn' : 'nothing';
   const ok = !unknown && shown !== 'nothing' && (LAST.has(command) ? after === 'exited' : after === 'ready');
   const record = { agent, command, ok, shown, after, unknown, excerpt: (panelText || choiceText || screen.trim()).split('\n').filter(Boolean).slice(0, 6).join(' | ').slice(0, 300), screenshot: path.basename(shot) };
   results.push(record);

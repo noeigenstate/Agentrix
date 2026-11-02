@@ -12,7 +12,7 @@ const { promptText } = require('../electron/prompt-queue.cjs');
 
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const section = (from, to) => main.slice(main.indexOf(from), main.indexOf(to));
-const accounts = section('let claudeAccountTimer =', '// Restores and the reading-view picker');
+const accounts = section('let claudeAccountTimer =', '// Restores know the id');
 const claudeService = section('const claudeAccounts = new', 'const { agentCommand }');
 const notes = section('function noteSettings(', '// A skill step names the skill;');
 const historyUsage = section('function usageHistory(', '// What the activity pane shows');

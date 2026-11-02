@@ -47,7 +47,7 @@ function loadUI(name, overrides = {}) {
     if (key === './choice-keys') return require('../src/features/reading/choice-keys.ts');
     if (key === './approval-action') return require('../src/features/reading/approval-action.ts');
     if (key === './dictation-send') return require('../src/features/reading/dictation-send.ts');
-    if (key === './reading-sessions') return require('../src/features/reading/reading-sessions.ts');
+    if (key === './reading-command') return require('../src/features/reading/reading-command.ts');
     if (key === './reply-files') return require('../src/features/reading/reply-files.ts');
     if (key === './reading-paths') return { pathTooltip: () => 'Ctrl+click to show in File Explorer', markReadingPaths() {} };
     if (key === './PathText') return { PathText: ({ text }) => text };
@@ -302,88 +302,6 @@ test('welcome without a banner settles to the agent name and parsed status witho
   assert.match(withModel, /Opus 5\.5/); assert.match(withModel, /high/); assert.doesNotMatch(withModel, /Starting…|loading-spinner/);
 });
 
-function sessionsHarness(t, initialSessions = []) {
-  const slots = [initialSessions], written = [], followed = [], sent = [], errors = []; let cursor = 0, closed = 0;
-  const hooks = {
-    useState: initial => {
-      const index = cursor++;
-      if (!Object.hasOwn(slots, index)) slots[index] = typeof initial === 'function' ? initial() : initial;
-      return [slots[index], value => { slots[index] = typeof value === 'function' ? value(slots[index]) : value; }];
-    },
-    useRef: initial => {
-      const index = cursor++;
-      if (!Object.hasOwn(slots, index)) slots[index] = { current: initial };
-      return slots[index];
-    },
-    useEffect() {},
-  };
-  const previous = globalThis.window;
-  globalThis.window = { agentrix: {
-    writeTerminal: (id, text) => written.push({ id, text }),
-    followAgentSession: async (id, sessionId) => { followed.push({ id, sessionId }); return { ok: true, value: true }; },
-  } };
-  t.after(() => { if (previous === undefined) delete globalThis.window; else globalThis.window = previous; });
-  const { ReadingSessions } = loadUI('features/reading/ReadingSessions.tsx', { react: hooks });
-  const render = () => {
-    cursor = 0;
-    const root = ReadingSessions({ terminalId: 'resume-terminal', onClose: () => { closed++; }, onSent: text => sent.push(text), onError: error => errors.push(error) });
-    root.props.ref.current = { focus() {} }; return root;
-  };
-  const press = key => {
-    let prevented = false;
-    render().props.onKeyDown({ key, nativeEvent: {}, preventDefault: () => { prevented = true; }, stopPropagation() {} });
-    assert.equal(prevented, true);
-  };
-  const options = () => elements(render()).filter(node => node.props.className === 'reading-choice-option');
-  return { render, press, options, written, followed, sent, errors, closed: () => closed };
-}
-
-test('native session card arrows highlight, Enter types a targeted resume and follows after Enter', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const sessions = ['first', 'second'].map(id => ({ id, title: id, updatedAt: Date.now() - 180000, messages: 3 }));
-  const h = sessionsHarness(t, sessions);
-  assert.equal(h.options()[0].props['data-highlighted'], true);
-  h.press('ArrowDown'); assert.equal(h.options()[1].props['data-highlighted'], true);
-  h.press('ArrowUp'); assert.equal(h.options()[0].props['data-highlighted'], true);
-  h.press('ArrowDown'); h.press('Enter'); h.press('Enter'); h.press('Escape');
-  // What waits in Claude's input is cleared first, then the command is typed.
-  assert.deepEqual(h.written, [{ id: 'resume-terminal', text: '\x15' }]); assert.deepEqual(h.followed, []);
-  assert.ok(h.options().every(option => option.props.disabled));
-  t.mock.timers.tick(60); for (let index = 0; index < 6; index++) await Promise.resolve();
-  assert.deepEqual(h.written, [{ id: 'resume-terminal', text: '\x15' }, { id: 'resume-terminal', text: '/resume second' }]);
-  t.mock.timers.tick(150);
-  for (let index = 0; index < 6; index++) await Promise.resolve();
-  assert.deepEqual(h.written, [{ id: 'resume-terminal', text: '\x15' }, { id: 'resume-terminal', text: '/resume second' }, { id: 'resume-terminal', text: '\r' }]);
-  assert.deepEqual(h.followed, [{ id: 'resume-terminal', sessionId: 'second' }]);
-  assert.deepEqual(h.sent, ['/resume second']); assert.equal(h.closed(), 1); assert.deepEqual(h.errors, []);
-});
-
-test('Enter on a focused button presses that button, never the highlighted session (Cancel never resumes)', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const h = sessionsHarness(t, [{ id: 'first', title: 'first', updatedAt: Date.now() - 180000, messages: 3 }]);
-  let prevented = false;
-  const button = { closest: selector => selector === 'button' ? button : null };
-  h.render().props.onKeyDown({ key: 'Enter', target: button, nativeEvent: {}, preventDefault: () => { prevented = true; }, stopPropagation() {} });
-  t.mock.timers.tick(1000); await Promise.resolve();
-  assert.equal(prevented, false, 'the button keeps its own Enter');
-  assert.deepEqual(h.written, [], 'no session is resumed for it'); assert.deepEqual(h.followed, []);
-});
-
-test('native session card click chooses and Esc closes without sending terminal keys', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const h = sessionsHarness(t, [{ id: 'clicked', title: 'Restore this prompt', updatedAt: Date.now(), messages: 2 }]);
-  const option = h.options()[0]; void option.props.onClick();
-  t.mock.timers.tick(60); for (let index = 0; index < 6; index++) await Promise.resolve();
-  assert.deepEqual(h.written, [{ id: 'resume-terminal', text: '\x15' }, { id: 'resume-terminal', text: '/resume clicked' }]);
-  t.mock.timers.tick(150); for (let index = 0; index < 6; index++) await Promise.resolve();
-  assert.equal(h.closed(), 1);
-  const empty = sessionsHarness(t);
-  empty.press('ArrowDown'); empty.press('Enter'); empty.press('Escape');
-  assert.equal(empty.closed(), 1); assert.deepEqual(empty.written, []);
-  const labels = elements(empty.render()).flatMap(node => typeof node.props.children === 'string' ? [node.props.children] : []);
-  assert.ok(labels.includes('This project has no other Claude sessions yet'));
-});
-
 test('choice renders context, printed numbers, details, hotkeys and CLI selection', () => {
   const { ReadingChoice } = loadUI('features/reading/ReadingChoice.tsx');
   const html = renderToStaticMarkup(React.createElement(ReadingChoice, { choice: fakeChoice(), terminalId: 'test', onError: () => {} }));
@@ -460,7 +378,7 @@ function dictationHarness(t, overrides = {}) {
     './voice-input': { dictateInto: (id, take) => { insert = take; return () => { insert = null; }; } },
     './terminal-screen': { useScreen: () => null, readScreen: () => ({ rows: ['› ', '', 'GPT-6.1-Sol high · C:\\work'] }) },
     './agent-screen': { parseAgentScreen: () => screen },
-    './ReadingWelcome': {}, './ReadingChoice': {}, './ReadingQuestion': {}, './ReadingSessions': {},
+    './ReadingWelcome': {}, './ReadingChoice': {}, './ReadingQuestion': {},
     './reading-mode': { setChoiceVisible() {} },
     './useStickToBottom': { useStickToBottom: () => ({ stuck: true, unseen: 0, ready: true, holdPosition() {}, toBottom() {} }) },
     './useReadingConversation': { conversationKey: (id, session) => JSON.stringify([id, session]), useReadingHistory: () => historySnapshot([]) },
@@ -1250,7 +1168,7 @@ function readingHarness(t, entries = [], overrides = {}) {
     './PendingPromptEntries': loadUI('features/reading/PendingPromptEntries.tsx'),
     './markdown-parse': { parseMarkdown: async () => null, parsedMarkdown: () => undefined },
     './FileCards': { FileCards: ({ files }) => React.createElement('div', { className: 'file-cards' }, files.join(',')), previewable: () => true },
-    './ReadingSessions': { ReadingSessions: () => null }, './reading-sessions': require('../src/features/reading/reading-sessions.ts'),
+    './reading-command': require('../src/features/reading/reading-command.ts'),
     './reading-welcome': { useWelcomeStarting: () => false },
     './cli-panel': require('../src/features/reading/cli-panel.ts'),
     './i18n': { currentLanguage: () => 'en', t: (text, values) => (en[text] ?? text).replace(/\{(\w+)\}/g, (_, name) => String(values?.[name] ?? name)) },
@@ -1549,6 +1467,25 @@ test('a question renders as its own card: progress, the question, options, an ow
   const codex = render('codex-question');
   assert.match(codex, /Question 1\/2/); assert.match(codex, /Notes \(optional\)/); assert.doesNotMatch(codex, /Optionally, add details/);
   assert.doesNotMatch(review, /reading-question-warning/, 'a complete review has no warning');
+});
+
+test('Enter on a focused button presses that button, never the highlighted option (Cancel never picks one)', async t => {
+  const written = [], previous = { window: globalThis.window, document: globalThis.document };
+  globalThis.window = { agentrix: { writeTerminal: (id, key) => written.push(key), terminalFocus() {} } };
+  globalThis.document = { activeElement: null };
+  t.after(() => { for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete globalThis[name]; else globalThis[name] = value; } });
+  const hooks = { useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}], useRef: current => ({ current }), useEffect() {} };
+  const icons = new Proxy({}, { get: () => () => null });
+  const { ReadingQuestion } = loadUI('features/reading/ReadingQuestion.tsx', { react: hooks, '@phosphor-icons/react': icons, './question-keys': require('../src/features/reading/question-keys.ts') });
+  const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
+  const choice = parseAgentScreen('codex', fs.readFileSync(path.join(__dirname, 'fixtures/questions/codex-question.txt'), 'utf8').split('\n')).choice;
+  const root = ReadingQuestion({ choice, terminalId: 'terminal', onError: assert.fail });
+  const press = target => { let prevented = false; root.props.onKeyDown({ key: 'Enter', target, nativeEvent: {}, preventDefault: () => { prevented = true; }, stopPropagation() {} }); return prevented; };
+  const button = { closest: selector => selector === 'button' ? button : null };
+  assert.equal(press(button), false, 'the button keeps its own Enter'); assert.deepEqual(written, [], 'no option is picked for it');
+  assert.equal(press({ closest: () => null }), true, 'Enter on the card itself picks the highlighted option');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(written.length > 0, 'and its keys reach the terminal');
 });
 
 test('the review page shows the CLI\'s unanswered warning as words beside an icon, and nothing for an empty context', () => {
@@ -2331,14 +2268,16 @@ test('/clear hides the previous entries only after submission and keeps the term
   await h.tick(150); assert.deepEqual(shown, []); assert.ok(h.popup());
 });
 
-test('local /resume keeps its session picker, and SSH /resume opens the live terminal', async t => {
+test('/resume opens the live terminal like every slash command, here and over SSH: no session card', async t => {
   const h = dictationHarness(t);
-  h.edit('/resume'); h.press('Enter'); await h.tick(1000);
-  assert.equal(h.popup(), undefined); assert.deepEqual(h.written, []);
-  assert.ok(elements(h.tree()).some(element => element.props.onSent));
-  h.props.terminal.sessionId = 'remote'; h.props.remote = true; h.render(); h.render();
-  h.edit('/resume'); h.press('Enter'); await h.tick(0); await h.tick(60); await h.tick(150);
-  assert.ok(h.popup()); assert.deepEqual(h.written.map(item => item.text), ['\x15', '/resume', '\r']);
+  for (const remote of [false, true]) {
+    h.props.remote = remote; h.written.length = 0; h.render();
+    h.edit('/resume'); h.press('Enter'); await h.tick(0); await h.tick(60); await h.tick(150);
+    assert.equal(h.popup().props.command, '/resume');
+    assert.deepEqual(h.written.map(item => item.text), ['\x15', '/resume', '\r']);
+    assert.equal(elements(h.tree()).some(element => element.props.onSent), false);
+    h.popup().props.onClose(); h.render();
+  }
 });
 
 test('the terminal popup closes only by its button or backdrop and never translates a key', () => {

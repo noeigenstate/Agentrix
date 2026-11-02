@@ -170,7 +170,6 @@
 .reading-question-input.is-notes { margin-top: 8px; }
 .reading-question-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 12px; }
 .reading-question-actions .button.primary { display: inline-flex; align-items: center; gap: 4px; }
-.reading-sessions-empty { display: flex; align-items: center; gap: 7px; margin: 10px 8px; color: var(--text-2); }
 
 
 /* A picture the agent generated: large enough to judge, its prompt a two-line summary under it (13px on 1.6, as wide as the picture) with a quiet toggle for the whole text. */

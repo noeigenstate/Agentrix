@@ -16,8 +16,7 @@ import { ReadingChoice } from './ReadingChoice';
 import { NativeApprovalCard } from './NativeApprovalCard';
 import { ManagedSession } from './ManagedSession';
 import { ReadingQuestion } from './ReadingQuestion';
-import { ReadingSessions } from './ReadingSessions';
-import { typeReadingCommand, usesSessionPicker } from './reading-sessions';
+import { typeReadingCommand } from './reading-command';
 import { dataUrl, thumbnail } from '../../shared/image-thumbnail';
 import { useNativePictures } from './useNativePictures';
 import { rememberPicture } from './pasted-pictures';
@@ -241,11 +240,9 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   const signIn = useMemo(() => terminal.codexActive && visibleScreen && !screen.choice && !inputShown ? signInScreen(kind, visibleScreen.rows) : null,
     [terminal.agent, terminal.codexActive, visibleScreen, screen.choice, inputShown]);
   const choiceKey = screen.choice ? `${terminal.sessionId}:${screen.choice.approval?.instance ?? ''}:${choiceIdentity(screen.choice)}` : null;
-  const [sessionsOpen, setSessionsOpen] = useState(false);
-  useEffect(() => { setSessionsOpen(false); }, [terminal.id, terminal.sessionId, terminal.agent, epoch]);
   const welcomeIsStarting = useWelcomeStarting(terminal.agentStartedAt, screen);
   // A notice alone (no dialog read from the screen) leaves the handoff to the terminal in reading-mode.ts running.
-  const hasChoice = nativePending || screen.choice !== null || waiting !== null || sessionsOpen, choiceVisible = useRef(hasChoice);
+  const hasChoice = nativePending || screen.choice !== null || waiting !== null, choiceVisible = useRef(hasChoice);
   const mounted = useRef(true);
   const choiceHost = useRef<HTMLDivElement>(null), restoreComposer = useRef(false), wasChoice = useRef(false), editingAtChoice = useRef(false);
   const focusChoice = () => { restoreComposer.current = true; };
@@ -303,7 +300,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     const timer = setTimeout(() => endDialog(terminal.id), DIALOG_SETTLE);
     return () => clearTimeout(timer);
   }, [terminal.id, dialog, active, inputShown, nativePending]);
-  const inputBlocked = preview || nativePending || sessionsOpen || !!screen.choice || waitingShown;
+  const inputBlocked = preview || nativePending || !!screen.choice || waitingShown;
   const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, entries, conversation);
   useEffect(() => { if (stuck) void historyPage.compact(); }, [stuck, conversationEntries, historyPage.compact]);
   // A step hops only when the pointer moves onto it: moving arms the hops, any scroll disarms them until it moves again,
@@ -320,7 +317,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   // Capture composer ownership before disabling it; another card's focus must stay where it is.
   // A card that comes while someone writes in the box never takes the keyboard: the next Enter would answer it.
   if (hasChoice && !wasChoice.current) {
-    restoreComposer.current = document.activeElement === input.current || sessionsOpen;
+    restoreComposer.current = document.activeElement === input.current;
     editingAtChoice.current = hasEditingFocus(readingView.current) || isTyping(document.activeElement);
   }
   useLayoutEffect(() => {
@@ -420,11 +417,6 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     if ((!text && !batch.length) || !terminal.sessionId) return;
     // Commands clear the native input; they cannot silently consume pictures waiting for a normal message.
     if (batch.length && isTypedCommand(text)) { onError(t('请先发送或移除输入框中的图片，再发送这条消息。')); return; }
-    if (usesSessionPicker(terminal, text, remote)) {
-      choiceVisible.current = true; restoreComposer.current = document.activeElement === input.current;
-      if (own) edit('');
-      setSessionsOpen(true); return;
-    }
     const remember = () => { if (words) history.set(terminal.id, [...(history.get(terminal.id) || []), words].slice(-50)); };
     if (isTypedCommand(text)) {
       if (own) { edit(''); clearPictures(); }
@@ -735,13 +727,10 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     {attachedCount > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: attachedCount })}<UserImages images={shownImages} numbers={imageNumbers} onRemove={index => void removeImage(index)} /></div>}
     {!preview && terminal.nativeApprovals?.map(request => <NativeApprovalCard key={request.token} request={request} onError={onError} />)}
     {/* The popup shows the terminal's own dialog: no card for the same dialog waits behind it. */}
-    {screen.choice && terminalPopup === null && !nativePending && !sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}>{screen.choice.kind === 'question'
+    {screen.choice && terminalPopup === null && !nativePending && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}>{screen.choice.kind === 'question'
       ? <ReadingQuestion key={choiceKey} choice={screen.choice} terminalId={terminal.id} onError={onError} />
       : <ReadingChoice key={choiceKey} choice={screen.choice} terminalId={terminal.id} onShowTerminal={onShowTerminal} />}</div>}
-    {waitingShown && terminalPopup === null && !nativePending && !sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}><WaitingCard title={waiting?.title ?? null} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
-    {sessionsOpen && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}><ReadingSessions key={`${terminal.id}-${terminal.sessionId}`} terminalId={terminal.id} agent={terminal.agent === 'codex' ? 'codex' : 'claude'} onError={onError} onClose={() => setSessionsOpen(false)} onSent={text => {
-      history.set(terminal.id, [...(history.get(terminal.id) || []), text].slice(-50)); clearPictures(); toBottom();
-    }} /></div>}
+    {waitingShown && terminalPopup === null && !nativePending && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}><WaitingCard title={waiting?.title ?? null} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
     {/* The command list is part of the page, above the message box, not a popup over the conversation. */}
     {palette && <div className="reading-commands is-inline" id={listId} role="listbox" aria-label={t('命令')}>{matches.map((command, index) => <div key={command.name} id={optionId(index)} role="option" aria-selected={selection === index} className="reading-command" onMouseDown={event => event.preventDefault()} onClick={() => complete(command)}>
         <code>{command.name}</code><span>{command.source === 'builtin' ? t(command.description) : command.description}</span>{command.source !== 'builtin' && <small>{command.source === 'project' ? t('项目') : command.source === 'user' ? t('用户') : t('技能')}</small>}

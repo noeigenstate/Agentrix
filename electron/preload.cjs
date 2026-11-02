@@ -136,8 +136,6 @@ contextBridge.exposeInMainWorld('agentrix', {
   resolveSkillChange: (id, accept) => ipcRenderer.invoke('skills:resolve', id, accept),
   importSkill: (scope, projectId) => ipcRenderer.invoke('skills:import', scope, projectId),
   onSkills: callback => listen('skills:changed', callback),
-  agentSessions: id => ipcRenderer.invoke('terminal:agentSessions', id),
-  followAgentSession: (id, sessionId) => ipcRenderer.invoke('terminal:followAgentSession', id, sessionId),
   onTerminalConversation: callback => listen('terminal:conversation', callback),
   close: () => ipcRenderer.send('window:close'),
   quit: () => ipcRenderer.invoke('app:quit'),

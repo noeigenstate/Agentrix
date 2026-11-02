@@ -4,7 +4,6 @@ export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 export type DeliveryGrade = { projectId: string; terminalId: string; outcome: 'passed' | 'sent-back'; submission: number; note?: string };
 export type AgentCommand = { name: string; description: string; source: 'builtin' | 'project' | 'user' | 'skill'; view: 'terminal' | 'reading' };
 // messages is exact within 256 KiB, estimated from record density for larger transcripts.
-export type AgentSession = { id: string; updatedAt: number; title: string; messages: number };
 export type ProjectImageMode = 'auto' | 'custom' | 'number';
 export type ProjectImageCandidate = { path: string; source: 'icon' | 'readme' | 'asset'; image: string };
 export type ProjectImageCandidates = { candidates: ProjectImageCandidate[]; unavailable?: 'ssh' };
@@ -255,8 +254,6 @@ type Bridge = {
   answerNativeQuestion(id: string, answer: NativeQuestionAnswer): Promise<Result<{ mode: 'native'; requestId: string | number }>>;
   managedPrompt(id: string, sessionId: string, text: string): Promise<Result<boolean>>;
   terminalConversationPage(id: string, request: { key: string; cursor?: string | null }): Promise<Result<ConversationPage>>;
-  agentSessions(id: string): Promise<Result<AgentSession[]>>;
-  followAgentSession(id: string, sessionId: string): Promise<Result<boolean>>;
   writeTerminal(id: string, data: string): void;
   writeApproval(id: string, key: string, stamp: ApprovalStamp, actionId: string): Promise<Result<ApprovalResult>>;
   answerTerminal(id: string, data: string): void;
