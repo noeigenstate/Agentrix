@@ -11,7 +11,7 @@ const { RunInbox, MAX_INBOX } = require('../electron/features/team/inbox.cjs');
 const { createInterventions } = require('../electron/features/agents/interventions.cjs');
 
 function plannerRelay() {
-  const sent = [], context = { setTimeout, clearTimeout,
+  const sent = [], context = { Date, setTimeout, clearTimeout,
     sessions: new Map([['terminal', { sessionId: 'planner', codexActive: true, agent: 'codex' }]]),
     window: { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: (channel, data) => sent.push({ channel, data }) } },
   };
@@ -175,6 +175,20 @@ test('planner acknowledgments and renderer send errors settle the relay and remo
   assert.equal(context.relays.size, 0);
   context.window.webContents.send = () => { throw new Error('renderer destroyed during send'); };
   await assert.rejects(context.sendParentPrompt('terminal', 'notice'), /renderer destroyed during send/);
+  assert.equal(context.relays.size, 0);
+});
+
+test('a planner relay carries its exact three-second deadline and a late acknowledgment cannot revive it', async t => {
+  const now = Date.UTC(2026, 10, 2);
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now });
+  const { context, sent } = plannerRelay();
+  const prompt = context.sendParentPrompt('terminal', 'synthetic notice');
+  const failed = assert.rejects(prompt, /无法把插话转给规划员/);
+  assert.equal(sent[0].data.deadline, now + 3000);
+  t.mock.timers.tick(2999); assert.equal(context.relays.size, 1);
+  t.mock.timers.tick(1); await failed;
+  assert.equal(context.relays.size, 0);
+  context.relayResult(sent[0].data.id);
   assert.equal(context.relays.size, 0);
 });
 

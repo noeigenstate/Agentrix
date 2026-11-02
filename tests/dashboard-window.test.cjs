@@ -99,7 +99,8 @@ test('dashboard initial and minimum dimensions use content sizes on every platfo
 });
 
 test('Windows native frame rounding preserves the exact content minimum before the dashboard is shown', async () => {
-  for (const { frame, rounding } of [{ frame: [0, 0], rounding: [0, 0] }, { frame: [14, 7], rounding: [1, 2] }]) {
+  for (const { frame, rounding } of [{ frame: [0, 0], rounding: [0, 0] }, { frame: [14, 7], rounding: [1, 2] },
+    { frame: [0, 0], rounding: [4, -4] }, { frame: [0, 0], rounding: [-4, 4] }]) {
     let selected;
     const { window } = windowLab({ BrowserWindow: class extends FakeWindow {
       constructor(options) {
@@ -120,6 +121,20 @@ test('Windows native frame rounding preserves the exact content minimum before t
     }
     selected.setContentSize(1, 1);
     assert.deepEqual(selected.getContentSize(), [820, 600], 'smaller requests still clamp to the content minimum');
+  }
+});
+
+test('Windows skips minimum calibration when either content dimension is not clamped within four pixels', async () => {
+  for (const content of [[1, 1], [820, 1], [1, 600], [825, 600], [815, 600], [820, 605], [820, 595]]) {
+    let selected;
+    const { window } = windowLab({ BrowserWindow: class extends FakeWindow {
+      constructor(options) { super(options); selected = this; }
+      setMinimumSize() { assert.fail(`unclamped content ${content} must not change the minimum`); }
+      setContentSize(width, height) { this.size = width === 1 && height === 1 ? content : [width, height]; }
+    } });
+    await window.open();
+    assert.deepEqual(selected.getMinimumSize(), [820, 600]);
+    assert.deepEqual(selected.getContentSize(), [1180, 820]); assert.equal(selected.shown, 1);
   }
 });
 
