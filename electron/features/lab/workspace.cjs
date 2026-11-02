@@ -105,15 +105,13 @@ async function archiveSnapshot(projectPath, revision, destination, { signal, dep
   } finally { await removePath(archive); }
 }
 
-async function prepareWorktree(projectPath, directory, task, signal, { electronDist = false } = {}) {
-  let cwd = path.join(directory, 'worktree');
-  const snapshot = await archiveSnapshot(projectPath, task.base, cwd, { signal, electronDist });
-  cwd = await fs.realpath(cwd);
+// A private repository over a filled folder: its files become the baseline commit, and commits and pushes are blocked.
+async function initBaseline(cwd, files, signal, { exclude = ['node_modules'] } = {}) {
   await git(cwd, ['init', '--initial-branch=lab-base'], { signal });
-  for (let offset = 0; offset < snapshot.files.length; offset += 100) {
-    await git(cwd, ['add', '-f', '--', ...snapshot.files.slice(offset, offset + 100)], { signal });
+  for (let offset = 0; offset < files.length; offset += 100) {
+    await git(cwd, ['add', '-f', '--', ...files.slice(offset, offset + 100)], { signal });
   }
-  await fs.writeFile(path.join(cwd, '.git/info/exclude'), 'node_modules\n');
+  await fs.writeFile(path.join(cwd, '.git/info/exclude'), exclude.map(name => name + '\n').join(''));
   const tree = (await git(cwd, ['write-tree'], { signal })).trim();
   const baseline = (await git(cwd, [
     '-c', 'user.name=Virtual Lab', '-c', 'user.email=lab@localhost',
@@ -126,6 +124,14 @@ async function prepareWorktree(projectPath, directory, task, signal, { electronD
     await fs.writeFile(path.join(hooks, name), '#!/bin/sh\nexit 1\n', { mode: 0o700 });
   }
   await git(cwd, ['config', 'core.hooksPath', hooks], { signal });
+  return baseline;
+}
+
+async function prepareWorktree(projectPath, directory, task, signal, { electronDist = false } = {}) {
+  let cwd = path.join(directory, 'worktree');
+  const snapshot = await archiveSnapshot(projectPath, task.base, cwd, { signal, electronDist });
+  cwd = await fs.realpath(cwd);
+  const baseline = await initBaseline(cwd, snapshot.files, signal);
   return { ...snapshot, cwd, baseline, real: await fs.realpath(cwd), gitDirectory: path.join(cwd, '.git') };
 }
 
@@ -181,6 +187,6 @@ async function cleanupWorktrees(directory) {
 }
 
 module.exports = {
-  inside, ownerState, assertOwner, archiveSnapshot, copyDependencies,
-  prepareWorktree, verifyWorktree, captureDiff, cleanupWorktrees,
+  inside, ownerState, assertOwner, validateLinks, archiveSnapshot, copyDependencies,
+  initBaseline, prepareWorktree, verifyWorktree, captureDiff, cleanupWorktrees,
 };

@@ -2214,5 +2214,7 @@
   "引用这条消息": "Quote this message",
   "引用的消息": "Quoted message",
   "移除引用": "Remove the quote",
-  "输入框暂时不可用，等它可用后再引用": "The message box is unavailable for now; quote once it is available"
+  "输入框暂时不可用，等它可用后再引用": "The message box is unavailable for now; quote once it is available",
+  "等待任务清单": "Waiting for the task manifest",
+  "测试报告无法读取，请查看测试日志。": "The test report could not be read. See the test log."
 }

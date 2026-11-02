@@ -1,13 +1,14 @@
 # Boundary: Lab engine
 
-Runs Virtual Lab experiments: samples a project's past changes that came with tests, runs each approach in its own worktree through the dispatch helper,
-grades it with the change's hidden tests and a blind review, and owns the lab window, its IPC and dedicated preload. Unknown measurements stay null.
+Runs Virtual Lab experiments: takes tasks from its sources (the project's own past changes, and the oss and aa providers behind `sources/contract.cjs`), runs each approach
+in its own workspace through the dispatch helper, grades it by the source's own tests and a blind review, and owns the lab window, its IPC and dedicated preload. Unknown measurements stay null.
 
 ## Owns
 - `electron/features/lab/**`
 
 ## Interface
 - `createLab` (`electron/features/lab/index.cjs`) — injected main-process composition: the lab window, its IPC and the experiment engine; open, sync and dispose
+- `assertProvider` (`electron/features/lab/sources/contract.cjs`) — the task-source contract providers meet: its typedefs, LAB_SOURCES, LAB_ARMS, TASK_ID and taskKey
 
 ## May import
 - `electron/i18n.cjs`
@@ -15,6 +16,9 @@ grades it with the change's hidden tests and a blind review, and owns the lab wi
 - `electron/features/dashboard/cost.cjs`
 - `electron/features/dashboard/records-routing.cjs`
 - `electron/features/dashboard/prices.json`
+- `electron/features/lab-oss/index.cjs`
+- `electron/features/lab-aa/index.cjs`
+- `src/shared/lab-types.ts`
 
 ## Invariants
 - Lab IPC requires the exact main frame and page, and only the main window may open the lab — other pages cannot start or read experiments — test: `tests/lab-engine-window.test.cjs` › "lab IPC requires the exact main frame and page and only the main window may open it"
@@ -31,3 +35,4 @@ grades it with the change's hidden tests and a blind review, and owns the lab wi
 - The contract between page and engine — `src/shared/lab-types.ts` (changed only through the lead)
 - Starting, authenticating and reporting workers — Dispatch (`integration/dispatch.cjs`)
 - Run records, public prices and cost estimates — Dashboard records (`electron/features/dashboard`)
+- The oss and aa task sources — Lab oss source (`electron/features/lab-oss`), Lab aa source (`electron/features/lab-aa`)

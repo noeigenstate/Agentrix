@@ -1,7 +1,7 @@
 const { TASK_KINDS } = require('../dashboard/records-routing.cjs');
 const { estimateCost, modelKey } = require('../dashboard/cost.cjs');
+const { LAB_ARMS: ARMS } = require('./sources/contract.cjs');
 
-const ARMS = Object.freeze(['orchestrated', 'opus', 'sol', 'sonnet']);
 const MODELS = Object.freeze({
   orchestrated: 'claude-opus-5-5', opus: 'claude-opus-5-5', sol: 'gpt-6.1-sol', sonnet: 'claude-sonnet-5-5',
 });
