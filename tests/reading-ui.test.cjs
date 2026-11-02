@@ -290,7 +290,7 @@ function elements(node) {
 
 const composerRows = (agent, activity = 'idle', draft = '') => [
   ...(activity === 'working' ? [agent === 'claude' ? '✶ Swooping… (12s)' : '• Working (12s • esc to interrupt)'] : []),
-  ...(activity === 'shell' ? ['! sleep 10', '  ⎿ Running…'] : []),
+  ...(activity === 'shell' ? agent === 'claude' ? ['! sleep 10', '  ⎿ Running…'] : ['• Running shell command (12s · esc to interrupt)'] : []),
   ...(agent === 'claude' ? ['────', '❯ ' + draft, '────', '  ⏸ manual mode on']
     : ['› ' + draft, '', 'GPT-6.1-Sol high · C:\\work', '? for shortcuts']),
 ];
@@ -1565,7 +1565,7 @@ for (const agent of ['claude', 'codex']) {
           actions.push(text); draft += text; return { ok: true };
         };
         if (activity !== 'idle') {
-          h.edit('next message'); assert.equal(h.render().props.disabled, true); h.press('Enter'); await h.tick(1000);
+          h.edit('next message'); assert.equal(h.render().props.disabled, true); h.press('Enter'); await h.tick(9000);
           assert.equal(h.node.value, 'next message'); assert.deepEqual(actions, []); assert.deepEqual(received, []); assert.equal(h.popup(), undefined); return;
         }
         if (picture !== 'none') {

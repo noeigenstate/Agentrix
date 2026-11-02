@@ -6,7 +6,7 @@ import { dictateInto } from '../voice/voice-input';
 import { createDictationSend } from './dictation-send';
 import { bindApproval, useScreen } from '../terminal/terminal-screen';
 import { parseAgentScreen } from '../agents/agent-screen';
-import { hasCliInput, isAtPrompt, isCliWorking } from './cli-panel';
+import { cliDialogShown, hasCliInput, isAtPrompt, isCliWorking } from './cli-panel';
 import { cliReady, DIALOG_SETTLE, endDialog, rememberReady, startDialog } from './reading-ready';
 import { WaitingCard } from './WaitingCard';
 import { ReadingWelcome } from './ReadingWelcome';
@@ -95,9 +95,11 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const screen = preview ? { ...parsedScreen, choice: null, waiting: null } : parsedScreen;
   const idleInput = inputShown && isAtPrompt(kind, visibleScreen?.rows ?? [], parsedScreen);
   const live = terminal.codexActive && !!terminal.sessionId && terminal.status !== 'exited';
-  const knownDialog = !!parsedScreen.choice || !!parsedScreen.waiting || terminal.needsInput != null && !idleInput;
-  const working = live && !knownDialog && (isCliWorking(kind, visibleScreen?.rows ?? []) || terminal.codexActivity === 'working' && (kind === 'codex' || !idleInput));
+  const knownDialog = cliDialogShown(kind, visibleScreen?.rows ?? [], parsedScreen) || terminal.needsInput != null && !idleInput;
+  const working = live && !knownDialog && inputShown && isCliWorking(kind, visibleScreen?.rows ?? [], parsedScreen);
   const hasChoice = live && (knownDialog || !!visibleScreen && !idleInput && !working);
+  // Activity can lag a mid-turn dialog. It gives unknown screens more time to settle, never a veto.
+  const dialogSettle = DIALOG_SETTLE * (terminal.codexActivity === 'working' ? 2 : 1);
   const waiting = screen.waiting ?? (screen.choice ? { title: screen.choice.title } : null);
   const waitingShown = hasChoice;
   const absence = useRef<{ conversation: string; at: number | null }>({ conversation, at: null });
@@ -164,11 +166,11 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       cancelSend(); setTerminalPopup({ command: '', focus });
     };
     if (knownDialog) { open(); return; }
-    const wait = Math.max(0, DIALOG_SETTLE - (Date.now() - (absence.current.at ?? Date.now())));
+    const wait = Math.max(0, dialogSettle - (Date.now() - (absence.current.at ?? Date.now())));
     if (!wait) { open(); return; }
     const timer = setTimeout(open, wait);
     return () => clearTimeout(timer);
-  }, [terminal.id, conversation, live, idleInput, knownDialog, hasChoice, active, working]);
+  }, [terminal.id, conversation, live, idleInput, knownDialog, hasChoice, active, working, dialogSettle]);
   const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, entries, conversation);
   useEffect(() => { if (stuck) void historyPage.compact(); }, [stuck, conversationEntries, historyPage.compact]);
   // A step hops only when the pointer moves onto it: moving arms the hops, any scroll disarms them until it moves again,

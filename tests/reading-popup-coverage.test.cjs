@@ -17,7 +17,7 @@ const read = file => fs.readFileSync(path.join(__dirname, 'fixtures', file), 'ut
 idle.claude = read('screens/claude-idle-2-1-296.txt');
 let nextId = 0;
 
-function popupHarness(t, agent = 'codex', rows = idle[agent]) {
+function popupHarness(t, agent = 'codex', rows = idle[agent], activity = 'complete') {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 10000 });
   const previous = { window: global.window, document: global.document, textarea: global.HTMLTextAreaElement };
   global.HTMLTextAreaElement = class {};
@@ -77,7 +77,7 @@ function popupHarness(t, agent = 'codex', rows = idle[agent]) {
     './i18n': { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match) },
   });
   const props = { projectId: 'fixture', terminal: { id: 'popup-fixture-' + ++nextId, sessionId: 'fixture-session', agent,
-    codexActive: true, codexActivity: 'complete', status: 'codex', needsInput: null }, active: true, autoFocus: false,
+    codexActive: true, codexActivity: activity, status: 'codex', needsInput: null }, active: true, autoFocus: false,
     onShowTerminal() {}, onError: assert.fail, onOpenLink() {} };
   let tree;
   const render = () => {
@@ -99,14 +99,14 @@ function popupHarness(t, agent = 'codex', rows = idle[agent]) {
 if (require.main === module) {
   // All captured dialog variants, not just the parser's successfully recognised choices.
   const screenDir = path.join(__dirname, 'fixtures/screens'), questionDir = path.join(__dirname, 'fixtures/questions');
-  const screens = fs.readdirSync(screenDir).filter(name => /(?:sign-in|trust-folder|permission|model-menu|resume-(?:inside|linux|start|empty)|investigation-(?:question|single|multi|tabs|review|plan|mcp|trust|bash|edit|write|web|patch|permissions|command|script|api-key|tall)|memories-dialog|plugins-view|0-163-(?:model|plugins|permissions|memories))/.test(name) && !name.endsWith('-before.txt'));
+  const screens = fs.readdirSync(screenDir).filter(name => /(?:sign-in|trust-folder|permission|model-menu|mention|shortcuts|resume-(?:inside|linux|start|empty)|investigation-(?:question|single|multi|tabs|review|plan|mcp|trust|bash|edit|write|web|patch|permissions|command|script|api-key|tall)|memories-dialog|plugins-view|(?:config|usage)-working|2-1-302-(?:status|config)|0-163-(?:model|plugins|permissions|memories))/.test(name) && !name.endsWith('-before.txt'));
   const fixtures = [...screens.map(name => ['screens/' + name, name.startsWith('claude') ? 'claude' : 'codex']),
     ...fs.readdirSync(questionDir).filter(name => name.endsWith('.txt')).map(name => ['questions/' + name, name.startsWith('claude') ? 'claude' : 'codex'])];
-  for (const [file, agent] of fixtures) for (const typing of [false, true]) {
-    test(file + (typing ? ' while typing' : '') + ': the actual reading view opens its terminal and never emits answer keys', t => {
-      const h = popupHarness(t, agent, typing ? idle[agent] : read(file));
+  for (const [file, agent] of fixtures) for (const activity of ['complete', 'working']) for (const typing of [false, true]) {
+    test(file + ' while ' + activity + (typing ? ' and typing' : '') + ': the actual reading view opens its terminal and never emits answer keys', t => {
+      const h = popupHarness(t, agent, typing ? idle[agent] : read(file), activity);
       if (typing) { h.edit('draft retained'); h.view.rows = read(file); h.render(); }
-      h.tick(DIALOG_SETTLE + 1);
+      h.tick(DIALOG_SETTLE * 2);
       assert.ok(h.popup(), file); assert.equal(h.node.disabled, true);
       if (typing) { assert.equal(h.popup().props.focus, false); assert.equal(h.node.value, 'draft retained'); }
       assert.equal(elements(h.tree()).some(element => /^(ReadingChoice|ReadingQuestion|NativeApprovalCard|NativeQuestionCard)$/.test(element.type?.name)), false);
@@ -118,19 +118,44 @@ if (require.main === module) {
     assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, false);
   });
   for (const agent of ['claude', 'codex']) {
-    test(agent + ': an unknown dialog opens after settling, without a parsed choice or notice', t => {
-      const h = popupHarness(t, agent, ['UNRECOGNISED GATE', 'Choose whether to continue: maybe / later']);
-      assert.equal(h.popup(), undefined); h.tick(DIALOG_SETTLE - 1); assert.equal(h.popup(), undefined);
-      h.tick(1); assert.ok(h.popup()); assert.deepEqual(h.writes, []);
+    for (const activity of ['complete', 'working']) {
+      test(agent + ': an unknown dialog opens after settling while ' + activity + ', without a parsed choice or notice', t => {
+        const h = popupHarness(t, agent, ['UNRECOGNISED GATE', 'Choose whether to continue: maybe / later'], activity);
+        const wait = DIALOG_SETTLE * (activity === 'working' ? 2 : 1);
+        assert.equal(h.popup(), undefined); h.tick(wait - 1); assert.equal(h.popup(), undefined);
+        h.tick(1); assert.ok(h.popup()); assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
+      });
+      test(agent + ': an idle input stays available despite ' + activity + ' activity', t => {
+        const h = popupHarness(t, agent, idle[agent], activity); h.tick(DIALOG_SETTLE * 3);
+        assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, false);
+      });
+      test(agent + ': working output with its input drawn stays in the reader while ' + activity, t => {
+        const line = agent === 'claude' ? '✻ Working…' : '• Working (5s · esc to interrupt)';
+        const h = popupHarness(t, agent, [line, ...idle[agent]], activity); h.tick(DIALOG_SETTLE * 3);
+        assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, true);
+        assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
+      });
+    }
+    test(agent + ': a working line without an input box cannot hide an unknown dialog', t => {
+      const line = agent === 'claude' ? '✻ Working…' : '• Working (5s · esc to interrupt)';
+      const h = popupHarness(t, agent, [line, 'Unknown dialog'], 'working'); h.tick(DIALOG_SETTLE * 2);
+      assert.ok(h.popup()); assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
     });
+    if (agent === 'claude') for (const name of ['claude-bang-running', 'claude-bang-empty-running', 'claude-bang-empty-model-working', 'claude-wrapped-draft']) {
+      for (const activity of ['complete', 'working']) test(name + ': actual working input stays in the reader despite ' + activity + ' activity', t => {
+        const h = popupHarness(t, agent, read('screens/' + name + '.txt'), activity); h.tick(DIALOG_SETTLE * 3);
+        assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, true);
+        assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
+      });
+    }
     test(agent + ': an idle prompt with its footer keeps the composer available', t => {
       const file = agent === 'claude' ? 'screens/claude-idle-2-1-296.txt' : 'screens/codex-fresh-default.txt';
       const h = popupHarness(t, agent, read(file)); h.tick(DIALOG_SETTLE * 2);
       assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, false);
     });
-    test(agent + ': while typing an unknown dialog opens without xterm focus and preserves the draft', t => {
-      const h = popupHarness(t, agent, read(agent === 'claude' ? 'screens/claude-idle-2-1-296.txt' : 'screens/codex-fresh-default.txt'));
-      h.edit('keep this draft'); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE);
+    for (const activity of ['complete', 'working']) test(agent + ': while ' + activity + ' and typing an unknown dialog opens without xterm focus and preserves the draft', t => {
+      const h = popupHarness(t, agent, idle[agent], activity);
+      h.edit('keep this draft'); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE * (activity === 'working' ? 2 : 1));
       assert.ok(h.popup()); assert.equal(h.popup().props.focus, false); assert.equal(h.node.value, 'keep this draft');
       assert.equal(h.node.disabled, true); h.keys('Enter'); h.keys('Tab');
       assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
@@ -172,9 +197,14 @@ if (require.main === module) {
     h.waiting().props.onOpenTerminal(); h.render(); assert.ok(h.popup());
   });
   test('busy output and a transient redraw do not open a dialog, and returning to input cancels the timer', t => {
-    const h = popupHarness(t); h.props.terminal.codexActivity = 'working'; h.view.rows = ['Busy output']; h.render(); h.tick(DIALOG_SETTLE * 2);
-    assert.equal(h.popup(), undefined); h.props.terminal.codexActivity = 'complete'; h.render(); h.tick(DIALOG_SETTLE - 1);
+    const h = popupHarness(t, 'codex', ['• Working (5s · esc to interrupt)', ...idle.codex], 'working'); h.tick(DIALOG_SETTLE * 3);
+    assert.equal(h.popup(), undefined); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE - 1);
     h.view.rows = idle.codex; h.render(); h.tick(DIALOG_SETTLE * 2); assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, false);
+  });
+  test('finishing activity shortens a pending unknown dialog wait, without suppressing it or sending keys', t => {
+    const h = popupHarness(t, 'codex', ['Unknown dialog'], 'working'); h.tick(DIALOG_SETTLE);
+    assert.equal(h.popup(), undefined); h.props.terminal.codexActivity = 'complete'; h.render();
+    assert.ok(h.popup()); assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
   });
 }
 module.exports = { popupHarness, elements, idle };

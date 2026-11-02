@@ -1,5 +1,5 @@
 import { parseAgentScreen } from '../agents/agent-screen';
-import { cliInputDraft, isAtPrompt } from '../reading/cli-panel';
+import { cliDialogShown, cliInputDraft, hasCliInput, isAtPrompt } from '../reading/cli-panel';
 import { readScreen } from '../terminal/terminal-screen';
 import { sameMessage } from '../reading/pending-prompts';
 import { t } from '../../shared/i18n';
@@ -13,23 +13,30 @@ function look(terminalId: string, agent: Agent) {
   return rows ? { rows, screen: parseAgentScreen(agent, rows) } : null;
 }
 
-// A message typed into the agent's own input, as a person would: whatever was left there is cleared, the text is pasted
-// and Enter pressed, again if the CLI did not take it. Both CLIs queue a message sent while they work. While the agent
-// waits on a choice or a question, its keys belong to that: nothing is sent. Gives an error, or null once sent.
-export async function sendToAgent(terminalId: string, sessionId: string, agent: Agent, text: string): Promise<string | null> {
+// Both CLIs queue messages while working if their input is drawn. Dialogs own the keys. Owner sends replace an old
+// draft; background relays preserve it and press Enter only while their own message is still in the input.
+export async function sendToAgent(terminalId: string, sessionId: string, agent: Agent, text: string,
+  { preserveDraft = false }: { preserveDraft?: boolean } = {}): Promise<string | null> {
+  const screenError = t('请先在终端中处理当前界面，再发送消息。');
+  const draftError = t('规划员输入框中有未发送的草稿，请先处理草稿后重试。');
   const now = look(terminalId, agent);
   if (!now) return t('它的终端还没有准备好，请稍后再试。');
-  if (!isAtPrompt(agent, now.rows, now.screen)) return t('请先在终端中处理当前界面，再发送消息。');
-  if (cliInputDraft(agent, now.rows, now.screen)) { window.agentrix.writeTerminal(terminalId, '\x15'); await pause(60); }
+  if (cliDialogShown(agent, now.rows, now.screen) || !hasCliInput(agent, now.rows, now.screen)) return screenError;
+  if (cliInputDraft(agent, now.rows, now.screen)) {
+    if (preserveDraft) return draftError;
+    window.agentrix.writeTerminal(terminalId, '\x15'); await pause(60);
+  }
   const pasted = await window.agentrix.pasteTerminal(terminalId, text, sessionId);
   if (!pasted.ok) return pasted.error;
-  await pause(400);
-  window.agentrix.writeTerminal(terminalId, '\r');
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await pause(700);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await pause(attempt === 0 ? 400 : 700);
     const after = look(terminalId, agent);
-    // Enter again only on this message still waiting there, never on something else typed in the meantime.
-    if (!after || !sameMessage(text, cliInputDraft(agent, after.rows, after.screen))) break;
+    if (preserveDraft && (!after || cliDialogShown(agent, after.rows, after.screen) || !hasCliInput(agent, after.rows, after.screen))) return screenError;
+    const draft = after ? cliInputDraft(agent, after.rows, after.screen) : '';
+    if (!sameMessage(text, draft)) {
+      if (preserveDraft && draft) return draftError;
+      if (preserveDraft || attempt > 0) break;
+    }
     window.agentrix.writeTerminal(terminalId, '\r');
   }
   return null;
