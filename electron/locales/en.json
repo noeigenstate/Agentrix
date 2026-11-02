@@ -2215,5 +2215,7 @@
   "引用的消息": "Quoted message",
   "移除引用": "Remove the quote",
   "输入框暂时不可用，等它可用后再引用": "The message box is unavailable for now; quote once it is available",
-  "规划员输入框中有未发送的草稿，请先处理草稿后重试。": "The planner's input holds an unsent draft. Deal with the draft, then try again."
+  "规划员输入框中有未发送的草稿，请先处理草稿后重试。": "The planner's input holds an unsent draft. Deal with the draft, then try again.",
+  "转发已超时，消息未发送。": "Relay timed out. The message was not sent.",
+  "已粘贴到规划员输入框，未能确认发送，请在终端里处理。": "Pasted into the planner's input, but sending could not be confirmed. Please handle it in the terminal."
 }
