@@ -18,7 +18,7 @@ function fixture(t) {
     gate: { dispose() {} }, promptQueue: { reset() {} }, completionWork: { reset: () => false }, approval: { context() {} } };
   const sessions = new Map([[id, s]]), calls = [];
   s.terminal = { kill() { calls.push('kill'); assert.ok(fs.existsSync(s.bootstrapFile)); } };
-  const context = vm.createContext({ fs, path, sessions, readingHistory: { close() {} }, endSkillSession() {}, stopUsageAccount() {},
+  const context = vm.createContext({ fs, path, sessions, readingHistory: { close() {} }, endSkillSession() {}, stopUsageAccount() {}, syncDashboardLive() {},
     skills: { endSession(project, session) { calls.push([project, session]); } }, clearTimeout, broadcast() {}, store: { setRestore() {} },
     restorePlans: new Map(), quitting: false, project: { id: s.projectId }, id, s, sessionId, bootstrapFile: s.bootstrapFile, skillNoteFile: s.skillNoteFile,
     report(error) { throw error; }, flush() {}, terminal: { onExit(fn) { context.onExit = fn; } }, t: () => '' });
