@@ -1,13 +1,7 @@
-// The real NativeQuestionCard in the real reading view, at the smallest window: a managed Claude session (agentLaunch native) whose CLI is a stand-in found first on PATH
-// (<run>/fakebin/node_modules/@anthropic-ai/claude-code/cli.js, the layout resolveCli looks for). It answers the SDK's initialize and then raises an MCP elicitation whose form has a
-// required boolean with no default, so the card is the one main builds from a live request. Nothing is sent back: the form stays unfinished.
-//
-//   node scripts/native-question-smoke.mjs        # both themes (mono, light)
-//
-// Checks: Enter on the unfinished form shows the reason and puts focus on the first field; Tab reaches the 前往第一项 link (2px ring that touches neither the status text nor the
-// action row); activating it focuses the first unfinished field again. The profile is isolated (AGENTRIX_DATA_DIR, CODEX_HOME, CLAUDE_CONFIG_DIR); screenshots land in the run folder.
+// Real reading view + xterm + native proxy, using an injected synthetic Codex TUI and isolated homes.
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -17,117 +11,128 @@ import { withGuiLock } from './gui-lock.mjs';
 import { waitFor } from './wait.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
+const { isolatedEnvironment } = require('./native-approval-probe.cjs');
 const { minWidth, minHeight } = require('../electron/window-zoom.json');
-const THEMES = ['mono', 'light'], packaged = process.argv.includes('--packaged');
-
-// The stand-in CLI: a JSON-lines peer that confirms the SDK's initialize, then asks one form with a required boolean (no default), a required text and an optional note.
-const FAKE_CLI = `
-let buffer = '';
+const packaged = process.argv.includes('--packaged');
+const idle = ['\u203a Ask Codex to do anything', '', 'gpt-6.1-sol \u00b7 high \u00b7 100% context left'];
+const rows = (await fs.readFile(path.join(root, 'tests/fixtures/questions/codex-question.txt'), 'utf8')).split(/\r?\n/);
+function standin(trigger, answered) {
+  return `
+const fs = require('node:fs'), readline = require('node:readline');
+let phase = 'loading', failure;
+process.on('uncaughtException', error => { failure = { name: error.name, code: error.code }; process.exit(1); });
+process.on('exit', code => fs.writeFileSync(${JSON.stringify(answered)} + (process.argv.includes('app-server') ? '.server' : '.tui'), JSON.stringify({ phase, code, failure })));
 const send = message => process.stdout.write(JSON.stringify(message) + '\\n');
-process.stdin.on('data', bytes => {
-  buffer += bytes;
-  for (const line of buffer.split('\\n').slice(0, -1)) {
+const draw = rows => process.stdout.write('\\x1b[2J\\x1b[H' + rows.join('\\r\\n'));
+if (process.argv.includes('app-server')) {
+  let asked = false;
+  readline.createInterface({ input: process.stdin }).on('line', line => {
     const message = JSON.parse(line);
-    if (message.type !== 'control_request' || message.request.subtype !== 'initialize') continue;
-    send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } });
-    send({ type: 'control_request', request_id: 'form-1', request: { subtype: 'elicitation', mode: 'form', mcp_server_name: 'deploy-helper', message: 'Configure the deployment',
-      requested_schema: { type: 'object', required: ['approve', 'reason'], properties: { approve: { type: 'boolean', title: 'Approve the release' }, reason: { type: 'string', title: 'Reason for the release' }, note: { type: 'string', title: 'Note for the log' } } } } });
-  }
-  buffer = buffer.slice(buffer.lastIndexOf('\\n') + 1);
-});
-process.stdin.on('end', () => process.exit(0));
-setInterval(() => {}, 1 << 30);
+    if (message.method === 'initialize') { send({ id: message.id, result: { userAgent: 'synthetic-TUI' } }); send({ method: 'thread/started', params: { thread: { id: 'fixture-thread' } } }); }
+    if (!message.method && message.id === 'fixture-question') {
+      fs.writeFileSync(${JSON.stringify(answered)}, JSON.stringify(message.result));
+      send({ method: 'serverRequest/resolved', params: { requestId: message.id, threadId: 'fixture-thread' } });
+    }
+  });
+  setInterval(() => {
+    if (asked || !fs.existsSync(${JSON.stringify(trigger)})) return; asked = true;
+    send({ id: 'fixture-question', method: 'item/tool/requestUserInput', params: { threadId: 'fixture-thread', turnId: 'fixture-turn', itemId: 'fixture-item', questions: [{ id: 'q', header: 'Fixture', question: 'Choose one', options: [{ label: 'One', description: 'First' }, { label: 'Two', description: 'Second' }] }] } });
+  }, 50);
+} else {
+  const { WebSocket } = require(${JSON.stringify(require.resolve('ws'))});
+  const args = process.argv, address = args[args.indexOf('--remote') + 1], name = args[args.indexOf('--remote-auth-token-env') + 1];
+  phase = 'connecting';
+  const socket = new WebSocket(address, { headers: { Authorization: 'Bearer ' + process.env[name] } }); let held = null;
+  socket.on('error', error => { phase = 'websocket-error'; failure = { name: error.name, code: error.code, status: error.message.match(/response: (\d+)/)?.[1] }; process.exit(1); }); socket.on('close', () => process.exit(0));
+  socket.on('open', () => socket.send(JSON.stringify({ id: 'initialize', method: 'initialize', params: {} })));
+  socket.on('message', bytes => {
+    const message = JSON.parse(bytes);
+    if (message.id === 'initialize') draw(${JSON.stringify(idle)});
+    if (message.method === 'item/tool/requestUserInput') { held = message.id; draw(${JSON.stringify(rows)}); }
+    if (message.method === 'serverRequest/resolved') { held = null; draw(${JSON.stringify(idle)}); }
+  });
+  process.stdin.setRawMode?.(true); process.stdin.resume();
+  process.stdin.on('data', bytes => {
+    if (held && bytes.includes(13)) socket.send(JSON.stringify({ id: held, result: { answers: { q: { answers: ['One'] } } } }));
+  });
+}
 `;
-
-// The card's status line: its text and the link's ring box (the border box grown by the 2px offset and the 2px ring) against the status text and the action row.
-const measureLink = () => {
-  const link = document.activeElement, status = link.closest('.native-question-status'), actions = document.querySelector('.native-question-actions');
-  const range = document.createRange(), ring = link.getBoundingClientRect(), style = getComputedStyle(link), grow = parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth);
-  range.selectNodeContents(status.firstChild);
-  const text = range.getBoundingClientRect(), row = actions.getBoundingClientRect(), box = { left: ring.left - grow, right: ring.right + grow, top: ring.top - grow, bottom: ring.bottom + grow };
-  const meet = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0;
-  const body = document.querySelector('.native-question-footer').getBoundingClientRect();
-  return { label: link.textContent, outline: `${style.outlineWidth} ${style.outlineStyle}`, hit: Math.round(ring.height), underline: style.textDecorationLine, overStatusText: meet(box, text), overActions: meet(box, row),
-    clipped: box.left < body.left || box.right > body.right || box.top < body.top || box.bottom > body.bottom + 12 };
-};
-
-async function runTheme(theme, output) {
-  const dir = path.join(output, theme), profile = path.join(dir, 'profile'), project = path.join(dir, 'project'), bin = path.join(dir, 'fakebin');
-  const cli = path.join(bin, 'node_modules/@anthropic-ai/claude-code');
-  await fs.mkdir(profile, { recursive: true }); await fs.mkdir(project, { recursive: true }); await fs.mkdir(cli, { recursive: true });
-  await fs.writeFile(path.join(cli, 'cli.js'), FAKE_CLI);
-  await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ id: 'questions', name: '原生问题', path: project, restore: { terminal: false, codex: false } }],
-    settings: { language: 'zh', theme, terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false } }));
-  const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: path.join(dir, 'codex-home'), CLAUDE_CONFIG_DIR: path.join(dir, 'claude-home') };
-  // Windows spells it Path: keep one key with the stand-in first, so the app cannot find a real CLI.
+}
+async function run(theme, output) {
+  // Keep executable and profile paths below Windows' command-line loader limits in a deep worker worktree.
+  const runtime = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-tui-'));
+  const dir = path.join(output, theme), profile = path.join(runtime, 'profile'), project = path.join(runtime, 'project'), bin = path.join(runtime, 'fakebin');
+  const trigger = path.join(runtime, 'ask'), answered = path.join(runtime, 'answered.json'), cli = path.join(bin, 'node_modules/@openai/codex/bin');
+  await fs.mkdir(dir, { recursive: true });
+  for (const folder of [profile, project, cli]) await fs.mkdir(folder, { recursive: true });
+  await fs.writeFile(path.join(cli, 'codex.js'), standin(trigger, answered));
+  await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ id: 'questions', name: 'Native TUI fixture', path: project, restore: { terminal: false, codex: false } }],
+    settings: { language: 'en', theme, terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false } }));
+  const env = { ...isolatedEnvironment(runtime), AGENTRIX_DATA_DIR: profile, CODEX_HOME: path.join(runtime, 'codex-home'), CLAUDE_CONFIG_DIR: path.join(runtime, 'claude-home') };
+  for (const key of ['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']) if (process.env[key]) env[key] = process.env[key];
   const searchPath = Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '';
   for (const key of Object.keys(env)) if (key.toLowerCase() === 'path') delete env[key];
   env[process.platform === 'win32' ? 'Path' : 'PATH'] = bin + path.delimiter + searchPath;
   delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
-  const errors = [], results = { theme, steps: [] }, shot = (page, name) => page.screenshot({ path: path.join(dir, `${name}.png`) });
-  let app;
+  const errors = [], checks = []; let app;
   try {
-    app = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'),
-      args: packaged ? [] : [root], cwd: root, env });
+    app = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'), args: packaged ? [] : [root], cwd: root, env });
     const page = await app.firstWindow(); page.on('pageerror', error => errors.push(error.message));
+    await app.evaluate((_electron, { runtime, ptyPath, nodePath }) => {
+      const pty = process.mainModule.require(ptyPath), spawn = pty.spawn;
+      globalThis.nativeProbeLaunch = null;
+      pty.spawn = (file, args, options) => {
+        globalThis.nativeProbeLaunch = { file: nodePath, requestedFile: file, script: args[0], remote: args.includes('--remote') };
+        if (!args[0]?.startsWith(runtime)) throw new Error('The fixture PATH did not select the injected CLI');
+        // The injected peer is JavaScript; use the test runner's Node for its physical TUI.
+        return spawn(nodePath, args, options);
+      };
+    }, { runtime, ptyPath: require.resolve('node-pty'), nodePath: process.execPath });
+    const workbench = page.getByRole('button', { name: 'Workbench', exact: true });
+    if (await workbench.isVisible()) await workbench.click();
     await app.evaluate(({ BrowserWindow }, [width, height]) => BrowserWindow.getAllWindows()[0].setContentSize(width, height), [minWidth, minHeight]);
-    await waitFor(() => page.evaluate(([width, height]) => innerWidth <= width + 1 && innerHeight <= height + 1, [minWidth, minHeight]), 'the minimum window size');
-    results.window = await page.evaluate(() => [innerWidth, innerHeight]);
-    await waitFor(async () => (await page.evaluate(() => document.documentElement.dataset.theme ?? 'mono')) === theme, `the profile theme ${theme}`);
-    // A native session starts in a terminal that has no shell yet: the project is not opened first.
-    await page.evaluate(() => window.agentrix.agentLaunch('questions', 'claude', 'native')).then(result => assert.equal(result.ok, true, JSON.stringify(result)));
-    const show = page.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }); if (await show.isVisible()) await show.click();
-    const card = page.locator('.native-question');
-    await card.waitFor({ timeout: 30000 });
-    assert.equal(await card.count(), 1, 'one native question card');
-    const required = page.locator('.native-question-bool input[type="radio"]');
-    assert.equal(await required.count(), 2, 'a required boolean offers yes and no only');
-    assert.equal(await required.evaluateAll(nodes => nodes.filter(node => node.checked).length), 0, 'the boolean is left empty');
-    assert.match(await card.locator('.native-question-status').innerText(), /还有 2 项未完成/);
-    await shot(page, 'card-initial');
-
-    // Enter on the unfinished form: the reason shows and the first unfinished field takes focus.
-    await page.locator('.native-question-field').first().locator('input').first().focus();
-    await page.keyboard.press('Enter');
-    await card.locator('.native-question-reason').first().waitFor();
-    assert.equal(await page.evaluate(() => document.activeElement.type), 'radio', 'Enter leaves focus on the first unfinished field');
-    await shot(page, 'card-enter');
-
-    // Tab to the link: radios of the group first, then the link.
-    for (let step = 0; step < 6 && await page.evaluate(() => document.activeElement.textContent !== '前往第一项'); step++) await page.keyboard.press('Tab');
-    const link = await page.evaluate(measureLink);
-    assert.equal(link.label, '前往第一项', 'Tab reaches the link');
-    assert.deepEqual({ ...link, label: undefined }, { label: undefined, outline: '2px solid', hit: 32, underline: 'underline', overStatusText: false, overActions: false, clipped: false });
-    await shot(page, 'card-link-focus');
-    results.steps.push({ link });
-
-    // Activating it puts focus back on the first unfinished field.
-    await page.keyboard.press('Enter');
-    await waitFor(() => page.evaluate(() => document.activeElement.type === 'radio'), 'the link focuses the first unfinished field');
-    assert.equal(await page.evaluate(() => document.activeElement.closest('.native-question-field') === document.querySelector('.native-question-field')), true);
-    await shot(page, 'card-after-jump');
-
-    // The mouse path. A radio clicked with the mouse answers its field; the link, clicked with the mouse, then takes focus to the next unfinished one and brings it into view
-    // (a click does not match :focus-visible, so focus and scroll position are checked, not the ring).
-    await page.locator('.native-question-body').evaluate(node => { node.scrollTop = 0; });
-    await card.locator('.native-question-bool label', { hasText: '是' }).click();
-    await waitFor(async () => /还有 1 项未完成/.test(await card.locator('.native-question-status').innerText()), 'a radio answered by mouse leaves one unfinished field');
-    assert.equal(await required.evaluateAll(nodes => nodes.filter(node => node.checked).length), 1, 'the clicked radio is checked');
-    await shot(page, 'card-mouse-radio');
-    await page.locator('.native-question-body').evaluate(node => { node.scrollTop = 0; });
-    await card.getByRole('button', { name: '前往第一项', exact: true }).click();
-    await waitFor(() => page.evaluate(() => document.activeElement === document.querySelectorAll('.native-question-field')[1]?.querySelector('input')), 'the mouse-clicked link focuses the first unfinished field');
-    const view = await page.evaluate(() => { const body = document.querySelector('.native-question-body').getBoundingClientRect(), field = document.querySelectorAll('.native-question-field')[1].getBoundingClientRect(); return { body: [body.top, body.bottom], field: [field.top, field.bottom] }; });
-    assert.ok(view.field[0] >= view.body[0] - 1 && view.field[1] <= view.body[1] + 1, `the unfinished field is scrolled into view: ${JSON.stringify(view)}`);
-    results.steps.push({ mouse: view });
-    await shot(page, 'card-mouse-jump');
-    assert.deepEqual(errors, []);
+    const launched = await page.evaluate(() => window.agentrix.agentLaunch('questions', 'codex', 'native')); assert.equal(launched.ok, true, JSON.stringify(launched));
+    const card = page.locator('[data-project-id="questions"]');
+    await card.locator('.panel-name').click();
+    const composer = page.locator('.reading-composer textarea');
+    await waitFor(async () => {
+      const state = await page.evaluate(() => window.agentrix.getState());
+      if (state.ok && state.value.projects[0]?.terminals[0]?.status === 'exited') throw new Error('Synthetic TUI exited before input');
+      return composer.evaluateAll(nodes => nodes.length === 1 && !nodes[0].disabled);
+    }, 'the synthetic Codex TUI draws its idle input');
+    await composer.fill('keep this draft'); await fs.writeFile(trigger, 'ask');
+    const popup = page.locator('.reading-terminal-popup'); await popup.waitFor({ timeout: 15000 });
+    await waitFor(() => popup.locator('.xterm-rows').innerText().then(text => text.includes('Question 1/2')), 'the actual xterm shows the provider question');
+    assert.equal(await composer.isDisabled(), true); assert.equal(await composer.inputValue(), 'keep this draft');
+    assert.equal(await popup.evaluate(node => !!document.activeElement?.closest('.xterm')), false, 'automatic opening never took typing focus');
+    assert.equal(await page.locator('.native-question, .reading-choice-option, .reading-question-option').count(), 0);
+    await page.keyboard.press('Enter'); await page.waitForTimeout(150);
+    assert.equal(await fs.stat(answered).then(() => true, () => false), false, 'a composer Enter did not answer');
+    await page.screenshot({ path: path.join(dir, 'popup-no-focus.png') }); checks.push('popup visible without focus, composer locked, no host answer');
+    await popup.locator('.xterm-screen').click(); await page.keyboard.press('Enter');
+    await waitFor(() => fs.stat(answered).then(() => true, () => false), 'the owner clicked the TUI and answered there');
+    assert.deepEqual(JSON.parse(await fs.readFile(answered, 'utf8')), { answers: { q: { answers: ['One'] } } });
+    await waitFor(() => popup.locator('.xterm-rows').innerText().then(text => text.includes('Ask Codex to do anything')), 'TUI returned to input');
+    await popup.getByRole('button', { name: 'Close', exact: true }).click();
+    await waitFor(() => composer.isEnabled(), 'composer unlocked after dialog'); assert.equal(await composer.inputValue(), 'keep this draft');
+    checks.push('explicit TUI click + Enter resolves the exact provider request; draft survives');
+    await page.screenshot({ path: path.join(dir, 'returned-to-input.png') }); assert.deepEqual(errors, []);
+  } catch (error) {
+    if (app) {
+      const page = await app.firstWindow();
+      await page.screenshot({ path: path.join(dir, 'failure.png') }).catch(() => {});
+      const state = await page.evaluate(() => window.agentrix.getState()).catch(() => null);
+      const terminal = state?.ok && state.value.projects[0]?.terminals[0];
+      const rows = (await page.locator('.xterm-rows').allTextContents()).map(text => text.replace(/[a-f0-9]{64}/gi, '[redacted]'));
+      const launch = await app.evaluate(() => globalThis.nativeProbeLaunch);
+      await fs.writeFile(path.join(dir, 'failure.json'), JSON.stringify({ error: error.message, terminal: terminal && { status: terminal.status, active: terminal.codexActive, error: terminal.error }, launch, rows, errors }, null, 2));
+    }
+    throw error;
   } finally {
-    await fs.writeFile(path.join(dir, 'results.json'), JSON.stringify(results, null, 2));
+    await fs.writeFile(path.join(dir, 'results.json'), JSON.stringify({ theme, checks, errors }, null, 2));
     if (app) await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]);
   }
 }
-
 const output = await testRun('native-question');
-await withGuiLock('native-question', async () => { for (const theme of THEMES) await runTheme(theme, output); });
-console.log(`PASS: the real native question card at ${minWidth}×${minHeight}: empty required boolean, Enter, Tab to 前往第一项 and activating it by key and by mouse, in the mono and light themes: ${output}`);
+await withGuiLock('native-question', async () => { for (const theme of ['mono', 'light']) await run(theme, output); });
+console.log('PASS: native requests answered only in the TUI, both themes. Evidence: ' + output);

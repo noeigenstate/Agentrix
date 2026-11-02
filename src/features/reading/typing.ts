@@ -10,5 +10,5 @@ export function isTyping(node: Element | null) {
 // Focus belongs to an editor even when it is empty and the typing grace has expired.
 export function hasEditingFocus(view: Element | null) {
   const node = document.activeElement;
-  return !!node && !!view?.contains(node) && (node.matches('input, textarea, select') || (node as HTMLElement).isContentEditable);
+  return !!node && !!view?.contains?.(node) && (node.matches('input, textarea, select') || (node as HTMLElement).isContentEditable);
 }

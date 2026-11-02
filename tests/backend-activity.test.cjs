@@ -451,20 +451,15 @@ for (const kind of ['local', 'ssh']) test(`Claude ${kind} real queued inputs sur
 });
 
 test('a running Claude dev server lets its session card complete and cannot rearm it after acknowledgment', async t => {
-  for (const native of [false, true]) {
+  {
     const h = await harness(t, 'local', 'claude'), { s } = h;
-    if (native) Object.assign(s, { native: {}, nativeMode: 'claude-sdk', sessionId: 'generation', nativeMessages: [] });
     const record = { ...background('Bash', 'dev', 2050), message: { content: [
       { type: 'tool_use', name: 'Bash', id: 'dev', input: { command: 'cd /work/app && npm run dev', run_in_background: true } },
     ] } };
-    if (native) h.context.nativeSessionEvent(s.terminalId, s.sessionId, { type: 'managed-prompt', text: 'Fix the app' });
-    else { h.write('Fix the app\r'); h.user('Fix the app'); }
+    h.write('Fix the app\r'); h.user('Fix the app');
     s.completionWork.record(record, 'claude');
     s.completionWork.record({ type: 'user', timestamp: stamp(2070), toolUseResult: { backgroundTaskId: 'server' },
       message: { content: [{ type: 'tool_result', tool_use_id: 'dev' }] } }, 'claude');
-    if (native) {
-      h.now(2080); h.context.nativeSessionEvent(s.terminalId, s.sessionId, { type: 'system', subtype: 'task_started', tool_use_id: 'dev', task_id: 'server' });
-    }
     h.apply('complete', 'parent', 2100);
     assert.equal(s.codexActivity, 'complete'); assert.equal(h.project.unread, 1); assert.equal(h.alerts(), 1);
     h.store.acknowledge(h.project.id);
@@ -830,8 +825,8 @@ test('a lost background task times out to interrupted without unread, success no
   assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
 });
 
-test('native real prompts arm once, notify once, and reject older complete snapshots in both modes', async t => {
-  for (const agent of ['claude', 'codex']) {
+test('native Codex real prompts arm once, notify once, and reject older complete snapshots', async t => {
+  for (const agent of ['codex']) {
     const h = await harness(t, 'local', agent), { s } = h;
     Object.assign(s, { native: {}, nativeMode: agent === 'claude' ? 'claude-sdk' : 'codex-native', sessionId: 'generation', nativeMessages: [], reportedThreadId: 'parent' });
     const event = (message, at) => { h.now(at); h.context.nativeSessionEvent(s.terminalId, s.sessionId, message); };
@@ -890,48 +885,6 @@ test('native Codex command executions alone cannot defer an ended parent or trig
   h.store.acknowledge(h.project.id);
   h.now(2070 + 2 * LOST_WORK_TIMEOUT); h.apply('complete', 'turn', 2100);
   assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 1); assert.equal(h.project.unread, 0);
-});
-
-test('actual managed Claude handlers wait for SDK tasks and their review, without rearming on background results', async t => {
-  const h = await harness(t, 'local', 'claude'), { s } = h;
-  Object.assign(s, { native: {}, nativeMode: 'claude-sdk', sessionId: 'generation', nativeMessages: [] });
-  const event = (message, at) => { h.now(at); h.context.nativeSessionEvent(s.terminalId, s.sessionId, message); };
-  event({ type: 'managed-prompt', text: 'Finish all SDK work' }, 2000);
-  event({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', id: 'tool', input: { run_in_background: true } }] } }, 2050);
-  event({ type: 'system', subtype: 'task_started', tool_use_id: 'tool', task_id: 'child' }, 2060);
-  assert.equal(s.completionWork.tasks.size, 1, 'SDK task and tool launch are the same worker');
-  event({ type: 'result', session_id: 'claude-session', uuid: 'parent' }, 2100);
-  assert.equal(s.codexActivity, 'working'); assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
-  event({ type: 'system', subtype: 'task_notification', task_id: 'child', status: 'completed' }, 2200);
-  assert.equal(s.completionWork.tasks.size, 0); assert.equal(s.codexActivity, 'working');
-  event({ type: 'result', uuid: 'review' }, 2300);
-  assert.equal(s.codexActivity, 'complete'); assert.equal(h.project.unread, 1); assert.equal(h.alerts(), 1);
-  h.store.acknowledge(h.project.id);
-  event({ type: 'system', subtype: 'task_started', task_id: 'callback' }, 2400);
-  event({ type: 'result', uuid: 'background-parent' }, 2500);
-  assert.equal(s.codexActivity, 'working');
-  event({ type: 'system', subtype: 'task_notification', task_id: 'callback', status: 'stopped' }, 2600);
-  event({ type: 'result', uuid: 'background-review' }, 2700);
-  assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 1); assert.equal(h.project.completionArmed, false);
-  h.context.nativeSessionEvent(s.terminalId, 'old-generation', { type: 'managed-prompt', text: 'stale input' });
-  assert.equal(h.project.completionArmed, false);
-});
-
-test('managed Claude reports each new main round working after the previous round ended', async t => {
-  const h = await harness(t, 'local', 'claude'), { s } = h;
-  Object.assign(s, { native: {}, nativeMode: 'claude-sdk', sessionId: 'generation', nativeMessages: [] });
-  const event = (message, at) => { h.now(at); h.context.nativeSessionEvent(s.terminalId, s.sessionId, message); };
-  const main = () => s.completionWork.mainTurn(s.activitySnapshot).state;
-  event({ type: 'managed-prompt', text: 'First task' }, 2000);
-  assert.equal(main(), 'working'); assert.equal(s.codexActivity, 'working');
-  event({ type: 'result', session_id: 'claude-session', uuid: 'first' }, 2100);
-  assert.equal(main(), 'complete'); h.store.acknowledge(h.project.id);
-  event({ type: 'managed-prompt', text: 'Second task' }, 3000);
-  assert.equal(main(), 'working'); assert.equal(s.activitySnapshot.updatedAt, 3000);
-  s.completionWork.changed(); assert.equal(main(), 'working');
-  event({ type: 'result', uuid: 'second', is_error: true }, 3100);
-  assert.equal(main(), 'interrupted'); assert.equal(s.codexActivity, 'interrupted');
-  assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 1);
 });
 
 for (const kind of ['local', 'ssh']) test(`${kind} project waits for children while its Main card is interrupted; callbacks stay disarmed`, async t => {
@@ -1010,8 +963,8 @@ test('native interruption without a repeated status field cancels completion, in
   }
 });
 
-test('native clear/resume to a different Claude or Codex session retires old tasks and cannot announce restored history', async t => {
-  for (const agent of ['claude', 'codex']) {
+test('native clear/resume to a different Codex session retires old tasks and cannot announce restored history', async t => {
+  for (const agent of ['codex']) {
     const h = await harness(t, 'local', agent), { s } = h;
     Object.assign(s, { native: {}, nativeMode: agent === 'claude' ? 'claude-sdk' : 'codex-native', sessionId: 'generation', nativeMessages: [],
       claudeSessionId: 'old', reportedThreadId: 'old' });

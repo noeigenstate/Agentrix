@@ -1,6 +1,6 @@
 /* The main rail follows user and agent turns. Your message and the tool groups are cards, the agent's words are plain text, and code, errors and attachments
    are wells (the app colour, a divider edge, radius 12); tools have a small branch mark, and their pills still open into the detailed tree. */
-.reading-view {
+:is(.reading-view, .conversation-feed) {
   /* A card is one step above the surface the view is on: the input colour on a grid card (the card colour), the card colour in a project in focus (the app colour). */
   --flow-card: var(--bg-input); --flow-line: var(--border); --flow-inset: var(--bg-hover);
   --flow-ink: var(--text-1); --flow-muted: var(--text-2); --flow-faint: var(--text-3);
@@ -13,7 +13,7 @@
      left to reach it (the 44px reply inset less the node, 0 in a card narrower than 480px, where the content edge is the avatars'). */
   --turn-pad: 16px;
 }
-.focus-mode .reading-view { --flow-card: var(--bg-card); --flow-inset: var(--bg-input); }
+.focus-mode :is(.reading-view, .conversation-feed) { --flow-card: var(--bg-card); --flow-inset: var(--bg-input); }
 
 /* A step: its node on the line, then what it is, under a head line with the speaker and the time. The line runs from each node's foot to the next one's head
    (the steps stand 10px apart), never through the glass. */

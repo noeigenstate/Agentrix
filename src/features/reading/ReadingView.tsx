@@ -1,59 +1,44 @@
-import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { readingMarked } from './markdown-escape';
-import createDOMPurify from 'dompurify';
-import { ArrowDown, CaretDown, CaretUp, Image as ImageIcon, PaperPlaneRight, Stop } from '@phosphor-icons/react';
-import type { AgentCommand, ConversationEntry, ProjectTerminal } from '../../shared/types';
-import { actionText, stepVerb } from '../agents/action-text';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { ArrowDown, Image as ImageIcon, PaperPlaneRight, Stop } from '@phosphor-icons/react';
+import type { AgentCommand, ProjectTerminal } from '../../shared/types';
+import { actionText } from '../agents/action-text';
 import { dictateInto } from '../voice/voice-input';
 import { createDictationSend } from './dictation-send';
 import { bindApproval, useScreen } from '../terminal/terminal-screen';
-import { choiceIdentity, parseAgentScreen } from '../agents/agent-screen';
-import { hasCliInput, isAtPrompt } from './cli-panel';
+import { parseAgentScreen } from '../agents/agent-screen';
+import { hasCliInput, isAtPrompt, isCliWorking } from './cli-panel';
 import { cliReady, DIALOG_SETTLE, endDialog, rememberReady, startDialog } from './reading-ready';
 import { WaitingCard } from './WaitingCard';
 import { ReadingWelcome } from './ReadingWelcome';
-import { ReadingChoice } from './ReadingChoice';
-import { NativeApprovalCard } from './NativeApprovalCard';
-import { ManagedSession } from './ManagedSession';
-import { ReadingQuestion } from './ReadingQuestion';
 import { typeReadingCommand } from './reading-command';
 import { dataUrl, thumbnail } from '../../shared/image-thumbnail';
 import { useNativePictures } from './useNativePictures';
 import { rememberPicture } from './pasted-pictures';
 import { useWelcomeStarting } from './reading-welcome';
 import { ReadingTerminalPopup } from './ReadingTerminalPopup';
-import { ReadingSignIn } from './ReadingSignIn';
-import { signInScreen } from '../agents/sign-in-screen';
 import { setChoiceVisible } from './reading-mode';
 import { hasEditingFocus, isTyping, markTyping } from './typing';
 import { useStickToBottom } from './useStickToBottom';
 import { useReadingHistory } from './useReadingConversation';
-import { blocks, conversationTurns, useVisibleTail } from './useVisibleTail';
+import { blocks, useVisibleTail } from './useVisibleTail';
 import './reading.css';
 import './reading-flow.css';
-import { currentLanguage, t } from '../../shared/i18n';
-import { UserAvatar } from '../../shared/UserAvatar';
+import { t } from '../../shared/i18n';
 import { useMentions } from './useMentions';
-import { QUICK, useLongMarkdown } from './useLongMarkdown.ts';
 import { MentionPalette } from './MentionPalette';
 import { isTypedCommand, pendingPromptCards, sameMessage, type PendingPrompt } from './pending-prompts';
 import { usePendingPrompts } from './usePendingPrompts';
-import { PendingPromptEntries, UserImages, UserMessage } from './PendingPromptEntries';
-import { AgentMark, AgentTurnItem, stepTime, TimelineStep } from './Timeline';
-import { groupSummary, ImageProgress, ResultActions, ResultChecks, ResultStatus, StepState, WorkingLine } from './ResultCard';
-import { latestResult, writtenBy } from './result-round';
+import { PendingPromptEntries, UserImages } from './PendingPromptEntries';
+import { AgentMark, TimelineStep } from './Timeline';
+import { ResultActions, ResultChecks, ResultStatus, WorkingLine } from './ResultCard';
+import { latestResult } from './result-round';
 import { AgentCommandRun } from './AgentCommandRun';
-import { FileCards, previewable } from './FileCards';
-import { replyFiles } from './reply-files';
 import { onComposerPrefill } from './composer-prefill';
-import { showPopup } from '../files/file-popup';
-import { markReadingPaths } from './reading-paths';
-import { PathText } from './PathText';
-import { useReadingPaths } from './useReadingPaths';
 
+import { ConversationDecorations, ConversationFeed } from './ConversationFeed';
+export { Markdown } from './Markdown';
 export { groupSummary } from './ResultCard';
 
-const purifier = createDOMPurify(window);
 // Switching to the CLI unmounts the composer; sent messages still belong to that terminal.
 const history = new Map<string, string[]>();
 type ServerPicture = { generation: number; src: string; path?: string; error?: string; ready?: Promise<void>; sent?: boolean };
@@ -63,134 +48,12 @@ const cleared = new Map<string, ReadonlySet<string>>();
 const clears = (agent: ProjectTerminal['agent'], text: string) => (agent === 'claude' ? /^\/clear(?:\s|$)/ : /^\/(?:clear|new)(?:\s|$)/).test(text.trim());
 // Picture previews may still be decoding after the CLI has accepted the attachment.
 const IMAGE_PLACEHOLDER = /\[Image #\d+\]/;
-// A Markdown block the agent shows (a file's content, a draft) is laid out like the answer around it, its source a
-// click away; inside it, Markdown blocks stay source. A very long one stays source too: this runs on the window's thread.
-const DOCUMENT = /^(?:markdown|md|mdx)$/i, DOCUMENT_LIMIT = 20000;
-// What the agent wrote, laid out as Markdown. Only plain structure survives: no raw HTML, no images (an
-// answer has no business loading anything), and links open outside through the window's link handler.
-function finish(parsed: string, nested = false): string {
-  const html = purifier.sanitize(parsed, {
-    ALLOWED_TAGS: ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'ul', 'ol', 'li', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a', 'hr', 'br', 'em', 'strong', 's', 'del', 'input', 'kbd'],
-    ALLOWED_ATTR: ['href', 'class', 'type', 'checked', 'disabled', 'start', 'align'], ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false,
-    // Preserve file/drive references as well as DOMPurify's usual safe links; scripts remain disallowed.
-    ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|file|mailto|tel|callto|sms|cid|xmpp|matrix):|[a-z]:(?:[\\/]|%5c|%2f)|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
-  });
-  const root = document.createElement('div'); root.innerHTML = html;
-  for (const box of root.querySelectorAll('input')) { box.type = 'checkbox'; box.disabled = true; }
-  // Each code block gets a copy button over its top right corner.
-  for (const pre of root.querySelectorAll('pre')) {
-    const frame = document.createElement('div'); frame.className = 'reading-code';
-    const language = pre.querySelector('code')?.className.match(/language-([\w+-]+)/)?.[1];
-    const bar = document.createElement('div'); bar.className = 'reading-code-bar';
-    bar.innerHTML = `<span></span><button type="button" data-copy-code>${t('复制')}</button>`;
-    bar.querySelector('span')!.textContent = language || '';
-    pre.replaceWith(frame); frame.append(bar, pre);
-    const source = pre.textContent || '';
-    if (nested || !language || !DOCUMENT.test(language) || !source.trim() || source.length > DOCUMENT_LIMIT) continue;
-    const doc = document.createElement('div'); doc.className = 'reading-code-doc';
-    doc.innerHTML = finish(readingMarked.parse(source) as string, true);
-    const toggle = document.createElement('button'); toggle.type = 'button'; toggle.dataset.codeSource = ''; toggle.textContent = t('源码');
-    bar.querySelector('span')!.textContent = 'Markdown';
-    bar.insertBefore(toggle, bar.querySelector('[data-copy-code]'));
-    frame.classList.add('is-document'); frame.insertBefore(doc, pre);
-  }
-  markReadingPaths(root);
-  return root.innerHTML;
-}
-
-const safely = (make: () => string) => { try { return make(); } catch { return null; } };
-export function Markdown({ text, softBreaks = false }: { text: string; softBreaks?: boolean }) {
-  const language = currentLanguage(), short = text.length <= QUICK;
-  const quick = useMemo(() => short ? safely(() => finish(readingMarked.parse(text, { breaks: !softBreaks }) as string)) : undefined, [text, language, short, softBreaks]);
-  const long = useLongMarkdown(text, short, softBreaks);
-  const html = useMemo(() => short ? quick : long == null ? null : safely(() => finish(long)), [short, quick, long, language]);
-  if (html == null) return <p className="reading-plain"><PathText text={text} /></p>;
-  return <div className="reading-markdown" dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
-// A picture the agent generated, shown where it answered; a click shows it full size in a popup. Its prompt is a two-line summary
-// under it; when the summary is cut off, a text toggle shows the whole prompt (not remembered). The latest result's picture
-// is larger and carries the agent's one-sentence reply (children) between itself and its prompt.
-function GeneratedImage({ src, path, prompt, result = false, children }: { src: string; path: string; prompt: string; result?: boolean; children?: ReactNode }) {
-  const open = () => showPopup({ kind: 'image', path });
-  const [expanded, setExpanded] = useState(false);
-  const [clipped, setClipped] = useState(false);
-  const caption = useRef<HTMLElement>(null);
-  const captionId = useId();
-  useEffect(() => {
-    const element = caption.current;
-    if (!element || expanded) return;
-    const measure = () => setClipped(element.scrollHeight > element.clientHeight + 1);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [prompt, expanded]);
-  return <figure className={`reading-generated${result ? ' is-result' : ''}`}>
-    <button type="button" className="reading-generated-picture" title={t('打开原图')} aria-label={t('打开原图')} onClick={open}><img src={src} alt={prompt || t('生成的图片')} /></button>
-    {children}
-    {prompt && <figcaption id={captionId} ref={caption} className={expanded ? 'is-expanded' : undefined}>{prompt}</figcaption>}
-    {prompt && (clipped || expanded) && <button type="button" className="reading-generated-toggle" aria-expanded={expanded} aria-controls={captionId} onClick={() => setExpanded(!expanded)}>
-      {expanded ? t('收起') : t('展开提示词')}{expanded ? <CaretUp size={12} aria-hidden="true" /> : <CaretDown size={12} aria-hidden="true" />}
-    </button>}
-  </figure>;
-}
-
-// A reply card inside its agent's turn, with the local pictures, pages and videos it names shown under it
-// (the agents are told they can show one this way: reading-note.cjs).
-function AssistantReply({ entry, agent, projectId, result = false, onError }: { entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; result?: boolean; onError: (message: string) => void }) {
-  const named = useMemo(() => entry.text ? replyFiles(entry.text) : [], [entry.text]);
-  const words = entry.text ? <Markdown text={entry.omitted ? t('此条对话过大，未在此显示。') : entry.text} /> : null;
-  // The latest result shows its picture first with the words under it; anywhere else the words come first.
-  const picture = entry.generated && entry.images?.[0] ? <GeneratedImage src={entry.images[0]} {...entry.generated} result={result}>{result && words}</GeneratedImage> : null;
-  return <div data-reading-entry={entry.id} className={`reading-assistant is-${agent}`}>{result && picture}{!(result && picture) && words}
-      {named.length > 0 && <FileCards projectId={projectId} files={named} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet />}
-      {!result && picture}</div>;
-}
-
-function ToolGroup({ entries, live, projectId, onError }: { entries: ConversationEntry[]; live: boolean; projectId: string; onError: (message: string) => void }) {
-  const running = entries.some(entry => !entry.tool?.done);
-  const [open, setOpen] = useState(false);
-  const failed = entries.filter(entry => entry.tool?.failed).length;
-  const shown = open || (live && running);
-  // A picture being generated: Codex reports no progress, so the wait is shown as such, with the time it has taken.
-  const drawing = entries.find(entry => !entry.tool?.done && /image_?gen/i.test(`${entry.tool?.tool} ${entry.tool?.target}`));
-  // The documents, pages and videos these steps finished writing, each once.
-  const files = useMemo(() => writtenBy(entries).filter(previewable), [entries]);
-  // The files its edits changed, by name, a few of them on the pill itself.
-  const edited = useMemo(() => [...new Set(entries.flatMap(entry => entry.tool?.kind === 'edit' ? entry.tool.written?.length ? entry.tool.written : entry.tool.target.split('、') : []))]
-    .map(file => file.split(/[\\/]/).pop() || file).filter(Boolean), [entries]);
-  return <div data-reading-entry={entries[0]?.id} className={`reading-tools${running ? ' is-running' : ''}${shown ? ' is-open' : ''}${failed ? ' has-failed' : ''}`}>
-    <button type="button" className="reading-tools-head" aria-expanded={shown} onClick={() => setOpen(!open)}>
-      <StepState running={running} failed={failed > 0} />
-      <span>{groupSummary(entries)}</span>
-      {failed > 0 && <em>{t('{count} 个失败', { count: failed })}</em>}
-      {edited.slice(0, 3).map(file => <code key={file} className="reading-tools-file"><PathText text={file} literal /></code>)}
-      {edited.length > 3 && <small className="reading-tools-more">+{edited.length - 3}</small>}
-      {shown ? <CaretUp size={13} weight="bold" className="reading-tools-caret" /> : <CaretDown size={13} weight="bold" className="reading-tools-caret" />}
-    </button>
-    {shown && <ul className="reading-tools-tree">{entries.map(entry => {
-      const tool = entry.tool!;
-      return <li key={entry.id} className={`${tool.done ? '' : 'is-running'} ${tool.failed ? 'is-failed' : ''} reading-tool-${tool.kind}`}>
-        <StepState running={!tool.done} failed={tool.failed} filled />
-        <b>{stepVerb(tool)}</b><code title={tool.target}><PathText text={tool.target} literal={tool.kind === 'read' || tool.kind === 'edit'} /></code>{tool.detail && <small><PathText text={tool.detail} /></small>}
-      </li>;
-    })}</ul>}
-    {drawing && <ImageProgress step={drawing.id} />}
-    {files.length > 0 && <FileCards projectId={projectId} files={files} renderMarkdown={text => <Markdown text={text} />} onError={onError} />}
-  </div>;
-}
-
 // The agent's conversation laid out for reading: your prompts, its answers as Markdown with copyable code,
 // and its tool calls folded between them. The real terminal stays underneath; what is written here goes to
 // it, and the toggle in the card header switches back to it at any time. autoFocus: the card is expanded and
 // this is its terminal in use, so the message box takes the keyboard (never a small card's).
-export function ReadingView(props: Parameters<typeof TerminalReadingView>[0]) {
-  return props.terminal.nativeMode === 'claude-sdk' ? <ManagedSession key={props.terminal.sessionId} projectId={props.projectId} terminal={props.terminal} onError={props.onError} /> : <TerminalReadingView {...props} />;
-}
-
-function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, active = true, onShowTerminal, onError, onOpenLink }: { projectId: string; terminal: ProjectTerminal; remote?: boolean; autoFocus: boolean; active?: boolean; onShowTerminal: () => void; onError: (message: string) => void; onOpenLink: (target: string) => void }) {
-  const pathLinks = useReadingPaths(projectId, onError), readingView = pathLinks.ref;
+export function ReadingView({ projectId, terminal, remote = false, autoFocus, active = true, onShowTerminal, onError, onOpenLink }: { projectId: string; terminal: ProjectTerminal; remote?: boolean; autoFocus: boolean; active?: boolean; onShowTerminal: () => void; onError: (message: string) => void; onOpenLink: (target: string) => void }) {
+  const readingView = useRef<HTMLDivElement>(null);
   const kind = (terminal.agent ?? terminal.readingHistory?.agent) === 'claude' ? 'claude' : 'codex';
   const readingSession = terminal.sessionId;
   const thread = terminal.readingHistory?.threadId;
@@ -227,28 +90,20 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   const run = { session: terminal.sessionId, thread, start: terminal.agentStartedAt, active: terminal.codexActive };
   const preview = !!terminal.readingHistory && !cliReady(terminal.id, run, inputShown);
   useEffect(() => rememberReady(terminal.id, run, inputShown));
-  // A menu the CLI drew (/model, /resume) has no card here: it is answered in the terminal popup, which opens for it.
-  const menu = parsedScreen.choice?.kind === 'menu' ? parsedScreen.choice : null;
-  const screen = preview ? { ...parsedScreen, choice: null, waiting: null } : menu ? { ...parsedScreen, choice: null, waiting: { title: menu.title } } : parsedScreen;
-  const nativePending = !!terminal.nativeApprovals?.length;
-  // The CLI waits for a choice the screen has no card for: a dialog it drew (waiting), or only its attention notice with
-  // no input box on screen. Either way the terminal is the place to answer, and a message typed here would land in it.
-  const waiting = screen.choice ? null : screen.waiting ?? null;
-  const notified = !preview && !screen.choice && !waiting && terminal.needsInput !== null && !inputShown;
-  const waitingShown = waiting !== null || notified;
-  // The CLI signing in before its input exists (a link to open, a code to paste): a popup, never a stuck welcome.
-  const signIn = useMemo(() => terminal.codexActive && visibleScreen && !screen.choice && !inputShown ? signInScreen(kind, visibleScreen.rows) : null,
-    [terminal.agent, terminal.codexActive, visibleScreen, screen.choice, inputShown]);
-  const choiceKey = screen.choice ? `${terminal.sessionId}:${screen.choice.approval?.instance ?? ''}:${choiceIdentity(screen.choice)}` : null;
+  const screen = preview ? { ...parsedScreen, choice: null, waiting: null } : parsedScreen;
+  const idleInput = inputShown && isAtPrompt(kind, visibleScreen?.rows ?? [], parsedScreen);
+  const live = terminal.codexActive && !!terminal.sessionId && terminal.status !== 'exited';
+  const knownDialog = !!parsedScreen.choice || !!parsedScreen.waiting || terminal.needsInput != null && !idleInput;
+  const working = live && !knownDialog && (isCliWorking(kind, visibleScreen?.rows ?? []) || terminal.codexActivity === 'working' && (kind === 'codex' || !idleInput));
+  const hasChoice = live && (knownDialog || !!visibleScreen && !idleInput && !working);
+  const waiting = screen.waiting ?? (screen.choice ? { title: screen.choice.title } : null);
+  const waitingShown = hasChoice;
+  const absence = useRef<{ conversation: string; at: number | null }>({ conversation, at: null });
+  if (absence.current.conversation !== conversation || !hasChoice) absence.current = { conversation, at: null };
+  if (hasChoice) absence.current.at ??= Date.now();
   const welcomeIsStarting = useWelcomeStarting(terminal.agentStartedAt, screen);
-  // A notice alone (no dialog read from the screen) leaves the handoff to the terminal in reading-mode.ts running.
-  const hasChoice = nativePending || screen.choice !== null || waiting !== null, choiceVisible = useRef(hasChoice);
-  const mounted = useRef(true);
+  const choiceVisible = useRef(hasChoice), mounted = useRef(true);
   const choiceHost = useRef<HTMLDivElement>(null), restoreComposer = useRef(false), wasChoice = useRef(false), editingAtChoice = useRef(false);
-  const focusChoice = () => { restoreComposer.current = true; };
-  const blurChoice = (event: FocusEvent<HTMLDivElement>) => {
-    if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) restoreComposer.current = false;
-  };
   const [draft, setDraft] = useState('');
   const [sendingSoon, setSendingSoon] = useState(false);
   const [commands, setCommands] = useState<AgentCommand[]>([]), [requested, setRequested] = useState(false);
@@ -263,7 +118,8 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   const clearPictures = () => { native.clear(); serverPictures.current = []; setPictureTick(tick => tick + 1); };
   useLayoutEffect(() => { pictureGeneration.current++; serverPictures.current = []; setPictureTick(tick => tick + 1); }, [conversation]);
   const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null), composer = useRef<HTMLDivElement>(null);
-  const [terminalPopup, setTerminalPopup] = useState<{ command: string } | null>(null);
+  const [terminalPopup, setTerminalPopup] = useState<{ command: string; focus?: boolean } | null>(null);
+  const inputBlocked = preview || !live || !idleInput || working || hasChoice || terminalPopup !== null;
   choiceVisible.current = hasChoice || terminalPopup !== null;
   const popupReady = useRef<(() => void) | null>(null);
   const readyPopup = () => { popupReady.current?.(); popupReady.current = null; };
@@ -271,7 +127,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   const closePopup = (restoreFocus = true) => {
     cancelSend(); setTerminalPopup(null);
     if (restoreFocus) {
-      if (inputBlocked) (choiceHost.current?.firstElementChild as HTMLElement | null)?.focus({ preventScroll: true });
+      if (!idleInput || hasChoice) composer.current?.focus({ preventScroll: true });
       else input.current?.focus({ preventScroll: true });
     }
   };
@@ -284,23 +140,26 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     const previous = ownership.current; ownership.current = { active, autoFocus };
     if (previous.active && !active || previous.autoFocus && !autoFocus) { cancelSend(); setTerminalPopup(null); }
   }, [active, autoFocus]);
-  // A dialog the screen shows with no card for it (a question taller than the view, one a CLI update added) opens the
-  // terminal once while this is the view in use, however often it mounts or the screen redraws; the card stays for the
-  // way back. The dialog is over once the CLI's input is back, or the hint has been gone longer than a redraw takes.
-  const dialog = waiting && JSON.stringify([terminal.agentStartedAt, waiting.title]);
+  // Unknown screens default to the TUI. A settled absence is one dialog episode, shared across remounts;
+  // a hidden view never consumes its opening, and closing it does not rearm it on redraw.
   useEffect(() => {
-    // A native request owns the reply surface and cancels any delayed terminal send.
-    if (nativePending) { closePopup(false); return; }
-    // Disabling the composer can blur it before this effect: keep its focus ownership captured during render.
-    if (dialog !== null) {
-      if (active && !editingAtChoice.current && !hasEditingFocus(readingView.current) && startDialog(terminal.id, dialog) && terminalPopup === null) setTerminalPopup({ command: '' });
-      return;
+    if (!live || idleInput && !knownDialog) { endDialog(terminal.id); return; }
+    if (working) {
+      const timer = setTimeout(() => endDialog(terminal.id), DIALOG_SETTLE);
+      return () => clearTimeout(timer);
     }
-    if (inputShown) { endDialog(terminal.id); return; }
-    const timer = setTimeout(() => endDialog(terminal.id), DIALOG_SETTLE);
+    if (!hasChoice) return;
+    const open = () => {
+      if (!active || !startDialog(terminal.id, conversation) || terminalPopup !== null) return;
+      const focus = !editingAtChoice.current && !hasEditingFocus(document.body) && !hasEditingFocus(readingView.current) && !isTyping(document.activeElement);
+      cancelSend(); setTerminalPopup({ command: '', focus });
+    };
+    if (knownDialog) { open(); return; }
+    const wait = Math.max(0, DIALOG_SETTLE - (Date.now() - (absence.current.at ?? Date.now())));
+    if (!wait) { open(); return; }
+    const timer = setTimeout(open, wait);
     return () => clearTimeout(timer);
-  }, [terminal.id, dialog, active, inputShown, nativePending]);
-  const inputBlocked = preview || nativePending || !!screen.choice || waitingShown;
+  }, [terminal.id, conversation, live, idleInput, knownDialog, hasChoice, active, working]);
   const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, entries, conversation);
   useEffect(() => { if (stuck) void historyPage.compact(); }, [stuck, conversationEntries, historyPage.compact]);
   // A step hops only when the pointer moves onto it: moving arms the hops, any scroll disarms them until it moves again,
@@ -314,25 +173,20 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   }, [conversation]);
   useLayoutEffect(() => { if (caret.current !== null) { input.current?.setSelectionRange(caret.current, caret.current); caret.current = null; } });
   useEffect(() => { if (draft.startsWith('/') || !entries.length) setRequested(true); }, [draft, entries.length]);
-  // Capture composer ownership before disabling it; another card's focus must stay where it is.
-  // A card that comes while someone writes in the box never takes the keyboard: the next Enter would answer it.
+  // Disabling a textarea can blur it before effects. Capture ownership before that DOM commit.
   if (hasChoice && !wasChoice.current) {
     restoreComposer.current = document.activeElement === input.current;
-    editingAtChoice.current = hasEditingFocus(readingView.current) || isTyping(document.activeElement);
+    editingAtChoice.current = hasEditingFocus(document.body) || hasEditingFocus(readingView.current) || isTyping(document.activeElement);
   }
   useLayoutEffect(() => {
     setChoiceVisible(terminal.id, hasChoice || terminalPopup !== null);
-    if (nativePending && terminalPopup !== null && active && document.activeElement === document.body) {
-      // The popup unmounted with focus; park it beside the disabled input until the native request ends.
-      restoreComposer.current = true; composer.current?.focus({ preventScroll: true });
-    } else if (hasChoice && terminalPopup === null) {
-      if (restoreComposer.current && !editingAtChoice.current && (!wasChoice.current || document.activeElement === document.body)) (choiceHost.current?.firstElementChild as HTMLElement | null)?.focus();
-    } else if (wasChoice.current) {
-      if (restoreComposer.current && (document.activeElement === document.body || document.activeElement === composer.current)) input.current?.focus();
-      restoreComposer.current = false;
+    if (hasChoice && restoreComposer.current && document.activeElement === document.body) composer.current?.focus({ preventScroll: true });
+    if (!hasChoice && wasChoice.current) {
+      if (restoreComposer.current && idleInput && (document.activeElement === document.body || document.activeElement === composer.current)) input.current?.focus();
+      restoreComposer.current = false; editingAtChoice.current = false;
     }
     wasChoice.current = hasChoice;
-  }, [terminal.id, hasChoice, choiceKey, terminalPopup, nativePending, active]);
+  }, [terminal.id, hasChoice, terminalPopup, idleInput]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -371,15 +225,9 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     if (choiceVisible.current) { restoreComposer.current = true; (choiceHost.current?.firstElementChild as HTMLElement | null)?.focus(); }
     else if (terminalPopup === null) input.current?.focus();
   }, [terminal.id, autoFocus]);
-  // Claude's own screen has the last word: a round its hooks opened without closing (a local slash command) must not
-  // keep "thinking" on screen while Claude sits idle at its prompt.
-  // It is at its prompt even with an interrupted prompt put back in its input.
-  const claudeIdle = terminal.agent === 'claude' && !!visibleScreen && isAtPrompt('claude', visibleScreen.rows, screen);
-  const working = terminal.codexActive && terminal.codexActivity === 'working' && !claudeIdle;
   const agent = kind === 'claude' ? 'Claude Code' : 'Codex';
   const grouped = useMemo(() => blocks(entries), [entries]);
   const tail = useVisibleTail(grouped, conversation, scroller, stuck, holdPosition, historyPage);
-  const turns = useMemo(() => conversationTurns(grouped, tail.earlier), [grouped, tail.earlier]);
   useEffect(() => {
     const node = scroller.current, sentinel = node?.querySelector('.reading-earlier');
     if (!node || !sentinel || !historyPage.paged || !tail.hasEarlier || historyPage.loading || typeof IntersectionObserver === 'undefined') return;
@@ -390,18 +238,18 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
   const ownsSend = (owner: number) => mounted.current && sendCounter.current === owner;
   const ownsPicture = (generation: number) => mounted.current && pictureGeneration.current === generation;
   const pictureNotAccepted = () => onError(t('图片未发送。请在输入框中移除后重新粘贴。'));
-  const send = async (text = draft.trim(), own = true) => {
+  const send = async (text = draft.trim(), own = true, automatic = false) => {
     if (own) dictationSend.cancel();
     if (sending.current) return;
     const owner = ++sendCounter.current;
     sending.current = true;
-    try { await deliver(text, own, owner); } catch (error) { if (ownsSend(owner)) onError(String(error)); } finally { if (ownsSend(owner)) sending.current = false; }
+    try { await deliver(text, own, owner, automatic); } catch (error) { if (ownsSend(owner)) onError(String(error)); } finally { if (ownsSend(owner)) sending.current = false; }
   };
   const interrupt = () => window.agentrix.writeTerminal(terminal.id, '\x1b');
   // The CLI recognises slash commands and shell mode from typed keys, not bracketed paste.
   // own: written in the composer here (it is cleared, with its pictures); otherwise a message sent again, which leaves
   // whatever is being written now alone and takes no pictures with it.
-  const deliver = async (words: string, own: boolean, owner: number) => {
+  const deliver = async (words: string, own: boolean, owner: number, automatic: boolean) => {
     if (inputBlocked) return;
     if (!own && images.length) { onError(t('请先发送或移除输入框中的图片，再发送这条消息。')); return; }
     const batch = own ? images : [], uploads = own ? serverPictures.current.slice() : [];
@@ -430,6 +278,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     }
     // A closed popup can leave the CLI's dialog open. Looking is harmless; guessing a close key is not.
     if (!native.readInput()) {
+      if (automatic) return;
       setTerminalPopup({ command: '' });
       return;
     }
@@ -527,7 +376,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
       const tries = resent.get(prompt.text) ?? 0;
       if (tries >= 2 || sending.current) continue;
       resent.set(prompt.text, tries + 1);
-      cancelEcho(prompt.id); void sendRef.current(prompt.text, false);
+      cancelEcho(prompt.id); void sendRef.current(prompt.text, false, true);
       break;
     }
   });
@@ -536,7 +385,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     if (prompt.imageCount || images.length) {
       onError(prompt.imageCount ? t('图片是否送达尚未确认。请先在终端中检查对话，再决定是否重新发送。') : t('请先发送或移除输入框中的图片，再发送这条消息。')); return;
     }
-    cancelEcho(prompt.id); void send(prompt.text, false);
+    cancelEcho(prompt.id); void send(prompt.text, false, true);
   };
   // Dictation into this terminal lands here while the reading view shows: the words appear at the cursor as
   // soon as they are recognised. Enter (or the shortcut again) allows a second to edit before sending normally.
@@ -557,6 +406,7 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     if (!item) return;
     event.preventDefault();
     if (sending.current) return;
+    if (inputBlocked || choiceVisible.current) { onError(t('图片未能附加，已从输入框移除。请等终端准备好后重新粘贴。')); return; }
     if (!terminal.codexActive || !terminal.sessionId) { onError(t('启动 Codex 或 Claude Code 后才能粘贴图片。')); return; }
     const file = item.getAsFile();
     if (!file) return;
@@ -595,15 +445,12 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     await native.remove(index);
   };
   const keys = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    markTyping(event.currentTarget);
     if (event.key === 'Escape' && dictationSend.cancel()) { event.preventDefault(); event.stopPropagation(); return; }
+    if (inputBlocked || choiceVisible.current) { event.preventDefault(); event.stopPropagation(); return; }
+    markTyping(event.currentTarget);
     if (event.nativeEvent.isComposing) { dictationSend.cancel(); return; }
     if (event.key === 'Enter') dictationSend.cancel();
     if (event.key === 'Tab' && event.shiftKey) { event.preventDefault(); window.agentrix.writeTerminal(terminal.id, '\x1b[Z'); return; }
-    // A picker open beside an empty box: up and down move into it.
-    if (screen.choice && !draft.trim() && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
-      event.preventDefault(); restoreComposer.current = true; (choiceHost.current?.firstElementChild as HTMLElement | null)?.focus(); return;
-    }
     if (mentions.keys(event)) return;
     if (palette) {
       if (event.key === 'Escape') { event.preventDefault(); setDismissed(true); return; }
@@ -651,86 +498,30 @@ function TerminalReadingView({ projectId, terminal, remote = false, autoFocus, a
     {result.kind === 'code' && <ResultChecks result={result} />}
     <ResultActions result={result} projectId={projectId} remote={remote} canSend={!inputBlocked && !!terminal.sessionId} onContinue={continueWith} onRetry={() => void send(result.request, false)} onError={onError} />
   </>;
-  // The newest round is the one after your last message; earlier ones keep their words but speak more quietly.
-  let latestUser = -1, latestAgent = -1;
-  for (let index = turns.length - 1; index >= 0; index--) {
-    if (turns[index].kind === 'user') { latestUser = index; break; }
-    if (latestAgent < 0) latestAgent = index;
-  }
-  let body: ReactNode, statusInTurn = false;
-  // A run of the CLI that is no conversation (codex update): what it does and what it prints, no message box.
+  const lastBlock = grouped.at(-1);
+  const statusInTurn = !!lastBlock && (lastBlock.kind === 'tools' || lastBlock.entry.role !== 'user') && pending.every(queued);
+  let body: ReactNode;
   if (terminal.agentCommand) body = <AgentCommandRun agent={kind} command={terminal.agentCommand} rows={visibleScreen?.rows ?? []} onShowTerminal={onShowTerminal} />;
-  else if (!entries.length && !cards.prompts.length) body = <ReadingWelcome agent={kind} commands={commands} complete={complete} disabled={inputBlocked}
-    screen={screen} starting={welcomeIsStarting} />;
-  else {
-    body = <>
-      {tail.hasEarlier && <button type="button" className="text-button reading-earlier" disabled={historyPage.loading} onClick={() => void tail.showEarlier()}>{historyPage.paged ? t('显示更早的对话') : t('显示更早的对话（{count}）', { count: tail.earlier })}</button>}
-      {historyPage.error && <p role="status">{t(historyPage.error)}</p>}
-      {turns.map((turn, index) => {
-        if (turn.kind === 'user') {
-          return <TimelineStep key={turn.entry.id} at={turn.entry.at} kind="user" who={t('你')} latest={index === latestUser} mark={<UserAvatar />}>
-            <div data-reading-entry={turn.entry.id} className={`reading-user${turn.entry.answer ? ' is-answer' : ''}`}>
-              {turn.entry.answer && <span className="reading-user-label">{t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} /></div>
-          </TimelineStep>;
-        }
-        const liveStatus = index === turns.length - 1 && pending.every(queued) ? status : null;
-        if (liveStatus) statusInTurn = true;
-        const tools = turn.blocks.flatMap(block => block.kind === 'tools' ? block.entries : []);
-        const state = (liveStatus && statusRunning) || tools.some(entry => !entry.tool?.done) ? 'running' : tools.some(entry => entry.tool?.failed) ? 'failed' : null;
-        let shownTime = stepTime(turn.at);
-        return <TimelineStep key={turn.id} at={turn.at} kind="agent" agent={kind} who={agent} state={state} latest={index === latestAgent} mark={<AgentMark agent={kind} />}>
-          <div className="reading-turn">
-            {turn.blocks.map(block => {
-              const at = block.kind === 'tools' ? block.entries[0]?.at : block.entry.at, time = stepTime(at), showTime = time !== shownTime;
-              shownTime = time;
-              if (block.kind === 'tools') {
-                const state = block.entries.some(entry => !entry.tool?.done) ? 'running' : block.entries.some(entry => entry.tool?.failed) ? 'failed' : null;
-                return <Fragment key={block.id}>
-                  <AgentTurnItem at={at} showTime={showTime} kind="tools" state={state}>
-                    <ToolGroup entries={block.entries} live={block === tail.visible.at(-1)} projectId={projectId} onError={onError} />
-                  </AgentTurnItem>
-                  {index === latestAgent && block.entries.some(entry => entry.id === result?.anchor) && <div className="result-block">{resultStatus}{resultActions}</div>}
-                </Fragment>;
-              }
-              const holdsResult = index === latestAgent && block.entry.id === result?.anchor;
-              // The status row says when the round ended: the result's own entry needs no stamp of its own.
-              return <AgentTurnItem key={block.entry.id} at={at} showTime={showTime && !holdsResult} kind="message">
-                {holdsResult && resultStatus}
-                <AssistantReply entry={block.entry} agent={kind} projectId={projectId} result={holdsResult} onError={onError} />
-                {holdsResult && resultActions}
-              </AgentTurnItem>;
-            })}
-            {liveStatus}
-          </div>
-        </TimelineStep>;
-      })}
-    </>;
-  }
-  return <div className="reading-view" data-agent={kind} {...pathLinks} onClick={event => {
-    const button = (event.target as Element).closest<HTMLButtonElement>('[data-copy-code]');
-    const toggle = (event.target as Element).closest<HTMLButtonElement>('[data-code-source]');
-    if (toggle) { const source = toggle.closest('.reading-code')!.classList.toggle('is-source'); toggle.textContent = t(source ? '预览' : '源码'); return; }
-    if (button) { const code = button.closest('.reading-code')?.querySelector(':scope > pre')?.textContent || ''; void window.agentrix.copy(code).then(result => { if (result.ok) { button.textContent = t('已复制'); setTimeout(() => { button.textContent = t('复制'); }, 1400); } else onError(result.error); }); return; }
-    const link = (event.target as Element).closest<HTMLAnchorElement>('.reading-markdown a');
-    if (link) { event.preventDefault(); const href = link.getAttribute('href') || ''; if (href) onOpenLink(href); }
-  }}>
+  else if (!entries.length && !cards.prompts.length) body = <ReadingWelcome agent={kind} commands={commands} complete={complete} disabled={inputBlocked} screen={screen} starting={welcomeIsStarting} />;
+  else body = <>
+    {tail.hasEarlier && <button type="button" className="text-button reading-earlier" disabled={historyPage.loading} onClick={() => void tail.showEarlier()}>{historyPage.paged ? t('显示更早的对话') : t('显示更早的对话（{count}）', { count: tail.earlier })}</button>}
+    {historyPage.error && <p role="status">{t(historyPage.error)}</p>}
+    <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: statusRunning, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions }}>
+      <ConversationFeed entries={entries} agent={kind} projectId={projectId} live={!settled} onError={onError} onOpenLink={onOpenLink} />
+    </ConversationDecorations.Provider>
+  </>;
+  return <div className="reading-view" data-agent={kind} ref={readingView}>
     <div className="reading-scroll-area">
       <div className="reading-scroll" ref={scroller} tabIndex={0}><div className="reading-content" ref={content} style={{ visibility: entries.length && !ready ? 'hidden' : undefined }}>{body}<PendingPromptEntries prompts={cards.prompts} queued={queued} undelivered={undelivered} onResend={resend} onDiscard={prompt => cancelEcho(prompt.id)} />
         {status && !statusInTurn && <TimelineStep at={pending.at(-1)?.at ?? entries.at(-1)?.at} kind="agent" who={agent} state={statusRunning ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}</div></div>
-      {terminalPopup === null && signIn && <ReadingSignIn agent={kind} screen={signIn} terminalId={terminal.id} projectId={projectId} onError={onError} />}
       {!stuck && <div className="reading-latest">
         {unseen > 0 && <span className="reading-unseen" role="status">{t('{count} 条新消息', { count: unseen })}</span>}
         <button type="button" className="icon-button reading-jump" title={t('跳到最新消息')} aria-label={t('跳到最新消息')} onClick={() => toBottom('smooth')}><ArrowDown size={18} /></button>
       </div>}
     </div>
-    {!nativePending && terminalPopup !== null && <ReadingTerminalPopup key={sendCounter.current} terminalId={terminal.id} sessionId={terminal.sessionId} command={terminalPopup.command} onReady={readyPopup} onClose={closePopup} onError={onError} />}
+    {terminalPopup !== null && <ReadingTerminalPopup key={sendCounter.current} terminalId={terminal.id} sessionId={terminal.sessionId} command={terminalPopup.command} focus={terminalPopup.focus} onReady={readyPopup} onClose={closePopup} onError={onError} />}
     {attachedCount > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: attachedCount })}<UserImages images={shownImages} numbers={imageNumbers} onRemove={index => void removeImage(index)} /></div>}
-    {!preview && terminal.nativeApprovals?.map(request => <NativeApprovalCard key={request.token} request={request} onError={onError} />)}
-    {/* The popup shows the terminal's own dialog: no card for the same dialog waits behind it. */}
-    {screen.choice && terminalPopup === null && !nativePending && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}>{screen.choice.kind === 'question'
-      ? <ReadingQuestion key={choiceKey} choice={screen.choice} terminalId={terminal.id} onError={onError} />
-      : <ReadingChoice key={choiceKey} choice={screen.choice} terminalId={terminal.id} onShowTerminal={onShowTerminal} />}</div>}
-    {waitingShown && terminalPopup === null && !nativePending && <div className="reading-choice-host" ref={choiceHost} onFocusCapture={focusChoice} onBlurCapture={blurChoice}><WaitingCard title={waiting?.title ?? null} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
+    {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waiting?.title ?? null} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
     {/* The command list is part of the page, above the message box, not a popup over the conversation. */}
     {palette && <div className="reading-commands is-inline" id={listId} role="listbox" aria-label={t('命令')}>{matches.map((command, index) => <div key={command.name} id={optionId(index)} role="option" aria-selected={selection === index} className="reading-command" onMouseDown={event => event.preventDefault()} onClick={() => complete(command)}>
         <code>{command.name}</code><span>{command.source === 'builtin' ? t(command.description) : command.description}</span>{command.source !== 'builtin' && <small>{command.source === 'project' ? t('项目') : command.source === 'user' ? t('用户') : t('技能')}</small>}

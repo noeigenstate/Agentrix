@@ -184,7 +184,7 @@ function publicState() {
           ...(reading ? { readingHistory: reading } : {}),
           agentStarting: !!s?.agentStarting && !s.codexActive && s.status !== 'exited' && !s.error,
           agentStartedAt: s?.codexActive ? s.activitySince : null,
-          nativeMode: s?.nativeMode || null, nativeApprovals: s?.native?.registry.list() || [], nativeMessages: s?.nativeMessages || [], nativeReady: !!s?.nativeReady,
+          nativeMode: s?.nativeMode || null,
           // The model, effort and fast mode its records show, above the reading view's message box.
           agentSettings: s?.codexActive ? s.agentSettings || null : null,
           // The service its model is reached through, the context it fills and the tokens it took, for the activity pane.
@@ -1056,46 +1056,23 @@ function localShell(fresh = false) {
 }
 
 function nativeSessionEvent(id, sessionId, message) {
-  const s = sessions.get(id); if (!s || s.sessionId !== sessionId || !s.native) return;
+  const s = sessions.get(id); if (!s || s.sessionId !== sessionId || !s.native || typeof message.method !== 'string') return;
   const project = findProject(id), at = Date.now(), p = message.params;
   const thread = message.method === 'thread/started' ? p?.thread?.id : null;
   if (thread && s.completionWork?.find(thread)) return;
-  const next = s.nativeMode === 'claude-sdk' ? message.type === 'system' && message.subtype === 'init' && message.session_id : thread;
-  const previous = s.nativeMode === 'claude-sdk' ? s.claudeSessionId : s.reportedThreadId;
-  if (next && previous && next !== previous) {
+  if (thread && s.reportedThreadId && thread !== s.reportedThreadId) {
     if (s.completionWork?.reset()) store.expectCompletion(project.id, false);
     s.promptQueue.reset(); s.activitySnapshot = s.activityRawSnapshot = null; s.codexActivity = 'unknown';
   }
   s.completionWork?.native(message, s.agent, at, s.reportedThreadId);
-  if (s.nativeMode !== 'claude-sdk' && s.reportedThreadId && p?.threadId && p.threadId !== s.reportedThreadId) return;
+  if (s.reportedThreadId && p?.threadId && p.threadId !== s.reportedThreadId) return;
   describeActions(s, project.path, nativeSkillActions(s.actions, message, project.path, at));
   const add = (role, text, entryId, provenance = message) => {
     if (typeof text !== 'string' || !text) return;
     // Native user-item replays must retain the original prompt's input watermark.
     if (role === 'user' && (promptText(text, provenance) === null || entryId && s.conversation.list.some(entry => entry.id === entryId))) return;
     s.conversation.put({ id: entryId || randomUUID(), at, role, text: text.slice(0, 20000), original: text });
-    if (s.nativeMode === 'claude-sdk') {
-      s.nativeMessages = [...s.nativeMessages, { role, text: text.slice(0, 20000) }].slice(-100);
-      scheduleState();
-    }
   };
-  if (message.type === 'managed-ready') { s.nativeReady = true; scheduleState(); }
-  if (message.type === 'managed-prompt' && promptText(message.text, message) !== null) {
-    s.completionWork?.begin(at);
-    add('user', message.text);
-    s.activityInputAt = s.activityConfirmedInputAt = at;
-    store.expectCompletion(project.id);
-    applyActivity(project, s, { threadId: s.claudeSessionId || sessionId, turnId: null, state: 'working', updatedAt: at, prompt: message.text });
-  }
-  if (s.nativeMode === 'claude-sdk') {
-    if (message.session_id) s.claudeSessionId = message.session_id;
-    if (message.type === 'assistant') add('assistant', message.message?.content?.filter(part => part.type === 'text').map(part => part.text).join('\n'), message.uuid);
-    if (message.type === 'result') {
-      if (message.is_error) add('assistant', (message.errors || ['Managed CLI turn failed']).join('\n'));
-      applyActivity(project, s, { threadId: s.claudeSessionId || sessionId, turnId: message.uuid || null, state: message.is_error ? 'interrupted' : 'complete', updatedAt: at });
-    }
-    return;
-  }
   if (message.method === 'thread/started' && p?.thread?.id) s.reportedThreadId = p.thread.id;
   if (message.method === 'item/completed' && p?.item) {
     const item = p.item;
@@ -1110,6 +1087,7 @@ function nativeSessionEvent(id, sessionId, message) {
 }
 
 function startTerminal(id, nativeMode = null, agentStarting = false) {
+  if (nativeMode !== null && nativeMode !== 'codex-native') throw new Error('Unsupported native session mode');
   const project = findProject(id);
   const old = sessions.get(id);
   if (old && old.status !== 'exited') return;
@@ -1150,13 +1128,13 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   if (local) env = shellKind === 'zsh' ? zshEnvironment(env, integration) : shellEnvironment(env, integration);
   const sshAskpassPath = project.kind === 'ssh' ? prepareAskpass() : undefined;
   if (nativeMode && project.kind === 'ssh') throw new Error('Native approval sessions are local only');
-  const native = nativeMode ? createNativeSession({ binding: { provider: nativeMode === 'claude-sdk' ? 'claude' : 'codex', projectId: project.id, terminalId: id, sessionId },
+  const native = nativeMode ? createNativeSession({ binding: { provider: 'codex', projectId: project.id, terminalId: id, sessionId },
     mode: nativeMode, cwd: startPath, env, pty, changed: scheduleState,
     event: message => nativeSessionEvent(id, sessionId, message),
   }) : null;
   if (native) {
     env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
-      skills.delivery(project, false, sessionId, { agent: nativeMode === 'claude-sdk' ? 'claude' : 'codex', started: true }), path.join(integrationDir, 'dispatch.cjs'));
+      skills.delivery(project, false, sessionId, { agent: 'codex', started: true }), path.join(integrationDir, 'dispatch.cjs'));
     writeFileAtomic(skillNoteFile, env.AGENTRIX_READING_NOTE);
   }
   const terminalOptions = { name: 'xterm-256color', cols: 90, rows: 22, cwd: startPath, env,
@@ -1181,9 +1159,9 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     codexActive: false, codexAvailable: null, seq: 0, chunks: [], bytes: 0, pending: '',
     flushTimer: null, error: null, submissions: new SubmissionTracker(),
     approval: new ApprovalGuard(sessionId), approvalRemote: project.kind === 'ssh',
-    native, nativeMode, nativeReady: false, nativeMessages: [],
+    native, nativeMode,
   };
-  if (native) { s.status = 'codex'; s.codexActive = true; s.agent = nativeMode === 'claude-sdk' ? 'claude' : 'codex'; s.activitySince = Date.now(); s.codexActivity = 'unknown'; }
+  if (native) { s.status = 'codex'; s.codexActive = true; s.agent = 'codex'; s.activitySince = Date.now(); s.codexActivity = 'unknown'; }
   s.actions = new ActionLog(change => publishAction(s, change));
   s.gate = new InputGate(data => {
     if (sessions.get(id) !== s || s.status === 'exited') return;
@@ -1280,7 +1258,6 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   terminal.onExit(({ exitCode }) => {
     if (sessions.get(id) !== s) return;
     flush();
-    s.native?.registry.close();
     endSkillSession(s);
     skills.endSession(project.id, sessionId);
     stopUsageAccount(s);
@@ -1320,7 +1297,6 @@ function disposeTerminal(id) {
   sessions.delete(id);
   endSkillSession(s);
   skills.endSession(s.projectId, s.sessionId);
-  s.native?.registry.close();
   stopUsageAccount(s);
   clearTimeout(s.flushTimer); clearTimeout(s.actionTimer); clearTimeout(s.conversationTimer);
   for (const timer of s.submissionPolls || []) clearTimeout(timer);
@@ -1400,17 +1376,18 @@ function registerIpc() {
     if (!['claude', 'codex'].includes(agent)) throw new Error('无效的助手。');
     if (project.kind === 'ssh') throw new Error('SSH 项目请先启动终端，再在终端里运行助手。');
     if (mode === 'native') {
+      if (agent !== 'codex') throw new Error('Native mode is only available for Codex');
       const current = sessions.get(id);
       if (current && current.status !== 'exited') throw new Error('Start a native session in a new or stopped terminal');
       launchPlans.delete(id); restorePlans.delete(id);
-      startTerminal(id, agent === 'claude' ? 'claude-sdk' : 'codex-native'); broadcast(); return true;
+      startTerminal(id, 'codex-native'); broadcast(); return true;
     }
     if (!['new', 'continue'].includes(mode)) throw new Error('Unsupported agent session mode');
     const history = mode === 'continue' ? (await folderHistory(folderOf(id)))[agent] : null;
     launchPlans.set(id, { agent, command: launchCommand(agent, history), threadId: history?.id || null });
     startTerminal(id, null, true); broadcast(); return true;
   });
-  registerNativeIpc({ handle, findProject, getSession: id => sessions.get(id) });
+  registerNativeIpc({ handle });
   registerTerminalIpc({ handle, listen, findProject, getSession: id => sessions.get(id), hasSession: id => sessions.has(id), startTerminal,
     addTerminal: id => store.addTerminal(id), removeTerminal: id => { store.removeTerminal(id); fs.promises.rm(handoffFile(id), { force: true }).catch(() => {}); }, confirmTerminalClose, forgetRestorePlan: id => restorePlans.delete(id),
     disposeTerminal, clearStartupError: id => startupErrors.delete(id), broadcast, getProjectById: id => store.projects.find(p => p.id === id),

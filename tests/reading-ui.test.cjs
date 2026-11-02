@@ -35,6 +35,7 @@ function loadUI(name, overrides = {}) {
   const originalRequire = mod.require.bind(mod);
   mod.require = name => {
     const key = name.startsWith('.') ? './' + path.basename(name) : name;
+    if (name === 'react' && overrides.react) return { ...React, ...overrides.react };
     // Stubbed screen modules keep their pure helpers (bindApproval, choiceIdentity) unless a test replaces them too.
     if (Object.hasOwn(overrides, key) && key === './terminal-screen') return { bindApproval: require('../src/features/terminal/terminal-screen.ts').bindApproval, ...overrides[key] };
     if (Object.hasOwn(overrides, key) && key === './agent-screen') return { choiceIdentity: require('../src/features/agents/agent-screen.ts').choiceIdentity, ...overrides[key] };
@@ -55,8 +56,11 @@ function loadUI(name, overrides = {}) {
     if (key === './ReadingTerminalPopup') return { ReadingTerminalPopup: function ReadingTerminalPopup() { return null; } };
     if (key === './ReadingSignIn') return { ReadingSignIn: () => null };
     if (key === './AgentCommandRun') return { AgentCommandRun: () => null };
-    if (key === './NativeApprovalCard') return { NativeApprovalCard: () => null };
-    if (key === './ManagedSession') return { ManagedSession: () => null };
+    if (key === './Markdown') return loadUI('features/reading/Markdown.tsx', overrides);
+    if (key === './ConversationFeed') return loadUI('features/reading/ConversationFeed.tsx', overrides);
+    if (key === './useLongMarkdown') return loadUI('features/reading/useLongMarkdown.ts', overrides);
+    if (key === './useVisibleTail') return loadUI('features/reading/useVisibleTail.ts', overrides);
+    if (key === './PendingPromptEntries') return loadUI('features/reading/PendingPromptEntries.tsx', overrides);
     // Its state is the point of it: every loaded view gets a fresh copy, so no test depends on another's terminals.
     if (key === './reading-ready') return loadUI('features/reading/reading-ready.ts');
     if (key === './WaitingCard') return loadUI('features/reading/WaitingCard.tsx');
@@ -302,16 +306,6 @@ test('welcome without a banner settles to the agent name and parsed status witho
   assert.match(withModel, /Opus 5\.5/); assert.match(withModel, /high/); assert.doesNotMatch(withModel, /Starting…|loading-spinner/);
 });
 
-test('choice renders context, printed numbers, details, hotkeys and CLI selection', () => {
-  const { ReadingChoice } = loadUI('features/reading/ReadingChoice.tsx');
-  const html = renderToStaticMarkup(React.createElement(ReadingChoice, { choice: fakeChoice(), terminalId: 'test', onError: () => {} }));
-  assert.match(html, /is-permission/); assert.match(html, /Run this command\?/); assert.match(html, /\$ echo hello/);
-  assert.match(html, /Commands starting with echo/); assert.match(html, /<kbd>p<\/kbd>/);
-  assert.match(html, /is-cli-selected/); assert.match(html, /data-highlighted="true"/);
-  assert.match(html, /data-approval-mode="terminal-only"/); assert.match(html, /Open terminal/);
-  assert.match(html, /Confirm or reject this request in the source terminal/); assert.doesNotMatch(html, /Enter to confirm|Cancel/);
-});
-
 function elements(node) {
   if (Array.isArray(node)) return node.flatMap(elements);
   if (!React.isValidElement(node)) return [];
@@ -370,13 +364,13 @@ function dictationHarness(t, overrides = {}) {
   const props = { projectId: 'project', terminal: { id: 'dictation', sessionId: 'session', agent: 'codex', codexActive: true, needsInput: null },
     autoFocus: false, onShowTerminal() {}, onError: message => assert.fail(message), onOpenLink() {},
   };
-  const screen = fakeScreen();
+  const screen = fakeScreen({ status: { model: 'fixture', effort: null, context: null, mode: null, notes: [] } });
   const { ReadingView } = loadUI('features/reading/ReadingView.tsx', {
     react: hooks, dompurify: { default: () => ({ sanitize: html => html }) },
     './action-text': {}, './cli-panel': require('../src/features/reading/cli-panel.ts'),
     './pending-prompts': require('../src/features/reading/pending-prompts.ts'),
     './voice-input': { dictateInto: (id, take) => { insert = take; return () => { insert = null; }; } },
-    './terminal-screen': { useScreen: () => null, readScreen: () => ({ rows: ['› ', '', 'GPT-6.1-Sol high · C:\\work'] }) },
+    './terminal-screen': { useScreen: () => ({ rows: composerRows(props.terminal.agent) }), readScreen: () => ({ rows: composerRows(props.terminal.agent) }) },
     './agent-screen': { parseAgentScreen: () => screen },
     './ReadingWelcome': {}, './ReadingChoice': {}, './ReadingQuestion': {},
     './reading-mode': { setChoiceVisible() {} },
@@ -405,7 +399,7 @@ function dictationHarness(t, overrides = {}) {
     while (effects.length) effects.shift()();
     const popup = elements(root).find(element => element.type?.name === 'ReadingTerminalPopup');
     // The real popup mounts xterm and calls terminal.focus() before onReady.
-    if (popup && !hadPopup) popupInput.focus();
+    if (popup && !hadPopup && popup.props.focus !== false) popupInput.focus();
     popup?.props.onReady();
     return box;
   };
@@ -611,9 +605,9 @@ test('a restored preview cannot send until its own CLI input is ready, and a dif
   rows = ['› Ask Codex to do anything', '', 'gpt-6.1-sol · high · 100% context left'];
   assert.equal(h.render().props.disabled, false);
   rows = ['Working...'];
-  assert.equal(h.render().props.disabled, false, 'input readiness remains latched through a working turn');
+  assert.equal(h.render().props.disabled, true, 'the composer requires current positive input, not latched readiness');
   h.props.terminal.readingHistory = { key: 'new-capability', agent: 'codex', threadId: 'restored' };
-  assert.equal(h.render().props.disabled, false, 'a new page capability is not a new CLI session');
+  assert.equal(h.render().props.disabled, true, 'a page capability cannot substitute for current CLI input');
   h.props.terminal.readingHistory = { key: 'history-b', agent: 'codex', threadId: 'different' };
   assert.equal(h.render().props.disabled, true);
 });
@@ -655,450 +649,19 @@ test('a read-only preview suppresses stale screen choices and approval cards', t
   assert.equal(elements(h.tree()).some(node => node.props.choice || node.props.request), false);
 });
 
-// Waiting dialogs: the harness reads the screen rows it is given and a fresh readiness module per test.
-const IDLE_ROWS = ['› Ask Codex to do anything', '', 'gpt-6.1-sol · high · 100% context left'];
-// Captured while PowerShell echoes the desktop fixture, before it draws the complete approval screen.
-const APPROVAL_ECHO_ROWS = [
-  " Clear-Host; Write-Host '  Would you like to run the following command?'; Write-Host ''; Write-Host '  $ npm test'; Write-Host ''; Write-Host '› 1. Yes, proceed (y)'; Write-Host '  2. No, an",
-  "d tell Codex what to do differently (esc)'; Write-Host ''; Write-Host '  Press enter to confirm or esc to cancel'; $global:ReadingFixtureClearOnPrompt = $true; Start-Sleep -Seconds 30",
-];
-const named = (tree, name) => elements(tree).find(node => node.type?.name === name);
-function waitingHarness(t, { rows = [], ready = loadUI('features/reading/reading-ready.ts'), parser } = {}) {
-  const view = { rows };
-  const h = dictationHarness(t, {
-    './reading-ready': ready, './terminal-screen': { useScreen: () => ({ rows: view.rows }), readScreen: () => ({ rows: view.rows }) },
-    './ReadingChoice': { ReadingChoice: function ReadingChoice() { return null; } },
-    ...(parser ? { './agent-screen': { parseAgentScreen: parser } } : {}),
-  });
-  document.activeElement = document.body;
-  return Object.assign(h, { view, card: () => named(h.tree(), 'WaitingCard'), choiceCard: () => named(h.tree(), 'ReadingChoice'),
-    showTerminalButton: () => elements(h.tree()).some(node => node.type === 'button' && node.props.className === 'text-button') });
-}
-const restored = thread => ({ key: 'history', agent: 'codex', threadId: thread });
-
-test('a permission redraw while composing never opens a terminal that would take the next Enter', async t => {
-  const view = { rows: IDLE_ROWS };
-  const h = dictationHarness(t, {
-    './terminal-screen': { useScreen: () => ({ rows: view.rows }), readScreen: () => ({ rows: view.rows }) },
-    './agent-screen': { parseAgentScreen },
-  });
-  h.edit('先别批准');
-  view.rows = APPROVAL_ECHO_ROWS;
-  assert.ok(parseAgentScreen('codex', view.rows).waiting, 'the real parser sees a transient waiting screen');
-  h.render(); h.render();
-  assert.ok(named(h.tree(), 'WaitingCard'));
-  assert.equal(h.render().props.disabled, true);
-  assert.equal(h.popup(), undefined, 'an automatic popup would focus xterm and turn the next Enter into approval');
-  // Disabling the composer can blur it. Redraws must remember who was typing before it was disabled.
-  document.activeElement = document.body;
-  h.render(); await h.tick(2000);
-  assert.equal(h.popup(), undefined);
-  view.rows = [
-    '  Would you like to run the following command?', '', '  $ npm test', '',
-    '› 1. Yes, proceed (y)', '  2. No, and tell Codex what to do differently (esc)', '',
-    '  Press enter to confirm or esc to cancel',
-  ];
-  h.render(); h.render();
-  assert.equal(elements(h.tree()).find(node => node.props.choice)?.props.choice.kind, 'permission');
-  assert.equal(h.popup(), undefined);
-  assert.equal(h.render().props.value, '先别批准');
-  h.press('Enter'); await h.tick(800);
-  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-});
-
-for (const [name, draft] of [['empty', ''], ['whitespace', ' \n\t '], ['non-empty', '先别批准']]) {
-  test(`a focused ${name} composer prevents automatic terminal focus after the typing grace expires`, async t => {
-    let clock = 10000;
-    t.mock.method(Date, 'now', () => clock);
-    const h = waitingHarness(t, { rows: IDLE_ROWS, parser: parseAgentScreen });
-    h.node.focus(); h.edit(draft); h.press('a');
-    clock += 3000; await h.tick(3000);
-    if (!draft.trim()) assert.equal(require('../src/features/reading/typing.ts').isTyping(h.node), false);
-    h.view.rows = APPROVAL_ECHO_ROWS;
-    assert.ok(parseAgentScreen('codex', h.view.rows).waiting);
-    h.render(); h.render();
-    assert.ok(h.card()); assert.equal(h.render().props.disabled, true);
-    assert.equal(h.node.value, draft); assert.equal(document.activeElement, h.node);
-    assert.equal(h.popup(), undefined); assert.deepEqual(h.terminalFocused, []);
-    // A disabled textarea can blur; changing selection and redrawing must preserve its captured ownership.
-    document.activeElement = document.body;
-    h.props.active = false; h.render(); h.props.active = true; h.render(); h.render();
-    h.press('Enter'); h.command('/status'); await h.tick(3000);
-    assert.equal(h.popup(), undefined); assert.deepEqual(h.terminalFocused, []);
-    assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-  });
-}
-
-for (const type of ['input', 'textarea', 'select', 'contenteditable']) {
-  test(`a focused ${type} in the reading view prevents automatic terminal focus`, async t => {
-    const h = waitingHarness(t, { rows: IDLE_ROWS, parser: parseAgentScreen });
-    const editable = { matches: selector => selector.split(/,\s*/).includes(type), isContentEditable: type === 'contenteditable' };
-    h.editables.add(editable); document.activeElement = editable;
-    h.view.rows = APPROVAL_ECHO_ROWS; h.render(); h.render(); await h.tick(3000);
-    assert.ok(h.card()); assert.equal(h.render().props.disabled, true);
-    assert.equal(document.activeElement, editable); assert.equal(h.popup(), undefined);
-    assert.deepEqual(h.terminalFocused, []); assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-  });
-}
-
-test('activating a waiting view rechecks editable focus before automatically opening its terminal', t => {
-  const h = waitingHarness(t, { rows: IDLE_ROWS, parser: parseAgentScreen });
-  h.props.active = false; h.view.rows = APPROVAL_ECHO_ROWS; h.render(); h.render();
-  const editable = { matches: selector => selector.split(/,\s*/).includes('input') };
-  h.editables.add(editable); document.activeElement = editable;
-  h.props.active = true; h.render(); h.render();
-  assert.equal(h.popup(), undefined); assert.equal(document.activeElement, editable);
-  assert.deepEqual(h.terminalFocused, []); assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-});
-
-test('without editable focus in the reading view a captured waiting screen still opens and focuses its terminal once', t => {
-  const h = waitingHarness(t, { rows: IDLE_ROWS, parser: parseAgentScreen });
-  // An editable control elsewhere does not belong to this reading view.
-  document.activeElement = { matches: selector => selector.split(/,\s*/).includes('input') };
-  h.view.rows = APPROVAL_ECHO_ROWS; h.render(); h.render();
-  assert.ok(h.popup()); assert.equal(document.activeElement, h.popupInput);
-  assert.deepEqual(h.terminalFocused, [h.props.terminal.id]);
-  h.popup().props.onClose(); h.render(); h.render();
-  h.props.active = false; h.render(); h.props.active = true; h.render(); h.render();
-  assert.equal(h.popup(), undefined); assert.deepEqual(h.terminalFocused, [h.props.terminal.id]);
-  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-});
-
-test('the waiting card explicitly opens and focuses the terminal after composer focus suppressed its automatic popup', t => {
-  const h = waitingHarness(t, { rows: IDLE_ROWS, parser: parseAgentScreen });
-  h.node.focus(); h.view.rows = APPROVAL_ECHO_ROWS; h.render(); h.render();
-  assert.equal(h.popup(), undefined); assert.deepEqual(h.terminalFocused, []);
-  h.card().props.onOpenTerminal(); h.render();
-  assert.ok(h.popup()); assert.equal(document.activeElement, h.popupInput);
-  assert.deepEqual(h.terminalFocused, [h.props.terminal.id]);
-  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-});
-
-test('a native question at the normal prompt blocks composer sends without moving its focus', async t => {
-  const h = waitingHarness(t, { rows: IDLE_ROWS });
-  h.node.focus();
-  h.edit('keep this draft');
-  const request = { token: 'native-question', question: { title: 'Choose a plan', fields: [] } };
-  h.props.terminal.nativeApprovals = [request];
-  assert.equal(h.render().props.disabled, true);
-  assert.equal(document.activeElement, h.node);
-  assert.deepEqual(elements(h.tree()).filter(node => node.props.request).map(node => node.props.request), [request]);
-  h.press('Enter'); h.command('/status'); h.dictate('do not send this');
-  await h.tick(2000);
-  assert.equal(h.node.value, 'keep this draft');
-  assert.equal(document.activeElement, h.node);
-  assert.equal(h.popup(), undefined);
-  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-  h.props.terminal.nativeApprovals = [];
-  assert.equal(h.render().props.disabled, false);
-  assert.equal(h.node.value, 'keep this draft');
-});
-
-for (const kind of ['question', 'permission']) test(`a pending native question excludes the screen ${kind} card until it resolves`, async t => {
-  const h = waitingHarness(t, { rows: IDLE_ROWS });
-  h.node.focus();
-  h.edit('keep my message');
-  h.screen.choice = { ...fakeChoice(), kind };
-  const request = { token: 'native-question', question: { title: 'Choose a plan', fields: [] } };
-  h.props.terminal.nativeApprovals = [request];
-  h.render(); h.render();
-  assert.equal(elements(h.tree()).some(node => node.props.choice), false);
-  assert.deepEqual(elements(h.tree()).filter(node => node.props.request).map(node => node.props.request), [request]);
-  assert.equal(h.card(), undefined); assert.equal(h.popup(), undefined);
-  assert.equal(h.render().props.disabled, true);
-  assert.equal(document.activeElement, h.node);
-  h.press('Enter'); await h.tick(800);
-  assert.equal(h.popup(), undefined);
-  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-  h.props.terminal.nativeApprovals = [];
-  h.render(); h.render();
-  assert.equal(elements(h.tree()).find(node => node.props.choice)?.props.choice.kind, kind);
-  assert.equal(elements(h.tree()).some(node => node.props.request), false);
-  assert.equal(document.activeElement, h.node);
-});
-
-test('a native question suppresses waiting cards and automatic popups without consuming the later screen handoff', async t => {
-  const h = waitingHarness(t);
-  h.screen.waiting = { title: 'Review your answers' };
-  h.props.terminal.nativeApprovals = [{ token: 'native-question', question: { title: 'Choose a plan', fields: [] } }];
-  h.render(); await h.tick(2000);
-  assert.equal(h.render().props.disabled, true);
-  assert.equal(h.card(), undefined); assert.equal(h.popup(), undefined);
-  assert.equal(document.activeElement, document.body);
-  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-  h.props.terminal.nativeApprovals = [];
-  h.render(); h.render();
-  assert.ok(h.popup(), 'the screen dialog can open once after the native request resolves');
-  assert.equal(h.card(), undefined, 'no card waits behind the popup');
-  h.popup().props.onClose(); h.render(); h.render();
-  assert.equal(h.popup(), undefined);
-  assert.equal(h.card().props.title, 'Review your answers');
-});
-
-test('a native question closes an existing terminal popup and resolving it cannot revive that popup', t => {
-  const h = waitingHarness(t);
-  h.screen.waiting = { title: 'Review your answers' };
-  h.render(); h.render(); assert.ok(h.popup());
-  h.props.terminal.nativeApprovals = [{ token: 'native-question', question: { title: 'Choose a plan', fields: [] } }];
-  h.render();
-  assert.equal(h.popup(), undefined, 'the old popup is hidden on the first render of the native request');
-  h.render();
-  assert.equal(h.card(), undefined); assert.equal(h.popup(), undefined);
-  h.props.terminal.nativeApprovals = [];
-  h.render(); h.render();
-  assert.ok(h.card()); assert.equal(h.popup(), undefined);
-  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-});
-
-test('a native request closing a manually opened terminal returns focus to the blocked composer, then its input', t => {
-  const h = waitingHarness(t);
-  h.screen.waiting = { title: 'Review your answers' }; h.render(); h.render();
-  h.popup().props.onClose(); h.render(); h.render();
-  h.card().props.onOpenTerminal(); h.render(); assert.ok(h.popup()); h.popupInput.focus();
-  h.props.terminal.nativeApprovals = [{ token: 'native-question', question: { title: 'Choose a plan', fields: [] } }];
-  assert.equal(h.render().props.disabled, true); assert.equal(h.popup(), undefined);
-  assert.equal(document.activeElement, h.composer, 'a disabled textarea cannot receive focus, so the composer container holds it');
-  assert.equal(elements(h.tree()).find(element => /\breading-composer\b/.test(element.props.className)).props.tabIndex, -1);
-  h.render(); assert.equal(document.activeElement, h.composer);
-  h.props.terminal.nativeApprovals = []; h.screen.waiting = null; h.view.rows = IDLE_ROWS;
-  h.render(); h.render(); assert.equal(document.activeElement, h.node);
-  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-});
-
-for (const target of ['typing', 'button', 'inactive', 'no-popup']) test(`native popup focus recovery preserves the owner's ${target} focus`, t => {
-  const h = waitingHarness(t);
-  if (target !== 'no-popup') { h.screen.waiting = { title: 'Review your answers' }; h.render(); h.render(); assert.ok(h.popup()); }
-  const focused = target === 'typing' ? { value: 'keep writing here' } : target === 'button' ? {} : document.body;
-  document.activeElement = focused;
-  if (target === 'inactive') h.props.active = false;
-  h.props.terminal.nativeApprovals = [{ token: 'native-question', question: { title: 'Choose a plan', fields: [] } }];
-  h.render(); h.render(); assert.equal(h.popup(), undefined); assert.equal(document.activeElement, focused);
-  h.props.terminal.nativeApprovals = []; h.screen.waiting = null; h.view.rows = IDLE_ROWS;
-  h.render(); h.render(); assert.equal(document.activeElement, focused);
-  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-});
-
-test('a native question remembers composer typing across disabled blur and later waiting redraws', async t => {
-  const view = { rows: IDLE_ROWS };
-  const h = dictationHarness(t, {
-    './terminal-screen': { useScreen: () => ({ rows: view.rows }), readScreen: () => ({ rows: view.rows }) },
-  });
-  h.edit('先别回答');
-  h.props.terminal.nativeApprovals = [{ token: 'native-question', question: { title: 'Choose a plan', fields: [] } }];
-  assert.equal(h.render().props.disabled, true);
-  assert.equal(document.activeElement, h.node);
-  document.activeElement = document.body;
-  view.rows = []; h.screen.waiting = { title: 'Review your answers' };
-  h.render(); await h.tick(2000);
-  assert.equal(named(h.tree(), 'WaitingCard'), undefined);
-  assert.equal(h.popup(), undefined);
-  h.props.terminal.nativeApprovals = [];
-  h.render(); await h.tick(2000);
-  assert.ok(named(h.tree(), 'WaitingCard'));
-  assert.equal(h.popup(), undefined, 'disabled blur must not let a later popup take the next Enter');
-  assert.equal(h.node.value, '先别回答');
-  h.press('Enter'); await h.tick(800);
-  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-});
-
-test('a native question cancels the delayed composer Enter even if it resolves before that Enter was due', async t => {
-  const h = waitingHarness(t, { rows: IDLE_ROWS });
-  h.edit('send once'); h.press('Enter'); await h.tick(100);
-  assert.equal(h.pasted.length, 1); assert.deepEqual(h.written, []);
-  h.props.terminal.nativeApprovals = [{ token: 'native-question', question: { title: 'Choose a plan', fields: [] } }];
-  h.render();
-  h.props.terminal.nativeApprovals = [];
-  h.render(); await h.tick(2000);
-  assert.equal(h.popup(), undefined);
-  assert.deepEqual(h.written, []); assert.equal(h.pasted.length, 1);
-});
-
-test('a dialog the screen has no card for shows the waiting card with its heading, blocks the composer and opens the terminal once', t => {
-  const h = waitingHarness(t);
-  h.screen.waiting = { title: 'Exit plan mode?' };
-  assert.equal(h.render().props.disabled, true);
-  h.render();
-  assert.ok(h.popup(), 'the terminal opens for the dialog');
-  assert.equal(h.card(), undefined, 'no card for the same dialog waits behind the popup');
-  h.popup().props.onClose(); h.render(); h.render();
-  assert.equal(h.popup(), undefined, 'the same dialog, drawn again, never reopens it');
-  assert.equal(h.card().props.title, 'Exit plan mode?', 'the card stays for the way back');
-  h.card().props.onOpenTerminal(); h.render();
-  assert.ok(h.popup(), 'the card button opens it again');
-  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-  assert.equal(h.showTerminalButton(), false);
-});
-
-test('a dialog without a heading still shows the card, and the next dialog opens the terminal again once the CLI has moved on', async t => {
-  const h = waitingHarness(t);
-  h.screen.waiting = { title: null };
-  h.render(); h.render();
-  assert.ok(h.popup());
-  h.popup().props.onClose(); h.render();
-  assert.equal(h.card().props.title, null);
-  h.screen.waiting = null; h.render(); h.render();
-  assert.equal(h.card(), undefined);
-  assert.equal(h.render().props.disabled, false);
-  await h.tick(3000);
-  h.screen.waiting = { title: null }; h.render(); h.render();
-  assert.ok(h.popup(), 'a new dialog is a new notice');
-});
-
-test('a redraw frame without the hint never rearms the dialog; a seen prompt, or a real absence, does', async t => {
-  const h = waitingHarness(t);
-  h.screen.waiting = { title: 'Exit plan mode?' };
-  h.render(); h.render(); h.popup().props.onClose(); h.render();
-  // The hint row is missing for a frame or two while the CLI redraws.
-  h.screen.waiting = null; h.render(); await h.tick(1000); h.render();
-  h.screen.waiting = { title: 'Exit plan mode?' }; h.render(); h.render();
-  assert.equal(h.popup(), undefined, 'the same dialog, back after a short gap, stays closed');
-  // Gone longer than a redraw takes: the next one is new.
-  h.screen.waiting = null; h.render(); await h.tick(3000); h.render();
-  h.screen.waiting = { title: 'Exit plan mode?' }; h.render(); h.render();
-  assert.ok(h.popup(), 'after a real absence it opens once more');
-  h.popup().props.onClose(); h.render();
-  // The CLI's own input box drawn again is a real prompt: no waiting needed.
-  h.screen.waiting = null; h.view.rows = IDLE_ROWS; h.render(); h.render();
-  h.screen.waiting = { title: 'Exit plan mode?' }; h.view.rows = []; h.render(); h.render();
-  assert.ok(h.popup(), 'after the prompt it opens once more');
-  assert.equal(h.written.length, 0);
-});
-
-test('only the view in use opens the terminal for a dialog, and it opens once when it becomes the one in use', t => {
-  const h = waitingHarness(t);
-  h.props.active = false;
-  h.screen.waiting = { title: 'Review your answers' };
-  h.render(); h.render();
-  assert.equal(h.popup(), undefined, 'a view in another split leaves the terminal alone');
-  assert.ok(h.card(), 'its card still shows');
-  assert.equal(h.render().props.disabled, true);
-  h.props.active = true; h.render(); h.render();
-  assert.ok(h.popup());
-  h.popup().props.onClose(); h.props.active = false; h.render(); h.props.active = true; h.render(); h.render();
-  assert.equal(h.popup(), undefined, 'one dialog, one automatic opening');
-});
-
-test('a CLI that restarted into the same session while the view was away is not ready until its input is seen again', t => {
-  const h = waitingHarness(t, { rows: IDLE_ROWS });
-  Object.assign(h.props.terminal, { sessionId: 'runtime', codexActive: true, agentStartedAt: 100, readingHistory: restored('saved') });
-  assert.equal(h.render().props.disabled, false);
-  h.view.rows = ['Do you want to proceed?']; h.screen.choice = fakeChoice();
-  h.render(); h.render();
-  assert.ok(h.choiceCard());
-  h.unmount(); h.props.terminal.agentStartedAt = 200;
-  h.remount();
-  assert.equal(h.choiceCard(), undefined, 'a different start of the CLI is not the one that was ready');
-  h.view.rows = IDLE_ROWS; h.render(); h.view.rows = ['Do you want to proceed?'];
-  h.remount();
-  assert.ok(h.choiceCard(), 'ready again once the restarted CLI has drawn its input');
-});
-
-test('rendering reads readiness without writing it: only the effect remembers', t => {
-  const ready = loadUI('features/reading/reading-ready.ts');
-  const h = waitingHarness(t, { rows: IDLE_ROWS, ready });
-  Object.assign(h.props.terminal, { sessionId: 'runtime', codexActive: true, readingHistory: restored('saved') });
-  const run = { session: 'runtime', thread: 'saved', start: undefined, active: true };
-  assert.equal(ready.cliReady('dictation', run, false), false);
-  h.render();
-  assert.equal(ready.cliReady('dictation', run, false), true, 'the effect of the render that saw the input remembered it');
-  assert.equal(ready.cliReady('dictation', { ...run, session: 'other' }, false), false);
-  assert.equal(ready.cliReady('dictation', run, false), true, 'asking never changes what is remembered');
-});
-
-test('a card read from the screen wins over waiting, and waiting never shows in a restored preview', t => {
-  const h = waitingHarness(t);
-  h.screen.choice = fakeChoice(); h.screen.waiting = { title: 'both' };
-  h.render(); h.render();
-  assert.equal(h.card(), undefined); assert.ok(h.choiceCard());
-  h.screen.choice = null;
-  Object.assign(h.props.terminal, { sessionId: null, codexActive: false, needsInput: 'Allow?', readingHistory: restored('saved') });
-  h.render(); h.render();
-  assert.equal(h.card(), undefined);
-  assert.equal(h.popup(), undefined);
-  assert.equal(h.render().props.disabled, true);
-});
-
-test('a menu such as /model has no card: the terminal popup answers it, and nothing waits behind the popup', async t => {
-  const h = waitingHarness(t, { rows: IDLE_ROWS });
-  h.command('/model'); await h.tick(0); await h.tick(60); await h.tick(150);
-  assert.equal(h.popup().props.command, '/model');
-  h.popupInput.focus();
-  h.view.rows = ['Select model', '❯ 1. Opus', '  2. Sonnet', 'Enter to confirm · Esc to cancel'];
-  h.screen.choice = { ...fakeChoice(), kind: 'menu', title: 'Select model' };
-  h.render(); h.render();
-  assert.equal(h.popup().props.command, '/model', 'the open popup is kept, not replaced');
-  assert.equal(h.choiceCard(), undefined); assert.equal(h.card(), undefined);
-  h.popup().props.onClose(); h.render(); h.render();
-  assert.equal(h.choiceCard(), undefined, 'a menu never becomes a card');
-  assert.equal(h.card().props.title, 'Select model', 'the waiting card leads back to the terminal');
-  assert.equal(h.render().props.disabled, true);
-  h.card().props.onOpenTerminal(); h.render();
-  assert.ok(h.popup()); assert.equal(h.card(), undefined);
-});
-
-test('an attention notice with no input box shows the waiting card without opening the terminal or pressing a key', t => {
-  const h = waitingHarness(t);
-  h.props.terminal.needsInput = 'Claude needs your attention';
-  assert.equal(h.render().props.disabled, true);
-  h.render();
-  assert.equal(h.card().props.title, null);
-  assert.equal(h.popup(), undefined, 'the handoff to the terminal stays with reading-mode');
-  assert.equal(h.showTerminalButton(), true, 'the status line still switches to the terminal (the card opens it as a popup)');
-  h.card().props.onOpenTerminal(); h.render();
-  assert.ok(h.popup());
-  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-  h.view.rows = IDLE_ROWS; h.popup().props.onClose();
-  assert.equal(h.render().props.disabled, false, 'an ordinary prompt with an old notice is not a dialog');
-  assert.equal(h.card(), undefined); assert.equal(h.showTerminalButton(), true);
-});
-
-test('the notice card gives way to a parsed choice and to a native approval card', t => {
-  const h = waitingHarness(t);
-  h.props.terminal.needsInput = 'Allow?';
-  h.screen.choice = fakeChoice(); h.render(); h.render();
-  assert.equal(h.card(), undefined); assert.ok(h.choiceCard());
-  h.screen.choice = null; h.props.terminal.nativeApprovals = [{ token: 'native' }];
-  assert.equal(h.render().props.disabled, true, 'the composer stays blocked behind the native card');
-  h.render();
-  assert.equal(h.card(), undefined);
-  h.screen.waiting = { title: 'Dialog' }; h.render(); h.render();
-  assert.equal(h.card(), undefined, 'one card per request');
-  assert.equal(h.render().props.disabled, true);
-});
-
-test('a live dialog card survives a trip to the raw terminal and back, because readiness lives outside the component', t => {
-  const h = waitingHarness(t, { rows: IDLE_ROWS });
-  Object.assign(h.props.terminal, { sessionId: 'runtime', codexActive: true, readingHistory: restored('saved') });
-  assert.equal(h.render().props.disabled, false, 'the restored session has drawn its input');
-  h.view.rows = ['Do you want to proceed?'];
-  h.screen.choice = fakeChoice();
-  h.render(); h.render();
-  assert.ok(h.choiceCard(), 'an approval screen has no input box, yet its card shows');
-  h.remount();
-  assert.ok(h.choiceCard(), 'the card is still there when the reading view mounts again');
-  h.screen.choice = null; h.screen.waiting = { title: 'Review your answers' };
-  h.render(); h.render(); h.popup()?.props.onClose();
-  h.remount(); h.render();
-  assert.equal(h.card().props.title, 'Review your answers');
-  assert.equal(h.popup(), undefined, 'a dialog the terminal was already opened for is not opened again by a remount');
-});
-
-test('a restored preview still hides its stale choice until its own CLI input is seen, and readiness ends with the CLI, session and thread', t => {
-  const h = waitingHarness(t, { rows: ['Do you want to proceed?'] });
-  Object.assign(h.props.terminal, { sessionId: 'runtime', codexActive: true, readingHistory: restored('saved') });
-  h.screen.choice = fakeChoice();
-  assert.equal(h.render().props.disabled, true); h.render();
-  assert.equal(h.choiceCard(), undefined, 'a screen never drawn live is only history');
-  h.view.rows = IDLE_ROWS; h.render(); h.view.rows = ['Do you want to proceed?']; h.render(); h.render();
-  assert.ok(h.choiceCard());
-  h.props.terminal.codexActive = false; h.render(); h.props.terminal.codexActive = true; h.render(); h.render();
-  assert.equal(h.choiceCard(), undefined, 'a CLI that stopped must draw its input again');
-  h.view.rows = IDLE_ROWS; h.render(); h.view.rows = ['Do you want to proceed?']; h.render();
-  h.props.terminal.sessionId = 'next'; h.render(); h.render();
-  assert.equal(h.choiceCard(), undefined, 'a new session is not ready');
-  h.view.rows = IDLE_ROWS; h.render(); h.view.rows = ['Do you want to proceed?']; h.render();
-  h.props.terminal.readingHistory = restored('different'); h.remount();
-  assert.equal(h.choiceCard(), undefined, 'a different thread invalidates readiness across a remount');
+// Dialog coverage uses the real ReadingView and parser, including frames that no parser recognises.
+const { popupHarness } = require('./reading-popup-coverage.test.cjs');
+for (const type of ['input', 'textarea', 'select', 'contenteditable']) test('a dialog opens without taking focus from a focused ' + type, t => {
+  const h = popupHarness(t);
+  const editable = { matches: selector => selector.split(/,\s*/).includes(type), isContentEditable: type === 'contenteditable' };
+  // Textareas are also protected while typing outside the reader; other editors are within its root.
+  h.tree().props.ref.current = { contains: target => target === editable };
+  document.activeElement = editable;
+  h.view.rows = ['Unrecognised dialog']; h.render();
+  h.tree().props.ref.current = { contains: target => target === editable };
+  h.tick(3000);
+  assert.ok(h.popup()); assert.equal(h.popup().props.focus, false); assert.equal(document.activeElement, editable);
+  assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
 });
 
 test('the terminal surface follows reading intent even before the reading subtree exists, and respects raw choice', () => {
@@ -1155,8 +718,9 @@ function readingHarness(t, entries = [], overrides = {}) {
     './markdown-escape': { readingMarked: { parse: text => { parsed.push(text); return text; } } },
     dompurify: { default: () => ({ sanitize: html => html }) },
     '@phosphor-icons/react': new Proxy({}, { get: () => icon }),
-    './action-text': { stepVerb: tool => tool.kind, actionText: tool => tool.target }, './voice-input': {}, './terminal-screen': { useScreen: () => null },
-    './agent-screen': { parseAgentScreen: () => fakeScreen() },
+    './action-text': { stepVerb: tool => tool.kind, actionText: tool => tool.target }, './voice-input': {}, './terminal-screen': { useScreen: () => ({ rows: composerRows(state.terminal.agent, state.terminal.codexActivity === 'working' ? 'working' : 'idle') }) },
+    './typing': { isTyping: () => false, hasEditingFocus: () => false },
+    './agent-screen': { parseAgentScreen },
     './ReadingWelcome': { ReadingWelcome: () => React.createElement('p', null, 'welcome preserved') },
     './ReadingChoice': {}, './ReadingQuestion': {}, './reading-mode': {},
     './useStickToBottom': { useStickToBottom: () => ({ stuck: true, unseen: 0, ready: true, holdPosition() {}, toBottom() {} }) },
@@ -1317,11 +881,11 @@ test('a queue receipt removes the stale card and keeps message order, while a wi
 test('an expanded visible tool group keeps its component state through rolling eviction and snapshot refreshes', t => {
   const { applyConversationPacket } = require('../src/features/reading/conversation-buffer.ts');
   // Retain hook state at React's keyed ancestry, so a changed parent or child key resets ToolGroup's open state.
-  const instances = new Map(); let slots, cursor;
+  const instances = new Map(); let slots, cursor, decorations = null;
   const hooks = {
     useState(initial) { const index = cursor++; if (!Object.hasOwn(slots, index)) slots[index] = typeof initial === 'function' ? initial() : initial; const own = slots; return [own[index], value => { own[index] = typeof value === 'function' ? value(own[index]) : value; }]; },
     useRef(initial) { return hooks.useState(() => ({ current: initial }))[0]; },
-    useMemo(make) { return make(); }, useEffect() {}, useLayoutEffect() {},
+    useMemo(make) { return make(); }, useContext() { return decorations; }, useEffect() {}, useLayoutEffect() {},
   };
   const run = (key, component, props) => { if (!instances.has(key)) instances.set(key, []); slots = instances.get(key); cursor = 0; return component(props); };
   const initial = Array.from({ length: 400 }, (_, index) => index === 398 ? readingTool('visible-tool', 10) : readingEntry('a' + index, 'assistant', 9, { text: 'reply' }));
@@ -1336,7 +900,8 @@ test('an expanded visible tool group keeps its component state through rolling e
       if (Array.isArray(node)) { node.forEach(child => visit(child, path)); return; }
       const key = path + '/' + String(node.key ?? (typeof node.type === 'function' ? node.type.name : node.type));
       if (node.type?.name === 'ToolGroup') found = { key, node: run(key, node.type, node.props) };
-      else if (node.type?.name === 'TerminalReadingView') visit(run(key, node.type, node.props), key);
+      else if (node.type?.name === 'ConversationFeed') visit(run(key, node.type, node.props), key);
+      else if (node.props?.value && 'start' in node.props.value) { const previous = decorations; decorations = node.props.value; visit(node.props.children, key); decorations = previous; }
       else visit(node.props?.children, key);
     };
     visit(root); return found;
@@ -1451,59 +1016,6 @@ test('an unconfirmed image receipt advises checking the conversation instead of 
   assert.doesNotMatch(html, /Check and remove this image|Remove it here|Resend/);
 });
 
-test('a question renders as its own card: progress, the question, options, an own answer or notes, Submit and Chat', () => {
-  const icon = props => React.createElement('svg', { className: props.className });
-  const icons = { CircleNotch: icon, CaretLeft: icon, CaretRight: icon, Check: icon, PaperPlaneRight: icon, WarningCircle: icon };
-  const { ReadingQuestion } = loadUI('features/reading/ReadingQuestion.tsx', { '@phosphor-icons/react': icons, './question-keys': require('../src/features/reading/question-keys.ts') });
-  const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
-  const screen = name => parseAgentScreen(name.startsWith('claude') ? 'claude' : 'codex', fs.readFileSync(path.join(__dirname, 'fixtures/questions', name + '.txt'), 'utf8').split('\n')).choice;
-  const render = name => renderToStaticMarkup(React.createElement(ReadingQuestion, { choice: screen(name), terminalId: 'terminal', onError: () => {} }));
-  const multi = render('claude-question-multi-checked');
-  assert.match(multi, /要清理哪些目录？/); assert.match(multi, /aria-pressed="true"/); assert.match(multi, /Submit this question/);
-  assert.match(multi, /Talk it over instead/); assert.match(multi, /placeholder="Type your own answer…"/); assert.match(multi, /清理目录/);
-  assert.doesNotMatch(multi, /Chat about this|Type something/, 'the CLI\'s own English rows are shown in the window\'s words');
-  const review = render('claude-question-review');
-  assert.match(review, /Review your answers/); assert.match(review, /node_modules, abc/); assert.match(review, /Submit answers/);
-  const codex = render('codex-question');
-  assert.match(codex, /Question 1\/2/); assert.match(codex, /Notes \(optional\)/); assert.doesNotMatch(codex, /Optionally, add details/);
-  assert.doesNotMatch(review, /reading-question-warning/, 'a complete review has no warning');
-});
-
-test('Enter on a focused button presses that button, never the highlighted option (Cancel never picks one)', async t => {
-  const written = [], previous = { window: globalThis.window, document: globalThis.document };
-  globalThis.window = { agentrix: { writeTerminal: (id, key) => written.push(key), terminalFocus() {} } };
-  globalThis.document = { activeElement: null };
-  t.after(() => { for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete globalThis[name]; else globalThis[name] = value; } });
-  const hooks = { useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}], useRef: current => ({ current }), useEffect() {} };
-  const icons = new Proxy({}, { get: () => () => null });
-  const { ReadingQuestion } = loadUI('features/reading/ReadingQuestion.tsx', { react: hooks, '@phosphor-icons/react': icons, './question-keys': require('../src/features/reading/question-keys.ts') });
-  const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
-  const choice = parseAgentScreen('codex', fs.readFileSync(path.join(__dirname, 'fixtures/questions/codex-question.txt'), 'utf8').split('\n')).choice;
-  const root = ReadingQuestion({ choice, terminalId: 'terminal', onError: assert.fail });
-  const press = target => { let prevented = false; root.props.onKeyDown({ key: 'Enter', target, nativeEvent: {}, preventDefault: () => { prevented = true; }, stopPropagation() {} }); return prevented; };
-  const button = { closest: selector => selector === 'button' ? button : null };
-  assert.equal(press(button), false, 'the button keeps its own Enter'); assert.deepEqual(written, [], 'no option is picked for it');
-  assert.equal(press({ closest: () => null }), true, 'Enter on the card itself picks the highlighted option');
-  await new Promise(resolve => setTimeout(resolve, 50));
-  assert.ok(written.length > 0, 'and its keys reach the terminal');
-});
-
-test('the review page shows the CLI\'s unanswered warning as words beside an icon, and nothing for an empty context', () => {
-  const icon = props => React.createElement('svg', { className: props.className });
-  const icons = { CircleNotch: icon, CaretLeft: icon, CaretRight: icon, Check: icon, PaperPlaneRight: icon, WarningCircle: icon };
-  const { ReadingQuestion } = loadUI('features/reading/ReadingQuestion.tsx', { '@phosphor-icons/react': icons, './question-keys': require('../src/features/reading/question-keys.ts') });
-  const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
-  const base = parseAgentScreen('claude', fs.readFileSync(path.join(__dirname, 'fixtures/questions/claude-question-review.txt'), 'utf8').split('\n')).choice;
-  const render = context => renderToStaticMarkup(React.createElement(ReadingQuestion, { choice: { ...base, context }, terminalId: 'terminal', onError: () => {} }));
-  const warned = render(['⚠ You have not answered all questions']);
-  const words = en['还有问题没有回答'] ?? '还有问题没有回答';
-  assert.match(warned, /<p class="reading-question-warning" role="status"><svg/);
-  assert.match(warned, new RegExp(`<span>${words}</span>`));
-  assert.doesNotMatch(warned, /⚠/, 'the icon replaces the CLI\'s glyph');
-  assert.match(render(['Something else the CLI says']), /<span>Something else the CLI says<\/span>/);
-  assert.doesNotMatch(render([]), /reading-question-warning/);
-});
-
 // A native editor with atomic image elements, following Claude 2.1.312's Mi cursor and Codex 0.165.0's TextArea.
 // It retains actual attachment identities separately from their labels, so renumbering cannot hide a wrong deletion.
 let imageComposerSequence = 0;
@@ -1518,7 +1030,7 @@ function imageComposerHarness(t, agent, { decode = file => Promise.resolve(file.
   const attached = [], waitingPastes = [];
   const rows = () => composerRows(agent, 'idle', heldScreen ?? text);
   const h = dictationHarness(t, {
-    './terminal-screen': { useScreen: () => null, readScreen: () => overriddenRows === null ? null : ({ rows: overriddenRows ?? rows() }) },
+    './terminal-screen': { useScreen: () => overriddenRows === null ? null : ({ rows: overriddenRows ?? rows() }), readScreen: () => overriddenRows === null ? null : ({ rows: overriddenRows ?? rows() }) },
     './agent-screen': { parseAgentScreen }, './image-thumbnail': { ...require('../src/shared/image-thumbnail.ts'), thumbnail: decode }, './platform': PLATFORMS[platform],
   });
   h.props.terminal.agent = agent; h.props.remote = remote;
@@ -1666,7 +1178,7 @@ for (const agent of ['claude', 'codex']) {
       await h.paste(1); h.edit('keep this picture');
       if (change === 'split blur') { h.props.active = false; h.render(); h.props.active = true; h.render(); }
       else {
-        h.setScreen(null); h.press('Enter'); await h.tick(0);
+        h.setScreen(['Unknown dialog']); await h.tick(3000);
         assert.ok(h.popup()); h.popup().props.onClose(); h.render(); h.setScreen(undefined);
       }
       if (action === 'send') {
@@ -1699,16 +1211,6 @@ for (const agent of ['claude', 'codex']) {
     assert.match(errors[0], /could not be attached and was removed\./);
     assert.deepEqual(h.written, []);
     h.setScreen(undefined); await h.paste(2); assert.equal(h.previews().length, 1);
-  });
-
-  test(agent + ': a staged picture survives native request cancellation and can still send', async t => {
-    const h = imageComposerHarness(t, agent);
-    await h.paste(1); h.edit('send after the question');
-    h.props.terminal.nativeApprovals = [{}]; h.render();
-    assert.equal(h.previews().length, 1);
-    h.props.terminal.nativeApprovals = []; h.render();
-    h.press('Enter'); await h.tick(0); await h.tick(400);
-    assert.deepEqual(h.received.images, [1]);
   });
 
   test(agent + ': an unknown chip format blocks the picture send but still allows local removal', async t => {
@@ -2069,7 +1571,7 @@ for (const agent of ['claude', 'codex']) {
         let draft = '';
         const actions = [], received = [], pasteKey = PASTE_KEYS[agent].darwin;
         const h = dictationHarness(t, {
-          './terminal-screen': { useScreen: () => null, readScreen: () => ({ rows: composerRows(agent, activity, draft) }) },
+          './terminal-screen': { useScreen: () => ({ rows: composerRows(agent, activity, draft) }), readScreen: () => ({ rows: composerRows(agent, activity, draft) }) },
           './agent-screen': { parseAgentScreen },
           './image-thumbnail': { thumbnail: () => picture === 'loading' ? new Promise(() => {}) : Promise.resolve('data:image/png;base64,picture') },
           './platform': PLATFORMS.darwin,
@@ -2085,6 +1587,10 @@ for (const agent of ['claude', 'codex']) {
           assert.equal(id, h.props.terminal.id); assert.equal(sessionId, h.props.terminal.sessionId);
           actions.push(text); draft += text; return { ok: true };
         };
+        if (activity !== 'idle') {
+          h.edit('next message'); assert.equal(h.render().props.disabled, true); h.press('Enter'); await h.tick(1000);
+          assert.equal(h.node.value, 'next message'); assert.deepEqual(actions, []); assert.deepEqual(received, []); assert.equal(h.popup(), undefined); return;
+        }
         if (picture !== 'none') {
           h.render().props.onPaste({ preventDefault() {}, clipboardData: { getData: () => '', items: [{ kind: 'file', type: 'image/png', getAsFile: () => ({ size: 1 }) }] } });
           await h.tick(0);
@@ -2106,7 +1612,7 @@ for (const agent of ['claude', 'codex']) {
   test(agent + ': consecutive picture pastes keep the first placeholder while previews load', async t => {
     let draft = '';
     const h = dictationHarness(t, {
-      './terminal-screen': { useScreen: () => null, readScreen: () => ({ rows: composerRows(agent, 'working', draft) }) },
+      './terminal-screen': { useScreen: () => ({ rows: composerRows(agent, 'idle', draft) }), readScreen: () => ({ rows: composerRows(agent, 'idle', draft) }) },
       './agent-screen': { parseAgentScreen }, './image-thumbnail': { thumbnail: () => new Promise(() => {}) }, './platform': PLATFORMS.darwin,
     });
     h.props.terminal.agent = agent;
@@ -2127,7 +1633,7 @@ for (const agent of ['claude', 'codex']) {
   test(agent + ': a message already left with a picture retries Enter without clearing or pasting again', async t => {
     let draft = '[Image #1] next message';
     const h = dictationHarness(t, {
-      './terminal-screen': { useScreen: () => null, readScreen: () => ({ rows: composerRows(agent, 'working', draft) }) },
+      './terminal-screen': { useScreen: () => ({ rows: composerRows(agent, 'idle', draft) }), readScreen: () => ({ rows: composerRows(agent, 'idle', draft) }) },
       './agent-screen': { parseAgentScreen },
     });
     h.props.terminal.agent = agent;
@@ -2145,7 +1651,7 @@ for (const agent of ['claude', 'codex']) {
 
   for (const command of ['/status', '/init', '!echo SAME_OUTPUT']) {
     test(agent + ': ' + command + ' opens the live popup and types with fixed pauses without screen reads', async t => {
-      const h = dictationHarness(t, { './terminal-screen': { useScreen: () => null, readScreen: () => assert.fail('typed commands never read the screen') } });
+      const h = dictationHarness(t, { './terminal-screen': { useScreen: () => ({ rows: composerRows(agent) }), readScreen: () => assert.fail('typed commands never read the screen') } });
       h.props.terminal.agent = agent;
       for (let repeat = 0; repeat < 2; repeat++) {
         h.edit(command); h.press('Enter'); await h.tick(0);
@@ -2164,28 +1670,13 @@ for (const agent of ['claude', 'codex']) {
     });
   }
 
-  test(agent + ': an explicit send at a dialog or missing prompt opens and focuses the terminal while keeping the draft', async t => {
-    let rows = composerRows(agent);
-    const h = dictationHarness(t, { './terminal-screen': { useScreen: () => null, readScreen: () => rows && ({ rows }) }, './agent-screen': { parseAgentScreen } });
-    h.props.terminal.agent = agent;
-    h.render().props.onPaste({ preventDefault() {}, clipboardData: { getData: () => '', items: [{ kind: 'file', type: 'image/png', getAsFile: () => ({ size: 1 }) }] } });
-    await h.tick(0); h.written.length = 0;
-    const dialog = agent === 'claude' ? ['✶ Swooping… (12s)', 'Settings  Status  Config  Usage', '❯ Auto-compact    true', 'Type to filter · Enter/↓ to select · Esc to clear']
-      : ['                Usage', '                Daily limit  75% left', '                esc close', ...composerRows(agent)];
-    const picker = agent === 'claude' ? ['Select model', '❯ 1. Opus', '  2. Sonnet', 'Enter to confirm · Esc to cancel']
-      : [...composerRows(agent), 'Copy user message', '↑/↓ select · Enter confirm · Esc cancel'];
-    for (const frame of [null, ['Settings', 'Esc to close'], dialog, picker]) for (const focused of [true, false]) {
-      rows = frame;
-      h.edit('keep this message'); document.activeElement = focused ? h.node : document.body;
-      const focusCount = h.terminalFocused.length;
-      h.press('Enter'); await h.tick(1000);
-      assert.ok(h.popup()); assert.equal(h.popup().props.command, ''); assert.equal(h.node.value, 'keep this message');
-      assert.equal(document.activeElement, h.popupInput);
-      assert.equal(h.terminalFocused.length, focusCount + 1);
-      assert.ok(elements(h.tree()).some(element => element.props.className === 'reading-attachments'));
-      assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []);
-      h.popup()?.props.onClose(); h.render();
-    }
+  test(agent + ': a dialog preserves staged pictures and a locked draft until the owner returns to input', async t => {
+    const h = imageComposerHarness(t, agent); await h.paste(1); h.edit('keep this message'); h.written.length = 0;
+    h.setScreen(['Unknown dialog']); await h.tick(3000); assert.ok(h.popup()); assert.equal(h.popup().props.focus, false);
+    h.press('Enter'); await h.tick(1000); assert.equal(h.node.value, 'keep this message'); assert.equal(h.previews().length, 1);
+    assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+    h.popup().props.onClose(); h.render(); h.setScreen(undefined); h.press('Enter'); await h.tick(0); await h.tick(400);
+    assert.deepEqual(h.received.images, [1]);
   });
 }
 
@@ -2240,7 +1731,7 @@ test('an external command uses the popup and leaves the composer draft alone', a
   h.edit('keep my draft'); h.command('/usage'); await h.tick(0); await h.tick(60); await h.tick(150);
   assert.equal(h.popup().props.command, '/usage'); assert.equal(h.node.value, 'keep my draft');
   assert.deepEqual(h.written.map(item => item.text), ['\x15', '/usage', '\r']);
-  h.command('/usage'); await h.tick(0); await h.tick(60); await h.tick(150);
+  h.popup().props.onClose(); h.render(); h.command('/usage'); await h.tick(0); await h.tick(60); await h.tick(150);
   assert.deepEqual(h.written.map(item => item.text), ['\x15', '/usage', '\r', '\x15', '/usage', '\r']);
   assert.equal(h.node.value, 'keep my draft');
 });
@@ -2318,7 +1809,7 @@ test('switching to a terminal in another small card closes the popup without res
 });
 
 test('a generated picture shows its prompt as a two-line summary and a toggle appears only when the summary is cut off', () => {
-  const view = fs.readFileSync(path.join(__dirname, '../src/features/reading/ReadingView.tsx'), 'utf8');
+  const view = fs.readFileSync(path.join(__dirname, '../src/features/reading/ConversationFeed.tsx'), 'utf8');
   const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading.css'), 'utf8');
   const figure = view.slice(view.indexOf('function GeneratedImage'), view.indexOf('// A reply card inside'));
   assert.ok(figure.includes('element.scrollHeight > element.clientHeight'), 'the clamp is measured');
@@ -2542,10 +2033,9 @@ test('list markers take the running agent\'s colour: Claude orange for Claude Co
     state.terminal.agent = agent;
     assert.match(render(), new RegExp(`<div class="reading-view" data-agent="${expected}"`), `${agent} marks the reading root`);
   }
-  assert.match(fs.readFileSync(path.join(__dirname, '../src/features/reading/ManagedSession.tsx'), 'utf8'), /className="reading-view" data-agent="claude"/);
   const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading.css'), 'utf8');
   const themes = fs.readFileSync(path.join(__dirname, '../src/shared/styles/themes.css'), 'utf8');
-  assert.match(css, /\.reading-view\[data-agent="claude"\] \{ --list-marker: var\(--agent-claude\); --list-number: var\(--agent-claude-text\); \}/);
+  assert.match(css, /:is\(\.reading-view, \.conversation-feed\)\[data-agent="claude"\] \{ --list-marker: var\(--agent-claude\); --list-number: var\(--agent-claude-text\); \}/);
   assert.doesNotMatch(css, /data-agent="codex"/, 'Codex keeps the default');
   assert.match(css, /ul > li::before \{[^}]*background: var\(--list-marker, var\(--usage\)\)/);
   assert.match(css, /ul ul > li::before \{[^}]*inset 0 0 0 1\.5px var\(--list-marker, var\(--usage\)\)/);
@@ -2561,4 +2051,39 @@ test('list markers take the running agent\'s colour: Claude orange for Claude Co
   for (const surface of [token(light, '--bg-card'), token(light, '--bg-app'), token(light, '--bg-hover')]) assert.ok(ratio(numeral, surface) >= 4.5, `${numeral} on ${surface}`);
   assert.match(dark, /--agent-claude-text: var\(--agent-claude\)/);
   assert.equal(token(dark, '--agent-claude'), '#d97757');
+});
+
+test('ConversationFeed works without a terminal or composer and forwards project links', t => {
+  readingHarness(t);
+  const entries = [readingEntry('feed-user', 'user', 1, { text: 'Inspect the fixture' }), readingTool('feed-tool', 2, { done: true }), readingEntry('feed-reply', 'assistant', 3, { text: 'Done' })];
+  const common = { './action-text': { stepVerb: step => step.kind }, './Markdown': { Markdown: ({ text }) => React.createElement('p', null, text) }, './FileCards': { FileCards: () => null, previewable: () => false } };
+  const { ConversationFeed } = loadUI('features/reading/ConversationFeed.tsx', common);
+  const html = renderToStaticMarkup(React.createElement(ConversationFeed, { entries, agent: 'codex', projectId: 'fixture', live: false, onError: assert.fail }));
+  assert.match(html, /conversation-feed/); assert.equal((html.match(/class="reading-step is-/g) || []).length, 2);
+  assert.match(html, /Inspect the fixture/); assert.match(html, /reading-tools/); assert.doesNotMatch(html, /textarea|reading-composer|reading-choice-option/);
+  const links = [], hooks = { useMemo: make => make(), useRef: value => ({ current: value }), useContext: () => null };
+  const component = loadUI('features/reading/ConversationFeed.tsx', { ...common, react: hooks }).ConversationFeed;
+  const root = component({ entries: [], agent: 'codex', projectId: 'fixture', live: false, onError: assert.fail, onOpenLink: target => links.push(target) });
+  let prevented = false;
+  root.props.onClick({ target: { closest: selector => selector === '.reading-markdown a' ? { getAttribute: () => 'https://example.invalid/fixture' } : null }, preventDefault() { prevented = true; } });
+  assert.equal(prevented, true); assert.deepEqual(links, ['https://example.invalid/fixture']);
+});
+
+test('an automatic stalled resend with a missing native input never opens or focuses a terminal', async t => {
+  let now = 10000; t.mock.method(Date, 'now', () => now);
+  const h = dictationHarness(t, {
+    './terminal-screen': { useScreen: () => ({ rows: composerRows('codex') }), readScreen: () => null },
+    './usePendingPrompts': { usePendingPrompts: () => ({ pending: [{ id: 'stalled', text: 'old send', at: 1, sending: false }], echo() {}, cancelEcho() {} }) },
+  });
+  h.edit('keep writing'); now += 6000; await h.tick(6000);
+  assert.equal(h.popup(), undefined); assert.deepEqual(h.terminalFocused, []); assert.equal(h.node.value, 'keep writing');
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+});
+
+test('a popup also preserves focus in another project composer after its typing grace expired', t => {
+  const h = popupHarness(t), editable = { matches: selector => selector.split(/,\s*/).includes('textarea') };
+  document.body.contains = target => target === editable; document.activeElement = editable;
+  h.view.rows = ['Unknown dialog']; h.render(); h.tick(3000);
+  assert.ok(h.popup()); assert.equal(h.popup().props.focus, false); assert.equal(document.activeElement, editable);
+  assert.deepEqual(h.writes, []);
 });

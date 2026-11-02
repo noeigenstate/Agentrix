@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const http = require('node:http');
 const { spawnSync } = require('node:child_process');
-const { main, isolatedEnvironment, cancellationDecision } = require('../scripts/native-approval-probe.cjs');
+const { main, isolatedEnvironment } = require('../scripts/native-approval-probe.cjs');
 const { createStandin } = require('../scripts/native-approval-model.cjs');
 
 test('probe defaults to no execution even with a provider, empty PATH and no account environment', async () => {
@@ -23,11 +23,8 @@ test('probe environment isolates homes and drops auth, proxies, provider overrid
   for (const key of ['NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE', 'HTTPS_PROXY', 'ANTHROPIC_BASE_URL']) assert.equal(env[key], undefined);
 });
 
-test('probe chooses supported cancel for the actual Codex decision shape, never invented decline', () => {
-  assert.equal(cancellationDecision({ decisions: ['accept', { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['echo'] } }, 'cancel'] }), 'cancel');
-  assert.equal(cancellationDecision({ decisions: ['accept', 'decline'] }), 'decline');
-  assert.equal(cancellationDecision({ decisions: ['allow', 'deny'] }), 'deny');
-  assert.throws(() => cancellationDecision({ decisions: ['accept'] }), /no supported/);
+test('managed Claude is no longer a launchable probe mode', async () => {
+  await assert.rejects(main(['claude', '--run-installed']), /Usage/);
 });
 
 function post(port, route, data) {

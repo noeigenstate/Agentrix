@@ -311,23 +311,19 @@ test('Claude queue receipts and withdrawals update activity without arming compl
   assert.equal(h.arms(), 1); assert.equal(h.alerts(), 1); assert.equal(project.unread, 0);
 });
 
-test('main keeps the short lastTask and long card task across bare follow-ups in terminal and managed sessions', () => {
+test('main keeps the short lastTask and long card task across bare follow-ups in terminal and Codex native sessions', () => {
   const requests = [
     ['把设置对话框右上角的关闭按钮删掉，并且更新所有相关的测试脚本和文档说明', '把设置对话框右上角的关闭按钮删掉，并且更新所有相关的测试…'],
     ['refactor the voice input so that it works in every terminal and every split view we have', 'refactor the voice input so that it works in every terminal and…'],
   ];
-  for (const mode of ['codex', 'claude', 'codex-native', 'claude-native']) for (const [request, spoken] of requests) {
+  for (const mode of ['codex', 'claude', 'codex-native']) for (const [request, spoken] of requests) {
     const h = activityHarness(mode), { s, project, context } = h;
     const cardSummary = promptSummary(request);
-    const managed = mode === 'claude-native';
-    if (managed) s.nativeMode = 'claude-sdk';
     const prompt = (text, at) => {
       h.now(at);
-      if (managed) context.nativeSessionEvent(s.terminalId, s.sessionId, { type: 'managed-prompt', text });
-      else {
+
         (s.agent === 'claude' ? claudeConversation : codexConversation)(s.conversation, s.agent === 'claude' ? claude(text, at) : codex(text, at));
         context.applyActivity(project, s, { state: 'working', threadId: 'thread', updatedAt: at, prompt: text });
-      }
     };
     prompt(request, 2000);
     assert.equal(s.lastTask, spoken);
@@ -354,11 +350,9 @@ test('main keeps the short lastTask and long card task across bare follow-ups in
 
 test('native input and Claude hooks retain explicit machine provenance before creating tasks or arming completion', () => {
   const reset = require('./fixtures/claude-usage-reset.json').records[0].content;
-  for (const mode of ['claude-native', 'codex-native']) {
+  for (const mode of ['claude', 'codex-native']) {
     const h = activityHarness(mode), { s, project, context } = h;
-    if (mode === 'claude-native') s.nativeMode = 'claude-sdk';
     for (const [text, flags] of [[reset, {}], ['Neutral automatic continuation.', { isMeta: true }], ['Neutral automatic continuation.', { origin: { kind: 'auto-continuation' }, promptSource: 'system' }]]) {
-      context.nativeSessionEvent(s.terminalId, s.sessionId, { type: 'managed-prompt', text, ...flags });
       if (mode === 'codex-native') context.nativeSessionEvent(s.terminalId, s.sessionId, { method: 'item/completed', params: { item: { type: 'userMessage', id: `machine-${text.length}`, content: [{ type: 'text', text }], ...flags } } });
       else context.claudeActivity(project, s, { state: 'working', sessionId: 'session', eventId: `session:machine-${text.length}`, prompt: text, ...flags });
     }

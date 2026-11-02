@@ -1,30 +1,12 @@
 const { TextDecoder } = require('node:util');
-const { MAX_BYTES, object, validId, fingerprint } = require('./native-approvals.cjs');
-const { codexQuestion, claudeQuestion } = require('./native-questions.cjs');
+const { createHash } = require('node:crypto');
+const MAX_BYTES = 256 * 1024;
+const object = value => !!value && typeof value === 'object' && !Array.isArray(value);
+const validId = id => typeof id === 'string' ? id.length > 0 && id.length <= 256 : Number.isSafeInteger(id);
+const keyOf = id => JSON.stringify([typeof id, id]);
 const validRpc = m => object(m) && (m.jsonrpc === undefined || m.jsonrpc === '2.0') && (Object.hasOwn(m, 'method')
   ? typeof m.method === 'string' && m.method.length > 0 && m.method.length <= 256 && (!Object.hasOwn(m, 'id') || validId(m.id))
   : validId(m.id) && Object.hasOwn(m, 'result') !== Object.hasOwn(m, 'error'));
-const keysOnly = (value, keys) => object(value) && Object.keys(value).every(key => keys.includes(key));
-function permissionProfile(value) {
-  if (!keysOnly(value, ['network', 'fileSystem'])) return false;
-  if (value.network != null && (!keysOnly(value.network, ['enabled']) || value.network.enabled != null && typeof value.network.enabled !== 'boolean')) return false;
-  const files = value.fileSystem;
-  if (files == null) return true;
-  if (!keysOnly(files, ['read', 'write', 'entries', 'globScanMaxDepth'])) return false;
-  if (['read', 'write'].some(key => files[key] != null && (!Array.isArray(files[key]) || !files[key].every(path => typeof path === 'string')))) return false;
-  if (files.globScanMaxDepth != null && (!Number.isSafeInteger(files.globScanMaxDepth) || files.globScanMaxDepth < 1)) return false;
-  if (files.entries == null) return true;
-  return Array.isArray(files.entries) && files.entries.every(entry => {
-    if (!keysOnly(entry, ['access', 'path']) || !['read', 'write', 'deny'].includes(entry.access)) return false;
-    const path = entry.path;
-    if (path?.type === 'path') return keysOnly(path, ['type', 'path']) && typeof path.path === 'string';
-    if (path?.type === 'glob_pattern') return keysOnly(path, ['type', 'pattern']) && typeof path.pattern === 'string';
-    if (path?.type !== 'special' || !keysOnly(path, ['type', 'value'])) return false;
-    const special = path.value;
-    return keysOnly(special, ['kind', 'path', 'subpath']) && ['root', 'minimal', 'project_roots', 'tmpdir', 'slash_tmp', 'unknown'].includes(special.kind)
-      && (special.kind !== 'unknown' || typeof special.path === 'string') && (special.subpath == null || typeof special.subpath === 'string');
-  });
-}
 
 // CLI stdout is newline-delimited JSON, never a terminal/text parser. Fatal UTF-8 and bounded partial records.
 class JsonLines {
@@ -54,99 +36,40 @@ class JsonLines {
   }
 }
 
+// Only the remote TUI owns responses. The proxy validates framing and correlates typed request IDs;
+// it creates no capabilities, answers, cancellation timers or schema-dependent replacement dialogs.
 class CodexProtocol {
-  constructor(registry) { this.registry = registry; this.issued = new Map(); }
-  server(m) {
-    const r = this.registry, p = m.params;
-    if (!validRpc(m)) { r.fault('invalid-server-envelope'); return false; }
-    if (m.method && Object.hasOwn(m, 'id')) {
-      if (!validId(m.id)) { r.fault('invalid-server-id'); return false; }
-      const key = `${typeof m.id}:${m.id}`, previous = this.issued.get(key), signature = fingerprint(m);
-      if (previous) {
-        if (previous.pending && previous.signature === signature && this.registry.records.get(key)?.pending !== false) return false;
-        r.fault('native-id-reuse'); return false;
-      }
-      if (this.issued.size >= r.maxSeen) { r.fault('request-limit'); return false; }
-      this.issued.set(key, { signature, pending: true });
+  constructor(fail = () => {}, maxSeen = 8192) { this.fail = fail; this.maxSeen = maxSeen; this.issued = new Map(); this.closed = false; }
+  close() { this.closed = true; this.issued.clear(); }
+  fault(reason) { if (!this.closed) { this.close(); this.fail(reason); } return false; }
+  server(message) {
+    if (this.closed) return false;
+    if (!validRpc(message)) return this.fault('invalid-server-envelope');
+    if (message.method && Object.hasOwn(message, 'id')) {
+      const key = keyOf(message.id), previous = this.issued.get(key);
+      const signature = createHash('sha256').update(JSON.stringify(message)).digest('hex');
+      if (previous) return previous.pending && previous.signature === signature ? false : this.fault('native-id-reuse');
+      if (this.issued.size >= this.maxSeen) return this.fault('request-limit');
+      this.issued.set(key, { signature, pending: true, thread: message.params?.threadId });
     }
-    if (m.method === 'serverRequest/resolved') {
-      if (!object(p) || !validId(p.requestId) || typeof p.threadId !== 'string') r.fault('invalid-resolution');
-      else { r.resolve(p.requestId, p.threadId); const issued = this.issued.get(`${typeof p.requestId}:${p.requestId}`); if (issued) issued.pending = false; }
+    if (message.method === 'serverRequest/resolved') {
+      const params = message.params;
+      if (!object(params) || !validId(params.requestId) || typeof params.threadId !== 'string') return this.fault('invalid-resolution');
+      const issued = this.issued.get(keyOf(params.requestId));
+      if (issued && issued.thread !== undefined && issued.thread !== params.threadId) return this.fault('resolution-binding-conflict');
+      if (issued) issued.pending = false;
     }
-    if (['turn/completed', 'turn/interrupted'].includes(m.method)) {
-      if (!object(p) || typeof p.threadId !== 'string' || typeof (p.turn?.id ?? p.turnId) !== 'string') r.fault('invalid-turn-end');
-      else r.endTurn(p.threadId, p.turn?.id ?? p.turnId);
-    }
-    if (m.method === 'turn/started' && typeof p?.threadId === 'string') {
-      for (const entry of r.tokens.values()) if (entry.params.threadId === p.threadId && entry.params.turnId !== p.turn?.id) r.consume(entry);
-    }
-    if (['item/tool/requestUserInput', 'mcpServer/elicitation/request'].includes(m.method)) {
-      const names = m.method === 'item/tool/requestUserInput' ? ['threadId', 'turnId', 'itemId'] : ['threadId', 'serverName'];
-      if (!validId(m.id) || !object(p) || names.some(key => typeof p[key] !== 'string' || !p[key] || p[key].length > 256)
-        || p.turnId != null && (typeof p.turnId !== 'string' || !p.turnId || p.turnId.length > 256)) { r.fault('invalid-question'); return false; }
-      const shape = codexQuestion(m.method, p);
-      if (!shape) return true;
-      const added = r.add(m.id, m.method, p, shape.decisions, shape.response, shape.question);
-      return !!added && !added.duplicate;
-    }
-    if (!['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval'].includes(m.method)) return true;
-    if (!validId(m.id) || !object(p) || !['threadId', 'turnId', 'itemId'].every(k => typeof p[k] === 'string' && p[k].length > 0 && p[k].length <= 256)) { r.fault('invalid-approval'); return false; }
-    if (m.method === 'item/permissions/requestApproval') {
-      if (!permissionProfile(p.permissions)) return true;
-      const permissions = JSON.parse(JSON.stringify(p.permissions));
-      // Exact provider-supplied grant, turn scoped only. No renderer subset or policy edits.
-      const added = r.add(m.id, m.method, p, ['grant', 'deny'], (decision, id) => ({ id,
-        result: { permissions: decision === 'grant' ? permissions : {}, scope: 'turn' } }));
-      return !!added;
-    }
-    if (p.availableDecisions != null && !Array.isArray(p.availableDecisions)) { r.fault('invalid-decisions'); return false; }
-    const decisions = ['accept', 'decline', 'cancel'].filter(d => !p.availableDecisions || p.availableDecisions.includes(d));
-    if (!decisions.length) return true;
-    const added = r.add(m.id, m.method, p, decisions, (decision, id) => ({ id, result: { decision } }));
-    return !!added && !added.duplicate;
+    return true;
   }
-  client(m) {
-    if (!validRpc(m)) { this.registry.fault('invalid-client-envelope'); return false; }
-    if (Object.hasOwn(m, 'id') && !m.method && (Object.hasOwn(m, 'result') || Object.hasOwn(m, 'error'))) {
-      const issued = this.issued.get(`${typeof m.id}:${m.id}`);
-      if (!issued) { this.registry.fault('unknown-client-response'); return false; }
-      if (!issued.pending) return false;
-      issued.pending = false;
-      return this.registry.clientResponse(m.id);
-    }
-    // An explicit interruption/start cancels held host actions before it enters the provider channel.
-    if (['turn/interrupt', 'turn/start'].includes(m.method) && object(m.params)) {
-      for (const r of this.registry.tokens.values()) if (r.params.threadId === m.params.threadId) this.registry.consume(r);
-    }
-    return !this.registry.closed;
-  }
-}
-
-class ClaudeProtocol {
-  constructor(registry) { this.registry = registry; }
-  server(m) {
-    const r = this.registry;
-    if (typeof m.type !== 'string') { r.fault('invalid-control-envelope'); return; }
-    if (m.type === 'control_cancel_request') { if (typeof m.request_id !== 'string') r.fault('invalid-cancel'); else r.resolve(m.request_id); }
-    if (m.type === 'result') for (const entry of r.tokens.values()) r.consume(entry);
-    if (m.type !== 'control_request') return;
-    const p = m.request;
-    if (typeof m.request_id !== 'string' || !object(p)) { r.fault('unsupported-control-request'); return; }
-    if (p.subtype === 'elicitation') {
-      if (typeof p.mcp_server_name !== 'string' || !p.mcp_server_name) { r.fault('invalid-elicitation'); return; }
-      const shape = claudeQuestion(p);
-      r.add(m.request_id, p.subtype, p, shape.decisions, shape.response, shape.question); return;
-    }
-    if (p.subtype !== 'can_use_tool' || typeof p.tool_name !== 'string' || !object(p.input) || (p.tool_use_id !== undefined && typeof p.tool_use_id !== 'string')) { r.fault('unsupported-control-request'); return; }
-    if (p.tool_name === 'AskUserQuestion') {
-      const shape = claudeQuestion(p);
-      r.add(m.request_id, p.subtype, p, shape.decisions, shape.response, shape.question); return;
-    }
-    const input = JSON.parse(JSON.stringify(p.input));
-    r.add(m.request_id, p.subtype, p, ['allow', 'deny'], (decision, id) => ({ type: 'control_response', response: {
-      subtype: 'success', request_id: id,
-      response: decision === 'allow' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'Denied by user in Agentrix' },
-    } }));
+  client(message) {
+    if (this.closed) return false;
+    if (!validRpc(message)) return this.fault('invalid-client-envelope');
+    if (Object.hasOwn(message, 'method')) return true;
+    const issued = this.issued.get(keyOf(message.id));
+    if (!issued) return this.fault('unknown-client-response');
+    if (!issued.pending) return false;
+    issued.pending = false;
+    return true;
   }
 }
 
@@ -157,4 +80,4 @@ function writeJson(stream, message, fail) {
   if (Buffer.byteLength(data) > MAX_BYTES) throw new Error('Native response too large');
   if (!stream.write(data, error => { if (error) fail('native-write-error'); })) { fail('native-backpressure'); throw new Error('Native channel backpressure'); }
 }
-module.exports = { JsonLines, CodexProtocol, ClaudeProtocol, writeJson };
+module.exports = { JsonLines, CodexProtocol, writeJson, MAX_BYTES };
