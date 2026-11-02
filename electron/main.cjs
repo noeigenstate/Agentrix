@@ -304,6 +304,7 @@ function trayMenu() {
 
 function broadcast() {
   dashboardWindow?.sync();
+  syncDashboardLive();
   labWindow?.sync();
   skills?.syncWatchers();
   clearTimeout(stateTimer);
@@ -498,6 +499,7 @@ function followClaude(project, s, event) {
 
 // Workspace broadcasts can happen while history is still reading: hold a clean snapshot until it finishes.
 function usageHistory(s, ready) {
+  s.calls?.history(!ready);
   if (!s.usage) return;
   s.usageHistory = ready ? null : s.usage.snapshot();
   scheduleUsageRollover();
@@ -509,7 +511,14 @@ function usageHistory(s, ready) {
 // The called models belong to the terminal session, so workers dispatched from a plain shell, or before the agent
 // restarts, stay visible; the agent's usage meter shares them while it runs.
 function callsOf(s, project) {
-  return s.calls ||= new AgentCalls({ changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh' });
+  return s.calls ||= new AgentCalls({ changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh',
+    codexHome: () => s.codexHome || s.usageEnv?.CODEX_HOME || path.join(os.homedir(), '.codex'),
+    claudeHome: () => s.usageEnv?.CLAUDE_CONFIG_DIR || claudeConfigDir(),
+    feedChanged: event => { if (sessions.get(s.terminalId) === s) send('terminal:subagent-feed', { terminalId: s.terminalId, ...event }); } });
+}
+// The dashboard's 正在运行 strip: every terminal's running sub-agents and dispatched workers, with their project.
+function syncDashboardLive() {
+  dashboardWindow?.live([...sessions.values()].flatMap(s => (s.calls?.running() ?? []).map(call => ({ ...call, project: s.projectId ?? null }))));
 }
 function dispatchedOnly(s) {
   const calls = s?.calls?.snapshot(null) || [];
@@ -1270,6 +1279,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     if (terminal.error || exitCode) s.error = terminal.error || t('终端已退出（代码 {code}）。', { code: exitCode });
     if (!quitting && !exitCode) store.setRestore(id, { terminal: false, codex: false });
     if (bootstrapFile || skillNoteFile) cleanupTerminalFiles(s);
+    s.calls?.dispose();
     broadcast();
   });
   captureBranch(project);
@@ -1295,6 +1305,7 @@ function disposeTerminal(id) {
   const s = sessions.get(id);
   if (!s) return;
   sessions.delete(id);
+  s.calls?.dispose(); syncDashboardLive();
   endSkillSession(s);
   skills.endSession(s.projectId, s.sessionId);
   stopUsageAccount(s);
@@ -1481,6 +1492,7 @@ if (!app.requestSingleInstanceLock()) {
     dashboardWindow = createDashboard({ app, root, BrowserWindow, ipcMain, devUrl, t, records: dashboard,
       getProjects: () => store.projects, getSettings: () => store.settings, getMainWindow: () => window,
       getUiZoom: () => windowZoom?.percent ?? 100, backgroundColor: windowBackgroundColor });
+    syncDashboardLive();
     labWindow = createLab({ app, root, BrowserWindow, ipcMain, devUrl, t, records: dashboard, helper: path.join(integrationDir, 'dispatch.cjs'),
       getProjects: () => store.projects, getSettings: () => store.settings, getMainWindow: () => window,
       getUiZoom: () => windowZoom?.percent ?? 100, backgroundColor: windowBackgroundColor });

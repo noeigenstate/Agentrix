@@ -1,8 +1,8 @@
 # Boundary: Reading view
 
 The document view of an agent terminal: the conversation as a timeline, the composer that types into the CLI, the
-choice, question and approval cards drawn from its screen, the result card of the latest round, and the switch between
-reading and the raw terminal.
+terminal popup every confirmation, question, menu and slash command is answered in (no option cards), the result card of
+the latest round, and the switch between reading and the raw terminal.
 
 ## Owns
 - `src/features/reading/**`
@@ -15,8 +15,7 @@ reading and the raw terminal.
 - `hasCliInput` (`src/features/reading/cli-panel.ts`) — what the CLI's input line holds; the file also exports isAtPrompt, cliInputDraft and isCliIdle
 - `sameMessage` (`src/features/reading/pending-prompts.ts`) — whether a sent message is the one still in the CLI input
 - `lastRound` (`src/features/reading/result-round.ts`) — the latest round of a conversation; the file also exports CHECKS and changeLabel
-- `ReadingQuestion` (`src/features/reading/ReadingQuestion.tsx`) — the card for an agent's question, reused on the decision page
-- `NativeApprovalCard` (`src/features/reading/NativeApprovalCard.tsx`) — the native request entry; questions and forms use internal `NativeQuestionCard` (`src/features/reading/NativeQuestionCard.tsx`), with edits local until an explicit native answer
+- `ConversationFeed` (`src/features/reading/ConversationFeed.tsx`) — grouped read-only messages and tool steps, independent of composer and terminal state; the reading view and the sub-agent split render with it
 - `terminalApprovalCopy` (`src/features/reading/approval-action.ts`) — the text that sends a screen permission request to its terminal
 - `FileCards` (`src/features/reading/FileCards.tsx`) — the preview cards of the files a reply names; the file also exports previewable
 - `replyFiles` (`src/features/reading/reply-files.ts`) — the local pictures, pages and videos a reply names
@@ -34,9 +33,8 @@ reading and the raw terminal.
 - `src/features/terminal/active-terminal.ts`
 
 ## Invariants
-- A permission card drawn from the screen never sends approval keys, whatever identity it holds; it only sends the reader to the terminal — screen text cannot target a native request — test: `tests/approval-aba.test.cjs` › "retained permission dispatch rejects all targets even with fresh, absent or fabricated identity"
-- Native cards send the backend's exact token and a supported decision once; pending requests block the composer, screen cards and terminal popups without taking typing focus — a native answer must never become PTY keys — test: `tests/native-approval-ui.test.cjs` › "native UI sends exact backend token and supported decision once, without parser or PTY"; test: `tests/reading-ui.test.cjs` › "a native question at the normal prompt blocks composer sends without moving its focus"; "a native question remembers composer typing across disabled blur and later waiting redraws"
-- Enter on a focused button presses that button, never the highlighted option; Cancel never picks one — a keyboard user must not choose by accident — test: `tests/reading-ui.test.cjs` › "Enter on a focused button presses that button, never the highlighted option (Cancel never picks one)"
+- Composer availability requires positive current idle-input evidence; a settled dialog, unknown screen or needs-input notice opens the terminal popup once per dialog, and opening while the owner edits keeps the draft and never focuses xterm — the terminal must pop up for every confirmation without an Enter meant for a message answering it — test: `tests/reading-popup-coverage.test.cjs` › "busy output and a transient redraw do not open a dialog, and returning to input cancels the timer"; "an inactive dialog opens when activated; dismissal and redraw do not rearm it"
+- No option card exists in the reading view: screen choices, questions and native requests are answered only in the terminal, and no key is written on the owner's behalf — the owner decided every confirmation happens in the terminal — test: `tests/native-question-ui.test.cjs` › "question and form cards and managed Claude UI are removed"
 - Session changes (A to B to A) and unmounting invalidate picture callbacks; split changes and popup close cancel delayed keys but preserve staged pictures; SSH sends await reserved uploads in paste order, and removal prevents late revival — test: `tests/reading-ui.test.cjs` › "session A to B to A, terminal selection and unmount cancel every delayed command key"; "a staged picture survives"; "SSH Send waits for pending uploads and keeps their paste order"; "removing a pending SSH picture prevents a late upload from reviving it"
 - A queued message is never resent, and stalled text sends retry a bounded number of times; local pictures require a newly staged native chip and an image-bearing transcript receipt, with uncertain delivery left visible and never retried as text — test: `tests/reading-ui.test.cjs` › "unrelated user records cannot discard a stalled prompt; retries stay bounded and queued prompts never resend"; "an unaccepted picture stays in the composer instead of sending a false image echo"; "a matching text receipt cannot acknowledge missing pictures, and a later image update can"
 - Editing keys are sent only for what the CLI's screen shows unambiguously, never guessed from prose — a guessed key edits the wrong text — test: `tests/reading-ui.test.cjs` › "ambiguous prose on both sides of an image never causes guessed editing keystrokes"

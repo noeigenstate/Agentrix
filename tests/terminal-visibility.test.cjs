@@ -171,10 +171,10 @@ function elements(node) {
   return [node, ...React.Children.toArray(node.props?.children).flatMap(elements)];
 }
 
-test('launcher reserves a dedicated agent terminal without starting, writing to or restarting a shell', async t => {
+test('launcher reserves a dedicated native Codex terminal without starting, writing to or restarting a shell; Claude has no native mode', async t => {
   const previous = globalThis.window;
   t.after(() => { if (previous) globalThis.window = previous; else delete globalThis.window; });
-  for (const agent of ['claude', 'codex']) await t.test(agent, async () => {
+  for (const agent of ['codex']) await t.test(agent, async () => {
     const calls = [], terminals = [terminal('earlier-spare', { status: 'exited' }), terminal('busy-shell')];
     const before = structuredClone(terminals);
     let stateIndex = 0;
@@ -190,7 +190,8 @@ test('launcher reserves a dedicated agent terminal without starting, writing to 
       useState: initial => [[null, 'native', null, { codex: { installed: true }, claude: { installed: true } }][stateIndex++] ?? initial, () => {}], useEffect() {},
     } });
     const tree = AgentLauncher({ terminalId: 'busy-shell', projectId: 'p', onAction: async promise => { const result = await promise; assert.equal(result.ok, true); return result.value; }, onOpenTerminal() {} });
-    assert.ok(elements(tree).some(node => node.props?.role === 'radio' && node.props['aria-checked'] && node.props.children === '原生审批'));
+    assert.ok(elements(tree).some(node => node.props?.role === 'radio' && node.props['aria-checked'] && node.props.children === 'Codex 原生终端'));
+    assert.equal(elements(tree).some(node => node.props?.className === 'agent-launcher-agent is-claude'), false, 'Claude has no native mode');
     elements(tree).find(node => node.props?.className === `agent-launcher-agent is-${agent}`).props.onClick();
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(calls, [['add', 'p', false], ['launch', 'new', agent, 'native']]);

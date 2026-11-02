@@ -29,7 +29,7 @@ test('authenticated dispatch events populate groups, replace live totals, show d
   assert.equal(f.send(launch), true);
   let group = f.calls.snapshot('Parent service')[0];
   assert.equal(group.agent, 'Codex'); assert.equal(group.provider, null); assert.equal(group.running, 1);
-  assert.deepEqual(group.items, [{ state: 'running', role: '执行', title: launch.title, failure: null }]);
+  assert.deepEqual(group.items, [{ state: 'running', role: '执行', title: launch.title, failure: null, id: `dispatch:${launch.id}`, startedAt: launch.startedAt, endedAt: null, viewable: false }]);
   assert.equal(f.send(rate(launch.id)), true);
   assert.equal(f.send(rate(launch.id, { outputTokens: 20, activeMs: 500 })), false, 'stale totals cannot regress');
   assert.equal(f.calls.snapshot()[0].rate.outputTokens, 50);
@@ -160,7 +160,7 @@ test('dispatch-end accepts optional skill proposal counts without breaking old h
 test('roundtable is an authenticated role and does not change parent completion', t => {
   const f = session(t), launch = start(undefined, { role: '圆桌' });
   assert.equal(f.send(launch), true);
-  assert.deepEqual(f.calls.snapshot()[0].items[0], { state: 'running', role: '圆桌', title: launch.title, failure: null });
+  assert.deepEqual(f.calls.snapshot()[0].items[0], { state: 'running', role: '圆桌', title: launch.title, failure: null, id: `dispatch:${launch.id}`, startedAt: launch.startedAt, endedAt: null, viewable: false });
   assert.equal(f.send(start(undefined, { role: 'roundtable' })), false, 'only the explicit event role is accepted');
   f.send(end(launch.id));
   assert.equal(f.calls.snapshot()[0].items[0].state, 'done');
@@ -213,7 +213,8 @@ test('dispatched workers belong to the terminal session: shown without an agent 
   const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const { callsOf, dispatchedOnly } = vm.runInNewContext(source.slice(source.indexOf('function callsOf('), source.indexOf('function startUsage('))
-    + '\n({ callsOf, dispatchedOnly });', { AgentCalls, scheduleState: () => {} });
+    + '\n({ callsOf, dispatchedOnly });', { AgentCalls, scheduleState: () => {}, path, os: require('node:os'),
+      claudeConfigDir: () => path.join(require('node:os').tmpdir(), 'no-claude'), sessions: new Map(), send: () => {}, dashboardWindow: null });
   const s = { terminalId: 'terminal', sessionKey: 'test-key' }, project = { kind: 'local' };
   assert.equal(dispatchedOnly(s), null, 'no rows, no pane data');
   const launch = start();
