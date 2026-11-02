@@ -1,28 +1,34 @@
-// The dashboard's chart arithmetic: which models become series, how they are told apart without colour, and where
-// things go on a plot. Pure, so the SVG components only draw.
-import type { DashboardKindRate, DashboardModelRow, DashboardSpeedPoint } from '../../shared/dashboard-types';
+// The dashboard's chart arithmetic: how a model is told apart, which days a series covers, and where things go on a plot.
+// Pure, so the SVG components only draw.
+import type { DashboardDailyPoint, DashboardKindRate, DashboardSpeedPoint, DashboardSummary } from '../../shared/dashboard-types';
 import { modelShort } from './format';
 
-export type Shape = 'circle' | 'square' | 'diamond' | 'triangle';
-// A model keeps its shape everywhere (tables and charts); the chart colour, dash and bar texture are per chart slot.
-export const SHAPES: readonly Shape[] = ['circle', 'square', 'diamond', 'triangle'];
-export const DASHES = ['', '6 4', '10 3 2 3'] as const;
-export const MAX_SERIES = DASHES.length;
+export type Shape = 'circle' | 'square' | 'diamond' | 'triangle' | 'inverted' | 'hexagon';
+export const SHAPES: readonly Shape[] = ['circle', 'square', 'diamond', 'triangle', 'inverted', 'hexagon'];
+// The page's categorical palette (--m-0..5 in dashboard.css). The models told apart since the first dashboard keep their slot;
+// any other model takes the next free one, and past six the colour repeats with another shape, so a (colour, shape) pair stays unique.
+export const PALETTE = 6;
+const KNOWN = ['opus', 'sonnet', 'sol', 'terra', 'haiku', 'luna'];
 
-export type Series = { model: string; label: string; shape: Shape; slot: number };
+export type Look = { slot: number; colour: number; shape: Shape };
+export const lookOf = (slot: number): Look => ({ slot, colour: slot % PALETTE, shape: SHAPES[(slot + Math.floor(slot / PALETTE)) % SHAPES.length] });
 
-export const shapeOf = (models: DashboardModelRow[], model: string): Shape => SHAPES[Math.max(0, models.findIndex(row => row.model === model)) % SHAPES.length];
-
-// The models a chart can draw: the first MAX_SERIES (in the table's order) that have a value; the rest only in the data table.
-export function chartSeries(models: DashboardModelRow[], withData: Set<string>) {
-  const ordered = models.map(row => row.model).filter(model => withData.has(model));
-  const extra = [...withData].filter(model => !ordered.includes(model));
-  const all = [...ordered, ...extra];
-  const series: Series[] = all.slice(0, MAX_SERIES).map((model, slot) => ({ model, label: modelShort(model), shape: shapeOf(models, model), slot }));
-  return { series, all, hidden: all.length - series.length };
+// One look per model for the whole page: every chart, the key and the tables read the same map.
+export function modelLooks(models: Iterable<string>) {
+  const looks = new Map<string, Look>(), taken = new Set<number>();
+  let next = KNOWN.length;
+  for (const model of [...new Set(models)].sort()) {
+    const known = KNOWN.indexOf(modelShort(model).toLowerCase()), slot = known >= 0 && !taken.has(known) ? known : next++;
+    taken.add(slot);
+    looks.set(model, lookOf(slot));
+  }
+  return looks;
 }
 
-export const modelsWithRate = (kinds: DashboardKindRate[]) => new Set(kinds.filter(row => row.firstPassRate !== null).map(row => row.model));
+// Every model any part of the summary mentions.
+export const summaryModels = (summary: Pick<DashboardSummary, 'models' | 'daily' | 'kinds' | 'speed' | 'live'>) =>
+  [...summary.models, ...summary.daily, ...summary.kinds, ...summary.speed, ...summary.live.running].map(item => item.model);
+
 export const modelsWithSpeed = (speed: DashboardSpeedPoint[]) => new Set(speed.filter(point => point.tokensPerSecond !== null).map(point => point.model));
 
 // The smallest 1, 2 or 5 times a power of ten that holds the value, so the top gridline is a round number.
@@ -58,6 +64,14 @@ export function runs(values: (number | null)[]) {
 // yyyy-mm-dd as a day count, so a gap of idle days takes its width on the axis.
 export const dayNumber = (day: string) => { const [year, month, date] = day.split('-').map(Number); return Math.round(Date.UTC(year, month - 1, date) / 86_400_000); };
 
+const pad = (value: number) => String(value).padStart(2, '0');
+// The local calendar day of a time as yyyy-mm-dd, and the `count` days ending with that one, oldest first (a model's 14-day trend).
+export const localDay = (at: number) => { const date = new Date(at); return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`; };
+export function recentDays(at: number, count: number) {
+  const date = new Date(at);
+  return Array.from({ length: count }, (_, back) => localDay(new Date(date.getFullYear(), date.getMonth(), date.getDate() - (count - 1 - back), 12).getTime()));
+}
+
 // The index of the position nearest to x.
 export function nearest(xs: number[], x: number) {
   let best = 0;
@@ -76,6 +90,20 @@ export function speedByDay(speed: DashboardSpeedPoint[]): SpeedDay[] {
   return [...days.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([day, values]) => ({ day, values }));
 }
 
+export type RunDay = { day: string; runs: Record<string, number>; total: number; passes: number };
+// One row per local day of the daily series, oldest first, with each model's run count and the confirmed first passes of the day.
+export function runsByDay(daily: DashboardDailyPoint[]): RunDay[] {
+  const days = new Map<string, RunDay>();
+  for (const point of daily) {
+    const entry = days.get(point.day) ?? { day: point.day, runs: {}, total: 0, passes: 0 };
+    entry.runs[point.model] = (entry.runs[point.model] ?? 0) + point.runs;
+    entry.total += point.runs;
+    entry.passes += point.firstPass;
+    days.set(point.day, entry);
+  }
+  return [...days.values()].sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0);
+}
+
 export type KindGroup = { kind: string; rates: Record<string, { rate: number | null; runs: number }> };
 const KIND_ORDER = ['core', 'frontend', 'test', 'ui-check', 'docs', 'small', 'review', 'investigate', 'roundtable'];
 // One group per task kind, known kinds in their usual order and any other after them.
@@ -89,6 +117,12 @@ export function kindGroups(kinds: DashboardKindRate[]): KindGroup[] {
   const rank = (kind: string) => KIND_ORDER.indexOf(kind) < 0 ? KIND_ORDER.length : KIND_ORDER.indexOf(kind);
   return [...groups.values()].sort((a, b) => rank(a.kind) - rank(b.kind) || (a.kind < b.kind ? -1 : 1));
 }
+
+// A heat cell's step on the five-step slate ramp (1 lightest in dark, darkest in light: more is always further along the ramp).
+// A first-pass rate spans 45%..100% of the ramp; a count spans 0..the largest count shown.
+const step = (ratio: number) => Math.min(5, Math.max(1, Math.ceil(ratio * 5)));
+export const rateStep = (rate: number) => step((rate - 0.45) / 0.55);
+export const countStep = (value: number, max: number) => max > 0 ? step(value / max) : 1;
 
 // The share each phase takes of a round's measured build time; a phase with no runs takes none.
 export function phaseShares(phases: Record<string, number | null>) {

@@ -1,22 +1,28 @@
 /* The dashboard window. Tokens come from themes.css and the buttons, title bar and Select from the shared styles; this file only lays the page out.
    Spacing 2 4 8 12 16 24 32. Radius: 8 controls, small wells and tips; 12 cards; pill for tags; 0 for bars. Type: 48/600 the one hero figure, 16/600 the other
    figures, 14/600 panel titles and buttons, 13/400 body, 12/400 labels, hints and axes. Controls are 32px high.
-   One named exception to "tokens only": the three chart colours, which are content (they tell series apart together with shape, line style and texture), not interface. */
-.dash { --chart-1: #3987e5; --chart-2: #d95926; --chart-3: #199e70; display: flex; flex-direction: column; height: 100%; background: var(--bg-app); font: 400 13px/20px var(--font-ui); }
-:root[data-theme="light"] .dash { --chart-1: #2a78d6; --chart-2: #eb6834; --chart-3: #1baf7a; }
+   Named exceptions to "tokens only", all content rather than interface: --m-0..5, the six model colours (a model is told apart by this colour and a shape together,
+   in the key and in every chart), and --r1..5 with --rework, the slate ramp that shades heat cells and round phases and the one red of rework. Each ramp step has its own ink. */
+.dash { --m-0: #3987e5; --m-1: #d95926; --m-2: #199e70; --m-3: #c98500; --m-4: #d55181; --m-5: #9085e9;
+  --r1: #2e3642; --r2: #435166; --r3: #5a6d85; --r4: #8197b3; --r5: #b3c4dc; --rework: #e66767;
+  --r-ink-1: var(--text-1); --r-ink-2: var(--text-1); --r-ink-3: var(--text-1); --r-ink-4: var(--bg-app); --r-ink-5: var(--bg-app);
+  display: flex; flex-direction: column; height: 100%; background: var(--bg-app); font: 400 13px/20px var(--font-ui); }
+:root[data-theme="light"] .dash { --m-0: #2a78d6; --m-1: #eb6834; --m-2: #1baf7a; --m-3: #eda100; --m-4: #e87ba4; --m-5: #6250d6;
+  --r1: #e4e9f0; --r2: #bcc8d8; --r3: #8c9db5; --r4: #5f7390; --r5: #34465f; --rework: #e34948;
+  --r-ink-4: var(--bg-card); --r-ink-5: var(--bg-card); }
 .dash :is(h2, p) { margin: 0; }
 .dash b, .dash strong { font-weight: 600; }
-.dash-defs { position: absolute; }
-.dash .s0 { --ink: var(--chart-1); }
-.dash .s1 { --ink: var(--chart-2); }
-.dash .s2 { --ink: var(--chart-3); }
+/* The model picked in the key leaves the others dim in every chart and table. */
+.dash .dim { opacity: 0.25; }
+.dash :is(.dim, .seg, .live-item, .mini-bars > div) { transition: opacity 0.12s linear; }
 
 /* Title bar: the shared 40px bar; macOS keeps its own window buttons at the left, so a 78px spacer (the main title bar's) keeps the title clear of them. */
 .dash-title { margin-left: 16px; font-size: 14px; font-weight: 600; white-space: nowrap; }
 :root[data-platform="darwin"] .titlebar::before { content: ""; flex: none; width: 78px; }
 .dash-note { min-width: 0; margin-left: 16px; overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 
-.dash-main { display: flex; flex: 1; flex-direction: column; gap: 16px; min-height: 0; padding: 16px; overflow-y: auto; border-top: 1px solid var(--divider); }
+.dash-main { display: flex; flex: 1; flex-direction: column; gap: 16px; min-height: 0; padding: 16px; overflow-y: auto; border-top: 1px solid var(--divider); transition: opacity 0.12s linear; }
+.dash-main.is-refetch { opacity: 0.6; }
 .dash-main > .empty { border: 1px solid var(--panel-line); border-radius: 12px; background: var(--bg-card); }
 .dash { --panel-line: var(--bg-card); }
 :root[data-theme="light"] .dash { --panel-line: var(--border); }
@@ -37,13 +43,26 @@
 .content { display: flex; flex-direction: column; gap: 16px; }
 .kpis { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 16px; }
 .kpi, .panel { min-width: 0; border: 1px solid var(--panel-line); border-radius: 12px; background: var(--bg-card); }
-.kpi { padding: 12px 16px; }
+.kpi { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; }
 .kpi .label { color: var(--text-2); font-size: 12px; }
-.kpi .value { font-size: 16px; line-height: 24px; font-weight: 600; }
+.kpi .value { font-size: 16px; line-height: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
 /* The one emphasis is size and space: a wider tile, more padding and a 48px figure, in the same card as the others. */
 .kpi.hero { padding: 24px 16px; }
 .kpi.hero .value { font-size: 48px; line-height: 56px; }
 .kpi .delta { color: var(--text-3); font-size: 12px; }
+/* Small bars and the quota meter sit at the foot of their tile, so the tiles of a row end on one line. */
+.kpi > :is(.spark, .meter) { margin-top: auto; }
+.spark { display: block; width: 100%; height: 24px; }
+.kpi .spark { padding-top: 8px; box-sizing: content-box; }
+.hero-split { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 24px; }
+.hero-split .spark { margin-top: 12px; }
+.mini-bars { display: flex; flex-direction: column; gap: 4px; }
+.mini-bars > div { display: grid; grid-template-columns: 88px minmax(0, 1fr) 32px; align-items: center; gap: 8px; height: 16px; color: var(--text-2); font-size: 12px; }
+.mini-bars i { display: block; height: 8px; background: var(--bg-input); }
+.mini-bars b { display: block; height: 8px; }
+.mini-bars > div > span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.meter { height: 8px; background: var(--bg-input); }
+.meter b { display: block; height: 8px; background: var(--usage); }
 
 .panel { padding: 16px; }
 .panel h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 8px; font-size: 14px; line-height: 20px; font-weight: 600; }
@@ -103,29 +122,33 @@ table.incident { min-width: 820px; }
 .task-table .task-project { min-width: 96px; max-width: 160px; white-space: normal; overflow-wrap: anywhere; }
 .task-table th:first-child { z-index: 3; }
 
-/* Round phases: grey blocks in order, rework a different step, with its share written beside the bar. */
+/* Round phases: three steps of the slate ramp in order, rework in red hatch, with its share written beside the bar. */
 .stagecell { display: flex; align-items: center; gap: 12px; min-width: 240px; }
 .stagebar { display: flex; flex: 1; gap: 2px; height: 8px; }
-.stagebar i, .swatch { display: block; height: 8px; background: var(--text-disabled); }
-.stagebar i.rework, .swatch.rework { background: var(--text-2); }
+.stagebar i, .swatch { display: block; height: 8px; }
+:is(.stagebar i, .swatch).roundtable { background: var(--r2); }
+:is(.stagebar i, .swatch).build { background: var(--r3); }
+:is(.stagebar i, .swatch).review { background: var(--r4); }
+:is(.stagebar i, .swatch).rework { background: repeating-linear-gradient(45deg, var(--rework) 0 4px, var(--bg-card) 4px 6px); }
 .stagecell small { color: var(--text-2); font-size: 12px; white-space: nowrap; }
 .swatch { display: inline-block; width: 16px; height: 12px; margin-right: 4px; vertical-align: -2px; }
 
-/* Charts: legend and end labels name every series; shape, line style and texture tell them apart; the tip and the data table give the numbers. */
+/* Charts: legend and end labels name every series; colour and shape tell them apart; the tip and the data table give the numbers. */
 .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 8px; color: var(--text-2); font-size: 12px; }
 .legend > span { display: inline-flex; align-items: center; gap: 8px; }
-svg.chart { display: block; width: 100%; height: 180px; }
+svg.chart { display: block; width: 100%; }
 svg.chart text { fill: var(--text-3); font-size: 12px; font-family: var(--font-ui); }
-svg.chart text.value { fill: var(--text-2); }
 svg.chart text.end { fill: var(--text-1); font-weight: 600; }
 .chart .grid { stroke: var(--divider); }
 .chart .cross { stroke: var(--text-3); }
 .chart .hit { fill: transparent; }
-.chart .line, .legend .line { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; }
-.chart .marker, .legend .marker { fill: var(--ink); stroke: var(--bg-card); stroke-width: 1; }
-.chart .bar, .legend .bar { stroke: var(--ink); stroke-width: 1; }
-.pattern-ground { fill: var(--bg-card); }
-.pattern-ink { fill: var(--ink); }
+.chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .marker { stroke: var(--bg-card); stroke-width: 1; }
+.chart .bubble { stroke: var(--bg-card); stroke-width: 2; }
+.donut { display: grid; grid-template-columns: 144px minmax(0, 1fr); align-items: center; gap: 24px; }
+.donut svg text.centre { fill: var(--text-1); font-size: 16px; font-weight: 600; }
+.share-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.share-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 details.data { margin-top: 8px; }
 details.data summary { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-control); color: var(--text-2); font: 600 14px/20px var(--font-ui); cursor: pointer; list-style: none; }
 details.data summary::-webkit-details-marker { display: none; }
@@ -134,6 +157,49 @@ details.data[open] summary { border-color: var(--border-hover); background: var(
 details.data .scroll { margin-top: 8px; }
 .tip { position: fixed; z-index: 60; padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-menu); box-shadow: 0 8px 24px rgba(0, 0, 0, .45); color: var(--text-1); font-size: 12px; pointer-events: none; }
 :root[data-theme="light"] .tip { box-shadow: 0 8px 24px rgb(from var(--text-1) r g b / .14); }
+
+/* The model key above the charts, the freshness chip and the live strip. */
+.keybar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; background: var(--bg-app); }
+.keybar .cap { margin-right: 8px; color: var(--text-3); font-size: 12px; }
+.keybar .button small { color: var(--text-3); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.keybar .button[aria-pressed="true"] small { color: var(--text-1); }
+.fresh { display: inline-flex; align-items: center; gap: 4px; height: 32px; color: var(--text-2); }
+.fresh .state { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; }
+.fresh .state b { color: var(--text-1); }
+.fresh .refresh { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); font: 600 14px/20px var(--font-ui); cursor: pointer; transition: background 0.12s linear, color 0.12s linear; }
+.fresh .refresh:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-1); }
+.fresh .refresh:disabled { cursor: default; }
+.fresh .refresh:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.live-dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 999px; background: var(--running); }
+.live-dot::after { content: ""; position: absolute; inset: 0; border: 1px solid var(--running); border-radius: 999px; animation: live-ring 1.8s ease-out infinite; }
+.live-dot.is-refetch { background: transparent; box-shadow: inset 0 0 0 2px var(--running); }
+.live-dot.is-stale { background: transparent; box-shadow: inset 0 0 0 2px var(--text-3); }
+.live-dot:is(.is-refetch, .is-stale)::after { display: none; }
+@keyframes live-ring { from { transform: scale(1); opacity: 0.9; } to { transform: scale(2.6); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .live-dot::after { display: none; } }
+.tag.run { gap: 8px; margin-right: 4px; }
+.live-item .tag { background: var(--bg-selected); }
+.live-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
+.live-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0 16px; padding: 8px 12px; border-radius: 8px; background: var(--bg-hover); }
+.live-item .l1 { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 600; }
+.live-item .l2 { min-width: 0; overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.live-item .r1 { color: var(--text-3); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.live-item .r2 { color: var(--text-1); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.empty-line { color: var(--text-2); }
+
+/* Shaded tables: five steps of the slate ramp, each with the ink that reads on it; a missing record is a plain dash. */
+.heat { font-variant-numeric: tabular-nums; }
+.heat .cell { min-width: 48px; text-align: center; font-size: 12px; font-weight: 600; }
+.heat .cell.na { background: var(--bg-hover); color: var(--text-3); font-weight: 400; }
+.heat td.cell { border-bottom-color: var(--bg-card); }
+.scale { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--text-3); font-size: 12px; }
+.scale .ramp { display: flex; gap: 2px; }
+.scale .ramp i { display: block; width: 16px; height: 8px; }
+:is(.cell, .ramp i).step-1 { background: var(--r1); color: var(--r-ink-1); }
+:is(.cell, .ramp i).step-2 { background: var(--r2); color: var(--r-ink-2); }
+:is(.cell, .ramp i).step-3 { background: var(--r3); color: var(--r-ink-3); }
+:is(.cell, .ramp i).step-4 { background: var(--r4); color: var(--r-ink-4); }
+:is(.cell, .ramp i).step-5 { background: var(--r5); color: var(--r-ink-5); }
 
 /* Suggestions: the owner adopts, dismisses or takes back; each item's title and kind are words, never colour. */
 .advice { display: flex; flex-direction: column; }
@@ -154,6 +220,8 @@ details.data .scroll { margin-top: 8px; }
 /* Narrow window (the minimum is 820): KPIs two by two, side-by-side panels stack, the incident table becomes cards. */
 @media (max-width: 1000px) {
   .kpis { grid-template-columns: repeat(2, 1fr); }
+  .hero-split, .live-list { grid-template-columns: 1fr; }
+  .hero-split { gap: 12px; }
   .two { grid-template-columns: 1fr; }
   .wide-only { display: none; }
   .stack-only { display: flex; flex-direction: column; }

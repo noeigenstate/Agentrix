@@ -7,6 +7,7 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 - `src/features/agents/ResetCountdown.tsx`
 - `src/features/agents/reset-count.ts`
 - `src/features/agents/action-text.ts`
+- `src/features/agents/subagent-splits.ts`
 - `electron/features/agents/agent-calls.cjs`
 - `electron/features/agents/agent-usage.cjs`
 - `electron/features/agents/subagent-feed.cjs`
@@ -18,15 +19,15 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 - `electron/reading-history*.cjs`
 
 ## Interface
-- `ActivityPane` (`src/features/agents/ActivityPane.tsx`) — the pane; rendered by the workspace's ProjectPanel from a `ProjectTerminal`
+- `ActivityPane` (`src/features/agents/ActivityPane.tsx`) — the pane; rendered by the workspace's ProjectPanel from a `ProjectTerminal`; the file also exports CALL_STATES, elapsedClock, failureWord and rateValue, which the sub-agent view reuses, and its called-model rows open a sub-agent view
+- `useSplits` (`src/features/agents/subagent-splits.ts`) — the sub-agent views the owner opened beside a terminal (transient, at most two per terminal); the file also exports splitsOf, closeSplit, limitSplits and splitLimit
 - `actionText` (`src/features/agents/action-text.ts`) — the words for the agent's current step (with `stepVerb`), shared by the reading view and the decision inbox
 - `UsageMeter` (`electron/features/agents/agent-usage.cjs`) — per-session meter main.cjs feeds records to and publishes as `agentUsage` (with `claudeProvider`, `codexProvider`, `claudeAccount`, `claudeAccountFiles`)
 - `agentSettings` (`electron/features/agents/agent-settings.cjs`) — model, effort and fast mode from an agent's own records; used by main.cjs and the dispatch helper
 - `TokenRates` (`electron/features/agents/token-rate.cjs`) — output tokens over response time; the one rate calculation, also the dispatch helper's
 - `CodexAccountUsage` (`electron/features/agents/codex-account-usage.cjs`) — the read-only Codex plan-limit and reset-count client; main.cjs uses `openProject`/`closeProject` for private, serialized project-check lifetimes and a polling `watch` per active Codex session, sharing a verified account scope
 - `ClaudeAccountUsage` (`electron/features/agents/claude-account-usage.cjs`) — the read-only Claude plan-limit poller (with `readClaudeAccount`); SSH injects a sanitized remote read through features/ssh/claude-account.cjs
-- `dispatch` (`electron/features/agents/agent-calls.cjs`) — `AgentCalls.dispatch(event)`, reached as `session.usage.calls.dispatch` with authenticated events; retains evaluation metadata and invokes the injected finished hook once per accepted end
-- `feed` (`electron/features/agents/agent-calls.cjs`) — `AgentCalls.feed(callId)` serves `terminal:subagent-feed(terminalId, callId)`: a bounded read-only snapshot (newest 400 entries) of a sub-agent's or dispatched worker's conversation, pushed as `terminal:subagent-feed` events at most 4 per second; items carry stable `id` (`agent:<toolUseId>`, `dispatch:<id>`), `startedAt`, `endedAt` and `viewable`; `running()` feeds the dashboard's live strip
+- `dispatch` (`electron/features/agents/agent-calls.cjs`) — `AgentCalls.dispatch(event)`, reached as `session.usage.calls.dispatch` with authenticated events; retains evaluation metadata and invokes the injected finished hook once per accepted end; `AgentCalls.feed(callId)` — serves `terminal:subagent-feed(terminalId, callId)`: a bounded read-only snapshot (newest 400 entries) of a sub-agent's or dispatched worker's conversation, pushed as `terminal:subagent-feed` events at most 4 per second; items carry stable `id` (`agent:<toolUseId>`, `dispatch:<id>`), `startedAt`, `endedAt` and `viewable`; `running()` feeds the dashboard's live strip
 - `createInterventions` (`electron/features/agents/interventions.cjs`) — `{ resolve, sendParentPrompt }` → `interveneAgent` / `stopAgent` for `agents:intervene` / `agents:stop`; targets come only from main's own call bindings, and the planner is told of every intervention
 - `ReadingHistory` (`electron/reading-history.cjs`) — validates restored local transcript identities, prepares the latest page and serves `terminal:conversationPage(id, { key, cursor })` through agents IPC; `beforeCursor` alone indicates earlier history
 

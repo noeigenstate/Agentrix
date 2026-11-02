@@ -236,6 +236,14 @@ async function checkTheme(theme, output, results) {
     assert.match(await kpi('一次通过率'), /^\d+%$|^—$/);
     assert.ok(await dash.locator('.panel', { has: dash.getByRole('heading', { name: /模型对比/ }) }).locator('tbody tr').count() >= 2, 'the model table lists the seeded models');
     assert.equal(await dash.locator('.kpi.hero').count(), 1, 'one hero figure per page');
+    // The key above the charts: picking a model dims the others across the page, picking it again lifts the dimming.
+    const chips = dash.locator('.keybar .button');
+    assert.ok(await chips.count() >= 2, 'the key lists the seeded models');
+    await chips.first().click();
+    assert.equal(await dash.locator('.keybar .button[aria-pressed="true"]').count(), 1, 'one model is picked');
+    assert.ok(await dash.locator('.dash .dim').count() > 0, 'the other models are dimmed');
+    await chips.first().click();
+    assert.equal(await dash.locator('.dash .dim').count(), 0, 'picking it again lifts the dimming');
 
     // Model cells: mouse, Enter and Space open exactly that model's tasks; closing restores the owning control's focus.
     const modelControl = model => dash.locator('.model-toggle', { hasText: model === 'claude-opus-5-5' ? 'Opus 5.5' : model });
@@ -297,15 +305,15 @@ async function checkTheme(theme, output, results) {
         await tab(page); await new Promise(resolve => setTimeout(resolve, 250));
         if (name === 'models') {
           // The long id from the keyboard: Enter opens its task list, whose heading carries the whole name, wrapped if need be but never cut.
-          // Measured as it stands right after Enter: the test scrolls nothing, so the page itself must bring the heading into view.
+          // Measured as it stands right after Enter: the test scrolls nothing, so the page itself must bring the heading into view, below the sticky model key.
           const longControl = dash.getByRole('button', { name: LONG_MODEL, exact: true });
           await dash.locator('.dash-main').evaluate(node => { node.scrollTop = 0; });
           await longControl.focus(); await longControl.press('Enter');
           await tasks.waitFor();
           await dash.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
           const heading = await dash.locator('#dashboard-model-tasks-title').evaluate(node => {
-            const box = node.getBoundingClientRect(), main = document.querySelector('.dash-main').getBoundingClientRect();
-            return { text: node.textContent, cut: node.scrollWidth > node.clientWidth + 1, inside: box.left >= 0 && box.right <= innerWidth && box.top >= main.top && box.bottom <= main.bottom,
+            const box = node.getBoundingClientRect(), main = document.querySelector('.dash-main').getBoundingClientRect(), key = document.querySelector('.keybar').getBoundingClientRect();
+            return { text: node.textContent, cut: node.scrollWidth > node.clientWidth + 1, inside: box.left >= 0 && box.right <= innerWidth && box.top >= Math.max(main.top, key.bottom) && box.bottom <= main.bottom,
               lines: Math.round(box.height / parseFloat(getComputedStyle(node).lineHeight)), focusOnButton: document.activeElement.getAttribute('aria-expanded') === 'true' };
           });
           assert.ok(heading.text.includes(LONG_MODEL) && !heading.cut && heading.inside && heading.focusOnButton, `the long model's task heading right after Enter at ${width}×${height}: ${JSON.stringify(heading)}`);

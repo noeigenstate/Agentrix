@@ -14,7 +14,7 @@ function PhaseBar({ phases }: { phases: DashboardRound['phases'] }) {
   if (!shown.length) return <span className="muted">{NONE}</span>;
   return <div className="stagecell">
     <div className="stagebar" role="img" aria-label={shown.map(([key, name]) => `${name} ${share(shares[key])}%`).join(' · ')}>
-      {shown.map(([key]) => <i key={key} className={key === 'rework' ? 'rework' : undefined} style={{ width: `${shares[key] * 100}%` }} />)}
+      {shown.map(([key]) => <i key={key} className={key} style={{ width: `${shares[key] * 100}%` }} />)}
     </div>
     <small>{t('返工 {percent}%', { percent: share(shares.rework) })}</small>
   </div>;
@@ -23,9 +23,7 @@ function PhaseBar({ phases }: { phases: DashboardRound['phases'] }) {
 export function RoundTable({ rounds, showProject }: { rounds: DashboardRound[]; showProject: boolean }) {
   const columns = [t('轮次'), t('任务'), t('圆桌问题'), t('审查发现'), t('返工'), t('越界'), t('事故'), t('耗时'), t('各阶段用时')];
   return <>
-    <div className="legend">
-      <span><i className="swatch" />{t('圆桌 · 开发 · 审查')}</span><span><i className="swatch rework" />{t('返工')}</span>
-    </div>
+    <div className="legend">{phaseNames().map(([key, name]) => <span key={key}><i className={`swatch ${key}`} />{key === 'rework' ? t('返工（斜纹）') : name}</span>)}</div>
     <ScrollRegion label={t('每轮经过表，可横向滚动；轮次列固定')}>
       <table className="sticky wide">
         <thead><tr>{columns.map((name, index) => <th key={name} className={index > 0 && index < 8 ? 'num' : undefined}>{name}</th>)}</tr></thead>

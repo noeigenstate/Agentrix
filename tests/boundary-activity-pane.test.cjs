@@ -24,3 +24,21 @@ test('the pane never acts on its own: one /usage after the countdown, read-only 
   assert.deepEqual([...claude.matchAll(/\bfetch\(([^,]+), \{ method: '([A-Z]+)'/g)].map(match => match.slice(1)), [['USAGE_URL', 'GET']]);
   assert.doesNotMatch(claude, /writeFile|oauth\/token|refresh_token/, 'never renews or writes credentials');
 });
+
+// A sub-agent's view is the owner's to open and its conversation only reads: nothing opens one by itself, nothing in it writes to a terminal,
+// and the owner's word for the agent leaves through two main-process calls only.
+test('a sub-agent view opens only on the owner’s click on a row, reads the sub-agent’s record and speaks to it through the main process only', () => {
+  const walk = dir => fs.readdirSync(path.join(__dirname, '..', dir), { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(`${dir}/${entry.name}`) : [`${dir}/${entry.name}`]);
+  const callers = walk('src').filter(file => /\.tsx?$/.test(file) && /\b(openSplit|toggleSplit)\(/.test(read(file)));
+  assert.deepEqual(callers, ['src/features/agents/ActivityPane.tsx', 'src/features/agents/subagent-splits.ts'], 'only the pane’s row and the store itself');
+  const pane = read('src/features/agents/ActivityPane.tsx');
+  assert.equal(pane.match(/\btoggleSplit\(/g).length, 1);
+  assert.match(pane, /onClick=\{\(\) => toggleSplit\(terminalId, item\.id\)\}/, 'and it is the row button’s click');
+  assert.doesNotMatch(read('src/features/terminal/ProjectTerminals.tsx'), /\b(openSplit|toggleSplit)\(/, 'the grid shows the views, it never opens one');
+  const code = file => read(`src/features/agents/${file}`).replace(/\/\/.*$/gm, ''), view = ['SubagentPane.tsx', 'SubagentInput.tsx', 'subagent-splits.ts'].map(code).join('\n');
+  assert.doesNotMatch(view, /writeTerminal|writeApproval|answerTerminal|resizeTerminal|startTerminal|closeTerminal|restartTerminal|sendToAgent|readClipboard|\.copy\(/, 'no write to a terminal, no input, no clipboard');
+  assert.deepEqual([...view.matchAll(/window\.agentrix\.?(\w*)/g)].map(match => match[1]).sort(), ['', 'interveneAgent', 'stopAgent'], 'the bridge is handed to followFeed whole; the input only intervenes or stops');
+  assert.deepEqual([...new Set([...view.matchAll(/bridge\.(\w+)/g)].map(match => match[1]))].sort(), ['onSubagentFeed', 'subagentFeed'], 'whose only calls are the two feed ones');
+  assert.doesNotMatch(code('SubagentPane.tsx'), /<textarea|<input|contentEditable|interveneAgent|stopAgent/, 'the view itself takes no typing; its input is SubagentInput');
+  assert.equal(code('SubagentInput.tsx').match(/<textarea/g).length, 1, 'one text box, for the owner’s word to the agent');
+});
