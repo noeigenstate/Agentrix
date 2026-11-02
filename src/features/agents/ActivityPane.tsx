@@ -10,6 +10,7 @@ import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { actionText } from './action-text';
 import { ResetCountdown } from './ResetCountdown';
 import { codexResetCount, codexResetsSaid } from './reset-count';
+import { isSplitOpen, toggleSplit, useSplits } from './subagent-splits.ts';
 import './activity-pane.css';
 
 // 1234 → "1.2k", 828400 → "828k", 23898406 → "23.9M": token counts the way a person reads them at a glance.
@@ -28,7 +29,7 @@ export function ActivityPane({ terminal }: { terminal: ProjectTerminal }) {
     {terminal.codexActive ? <MainCard terminal={terminal} /> : <section className="activity-card">
       <p className="activity-empty">{t('在终端里启动 Codex 或 Claude Code 后，这里显示它的主模型、任务、上下文长度和用量。')}</p>
     </section>}
-    {!!calls?.length && <CallsCard calls={calls} />}
+    {!!calls?.length && <CallsCard calls={calls} terminalId={terminal.id} />}
     {terminal.codexActive && <div className="activity-gauges">
       <ContextCard usage={terminal.agentUsage} />
       <UsageCard usage={terminal.agentUsage} terminal={terminal} />
@@ -38,11 +39,15 @@ export function ActivityPane({ terminal }: { terminal: ProjectTerminal }) {
 
 // How fast a model writes, at the right end of its head: the average over its recent replies (output tokens per second of the time it spent writing). The column is a fixed width, so
 // a figure arriving or changing moves nothing. Not yet a finished reply: waiting. Records that cannot be read: a dash, and the tooltip says so.
+// Output tokens per second of the time the replies took; null until a reply has finished.
+export const rateValue = (rate: TokenRate | null | undefined) => rate && rate.samples > 0 && rate.activeMs > 0 ? Math.round(1000 * rate.outputTokens / rate.activeMs) : null;
+
 function Rate({ rate }: { rate: TokenRate | null | undefined }) {
   const partial = rate?.partial ? '\n' + t('（部分记录）') : '';
-  if (rate && rate.samples > 0 && rate.activeMs > 0) {
+  const value = rateValue(rate);
+  if (rate && value !== null) {
     const title = t('平均输出速率：最近 {samples} 条回复，共 {tokens} token，用时 {seconds} 秒', { samples: rate.samples, tokens: exactCount(rate.outputTokens), seconds: (rate.activeMs / 1000).toFixed(1) }) + partial;
-    return <span className="activity-row-end activity-rate is-live" title={title}>{Math.round(1000 * rate.outputTokens / rate.activeMs)} token/s</span>;
+    return <span className="activity-row-end activity-rate is-live" title={title}>{value} token/s</span>;
   }
   if (rate) return <span className="activity-row-end activity-rate" title={t('还没有完成一条回复，暂时没有速率。') + partial}>{t('等待中')}</span>;
   return <span className="activity-row-end activity-rate" title={t('这个模型的记录在这里读不到，所以没有速率。')}>— token/s</span>;
@@ -108,7 +113,7 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
 }
 
 // A call's state: the icon in the row's 16px box and the word at its right. Running is the one colour (the spinner).
-const CALL_STATES = {
+export const CALL_STATES = {
   preparing: { word: '准备中', icon: <Circle size={14} aria-hidden="true" /> },
   running: { word: '运行中', icon: <CircleNotch size={14} weight="bold" className="loading-spinner" aria-hidden="true" /> },
   reviewing: { word: '审核中', icon: <RecordDot size={14} aria-hidden="true" /> },
@@ -117,7 +122,7 @@ const CALL_STATES = {
 const MAX_CALL_ITEMS = 4;
 
 // A dispatched worker that did not finish cleanly, in words in the state column (skills/agent-dispatch).
-function failureWord(failure: NonNullable<AgentCall['items'][number]['failure']>) {
+export function failureWord(failure: NonNullable<AgentCall['items'][number]['failure']>) {
   if (failure.reason === 'unconfirmed') return t('未能启动');
   if (failure.reason === 'capacity') return t('模型满载');
   if (failure.reason === 'killed') return t('已停止');
@@ -127,7 +132,9 @@ function failureWord(failure: NonNullable<AgentCall['items'][number]['failure']>
 
 // The sub-agents the agent called: per model one head (its mark, name, settings, service and rate), then a row for each of its calls
 // (the state's icon, the role and what it does, the state in words). The heading counts every call; a model's calls past the fourth fold into "+N".
-function CallsCard({ calls }: { calls: AgentCall[] }) {
+// A call whose record can be read is one button on the same row: it opens (or closes) a read-only view of that sub-agent beside the conversation.
+export function CallsCard({ calls, terminalId }: { calls: AgentCall[]; terminalId: string }) {
+  const open = useSplits();
   return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
     <h4 className="activity-card-title">{t('调用的模型')}<span className="activity-count">{calls.reduce((sum, call) => sum + call.items.length, 0)}</span></h4>
     <ul className="activity-call-groups">
@@ -136,15 +143,21 @@ function CallsCard({ calls }: { calls: AgentCall[] }) {
         return <li key={JSON.stringify([call.agent, call.provider, call.model, call.effort, call.fast])}>
           <ul className="activity-call-rows">
             <ModelHead agent={call.agent} name={name} effort={call.effort} fast={call.fast} provider={call.provider} title={[call.agent, call.provider, name].filter(Boolean).join(' / ')} rate={call.rate} />
-            {call.items.slice(0, MAX_CALL_ITEMS).map((item, index) => {
-              const failure = item.failure ? failureWord(item.failure) : null;
+            {call.items.slice(0, MAX_CALL_ITEMS).map(item => {
+              const failure = item.failure ? failureWord(item.failure) : null, word = failure ?? t(CALL_STATES[item.state].word), opened = isSplitOpen(open, terminalId, item.id);
               // A dispatched worker that runs other settings than the lead declared says so in its tooltip.
               const declared = item.declared && t('分派时声明 {model} · {effort} · {mode}', { model: modelName(item.declared.model), effort: item.declared.effort ?? t('未报告'), mode: item.declared.fast == null ? t('未报告') : t(item.declared.fast ? '快速' : '普通') });
               const outside = item.failure?.files?.length ? t('改了允许范围之外的文件：{files}', { files: item.failure.files.join('、') }) : null;
-              return <li key={index} className={`is-${item.state}${failure ? ' is-failed' : ''}`} title={[item.title, failure, outside, declared].filter(Boolean).join('\n')}>
+              const cells = <>
                 <span className="activity-row-icon">{failure ? <WarningCircle size={14} weight="fill" aria-hidden="true" /> : CALL_STATES[item.state].icon}</span>
                 <p><span className="activity-call-role">{t(item.role)}</span>{item.title}</p>
-                <span className="activity-row-end">{failure ?? t(CALL_STATES[item.state].word)}</span>
+                <span className="activity-row-end">{word}</span>
+              </>;
+              const hint = item.viewable ? t(opened ? '点击关闭旁边的分屏' : '点击在旁边查看它在做什么') : null;
+              return <li key={item.id} className={`is-${item.state}${failure ? ' is-failed' : ''}`} title={[item.title, failure, outside, declared, hint].filter(Boolean).join('\n')}>
+                {item.viewable
+                  ? <button type="button" className="activity-call-open" aria-pressed={opened} aria-label={t('{role} {title}，{state}', { role: t(item.role), title: item.title, state: word })} onClick={() => toggleSplit(terminalId, item.id)}>{cells}</button>
+                  : cells}
               </li>;
             })}
             {call.items.length > MAX_CALL_ITEMS && <li className="activity-call-more"><span /><p>{t('+{count} 个', { count: call.items.length - MAX_CALL_ITEMS })}</p></li>}

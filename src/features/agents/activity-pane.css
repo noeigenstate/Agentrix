@@ -79,6 +79,13 @@
 .activity-call-rows li.activity-call-more p { font-size: 12px; line-height: 16px; color: var(--flow-faint); }
 .activity-call-rows li.activity-call-more:hover::before { background: none; }
 .activity-call-rows li .activity-row-end { text-align: right; }
+/* A call whose record can be read is one button on the row's own 16 | text | state grid: no new icon and no new colour. Open = the selected fill and a 2px bar, so it reads in grey too. */
+.activity-call-rows li > .activity-call-open { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; width: 100%; height: 32px; margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.activity-call-open:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 8px; }
+.activity-call-rows li:has(> .activity-call-open[aria-pressed="true"])::before { background: var(--bg-selected); }
+.activity-call-open[aria-pressed="true"]::before { content: ''; position: absolute; top: 8px; bottom: 8px; left: -8px; width: 2px; background: var(--select-bar); }
+.activity-call-open[aria-pressed="true"] :is(.activity-call-role, .activity-row-end) { color: var(--flow-ink); }
+.activity-call-rows li:not(.activity-call-head) > .activity-call-open[aria-pressed="true"] p { color: var(--flow-ink); }
 
 /* A metric: label | meter | figure on one 32px line, its caption (a reset time, how much is left, the tokens in and out) under the meter; blocks 8px apart.
    Meter and figure turn to the warning colour from 90%. */
@@ -113,3 +120,29 @@
 .activity-reset-row small { min-width: 0; overflow: hidden; text-align: right; text-overflow: ellipsis; font-size: 12px; line-height: 16px; color: var(--flow-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .activity-reset > .activity-note { padding-left: 24px; }
 .activity-reset-row .activity-row-icon { color: var(--flow-muted); }
+
+/* A sub-agent's read-only view (SubagentPane): a 40px header, the followed conversation, a 40px footer. It narrows by its own width, not the window's. */
+.subagent-split { container-type: inline-size; position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-app); }
+.subagent-head, .subagent-foot { display: flex; flex: none; align-items: center; gap: 8px; height: 40px; padding: 0 8px 0 16px; }
+.subagent-head { border-bottom: 1px solid var(--divider); }
+.subagent-foot { border-top: 1px solid var(--divider); color: var(--text-3); font-size: 12px; }
+.subagent-foot > span:not(.subagent-space) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-foot svg { flex: none; }
+.subagent-space { flex: 1; }
+.subagent-name { min-width: 0; overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-how, .subagent-rate, .subagent-elapsed { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.subagent-elapsed { color: var(--text-2); }
+.subagent-tag { display: inline-flex; flex: none; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--bg-selected); color: var(--text-2); font-size: 12px; white-space: nowrap; }
+.subagent-state.is-running { color: var(--running); }
+.subagent-state:is(.is-done, .is-reviewing) { color: var(--text-1); }
+.subagent-main { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.subagent-body { flex: 1; min-height: 0; padding: 16px 24px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border-hover) transparent; }
+.subagent-body:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.subagent-empty { margin: 0; color: var(--text-2); }
+.subagent-sent { width: fit-content; max-width: 85%; margin: 12px 0 0 auto; padding: 8px 12px; border-radius: 12px; background: var(--bg-selected); color: var(--text-1); font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
+.subagent-sent p { margin: 0; white-space: pre-wrap; }
+.subagent-sent small { display: block; margin-top: 4px; color: var(--text-3); font-size: 12px; }
+.subagent-jump.button { position: absolute; bottom: 12px; left: 50%; z-index: 3; background: var(--bg-menu); transform: translateX(-50%); }
+@container (max-width: 520px) { .subagent-how { display: none; } }
+@container (max-width: 480px) { .subagent-body { padding: 12px 16px; } }
+@container (max-width: 420px) { :is(.subagent-rate, .subagent-role) { display: none; } }

@@ -4,15 +4,15 @@ import { CaretRight } from '@phosphor-icons/react';
 import type { DashboardModelRow, DashboardSummary } from '../../shared/dashboard-types';
 import { t } from '../../shared/i18n';
 import { Marker } from './Charts';
-import { shapeOf } from './chart-math';
 import { costCoverage, costValue, count, decimal, duration, modelLabel, modelWeights, NONE, percent, speed, weightChange } from './format';
-import { ScrollRegion } from './ScrollRegion';
+import { useModels } from './model-look';
 import { ModelTasks } from './ModelTasks';
+import { ScrollRegion } from './ScrollRegion';
 
 const quota = (row: DashboardModelRow) => row.quotaPercent === null ? NONE : `${Math.round(row.quotaPercent)}%`;
 
 export function ModelTable({ summary }: { summary: DashboardSummary }) {
-  const { models, weights, prices, modelRuns } = summary;
+  const { models, weights, prices, modelRuns } = summary, { of } = useModels();
   const [opened, setOpened] = useState<string | null>(null), opener = useRef<HTMLButtonElement | null>(null);
   const expanded = models.find(row => row.model === opened)?.model ?? null;
   function close() { setOpened(null); opener.current?.focus(); }
@@ -25,12 +25,12 @@ export function ModelTable({ summary }: { summary: DashboardSummary }) {
           {models.length === 0 && <tr><td colSpan={columns.length} className="muted">{t('这段时间没有模型的记录')}</td></tr>}
           {models.map(row => {
             const own = modelWeights(weights, row.model);
-            return <tr key={row.model} data-expanded={expanded === row.model}>
+            return <tr key={row.model} className={of(row.model).dim || undefined} data-expanded={expanded === row.model}>
               <td><button type="button" className="button who model-toggle" title={modelLabel(row.model)} aria-label={modelLabel(row.model)} aria-expanded={expanded === row.model}
                 aria-controls={expanded === row.model ? 'dashboard-model-tasks' : undefined}
                 onClick={event => { opener.current = event.currentTarget; setOpened(expanded === row.model ? null : row.model); }}>
                 <CaretRight className="model-caret" size={12} aria-hidden="true" />
-                <Marker shape={shapeOf(models, row.model)} /><span className="model-name">{modelLabel(row.model)}</span>
+                <Marker model={row.model} /><span className="model-name">{modelLabel(row.model)}</span>
               </button></td>
               <td className="num">{row.runs}</td>
               <td className="num">{percent(row.firstPassRate)}</td>

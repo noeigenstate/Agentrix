@@ -22,6 +22,8 @@ split is in use.
 - `src/shared/**`
 - `src/features/agents/agent-screen*.ts`
 - `src/features/agents/AgentBrandIcon.ts`
+- `src/features/agents/SubagentPane.tsx`
+- `src/features/agents/subagent-splits.ts`
 - `src/features/reading/ReadingView.tsx`
 - `src/features/reading/reading-mode.ts`
 - `src/features/workspace/useProjectReorder.ts`

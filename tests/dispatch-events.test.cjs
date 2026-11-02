@@ -213,7 +213,7 @@ test('dispatched workers belong to the terminal session: shown without an agent 
   const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const { callsOf, dispatchedOnly } = vm.runInNewContext(source.slice(source.indexOf('function callsOf('), source.indexOf('function startUsage('))
-    + '\n({ callsOf, dispatchedOnly });', { AgentCalls, scheduleState: () => {}, path, os: require('node:os'),
+    + '\n({ callsOf, dispatchedOnly });', { AgentCalls, createInterventions: require('../electron/features/agents/interventions.cjs').createInterventions, scheduleState: () => {}, path, os: require('node:os'),
       claudeConfigDir: () => path.join(require('node:os').tmpdir(), 'no-claude'), sessions: new Map(), send: () => {}, dashboardWindow: null });
   const s = { terminalId: 'terminal', sessionKey: 'test-key' }, project = { kind: 'local' };
   assert.equal(dispatchedOnly(s), null, 'no rows, no pane data');

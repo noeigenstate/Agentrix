@@ -117,6 +117,8 @@ test("typing, selecting or copying in a small card's terminal never expands the 
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }),
     './AgentLauncher': { AgentLauncher: () => null }, './TerminalPane': { TerminalPane: () => null },
     './ReadingView': { ReadingView: () => null },
+    './SubagentPane': { SubagentPane: () => null },
+    './subagent-splits.ts': { closeSplit: noop, limitSplits: noop, splitLimit: () => 2, splitsOf: () => [], useSplits: () => [] },
     './reading-mode': { useTerminalChoice: () => [], syncReading: noop, setReading: noop, readingShown: () => false },
     './useProjectReorder': { TERMINAL_SPLITS: {}, useReorder: () => ({}) }, './i18n': { t: text => text },
   });
