@@ -19,10 +19,12 @@ import './activity-pane.css';
 const FOLLOW_SLACK = 24;
 const atEnd = (node: HTMLElement) => node.scrollHeight - node.scrollTop - node.clientHeight <= FOLLOW_SLACK;
 
-// The state in words: a feed the main process no longer keeps reads 不可用, whatever it last was.
-function stateWord(feed: SubagentFeed, status: FeedState['status']) {
+// The state in words: a feed the main process no longer keeps reads 不可用, whatever it last was; one that has ended reads 已完成
+// (a finished Task sub-agent's feed state stays 'reviewing', so the end time decides).
+function stateWord(feed: SubagentFeed, status: FeedState['status'], over: boolean) {
   if (status === 'gone') return t('不可用');
-  return feed.failure ? failureWord(feed.failure) : t(CALL_STATES[feed.state].word);
+  if (feed.failure) return failureWord(feed.failure);
+  return t(CALL_STATES[over ? 'done' : feed.state].word);
 }
 
 // The footer says what the view is doing, in one line.
@@ -78,7 +80,7 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
       {feed && <span className="subagent-tag subagent-role">{t(feed.role)}</span>}
       {how && <span className="subagent-how">{how}</span>}
       <span className="subagent-space" />
-      {feed && <span className={`subagent-tag subagent-state is-${over ? 'done' : feed.state}`}>{stateWord(feed, status)}</span>}
+      {feed && <span className={`subagent-tag subagent-state is-${over ? 'done' : feed.state}`}>{stateWord(feed, status, over)}</span>}
       <span className="subagent-rate">{rate === null ? '—' : rate} token/s</span>
       <span className="subagent-elapsed" title={t(over ? '用时' : '已运行')}>{elapsed}</span>
       <button type="button" className="icon-button" title={t('关闭分屏（Esc）')} aria-label={t('关闭 {name} 的分屏', { name })} onClick={onClose}><X size={13} /></button>

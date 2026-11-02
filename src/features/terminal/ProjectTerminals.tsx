@@ -55,7 +55,7 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
       ? <button className="text-button agent-launcher-running" onClick={onExpand}>{t('{count} 个终端运行中 · 点击展开', { count })}</button>
       : <button className="button secondary small" onClick={async () => { await onAction(window.agentrix.startTerminal(terminalId)); openTerminal(terminalId); }}><Play size={13} weight="fill" />{t('启动终端')}</button>}
   </div>;
-  return <div ref={area} className={`panel-terminal-area terminal-grid ${cells > 1 ? 'has-splits' : ''} ${reorder.drag ? 'is-reordering' : ''}`} style={{ '--terminal-columns': columns, '--terminal-rows': rows } as CSSProperties}
+  return <div ref={area} className={`panel-terminal-area terminal-grid ${cells > 1 ? 'has-splits' : ''} ${multiple ? 'has-terminals' : ''} ${reorder.drag ? 'is-reordering' : ''}`} style={{ '--terminal-columns': columns, '--terminal-rows': rows } as CSSProperties}
     onPointerDown={reorder.onPointerDown} onClickCapture={reorder.onClickCapture}>
     {shown.map(terminal => {
       if (!focused && !terminal.sessionId && !terminal.readingHistory) return null;

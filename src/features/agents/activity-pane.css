@@ -79,7 +79,8 @@
 .activity-call-rows li.activity-call-more p { font-size: 12px; line-height: 16px; color: var(--flow-faint); }
 .activity-call-rows li.activity-call-more:hover::before { background: none; }
 .activity-call-rows li .activity-row-end { text-align: right; }
-/* A call whose record can be read is one button on the row's own 16 | text | state grid: no new icon and no new colour. Open = the selected fill and a 2px bar, so it reads in grey too. */
+/* A call whose record can be read is one button filling the row (the row's own single column, or the button would land in its 16px icon column) with the same 16 | text | state grid inside: no new icon and no new colour. Open = the selected fill and a 2px bar, so it reads in grey too. */
+.activity-call-rows li:has(> .activity-call-open) { grid-template-columns: minmax(0, 1fr); }
 .activity-call-rows li > .activity-call-open { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; width: 100%; height: 32px; margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .activity-call-open:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 8px; }
 .activity-call-rows li:has(> .activity-call-open[aria-pressed="true"])::before { background: var(--bg-selected); }

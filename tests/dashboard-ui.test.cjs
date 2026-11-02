@@ -137,6 +137,8 @@ test('models, kinds and weights are named the way the owner writes them', () => 
   const f = dashboard('format.ts');
   assert.deepEqual(['claude-opus-5-5', 'gpt-6.1-sol', 'gpt-6.1-terra', 'unknown-model'].map(f.modelShort), ['Opus', 'Sol', 'Terra', 'unknown-model']);
   assert.deepEqual(['claude-sonnet-5-5', 'gpt-6.1-sol', 'x'].map(f.modelLabel), ['Sonnet 5.5', 'Sol · gpt-6.1-sol', 'x']);
+  assert.deepEqual(['sonnet', 'Opus', 'haiku'].map(f.modelShort), ['Sonnet', 'Opus', 'Haiku'], 'an alias is written like the full id');
+  assert.deepEqual(['sonnet', 'claude-sonnet-5-5'].map(f.modelLabel), ['Sonnet', 'Sonnet 5.5']);
   assert.deepEqual(['core', 'ui-check', 'review', 'odd'].map(f.kindLabel), ['复杂代码', '界面验收', '审查', 'odd']);
   assert.equal(f.weightChange(weight), '测试 1.0 → 0.7 ↓ 降权');
   assert.equal(f.weightChange({ ...weight, to: 1.2 }), '测试 1.0 → 1.2 ↑ 升权');
@@ -157,6 +159,10 @@ test('chart scales: round tops, half-pixel gridlines, labels that never overlap'
   for (let i = 1; i < sorted.length; i++) assert.ok(sorted[i] - sorted[i - 1] >= 14);
   assert.ok(Math.max(...m.spreadLabels([148, 149, 150], 14, 28, 150)) <= 150, 'a crowd at the bottom is pulled back into the plot');
   assert.equal(m.spreadLabels([], 14, 0, 10).length, 0);
+  // labels beside points: only neighbours in x are spread, a far point keeps its y
+  const near = m.spreadNearby([{ x: 575, y: 100 }, { x: 587, y: 100 }, { x: 350, y: 101 }], 88, 16, 20, 200);
+  assert.ok(Math.abs(near[0] - near[1]) >= 16, 'two points at one spot get labels a line apart'); assert.equal(near[2], 101, 'a point far to the left keeps its label where it was');
+  assert.deepEqual(m.spreadNearby([{ x: 10, y: 50 }], 88, 16, 20, 200), [50]); assert.deepEqual(m.spreadNearby([], 88, 16, 20, 200), []);
 });
 
 test('a missing reading breaks a line; a run of one is a lone mark', () => {
@@ -176,6 +182,15 @@ test('every model keeps one colour and one shape for the whole page, whichever m
     [[0, 'circle'], [1, 'square'], [2, 'diamond'], [3, 'triangle'], [4, 'inverted'], [5, 'hexagon']], 'the six models told apart so far keep the slots they always had');
   assert.deepEqual(m.modelLooks(['gpt-6.1-sol']).get('gpt-6.1-sol'), all.get('gpt-6.1-sol'), 'a filter that leaves fewer models does not repaint the others');
   assert.equal(m.PALETTE, 6); assert.equal(new Set(m.SHAPES).size, 6);
+});
+
+test('an alias is the same model as its full id, and what the records do not name is grey outside the palette', () => {
+  const m = dashboard('chart-math.ts'), looks = m.modelLooks(['sonnet', 'claude-sonnet-5-5', 'gpt-6.1-sol', 'unreported', 'opus']);
+  assert.deepEqual(looks.get('sonnet'), looks.get('claude-sonnet-5-5'), 'one colour and one shape for one model');
+  assert.equal(looks.get('opus').slot, 0, 'an alias with no full id on the page takes the slot the model always had');
+  assert.equal(looks.get('unreported'), m.NEUTRAL); assert.equal(m.NEUTRAL.neutral, true);
+  assert.ok(![...looks.entries()].some(([model, look]) => model !== 'unreported' && look.slot < 0), 'no model takes the neutral slot');
+  assert.deepEqual(m.modelLooks(['unreported', 'claude-opus-5-5']).get('claude-opus-5-5').slot, 0, 'it takes no palette slot from a model');
 });
 
 test('a model past the six takes a free slot, and no two models share both colour and shape', () => {
@@ -475,6 +490,28 @@ test('the live strip lists the running workers with their elapsed time and speed
   const none = view({ summary: fixture({ live: { running: [], at: 0 } }) });
   assert.match(none, /现在没有子任务在运行/); assert.doesNotMatch(none, /class="live-item /);
   assert.match(view({ now: at(10, 31, 14) + 61_000 }), /已运行 <span>1:01:01<\/span>/, 'the clock moves with the page clock');
+}));
+
+test('a running worker named by an alias reads and looks like the same model in the key', () => zh(() => {
+  const html = view({ summary: fixture({ live: { running: [live('agent:b', 'sonnet', { title: 'Plan it', role: '规划' }), live('agent:c', 'unreported')], at: at(10, 31, 14) } }) });
+  const strip = html.slice(html.indexOf('class="live-list"'), html.indexOf('class="live-list"') + 1700), key = html.slice(html.indexOf('class="keybar"'), html.indexOf('class="keybar"') + 1500);
+  assert.match(strip, /<span title="Sonnet">Sonnet<\/span>/, 'the model name, not the lowercase alias');
+  const fillBefore = (text, word) => [...text.slice(0, text.indexOf(word)).matchAll(/class="mk"[^>]*fill="([^"]+)"/g)].at(-1)[1];
+  assert.equal(fillBefore(strip, '</svg><span title="Sonnet">'), fillBefore(key, '</svg>Sonnet'), 'the same colour as the key chip');
+  assert.match(strip, /<svg class="mk"[^>]*fill="var\(--text-3\)"[^>]*><circle[^]*?unreported/, 'unreported is a neutral grey, not a model colour');
+  const picked = view({ summary: fixture({ live: { running: [live('agent:b', 'sonnet')], at: at(10, 31, 14) } }) });
+  assert.match(picked, /class="live-item "/, 'with nothing picked nothing is dim');
+}));
+
+test('two points on one spot get labels a line apart tied back by a thin line; a lone point has none', () => zh(() => {
+  const crowded = fixture();
+  crowded.models[0] = row('gpt-6.1-sol', 'codex', { runs: 18, tokensPerSecond: 71, costUsd: 11 * 1.0, costedRuns: 11 });
+  crowded.models[1] = row('claude-sonnet-5-5', 'claude', { runs: 11, tokensPerSecond: 71, costUsd: 11 * 1.0, costedRuns: 11 });
+  const html = view({ summary: crowded })
+  const ys = [...html.matchAll(/<text class="end" x="[\d.]+" y="([\d.]+)" text-anchor="\w+">(Sol|Sonnet)<\/text>/g)].map(match => [match[2], Number(match[1])]);
+  assert.equal(ys.length, 2); assert.ok(Math.abs(ys[0][1] - ys[1][1]) >= 16, 'the labels do not overlap');
+  assert.equal(count(html, /<line class="leader"/g), 1, 'the pushed label is tied to its point');
+  assert.equal(count(view(), /<line class="leader"/g), 0, 'labels that meet nothing stay where they were');
 }));
 
 test('the freshness chip says live, refreshing or stale with the age of the numbers, and the button reads again', () => zh(() => {
