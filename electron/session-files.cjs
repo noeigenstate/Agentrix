@@ -144,4 +144,56 @@ async function sessionMeta(filename) {
   return null;
 }
 
-module.exports = { records, rolloutFiles, sessionMeta, nativeWatchPath };
+// A transcript name is a capability only within its trusted CLI root. Resolve links before opening it;
+// a supplied handle must still identify that same contained file (including during a tail reset).
+async function containedFile(directory, filename, { file = null, exact = false, directoryOnly = false } = {}) {
+  if (!directory || !filename) return null;
+  const relative = path.relative(path.resolve(directory), path.resolve(filename));
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+  try {
+    const [root, resolved] = await Promise.all([fsp.realpath(directory), fsp.realpath(filename)]);
+    const inside = path.relative(root, resolved);
+    if (!inside || inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) return null;
+    if (exact && path.relative(path.join(root, relative), resolved)) return null;
+    const stat = await fsp.stat(resolved, { bigint: true });
+    if (directoryOnly ? !stat.isDirectory() : !stat.isFile()) return null;
+    if (file) {
+      const opened = await file.stat({ bigint: true });
+      if (opened.dev !== stat.dev || opened.ino !== stat.ino) return null;
+    }
+    return resolved;
+  } catch { return null; }
+}
+
+// Identity comes from one bounded first record, read from the already verified handle.
+async function sessionHeader(file) {
+  const buffer = Buffer.alloc(64 * 1024), { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+  const end = buffer.subarray(0, bytesRead).indexOf(10);
+  if (end < 0) return null;
+  try { return JSON.parse(buffer.subarray(0, end).toString('utf8')); } catch { return null; }
+}
+
+// Dispatch workers are exec sessions, so interactive-session discovery deliberately cannot find them.
+async function findRolloutSession(directory, id, cwd) {
+  if (typeof id !== 'string' || !/^[\w-]{1,160}$/.test(id) || !path.isAbsolute(cwd || '')) return null;
+  let found = null;
+  for (const item of await rolloutFiles(directory)) {
+    if (!item.name.includes(id)) continue;
+    const filename = await containedFile(directory, item.filename);
+    if (!filename) continue;
+    let file;
+    try {
+      file = await fsp.open(filename, 'r');
+      if (!await containedFile(directory, filename, { file })) continue;
+      const record = await sessionHeader(file), meta = record?.type === 'session_meta' && record.payload;
+      if (meta?.id === id && typeof meta.cwd === 'string' && path.isAbsolute(meta.cwd) && !path.relative(path.resolve(meta.cwd), path.resolve(cwd))) {
+        if (found && found !== filename) return null;
+        found = filename;
+      }
+    } catch { /* A disappearing or partial rollout is retried on the next poll. */ }
+    finally { await file?.close(); }
+  }
+  return found;
+}
+
+module.exports = { records, rolloutFiles, sessionMeta, nativeWatchPath, containedFile, sessionHeader, findRolloutSession };

@@ -212,7 +212,7 @@ test('Claude groups keep the latest five tasks and inherit the current provider'
     meter.apply(use(`a${i}`, 'Agent', { model: 'claude-sonnet-5-5', description: `Task ${i}` }));
     if (i < 6) meter.apply(result(`a${i}`));
   }
-  assert.deepEqual(meter.snapshot().calls[0], { agent: 'Claude Code', provider: 'relay.example', model: 'claude-sonnet-5-5', effort: null, fast: null, preparing: 0, running: 1, reviewing: 6, tasks: ['Task 2', 'Task 3', 'Task 4', 'Task 5', 'Task 6'], items: Array.from({ length: 7 }, (_, i) => ({ state: i ? 'reviewing' : 'running', role: '通用', title: `Task ${6 - i}` })), rate: null });
+  assert.deepEqual(meter.snapshot().calls[0], { agent: 'Claude Code', provider: 'relay.example', model: 'claude-sonnet-5-5', effort: null, fast: null, preparing: 0, running: 1, reviewing: 6, tasks: ['Task 2', 'Task 3', 'Task 4', 'Task 5', 'Task 6'], items: Array.from({ length: 7 }, (_, i) => ({ id: `agent:a${6 - i}`, state: i ? 'reviewing' : 'running', role: '通用', title: `Task ${6 - i}`, startedAt: null, endedAt: null, viewable: false })), rate: null });
   meter.provider = 'Anthropic';
   assert.equal(meter.snapshot().calls[0].provider, 'Anthropic');
   meter.apply(stop());
@@ -273,7 +273,7 @@ test('subagent items keep every role and full description newest first, includin
   const roles = [['Explore', '搜索'], ['Plan', '规划'], ['general-purpose', '通用'], ['claude', '通用'], [undefined, '通用'], ['none', '通用'], ['fork', '分身'], ['custom-worker', 'custom-worker'], ['constructor', 'constructor']];
   for (const [i, [subagent_type]] of roles.entries()) calls.apply(use(`role-${i}`, 'Agent', { subagent_type, description: 'Inspect ' + 'the parser '.repeat(30) }));
   calls.apply(result('role-0'));
-  assert.deepEqual(calls.snapshot()[0].items, roles.map(([, role], i) => ({ state: i ? 'running' : 'reviewing', role, title: 'Inspect ' + 'the parser '.repeat(30).trim() })).reverse());
+  assert.deepEqual(calls.snapshot()[0].items, roles.map(([, role], i) => ({ id: `agent:role-${i}`, state: i ? 'running' : 'reviewing', role, title: 'Inspect ' + 'the parser '.repeat(30).trim(), startedAt: null, endedAt: null, viewable: false })).reverse());
   assert.equal(calls.snapshot()[0].tasks.length, 1, 'hover tasks still deduplicate while rows keep each call');
   assert.equal(calls.snapshot()[0].tasks[0].length, 240, 'existing hover task length stays bounded');
   calls.apply(stop());

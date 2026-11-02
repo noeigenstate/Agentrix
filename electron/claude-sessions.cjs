@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { messageText, promptText } = require('./prompt-queue.cjs');
+const { containedFile } = require('./session-files.cjs');
 
 const SESSION_ID = /^[\w-]{1,100}$/;
 const READ_BUDGET = 256 * 1024;
@@ -15,9 +16,10 @@ async function directories(folder) {
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
 
-async function findClaudeSession(cwd, id, home = claudeConfigDir()) {
+async function findClaudeSession(cwd, id, home = claudeConfigDir(), { strict = false } = {}) {
   if (typeof id !== 'string' || !SESSION_ID.test(id)) return null;
   const folder = projectFolder(cwd, home);
+  if (strict) return containedFile(path.join(home, 'projects'), path.join(folder, `${id}.jsonl`), { exact: true });
   // Prefer the known project; scan only session transcripts if encoding differs at the edges.
   let folders;
   try { await fs.access(folder); folders = [folder]; }

@@ -53,7 +53,7 @@ test('main Opus and a running Opus child keep separate rates, resolved grouping 
   const group = calls.snapshot()[0];
   assert.equal(group.model, 'claude-opus-5-5', 'the actual child model replaces its requested alias');
   assert.deepEqual(group.rate, expected(80, 3000, 1, 4));
-  assert.deepEqual(group.items, [{ state: 'running', role: '通用', title: 'Exact parser inspection' }]);
+  assert.deepEqual(group.items, [{ id: 'agent:worker', state: 'running', role: '通用', title: 'Exact parser inspection', startedAt: Date.parse(at(0)), endedAt: null, viewable: true }]);
   assert.deepEqual(group.tasks, ['Exact parser inspection']);
   assert.ok(positions[1] > 0, 'the next child read starts at its retained byte offset');
   assert.deepEqual(meter.snapshot().rate, mainRate);
@@ -76,7 +76,10 @@ test('groups sum worker tokens and durations, including overlap, while preservin
   await calls.work; calls.apply(notice('a')); await calls.work;
   assert.equal(calls.snapshot().length, 1);
   assert.deepEqual(calls.snapshot()[0].rate, expected(140, 6000, 3, 7));
-  assert.deepEqual(calls.snapshot()[0].items, [{ state: 'running', role: '通用', title: 'Exact b' }, { state: 'reviewing', role: '通用', title: 'Exact a' }]);
+  assert.deepEqual(calls.snapshot()[0].items, [
+    { id: 'agent:b', state: 'running', role: '通用', title: 'Exact b', startedAt: Date.parse(at(0)), endedAt: null, viewable: true },
+    { id: 'agent:a', state: 'reviewing', role: '通用', title: 'Exact a', startedAt: Date.parse(at(0)), endedAt: Date.parse(at(9)), viewable: true },
+  ]);
   calls.apply(use('unreadable', 'Agent', { model: 'claude-opus-5-5', description: 'Exact unreadable' })); await calls.work;
   assert.equal(calls.snapshot()[0].rate, null, 'an unreadable member cannot silently disappear from a group sum');
 });

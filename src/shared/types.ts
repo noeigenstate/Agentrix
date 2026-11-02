@@ -32,14 +32,14 @@ export type AgentTokens = { input: number; cached: number; output: number };
 // AgentUsage.model is the main session's model as its latest reply records it, and its rate is that model's.
 export type TokenRate = { outputTokens: number; activeMs: number; samples: number; updatedAt: number; partial: boolean };
 // done: a dispatched worker that ended cleanly — shown as 已完成 and removed 3 s later; a failure stays until the lead's next round.
-export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | null; model: string; effort: string | null; fast: boolean | null; preparing: number; running: number; reviewing: number; tasks: string[]; rate?: TokenRate | null; items: { state: 'preparing' | 'running' | 'reviewing' | 'done'; role: string; title: string;
+export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | null; model: string; effort: string | null; fast: boolean | null; preparing: number; running: number; reviewing: number; tasks: string[]; rate?: TokenRate | null; items: { id: string; state: 'preparing' | 'running' | 'reviewing' | 'done'; role: string; title: string; startedAt: number | null; endedAt: number | null; viewable: boolean;
   // A dispatched worker that ended badly or never confirmed (skills/agent-dispatch): shown in words instead of a plain state.
   failure?: { reason: 'unconfirmed' | 'capacity' | 'killed' | 'error' | 'scope'; exitCode: number | null;
     // scope: files the worker changed outside the paths it was allowed (skills/agent-dispatch, --allow).
     files?: string[] } | null;
   declared?: { model: string; effort: string | null; fast: boolean | null }; }[] };
 export type AgentUsage = { provider: string | null; context: { used: number; window: number } | null; round: AgentTokens | null; total: AgentTokens | null; limits: { minutes: number | null; percent: number; resetsAt: number | null }[]; limitsAt?: number | null; limitsFrom?: string | null; resets?: { left: number | null; total: number | null } | null; resetQuery?: { state: 'loading' | 'ready' | 'unavailable' | 'error'; reason?: string; at?: number }; calls?: AgentCall[]; model?: string | null; rate?: TokenRate | null };
-export type ProjectTerminal = { readingHistory?: ReadingHistoryScope | null; mainTurn?: MainAgentTurn | null; agentStarting?: boolean; nativeMode?: 'codex-native' | 'claude-sdk' | null; nativeApprovals?: NativeApproval[]; nativeMessages?: { role: string; text: string }[]; nativeReady?: boolean; agentStartedAt?: number | null; agentSettings?: AgentSettings | null; agentUsage?: AgentUsage | null; agentCommand?: string | null; action: AgentActionBrief | null; task: string; taskTitle?: string; prompts: PendingPrompt[]; id: string; title: string; shell: 'powershell' | 'cmd' | 'bash' | 'zsh'; sessionId: string | null; status: Project['status']; codexActive: boolean; agent: Project['agent']; codexActivity: Project['codexActivity']; needsInput: string | null; shellReady: boolean; codexAvailable: boolean | null; lastActivityAt: number | null; lastCompletedAt: number | null; error: string | null };
+export type ProjectTerminal = { readingHistory?: ReadingHistoryScope | null; mainTurn?: MainAgentTurn | null; agentStarting?: boolean; nativeMode?: 'codex-native' | null; agentStartedAt?: number | null; agentSettings?: AgentSettings | null; agentUsage?: AgentUsage | null; agentCommand?: string | null; action: AgentActionBrief | null; task: string; taskTitle?: string; prompts: PendingPrompt[]; id: string; title: string; shell: 'powershell' | 'cmd' | 'bash' | 'zsh'; sessionId: string | null; status: Project['status']; codexActive: boolean; agent: Project['agent']; codexActivity: Project['codexActivity']; needsInput: string | null; shellReady: boolean; codexAvailable: boolean | null; lastActivityAt: number | null; lastCompletedAt: number | null; error: string | null };
 export type Settings = { startView: 'decisions' | 'workspace'; surface: 'glass' | 'solid'; glassBackground: 'theme' | 'desktop'; glassTransparency: number | null; terminalRenderer: 'gpu' | 'dom'; autoSave: boolean; activityPane: boolean; notifications: boolean; sound: boolean; closeToTray: boolean; explorerCollapsed: boolean; hideTreeNoise: boolean; fontSize: number; terminalFontWeight: 400 | 500 | 600; terminalFontFamily: string; terminalCjkFontFamily: string; userAvatar: string; restoreSessions: boolean; focusAnimation: 'smooth' | 'system' | 'off'; uiZoom: number | null; language: 'zh' | 'en'; theme: ThemeId; shortcuts: Partial<Record<'search' | 'addProject' | 'voice' | 'overview' | 'decisions' | 'explorer' | 'settings' | 'nextProject' | 'previousProject' | 'projectAbove' | 'projectBelow' | 'maximize' | 'fullscreen' | 'newTerminal' | 'removeProject', string>>; guideVersion: string; shell: 'powershell' | 'cmd' | 'bash' | 'zsh'; voiceModel: string };
 export type RecentProject = { path: string; name: string; lastOpenedAt: number; exists: boolean };
 export type RecentSSH = { host: string; path: string; name: string; lastOpenedAt: number };
@@ -54,13 +54,6 @@ export type Workspace = { desktopGlass?: { supported: boolean; compatibility: bo
   uiZoom: number };
 // A backend observation epoch; no native Claude Code/Codex approval request ID is exposed by terminal mode.
 export type ApprovalStamp = { sessionId: string; revision: number };
-export type NativeQuestionValue = string | number | boolean | string[];
-export type NativeQuestionField = { id: string; label: string; description?: string; type: 'string' | 'single' | 'multi' | 'number' | 'integer' | 'boolean'; required: boolean;
-  options?: { value: string; label: string; description?: string; preview?: string }[]; allowOther?: boolean; secret?: boolean; default?: NativeQuestionValue;
-  minLength?: number; maxLength?: number; minimum?: number; maximum?: number; minItems?: number; maxItems?: number; format?: 'email' | 'uri' | 'date' | 'date-time' };
-export type NativeQuestion = { title: string; fields: NativeQuestionField[]; unsupported?: boolean };
-export type NativeQuestionAnswer = { token: string; decision: 'submit'; values: Record<string, NativeQuestionValue> } | { token: string; decision: 'decline' | 'cancel' };
-export type NativeApproval = { provider: 'codex' | 'claude'; projectId: string; terminalId: string; sessionId: string; token: string; requestId: string | number; method: string; params: Record<string, unknown>; decisions: string[]; at: number; question?: NativeQuestion };
 export type ApprovalResult = { mode: 'terminal-only'; reason: 'native-request-identity-unavailable' };
 type TerminalSnapshot = { sessionId: string | null; seq: number; data: string; approval?: ApprovalStamp };
 export type TerminalPacket = TerminalSnapshot & { id: string };
@@ -90,6 +83,11 @@ export type ConversationEntry = { timeline?: { turn: { id: string; at: number; u
 export type ConversationPacket = { id: string; sessionId?: string; historyKey?: string; list?: ConversationEntry[]; changes?: ConversationEntry[] };
 export type ReadingHistoryScope = { key: string; agent: 'codex' | 'claude'; threadId: string };
 export type ConversationPage = { key: string; entries: ConversationEntry[]; beforeCursor: string | null };
+// Full snapshots, newest 400 entries; omitted on the first entry means earlier steps were dropped.
+export type SubagentFeed = { id: string; agent: AgentCall['agent']; model: string; effort: string | null; fast: boolean | null;
+  title: string; role: string; state: AgentCall['items'][number]['state']; failure?: AgentCall['items'][number]['failure'];
+  startedAt: number | null; endedAt: number | null; rate: TokenRate | null; entries: ConversationEntry[]; revision: number };
+export type SubagentFeedEvent = { terminalId: string; callId: string; revision: number };
 type GitDiffLine = { type: ' ' | '+' | '-' | '\\'; text: string };
 export type GitHunk = { header: string; oldStart: number; oldLines: number; newStart: number; newLines: number; lines: GitDiffLine[]; patch: string };
 export type GitDiff = { repository: boolean; binary: boolean; text: boolean; added: number; removed: number; hunks: GitHunk[]; patch: string };
@@ -250,10 +248,9 @@ type Bridge = {
   // Copies a folder holding a SKILL.md (chosen in a dialog) into the user's skills; null when cancelled.
   importSkill(scope: 'global' | 'project', projectId: string | null): Promise<Result<SkillInfo | null>>;
   onSkills(callback: (skills: SkillInfo[]) => void): () => void;
-  answerNativeApproval(id: string, answer: { token: string; decision: string }): Promise<Result<{ mode: 'native'; requestId: string | number }>>;
-  answerNativeQuestion(id: string, answer: NativeQuestionAnswer): Promise<Result<{ mode: 'native'; requestId: string | number }>>;
-  managedPrompt(id: string, sessionId: string, text: string): Promise<Result<boolean>>;
   terminalConversationPage(id: string, request: { key: string; cursor?: string | null }): Promise<Result<ConversationPage>>;
+  subagentFeed(terminalId: string, callId: string): Promise<Result<SubagentFeed>>;
+  onSubagentFeed(listener: (event: SubagentFeedEvent) => void): () => void;
   writeTerminal(id: string, data: string): void;
   writeApproval(id: string, key: string, stamp: ApprovalStamp, actionId: string): Promise<Result<ApprovalResult>>;
   answerTerminal(id: string, data: string): void;

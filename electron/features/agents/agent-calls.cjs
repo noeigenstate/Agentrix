@@ -4,6 +4,8 @@ const { claudePrompt, TranscriptTail } = require('../../agent-actions.cjs');
 const { TokenRates, emptyRate } = require('./token-rate.cjs');
 const { agentSettings } = require('./agent-settings.cjs');
 const { taskKind } = require('../dashboard/records-routing.cjs');
+const { containedFile } = require('../../session-files.cjs');
+const { SubagentFeeds, stateOf, time, rootValue } = require('./subagent-feed.cjs');
 
 const text = value => typeof value === 'string' ? value : '';
 const short = value => text(value).replace(/\s+/g, ' ').trim().slice(0, 240);
@@ -11,17 +13,30 @@ const enabled = value => value === true || value === 'true';
 const agentRoles = new Map(Object.entries({ Explore: '搜索', Plan: '规划', 'general-purpose': '通用', claude: '通用', none: '通用', fork: '分身' }));
 
 class AgentCalls {
-  constructor({ changed = () => {}, finished = () => {}, local = true } = {}) {
+  constructor({ changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true, codexHome = null, claudeHome = null, now = Date.now, since = now() } = {}) {
     this.changed = changed; this.finished = finished; this.local = local; this.folder = null;
+    this.now = now; this.since = since; this.claudeHome = claudeHome; this.finishedIds = new Set();
+    this.feeds = new SubagentFeeds({ changed: feedChanged, retired: () => this.changed(), local, codexHome, claudeHome, now,
+      read: async call => { this.refresh(call.key); await this.work; } });
     this.reset();
   }
   reset(preserveDispatch = false) {
     clearTimeout(this.timer);
     const dispatched = [...(this.calls || [])].filter(([, call]) => preserveDispatch && call.dispatch);
     for (const call of this.calls?.values() || []) if (!preserveDispatch || !call.dispatch) clearTimeout(call.expiry);
+    this.feeds.reset(preserveDispatch ? new Set(dispatched.map(([, call]) => call)) : null);
     this.timer = null; this.calls = new Map(dispatched); this.polls = new Map(); this.meta = new Map(); this.pending = new Set(); this.work = null;
   }
   setFolder(folder) { if (folder !== this.folder) { this.reset(true); this.folder = folder; } }
+  history(reading) { this.replaying = reading; }
+  feed(id) { return this.feeds.get(id); }
+  dispose() { this.reset(); this.finishedIds.clear(); }
+  running() {
+    return [...this.calls.values()].filter(call => !call.done && !call.reviewed).map(call => ({
+      id: call.id, agent: call.agent, model: call.model, title: call.title, role: call.role,
+      startedAt: time(call.startedAt), rate: call.rate ? { ...call.rate } : null,
+    }));
+  }
   snapshot(provider) {
     const groups = new Map();
     for (const call of this.calls.values()) {
@@ -36,11 +51,12 @@ class AgentCalls {
         group.rate.outputTokens += call.rate.outputTokens; group.rate.activeMs += call.rate.activeMs; group.rate.samples += call.rate.samples;
         group.rate.updatedAt = Math.max(group.rate.updatedAt, call.rate.updatedAt); group.rate.partial ||= call.rate.partial;
       }
-      let state = call.preparing ? 'preparing' : 'running';
-      if (call.done) state = call.dispatch && !call.failure ? 'done' : 'reviewing';
+      const state = stateOf(call);
       if (state !== 'done') group[state]++;
-      group.items.push({ state, role: call.role, title: call.title,
-        ...(call.dispatch ? { failure: call.failure || null, ...(call.declared ? { declared: call.declared } : {}) } : {}) });
+      group.items.push({ id: call.id, state, role: call.role, title: call.title,
+        startedAt: time(call.startedAt), endedAt: time(call.finishedAt), viewable: !!call.viewable,
+        ...(call.dispatch || call.failure ? { failure: call.failure || null } : {}),
+        ...(call.dispatch && call.declared ? { declared: call.declared } : {}) });
       if (call.task) { group.tasks = group.tasks.filter(task => task !== call.task); group.tasks.push(call.task); group.tasks = group.tasks.slice(-5); }
     }
     for (const group of groups.values()) group.items.reverse();
@@ -50,22 +66,24 @@ class AgentCalls {
     const call = this.calls.get(event.id);
     if (event.type === 'dispatch-start') {
       if (call || this.calls.size >= 1024) return false;
-      this.calls.set(event.id, { dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
+      const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
         model: event.model, effort: event.effort, fast: event.fast, declared: event.declared,
         kind: taskKind(event),
         meeting: event.meeting ?? null, skipMeeting: event.skipMeeting ?? null, unconfirmed: event.unconfirmed === true,
-        role: event.role, title: event.title, task: short(event.title), sessionId: event.sessionId,
-        startedAt: event.startedAt, done: false, rate: null, meter: new TokenRates(event.agent) });
+        role: event.role, title: event.title, task: short(event.title), sessionId: event.sessionId, cwd: event.cwd,
+        startedAt: time(event.startedAt), done: false, rate: null, meter: new TokenRates(event.agent) };
+      this.calls.set(event.id, next); this.feeds.track(next); this.schedule();
       return true;
     }
     if (!call?.dispatch || call.done || call.reviewed) return false;
     if (event.type === 'dispatch-rate') {
       if (call.rate && (event.outputTokens < call.rate.outputTokens || event.activeMs < call.rate.activeMs)) return false;
-      call.rate = call.meter.totals(call.model, event.outputTokens, event.activeMs, Date.now());
+      call.rate = call.meter.totals(call.model, event.outputTokens, event.activeMs, this.now());
+      this.feeds.update(call);
       return true;
     }
     if (event.type !== 'dispatch-end') return false;
-    call.done = true; call.finishedAt = event.endedAt;
+    call.done = true; call.finishedAt = event.endedAt; call.completedAt = this.now();
     try { this.finished(call, event); } catch {}
     call.model = event.model; call.effort = event.effort; call.fast = event.fast;
     call.rate = event.outputTokens === null || event.activeMs === null ? null
@@ -73,6 +91,8 @@ class AgentCalls {
     call.failure = event.reason === 'exit' && event.exitCode === 0 ? null
       : { reason: event.reason === 'exit' ? 'error' : event.reason, exitCode: event.exitCode, ...(event.outOfScope ? { files: event.outOfScope } : {}) };
     call.pendingReview = !!call.failure;
+    this.feeds.update(call); this.refresh(event.id);
+    if (!this.local) this.feeds.finish(call);
     if (!call.failure || call.failure.reason === 'unconfirmed') {
       call.expiry = setTimeout(() => {
         if (this.calls.get(event.id) !== call || call.reviewed) return;
@@ -83,10 +103,30 @@ class AgentCalls {
     }
     return true;
   }
+  endSubagent(call, at, status = 'completed') {
+    if (call.done) return false;
+    call.done = true; call.finishedAt = time(at); call.completedAt = this.now(); call.outcome = status;
+    call.failure = status === 'completed' ? null : { reason: status === 'killed' ? 'killed' : 'error', exitCode: null };
+    call.recordable = !this.replaying && call.finishedAt !== null && call.finishedAt >= this.since;
+    return true;
+  }
+  recordSubagent(call) {
+    if (call.recorded) return;
+    call.recorded = true;
+    if (!call.recordable || this.finishedIds.has(call.id)) return;
+    this.finishedIds.add(call.id);
+    const rate = call.rate?.samples > 0 && !call.rate.partial ? call.rate : null;
+    const event = { id: call.id, source: 'subagent', model: call.meter?.model || call.resultModel || 'unreported',
+      effort: call.effort ?? null, fast: call.fast ?? null, endedAt: time(call.finishedAt),
+      reason: call.outcome === 'completed' ? 'exit' : call.outcome === 'killed' ? 'killed' : 'error',
+      exitCode: call.outcome === 'completed' ? 0 : null, outputTokens: rate?.outputTokens ?? null, activeMs: rate?.activeMs ?? null,
+      ...this.feeds.totals(call) };
+    try { this.finished(call, event); } catch {}
+  }
   review(at, prompt = false) {
     let changed = false;
     for (const call of this.calls.values()) {
-      if ((call.dispatch && !call.failure) || !call.done || call.reviewed || call.finishedAt > at || (call.pendingReview && !prompt)) continue;
+      if ((call.dispatch && !call.failure) || !call.done || call.reviewed || (call.reviewAt ?? call.finishedAt) > at || (call.pendingReview && !prompt)) continue;
       call.reviewed = true; changed = true;
     }
     return changed;
@@ -103,16 +143,19 @@ class AgentCalls {
         continue;
       }
       if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && !this.calls.has(block.id)) {
-        if (block.name !== 'Agent') continue;
+        if (!['Agent', 'Task'].includes(block.name) || this.calls.size >= 1024) continue;
         const input = block.input || {};
         const settings = { model: text(input.model) || 'default', effort: text(input.effort).trim() || null, fast: null };
-        this.calls.set(block.id, {
+        const next = {
+          id: `agent:${block.id}`, key: block.id, sourceAgent: 'claude', startedAt: time(at), cwd: record.cwd,
           agent: 'Claude Code', provider: null, ...settings, requested: settings, rate: null,
           task: short(input.description || block.description || input.subagent_type || block.name),
           title: text(input.description || block.description || input.subagent_type || block.name).replace(/\s+/g, ' ').trim(),
           role: agentRoles.get(input.subagent_type) || text(input.subagent_type) || '通用',
           background: enabled(input.run_in_background), done: false, preparing: this.local && !!this.folder,
-        });
+        };
+        next.kind = taskKind(next);
+        this.calls.set(block.id, next); this.feeds.track(next);
         this.refresh(block.id);
         changed = true;
       } else if (record.type === 'user' && block.type === 'tool_result') {
@@ -122,7 +165,8 @@ class AgentCalls {
           const task = result.task?.task_id || result.task_id || poll.task;
           const call = [...this.calls.values()].find(call => call.backgroundTaskId === task || (poll.stop && call.agentId === task));
           if (call && !call.reviewed && (!call.done || call.pendingReview) && !block.is_error && (poll.stop || /^(?:completed|failed|killed)$/.test(result.task?.status || result.status))) {
-            call.done = true; call.finishedAt = at; call.pendingReview = false; changed = true;
+            this.endSubagent(call, at, poll.stop ? 'killed' : result.task?.status || result.status);
+            call.pendingReview = false; changed = true;
           }
           continue;
         }
@@ -130,7 +174,7 @@ class AgentCalls {
         if (!call || call.reviewed) continue;
         call.background ||= enabled(result.isAsync) || !!result.backgroundTaskId;
         if (typeof result.backgroundTaskId === 'string' && result.backgroundTaskId) call.backgroundTaskId = result.backgroundTaskId;
-        if ((block.is_error || !call.background) && !call.done) { call.done = true; call.finishedAt = at; changed = true; }
+        if (block.is_error || !call.background) changed = this.endSubagent(call, at, block.is_error ? 'failed' : 'completed') || changed;
         if (call.agent === 'Claude Code') {
           if (typeof result.resolvedModel === 'string' && result.resolvedModel) {
             call.resultModel = result.resolvedModel;
@@ -162,9 +206,10 @@ class AgentCalls {
         if (!call || call.reviewed) continue;
         if (queued && record.operation === 'remove' && !call.done) continue;
         if (!call.done) {
-          call.done = true; call.finishedAt = at; call.pendingReview = queued; changed = true;
+          this.endSubagent(call, at, /<status>\s*(completed|failed|killed)\s*<\/status>/.exec(notification)[1]);
+          call.pendingReview = queued; changed = true;
         }
-        if (call.pendingReview && (!queued || record.operation === 'remove')) { call.pendingReview = false; call.finishedAt = at; }
+        if (call.pendingReview && (!queued || record.operation === 'remove')) { call.pendingReview = false; call.reviewAt = at; }
       }
     }
     // The app completes Claude rounds on Stop. Use that hook's transcript record, not assistant text or idle time.
@@ -172,12 +217,17 @@ class AgentCalls {
     if (prompt || (record.type === 'system' && record.subtype === 'stop_hook_summary')) {
       changed = this.review(at, prompt) || changed;
     }
-    for (const [id, call] of this.calls) if (call.done && !call.drained) this.refresh(id);
+    for (const [id, call] of this.calls) {
+      this.feeds.update(call);
+      if (call.done && !call.dispatch && (!this.local || !this.folder)) {
+        call.drained = true; this.recordSubagent(call); this.feeds.finish(call);
+      } else if (call.done && !call.drained) this.refresh(id);
+    }
     this.schedule();
     return changed;
   }
   follows(call) {
-    return this.local && !call.dispatch && this.folder && (call.done ? !call.drained : !call.reviewed);
+    return this.local && !call.feedExpired && (call.dispatch ? !call.done || !call.feedDrained : this.folder && (call.done ? !call.drained : !call.reviewed));
   }
   // Follow running workers too; generation identity cancels even an already queued callback.
   schedule() {
@@ -194,7 +244,8 @@ class AgentCalls {
   }
   // Batch related history records; bound workers retain offsets and partial lines.
   refresh(id) {
-    if (!this.local || !this.folder || this.calls.get(id)?.dispatch) return;
+    if (!this.local || !this.calls.has(id) || this.calls.get(id).feedExpired) return;
+    if (!this.calls.get(id).dispatch && !this.folder) return;
     clearTimeout(this.timer); this.timer = null;
     this.pending.add(id);
     if (this.work) return;
@@ -208,49 +259,82 @@ class AgentCalls {
         for (const id of ids) {
           const call = calls.get(id);
           if (!call) continue;
+          if (call.dispatch) continue;
           if (call.done && (!call.rate || call.reader?.offset >= call.reader?.fileSize)) call.drained = true;
+          if (call.done && call.drained) { this.recordSubagent(call); this.feeds.finish(call); }
         }
         if ([...ids].some(id => !calls.get(id)?.reviewed && before.get(id) !== this.signature(calls.get(id)))) this.changed();
       }
     }).catch(() => {}).finally(() => { if (this.calls === calls) { this.work = null; this.schedule(); } });
   }
-  signature(call) { return JSON.stringify(call && [call.model, call.effort, call.fast, call.preparing, call.title, call.role, call.rate]); }
+  signature(call) { return JSON.stringify(call && [call.model, call.effort, call.fast, call.preparing, call.title, call.role, call.rate, call.viewable]); }
   async readSubagent(call, filename, calls, meta) {
+    filename = filename ? await containedFile(this.folder, filename, { exact: true }) : null;
+    const home = rootValue(this.claudeHome);
+    if (filename && home && !await containedFile(path.join(home, 'projects'), filename, { exact: true })) filename = null;
+    if (this.calls !== calls) return;
     if (call.reader?.filename !== filename) {
       Object.assign(call, call.requested);
       call.model = call.resultModel || call.model; call.rate = null;
       call.meter = new TokenRates('claude', { sidechain: true });
-      call.reader = filename ? new TranscriptTail(filename, { onReset: partial => {
+      call.reader = filename ? new TranscriptTail(filename, { onReset: async (partial, file) => {
+        if (!await containedFile(this.folder, filename, { file, exact: true })) throw new Error('unavailable');
+        if (home && !await containedFile(path.join(home, 'projects'), filename, { file, exact: true })) throw new Error('unavailable');
         call.meter.reset(partial); Object.assign(call, call.requested);
+        this.feeds.resetLog(call, partial);
       } }) : null;
     }
-    if (!call.reader) { call.model = call.resultModel || text(meta?.model) || call.requested.model; return; }
+    if (!call.reader) { call.model = call.resultModel || text(meta?.model) || call.requested.model; this.feeds.update(call, false); return; }
     const readable = await call.reader.read(record => {
       if (this.calls !== calls) return;
       const settings = agentSettings(null, 'claude', { ...record, isSidechain: false });
       if (settings) { call.effort = settings.effort ?? call.effort; call.fast = settings.fast ?? call.fast; }
-      call.meter.apply(record);
+      if (call.startedAt === null || Date.parse(record.timestamp) >= call.startedAt) call.meter.apply(record);
+      this.feeds.consume(call, record);
       if (record.type === 'assistant' || record.type === 'token_usage_record') call.preparing = false;
     }).catch(() => false);
     if (this.calls !== calls) return;
     call.rate = readable ? call.meter.snapshot() : null;
     call.effort ??= text(meta?.effort).trim() || null;
     call.model = call.meter.model || call.resultModel || text(meta?.model) || call.requested.model;
+    this.feeds.update(call, readable);
   }
   async readModels(folder, ids, calls) {
+    for (const id of ids) {
+      const call = calls.get(id);
+      if (call?.dispatch) await this.feeds.readDispatch(call);
+      if (this.calls !== calls) return;
+    }
     ids = new Set([...ids].filter(id => calls.get(id)?.agent === 'Claude Code' && !calls.get(id).dispatch));
     if (!folder || !ids.size) return;
+    const home = rootValue(this.claudeHome);
+    const valid = !home || await containedFile(path.join(home, 'projects'), folder, { exact: true, directoryOnly: true });
+    if (this.calls !== calls) return;
+    if (!valid) {
+      for (const id of ids) { const call = calls.get(id); call.rate = null; this.feeds.update(call, false); }
+      return;
+    }
     const files = [...ids].some(id => !calls.get(id).filename) ? await fs.readdir(folder).catch(() => []) : [...ids].map(id => path.basename(calls.get(id).filename).replace(/\.jsonl$/, '.meta.json'));
     if (this.calls !== calls) return;
     const matches = new Map();
     for (const name of files) {
       if (!/^agent-[\w-]+\.meta\.json$/.test(name)) continue;
-      const filename = path.join(folder, name), stat = await fs.stat(filename).catch(() => null);
+      const filename = await containedFile(folder, path.join(folder, name), { exact: true });
+      if (!filename) continue;
+      const stat = await fs.stat(filename).catch(() => null);
       if (this.calls !== calls) return;
       if (!stat || stat.size > 64 * 1024) continue;
       let entry = this.meta.get(filename);
       if (!entry || entry.at !== stat.mtimeMs || entry.size !== stat.size) {
-        try { entry = { at: stat.mtimeMs, size: stat.size, value: JSON.parse(await fs.readFile(filename, 'utf8')) }; } catch { continue; }
+        let file;
+        try {
+          file = await fs.open(filename, 'r');
+          if (!await containedFile(home ? path.join(home, 'projects') : folder, filename, { file, exact: true })) continue;
+          const buffer = Buffer.alloc(64 * 1024 + 1), { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+          if (bytesRead > 64 * 1024) continue;
+          entry = { at: stat.mtimeMs, size: stat.size, value: JSON.parse(buffer.subarray(0, bytesRead).toString('utf8')) };
+        } catch { continue; }
+        finally { await file?.close(); }
         if (this.calls !== calls) return;
         this.meta.set(filename, entry);
       }
