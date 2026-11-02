@@ -15,6 +15,7 @@ the latest round, and the switch between reading and the raw terminal.
 - `sameMessage` (`src/features/reading/pending-prompts.ts`) — whether a sent message is the one still in the CLI input
 - `lastRound` (`src/features/reading/result-round.ts`) — the latest round of a conversation; the file also exports CHECKS and changeLabel
 - `ConversationFeed` (`src/features/reading/ConversationFeed.tsx`) — grouped read-only messages and tool steps, independent of composer and terminal state; the reading view and the sub-agent split render with it
+- `QuoteChip` (`src/features/reading/ReadingQuote.tsx`) — the 引用 button on a message (`QuoteAction`) and the one quote chip above the composer; `message-quote.ts` exports quoteExcerpt, withQuote and splitQuote; ConversationFeed offers the button only when its parent supplies quote decorations (the sub-agent split supplies none)
 - `FileCards` (`src/features/reading/FileCards.tsx`) — the preview cards of the files a reply names; the file also exports previewable
 - `replyFiles` (`src/features/reading/reply-files.ts`) — the local pictures, pages and videos a reply names
 
@@ -38,6 +39,7 @@ the latest round, and the switch between reading and the raw terminal.
 - Editing keys are sent only for what the CLI's screen shows unambiguously, never guessed from prose — a guessed key edits the wrong text — test: `tests/reading-ui.test.cjs` › "ambiguous prose on both sides of an image never causes guessed editing keystrokes"
 - Interactive reading requires an active agent in a live terminal; an identity-checked restored history may show read-only until its CLI draws input, and a different thread invalidates readiness; a page capability alone never cancels a send — test: `tests/reading-ui.test.cjs` › "a restored preview cannot send until its own CLI input is ready, and a different thread disables it again"; test: `tests/reading-ui.test.cjs` › "reading view requires an active agent and a live terminal session"
 - A waiting notice hands the reader to the terminal at most once, and a manual switch cancels the automatic return — a handoff must not be rearmed by later screen updates — test: `tests/reading-ui.test.cjs` › "one automatic handoff per notice and manual toggles cancel automatic return"
+- A quote is one bounded `> ` block (at most 6 lines and 400 characters, a quote inside the quoted message stripped first) put before the words of the owner's next ordinary message only; a slash command or shell line keeps it for the next message, a resend adds none, and a failed send returns it unless a newer quote was picked — quotes never nest and a command is never altered — test: `tests/reading-ui.test.cjs` › "a command is typed as it is and keeps the quote for the next message"; test: `tests/reading-quote.test.cjs` › "quoting a message that carries a quote takes its words only, so quotes never nest"
 
 ## Not ours
 - Parsing the agent's screen, sign-in steps and tool actions — Activity pane (src/features/agents)
