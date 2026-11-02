@@ -358,6 +358,17 @@ test('native session card arrows highlight, Enter types a targeted resume and fo
   assert.deepEqual(h.sent, ['/resume second']); assert.equal(h.closed(), 1); assert.deepEqual(h.errors, []);
 });
 
+test('Enter on a focused button presses that button, never the highlighted session (Cancel never resumes)', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = sessionsHarness(t, [{ id: 'first', title: 'first', updatedAt: Date.now() - 180000, messages: 3 }]);
+  let prevented = false;
+  const button = { closest: selector => selector === 'button' ? button : null };
+  h.render().props.onKeyDown({ key: 'Enter', target: button, nativeEvent: {}, preventDefault: () => { prevented = true; }, stopPropagation() {} });
+  t.mock.timers.tick(1000); await Promise.resolve();
+  assert.equal(prevented, false, 'the button keeps its own Enter');
+  assert.deepEqual(h.written, [], 'no session is resumed for it'); assert.deepEqual(h.followed, []);
+});
+
 test('native session card click chooses and Esc closes without sending terminal keys', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const h = sessionsHarness(t, [{ id: 'clicked', title: 'Restore this prompt', updatedAt: Date.now(), messages: 2 }]);
@@ -575,41 +586,6 @@ test('dictation without submit inserts and focuses without scheduling a send', a
   await h.tick(2000); assert.deepEqual(h.pasted, []);
 });
 
-// Exercise the component's handlers with persistent hook slots, without a DOM or native GUI.
-function choiceHarness(t, choice = { ...fakeChoice(), kind: 'menu' }) {
-  const slots = []; let cursor = 0;
-  const hooks = {
-    useState: initial => {
-      const index = cursor++;
-      if (!Object.hasOwn(slots, index)) slots[index] = typeof initial === 'function' ? initial() : initial;
-      return [slots[index], value => { slots[index] = typeof value === 'function' ? value(slots[index]) : value; }];
-    },
-    useRef: initial => {
-      const index = cursor++;
-      if (!Object.hasOwn(slots, index)) slots[index] = { current: initial };
-      return slots[index];
-    },
-    useEffect: () => {},
-  };
-  const written = [], previous = globalThis.window;
-  globalThis.window = { agentrix: { writeTerminal: (id, key) => written.push({ id, key }) } };
-  t.after(() => { if (previous === undefined) delete globalThis.window; else globalThis.window = previous; });
-  const { ReadingChoice } = loadUI('features/reading/ReadingChoice.tsx', { react: hooks });
-  const render = () => {
-    cursor = 0;
-    const root = ReadingChoice({ choice, terminalId: 'native-choice', onError: message => assert.fail(message) });
-    root.props.ref.current = { focus: () => {} };
-    return root;
-  };
-  const press = key => {
-    let prevented = false;
-    render().props.onKeyDown({ key, nativeEvent: { isComposing: false }, preventDefault: () => { prevented = true; }, stopPropagation: () => {} });
-    assert.equal(prevented, true);
-  };
-  const options = () => elements(render()).filter(node => node.props.className?.split(' ').includes('reading-choice-option'));
-  return { written, render, press, options };
-}
-
 test('welcome command rows call the existing completion callback with the cached command', () => {
   const { ReadingWelcome } = loadUI('features/reading/ReadingWelcome.tsx');
   const command = { name: '/model', source: 'builtin', description: '切换模型', view: 'terminal' };
@@ -617,49 +593,6 @@ test('welcome command rows call the existing completion callback with the cached
   const root = ReadingWelcome({ agent: 'claude', screen: fakeScreen(), commands: [command], complete: value => picked.push(value), disabled: false });
   elements(root).find(node => node.type === 'button').props.onClick();
   assert.deepEqual(picked, [command]);
-});
-
-test('choice arrows move a local highlight; Enter submits once and keeps a pending card', t => {
-  const harness = choiceHarness(t);
-  assert.equal(harness.options()[1].props['data-highlighted'], true);
-  harness.press('ArrowDown'); assert.equal(harness.options()[2].props['data-highlighted'], true);
-  harness.press('ArrowUp'); assert.equal(harness.options()[1].props['data-highlighted'], true);
-  assert.deepEqual(harness.written, []);
-  harness.press('Enter'); harness.press('Enter'); harness.press('Escape');
-  assert.deepEqual(harness.written, [{ id: 'native-choice', key: '\r' }]);
-  assert.equal(harness.render().props['aria-busy'], true);
-  assert.ok(harness.options().every(option => option.props.disabled));
-  assert.ok(elements(harness.options()[1]).some(node => node.props.className === 'loading-spinner'));
-});
-
-test('choice number keys target printed numbers and write relative to the CLI cursor', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const choice = { ...fakeChoice(), kind: 'menu' }; choice.options.forEach((option, index) => { option.number = [4, 7, 9][index]; });
-  const harness = choiceHarness(t, choice);
-  harness.press('4'); harness.options()[2].props.onClick();
-  assert.deepEqual(harness.written, [{ id: 'native-choice', key: '\x1b[A' }]);
-  t.mock.timers.tick(25); await Promise.resolve();
-  assert.deepEqual(harness.written, [{ id: 'native-choice', key: '\x1b[A' }, { id: 'native-choice', key: '\r' }]);
-});
-
-test('Enter on a focused button presses that button, never the highlighted option (Cancel never approves)', t => {
-  const harness = choiceHarness(t);
-  let prevented = false;
-  const button = { closest: selector => selector === 'button' ? button : null };
-  harness.render().props.onKeyDown({ key: 'Enter', target: button, nativeEvent: { isComposing: false }, preventDefault: () => { prevented = true; }, stopPropagation: () => {} });
-  assert.equal(prevented, false, 'the button keeps its own Enter');
-  assert.deepEqual(harness.written, [], 'nothing chosen for it');
-});
-
-test('choice Esc and cancel button each send a single Escape and wait for CLI dismissal', t => {
-  for (const action of ['Escape', 'button']) {
-    const harness = choiceHarness(t);
-    if (action === 'Escape') harness.press('Escape');
-    else elements(harness.render()).find(node => node.props.className === 'text-button').props.onClick();
-    harness.press('Escape'); harness.press('Enter');
-    assert.deepEqual(harness.written, [{ id: 'native-choice', key: '\x1b' }]);
-    assert.equal(harness.render().props['aria-busy'], true);
-  }
 });
 
 function readingMode() {
@@ -823,7 +756,6 @@ function waitingHarness(t, { rows = [], ready = loadUI('features/reading/reading
   return Object.assign(h, { view, card: () => named(h.tree(), 'WaitingCard'), choiceCard: () => named(h.tree(), 'ReadingChoice'),
     showTerminalButton: () => elements(h.tree()).some(node => node.type === 'button' && node.props.className === 'text-button') });
 }
-const menuChoice = () => ({ ...fakeChoice(), kind: 'menu' });
 const restored = thread => ({ key: 'history', agent: 'codex', threadId: thread });
 
 test('a permission redraw while composing never opens a terminal that would take the next Enter', async t => {
@@ -944,7 +876,7 @@ test('a native question at the normal prompt blocks composer sends without movin
   assert.equal(h.node.value, 'keep this draft');
 });
 
-for (const kind of ['question', 'menu', 'permission']) test(`a pending native question excludes the screen ${kind} card until it resolves`, async t => {
+for (const kind of ['question', 'permission']) test(`a pending native question excludes the screen ${kind} card until it resolves`, async t => {
   const h = waitingHarness(t, { rows: IDLE_ROWS });
   h.node.focus();
   h.edit('keep my message');
@@ -978,10 +910,11 @@ test('a native question suppresses waiting cards and automatic popups without co
   assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
   h.props.terminal.nativeApprovals = [];
   h.render(); h.render();
-  assert.equal(h.card().props.title, 'Review your answers');
   assert.ok(h.popup(), 'the screen dialog can open once after the native request resolves');
+  assert.equal(h.card(), undefined, 'no card waits behind the popup');
   h.popup().props.onClose(); h.render(); h.render();
   assert.equal(h.popup(), undefined);
+  assert.equal(h.card().props.title, 'Review your answers');
 });
 
 test('a native question closes an existing terminal popup and resolving it cannot revive that popup', t => {
@@ -1067,11 +1000,11 @@ test('a dialog the screen has no card for shows the waiting card with its headin
   h.screen.waiting = { title: 'Exit plan mode?' };
   assert.equal(h.render().props.disabled, true);
   h.render();
-  assert.equal(h.card().props.title, 'Exit plan mode?');
-  assert.ok(h.popup(), 'the terminal opens beside the card');
+  assert.ok(h.popup(), 'the terminal opens for the dialog');
+  assert.equal(h.card(), undefined, 'no card for the same dialog waits behind the popup');
   h.popup().props.onClose(); h.render(); h.render();
   assert.equal(h.popup(), undefined, 'the same dialog, drawn again, never reopens it');
-  assert.ok(h.card(), 'the card stays for the way back');
+  assert.equal(h.card().props.title, 'Exit plan mode?', 'the card stays for the way back');
   h.card().props.onOpenTerminal(); h.render();
   assert.ok(h.popup(), 'the card button opens it again');
   assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
@@ -1082,9 +1015,9 @@ test('a dialog without a heading still shows the card, and the next dialog opens
   const h = waitingHarness(t);
   h.screen.waiting = { title: null };
   h.render(); h.render();
-  assert.equal(h.card().props.title, null);
   assert.ok(h.popup());
-  h.popup().props.onClose();
+  h.popup().props.onClose(); h.render();
+  assert.equal(h.card().props.title, null);
   h.screen.waiting = null; h.render(); h.render();
   assert.equal(h.card(), undefined);
   assert.equal(h.render().props.disabled, false);
@@ -1131,7 +1064,7 @@ test('a CLI that restarted into the same session while the view was away is not 
   const h = waitingHarness(t, { rows: IDLE_ROWS });
   Object.assign(h.props.terminal, { sessionId: 'runtime', codexActive: true, agentStartedAt: 100, readingHistory: restored('saved') });
   assert.equal(h.render().props.disabled, false);
-  h.view.rows = ['Do you want to proceed?']; h.screen.choice = menuChoice();
+  h.view.rows = ['Do you want to proceed?']; h.screen.choice = fakeChoice();
   h.render(); h.render();
   assert.ok(h.choiceCard());
   h.unmount(); h.props.terminal.agentStartedAt = 200;
@@ -1156,7 +1089,7 @@ test('rendering reads readiness without writing it: only the effect remembers', 
 
 test('a card read from the screen wins over waiting, and waiting never shows in a restored preview', t => {
   const h = waitingHarness(t);
-  h.screen.choice = menuChoice(); h.screen.waiting = { title: 'both' };
+  h.screen.choice = fakeChoice(); h.screen.waiting = { title: 'both' };
   h.render(); h.render();
   assert.equal(h.card(), undefined); assert.ok(h.choiceCard());
   h.screen.choice = null;
@@ -1165,6 +1098,24 @@ test('a card read from the screen wins over waiting, and waiting never shows in 
   assert.equal(h.card(), undefined);
   assert.equal(h.popup(), undefined);
   assert.equal(h.render().props.disabled, true);
+});
+
+test('a menu such as /model has no card: the terminal popup answers it, and nothing waits behind the popup', async t => {
+  const h = waitingHarness(t, { rows: IDLE_ROWS });
+  h.command('/model'); await h.tick(0); await h.tick(60); await h.tick(150);
+  assert.equal(h.popup().props.command, '/model');
+  h.popupInput.focus();
+  h.view.rows = ['Select model', '❯ 1. Opus', '  2. Sonnet', 'Enter to confirm · Esc to cancel'];
+  h.screen.choice = { ...fakeChoice(), kind: 'menu', title: 'Select model' };
+  h.render(); h.render();
+  assert.equal(h.popup().props.command, '/model', 'the open popup is kept, not replaced');
+  assert.equal(h.choiceCard(), undefined); assert.equal(h.card(), undefined);
+  h.popup().props.onClose(); h.render(); h.render();
+  assert.equal(h.choiceCard(), undefined, 'a menu never becomes a card');
+  assert.equal(h.card().props.title, 'Select model', 'the waiting card leads back to the terminal');
+  assert.equal(h.render().props.disabled, true);
+  h.card().props.onOpenTerminal(); h.render();
+  assert.ok(h.popup()); assert.equal(h.card(), undefined);
 });
 
 test('an attention notice with no input box shows the waiting card without opening the terminal or pressing a key', t => {
@@ -1186,7 +1137,7 @@ test('an attention notice with no input box shows the waiting card without openi
 test('the notice card gives way to a parsed choice and to a native approval card', t => {
   const h = waitingHarness(t);
   h.props.terminal.needsInput = 'Allow?';
-  h.screen.choice = menuChoice(); h.render(); h.render();
+  h.screen.choice = fakeChoice(); h.render(); h.render();
   assert.equal(h.card(), undefined); assert.ok(h.choiceCard());
   h.screen.choice = null; h.props.terminal.nativeApprovals = [{ token: 'native' }];
   assert.equal(h.render().props.disabled, true, 'the composer stays blocked behind the native card');
@@ -1202,7 +1153,7 @@ test('a live dialog card survives a trip to the raw terminal and back, because r
   Object.assign(h.props.terminal, { sessionId: 'runtime', codexActive: true, readingHistory: restored('saved') });
   assert.equal(h.render().props.disabled, false, 'the restored session has drawn its input');
   h.view.rows = ['Do you want to proceed?'];
-  h.screen.choice = menuChoice();
+  h.screen.choice = fakeChoice();
   h.render(); h.render();
   assert.ok(h.choiceCard(), 'an approval screen has no input box, yet its card shows');
   h.remount();
@@ -1217,7 +1168,7 @@ test('a live dialog card survives a trip to the raw terminal and back, because r
 test('a restored preview still hides its stale choice until its own CLI input is seen, and readiness ends with the CLI, session and thread', t => {
   const h = waitingHarness(t, { rows: ['Do you want to proceed?'] });
   Object.assign(h.props.terminal, { sessionId: 'runtime', codexActive: true, readingHistory: restored('saved') });
-  h.screen.choice = menuChoice();
+  h.screen.choice = fakeChoice();
   assert.equal(h.render().props.disabled, true); h.render();
   assert.equal(h.choiceCard(), undefined, 'a screen never drawn live is only history');
   h.view.rows = IDLE_ROWS; h.render(); h.view.rows = ['Do you want to proceed?']; h.render(); h.render();

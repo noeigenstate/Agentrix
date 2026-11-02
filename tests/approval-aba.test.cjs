@@ -130,7 +130,8 @@ for (const agent of ['claude', 'codex']) {
       await h.tick(100);
       assert.deepEqual(h.writes, []); assert.deepEqual(h.done, []); assert.deepEqual(h.approvalCalls, []);
     });
-    test(`${agent}/${view}: ordinary model menus remain interactive`, async t => {
+    // The reading view has no menu card: a menu is answered in its terminal popup (reading-ui tests).
+    if (view === 'decision') test(`${agent}/${view}: ordinary model menus remain interactive`, async t => {
       const h = cardHarness(t, agent, view, 'menu'), choice = h.choice();
       assert.equal(choice.kind, 'menu');
       assert.equal(h.root().props['data-approval-mode'], undefined);
