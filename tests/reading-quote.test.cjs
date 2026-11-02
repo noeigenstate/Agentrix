@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readingMarked } = require('../src/features/reading/markdown-escape.ts');
 const { QUOTE_LINES, QUOTE_CHARS, splitQuote, quoteExcerpt, plainExcerpt, withQuote } = require('../src/features/reading/message-quote.ts');
 
 // The rendering and send-flow tests of quotes sit beside the harnesses they use, in reading-ui.test.cjs.
@@ -16,9 +17,22 @@ test('a quote is the message\'s own words: at most 6 lines and 400 characters, c
   assert.equal(quoteExcerpt(`a${'😀'.repeat(250)}`), `a${'😀'.repeat(199)}…`, 'a cut never leaves half a character');
 });
 
-test('blank lines and trailing spaces are dropped, and an empty message has nothing to quote', () => {
-  assert.equal(quoteExcerpt('a\n\n  \nb  \r\nc'), 'a\nb\nc');
-  assert.equal(quoteExcerpt('  \n\n'), '');
+test('one blank line stays between blocks and counts toward the 6 lines; its edges, repeats and trailing spaces go', () => {
+  assert.equal(quoteExcerpt('a\n\n  \n\nb  \r\nc'), 'a\n\nb\nc');
+  assert.equal(quoteExcerpt('\n\n  a\n\n'), '  a', 'blank edges are dropped');
+  assert.equal(quoteExcerpt('  \n\n'), '', 'an empty message has nothing to quote');
+  assert.equal(quoteExcerpt('1\n2\n3\n4\n5\n\n7'), '1\n2\n3\n4\n5…', 'the blank line is the 6th line, and nothing hangs before the ellipsis');
+  assert.equal(quoteExcerpt('1\n2\n3\n4\n\n6'), '1\n2\n3\n4\n\n6', 'six lines with a blank one are not cut');
+  assert.ok(quoteExcerpt(`${'x'.repeat(100)}\n\n${'y'.repeat(400)}`).length <= QUOTE_CHARS + 1, 'a blank line never lifts the character bound');
+});
+
+test('a paragraph after a list stays its own block in the sent quote, so it never nests in the last item', () => {
+  const excerpt = quoteExcerpt('读取分块：\n- 保留偏移量\n- 补上换行\n\n文件结束时冲刷剩余内容。');
+  const sent = withQuote(excerpt, '继续');
+  assert.equal(sent, '> 读取分块：\n> - 保留偏移量\n> - 补上换行\n>\n> 文件结束时冲刷剩余内容。\n\n继续');
+  assert.deepEqual(splitQuote(sent), { quote: excerpt, rest: '继续' });
+  assert.match(readingMarked.parse(excerpt), /<\/ul>\s*<p>文件结束时冲刷剩余内容。<\/p>/, 'the paragraph is outside the list');
+  assert.doesNotMatch(readingMarked.parse(excerpt.replace('\n\n', '\n')), /<\/ul>\s*<p>/, 'without the blank line it would be a lazy continuation');
 });
 
 test('quoting a message that carries a quote takes its words only, so quotes never nest', () => {
