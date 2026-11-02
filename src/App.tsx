@@ -55,7 +55,8 @@ function focusOverviewProject(id: string) {
 }
 
 const NO_PROJECTS: Project[] = [];
-const dialogOpen = () => !!document.querySelector('dialog[open], .tour-layer');
+// Terminal popups are modeless: only their own keys belong to the CLI, even while other projects are hidden.
+const dialogOpen = (target: EventTarget | null = document.activeElement) => !!document.querySelector('dialog:modal, .tour-layer') || !!(target as Element | null)?.closest?.('.reading-terminal-popup');
 
 export function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
@@ -243,10 +244,10 @@ export function App() {
   useEffect(() => {
     // App shortcuts (configurable in settings). In text boxes and the editor, standard editing keys such as
     // Ctrl+A keep their meaning; in terminals and elsewhere the shortcut wins, before xterm sees the key.
-    // While a dialog is open (including recording a new shortcut) nothing is intercepted.
+    // Modal dialogs (including recording a new shortcut) block everywhere; terminal popups keep their own keys.
     const handler = (event: KeyboardEvent) => {
       const action = actionFor(event);
-      if (!action || editingKeyInField(event) || dialogOpen()) return;
+      if (!action || editingKeyInField(event) || dialogOpen(event.target)) return;
       event.preventDefault(); event.stopPropagation();
       if (!event.repeat) runAction(action);
     };
