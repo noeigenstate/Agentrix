@@ -2084,9 +2084,9 @@ function quoteHarness(t, overrides = {}) {
 test('a quote goes before the words of the next ordinary message once, and the pending echo carries it', async t => {
   const { h, pick, chip } = quoteHarness(t);
   pick('Codex', 'the plan:\n\nstep one\nstep two');
-  assert.deepEqual(chip().props.quote, { who: 'Codex', excerpt: 'the plan:\nstep one\nstep two' });
+  assert.deepEqual(chip().props.quote, { who: 'Codex', excerpt: 'the plan:\n\nstep one\nstep two' });
   h.edit('please fix'); h.press('Enter'); await h.tick(0);
-  assert.deepEqual(h.pasted.map(item => item.text), ['> the plan:\n> step one\n> step two\n\nplease fix']);
+  assert.deepEqual(h.pasted.map(item => item.text), ['> the plan:\n>\n> step one\n> step two\n\nplease fix']);
   assert.equal(h.echoed[0].text, h.pasted[0].text);
   assert.equal(chip(), undefined);
 });

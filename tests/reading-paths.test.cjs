@@ -92,6 +92,16 @@ test('reading path spans retain all text for selection/copy and escape agent out
   assert.equal(html.replace(/<[^>]+>/g, '').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&'), text);
 });
 
+test('a plain phrase in prose quotes or brackets is not a path; only code ticks make a bare name one', () => {
+  const { PathText } = load('PathText.tsx'), render = (text, literal) => renderToStaticMarkup(React.createElement(PathText, { text, literal }));
+  const phrase = '文件结束时冲刷剩余内容';
+  for (const text of [`要点是「${phrase}」`, `要点是“${phrase}”`, `要点是'${phrase}'`, `要点是"${phrase}"`, `要点是（${phrase}）`, `要点是 (${phrase})`, `要点是 [${phrase}]`, phrase]) {
+    assert.doesNotMatch(render(text), /data-reading-path/, text);
+  }
+  assert.match(render('docs', true), /data-reading-path="docs"/, 'inline code keeps its bare folder name');
+  assert.match(render('见`docs`与「src/app」和「a.md」'), /data-reading-path="docs".*data-reading-path="src\/app".*data-reading-path="a.md"/, 'ticks, separators and extensions still make paths');
+});
+
 test('path affordances name the native modifier and file manager in each platform', () => {
   assert.equal(load('reading-paths.ts').pathTooltip(), 'Ctrl+click to show in File Explorer');
   assert.equal(load('reading-paths.ts', { isMac: true, isWindows: false }).pathTooltip(), '⌘+click to show in Finder');

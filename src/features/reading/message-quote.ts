@@ -14,10 +14,14 @@ export function splitQuote(text: string): { quote: string | null; rest: string }
   return { quote: lines.slice(0, count).map(line => line.slice(2)).join('\n'), rest: lines.slice(count).join('\n').replace(/^\s*\n/, '') };
 }
 
-// What of a message is quoted: its own words (a quote it carries is dropped, so quotes never nest), without blank lines.
+// What of a message is quoted: its own words (a quote it carries is dropped, so quotes never nest). One blank line stays
+// between blocks, so a paragraph after a list does not render as a lazy continuation of its last item. A blank line counts
+// as a line of the bound; the edges and repeats of blank lines are dropped.
 export function quoteExcerpt(text: string): string {
-  const lines = splitQuote(text).rest.split(/\r?\n/).map(line => line.trimEnd()).filter(line => line.trim());
-  let excerpt = lines.slice(0, QUOTE_LINES).join('\n'), cut = lines.length > QUOTE_LINES;
+  const lines: string[] = [];
+  for (const line of splitQuote(text).rest.split(/\r?\n/)) if (line.trim() || lines.at(-1)) lines.push(line.trimEnd());
+  if (!lines.at(-1)) lines.pop();
+  let excerpt = lines.slice(0, QUOTE_LINES).join('\n').trimEnd(), cut = lines.length > QUOTE_LINES;
   if (excerpt.length > QUOTE_CHARS) { excerpt = excerpt.slice(0, QUOTE_CHARS).replace(/[\ud800-\udbff]$/, '').trimEnd(); cut = true; }
   return cut ? `${excerpt}…` : excerpt;
 }
@@ -33,4 +37,4 @@ export function plainExcerpt(excerpt: string): string {
 
 // Only an ordinary message carries a quote: a slash command or shell line is typed as it is and keeps the quote for the next one.
 export const withQuote = (excerpt: string | undefined, text: string) =>
-  excerpt ? `${excerpt.split('\n').map(line => `> ${line}`).join('\n')}\n\n${text}` : text;
+  excerpt ? `${excerpt.split('\n').map(line => line ? `> ${line}` : '>').join('\n')}\n\n${text}` : text;
