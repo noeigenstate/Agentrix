@@ -14,7 +14,7 @@ import { reviewHistory } from './review-history';
 export type DecisionKind = 'approval' | 'question' | 'choice' | 'signin' | 'attention' | 'review';
 export type Decision = {
   id: string; kind: DecisionKind; projectId: string; projectName: string; terminalId: string; sessionId: string | null; terminalTitle: string; multipleTerminals: boolean;
-  agent: 'claude' | 'codex'; title: string; context: string[]; choice: ScreenChoice | null; identity: string | null; message: string; since: number; native?: import('../../shared/types').NativeApproval;
+  agent: 'claude' | 'codex'; title: string; context: string[]; choice: ScreenChoice | null; identity: string | null; message: string; since: number;
 };
 
 // When each decision was first seen, so it can say how long it has waited and keep its place in the queue.
@@ -69,10 +69,6 @@ export function useDecisions(projects: readonly Project[]) {
         if (!firstSeen.has(id)) { firstSeen.set(id, Date.now()); if (firstSeen.size > 500) firstSeen.delete(firstSeen.keys().next().value!); }
         found.push({ ...base, ...decision, id, since: firstSeen.get(id)! });
       };
-      if (terminal.nativeApprovals?.length) {
-        for (const native of terminal.nativeApprovals) add({ id: native.token, kind: 'approval', title: `${native.provider} native approval`, context: [], choice: null, identity: null, message: '', native });
-        continue;
-      }
       if (screen.choice) {
         const choice = screen.choice, identity = choiceIdentity(choice);
         const kind: DecisionKind = choice.kind === 'permission' ? 'approval' : choice.kind === 'question' ? 'question' : 'choice';

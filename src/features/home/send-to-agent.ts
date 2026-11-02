@@ -17,15 +17,9 @@ function look(terminalId: string, agent: Agent) {
 // and Enter pressed, again if the CLI did not take it. Both CLIs queue a message sent while they work. While the agent
 // waits on a choice or a question, its keys belong to that: nothing is sent. Gives an error, or null once sent.
 export async function sendToAgent(terminalId: string, sessionId: string, agent: Agent, text: string): Promise<string | null> {
-  const state = await window.agentrix.getState?.();
-  const managed = state?.ok && state.value.projects.some(project => project.terminals.some(terminal => terminal.id === terminalId && terminal.sessionId === sessionId && terminal.nativeMode === 'claude-sdk'));
-  if (managed) {
-    const result = await window.agentrix.managedPrompt(terminalId, sessionId, text);
-    return result.ok ? null : result.error;
-  }
   const now = look(terminalId, agent);
   if (!now) return t('它的终端还没有准备好，请稍后再试。');
-  if (now.screen.choice) return t('它在等你做一个选择，先处理那张决策卡再发送。');
+  if (!isAtPrompt(agent, now.rows, now.screen)) return t('请先在终端中处理当前界面，再发送消息。');
   if (cliInputDraft(agent, now.rows, now.screen)) { window.agentrix.writeTerminal(terminalId, '\x15'); await pause(60); }
   const pasted = await window.agentrix.pasteTerminal(terminalId, text, sessionId);
   if (!pasted.ok) return pasted.error;

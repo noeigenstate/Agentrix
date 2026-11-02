@@ -118,7 +118,7 @@ try {
     await popup.waitFor({ state: 'detached' });
     assert.deepEqual(await writes(), before, 'closing sends no key to the CLI');
     assert.ok(await terminal.locator('.terminal-split-body > .terminal-host > .xterm').evaluate(node => node === globalThis.readingXterm), 'the same xterm returns to its original host');
-    assert.equal(await composer.evaluate(node => document.activeElement === node), true);
+    if (await composer.isEnabled()) assert.equal(await composer.evaluate(node => document.activeElement === node), true);
   };
   const settled = async (label, command = label) => {
     await popup.waitFor();
@@ -220,35 +220,21 @@ try {
   assert.equal(await composer.inputValue(), 'keep this draft');
   await write("Clear-Host; Write-Host 'Settings'; Write-Host 'Esc to close'; Start-Sleep -Seconds 4\r");
   await waitFor(async () => (await physicalRows()).some(row => row.trim() === 'Esc to close'), 'dialog remains in the CLI');
-  await resetWrites(); await composer.press('Enter'); await popup.waitFor();
+  await resetWrites(); await popup.waitFor(); await page.keyboard.press('Enter');
   assert.equal(await composer.inputValue(), 'keep this draft'); assert.deepEqual(await writes(), []);
   // The stand-in dialog ends by itself (Ctrl+C does not reach Start-Sleep through ConPTY here); the idle frame follows.
   await renderIdle('after dialog'); await closePopup(); await composer.fill('');
   checks.push('external commands preserve the composer; normal messages in a CLI dialog open the popup without typing');
-  const permission = { session_id: 's1', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' };
-  await write(hook('notify', permission));
-  await waitFor(async () => (await state()).needsInput === permission.message, 'permission reaches renderer'); await raw();
+  // A real terminal frame owns every confirmation. It opens even while the composer holds a draft.
+  const permissionRows = (await fs.readFile(path.join(root, 'tests/fixtures/screens/claude-permission.txt'), 'utf8')).split(/\r?\n/);
+  await composer.fill('keep the confirmation draft');
+  await write('Clear-Host; ' + permissionRows.map(row => "Write-Host '" + row.replace(/'/g, "''") + "'").join('; ') + '; $global:ReadingFixtureClearOnPrompt = $true; Start-Sleep -Seconds 4\r');
+  await popup.waitFor(); assert.equal(await composer.isDisabled(), true);
+  assert.equal(await popup.evaluate(node => node.contains(document.activeElement)), false);
   await page.screenshot({ path: path.join(output, 'permission-terminal.png') });
-  await write(hook('stop', { session_id: 's1' }));
-  await waitFor(async () => (await state()).needsInput === null, 'stop clears permission'); await reading();
-  checks.push('permission automatically opens terminal and stop returns to reading');
-  await write(hook('notify', permission)); await raw(); await showReading();
-  assert.ok((await terminal.locator('.reading-status').innerText()).includes(`等待你确认：${permission.message}`));
-  // No choice the reading view can lay out (none is on this screen): the waiting line offers the terminal itself.
-  await page.screenshot({ path: path.join(output, 'permission-waiting.png') });
-  await terminal.locator('.reading-status').getByRole('button', { name: '切换到终端', exact: true }).click(); await raw();
-  await write(hook('stop', { session_id: 's1' }));
-  await waitFor(async () => (await state()).needsInput === null, 'manual choice survives permission clear');
-  assert.equal(await composer.count(), 0);
-  await showReading();
-  // Claude runs no hook when its permission prompt is answered: the answering key itself (Enter here, as a choice in
-  // the reading view sends it) ends the notice, not the end of the round.
-  await write(hook('notify', permission));
-  await waitFor(async () => (await state()).needsInput === permission.message, 'another permission');
-  await write('\r');
-  await waitFor(async () => (await state()).needsInput === null, 'answering the permission ends the waiting notice');
-  await waitFor(async () => (await terminal.locator('.reading-status', { hasText: '等待你确认' }).count()) === 0, 'no waiting line after the answer');
-  checks.push('answering a permission ends its waiting notice before the round ends');
+  await resetWrites(); await page.keyboard.press('Enter'); assert.deepEqual(await writes(), []);
+  await renderIdle('permission returned to input'); await closePopup(); await composer.fill('');
+  checks.push('confirmations open the terminal without typing focus; the locked draft sends no answer');
   await write(hook('start', { session_id: 's1', prompt: 'test interrupt' }));
   await waitFor(async () => (await state()).codexActivity === 'working', 'working fixture');
   // Claude's spinner line while it works (an idle input on screen would mean it has finished).
@@ -260,17 +246,13 @@ try {
     const rows = await physicalRows();
     return hasCliInput('claude', rows, parseAgentScreen('claude', rows));
   }, 'working CLI still has its input');
-  await resetWrites();
-  await composer.fill("Write-Output 'READING_WORKING_SENT'; Show-ReadingFixtureInput"); await composer.press('Enter');
-  await waitFor(async () => (await physicalRows()).some(row => row.trim().startsWith('READING_WORKING_SENT')), 'normal message submitted while Claude works');
-  assert.equal(await popup.count(), 0, 'a message during work never opens the terminal popup');
-  assert.equal(await composer.inputValue(), ''); assert.deepEqual((await writes()).map(item => item.data), ["Write-Output 'READING_WORKING_SENT'; Show-ReadingFixtureInput", '\r']);
-  checks.push('normal messages while Claude works reach the CLI with one Enter and no terminal popup');
+  await resetWrites(); assert.equal(await composer.isDisabled(), true);
+  await page.keyboard.press('Enter'); assert.deepEqual(await writes(), []); assert.equal(await popup.count(), 0);
+  await renderIdle('working frame returned to idle');
+  checks.push('a working CLI cannot receive a composer message until its idle input returns');
   await composer.fill('/'); await palette.waitFor(); await resetWrites(); await composer.press('Escape');
   await waitFor(async () => await composer.getAttribute('aria-expanded') === 'false', 'palette Escape closes the list');
-  assert.deepEqual(await writes(), [], 'palette Escape does not interrupt');
-  await composer.press('Escape'); await waitFor(async () => (await writes()).some(item => item.data === '\x1b'), 'Escape interrupts working CLI');
-  checks.push('manual view choice and status, palette Escape before interrupt');
+  assert.deepEqual(await writes(), [], 'palette Escape sends no CLI key');
   // Replay actual transcript shapes through the main-process reader, IPC and React, in this run's Claude home.
   const queueSession = randomUUID(), transcript = path.join(claudeHome, 'projects', project.path.replace(/[^A-Za-z0-9]/gu, '-'), `${queueSession}.jsonl`);
   await fs.mkdir(path.dirname(transcript), { recursive: true });
@@ -365,14 +347,15 @@ try {
   // A card that comes while someone writes in the box never takes the keyboard: the Enter meant for the message must not
   // answer it (here, approve a command). The fixture prints Codex's approval prompt and keeps its own prompt away.
   await composer.fill(''); await composer.click(); await page.keyboard.type('先别批准', { delay: 40 });
-  await write("Clear-Host; Write-Host '  Would you like to run the following command?'; Write-Host ''; Write-Host '  $ npm test'; Write-Host ''; Write-Host '› 1. Yes, proceed (y)'; Write-Host '  2. No, and tell Codex what to do differently (esc)'; Write-Host ''; Write-Host '  Press enter to confirm or esc to cancel'; $global:ReadingFixtureClearOnPrompt = $true; Start-Sleep -Seconds 30\r");
-  const asked = page.locator('.reading-choice'); await asked.waitFor({ timeout: 10000 });
-  assert.equal(await page.evaluate(() => !!document.activeElement?.closest('.reading-choice-host')), false, 'the card does not take the keyboard from someone writing');
-  await resetWrites(); await page.keyboard.press('Enter'); await page.waitForTimeout(800);
-  assert.ok(!(await writes()).some(item => item.data.includes('\r') || item.data === 'y'), 'the Enter meant for the message answers nothing');
-  assert.equal(await asked.count(), 1, 'the card still waits for an answer');
-  await write('\x03'); await asked.waitFor({ state: 'detached', timeout: 10000 });
-  checks.push('a card that comes while someone writes never takes the keyboard');
+  await write("Clear-Host; Write-Host '  Would you like to run the following command?'; Write-Host ''; Write-Host '  $ npm test'; Write-Host ''; Write-Host '› 1. Yes, proceed (y)'; Write-Host '  2. No, and tell Codex what to do differently (esc)'; Write-Host ''; Write-Host '  Press enter to confirm or esc to cancel'; $global:ReadingFixtureClearOnPrompt = $true; Start-Sleep -Seconds 4\r");
+  await popup.waitFor({ timeout: 10000 });
+  assert.equal(await popup.evaluate(node => node.contains(document.activeElement)), false, 'automatic terminal mounting preserves typing ownership');
+  assert.equal(await composer.isDisabled(), true);
+  await resetWrites(); await page.keyboard.press('Enter'); await page.waitForTimeout(150);
+  assert.deepEqual(await writes(), [], 'the Enter meant for the message answers nothing');
+  assert.equal(await page.locator('.reading-choice-option, .native-question').count(), 0);
+  await renderIdle('typing confirmation ended'); await closePopup();
+  checks.push('a confirmation arriving while typing opens a terminal without focusing it or answering');
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, checks, errors, targeting: { plainTerminalId: project.id, plainSession, agentTerminalId: terminalId, commandTargets } }, null, 2));
   console.log(`PASS: reading palette, typed slash/shell commands, CLI keys, history and permission handoff. Evidence: ${output}`);

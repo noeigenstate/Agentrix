@@ -1,20 +1,7 @@
-function registerNativeIpc({ handle, findProject, getSession }) {
-  handle('terminal:native-approval', (id, answer) => {
-    findProject(id);
-    const s = getSession(id);
-    if (!s?.native || s.approvalRemote || s.status === 'exited') throw new Error('No live native approval channel');
-    return s.native.answer(answer);
-  });
-  handle('terminal:native-question', (id, answer) => {
-    findProject(id);
-    const s = getSession(id);
-    if (!s?.native || s.approvalRemote || s.status === 'exited') throw new Error('No live native question channel');
-    return s.native.answerQuestion(answer);
-  });
-  handle('terminal:managed-prompt', (id, sessionId, text) => {
-    findProject(id); const s = getSession(id);
-    if (!s?.native || s.approvalRemote || s.nativeMode !== 'claude-sdk' || s.sessionId !== sessionId || s.status === 'exited') throw new Error('Managed session changed');
-    s.native.prompt(text); return true;
-  });
+// Stale renderers have no authority to answer the CLI. These retired channels never fall back to keys.
+function registerNativeIpc({ handle }) {
+  for (const channel of ['terminal:native-approval', 'terminal:native-question', 'terminal:managed-prompt']) {
+    handle(channel, () => { throw new Error('Answer in the terminal'); });
+  }
 }
 module.exports = { registerNativeIpc };

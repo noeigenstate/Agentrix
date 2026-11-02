@@ -20,7 +20,7 @@ export function pruneReadingCli(liveKeys: ReadonlySet<string>) {
 }
 
 // Move only xterm's DOM. React keeps its original host, and the PTY, renderer and handlers stay attached.
-export function mountReadingTerminal(id: string, sessionId: string | null, host: HTMLElement) {
+export function mountReadingTerminal(id: string, sessionId: string | null, host: HTMLElement, focus = true) {
   const entry = terminals.get(keyFor(id, sessionId)), terminal = entry?.terminal, element = terminal?.element;
   if (!entry || !terminal || !element) throw new Error('Terminal is not ready');
   entry.restore?.();
@@ -38,7 +38,7 @@ export function mountReadingTerminal(id: string, sessionId: string | null, host:
     fit(); entry.restore = undefined;
   };
   entry.restore = restore;
-  try { host.appendChild(element); fit(); terminal.focus(); observer.observe(host); }
+  try { host.appendChild(element); fit(); if (focus) terminal.focus(); observer.observe(host); }
   catch (error) { restore(); throw error; }
   return restore;
 }

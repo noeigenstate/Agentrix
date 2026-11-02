@@ -56,3 +56,30 @@ test('public state reserves the reading surface during agent startup and release
   session.error = null; session.status = 'exited'; assert.equal(terminal().agentStarting, false);
   session.status = 'shell'; session.agentStarting = false; assert.equal(terminal().agentStarting, false, 'a plain shell stays visible');
 });
+
+test('agent:launch refuses native Claude without starting or replacing a session, and keeps native Codex', async () => {
+  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'), handlers = {}, starts = [], deleted = [];
+  const context = vm.createContext({ handle: (name, run) => handlers[name] = run, findProject: () => ({ kind: 'local' }), sessions: new Map(),
+    launchPlans: { delete: id => deleted.push(id) }, restorePlans: { delete: id => deleted.push(id) }, startTerminal: (...args) => starts.push(args), broadcast() {} });
+  const start = main.indexOf("  handle('agent:launch'");
+  vm.runInContext(main.slice(start, main.indexOf('  registerNativeIpc(', start)), context);
+  await assert.rejects(handlers['agent:launch']('fixture', 'claude', 'native'), /only available for Codex/);
+  assert.deepEqual(starts, []); assert.deepEqual(deleted, []);
+  assert.equal(await handlers['agent:launch']('fixture', 'codex', 'native'), true);
+  assert.deepEqual(starts, [['fixture', 'codex-native']]);
+});
+
+test('the native launcher offers Codex alone and has no managed Claude action', t => {
+  const { hookHarness } = require('./helpers/hook-harness.cjs'), React = require('react');
+  const previous = global.window; global.window = { agentrix: { getAgents: async () => ({ ok: true, value: { codex: { installed: true }, claude: { installed: true } } }), onAgents: () => () => {}, agentHistory: async () => ({ ok: true, value: { claude: null, codex: null } }) } };
+  t.after(() => { global.window = previous; });
+  const ui = hookHarness('src/features/terminal/AgentLauncher.tsx', { '@phosphor-icons/react': { CircleNotch() {}, Terminal() {} },
+    './AgentBrandIcon.ts': { ClaudeLogo() {}, CodexLogo() {} }, './time': { relativeTime: () => '' }, './i18n': { t: text => text }, './agent-launcher.css': {} });
+  const props = { terminalId: 'fixture', projectId: 'fixture', onAction: async () => {}, onOpenTerminal() {} };
+  const nodes = node => Array.isArray(node) ? node.flatMap(nodes) : React.isValidElement(node) ? [node, ...nodes(node.props.children)] : [];
+  const first = ui.render('AgentLauncher', props).result;
+  nodes(first).find(node => node.props.role === 'radio').props.onClick();
+  const native = ui.render('AgentLauncher', props).result, buttons = nodes(native).filter(node => node.type === 'button' && node.props.className?.startsWith('agent-launcher-agent '));
+  assert.equal(buttons.length, 1); assert.ok(buttons[0].props.className.includes('is-codex'));
+  assert.equal(nodes(native).some(node => typeof node.props.children === 'string' && /SDK/.test(node.props.children)), false); ui.dispose();
+});

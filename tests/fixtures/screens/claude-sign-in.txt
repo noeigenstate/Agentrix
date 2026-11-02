@@ -1,0 +1,3 @@
+Sign in to Claude Code
+Open https://login.example.invalid/authorize in your browser
+Paste the authorization code below:

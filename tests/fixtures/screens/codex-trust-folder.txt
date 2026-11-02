@@ -1,0 +1,5 @@
+Do you trust the files in this folder?
+C:\synthetic\project
+› 1. Yes, proceed
+  2. No, exit
+Press enter to confirm or esc to cancel

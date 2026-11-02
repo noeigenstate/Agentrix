@@ -41,7 +41,7 @@ function backend(agent) {
 
 // Keep the real cards mounted. Only React/DOM and terminal IO are stand-ins. A/B/A is actually drawn,
 // without a React render or a 100 ms screen publication.
-function cardHarness(t, agent, view = 'reading', kind = 'permission') {
+function cardHarness(t, agent, view = 'decision', kind = 'permission') {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const before = globalThis.window, slots = [], effects = [], errors = [], done = [], b = backend(agent), writes = b.writes;
   let cursor = 0, parsed, rows = fixture(agent, kind);
@@ -70,7 +70,7 @@ function cardHarness(t, agent, view = 'reading', kind = 'permission') {
       effects.push(() => { slot.cleanup?.(); slot.cleanup = fn(); });
     },
   };
-  const filename = path.join(__dirname, view === 'reading' ? '../src/features/reading/ReadingChoice.tsx' : '../src/features/home/DecisionCard.tsx'), mod = new Module(filename, module);
+  const filename = path.join(__dirname, '../src/features/home/DecisionCard.tsx'), mod = new Module(filename, module);
   mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
   const original = mod.require.bind(mod);
   mod.require = name => name === 'react' ? hooks : name === '@phosphor-icons/react' ? new Proxy({}, { get: () => () => null })
@@ -84,7 +84,7 @@ function cardHarness(t, agent, view = 'reading', kind = 'permission') {
     const props = { choice: c, terminalId: 'aba', agent, onShowTerminal: () => opened.push('aba'), onError: error => errors.push(error) };
     const decision = { id: `${c.approval?.instance}:${c.title}`, kind: kind === 'permission' ? 'approval' : 'choice', terminalId: 'aba', agent, choice: c,
       identity: require('../src/features/agents/agent-screen.ts').choiceIdentity(c), title: c.title, context: c.context, projectName: 'fixture' };
-    root = view === 'reading' ? mod.exports.ReadingChoice(props) : mod.exports.DecisionCard({ decision, now: 1, onOpen: d => opened.push(d.terminalId), onDone: message => done.push(message), onError: props.onError });
+    root = mod.exports.DecisionCard({ decision, now: 1, onOpen: d => opened.push(d.terminalId), onDone: message => done.push(message), onError: props.onError });
     if (root.props.ref) root.props.ref.current = { focus() {}, querySelector() {} };
     while (effects.length) effects.shift()();
     return root;
@@ -101,16 +101,16 @@ function cardHarness(t, agent, view = 'reading', kind = 'permission') {
 
 const terminalOnly = { mode: 'terminal-only', reason: 'native-request-identity-unavailable' };
 for (const agent of ['claude', 'codex']) {
-  for (const view of ['reading', 'decision']) {
+  for (const view of ['decision']) {
     test(`${agent}/${view}: permission cards are informative, terminal-only and open their source without keys`, async t => {
       const h = cardHarness(t, agent, view), root = h.root();
       assert.equal(root.props['data-approval-mode'], 'terminal-only');
       assert.ok(nodes(root).some(n => n.type === 'pre' && n.props.children.includes('hello.txt')));
       const options = nodes(root).filter(n => (n.type === 'button' && /reading-choice-option/.test(n.props.className)) || n.type === 'input');
       // The decision card lists the terminal's options as plain text; the reading card shows them disabled.
-      if (view === 'decision') { assert.equal(options.length, 0); assert.ok(nodes(root).filter(n => n.type === 'li').length > 0); }
+      if (view === 'decision') { assert.equal(options.length, 0); assert.equal(nodes(root).filter(n => n.type === 'li').length, 0); }
       else { assert.ok(options.length > 0); assert.ok(options.every(n => n.props.disabled)); }
-      assert.ok(nodes(root).some(n => n.props.children === 'Confirm or reject this request in the source terminal. Permission cards cannot safely send approval keys.'));
+      assert.ok(nodes(root).some(n => n.props.role === 'status' && typeof n.props.children === 'string' && n.props.children.length > 0));
       const open = nodes(root).find(n => n.props['data-approval-open-terminal']);
       assert.ok(open); open.props.onClick(); assert.deepEqual(h.opened, ['aba']);
       // Retain the mounted A's callbacks, then draw B and byte-identical A without publication.
@@ -130,20 +130,12 @@ for (const agent of ['claude', 'codex']) {
       await h.tick(100);
       assert.deepEqual(h.writes, []); assert.deepEqual(h.done, []); assert.deepEqual(h.approvalCalls, []);
     });
-    // The reading view has no menu card: a menu is answered in its terminal popup (reading-ui tests).
-    if (view === 'decision') test(`${agent}/${view}: ordinary model menus remain interactive`, async t => {
-      const h = cardHarness(t, agent, view, 'menu'), choice = h.choice();
-      assert.equal(choice.kind, 'menu');
-      assert.equal(h.root().props['data-approval-mode'], undefined);
-      const selected = Math.max(0, choice.options.findIndex(option => option.selected));
-      if (view === 'reading') {
-        nodes(h.root()).filter(n => n.type === 'button' && /reading-choice-option/.test(n.props.className))[selected].props.onClick();
-      } else {
-        nodes(h.root()).filter(n => n.type === 'input')[selected].props.onChange(); h.render();
-        nodes(h.root()).find(n => n.props.className === 'button primary').props.onClick();
-      }
-      await h.tick(100);
-      assert.deepEqual(h.writes, ['\r']); assert.deepEqual(h.errors, []); assert.deepEqual(h.approvalCalls, []);
+    test(agent + ': model menus also open their terminal without host-selected options', async t => {
+      const h = cardHarness(t, agent, view, 'menu');
+      assert.equal(h.choice().kind, 'menu'); assert.equal(h.root().props['data-approval-mode'], 'terminal-only');
+      assert.equal(nodes(h.root()).filter(n => n.type === 'input').length, 0);
+      nodes(h.root()).find(n => n.props['data-approval-open-terminal']).props.onClick();
+      await h.tick(100); assert.deepEqual(h.opened, ['aba']); assert.deepEqual(h.writes, []); assert.deepEqual(h.errors, []);
     });
   }
   test(`${agent}: retained permission dispatch rejects all targets even with fresh, absent or fabricated identity`, async t => {

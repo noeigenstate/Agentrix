@@ -4,15 +4,15 @@ import { mountReadingTerminal } from '../terminal/terminal-popup';
 import { t } from '../../shared/i18n';
 import './reading-terminal-popup.css';
 
-export function ReadingTerminalPopup({ terminalId, sessionId, command, onReady, onClose, onError }: {
-  terminalId: string; sessionId: string | null; command: string;
+export function ReadingTerminalPopup({ terminalId, sessionId, command, focus = true, onReady, onClose, onError }: {
+  terminalId: string; sessionId: string | null; command: string; focus?: boolean;
   onReady: () => void; onClose: (restoreFocus?: boolean) => void; onError: (message: string) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const callbacks = useRef({ onReady, onClose, onError }); callbacks.current = { onReady, onClose, onError };
   useLayoutEffect(() => {
     try {
-      const restore = mountReadingTerminal(terminalId, sessionId, host.current!);
+      const restore = mountReadingTerminal(terminalId, sessionId, host.current!, focus);
       callbacks.current.onReady();
       return restore;
     } catch (error) { callbacks.current.onClose(); callbacks.current.onError(String(error)); }
