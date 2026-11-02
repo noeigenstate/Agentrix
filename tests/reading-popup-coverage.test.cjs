@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const React = require('react');
+const jsx = require('react/jsx-runtime');
 const { hookHarness } = require('./helpers/hook-harness.cjs');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
 const panel = require('../src/features/reading/cli-panel.ts');
@@ -32,7 +33,19 @@ function popupHarness(t, agent = 'codex', rows = idle[agent]) {
   } };
   function ReadingTerminalPopup() {} function ConversationFeed() {}
   const noop = () => null, compact = async () => {}, entries = [];
+  // Commit the mock DOM before layout effects; a disabled textarea must reject focus until that commit.
+  const runtime = Object.fromEntries(['jsx', 'jsxs'].map(name => [name, (...args) => {
+    const tree = jsx[name](...args);
+    if (tree.props.className === 'reading-view') {
+      tree.props.ref.current = root;
+      const box = elements(tree).find(element => element.type === 'textarea');
+      box.props.ref.current = node; node.value = box.props.value; node.disabled = box.props.disabled;
+      elements(tree).find(element => element.props.className?.startsWith('reading-composer')).props.ref.current = composer;
+    }
+    return tree;
+  }]));
   const harness = hookHarness('src/features/reading/ReadingView.tsx', {
+    'react/jsx-runtime': runtime,
     '@phosphor-icons/react': new Proxy({}, { get: () => noop }),
     './action-text': { actionText: () => '' },
     './dictation-send': require('../src/features/reading/dictation-send.ts'),
@@ -68,11 +81,6 @@ function popupHarness(t, agent = 'codex', rows = idle[agent]) {
   let tree;
   const render = () => {
     tree = harness.render('ReadingView', props).result;
-    tree.props.ref.current = root;
-    const box = elements(tree).find(element => element.type === 'textarea');
-    box.props.ref.current = node; node.value = box.props.value; node.disabled = box.props.disabled;
-    const host = elements(tree).find(element => element.props.className?.startsWith('reading-composer'));
-    host.props.ref.current = composer;
     return tree;
   };
   t.after(() => { harness.dispose(); global.window = previous.window; global.document = previous.document;
@@ -124,6 +132,34 @@ if (require.main === module) {
       h.edit('keep this draft'); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE);
       assert.ok(h.popup()); assert.equal(h.popup().props.focus, false); assert.equal(h.node.value, 'keep this draft');
       assert.equal(h.node.disabled, true); h.keys('Enter'); h.keys('Tab');
+      assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
+    });
+    for (const restoreFocus of [true, false]) test(agent + ': closing /status at idle ' + (restoreFocus ? 'focuses the enabled composer after commit' : 'leaves another editor focused'), async t => {
+      const rows = agent === 'claude' ? ['────', '❯ ', '────', '  ⏸ manual mode on'] : idle.codex;
+      const h = popupHarness(t, agent, rows);
+      h.edit('/status'); h.keys('Enter');
+      assert.equal(h.popup().props.command, '/status'); assert.equal(h.node.disabled, true);
+      h.popup().props.onReady(); await Promise.resolve();
+      h.tick(60); await Promise.resolve(); h.tick(150); await Promise.resolve();
+      assert.deepEqual(h.writes.map(([, text]) => text), ['\x15', '/status', '\r']);
+      const before = h.writes.slice(), otherEditor = { matches: () => true };
+      document.activeElement = restoreFocus ? document.body : otherEditor;
+      h.popup().props.onClose(restoreFocus);
+      assert.equal(h.node.disabled, true, 'the close handler runs before the DOM commit');
+      h.render();
+      assert.equal(h.node.disabled, false); assert.equal(h.popup(), undefined);
+      assert.equal(document.activeElement, restoreFocus ? h.node : otherEditor);
+      h.tick(DIALOG_SETTLE * 2);
+      assert.equal(h.popup(), undefined); assert.deepEqual(h.writes, before); assert.deepEqual(h.pastes, []);
+    });
+    test(agent + ': a popup opened while typing preserves focus and draft, then restores the composer when closed at idle', t => {
+      const h = popupHarness(t, agent);
+      h.edit('keep this draft'); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE);
+      assert.equal(h.popup().props.focus, false); assert.equal(document.activeElement, h.node);
+      h.view.rows = idle[agent]; h.render();
+      assert.equal(h.node.disabled, true); document.activeElement = document.body;
+      h.popup().props.onClose(); h.render();
+      assert.equal(h.node.disabled, false); assert.equal(document.activeElement, h.node); assert.equal(h.node.value, 'keep this draft');
       assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
     });
   }

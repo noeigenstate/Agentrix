@@ -121,16 +121,19 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const [terminalPopup, setTerminalPopup] = useState<{ command: string; focus?: boolean } | null>(null);
   const inputBlocked = preview || !live || !idleInput || working || hasChoice || terminalPopup !== null;
   choiceVisible.current = hasChoice || terminalPopup !== null;
+  const focusAfterPopup = useRef(false);
   const popupReady = useRef<(() => void) | null>(null);
   const readyPopup = () => { popupReady.current?.(); popupReady.current = null; };
   const cancelSend = () => { sendCounter.current++; interaction.current++; sending.current = false; readyPopup(); };
   const closePopup = (restoreFocus = true) => {
-    cancelSend(); setTerminalPopup(null);
-    if (restoreFocus) {
-      if (!idleInput || hasChoice) composer.current?.focus({ preventScroll: true });
-      else input.current?.focus({ preventScroll: true });
-    }
+    cancelSend(); focusAfterPopup.current = restoreFocus; setTerminalPopup(null);
   };
+  // The popup disables the textarea; restore focus only after closing has enabled it in the DOM.
+  useLayoutEffect(() => {
+    if (terminalPopup !== null || !focusAfterPopup.current) return;
+    focusAfterPopup.current = false;
+    (inputBlocked ? composer.current : input.current)?.focus({ preventScroll: true });
+  }, [terminalPopup, inputBlocked]);
   useLayoutEffect(() => {
     setTerminalPopup(null);
     return cancelSend;
