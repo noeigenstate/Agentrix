@@ -187,8 +187,8 @@ const ok = (patch, status = 'ok') => ({ feed: feed(3, patch), status, error: nul
 test('the view names the task first, then the model, settings, state, speed and time, and renders the feed read-only with live links', () => zh(() => {
   const html = paneMarkup(ok({}));
   assert.match(html, /<section class="subagent-split" aria-label="Refactor the grid · GPT-6\.1-Sol 的输出，只读">/);
-  assert.match(html, /<span class="subagent-title" title="Refactor the grid">Refactor the grid<\/span><span class="subagent-tag subagent-role">执行<\/span><span class="subagent-name" title="gpt-6\.1-sol">GPT-6\.1-Sol<\/span><span class="subagent-how">max · 快速<\/span>/);
-  assert.match(html, /<span class="subagent-tag subagent-state is-running">运行中<\/span><span class="subagent-rate">94 token\/s<\/span>/);
+  assert.match(html, /<span class="subagent-title" title="Refactor the grid">Refactor the grid<\/span><span class="subagent-tag subagent-state is-running">运行中<\/span>/);
+  assert.match(html, /<div class="subagent-meta" title="执行 · GPT-6\.1-Sol · max · 快速 · 94 token\/s · gpt-6\.1-sol">执行 · GPT-6\.1-Sol · max · 快速 · 94 token\/s<\/div>/, 'role, model, settings and speed on the quiet second line');
   assert.match(html, /<span class="subagent-elapsed" title="已运行">2:05<\/span>/, 'now is 126 s, it started at 1 s');
   assert.match(html, /<button type="button" class="icon-button" title="关闭分屏（Esc）" aria-label="关闭 Refactor the grid · GPT-6\.1-Sol 的分屏">/);
   assert.match(html, /<div class="subagent-body" tabindex="0" role="log" aria-live="off" aria-label="Refactor the grid · GPT-6\.1-Sol 的消息和工具步骤，只读">/);
@@ -196,8 +196,8 @@ test('the view names the task first, then the model, settings, state, speed and 
   assert.match(html, /只读 · 自动跟随最新一步/);
   assert.equal(count(html, /<textarea/g), 1, 'the owner’s one text box, for the word to the agent');
   assert.match(paneMarkup(ok({ agent: 'Claude Code', rate: null })), /data-agent="claude"/);
-  assert.doesNotMatch(paneMarkup(ok({ effort: null, fast: null })), /subagent-how/);
-  assert.match(paneMarkup(ok({ rate: null })), /<span class="subagent-rate">— token\/s<\/span>/, 'an unknown speed is a dash, not 0');
+  assert.doesNotMatch(paneMarkup(ok({ effort: null, fast: null })), /max · 快速/);
+  assert.doesNotMatch(paneMarkup(ok({ rate: null })), /token\/s/, 'an unknown speed takes no room in the header: no dash, no unit');
   assert.match(html, /<\/div><div class="subagent-input"><div class="subagent-input-row"><textarea[^>]*maxLength="4000"[^>]*><\/textarea><button type="button" class="button">停下<\/button><\/div><\/div><footer class="subagent-foot">/, 'the input sits above the status line');
 }));
 
@@ -215,6 +215,8 @@ test('a finished view stays until closed, shows the time it took, and a lost rec
   assert.match(loading, /aria-label="子 agent 的输出，只读"/); assert.match(loading, /<p class="subagent-empty">正在读取…<\/p>/); assert.doesNotMatch(loading, /conversation-feed/);
   assert.match(paneMarkup({ feed: null, status: 'error', error: 'no bridge' }), /<p class="subagent-empty">读取失败：no bridge<\/p>/);
   assert.match(paneMarkup(ok({ startedAt: null })), /title="已运行">—<\/span>/, 'a start the records do not give is a dash');
+  assert.match(paneMarkup(ok({ state: 'done', startedAt: 1000, endedAt: null })), /title="用时">—<\/span>/, 'a finished view with no recorded end does not count on to now');
+  assert.match(paneMarkup(ok({ state: 'done', startedAt: 66_000, endedAt: 66_000 })), /title="用时">—<\/span>/, 'an end that is not after the start is unknown, not 0:00');
 }));
 
 test('the view closes on Escape and on its button, and Escape never travels on to the terminal', () => zh(() => {
@@ -554,7 +556,8 @@ test('two splits of one model are told apart by their task: it leads the header 
   const first = paneMarkup(ok({ model: 'claude-sonnet-5-5', agent: 'Claude Code', title: 'Trace the parser' })), second = paneMarkup(ok({ model: 'claude-sonnet-5-5', agent: 'Claude Code', title: 'Plan the split' }));
   const head = html => html.match(/<header class="subagent-head">.*?<\/header>/)[0];
   assert.notEqual(head(first), head(second));
-  assert.ok(head(first).indexOf('Trace the parser') < head(first).indexOf('subagent-name'), 'the task before the model');
+  assert.ok(head(first).indexOf('Trace the parser') < head(first).indexOf('subagent-meta'), 'the task before the model');
+  assert.match(head(first), /<div class="subagent-meta"[^>]*>[^<]*Sonnet 5\.5/, 'the model is on the second line');
   for (const [html, title] of [[first, 'Trace the parser'], [second, 'Plan the split']]) {
     assert.match(html, new RegExp(`aria-label="${title} · Sonnet 5\.5 的输出，只读"`));
     assert.match(html, new RegExp(`aria-label="关闭 ${title} · Sonnet 5\.5 的分屏"`));
@@ -563,14 +566,15 @@ test('two splits of one model are told apart by their task: it leads the header 
   assert.match(paneMarkup(ok({ title: '' })), /aria-label="GPT-6\.1-Sol 的输出，只读"/, 'a task with no title is named by its model, as before');
 }));
 
-test('the header keeps one line: the task takes the width the rest leaves with an ellipsis, the model gives way first, and the header stays above the feed', () => {
+test('the task keeps the header’s width: only the state, the clock and the close button share its row, who it is goes on one quiet line under it, and the header stays above the feed', () => zh(() => {
   const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
+  const row = paneMarkup(ok({})).match(/<div class="subagent-head-row">(.*?)<\/div>/)[1];
+  assert.deepEqual([...row.matchAll(/class="([^"]+)"/g)].map(match => match[1]), ['agent-brand-icon agent-brand-codex', 'subagent-title', 'subagent-tag subagent-state is-running', 'subagent-elapsed', 'icon-button'], 'no role, model, settings or speed beside the task');
   assert.match(css, /\.subagent-title \{ flex: 1 1 0; min-width: 0; overflow: hidden;[^}]*text-overflow: ellipsis; white-space: nowrap; \}/);
-  assert.match(css, /\.subagent-name \{ flex: none;[^}]*white-space: nowrap; \}/);
+  assert.match(css, /\.subagent-meta \{ overflow: hidden;[^}]*text-overflow: ellipsis; white-space: nowrap; \}/);
+  assert.match(css, /\.subagent-body \{[^}]*mask-image: linear-gradient\(to bottom, transparent 0, #000 14px\);/, 'a line scrolled under the header fades instead of showing half');
   assert.match(css, /\.subagent-head \{ position: relative; z-index: 1;[^}]*background: var\(--bg-app\); \}/, 'the feed scrolling to its end clips under the header, never over it');
-  assert.match(css, /@container \(max-width: 420px\) \{ :is\(\.subagent-rate, \.subagent-role\) \{ display: none; \} \}/);
-  assert.match(css, /@container \(max-width: 360px\) \{ \.subagent-name \{ display: none; \} \}/);
-});
+}));
 
 test('a narrow message box shows a shorter hint that fits, never a cut-off one: the longest hint comes first, the reason a finished view gives has a short form', () => {
   const view = inputView({}, {}, 2);

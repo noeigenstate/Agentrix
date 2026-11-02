@@ -122,32 +122,31 @@
 .activity-reset > .activity-note { padding-left: 24px; }
 .activity-reset-row .activity-row-icon { color: var(--flow-muted); }
 
-/* A sub-agent's read-only view (SubagentPane): a 40px header, the followed conversation, a 40px footer. It narrows by its own width, not the window's. */
+/* A sub-agent's read-only view (SubagentPane): a header of the task over a quiet line of who it is, the followed conversation, a 40px footer. It narrows by its own width, not the window's. */
 .subagent-split { container-type: inline-size; position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-app); }
-.subagent-head, .subagent-foot { display: flex; flex: none; align-items: center; gap: 8px; height: 40px; padding: 0 8px 0 16px; }
-/* The header sits above the feed it scrolls over (the feed's top clips under it), on the split's own colour. */
-.subagent-head { position: relative; z-index: 1; border-bottom: 1px solid var(--divider); background: var(--bg-app); }
+.subagent-foot, .subagent-head-row { display: flex; flex: none; align-items: center; gap: 8px; height: 40px; padding: 0 8px 0 16px; }
+/* The header sits above the feed it scrolls over (the feed's top clips under it), on the split's own colour. The task, the state and the clock share the first row; the second is who it is, quieter, and only as long as there is room. */
+.subagent-head { position: relative; z-index: 1; display: flex; flex: none; flex-direction: column; border-bottom: 1px solid var(--divider); background: var(--bg-app); }
+.subagent-head-row { height: 32px; padding-top: 4px; }
+.subagent-meta { overflow: hidden; padding: 0 16px 6px 40px; color: var(--text-3); font-size: 12px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
 .subagent-foot { border-top: 1px solid var(--divider); color: var(--text-3); font-size: 12px; }
 .subagent-foot > span:not(.subagent-space) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .subagent-foot svg { flex: none; }
 .subagent-space { flex: 1; }
 /* The task names the split and takes the width the rest leaves, on one line with an ellipsis; the model follows it, small. */
 .subagent-title { flex: 1 1 0; min-width: 0; overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.subagent-name { flex: none; color: var(--text-2); font-size: 12px; white-space: nowrap; }
-.subagent-how, .subagent-rate, .subagent-elapsed { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.subagent-elapsed { color: var(--text-2); }
+.subagent-elapsed { color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .subagent-tag { display: inline-flex; flex: none; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--bg-selected); color: var(--text-2); font-size: 12px; white-space: nowrap; }
 .subagent-state.is-running { color: var(--running); }
 .subagent-state:is(.is-done, .is-reviewing) { color: var(--text-1); }
 .subagent-main { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; }
-.subagent-body { flex: 1; min-height: 0; padding: 16px 24px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border-hover) transparent; }
+/* A line scrolled up under the header fades out over its first 14px instead of showing as a cut half-line. */
+.subagent-body { flex: 1; min-height: 0; padding: 16px 24px; overflow-y: auto; mask-image: linear-gradient(to bottom, transparent 0, #000 14px); scrollbar-width: thin; scrollbar-color: var(--border-hover) transparent; }
 .subagent-body:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .subagent-empty { margin: 0; color: var(--text-2); }
 .subagent-sent { width: fit-content; max-width: 85%; margin: 12px 0 0 auto; padding: 8px 12px; border-radius: 12px; background: var(--bg-selected); color: var(--text-1); font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
 .subagent-sent p { margin: 0; white-space: pre-wrap; }
 .subagent-sent small { display: block; margin-top: 4px; color: var(--text-3); font-size: 12px; }
 .subagent-jump.button { position: absolute; bottom: 12px; left: 50%; z-index: 3; background: var(--bg-menu); transform: translateX(-50%); }
-@container (max-width: 520px) { .subagent-how { display: none; } }
 @container (max-width: 480px) { .subagent-body { padding: 12px 16px; } }
-@container (max-width: 420px) { :is(.subagent-rate, .subagent-role) { display: none; } }
-@container (max-width: 360px) { .subagent-name { display: none; } }
+@container (max-width: 420px) { .subagent-meta { padding-right: 8px; } }

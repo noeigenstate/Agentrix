@@ -73,19 +73,21 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
   const over = feed?.state === 'done' || feed?.endedAt != null || status === 'gone', delivered = deliveredIds(entries, sent);
   const how = feed ? [feed.effort === 'default' ? t('默认') : feed.effort, feed.fast != null && (feed.fast ? t('快速') : t('普通'))].filter(Boolean).join(' · ') : '';
   const rate = feed ? rateValue(feed.rate) : null;
-  const ended = feed?.endedAt ?? (status === 'gone' ? null : now);
-  const elapsed = !feed || feed.startedAt === null || (over && ended === null) ? '—' : elapsedClock((over ? ended! : now) - feed.startedAt);
+  // A finished view counts to its recorded end; without one, or with an end not after the start, the time it took is unknown, not 0:00.
+  const ended = over ? feed?.endedAt ?? null : now;
+  const elapsed = feed?.startedAt != null && ended !== null && (!over || ended > feed.startedAt) ? elapsedClock(ended - feed.startedAt) : '—';
+  // Who it is, quietly under the task: the task takes the header's width; the role, model, settings and a known speed go on a second line.
+  const meta = feed ? [t(feed.role), name, how, rate !== null && `${rate} token/s`].filter(Boolean).join(' · ') : '';
 
   return <section className="subagent-split" aria-label={t('{name} 的输出，只读', { name: who })} onKeyDown={onKeyDown}>
     <header className="subagent-head">
-      <Mark size={16} /><span className="subagent-title" title={title}>{title}</span>
-      {feed && <span className="subagent-tag subagent-role">{t(feed.role)}</span>}
-      <span className="subagent-name" title={feed?.model}>{name}</span>
-      {how && <span className="subagent-how">{how}</span>}
-      {feed && <span className={`subagent-tag subagent-state is-${over ? 'done' : feed.state}`}>{stateWord(feed, status, over)}</span>}
-      <span className="subagent-rate">{rate === null ? '—' : rate} token/s</span>
-      <span className="subagent-elapsed" title={t(over ? '用时' : '已运行')}>{elapsed}</span>
-      <button type="button" className="icon-button" title={t('关闭分屏（Esc）')} aria-label={t('关闭 {name} 的分屏', { name: who })} onClick={onClose}><X size={13} /></button>
+      <div className="subagent-head-row">
+        <Mark size={16} /><span className="subagent-title" title={title}>{title || name}</span>
+        {feed && <span className={`subagent-tag subagent-state is-${over ? 'done' : feed.state}`}>{stateWord(feed, status, over)}</span>}
+        <span className="subagent-elapsed" title={t(over ? '用时' : '已运行')}>{elapsed}</span>
+        <button type="button" className="icon-button" title={t('关闭分屏（Esc）')} aria-label={t('关闭 {name} 的分屏', { name: who })} onClick={onClose}><X size={13} /></button>
+      </div>
+      {meta && <div className="subagent-meta" title={feed?.model ? `${meta} · ${feed.model}` : meta}>{meta}</div>}
     </header>
     <div className="subagent-main">
       <div ref={body} className="subagent-body" tabIndex={0} role="log" aria-live="off" aria-label={t('{name} 的消息和工具步骤，只读', { name: who })}

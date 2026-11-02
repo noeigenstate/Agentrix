@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 // Node 24 can require ESM TypeScript directly, erasing the type-only import.
-const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
+const { parseAgentScreen, waitingTitle } = require('../src/features/agents/agent-screen.ts');
 
 const emptyStatus = { model: null, effort: null, context: null, mode: null, notes: [] };
 const emptyScreen = { banner: null, status: emptyStatus, choice: null, overlay: 'none' };
@@ -379,6 +379,13 @@ const expected = {
       option(10, 'Opus 4.8', false, 'Best for everyday, complex tasks'),
     ], hint: 'Enter to set as default · s to use this session only · Esc to cancel',
   } }),
+  // A narrow terminal wrapped the paragraph and scrolled the heading off: its first row is a paragraph's tail.
+  'claude-model-menu-narrow': ({ ...emptyScreen, choice: {
+    kind: 'menu', title: 'model names, specify with --model.', context: [], options: [
+      option(1, 'Default (recommended)  Opus 5.5'), option(2, 'Opus 5.5 ✔             Complex work', true), option(3, 'Fable 5.1              Toughest tasks'),
+      option(4, 'Sonnet 5.5             Simpler tasks'),
+    ], hint: 'Enter to set as default · Esc to cancel',
+  } }),
   'claude-slash-typed': claudeScreen({ overlay: 'slash' }),
   'claude-mention': claudeScreen({ overlay: 'mention' }),
   'claude-shortcuts': claudeScreen({ overlay: 'shortcuts' }),
@@ -692,4 +699,21 @@ test("Codex's own resume list opens as a choice of its conversations, wherever i
   assert.deepEqual(older.options.map(option => [option.label, option.detail, option.selected]), [['合并远端主分支', '3 hours ago · main', true], ['修复滚动', '2 days ago · dev', false]]);
   // Claude's screen never reads as it.
   assert.equal(parseAgentScreen('claude', readFixture('codex-resume-start')).choice?.title === 'Resume a previous session', false);
+});
+
+test('the waiting notice is the dialog heading, never a wrapped tail of the paragraph below it', () => {
+  const claude = rows => parseAgentScreen('claude', rows);
+  assert.equal(waitingTitle(claude(readFixture('claude-model-menu'))), 'Select model');
+  // The same /model screen wrapped for a narrow terminal, heading in view.
+  const wrapped = ['──────────────────────────────────────────────────', '  Select model', '  Switch between Claude models. Your pick becomes', '  the default for new sessions. For other/previous',
+    '  model names, specify with --model.', '', ...readFixture('claude-model-menu-narrow').slice(2)];
+  assert.equal(waitingTitle(claude(wrapped)), 'Select model');
+  // Scrolled off by a short terminal: the notice has no title rather than a tail.
+  const cut = claude(readFixture('claude-model-menu-narrow'));
+  assert.equal(cut.choice.title, 'model names, specify with --model.');
+  assert.equal(waitingTitle(cut), null);
+  assert.equal(waitingTitle({ ...cut, choice: null, waiting: { title: 'specify with --model.' } }), null);
+  assert.equal(waitingTitle({ ...cut, choice: null, waiting: { title: 'MCP server “localprobe” requests your input' } }), 'MCP server “localprobe” requests your input');
+  assert.equal(waitingTitle(emptyScreen), null);
+  assert.equal(waitingTitle({ ...emptyScreen, choice: { ...cut.choice, title: '是否继续？' } }), '是否继续？');
 });

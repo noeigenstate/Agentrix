@@ -414,6 +414,26 @@ test('the heat map legend names its low end honestly: 45% while every rate is on
   assert.match(html, /step-1" title="审查 · Sol：33%（3 次）">33<\/td>/); assert.match(html, /<div class="scale"><span>≤45%<\/span>/);
 }));
 
+test('the heat map hints are theme-neutral: the darkest cell is the highest in light and the lightest in dark, so neither says dark', () => {
+  const tabs = fs.readFileSync(path.join(dashboardDir, 'Tabs.tsx'), 'utf8');
+  assert.doesNotMatch(tabs, /颜色越深/);
+  for (const language of ['zh', 'en']) {
+    applyLanguage(language);
+    const [models, team] = [view(), view({ tab: 'team' })];
+    assert.match(models, language === 'zh' ? /<span class="hint">%，颜色越醒目越高<\/span>/ : /<span class="hint">%, the more prominent the colour, the higher<\/span>/);
+    assert.match(team, language === 'zh' ? /次数，颜色越醒目越多/ : /Counts, the more prominent the colour, the more/);
+    assert.doesNotMatch(models + team, /darker|越深/);
+  }
+  applyLanguage('zh');
+});
+
+test('every tile title of a row sits on one baseline: the hero tile keeps the top padding of the others and puts its extra room below', () => {
+  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const top = rule => Number(new RegExp(String.raw`\.kpi${rule} \{[^}]*padding: (\d+)px`).exec(css)[1]);
+  assert.equal(top('.hero'), top(''), 'the same top padding, so the labels share a row');
+  assert.match(css, /\.kpi\.hero \{ padding: 12px 16px 24px; \}/);
+});
+
 test('there is no limit to the models drawn: a fourth model gets its own colour, mark and end label', () => zh(() => {
   const data = fixture();
   data.speed.push({ day: '2026-10-30', model: 'claude-opus-5-5', tokensPerSecond: 58 });

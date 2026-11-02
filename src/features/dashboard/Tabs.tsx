@@ -64,7 +64,7 @@ export function ModelsTab({ summary, now, onFocus }: { summary: DashboardSummary
       <Panel title={t('每天子任务')} hint={t('按模型叠加')}><DailyBars daily={summary.daily} models={ids} /></Panel>
     </div>
     <div className="two">
-      <Panel title={t('一次通过率 · 任务类型 × 模型')} hint={t('%，颜色越深越高')}><KindChart kinds={summary.kinds} models={models} /></Panel>
+      <Panel title={t('一次通过率 · 任务类型 × 模型')} hint={t('%，颜色越醒目越高')}><KindChart kinds={summary.kinds} models={models} /></Panel>
       <Panel title={t('子任务份额')} hint={t('{range}内每个模型占多少', { range })}><ShareDonut models={models} /></Panel>
     </div>
     <Panel title={t('输出速度 · 每天')} hint={t('tok/s，按活跃时间算')}><SpeedChart speed={summary.speed} models={ids} /></Panel>
@@ -86,7 +86,7 @@ export function TeamTab({ summary, decide }: { summary: DashboardSummary; decide
     </div>
     <Panel title={t('每轮经过')} hint={t('各阶段用时的占比；返工是红色斜纹，旁边写明返工占比')}><RoundTable rounds={summary.rounds} showProject={query.projectId === null} /></Panel>
     <div className="two">
-      <Panel title={t('审查发现 · 作者 × 类别')} hint={t('次数，颜色越深越多')}><FindingsTable findings={summary.findings} models={models} /></Panel>
+      <Panel title={t('审查发现 · 作者 × 类别')} hint={t('次数，颜色越醒目越多')}><FindingsTable findings={summary.findings} models={models} /></Panel>
       <Panel title={t('改进建议')} hint={t('由数据生成，你采纳后才生效')}><Suggestions suggestions={summary.suggestions} decide={decide} /></Panel>
     </div>
   </div>;

@@ -5,7 +5,7 @@ const path = require('node:path');
 const React = require('react');
 const jsx = require('react/jsx-runtime');
 const { hookHarness } = require('./helpers/hook-harness.cjs');
-const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
+const { parseAgentScreen, waitingTitle } = require('../src/features/agents/agent-screen.ts');
 const panel = require('../src/features/reading/cli-panel.ts');
 const { blocks } = require('../src/features/reading/useVisibleTail.ts');
 const { DIALOG_SETTLE } = require('../src/features/reading/reading-ready.ts');
@@ -56,7 +56,7 @@ function popupHarness(t, agent = 'codex', rows = idle[agent], activity = 'comple
     './pending-prompts': require('../src/features/reading/pending-prompts.ts'),
     './composer-prefill': { onComposerPrefill: () => () => {} },
     './terminal-screen': { useScreen: () => ({ rows: view.rows }), bindApproval: choice => choice },
-    './agent-screen': { parseAgentScreen }, './cli-panel': panel,
+    './agent-screen': { parseAgentScreen, waitingTitle }, './cli-panel': panel,
     './reading-mode': { setChoiceVisible() {} }, './reading.css': {}, './reading-flow.css': {},
     './Markdown': { Markdown: noop }, './ConversationFeed': { ConversationFeed, ConversationDecorations: React.createContext(null) },
     './ReadingQuote': { QuoteChip: noop }, './message-quote': require('../src/features/reading/message-quote.ts'),
@@ -196,6 +196,25 @@ if (require.main === module) {
     h.popup().props.onClose(); h.render(); assert.ok(h.waiting());
     for (let i = 0; i < 5; i++) { h.view.rows = ['Unknown dialog', String(i)]; h.render(); h.tick(DIALOG_SETTLE); assert.equal(h.popup(), undefined); }
     h.waiting().props.onOpenTerminal(); h.render(); assert.ok(h.popup());
+  });
+  // What the closed popup leaves: the dialog's own heading, and nothing at all rather than the tail of a wrapped paragraph.
+  const wrappedModelMenu = ['  Select model', '  Switch between Claude models. Your pick becomes', '  the default for new sessions. For other/previous', '  model names, specify with --model.', '',
+    ...read('screens/claude-model-menu-narrow.txt').slice(2)];
+  for (const [what, rows, title] of [['the heading in view', wrappedModelMenu, 'Select model'], ['the heading scrolled off', read('screens/claude-model-menu-narrow.txt'), null]]) {
+    test('claude: /model closed again leaves ' + (title ? 'its heading' : 'no title') + ' as the notice with ' + what + ', never a wrapped line of the paragraph', t => {
+      const h = popupHarness(t, 'claude', rows); h.tick(DIALOG_SETTLE * 2);
+      h.popup().props.onClose(); h.render();
+      assert.equal(h.waiting().props.title, title);
+    });
+  }
+  for (const agent of ['claude', 'codex']) test(agent + ': while a dialog waits the locked composer says so in its hint, and its draft stays', t => {
+    const h = popupHarness(t, agent, idle[agent]);
+    h.edit('keep this draft'); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE);
+    const box = elements(h.tree()).find(element => element.type === 'textarea').props;
+    assert.equal(box.disabled, true); assert.equal(box.value, 'keep this draft');
+    assert.equal(box.placeholder, '终端里有待处理的界面');
+    h.view.rows = idle[agent]; h.popup().props.onClose(); h.render();
+    assert.notEqual(elements(h.tree()).find(element => element.type === 'textarea').props.placeholder, '终端里有待处理的界面', 'the hint goes with the dialog');
   });
   test('busy output and a transient redraw do not open a dialog, and returning to input cancels the timer', t => {
     const h = popupHarness(t, 'codex', ['• Working (5s · esc to interrupt)', ...idle.codex], 'working'); h.tick(DIALOG_SETTLE * 3);

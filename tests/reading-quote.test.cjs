@@ -66,6 +66,15 @@ test('the quote styles use theme tokens and the spacing scale only', () => {
   for (const value of spacing) assert.ok(scale.has(Math.abs(parseFloat(value))), `${value} is off the spacing scale`);
 });
 
+test('the 引用 button is a compact 28px icon button with the standard hover fill, and its column is reserved so it never lies over the text', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading-quote.css'), 'utf8');
+  assert.match(css, /\.reading-quote-action \{[^}]*width: 28px; height: 28px;/);
+  assert.match(css, /\.reading-quote-action:not\(:disabled\):hover \{[^}]*background: var\(--bg-selected\);/, 'a visible fill and bounds when the pointer is on it');
+  assert.match(css, /\.reading-user:has\(> \.reading-quote-action\), \.reading-assistant:has\(> \.reading-quote-action\) \{ padding-right: 40px; \}/, '28px button + 4px gap + 8px edge: the text ends before it');
+  const right = Number(/\.reading-quote-action \{[^}]*right: (\d+)px/.exec(css)[1]);
+  assert.ok(right + 28 <= 40, 'the button lies inside the reserved column');
+});
+
 test('the chip shows the excerpt as one clean line: Markdown markers dropped, lists and lines joined', () => {
   assert.equal(plainExcerpt('我读了 `parser.cjs`，问题出在分块读取：\n1. 读到半行时没有保留偏移量；\n2. 文件末尾没有换行。'),
     '我读了 parser.cjs，问题出在分块读取： 读到半行时没有保留偏移量； 文件末尾没有换行。');

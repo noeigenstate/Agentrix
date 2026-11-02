@@ -112,6 +112,9 @@
 .reading-composer textarea:focus-visible { outline: none; box-shadow: none; }
 /* The disabled cursor also overrides the desktop-glass compatibility cursor. */
 .reading-composer textarea:disabled { cursor: not-allowed !important; }
+/* A locked composer reads as locked: no input fill and the quiet divider as its edge, the send button already off; a draft kept in it stays in the secondary text colour, readable. */
+.reading-composer:has(textarea:disabled) { background: transparent; border-color: var(--divider); }
+.reading-composer textarea:disabled { color: var(--text-2); }
 
 /* Native CLI prompts remain above the input until the CLI dismisses them. */
 .reading-choice-host { flex: 0 1 auto; min-height: 0; margin: 0 var(--reading-edge-right) 8px var(--reading-edge-left); overflow: auto; }
