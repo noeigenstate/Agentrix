@@ -1,0 +1,8 @@
+/* The narrow window's way in (SubagentChip): the header chip, and a popover holding the same called-models list as the pane. The popover takes the pane's ink levels and 16px padding. */
+.subagent-chip { gap: 6px; }
+.subagent-chip[aria-expanded="true"] { background: var(--bg-selected); }
+.subagent-chip-run { display: inline-flex; align-items: center; gap: 4px; color: var(--running); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.subagent-chip-run > i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.subagent-menu { --flow-line: var(--divider); --flow-ink: var(--text-1); --flow-muted: var(--text-2); --flow-faint: var(--text-3);
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 70; display: flex; flex-direction: column; box-sizing: border-box; width: 340px; max-width: calc(100vw - 32px); max-height: min(420px, calc(100vh - 120px)); padding: 16px;
+  border: 1px solid var(--border); border-radius: 16px; background: var(--bg-menu); }

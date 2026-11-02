@@ -436,3 +436,112 @@ test('the grid is not rearranged by views of another terminal, and a narrow cent
   assert.deepEqual([...gridMarkup([terminal('t-mine')], true).matchAll(/data-call="([^"]+)"/g)].map(match => match[1]), ['agent:b']);
   s.limitSplits('t-mine', 0); s.limitSplits('t-elsewhere', 0);
 }));
+
+// ---- the narrow window's way in -------------------------------------------------------------------------------------------------
+// CSS hides the activity pane below 1000px; the header of the expanded project then carries a chip that opens the pane's own rows in a popover.
+const chipTerminal = (id, items) => ({ id, agentUsage: { provider: 'Anthropic', limits: [], calls: [call(items)] } });
+const chipMarkup = (terminal, open) => {
+  const chipLoader = makeLoader({ '../terminal/terminal-screen': screenStub, '../home/send-to-agent': sendStub,
+    react: { ...React, useState: () => [open, () => {}], useRef: current => ({ current }), useEffect() {}, useSyncExternalStore: (subscribe, snapshot) => snapshot() } });
+  chipLoader('shared/i18n.ts').applyLanguage('zh');
+  return renderToStaticMarkup(React.createElement(chipLoader('features/agents/SubagentChip.tsx').SubagentChip, { terminal }));
+};
+
+test("the narrow window's header chip: counts the called models, shows the running ones, lists the pane's own rows, and exists only for a viewable sub-agent", () => zh(() => {
+  const items = [item('agent:a'), item('agent:b', { state: 'done' }), item('dispatch:c', { viewable: false, state: 'preparing' })];
+  const closed = chipMarkup(chipTerminal('t-chip', items), false);
+  assert.match(closed, /^<div class="subagent-chip-anchor"><button type="button" class="button small subagent-chip" aria-expanded="false" aria-haspopup="dialog">子 agent 3<span class="subagent-chip-run" title="1 个运行中"><i aria-hidden="true"><\/i>1<\/span><\/button><\/div>$/);
+  assert.equal(chipMarkup(chipTerminal('t-chip', [item('agent:b', { state: 'done' })]), false).includes('subagent-chip-run'), false, 'nothing running, no running count');
+  assert.equal(chipMarkup(chipTerminal('t-chip', [item('dispatch:c', { viewable: false })]), false), '', 'no readable record, no chip');
+  assert.equal(chipMarkup({ id: 't-chip', agentUsage: null }, false), '', 'no calls, no chip');
+  // Open: the same card the pane shows, row for row (the same buttons, so the same click and the same pressed state).
+  const open = chipMarkup(chipTerminal('t-chip', items), true), pane = paneRows(items, 't-chip');
+  assert.match(open, /<div class="subagent-menu" role="dialog" aria-label="子 agent">/);
+  assert.match(open, /aria-expanded="true"/);
+  const rows = html => html.match(/<li class="is-[^"]*"[^>]*>.*?<\/li>/gs);
+  assert.equal(rows(open).length, 3, 'the three calls');
+  assert.deepEqual(rows(open), rows(pane), 'the same rows as the activity pane');
+  assert.equal(count(open, /<button type="button" class="activity-call-open"/g), 2);
+}));
+
+test('the chip opens on a click and closes on Escape (focus back on it, the key goes no further), on a press outside, on Tab out of it and on choosing a row', () => zh(() => {
+  const slots = [], effects = [], listeners = [], focused = [];
+  let cursor = 0;
+  const hooks = { ...React,
+    useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = initial; return [slots[index], value => { slots[index] = value; }]; },
+    useRef(initial) { const index = cursor++; return slots[index] ??= { current: initial }; },
+    useEffect(callback, deps) {
+      const index = cursor++, previous = slots[index];
+      if (previous && deps.every((value, i) => Object.is(value, previous.deps[i]))) return;
+      effects.push(() => { previous?.cleanup?.(); slots[index] = { deps, cleanup: callback() }; });
+    },
+    useSyncExternalStore: (subscribe, snapshot) => snapshot() };
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: { dataset: {}, lang: '' },
+    addEventListener: (name, listener, capture) => listeners.push({ name, listener, capture }),
+    removeEventListener: (name, listener) => listeners.splice(0, listeners.length, ...listeners.filter(entry => entry.name !== name || entry.listener !== listener)) } });
+  try {
+    const chipLoader = makeLoader({ '../terminal/terminal-screen': screenStub, '../home/send-to-agent': sendStub, react: hooks });
+    chipLoader('shared/i18n.ts').applyLanguage('zh');
+    const { SubagentChip } = chipLoader('features/agents/SubagentChip.tsx'), { CallsCard } = chipLoader('features/agents/ActivityPane.tsx');
+    const terminal = chipTerminal('t-esc', [item('agent:a')]), popup = {}, elsewhere = {};
+    // Slot 0 is the open state, 1 the anchor ref, 2 the chip ref: a mounted tree would fill the refs; here the anchor knows `popup` and the chip counts focus.
+    const render = () => {
+      cursor = 0;
+      const tree = elements(SubagentChip({ terminal }));
+      slots[1] = { current: { contains: node => node === popup } }; slots[2] = { current: { focus: () => focused.push('chip') } };
+      while (effects.length) effects.shift()();
+      return tree;
+    };
+    const chip = () => render().find(node => node.type === 'button' && node.props.className === 'button small subagent-chip');
+    const anchor = () => render().find(node => node.props.className === 'subagent-chip-anchor');
+    const dialog = () => render().find(node => node.props.role === 'dialog');
+    const listener = name => listeners.filter(entry => entry.name === name).at(-1);
+
+    render();
+    assert.equal(dialog(), undefined, 'closed at first');
+    chip().props.onClick();
+    assert.ok(dialog(), 'a click opens it'); assert.equal(chip().props['aria-expanded'], true);
+    assert.equal(dialog().props['aria-label'], '子 agent');
+    assert.equal(elements(dialog()).find(node => node.type === CallsCard).props.terminalId, 't-esc', 'the pane\'s card for this terminal');
+
+    // Escape closes it, puts focus back on the chip and is swallowed in the capture phase, before the terminal sees it.
+    const swallowed = [];
+    assert.equal(listener('keydown').capture, true);
+    listener('keydown').listener({ key: 'a', stopPropagation: () => swallowed.push('a') });
+    assert.ok(dialog(), 'another key leaves it open'); assert.deepEqual(swallowed, []);
+    listener('keydown').listener({ key: 'Escape', stopPropagation: () => swallowed.push('Escape') });
+    assert.equal(dialog(), undefined); assert.deepEqual([swallowed, focused], [['Escape'], ['chip']]);
+    assert.equal(listeners.length, 0, 'its listeners are let go of once it is closed');
+
+    // A press outside closes it; one inside does not.
+    chip().props.onClick(); render();
+    listener('pointerdown').listener({ target: popup }); assert.ok(dialog(), 'a press inside stays');
+    listener('pointerdown').listener({ target: elsewhere }); assert.equal(dialog(), undefined, 'a press outside closes');
+
+    // Tab out of the popover closes it; moving within it does not.
+    chip().props.onClick();
+    anchor().props.onBlur({ relatedTarget: popup }); assert.ok(dialog());
+    anchor().props.onBlur({ relatedTarget: elsewhere }); assert.equal(dialog(), undefined);
+
+    // Choosing a row closes it and hands focus back (the pane's row has already toggled its view); the popover's own space is no choice.
+    chip().props.onClick(); focused.length = 0;
+    dialog().props.onClick({ target: { closest: () => null } }); assert.ok(dialog());
+    dialog().props.onClick({ target: { closest: selector => selector === '.activity-call-open' ? {} : null } });
+    assert.equal(dialog(), undefined); assert.deepEqual(focused, ['chip']);
+  } finally { if (previous) Object.defineProperty(globalThis, 'document', previous); else delete globalThis.document; }
+}));
+
+test("the chip's popover is the pane's card on the menu colour, and the chip itself opens no view, writes nothing and expands nothing", () => {
+  const read = file => fs.readFileSync(path.join(src, file), 'utf8'), css = read('features/agents/subagent-chip.css');
+  assert.match(css, /\.subagent-menu \{ --flow-line: var\(--divider\); --flow-ink: var\(--text-1\); --flow-muted: var\(--text-2\); --flow-faint: var\(--text-3\);/, 'the pane\'s ink levels');
+  assert.match(css, /\.subagent-menu \{[^}]*background: var\(--bg-menu\);/);
+  assert.doesNotMatch(css, /\.subagent-menu \{[^}]*box-shadow/, 'no new shadow');
+  assert.doesNotMatch(read('features/agents/SubagentChip.tsx').replace(/\/\/.*$/gm, ''), /\b(openSplit|toggleSplit|closeSplit)\(|window\.agentrix|writeTerminal|onFocus|onExpand/);
+});
+
+test("a sub-agent view's hint stays on one line with an ellipsis, so the box keeps its 36px at any width while typed text still grows it", () => {
+  const css = fs.readFileSync(path.join(src, 'features/agents/subagent-input.css'), 'utf8');
+  assert.match(css, /\.subagent-input textarea::placeholder \{ color: var\(--text-2\); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; \}/);
+  assert.match(css, /\.subagent-input textarea \{[^}]*min-height: 36px;[^}]*field-sizing: content;/);
+});

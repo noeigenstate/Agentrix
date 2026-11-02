@@ -117,6 +117,7 @@ function projectHeaderHarness(t) {
     react: hooks,
     './ProjectTerminals': { ProjectTerminals: () => null },
     './ActivityPane': { ActivityPane: () => null },
+    './SubagentChip': { SubagentChip: () => null },
     './ProjectImageDialog': { ProjectImageDialog: () => null },
     './IconButton': loadUI('shared/IconButton.tsx'),
     './active-terminal': { useActiveTerminal: () => null, setActiveTerminal() {} },
@@ -154,6 +155,25 @@ test('only a focused project with the activity toggle off omits the header actio
     assert.equal(nodes.some(node => node.props.className === 'panel-menu-anchor'), visible, `more menu: ${label}`);
     assert.equal(nodes.find(node => node.props.className === 'panel-name').props.children[0].props.children, 'Example');
   }
+});
+
+// The narrow window hides the activity pane in CSS, so its sub-agent rows are reached from the header of the expanded project.
+test('the sub-agent chip is in the header of an expanded project only: never on a small card, and the header stays a one-row control cluster', t => {
+  const h = projectHeaderHarness(t), chips = () => h.render().filter(node => node.type?.name === 'SubagentChip');
+  for (const activityOpen of [false, true]) {
+    Object.assign(h.props, { focused: false, activityOpen });
+    assert.equal(chips().length, 0, `a small card has no chip (activityOpen=${activityOpen})`);
+    h.props.focused = true;
+    const [chip] = chips();
+    assert.equal(chips().length, 1, `an expanded project has one (activityOpen=${activityOpen})`);
+    assert.equal(chip.props.terminal.id, 'terminal', 'for the terminal in use');
+  }
+  h.props.focused = true; h.props.project.terminals = [];
+  assert.equal(chips().length, 0, 'no terminal, no chip');
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/workspace/workspace.css'), 'utf8');
+  assert.match(css, /\.subagent-chip-anchor \{ display: none;/, 'hidden by default');
+  assert.match(css, /@media \(max-width: 1000px\) \{ \.subagent-chip-anchor \{ display: block; \} \}/, 'shown only where the pane is hidden, at the same 1000px as the rule that hides the pane');
+  assert.match(css, /@media \(max-width: 1000px\) \{[^]*?\.activity-pane, \.project-panel\.has-activity::before \{ display: none; \}/, 'the pane-hiding rule this one pairs with');
 });
 
 test('the unread status button still opens a grid card with either activity toggle setting', t => {

@@ -2191,6 +2191,7 @@
   "点击关闭旁边的分屏": "Click to close the split beside the conversation",
   "{role} {title}，{state}": "{role} {title}, {state}",
   "子 agent": "Sub-agent",
+  "子 agent {count}": "Sub-agents {count}",
   "不可用": "Unavailable",
   "{name} 的输出，只读": "{name}'s output, read-only",
   "{name} 的消息和工具步骤，只读": "{name}'s messages and tool steps, read-only",
