@@ -30,6 +30,10 @@ class FakeWindow extends EventEmitter {
   minimize() { this.minimized = true; }
   maximize() { this.maximized = true; }
   unmaximize() { this.maximized = false; }
+  getMinimumSize() { return this.minimum ?? [this.options.minWidth ?? 0, this.options.minHeight ?? 0]; }
+  setMinimumSize(width, height) { this.minimum = [width, height]; }
+  getContentSize() { return this.size ?? [this.options.width, this.options.height]; }
+  setContentSize(width, height) { const minimum = this.getMinimumSize(); this.size = [Math.max(width, minimum[0]), Math.max(height, minimum[1])]; }
   setBackgroundColor(value) { this.background = value; }
   async loadURL(url) { this.url = url; this.webContents.mainFrame.url = url; this.webContents.emit('did-finish-load'); }
 }
@@ -70,8 +74,7 @@ test('dashboard window is a single sandboxed instance with its own preload and m
   await Promise.all([window.open(), window.open()]);
   assert.equal(created.length, 1);
   const selected = created[0], options = selected.options;
-  assert.equal(options.width, 1180); assert.equal(options.height, 820);
-  assert.equal(options.minWidth, 820); assert.equal(options.minHeight, 600); assert.equal(options.frame, false);
+  assert.equal(options.frame, false);
   assert.equal(options.show, false); assert.equal(options.backgroundColor, '#181818');
   assert.deepEqual({ ...options.webPreferences, preload: path.relative(path.resolve(__dirname, '..'), options.webPreferences.preload).split(path.sep).join('/') }, {
     preload: 'electron/features/dashboard/preload.cjs', nodeIntegration: false, nodeIntegrationInSubFrames: false,
@@ -82,6 +85,42 @@ test('dashboard window is a single sandboxed instance with its own preload and m
   selected.minimized = true; await window.open();
   assert.equal(selected.minimized, false); assert.ok(selected.shown > 0); assert.ok(selected.focused > 0);
   selected.close(); await window.open(); assert.equal(created.length, 2);
+});
+
+test('dashboard initial and minimum dimensions use content sizes on every platform', async () => {
+  for (const platform of ['win32', 'darwin', 'linux']) {
+    const { created, window } = windowLab({ platform });
+    await window.open();
+    const options = created[0].options;
+    assert.equal(options.useContentSize, true, `${platform}: sizes must exclude the native frame`);
+    assert.deepEqual([options.width, options.height], [1180, 820]);
+    assert.deepEqual([options.minWidth, options.minHeight], [820, 600]);
+  }
+});
+
+test('Windows native frame rounding preserves the exact content minimum before the dashboard is shown', async () => {
+  for (const { frame, rounding } of [{ frame: [0, 0], rounding: [0, 0] }, { frame: [14, 7], rounding: [1, 2] }]) {
+    let selected;
+    const { window } = windowLab({ BrowserWindow: class extends FakeWindow {
+      constructor(options) {
+        super(options); selected = this;
+        this.minimum = [options.minWidth + frame[0], options.minHeight + frame[1]];
+      }
+      setMinimumSize(width, height) { assert.equal(this.shown, 0); super.setMinimumSize(width, height); }
+      setContentSize(width, height) {
+        this.size = [Math.max(width, this.minimum[0] - frame[0] + rounding[0]),
+          Math.max(height, this.minimum[1] - frame[1] + rounding[1])];
+      }
+    } });
+    await window.open();
+    assert.deepEqual(selected.getContentSize(), [1180, 820]);
+    for (const size of [[820, 600], [900, 820], [1180, 820]]) {
+      selected.setContentSize(...size);
+      assert.deepEqual(selected.getContentSize(), size);
+    }
+    selected.setContentSize(1, 1);
+    assert.deepEqual(selected.getContentSize(), [820, 600], 'smaller requests still clamp to the content minimum');
+  }
 });
 
 test('macOS title bar and development URL follow the dashboard window contract', async () => {
