@@ -292,8 +292,11 @@ test('worktrees share the inbox and accepting a send cannot race past the helper
   execFileSync('git', ['-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', 'commit', '--allow-empty', '-qm', 'base'], {cwd:f.repo,stdio:'ignore',windowsHide:true});
   const peer = path.join(f.root, 'peer');
   execFileSync('git', ['worktree', 'add', '--detach', peer, 'HEAD'], {cwd:f.repo,stdio:'ignore',windowsHide:true});
-  assert.equal(projectTeam(peer).directory, f.team.directory);
+  assert.equal(fs.realpathSync.native(projectTeam(peer).directory), fs.realpathSync.native(f.team.directory));
   f.target.projectPath = peer;
+  const accepted = await f.api.interveneAgent('terminal', f.target.callId, 'across worktree aliases');
+  assert.deepEqual((await f.inbox.take()).map(control => control.id), [accepted.id]);
+  f.notifications.length = 0;
   const sending = f.api.interveneAgent('terminal', f.target.callId, 'racing finalization');
   const finishing = f.inbox.take(true);
   const [sent, final] = await Promise.allSettled([sending, finishing]);

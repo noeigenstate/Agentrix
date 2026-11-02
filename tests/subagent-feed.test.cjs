@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { FINAL_LIMIT, FINAL_TTL } = require('../electron/features/agents/subagent-feed.cjs');
 const { encodeClaudeCwd, findClaudeSession } = require('../electron/claude-sessions.cjs');
-const { containedFile, findRolloutSession } = require('../electron/session-files.cjs');
+const { containedFile, findRolloutSession, rolloutFiles } = require('../electron/session-files.cjs');
 const { ConversationLog, claudeConversation, codexConversation } = require('../electron/conversation.cjs');
 const { registerAgentsIpc } = require('../electron/features/agents/ipc.cjs');
 const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
@@ -318,16 +318,40 @@ test('successful dispatch rows disappear after three seconds while their final s
 });
 
 test('completed feed retention is bounded at twenty calls, including after a preserving reset', async t => {
+  // macOS can deliver file notifications after all of these fast workers have already ended.
+  t.mock.method(require('node:fs'), 'watch', () => ({ on() {}, close() {} }));
   const f = await fixture(t);
   for (let i = 0; i <= FINAL_LIMIT; i++) {
     const id = `final-${i}`, sessionId = dispatch(f, id); await rollout(f, sessionId);
     endDispatch(f, id); await f.calls.work;
   }
   await assert.rejects(f.calls.feed('dispatch:final-0'), /^Error: gone$/);
-  assert.equal((await f.calls.feed(`dispatch:final-${FINAL_LIMIT}`)).state, 'done');
+  for (let i = 1; i <= FINAL_LIMIT; i++) assert.equal((await f.calls.feed(`dispatch:final-${i}`)).state, 'done');
   assert.equal(f.calls.feeds.entries.size, FINAL_LIMIT);
   f.calls.reset(true);
   assert.equal((await f.calls.feed(`dispatch:final-${FINAL_LIMIT}`)).state, 'done');
+});
+
+test('dispatch completion waits for an older directory walk before discovering its new rollout', async t => {
+  t.mock.method(require('node:fs'), 'watch', () => ({ on() {}, close() {} }));
+  const f = await fixture(t), directory = path.join(f.codexHome, 'sessions'), readdir = fs.readdir;
+  const scanned = Promise.withResolvers(), resume = Promise.withResolvers();
+  let held = false;
+  t.after(() => resume.resolve());
+  t.mock.method(fs, 'readdir', async (...args) => {
+    const entries = await readdir(...args);
+    if (args[0] === directory && !held) { held = true; scanned.resolve(); await resume.promise; }
+    return entries;
+  });
+  const older = rolloutFiles(directory);
+  await scanned.promise;
+  const sessionId = dispatch(f, 'during-scan');
+  await rollout(f, sessionId, {}, [{ type: 'event_msg', timestamp: iso(1), payload: { type: 'agent_message', message: 'Created after the scan.' } }]);
+  endDispatch(f, 'during-scan');
+  await Promise.resolve(); resume.resolve();
+  await older; await f.calls.work;
+  const feed = await f.calls.feed('dispatch:during-scan');
+  assert.equal(feed.state, 'done'); assert.equal(feed.entries.at(-1).text, 'Created after the scan.');
 });
 
 test('a final snapshot keeps its last verified contents if the transcript disappears before the end receipt', async t => {
