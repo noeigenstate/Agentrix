@@ -16,7 +16,8 @@ function cleanEnvironment(environment = process.env) {
   return gitEnvironment(Object.fromEntries(Object.entries(environment).filter(([key]) => INHERITED_ENV.has(key.toUpperCase()))));
 }
 
-async function requireIsolation() {
+async function requireIsolation(options) {
+  if (process.platform === 'win32') return require('./sandbox-win32.cjs').requireIsolation(options);
   if (process.platform !== 'darwin') {
     throw new Error('Secure lab execution is unavailable on this platform. No workers were started.');
   }
@@ -32,7 +33,7 @@ const deniedOutside = (root, allowed) => '(require-all ' + subpath(root) + ' ' +
 
 function sandboxProfile({
   labRoot, readRoots, writeRoots, protectedPaths, credentialPaths = [], deniedExecutables = [],
-  codexSource, sharedAuth,
+  codexSource, sharedAuth, network = true,
 }) {
   const blocked = protectedPaths.map(subpath).join(' ');
   const credentialBlocks = credentialPaths.map(subpath).join(' ');
@@ -47,6 +48,8 @@ function sandboxProfile({
     '(version 1)', '(allow default)',
     '(deny process-info* (target others))',
     '(deny signal (require-not (target same-sandbox)))',
+    ...(!network ? ['(deny network*)', ...readRoots.filter(file => /(?:rpc|meter|broker)-/.test(path.basename(file)))
+      .map(file => '(allow network-outbound (literal ' + JSON.stringify(file) + '))')] : []),
     '(deny file-read-data ' + deniedOutside(labRoot, readRoots) + ')',
     ...(codexRead ? ['(deny file-read-data ' + codexRead + ')'] : []),
     ...(blocked ? ['(deny file-read* ' + blocked + ')'] : []),
@@ -62,7 +65,7 @@ function sandboxProfile({
 async function channelAddress(directory, prefix) {
   const name = prefix + '-' + require('node:crypto').randomUUID().slice(0, 8);
   if (process.platform === 'win32') {
-    return { address: '\\\\.\\pipe\\agentrix-lab-' + name, async close() {} };
+    return { address: '\\\\.\\pipe\\LOCAL\\agentrix-lab-' + name, async close() {} };
   }
   let address = path.join(directory, name), alias = null;
   if (Buffer.byteLength(address) > 100) {
@@ -110,7 +113,19 @@ async function credentialAccess(environment = process.env, credentials = true) {
 async function gitCredentialHelpers() {
   const result = await command('git', ['--exec-path'], { timeoutMs: 5000 });
   if (result.code !== 0) throw new Error('Could not locate the Git credential helper for isolation.');
-  return [await physicalPath(path.join(result.stdout.trim(), 'git-credential-osxkeychain'))];
+  const names = process.platform === 'win32'
+    ? ['git-credential-manager.exe', 'git-credential-manager-core.exe', 'git-credential-wincred.exe']
+    : ['git-credential-osxkeychain'];
+  return Promise.all(names.map(name => physicalPath(path.join(result.stdout.trim(), name))));
+}
+
+async function linkCredential(source, target) {
+  try { await fs.symlink(source, target); }
+  catch (error) {
+    if (process.platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error;
+    // A hard link shares the file without copying its contents. Cross-volume links deliberately fail closed.
+    await fs.link(source, target);
+  }
 }
 
 async function cliHomes(environment = process.env, directory, credentials = true, access) {
@@ -129,7 +144,7 @@ async function cliHomes(environment = process.env, directory, credentials = true
     }
   }
   if (credentials && access.sharedAuth) {
-    await fs.symlink(access.sharedAuth, path.join(codex, 'auth.json'));
+    await linkCredential(access.sharedAuth, path.join(codex, 'auth.json'));
   }
   const secure = environment?.CLAUDE_SECURESTORAGE_CONFIG_DIR ??
     environment?.CLAUDE_CONFIG_DIR ?? '';
@@ -141,6 +156,11 @@ async function cliHomes(environment = process.env, directory, credentials = true
     ...env, CODEX_HOME: codex, CLAUDE_CONFIG_DIR: claude,
     CLAUDE_SECURESTORAGE_CONFIG_DIR: credentials ? secure : claude, ELECTRON_RUN_AS_NODE: '1',
     TMPDIR: temporary, TMP: temporary, TEMP: temporary, XDG_CACHE_HOME: temporary,
+    ...(process.platform === 'win32' ? {
+      HOME: directory, USERPROFILE: directory, APPDATA: path.join(directory, 'AppData/Roaming'),
+      LOCALAPPDATA: path.join(directory, 'AppData/Local'),
+      HOMEDRIVE: path.parse(directory).root.slice(0, 2), HOMEPATH: directory.slice(path.parse(directory).root.length - 1),
+    } : {}),
   };
 }
 

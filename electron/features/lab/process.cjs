@@ -18,6 +18,7 @@ function gitEnvironment(environment = process.env) {
 
 async function markedPids(marker, job) {
   if (!/^[a-f0-9-]{36}$/.test(marker)) throw new Error('Invalid lab process marker.');
+  if (process.platform === 'win32') return require('./sandbox-win32.cjs').markedPids(marker, job);
   if (process.platform === 'darwin') {
     const env = { ...process.env };
     delete env.AGENTRIX_LAB_RUN; delete env.AGENTRIX_LAB_JOB;
@@ -49,6 +50,7 @@ async function markedPids(marker, job) {
 }
 
 async function killMarked(marker, { exclude = [], job } = {}) {
+  if (process.platform === 'win32') return require('./sandbox-win32.cjs').killMarked(marker, { job });
   const ignored = new Set([process.pid, ...exclude]);
   for (let pass = 0; pass < 20; pass++) {
     const pids = (await markedPids(marker, job)).filter(pid => !ignored.has(pid));
@@ -85,6 +87,7 @@ async function descendants(pid) {
 async function stopTree(child) {
   if (!child.pid) return;
   if (process.platform === 'win32') {
+    if (child.labRun) await killMarked(child.labRun, { job: child.labJob });
     await execute('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 5000 }).catch(() => child.kill());
     return;
   }
@@ -111,6 +114,9 @@ async function command(file, args, {
       cwd, env, stdio: ['ignore', 'pipe', 'pipe', ...(ipc ? ['ipc'] : [])],
       windowsHide: true, detached: ipc && process.platform !== 'win32',
     });
+    if (ipc && process.platform === 'win32' && env.AGENTRIX_LAB_RUN) {
+      child.labRun = env.AGENTRIX_LAB_RUN; child.labJob = env.AGENTRIX_LAB_JOB;
+    }
     if (onMessage) child.on('message', message => { try { onMessage(message); } catch (error) { stop(error); } });
     const closed = new Promise(resolve => {
       child.once('error', error => { failure ||= error; });
