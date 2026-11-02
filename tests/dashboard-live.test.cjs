@@ -22,6 +22,10 @@ class FakeWindow extends EventEmitter {
   }
   isDestroyed() { return !!this.destroyed; }
   isMinimized() { return false; }
+  getMinimumSize() { return this.minimum ?? [0, 0]; }
+  setMinimumSize(width, height) { this.minimum = [width, height]; }
+  getContentSize() { return this.size ?? [1180, 820]; }
+  setContentSize(width, height) { this.size = [width, height]; }
   setBackgroundColor() {}
   async loadURL(url) { this.webContents.mainFrame.url = url; this.webContents.emit('did-finish-load'); }
   show() {}
