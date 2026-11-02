@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ts = require('typescript');
 const { chromium } = require('playwright-core');
+const { timeoutScale } = require('../scripts/wait.mjs');
 
 // Use an installed browser with Playwright's temporary profile; Electron and real sessions are never opened.
 const browserPath = [
@@ -13,7 +14,7 @@ const browserPath = [
 ].find(filename => filename && fs.existsSync(filename));
 const root = path.resolve(__dirname, '..');
 
-test('revealing a hidden cmd terminal keeps the wrapped prompt in the DOM viewport', { skip: !browserPath, timeout: 60000 }, async t => {
+test('revealing a hidden cmd terminal keeps the wrapped prompt in the DOM viewport', { skip: !browserPath, timeout: 60000 * timeoutScale }, async t => {
   const sources = Object.fromEntries([
     ['react', 'react/cjs/react.production.js'], ['react/jsx-runtime', 'react/cjs/react-jsx-runtime.production.js'],
     ['react-dom', 'react-dom/cjs/react-dom.production.js'], ['react-dom/client', 'react-dom/cjs/react-dom-client.production.js'],
@@ -22,14 +23,18 @@ test('revealing a hidden cmd terminal keeps the wrapped prompt in the DOM viewpo
   for (const name of ['TerminalPane', 'terminal-fit']) sources[name] = ts.transpileModule(fs.readFileSync(path.join(root, 'src/features/terminal', name + (name === 'TerminalPane' ? '.tsx' : '.ts')), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const browser = await chromium.launch({ executablePath: browserPath, headless: true });
-  t.after(() => browser.close());
+  const browser = await chromium.launch({ executablePath: browserPath, headless: true, timeout: 30000 * timeoutScale });
+  let stage = 'browser ready';
+  t.after(() => { t.diagnostic(`last reveal stage: ${stage}`); return browser.close(); });
   const prefix = 'D:\\a\\Agentrix\\Agentrix\\.test-output\\cmd-1793265759578\\';
   const prompt = prefix + '命令提示符 项目\\sub>';
   // At 55 columns the first wide character cannot fit in the last cell; 54 and 56 cover either side.
   for (const cols of [55, 54, 56]) {
+    stage = `${cols} columns: create page`;
     const page = await browser.newPage({ viewport: { width: 1024, height: 720 } });
+    page.setDefaultTimeout(30000 * timeoutScale);
     try {
+      stage = `${cols} columns: mount terminal`;
       await page.setContent('<div id="slot"><div id="root" style="width:1000px;height:612px"></div></div>');
       await page.addStyleTag({ path: path.join(root, 'node_modules/@xterm/xterm/css/xterm.css') });
       await page.addStyleTag({ content: '.terminal-host,.xterm { width:100%; height:100%; overflow:hidden; }' });
@@ -88,6 +93,7 @@ test('revealing a hidden cmd terminal keeps the wrapped prompt in the DOM viewpo
         fixture.render(false);
       }, sources);
       await page.waitForFunction(() => window.fixture.terminal?._core._renderService.dimensions.css.cell.width > 0);
+      stage = `${cols} columns: initial fit`;
       await page.evaluate(() => window.fixture.size(134, 34));
       await page.waitForFunction(() => window.fixture.terminal.cols === 134 && window.fixture.terminal.rows === 34 && !document.querySelector('[data-fit-pending]'));
       await page.evaluate(async prefix => {
@@ -95,6 +101,7 @@ test('revealing a hidden cmd terminal keeps the wrapped prompt in the DOM viewpo
         await new Promise(resolve => terminal.write(Array.from({ length: 150 }, (_, i) => `scrollback line ${i}\r\n`).join('') + '\r\n' + prefix + '命令提示符 项目>', resolve));
         document.getElementById('slot').style.display = 'none';
       }, prefix);
+      stage = `${cols} columns: hidden renderer pauses`;
       await page.waitForFunction(() => window.fixture.terminal._core._renderService._isPaused && !document.querySelector('[data-fit-pending]'));
       await page.evaluate(async ({ prompt, cols }) => {
         const terminal = window.fixture.terminal;
@@ -104,6 +111,7 @@ test('revealing a hidden cmd terminal keeps the wrapped prompt in the DOM viewpo
         document.getElementById('slot').style.display = '';
         window.fixture.render(true);
       }, { prompt, cols });
+      stage = `${cols} columns: reveal and reflow`;
       await page.waitForFunction(cols => window.fixture.terminal.cols === cols && !document.querySelector('[data-fit-pending]') && !window.fixture.terminal._core._renderService._isPaused, cols);
       const result = await page.evaluate(() => {
         const terminal = window.fixture.terminal, buffer = terminal.buffer.active;
@@ -114,6 +122,7 @@ test('revealing a hidden cmd terminal keeps the wrapped prompt in the DOM viewpo
       assert.ok(result.buffer.join('').includes(prompt), 'reflow preserves the actual prompt');
       assert.ok(result.rows.join('').includes(prompt), JSON.stringify({ cols, tail: result.rows.slice(-5), baseY: result.baseY, viewportY: result.viewportY, resizes: result.resizes }));
       assert.equal(result.viewportY, result.baseY, 'the viewport follows the bottom through reveal and reflow');
+      stage = `${cols} columns: verified`;
     } finally { await page.close(); }
   }
 });
