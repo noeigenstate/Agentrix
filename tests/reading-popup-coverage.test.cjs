@@ -66,6 +66,7 @@ function popupHarness(t, agent = 'codex', rows = idle[agent], activity = 'comple
     './useReadingConversation': { useReadingHistory: () => ({ entries, compact }) },
     './useStickToBottom': { useStickToBottom: () => ({ stuck: true, unseen: 0, ready: true, holdPosition() {}, toBottom() {} }) },
     './useVisibleTail': { blocks, useVisibleTail: grouped => ({ visible: grouped, earlier: 0, hasEarlier: false }) },
+    './useFittingHint': { useFittingHint: (box, hints) => hints[0] },
     './useNativePictures': { useNativePictures: () => ({ images: [], clear() {}, readInput: () => null }) },
     './usePendingPrompts': { usePendingPrompts: () => ({ pending: [], echo: noop, cancelEcho() {} }) },
     './useMentions': { useMentions: () => ({ open: false, keys: () => false }) },

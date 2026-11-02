@@ -184,14 +184,14 @@ const paneProps = (patch = {}) => ({ terminalId: 't1', callId: 'agent:a', projec
 const paneMarkup = (state, patch, react) => renderToStaticMarkup(React.createElement(paneLoader(state, react), paneProps(patch)));
 const ok = (patch, status = 'ok') => ({ feed: feed(3, patch), status, error: null });
 
-test('the view names the agent, its model, settings, state, speed and time, and renders the feed read-only with live links', () => zh(() => {
+test('the view names the task first, then the model, settings, state, speed and time, and renders the feed read-only with live links', () => zh(() => {
   const html = paneMarkup(ok({}));
-  assert.match(html, /<section class="subagent-split" aria-label="GPT-6\.1-Sol 的输出，只读">/);
-  assert.match(html, /<span class="subagent-name" title="gpt-6\.1-sol">GPT-6\.1-Sol<\/span><span class="subagent-tag subagent-role">执行<\/span><span class="subagent-how">max · 快速<\/span>/);
+  assert.match(html, /<section class="subagent-split" aria-label="Refactor the grid · GPT-6\.1-Sol 的输出，只读">/);
+  assert.match(html, /<span class="subagent-title" title="Refactor the grid">Refactor the grid<\/span><span class="subagent-tag subagent-role">执行<\/span><span class="subagent-name" title="gpt-6\.1-sol">GPT-6\.1-Sol<\/span><span class="subagent-how">max · 快速<\/span>/);
   assert.match(html, /<span class="subagent-tag subagent-state is-running">运行中<\/span><span class="subagent-rate">94 token\/s<\/span>/);
   assert.match(html, /<span class="subagent-elapsed" title="已运行">2:05<\/span>/, 'now is 126 s, it started at 1 s');
-  assert.match(html, /<button type="button" class="icon-button" title="关闭分屏（Esc）" aria-label="关闭 GPT-6\.1-Sol 的分屏">/);
-  assert.match(html, /<div class="subagent-body" tabindex="0" role="log" aria-live="off" aria-label="GPT-6\.1-Sol 的消息和工具步骤，只读">/);
+  assert.match(html, /<button type="button" class="icon-button" title="关闭分屏（Esc）" aria-label="关闭 Refactor the grid · GPT-6\.1-Sol 的分屏">/);
+  assert.match(html, /<div class="subagent-body" tabindex="0" role="log" aria-live="off" aria-label="Refactor the grid · GPT-6\.1-Sol 的消息和工具步骤，只读">/);
   assert.match(html, /<div class="conversation-feed" data-agent="codex" data-live="true" data-entries="2" data-project="p1" data-link="function">/, 'the feed gets the agent, the project and the link handler');
   assert.match(html, /只读 · 自动跟随最新一步/);
   assert.equal(count(html, /<textarea/g), 1, 'the owner’s one text box, for the word to the agent');
@@ -240,7 +240,7 @@ test('Escape inside the message box leaves the box with the typed word kept; Esc
 
 test('a finished Task subagent (reviewing, with an end time) takes no word, keeps the time it took and says it is done', () => zh(() => {
   const html = paneMarkup(ok({ state: 'reviewing', startedAt: 1000, endedAt: 66_000 }));
-  assert.match(html, /<textarea[^>]*disabled/); assert.match(html, /它已结束或不可用，不能再发消息/);
+  assert.match(html, /<textarea[^>]*disabled[^>]*placeholder="它已结束或不可用，不能再发消息"/); assert.doesNotMatch(html, /<button[^>]*>停下/);
   assert.match(html, /subagent-state is-done">已完成</, 'the header agrees with the footer: the end time decides, not the feed state'); assert.doesNotMatch(html, /审核中/);
   assert.match(html, /<span class="subagent-elapsed" title="用时">1:05<\/span>/, 'the clock stopped at the end');
   assert.match(html, /只读 · 已完成，分屏保留到你关闭/);
@@ -273,15 +273,16 @@ const fill = (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, key) => v
 const intervention = (patch = {}) => ({ id: 'i1', callId: 'agent:a', text: 'fix the test', at: 5, route: 'dispatch', status: 'queued', ...patch });
 
 // SubagentInput with real hooks and a stand-in bridge; `find` looks in the view as it stands, `done` puts the globals back.
-function inputView(bridge, patch = {}) {
+function inputView(bridge, patch = {}, fit = 0) {
   const sent = [], saved = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge } });
-  const harness = hookHarness('src/features/agents/SubagentInput.tsx', { './i18n': { t: fill }, './subagent-input.css': {} });
+  // The width-fitting hook has its own tests below; here the box shows the hint at index `fit` of the list it was given.
+  const hints = [], harness = hookHarness('src/features/agents/SubagentInput.tsx', { './i18n': { t: fill }, './subagent-input.css': {}, './useFittingHint': { useFittingHint: (box, list) => (hints.splice(0, hints.length, ...list), list[fit]) } });
   const props = { terminalId: 't1', callId: 'agent:a', name: 'Sol', closed: false, onSent: item => sent.push(item), ...patch };
   const find = tag => elements(harness.render('SubagentInput', props).result).find(node => node.type === tag);
   const press = (init = {}) => { const prevented = []; find('textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, preventDefault: () => prevented.push(true), ...init }); return prevented.length; };
   const type = value => find('textarea').props.onChange({ target: { value } });
-  return { sent, find, press, type, done() { harness.dispose(); if (saved) Object.defineProperty(globalThis, 'window', saved); else delete globalThis.window; } };
+  return { sent, hints, find, press, type, done() { harness.dispose(); if (saved) Object.defineProperty(globalThis, 'window', saved); else delete globalThis.window; } };
 }
 
 test('Enter sends the trimmed word; Shift+Enter, an empty box and an IME composition send nothing; a sent word clears the box and is handed on', async () => {
@@ -329,12 +330,15 @@ test('停下 asks the agent to stop through the main process and says so; the pa
   } finally { view.done(); }
 });
 
-test('a finished or lost view takes no word: box and button are off, a note says why, and a keypress that gets through still sends nothing', async () => {
+test('a finished or lost view takes no word: the box is off and says why in its hint, 停下 is gone, and a keypress that gets through still sends nothing', async () => {
   const calls = [], answer = async (...args) => { calls.push(args); return { ok: true, value: intervention() }; };
   const view = inputView({ interveneAgent: answer, stopAgent: answer }, { closed: true });
   try {
-    assert.deepEqual([view.find('textarea').props.disabled, view.find('button').props.disabled], [true, true]);
-    assert.equal(view.find('p').props.children, '它已结束或不可用，不能再发消息');
+    assert.equal(view.find('textarea').props.disabled, true);
+    assert.equal(view.find('button'), undefined, 'a button that can never work is not shown beside a disabled box');
+    assert.equal(view.find('textarea').props.placeholder, '它已结束或不可用，不能再发消息', 'the reason is the box’s own hint, not a second line under it');
+    assert.equal(view.find('p'), undefined);
+    assert.deepEqual(view.hints, ['它已结束或不可用，不能再发消息', '已结束，不能再发消息'], 'a narrow box falls back to the short reason');
     view.type('too late'); view.press(); await settle();
     assert.deepEqual(calls, []);
   } finally { view.done(); }
@@ -540,8 +544,68 @@ test("the chip's popover is the pane's card on the menu colour, and the chip its
   assert.doesNotMatch(read('features/agents/SubagentChip.tsx').replace(/\/\/.*$/gm, ''), /\b(openSplit|toggleSplit|closeSplit)\(|window\.agentrix|writeTerminal|onFocus|onExpand/);
 });
 
-test("a sub-agent view's hint stays on one line with an ellipsis, so the box keeps its 36px at any width while typed text still grows it", () => {
+test("a sub-agent view's hint stays on one line, so the box keeps its 36px at any width while typed text still grows it", () => {
   const css = fs.readFileSync(path.join(src, 'features/agents/subagent-input.css'), 'utf8');
-  assert.match(css, /\.subagent-input textarea::placeholder \{ color: var\(--text-2\); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; \}/);
+  assert.match(css, /\.subagent-input textarea::placeholder \{ color: var\(--text-2\); white-space: nowrap; overflow: hidden; \}/);
   assert.match(css, /\.subagent-input textarea \{[^}]*min-height: 36px;[^}]*field-sizing: content;/);
+});
+
+test('two splits of one model are told apart by their task: it leads the header and every accessible name, the model follows', () => zh(() => {
+  const first = paneMarkup(ok({ model: 'claude-sonnet-5-5', agent: 'Claude Code', title: 'Trace the parser' })), second = paneMarkup(ok({ model: 'claude-sonnet-5-5', agent: 'Claude Code', title: 'Plan the split' }));
+  const head = html => html.match(/<header class="subagent-head">.*?<\/header>/)[0];
+  assert.notEqual(head(first), head(second));
+  assert.ok(head(first).indexOf('Trace the parser') < head(first).indexOf('subagent-name'), 'the task before the model');
+  for (const [html, title] of [[first, 'Trace the parser'], [second, 'Plan the split']]) {
+    assert.match(html, new RegExp(`aria-label="${title} · Sonnet 5\.5 的输出，只读"`));
+    assert.match(html, new RegExp(`aria-label="关闭 ${title} · Sonnet 5\.5 的分屏"`));
+    assert.match(html, new RegExp(`aria-label="${title} · Sonnet 5\.5 的消息和工具步骤，只读"`));
+  }
+  assert.match(paneMarkup(ok({ title: '' })), /aria-label="GPT-6\.1-Sol 的输出，只读"/, 'a task with no title is named by its model, as before');
+}));
+
+test('the header keeps one line: the task takes the width the rest leaves with an ellipsis, the model gives way first, and the header stays above the feed', () => {
+  const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
+  assert.match(css, /\.subagent-title \{ flex: 1 1 0; min-width: 0; overflow: hidden;[^}]*text-overflow: ellipsis; white-space: nowrap; \}/);
+  assert.match(css, /\.subagent-name \{ flex: none;[^}]*white-space: nowrap; \}/);
+  assert.match(css, /\.subagent-head \{ position: relative; z-index: 1;[^}]*background: var\(--bg-app\); \}/, 'the feed scrolling to its end clips under the header, never over it');
+  assert.match(css, /@container \(max-width: 420px\) \{ :is\(\.subagent-rate, \.subagent-role\) \{ display: none; \} \}/);
+  assert.match(css, /@container \(max-width: 360px\) \{ \.subagent-name \{ display: none; \} \}/);
+});
+
+test('a narrow message box shows a shorter hint that fits, never a cut-off one: the longest hint comes first, the reason a finished view gives has a short form', () => {
+  const view = inputView({}, {}, 2);
+  try {
+    assert.equal(view.find('textarea').props.placeholder, '给它发消息', 'the shortest, for the narrowest box');
+    assert.deepEqual(view.hints, ['给它发消息 · Enter 发送，Shift+Enter 换行', '给它发消息 · Enter 发送', '给它发消息']);
+  } finally { view.done(); }
+});
+
+// ---- the hint that fits ---------------------------------------------------------------------------------------------------------
+test('the first hint that fits the box is the one shown; when none does, the shortest', () => {
+  const { fittingIndex } = load('shared/useFittingHint.ts'), width = text => text.length * 10, hints = ['a'.repeat(30), 'a'.repeat(20), 'a'.repeat(10)];
+  assert.deepEqual([400, 300, 299, 200, 100, 99, 0].map(room => fittingIndex(hints, room, width)), [0, 0, 1, 1, 2, 2, 2]);
+  assert.equal(fittingIndex(['only'], 0, width), 0);
+});
+
+test('the hook measures the box in its own font, minus its padding, and again whenever the box is resized', () => {
+  const saved = ['document', 'getComputedStyle', 'ResizeObserver'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]), fonts = new Set(), observers = [];
+  const canvas = { font: '', measureText: text => (fonts.add(canvas.font), { width: text.length * 10 }) };
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElement: () => ({ getContext: () => canvas }) } });
+  Object.defineProperty(globalThis, 'getComputedStyle', { configurable: true, value: () => ({ font: '400 14px UI', paddingLeft: '12px', paddingRight: '12px' }) });
+  Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: class { constructor(run) { this.run = run; observers.push(this); } observe() {} disconnect() { this.gone = true; } } });
+  const node = { clientWidth: 224 }, box = { current: node }, harness = hookHarness('src/shared/useFittingHint.ts'), hints = ['x'.repeat(25), 'x'.repeat(15), 'x'.repeat(5)];
+  const shown = list => harness.render('useFittingHint', box, list).result;
+  try {
+    assert.equal(shown(hints), hints[1], 'room is 224 - 24 = 200: the 250 wide hint does not fit, the 150 wide one does');
+    assert.deepEqual([...fonts], ['400 14px UI'], 'measured in the box’s own font');
+    node.clientWidth = 100; observers.at(-1).run();
+    assert.equal(shown(hints), hints[2], 'the box was narrowed');
+    node.clientWidth = 400; observers.at(-1).run();
+    assert.equal(shown(hints), hints[0], 'and widened again');
+    assert.equal(shown(['y'.repeat(60)]), 'y'.repeat(60), 'a list that changes under the box is measured afresh; its only hint is shown even when it does not fit');
+    assert.ok(observers[0].gone, 'the old list’s observer was let go');
+  } finally {
+    harness.dispose();
+    for (const [name, descriptor] of saved) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
+  }
 });

@@ -70,6 +70,8 @@ function loadUI(name, overrides = {}) {
     if (key === './composer-prefill') return require('../src/features/reading/composer-prefill.ts');
     if (key === './image-thumbnail') return require('../src/shared/image-thumbnail.ts');
     if (key === './image-input') return require('../src/features/reading/image-input.ts');
+    // Width fitting needs a real box; here the composer shows its longest hint.
+    if (key === './useFittingHint') return { useFittingHint: (box, hints) => hints[0] };
     if (key === './useNativePictures') return loadUI('features/reading/useNativePictures.ts', overrides);
     if (key === './markdown-escape') return require('../src/features/reading/markdown-escape.ts');
     if (key === './pasted-pictures') return require('../src/features/reading/pasted-pictures.ts');
@@ -584,6 +586,21 @@ test('an identity-checked restored history may show before the CLI, respects raw
   mode.setReading(value.id, false); assert.equal(isReading(mode, value), false);
   mode.setReading(value.id, true); assert.equal(isReading(mode, value), true);
   assert.equal(isReading(mode, { ...value, readingHistory: null }), false);
+});
+
+test('the composer offers its hint longest first and shows the one that fits, so a narrow box reads a short hint instead of a cut-off one', async t => {
+  const offered = [], narrow = { './useFittingHint': { useFittingHint: (box, hints) => (offered.splice(0, offered.length, ...hints), hints.at(-1)) } };
+  const h = dictationHarness(t, narrow);
+  Object.assign(h.props.terminal, { codexActive: true, readingHistory: null });
+  const shown = h.render().props.placeholder;
+  const strictlyShorter = list => list.every((hint, index) => index === 0 || hint.length < list[index - 1].length);
+  assert.equal(offered.length, 3); assert.ok(strictlyShorter(offered), 'longest first');
+  assert.equal(offered[0], en['给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行'].replace('{agent}', /Claude Code|Codex/.exec(offered[0])[0]), 'the full hint is the one that was always shown');
+  assert.ok(offered.every(hint => hint.includes(/Claude Code|Codex/.exec(offered[0])[0])), 'each form still says who it is for');
+  assert.equal(shown, offered[2], 'the shortest hint is the one the narrow box shows');
+  Object.assign(h.props.terminal, { codexActive: false });
+  h.render();
+  assert.equal(offered.length, 2); assert.equal(offered[0], en['输入命令，Enter 发送']); assert.ok(strictlyShorter(offered));
 });
 
 test('a restored preview cannot send until its own CLI input is ready, and a different thread disables it again', async t => {

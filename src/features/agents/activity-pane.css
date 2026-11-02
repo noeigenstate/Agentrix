@@ -125,12 +125,15 @@
 /* A sub-agent's read-only view (SubagentPane): a 40px header, the followed conversation, a 40px footer. It narrows by its own width, not the window's. */
 .subagent-split { container-type: inline-size; position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-app); }
 .subagent-head, .subagent-foot { display: flex; flex: none; align-items: center; gap: 8px; height: 40px; padding: 0 8px 0 16px; }
-.subagent-head { border-bottom: 1px solid var(--divider); }
+/* The header sits above the feed it scrolls over (the feed's top clips under it), on the split's own colour. */
+.subagent-head { position: relative; z-index: 1; border-bottom: 1px solid var(--divider); background: var(--bg-app); }
 .subagent-foot { border-top: 1px solid var(--divider); color: var(--text-3); font-size: 12px; }
 .subagent-foot > span:not(.subagent-space) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .subagent-foot svg { flex: none; }
 .subagent-space { flex: 1; }
-.subagent-name { min-width: 0; overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+/* The task names the split and takes the width the rest leaves, on one line with an ellipsis; the model follows it, small. */
+.subagent-title { flex: 1 1 0; min-width: 0; overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-name { flex: none; color: var(--text-2); font-size: 12px; white-space: nowrap; }
 .subagent-how, .subagent-rate, .subagent-elapsed { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .subagent-elapsed { color: var(--text-2); }
 .subagent-tag { display: inline-flex; flex: none; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--bg-selected); color: var(--text-2); font-size: 12px; white-space: nowrap; }
@@ -147,3 +150,4 @@
 @container (max-width: 520px) { .subagent-how { display: none; } }
 @container (max-width: 480px) { .subagent-body { padding: 12px 16px; } }
 @container (max-width: 420px) { :is(.subagent-rate, .subagent-role) { display: none; } }
+@container (max-width: 360px) { .subagent-name { display: none; } }
