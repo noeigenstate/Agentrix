@@ -759,6 +759,8 @@ test('Claude and Codex render user and agent parents with ordered child replies,
   for (const agent of ['claude', 'codex']) {
     state.terminal.agent = agent;
     const html = render(), sections = timelineSections(html);
+    assert.equal((html.match(/class="reading-content\b/g) || []).length, 1, 'one content container owns the timeline rail');
+    assert.match(html, /class="reading-content conversation-feed"[^>]*><div class="reading-step is-user/, 'the feed preserves direct rail children');
     assert.deepEqual(sections.map(section => section.match(/reading-step is-(\w+)/)[1]), ['user', 'agent', 'user', 'agent']);
     assert.equal((html.match(/class="reading-node"/g) || []).length, 4);
     assert.equal((html.match(/class="reading-turn-tools/g) || []).length, 3);

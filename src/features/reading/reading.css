@@ -48,8 +48,8 @@
 .reading-markdown :not(pre) > code { padding: 1px 6px; border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: 500 .88em var(--font-mono); white-space: break-spaces; }
 .reading-markdown strong { color: var(--text-1); font-weight: 700; }
 .reading-markdown a { color: var(--text-1); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
-.reading-view [data-reading-path] { user-select: text; }
-.reading-view[data-reveal-modifier] [data-reading-path]:hover { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+:is(.reading-view, .conversation-feed) [data-reading-path] { user-select: text; }
+:is(.reading-view, .conversation-feed)[data-reveal-modifier] [data-reading-path]:hover { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .reading-markdown blockquote { margin: 8px 0; padding: 2px 12px; border-left: 2px solid var(--border); color: var(--text-2); }
 .reading-markdown hr { border: 0; border-top: 1px solid var(--divider); margin: 12px 0; }
 /* A table reads at the size of the text around it: smaller, its cells were too small to read. */

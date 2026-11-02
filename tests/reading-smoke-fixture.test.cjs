@@ -30,6 +30,10 @@ test('fixture readiness rejects partial frames, helper input and an ordinary she
   assert.equal(fixtureIdle(frame.map(row => row === '❯ ' ? '❯ Clear-Host; Write-Host pending' : row)), false, 'the idle-rendering script itself is not an empty input');
   assert.equal(fixtureIdle(['reading-fixture> ']), false);
   assert.equal(fixtureIdle([]), false);
+  const codex = ['› ', '', 'gpt-6.1-sol · high · 100% context left'];
+  assert.equal(fixtureIdle(codex, 'codex'), true);
+  assert.equal(fixtureIdle(codex, 'claude'), false, 'provider changes require that provider\'s input evidence');
+  assert.equal(fixtureIdle(frame, 'codex'), false);
 });
 
 test('reading smoke keeps real PTY input, command results and later choices in its frame', { skip: process.platform !== 'win32', timeout: 20000 * timeoutScale }, async t => {

@@ -35,6 +35,12 @@ const entries = [
   tool('c3', 'command', 'npm run build', true, false, 120000),
   message('a3', 'assistant', '**核对完成。** 技能和运行命令现在都属于这轮机器人回复。', 180000),
 ];
+// A shell prompt is now an unknown CLI screen and must open the terminal. These timeline fixtures draw real idle evidence.
+const fixturePrompt = agent => {
+  const rows = agent === 'claude' ? ['────', '❯ ', '────', '  ⏸ manual mode on']
+    : ['› Ask Codex to do anything', '', 'gpt-6.1-sol · high · 100% context left'];
+  return `function global:prompt { Clear-Host; ${rows.map(row => `Write-Host '${row}'`).join('; ')}; ' ' }; `;
+};
 let app, page;
 const errors = [];
 try {
@@ -51,12 +57,13 @@ try {
   await card.getByRole('button', { name: '只打开终端', exact: true }).click();
   const state = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals[0];
   await waitFor(async () => (await state()).shellReady, 'isolated shell ready');
-  await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'hierarchy-fixture> ' }; Send-AgentrixEvent 'codex-started'\r"), project.id);
+  await page.evaluate(({ id, prompt }) => window.agentrix.writeTerminal(id, prompt + "Send-AgentrixEvent 'codex-started'\r"), { id: project.id, prompt: fixturePrompt('codex') });
   await waitFor(async () => (await state()).codexActive, 'fixture agent active');
   if (!await page.locator('.focus-mode').count()) await card.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   if (!await card.locator('.reading-view').count()) await page.locator('.titlebar-tools').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
   await card.locator('.reading-tools-head').first().waitFor();
+  await page.waitForFunction(() => document.querySelector('.reading-composer textarea')?.disabled === false);
   const reader = card.locator('.reading-scroll');
   const geometry = async () => reader.evaluate(node => {
     const tools = [...node.querySelectorAll('.reading-tools')];
@@ -110,8 +117,9 @@ try {
   // The intercepted conversation endpoint must model the new agent's empty transcript too.
   // Otherwise its first refresh immediately reloads the previous provider's fixture.
   await app.evaluate(() => { globalThis.hierarchyEntries = []; });
-  await page.evaluate(id => window.agentrix.writeTerminal(id, "Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), project.id);
+  await page.evaluate(({ id, prompt }) => window.agentrix.writeTerminal(id, prompt + "Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), { id: project.id, prompt: fixturePrompt('claude') });
   await waitFor(async () => (await state()).agent === 'claude', 'Claude fixture active');
+  await page.waitForFunction(() => document.querySelector('.reading-composer textarea')?.disabled === false);
   // The main log is empty in this injected fixture, so its no-op reset emits no packet. Model the
   // new provider's reset explicitly and await the real renderer buffer before publishing its entries.
   await publish([]);

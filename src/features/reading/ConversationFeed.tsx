@@ -1,4 +1,4 @@
-import { createContext, Fragment, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, Fragment, useContext, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { CaretDown, CaretUp } from '@phosphor-icons/react';
 import type { ConversationEntry } from '../../shared/types';
 import { t } from '../../shared/i18n';
@@ -24,6 +24,7 @@ import './reading-flow.css';
 export const ConversationDecorations = createContext<{
   start: number; status: ReactNode; running: boolean; anchor?: string; beforeResult: ReactNode; afterResult: ReactNode;
   quote?: { disabled: string | null; pick: (who: string, text: string) => void };
+  frame?: { ref: RefObject<HTMLDivElement | null>; style: CSSProperties; before: ReactNode };
 } | null>(null);
 
 // A picture the agent generated, shown where it answered; a click shows it full size in a popup. Its prompt is a two-line summary
@@ -105,12 +106,12 @@ function ToolGroup({ entries, live, projectId, onError }: { entries: Conversatio
   </div>;
 }
 
-export function ConversationFeed({ entries, agent: kind, projectId, live, onError, onOpenLink }: {
+export function ConversationFeed({ entries, agent: kind, projectId, live, onError, onOpenLink, children }: {
   entries: ConversationEntry[]; agent: 'claude' | 'codex'; projectId: string; live: boolean;
-  onError: (message: string) => void; onOpenLink?: (target: string) => void;
+  onError: (message: string) => void; onOpenLink?: (target: string) => void; children?: ReactNode;
 }) {
-  const pathLinks = useReadingPaths(projectId, onError);
   const decorations = useContext(ConversationDecorations);
+  const pathLinks = useReadingPaths(projectId, onError, decorations?.frame?.ref);
   const grouped = useMemo(() => blocks(entries), [entries]);
   const turns = useMemo(() => conversationTurns(grouped, decorations?.start ?? 0), [grouped, decorations?.start]);
   const result = useMemo(() => latestResult(entries, { idle: !live, interrupted: false }), [entries, live]);
@@ -121,7 +122,8 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, onErro
     if (turns[index].kind === 'user') { latestUser = index; break; }
     if (latestAgent < 0) latestAgent = index;
   }
-  return <div className="conversation-feed" data-agent={kind} {...pathLinks} onClick={event => {
+  // Every rail node, including pending messages, stays in one content container for spacing and scroll anchoring.
+  return <div className="reading-content conversation-feed" data-agent={kind} style={decorations?.frame?.style} {...pathLinks} onClick={event => {
     const button = (event.target as Element).closest<HTMLButtonElement>('[data-copy-code]');
     const toggle = (event.target as Element).closest<HTMLButtonElement>('[data-code-source]');
     if (toggle) { const source = toggle.closest('.reading-code')!.classList.toggle('is-source'); toggle.textContent = t(source ? '预览' : '源码'); return; }
@@ -129,6 +131,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, onErro
     const link = (event.target as Element).closest<HTMLAnchorElement>('.reading-markdown a');
     if (link) { event.preventDefault(); const href = link.getAttribute('href') || ''; if (href) onOpenLink?.(href); }
   }}>
+      {decorations?.frame?.before}
       {turns.map((turn, index) => {
         if (turn.kind === 'user') {
           return <TimelineStep key={turn.entry.id} at={turn.entry.at} kind="user" who={t('你')} latest={index === latestUser} mark={<UserAvatar />}>
@@ -166,5 +169,6 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, onErro
           </div>
         </TimelineStep>;
       })}
+      {children}
   </div>;
 }
