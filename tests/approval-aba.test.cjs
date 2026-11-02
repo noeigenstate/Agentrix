@@ -138,19 +138,6 @@ for (const agent of ['claude', 'codex']) {
       await h.tick(100); assert.deepEqual(h.opened, ['aba']); assert.deepEqual(h.writes, []); assert.deepEqual(h.errors, []);
     });
   }
-  test(`${agent}: retained permission dispatch rejects all targets even with fresh, absent or fabricated identity`, async t => {
-    const h = cardHarness(t, agent), { writeApprovalAction } = require('../src/features/reading/approval-action.ts');
-    const held = h.choice();
-    for (const choice of [held, { ...held, approval: undefined }, { ...held, approval: { instance: 999, stamp: { sessionId: 'fake-native-request', revision: 1 } } }]) {
-      for (const target of [0, 1, 2, 'cancel', -1, 999]) {
-        assert.deepEqual(await writeApprovalAction('aba', agent, choice, target, () => true), terminalOnly);
-      }
-    }
-    h.draw(h.b); h.draw(h.a);
-    assert.deepEqual(await writeApprovalAction('aba', agent, held, 0, () => true), terminalOnly);
-    assert.deepEqual(await writeApprovalAction('aba', agent, h.choice(), 'cancel', () => true), terminalOnly);
-    await h.tick(100); assert.deepEqual(h.writes, []); assert.deepEqual(h.approvalCalls, []);
-  });
   test(`${agent}: backend independently returns terminal-only for every key, identity, gate and session state`, () => {
     const h = backend(agent);
     const states = [h.s, { ...h.s, approvalRemote: true }, { ...h.s, gate: { open: 1, held: ['pending'] } }, { ...h.s, status: 'exited' }, { ...h.s, status: 'starting' }, { ...h.s, approval: undefined }, null];

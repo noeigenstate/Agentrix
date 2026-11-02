@@ -453,10 +453,9 @@ export function parseAgentScreen(agent: ScreenAgent, rows: string[]): AgentScree
     choice, overlay: picker ? 'none' : overlay, ...(waiting ? { waiting } : {}) };
 }
 
-// Display equivalence only: identical text is NOT a permission request identity (see approval-action.ts).
-// Cursor updates are the same prompt; a second menu (e.g. effort after model) is a new prompt. A question keeps its
-// card for the whole page: ticks, a typed answer, notes and hints redraw it, and only another question or page (or
-// the review) is new. Replacing the card mid-answer would drop the keys it had not sent yet.
+// Display equivalence only: identical text is not a permission request identity.
+// Cursor movement, ticks, typed answers and notes keep the dialog's identity so redraws do not reopen the popup.
+// A new menu, question page or review has a new identity.
 export function choiceIdentity(choice: ScreenChoice): string {
   const question = choice.question;
   if (question) return JSON.stringify([choice.kind, choice.title, choice.options.map(option => [option.number, option.role, option.role === 'input' ? null : option.label]), question.agent, question.tabs.map(tab => tab.label), question.position, question.multi, !!question.review]);

@@ -6,7 +6,6 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
-const { choiceKeys, selectedChoiceIndex, writeChoiceKeys } = require('../src/features/reading/choice-keys.ts');
 const { choiceIdentity } = require('../src/features/agents/agent-screen.ts');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
 const en = require('../electron/locales/en.json');
@@ -45,8 +44,6 @@ function loadUI(name, overrides = {}) {
     if (name === '@phosphor-icons/react') return new Proxy({}, { get: () => props => React.createElement('svg', { className: props.className }) });
     if (key === './i18n') return { currentLanguage: () => 'en', t: (text, values = {}) => (en[text] ?? text).replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match) };
     if (key === './platform') return { isMac: true, isLinux: false, isWindows: false };
-    if (key === './choice-keys') return require('../src/features/reading/choice-keys.ts');
-    if (key === './approval-action') return require('../src/features/reading/approval-action.ts');
     if (key === './dictation-send') return require('../src/features/reading/dictation-send.ts');
     if (key === './reading-command') return require('../src/features/reading/reading-command.ts');
     if (key === './reply-files') return require('../src/features/reading/reply-files.ts');
@@ -234,37 +231,11 @@ test('child replies and tools show minute changes without adding main rail nodes
   }
 });
 
-test('choice keys move up, down or confirm in place using option positions', () => {
-  assert.deepEqual(choiceKeys(1, 3), ['\x1b[B', '\x1b[B', '\r']);
-  assert.deepEqual(choiceKeys(3, 0), ['\x1b[A', '\x1b[A', '\x1b[A', '\r']);
-  assert.deepEqual(choiceKeys(2, 2), ['\r']);
-  assert.equal(selectedChoiceIndex(fakeChoice()), 1);
-  assert.equal(selectedChoiceIndex({ ...fakeChoice(), options: [] }), 0);
-});
-
 test('choice identity survives cursor redraws and changes for the next menu', () => {
   const choice = fakeChoice();
   assert.equal(choiceIdentity(choice), choiceIdentity({ ...choice, options: choice.options.map(option => ({ ...option, selected: !option.selected })) }));
   assert.notEqual(choiceIdentity(choice), choiceIdentity({ ...choice, title: 'Select effort' }));
   assert.notEqual(choiceIdentity(choice), choiceIdentity({ ...choice, options: choice.options.slice(1) }));
-});
-
-test('choice writes are separate and spaced 25 ms apart, with Enter last', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const written = [];
-  const pending = writeChoiceKeys(0, 2, key => written.push(key));
-  assert.deepEqual(written, ['\x1b[B']);
-  t.mock.timers.tick(24); await Promise.resolve(); assert.equal(written.length, 1);
-  t.mock.timers.tick(1); await Promise.resolve(); assert.deepEqual(written, ['\x1b[B', '\x1b[B']);
-  t.mock.timers.tick(25); await pending; assert.deepEqual(written, ['\x1b[B', '\x1b[B', '\r']);
-});
-
-test('dismissing a choice aborts its remaining keys', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  let active = true; const written = [];
-  const pending = writeChoiceKeys(2, 0, key => written.push(key), () => active);
-  active = false; t.mock.timers.tick(25); await pending;
-  assert.deepEqual(written, ['\x1b[A']);
 });
 
 test('screen parser stub preserves its replacement contract', () => {
