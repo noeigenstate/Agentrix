@@ -101,8 +101,8 @@
 .reading-command small { flex: none; padding: 2px 4px; border-radius: 999px; background: var(--bg-selected); color: var(--text-1); font-size: calc(11px * var(--reading-text)); }
 .reading-composer:focus-within { border-color: var(--focus-ring); }
 .reading-composer textarea { flex: 1; min-width: 0; max-height: 140px; field-sizing: content; resize: none; border: 0; outline: 0; padding: 4px 0; min-height: 32px; background: transparent; color: var(--text-1); font: 400 calc(14px * var(--reading-text))/calc(24px * var(--reading-text)) var(--font-ui); }
-/* One line at any width: a narrow box cuts the hint with an ellipsis instead of growing a second row. */
-.reading-composer textarea::placeholder { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* One line at any width, so the empty box keeps its height; Chromium gives a textarea placeholder no ellipsis, so ReadingView swaps in a shorter hint that fits (useFittingHint). */
+.reading-composer textarea::placeholder { color: var(--text-2); white-space: nowrap; overflow: hidden; }
 .reading-attachments { display: flex; align-items: center; gap: 8px; margin: 0 var(--reading-edge-right) 8px var(--reading-edge-left); font-size: calc(12px * var(--reading-text)); color: var(--text-2); }
 .reading-composer .icon-button { flex: none; width: 32px; height: 32px; border-radius: 8px; }
 .reading-send:not(:disabled) { color: var(--button-primary-text); background: var(--button-primary); }

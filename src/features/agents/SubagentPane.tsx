@@ -67,6 +67,8 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
     if ((event.target as HTMLElement).tagName === 'TEXTAREA') body.current?.focus(); else onClose();
   };
   const name = feed ? modelName(feed.model) : t('子 agent'), Mark = feed?.agent === 'Codex' ? CodexLogo : ClaudeLogo;
+  // The task first, then the model: two splits of one model are told apart by their task, in the header and in every accessible name.
+  const title = feed?.title ?? '', who = title ? `${title} · ${name}` : name;
   // A finished Task subagent is 'reviewing' but has an end time; either way nothing more can be said to it.
   const over = feed?.state === 'done' || feed?.endedAt != null || status === 'gone', delivered = deliveredIds(entries, sent);
   const how = feed ? [feed.effort === 'default' ? t('默认') : feed.effort, feed.fast != null && (feed.fast ? t('快速') : t('普通'))].filter(Boolean).join(' · ') : '';
@@ -74,19 +76,19 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
   const ended = feed?.endedAt ?? (status === 'gone' ? null : now);
   const elapsed = !feed || feed.startedAt === null || (over && ended === null) ? '—' : elapsedClock((over ? ended! : now) - feed.startedAt);
 
-  return <section className="subagent-split" aria-label={t('{name} 的输出，只读', { name })} onKeyDown={onKeyDown}>
+  return <section className="subagent-split" aria-label={t('{name} 的输出，只读', { name: who })} onKeyDown={onKeyDown}>
     <header className="subagent-head">
-      <Mark size={16} /><span className="subagent-name" title={feed?.model}>{name}</span>
+      <Mark size={16} /><span className="subagent-title" title={title}>{title}</span>
       {feed && <span className="subagent-tag subagent-role">{t(feed.role)}</span>}
+      <span className="subagent-name" title={feed?.model}>{name}</span>
       {how && <span className="subagent-how">{how}</span>}
-      <span className="subagent-space" />
       {feed && <span className={`subagent-tag subagent-state is-${over ? 'done' : feed.state}`}>{stateWord(feed, status, over)}</span>}
       <span className="subagent-rate">{rate === null ? '—' : rate} token/s</span>
       <span className="subagent-elapsed" title={t(over ? '用时' : '已运行')}>{elapsed}</span>
-      <button type="button" className="icon-button" title={t('关闭分屏（Esc）')} aria-label={t('关闭 {name} 的分屏', { name })} onClick={onClose}><X size={13} /></button>
+      <button type="button" className="icon-button" title={t('关闭分屏（Esc）')} aria-label={t('关闭 {name} 的分屏', { name: who })} onClick={onClose}><X size={13} /></button>
     </header>
     <div className="subagent-main">
-      <div ref={body} className="subagent-body" tabIndex={0} role="log" aria-live="off" aria-label={t('{name} 的消息和工具步骤，只读', { name })}
+      <div ref={body} className="subagent-body" tabIndex={0} role="log" aria-live="off" aria-label={t('{name} 的消息和工具步骤，只读', { name: who })}
         onScroll={event => { const end = atEnd(event.currentTarget); setPaused(current => end ? null : current ?? { after: lastId }); }}>
         {feed ? <ConversationFeed entries={feed.entries} agent={feed.agent === 'Codex' ? 'codex' : 'claude'} projectId={projectId} live={feed.state === 'running' && status === 'ok'} onError={onError} onOpenLink={onOpenLink} />
           : <p className="subagent-empty">{status === 'error' ? t('读取失败：{message}', { message: error ?? '' }) : t('正在读取…')}</p>}
@@ -96,7 +98,7 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
       </div>
       {unread > 0 && <button type="button" className="subagent-jump button" onClick={follow}><ArrowDown size={16} />{t('{count} 个新步骤', { count: unread })}</button>}
     </div>
-    <SubagentInput terminalId={terminalId} callId={callId} name={name} closed={over} onSent={item => setSent(items => [...items, item])} />
+    <SubagentInput terminalId={terminalId} callId={callId} name={who} closed={over} onSent={item => setSent(items => [...items, item])} />
     <footer className="subagent-foot">
       <Lock size={14} aria-hidden="true" /><span>{footerText(status, error, following, unread, over)}</span><span className="subagent-space" />
       {!following && !over && <button type="button" className="button" onClick={follow}>{t('回到最新')}</button>}

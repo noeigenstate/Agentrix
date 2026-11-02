@@ -88,5 +88,5 @@ test('the popup sits in the conversation area, so it never covers the message bo
   const popupCss = read('reading-terminal-popup.css');
   assert.doesNotMatch(popupCss, /padding:[^;]*\b7\d+px/, 'no guessed room for the composer');
   assert.match(popupCss, /\.reading-terminal-popup \{[^}]*height: min\(760px, 100%\)/, 'as tall as the conversation area allows, so a tall dialog shows whole');
-  assert.match(read('reading.css'), /\.reading-composer textarea::placeholder \{[^}]*white-space: nowrap[^}]*text-overflow: ellipsis/);
+  assert.match(read('reading.css'), /\.reading-composer textarea::placeholder \{[^}]*white-space: nowrap; overflow: hidden; \}/);
 });

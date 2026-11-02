@@ -154,6 +154,7 @@ svg.chart text.end { fill: var(--text-1); font-weight: 600; }
 .chart .tail { fill: none; stroke-width: 1; stroke-dasharray: 2 3; stroke-linecap: round; opacity: .7; }
 .chart .bubble { stroke: var(--bg-card); stroke-width: 2; }
 .donut { display: grid; grid-template-columns: 144px minmax(0, 1fr); align-items: center; gap: 24px; }
+.donut svg text { fill: var(--text-2); }
 .donut svg text.centre { fill: var(--text-1); font-size: 16px; font-weight: 600; }
 .share-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .share-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

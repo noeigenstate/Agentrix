@@ -747,6 +747,23 @@ test('every heat step has an ink that reads on it at 4.5:1 in both themes, and t
   assert.deepEqual([0, 1, 2, 3, 4, 5].filter(slot => ratio(hex('light', `m-${slot}`), tokens.light['bg-card']) < 3), [2, 3, 4]);
 });
 
+test('the donut’s centre figure and its 子任务 caption both take a text token and read on the card at 4.5:1 in both themes', () => {
+  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  // An SVG <text> with no fill is painted black, which is ~1.4:1 on the dark card: every label in the ring names its colour.
+  assert.match(css, /\.donut svg text \{ fill: var\(--text-2\); \}/);
+  assert.match(css, /\.donut svg text\.centre \{ fill: var\(--text-1\);/);
+  const themes = fs.readFileSync(path.join(src, 'shared/styles/themes.css'), 'utf8');
+  const block = selector => themes.slice(themes.indexOf(`
+${selector} {`), themes.indexOf('}', themes.indexOf(`
+${selector} {`)));
+  const token = (body, name) => body.match(new RegExp(`--${name}: (#[0-9a-f]{6});`, 'i'))[1];
+  const luminance = hex => { const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const ratio = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+  for (const [theme, body] of [['dark', block(':root')], ['light', block(':root[data-theme="light"]')]]) for (const ink of ['text-1', 'text-2']) {
+    assert.ok(ratio(token(body, ink), token(body, 'bg-card')) >= 4.5, `${theme} ${ink} on the card ${ratio(token(body, ink), token(body, 'bg-card')).toFixed(2)}`);
+  }
+});
+
 test('the page reads only the dashboard bridge and never the main window’s', () => {
   const files = fs.readdirSync(dashboardDir).filter(name => /\.tsx?$/.test(name));
   for (const name of files) assert.doesNotMatch(fs.readFileSync(path.join(dashboardDir, name), 'utf8'), /window\.agentrix\b(?!Dashboard)/, name);
