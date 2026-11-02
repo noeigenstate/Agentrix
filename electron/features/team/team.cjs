@@ -7,6 +7,7 @@ const { setTimeout: delay } = require('node:timers/promises');
 const { matches, repoFiles } = require('../../boundaries.cjs');
 const { LABELS, ISSUE_KEYS, blank, stamp, statusWord } = require('./minutes-page.cjs');
 const { TASK_KINDS } = require('../dashboard/records-routing.cjs');
+const { queueControl, recordControl, controlOf } = require('./inbox.cjs');
 
 const FINDINGS = '## Findings for the ledger';
 const fields = { Goal: 'goal', Files: 'files', Provides: 'provides', Uses: 'uses', 'Done when': 'doneWhen', 'Questions and risks': 'questions' };
@@ -136,6 +137,8 @@ class Team {
     });
   }
   append(entry) { fs.appendFileSync(this.journal, JSON.stringify({ ...entry, time: Date.now() }) + '\n'); }
+  queueControl(id, control, notify) { return queueControl(this, id, control, notify); }
+  recordControl(id, title, control, notify) { return this.locked(() => recordControl(this, id, title, controlOf(control), notify)); }
   async locked(action) {
     const file = path.join(this.directory, 'lock'), token = randomUUID(), deadline = Date.now() + 15000;
     let stale;

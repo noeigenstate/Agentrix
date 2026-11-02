@@ -15,12 +15,13 @@ const { rolloutFiles, sessionMeta } = require(path.join(runtime, 'session-files.
 const { TranscriptTail } = require(path.join(runtime, 'transcript-tail.cjs'));
 const { matches, snapshot, changedBetween, boundariesFor, repoFiles } = require(path.join(runtime, 'boundaries.cjs'));
 const { projectTeam, meetingRequest, recordFindings, minutesMarkdown, FINDINGS } = require(path.join(runtime, 'features/team/team.cjs'));
+const { RunInbox, runId, validText } = require(path.join(runtime, 'features/team/inbox.cjs'));
 const { minutesPage } = require(path.join(runtime, 'features/team/minutes-page.cjs'));
 const { TASK_KINDS, taskKind, routingVerdict } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
 const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
 const RUNTIME_FILES = ['boundaries.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs',
-  'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/dashboard/records-routing.cjs',
+  'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/team/inbox.cjs', 'features/dashboard/records-routing.cjs',
   'features/skills/session.cjs', 'features/skills/worker-proposals.cjs'];
 const runtimeFiles = () => Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
 
@@ -46,10 +47,27 @@ const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审
 
   node dispatch.cjs minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues <issues.json>] [--language zh|en]
   node dispatch.cjs consolidate --cwd <dir> --meeting <id> --summary <file.md> [--incidents <file.json>] [--findings <file.json>]
+  node dispatch.cjs stop <run id> [--reason <text>] [--no-resume] [--cwd <dir>]
 `;
 
 function argumentsOf(argv) {
   const [agent, ...flags] = argv;
+  if (agent === 'stop') {
+    const [id, ...rest] = flags, options = { agent, id, cwd: process.cwd(), noResume: false };
+    if (!runId(id)) throw new Error('Expected a run id for stop');
+    const seen = new Set();
+    for (let i = 0; i < rest.length; i++) {
+      const flag = rest[i];
+      if (!['--reason', '--no-resume', '--cwd'].includes(flag) || seen.has(flag)) throw new Error(`Unknown or repeated option ${flag}`);
+      seen.add(flag);
+      if (flag === '--no-resume') { options.noResume = true; continue; }
+      const value = rest[++i];
+      if (!value || value.startsWith('--') || !validText(value)) throw new Error(`Expected a value for ${flag}`);
+      options[flag === '--reason' ? 'reason' : 'cwd'] = value;
+    }
+    options.cwd = path.resolve(options.cwd);
+    return options;
+  }
   const command = ['minutes', 'consolidate'].includes(agent);
   if (!command && !['codex', 'claude'].includes(agent)) throw new Error('Expected codex, claude, minutes or consolidate');
   const options = { agent, images: [], allow: [], fast: false, readOnly: false };
@@ -140,8 +158,14 @@ function briefOf(options, brief, team, { id, phase, repo, before } = {}) {
 
 async function teamCommand(argv, stdout) {
   try {
-    const options = argumentsOf(argv), team = projectTeam(options.cwd, true);
+    const options = argumentsOf(argv), team = projectTeam(options.cwd, options.agent !== 'stop');
     if (!team) throw new Error('Team commands require a git repository');
+    if (options.agent === 'stop') {
+      await team.queueControl(options.id, { id: randomUUID(), type: 'stop', at: Date.now(),
+        ...(options.reason ? { reason: options.reason } : {}), ...(options.noResume ? { noResume: true } : {}) });
+      stdout.write(`[dispatch] stop queued ${options.id}\n`);
+      return 0;
+    }
     if (options.agent === 'consolidate') {
       const records = {};
       for (const kind of ['incidents', 'findings']) if (options[kind]) {
@@ -395,15 +419,58 @@ function executable(agent, args, env) {
   return { file: agent, args };
 }
 
-async function run(argv, { env = process.env, stdout = process.stdout, launch = spawn, resolveExecutable = executable, startTimeout = START_TIMEOUT } = {}) {
-  if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'minutes', 'consolidate'].includes(argv[0]))) {
+function readWorkerOutput(child, agent, log, output) {
+  const tails = [];
+  for (const stream of [child.stdout, child.stderr]) {
+    const decoder = new StringDecoder('utf8');
+    let buffer = '', skipping = false, json = '';
+    const parseLine = line => {
+      // Claude's JSON result can be a pretty-printed array, or older builds can emit JSON lines.
+      if (agent !== 'claude' || !json && !/^\s*[\[{]\s*$/.test(line)) { output.line(line); return; }
+      json += line + '\n';
+      if (json.length > LIMIT) { json = ''; return; }
+      try { const record = JSON.parse(json); json = ''; output.record(record); } catch {}
+    };
+    const accept = data => {
+      buffer += data;
+      let end;
+      while ((end = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
+        if (!skipping && line.length <= LIMIT) parseLine(line);
+        skipping = false;
+      }
+      if (buffer.length > LIMIT) { buffer = ''; skipping = true; }
+    };
+    stream.on('data', chunk => { log.write(chunk); accept(decoder.write(chunk)); });
+    tails.push(() => { accept(decoder.end()); if (!skipping && buffer.trim()) parseLine(buffer); });
+  }
+  return () => { for (const tail of tails) tail(); };
+}
+
+async function run(argv, { env = process.env, stdout = process.stdout, launch = spawn, resolveExecutable = executable, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL } = {}) {
+  if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'minutes', 'consolidate', 'stop'].includes(argv[0]))) {
     stdout.write(USAGE); return 0;
   }
-  if (['minutes', 'consolidate'].includes(argv[0])) return teamCommand(argv, stdout);
+  if (['minutes', 'consolidate', 'stop'].includes(argv[0])) return teamCommand(argv, stdout);
   const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
   let options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, endSent = false;
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
   let team = null, admission = null, teamFinished = false, roundtable = false, skillGuard = null, skillProposals = 0, skillChangesLeftLive = 0;
+  let inbox = null, inboxTimer, inboxRead = Promise.resolve(), messages = [], noResume = false, segmentStopped = false;
+  let interventions = 0, stops = 0, completedUsage = null, resumeSession = null, segmentConfirmed = false;
+  let treeStop = Promise.resolve(), stoppingChild = null;
+  const usage = (live = false) => {
+    const current = output.usage();
+    if (!completedUsage) return current;
+    const total = Object.fromEntries(Object.keys(current).map(key => [key,
+      completedUsage[key] === null || current[key] === null ? null : completedUsage[key] + current[key]]));
+    // A rate is a measured pair. An untimed reply cannot add tokens while borrowing the previous segment's time.
+    if (live && (current.outputTokens === null || !(current.activeMs > 0))) {
+      total.outputTokens = completedUsage.outputTokens; total.activeMs = completedUsage.activeMs;
+    }
+    return total;
+  };
+  const interventionNote = () => (interventions ? ` · owner intervened ${interventions}` : '') + (stops ? ` · owner stopped ${stops}` : '');
   const restoreSkills = changedFiles => {
     if (!skillGuard) return;
     const total = skillGuard.finish(id, changedFiles);
@@ -418,8 +485,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const recordTeam = async report => {
     if (!team || !admission || teamFinished) return {};
     teamFinished = true;
-    try { return await team.finish(options, { id, session: output.sessionId, model: unconfirmed ? 'unreported' : output.routing().model,
-      kind: taskKind(options, roundtable), ...output.usage(), ...admission, ...report }); }
+    try { return await team.finish(options, { id, session: resumeSession || output.sessionId, model: unconfirmed ? 'unreported' : output.routing().model,
+      kind: taskKind(options, roundtable), ...usage(), ...admission, ...report }); }
     catch (error) { return { warning: String(error.message || error).replace(/[\r\n]+/g, ' ') }; }
   };
   const teamEnd = ({ status, warning }) => {
@@ -429,7 +496,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     return (wording ? ` · ${wording}` : '') + (warning ? ` · WARNING: team bookkeeping failed: ${warning}` : '');
   };
   // Settles once the worker's output has been read to the end.
-  const drained = new Promise(resolve => { drain = resolve; });
+  let drained = new Promise(resolve => { drain = resolve; });
   const signal = line => stdout.write(`[dispatch] ${line}\n`);
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
   const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
@@ -456,38 +523,65 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   // While it runs, every new record is checked at once. A worker that has exited is judged once, on everything it left
   // (final), so a fast worker that did start is reported started and done, and one without those records is not.
   const confirm = (final = false) => {
-    if (started || unconfirmed || !child?.pid || !output.sessionId || !final && (exited || child.exitCode !== null)) return;
+    if (segmentConfirmed || unconfirmed || spawnError || !child?.pid || !output.sessionId || !final && (exited || child.exitCode !== null)) return;
+    if (resumeSession && output.sessionId !== resumeSession) { spawnError = new Error('Resumed worker reported a different session'); stop('SIGTERM', false); return; }
     if (!output.confirmed) { if (!final && options.agent === 'codex') void rollout.read(); return; }
-    started = true; clearTimeout(startTimer);
+    segmentConfirmed = true; clearTimeout(startTimer);
     const actual = output.routing(), requested = declared();
     const unverified = Object.keys(requested).filter(key => output[key] === null);
     const decision = routingVerdict(output, requested), mismatch = decision === 'mismatch';
     const verdict = mismatch ? `MISMATCH (declared ${requested.model} ${requested.effort} fast ${requested.fast ? 'on' : 'off'})` : decision;
     const routing = verdict + (unverified.length ? ` (${unverified.join(', ')}${verdict === 'unverified' ? '' : ' unverified'})` : '');
-    signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}${teamLabel()}`);
-    send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
-    if (final) return;
+    if (!started) {
+      started = true;
+      signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}${teamLabel()}`);
+      send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
+    }
+    if (final || rateTimer) return;
     rateTimer = setInterval(() => {
-      const { outputTokens, activeMs } = output;
+      const { outputTokens, activeMs } = usage(true);
       if (outputTokens === null || !(activeMs > 0) || lastRate?.outputTokens === outputTokens && lastRate?.activeMs === activeMs) return;
       lastRate = { outputTokens, activeMs };
       send({ type: 'dispatch-rate', id, ...lastRate });
-    }, RATE_INTERVAL);
+    }, rateInterval);
   };
-  const output = new WorkerOutput(argv[0], () => confirm());
-  const rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
+  let output = new WorkerOutput(argv[0], () => confirm());
+  let rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
   const stop = (kind, requested = true) => {
     if (requested) killed = true;
     if (exited || !child?.pid || child.exitCode !== null) return;
+    const victim = child;
+    if (stoppingChild === victim) return;
+    stoppingChild = victim;
     if (process.platform === 'win32') {
-      const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
-      killer.on('error', () => child.kill());
+      treeStop = new Promise(resolve => {
+        const killer = spawn('taskkill.exe', ['/pid', String(victim.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+        killer.on('error', error => { spawnError ||= error; victim.kill(); resolve(); });
+        killer.once('close', code => { if (code && victim.exitCode === null) { spawnError ||= new Error('Unable to stop worker tree'); victim.kill(); } resolve(); });
+      });
     } else {
-      try { process.kill(-child.pid, kind); } catch { child.kill(kind); }
-      clearTimeout(forceTimer);
-      forceTimer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, 1000);
-      forceTimer.unref();
+      try { process.kill(-victim.pid, kind); } catch { victim.kill(kind); }
+      treeStop = new Promise(resolve => {
+        forceTimer = setTimeout(() => { try { process.kill(-victim.pid, 'SIGKILL'); } catch {} resolve(); }, 1000);
+      });
     }
+  };
+  const readInbox = (finish = false) => {
+    if (!inbox) return Promise.resolve();
+    const task = inboxRead.then(async () => {
+      for (const control of await inbox.take(finish && !messages.length)) {
+        if (control.type === 'stop') {
+          stops++; segmentStopped = true; noResume ||= !!control.noResume;
+          signal(`stop requested ${id}${control.reason ? ': ' + JSON.stringify(control.reason).slice(1, -1) : ''}${control.noResume ? ' · no resume' : ''}`);
+          stop('SIGTERM', false);
+        } else {
+          interventions++; messages.push(control.text);
+          signal(`intervened ${id}: ${JSON.stringify(control.text).slice(1, -1)}`);
+        }
+      }
+    });
+    inboxRead = task.catch(error => { spawnError ||= error; noResume = true; stop('SIGTERM', false); });
+    return task;
   };
   const onInterrupt = () => stop('SIGINT'), onTerminate = () => stop('SIGTERM'), onHangup = () => stop('SIGHUP');
   try {
@@ -497,6 +591,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     roundtable = Boolean(team && options.meeting);
     if (options.meeting && !team) throw new Error('roundtables need a git repository');
     if (team) admission = await team.admit(options, id, __filename);
+    if (team && !roundtable) {
+      inbox = new RunInbox(team, id); await inbox.open();
+      inboxTimer = setInterval(() => { void readInbox().catch(() => {}); }, POLL_INTERVAL);
+    }
     if (killed) throw new Error('Dispatch interrupted before launch');
     const repo = admission?.repo || (options.allow.length ? repoFiles(options.cwd) : undefined);
     const checking = options.allow.length > 0 || roundtable;
@@ -504,93 +602,108 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (checking) before = snapshot(options.cwd, repo);
     if (roundtable && !before) throw new Error('Cannot verify the roundtable working tree');
     skillGuard = new WorkerSkillProposals(options, env, repo);
-    const brief = briefOf(options, fs.readFileSync(options.brief), team, { id, phase: admission?.phase, repo, before: checking ? before : undefined });
+    const inspectScope = () => {
+      const after = checking ? snapshot(options.cwd, before) : null;
+      const own = after ? new Set([options.out, `${options.out}.log`, options.ledger, team?.memory, ...skillGuard.artifacts].filter(Boolean)
+        .map(file => path.relative(after.root, file).split(path.sep).join('/'))) : null;
+      const changed = (after && changedBetween(before, after)?.filter(file => !own.has(file))) ?? null;
+      return { after, changed, outOfScope: changed && (roundtable ? changed : changed.filter(file => !matches(options.allow, file))) };
+    };
+    let brief = briefOf(options, fs.readFileSync(options.brief), team, { id, phase: admission?.phase, repo, before: checking ? before : undefined });
     log = fs.createWriteStream(options.out + '.log');
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
-    const command = resolveExecutable(options.agent, commandOf(options), env);
-    if (options.agent === 'codex' && options.resume) await rollout.prepare(options.resume);
-    if (killed) throw new Error('Dispatch interrupted before launch');
-    child = launch(command.file, command.args, { cwd: options.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-      detached: process.platform !== 'win32' });
-    if (killed) stop('SIGTERM');
-    log.on('error', error => { spawnError = error; stop('SIGTERM', false); });
-    startTimer = setTimeout(() => { failed('session not reported within 30 s'); stop('SIGTERM', false); }, startTimeout);
-    if (options.agent === 'codex') pollTimer = setInterval(() => { void rollout.read(); }, POLL_INTERVAL);
-    child.once('exit', code => {
-      exited = true; clearTimeout(startTimer); clearInterval(pollTimer); clearInterval(rateTimer);
-      if (started) return;
-      // Its last output can still be in the pipes: once that is read (at most EXIT_SETTLE), decide from its records,
-      // without waiting for pipes a leftover child process may hold open.
-      void Promise.race([drained, new Promise(resolve => setTimeout(resolve, EXIT_SETTLE))]).then(async () => {
-        if (started || unconfirmed) return;
-        if (options.agent === 'codex') { await rollout.pending; await rollout.read(); }
-        confirm(true);
-        if (!started) failed(output.capacity ? 'at capacity' : 'worker exited without a confirmed session', code === 0 ? 1 : code);
+    let result;
+    for (;;) {
+      const effective = resumeSession ? { ...options, resume: resumeSession } : options;
+      const command = resolveExecutable(options.agent, commandOf(effective), env);
+      if (options.agent === 'codex' && effective.resume && !resumeSession) await rollout.prepare(effective.resume);
+      if (resumeSession) {
+        const nextOutput = new WorkerOutput(options.agent, () => confirm());
+        const nextRollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), nextOutput);
+        if (options.agent === 'codex') await nextRollout.prepare(resumeSession);
+        await readInbox();
+        if (noResume || killed || spawnError) break;
+        completedUsage = usage(); output = nextOutput; rollout = nextRollout;
+        segmentConfirmed = false; segmentStopped = false; exited = false;
+        drained = new Promise(resolve => { drain = resolve; });
+        brief = briefOf(options, Buffer.from(messages.splice(0).map(text => `业主插话：${text}`).join('\n\n') + '\n\n继续执行当前任务。'), team,
+          { id, phase: admission?.phase, repo, before: checking ? before : undefined });
+      }
+      if (killed) throw new Error('Dispatch interrupted before launch');
+      child = launch(command.file, command.args, { cwd: options.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+        detached: process.platform !== 'win32' });
+      if (killed) stop('SIGTERM');
+      if (!resumeSession) log.on('error', error => { spawnError = error; stop('SIGTERM', false); });
+      startTimer = setTimeout(() => {
+        if (started) spawnError = new Error('Resumed session not reported within 30 s');
+        else failed('session not reported within 30 s');
+        stop('SIGTERM', false);
+      }, startTimeout);
+      if (options.agent === 'codex') pollTimer = setInterval(() => { void rollout.read(); }, POLL_INTERVAL);
+      const segmentOutput = output, segmentRollout = rollout, segmentDrain = drained;
+      child.once('exit', code => {
+        exited = true; clearTimeout(startTimer); clearInterval(pollTimer);
+        if (segmentConfirmed) return;
+        // Its last output can still be in the pipes: once that is read (at most EXIT_SETTLE), decide from its records,
+        // without waiting for pipes a leftover child process may hold open.
+        void Promise.race([segmentDrain, new Promise(resolve => setTimeout(resolve, EXIT_SETTLE))]).then(async () => {
+          if (output !== segmentOutput || segmentConfirmed || unconfirmed) return;
+          if (options.agent === 'codex') { await segmentRollout.pending; await segmentRollout.read(); }
+          if (output !== segmentOutput) return;
+          confirm(true);
+          if (!started) failed(output.capacity ? 'at capacity' : 'worker exited without a confirmed session', code === 0 ? 1 : code);
+        });
       });
-    });
-    const tails = [];
-    for (const stream of [child.stdout, child.stderr]) {
-      const decoder = new StringDecoder('utf8');
-      let buffer = '', skipping = false, json = '';
-      const parseLine = line => {
-        // Claude's JSON result can be a pretty-printed array, or older builds can emit JSON lines.
-        if (options.agent !== 'claude' || !json && !/^\s*[\[{]\s*$/.test(line)) { output.line(line); return; }
-        json += line + '\n';
-        if (json.length > LIMIT) { json = ''; return; }
-        try { const record = JSON.parse(json); json = ''; output.record(record); } catch {}
-      };
-      const accept = data => {
-        buffer += data;
-        let end;
-        while ((end = buffer.indexOf('\n')) >= 0) {
-          const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-          if (!skipping && line.length <= LIMIT) parseLine(line);
-          skipping = false;
-        }
-        if (buffer.length > LIMIT) { buffer = ''; skipping = true; }
-      };
-      stream.on('data', chunk => { log.write(chunk); accept(decoder.write(chunk)); });
-      tails.push(() => { accept(decoder.end()); if (!skipping && buffer.trim()) parseLine(buffer); });
+      const flushOutput = readWorkerOutput(child, options.agent, log, output);
+      child.stdin.on('error', error => { if (error.code !== 'EPIPE') spawnError = error; });
+      child.stdin.end(brief);
+      result = await new Promise(resolve => {
+        child.once('error', error => { spawnError = error; });
+        child.once('close', (code, killedBy) => resolve({ code, killedBy }));
+      });
+      flushOutput();
+      clearInterval(pollTimer);
+      if (options.agent === 'codex') { await rollout.pending; await rollout.read(); }
+      confirm(true); drain();
+      clearTimeout(startTimer); await treeStop;
+      if (!started) failed(spawnError?.message || (output.capacity ? 'at capacity' : 'worker exited without a confirmed session'), result.code === 0 ? 1 : result.code);
+      if (resumeSession && !segmentConfirmed) { spawnError ||= new Error('Resumed worker exited without a confirmed session'); result.code = result.code || 1; }
+      if (resumeSession && spawnError) signal(`resume failed ${id}: ${String(spawnError.message).replace(/[\r\n]+/g, ' ')}`);
+      if (options.agent === 'claude' && output.result !== null && output.result !== undefined) fs.writeFileSync(options.out, output.result);
+      await readInbox(!messages.length);
+      if (!messages.length || killed || noResume || unconfirmed || spawnError) break;
+      if (checking) {
+        const { changed, outOfScope } = inspectScope();
+        if (changed === null || outOfScope.length) break;
+      }
+      resumeSession = output.sessionId;
     }
-    child.stdin.on('error', error => { if (error.code !== 'EPIPE') spawnError = error; });
-    child.stdin.end(brief);
-    const result = await new Promise(resolve => {
-      child.once('error', error => { spawnError = error; });
-      child.once('close', (code, killedBy) => resolve({ code, killedBy }));
-    });
-    for (const tail of tails) tail();
-    clearInterval(pollTimer); clearInterval(rateTimer);
-    if (options.agent === 'codex') { await rollout.pending; await rollout.read(); }
-    confirm(true); drain();
-    clearTimeout(startTimer); clearTimeout(forceTimer);
-    if (!started) failed(spawnError?.message || (output.capacity ? 'at capacity' : 'worker exited without a confirmed session'), result.code === 0 ? 1 : result.code);
-    if (options.agent === 'claude' && output.result !== null && output.result !== undefined) fs.writeFileSync(options.out, output.result);
-    const after = checking ? snapshot(options.cwd, before) : null;
-    // The helper's own files (the answer, its log, the ledger it appends to) are not the worker's changes.
-    const own = after ? new Set([options.out, `${options.out}.log`, options.ledger, team?.memory, ...skillGuard.artifacts].filter(Boolean).map(file => path.relative(after.root, file).split(path.sep).join('/'))) : null;
-    const changed = (after && changedBetween(before, after)?.filter(file => !own.has(file))) ?? null;
-    const outOfScope = changed && (roundtable ? changed : changed.filter(file => !matches(options.allow, file)));
+    if (inbox) { await inbox.close(); await readInbox(); }
+    clearInterval(inboxTimer); clearInterval(rateTimer);
+    const { after, changed, outOfScope } = inspectScope();
     restoreSkills(after?.status.map(entry => entry.file));
     const route = output.routing();
     let reason = 'exit';
     if (unconfirmed) reason = 'unconfirmed';
     else if (killed) reason = 'killed';
+    else if (spawnError) reason = 'error';
+    else if (segmentStopped || noResume) reason = 'killed';
     else if (output.capacity) reason = 'capacity';
     else if (result.killedBy) reason = 'killed';
     else if (roundtable && outOfScope?.length) reason = 'scope';
-    else if (spawnError || output.failed || result.code !== 0 || roundtable && changed === null) reason = 'error';
+    else if (output.failed || result.code !== 0 || roundtable && changed === null) reason = 'error';
     else if (outOfScope?.length) reason = 'scope';
     let answer = '';
     try { answer = fs.readFileSync(options.out, 'utf8'); } catch {}
-    const header = `${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${options.title} · ${options.agent} ${route.model} · session ${output.sessionId || 'unreported'}`;
+    const header = `${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${options.title} · ${options.agent} ${route.model} · session ${resumeSession || output.sessionId || 'unreported'}`;
     const bookkeeping = await recordTeam({ answer, header, reason });
     if (!team) { try { recordFindings(options, answer, header); } catch {} }
     const scope = !checking ? '' : changed === null ? (team ? ' · scope unchecked (working tree unavailable)' : ' · scope unchecked (not a git working tree)')
       : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
     const exitCode = Number.isInteger(result.code) ? (result.code === 0 && (unconfirmed || roundtable && reason !== 'exit') ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
-    const rate = output.outputTokens !== null && output.activeMs > 0 ? `${Math.round(output.outputTokens * 1000 / output.activeMs)} token/s (${output.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(output.activeMs / 1000)} s)` : 'token/s unreported';
-    signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()} · out ${options.out}`);
-    if (!endSent) send({ type: 'dispatch-end', id, ...route, exitCode, reason, ...output.usage(), verdict: routingVerdict(output, declared()),
+    const measured = usage(), rate = measured.outputTokens !== null && measured.activeMs > 0 ? `${Math.round(measured.outputTokens * 1000 / measured.activeMs)} token/s (${measured.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(measured.activeMs / 1000)} s)` : 'token/s unreported';
+    signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()}${interventionNote()} · out ${options.out}`);
+    if (!endSent) send({ type: 'dispatch-end', id, ...route, exitCode, reason, ...measured, verdict: routingVerdict(output, declared()),
       ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
       ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
     await new Promise(resolve => log.end(resolve));
@@ -602,15 +715,16 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (options) {
       const reason = unconfirmed ? 'unconfirmed' : 'error';
       const bookkeeping = await recordTeam({ answer: '', header: '', reason });
-      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()} · out ${options.out}`);
-      if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', ...output.usage(),
+      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()}${interventionNote()} · out ${options.out}`);
+      if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', ...usage(),
         verdict: routingVerdict(output, declared()), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
     }
     log?.destroy();
     return 1;
   } finally {
-    clearTimeout(startTimer); clearTimeout(forceTimer);
-    clearInterval(pollTimer); clearInterval(rateTimer);
+    clearTimeout(startTimer);
+    clearInterval(pollTimer); clearInterval(rateTimer); clearInterval(inboxTimer);
+    await inboxRead; await treeStop; clearTimeout(forceTimer);
     await rollout.pending;
     team?.release(id);
     process.removeListener('SIGINT', onInterrupt); process.removeListener('SIGTERM', onTerminate); process.removeListener('SIGHUP', onHangup);
