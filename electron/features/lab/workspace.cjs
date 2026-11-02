@@ -96,7 +96,9 @@ async function archiveSnapshot(projectPath, revision, destination, { signal, dep
     const names = (await git(projectPath, ['ls-tree', '-rz', '--name-only', revision], { signal })).split('\0').filter(Boolean);
     if (names.some(file => !safePath(file))) throw new Error('The project archive contains an unsafe path.');
     await git(projectPath, ['archive', '--format=tar', '--output', archive, revision], { signal });
-    const extracted = await command('tar', ['-xf', archive, '-C', destination], { signal, timeoutMs: 120000 });
+    // A drive letter in GNU tar's archive argument is parsed as a remote host. Both paths are siblings here.
+    const extracted = await command('tar', ['-xf', path.basename(archive), '-C', path.basename(destination)],
+      { cwd: path.dirname(destination), signal, timeoutMs: 120000 });
     if (extracted.code !== 0) throw new Error('Could not extract the project snapshot.');
     await validateLinks(destination);
     const dependencySource = dependencies

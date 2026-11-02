@@ -1,6 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { validId } = require('./values.cjs');
+const { validId, upgradeExperiment } = require('./values.cjs');
 const { removePath } = require('./disk.cjs');
 
 const MAX_EXPERIMENTS = 100, MAX_STATE = 16 * 1024 * 1024;
@@ -23,7 +23,9 @@ class LabStore {
       try {
         if ((await fs.lstat(filename)).size > MAX_STATE) continue;
         const value = JSON.parse(await fs.readFile(filename, 'utf8'));
-        if (value.id === entry.name && Array.isArray(value.runs) && value.runs.length <= 200 && Array.isArray(value.tasks)) experiments.push(value);
+        if (value.id === entry.name && Array.isArray(value.runs) && value.runs.length <= 600 && Array.isArray(value.tasks)) {
+          experiments.push(upgradeExperiment(value));
+        }
       } catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code) && !(error instanceof SyntaxError)) throw error; }
     }
     return experiments.sort((a, b) => b.createdAt - a.createdAt);
@@ -43,6 +45,27 @@ class LabStore {
   async remove(id) {
     await this.pending;
     await removePath(this.folder(id));
+  }
+  async readAaKey(storage) {
+    if (!storage?.isEncryptionAvailable?.()) return null;
+    try {
+      const file = path.join(this.directory, 'secrets', 'aa.key');
+      const stat = await fs.lstat(file);
+      if (!stat.isFile() || stat.size > 16384) return null;
+      const value = storage.decryptString(await fs.readFile(file));
+      return typeof value === 'string' && /^[\x21-\x7e]{1,4096}$/.test(value) ? value : null;
+    } catch { return null; }
+  }
+  async writeAaKey(value, storage) {
+    const directory = path.join(this.directory, 'secrets'), file = path.join(directory, 'aa.key');
+    if (value === null) { await fs.rm(file, { force: true }); return; }
+    if (!storage?.isEncryptionAvailable?.()) throw new Error('安全密钥存储不可用。');
+    try {
+      const encrypted = storage.encryptString(value);
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      await fs.writeFile(file + '.tmp', encrypted, { mode: 0o600 });
+      await fs.rename(file + '.tmp', file);
+    } catch { throw new Error('无法保存实验室密钥。'); }
   }
 }
 

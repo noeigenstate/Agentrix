@@ -57,7 +57,19 @@
  * @typedef {{ diffFiles: string[], [key: string]: unknown }} Reference
  */
 
-/** @typedef {{ cwd: string, baseline: string, real: string, gitDirectory: string, files: string[] }} Workspace */
+/** @typedef {{ cwd: string, baseline: string, real: string, gitDirectory: string, files: string[], container?: { id: string } }} Workspace */
+
+/**
+ * Main-process Docker operations. A model reaches only exec for its own container through LabSession.broker.
+ * Images are pinned by digest; no host mounts or daemon socket are exposed. Docker errors are infrastructure errors.
+ * @typedef {object} DockerTools
+ * @property {() => Promise<{ available: boolean, reason: string | null }>} probe
+ * @property {(options: { image: string, digest: string, workdir: string, network: 'none' | 'bridge' }) => Promise<string>} create
+ * @property {(id: string, argv: string[], options?: { timeoutMs?: number, stdin?: string }) => Promise<{ code: number | null, stdout: string, stderr: string }>} exec
+ * @property {(id: string, hostPath: string, containerPath: string) => Promise<void>} copyTo
+ * @property {(id: string, containerPath: string, hostPath: string) => Promise<void>} copyFrom
+ * @property {(id: string) => Promise<void>} remove
+ */
 
 /**
  * task replaces the task text under "# Task" in the dispatched brief; rules are extra lines for the brief's rules.
