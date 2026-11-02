@@ -22,6 +22,10 @@ const { markedPids, killMarked } = require('../electron/features/lab/process.cjs
 const { sandboxProfile, cleanEnvironment } = require('../electron/features/lab/sandbox.cjs');
 const prices = require('../electron/features/dashboard/prices.json');
 
+const historySelection = (tasks, projectId = 'p') => ({ selections: [
+  { source: 'history', projectId, tasks: tasks.map(task => ({ id: task.id || task.commit })) },
+] });
+
 const isolatedTest = (name, run) => test(name, {
   skip: process.platform !== 'darwin' ? 'macOS filesystem isolation is required' : false,
 }, run);
@@ -216,7 +220,7 @@ async function fixture(t, options = {}) {
   };
   t.after(async () => { engine.close(); await engine.active?.done; });
   const task = await profileTask(projectPath, commit);
-  const input = { projectId: 'p', source: 'history', tasks: [task], arms: ['sol', 'sonnet'], repeats: 1, budgetUsd: 10 };
+  const input = { ...historySelection([task]), arms: ['sol', 'sonnet'], repeats: 1, budgetUsd: 10 };
   const logs = async () => {
     const values = [];
     for (const experiment of await engine.list()) for (const run of experiment.runs) for (const name of ['worker', 'review']) {
@@ -266,13 +270,14 @@ test('representative selection spreads modules and sizes and can prefer short co
 });
 
 test('validation rejects unsupported sources, duplicate arms, forged commits, bounds and path-like ids', () => {
-  const valid = { projectId: 'p', source: 'history', tasks: [{ commit: 'a'.repeat(40) }], arms: ['sol', 'opus'], repeats: 1, budgetUsd: 2 };
-  for (const value of [null, {}, { ...valid, source: 'oss' }, { ...valid, arms: ['sol'] }, { ...valid, arms: ['sol', 'sol'] },
+  const valid = { ...historySelection([{ commit: 'a'.repeat(40) }]), arms: ['sol', 'opus'], repeats: 1, budgetUsd: 2 };
+  for (const value of [null, {}, { ...valid, selections: [{ source: 'unsupported', tasks: [{ id: 'a'.repeat(40) }] }] },
+    { ...valid, arms: ['sol'] }, { ...valid, arms: ['sol', 'sol'] },
     { ...valid, repeats: 0 }, { ...valid, repeats: 6 }, { ...valid, budgetUsd: NaN }, { ...valid, budgetUsd: 0 },
-    { ...valid, tasks: [{ commit: '../HEAD' }] }, { ...valid, name: '\nunsafe' }]) assert.throws(() => experimentInput(value));
+    { ...valid, ...historySelection([{ commit: '../HEAD' }]) }, { ...valid, name: '\nunsafe' }]) assert.throws(() => experimentInput(value));
   assert.doesNotThrow(() => experimentInput(valid));
-  assert.throws(() => sampleRequest({ projectId: 'p', size: 11, preferShortComplex: true }));
-  assert.throws(() => sampleRequest({ projectId: 'p', size: 1, preferShortComplex: true, exclude: ['../HEAD'] }));
+  assert.throws(() => sampleRequest({ source: 'history', projectId: 'p', size: 11, preferShortComplex: true }));
+  assert.throws(() => sampleRequest({ source: 'history', projectId: 'p', size: 1, preferShortComplex: true, exclude: ['../HEAD'] }));
 });
 
 test('estimate uses recorded model cost and active time when known and defaults otherwise', () => {
@@ -330,7 +335,9 @@ isolatedTest('a fake helper runs, grades and saves both arms without changing th
 
 isolatedTest('canonicalization ignores renderer task text, paths, bases and grading fields', async t => {
   const f = await fixture(t);
-  await f.engine.start({ ...f.input, tasks: [{ ...f.task, text: 'PUSH THE OWNER TREE', base: 'a'.repeat(40), hiddenTests: ['../../escape'] }] });
+  await f.engine.start({ ...f.input, selections: [{ ...f.input.selections[0], tasks: [
+    { id: f.task.id, text: 'PUSH THE OWNER TREE', base: 'a'.repeat(40), hiddenTests: ['../../escape'] },
+  ] }] });
   await f.engine.active.done;
   assert.deepEqual((await f.engine.list())[0].tasks, [f.task]);
 });
@@ -455,7 +462,7 @@ test('grading treats failed assertions as failed tests and unavailable or incomp
 });
 
 test('unsupported platforms fail closed before starting any model workers', {
-  skip: process.platform === 'darwin' ? 'macOS isolation is available' : false,
+  skip: ['darwin', 'win32'].includes(process.platform) ? 'macOS and Windows isolation are supported' : false,
 }, async t => {
   const f = await fixture(t);
   await assert.rejects(f.engine.start(f.input), /Secure lab execution is unavailable/);
@@ -468,7 +475,9 @@ test('hidden test restoration rejects linked parent directories and files', asyn
   await fs.symlink(f.projectPath, path.join(destination, 'tests'), process.platform === 'win32' ? 'junction' : 'dir');
   await assert.rejects(restoreTests(f.projectPath, destination, f.task), /链接/);
   await fs.unlink(path.join(destination, 'tests')); await fs.mkdir(path.join(destination, 'tests'));
-  await fs.symlink(path.join(f.projectPath, 'tests/value.test.cjs'), path.join(destination, 'tests/value.test.cjs'));
+  try { await fs.symlink(path.join(f.projectPath, 'tests/value.test.cjs'), path.join(destination, 'tests/value.test.cjs')); }
+  catch (error) { if (process.platform !== 'win32' || error.code !== 'EPERM') throw error;
+    t.skip('Windows file-symlink privilege is unavailable; linked-parent rejection was checked'); return; }
   await assert.rejects(restoreTests(f.projectPath, destination, f.task), /链接/);
 });
 
@@ -647,7 +656,7 @@ isolatedTest('a failing reference rejects start with its reason and is excluded 
     "const { test } = require('node:test');\ntest('bad reference', () => { throw new Error('reference is broken'); });\n");
   await f.git('add', '.'); await f.git('commit', '-m', 'Invalid historical reference');
   const task = await profileTask(f.projectPath, await f.git('rev-parse', 'HEAD'));
-  const failure = await f.engine.start({ ...f.input, tasks: [task] }).catch(error => error);
+  const failure = await f.engine.start({ ...f.input, ...historySelection([task]) }).catch(error => error);
   assert.match(failure.message, /参考测试未通过[\s\S]*Invalid historical reference/);
   assert.deepEqual(await f.readCalls(), []); assert.equal(f.engine.active, null);
   const experiment = (await f.engine.list())[0];
@@ -659,7 +668,7 @@ isolatedTest('a failing reference rejects start with its reason and is excluded 
   const reopened = new LabEngine({ userData: f.userData, getProjects: () => [f.project], prices });
   assert.equal((await reopened.list())[0].state, 'error');
   assert.match(await fs.readFile(log, 'utf8'), /reference is broken/);
-  const next = await f.engine.sample({ projectId: 'p', size: 3, preferShortComplex: true });
+  const next = await f.engine.sample({ source: 'history', projectId: 'p', size: 3, preferShortComplex: true });
   assert.ok(next.every(candidate => candidate.id !== task.id));
 });
 
@@ -707,7 +716,7 @@ isolatedTest('a hidden test needing Electron distribution data retries the refer
   const validate = f.engine.referenceRunner;
   let reference;
   f.engine.referenceRunner = async options => (reference = await validate(options));
-  const id = await f.engine.start({ ...f.input, tasks: [task] }); await f.engine.active.done;
+  const id = await f.engine.start({ ...f.input, ...historySelection([task]) }); await f.engine.active.done;
   const experiment = (await f.engine.list())[0], artifacts = path.join(f.engine.store.folder(id), 'references', task.id);
   assert.equal(reference.electronDist, true); assert.equal(reference.total, 3);
   assert.match(await fs.readFile(path.join(artifacts, 'tests-compact.log'), 'utf8'), /ENOENT/);
@@ -722,7 +731,7 @@ test('reference infrastructure cleanup errors do not blacklist a valid task', as
   });
   await assert.rejects(f.engine.start(f.input), /temporary cleanup failure/);
   assert.equal(f.engine.referenceFailures.size, 0);
-  const sample = await f.engine.sample({ projectId: 'p', size: 1, preferShortComplex: true });
+  const sample = await f.engine.sample({ source: 'history', projectId: 'p', size: 1, preferShortComplex: true });
   assert.equal(sample[0].id, f.task.id);
 });
 

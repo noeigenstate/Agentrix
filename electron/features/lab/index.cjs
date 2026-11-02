@@ -8,7 +8,8 @@ const prices = require('../dashboard/prices.json');
 function createLab({ app, userData = app.getPath('userData'), root = path.resolve(__dirname, '../../..'), getProjects, getSettings,
   getMainWindow, BrowserWindow, ipcMain, devUrl = null, getUiZoom, backgroundColor, records, helper = path.join(root, 'integration/dispatch.cjs'),
   t = (source, values) => translate(getSettings().language, source, values), platform = process.platform,
-  engine = new LabEngine({ userData, getProjects, helper, records, prices, t }) }) {
+  safeStorage = process.versions.electron ? require('electron').safeStorage : undefined,
+  engine = new LabEngine({ userData, getProjects, helper, records, prices, t, safeStorage, platform }) }) {
   let timer = null, disposed = false;
   const labWindow = createLabWindow({ BrowserWindow, getSettings, getMainWindow, getUiZoom, backgroundColor, root, devUrl, platform, t });
   const changed = () => {
