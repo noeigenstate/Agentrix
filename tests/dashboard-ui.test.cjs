@@ -233,6 +233,8 @@ test('heat steps: a rate spans 45%..100% over five steps and a count spans 0..th
   const m = dashboard('chart-math.ts');
   assert.deepEqual([0.3, 0.45, 0.46, 0.6, 0.8, 0.9, 1].map(m.rateStep), [1, 1, 1, 2, 4, 5, 5]);
   assert.deepEqual([0, 1, 3, 6, 9].map(count => m.countStep(count, 9)), [1, 1, 2, 4, 5]);
+  assert.deepEqual([[0.46, 0.9], [0.45, 1], []].map(m.rateLegendLow), ['45%', '45%', '45%'], 'every rate on the ramp: its lower end is the rate it says');
+  assert.deepEqual([[0.33, 0.9], [0.449]].map(m.rateLegendLow), ['≤45%', '≤45%'], 'a lower rate shares the lightest step, so the end says at most');
   assert.equal(m.countStep(0, 0), 1, 'no findings at all is the lightest step, not a division by zero');
 });
 
@@ -402,6 +404,14 @@ test('the first-pass heat map shades each model-kind cell on five steps, says th
   const docs = rowOf(html, '<td>文档</td>');
   assert.match(docs, /<td class="cell na" title="没有记录">—<\/td>/); assert.match(docs, /<td class="num muted">2 次<\/td>/, 'the sample column counts the runs even when no rate is known');
   assert.match(html, /<div class="scale"><span>45%<\/span><span class="ramp"><i class="step-1"><\/i>.*<i class="step-5"><\/i><\/span><span>100%<\/span><span>· 无记录显示为 —<\/span><\/div>/);
+}));
+
+test('the heat map legend names its low end honestly: 45% while every rate is on the ramp, at most 45% when a lower one is clamped into it', () => zh(() => {
+  assert.match(view(), /<div class="scale"><span>45%<\/span>/);
+  const data = fixture();
+  data.kinds.push({ kind: 'review', model: 'gpt-6.1-sol', runs: 3, firstPassRate: 0.33 });
+  const html = view({ summary: data });
+  assert.match(html, /step-1" title="审查 · Sol：33%（3 次）">33<\/td>/); assert.match(html, /<div class="scale"><span>≤45%<\/span>/);
 }));
 
 test('there is no limit to the models drawn: a fourth model gets its own colour, mark and end label', () => zh(() => {

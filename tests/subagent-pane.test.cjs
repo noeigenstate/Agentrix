@@ -277,12 +277,12 @@ function inputView(bridge, patch = {}, fit = 0) {
   const sent = [], saved = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge } });
   // The width-fitting hook has its own tests below; here the box shows the hint at index `fit` of the list it was given.
-  const hints = [], harness = hookHarness('src/features/agents/SubagentInput.tsx', { './i18n': { t: fill }, './subagent-input.css': {}, './useFittingHint': { useFittingHint: (box, list) => (hints.splice(0, hints.length, ...list), list[fit]) } });
+  const hints = [], harness = hookHarness('src/features/agents/SubagentInput.tsx', { './i18n': { t: fill }, './subagent-input.css': {}, './useFittingHint': { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, list) => (hints.splice(0, hints.length, ...list), list[fit] ?? '') } });
   const props = { terminalId: 't1', callId: 'agent:a', name: 'Sol', closed: false, onSent: item => sent.push(item), ...patch };
-  const find = tag => elements(harness.render('SubagentInput', props).result).find(node => node.type === tag);
+  const find = tag => elements(harness.render('SubagentInput', props).result).find(node => node.type === tag), note = () => elements(harness.render('SubagentInput', props).result).find(node => node.type === 'span' && node.props.id);
   const press = (init = {}) => { const prevented = []; find('textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, preventDefault: () => prevented.push(true), ...init }); return prevented.length; };
   const type = value => find('textarea').props.onChange({ target: { value } });
-  return { sent, hints, find, press, type, done() { harness.dispose(); if (saved) Object.defineProperty(globalThis, 'window', saved); else delete globalThis.window; } };
+  return { sent, hints, find, note, press, type, done() { harness.dispose(); if (saved) Object.defineProperty(globalThis, 'window', saved); else delete globalThis.window; } };
 }
 
 test('Enter sends the trimmed word; Shift+Enter, an empty box and an IME composition send nothing; a sent word clears the box and is handed on', async () => {
@@ -580,11 +580,29 @@ test('a narrow message box shows a shorter hint that fits, never a cut-off one: 
   } finally { view.done(); }
 });
 
+test('whenever the box shows a shortened hint, or none, the full one with its keys is its tooltip and a hidden accessible description; the full hint needs neither', () => {
+  const full = '给它发消息 · Enter 发送，Shift+Enter 换行';
+  for (const fit of [1, 2, 3]) {   // a shorter hint, the shortest, nothing fits
+    const view = inputView({}, {}, fit);
+    try {
+      const box = view.find('textarea'), note = view.note();
+      assert.equal(box.props.title, full); assert.equal(box.props['aria-describedby'], 'subagent-hint-t1-agent:a');
+      assert.equal(note.props.id, box.props['aria-describedby']); assert.equal(note.props.children, full);
+      assert.equal(note.props.style.position, 'absolute', 'not drawn');
+      assert.equal(box.props.placeholder, ['给它发消息 · Enter 发送', '给它发消息', ''][fit - 1], 'the visible hint is the longest that fits, empty when none does');
+    } finally { view.done(); }
+  }
+  const whole = inputView({}, {}, 0);
+  try { assert.equal(whole.find('textarea').props.title, undefined); assert.equal(whole.find('textarea').props['aria-describedby'], undefined); assert.equal(whole.note(), undefined); } finally { whole.done(); }
+  const closed = inputView({}, { closed: true }, 1);
+  try { assert.equal(closed.find('textarea').props.title, '它已结束或不可用，不能再发消息', 'a finished view keeps its whole reason too'); assert.equal(closed.note().props.children, '它已结束或不可用，不能再发消息'); } finally { closed.done(); }
+});
+
 // ---- the hint that fits ---------------------------------------------------------------------------------------------------------
-test('the first hint that fits the box is the one shown; when none does, the shortest', () => {
+test('the first hint that fits the box is the one shown; when none does, none is', () => {
   const { fittingIndex } = load('shared/useFittingHint.ts'), width = text => text.length * 10, hints = ['a'.repeat(30), 'a'.repeat(20), 'a'.repeat(10)];
-  assert.deepEqual([400, 300, 299, 200, 100, 99, 0].map(room => fittingIndex(hints, room, width)), [0, 0, 1, 1, 2, 2, 2]);
-  assert.equal(fittingIndex(['only'], 0, width), 0);
+  assert.deepEqual([400, 300, 299, 200, 100, 99, 0].map(room => fittingIndex(hints, room, width)), [0, 0, 1, 1, 2, -1, -1]);
+  assert.equal(fittingIndex(['only'], 0, width), -1);
 });
 
 test('the hook measures the box in its own font, minus its padding, and again whenever the box is resized', () => {
@@ -602,7 +620,9 @@ test('the hook measures the box in its own font, minus its padding, and again wh
     assert.equal(shown(hints), hints[2], 'the box was narrowed');
     node.clientWidth = 400; observers.at(-1).run();
     assert.equal(shown(hints), hints[0], 'and widened again');
-    assert.equal(shown(['y'.repeat(60)]), 'y'.repeat(60), 'a list that changes under the box is measured afresh; its only hint is shown even when it does not fit');
+    node.clientWidth = 224;
+    assert.equal(shown(['y'.repeat(60)]), '', 'a list that changes under the box is measured afresh; when its only hint does not fit the box shows none, not a cut-off one');
+    assert.equal(shown(['y'.repeat(5)]), 'y'.repeat(5), 'and shows it as soon as it does');
     assert.ok(observers[0].gone, 'the old list’s observer was let go');
   } finally {
     harness.dispose();

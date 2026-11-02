@@ -146,7 +146,10 @@ export function kindGroups(kinds: DashboardKindRate[]): KindGroup[] {
 // A heat cell's step on the five-step slate ramp (1 lightest in dark, darkest in light: more is always further along the ramp).
 // A first-pass rate spans 45%..100% of the ramp; a count spans 0..the largest count shown.
 const step = (ratio: number) => Math.min(5, Math.max(1, Math.ceil(ratio * 5)));
-export const rateStep = (rate: number) => step((rate - 0.45) / 0.55);
+export const rateStep = (rate: number) => step((rate - RATE_FLOOR) / (1 - RATE_FLOOR));
+// The legend's low end: a rate below the ramp's start shares its lightest step, so the end then says "at most" instead of a rate it does not mean.
+const RATE_FLOOR = 0.45;
+export const rateLegendLow = (rates: number[]) => `${rates.some(rate => rate < RATE_FLOOR) ? '≤' : ''}${RATE_FLOOR * 100}%`;
 export const countStep = (value: number, max: number) => max > 0 ? step(value / max) : 1;
 
 // The share each phase takes of a round's measured build time; a phase with no runs takes none.
