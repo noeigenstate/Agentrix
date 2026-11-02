@@ -1,4 +1,5 @@
-// The running screen: an overall ring, a card per approach with the model working now, and a tile per run that fills in as it finishes.
+// The running screen: an overall ring, then a card per approach with the model working now and a tile per run that fills in as it finishes. With several
+// sources the cards and tiles are grouped by source, each with its own state and spend.
 import { useState } from 'react';
 import { Check, Minus, Stop, Warning, X } from '@phosphor-icons/react';
 import type { LabExperiment, LabRun } from '../../shared/lab-types';
@@ -6,14 +7,17 @@ import { t } from '../../shared/i18n';
 import { useNow } from '../../shared/useNow';
 import { duration, friendlyError, money, outOf, stateLabel } from './format';
 import { ArmName, Panel, Ring, ScrollRegion, Tag } from './Marks';
+import { Lanes } from './LaneSection';
 import { isDone, progress, ranArms, runsFor } from './results-math';
+import { metricOf } from './source-math';
+import { METRIC_WORDS } from './source-text';
 
 // A finished run carries a mark as well as a colour: passed, failed, errored and stopped never differ by colour alone.
 const TILE_ICONS = { passed: Check, failed: X, error: Warning, stopped: Minus } as const;
 const TILE_NAMES: Record<LabRun['state'], () => string> = {
   queued: () => t('排队'), running: () => t('运行中'), passed: () => t('通过'), failed: () => t('未通过'), error: () => t('出错'), stopped: () => t('已停止'),
 };
-const KEY_RUN: LabRun = { id: '', taskId: '', arm: 'opus', repeat: 1, state: 'queued', startedAt: null, endedAt: null, activeModel: null, testsPassed: null, testsTotal: null, reviewIssues: null, costUsd: null, outputTokens: null, rework: null };
+const KEY_RUN: LabRun = { id: '', taskId: '', source: 'history', score: null, arm: 'opus', repeat: 1, state: 'queued', startedAt: null, endedAt: null, activeModel: null, testsPassed: null, testsTotal: null, reviewIssues: null, costUsd: null, outputTokens: null, rework: null };
 
 export function Tile({ run }: { run: LabRun }) {
   const Icon = run.state in TILE_ICONS ? TILE_ICONS[run.state as keyof typeof TILE_ICONS] : null, label = TILE_NAMES[run.state]();
@@ -32,9 +36,29 @@ function ArmCard({ experiment, arm }: { experiment: LabExperiment; arm: LabExper
   </section>;
 }
 
+// The cards and the grid of one experiment, or of one source's slice of it.
+function Board({ experiment }: { experiment: LabExperiment }) {
+  const arms = ranArms(experiment);
+  return <>
+    <div className="arm-cards">{arms.map(arm => <ArmCard key={arm} experiment={experiment} arm={arm} />)}</div>
+    <Panel title={t('运行网格')} hint={t('每个方块是一次运行，完成后填色')}>
+      <ScrollRegion label={t('每个任务在每种方案下的运行状态')}>
+        <table className="tiles">
+          <thead><tr><th>{t('任务')}</th>{arms.map(arm => <th key={arm}><ArmName arm={arm} /></th>)}</tr></thead>
+          <tbody>{experiment.tasks.map(task => <tr key={task.id}>
+            <th scope="row" className="task-title">{task.title}</th>
+            {arms.map(arm => <td key={arm}><span className="tile-row">{[...runsFor(experiment, arm, task.id)].sort((a, b) => a.repeat - b.repeat).map(run => <Tile key={run.id} run={run} />)}</span></td>)}
+          </tr>)}</tbody>
+        </table>
+      </ScrollRegion>
+      <p className="note tile-key">{(['queued', 'running', 'passed', 'failed', 'error'] as const).map(state => <span key={state}><Tile run={{ ...KEY_RUN, state }} />{TILE_NAMES[state]()}</span>)}<span>{METRIC_WORDS[metricOf(experiment)].rule()}</span></p>
+    </Panel>
+  </>;
+}
+
 export function Running({ experiment, onStop }: { experiment: LabExperiment; onStop: () => Promise<string | null> }) {
   const now = useNow(() => Date.now()), [stopping, setStopping] = useState(false), [error, setError] = useState<string | null>(null);
-  const pace = progress(experiment, now), arms = ranArms(experiment);
+  const pace = progress(experiment, now);
   const stop = async () => { setStopping(true); setError(await onStop()); setStopping(false); };
   return <div className="content">
     <section className="panel overall">
@@ -47,18 +71,7 @@ export function Running({ experiment, onStop }: { experiment: LabExperiment; onS
       </div>
       <button type="button" className="button" disabled={stopping || experiment.state !== 'running'} onClick={() => void stop()}><Stop size={16} weight="fill" />{t('停止')}</button>
     </section>
-    <div className="arm-cards">{arms.map(arm => <ArmCard key={arm} experiment={experiment} arm={arm} />)}</div>
-    <Panel title={t('运行网格')} hint={t('每个方块是一次运行，完成后填色')}>
-      <ScrollRegion label={t('每个任务在每种方案下的运行状态')}>
-        <table className="tiles">
-          <thead><tr><th>{t('任务')}</th>{arms.map(arm => <th key={arm}><ArmName arm={arm} /></th>)}</tr></thead>
-          <tbody>{experiment.tasks.map(task => <tr key={task.id}>
-            <th scope="row" className="task-title">{task.title}</th>
-            {arms.map(arm => <td key={arm}><span className="tile-row">{[...runsFor(experiment, arm, task.id)].sort((a, b) => a.repeat - b.repeat).map(run => <Tile key={run.id} run={run} />)}</span></td>)}
-          </tr>)}</tbody>
-        </table>
-      </ScrollRegion>
-      <p className="note tile-key">{(['queued', 'running', 'passed', 'failed', 'error'] as const).map(state => <span key={state}><Tile run={{ ...KEY_RUN, state }} />{TILE_NAMES[state]()}</span>)}<span>{t('通过 = 隐藏测试全部通过')}</span></p>
-    </Panel>
+    {experiment.lanes.length > 1 ? <Lanes experiment={experiment}>{slice => <Board experiment={slice} />}</Lanes>
+      : <Board experiment={experiment} />}
   </div>;
 }

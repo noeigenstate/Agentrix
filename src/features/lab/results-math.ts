@@ -36,8 +36,10 @@ export function armSummary(experiment: LabExperiment, arm: LabArm) {
 }
 export type ArmSummary = ReturnType<typeof armSummary>;
 
-// A run's score is the share of its hidden tests that pass; when the counts are unknown a pass is 1 and a failure 0, and anything else is unmeasured.
+// A history run's score is the share of its hidden tests that pass; when the counts are unknown a pass is 1 and a failure 0, and anything else is unmeasured.
+// The other sources grade on their own scale: their score is the one the engine recorded, and null stays unknown.
 export function runScore(run: LabRun): number | null {
+  if (run.source !== 'history') return run.score;
   if (run.testsTotal && run.testsPassed !== null) return run.testsPassed / run.testsTotal;
   return run.state === 'passed' ? 1 : run.state === 'failed' ? 0 : null;
 }
@@ -65,7 +67,9 @@ export function kindScore(experiment: LabExperiment, kind: string, arm: LabArm) 
 export function matrixCell(experiment: LabExperiment, arm: LabArm, taskId: string) {
   const runs = runsFor(experiment, arm, taskId), counted = runs.filter(run => run.testsTotal && run.testsPassed !== null);
   const testsTotal = total(counted.map(run => run.testsTotal!)), testsPassed = total(counted.map(run => run.testsPassed!));
-  return { testsPassed, testsTotal, share: testsTotal ? testsPassed! / testsTotal : null, passes: taskPasses(experiment, arm, taskId), settled: runs.length > 0 && runs.every(isDone) };
+  // Without test counts a cell of another source than history is the mean of its runs' scores.
+  const share = testsTotal ? testsPassed! / testsTotal : average(known(runs.map(run => run.source === 'history' ? null : run.score)));
+  return { testsPassed, testsTotal, share, passes: taskPasses(experiment, arm, taskId), settled: runs.length > 0 && runs.every(isDone) };
 }
 
 export type Conclusion =

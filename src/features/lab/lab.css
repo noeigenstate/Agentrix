@@ -232,6 +232,18 @@ details.data summary:hover { border-color: var(--border-hover); background: var(
 details.data[open] summary { border-color: var(--border-hover); background: var(--bg-selected); color: var(--text-1); }
 details.data .scroll { margin-top: 8px; }
 
+/* Several sources: a section per source (its name and scope, state and spend), the combined view's lines, tags side by side and the AA key row. */
+.source-section, .lane { display: flex; flex-direction: column; gap: 16px; }
+.source-section > h2, .lane-head h2 { font-size: 14px; line-height: 20px; font-weight: 600; }
+.lane-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.lane-head h2 { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.lane-head .hint { color: var(--text-3); font-size: 12px; font-weight: 400; }
+.lead-line { margin-bottom: 8px; font-size: 16px; line-height: 24px; font-weight: 600; }
+.tags { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.key-row { display: flex; align-items: center; gap: 8px; }
+.key-row .input { flex: 1; min-width: 0; }
+.published .note { margin-top: 4px; }
+
 /* Narrow window (the minimum is 820): side-by-side panels stack and the choices wrap. */
 @media (max-width: 1000px) {
   .scatter { grid-template-columns: minmax(0, 1fr); }
