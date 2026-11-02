@@ -131,6 +131,62 @@ test('dispatched Claude workers use dispatch cwd rather than the parent cwd and 
   await assert.rejects(f.calls.feed('dispatch:wrong-project'), /^Error: unavailable$/);
 });
 
+test('contained files keep their trusted root spelling across aliases and repeated handle checks', async t => {
+  const f = await fixture(t), filename = await task(f), alias = path.join(f.root, 'claude-alias');
+  await fs.symlink(f.claudeHome, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const candidate = path.join(alias, path.relative(f.claudeHome, filename));
+  const verified = await containedFile(alias, candidate, { exact: true });
+  assert.equal(verified, path.resolve(candidate));
+  const file = await fs.open(verified, 'r');
+  try { assert.equal(await containedFile(alias, verified, { file, exact: true }), verified); }
+  finally { await file.close(); }
+  const other = path.join(f.folder, 'agent-other.jsonl'); await fs.writeFile(other, lines(childRecords('-other')));
+  const wrongFile = await fs.open(other, 'r');
+  try { assert.equal(await containedFile(alias, verified, { file: wrongFile, exact: true }), null); }
+  finally { await wrongFile.close(); }
+  assert.equal(await containedFile(alias, filename, { exact: true }), null, 'a canonical path outside the lexical root is not a capability');
+});
+
+test('aliased CLI homes support Task, Codex and Claude dispatch feeds through cached and tail-reset reads', async t => {
+  const f = await fixture(t), codexHome = path.join(f.root, 'codex-alias'), claudeHome = path.join(f.root, 'claude-alias');
+  for (const [target, alias] of [[f.codexHome, codexHome], [f.claudeHome, claudeHome]]) {
+    await fs.symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  const calls = new AgentCalls({ codexHome, claudeHome, since: BASE }); t.after(() => calls.dispose());
+  const folder = path.join(claudeHome, 'projects', encodeClaudeCwd(f.cwd), 'parent-session', 'subagents');
+  const aliased = { ...f, codexHome, claudeHome, calls, folder }; calls.setFolder(folder);
+  const filename = await task(aliased);
+  assert.ok((await calls.feed('agent:worker')).entries.some(entry => entry.text === 'Synthetic finding.'));
+  await fs.rename(filename, `${filename}.old`); await fs.writeFile(filename, lines(childRecords('-aliased')));
+  assert.ok((await calls.feed('agent:worker')).entries.some(entry => entry.text === 'Synthetic finding-aliased.'));
+  const sessionId = dispatch(aliased, 'codex');
+  await rollout(aliased, sessionId, {}, [{ type: 'event_msg', timestamp: iso(1), payload: { type: 'agent_message', message: 'Aliased Codex answer.' } }]);
+  const codexFeed = await calls.feed('dispatch:codex');
+  assert.equal(codexFeed.entries.at(-1).text, 'Aliased Codex answer.');
+  assert.deepEqual(await calls.feed('dispatch:codex'), codexFeed);
+  const claudeId = dispatch(aliased, 'claude', 'claude', 'aliased-session');
+  const transcript = path.join(claudeHome, 'projects', encodeClaudeCwd(f.cwd), `${claudeId}.jsonl`);
+  await fs.writeFile(transcript, lines(childRecords().map(record => ({ ...record, isSidechain: false, sessionId: claudeId }))));
+  const claudeFeed = await calls.feed('dispatch:claude');
+  assert.ok(claudeFeed.entries.some(entry => entry.text === 'Synthetic finding.'));
+  assert.deepEqual(await calls.feed('dispatch:claude'), claudeFeed);
+});
+
+test('an aliased trusted root still rejects redirected descendants in exact mode and escaped descendants in either mode', async t => {
+  const f = await fixture(t), filename = await task(f), alias = path.join(f.root, 'claude-alias');
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  await fs.symlink(f.claudeHome, alias, linkType);
+  const projects = path.join(alias, 'projects'), redirected = path.join(projects, 'redirected');
+  await fs.symlink(f.folder, redirected, linkType);
+  const candidate = path.join(redirected, path.basename(filename));
+  assert.equal(await containedFile(projects, candidate, { exact: true }), null);
+  assert.equal(await containedFile(projects, candidate), path.resolve(candidate));
+  const outside = path.join(f.root, 'outside'); await fs.mkdir(outside);
+  await fs.writeFile(path.join(outside, 'escape.jsonl'), lines(childRecords()));
+  await fs.symlink(outside, path.join(projects, 'escaped'), linkType);
+  for (const exact of [true, false]) assert.equal(await containedFile(projects, path.join(projects, 'escaped', 'escape.jsonl'), { exact }), null);
+});
+
 test('rollout discovery rejects another session, another cwd, ambiguous identities and traversal-like session ids', async t => {
   const f = await fixture(t), directory = path.join(f.codexHome, 'sessions');
   dispatch(f, 'wrong-id'); await rollout(f, 'session-wrong-id', { id: 'different' });
