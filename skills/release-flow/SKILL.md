@@ -137,3 +137,12 @@ description: Publish a new Agentrix version — bump, update notes, the full loc
    After any change to `integration/*.bash`, `integration/*.zsh` or `remote-worker.py`, run `ci-preflight remote` before
    integrating further, and read the failed jobs' logs (`/actions/jobs/<id>/logs`) for the `✖` lines. Python's
    `os.makedirs(path, mode)` applies `mode` only to the last folder: create a private tree one folder at a time.
+31. **Aliased temp paths break path checks on CI only.** Runners give temp folders under aliases: macOS `TMPDIR` lives in
+   `/var/folders`, a link to `/private/var`; Windows `TEMP` is an 8.3 short path (`C:\Users\RUNNER~1\…`) and the checkout is on
+   `D:`. Code that realpaths one side and compares it with the unresolved other side (or a test that compares paths as strings)
+   passes on a developer machine and fails on every runner. Compare resolved paths on both sides (or by file identity), and before
+   pushing reproduce locally: point `TEMP`/`TMP` at a `subst` drive and at the short form (`for %I in ("%TEMP%") do @echo %~sI`).
+32. **Local replica from a worktree.** `ci-preflight local` writes a `.ps1` per step whose path must stay under 260 characters:
+   run it from a short path (`subst R: <worktree>`; run `npm test` itself from the long path, since realpath tests notice the
+   drive alias). `npm run dist` refuses a junctioned `node_modules`: give the worktree a real one (`npm ci`, then
+   `node node_modules/electron/install.js` when the install script was held back).
