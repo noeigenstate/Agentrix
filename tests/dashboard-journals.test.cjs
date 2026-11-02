@@ -5,7 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
-const { DashboardJournals } = require('../electron/features/dashboard/journals.cjs');
+const { DashboardJournals, RETRY_MIN, RETRY_MAX } = require('../electron/features/dashboard/journals.cjs');
 const { READ_LIMIT, LINE_LIMIT } = require('../electron/features/dashboard/jsonl.cjs');
 
 function lab(t, withJournal = true) {
@@ -140,4 +140,76 @@ test('the default journal resolver reads an isolated real Git common directory w
   assert.equal(result.length, 1); assert.equal(result[0].entries[0].meeting, 'real-common');
   assert.equal(result[0].key, fs.realpathSync.native(path.join(directory, '.git')));
   assert.deepEqual(fs.readdirSync(path.dirname(journal)), ['journal.jsonl']);
+});
+
+test('journal watcher errors back off, survive repeated reads, recover missed changes, and ignore old callbacks', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { directory, common, file } = lab(t);
+  let failJournal = false, changes = 0, attempts = 0;
+  const watched = [];
+  const source = new DashboardJournals({ getProjects: () => [{ id: 'p', path: directory }], resolveCommon: async () => common,
+    changed: () => changes++, watch: (filename, _options, callback) => {
+      if (filename.endsWith('agentrix')) { attempts++; if (failJournal) throw new Error('synthetic watch failure'); }
+      const watcher = new EventEmitter(); watcher.close = () => { watcher.closed = true; };
+      watched.push({ filename, callback, watcher }); return watcher;
+    } });
+  t.after(() => source.stop());
+  await source.start(); assert.equal(attempts, 1);
+  const old = watched.find(entry => entry.filename.endsWith('agentrix'));
+  failJournal = true; old.watcher.emit('error', new Error('synthetic watcher error'));
+  assert.equal(old.watcher.closed, true); assert.equal(source.watchers.size, 1);
+  for (const delay of [RETRY_MIN, 2000, 4000, 8000, 16000, 32000, RETRY_MAX, RETRY_MAX]) {
+    const before = attempts;
+    await source.read(); await source.sync(); assert.equal(attempts, before, 'ordinary reads respect the pending retry');
+    t.mock.timers.tick(delay - 1); await source.sync(); assert.equal(attempts, before);
+    t.mock.timers.tick(1); await source.sync(); assert.equal(attempts, before + 1);
+  }
+  fs.writeFileSync(file, JSON.stringify({ type: 'consolidate', meeting: 'during-outage', time: 100 }) + '\n');
+  failJournal = false; const beforeRecovery = changes;
+  t.mock.timers.tick(RETRY_MAX); await source.sync();
+  assert.equal(source.watchers.size, 2); assert.equal(source.retries.size, 0);
+  assert.ok(changes > beforeRecovery, 'recovery invalidates the dashboard even when the missed write emitted no event');
+  assert.equal((await source.read())[0].entries[0].meeting, 'during-outage');
+  const current = source.watchers.get(path.join(common, 'agentrix'));
+  old.watcher.emit('error', new Error('late error')); old.callback('change', 'journal.jsonl');
+  assert.equal(source.watchers.get(path.join(common, 'agentrix')), current); assert.equal(current.closed, undefined);
+  assert.equal(source.retries.size, 0);
+});
+
+test('stopping journal discovery or removing a project cancels retries and prevents late watcher installation', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { directory, common } = lab(t);
+  let projects = [{ id: 'p', path: directory }], attempts = 0;
+  const source = new DashboardJournals({ getProjects: () => projects, resolveCommon: async () => common, changed() {},
+    watch: () => { attempts++; throw new Error('synthetic failure'); } });
+  t.after(() => source.stop());
+  await source.start(); assert.equal(attempts, 2); assert.equal(source.retries.size, 2);
+  projects = []; await source.sync(); assert.equal(source.retries.size, 0);
+  t.mock.timers.tick(RETRY_MAX); assert.equal(attempts, 2);
+  projects = [{ id: 'p', path: directory }]; await source.start(); assert.equal(attempts, 4);
+  source.stop(); t.mock.timers.tick(RETRY_MAX); assert.equal(attempts, 4);
+  assert.equal(source.retries.size, 0);
+  let finish;
+  source.cache.clear(); source.resolveCommon = () => new Promise(resolve => { finish = resolve; });
+  const opening = source.start(); source.stop(); finish(common); await opening;
+  assert.equal(source.watchers.size, 0); assert.equal(source.retries.size, 0); assert.equal(attempts, 4);
+});
+
+test('journal directory replacement reattaches immediately and cached probe rejection can recover on discovery', async t => {
+  const { directory, common } = lab(t);
+  let probes = 0;
+  const watched = [];
+  const source = new DashboardJournals({ getProjects: () => [{ id: 'p', path: directory }], changed() {},
+    resolveCommon: () => ++probes === 1 ? Promise.reject(new Error('synthetic probe error')) : Promise.resolve(common),
+    watch: (filename, _options, callback) => {
+      const watcher = new EventEmitter(); watcher.close = () => { watcher.closed = true; };
+      watched.push({ filename, callback, watcher }); return watcher;
+    } });
+  t.after(() => source.stop());
+  await source.start(); assert.deepEqual(await source.read(), []); assert.equal(probes, 1);
+  await source.start(); assert.equal(probes, 2); assert.equal(watched.length, 2);
+  const old = watched.find(entry => entry.filename.endsWith('agentrix'));
+  watched.find(entry => entry.filename === common).callback('rename', 'agentrix'); await source.sync();
+  assert.equal(old.watcher.closed, true); assert.equal(watched.length, 3); assert.equal(source.watchers.size, 2);
+  await source.start(); assert.equal(probes, 2, 'successful common-directory probes remain cached');
 });

@@ -123,6 +123,37 @@ test('unconfirmed runs retain declarations without inventing an actual route', a
   assert.equal(legacy.model, 'unreported'); assert.equal(legacy.declared.model, 'legacy-model'); assert.equal(legacy.verdict, 'unverified');
 });
 
+test('subagent run records retain their source and observed metrics without retaining private input', async t => {
+  const { records } = await lab(t, { now: () => 10000 });
+  records.run({ id: 'p', path: path.join(os.tmpdir(), 'synthetic-project') },
+    { sourceAgent: 'claude', source: 'subagent', role: '搜索', title: 'Synthetic child', startedAt: 100, kind: 'investigate' },
+    { source: 'subagent', id: 'agent:synthetic-tool-use', model: 'claude-sonnet-5-5', effort: 'high', fast: null,
+      endedAt: 9000, reason: 'exit', exitCode: 0, outputTokens: 20, totalOutputTokens: 30, activeMs: 1000,
+      inputTokens: null, cachedTokens: null, cwd: 'private-fixture-path', entries: ['private-fixture-body'] });
+  const [run] = await records.read('runs');
+  assert.equal(run.source, 'subagent'); assert.equal(run.agent, 'claude'); assert.equal(run.id, 'agent:synthetic-tool-use');
+  assert.equal(run.activeMs, 1000); assert.equal(run.inputTokens, null); assert.equal(run.outputTokens, 20);
+  assert.equal(run.outOfScope, null, 'missing subagent scope evidence stays unknown');
+  assert.equal(run.reason, 'exit'); assert.equal(run.exitCode, 0); assert.doesNotMatch(JSON.stringify(run), /private-fixture/);
+});
+
+test('latest quota snapshots isolate scopes, return copies, and never replace durable history', async t => {
+  let now = 100;
+  const { records } = await lab(t, { now: () => now });
+  records.quota('codex', [{ minutes: 300, percent: 10 }], 'one');
+  now++; records.quota('codex', [{ minutes: 300, percent: 20, accountId: 'private-fixture' }], 'one');
+  now++; records.quota('codex', [{ minutes: 300, percent: 30 }], 'two');
+  now++; records.quota('claude', [{ minutes: 300, percent: 0 }], 'one');
+  const snapshots = records.latestQuota();
+  assert.equal(snapshots.length, 3);
+  assert.deepEqual(snapshots.map(record => record.windows[0].percent), [20, 30, 0]);
+  assert.equal(snapshots[0].at, 101); assert.doesNotMatch(JSON.stringify(snapshots), /private-fixture/);
+  snapshots[0].windows[0].percent = 99;
+  assert.equal(records.latestQuota()[0].windows[0].percent, 20);
+  assert.deepEqual((await records.read('quota')).map(record => record.windows[0].percent), [10, 30, 0]);
+  records.waitForQuit(); await records.flush();
+});
+
 test('quota snapshots throttle each provider and preserve zero', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let now = 1000;

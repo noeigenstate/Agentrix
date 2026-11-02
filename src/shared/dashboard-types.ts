@@ -20,11 +20,22 @@ export type DashboardModelRow = {
   costUsd: number | null; costedRuns: number;
   // 1 unless the owner adopted a weight suggestion for this model; the per-kind values are in weights.
   weight: number;
+  // Runs on the last 14 local calendar days, oldest first, including today; missing days are zero.
+  trend: number[];
 };
 // runs counts only the runs whose outcome is known (the first-pass sample), so it can be below the model row's runs.
 export type DashboardKindRate = { kind: string; model: string; runs: number; firstPassRate: number | null };
 // day is the local calendar day, yyyy-mm-dd. Rate from timed replies only (outputTokens / activeMs).
 export type DashboardSpeedPoint = { day: string; model: string; tokensPerSecond: number | null };
+// firstPass counts confirmed passes only; the remaining runs can include unknown outcomes.
+// Cost is the known-cost subtotal (null when none is known); active time is null if any run lacks timing.
+export type DashboardDailyPoint = {
+  day: string; model: string; runs: number; firstPass: number; costUsd: number | null; activeMs: number | null;
+};
+export type DashboardLiveRun = {
+  id: string; project: string | null; agent: string; model: string; title: string; role: string;
+  startedAt: number | null; tokensPerSecond: number | null;
+};
 export type DashboardWeight = { model: string; kind: string; from: number; to: number };
 export type DashboardIncident = {
   at: number; project: string; meeting: string | null; model: string; kind: string; cause: string; fix: string;
@@ -60,6 +71,10 @@ export type DashboardSummary = {
   projects: { id: string; name: string }[];
   kpis: DashboardKpis;
   models: DashboardModelRow[]; kinds: DashboardKindRate[]; speed: DashboardSpeedPoint[];
+  daily: DashboardDailyPoint[];
+  // Live calls are global; project is the project-filter key, never a project path or display name.
+  // at is the last observation time (0 before the first snapshot), not the summary generation time.
+  live: { running: DashboardLiveRun[]; at: number };
   incidents: DashboardIncident[]; rounds: DashboardRound[]; findings: DashboardFindingCell[];
   suggestions: DashboardSuggestion[]; weights: DashboardWeight[]; modelRuns: DashboardModelRun[];
   // prices.json's date; models seen in runs without a price row are listed so the page can say so.
@@ -75,7 +90,7 @@ export type DashboardBridge = {
   decide(id: string, state: DashboardSuggestion['state'], query: DashboardQuery): Promise<Result<DashboardSummary>>;
   appearance(): Promise<Result<DashboardAppearance>>;
   onAppearance(callback: (appearance: DashboardAppearance) => void): () => void;
-  // New records arrived (a run ended, a grade, a consolidation); the page re-reads its current query.
+  // Records, live calls or time changed; the page re-reads its current query.
   onChanged(callback: () => void): () => void;
   close(): void; minimize(): void; maximize(): void;
 };
