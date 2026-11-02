@@ -31,6 +31,9 @@ export function friendlyError(message: string) {
   return [t('无法创建独立工作区。请重试；仍然失败时，先检查这个项目的 Git 状态，再新建实验。'), ...rest].join('\n');
 }
 
+// A download is written in the unit a person reads: "320 MB", "1.2 GB".
+export const bytesLabel = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+
 // An estimate is given in minutes.
 export const minutesLabel = (minutes: number) => duration(minutes * 60000);
 
