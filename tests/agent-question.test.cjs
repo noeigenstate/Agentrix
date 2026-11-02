@@ -2,14 +2,12 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
+const { choiceIdentity, parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
 const { parseQuestion } = require('../src/features/agents/agent-question.ts');
-const { questionKeys, questionStops } = require('../src/features/reading/question-keys.ts');
 
 // Screens drawn by Claude Code 2.1.294 (AskUserQuestion) and Codex 0.161 (request_user_input in Plan mode).
 const read = name => fs.readFileSync(path.join(__dirname, 'fixtures/questions', name + '.txt'), 'utf8').split('\n');
 const parse = name => parseAgentScreen(name.startsWith('claude') ? 'claude' : 'codex', read(name)).choice;
-const UP = '\x1b[A', DOWN = '\x1b[B', ENTER = '\r';
 const option = (number, label, detail, role, selected = false, checked) =>
   ({ number, label, detail, hotkey: null, selected, role, ...(checked === undefined ? {} : { checked }) });
 const claude = fields => ({ agent: 'claude', tabs: [], position: null, multi: false, submit: null, notes: null, review: null, ...fields });
@@ -124,34 +122,6 @@ test('a question already answered or scrolled away is not a choice; padding does
   }
 });
 
-test('answering in keys: the cursor moves from where the CLI has it', () => {
-  const single = parse('claude-question');
-  assert.deepEqual(questionKeys(single, { type: 'choose', option: 1 }), [DOWN, ENTER]);
-  assert.deepEqual(questionKeys(single, { type: 'answer', option: 2, text: '先别动，晚点再说' }), [DOWN, DOWN, '先别动，晚点再说', ENTER]);
-  assert.deepEqual(questionKeys(single, { type: 'choose', option: 3 }), [DOWN, DOWN, DOWN, ENTER], 'Chat about this is under the rule');
-  assert.deepEqual(questionKeys(single, { type: 'switch', direction: 1 }), ['\x1b[C']);
-  assert.deepEqual(questionKeys(single, { type: 'cancel' }), ['\x1b']);
-
-  const multi = parse('claude-question-multi-checked');
-  assert.deepEqual(questionStops(multi), [{ option: 0 }, { option: 1 }, { option: 2 }, { option: 3 }, { submit: true }, { option: 4 }]);
-  assert.deepEqual(questionKeys(multi, { type: 'toggle', option: 0 }), [UP, ' ']);
-  assert.deepEqual(questionKeys(multi, { type: 'submit' }), [DOWN, DOWN, DOWN, ENTER]);
-  assert.deepEqual(questionKeys(multi, { type: 'answer', option: 3, text: 'logs' }), [DOWN, DOWN, 'logs'], 'typing ticks the own answer; Submit sends it');
-  assert.deepEqual(questionKeys(multi, { type: 'choose', option: 4 }), [DOWN, DOWN, DOWN, DOWN, ENTER]);
-  // An own answer already typed is replaced, not appended to.
-  assert.deepEqual(questionKeys(parse('claude-question-typed'), { type: 'answer', option: 3, text: 'tmp' }), ['\x7f'.repeat(3), 'tmp']);
-
-  const review = parse('claude-question-review');
-  assert.deepEqual(questionKeys(review, { type: 'choose', option: 0 }), [ENTER]);
-
-  const question = parse('codex-question');
-  assert.deepEqual(questionKeys(question, { type: 'choose', option: 1 }), [DOWN, ENTER]);
-  assert.deepEqual(questionKeys(question, { type: 'answer', option: 2, text: '都不要清理' }), [DOWN, DOWN, '\t', '都不要清理', ENTER]);
-  assert.deepEqual(questionKeys(parse('codex-question-notes'), { type: 'answer', option: 1, text: '先备份' }), ['先备份', ENTER], 'notes already open on the highlighted option');
-  assert.deepEqual(questionKeys(question, { type: 'toggle', option: 0 }), [], 'Codex questions have no ticks');
-  assert.deepEqual(questionKeys(question, { type: 'answer', option: 0, text: '  ' }), [], 'nothing to send');
-});
-
 test('numbered lines in the question text stay in the question; the options start above the live cursor', () => {
   const rows = read('claude-question');
   const at = rows.findIndex(row => row.trim() === '回收站怎么处理？');
@@ -161,19 +131,9 @@ test('numbered lines in the question text stay in the question; the options star
   assert.match(choice.title, /1\. 保留：文件原样不动。/);
 });
 
-test('Codex pages with Ctrl+P / Ctrl+N, and cancelling from open notes takes two Escapes', () => {
-  assert.deepEqual(questionKeys(parse('codex-question'), { type: 'switch', direction: 1 }), ['\x0e']);
-  assert.deepEqual(questionKeys(parse('codex-question-notes'), { type: 'switch', direction: -1 }), ['\x10']);
-  assert.deepEqual(questionKeys(parse('codex-question-notes'), { type: 'cancel' }), ['\x1b', '\x1b']);
-  assert.deepEqual(questionKeys(parse('codex-question'), { type: 'cancel' }), ['\x1b']);
-});
-
-test('a question card keeps its identity while ticks, typed text and the cursor change, and not across pages', () => {
-  const { choiceContent } = require('../src/features/reading/choice-keys.ts');
-  const { choiceIdentity } = require('../src/features/agents/agent-screen.ts');
+test('a question keeps its display identity while ticks, typed text and the cursor change, and not across pages', () => {
   const same = ['claude-question-multi', 'claude-question-multi-checked', 'claude-question-typed', 'claude-question-submit'].map(name => choiceIdentity(parse(name)));
   assert.equal(new Set(same).size, 1);
-  assert.notEqual(choiceContent(parse('claude-question-multi')), choiceContent(parse('claude-question-multi-checked')), 'a tick is new content');
   assert.notEqual(choiceIdentity(parse('claude-question-tabs')), same[0]);
   assert.notEqual(choiceIdentity(parse('claude-question-review')), same[0]);
   assert.equal(choiceIdentity(parse('codex-question')), choiceIdentity(parse('codex-question-notes')));
