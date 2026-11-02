@@ -51,3 +51,10 @@ test('disabled reading composer text remains legible in every theme', () => {
     }
   }
 });
+
+test('the light theme fills the owner message on the feed itself, which sets its own card token', () => {
+  const flow = read('src/features/reading/reading-flow.css'), selectors = [];
+  themes.walkRules(rule => { if (rule.some(node => node.prop === '--flow-card')) selectors.push(rule.selector); });
+  assert.ok(selectors.some(selector => selector.includes('light') && selector.includes('.conversation-feed') && selector.includes('.reading-view')), 'the nearest element defining --flow-card wins, so the light override must name .conversation-feed too');
+  assert.equal(declarations(flow, ':is(.reading-view, .conversation-feed)')['--flow-card'], 'var(--bg-input)');
+});

@@ -33,7 +33,7 @@ function pendingMarkup(prompts, props = {}) {
   mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
   const originalRequire = mod.require.bind(mod);
   const icon = props => React.createElement('svg', { className: props.className });
-  mod.require = name => name.endsWith('/UserAvatar') ? { UserAvatar: () => React.createElement('svg') } : name === './Timeline' ? timeline() : name.endsWith('/i18n') ? { t: text => en[text] ?? text } : name.endsWith('.css') ? {} : name === '@phosphor-icons/react' ? new Proxy({}, { get: () => icon }) : name === './pasted-pictures' ? require('../src/features/reading/pasted-pictures.ts') : name === '../files/file-popup' ? { showPopup() {} } : name === './message-quote' ? require('../src/features/reading/message-quote.ts') : originalRequire(name);
+  mod.require = name => name.endsWith('/UserAvatar') ? { UserAvatar: () => React.createElement('svg') } : name === './Timeline' ? timeline() : name.endsWith('/i18n') ? { t: text => en[text] ?? text } : name.endsWith('.css') ? {} : name === '@phosphor-icons/react' ? new Proxy({}, { get: () => icon }) : name === './pasted-pictures' ? require('../src/features/reading/pasted-pictures.ts') : name === '../files/file-popup' ? { showPopup() {} } : name === './message-quote' ? require('../src/features/reading/message-quote.ts') : name === './Markdown' ? { Markdown: ({ text }) => text } : originalRequire(name);
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   }).outputText, filename);

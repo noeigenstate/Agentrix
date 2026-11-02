@@ -690,9 +690,10 @@ function readingHarness(t, entries = [], overrides = {}) {
   });
   const state = { entries, pending: [], terminal: { id: 'terminal', sessionId: 'session', agent: 'codex', codexActive: true, needsInput: null } };
   const parsed = [], icon = () => React.createElement('svg');
+  // A sent message's quote block is laid out by the same Markdown renderer, so it gets the same stubs.
+  const markdownStubs = { './markdown-escape': { readingMarked: { parse: text => { parsed.push(text); return text; } } }, dompurify: { default: () => ({ sanitize: html => html }) }, ...overrides };
   const environment = {
-    './markdown-escape': { readingMarked: { parse: text => { parsed.push(text); return text; } } },
-    dompurify: { default: () => ({ sanitize: html => html }) },
+    './markdown-escape': markdownStubs['./markdown-escape'], dompurify: markdownStubs.dompurify,
     '@phosphor-icons/react': new Proxy({}, { get: () => icon }),
     './action-text': { stepVerb: tool => tool.kind, actionText: tool => tool.target }, './voice-input': {}, './terminal-screen': { useScreen: () => ({ rows: composerRows(state.terminal.agent, state.terminal.codexActivity === 'working' ? 'working' : 'idle') }) },
     './typing': { isTyping: () => false, hasEditingFocus: () => false },
@@ -705,7 +706,7 @@ function readingHarness(t, entries = [], overrides = {}) {
     './useMentions': { useMentions: () => ({ open: false }) }, './MentionPalette': { MentionPalette: () => null },
     './pending-prompts': require('../src/features/reading/pending-prompts.ts'),
     './usePendingPrompts': { usePendingPrompts: () => ({ pending: state.pending, echo() {}, cancelEcho() {} }) },
-    './PendingPromptEntries': loadUI('features/reading/PendingPromptEntries.tsx'),
+    './PendingPromptEntries': loadUI('features/reading/PendingPromptEntries.tsx', markdownStubs),
     './markdown-parse': { parseMarkdown: async () => null, parsedMarkdown: () => undefined },
     './FileCards': { FileCards: ({ files }) => React.createElement('div', { className: 'file-cards' }, files.join(',')), previewable: () => true },
     './reading-command': require('../src/features/reading/reading-command.ts'),
@@ -987,7 +988,7 @@ test('an unconfirmed image receipt stays visible and cannot retry or resend as t
 });
 
 test('an unconfirmed image receipt advises checking the conversation instead of removing a composer picture', () => {
-  const { PendingPromptEntries } = loadUI('features/reading/PendingPromptEntries.tsx');
+  const { PendingPromptEntries } = loadUI('features/reading/PendingPromptEntries.tsx', { './Markdown': { Markdown: ({ text }) => text } });
   const html = renderToStaticMarkup(React.createElement(PendingPromptEntries, {
     prompts: [{ id: 'pending-image', role: 'user', text: 'describe', at: 1000, sending: false, imageCount: 1 }], undelivered: () => true,
   }));
@@ -1135,7 +1136,7 @@ test('completion smoke: a live Codex input forwards the exact four-byte PNG and 
 
 test('composer thumbnails each have the decision page remove label and 12px bold X, while message pictures only zoom', () => {
   const removed = [], opened = [];
-  const { UserImages } = loadUI('features/reading/PendingPromptEntries.tsx', { './file-popup': { showPopup: picture => opened.push(picture) } });
+  const { UserImages } = loadUI('features/reading/PendingPromptEntries.tsx', { './Markdown': { Markdown: ({ text }) => text }, './file-popup': { showPopup: picture => opened.push(picture) } });
   const images = ['data:image/png;base64,one', 'data:image/png;base64,two', 'data:image/png;base64,three'];
   const tree = UserImages({ images, onRemove: index => removed.push(index) }), nodes = elements(tree);
   const buttons = nodes.filter(element => element.props.className === 'reading-user-image-remove');
@@ -2176,8 +2177,16 @@ test('a sent message shows its quote as a block, in the timeline and while pendi
   const { state, render } = readingHarness(t, [readingEntry('u1', 'user', 10, { text: '> quoted line\n> second\n\nmy question' })]);
   state.pending = [{ id: 'p', role: 'user', text: '> pending quote\n\nmy echo', at: new Date(2026, 9, 17, 16, 20).getTime(), sending: true }];
   const html = render();
-  assert.match(html, /<blockquote class="reading-user-quote">quoted line\nsecond<\/blockquote>/);
-  assert.match(html, /<blockquote class="reading-user-quote">pending quote<\/blockquote>/);
+  assert.match(html, /<blockquote class="reading-user-quote"><div class="reading-markdown">quoted line\nsecond<\/div><\/blockquote>/);
+  assert.match(html, /<blockquote class="reading-user-quote"><div class="reading-markdown">pending quote<\/div><\/blockquote>/);
   assert.match(html, /my question/); assert.match(html, /my echo/);
   assert.doesNotMatch(html, /&gt; quoted|&gt; pending/);
+});
+
+test('a sent quote is laid out as Markdown: inline code and lists are not shown raw', t => {
+  const { render } = readingHarness(t, [readingEntry('u1', 'user', 10, { text: '> 读了 `parser.cjs`：\n> 1. 第一点\n> 2. 第二点\n\n同意' })],
+    { './markdown-escape': require('../src/features/reading/markdown-escape.ts') });
+  const html = render();
+  assert.match(html, /<blockquote class="reading-user-quote">[\s\S]*<code>parser\.cjs<\/code>[\s\S]*<ol>[\s\S]*<li>第一点<\/li>[\s\S]*<li>第二点<\/li>[\s\S]*<\/blockquote>/);
+  assert.doesNotMatch(html, /`parser|1\. 第一点/);
 });
