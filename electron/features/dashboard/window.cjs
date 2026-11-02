@@ -31,7 +31,10 @@ function createDashboardWindow({ BrowserWindow, getSettings, getMainWindow, getU
         // Windows rounds native minimum constraints at fractional DPI; measure the clamp while hidden.
         created.setContentSize(1, 1);
         const content = created.getContentSize(), minimum = created.getMinimumSize();
-        created.setMinimumSize(minimum[0] + minWidth - content[0], minimum[1] + minHeight - content[1]);
+        // Some platforms accept 1x1: calibrate only a clamp near the requested content minimum.
+        if (Math.abs(minWidth - content[0]) <= 4 && Math.abs(minHeight - content[1]) <= 4) {
+          created.setMinimumSize(minimum[0] + minWidth - content[0], minimum[1] + minHeight - content[1]);
+        }
         created.setContentSize(width, height);
       }
       window = created; lastAppearance = '';

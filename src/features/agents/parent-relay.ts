@@ -3,8 +3,8 @@
 import { sendToAgent } from '../home/send-to-agent';
 
 export function startParentRelay() {
-  return window.agentrix.onAgentRelay(async ({ id, terminalId, sessionId, agent, text }) => {
-    const error = await sendToAgent(terminalId, sessionId, agent, text, { preserveDraft: true }).catch(failure => failure instanceof Error ? failure.message : String(failure));
+  return window.agentrix.onAgentRelay(async ({ id, terminalId, sessionId, agent, text, deadline }) => {
+    const error = await sendToAgent(terminalId, sessionId, agent, text, { preserveDraft: true, deadline }).catch(failure => failure instanceof Error ? failure.message : String(failure));
     void window.agentrix.agentRelayResult(id, error);
   });
 }

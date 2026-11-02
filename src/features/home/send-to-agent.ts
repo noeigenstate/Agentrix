@@ -16,9 +16,12 @@ function look(terminalId: string, agent: Agent) {
 // Both CLIs queue messages while working if their input is drawn. Dialogs own the keys. Owner sends replace an old
 // draft; background relays preserve it and press Enter only while their own message is still in the input.
 export async function sendToAgent(terminalId: string, sessionId: string, agent: Agent, text: string,
-  { preserveDraft = false }: { preserveDraft?: boolean } = {}): Promise<string | null> {
+  { preserveDraft = false, deadline }: { preserveDraft?: boolean; deadline?: number } = {}): Promise<string | null> {
   const screenError = t('请先在终端中处理当前界面，再发送消息。');
   const draftError = t('规划员输入框中有未发送的草稿，请先处理草稿后重试。');
+  const pastedError = t('已粘贴到规划员输入框，未能确认发送，请在终端里处理。');
+  // Leave main time to receive the result before its admission timeout releases the team lock.
+  const expired = () => deadline !== undefined && Date.now() > deadline - 300;
   const now = look(terminalId, agent);
   if (!now) return t('它的终端还没有准备好，请稍后再试。');
   if (cliDialogShown(agent, now.rows, now.screen) || !hasCliInput(agent, now.rows, now.screen)) return screenError;
@@ -26,20 +29,25 @@ export async function sendToAgent(terminalId: string, sessionId: string, agent: 
     if (preserveDraft) return draftError;
     window.agentrix.writeTerminal(terminalId, '\x15'); await pause(60);
   }
+  if (expired()) return t('转发已超时，消息未发送。');
   const pasted = await window.agentrix.pasteTerminal(terminalId, text, sessionId);
   if (!pasted.ok) return pasted.error;
+  let submitted = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     await pause(attempt === 0 ? 400 : 700);
     const after = look(terminalId, agent);
-    if (preserveDraft && (!after || cliDialogShown(agent, after.rows, after.screen) || !hasCliInput(agent, after.rows, after.screen))) return screenError;
+    if (preserveDraft && (!after || cliDialogShown(agent, after.rows, after.screen) || !hasCliInput(agent, after.rows, after.screen))) return pastedError;
     const draft = after ? cliInputDraft(agent, after.rows, after.screen) : '';
+    if (expired()) return pastedError;
     if (!sameMessage(text, draft)) {
-      if (preserveDraft && draft) return draftError;
+      if (preserveDraft && draft) return pastedError;
+      if (preserveDraft && !submitted) continue;
       if (preserveDraft || attempt > 0) break;
     }
     window.agentrix.writeTerminal(terminalId, '\r');
+    submitted = true;
   }
-  return null;
+  return preserveDraft && !submitted ? pastedError : null;
 }
 
 // Waits until a just-started agent shows its input (it may first ask to trust the folder or to sign in, which the
