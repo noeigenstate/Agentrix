@@ -7,8 +7,10 @@ const OUTPUT_LIMIT = 8 * 1024 * 1024;
 
 function gitEnvironment(environment = process.env) {
   const env = { ...environment };
-  for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
-  delete env.SSH_AUTH_SOCK; delete env.SSH_AGENT_PID;
+  for (const key of Object.keys(env)) {
+    const name = key.toUpperCase();
+    if (name.startsWith('GIT_') || name === 'SSH_AUTH_SOCK' || name === 'SSH_AGENT_PID') delete env[key];
+  }
   return {
     ...env, GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0',
@@ -100,9 +102,12 @@ async function stopTree(child) {
 
 async function command(file, args, {
   cwd, env = process.env, signal, timeoutMs = 30000, log, onLine, maxOutput = OUTPUT_LIMIT, ipc = false,
-  raw = false, onMessage,
+  raw = false, onMessage, stdin,
 } = {}) {
   aborted(signal);
+  if (stdin !== undefined && ((typeof stdin !== 'string' && !Buffer.isBuffer(stdin)) || Buffer.byteLength(stdin) > OUTPUT_LIMIT)) {
+    throw new Error('Invalid lab process input.');
+  }
   env = gitEnvironment(env);
   const output = log ? await fs.open(log, 'w', 0o600) : null;
   let child, timer, stopping = null, failure = null, stdout = '', stderr = '', bytes = 0;
@@ -111,9 +116,10 @@ async function command(file, args, {
   const abort = () => stop(Object.assign(new Error('实验已停止。'), { name: 'AbortError' }));
   try {
     child = spawn(file, args, {
-      cwd, env, stdio: ['ignore', 'pipe', 'pipe', ...(ipc ? ['ipc'] : [])],
+      cwd, env, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe', ...(ipc ? ['ipc'] : [])],
       windowsHide: true, detached: ipc && process.platform !== 'win32',
     });
+    if (child.stdin) { child.stdin.on('error', () => {}); child.stdin.end(stdin); }
     if (ipc && process.platform === 'win32' && env.AGENTRIX_LAB_RUN) {
       child.labRun = env.AGENTRIX_LAB_RUN; child.labJob = env.AGENTRIX_LAB_JOB;
     }

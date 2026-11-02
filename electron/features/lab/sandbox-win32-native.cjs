@@ -14,15 +14,16 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using Microsoft.Win32.SafeHandles;
 
-public class LabSandbox {
+public partial class LabSandbox {
   const uint DACL = 4, LABEL = 16;
   const uint RX = 0x1200a9, MODIFY = 0x1301bf;
   const uint INHERIT = 3;
   static JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 16777216 };
   static string stage="initialize";
+  static HashSet<string> credentialIdentities=new HashSet<string>();
   public class Plan {
     public string file, cwd, runId, job, labRoot, manifest, input;
-    public string[] args, readRoots, writeRoots, credentialFiles, pipes;
+    public string[] args, readRoots, writeRoots, credentialFiles, pipes, blockedPaths;
     public Dictionary<string,string> env;
     public bool network;
   }
@@ -34,8 +35,14 @@ public class LabSandbox {
   }
   [StructLayout(LayoutKind.Sequential)] struct SX { public SI info; public IntPtr attributes; }
   [StructLayout(LayoutKind.Sequential)] struct PI { public IntPtr process, thread; public int pid, tid; }
+  [StructLayout(LayoutKind.Sequential)] struct FileIdentity {
+    public uint attributes; public System.Runtime.InteropServices.ComTypes.FILETIME created,accessed,written;
+    public uint volume,sizeHigh,sizeLow,links,idHigh,idLow;
+    public string Key { get { return volume+":"+idHigh+":"+idLow; } }
+  }
   [StructLayout(LayoutKind.Sequential)] struct Cap { public IntPtr sid, capabilities; public int count, reserved; }
   [StructLayout(LayoutKind.Sequential)] struct SidAttr { public IntPtr sid; public uint attributes; }
+  [StructLayout(LayoutKind.Sequential)] struct Mapping { public uint read,write,execute,all; }
   [StructLayout(LayoutKind.Sequential)] struct Trustee {
     public IntPtr multiple; public int operation, form, type; public IntPtr name;
   }
@@ -64,7 +71,8 @@ public class LabSandbox {
   [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr process,out uint code);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr value);
-  [DllImport("userenv.dll",CharSet=CharSet.Unicode)] static extern int DeriveAppContainerSidFromAppContainerName(string name,out IntPtr sid);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetDefaultDllDirectories(uint flags);
+  [DllImport("advapi32.dll")] static extern IntPtr FreeSid(IntPtr sid);
   [DllImport("userenv.dll",CharSet=CharSet.Unicode)] static extern int CreateAppContainerProfile(string name,string display,string description,IntPtr caps,int count,out IntPtr sid);
   [DllImport("userenv.dll",CharSet=CharSet.Unicode)] static extern int DeleteAppContainerProfile(string name);
   [DllImport("userenv.dll",CharSet=CharSet.Unicode)] static extern int GetAppContainerFolderPath(string sid,out IntPtr path);
@@ -77,7 +85,12 @@ public class LabSandbox {
   [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern uint SetEntriesInAclW(int count,ref Access entry,IntPtr oldAcl,out IntPtr acl);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool InitializeSecurityDescriptor(IntPtr descriptor,uint revision);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool SetSecurityDescriptorDacl(IntPtr descriptor,bool present,IntPtr acl,bool defaulted);
-  [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool SetFileSecurityW(string name,uint info,IntPtr descriptor);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern uint GetSecurityInfo(IntPtr handle,int type,uint info,out IntPtr owner,out IntPtr group,out IntPtr dacl,out IntPtr sacl,out IntPtr descriptor);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(IntPtr handle,out FileIdentity information);
+  [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern uint GetFinalPathNameByHandleW(IntPtr handle,StringBuilder path,uint length,uint flags);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool DuplicateToken(IntPtr token,int level,out IntPtr duplicate);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool AccessCheck(IntPtr descriptor,IntPtr token,uint access,ref Mapping mapping,IntPtr privileges,ref uint length,out uint granted,out bool allowed);
 
   static void Check(bool ok) { if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error()); }
   static void CheckCode(uint code) { if (code != 0) throw new Win32Exception((int)code); }
@@ -94,32 +107,60 @@ public class LabSandbox {
     Check(ConvertStringSecurityDescriptorToSecurityDescriptorW("D:P(A;;GA;;;SY)(A;;GA;;;"+owner+")(A;;RC;;;OW)",1,out descriptor,out size));
     return descriptor;
   }
+  static IntPtr CheckedFile(string file,uint access,out FileIdentity identity) {
+    IntPtr handle=CreateFileW(file,access,7,IntPtr.Zero,3,0x02200000,IntPtr.Zero);
+    Check(handle!=new IntPtr(-1));
+    try {
+      Check(GetFileInformationByHandle(handle,out identity));
+      if((identity.attributes & 0x400)!=0) throw new Exception();
+      var name=new StringBuilder(32768); uint length=GetFinalPathNameByHandleW(handle,name,32768,0);
+      Check(length>0 && length<32768);
+      string resolved=name.ToString();
+      if(resolved.StartsWith("\\\\?\\UNC\\",StringComparison.OrdinalIgnoreCase)) resolved="\\\\"+resolved.Substring(8);
+      else if(resolved.StartsWith("\\\\?\\")) resolved=resolved.Substring(4);
+      if(!String.Equals(resolved.TrimEnd('\\'),Path.GetFullPath(file).TrimEnd('\\'),StringComparison.OrdinalIgnoreCase)) throw new Exception();
+      return handle;
+    } catch { CloseHandle(handle); throw; }
+  }
   static void Acl(string file,IntPtr sid,uint rights,bool remove,bool deny=false,bool inherit=true) {
-    IntPtr owner,group,oldAcl,sacl,descriptor,acl = IntPtr.Zero;
-    uint code = GetNamedSecurityInfoW(file,1,DACL,out owner,out group,out oldAcl,out sacl,out descriptor);
+    IntPtr owner,group,oldAcl,sacl,descriptor,acl=IntPtr.Zero,handle=IntPtr.Zero;
+    bool pipe=file.StartsWith("\\\\.\\pipe\\",StringComparison.OrdinalIgnoreCase);
+    FileIdentity identity=new FileIdentity(); uint code;
+    if(pipe) code=GetNamedSecurityInfoW(file,1,DACL,out owner,out group,out oldAcl,out sacl,out descriptor);
+    else {
+      try { handle=CheckedFile(file,0x20080,out identity); }
+      catch(Win32Exception error) { if(remove && (error.NativeErrorCode==2 || error.NativeErrorCode==3)) return; throw; }
+      code=GetSecurityInfo(handle,1,DACL,out owner,out group,out oldAcl,out sacl,out descriptor);
+    }
     if (remove && (code == 2 || code == 3)) return;
     CheckCode(code);
     try {
       if(remove) {
         if(oldAcl==IntPtr.Zero) return;
         byte[] bytes=new byte[(ushort)Marshal.ReadInt16(oldAcl,2)]; Marshal.Copy(oldAcl,bytes,0,bytes.Length);
-        string identity=SidString(sid);
-        if(!new RawAcl(bytes,0).Cast<GenericAce>().OfType<QualifiedAce>().Any(ace=>ace.SecurityIdentifier.Value==identity)) return;
+        string trusteeSid=SidString(sid);
+        if(!new RawAcl(bytes,0).Cast<GenericAce>().OfType<QualifiedAce>().Any(ace=>ace.SecurityIdentifier.Value==trusteeSid)) return;
       }
       var entry = new Access { permissions=rights,mode=remove?4:deny?3:1,inheritance=inherit && Directory.Exists(file)?INHERIT:0,
         trustee=new Trustee { form=0,type=5,name=sid } };
       CheckCode(SetEntriesInAclW(1,ref entry,oldAcl,out acl));
       // SetNamedSecurityInfo propagates the entire existing DACL through a directory tree, even for a new
-      // non-inheriting metadata ACE. SetFileSecurity changes exactly this object; roots are expanded explicitly.
-      if(file.StartsWith("\\\\.\\pipe\\",StringComparison.OrdinalIgnoreCase)) {
+      // non-inheriting metadata ACE. Handle-based updates change exactly one verified object.
+      if(pipe) {
         CheckCode(SetNamedSecurityInfoW(file,1,DACL,IntPtr.Zero,IntPtr.Zero,acl,IntPtr.Zero));
       } else {
         IntPtr security=Marshal.AllocHGlobal(40);
         try { Check(InitializeSecurityDescriptor(security,1)); Check(SetSecurityDescriptorDacl(security,true,acl,false));
-          Check(SetFileSecurityW(file,DACL,security)); }
+          FileIdentity current; IntPtr write=CheckedFile(file,0x60080,out current);
+          try {
+            if(current.Key!=identity.Key) throw new Exception();
+            if(!remove && (rights & 0x116)!=0 && (current.attributes & 0x10)==0 && current.links>1 && !credentialIdentities.Contains(current.Key)) throw new Exception();
+            Check(SetKernelObjectSecurity(write,DACL,security));
+          } finally { CloseHandle(write); }
+        }
         finally { Marshal.FreeHGlobal(security); }
       }
-    } finally { LocalFree(acl); LocalFree(descriptor); }
+    } finally { LocalFree(acl); LocalFree(descriptor); if(handle!=IntPtr.Zero) CloseHandle(handle); }
   }
   static IntPtr NewJob(string name,IntPtr descriptor) {
     var security = new SA { size=Marshal.SizeOf(typeof(SA)),descriptor=descriptor };
@@ -187,13 +228,52 @@ public class LabSandbox {
       if((attributes & FileAttributes.Directory)!=0) foreach(var child in Directory.EnumerateFileSystemEntries(file)) pending.Push(child);
     }
   }
+  static bool Under(string root,string file) {
+    root=Path.GetFullPath(root).TrimEnd('\\'); file=Path.GetFullPath(file).TrimEnd('\\');
+    return String.Equals(root,file,StringComparison.OrdinalIgnoreCase) || file.StartsWith(root+"\\",StringComparison.OrdinalIgnoreCase);
+  }
+  static void VerifyBlocked(Plan plan,IntPtr process) {
+    IntPtr token,duplicate; Check(OpenProcessToken(process,10,out token));
+    try { Check(DuplicateToken(token,2,out duplicate)); } finally { CloseHandle(token); }
+    IntPtr privileges=Marshal.AllocHGlobal(1024);
+    var mapping=new Mapping { read=0x120089,write=0x120116,execute=0x1200a0,all=0x1f01ff };
+    try {
+      var roots=new List<string>();
+      foreach(string root in (plan.blockedPaths ?? new string[0]).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(file=>file.Length)) {
+        if(!roots.Any(parent=>Under(parent,root))) roots.Add(root);
+      }
+      foreach(string root in roots) {
+        // A deliberately broad pre-existing AppContainer ACE must not make protected material readable.
+        // This inspects security metadata only; protected file contents never enter the host's output.
+        try { File.GetAttributes(root); }
+        catch(FileNotFoundException) { continue; } catch(DirectoryNotFoundException) { continue; }
+        foreach(string file in Tree(root)) {
+          if(Under(plan.labRoot,file) && (plan.readRoots ?? new string[0]).Any(admitted=>Under(plan.labRoot,admitted) && Under(admitted,file))) continue;
+          if((plan.credentialFiles ?? new string[0]).Any(admitted=>String.Equals(admitted,file,StringComparison.OrdinalIgnoreCase))) continue;
+          IntPtr owner,group,dacl,sacl,descriptor;
+          CheckCode(GetNamedSecurityInfoW(file,1,7,out owner,out group,out dacl,out sacl,out descriptor));
+          try {
+            uint length=1024,granted; bool readable;
+            Check(AccessCheck(descriptor,duplicate,1,ref mapping,privileges,ref length,out granted,out readable));
+            if(readable) throw new Exception();
+          } finally { LocalFree(descriptor); }
+        }
+      }
+    } finally { Marshal.FreeHGlobal(privileges); CloseHandle(duplicate); }
+  }
   static void Clean(string manifest) {
     if (!File.Exists(manifest)) return;
-    var lease=json.Deserialize<Lease>(File.ReadAllText(manifest));
+    Lease lease;
+    try { lease=json.Deserialize<Lease>(File.ReadAllText(manifest)); } catch(FileNotFoundException) { return; }
     IntPtr sid; Check(ConvertStringSidToSidW(lease.sid,out sid));
     try {
-      foreach(var file in lease.paths.Reverse()) Acl(file,sid,0,true);
-      if(!String.IsNullOrEmpty(lease.profile)) CheckCode((uint)DeleteAppContainerProfile(lease.profile));
+      Exception failure=null;
+      foreach(var file in lease.paths.Reverse()) { try { Acl(file,sid,0,true); } catch(Exception error) { failure=error; } }
+      if(!String.IsNullOrEmpty(lease.profile)) {
+        uint code=unchecked((uint)DeleteAppContainerProfile(lease.profile));
+        if(code!=0 && code!=0x80070002 && code!=0x80070490) failure=new Win32Exception((int)code);
+      }
+      if(failure!=null) throw failure;
       File.Delete(manifest);
     }
     finally { LocalFree(sid); }
@@ -204,8 +284,14 @@ public class LabSandbox {
     string profile="agentrix.lab."+plan.runId.Substring(0,8)+"."+plan.job.Replace("-","");
     IntPtr sid; CheckCode((uint)CreateAppContainerProfile(profile,profile,"Agentrix isolated lab run",IntPtr.Zero,0,out sid));
     var paths=new List<string>(); var memory=new List<IntPtr>(); var handles=new List<IntPtr>();
-    IntPtr descriptor=Descriptor(),list=IntPtr.Zero; PI process=new PI();
+    IntPtr descriptor=IntPtr.Zero,list=IntPtr.Zero; PI process=new PI();
     try {
+      File.WriteAllText(plan.manifest,json.Serialize(new Lease { sid=SidString(sid),profile=profile,paths=new string[0] }));
+      descriptor=Descriptor();
+      foreach(string file in plan.credentialFiles ?? new string[0]) {
+        FileIdentity identity; IntPtr handle=CheckedFile(file,0x20080,out identity);
+        try { credentialIdentities.Add(identity.Key); } finally { CloseHandle(handle); }
+      }
       // Write the undo record before granting access, so even a killed launcher can be recovered.
       var reads=(plan.readRoots ?? new string[0]).SelectMany(Tree).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
       var writes=(plan.writeRoots ?? new string[0]).SelectMany(Tree).Concat(plan.credentialFiles ?? new string[0]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -222,9 +308,18 @@ public class LabSandbox {
       try { foreach(var file in Tree(Directory.GetParent(Marshal.PtrToStringUni(profilePath)).FullName)) Acl(file,sid,0xd0156,false,true); }
       finally { Marshal.FreeCoTaskMem(profilePath); }
       stage="ancestor metadata ACL";
-      foreach(var ancestor in ancestors) Acl(ancestor,sid,0x120088,false,false,false);
+      foreach(var ancestor in ancestors) {
+        if(Allows(FileAcl(ancestor),PackageSids[1],METADATA)) continue;
+        // Traversal is supplied by SeChangeNotifyPrivilege. Metadata grants help tools that stat
+        // their parents, but must not require rewriting system-owned ancestors such as Users/.
+        try { Acl(ancestor,sid,METADATA,false,false,false); }
+        catch(Win32Exception aclError) { if(aclError.NativeErrorCode!=5) throw; }
+      }
       stage="read ACL";
-      foreach(var file in reads) Acl(file,sid,RX,false);
+      foreach(var file in reads) {
+        if(Allows(FileAcl(file),PackageSids[1],RX)) continue;
+        Acl(file,sid,RX,false);
+      }
       stage="write ACL";
       foreach(var file in writes) Acl(file,sid,MODIFY,false);
       stage="pipe ACL";
@@ -266,6 +361,7 @@ public class LabSandbox {
       stage="process creation";
       Check(CreateProcessW(plan.file,new StringBuilder(arguments),ref security,ref security,true,0x08080404,env,plan.cwd,ref start,out process));
       handles.Add(process.process); handles.Add(process.thread);
+      stage="protected paths"; VerifyBlocked(plan,process.process);
       foreach(var handle in new[]{inRead,outWrite,errWrite}) { CloseHandle(handle); handles.Remove(handle); }
       Task output=Relay(outRead,Console.OpenStandardOutput()),error=Relay(errRead,Console.OpenStandardError());
       handles.Remove(outRead); handles.Remove(errRead);
@@ -285,12 +381,16 @@ public class LabSandbox {
       if(list!=IntPtr.Zero) { DeleteProcThreadAttributeList(list); Marshal.FreeHGlobal(list); }
       foreach(var handle in handles.AsEnumerable().Reverse()) if(handle!=IntPtr.Zero) CloseHandle(handle);
       foreach(var pointer in memory) Marshal.FreeHGlobal(pointer);
-      LocalFree(descriptor); LocalFree(sid);
-      Clean(plan.manifest);
+      LocalFree(descriptor); FreeSid(sid);
+      if(File.Exists(plan.manifest)) Clean(plan.manifest); else DeleteAppContainerProfile(profile);
     }
   }
   public static int Main(string[] args) {
     try {
+      Check(SetDefaultDllDirectories(0x800)); // System32 only; never load an adjacent DLL during elevated preparation.
+      if(args.Length==1 && args[0]=="host-ready") { Console.Write(json.Serialize(new { ready=HostReady(),elevated=Elevated() })); return 0; }
+      if(args.Length==1 && args[0]=="prepare-host") return PrepareHost();
+      if(args.Length==1 && args[0]=="elevate-host") return ElevateHost();
       if(args.Length==1 && args[0]=="run") return Run(json.Deserialize<Plan>(Console.In.ReadToEnd()));
       if(args.Length==2 && args[0]=="clean") { Clean(args[1]); return 0; }
       if(args.Length>=2 && (args[0]=="list" || args[0]=="kill")) {

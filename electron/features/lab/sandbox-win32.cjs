@@ -1,12 +1,15 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const os = require('node:os');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { createHash, randomUUID } = require('node:crypto');
-const source = require('./sandbox-win32-native.cjs');
+const preparation = require('./sandbox-win32-preparation.cjs');
+const source = require('./sandbox-win32-native.cjs') + preparation.nativeSource;
 const exec = promisify(execFile);
 const runs = new Map();
 let executable, preparing;
+const prepareHost = preparation.createHostPreparation();
 
 const infrastructure = message => Object.assign(new Error(message), { infrastructure: true });
 const contained = (root, target) => {
@@ -20,7 +23,7 @@ async function native(args, options = {}) {
   catch { throw infrastructure('Windows lab isolation could not complete its operation.'); }
 }
 
-async function requireIsolation({ directory } = {}) {
+async function initialize({ directory } = {}) {
   if (!directory || !path.isAbsolute(directory)) throw infrastructure('Windows lab isolation requires a private lab directory.');
   if (preparing) await preparing;
   const root = path.join(await fs.realpath(directory), 'private', '.win32-runtime');
@@ -46,12 +49,32 @@ async function requireIsolation({ directory } = {}) {
       return binary;
     } catch (error) {
       if (error.infrastructure) throw error;
-      const failure = infrastructure('Secure Windows lab execution is unavailable. No workers were started.');
+      const failure = infrastructure(preparation.ISOLATION_ERROR);
       failure.compiler = String(error.stdout || '').replaceAll(input, '<launcher-source>').slice(0, 4096);
       throw failure;
     } finally { await fs.rm(input, { force: true }); await fs.rm(output, { force: true }); }
   })();
   try { return await preparing; } finally { preparing = null; }
+}
+
+async function hostState(options) {
+  await initialize(options);
+  const { stdout } = await native(['host-ready']);
+  const state = JSON.parse(stdout);
+  if (typeof state.ready !== 'boolean' || typeof state.elevated !== 'boolean') throw infrastructure(preparation.ISOLATION_ERROR);
+  return state;
+}
+
+async function requireIsolation(options = {}) {
+  await initialize(options);
+  await prepareHost({
+    verify: () => hostState(options), prompt: options.prompt !== false && !process.env.NODE_TEST_CONTEXT,
+    prepare: () => native(['prepare-host']),
+    elevate: () => {
+      const call = preparation.prepCommand(executable);
+      return exec(call.file, call.args, call.options);
+    },
+  });
 }
 
 function register(runId, directory) { runs.set(runId, directory); }
@@ -104,7 +127,8 @@ async function runtimeRoots({ nodePath, env, command, protectedPaths = [] }) {
     // Git for Windows keeps its DLLs and Unix tools beside cmd/, in the same installation.
     if (path.basename(file).toLowerCase() === 'git.exe' && ['cmd', 'bin'].includes(path.basename(root).toLowerCase())) root = path.dirname(root);
     if (contained(system, root)) continue;
-    if (root === path.parse(root).root || protectedPaths.some(blocked => contained(root, blocked) || contained(blocked, root))) {
+    if (root === path.parse(root).root || root.toLowerCase() === path.resolve(os.homedir()).toLowerCase() ||
+      protectedPaths.some(blocked => contained(root, blocked) || contained(blocked, root))) {
       throw infrastructure('A Windows lab runtime overlaps a protected path.');
     }
     roots.push(root);
@@ -112,5 +136,5 @@ async function runtimeRoots({ nodePath, env, command, protectedPaths = [] }) {
   return [...new Set(roots)];
 }
 
-module.exports = { requireIsolation, register, markedPids, killMarked, release, resolveExecutable, runtimeRoots, contained,
+module.exports = { initialize, hostState, requireIsolation, register, markedPids, killMarked, release, resolveExecutable, runtimeRoots, contained,
   get executable() { return executable; } };

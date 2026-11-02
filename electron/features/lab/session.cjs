@@ -67,11 +67,16 @@ class LabSession {
     this.control = path.join(this.workspaceRoot, 'control');
     this.sockets = new Set(); this.jobs = new Set(); this.controller = new AbortController();
     this.brokerSockets = new Set(); this.brokerJobs = new Set();
+    this.brokerWork = new Set();
     this.capability = randomUUID(); this.invocations = 0; this.active = false; this.closed = false; this.modelStarted = false;
   }
   async start() {
-    await requireIsolation({ directory: this.labRoot });
+    if (this.closed || this.started) throw new Error('The lab session cannot be started again.');
+    aborted(this.signal);
+    await requireIsolation({ directory: this.labRoot, prompt: this.hostPrompt !== false });
+    aborted(this.signal);
     this.started = true;
+    this.protectedPaths = await Promise.all(this.protectedPaths.map(physicalPath));
     this.nodePath = await resolveNode({
       nodePath: this.nodePath, env: this.env, protectedPaths: this.protectedPaths, signal: this.signal, t: this.t,
     });
@@ -96,7 +101,7 @@ class LabSession {
       await fs.copyFile(path.join(__dirname, file), path.join(this.privateDirectory, file));
     }
     if (process.platform === 'win32') {
-      for (const file of ['sandbox-win32-host.cjs', 'sandbox-win32.cjs', 'sandbox-win32-native.cjs']) {
+      for (const file of ['sandbox-win32-host.cjs', 'sandbox-win32.cjs', 'sandbox-win32-native.cjs', 'sandbox-win32-preparation.cjs']) {
         await fs.copyFile(path.join(__dirname, file), path.join(this.privateDirectory, file));
       }
       await fs.copyFile(path.join(__dirname, 'sandbox-win32-executor.cjs'), path.join(this.tools, 'sandbox-win32-executor.cjs'));
@@ -138,26 +143,37 @@ class LabSession {
         if (!buffer.includes('\n')) return;
         submitted = true;
         const operation = (async () => {
-          let timer;
+          let timer, signal, onAbort;
           try {
             const request = JSON.parse(buffer.trim()); buffer = '';
             const { argv, stdin, timeoutMs = 120000 } = request;
             if (request.capability !== capability || this.closed || !this.active || this.controller.signal.aborted ||
-              this.brokerJobs.size >= 4 || !Array.isArray(argv) || !argv.length || argv.length > 256 ||
+              this.brokerWork.size >= 4 || !Array.isArray(argv) || !argv.length || argv.length > 256 ||
               argv.some(arg => typeof arg !== 'string' || arg.includes('\0') || Buffer.byteLength(arg) > 8192) ||
               (stdin !== undefined && (typeof stdin !== 'string' || Buffer.byteLength(stdin) > 128 * 1024)) ||
               !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20 * 60000) throw new Error();
             socket.setTimeout(timeoutMs + 1000, () => socket.destroy());
             timer = setTimeout(() => control.abort(), timeoutMs);
-            const signal = AbortSignal.any([control.signal, this.controller.signal]);
-            const result = await handler({ argv, ...(stdin === undefined ? {} : { stdin }), timeoutMs }, { signal });
+            signal = AbortSignal.any([control.signal, this.controller.signal]);
+            const running = Promise.resolve().then(() => handler({ argv, ...(stdin === undefined ? {} : { stdin }), timeoutMs }, { signal }));
+            this.brokerWork.add(running);
+            void running.finally(() => this.brokerWork.delete(running)).catch(error => {
+              if (error?.infrastructure || error?.fatal) this.brokerFailure = Object.assign(new Error('Lab broker command failed.'),
+                { infrastructure: true, ...(error.fatal ? { fatal: true } : {}) });
+            });
+            const cancelled = new Promise((resolve, reject) => {
+              onAbort = () => reject(new Error('Lab broker request cancelled.'));
+              signal.addEventListener('abort', onAbort, { once: true });
+              if (signal.aborted) onAbort();
+            });
+            const result = await Promise.race([running, cancelled]);
             if (signal.aborted || !result || (result.code !== null && !Number.isInteger(result.code)) ||
               typeof result.stdout !== 'string' || typeof result.stderr !== 'string' ||
               Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) > 8 * 1024 * 1024) throw new Error();
             if (!socket.destroyed) socket.end(JSON.stringify({ code: result.code, stdout: result.stdout, stderr: result.stderr }) + '\n');
           } catch {
             if (!socket.destroyed) socket.end(JSON.stringify({ code: 125, stdout: '', stderr: 'Lab broker command failed.' }) + '\n');
-          } finally { clearTimeout(timer); }
+          } finally { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); }
         })();
         this.brokerJobs.add(operation); void operation.finally(() => this.brokerJobs.delete(operation));
       });
@@ -237,6 +253,8 @@ class LabSession {
   async launchJob(job, args, {
     cwd, log, onLine, timeoutMs = 20 * 60000, command: executable, review = false, signal, network = true,
   }) {
+    const root = review ? path.join(this.labRoot, 'reviews', this.runId) : this.workspaceRoot;
+    await localPath(cwd, cwd, [root], true);
     const folder = review ? path.join(cwd, '.control') : path.join(this.control, job);
     await fs.mkdir(folder, { recursive: true, mode: 0o700 });
     const access = await credentialAccess(this.env, !executable);
@@ -254,7 +272,7 @@ class LabSession {
     const writeRoots = review ? [cwd, ...sockets] : [this.workspaceRoot, ...sockets];
     const profile = sandboxProfile({
       labRoot: this.labRoot, readRoots, writeRoots, protectedPaths: this.protectedPaths,
-      credentialPaths: this.credentialPaths, deniedExecutables: this.deniedExecutables, network, ...access,
+      credentialPaths: this.credentialPaths, deniedExecutables: this.deniedExecutables, network, ipcPaths: sockets, ...access,
     });
     let windows;
     if (process.platform === 'win32') {
@@ -266,7 +284,9 @@ class LabSession {
         executable: backend.executable, runId: this.runId, job, labRoot: this.labRoot,
         manifest: path.join(this.privateDirectory, job + '.acl.json'), network,
         readRoots: [...physicalRead, ...runtimes], writeRoots: physicalWrite,
-        credentialFiles: access.sharedAuth ? [access.sharedAuth] : [],
+        credentialFiles: [access.sharedAuth, access.claudeAuth].filter(Boolean),
+        blockedPaths: [this.labRoot, ...this.protectedPaths, ...this.credentialPaths,
+          access.codexSource, access.claudeSource].filter(Boolean),
         pipes: sockets,
       };
       if (executable) executable = { ...executable, file: await backend.resolveExecutable(executable.file, env) };
@@ -282,7 +302,13 @@ class LabSession {
       timeoutMs, log, onLine, ipc: true,
       onMessage: message => { if (message?.type === 'lab-model-started') this.modelStarted = true; },
     });
-    try { return await running; }
+    try {
+      const result = await running;
+      if (windows && result.code === 125 && result.stderr.includes('Windows lab isolation failed')) {
+        throw Object.assign(new Error('Windows 安全实验执行不可用，未启动工作者。'), { infrastructure: true });
+      }
+      return result;
+    }
     finally {
       await killMarked(this.runId, { job });
       await fs.rm(config, { force: true });
@@ -293,11 +319,15 @@ class LabSession {
       throw new Error('Authenticated lab metering is required.');
     }
     this.active = true;
-    try { return await this.launch(args, options); }
+    try {
+      const result = await this.launch(args, options);
+      if (this.brokerFailure) throw this.brokerFailure;
+      return result;
+    }
     finally { this.active = false; await killMarked(this.runId); }
   }
   async execute(file, args, { network = false, ...options } = {}) {
-    if (typeof network !== 'boolean' || typeof file !== 'string' || !file || !Array.isArray(args) ||
+    if (typeof network !== 'boolean' || typeof file !== 'string' || !file || file.includes('\0') || !Array.isArray(args) ||
       args.some(arg => typeof arg !== 'string' || arg.includes('\0'))) throw new Error('Invalid lab execution request.');
     return this.launch([], { ...options, network, command: { file, args } });
   }
@@ -305,12 +335,23 @@ class LabSession {
     if (this.closed) return;
     this.closed = true; this.active = false; this.controller.abort();
     this.signal?.removeEventListener('abort', this.signalAbort);
-    if (this.started) await killMarked(this.runId);
+    let failure;
+    try { if (this.started) await killMarked(this.runId); } catch (error) { failure = error; }
     if (this.brokerServer) {
       await new Promise(resolve => { this.brokerServer.close(resolve); for (const socket of this.brokerSockets) socket.destroy(); });
       this.brokerServer = null;
     }
     await Promise.allSettled(this.brokerJobs);
+    if (this.brokerWork.size) {
+      let timer;
+      try {
+        await Promise.race([Promise.allSettled(this.brokerWork), new Promise((resolve, reject) => {
+          timer = setTimeout(() => reject(Object.assign(new Error('Lab broker did not stop. Cleanup was refused.'),
+            { infrastructure: true, fatal: true })), 2000);
+        })]);
+      } catch (error) { failure ||= error; }
+      finally { clearTimeout(timer); }
+    }
     await this.brokerChannel?.close();
     await Promise.allSettled(this.jobs);
     if (this.server) {
@@ -318,6 +359,7 @@ class LabSession {
       this.server = null;
     }
     await this.channel?.close();
+    if (failure) throw failure;
     await removePath(this.tools);
     await removePath(path.join(this.labRoot, 'reviews', this.runId));
     await removePath(this.privateDirectory);
@@ -330,7 +372,7 @@ async function recoverRuns(labRoot) {
     if (error.code === 'ENOENT') return [];
     throw error;
   });
-  if (process.platform === 'win32' && entries.length) await requireIsolation({ directory: labRoot });
+  if (process.platform === 'win32' && entries.length) await require('./sandbox-win32.cjs').initialize({ directory: labRoot });
   for (const entry of entries) {
     if (!entry.isDirectory() || !/^[a-f0-9-]{36}$/.test(entry.name)) continue;
     await killMarked(entry.name);

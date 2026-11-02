@@ -33,7 +33,7 @@ const deniedOutside = (root, allowed) => '(require-all ' + subpath(root) + ' ' +
 
 function sandboxProfile({
   labRoot, readRoots, writeRoots, protectedPaths, credentialPaths = [], deniedExecutables = [],
-  codexSource, sharedAuth, network = true,
+  codexSource, sharedAuth, network = true, ipcPaths = [],
 }) {
   const blocked = protectedPaths.map(subpath).join(' ');
   const credentialBlocks = credentialPaths.map(subpath).join(' ');
@@ -48,8 +48,8 @@ function sandboxProfile({
     '(version 1)', '(allow default)',
     '(deny process-info* (target others))',
     '(deny signal (require-not (target same-sandbox)))',
-    ...(!network ? ['(deny network*)', ...readRoots.filter(file => /(?:rpc|meter|broker)-/.test(path.basename(file)))
-      .map(file => '(allow network-outbound (literal ' + JSON.stringify(file) + '))')] : []),
+    ...(!network ? ['(deny network*)', ...ipcPaths
+      .map(file => '(allow network-outbound (remote unix-socket ' + subpath(file) + '))')] : []),
     '(deny file-read-data ' + deniedOutside(labRoot, readRoots) + ')',
     ...(codexRead ? ['(deny file-read-data ' + codexRead + ')'] : []),
     ...(blocked ? ['(deny file-read* ' + blocked + ')'] : []),
@@ -107,7 +107,14 @@ async function credentialAccess(environment = process.env, credentials = true) {
     if (error.code === 'ENOENT') return false;
     throw error;
   }) ? await fs.realpath(candidate) : null;
-  return { codexSource, sharedAuth };
+  if (process.platform !== 'win32') return { codexSource, sharedAuth };
+  const claudeSource = await physicalPath(environment.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
+  const claudeFile = path.join(claudeSource, '.credentials.json');
+  const claudeAuth = credentials && await fs.stat(claudeFile).then(stat => stat.isFile(), error => {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }) ? await fs.realpath(claudeFile) : null;
+  return { codexSource, sharedAuth, claudeSource, claudeAuth };
 }
 
 async function gitCredentialHelpers() {
@@ -119,12 +126,12 @@ async function gitCredentialHelpers() {
   return Promise.all(names.map(name => physicalPath(path.join(result.stdout.trim(), name))));
 }
 
-async function linkCredential(source, target) {
-  try { await fs.symlink(source, target); }
+async function linkCredential(source, target, { platform = process.platform, files = fs } = {}) {
+  try { await files.symlink(source, target); }
   catch (error) {
-    if (process.platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error;
+    if (platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error;
     // A hard link shares the file without copying its contents. Cross-volume links deliberately fail closed.
-    await fs.link(source, target);
+    await files.link(source, target);
   }
 }
 
@@ -146,6 +153,7 @@ async function cliHomes(environment = process.env, directory, credentials = true
   if (credentials && access.sharedAuth) {
     await linkCredential(access.sharedAuth, path.join(codex, 'auth.json'));
   }
+  if (credentials && access.claudeAuth) await linkCredential(access.claudeAuth, path.join(claude, '.credentials.json'));
   const secure = environment?.CLAUDE_SECURESTORAGE_CONFIG_DIR ??
     environment?.CLAUDE_CONFIG_DIR ?? '';
   const temporary = path.join(directory, 'tmp');
@@ -154,7 +162,7 @@ async function cliHomes(environment = process.env, directory, credentials = true
   env[search] = String(env[search] || '').split(path.delimiter).filter(path.isAbsolute).join(path.delimiter);
   return {
     ...env, CODEX_HOME: codex, CLAUDE_CONFIG_DIR: claude,
-    CLAUDE_SECURESTORAGE_CONFIG_DIR: credentials ? secure : claude, ELECTRON_RUN_AS_NODE: '1',
+    CLAUDE_SECURESTORAGE_CONFIG_DIR: credentials && process.platform !== 'win32' ? secure : claude, ELECTRON_RUN_AS_NODE: '1',
     TMPDIR: temporary, TMP: temporary, TEMP: temporary, XDG_CACHE_HOME: temporary,
     ...(process.platform === 'win32' ? {
       HOME: directory, USERPROFILE: directory, APPDATA: path.join(directory, 'AppData/Roaming'),
@@ -166,5 +174,5 @@ async function cliHomes(environment = process.env, directory, credentials = true
 
 module.exports = {
   cleanEnvironment, requireIsolation, sandboxProfile, channelAddress, cliHomes,
-  credentialAccess, gitCredentialPaths, gitCredentialHelpers, physicalPath,
+  credentialAccess, gitCredentialPaths, gitCredentialHelpers, physicalPath, linkCredential,
 };

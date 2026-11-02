@@ -8,6 +8,10 @@ const bootstrap = process.env.AGENTRIX_BOOTSTRAP ? JSON.parse(fs.readFileSync(pr
 const marker = '\x1e' + randomUUID() + '\x1f';
 const env = { ...process.env };
 delete env.AGENTRIX_BOOTSTRAP; delete env.NODE_OPTIONS; delete env.NODE_PATH;
+const isolatedEnvironment = Object.fromEntries([
+  'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'TMPDIR',
+  'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_SECURESTORAGE_CONFIG_DIR',
+].filter(key => env[key] !== undefined).map(key => [key, env[key]]));
 const child = spawn(config.windows.executable, ['run'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
 process.once('disconnect', () => { child.kill(); });
 process.channel?.unref();
@@ -29,7 +33,7 @@ child.stderr.once('end', () => { if (tail) process.stderr.write(tail); });
 child.stdin.on('error', () => {});
 child.stdin.end(JSON.stringify({
   ...config.windows, file: process.execPath, args: [config.executor], cwd: config.cwd, env,
-  input: JSON.stringify({ config: { ...config, startMarker: marker }, bootstrap, modules }),
+  input: JSON.stringify({ config: { ...config, startMarker: marker, isolatedEnvironment }, bootstrap, modules }),
 }));
 child.once('error', () => { console.error('Windows lab launcher could not start.'); process.exitCode = 125; });
 child.once('close', code => { process.exitCode = code ?? 125; });
