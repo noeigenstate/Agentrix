@@ -177,7 +177,7 @@ helper prints exactly one start line, then exactly one end line, on its stdout:
 [dispatch] started <id> codex model gpt-6.1-sol effort max fast on · routing ok · pid <n> session <session id>
 [dispatch] started <id> codex model unreported effort unreported fast unreported · routing unverified (model, effort, fast) · pid <n> session <session id>
 [dispatch] started <id> claude model claude-sonnet-5-5 effort unreported fast off · routing ok (effort unverified) · pid <n> session <session id>
-[dispatch] started <id> codex model gpt-6.1-terra effort high fast off · routing MISMATCH (declared gpt-6.1-sol max fast on) · …
+[dispatch] started <id> codex model gpt-6.1-luna effort high fast off · routing MISMATCH (declared gpt-6.1-sol max fast on) · …
 [dispatch] failed to start <id>: <reason>          (instead of "started"; the helper then exits non-zero)
 [dispatch] ended <id> codex model gpt-6.1-sol effort max fast on · 43 token/s (5,210 output tokens in 121 s) · exit 0 reason exit · scope ok · out <answer path>
 ```
