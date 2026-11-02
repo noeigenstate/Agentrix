@@ -161,7 +161,8 @@ async function containedFile(directory, filename, { file = null, exact = false, 
       const opened = await file.stat({ bigint: true });
       if (opened.dev !== stat.dev || opened.ino !== stat.ino) return null;
     }
-    return resolved;
+    // Keep the trusted root's spelling so later handle checks do not mix an alias with its realpath.
+    return path.resolve(filename);
   } catch { return null; }
 }
 
