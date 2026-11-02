@@ -5,7 +5,7 @@ import { actionText } from '../agents/action-text';
 import { dictateInto } from '../voice/voice-input';
 import { createDictationSend } from './dictation-send';
 import { bindApproval, useScreen } from '../terminal/terminal-screen';
-import { parseAgentScreen } from '../agents/agent-screen';
+import { parseAgentScreen, waitingTitle } from '../agents/agent-screen';
 import { cliDialogShown, hasCliInput, isAtPrompt, isCliWorking } from './cli-panel';
 import { cliReady, DIALOG_SETTLE, endDialog, rememberReady, startDialog } from './reading-ready';
 import { WaitingCard } from './WaitingCard';
@@ -101,7 +101,6 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const hasChoice = live && (knownDialog || !!visibleScreen && !idleInput && !working);
   // Activity can lag a mid-turn dialog. It gives unknown screens more time to settle, never a veto.
   const dialogSettle = DIALOG_SETTLE * (terminal.codexActivity === 'working' ? 2 : 1);
-  const waiting = screen.waiting ?? (screen.choice ? { title: screen.choice.title } : null);
   const waitingShown = hasChoice;
   const absence = useRef<{ conversation: string; at: number | null }>({ conversation, at: null });
   if (absence.current.conversation !== conversation || !hasChoice) absence.current = { conversation, at: null };
@@ -540,7 +539,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     </ConversationDecorations.Provider>;
   // The hint, longest first: the box shows the first that fits its width, so a narrow composer gets a short hint instead of a cut-off one.
   // The first is the full hint: when the box shows a shorter one (or none), it is the box's tooltip and accessible description.
-  const hints = preview ? [t('正在启动…')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.codexActive
+  const hints = preview ? [t('正在启动…')] : hasChoice ? [t('终端里有待处理的界面')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.codexActive
     ? [t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }), t('给 {agent} 发消息，/ 查看命令，@ 提及文件', { agent }), t('给 {agent} 发消息', { agent })]
     : [t('输入命令，Enter 发送'), t('输入命令')];
   const hint = useFittingHint(input, hints), hintId = `reading-hint-${terminal.id}`, fullHint = fullHintProps(hints, hint, hintId);
@@ -555,7 +554,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     </div>
     {attachedCount > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: attachedCount })}<UserImages images={shownImages} numbers={imageNumbers} onRemove={index => void removeImage(index)} /></div>}
     {quote && <QuoteChip quote={quote} onRemove={() => { holdQuote(null); input.current?.focus(); }} />}
-    {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waiting?.title ?? null} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
+    {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waitingTitle(screen)} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
     {/* The command list is part of the page, above the message box, not a popup over the conversation. */}
     {palette && <div className="reading-commands is-inline" id={listId} role="listbox" aria-label={t('命令')}>{matches.map((command, index) => <div key={command.name} id={optionId(index)} role="option" aria-selected={selection === index} className="reading-command" onMouseDown={event => event.preventDefault()} onClick={() => complete(command)}>
         <code>{command.name}</code><span>{command.source === 'builtin' ? t(command.description) : command.description}</span>{command.source !== 'builtin' && <small>{command.source === 'project' ? t('项目') : command.source === 'user' ? t('用户') : t('技能')}</small>}

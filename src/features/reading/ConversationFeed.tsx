@@ -98,7 +98,7 @@ function ToolGroup({ entries, live, projectId, onError }: { entries: Conversatio
       const tool = entry.tool!;
       return <li key={entry.id} className={`${tool.done ? '' : 'is-running'} ${tool.failed ? 'is-failed' : ''} reading-tool-${tool.kind}`}>
         <StepState running={!tool.done} failed={tool.failed} filled />
-        <b>{stepVerb(tool)}</b><code title={tool.target}><PathText text={tool.target} literal={tool.kind === 'read' || tool.kind === 'edit'} /></code>{tool.detail && <small><PathText text={tool.detail} /></small>}
+        <b>{stepVerb(tool)}</b><code title={tool.target}><PathText text={tool.target} literal={tool.kind === 'read' || tool.kind === 'edit'} /></code>{tool.detail && <small title={tool.detail}><PathText text={tool.detail} /></small>}
       </li>;
     })}</ul>}
     {drawing && <ImageProgress step={drawing.id} />}

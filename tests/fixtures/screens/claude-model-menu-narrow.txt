@@ -1,0 +1,10 @@
+  model names, specify with --model.
+
+    1.  Default (recommended)  Opus 5.5
+  ❯ 2.  Opus 5.5 ✔             Complex work
+    3.  Fable 5.1              Toughest tasks
+    4.  Sonnet 5.5             Simpler tasks
+
+  ● High effort ←/→ to adjust
+
+  Enter to set as default · Esc to cancel

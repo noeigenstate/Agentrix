@@ -37,7 +37,7 @@ function loadUI(name, overrides = {}) {
     if (name === 'react' && overrides.react) return { ...React, ...overrides.react };
     // Stubbed screen modules keep their pure helpers (bindApproval, choiceIdentity) unless a test replaces them too.
     if (Object.hasOwn(overrides, key) && key === './terminal-screen') return { bindApproval: require('../src/features/terminal/terminal-screen.ts').bindApproval, ...overrides[key] };
-    if (Object.hasOwn(overrides, key) && key === './agent-screen') return { choiceIdentity: require('../src/features/agents/agent-screen.ts').choiceIdentity, ...overrides[key] };
+    if (Object.hasOwn(overrides, key) && key === './agent-screen') { const { choiceIdentity, waitingTitle } = require('../src/features/agents/agent-screen.ts'); return { choiceIdentity, waitingTitle, ...overrides[key] }; }
     if (Object.hasOwn(overrides, key)) return overrides[key];
     if (name.endsWith('.css')) return {};
     // Every icon renders as a plain svg carrying its class name.
@@ -818,6 +818,14 @@ test('Claude and Codex render user and agent parents with ordered child replies,
     assert.match(sections[3], /failed command/); assert.match(sections[3], /still processing/);
     assert.match(sections[3], /class="file-cards">report.md/);
   }
+});
+
+test('a sub-agent step names its role on one line with an ellipsis and the whole role in its title, never broken letter by letter', t => {
+  const { render } = readingHarness(t, [readingEntry('u1', 'user', 10, { text: 'go' }), readingTool('检查现有测试覆盖', 11, { kind: 'agent', tool: 'Task', done: false, detail: 'general-purpose' })]);
+  const html = render();
+  assert.match(html, /<li class="[^"]*reading-tool-agent"[^>]*>[\s\S]*<small title="general-purpose">general-purpose<\/small>/);
+  const flow = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading-flow.css'), 'utf8');
+  assert.match(flow, /\.reading-tools-tree li\.reading-tool-agent > small \{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; \}/);
 });
 
 test('live thinking and confirmation stay inside the latest agent, including a tools-only history', t => {
@@ -2230,4 +2238,12 @@ test('a sent quote is laid out as Markdown: inline code and lists are not shown 
   const html = render();
   assert.match(html, /<blockquote class="reading-user-quote">[\s\S]*<code>parser\.cjs<\/code>[\s\S]*<ol>[\s\S]*<li>第一点<\/li>[\s\S]*<li>第二点<\/li>[\s\S]*<\/blockquote>/);
   assert.doesNotMatch(html, /`parser|1\. 第一点/);
+});
+
+test('a locked composer looks locked: no input fill, the quiet divider edge and a readable draft, in theme tokens only', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading.css'), 'utf8');
+  const locked = /\.reading-composer:has\(textarea:disabled\) \{([^}]*)\}/.exec(css)?.[1] ?? '';
+  assert.match(locked, /background: transparent;/); assert.match(locked, /border-color: var\(--divider\);/);
+  assert.match(css, /\.reading-composer textarea:disabled \{ color: var\(--text-2\); \}/, 'the draft kept in it stays readable');
+  assert.doesNotMatch(locked, /#[0-9a-f]{3,8}\b|rgba?\(/i, 'tokens only');
 });
