@@ -10,6 +10,9 @@ export const MAX_SPLITS = 2;
 export const NARROW_CENTRE = 600;
 export const splitLimit = (centre: number) => centre < NARROW_CENTRE ? 1 : MAX_SPLITS;
 
+// The feed each view last read, so a view opened again shows it at once; dropped when the view closes or its terminal goes.
+const lastFeeds = new Map<string, SubagentFeed>();
+const feedKey = (terminalId: string, callId: string) => JSON.stringify([terminalId, callId]);
 let splits: readonly SubagentSplit[] = [];
 const listeners = new Set<() => void>();
 const publish = (next: readonly SubagentSplit[]) => { splits = next; listeners.forEach(listener => listener()); };
@@ -28,7 +31,15 @@ export function openSplit(terminalId: string, callId: string, limit = MAX_SPLITS
   publish([...splits, { terminalId, callId }]);
   limitSplits(terminalId, limit);
 }
-export const closeSplit = (terminalId: string, callId: string) => publish(splits.filter(item => !same(item, terminalId, callId)));
+export function closeSplit(terminalId: string, callId: string) {
+  lastFeeds.delete(feedKey(terminalId, callId));
+  publish(splits.filter(item => !same(item, terminalId, callId)));
+}
+// Terminals the workspace no longer has: their views close and the feeds kept for reopening are dropped.
+export function pruneSplits(live: ReadonlySet<string>) {
+  for (const key of lastFeeds.keys()) if (!live.has(JSON.parse(key)[0])) lastFeeds.delete(key);
+  if (splits.some(item => !live.has(item.terminalId))) publish(splits.filter(item => live.has(item.terminalId)));
+}
 export const toggleSplit = (terminalId: string, callId: string) => isSplitOpen(splits, terminalId, callId) ? closeSplit(terminalId, callId) : openSplit(terminalId, callId);
 
 export const getSplits = () => splits;
@@ -42,8 +53,6 @@ export type FeedState = { feed: SubagentFeed | null; status: 'loading' | 'ok' | 
 export const FEED_LOADING: FeedState = { feed: null, status: 'loading', error: null };
 
 type FeedBridge = { subagentFeed(terminalId: string, callId: string): Promise<Result<SubagentFeed>>; onSubagentFeed(listener: (event: SubagentFeedEvent) => void): () => void };
-const lastFeeds = new Map<string, SubagentFeed>();
-const feedKey = (terminalId: string, callId: string) => `${terminalId}\n${callId}`;
 
 // Reads the feed now and again whenever the main process says it moved to a newer revision. Only one read is in flight; a change that
 // arrives meanwhile is read once it returns. A feed older than the one shown is ignored, and a gone feed ends the following.
@@ -79,6 +88,18 @@ export function followFeed(bridge: FeedBridge, terminalId: string, callId: strin
 }
 
 // How many entries came after the last one the owner saw (the whole feed when that entry has scrolled out of it).
+// A word sent to a dispatched worker is delivered once its resumed transcript opens with 「业主插话：」 and the word; the same word sent twice
+// needs two such lines. A word relayed through the parent session leaves no trace in the worker's record, so it is never reported delivered.
+export function deliveredIds(entries: readonly { role: string; text?: string }[], sent: readonly { id: string; text: string; route: string }[]) {
+  const users = entries.filter(entry => entry.role === 'user').map(entry => entry.text ?? ''), asked = new Map<string, number>();
+  return new Set(sent.filter(item => {
+    if (item.route !== 'dispatch') return false;
+    const line = `业主插话：${item.text}`, nth = (asked.get(line) ?? 0) + 1;
+    asked.set(line, nth);
+    return users.reduce((total, text) => total + text.split(line).length - 1, 0) >= nth;
+  }).map(item => item.id));
+}
+
 export function unreadAfter(entries: readonly { id: string }[], lastSeenId: string | null) {
   const index = lastSeenId === null ? -1 : entries.findIndex(entry => entry.id === lastSeenId);
   return entries.length - 1 - index;

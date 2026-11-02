@@ -6,6 +6,7 @@ import { ProjectExplorer } from './features/files/ProjectExplorer';
 import { AddProjectDialog } from './features/workspace/AddProjectDialog';
 import { SSHAuthDialog } from './features/ssh/SSHAuthDialog';
 import { useProjectReorder } from './features/workspace/useProjectReorder';
+import { pruneSplits } from './features/agents/subagent-splits';
 import { pruneReadingCli } from './features/terminal/terminal-popup';
 import { setReading } from './features/reading/reading-mode';
 import { useProjectFocusMotion } from './features/workspace/useProjectFocusMotion';
@@ -154,6 +155,7 @@ export function App() {
     const live = workspace.projects.flatMap(project => project.terminals)
       .filter(terminal => terminal.sessionId && terminal.status !== 'exited');
     pruneReadingCli(new Set(live.map(terminal => JSON.stringify([terminal.id, terminal.sessionId]))));
+    pruneSplits(new Set(workspace.projects.flatMap(project => project.terminals.map(terminal => terminal.id))));
   }, [workspace]);
 
   // Project order for next/previous (set each render), and the current card even if focus fails.

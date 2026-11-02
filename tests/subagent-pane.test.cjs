@@ -89,6 +89,23 @@ test('subscribers hear every change to the open views and stop hearing when they
   assert.equal(heard.length, 2); s.closeSplit('t-hear', 'b');
 });
 
+test('a closed view and the views of a removed terminal leave nothing behind: no open view, no kept feed', async () => {
+  const s = splits(), bridge = stubBridge(() => Promise.resolve({ ok: true, value: feed(4) }));
+  const firstState = (terminalId, callId) => { let first; s.followFeed(bridge, terminalId, callId, state => { first ??= state; })(); return first.status; };
+  for (const [terminalId, callId] of [['t-keep', 'a'], ['t-shut', 'b'], ['t-gone', 'c'], ['t-gone', 'd']]) { s.openSplit(terminalId, callId); s.followFeed(bridge, terminalId, callId, () => {})(); }
+  await settle();
+  assert.equal(firstState('t-shut', 'b'), 'ok', 'a view that opens again at once shows the feed it had');
+  s.closeSplit('t-shut', 'b');
+  assert.equal(firstState('t-shut', 'b'), 'loading', 'closing the view dropped its kept feed');
+  const heard = [], leave = s.subscribeSplits(() => heard.push(true));
+  s.pruneSplits(new Set(['t-keep', 't-gone']));
+  assert.deepEqual(heard, [], 'nothing to prune: nobody is told');
+  s.pruneSplits(new Set(['t-keep']));
+  assert.deepEqual([openIds('t-keep'), openIds('t-gone'), heard.length], [['a'], [], 1], 'the views of a terminal that went close');
+  assert.deepEqual([firstState('t-keep', 'a'), firstState('t-gone', 'c')], ['ok', 'loading'], 'its kept feeds went too, the live terminal keeps its own');
+  leave(); s.closeSplit('t-keep', 'a');
+});
+
 // ---- following one agent --------------------------------------------------------------------------------------------------------
 function stubBridge(answer) {
   const calls = [], hear = { listener: null };
@@ -203,11 +220,49 @@ test('a finished view stays until closed, shows the time it took, and a lost rec
 test('the view closes on Escape and on its button, and Escape never travels on to the terminal', () => zh(() => {
   const closed = [], tree = paneLoader(ok({}))(paneProps({ onClose: () => closed.push('closed') })), stopped = [];
   assert.equal(tree.type, 'section');
-  const key = name => tree.props.onKeyDown({ key: name, stopPropagation: () => stopped.push(name) });
+  const key = name => tree.props.onKeyDown({ key: name, target: { tagName: 'DIV' }, stopPropagation: () => stopped.push(name) });
   key('Enter'); key('a'); assert.deepEqual([closed, stopped], [[], []]);
   key('Escape'); assert.deepEqual([closed, stopped], [['closed'], ['Escape']]);
   elements(tree).find(node => node.type === 'button' && node.props.title === '关闭分屏（Esc）').props.onClick();
   assert.deepEqual(closed, ['closed', 'closed']);
+}));
+
+test('Escape inside the message box leaves the box with the typed word kept; Escape elsewhere in the view closes it', () => zh(() => {
+  const closed = [], stopped = [], focused = [];
+  const react = { ...hookApi, useRef: current => ({ current: current === null ? { focus: () => focused.push(true) } : current }) };
+  const tree = paneLoader(ok({}), react)(paneProps({ onClose: () => closed.push(true) }));
+  const press = tagName => tree.props.onKeyDown({ key: 'Escape', target: { tagName }, stopPropagation: () => stopped.push(tagName) });
+  press('TEXTAREA');
+  assert.deepEqual([closed.length, focused.length, stopped], [0, 1, ['TEXTAREA']], 'the box gives up focus, the view stays, the terminal still hears nothing');
+  press('DIV');
+  assert.deepEqual([closed.length, focused.length], [1, 1], 'the next Escape (focus now in the view) closes it');
+}));
+
+test('a finished Task subagent (reviewing, with an end time) takes no word, keeps the time it took and says it is done', () => zh(() => {
+  const html = paneMarkup(ok({ state: 'reviewing', startedAt: 1000, endedAt: 66_000 }));
+  assert.match(html, /<textarea[^>]*disabled/); assert.match(html, /它已结束或不可用，不能再发消息/);
+  assert.match(html, /subagent-state is-done">审核中</); assert.match(html, /<span class="subagent-elapsed" title="用时">1:05<\/span>/, 'the clock stopped at the end');
+  assert.match(html, /只读 · 已完成，分屏保留到你关闭/);
+  assert.doesNotMatch(paneMarkup(ok({ state: 'reviewing', endedAt: null })), /<textarea[^>]*disabled/, 'a reviewer still at work can be told something');
+}));
+
+test('a word to a dispatched worker is delivered once its resumed transcript carries it; a parent relay and a word not yet seen stay queued', () => {
+  const { deliveredIds } = splits(), user = text => ({ id: text, role: 'user', text }), item = (id, text, route = 'dispatch') => ({ id, text, route });
+  const entries = [user('first brief'), { id: 'a', role: 'assistant', text: '业主插话：fix the test' }, user('业主插话：fix the test\n\n业主插话：and the docs\n\n继续执行当前任务。')];
+  const delivered = sent => [...deliveredIds(entries, sent)];
+  assert.deepEqual(delivered([item('1', 'fix the test'), item('2', 'and the docs'), item('3', 'later word')]), ['1', '2'], 'only the owner\'s own lines count, and only words found');
+  assert.deepEqual(delivered([item('1', 'fix the test'), item('2', 'fix the test')]), ['1'], 'the same word twice needs two lines');
+  assert.deepEqual(delivered([item('1', 'fix the test', 'parent')]), [], 'a relay through the parent leaves no trace to check');
+  assert.deepEqual([...deliveredIds([], [item('1', 'x')])], []);
+});
+
+test('a delivered word reads 已送达 under the conversation, a queued one 已排队', () => zh(() => {
+  const withSent = items => { let slot = 0; return { ...hookApi, useState: start => [slot++ === 1 ? items : typeof start === 'function' ? start() : start, () => {}] }; };
+  const entries = [{ id: 'u1', role: 'user', text: '业主插话：fix the test\n\n继续执行当前任务。' }];
+  const html = paneMarkup(ok({ entries }), undefined, withSent([intervention(), intervention({ id: 'i2', text: 'and the docs' }), intervention({ id: 'i3', text: 'fix the test', route: 'parent' })]));
+  assert.match(html, /<p>fix the test<\/p><small>已送达<\/small>/);
+  assert.match(html, /<p>and the docs<\/p><small>已排队<\/small>/);
+  assert.match(html, /<p>fix the test<\/p><small>已排队 · 已转告主会话<\/small>/);
 }));
 
 // ---- the owner's word to the agent --------------------------------------------------------------------------------------------------

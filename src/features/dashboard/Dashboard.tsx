@@ -14,7 +14,7 @@ import { hasNoRecords, rangeName } from './format';
 import { ModelPageProvider } from './model-look';
 import { Empty } from './Panel';
 import { ModelsTab, TeamTab } from './Tabs';
-import { useNow } from './use-now';
+import { useNow } from '../../shared/useNow';
 
 type Tab = 'models' | 'team';
 type Actions = Pick<DashboardBridge, 'minimize' | 'maximize' | 'close'>;
@@ -42,7 +42,7 @@ function TitleBar({ note, named, actions }: { note: string; named: boolean; acti
 }
 
 export function DashboardView({ summary, query, error, loading = false, now: given, tab, named, onTab, onQuery, onRefresh = () => undefined, decide, actions }: DashboardViewProps) {
-  const [picked, setPicked] = useState<string | null>(null), clock = useNow(), now = given ?? clock;
+  const [picked, setPicked] = useState<string | null>(null), clock = useNow(Date.now), now = given ?? clock;
   const looks = useMemo(() => modelLooks(summary ? summaryModels(summary) : []), [summary]);
   const focus = picked !== null && looks.has(picked) ? picked : null;
   const project = summary?.projects.find(item => item.id === query.projectId);
