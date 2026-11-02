@@ -164,11 +164,11 @@ async function measureArrowScroll(page, shoot) {
   return result;
 }
 
-// The text in the selected (expanded) model row with the colour it is drawn in and the surface under it.
+// The text in the selected (expanded) model row with the colour it is drawn in and the surface under it; a column the region has hidden (.is-cut) shows no text to measure.
 const measureSelectedRow = () => {
   const surface = node => { for (let at = node; at; at = at.parentElement) { const color = getComputedStyle(at).backgroundColor; if (!/, 0\)$|transparent/.test(color)) return color; } return 'rgb(0, 0, 0)'; };
   const row = document.querySelector('tr[data-expanded="true"]');
-  return [...row.querySelectorAll('*')].filter(node => [...node.childNodes].some(child => child.nodeType === 3 && child.textContent.trim()))
+  return [...row.querySelectorAll('*')].filter(node => !node.closest('.is-cut') && [...node.childNodes].some(child => child.nodeType === 3 && child.textContent.trim()))
     .map(node => ({ text: node.textContent.trim().slice(0, 24), size: getComputedStyle(node).fontSize, color: getComputedStyle(node).color, surface: surface(node) }));
 };
 
@@ -278,6 +278,8 @@ async function checkTheme(theme, output, results) {
     await weightItem.getByRole('button', { name: '采纳', exact: true }).click();
     await weightItem.getByText('已采纳 ✓').waitFor();
     await tab('模型评估');
+    // The weight is the table's last column: where the window is narrower than the table it lies beyond the right edge (hidden, not half-shown), so, as a person does, scroll the region to its end.
+    await dash.getByRole('region', { name: /模型对比表/ }).hover(); await dash.mouse.wheel(4000, 0);
     await modelWeight().first().waitFor();
     await tab('协作报告');
     await weightItem.getByRole('button', { name: '撤销', exact: true }).click();
