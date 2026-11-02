@@ -310,11 +310,79 @@ test('malformed journal issue and weight fields stay unavailable instead of crea
 });
 
 test('summary is pure and never changes caller records or journal arrays', () => {
-  const input = { now, query, projects, prices, records: { runs: [run('one', { meeting: 'r' })] }, journals: journal([
+  const input = { now, query, projects, prices, live: { at: now - 10, running: [{ id: 'agent:live', project: 'a',
+    agent: 'Claude Code', model: sonnet, title: 'Synthetic task', role: '搜索', startedAt: now - 1000, tokensPerSecond: null }] },
+    records: { runs: [run('one', { meeting: 'r' })] }, journals: journal([
     entry('skip', 'r', { id: 'one', reason: 'review follow-up' }), entry('consolidate', 'r'),
   ]) };
   const before = JSON.stringify(input);
   const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } };
   freeze(input);
   assert.deepEqual(summarize(input), summarize(input)); assert.equal(JSON.stringify(input), before);
+});
+
+test('daily series use the selected range and project, count confirmed passes, and fill missing local days', () => {
+  const runs = [run('pass', { at: now, reportedCostUsd: 0 }), run('fail', { at: now, exitCode: 1, reportedCostUsd: 2 }),
+    run('unknown', { at: now, exitCode: null, activeMs: null, inputTokens: null }),
+    run('review', { at: now, role: '审查', kind: 'review', reportedCostUsd: 3 }),
+    run('boundary', { at: now - 7 * DAY }), run('old', { at: now - 7 * DAY - 1 }),
+    run('future', { at: now + 1 }), run('other-project', { projectId: 'b', reportedCostUsd: 100 })];
+  const result = summary({ query: { ...query, projectId: 'a' }, records: { runs } });
+  assert.equal(result.daily.length, 8, 'a rolling seven-day interval intersects eight local calendar dates');
+  assert.deepEqual(result.daily.at(-1), { day: '2026-10-31', model: sol, runs: 4, firstPass: 1, costUsd: 5, activeMs: null });
+  assert.equal(result.daily[0].runs, 1); assert.equal(result.daily[0].firstPass, 1);
+  assert.deepEqual(result.daily[1], { day: '2026-10-25', model: sol, runs: 0, firstPass: 0, costUsd: 0, activeMs: 0 });
+  assert.equal(result.daily.reduce((sum, row) => sum + row.runs, 0), result.kpis.runs);
+  const unavailable = summary({ records: { runs: [run('unknown', { model: 'custom', activeMs: null, inputTokens: null })] } }).daily.at(-1);
+  assert.equal(unavailable.costUsd, null); assert.equal(unavailable.activeMs, null);
+  assert.deepEqual(summary().daily, []); assert.deepEqual(summary().live, { running: [], at: 0 });
+});
+
+test('fourteen-day model trends use local dates and project scope independently of the selected time range', () => {
+  const first = new Date(now); first.setHours(0, 0, 0, 0); first.setDate(first.getDate() - 13);
+  const runs = [run('today', { at: now }), run('first', { at: first.getTime() }), run('before', { at: first.getTime() - 1 }),
+    run('last-week', { at: now - 10 * DAY }), run('future', { at: now + 1 }), run('other', { projectId: 'b' })];
+  const options = { query: { ...query, projectId: 'a' }, records: { runs } };
+  const result = summary(options), trend = model(result).trend;
+  assert.equal(trend.length, 14); assert.equal(trend[0], 1); assert.equal(trend[3], 1); assert.equal(trend[13], 1);
+  assert.equal(trend.reduce((sum, count) => sum + count, 0), 3);
+  for (const range of ['30d', 'all']) assert.deepEqual(model(summary({ ...options, query: { projectId: 'a', range } })).trend, trend);
+  assert.equal(result.kpis.runs, 1, 'the fixed sparkline does not widen the selected KPI range');
+  const all = summary({ ...options, query: { projectId: 'a', range: 'all' } });
+  assert.equal(all.daily[0].day, '2026-10-17'); assert.equal(all.daily.at(-1).day, '2026-10-31');
+  assert.equal(all.daily.reduce((sum, row) => sum + row.runs, 0), 4);
+});
+
+test('subagents participate in every run series, while duplicate ends and source-id collisions do not lose or inflate them', () => {
+  const child = run('agent:task', { source: 'subagent', agent: 'claude', model: sonnet, role: '搜索', kind: 'investigate',
+    at: now, meeting: 'r', reportedCostUsd: 0.25, activeMs: 2000, outputTokens: 80 });
+  const result = summary({ records: { runs: [child, { ...child }, run('dispatch:task', { at: now, meeting: 'r' })] },
+    journals: journal([entry('consolidate', 'r')]) });
+  assert.equal(result.kpis.runs, 2); assert.equal(model(result, sonnet).runs, 1);
+  assert.equal(model(result, sonnet).firstPassRate, 1); assert.equal(model(result, sonnet).trend.at(-1), 1);
+  assert.equal(result.modelRuns.filter(row => row.model === sonnet).length, 1);
+  assert.deepEqual(result.daily.find(row => row.day === '2026-10-31' && row.model === sonnet),
+    { day: '2026-10-31', model: sonnet, runs: 1, firstPass: 1, costUsd: 0.25, activeMs: 2000 });
+  assert.equal(result.speed.find(row => row.model === sonnet).tokensPerSecond, 40);
+  assert.equal(result.kinds.find(row => row.model === sonnet).runs, 1);
+  assert.equal(result.rounds[0].tasks, 2); assert.equal(result.rounds[0].phases.build, 3000);
+  const collision = summary({ records: { runs: [run('same'), run('same', { source: 'dispatch' }),
+    run('same', { source: 'subagent', model: sonnet, agent: 'claude', role: '搜索' })] } });
+  assert.equal(collision.kpis.runs, 2, 'legacy dispatch ids remain compatible and subagent ids have their own namespace');
+  assert.equal(model(summary({ records: { runs: [{ ...child, role: '审查', kind: 'review' }] } }), sonnet).firstPassRate, null);
+});
+
+test('daily and trend bins follow local calendar days across a daylight-saving transition', () => {
+  const { execFileSync } = require('node:child_process');
+  const script = `const { summarize } = require('./electron/features/dashboard/summary.cjs');
+    const now = new Date(2026, 2, 9, 12).getTime();
+    const records = { runs: [7, 8, 9].map(day => ({ id: String(day), agent: 'codex', model: 'test',
+      at: new Date(2026, 2, day, 0, 30).getTime() })) };
+    const result = summarize({ records, now, query: { projectId: null, range: '7d' } });
+    process.stdout.write(JSON.stringify({ daily: result.daily, trend: result.models[0].trend }));`;
+  const result = JSON.parse(execFileSync(process.execPath, ['-e', script], { cwd: require('node:path').resolve(__dirname, '..'),
+    env: { SystemRoot: process.env.SystemRoot, TZ: 'America/New_York' }, windowsHide: true, encoding: 'utf8' }));
+  assert.deepEqual(result.daily.filter(row => row.runs).map(row => [row.day, row.runs]),
+    [['2026-03-07', 1], ['2026-03-08', 1], ['2026-03-09', 1]]);
+  assert.equal(result.trend.length, 14); assert.deepEqual(result.trend.slice(-3), [1, 1, 1]);
 });

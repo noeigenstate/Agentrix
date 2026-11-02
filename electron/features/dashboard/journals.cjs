@@ -5,6 +5,7 @@ const { promisify } = require('node:util');
 const { readJsonl } = require('./jsonl.cjs');
 
 const execute = promisify(execFile);
+const RETRY_MIN = 1000, RETRY_MAX = 60_000;
 async function gitCommon(projectPath) {
   try {
     const cwd = await fs.promises.realpath(projectPath);
@@ -17,10 +18,11 @@ class DashboardJournals {
   constructor({ getProjects, changed, resolveCommon = gitCommon, watch = fs.watch }) {
     this.getProjects = getProjects; this.changed = changed; this.resolveCommon = resolveCommon; this.watch = watch;
     this.cache = new Map(); this.watchers = new Map(); this.projects = []; this.active = false; this.syncing = null; this.resync = false;
+    this.retries = new Map();
   }
   async start() {
     this.active = true;
-    // Explicit opens retry missed repositories; broadcasts and successful probes keep their cache.
+    // Explicit opens and the minute tick retry misses; broadcasts keep the bounded probe cache.
     for (const [filename, pending] of [...this.cache]) {
       if (!await pending && this.cache.get(filename) === pending) this.cache.delete(filename);
     }
@@ -39,7 +41,7 @@ class DashboardJournals {
     // Keep Git probes bounded even when the workspace contains many projects.
     for (let offset = 0; offset < projects.length; offset += 4) {
       const batch = await Promise.all(projects.slice(offset, offset + 4).map(async project => {
-        if (!this.cache.has(project.path)) this.cache.set(project.path, this.resolveCommon(project.path));
+        if (!this.cache.has(project.path)) this.cache.set(project.path, Promise.resolve(this.resolveCommon(project.path)).catch(() => null));
         const common = await this.cache.get(project.path);
         if (!common) return null;
         return { id: project.id, name: project.name, common, directory: path.join(common, 'agentrix') };
@@ -53,20 +55,46 @@ class DashboardJournals {
       wanted.set(project.common, 'common'); wanted.set(project.directory, 'journal');
     }
     for (const [directory, watcher] of this.watchers) if (!wanted.has(directory)) { watcher.close(); this.watchers.delete(directory); }
+    for (const directory of this.retries.keys()) if (!wanted.has(directory)) this.clearRetry(directory);
     for (const [directory, kind] of wanted) {
-      if (this.watchers.has(directory)) continue;
+      if (this.watchers.has(directory) || this.retries.get(directory)?.timer) continue;
       try {
         // libuv aborts on Windows 8.3 aliases; every watched path must use its native long spelling.
         const native = fs.realpathSync.native(directory);
         const watcher = this.watch(native, { persistent: false }, (_event, filename) => {
+          if (!this.active || this.watchers.get(directory) !== watcher) return;
           const name = filename == null ? null : String(filename);
           if (kind === 'journal' && (name === null || name === 'journal.jsonl')) this.changed();
-          if (name === null || kind === 'common' && name === 'agentrix') { this.changed(); void this.sync(); }
+          if (name === null || kind === 'common' && name === 'agentrix') {
+            if (kind === 'common') {
+              const journal = path.join(directory, 'agentrix');
+              this.watchers.get(journal)?.close(); this.watchers.delete(journal); this.clearRetry(journal);
+            }
+            this.changed(); void this.sync();
+          }
         });
-        watcher.on('error', () => { watcher.close(); this.watchers.delete(directory); });
+        watcher.on('error', () => {
+          if (!this.active || this.watchers.get(directory) !== watcher) return;
+          watcher.close(); this.watchers.delete(directory); this.retry(directory); this.changed();
+        });
         this.watchers.set(directory, watcher);
-      } catch {}
+        if (this.retries.has(directory)) { this.clearRetry(directory); this.changed(); }
+      } catch { this.retry(directory); }
     }
+  }
+  retry(directory) {
+    if (!this.active) return;
+    const state = this.retries.get(directory) || { delay: RETRY_MIN, timer: null };
+    if (state.timer) return;
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      if (this.active) void this.sync();
+    }, state.delay);
+    state.timer.unref?.(); state.delay = Math.min(state.delay * 2, RETRY_MAX);
+    this.retries.set(directory, state);
+  }
+  clearRetry(directory) {
+    clearTimeout(this.retries.get(directory)?.timer); this.retries.delete(directory);
   }
   async read() {
     await this.sync();
@@ -81,7 +109,8 @@ class DashboardJournals {
     this.active = false;
     for (const watcher of this.watchers.values()) watcher.close();
     this.watchers.clear();
+    for (const directory of this.retries.keys()) this.clearRetry(directory);
   }
 }
 
-module.exports = { DashboardJournals };
+module.exports = { DashboardJournals, RETRY_MIN, RETRY_MAX };

@@ -4,7 +4,7 @@ const nonnegative = value => Number.isFinite(value) && value >= 0;
 const text = (value, limit = 160) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, limit) : '';
 const modelOf = value => modelKey(text(value)) || 'unreported';
 const keyOf = (...parts) => JSON.stringify(parts);
-const execution = run => ['执行', 'execution'].includes(run.role);
+const execution = run => ['执行', 'execution'].includes(run.role) || run.source === 'subagent' && !review(run) && !roundtable(run);
 const review = run => ['审查', 'review'].includes(run.role) || run.kind === 'review';
 const roundtable = run => ['圆桌', 'roundtable'].includes(run.role) || run.kind === 'roundtable';
 const reviewFollowup = run => execution(run) && /review|follow[ -]?up|审查|复审|复核|返工/i.test(run.skipMeeting || '');

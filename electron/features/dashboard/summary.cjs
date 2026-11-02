@@ -2,7 +2,8 @@ const { estimateCost, priceOf } = require('./cost.cjs');
 const { currentWeights } = require('./decisions.cjs');
 const { suggestions } = require('./suggestions.cjs');
 const { journalEntries, roundData, incidentOf, CATEGORIES } = require('./rounds.cjs');
-const { nonnegative, text, modelOf, keyOf, execution, reviewFollowup, ratio, average, timedRate, localDay } = require('./summary-values.cjs');
+const { runSeries, trends } = require('./summary-series.cjs');
+const { nonnegative, text, modelOf, keyOf, execution, reviewFollowup, ratio, average, timedRate } = require('./summary-values.cjs');
 
 // Definitions shared by both pages:
 // - Worker first pass: exit/0, no out-of-scope files, no finding against its author in the meeting, and no rework of
@@ -19,7 +20,7 @@ function normalizeRuns(records, now) {
   for (const [index, record] of records.entries()) {
     if (!nonnegative(record?.at) || record.at > now || !['codex', 'claude'].includes(record.agent)) continue;
     const run = { ...record, model: modelOf(record.model), kind: text(record.kind, 32) || 'unreported' };
-    unique.set(keyOf(record.projectId, record.id || index), run);
+    unique.set(keyOf(record.projectId, record.source === 'subagent' ? 'subagent' : 'dispatch', record.id || index), run);
   }
   return [...unique.values()].sort((a, b) => a.at - b.at);
 }
@@ -86,7 +87,8 @@ function taskList(runs, passes, prices) {
   return rows;
 }
 
-function summarize({ records = {}, journals = [], projects = [], prices = {}, decisions = [], query = { projectId: null, range: '30d' }, now = 0, t } = {}) {
+function summarize({ records = {}, journals = [], projects = [], prices = {}, decisions = [], live = { running: [], at: 0 },
+  query = { projectId: null, range: '30d' }, now = 0, t } = {}) {
   const length = query.range === 'all' ? null : (query.range === '7d' ? 7 : 30) * DAY;
   const start = length === null ? 0 : now - length;
   const selected = record => nonnegative(record?.at) && record.at >= start && record.at <= now;
@@ -108,6 +110,7 @@ function summarize({ records = {}, journals = [], projects = [], prices = {}, de
   const leadPasses = grades.filter(grade => grade.submission === 1);
   const observations = runs.map(run => passes.get(run)).filter(value => value !== null).concat(leadPasses.map(grade => grade.outcome === 'passed'));
   const modelNames = [...new Set([...runs, ...grades].map(value => value.model))].sort();
+  const modelTrends = trends(allRuns, modelNames, now);
   const models = modelNames.map(model => {
     const modelRuns = runs.filter(run => run.model === model), modelGrades = grades.filter(grade => grade.model === model);
     const agent = modelRuns[0]?.agent || modelGrades[0].agent;
@@ -123,17 +126,12 @@ function summarize({ records = {}, journals = [], projects = [], prices = {}, de
       incidents: incidents.filter(incident => incident.row.model === model).length,
       quotaPercent: quota.providers.get(agent)?.percent ?? null,
       costUsd: costs.length ? costs.reduce((sum, cost) => sum + cost, 0) : null, costedRuns: costs.length,
-      weight: modelWeights.length ? Math.min(...modelWeights.map(weight => weight.to)) : 1 };
+      weight: modelWeights.length ? Math.min(...modelWeights.map(weight => weight.to)) : 1, trend: modelTrends.get(model) };
   });
-  const groupedSpeed = new Map(), findingCells = new Map();
-  for (const run of runs) {
-    const day = keyOf(localDay(run.at), run.model);
-    if (!groupedSpeed.has(day)) groupedSpeed.set(day, []);
-    groupedSpeed.get(day).push(run);
-  }
+  const findingCells = new Map();
   const kinds = kindRates(runs, passes);
-  const speed = [...groupedSpeed.values()].map(group => ({ day: localDay(group[0].at), model: group[0].model, tokensPerSecond: timedRate(group) }))
-    .sort((a, b) => a.day.localeCompare(b.day) || a.model.localeCompare(b.model));
+  const { daily, speed } = modelNames.length ? runSeries(runs, passes, prices, modelNames,
+    Math.max(0, length === null ? runs[0]?.at ?? now : start), now) : { daily: [], speed: [] };
   for (const finding of findings) {
     const key = keyOf(finding.author, finding.category);
     const cell = findingCells.get(key) || { author: finding.author, category: finding.category, count: 0 };
@@ -150,7 +148,8 @@ function summarize({ records = {}, journals = [], projects = [], prices = {}, de
       roundtableFirstConfirm: ratio(rounds.filter(round => round.row.firstConfirmed).length, rounds.length),
       findingsPerRound: ratio(rounds.reduce((sum, round) => sum + round.row.findings, 0), rounds.length),
       findingFixRate: ratio(knownFixes.filter(finding => finding.fixed).length, knownFixes.length) },
-    models, modelRuns: taskList(runs, passes, prices), kinds, speed,
+    models, modelRuns: taskList(runs, passes, prices), kinds, speed, daily,
+    live: { at: live.at, running: live.running.map(run => ({ ...run })) },
     incidents: incidents.map(incident => incident.row).sort((a, b) => b.at - a.at), rounds: rounds.map(round => round.row),
     findings: [...findingCells.values()].sort((a, b) => a.author.localeCompare(b.author) || a.category.localeCompare(b.category)),
     suggestions: suggestions({ incidents: globalEntries.filter(entry => entry.type === 'incident').map(entry => ({ row: incidentOf(entry), key: entry.key })),

@@ -40,11 +40,13 @@ class DashboardDecisions {
   constructor(userData, { now = Date.now, log = message => console.warn(message) } = {}) {
     this.files = filesFor(userData); this.now = now; this.log = log;
     this.pending = Promise.resolve(); this.warned = false;
+    this.listeners = new Set();
   }
   async read() {
     await this.pending;
     return [...latestDecisions((await Promise.all(this.files.map(file => readJsonl(file, readOptions)))).flat()).values()];
   }
+  subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   decide(id, state, weight) {
     const record = { id, state, ...(weight ? { weight } : {}), at: this.now(), v: 1 };
     if (!validDecision(record)) return Promise.resolve(false);
@@ -76,6 +78,7 @@ class DashboardDecisions {
         await fs.rename(this.files[1], filename);
       }
       await fs.appendFile(filename, line, { mode: 0o600 });
+      for (const listener of this.listeners) { try { listener(); } catch {} }
       return true;
     }).catch(() => {
       if (!this.warned) { this.warned = true; try { this.log('Dashboard decisions could not be written.'); } catch {} }

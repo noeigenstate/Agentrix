@@ -10,17 +10,20 @@ const route = value => ({ model: text(value?.model) || 'unreported', effort: tex
 const projectName = project => (project.kind === 'ssh' ? path.posix : path).basename(project.path);
 
 function runRecord(project, call, event) {
+  const source = (event.source || call.source) === 'subagent' ? 'subagent' : 'dispatch';
   const actual = call.unconfirmed ? route(null) : route(event);
   const declared = call.declared || call.unconfirmed ? route(call.declared || call) : null;
   const verdict = call.unconfirmed ? 'unverified' : event.verdict || routingVerdict({ ...actual, model: actual.model === 'unreported' ? null : actual.model }, declared);
   return { id: text(event.id), projectId: text(project.id), project: text(projectName(project), 240),
-    agent: call.sourceAgent, ...actual, ...(declared ? { declared } : {}), role: text(call.role, 32), kind: call.kind ?? null,
+    agent: call.sourceAgent, source,
+    ...actual, ...(declared ? { declared } : {}), role: text(call.role, 32), kind: call.kind ?? null,
     title: text(call.title, 240), meeting: text(call.meeting, 64), skipMeeting: text(call.skipMeeting, 240),
     startedAt: number(call.startedAt), endedAt: number(event.endedAt), activeMs: number(event.activeMs),
     outputTokens: count(event.outputTokens), totalOutputTokens: count(event.totalOutputTokens),
     inputTokens: count(event.inputTokens), cachedTokens: count(event.cachedTokens),
     reportedCostUsd: number(event.reportedCostUsd), reason: text(event.reason, 32),
-    exitCode: Number.isSafeInteger(event.exitCode) ? event.exitCode : null, outOfScope: count(event.outOfScopeCount) ?? event.outOfScope?.length ?? 0, verdict };
+    exitCode: Number.isSafeInteger(event.exitCode) ? event.exitCode : null,
+    outOfScope: count(event.outOfScopeCount) ?? (Array.isArray(event.outOfScope) ? event.outOfScope.length : source === 'subagent' ? null : 0), verdict };
 }
 
 function gradeRecord(grade, project, session) {

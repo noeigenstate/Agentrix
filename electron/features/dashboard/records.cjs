@@ -33,7 +33,7 @@ class DashboardRecords {
         if (size) await fs.rename(file, this.file(kind, true));
       }
       await fs.appendFile(file, line, { mode: 0o600 });
-      for (const listener of this.listeners) { try { listener(kind); } catch {} }
+      this.notify(kind);
       return true;
     }).catch(() => {
       if (!this.warned) { this.warned = true; try { this.log('Dashboard records could not be written.'); } catch {} }
@@ -45,17 +45,19 @@ class DashboardRecords {
   }
   run(project, call, event) { void this.append('runs', runRecord(project, call, event)); }
   subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  notify(kind) { for (const listener of this.listeners) { try { listener(kind); } catch {} } }
   grade(grade, project, session) { void this.append('grades', gradeRecord(grade, project, session)); }
   quota(provider, limits, scope = quotaScope(provider, { kind: 'local' }, {})) {
     if (this.quitAttempted || !['claude', 'codex'].includes(provider)) return;
     const windows = quotaWindows(limits);
     if (!windows.length) return;
-    const key = `${provider}:${scope}`, signature = JSON.stringify(windows), previous = this.quotas.get(key);
-    if (!previous) {
-      const state = { provider, scope };
-      this.quotas.set(key, state); this.writeQuota(state, windows);
-      return;
-    }
+    const key = `${provider}:${scope}`, signature = JSON.stringify(windows);
+    const previous = this.quotas.get(key) || { provider, scope };
+    this.quotas.delete(key); this.quotas.set(key, previous);
+    previous.latest = { v: 1, at: this.now(), provider, scope, windows };
+    // The UI follows observations immediately; durable history keeps its existing write throttle.
+    this.notify('quota');
+    if (previous.signature === undefined) { this.writeQuota(previous, windows); return; }
     if (previous.signature === signature) {
       clearTimeout(previous.timer); previous.timer = null; previous.trailing = null;
       return;
@@ -65,6 +67,9 @@ class DashboardRecords {
     previous.trailing = windows;
     previous.timer ??= setTimeout(() => this.writeQuota(previous, previous.trailing), remaining);
     previous.timer.unref?.();
+  }
+  latestQuota() {
+    return [...this.quotas.values()].map(({ latest }) => ({ ...latest, windows: latest.windows.map(window => ({ ...window })) }));
   }
   writeQuota(state, windows) {
     clearTimeout(state.timer); state.timer = null; state.trailing = null;
