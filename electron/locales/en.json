@@ -2214,5 +2214,6 @@
   "引用这条消息": "Quote this message",
   "引用的消息": "Quoted message",
   "移除引用": "Remove the quote",
-  "输入框暂时不可用，等它可用后再引用": "The message box is unavailable for now; quote once it is available"
+  "输入框暂时不可用，等它可用后再引用": "The message box is unavailable for now; quote once it is available",
+  "规划员输入框中有未发送的草稿，请先处理草稿后重试。": "The planner's input holds an unsent draft. Deal with the draft, then try again."
 }
