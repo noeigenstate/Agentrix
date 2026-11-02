@@ -531,12 +531,15 @@ function resolveIntervention(terminalId, callId) {
 const relays = new Map();
 let relaySequence = 0;
 function sendParentPrompt(terminalId, text) {
+  if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return Promise.reject(new Error('无法把插话转给规划员。'));
   const s = sessions.get(terminalId);
   if (!s?.sessionId || !s.codexActive || !['claude', 'codex'].includes(s.agent)) return Promise.reject(new Error('规划员会话已变化，消息未发送。'));
   return new Promise((resolve, reject) => {
-    const id = ++relaySequence, timer = setTimeout(() => { relays.delete(id); reject(new Error('无法把插话转给规划员。')); }, 15000);
+    // Admission holds the team lock, which expires after 10 s. A stalled renderer must release it well before then.
+    const id = ++relaySequence, timer = setTimeout(() => { relays.delete(id); reject(new Error('无法把插话转给规划员。')); }, 3000);
     relays.set(id, { resolve, reject, timer });
-    send('agents:relay', { id, terminalId, sessionId: s.sessionId, agent: s.agent, text });
+    try { window.webContents.send('agents:relay', { id, terminalId, sessionId: s.sessionId, agent: s.agent, text }); }
+    catch (error) { relayResult(id, error?.message || String(error)); }
   });
 }
 function relayResult(id, error) {

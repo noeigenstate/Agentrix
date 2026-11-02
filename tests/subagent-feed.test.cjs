@@ -209,7 +209,43 @@ test('entry-only and header-only changes push a newer revision, coalesced to fou
   assert.equal(f.events.length, 3); assert.ok(f.events.at(-1).revision > latest.revision);
   assert.equal((await f.calls.feed('agent:worker')).state, 'reviewing');
   f.calls.reset(); const count = f.events.length;
-  t.mock.timers.tick(1000); assert.equal(f.events.length, count, 'reset cancels queued callbacks');
+  t.mock.timers.tick(250); assert.equal(f.events.length, count + 1, 'reset replaces queued content with the retirement revision');
+  assert.ok(f.events.at(-1).revision > latest.revision);
+  await assert.rejects(f.calls.feed('agent:worker'), /^Error: gone$/);
+  t.mock.timers.tick(1000); assert.equal(f.events.length, count + 1, 'no stale content callbacks follow retirement');
+});
+
+test('repeated full resets notify an open split of gone even while a content revision is pending', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: BASE });
+  const f = await fixture(t), filename = await task(f), before = await f.calls.feed('agent:worker');
+  await fs.appendFile(filename, lines([{ type: 'assistant', uuid: 'pending', timestamp: iso(5), isSidechain: true,
+    message: { content: [{ type: 'text', text: 'Pending synthetic step.' }] } }]));
+  const pending = await f.calls.feed('agent:worker'); assert.ok(pending.revision > before.revision);
+  f.calls.reset(); f.calls.reset();
+  await assert.rejects(f.calls.feed('agent:worker'), /^Error: gone$/);
+  assert.equal(f.events.length, 1);
+  t.mock.timers.tick(250);
+  assert.equal(f.events.length, 2); assert.equal(f.events.at(-1).callId, before.id);
+  assert.ok(f.events.at(-1).revision > pending.revision);
+  t.mock.timers.tick(1000); assert.equal(f.events.length, 2);
+  assert.ok(before.entries.length, 'the split can retain its last successful snapshot');
+});
+
+test('folder changes retire removed Task feeds with a newer revision while preserving dispatched and completed feeds', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: BASE });
+  const f = await fixture(t);
+  await task(f, 'removed'); const removed = await f.calls.feed('agent:removed');
+  await task(f, 'completed'); f.calls.apply(notice('completed')); await f.calls.work;
+  const completed = await f.calls.feed('agent:completed');
+  const sessionId = dispatch(f, 'kept'); await rollout(f, sessionId);
+  const kept = await f.calls.feed('dispatch:kept');
+  f.calls.setFolder(path.join(f.root, 'another-folder'));
+  await assert.rejects(f.calls.feed(removed.id), /^Error: gone$/);
+  assert.deepEqual(await f.calls.feed(completed.id), completed);
+  assert.deepEqual(await f.calls.feed(kept.id), kept);
+  t.mock.timers.tick(250);
+  assert.ok(f.events.some(event => event.callId === removed.id && event.revision > removed.revision));
+  assert.ok(!f.events.some(event => event.callId === kept.id && event.revision > kept.revision));
 });
 
 test('successful dispatch rows disappear after three seconds while their final snapshots expire at thirty minutes', async t => {
