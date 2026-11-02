@@ -34,14 +34,21 @@ async function assertOwner(projectPath, before) {
   return after;
 }
 
-async function validateLinks(directory, root) {
+const excludedPath = (file, exclude) => exclude.some(name => file === name || file.startsWith(name + '/'));
+
+async function validateLinks(directory, root, { exclude = [], signal, onFile } = {}) {
   root ||= await fs.realpath(directory);
+  aborted(signal);
   for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-    const file = path.join(directory, entry.name);
+    const file = path.join(directory, entry.name), relative = path.relative(root, file).split(path.sep).join('/');
     if (entry.isSymbolicLink()) {
       const target = await fs.realpath(file);
       if (!inside(root, target)) throw new Error('A snapshot or dependency link escapes the isolated workspace.');
-    } else if (entry.isDirectory()) await validateLinks(file, root);
+    }
+    // Excluded environments may have runtime links of their own. Never walk them, but still check a root link.
+    if (excludedPath(relative, exclude)) continue;
+    if (entry.isDirectory()) await validateLinks(file, root, { exclude, signal, onFile });
+    else onFile?.(relative);
   }
 }
 
@@ -88,8 +95,9 @@ async function copyDependencies(projectPath, destination, signal, { electronDist
   return source;
 }
 
-async function archiveSnapshot(projectPath, revision, destination, { signal, dependencies = true, electronDist = false } = {}) {
+async function archiveSnapshot(projectPath, revision, destination, { signal, dependencies = true, electronDist = false, exclude = [] } = {}) {
   aborted(signal);
+  destination = path.resolve(destination);
   await fs.mkdir(destination, { recursive: true, mode: 0o700 });
   const archive = destination + '.tar';
   try {
@@ -100,10 +108,10 @@ async function archiveSnapshot(projectPath, revision, destination, { signal, dep
     const extracted = await command('tar', ['-xf', path.basename(archive), '-C', path.basename(destination)],
       { cwd: path.dirname(destination), signal, timeoutMs: 120000 });
     if (extracted.code !== 0) throw new Error('Could not extract the project snapshot.');
-    await validateLinks(destination);
+    await validateLinks(destination, undefined, { exclude, signal });
     const dependencySource = dependencies
       ? await copyDependencies(projectPath, path.join(destination, 'node_modules'), signal, { electronDist }) : null;
-    return { files: names, dependencySource };
+    return { files: names.filter(file => !excludedPath(file, exclude)), dependencySource };
   } finally { await removePath(archive); }
 }
 
@@ -129,11 +137,11 @@ async function initBaseline(cwd, files, signal, { exclude = ['node_modules'] } =
   return baseline;
 }
 
-async function prepareWorktree(projectPath, directory, task, signal, { electronDist = false } = {}) {
+async function prepareWorktree(projectPath, directory, task, signal, { electronDist = false, exclude = [] } = {}) {
   let cwd = path.join(directory, 'worktree');
-  const snapshot = await archiveSnapshot(projectPath, task.base, cwd, { signal, electronDist });
+  const snapshot = await archiveSnapshot(projectPath, task.base, cwd, { signal, electronDist, exclude });
   cwd = await fs.realpath(cwd);
-  const baseline = await initBaseline(cwd, snapshot.files, signal);
+  const baseline = await initBaseline(cwd, snapshot.files, signal, { exclude: ['node_modules', ...exclude] });
   return { ...snapshot, cwd, baseline, real: await fs.realpath(cwd), gitDirectory: path.join(cwd, '.git') };
 }
 
