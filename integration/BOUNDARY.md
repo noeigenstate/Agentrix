@@ -8,7 +8,7 @@ The dispatch helper that every command-line Codex or Claude worker is started th
 - `electron/features/agents/dispatch-events.cjs`
 
 ## Interface
-- `USAGE` (`integration/dispatch.cjs`) — the helper's command line (`node dispatch.cjs <codex|claude> …`); sessions learn its path from the startup note (skills/agent-dispatch)
+- `USAGE` (`integration/dispatch.cjs`) — the helper's command line (`node dispatch.cjs <codex|claude> …`, and `stop <run id> [--reason] [--no-resume]` for the planner to stop a worker whose owner intervention conflicts with its task); a normal owner intervention never stops a worker: it is resumed in the same session after its current run; sessions learn its path from the startup note (skills/agent-dispatch)
 - `[dispatch]` (`integration/dispatch.cjs`) — the started / failed to start / ended lines; events carry kind, meeting and verified routing; outputTokens/activeMs are the meter's timed pair and totalOutputTokens is the invocation's cost count; resumed Codex never falls back to stdout totals
 - `runtimeFiles` (`integration/dispatch.cjs`) — the electron modules the helper carries; copied by scripts/after-pack.cjs and electron/remote-connection.cjs
 - `acceptDispatch` (`electron/features/agents/dispatch-events.cjs`) — main.cjs hands it every dispatch-* event from a session's event pipe
@@ -23,6 +23,7 @@ The dispatch helper that every command-line Codex or Claude worker is started th
 - `electron/boundaries.cjs`
 - `electron/features/team/team.cjs`
 - `electron/features/team/minutes-page.cjs`
+- `electron/features/team/inbox.cjs`
 - `electron/features/dashboard/records-routing.cjs`
 - `electron/features/skills/session.cjs`
 - `electron/features/skills/worker-proposals.cjs`

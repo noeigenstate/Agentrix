@@ -30,6 +30,7 @@ class AgentCalls {
   setFolder(folder) { if (folder !== this.folder) { this.reset(true); this.folder = folder; } }
   history(reading) { this.replaying = reading; }
   feed(id) { return this.feeds.get(id); }
+  byId(id) { return [...this.calls.values()].find(call => call.id === id) || null; }
   dispose() { this.reset(); this.finishedIds.clear(); }
   running() {
     return [...this.calls.values()].filter(call => !call.done && !call.reviewed).map(call => ({

@@ -10,6 +10,7 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 - `electron/features/agents/agent-calls.cjs`
 - `electron/features/agents/agent-usage.cjs`
 - `electron/features/agents/subagent-feed.cjs`
+- `electron/features/agents/interventions.cjs`
 - `electron/features/agents/token-rate.cjs`
 - `electron/features/agents/agent-settings.cjs`
 - `electron/features/agents/claude-account-usage.cjs`
@@ -26,6 +27,7 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 - `ClaudeAccountUsage` (`electron/features/agents/claude-account-usage.cjs`) — the read-only Claude plan-limit poller (with `readClaudeAccount`); SSH injects a sanitized remote read through features/ssh/claude-account.cjs
 - `dispatch` (`electron/features/agents/agent-calls.cjs`) — `AgentCalls.dispatch(event)`, reached as `session.usage.calls.dispatch` with authenticated events; retains evaluation metadata and invokes the injected finished hook once per accepted end
 - `feed` (`electron/features/agents/agent-calls.cjs`) — `AgentCalls.feed(callId)` serves `terminal:subagent-feed(terminalId, callId)`: a bounded read-only snapshot (newest 400 entries) of a sub-agent's or dispatched worker's conversation, pushed as `terminal:subagent-feed` events at most 4 per second; items carry stable `id` (`agent:<toolUseId>`, `dispatch:<id>`), `startedAt`, `endedAt` and `viewable`; `running()` feeds the dashboard's live strip
+- `createInterventions` (`electron/features/agents/interventions.cjs`) — `{ resolve, sendParentPrompt }` → `interveneAgent` / `stopAgent` for `agents:intervene` / `agents:stop`; targets come only from main's own call bindings, and the planner is told of every intervention
 - `ReadingHistory` (`electron/reading-history.cjs`) — validates restored local transcript identities, prepares the latest page and serves `terminal:conversationPage(id, { key, cursor })` through agents IPC; `beforeCursor` alone indicates earlier history
 
 ## May import
@@ -40,6 +42,7 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 - `electron/conversation*` (the record parser and the shared grouping rule)
 - `electron/oversized-record.cjs`
 - `electron/features/dashboard/records-routing.cjs`
+- `electron/features/team/*.cjs` (the team folder and a run's owner inbox)
 
 ## Invariants
 - Each model is shown from its own records: the main model is its latest reply's (configured only until the first reply), its rows are the user's prompts and its own steps, never another worker's or a prompt's model; a called model's effort and speed are its own recorded values, unknown (null) when absent, never taken from the parent, configuration or dispatch declaration — guessed routing hides which model really ran — test: `tests/activity-route.test.cjs` › "the main model section: the model its latest reply records"; test: `tests/agent-calls.test.cjs` › "Claude Agent calls keep their own effort and leave unrecorded effort and speed unknown"

@@ -38,6 +38,9 @@ export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | nul
     // scope: files the worker changed outside the paths it was allowed (skills/agent-dispatch, --allow).
     files?: string[] } | null;
   declared?: { model: string; effort: string | null; fast: boolean | null }; }[] };
+// What the owner typed into a sub-agent's split, accepted for delivery (not yet read by the worker).
+export type AgentIntervention = { id: string; callId: string; text: string; at: number; route: 'dispatch' | 'parent'; status: 'queued' };
+export type AgentRelay = { id: number; terminalId: string; sessionId: string; agent: 'claude' | 'codex'; text: string };
 export type AgentUsage = { provider: string | null; context: { used: number; window: number } | null; round: AgentTokens | null; total: AgentTokens | null; limits: { minutes: number | null; percent: number; resetsAt: number | null }[]; limitsAt?: number | null; limitsFrom?: string | null; resets?: { left: number | null; total: number | null } | null; resetQuery?: { state: 'loading' | 'ready' | 'unavailable' | 'error'; reason?: string; at?: number }; calls?: AgentCall[]; model?: string | null; rate?: TokenRate | null };
 export type ProjectTerminal = { readingHistory?: ReadingHistoryScope | null; mainTurn?: MainAgentTurn | null; agentStarting?: boolean; nativeMode?: 'codex-native' | null; agentStartedAt?: number | null; agentSettings?: AgentSettings | null; agentUsage?: AgentUsage | null; agentCommand?: string | null; action: AgentActionBrief | null; task: string; taskTitle?: string; prompts: PendingPrompt[]; id: string; title: string; shell: 'powershell' | 'cmd' | 'bash' | 'zsh'; sessionId: string | null; status: Project['status']; codexActive: boolean; agent: Project['agent']; codexActivity: Project['codexActivity']; needsInput: string | null; shellReady: boolean; codexAvailable: boolean | null; lastActivityAt: number | null; lastCompletedAt: number | null; error: string | null };
 export type Settings = { startView: 'decisions' | 'workspace'; surface: 'glass' | 'solid'; glassBackground: 'theme' | 'desktop'; glassTransparency: number | null; terminalRenderer: 'gpu' | 'dom'; autoSave: boolean; activityPane: boolean; notifications: boolean; sound: boolean; closeToTray: boolean; explorerCollapsed: boolean; hideTreeNoise: boolean; fontSize: number; terminalFontWeight: 400 | 500 | 600; terminalFontFamily: string; terminalCjkFontFamily: string; userAvatar: string; restoreSessions: boolean; focusAnimation: 'smooth' | 'system' | 'off'; uiZoom: number | null; language: 'zh' | 'en'; theme: ThemeId; shortcuts: Partial<Record<'search' | 'addProject' | 'voice' | 'overview' | 'decisions' | 'explorer' | 'settings' | 'nextProject' | 'previousProject' | 'projectAbove' | 'projectBelow' | 'maximize' | 'fullscreen' | 'newTerminal' | 'removeProject', string>>; guideVersion: string; shell: 'powershell' | 'cmd' | 'bash' | 'zsh'; voiceModel: string };
@@ -251,6 +254,11 @@ type Bridge = {
   terminalConversationPage(id: string, request: { key: string; cursor?: string | null }): Promise<Result<ConversationPage>>;
   subagentFeed(terminalId: string, callId: string): Promise<Result<SubagentFeed>>;
   onSubagentFeed(listener: (event: SubagentFeedEvent) => void): () => void;
+  interveneAgent(terminalId: string, callId: string, text: string): Promise<Result<AgentIntervention>>;
+  stopAgent(terminalId: string, callId: string): Promise<Result<AgentIntervention>>;
+  // Main asks the window to send a message to the planner's own agent terminal (the normal send path), and is told the outcome.
+  onAgentRelay(listener: (relay: AgentRelay) => void): () => void;
+  agentRelayResult(id: number, error: string | null): Promise<Result<void>>;
   writeTerminal(id: string, data: string): void;
   writeApproval(id: string, key: string, stamp: ApprovalStamp, actionId: string): Promise<Result<ApprovalResult>>;
   answerTerminal(id: string, data: string): void;

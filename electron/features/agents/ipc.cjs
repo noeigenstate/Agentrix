@@ -1,4 +1,4 @@
-function registerAgentsIpc({ handle, agents, openExternal, getSession, findProject, listAgentCommands, readingPage, gradeDelivery, t }) {
+function registerAgentsIpc({ handle, agents, openExternal, getSession, findProject, listAgentCommands, readingPage, gradeDelivery, interventions, relayResult, t }) {
   handle('dashboard:grade', grade => {
     const project = findProject(grade?.terminalId);
     gradeDelivery(grade, project, getSession(grade.terminalId));
@@ -8,6 +8,9 @@ function registerAgentsIpc({ handle, agents, openExternal, getSession, findProje
   handle('agents:open-node', () => openExternal('https://nodejs.org/'));
   handle('terminal:actions', id => { findProject(id); return getSession(id)?.actions.list || []; });
   handle('terminal:conversation', id => { findProject(id); return getSession(id)?.conversation.snapshot() || []; });
+  handle('agents:intervene', (terminalId, callId, text) => interventions.interveneAgent(terminalId, callId, text));
+  handle('agents:stop', (terminalId, callId) => interventions.stopAgent(terminalId, callId));
+  handle('agents:relay-result', (id, error) => relayResult(id, error));
   handle('terminal:subagent-feed', (id, callId) => {
     if (typeof id !== 'string' || id.length > 160 || typeof callId !== 'string' || !/^(?:agent|dispatch):[\w-]{1,160}$/.test(callId)) throw new Error('无效的子代理对话请求。');
     const project = findProject(id), session = getSession(id);

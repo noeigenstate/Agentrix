@@ -5,10 +5,12 @@ Coordinates dispatched workers through shared project memory, roundtable records
 ## Owns
 - `electron/features/team/team.cjs`
 - `electron/features/team/minutes-page.cjs`
+- `electron/features/team/inbox.cjs`
 
 ## Interface
 - `projectTeam` (`electron/features/team/team.cjs`) — repository state, worker admission, context, meeting records, every-role end metadata, minutes with bounded latest issues snapshots and consolidation with validated incidents and findings
 - `minutesMarkdown` (`electron/features/team/team.cjs`) — two Markdown tables from the minutes-page data contract
+- `RunInbox` (`electron/features/team/inbox.cjs`) — a dispatched run's bounded owner inbox: incremental reads, atomic final closure; `queueControl` and `recordControl` serialize owner controls, their audit record and the planner's notification, rolling back when the planner's admission fails
 - `minutesPage` (`electron/features/team/minutes-page.cjs`) — a self-contained HTML document from the same minutes data
 
 ## May import

@@ -26,6 +26,7 @@ const { createGitRuntime } = require('./features/git/runtime.cjs');
 const { registerGitIpc } = require('./features/git/ipc.cjs');
 const { registerUpdatesIpc } = require('./features/updates/ipc.cjs');
 const { registerAgentsIpc } = require('./features/agents/ipc.cjs');
+const { createInterventions } = require('./features/agents/interventions.cjs');
 const { registerSkillsIpc } = require('./features/skills/ipc.cjs');
 const { SkillsStore } = require('./features/skills/store.cjs');
 const { nativeSkillActions } = require('./features/skills/native-actions.cjs');
@@ -516,6 +517,35 @@ function callsOf(s, project) {
     claudeHome: () => s.usageEnv?.CLAUDE_CONFIG_DIR || claudeConfigDir(),
     feedChanged: event => { if (sessions.get(s.terminalId) === s) send('terminal:subagent-feed', { terminalId: s.terminalId, ...event }); } });
 }
+// An owner intervention's target, from the call the terminal's own tracker holds: never from the renderer. The planner
+// binding is the terminal session together with its CLI conversation, so a replaced conversation is never written to.
+function resolveIntervention(terminalId, callId) {
+  const s = sessions.get(terminalId), project = store.findTerminal(terminalId)?.project, call = s?.calls?.byId(callId);
+  if (!s?.sessionId || !project || !call) return null;
+  return { terminalId, callId, parentSessionId: `${s.sessionId}:${s.claudeSessionId || s.rootThreadId || s.reportedThreadId || ''}`,
+    confirmed: !call.unconfirmed, done: !!call.done, title: call.title, route: call.dispatch ? 'dispatch' : 'parent', projectPath: project.path,
+    ...(call.dispatch ? { local: project.kind !== 'ssh', runId: callId.slice('dispatch:'.length), cwd: call.cwd } : {}) };
+}
+// The planner learns of every intervention as a message in its own terminal, sent by the window the way the owner's
+// messages are (queued while it works, never into a dialog). Resolves once the window accepted it.
+const relays = new Map();
+let relaySequence = 0;
+function sendParentPrompt(terminalId, text) {
+  const s = sessions.get(terminalId);
+  if (!s?.sessionId || !s.codexActive || !['claude', 'codex'].includes(s.agent)) return Promise.reject(new Error('规划员会话已变化，消息未发送。'));
+  return new Promise((resolve, reject) => {
+    const id = ++relaySequence, timer = setTimeout(() => { relays.delete(id); reject(new Error('无法把插话转给规划员。')); }, 15000);
+    relays.set(id, { resolve, reject, timer });
+    send('agents:relay', { id, terminalId, sessionId: s.sessionId, agent: s.agent, text });
+  });
+}
+function relayResult(id, error) {
+  const relay = relays.get(id);
+  if (!relay) return;
+  relays.delete(id); clearTimeout(relay.timer);
+  if (error) relay.reject(new Error(String(error).slice(0, 300))); else relay.resolve();
+}
+const interventions = createInterventions({ resolve: resolveIntervention, sendParentPrompt });
 // The dashboard's 正在运行 strip: every terminal's running sub-agents and dispatched workers, with their project.
 function syncDashboardLive() {
   dashboardWindow?.live([...sessions.values()].flatMap(s => (s.calls?.running() ?? []).map(call => ({ ...call, project: s.projectId ?? null }))));
@@ -1323,7 +1353,7 @@ function registerIpc() {
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
     gradeDelivery: (grade, project, session) => dashboard.grade(grade, project, session),
     readingPage: (id, request) => readingHistory.page(id, request.key, request.cursor),
-    listAgentCommands, t });
+    listAgentCommands, interventions, relayResult, t });
   registerSshIpc({ handle, getSSHInfo, sshAuth, addSSH: input => store.addSSH(input), hasSession: id => sessions.has(id), getSession: id => sessions.get(id),
     startTerminal, setStartupError: (id, message) => startupErrors.set(id, message), broadcast });
   updatesIpc = registerUpdatesIpc({ handle, updateManager, openExternal: url => shell.openExternal(url), getWindow: () => window, dialog, t,

@@ -11,12 +11,10 @@ the latest round, and the switch between reading and the raw terminal.
 - `ReadingView` (`src/features/reading/ReadingView.tsx`) — the reading view of one agent terminal; the file also exports Markdown, the renderer the review card and skill pane reuse
 - `ModeSwitch` (`src/features/reading/ModeSwitch.tsx`) — the title bar's reading / terminal switch for the terminal in use
 - `setReading` (`src/features/reading/reading-mode.ts`) — reading or raw terminal per terminal; the file also exports readingShown, syncReading and useTerminalChoice
-- `writeChoiceKeys` (`src/features/reading/choice-keys.ts`) — presses a choice by position; the file also exports selectedChoiceIndex and writeChoiceKeys
 - `hasCliInput` (`src/features/reading/cli-panel.ts`) — what the CLI's input line holds; the file also exports isAtPrompt, cliInputDraft and isCliIdle
 - `sameMessage` (`src/features/reading/pending-prompts.ts`) — whether a sent message is the one still in the CLI input
 - `lastRound` (`src/features/reading/result-round.ts`) — the latest round of a conversation; the file also exports CHECKS and changeLabel
 - `ConversationFeed` (`src/features/reading/ConversationFeed.tsx`) — grouped read-only messages and tool steps, independent of composer and terminal state; the reading view and the sub-agent split render with it
-- `terminalApprovalCopy` (`src/features/reading/approval-action.ts`) — the text that sends a screen permission request to its terminal
 - `FileCards` (`src/features/reading/FileCards.tsx`) — the preview cards of the files a reply names; the file also exports previewable
 - `replyFiles` (`src/features/reading/reply-files.ts`) — the local pictures, pages and videos a reply names
 

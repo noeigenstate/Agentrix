@@ -2125,5 +2125,19 @@
   "在终端中处理所有确认和问题": "Handle all confirmations and questions in the terminal",
   "请在终端中完成登录。": "Complete sign-in in the terminal.",
   "请先在终端中处理当前界面，再发送消息。": "Handle the current screen in the terminal before sending a message.",
-  "无效的子代理对话请求。": "Invalid sub-agent conversation request."
+  "无效的子代理对话请求。": "Invalid sub-agent conversation request.",
+  "无效的子代理。": "Invalid sub-agent.",
+  "插话须为 1 至 4000 个字符。": "Enter an intervention of 1–4000 characters.",
+  "子代理已结束或尚未就绪。": "The sub-agent has finished or is not ready.",
+  "规划员会话已变化，消息未发送。": "The planner session changed; the message was not sent.",
+  "此工作者的插话通道不可用。": "Interventions are unavailable for this worker.",
+  "无效的工作者消息。": "Invalid worker message.",
+  "无效的停止请求。": "Invalid stop request.",
+  "无效的工作者标识。": "Invalid worker ID.",
+  "工作者收件箱不可用。": "The worker inbox is unavailable.",
+  "工作者已结束或收件箱不可用。": "The worker has finished or its inbox is unavailable.",
+  "工作者收件箱已满，请稍后再试。": "The worker inbox is full. Try again later.",
+  "工作者收件箱含有未完成的消息。": "The worker inbox contains an incomplete message.",
+  "停下": "Stop",
+  "无法把插话转给规划员。": "The intervention could not be passed to the planner."
 }
