@@ -7,6 +7,7 @@ const { randomUUID } = require('node:crypto');
 const { spawn, execFileSync } = require('node:child_process');
 const { run, argumentsOf } = require('../integration/dispatch.cjs');
 const { projectTeam } = require('../electron/features/team/team.cjs');
+const { RunInbox } = require('../electron/features/team/inbox.cjs');
 const { createInterventions } = require('../electron/features/agents/interventions.cjs');
 const { createEventServer } = require('../electron/events.cjs');
 
@@ -133,6 +134,39 @@ test('default send leaves the child running and joins ordered messages in same-s
     assert.match(f.stdout(), /owner intervened 3/); assert.equal(f.team.live().length, 0);
     assert.equal(fs.readFileSync(f.out, 'utf8'), 'done 3');
   }
+});
+
+test('transient inbox polling errors leave the child running and retry the intervention without poisoning its result', async t => {
+  const f = await fixture(t), take = RunInbox.prototype.take;
+  let failures = 2;
+  t.mock.method(RunInbox.prototype, 'take', function (finish) {
+    if (this.id === f.id && failures) { failures--; throw Object.assign(new Error('synthetic transient inbox read'), { code: 'EIO' }); }
+    return take.call(this, finish);
+  });
+  await f.api.interveneAgent('terminal', f.target.callId, 'Deliver after the transient read.');
+  await until(() => failures === 0);
+  assert.equal(f.children[0].exitCode, null); assert.equal(f.children[0].signalCode, null);
+  assert.equal(f.captures().length, 1);
+  await until(() => f.stdout().includes('Deliver after the transient read.'));
+  f.release(1); await until(() => f.captures().length === 2);
+  assert.match(f.captures()[1].brief, /Deliver after the transient read\./);
+  f.release(2); assert.equal(await f.result, 0);
+  assert.match(f.stdout(), /reason exit/); assert.match(f.stdout(), /owner intervened 1/);
+  assert.doesNotMatch(f.stdout(), /stop requested|reason error|owner stopped/);
+});
+
+test('a failed final empty check reports an error only after the worker exits without killing it or resuming', async t => {
+  const f = await fixture(t), take = RunInbox.prototype.take;
+  let finalChecks = 0;
+  t.mock.method(RunInbox.prototype, 'take', function (finish) {
+    if (this.id === f.id && finish) { finalChecks++; throw new Error('synthetic final empty-check failure'); }
+    return take.call(this, finish);
+  });
+  assert.equal(f.children[0].exitCode, null); f.release(1);
+  assert.equal(await f.result, 1); assert.equal(finalChecks, 1);
+  assert.equal(f.children[0].exitCode, 0); assert.equal(f.children[0].signalCode, null);
+  assert.equal(f.captures().length, 1); assert.match(f.stdout(), /reason error/);
+  assert.doesNotMatch(f.stdout(), /stop requested|owner stopped/);
 });
 
 test('explicit stop terminates the old process tree before resuming queued work', async t => {

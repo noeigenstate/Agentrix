@@ -4,6 +4,7 @@ const path = require('node:path');
 const MAX_INBOX = 4 * 1024 * 1024;
 const runId = value => typeof value === 'string' && /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(value);
 const validText = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 4000 && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value);
+const withdrawalOf = control => ({ id: control.id, type: 'withdrawn', at: control.at });
 const inside = (root, file) => { const relative = path.relative(root, file); return relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative); };
 
 function controlOf(value) {
@@ -39,14 +40,15 @@ function updateWorker(team, id, patch) {
 }
 
 // Both producers and the helper's final empty check hold the team lock. A successful receipt therefore cannot race
-// past finalization. Roll back the append if the original planner cannot accept its notification.
+// past finalization. Publish to the inbox only after the original planner accepts its notification.
 async function queueControl(team, id, input, notify = () => {}) {
   const control = controlOf(input);
   return team.locked(async () => {
     const worker = team.live().find(entry => entry.id === id);
     if (!worker?.controls || worker.closing) throw new Error('工作者已结束或收件箱不可用。');
     const file = inboxFile(team, id), size = fs.statSync(file).size;
-    if (size + Buffer.byteLength(JSON.stringify(control)) + 1 > MAX_INBOX) throw new Error('工作者收件箱已满，请稍后再试。');
+    const bytes = Buffer.byteLength(JSON.stringify(control)) + 1, rollbackBytes = Buffer.byteLength(JSON.stringify(withdrawalOf(control))) + 2;
+    if (size + bytes + rollbackBytes > MAX_INBOX) throw new Error('工作者收件箱已满，请稍后再试。');
     if (control.noResume) updateWorker(team, id, { closing: true });
     try { return await recordControl(team, id, worker.title, control, notify, file); }
     catch (error) { if (control.noResume) updateWorker(team, id, { closing: false }); throw error; }
@@ -54,21 +56,28 @@ async function queueControl(team, id, input, notify = () => {}) {
 }
 
 async function recordControl(team, id, title, control, notify = () => {}, inbox) {
-  const files = [inbox, team.memory, team.journal].filter(Boolean), sizes = files.map(file => fs.statSync(file, { throwIfNoEntry: false })?.size ?? 0);
+  const files = [inbox, team.memory, team.journal].filter(Boolean);
   const root = fs.realpathSync(team.directory);
   for (const file of files) {
     const stat = fs.lstatSync(file, { throwIfNoEntry: false });
     if (stat && (!stat.isFile() || stat.nlink !== 1 || !inside(root, fs.realpathSync(file)))) throw new Error('工作者收件箱不可用。');
   }
+  const kind = control.type === 'stop' ? 'stop' : 'intervention';
+  let inboxAttempted = false;
   try {
-    if (inbox) fs.appendFileSync(inbox, JSON.stringify(control) + '\n');
-    const kind = control.type === 'stop' ? 'stop' : 'intervention';
     fs.appendFileSync(team.memory, `\n\n### ${new Date(control.at).toISOString()} · owner ${kind} · ${String(title).replace(/[\r\n]/g, ' ')}\n\n${JSON.stringify({ ...control, id, messageId: control.id })}\n`);
     team.append({ ...control, type: kind, id, messageId: control.id });
     await notify();
+    if (inbox) { inboxAttempted = true; fs.appendFileSync(inbox, JSON.stringify(control) + '\n'); }
     return control;
   } catch (error) {
-    for (const [index, file] of files.entries()) if (fs.existsSync(file)) fs.truncateSync(file, sizes[index]);
+    // Memory has unlocked writers, and a helper may already hold an offset. Never truncate their appends.
+    const withdrawn = withdrawalOf(control);
+    if (inboxAttempted) {
+      try { fs.appendFileSync(inbox, '\n' + JSON.stringify(withdrawn) + '\n'); } catch {}
+    }
+    try { fs.appendFileSync(team.memory, `\n\n### ${new Date(control.at).toISOString()} · owner ${kind} withdrawn\n\n${JSON.stringify({ ...withdrawn, id, messageId: control.id })}\n`); } catch {}
+    try { fs.appendFileSync(team.journal, '\n'); team.append({ ...withdrawn, id, messageId: control.id }); } catch {}
     throw error;
   }
 }
@@ -95,21 +104,26 @@ class RunInbox {
         data = data.subarray(0, bytes);
       } finally { fs.closeSync(fd); }
       const end = data.lastIndexOf(10);
-      const messages = [];
+      const messages = [], withdrawn = new Set();
       if (end >= 0) {
         for (const line of data.subarray(0, end + 1).toString('utf8').split('\n').filter(Boolean)) {
           let control;
-          try { control = controlOf(JSON.parse(line)); } catch { continue; }
+          try {
+            const value = JSON.parse(line);
+            if (value?.type === 'withdrawn' && runId(value.id)) { withdrawn.add(value.id); this.seen.add(value.id); continue; }
+            control = controlOf(value);
+          } catch { continue; }
           if (!this.seen.has(control.id)) { this.seen.add(control.id); messages.push(control); }
         }
         this.offset += end + 1;
       }
-      if (finishIfEmpty && !messages.length) {
+      const accepted = messages.filter(control => !withdrawn.has(control.id));
+      if (finishIfEmpty && !accepted.length) {
         // A partial external write is not an accepted API message; do not silently close over it.
         if (data.length !== end + 1) throw new Error('工作者收件箱含有未完成的消息。');
         updateWorker(this.team, this.id, { closing: true });
       }
-      return messages;
+      return accepted;
     });
   }
   async close() {
