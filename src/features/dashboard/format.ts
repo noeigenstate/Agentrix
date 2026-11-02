@@ -57,17 +57,19 @@ export function clock(ms: number | null) {
 
 const capital = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 const CLAUDE = /^claude-([a-z]+)-(\d+)-(\d+)$/, GPT = /^gpt-[\d.]+-([a-z]+)$/;
+// The names Claude Code accepts for a model it resolves itself ("sonnet"): the same model as its full id.
+export const ALIAS = /^(opus|sonnet|haiku|fable)$/i;
 
-// "claude-opus-5-5" is Opus, "gpt-6.1-sol" is Sol; an id in neither shape stands for itself.
+// "claude-opus-5-5" and the alias "opus" are Opus, "gpt-6.1-sol" is Sol; an id in none of these shapes stands for itself.
 export function modelShort(model: string) {
-  const name = CLAUDE.exec(model)?.[1] ?? GPT.exec(model)?.[1];
-  return name ? capital(name) : model;
+  const name = CLAUDE.exec(model)?.[1] ?? GPT.exec(model)?.[1] ?? ALIAS.exec(model)?.[1];
+  return name ? capital(name.toLowerCase()) : model;
 }
 
 export function modelLabel(model: string) {
   const claude = CLAUDE.exec(model);
   if (claude) return `${capital(claude[1])} ${claude[2]}.${claude[3]}`;
-  return GPT.test(model) ? `${modelShort(model)} · ${model}` : model;
+  return GPT.test(model) ? `${modelShort(model)} · ${model}` : modelShort(model);
 }
 
 export function kindLabel(kind: string) {

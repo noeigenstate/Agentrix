@@ -1,7 +1,7 @@
 // The dashboard's chart arithmetic: how a model is told apart, which days a series covers, and where things go on a plot.
 // Pure, so the SVG components only draw.
 import type { DashboardDailyPoint, DashboardKindRate, DashboardSpeedPoint, DashboardSummary } from '../../shared/dashboard-types';
-import { modelShort } from './format';
+import { ALIAS, modelShort } from './format';
 
 export type Shape = 'circle' | 'square' | 'diamond' | 'triangle' | 'inverted' | 'hexagon';
 export const SHAPES: readonly Shape[] = ['circle', 'square', 'diamond', 'triangle', 'inverted', 'hexagon'];
@@ -10,18 +10,30 @@ export const SHAPES: readonly Shape[] = ['circle', 'square', 'diamond', 'triangl
 export const PALETTE = 6;
 const KNOWN = ['opus', 'sonnet', 'sol', 'terra', 'haiku', 'luna'];
 
-export type Look = { slot: number; colour: number; shape: Shape };
+// neutral: the look of what the records do not name, so it is never mistaken for a model's colour.
+export type Look = { slot: number; colour: number; shape: Shape; neutral?: true };
 export const lookOf = (slot: number): Look => ({ slot, colour: slot % PALETTE, shape: SHAPES[(slot + Math.floor(slot / PALETTE)) % SHAPES.length] });
 
-// One look per model for the whole page: every chart, the key and the tables read the same map.
+// The model the records do not name ("unreported" in the summary) is drawn grey, outside the palette.
+export const UNREPORTED = 'unreported';
+export const NEUTRAL: Look = { slot: -1, colour: -1, shape: 'circle', neutral: true };
+
+// One look per model for the whole page: every chart, the key and the tables read the same map. An alias ("sonnet") takes the look of the full id
+// of the same model when the page has one, so one model never shows as two.
 export function modelLooks(models: Iterable<string>) {
-  const looks = new Map<string, Look>(), taken = new Set<number>();
+  const looks = new Map<string, Look>(), taken = new Set<number>(), all = [...new Set(models)].sort();
   let next = KNOWN.length;
-  for (const model of [...new Set(models)].sort()) {
+  const fresh = (model: string) => {
     const known = KNOWN.indexOf(modelShort(model).toLowerCase()), slot = known >= 0 && !taken.has(known) ? known : next++;
     taken.add(slot);
-    looks.set(model, lookOf(slot));
+    return lookOf(slot);
+  };
+  for (const model of all.filter(model => model !== UNREPORTED && !ALIAS.test(model))) looks.set(model, fresh(model));
+  for (const alias of all.filter(model => ALIAS.test(model))) {
+    const twin = all.find(model => model !== alias && !ALIAS.test(model) && modelShort(model) === modelShort(alias));
+    looks.set(alias, twin ? looks.get(twin)! : fresh(alias));
   }
+  if (all.includes(UNREPORTED)) looks.set(UNREPORTED, NEUTRAL);
   return looks;
 }
 
@@ -48,6 +60,19 @@ export function spreadLabels(ys: number[], gap: number, low: number, high: numbe
   for (let i = placed.length - 1; i >= 0; i--) placed[i] = Math.min(placed[i], i === placed.length - 1 ? high : placed[i + 1] - gap);
   const result: number[] = [];
   order.forEach((item, i) => { result[item.index] = placed[i]; });
+  return result;
+}
+
+// The same for labels beside points: only points whose labels could meet (their x within `reach`, chained left to right) are spread, the rest keep their y.
+export function spreadNearby(points: { x: number; y: number }[], reach: number, gap: number, low: number, high: number) {
+  const order = points.map((point, index) => ({ ...point, index })).sort((a, b) => a.x - b.x), result: number[] = [];
+  for (let start = 0; start < order.length;) {
+    let end = start + 1;
+    while (end < order.length && order[end].x - order[end - 1].x < reach) end++;
+    const group = order.slice(start, end), ys = spreadLabels(group.map(item => item.y), gap, low, high);
+    group.forEach((item, i) => { result[item.index] = group.length > 1 ? ys[i] : item.y; });
+    start = end;
+  }
   return result;
 }
 

@@ -241,9 +241,11 @@ test('Escape inside the message box leaves the box with the typed word kept; Esc
 test('a finished Task subagent (reviewing, with an end time) takes no word, keeps the time it took and says it is done', () => zh(() => {
   const html = paneMarkup(ok({ state: 'reviewing', startedAt: 1000, endedAt: 66_000 }));
   assert.match(html, /<textarea[^>]*disabled/); assert.match(html, /它已结束或不可用，不能再发消息/);
-  assert.match(html, /subagent-state is-done">审核中</); assert.match(html, /<span class="subagent-elapsed" title="用时">1:05<\/span>/, 'the clock stopped at the end');
+  assert.match(html, /subagent-state is-done">已完成</, 'the header agrees with the footer: the end time decides, not the feed state'); assert.doesNotMatch(html, /审核中/);
+  assert.match(html, /<span class="subagent-elapsed" title="用时">1:05<\/span>/, 'the clock stopped at the end');
   assert.match(html, /只读 · 已完成，分屏保留到你关闭/);
-  assert.doesNotMatch(paneMarkup(ok({ state: 'reviewing', endedAt: null })), /<textarea[^>]*disabled/, 'a reviewer still at work can be told something');
+  const reviewing = paneMarkup(ok({ state: 'reviewing', endedAt: null }));
+  assert.doesNotMatch(reviewing, /<textarea[^>]*disabled/, 'a reviewer still at work can be told something'); assert.match(reviewing, /subagent-state is-reviewing">审核中</);
 }));
 
 test('a word to a dispatched worker is delivered once its resumed transcript carries it; a parent relay and a word not yet seen stay queued', () => {
@@ -391,6 +393,12 @@ test('an open view makes its row pressed and the hint offers to close it; a clic
 
 // ---- the terminal grid ----------------------------------------------------------------------------------------------------------
 const terminal = id => ({ id, title: id, sessionId: `s-${id}`, status: 'running', codexActive: true, agent: 'claude', readingHistory: false });
+test('a viewable row is a plain row with one full-width button: the row has a single column, so the button never lands in the 16px icon column', () => {
+  const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
+  assert.match(css, /\.activity-call-rows li:has\(> \.activity-call-open\) \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(css, /\.activity-call-rows li > \.activity-call-open \{ display: grid; grid-template-columns: 16px minmax\(0, 1fr\) auto;/, 'the button carries the same 16 | text | state grid inside');
+});
+
 const gridMarkup = (terminals, focused) => renderToStaticMarkup(React.createElement(load('features/terminal/ProjectTerminals.tsx').ProjectTerminals, {
   project: { id: 'p1', name: 'Project', kind: 'local', terminals }, focused, fontSize: 14, activeId: terminals[0].id, setActiveId() {}, onExpand() {}, onAction: async () => undefined, onError() {}, onOpenLink() {} }));
 
@@ -412,7 +420,9 @@ test('open views take cells of the expanded grid after the terminals, are not te
   assert.deepEqual([...gridMarkup(one, true).matchAll(/data-call="([^"]+)"/g)].map(match => match[1]), ['agent:b', 'agent:c'], 'a third view replaces the oldest');
   assert.equal(count(gridMarkup(one, false), /subagent-/g), 0, 'a small card shows no views');
   assert.doesNotMatch(gridMarkup(one, false), /has-splits/);
+  assert.doesNotMatch(single, /has-terminals/, 'a lone conversation beside views is not picked out by the active-split edge');
   const two = gridMarkup([terminal('t-grid'), terminal('t-grid-2')], true);
+  assert.match(two, /has-terminals/, 'with several terminals the one in use is');
   assert.match(two, /terminal-split-tools/, 'with several terminals the terminals keep their own tools'); assert.doesNotMatch(two, /grid-row/);
   s.limitSplits('t-grid', 0);
 }));

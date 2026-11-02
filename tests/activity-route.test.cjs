@@ -260,6 +260,7 @@ test('unknown round and conversation totals explain earlier history when context
     }
     const empty = activityMarkup([], language, { agentUsage: { limits: [], context: null, round: null, total: null } });
     assert.ok(empty.includes(first));
+    assert.ok(empty.includes(`<div class="activity-metric activity-tokens"><span class="activity-metric-label">`), 'the empty context hint sits on the label line, not stacked under it');
     assert.ok(!empty.includes(roundNote)); assert.ok(!empty.includes(totalNote));
   }
 });

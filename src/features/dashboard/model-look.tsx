@@ -14,7 +14,9 @@ export function useModels() {
     focus,
     of(model: string): ModelStyle {
       const look = looks.get(model) ?? modelLooks([model]).get(model) ?? lookOf(0);
-      return { look, colour: `var(--m-${look.colour})`, dim: focus !== null && focus !== model ? 'dim' : '' };
+      // An alias shares its model's look, so the highlight follows the look, not the spelling.
+      const dim = focus !== null && focus !== model && look.slot !== (looks.get(focus) ?? modelLooks([focus]).get(focus))?.slot;
+      return { look, colour: look.neutral ? 'var(--text-3)' : `var(--m-${look.colour})`, dim: dim ? 'dim' : '' };
     },
   };
 }

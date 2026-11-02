@@ -144,6 +144,7 @@ svg.chart text.end { fill: var(--text-1); font-weight: 600; }
 .chart .hit { fill: transparent; }
 .chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .chart .marker { stroke: var(--bg-card); stroke-width: 1; }
+.chart .leader { stroke: var(--text-3); stroke-width: 1; }
 .chart .bubble { stroke: var(--bg-card); stroke-width: 2; }
 .donut { display: grid; grid-template-columns: 144px minmax(0, 1fr); align-items: center; gap: 24px; }
 .donut svg text.centre { fill: var(--text-1); font-size: 16px; font-weight: 600; }

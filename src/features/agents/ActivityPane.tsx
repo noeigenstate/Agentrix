@@ -190,7 +190,7 @@ function ContextCard({ usage }: { usage: AgentUsage | null | undefined }) {
       meterLabel={t('上下文已用 {percent}%', { percent })} title={`${exactCount(context.used)} / ${exactCount(context.window)} tokens`}
       note={windowKnown ? t('共 {window} tokens · 还可容纳 {count}', { window: tokenCount(context.window), count: tokenCount(Math.max(0, context.window - context.used)) })
         : t('已用 {count} tokens，窗口大小未知', { count: tokenCount(context.used) })} />
-      : <Metric label={t('上下文长度')} note={t('第一次回复后显示。')} />}
+      : <Metric className="activity-tokens" label={t('上下文长度')} note={t('第一次回复后显示。')} />}
   </section>;
 }
 
