@@ -13,17 +13,14 @@ const { testResult: tap } = require('../grading.cjs');
 const { prepareWorktree, initBaseline, validateLinks } = require('../workspace.cjs');
 
 // The owner's revision as a private workspace in directory/worktree: an archive, its dependencies and a fresh baseline.
-const snapshot = (projectPath, directory, revision, { signal, electronDist = false } = {}) =>
-  prepareWorktree(projectPath, directory, { base: revision }, signal, { electronDist });
+const snapshot = (projectPath, directory, revision, { signal, electronDist = false, exclude = [] } = {}) =>
+  prepareWorktree(projectPath, directory, { base: revision }, signal, { electronDist, exclude });
 
 // A folder the provider filled (a checkout without .git, an unpacked task) as a workspace: every file outside exclude
-// (top-level names such as a venv, kept out of git) becomes the baseline.
+// (workspace-relative folders such as a venv, kept out of git) becomes the baseline.
 async function files(cwd, { signal, exclude = [] } = {}) {
-  const real = await fs.realpath(cwd);
-  await validateLinks(real);
-  const names = (await fs.readdir(real, { recursive: true, withFileTypes: true })).filter(entry => !entry.isDirectory())
-    .map(entry => path.relative(real, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'))
-    .filter(file => !exclude.some(name => file === name || file.startsWith(name + '/')));
+  const real = await fs.realpath(cwd), names = [];
+  await validateLinks(real, real, { exclude, signal, onFile: file => names.push(file) });
   if (names.some(file => !safePath(file))) throw new Error('The workspace contains an unsafe path.');
   const baseline = await initBaseline(real, names, signal, { exclude });
   return { cwd: real, baseline, real, gitDirectory: path.join(real, '.git'), files: names };
