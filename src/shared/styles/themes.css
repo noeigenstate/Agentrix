@@ -66,7 +66,7 @@
    input (#fafafb, bordered by #e4e7eb). The input colour is a field's and nothing else: a quiet well (a code block, a tag, a goal, a file card, a theme option) takes the hover grey #f3f5f7,
    which is also the user's message and a tool group in every layout (--flow-card), with the selected grey for the chips inside them. A hovered well steps to the selected grey. */
 :root[data-theme="light"] .app-shell:not(.focus-mode) .project-panel, :root[data-theme="light"] .home-layer .decision-card { box-sizing: border-box; border: 1px solid var(--border); }
-:root[data-theme="light"] .reading-view { --flow-card: var(--bg-hover); --flow-inset: var(--bg-selected); }
+:root[data-theme="light"] :is(.reading-view, .conversation-feed) { --flow-card: var(--bg-hover); --flow-inset: var(--bg-selected); }
 :root[data-theme="light"] .reading-tools-head:hover { background: var(--bg-selected); }
 :root[data-theme="light"] :is(.markdown-body blockquote, .markdown-body pre, .markdown-body th, .git-diff-note, .editor-message, .workspace-warning, .home-notice) { background: var(--bg-hover); }
 /* The wells that paint --bg-input take the hover grey here by redefining the token for themselves, so their own hover, picked and answered states keep working. */

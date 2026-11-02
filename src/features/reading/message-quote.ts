@@ -22,6 +22,15 @@ export function quoteExcerpt(text: string): string {
   return cut ? `${excerpt}…` : excerpt;
 }
 
+// The excerpt as one plain line for the chip: block markers (heading, list, quote), code ticks, emphasis and link syntax
+// dropped, the lines joined with a space. The chip's own ellipsis cuts what does not fit.
+export function plainExcerpt(excerpt: string): string {
+  return excerpt.split('\n')
+    .map(line => line.replace(/^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)+/, '')
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/(\*\*|__|~~|[`*])/g, '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean).join(' ');
+}
+
 // Only an ordinary message carries a quote: a slash command or shell line is typed as it is and keeps the quote for the next one.
 export const withQuote = (excerpt: string | undefined, text: string) =>
   excerpt ? `${excerpt.split('\n').map(line => `> ${line}`).join('\n')}\n\n${text}` : text;

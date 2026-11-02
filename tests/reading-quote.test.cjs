@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { QUOTE_LINES, QUOTE_CHARS, splitQuote, quoteExcerpt, withQuote } = require('../src/features/reading/message-quote.ts');
+const { QUOTE_LINES, QUOTE_CHARS, splitQuote, quoteExcerpt, plainExcerpt, withQuote } = require('../src/features/reading/message-quote.ts');
 
 // The rendering and send-flow tests of quotes sit beside the harnesses they use, in reading-ui.test.cjs.
 
@@ -50,4 +50,22 @@ test('the quote styles use theme tokens and the spacing scale only', () => {
   const scale = new Set([0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64]);
   const spacing = [...css.matchAll(/(?:padding|margin|gap|top|right|left|bottom)[a-z-]*:\s*([^;}]+)/g)].flatMap(match => match[1].match(/-?\d+(?:\.\d+)?px/g) ?? []);
   for (const value of spacing) assert.ok(scale.has(Math.abs(parseFloat(value))), `${value} is off the spacing scale`);
+});
+
+test('the chip shows the excerpt as one clean line: Markdown markers dropped, lists and lines joined', () => {
+  assert.equal(plainExcerpt('我读了 `parser.cjs`，问题出在分块读取：\n1. 读到半行时没有保留偏移量；\n2. 文件末尾没有换行。'),
+    '我读了 parser.cjs，问题出在分块读取： 读到半行时没有保留偏移量； 文件末尾没有换行。');
+  assert.equal(plainExcerpt('## Title\n- **bold** and *it* and ~~gone~~\n> quoted\n[a link](https://x.y/z) end'), 'Title bold and it and gone quoted a link end');
+  assert.equal(plainExcerpt('3) third\n+ plus item'), 'third plus item');
+  assert.equal(plainExcerpt('snake_case stays'), 'snake_case stays', 'single underscores are words, not emphasis');
+  assert.equal(plainExcerpt('a…'), 'a…'); assert.equal(plainExcerpt(''), '');
+});
+
+test('the quote block is laid out by the Markdown renderer and the chip is one line with an ellipsis', () => {
+  const read = file => fs.readFileSync(path.join(__dirname, '../src/features/reading', file), 'utf8');
+  const css = read('reading-quote.css');
+  assert.doesNotMatch(/\.reading-user-quote \{[^}]*\}/.exec(css)[0], /pre-wrap/, 'not raw pre-wrapped text');
+  assert.match(css, /\.reading-quote > span \{[^}]*white-space: nowrap/); assert.match(css, /\.reading-quote > span \{[^}]*text-overflow: ellipsis/);
+  assert.match(read('PendingPromptEntries.tsx'), /<blockquote className="reading-user-quote"><Markdown text=\{quote\} \/><\/blockquote>/);
+  assert.match(read('ReadingQuote.tsx'), /plainExcerpt\(quote\.excerpt\)/);
 });

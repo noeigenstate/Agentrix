@@ -13,4 +13,5 @@
 .reading-quote .icon-button { width: 24px; height: 24px; }
 
 /* A quote inside a sent message: the lines it quoted, set apart by a rule at their side. */
-.reading-user-quote { margin: 0; padding: 0 0 0 12px; border-left: 2px solid var(--border); color: var(--text-2); font-size: calc(12px * var(--reading-text)); white-space: pre-wrap; overflow-wrap: anywhere; }
+.reading-user-quote { margin: 0; padding: 0 0 0 12px; border-left: 2px solid var(--border); color: var(--text-2); font-size: calc(12px * var(--reading-text)); overflow-wrap: anywhere; }
+.reading-user-quote .reading-markdown p { margin: 0; }
