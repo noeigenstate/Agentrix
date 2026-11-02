@@ -175,7 +175,8 @@ test('explicit stop terminates the old process tree before resuming queued work'
   await f.api.interveneAgent('terminal', f.target.callId, 'Change the conflicting approach.');
   await f.api.stopAgent('terminal', f.target.callId);
   await until(() => f.captures().length === 2);
-  assert.notEqual(f.children[0].exitCode, null);
+  // A signal-terminated POSIX child has signalCode set and exitCode null.
+  assert.notEqual(f.children[0].exitCode ?? f.children[0].signalCode, null, 'old worker must exit before resume');
   const beat = fs.readFileSync(path.join(f.root, 'heartbeat'), 'utf8'); await pause(150);
   assert.equal(fs.readFileSync(path.join(f.root, 'heartbeat'), 'utf8'), beat, 'old descendant cannot keep working after resume');
   f.release(2); assert.equal(await f.result, 0);
