@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react';
 import { ArrowDown, Image as ImageIcon, PaperPlaneRight, Stop } from '@phosphor-icons/react';
 import type { AgentCommand, ProjectTerminal } from '../../shared/types';
 import { actionText } from '../agents/action-text';
@@ -526,20 +526,20 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   </>;
   const lastBlock = grouped.at(-1);
   const statusInTurn = !!lastBlock && (lastBlock.kind === 'tools' || lastBlock.entry.role !== 'user') && pending.every(queued);
-  let body: ReactNode;
-  if (terminal.agentCommand) body = <AgentCommandRun agent={kind} command={terminal.agentCommand} rows={visibleScreen?.rows ?? []} onShowTerminal={onShowTerminal} />;
-  else if (!entries.length && !cards.prompts.length) body = <ReadingWelcome agent={kind} commands={commands} complete={complete} disabled={inputBlocked} screen={screen} starting={welcomeIsStarting} />;
-  else body = <>
+  const afterFeed = <><PendingPromptEntries prompts={cards.prompts} queued={queued} undelivered={undelivered} onResend={resend} onDiscard={prompt => cancelEcho(prompt.id)} />
+    {status && !statusInTurn && <TimelineStep at={pending.at(-1)?.at ?? entries.at(-1)?.at} kind="agent" who={agent} state={statusRunning ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}</>;
+  const beforeFeed = terminal.agentCommand ? <AgentCommandRun agent={kind} command={terminal.agentCommand} rows={visibleScreen?.rows ?? []} onShowTerminal={onShowTerminal} />
+    : !entries.length && !cards.prompts.length ? <ReadingWelcome agent={kind} commands={commands} complete={complete} disabled={inputBlocked} screen={screen} starting={welcomeIsStarting} /> : <>
     {tail.hasEarlier && <button type="button" className="text-button reading-earlier" disabled={historyPage.loading} onClick={() => void tail.showEarlier()}>{historyPage.paged ? t('显示更早的对话') : t('显示更早的对话（{count}）', { count: tail.earlier })}</button>}
-    {historyPage.error && <p role="status">{t(historyPage.error)}</p>}
-    <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: statusRunning, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions, quote: { disabled: inputBlocked ? t('输入框暂时不可用，等它可用后再引用') : null, pick: quoteMessage } }}>
-      <ConversationFeed entries={entries} agent={kind} projectId={projectId} live={!settled} onError={onError} onOpenLink={onOpenLink} />
-    </ConversationDecorations.Provider>
-  </>;
+    {historyPage.error && <p role="status">{t(historyPage.error)}</p>}</>;
+  const body = <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: statusRunning, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
+    quote: { disabled: inputBlocked ? t('输入框暂时不可用，等它可用后再引用') : null, pick: quoteMessage },
+    frame: { ref: content, style: { visibility: entries.length && !ready ? 'hidden' : undefined }, before: beforeFeed } }}>
+      <ConversationFeed entries={terminal.agentCommand ? [] : entries} agent={kind} projectId={projectId} live={!settled} onError={onError} onOpenLink={onOpenLink}>{afterFeed}</ConversationFeed>
+    </ConversationDecorations.Provider>;
   return <div className="reading-view" data-agent={kind} ref={readingView}>
     <div className="reading-scroll-area">
-      <div className="reading-scroll" ref={scroller} tabIndex={0}><div className="reading-content" ref={content} style={{ visibility: entries.length && !ready ? 'hidden' : undefined }}>{body}<PendingPromptEntries prompts={cards.prompts} queued={queued} undelivered={undelivered} onResend={resend} onDiscard={prompt => cancelEcho(prompt.id)} />
-        {status && !statusInTurn && <TimelineStep at={pending.at(-1)?.at ?? entries.at(-1)?.at} kind="agent" who={agent} state={statusRunning ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}</div></div>
+      <div className="reading-scroll" ref={scroller} tabIndex={0}>{body}</div>
       {!stuck && <div className="reading-latest">
         {unseen > 0 && <span className="reading-unseen" role="status">{t('{count} 条新消息', { count: unseen })}</span>}
         <button type="button" className="icon-button reading-jump" title={t('跳到最新消息')} aria-label={t('跳到最新消息')} onClick={() => toBottom('smooth')}><ArrowDown size={18} /></button>

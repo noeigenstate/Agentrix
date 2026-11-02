@@ -1,9 +1,9 @@
-import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useRef, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { isMac } from '../../shared/platform';
 import { revealPathClick } from './reading-paths';
 
-export function useReadingPaths(projectId: string, onError: (message: string) => void) {
-  const ref = useRef<HTMLDivElement>(null);
+export function useReadingPaths(projectId: string, onError: (message: string) => void, container?: RefObject<HTMLDivElement | null>) {
+  const ownRef = useRef<HTMLDivElement>(null), ref = container ?? ownRef;
   const down = useRef<{ x: number; y: number } | null>(null);
   const held = (event: { metaKey: boolean; ctrlKey: boolean }) => isMac ? event.metaKey : event.ctrlKey;
   useEffect(() => {

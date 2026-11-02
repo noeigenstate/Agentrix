@@ -12,14 +12,14 @@ import { setMode } from './mode-switch.mjs';
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
 const { hasCliInput, isCliIdle, cliInputDraft } = require('../src/features/reading/cli-panel.ts');
-const fixtureIdle = rows => {
-  const screen = parseAgentScreen('claude', rows);
-  return hasCliInput('claude', rows, screen) && isCliIdle('claude', rows, screen) && cliInputDraft('claude', rows, screen) === '';
+const fixtureIdle = (rows, agent = 'claude') => {
+  const screen = parseAgentScreen(agent, rows);
+  return hasCliInput(agent, rows, screen) && isCliIdle(agent, rows, screen) && cliInputDraft(agent, rows, screen) === '';
 };
-const waitForFixtureIdle = async (readRows, label) => {
+const waitForFixtureIdle = async (readRows, label, agent = 'claude') => {
   let emptySince;
   await waitFor(async () => {
-    if (!fixtureIdle(await readRows())) { emptySince = undefined; return false; }
+    if (!fixtureIdle(await readRows(), agent)) { emptySince = undefined; return false; }
     emptySince ??= Date.now();
     // Let the isolated shell finish redrawing before this script starts its next action.
     return Date.now() - emptySince >= 600;
@@ -94,7 +94,7 @@ try {
   checks.push('Claude limits: cache replacement pushes to the activity pane without /usage; older snapshots lose and background reads never rearm completion');
   // Draw the stand-in CLI's input; the popup shows its actual xterm output.
   const idle = "Clear-Host; Show-ReadingFixtureInput\r";
-  const renderIdle = async label => { await write(idle); await waitForFixtureIdle(physicalRows, label); };
+  const renderIdle = async (label, agent = 'claude') => { await write(idle); await waitForFixtureIdle(physicalRows, label, agent); };
   await renderIdle('initial idle');
   // Leave the first plain shell selected before it becomes hidden, so header actions must choose the visible agent.
   await plain.locator('.xterm-helper-textarea').focus();
@@ -337,8 +337,12 @@ try {
   } finally {
     await app.evaluate(({ shell }) => { shell.showItemInFolder = globalThis.originalReadingShowItem; shell.openPath = globalThis.originalReadingOpenPath; });
   }
-  await write("Send-AgentrixEvent 'codex-started' -Agent 'codex'\r");
+  // Switching providers must switch its input frame too: a Claude box cannot enable a Codex composer.
+  await write("function global:Show-ReadingFixtureInput { Write-Host '› '; Write-Host ''; Write-Host 'gpt-6.1-sol · high · 100% context left'; $global:ReadingFixtureInputRow = [Console]::CursorTop - 3 }; Send-AgentrixEvent 'codex-started' -Agent 'codex'\r");
   await waitFor(async () => (await state()).agent === 'codex', 'fixture agent changes');
+  await renderIdle('Codex idle input', 'codex');
+  // A settled provider redraw may have opened the terminal; returning to idle still needs the owner's close.
+  if (await popup.count()) await closePopup();
   await composer.fill('/a'); await composer.fill('/');
   await palette.getByRole('option').filter({ has: page.getByText('/plan', { exact: true }) }).waitFor();
   assert.equal(await palette.getByRole('option').filter({ hasText: '/fix-issue' }).count(), 0, 'agent change reloads commands');
@@ -354,7 +358,7 @@ try {
   await resetWrites(); await page.keyboard.press('Enter'); await page.waitForTimeout(150);
   assert.deepEqual(await writes(), [], 'the Enter meant for the message answers nothing');
   assert.equal(await page.locator('.reading-choice-option, .native-question').count(), 0);
-  await renderIdle('typing confirmation ended'); await closePopup();
+  await renderIdle('typing confirmation ended', 'codex'); await closePopup();
   checks.push('a confirmation arriving while typing opens a terminal without focusing it or answering');
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, checks, errors, targeting: { plainTerminalId: project.id, plainSession, agentTerminalId: terminalId, commandTargets } }, null, 2));
