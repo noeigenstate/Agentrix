@@ -96,9 +96,6 @@ contextBridge.exposeInMainWorld('agentrix', {
   writeTerminal: (id, data) => ipcRenderer.send('terminal:write', id, data),
   // Compatibility endpoint for retained cards; main always returns terminal-only and never writes keys.
   writeApproval: (id, key, stamp, actionId) => ipcRenderer.invoke('terminal:approval', id, key, stamp, actionId),
-  answerNativeApproval: (id, answer) => ipcRenderer.invoke('terminal:native-approval', id, answer),
-  answerNativeQuestion: (id, answer) => ipcRenderer.invoke('terminal:native-question', id, answer),
-  managedPrompt: (id, sessionId, text) => ipcRenderer.invoke('terminal:managed-prompt', id, sessionId, text),
   answerTerminal: (id, data) => ipcRenderer.send('terminal:write', id, data, true),
   resizeTerminal: (id, cols, rows) => ipcRenderer.send('terminal:resize', id, cols, rows),
   copy: text => ipcRenderer.invoke('clipboard:copy', text),
@@ -118,6 +115,8 @@ contextBridge.exposeInMainWorld('agentrix', {
   terminalActions: id => ipcRenderer.invoke('terminal:actions', id),
   terminalConversation: id => ipcRenderer.invoke('terminal:conversation', id),
   terminalConversationPage: (id, request) => ipcRenderer.invoke('terminal:conversationPage', id, request),
+  subagentFeed: (terminalId, callId) => ipcRenderer.invoke('terminal:subagent-feed', terminalId, callId),
+  onSubagentFeed: callback => listen('terminal:subagent-feed', callback),
   terminalCommands: id => ipcRenderer.invoke('terminal:commands', id),
   agentHistory: id => ipcRenderer.invoke('agent:history', id),
   agentImage: file => ipcRenderer.invoke('agent:image', file),

@@ -29,11 +29,11 @@ const claudeWindow = (model, used) => LARGE_WINDOW.test(model || '') || used > 2
 // id into what the pane shows.
 class UsageMeter {
   // calls: the terminal session's called models, which outlive this agent (dispatched workers stay when it restarts).
-  constructor(agent, { provider = null, names = codexProviderName, changed = () => {}, rates = true, calls = null } = {}) {
+  constructor(agent, { provider = null, names = codexProviderName, changed = () => {}, rates = true, calls = null, codexHome = null, claudeHome = null } = {}) {
     this.agent = agent; this.provider = provider; this.names = names; this.providerId = null; this.limits = [];
     this.resets = null; this.limitsAt = null; this.claudeDirect = null; this.scopeReported = false;
     this.rates = new TokenRates(agent); this.readRates = rates; this.mainCodex = true;
-    this.calls = calls || new AgentCalls({ changed, local: rates });
+    this.calls = calls || new AgentCalls({ changed, local: rates, codexHome, claudeHome });
     this.reset(!!calls);
   }
   // Claude's plan limits from the read-only account query or the existing local caches.
