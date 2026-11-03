@@ -103,7 +103,7 @@ async function run(theme, output) {
     await composer.fill('keep this draft'); await fs.writeFile(trigger, 'ask');
     const popup = page.locator('.reading-terminal-popup'); await popup.waitFor({ timeout: 15000 });
     await waitFor(() => popup.locator('.xterm-rows').innerText().then(text => text.includes('Question 1/2')), 'the actual xterm shows the provider question');
-    assert.equal(await composer.isDisabled(), true); assert.equal(await composer.inputValue(), 'keep this draft');
+    assert.equal(await composer.isDisabled(), false, 'the composer keeps accepting text behind a dialog'); assert.equal(await composer.inputValue(), 'keep this draft');
     assert.equal(await popup.evaluate(node => !!document.activeElement?.closest('.xterm')), false, 'automatic opening never took typing focus');
     assert.equal(await page.locator('.native-question, .reading-choice-option, .reading-question-option').count(), 0);
     await page.keyboard.press('Enter'); await page.waitForTimeout(150);
