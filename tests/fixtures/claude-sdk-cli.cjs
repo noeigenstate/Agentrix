@@ -21,6 +21,9 @@ let sessionId = resume || randomUUID();
 const costsFile = path.join(output, 'fake-costs.json');
 const costs = fs.existsSync(costsFile) ? JSON.parse(fs.readFileSync(costsFile, 'utf8')) : {};
 let total = costs[sessionId] || 0, turns = 0, activeTurn;
+const baseline = total, budgetIndex = args.indexOf('--max-budget-usd');
+const budgetValue = args.find(arg => arg.startsWith('--max-budget-usd='))?.split('=')[1] ?? (budgetIndex < 0 ? undefined : args[budgetIndex + 1]);
+const budget = budgetValue === undefined ? Infinity : Number(budgetValue);
 append({ spawn: true, pid: process.pid, args, scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1' });
 function toolEnvironment() {
   const env = { ...process.env };
@@ -45,9 +48,10 @@ function claudeUser(message) {
   if (text === 'HOLD') return;
   send({ type: 'assistant', session_id: sessionId, parent_tool_use_id: null, uuid: randomUUID(), user_message_uuid: message.uuid,
     message: { id: randomUUID(), type: 'message', role: 'assistant', model: 'fake-claude', content: [{ type: 'text', text: 'PACKAGED_CLAUDE_OK' }], usage: { input_tokens: 1, output_tokens: 2 } } });
-  total += 0.01;
+  total += text === 'BUDGET_TURN' ? 2 : 0.01;
+  const limited = total - baseline >= budget;
   costs[sessionId] = total; fs.writeFileSync(costsFile, JSON.stringify(costs));
-  send({ type: 'result', session_id: sessionId, uuid: randomUUID(), subtype: 'success', is_error: false, result: 'PACKAGED_CLAUDE_OK',
+  send({ type: 'result', session_id: sessionId, uuid: randomUUID(), subtype: limited ? 'error_max_budget_usd' : 'success', is_error: limited, result: 'PACKAGED_CLAUDE_OK',
     user_message_uuid: message.uuid, user_message_uuids: [message.uuid], queued_turn_count: 0, total_cost_usd: total,
     duration_ms: 1, duration_api_ms: 1, num_turns: 1, permission_denials: [], usage: { input_tokens: 1, output_tokens: 2 },
     modelUsage: { 'fake-claude': { inputTokens: 1, outputTokens: 2, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, contextWindow: 100 } } });

@@ -86,6 +86,14 @@ function createClaudeSession(spec, emit, dependencies) {
     publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
       state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: reason });
   }
+  function budgetNotice() {
+    const exhausted = usage.available(spec.monthlyBudgetUsd ?? null) <= 0;
+    const message = exhausted ? '本月 API 预算已用完。' : '本轮 API 预算上限已用完，请发送新消息继续。';
+    publish('error', { code: 'budget_exhausted', message, retryable: !exhausted, willRetry: false, stage: 'runtime' });
+    if (exhausted) publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
+      state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: 'budget_exhausted' });
+    return message;
+  }
   async function pump(run) {
     let idle = false;
     try {
@@ -104,6 +112,12 @@ function createClaudeSession(spec, emit, dependencies) {
           });
         }
         if (message.isReplay === true) { normalize(message); continue; }
+        if (message.type === 'system') {
+          if (message.subtype === 'background_tasks_changed') run.background = new Map(message.tasks.map(task => [task.task_id, task.run_id]));
+          if (message.subtype === 'task_started' && message.is_backgrounded !== false) run.background.set(message.task_id, message.run_id);
+          if (message.subtype === 'task_notification' && (!message.run_id || run.background.get(message.task_id) === message.run_id)) run.background.delete(message.task_id);
+          if (message.subtype === 'task_updated' && message.patch?.is_backgrounded === true) run.background.set(message.task_id, message.run_id);
+        }
         if (stopping && (message.type !== 'result' || message.parent_tool_use_id)) continue;
         if (!run.initialized && message.type !== 'system') throw Object.assign(new Error(), { code: 'billing_identity_mismatch' });
         if (message.user_message_uuid) receipt(message.user_message_uuid, 'consumed');
@@ -122,11 +136,16 @@ function createClaudeSession(spec, emit, dependencies) {
         publish('usage.updated', entry.snapshot);
         if (entry.deltaUsdMicros > 0) onCost({ ...entry, spec: { ...spec, model: run.model || spec.model }, providerSessionId: providerId });
         requests.cancel();
-        const status = run.interrupted ? 'interrupted' : message.is_error ? 'failed' : 'completed';
-        publish('turn.completed', { status, error: status === 'failed' ? 'Claude 执行失败。' : null });
+        const budgetBlocked = message.subtype === 'error_max_budget_usd';
+        const status = run.interrupted || budgetBlocked ? 'interrupted' : message.is_error ? 'failed' : 'completed';
+        const error = budgetBlocked ? budgetNotice() : status === 'failed' ? 'Claude 执行失败。' : null;
+        publish('turn.completed', { status, error });
         run.interrupted = false;
         turnId = null; stream.turn(null);
-        if (message.subtype === 'error_max_budget_usd') onFailure('budget_exhausted');
+        if (budgetBlocked) {
+          run.busy = false; releaseIdle(run); run.onStoppedResult?.(); unknownInput();
+          idle = !stopping; cancelQuery(run, 'budget'); break;
+        }
         if (!(message.queued_turn_count > 0)) {
           run.busy = false;
           releaseIdle(run);
@@ -141,10 +160,17 @@ function createClaudeSession(spec, emit, dependencies) {
       if (!run.closing) {
         usage.unverified(run.reservation?.id);
         if (!closed) {
-          const code = error.code === 'billing_identity_mismatch' ? error.code : 'sdk_failed';
-          onFailure(code);
-          publish('error', { code, message: 'Claude API 会话无法继续。', retryable: false, willRetry: false, stage: 'runtime' });
-          requests.cancel(); unknownInput(); setState('failed', code);
+          if (error.code === 'budget_exhausted') {
+            if (!turnId) begin('automatic', null);
+            publish('turn.completed', { status: 'interrupted', error: budgetNotice() });
+            turnId = null; stream.turn(null); idle = true;
+            requests.cancel(); unknownInput();
+          } else {
+            const code = error.code === 'billing_identity_mismatch' ? error.code : 'sdk_failed';
+            onFailure(code);
+            publish('error', { code, message: 'Claude API 会话无法继续。', retryable: false, willRetry: false, stage: 'runtime' });
+            requests.cancel(); unknownInput(); setState('failed', code);
+          }
         }
       }
     } finally {
@@ -177,7 +203,7 @@ function createClaudeSession(spec, emit, dependencies) {
     if (!key) throw new Error('请先保存 API 密钥。');
     const reservation = usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId });
     const run = { key, reservation, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
-      remainingBudgetUsd: reservation.maxBudgetUsd ?? Infinity, busy: false };
+      remainingBudgetUsd: reservation.maxBudgetUsd ?? Infinity, busy: false, background: new Map() };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
     const options = {
@@ -217,10 +243,13 @@ function createClaudeSession(spec, emit, dependencies) {
       return { type: 'image', source: { type: 'base64', media_type, data } };
     })] : text;
     if (active?.closing) await active.task;
-    if (active && !active.busy && (active.remainingBudgetUsd <= 0 ||
-      usage.available(spec.monthlyBudgetUsd ?? null) < active.remainingBudgetUsd * 1e6)) {
-      // Only a smaller remaining allowance requires restarting an otherwise persistent owner query.
-      cancelQuery(active, 'budget'); await active.task;
+    if (active && !active.busy && !active.background.size) {
+      const availableUsd = usage.available(spec.monthlyBudgetUsd ?? null) / 1e6;
+      const freshBudgetUsd = spec.monthlyBudgetUsd == null ? Infinity : Math.min(availableUsd, 5);
+      if (active.remainingBudgetUsd !== freshBudgetUsd) {
+        // SDK caps accumulate across turns. Renew at an explicit message boundary, preserving live background work.
+        cancelQuery(active, 'budget'); await active.task;
+      }
     }
     if (!active) {
       preparing ||= createQuery().finally(() => { preparing = null; });

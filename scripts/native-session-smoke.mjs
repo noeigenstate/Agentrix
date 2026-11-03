@@ -18,6 +18,13 @@ const require = createRequire(import.meta.url), root = path.resolve(path.dirname
 const { isolatedEnvironment } = require('./native-approval-probe.cjs');
 const packaged = process.argv.includes('--packaged');
 
+export function desktopEnvironment(home, inherited = process.env, platform = process.platform) {
+  const env = isolatedEnvironment(home, inherited);
+  // xvfb-run supplies display access; credential isolation must not strip it before Electron starts.
+  if (platform === 'linux') for (const name of ['DISPLAY', 'XAUTHORITY']) if (inherited[name]) env[name] = inherited[name];
+  return env;
+}
+
 export async function prepareProviders(directory) {
   const bin = path.join(directory, 'bin'), cli = path.join(directory, 'fake-cli.cjs');
   await fs.mkdir(bin, { recursive: true });
@@ -57,7 +64,7 @@ async function runtimeSmoke(output) {
       settings: { language: 'zh', restoreSessions: false, closeToTray: false, notifications: false } }));
     await fs.mkdir(path.join(profile, 'native-session'), { recursive: true });
     await fs.writeFile(path.join(profile, 'native-session/usage.json'), '{broken-offline-fixture');
-    const env = { ...isolatedEnvironment(runtime), PATH: bin, AGENTRIX_DATA_DIR: profile,
+    const env = { ...desktopEnvironment(runtime), PATH: bin, AGENTRIX_DATA_DIR: profile,
       AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_FAKE_CLI: cli, AGENTRIX_FAKE_OUTPUT: runtime };
     delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
     if (process.platform === 'win32') delete env.Path;
@@ -87,7 +94,9 @@ async function runtimeSmoke(output) {
       const first = await page.evaluate(({ terminalId, agent }) => window.agentrix.nativeSession.start(terminalId, { agent }), { terminalId, agent });
       assert.equal(first.ok, true, JSON.stringify(first));
       let id = first.value.runtimeSessionId;
-      for (const [text, marker] of [['first', agent === 'claude' ? 'PACKAGED_CLAUDE_OK' : 'PACKAGED_CODEX_OK'], ['second', agent === 'claude' ? 'PACKAGED_CLAUDE_OK' : 'PACKAGED_CODEX_OK']]) {
+      const texts = agent === 'claude' ? ['first', 'second', 'BUDGET_TURN', 'BUDGET_TURN', 'BUDGET_TURN'] : ['first', 'second'];
+      for (const text of texts) {
+        const marker = agent === 'claude' ? 'PACKAGED_CLAUDE_OK' : 'PACKAGED_CODEX_OK';
         const messageId = randomUUID();
         const sent = await page.evaluate(p => window.agentrix.nativeSession.send(p.terminalId, p.id, p.messageId, p.text), { terminalId, id, messageId, text });
         assert.equal(sent.ok, true, JSON.stringify(sent));
@@ -95,6 +104,8 @@ async function runtimeSmoke(output) {
           const value = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
           return value.ok && value.value?.state === 'idle' && value.value.events.some(event => event.type === 'item.upsert' && event.payload.content.text === marker);
         }, `${agent} real main received the fake provider result`, 20000);
+        const completed = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
+        assert.equal(completed.value.events.findLast(event => event.type === 'turn.completed').payload.status, 'completed', `${agent} turn must not hit a stale cumulative query cap`);
         if (text === 'first') {
           assert.equal((await page.evaluate(p => window.agentrix.nativeSession.stop(p.terminalId, p.id), { terminalId, id })).ok, true);
           const resumed = await page.evaluate(p => window.agentrix.nativeSession.start(p.terminalId, { agent: p.agent, resume: true }), { terminalId, agent });
@@ -107,6 +118,7 @@ async function runtimeSmoke(output) {
       const snapshot = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
       assert.equal(snapshot.value.state, 'stopped');
       checks.push(`${agent}: main IPC, native executable discovery, wire handshake, send, resume and stop`);
+      if (agent === 'claude') checks.push('fresh turn reservations exceed $5 across one logical owner session without a stale query cap');
     }
     const claude = (await fs.readFile(path.join(runtime, 'claude-wire.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
     assert.ok(claude.some(row => row.control === 'initialize'), 'the packaged SDK performs its real initialize handshake');
@@ -140,7 +152,7 @@ async function run(output) {
   const profile = path.join(output, 'profile'), project = { id: randomUUID(), name: '原生会话', path: path.join(output, 'project'), kind: 'local', restore: { terminal: false, codex: false } };
   for (const dir of [profile, project.path]) await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, fontSize: 14 } }));
-  const env = { ...isolatedEnvironment(output), AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+  const env = { ...desktopEnvironment(output), AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
   const errors = [], checks = [];
   let app;
   try {
@@ -158,13 +170,13 @@ async function run(output) {
     const emit = events => app.evaluate(({ BrowserWindow }, list) => { for (const item of list) BrowserWindow.getAllWindows()[0].webContents.send('native:event', item); }, events);
 
     assert.equal(await page.locator('.activity-pane').count(), 0, 'a small card has no activity pane');
-    const reply = event('item.delta', { channel: 'text', text: 'Done: it passes now.' }, { itemId: 'm1' });
-    await emit([
+    const opening = [
       event('session.state', { state: 'running', reason: null }), event('turn.started', { origin: 'user', clientMessageId: 'c1' }),
       event('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'fix the test', clientMessageId: 'c1' } }, { itemId: 'u1' }),
       event('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'npm test', cwd: project.path } }, { itemId: 'k1' }), event('item.delta', { channel: 'output', text: 'FAIL a.test.js' }, { itemId: 'k1' }),
-      reply, event('request.opened', { requestId: 'r1', kind: 'command', blocking: true, title: 'Run rm -rf build', preview: 'rm -rf build', actions: [], providerData: {} }),
-    ]);
+    ];
+    const reply = event('item.delta', { channel: 'text', text: 'Done: it passes now.' }, { itemId: 'm1' });
+    await emit([...opening, reply, event('request.opened', { requestId: 'r1', kind: 'command', blocking: true, title: 'Run rm -rf build', preview: 'rm -rf build', actions: [], providerData: {} })]);
     await view.waitFor({ timeout: 15000 });
     assert.match(await view.locator('.native-runtime').innerText(), /Claude · API/);
     await waitFor(async () => (await view.locator('.reading-user p').allInnerTexts()).includes('fix the test'), 'your message is drawn');
@@ -207,6 +219,7 @@ async function run(output) {
     assert.equal(await settings.locator('input[type="password"]').count(), 1);
     assert.ok((await settings.locator('.select-trigger').count()) >= 2, 'Claude’s path and Codex’s view');
     assert.match(await settings.locator('.runtime-key-row small[role="status"]').innerText(), /已保存|未保存/);
+    await settings.getByText('你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入这里的预算估算。', { exact: true }).waitFor();
     await page.screenshot({ path: path.join(output, 'native-settings.png') });
     checks.push('运行方式 settings page');
     assert.deepEqual(errors, []);

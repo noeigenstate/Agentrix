@@ -34,6 +34,7 @@ const result = (cost, extra = {}) => ({ type: 'result', uuid: randomUUID(), subt
 test('N2 owner idle releases its lease without closing the query and accepts a background automatic turn', async t => {
   const { fake, factory, create, ledger } = setup(t), { session, events } = create();
   await session.start(); await send(session); await until(() => fake.inputs.length === 1);
+  fake.emit({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'offline-monitor', run_id: '1' }] });
   fake.emit(result(0.1)); await until(() => session.snapshot().state === 'idle');
   assert.equal(fake.closes.length, 0); assert.equal(factory.usage.available(10), 9900000);
   assert.deepEqual(ledger().reservations, {});
@@ -113,7 +114,8 @@ test('N4 a timed-out interrupt closes within a bound and converts only the prove
   await send(session); await until(() => fake.inputs.length === 2);
   const started = Date.now(); await session.close(); assert.ok(Date.now() - started < 2500);
   assert.deepEqual(ledger().reservations, {});
-  assert.equal(Object.values(ledger().estimates)[0].micros, 4900000);
+  assert.equal(fake.calls[1].options.maxBudgetUsd, 5);
+  assert.equal(Object.values(ledger().estimates)[0].micros, 5000000);
   assert.equal(factory.apiState(10).status, 'ready');
   factory.usage.record(fake.sessionId, result(0.15), { resume: true });
   assert.equal(factory.usage.available(10), 9850000); assert.deepEqual(ledger().estimates, {});

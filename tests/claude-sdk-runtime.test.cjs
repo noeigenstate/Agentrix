@@ -24,7 +24,7 @@ function setup(t, fakeOptions) {
   return { dir, fake, events, runtime, spec, session };
 }
 test('owner queries remain alive at idle and reuse the same process on the next send', async t => {
-  const { session, fake, events, runtime } = setup(t); await session.start();
+  const { session, fake, events, runtime, spec } = setup(t); spec.monthlyBudgetUsd = null; await session.start();
   assert.equal(session.connection().kind, 'none');
   const first = randomUUID(), second = randomUUID();
   session.send({ clientMessageId: first, text: 'one' });
