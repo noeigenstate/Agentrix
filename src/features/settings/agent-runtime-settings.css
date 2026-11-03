@@ -7,4 +7,17 @@
 /* Claude's path names are long, and "(默认)" ends the first: the trigger is wide enough for the longest. */
 .setting-row .select-trigger.runtime-select { width: 300px; max-width: 48%; }
 .runtime-key .text-button { min-height: 32px; padding: 0 8px; }
+/* The connection test: a spinner while it runs, then a list whose lines each have a mark (and words), a next step under what failed. */
+.runtime-testing { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; font-size: 12px; line-height: 16px; color: var(--text-2); }
+.runtime-test { margin: 12px 0 0; padding: 12px 16px; border-radius: 12px; background: var(--bg-input); }
+.runtime-test ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.runtime-test li { display: grid; grid-template-columns: 16px 112px minmax(0, 1fr); column-gap: 8px; align-items: baseline; font-size: 13px; line-height: 20px; color: var(--text-1); }
+.runtime-test li > b { font-weight: 600; }
+.runtime-test li > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.runtime-test small { display: block; margin-top: 2px; font-size: 12px; line-height: 16px; color: var(--text-2); }
+.runtime-test-mark { display: inline-flex; align-self: center; }
+.runtime-test li.is-ok .runtime-test-mark { color: var(--success-text); }
+.runtime-test li.is-warn .runtime-test-mark { color: var(--warning); }
+.runtime-test li.is-bad .runtime-test-mark { color: var(--danger); }
+.runtime-test .runtime-test-time { margin-top: 8px; color: var(--text-3); }
 .runtime-error { margin: 12px 0 0; }

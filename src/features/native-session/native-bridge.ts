@@ -18,7 +18,21 @@ export type LimitsPayload = {
   limitsById?: Record<string, { limitName?: string | null; primary?: LimitWindow | null; secondary?: LimitWindow | null } | null> | null;
   resetCredits?: { availableCount?: number | null } | null;
 };
-export type AgentPathState = { path: 'api' | 'native' | 'terminal' | null; reason: string | null; limits: LimitsPayload | null };
+// What an agent is connected through right now (contract addendum 2): the API key, the subscription login, nothing running, or not known.
+export type ConnectionKind = 'api' | 'subscription' | 'none' | 'unknown';
+export type AgentConnection = { kind: ConnectionKind; source: string | null; observedAt: number | null };
+export type AgentPathState = { path: 'api' | 'native' | 'terminal' | null; reason: string | null; limits: LimitsPayload | null; connection?: AgentConnection | null };
+
+// The answer to the owner's click on 测试连接 (contract addendum 2); it never carries the key.
+export type KeyCheck = 'ok' | 'missing' | 'invalid' | 'forbidden' | 'rate_limited' | 'unreachable' | 'error';
+export type ConnectionTest = {
+  checkedAt: number;
+  key: { status: KeyCheck; detail: string | null; latencyMs: number | null };
+  models: string[] | null;
+  cli: { status: 'ok' | 'missing' | 'too_old'; version: string | null; required: string };
+  path: 'api' | 'terminal' | null;
+  reason: string | null;
+};
 export type NativeUsage = {
   month: string; todayUsdMicros: number | null; monthUsdMicros: number | null; estimated: true; budgetUsd: number | null;
   agents: Record<NativeAgent, AgentPathState>;
@@ -39,6 +53,8 @@ export interface NativeBridge {
   keyClear(): Promise<Result<unknown>>;
   keyStatus(): Promise<Result<{ saved: boolean }>>;
   usage(): Promise<Result<NativeUsage>>;
+  // Runs only when the owner clicks the button; never on a timer.
+  testConnection(): Promise<Result<ConnectionTest>>;
 }
 
 // How a new agent session starts, from the settings and whether an API key is saved: the native view, today's terminal (with the reason when
