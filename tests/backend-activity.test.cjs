@@ -23,7 +23,7 @@ async function harness(t, kind = 'local', agent = 'codex') {
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = new WorkspaceStore(path.join(directory, 'workspace.json'));
   const project = store.add(directory).project; project.kind = kind;
-  const s = { terminalId: project.id, projectId: project.id, agent, codexActive: true, status: 'running',
+  const s = { terminalId: project.id, projectId: project.id, sessionId: 'pty', agent, codexActive: true, status: 'running',
     activitySince: 1000, activityInputAt: 0, submissions: new SubmissionTracker(),
     actions: { settle() {} }, gate: { input() {} } };
   const sessions = new Map([[s.terminalId, s]]);
@@ -43,7 +43,7 @@ async function harness(t, kind = 'local', agent = 'codex') {
     startSkillSession() {}, endSkillSession() {},
     restorePlans: new Map(), Date: class extends Date { static now() { return now; } },
   });
-  vm.runInContext(main.slice(main.indexOf('function applyActivity('), main.indexOf('function onEvent(')), context);
+  vm.runInContext(main.slice(main.indexOf('function publishCliState('), main.indexOf('function onEvent(')), context);
   Object.assign(context, { findProject: () => project, scheduleState() {}, randomUUID: require('node:crypto').randomUUID,
     s, project, id: s.terminalId, PromptQueue, CompletionWork, queueMicrotask });
   vm.runInContext(main.slice(main.indexOf('function nativeSessionEvent('), main.indexOf('function startTerminal(')), context);
@@ -64,7 +64,8 @@ async function harness(t, kind = 'local', agent = 'codex') {
   });
   return { project, s, store, sessions, context, alerts: () => alerts, armings: () => armings, now: value => { now = value; },
     write: text => listeners['terminal:write'](s.terminalId, text),
-    apply: (state, turnId, updatedAt = now) => context.applyActivity(project, s, { state, turnId, threadId: 'thread', updatedAt }),
+    apply: (state, turnId, updatedAt = now) => context.applyActivity(project, s, {
+      state, turnId, threadId: s.cliProviderId || s.claudeSessionId || s.reportedThreadId || s.rootThreadId || 'thread', updatedAt }),
     user: (text, at = now) => agent === 'claude'
       ? claudeConversation(s.conversation, { type: 'user', uuid: `user-${at}`, timestamp: new Date(at).toISOString(), message: { content: text } })
       : codexConversation(s.conversation, { type: 'event_msg', timestamp: new Date(at).toISOString(), payload: { type: 'user_message', message: text } }),
@@ -100,7 +101,7 @@ for (const agent of ['codex', 'claude']) test(`${agent}: catch-up completion is 
   const h = await harness(t, 'ssh', agent), feed = await activityFeed(t, h, { clockOffset: 0 });
   h.write('A received human request\r');
   await feed.user('A received human request', 2000);
-  const snapshot = { threadId: 'thread', turnId: 'deferred-turn', state: 'complete', updatedAt: 2100 };
+  const snapshot = { threadId: h.s.cliProviderId || h.s.claudeSessionId || h.s.rootThreadId, turnId: 'parent', state: 'complete', updatedAt: 2100 };
   let done = false;
   h.s.activityRawSnapshot = snapshot;
   h.s.terminal.request = async () => ({ snapshot, records: [], historyDone: done });
@@ -245,7 +246,7 @@ for (const clockOffset of [100000, -100000]) test(`SSH Codex null history polls 
   assert.equal(s.activityRawSnapshot.updatedAt, 2300, 'a fresh remote snapshot is shifted once and replaces the cache');
   s.completionWork.changed(); await Promise.resolve();
   const otherId = h.store.addTerminal(project.id);
-  const other = { terminalId: otherId, projectId: project.id, agent: 'codex', codexActive: true, promptQueue: new PromptQueue() };
+  const other = { terminalId: otherId, projectId: project.id, sessionId: 'other-pty', agent: 'codex', codexActive: true, promptQueue: new PromptQueue() };
   h.sessions.set(otherId, other); t.after(() => other.promptQueue.reset());
   h.context.applyActivity(project, other, { threadId: 'sibling', turnId: 'done', state: 'complete', updatedAt: 2400 });
   assert.equal(s.codexActivity, 'working'); assert.equal(project.unread, 0); assert.equal(h.alerts(), 1);

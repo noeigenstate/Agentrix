@@ -201,6 +201,7 @@ function publicState() {
           agentCommand: s?.codexActive ? s.agentCommand || null : null,
           codexActivity: s?.completionWork?.reading ? 'working' : s?.codexActivity || 'unknown', needsInput: s?.needsInput?.message || null, shellReady: !!s?.ready && !s?.inputDirty, codexAvailable: s?.codexAvailable ?? null,
           mainTurn: s?.codexActive ? s.completionWork?.mainTurn(s.activitySnapshot) || null : null,
+          cliState: s?.codexActive ? s.cliState || null : null,
           lastCompletedAt: s?.lastCompletedAt || null, error: s?.error || startupErrors.get(id) || null,
           // The step a working agent is on, for the card's one-line status; the full list is sent separately.
           action: s?.codexActive && s.codexActivity === 'working' ? briefAction(s.actions.current()) : null,
@@ -724,21 +725,57 @@ async function followClaudeSession(project, s, id) {
 }
 
 
+// CLI interaction is independent of project completion: progress never arms another completion notification.
+function publishCliState(s, state, { at = Date.now(), threadId, turnId, requestId, eventId, message: detail, bind = false, progress = false, expectedRevision, newTurn = false } = {}) {
+  if (!s.sessionId || s.nativeStructured || !s.codexActive || sessions.get(s.terminalId) !== s || !Number.isFinite(at)) return false;
+  if (!s.cliStateMeta || s.cliState?.sessionId !== s.sessionId) s.cliStateMeta = { at: 0, events: new Set(), closed: new Set(), turnId: null, requestId: null };
+  const meta = s.cliStateMeta, before = s.cliState;
+  if (expectedRevision != null && expectedRevision !== before?.revision) return false;
+  const bound = s.cliProviderId || (s.agent === 'claude' ? s.claudeSessionId || s.claudeResumeId : s.reportedThreadId || s.rootThreadId);
+  if (!bind && threadId && bound && threadId !== bound && !(s.agent === 'codex' && bound.length >= 8 && threadId.toLowerCase().startsWith(bound.toLowerCase()))) return false;
+  if (at < Math.max(s.activitySince || 0, s.activityInputAt || 0, meta.at)) return false;
+  if (eventId && meta.events.has(eventId)) return false;
+  if (progress && before?.state !== 'waiting' && before?.state !== 'working') return false;
+  if (!bind && turnId && (meta.closed.has(turnId) || state !== 'working' && meta.turnId && turnId !== meta.turnId)) return false;
+  if (progress && requestId && meta.requestId && requestId !== meta.requestId) return false;
+  if (bind && threadId !== bound) { meta.closed.clear(); meta.turnId = null; }
+  if (newTurn) { if (meta.turnId) meta.closed.add(meta.turnId); meta.turnId = null; }
+  if (threadId) s.cliProviderId = threadId;
+  if (turnId && turnId !== meta.turnId) { if (meta.turnId) meta.closed.add(meta.turnId); meta.turnId = turnId; }
+  if (eventId) { meta.events.add(eventId); if (meta.events.size > 256) meta.events.delete(meta.events.values().next().value); }
+  meta.at = at;
+  if (state === 'idle' && turnId) meta.closed.add(turnId);
+  const message = state === 'waiting' ? String(detail ?? '').slice(0, 300) : undefined;
+  meta.requestId = state === 'waiting' ? requestId || null : null;
+  s.needsInput = state === 'waiting' ? { message, since: Date.now() } : null;
+  s.cliStateRevision = (s.cliStateRevision || 0) + 1;
+  s.cliState = { sessionId: s.sessionId, revision: s.cliStateRevision,
+    updatedAt: Date.now(), state, ...(message ? { message } : {}) };
+  broadcast();
+  return true;
+}
+
 // One place turns an agent's turn state into lights and completion alerts, for Codex and Claude alike.
 function applyActivity(project, s, snapshot) {
   if (sessions.get(s.terminalId) !== s || !s.codexActive) return;
   if (snapshot.updatedAt < (s.activitySince || 0)) return;
+  const bound = s.cliProviderId || (s.agent === 'claude' ? s.claudeSessionId : s.reportedThreadId);
+  if (bound && snapshot.threadId && bound !== snapshot.threadId && !(s.agent === 'codex' && bound.length >= 8 && snapshot.threadId.toLowerCase().startsWith(bound.toLowerCase()))) return;
+  if (s.agent === 'codex' && snapshot.turnId && s.cliStateMeta?.closed.has(snapshot.turnId)
+    && (snapshot.state === 'working' || snapshot.turnId !== s.cliStateMeta.turnId)) return;
   // Readers deduplicate snapshots. Retain even a completion hidden by provisional
   // input so that expiring that submission can replay it without another record.
   if (snapshot.updatedAt >= (s.activityRawSnapshot?.updatedAt || 0)) s.activityRawSnapshot = snapshot;
+  // Neither a polled result from before new input nor a result from before newer attention can end this interaction.
+  if (snapshot.updatedAt < Math.max(s.activityInputAt || 0, s.cliStateMeta?.at || 0)) return;
+  if (['working', 'complete', 'interrupted'].includes(snapshot.state)) publishCliState(s, snapshot.state === 'working' ? 'working' : 'idle',
+    { at: snapshot.updatedAt, threadId: snapshot.threadId, turnId: s.agent === 'codex' ? snapshot.turnId : undefined,
+      eventId: `record:${snapshot.threadId}:${snapshot.turnId}:${snapshot.state}:${snapshot.updatedAt}` });
   if (s.completionWork?.reading) { s.codexActivity = 'working'; scheduleState(); return; }
   if (['complete', 'interrupted'].includes(snapshot.state)) {
     s.completionWork?.end(snapshot.updatedAt);
     s.promptQueue.finish?.(snapshot.updatedAt);
   }
-  // Resumed history and a slow response from before a new submission
-  // must not make newly running work look complete.
-  if (snapshot.updatedAt < (s.activityInputAt || 0)) return;
   s.activitySnapshot = snapshot;
   const queued = s.promptQueue.list?.().some(item => item.state === 'queued') || !!s.conversation?.queue?.length;
   const state = s.completionWork?.state(snapshot, { queued })
@@ -787,42 +824,53 @@ function applyActivity(project, s, snapshot) {
 // Notification -> attention while Claude waits for a permission answer in its own screen; that only
 // sets the waiting indicator and never changes the round's lifecycle.
 function claudeActivity(project, s, event) {
-  if (!s.codexActive || s.agent !== 'claude' || !['working', 'complete', 'attention', 'session'].includes(event.state)) return;
+  if (!s.codexActive || s.agent !== 'claude' || !['working', 'complete', 'attention', 'session', 'progress'].includes(event.state)) return;
   if (typeof event.sessionId !== 'string' || !/^[\w-]{1,100}$/.test(event.sessionId) || typeof event.eventId !== 'string' || event.eventId.length > 200) return;
+  const at = Number.isFinite(event.sentAt) ? event.sentAt + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0) : Date.now();
+  const bound = s.cliProviderId || s.claudeSessionId || s.claudeResumeId;
+  if (at < Math.max(s.activitySince || 0, s.cliStateMeta?.at || 0) || s.cliStateMeta?.events.has(event.eventId) || event.state !== 'session' && bound && bound !== event.sessionId) return;
+  const evidence = { at, threadId: event.sessionId, turnId: event.turnId, requestId: event.requestId, eventId: event.eventId };
   // Hook eventId is an event identity, not a native approval request ID. A different observed event invalidates
   // actions conservatively, even if its message is identical. Duplicate events leave the epoch alone.
   s.approval?.context('claude-event', [event.sessionId, event.eventId, event.state]);
-  if (event.state === 'attention') { s.needsInput = { message: typeof event.message === 'string' ? event.message.slice(0, 300) : '', since: Date.now() }; broadcast(); return; }
-  if (event.state === 'session') { followClaude(project, s, event); broadcast(); return; }
+  if (event.state === 'attention') { publishCliState(s, 'waiting', { ...evidence, message: event.message }); return; }
+  if (event.state === 'progress') { publishCliState(s, 'working', { ...evidence, progress: true }); return; }
+  if (event.state === 'session') {
+    if (publishCliState(s, event.sessionSource === 'compact' && s.cliState?.state === 'working' ? 'working' : 'idle', { ...evidence, bind: true })) followClaude(project, s, event);
+    return;
+  }
   if (s.usage && project.kind !== 'ssh') void refreshClaudeAccounts();
   // Claude Code runs its prompt hooks for some local slash commands (/context, /doctor, /compact) too. They open a screen
   // or print a line and no round follows, so they neither start a round nor end one; the card would stay "working".
   if (event.state === 'working') {
     if (typeof event.prompt === 'string' && promptText(event.prompt, event) === null) return;
-    s.claudeLocalCommand = typeof event.prompt === 'string' && isLocalAgentCommand('claude', event.prompt);
-    if (s.claudeLocalCommand) return;
+    const local = typeof event.prompt === 'string' && isLocalAgentCommand('claude', event.prompt);
+    if (local) { if (publishCliState(s, 'working', evidence)) s.claudeLocalCommand = true; return; }
+    if (!publishCliState(s, 'working', evidence)) return;
+    s.claudeLocalCommand = false;
     // UserPromptSubmit is actual input, unlike a polled working snapshot or a Stop callback.
     if (s.claudePromptEventId !== event.eventId) {
       s.claudePromptEventId = event.eventId;
       if (promptText(event.prompt, event) !== null) {
-        s.activityConfirmedInputAt = Math.max(s.activityConfirmedInputAt || 0, Date.now());
+        s.activityConfirmedInputAt = Math.max(s.activityConfirmedInputAt || 0, at);
         s.activityInputAt = Math.max(s.activityInputAt || 0, s.activityConfirmedInputAt);
         s.completionWork?.begin(); store.expectCompletion(project.id);
       }
     }
-  } else if (event.state === 'complete' && s.claudeLocalCommand) { s.claudeLocalCommand = false; return; }
-  s.needsInput = null;
+  } else if (event.state === 'complete' && s.claudeLocalCommand) { if (publishCliState(s, 'idle', evidence)) s.claudeLocalCommand = false; return; }
+  if (event.state === 'complete' && !publishCliState(s, 'idle', evidence)) return;
+  const revision = s.cliState.revision;
   const turnId = event.eventId.slice(event.sessionId.length + 1);
   // Remember the conversation and whether its turn is still open, so a restart can resume it and continue.
   store.setRestore(s.terminalId, { threadId: event.sessionId, interrupted: event.state === 'working' });
   followClaude(project, s, event);
-  const snapshot = { threadId: event.sessionId, turnId: event.state === 'complete' ? turnId : null, state: event.state, updatedAt: Date.now(), prompt: typeof event.prompt === 'string' ? event.prompt.slice(0, 2000) : undefined };
+  const snapshot = { threadId: event.sessionId, turnId: event.state === 'complete' ? turnId : null, state: event.state, updatedAt: at, prompt: typeof event.prompt === 'string' ? event.prompt.slice(0, 2000) : undefined };
   // Stop can beat the last tool-result write. Read it before granting a completion,
   // and let a newer turn/input win if it started while the read was in flight.
   if (event.state === 'complete' && s.activityMonitor) {
     const promptEvent = s.claudePromptEventId;
     void Promise.resolve(s.activityMonitor.poll()).then(() => {
-      if (s.agent !== 'claude' || s.claudeSessionId && s.claudeSessionId !== event.sessionId || s.claudePromptEventId !== promptEvent || s.activityRawSnapshot?.updatedAt > snapshot.updatedAt) return;
+      if (s.agent !== 'claude' || s.cliState?.revision !== revision || s.claudeSessionId && s.claudeSessionId !== event.sessionId || s.claudePromptEventId !== promptEvent || s.activityRawSnapshot?.updatedAt > snapshot.updatedAt) return;
       applyActivity(project, s, { ...snapshot, state: s.completionWork?.turn?.state === 'interrupted' ? 'interrupted' : snapshot.state, transcriptRead: true });
     }).catch(() => {});
   } else applyActivity(project, s, snapshot);
@@ -841,6 +889,7 @@ function onEvent(event) {
   if (event.type !== 'turn-complete' && !acceptShellEvent(s, event)) return;
   s.approval?.context('shell-event', [event.type, event.sequence]);
   if (event.type === 'shell-ready' || event.type === 'shell-prompt') {
+    s.cliState = s.cliStateMeta = s.cliProviderId = null;
     endSkillSession(s);
     s.needsInput = null; s.agentCommand = null; stopUsageAccount(s);
     s.claudeResumeId = null; s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
@@ -857,6 +906,8 @@ function onEvent(event) {
     if (typeof event.codexHome === 'string') s.codexHome = event.codexHome;
     if (!quitting && typeof event.cwd === 'string') store.setRestore(s.terminalId, { cwd: event.cwd });
   } else if (event.type === 'codex-started') {
+    s.cliState = s.cliStateMeta = s.cliProviderId = null;
+    s.needsInput = null;
     s.agentStarting = false;
     const restored = store.findTerminal(s.terminalId)?.record.restore;
     const startingAgent = event.agent === 'claude' ? 'claude' : 'codex';
@@ -883,6 +934,7 @@ function onEvent(event) {
     } else void sshHandoff(project, s).catch(() => {});
     const claudeResumeId = event.agent === 'claude' ? s.claudeResumeId : null;
     const keepClaudeHistory = claudeResumeId && s.claudeSessionId === claudeResumeId && s.claudeTranscript;
+    if (!keepClaudeHistory) s.claudeSessionId = null;
     s.ready = false;
     s.codexActive = true;
     // A resumed Claude conversation whose transcript is still followed keeps what its records showed.
@@ -982,6 +1034,7 @@ function onEvent(event) {
     store.setRestore(s.terminalId, { terminal: true, codex: true, cwd: event.cwd });
     // Unread completion is independent of session activity. It survives new turns.
   } else if (event.type === 'codex-exited') {
+    s.cliState = s.cliStateMeta = s.cliProviderId = null;
     readingHistory.close(s.terminalId);
     endSkillSession(s);
     s.needsInput = null; s.agentCommand = null; stopUsageAccount(s);
@@ -997,6 +1050,10 @@ function onEvent(event) {
     const code = Number(event.exitCode);
     if (code && code !== 130 && code !== -1073741510) s.error = t('{agent} 已退出（代码 {code}），请查看终端输出。', { agent: s.agent === 'claude' ? 'Claude Code' : 'Codex', code });
   } else if (event.type === 'turn-complete') {
+    if (s.agent === 'codex' && event.threadId && event.turnId && s.cliStateMeta?.turnId === event.turnId
+      && (s.cliProviderId || s.rootThreadId || s.reportedThreadId) === event.threadId) {
+      publishCliState(s, 'idle', { at: Number.isFinite(event.sentAt) ? event.sentAt : Date.now(), threadId: event.threadId, turnId: event.turnId, eventId: `notify:${event.eventId}` });
+    }
     // notify is inherited by child agents. It only requests a refresh; the
     // interactive parent's task lifecycle is the authority for completion.
     if (s.codexActive && (!s.rootThreadId || event.threadId === s.rootThreadId)) { s.usageAccount?.refresh(); void s.activityMonitor?.poll(); }
@@ -1373,6 +1430,11 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
       // tracker. Codex's received user message confirms them. A time watermark excludes history and replays;
       // working/completion snapshots alone can never grant another alert. Claude has UserPromptSubmit hooks.
       if (s.agent === 'codex' && !localCommand && at >= Math.max(s.activitySince || 0, s.activityInputAt || 0) && at > Math.max(s.activityPromptAt || 0, s.lastCompletedAt || 0)) {
+        // task_started may already have published this turn before its user item arrives.
+        // Retire the previous turn only when no newer start is awaiting its prompt receipt.
+        const started = s.activitySnapshot?.state === 'working' && s.activitySnapshot.turnId
+          && s.activitySnapshot.updatedAt > (s.activityPromptAt || 0);
+        publishCliState(s, 'working', { at, threadId: s.reportedThreadId || s.rootThreadId, eventId: `input:${entry.id}`, newTurn: !started });
         s.activityPromptAt = at;
         s.completionWork?.begin(at);
         store.expectCompletion(project.id);
@@ -1404,6 +1466,9 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
         if (previous && !previous.threadId.toLowerCase().startsWith(threadId.toLowerCase())) readingHistory.close(id);
         if (s.agent === 'codex' && wholeThread(threadId)) void prepareReading(id, { agent: 'codex', threadId, cwd: store.findTerminal(id)?.record.restore?.cwd || project.path });
         s.reportedThreadId = threadId;
+        if (s.agent === 'codex' && s.cliProviderId && !s.cliProviderId.toLowerCase().startsWith(threadId.toLowerCase())) {
+          publishCliState(s, 'idle', { threadId, bind: true });
+        }
         s.approval.context('terminal-title', threadId);
         // A title cut short names the session only by how its id begins: the whole id is kept once its record is found.
         if (s.codexActive) { s.codexActivity = 'unknown'; s.activityInputAt = s.activityConfirmedInputAt = 0; if (wholeThread(threadId)) store.setRestore(id, { threadId }); void s.activityMonitor?.poll(); }

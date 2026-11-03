@@ -244,8 +244,11 @@ try {
   await terminal.locator('.reading-outbox').waitFor({ state: 'detached' });
   await renderIdle('queued instruction ended'); await composer.fill('');
   checks.push('confirmations keep the composer editable; messages wait without answering, then drain when input returns');
+  await write(hook('session', { session_id: 's1', source: 'startup' }));
   await write(hook('start', { session_id: 's1', prompt: 'test interrupt' }));
   await waitFor(async () => (await state()).codexActivity === 'working', 'working fixture');
+  await waitFor(async () => (await state()).cliState?.state === 'working', 'host publishes CLI work');
+  const workingRevision = (await state()).cliState.revision;
   // Claude's spinner line while it works (an idle input on screen would mean it has finished).
   await write("Clear-Host; Write-Host ([string][char]0x2736 + ' Osmosing' + [char]0x2026); Show-ReadingFixtureInput\r");
   await waitFor(async () => await terminal.locator('.reading-status.is-working').count() > 0, 'working status rendered');
@@ -261,6 +264,21 @@ try {
   await renderIdle('working frame returned to idle');
   await waitFor(async () => await terminal.locator('.reading-status.is-working, .reading-choice-host').count() === 0, 'idle screen immediately retires stale activity', 1500);
   checks.push('a working CLI keeps the composer usable, and an empty Enter sends nothing');
+  await write(hook('stop', { session_id: 's1' }));
+  await waitFor(async () => (await state()).cliState?.state === 'idle', 'Stop publishes idle');
+  assert.ok((await state()).cliState.revision > workingRevision);
+  await waitFor(async () => (await state()).codexActivity === 'complete', 'the real turn completes');
+  const idleRevision = (await state()).cliState.revision;
+  const completedAt = (await page.evaluate(() => window.agentrix.getState())).value.projects[0].lastCompletedAt;
+  assert.ok(Number.isFinite(completedAt));
+  await write(hook('progress', { session_id: 's1', hook_event_name: 'PostToolUse' }));
+  await renderIdle('background progress after completion');
+  assert.equal((await state()).cliState.revision, idleRevision, 'background progress cannot reopen an idle turn');
+  await write(hook('stop', { session_id: 's1' })); await renderIdle('repeated Stop');
+  // Writing the next fixture command acknowledges unread completion; the accepted completion timestamp must stay put.
+  assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[0].lastCompletedAt, completedAt, 'repeated Stop cannot rearm completion');
+  assert.equal(await pane.locator('.activity-main-tasks .is-working').count(), 0);
+  checks.push('host CLI revisions reach both views; Stop and background progress never rearm completion');
   await composer.fill('/'); await palette.waitFor(); await resetWrites(); await composer.press('Escape');
   await waitFor(async () => await composer.getAttribute('aria-expanded') === 'false', 'palette Escape closes the list');
   assert.deepEqual(await writes(), [], 'palette Escape sends no CLI key');
@@ -270,6 +288,7 @@ try {
   const row = record => JSON.stringify({ timestamp: new Date().toISOString(), ...record }) + '\n';
   await fs.writeFile(transcript, ['keep this draft', 'keep the confirmation draft'].map((text, index) => row({ type: 'user', uuid: `dialog-received-${index}`, message: { content: text } })).join('')
     + row({ type: 'user', uuid: 'queue-start', message: { content: 'Queue fixture work' } }));
+  await write(hook('session', { session_id: queueSession, transcript_path: transcript, source: 'resume' }));
   await write(hook('start', { session_id: queueSession, transcript_path: transcript, prompt: 'Queue fixture work' }));
   await waitFor(async () => (await terminal.locator('.reading-user', { hasText: 'Queue fixture work' }).count()) === 1, 'isolated Claude transcript is bound');
   const queueRows = records => fs.appendFile(transcript, records.map(row).join(''));

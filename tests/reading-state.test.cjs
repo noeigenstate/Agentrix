@@ -21,6 +21,14 @@ for (const file of fs.readdirSync(path.join(__dirname, 'fixtures/screens')).filt
 }
 
 for (const agent of ['claude', 'codex']) {
+  test(agent + ': a newer PTY input frame clears host waiting in the same render, and a newer host event wins again', t => {
+    const h = popupHarness(t, agent, ['Settings', 'Esc to close']);
+    h.props.terminal.cliState = { sessionId: 'fixture-session', revision: 1, state: 'waiting', updatedAt: 10000 };
+    h.view.frame = { sessionId: 'fixture-session', revision: 1, updatedAt: 9999 }; h.render(); assert.ok(h.popup());
+    h.view.rows = idle[agent]; h.view.frame = { ...h.view.frame, revision: 2, updatedAt: 10001 }; h.render();
+    assert.equal(h.popup(), undefined); assert.equal(h.waiting(), undefined); assert.equal(h.node.disabled, false);
+    h.props.terminal.cliState = { ...h.props.terminal.cliState, revision: 2, updatedAt: 10002 }; h.render(); assert.ok(h.popup());
+  });
   test(agent + ': a transient unknown redraw cannot rearm a dismissed confirmation', t => {
     const h = popupHarness(t, agent, ['Settings', 'Esc to close']);
     h.popup().props.onClose(); h.render();

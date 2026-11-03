@@ -507,7 +507,7 @@ for (const agent of ['claude', 'codex']) {
     h.remount(); h.view.draft = ''; h.render();
     await h.tick(1000); await h.tick(30000);
     assert.equal(h.pasted.length, 1);
-    assert.ok(elements(h.tree()).some(node => node.props.children === '送达未确认，请在终端检查'));
+    assert.ok(elements(h.tree()).some(node => node.props.children === en['送达未确认，请在终端检查']));
   });
 
   test(agent + ': a dialog arriving after paste cancels the delayed Enter', async t => {
@@ -904,7 +904,7 @@ test('the composer offers its hint longest first and shows the one that fits, so
   assert.equal(note.props.style.position, 'absolute', 'the description is not drawn');
   Object.assign(h.props.terminal, { codexActive: false });
   h.render();
-  assert.equal(offered.length, 1); assert.equal(offered[0], '会话未启动或已退出');
+  assert.equal(offered.length, 1); assert.equal(offered[0], en['会话未启动或已退出']);
 });
 
 test('a restored preview cannot send until its own CLI input is ready, and a different thread disables it again', async t => {
@@ -912,7 +912,7 @@ test('a restored preview cannot send until its own CLI input is ready, and a dif
   const h = dictationHarness(t, { './terminal-screen': { useScreen: () => ({ rows }), readScreen: () => ({ rows }) } });
   Object.assign(h.props.terminal, { sessionId: null, codexActive: false, readingHistory: { key: 'history-a', agent: 'codex', threadId: 'restored' } });
   assert.equal(h.render().props.disabled, true);
-  assert.equal(h.render().props.placeholder, '历史预览，等待会话输入就绪');
+  assert.equal(h.render().props.placeholder, en['历史预览，等待会话输入就绪']);
   h.edit('do not send before ready'); h.press('Enter'); await h.tick(1000);
   h.command('/status'); await h.tick(1000);
   h.dictate('/status', true); await h.tick(1000);

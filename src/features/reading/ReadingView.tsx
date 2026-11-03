@@ -103,7 +103,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     || latestMessages.current.entries.some(entry => entry.role === 'user' && (sameMessage(entry.text ?? '', text) || sameMessage(entry.original ?? '', text)))
     || ownHistory.texts.some(message => sameMessage(message, text));
   const sendCounter = useRef(0);
-  const visibleScreen = useScreen(terminal.id);
+  const visibleScreen = useScreen(terminal.id, terminal.sessionId);
   const parsedScreen = useMemo(() => {
     const parsed = parseAgentScreen(kind, visibleScreen?.rows ?? []);
     return { ...parsed, choice: bindApproval(parsed.choice, kind, visibleScreen) };
@@ -117,7 +117,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const screen = preview ? { ...parsedScreen, choice: null, waiting: null } : parsedScreen;
   const latestSignal = useRef<CliState | null>(null);
   const signal = latestSignal.current = nextCliState(latestSignal.current, terminal);
-  const state = readingState(kind, visibleScreen?.rows ?? [], parsedScreen, terminal, signal);
+  const state = readingState(kind, visibleScreen?.rows ?? [], parsedScreen, terminal, signal, visibleScreen);
   const idleInput = state.idle;
   const live = terminal.codexActive && !!terminal.sessionId && terminal.status !== 'exited';
   const working = live && state.working;

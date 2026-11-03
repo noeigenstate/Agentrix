@@ -20,7 +20,7 @@ function activityHarness(mode = 'codex') {
   const store = new WorkspaceStore(''); store.save = () => {}; store.projects = [project];
   const expectCompletion = store.expectCompletion.bind(store);
   store.expectCompletion = (...args) => { arms++; expectCompletion(...args); };
-  const s = { terminalId: project.id, projectId: project.id, sessionId: 'session', sessionKey: 'key', status: 'running', codexActive: true, agent,
+  const s = { terminalId: project.id, projectId: project.id, sessionId: 'pty', sessionKey: 'key', status: 'running', codexActive: true, agent,
     activitySince: 1000, activityInputAt: 0, promptQueue: new PromptQueue(() => {}, { now: () => now }), actions: new ActionLog(), submissions: new SubmissionTracker(),
     gate: { input() {} }, nativeMessages: [], native: mode.endsWith('-native') ? { registry: { list: () => [] } } : null };
   const sessions = new Map([[s.terminalId, s]]);
@@ -32,7 +32,7 @@ function activityHarness(mode = 'codex') {
   });
   const start = main.indexOf('  s.conversation = new ConversationLog(');
   vm.runInContext(main.slice(start, main.indexOf('\n  sessions.set(id, s);', start)), context);
-  vm.runInContext(main.slice(main.indexOf('function applyActivity('), main.indexOf('function onEvent(')), context);
+  vm.runInContext(main.slice(main.indexOf('function publishCliState('), main.indexOf('function onEvent(')), context);
   vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('// The agent chosen on a new project')), context);
   vm.runInContext(main.slice(main.indexOf('function nativeSessionEvent('), main.indexOf('function startTerminal(')), context);
   const listeners = {};
@@ -267,6 +267,7 @@ test('a Claude reply with several text blocks supplies its whole delivery', () =
 test('real main-process conversation callbacks ignore injections without rearming acknowledged completion', () => {
   for (const mode of ['claude', 'codex', 'codex-native']) {
     const h = activityHarness(mode), { s, project, context } = h, { agent } = s;
+    const threadId = agent === 'claude' ? 'session' : 'thread';
     const feed = agent === 'claude' ? record => claudeConversation(s.conversation, record) : record => codexConversation(s.conversation, record);
     if (agent === 'claude') context.claudeActivity(project, s, { state: 'working', sessionId: 'session', eventId: 'session:input', prompt: 'Human request.' });
     feed(agent === 'claude' ? claude('Human request.') : codex('Human request.'));
@@ -274,14 +275,14 @@ test('real main-process conversation callbacks ignore injections without rearmin
     const reply = '【交付】\n问题：Synthetic completion.\n验证：Synthetic checks passed.';
     feed(agent === 'claude' ? { type: 'assistant', timestamp: stamp(2400), uuid: 'reply', message: { content: [{ type: 'text', text: reply }] } }
       : { type: 'event_msg', timestamp: stamp(2400), payload: { type: 'item_completed', item: { type: 'AgentMessage', id: 'reply', content: [{ type: 'text', text: reply }] } } });
-    context.applyActivity(project, s, { state: 'complete', threadId: 'thread', turnId: 'turn', updatedAt: 2500 });
+    context.applyActivity(project, s, { state: 'complete', threadId, turnId: 'turn', updatedAt: 2500 });
     if (mode === 'codex') s.promptQueue.finish(2500);
     assert.equal(h.alerts(), 1); assert.equal(project.completionArmed, false);
     h.store.acknowledge(project.id);
     for (const [content, extra = {}] of injected) feed(agent === 'claude' ? claude(content, 3000, extra) : codex(content, 3000, extra));
     assert.equal(h.arms(), 1); assert.equal(project.completionArmed, false); assert.deepEqual(s.promptQueue.list(), []);
     assert.equal(s.promptQueue.task.summary, 'Synthetic completion.'); assert.equal(s.promptQueue.task.title, reply);
-    context.applyActivity(project, s, { state: 'complete', threadId: 'thread', turnId: 'background', updatedAt: 3500, prompt: injected[1][0] });
+    context.applyActivity(project, s, { state: 'complete', threadId, turnId: 'background', updatedAt: 3500, prompt: injected[1][0] });
     assert.equal(h.alerts(), 1); assert.equal(s.promptQueue.task.summary, 'Synthetic completion.');
     feed(agent === 'claude' ? claude('<command-name>/model</command-name>', 4000) : codex('/model', 4000));
     assert.equal(s.promptQueue.task.summary, '/model'); assert.deepEqual(s.promptQueue.list(), []);
@@ -303,11 +304,11 @@ test('Claude queue receipts and withdrawals update activity without arming compl
   queue('enqueue', 2200); queue('popAll', 2300);
   assert.deepEqual(s.promptQueue.list().map(item => item.text), ['Initial work.']);
   assert.equal(h.arms(), 1);
-  context.applyActivity(project, s, { state: 'complete', threadId: 'thread', turnId: 'turn', updatedAt: 2500 });
+  context.applyActivity(project, s, { state: 'complete', threadId: 'session', turnId: 'turn', updatedAt: 2500 });
   h.store.acknowledge(project.id);
   queue('enqueue', 2600); claudeConversation(s.conversation, claude('Next work.', 2700));
   assert.equal(s.conversation.list.filter(entry => entry.queued && !entry.cancelled).length, 0);
-  context.applyActivity(project, s, { state: 'complete', threadId: 'thread', turnId: 'background', updatedAt: 3000 });
+  context.applyActivity(project, s, { state: 'complete', threadId: 'session', turnId: 'background', updatedAt: 3000 });
   assert.equal(h.arms(), 1); assert.equal(h.alerts(), 1); assert.equal(project.unread, 0);
 });
 

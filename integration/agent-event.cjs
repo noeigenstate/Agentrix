@@ -46,8 +46,9 @@ function codexEvent(payload, projectId, sessionKey) {
 
 // Claude Code hook: UserPromptSubmit reports a working turn, Stop reports a finished one, SessionStart the
 // conversation Claude writes now (after /clear, /resume or a new start it is another file).
-const CLAUDE_STATES = { start: 'working', stop: 'complete', notify: 'attention', session: 'session' };
+const CLAUDE_STATES = { start: 'working', stop: 'complete', notify: 'attention', session: 'session', progress: 'progress', permission: 'attention' };
 function claudeEvent(input, projectId, sessionKey, kind) {
+  const sentAt = Date.now();
   if (!Object.hasOwn(CLAUDE_STATES, kind)) return null;
   const hook = JSON.parse(input);
   // Idle notifications must not turn a completed round back into a waiting one.
@@ -57,7 +58,10 @@ function claudeEvent(input, projectId, sessionKey, kind) {
   const prompt = kind === 'start' && hook.prompt ? String(hook.prompt).slice(0, 2000) : null;
   return {
     projectId, sessionKey, type: 'agent-activity', agent: 'claude', state: CLAUDE_STATES[kind], sessionId,
-    message: kind === 'notify' ? String(hook.message ?? '').slice(0, 300) : null,
+    message: ['notify', 'permission'].includes(kind) ? String(hook.message ?? hook.tool_name ?? '').slice(0, 300) : null,
+    sentAt, hookEvent: String(hook.hook_event_name ?? ''), sessionSource: String(hook.source ?? ''),
+    ...(typeof hook.turn_id === 'string' ? { turnId: hook.turn_id } : {}),
+    ...(typeof hook.tool_use_id === 'string' ? { requestId: hook.tool_use_id } : {}),
     // Where Claude writes this conversation; Agentrix reads the steps of the round from it.
     transcriptPath: String(hook.transcript_path ?? ''),
     eventId: `${sessionId}:${Date.now()}${String(process.hrtime.bigint() % 10000n).padStart(4, '0')}`,

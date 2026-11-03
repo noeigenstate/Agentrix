@@ -2546,5 +2546,11 @@
   "原生会话记录损坏，已使用空记录；运行方式设置未改变。": "Native session records were damaged. Empty records are in use; runtime settings are unchanged.",
   "损坏的文件已隔离保留。": "The damaged file was quarantined and preserved.",
   "损坏的文件无法隔离，原文件已保留。": "The damaged file could not be quarantined. The original file was preserved.",
-  "本轮 API 预算已用完。": "The API budget for this query has been exhausted."
+  "本轮 API 预算已用完。": "The API budget for this query has been exhausted.",
+  "历史预览，等待会话输入就绪": "History preview; waiting for session input",
+  "会话未启动或已退出": "Session has not started or has exited",
+  "等终端处理完后发送": "Will send after the terminal dialog is resolved",
+  "等待终端输入就绪后发送": "Will send when terminal input is ready",
+  "送达未确认，请在终端检查": "Delivery unconfirmed; check the terminal",
+  "取回": "Restore draft"
 }

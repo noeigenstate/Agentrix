@@ -18,13 +18,14 @@ const notes = section('function noteSettings(', '// A skill step names the skill
 const historyUsage = section('function usageHistory(', '// What the activity pane shows');
 const lifecycle = section('function startUsage(', 'let claudeAccountTimer =');
 const hooks = section('function claudeActivity(', 'function onEvent(');
+const cliState = section('function publishCliState(', 'function applyActivity(');
 const events = section('function onEvent(', '// The agent chosen on a new project');
 const state = section('function publicState(', 'function terminalIds(');
 const histories = [...main.matchAll(/const onHistory = ready => \{[\s\S]*?\r?\n    \};/g)].map(match => match[0]);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const account = (at = 1000, percent = 12, resetsAt = null) => ({ limits: [{ minutes: 300, percent, resetsAt }], at, source: 'Claude Code' });
 const session = (terminalId, agent = 'claude', projectId = 'local') => ({
-  terminalId, projectId, codexActive: true, agent, usage: new UsageMeter(agent),
+  terminalId, projectId, sessionId: `pty-${terminalId}`, codexActive: true, agent, usage: new UsageMeter(agent),
   promptQueue: { list: () => [], finish() {} },
 });
 
@@ -58,7 +59,7 @@ function runtime(overrides = {}) {
     ...overrides,
   });
   // Run the real main-process functions without requiring Electron or creating a terminal.
-  const api = vm.runInContext(`${claudeService}\n${accounts}\n${notes}\n${historyUsage}\n${lifecycle}\n${hooks}\n${events}\n${state}\n({
+  const api = vm.runInContext(`${claudeService}\n${accounts}\n${notes}\n${historyUsage}\n${lifecycle}\n${cliState}\n${hooks}\n${events}\n${state}\n({
     refreshClaudeAccounts, startUsage, stopUsageAccount, disposeClaudeAccounts, scheduleUsageRollover, noteSettings, usageHistory, claudeActivity, onEvent, publicState,
     claudeAccounts,
     resources: () => ({ claudeAccountTimer, claudeAccountSoon, claudeAccountPending, claudeAccountWatchers, usageRolloverTimer, usageRolloverAt })

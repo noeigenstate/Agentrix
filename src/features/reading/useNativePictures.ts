@@ -30,7 +30,7 @@ export function useNativePictures({ owner, terminalId, agent, sending, interacti
   };
   const readInput = () => {
     const current = readScreen(terminalId);
-    if (!current) return null;
+    if (!current || current.pending) return null;
     const screen = parseAgentScreen(agent, current.rows);
     if (!hasCliInput(agent, current.rows, screen) || cliDialogShown(agent, current.rows, screen)) return null;
     return { rows: current.rows, text: cliInputDraft(agent, current.rows, screen) };

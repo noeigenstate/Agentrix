@@ -55,7 +55,7 @@ function popupHarness(t, agent = 'codex', rows = idle[agent], activity = 'comple
     './typing': require('../src/features/reading/typing.ts'),
     './pending-prompts': require('../src/features/reading/pending-prompts.ts'),
     './composer-prefill': { onComposerPrefill: () => () => {} },
-    './terminal-screen': { useScreen: () => ({ rows: view.rows }), bindApproval: choice => choice },
+    './terminal-screen': { useScreen: () => ({ rows: view.rows, ...view.frame }), bindApproval: choice => choice },
     './agent-screen': { parseAgentScreen, waitingTitle }, './cli-panel': panel,
     './reading-mode': { setChoiceVisible() {} }, './reading.css': {}, './reading-flow.css': {},
     './Markdown': { Markdown: noop }, './ConversationFeed': { ConversationFeed, ConversationDecorations: React.createContext(null) },

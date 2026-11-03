@@ -102,7 +102,7 @@ function mainHarness(t, f) {
   const project = { id: 'project', path: f.cwd, kind: 'local' };
   const restore = { cwd: f.cwd, agent: 'claude' };
   let resets = 0;
-  const s = { terminalId: 'terminal', projectId: project.id, sessionKey: 'key', agent: 'claude', codexActive: true,
+  const s = { terminalId: 'terminal', projectId: project.id, sessionId: 'pty', sessionKey: 'key', agent: 'claude', codexActive: true,
     actions: new ActionLog(), conversation: new ConversationLog(), promptQueue: { reset() {} }, submissions: { reset() {} } };
   const reset = s.conversation.reset.bind(s.conversation); s.conversation.reset = () => { resets++; reset(); };
   const sessions = new Map([[s.terminalId, s]]);
@@ -147,6 +147,7 @@ const pendingTool = id => ({ type: 'assistant', uuid: id, message: { content: [{
 test('SSH Claude hooks poll remote records with history, tools and settings through the local consumers', async t => {
   const f = await fixture(t), h = activityHarness(t, f), requests = [], described = [];
   h.project.kind = 'ssh'; h.project.path = '/srv/project'; h.s.activitySince = 1000;
+  h.s.activityClockOffset = 100; // The startup event bound remote 900 to host 1000.
   h.context.claudeConfigDir = () => { throw new Error('SSH must use the server config directory'); };
   h.context.noteSettings = (s, agent, record) => { s.agentSettings = agentSettings(s.agentSettings || null, agent, record); };
   h.context.describeActions = (_s, cwd, actions) => { for (const action of actions || []) described.push([cwd, action.target]); };

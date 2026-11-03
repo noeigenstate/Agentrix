@@ -63,7 +63,7 @@ export function syncReading(terminal: ProjectTerminal) {
   }
   const monitor = monitors.get(terminal.id), signal = nextCliState(monitor?.signal ?? null, terminal), screen = readScreen(terminal.id);
   if (monitor) monitor.signal = signal;
-  const waiting = screen && terminal.agent ? readingState(terminal.agent, screen.rows, parseAgentScreen(terminal.agent, screen.rows), terminal, signal).waiting
+  const waiting = screen && terminal.agent ? readingState(terminal.agent, screen.rows, parseAgentScreen(terminal.agent, screen.rows), terminal, signal, screen).waiting
     : signal ? signal.state === 'waiting' : terminal.needsInput != null;
   if (!waiting || !terminal.codexActive) {
     cancelHandoff(terminal.id);
