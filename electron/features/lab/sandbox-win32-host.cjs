@@ -10,28 +10,48 @@ async function createPipeRelays(addresses, namespace, failed = () => {}) {
     throw new Error('Invalid Windows lab pipe namespace.');
   }
   const relays = [], pipes = [];
-  const close = () => Promise.all(relays.map(({ server, sockets }) => new Promise(resolve => {
-    server.close(resolve); for (const socket of sockets) socket.destroy();
+  const close = () => Promise.all(relays.map(relay => new Promise(resolve => {
+    relay.closed = true;
+    relay.server.close(resolve); for (const socket of relay.sockets) socket.destroy();
   })));
   try {
     for (const address of addresses) {
       const match = /^\\\\\.\\pipe\\LOCAL\\(agentrix-lab-[a-zA-Z0-9-]{1,128})$/.exec(address);
       if (!match) throw new Error('Invalid Windows lab pipe address.');
-      const sockets = new Set(), target = namespace + match[1];
-      const server = net.createServer({ allowHalfOpen: true }, socket => {
-        if (sockets.size >= 16) return socket.destroy();
-        const upstream = net.connect({ path: address, allowHalfOpen: true });
-        for (const [local, peer] of [[socket, upstream], [upstream, socket]]) {
-          sockets.add(local); local.setTimeout(30 * 60000, () => local.destroy());
-          local.on('error', () => { local.destroy(); peer.destroy(); });
-          local.on('close', () => {
-            sockets.delete(local);
-            if (local.readableEnded) peer.end(); else peer.destroy();
-          });
+      const sockets = new Set(), active = new Set(), pending = [], target = namespace + match[1];
+      const relay = { sockets, closed: false };
+      const drain = () => {
+        while (!relay.closed && active.size < 8 && pending.length) {
+          const socket = pending.shift();
+          if (socket.destroyed) continue;
+          active.add(socket);
+          const upstream = net.connect({ path: address, allowHalfOpen: true });
+          sockets.add(upstream);
+          let remaining = 2;
+          for (const [local, peer] of [[socket, upstream], [upstream, socket]]) {
+            local.on('error', () => { local.destroy(); peer.destroy(); });
+            local.once('close', () => {
+              sockets.delete(local);
+              if (!local.readableEnded) peer.destroy();
+              if (--remaining === 0) { active.delete(socket); drain(); }
+            });
+          }
+          upstream.setTimeout(30 * 60000, () => upstream.destroy());
+          // Named pipes can retain their writable half after EOF. Retire both handles once the reply drains.
+          upstream.once('end', () => { socket.end(() => socket.destroy()); upstream.destroy(); });
+          socket.pipe(upstream); upstream.pipe(socket, { end: false });
         }
-        socket.pipe(upstream); upstream.pipe(socket);
+      };
+      const server = net.createServer({ allowHalfOpen: true }, socket => {
+        sockets.add(socket); socket.pause(); socket.on('error', () => {});
+        socket.setTimeout(30 * 60000, () => socket.destroy());
+        socket.once('close', () => {
+          sockets.delete(socket);
+          const index = pending.indexOf(socket); if (index !== -1) pending.splice(index, 1);
+        });
+        pending.push(socket); drain();
       });
-      relays.push({ server, sockets });
+      relay.server = server; relays.push(relay);
       // The native launcher applies this job's user/package DACL and low label before resuming its worker.
       server.on('error', failed);
       await new Promise((resolve, reject) => { server.once('error', reject); server.listen(target, resolve); });
