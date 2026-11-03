@@ -21,7 +21,7 @@ const windows = { timeout: 45000, skip: process.platform !== 'win32' ? 'Windows 
 async function loadModule(name, overrides = {}, globals = {}) {
   const file = path.join(__dirname, '../electron/features/lab', name), localRequire = createRequire(file), module = { exports: {} };
   vm.runInNewContext(await fs.readFile(file, 'utf8'), {
-    module, process, Buffer, console, setTimeout, clearTimeout, AbortSignal, __dirname: path.dirname(file),
+    module, process, Buffer, console, setTimeout, clearTimeout, AbortSignal, AbortController, queueMicrotask, __dirname: path.dirname(file),
     require: name => overrides[name] || localRequire(name), ...globals,
   }, { filename: file });
   return module.exports;
@@ -422,6 +422,8 @@ test('Windows diagnostics are opt-in, bounded and accept only fixed events with 
   assert.equal(trace.summary().split('\n').length, 8);
   assert.match(trace.summary(), /frame chars=199/);
   assert.doesNotMatch(trace.summary(), /secret|private/);
+  trace.feed('[lab-win32] executor launch error phase=stdio code=EACCES errno=-4092\n');
+  assert.match(trace.summary(), /phase=stdio code=EACCES errno=-4092/);
   for (const env of [{ NODE_TEST_CONTEXT: 'child-v8' }, { AGENTRIX_LAB_TEST_PREPARE_HOST: '1' }]) {
     const disabled = await loadModule('process.cjs', {}, { process: { platform: 'win32', env } });
     assert.equal(disabled.windowsDiagnostics(), null);
@@ -443,7 +445,90 @@ test('the Windows executor consumes a UTF-8 payload, closes stdin and reports ev
   assert.deepEqual(JSON.parse(result.stdout), { value, diagnostics: null });
   for (const stage of ['entry', 'input wait', 'input first bytes=', 'input end chars=', 'payload parsed',
     'child spawned pid=', 'child exit code=0', 'complete code=0']) assert.ok(result.stderr.includes('[lab-win32] executor ' + stage), stage);
+  if (process.platform === 'win32') for (const stage of ['stdio setup', 'stdio ready', 'spawn begin', 'spawn returned']) {
+    assert.ok(result.stderr.includes('[lab-win32] executor ' + stage), stage);
+  }
   assert.ok(!result.stderr.includes(root)); assert.ok(!result.stderr.includes(value));
   const malformed = await command(process.execPath, [executor], { cwd: root, stdin: 'invalid JSON', timeoutMs: 5000 });
   assert.equal(malformed.code, 1); assert.match(malformed.stderr, /Invalid trusted dispatch payload/);
+  if (process.platform === 'win32') {
+    const missing = await command(process.execPath, [executor], { cwd: root, timeoutMs: 5000,
+      stdin: JSON.stringify({ config: { cwd: root, command: { file: path.join(root, 'missing.exe'), args: [] } } }),
+      env: { ...process.env, AGENTRIX_LAB_DIAGNOSTICS: '1' } });
+    assert.equal(missing.code, 1);
+    assert.match(missing.stderr, /launch error phase=spawn code=ENOENT errno=-?\d+/);
+    assert.ok(!missing.stderr.includes(root));
+  }
 });
+
+test('LOCAL stdio preserves queued input, complete output, exit code and the synchronous child interface',
+  { skip: process.platform !== 'win32', timeout: 15000 }, async t => {
+    const cp = require('node:child_process'), nativeSpawn = cp.spawn;
+    const { spawnWithLocalPipes } = require('../electron/features/lab/sandbox-win32-executor.cjs');
+    let launches = 0;
+    t.mock.method(cp, 'spawn', (file, args, options) => {
+      launches++;
+      assert.ok(options.stdio.every(value => value !== 'pipe' && value !== 'overlapped'));
+      assert.equal(options.windowsHide, true); assert.equal(options.detached, false);
+      return nativeSpawn(file, args, options);
+    });
+    const script = `let bytes=0;process.stdin.on('data',data=>bytes+=data.length);process.stdin.on('end',()=>{
+      process.stdout.write('x'.repeat(262144)+':'+bytes);process.stderr.write('e'.repeat(131072));process.exitCode=7;});`;
+    const child = spawnWithLocalPipes(process.execPath, ['-e', script], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '', spawns = 0;
+    child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+    child.once('spawn', () => { spawns++; assert.ok(child.pid > 0); });
+    const result = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => resolve({ code, signal })); });
+    child.stdin.end(Buffer.alloc(262144, 97));
+    assert.deepEqual(await result, { code: 7, signal: null });
+    assert.equal(stdout, 'x'.repeat(262144) + ':262144'); assert.equal(stderr, 'e'.repeat(131072));
+    assert.equal(child.exitCode, 7); assert.equal(spawns, 1); assert.equal(launches, 1);
+  });
+
+test('LOCAL stdio setup failures report a sanitized errno and close without attempting spawn', async () => {
+  let launches = 0, listenersClosed = 0;
+  const trace = [];
+  const { spawnWithLocalPipes } = await loadModule('sandbox-win32-executor.cjs', {
+    'node:net': { createServer: () => Object.assign(new EventEmitter(), {
+      listen(address) {
+        assert.match(address, /^\\\\\.\\pipe\\LOCAL\\agentrix-lab-stdio-/);
+        queueMicrotask(() => this.emit('error', Object.assign(new Error('private path and secret'), { code: 'EACCES', errno: -4092 })));
+      }, close() { listenersClosed++; },
+    }) },
+    'node:child_process': { spawn: () => { launches++; assert.fail('a failed pipe must prevent spawn'); } },
+  }, { process: { platform: 'win32' } });
+  const child = spawnWithLocalPipes('unused', [], { stdio: ['pipe', 'pipe', 'pipe'] }, line => trace.push(line));
+  let failure;
+  child.once('error', error => { failure = error; });
+  await new Promise(resolve => child.once('close', resolve));
+  assert.equal(failure.code, 'EACCES'); assert.equal(failure.errno, -4092); assert.equal(failure.phase, 'stdio');
+  assert.doesNotMatch(failure.message, /private|secret/);
+  assert.ok(trace.includes('launch error phase=stdio code=EACCES errno=-4092'));
+  assert.equal(launches, 0); assert.ok(listenersClosed >= 3);
+});
+
+test('LOCAL stdio cancellation before connection admits no worker and closes every pending listener', async () => {
+  let listenersClosed = 0;
+  const { spawnWithLocalPipes } = await loadModule('sandbox-win32-executor.cjs', {
+    'node:net': { createServer: () => Object.assign(new EventEmitter(), { listen() {}, close() { listenersClosed++; } }) },
+    'node:child_process': { spawn: () => assert.fail('cancelled preparation must never spawn') },
+  }, { process: { platform: 'win32' } });
+  const child = spawnWithLocalPipes('unused', [], { stdio: 'pipe' });
+  let failure; child.once('error', error => { failure = error; });
+  const closed = new Promise(resolve => child.once('close', resolve));
+  assert.equal(child.kill(), true); await closed;
+  assert.equal(failure.code, 'ECANCELED'); assert.equal(child.killed, true); assert.ok(listenersClosed >= 3);
+});
+
+test('a missing executable reports the spawn phase immediately with LOCAL stdio',
+  { skip: process.platform !== 'win32', timeout: 10000 }, async t => {
+    const { spawnWithLocalPipes } = require('../electron/features/lab/sandbox-win32-executor.cjs');
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lab-missing-executable-'));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    const trace = [], child = spawnWithLocalPipes(path.join(root, 'missing.exe'), [], { stdio: 'pipe' }, line => trace.push(line));
+    let failure; child.once('error', error => { failure = error; });
+    await new Promise(resolve => child.once('close', resolve));
+    assert.equal(failure.code, 'ENOENT'); assert.equal(failure.phase, 'spawn');
+    assert.ok(trace.some(line => line.startsWith('launch error phase=spawn code=ENOENT errno=')));
+    assert.ok(trace.every(line => !line.includes(root)));
+  });

@@ -16,6 +16,7 @@ const WINDOWS_DIAGNOSTIC_EVENTS = new Set([
   'host preparation begin', 'host ready=# elevated=#', 'executor entry', 'executor input wait',
   'executor input first bytes=#', 'executor input end chars=#', 'executor payload parsed', 'executor child spawned pid=#',
   'executor child exit code=#', 'executor complete code=#', 'executor execute failed',
+  'executor stdio setup', 'executor stdio ready', 'executor spawn begin', 'executor spawn returned',
 ]);
 
 // CI diagnostics contain fixed stage names and numeric counters, never argv, environment or worker output.
@@ -30,7 +31,9 @@ function windowsDiagnostics() {
         const line = tail.slice(0, index).replace(/\r$/, ''); tail = tail.slice(index + 1);
         if (!line.startsWith('[lab-win32] ')) continue;
         const event = line.slice(12).replace(/ ms=\d+$/, '').replace(/=(?:-?\d+|null)(?= |$)/g, '=#');
-        if (!WINDOWS_DIAGNOSTIC_EVENTS.has(event) && !/^executor child error code=(?:E[A-Z0-9_]{1,20}|UNKNOWN)$/.test(event)) continue;
+        if (!WINDOWS_DIAGNOSTIC_EVENTS.has(event) &&
+          !/^executor child error code=(?:E[A-Z0-9_]{1,31}|UNKNOWN)$/.test(event) &&
+          !/^executor launch error phase=(?:stdio|spawn) code=E[A-Z0-9_]{1,31} errno=#$/.test(event)) continue;
         recent.push(line); if (recent.length > 8) recent.shift();
         if (emitted++ < 128) console.error(line);
       }
