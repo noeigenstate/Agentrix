@@ -1,6 +1,6 @@
 // The roundtable minutes as a page the owner reads before work starts: one row per worker's understanding, then the
-// questions raised and how they were settled. Plain Node (built-ins only, no file reads), carried by the dispatch helper
-// (integration/dispatch.cjs RUNTIME_FILES); `node dispatch.cjs minutes` writes it beside the Markdown minutes.
+// ambiguities, misreadings or blockers and the planner's replies. Plain Node (built-ins only, no file reads), carried by
+// the dispatch helper (integration/dispatch.cjs RUNTIME_FILES); `node dispatch.cjs minutes` writes it beside the Markdown minutes.
 //
 // minutes: { meeting, round, generatedAt (ms), language ('zh' | 'en'; anything else reads as zh),
 //   rows: [{ who, title, files, goal, provides, uses, doneWhen, questions,
@@ -14,12 +14,12 @@ const ZH = {
   round: round => `第 ${round} 轮圆桌`,
   generated: '生成于',
   summary: (confirmed, total) => `已确认 ${confirmed} / ${total}`,
-  understandings: '各子模型的理解',
-  columns: ['子模型', '任务', '负责的文件', '提供的接口', '用到的接口', '怎样算完成', '疑问或风险', '状态'],
+  understandings: '各子模型的任务复述',
+  columns: ['子模型', '任务', '负责的文件', '提供的接口', '用到的接口', '怎样算完成', '歧义或阻碍', '状态'],
   noRows: '还没有子模型的记录',
-  issues: '分歧与答复',
-  issueColumns: ['分歧或疑问', '谁提出', '主模型的答复', '结果'],
-  noIssues: '没有分歧或疑问',
+  issues: '澄清与纠正',
+  issueColumns: ['歧义、误读或阻碍', '谁提出', '规划师的答复', '结果'],
+  noIssues: '没有需要澄清或纠正的问题',
   statuses: { confirmed: '✅ 已确认', open: '⚠️ 待澄清', understood: '📝 已复述', incomplete: '✖ 不完整', invalid: '✖ 不完整' },
   openPrefix: '未解决：',
   openCount: count => `${count} 个未解决问题`,
@@ -29,12 +29,12 @@ const EN = {
   round: round => `Round ${round} roundtable`,
   generated: 'Generated',
   summary: (confirmed, total) => `Confirmed ${confirmed} of ${total}`,
-  understandings: 'What each worker understood',
-  columns: ['Worker', 'Task', 'Files owned', 'Provides', 'Uses', 'Done when', 'Questions or risks', 'Status'],
+  understandings: "Each worker's task restatement",
+  columns: ['Worker', 'Task', 'Files owned', 'Provides', 'Uses', 'Done when', 'Ambiguities or blockers', 'Status'],
   noRows: 'No worker has answered yet',
-  issues: 'Disagreements and answers',
-  issueColumns: ['Disagreement or question', 'Raised by', "Lead's answer", 'Result'],
-  noIssues: 'No disagreements or questions',
+  issues: 'Clarifications and corrections',
+  issueColumns: ['Ambiguity, misreading or blocker', 'Raised by', "Planner's answer", 'Result'],
+  noIssues: 'No clarifications or corrections needed',
   statuses: { confirmed: '✅ Confirmed', open: '⚠️ Open', understood: '📝 Understood', incomplete: '✖ Incomplete', invalid: '✖ Incomplete' },
   openPrefix: 'Open: ',
   openCount: count => `${count} open question${count === 1 ? '' : 's'}`,

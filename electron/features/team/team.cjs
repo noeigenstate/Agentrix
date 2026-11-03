@@ -95,9 +95,9 @@ function confirmationOf(answer) {
 
 function meetingRequest(phase) {
   const instruction = phase === 'confirmation'
-    ? 'The brief carries the roundtable minutes. Check that the other workers understand your shared interfaces the same way and that your questions are answered. End with exactly:\n\n'
-      + '## Roundtable confirmation\nStatus: confirmed\n\nor use Status: open followed by bullet lines naming what is unresolved.'
-    : 'Read the whole plan and restate your own task so the lead can check it before work. Answer in the language of the plan, ending with exactly this block (fields may continue on following lines; use none where empty):\n\n'
+    ? 'The brief carries the roundtable minutes. Check that the minutes record your task as you restated it, including the planner\'s corrections, and that your shared interfaces match those of the other workers. Then confirm. End with exactly:\n\n'
+      + '## Roundtable confirmation\nStatus: confirmed\n\nUse Status: open only for a misreading that is still uncorrected, followed by bullet lines naming it.'
+    : 'Read the whole plan and restate your own task so the planner can check that the brief reached you as meant. Do not propose alternatives or reopen decisions. Under "Questions and risks", list only points where the brief is ambiguous or contradicts itself, and facts in the code that make it impossible as written; write none if there are none. Answer in the language of the plan, ending with exactly this block (fields may continue on following lines; use none where empty):\n\n'
       + '## Roundtable understanding\n- Goal: …\n- Files: …\n- Provides: …\n- Uses: …\n- Done when: …\n- Questions and risks: …';
   return '# Roundtable before work\n\nThis run is the roundtable, not the work. Change no file in this run, including files in the agreed scope. '
     + instruction + '\n\nIf you have findings for the ledger, put that section before the final roundtable block.\n';
