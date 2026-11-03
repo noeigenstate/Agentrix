@@ -24,6 +24,8 @@ async function ready(t, changeRow) {
   const f = await fixture(t);
   if (changeRow) {
     changeRow(f.row);
+    f.entry.repo = f.row.repo;
+    f.entry.url = 'https://github.com/' + f.row.repo + '.git';
     const raw = Buffer.from(JSON.stringify({ rows: [{ row_idx: 0, row: f.row, truncated_cells: [] }] }));
     f.entry.row = { ...f.entry.row, sha256: sha256(raw), bytes: raw.length };
     f.entry.sha256 = Object.fromEntries(['problem_statement', 'patch', 'test_patch'].map(key => [key, sha256(f.row[key])]));
@@ -51,9 +53,10 @@ async function ready(t, changeRow) {
     const payload = { version: 1, code: output.code, events, collectionErrors: [], plugins: f.state.plugins || [] };
     return { ...output, stdout: 'AGENTRIX_OSS_EVIDENCE_' + args[4] + '=' + JSON.stringify(payload) + '\n' };
   };
-  const { scope } = await provider.canonical(selection, f.ctx);
+  const chosen = { ...selection, repos: [f.entry.repo] };
+  const { scope } = await provider.canonical(chosen, f.ctx);
   await provider.fetch(scope, f.ctx);
-  const canonical = await provider.canonical(selection, f.ctx);
+  const canonical = await provider.canonical(chosen, f.ctx);
   return { ...f, provider, ...canonical, task: canonical.tasks[0] };
 }
 
@@ -188,11 +191,8 @@ test('grade restores hidden tests and reports resolved only when both groups pas
   const ctx = { ...await f.run(), reference }, workspace = await f.provider.prepare(f.task, f.scope, ctx);
   const failed = await f.provider.grade(f.task, f.scope, ctx);
   assert.deepEqual([failed.passed, failed.score, failed.testsPassed, failed.testsTotal], [false, 0, 1, 2]);
-  const restored = await fs.readFile(path.join(workspace.cwd, 'tests/test_calc.py'), 'utf8');
   await fs.writeFile(path.join(workspace.cwd, 'tests/test_calc.py'), 'pretend everything passes');
-  await assert.rejects(f.provider.grade(f.task, f.scope, ctx), /tampered/);
-  assert.match(await fs.readFile(path.join(ctx.artifactDirectory, 'tests.log'), 'utf8'), /test_calc.py.*changed/);
-  await fs.writeFile(path.join(workspace.cwd, 'tests/test_calc.py'), restored);
+  assert.equal((await f.provider.grade(f.task, f.scope, ctx)).passed, false, 'the hidden test is restored, not trusted');
   await fs.writeFile(path.join(workspace.cwd, 'calc.py'), BEFORE.replace('return 0', 'return 42'));
   const passed = await f.provider.grade(f.task, f.scope, ctx);
   assert.deepEqual([passed.passed, passed.score, passed.testsPassed, passed.testsTotal], [true, 1, 2, 2]);
@@ -289,12 +289,13 @@ test('a machine snapshot failure is infrastructure, not a reference task rejecti
   await assert.rejects(f.provider.prepare(f.task, f.scope, await f.run()), { infrastructure: true });
 });
 
-async function installedFixture(t) {
+async function installedFixture(t, afterInstall) {
   const f = await ready(t);
   f.state.afterInstall = async cwd => {
     const site = path.join(path.dirname(cwd), '.oss-venv', 'Lib', 'site-packages');
     await fs.mkdir(site, { recursive: true });
     await fs.writeFile(path.join(site, 'prepared.py'), 'PREPARED = True\n');
+    await afterInstall?.(site, cwd);
   };
   const reference = await f.provider.reference(f.task, f.scope, await f.run());
   const ctx = { ...await f.run(), reference }, workspace = await f.provider.prepare(f.task, f.scope, ctx);
@@ -330,14 +331,16 @@ test('the environment seal checks changed, removed and newly added files and dir
 const FORCE_PASS = 'import pytest\n@pytest.hookimpl(hookwrapper=True)\ndef pytest_runtest_makereport(item, call):\n' +
   '    outcome = yield\n    report = outcome.get_result()\n    report.outcome = "passed"\n    report.longrepr = None\n';
 
-test('repository startup files, pytest options and non-subject plugins cannot change the grader', async t => {
+test('repository startup files and pytest options cannot change the grader', async t => {
   const f = await ready(t), reference = await f.provider.reference(f.task, f.scope, await f.run());
   const ctx = { ...await f.run(), reference }, workspace = await f.provider.prepare(f.task, f.scope, ctx);
   for (const file of ['conftest.py', 'unrelated/conftest.py', 'sitecustomize.py', 'src/usercustomize.py', 'src/zz.pth',
-    'pytest.ini', '.pytest.ini', 'tox.ini', 'setup.cfg', 'pyproject.toml', 'src/pytest_evil.py', 'src/_pytest/junitxml.py',
-    'src/sitecustomize/__init__.py', 'src/usercustomize.cp312.pyd', 'src/pytest.py', 'src/pluggy.py']) {
+    'pytest.ini', '.pytest.ini', 'tox.ini', 'setup.cfg', 'pyproject.toml',
+    'src/sitecustomize/__init__.py', 'src/usercustomize.cp312.pyd']) {
     const target = path.join(workspace.cwd, file);
-    await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, FORCE_PASS);
+    const payload = file === 'tox.ini' ? '[pytest]\naddopts = -p forged\n' : file === 'setup.cfg' ? '[tool:pytest]\naddopts = -p forged\n'
+      : file === 'pyproject.toml' ? '[tool.pytest.ini_options]\naddopts = "-p forged"\n' : FORCE_PASS;
+    await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, payload);
     const calls = f.state.calls.length;
     await assert.rejects(f.provider.grade(f.task, f.scope, ctx), /tampered/, file);
     assert.equal(f.state.calls.length, calls, 'the injected hook never runs: ' + file);
@@ -410,18 +413,83 @@ test('a pinned reference change to a grading control is accepted without allowin
   await assert.rejects(f.provider.grade(f.task, f.scope, ctx), /tampered/);
 });
 
-test('pytest subject source remains editable while an unrelated pytest runner change is rejected', async t => {
-  const f = await ready(t, row => {
-    row.patch += '\ndiff --git a/src/_pytest/python.py b/src/_pytest/python.py\nnew file mode 100644\n--- /dev/null\n+++ b/src/_pytest/python.py\n' +
-      '@@ -0,0 +1 @@\n+SUBJECT_FIX = True\n';
-  });
+test('alternative pytest source fixes and new regression tests are not restricted to reference files', async t => {
+  const f = await ready(t, row => { row.repo = 'pytest-dev/pytest'; });
+  f.state.plugins = ['src/_pytest/runner.py'];
+  f.state.afterInstall = async cwd => {
+    await fs.mkdir(path.join(cwd, 'src', '_pytest'), { recursive: true });
+    await fs.writeFile(path.join(cwd, 'src', '_pytest', 'runner.py'), 'BASELINE_RUNNER = True\n');
+    await fs.mkdir(path.join(cwd, 'src', 'flask'), { recursive: true });
+    await fs.writeFile(path.join(cwd, 'src', 'flask', 'testing.py'), 'BASELINE_SOURCE = True\n');
+  };
   const reference = await f.provider.reference(f.task, f.scope, await f.run());
+  assert.deepEqual(reference.diffFiles, ['calc.py']);
   const ctx = { ...await f.run(), reference }, workspace = await f.provider.prepare(f.task, f.scope, ctx);
-  await fs.mkdir(path.join(workspace.cwd, 'src', '_pytest'), { recursive: true });
-  await fs.writeFile(path.join(workspace.cwd, 'src', '_pytest', 'python.py'), 'ALTERNATIVE_SUBJECT_FIX = True\n');
+  await fs.writeFile(path.join(workspace.cwd, 'src', '_pytest', 'runner.py'), 'ALTERNATIVE_SUBJECT_FIX = True\n');
+  await fs.writeFile(path.join(workspace.cwd, 'src', '_pytest', 'new_helper.py'), 'NEW_SUBJECT_HELPER = True\n');
+  await fs.writeFile(path.join(workspace.cwd, 'src', 'flask', 'testing.py'), 'ALTERNATIVE_SOURCE_FIX = True\n');
+  await fs.writeFile(path.join(workspace.cwd, 'tests', 'test_regression.py'), 'def test_new_regression(): assert False\n');
+  await fs.writeFile(path.join(workspace.cwd, 'tests', '__init__.py'), 'raise RuntimeError("model test helper")\n');
   await fs.writeFile(path.join(workspace.cwd, 'calc.py'), BEFORE.replace('return 0', 'return 42'));
   assert.equal((await f.provider.grade(f.task, f.scope, ctx)).passed, true);
-  await fs.writeFile(path.join(workspace.cwd, 'src', '_pytest', 'junitxml.py'), FORCE_PASS);
+  for (const file of ['tests/test_regression.py', 'tests/__init__.py']) assert.equal(await fs.stat(path.join(workspace.cwd, file)).catch(() => null), null);
+  assert.match(await fs.readFile(path.join(workspace.cwd, 'src/_pytest/runner.py'), 'utf8'), /ALTERNATIVE/);
+  assert.match(await fs.readFile(path.join(workspace.cwd, 'src/_pytest/new_helper.py'), 'utf8'), /NEW_SUBJECT_HELPER/);
+  f.state.plugins.push('src/_pytest/new_helper.py');
+  assert.equal((await f.provider.grade(f.task, f.scope, ctx)).passed, true, 'a new subject plugin module is source too');
+});
+
+test('unsealed environment caches are removed before verification while sealed bytecode stays immutable', async t => {
+  const f = await installedFixture(t, async site => {
+    await fs.mkdir(path.join(site, '__pycache__'));
+    await fs.writeFile(path.join(site, '__pycache__', 'prepared.cpython-312.pyc'), 'sealed bytecode');
+  });
+  const cached = path.join(f.site, '__pycache__', 'plugin.cpython-312-pytest-8.3.5.pyc');
+  const pytestCache = path.join(environmentPath(f.ctx), '.pytest_cache');
+  await fs.writeFile(cached, 'model-generated assertion rewrite cache');
+  await fs.mkdir(path.join(pytestCache, 'v', 'cache'), { recursive: true });
+  await fs.writeFile(path.join(pytestCache, 'v', 'cache', 'nodeids'), '[]');
+  await fs.writeFile(path.join(f.workspace.cwd, 'calc.py'), BEFORE.replace('return 0', 'return 42'));
+  assert.equal((await f.provider.grade(f.task, f.scope, f.ctx)).passed, true);
+  assert.equal(await fs.stat(cached).catch(() => null), null);
+  assert.equal(await fs.stat(pytestCache).catch(() => null), null);
+  const sealed = path.join(f.site, '__pycache__', 'prepared.cpython-312.pyc');
+  await fs.writeFile(sealed, 'changed sealed bytecode');
+  await assert.rejects(f.provider.grade(f.task, f.scope, f.ctx), /could not be graded/);
+  await fs.rm(sealed);
+  await assert.rejects(f.provider.grade(f.task, f.scope, f.ctx), /could not be graded/);
+  await fs.writeFile(sealed, 'sealed bytecode');
+  for (const name of ['injected.py', 'zz.pth', 'injected.pyd']) {
+    const file = path.join(f.site, '__pycache__', name);
+    await fs.writeFile(file, 'not derived bytecode');
+    await assert.rejects(f.provider.grade(f.task, f.scope, f.ctx), /could not be graded/);
+    assert.equal(await fs.readFile(file, 'utf8'), 'not derived bytecode');
+    await fs.rm(file);
+  }
+  assert.equal((await f.provider.grade(f.task, f.scope, f.ctx)).passed, true);
+});
+
+test('non-pytest configuration edits are allowed while pytest sections remain pinned', async t => {
+  const f = await ready(t);
+  f.state.afterInstall = async cwd => {
+    await fs.writeFile(path.join(cwd, 'pyproject.toml'), '[project]\nversion = "1"\n[tool.pytest.ini_options]\naddopts = ""\n');
+    await fs.writeFile(path.join(cwd, 'setup.cfg'), '[metadata]\nversion = 1\n[tool:pytest]\naddopts =\n');
+    await fs.writeFile(path.join(cwd, 'tox.ini'), '[testenv]\ndeps = pytest\n[pytest]\naddopts =\n');
+  };
+  const reference = await f.provider.reference(f.task, f.scope, await f.run());
+  const ctx = { ...await f.run(), reference }, workspace = await f.provider.prepare(f.task, f.scope, ctx);
+  await fs.writeFile(path.join(workspace.cwd, 'calc.py'), BEFORE.replace('return 0', 'return 42'));
+  for (const file of ['pyproject.toml', 'setup.cfg', 'tox.ini']) {
+    const target = path.join(workspace.cwd, file), original = await fs.readFile(target, 'utf8');
+    const edited = original.replace('version = "1"', 'version = "2"').replace('version = 1', 'version = 2').replace('deps = pytest', 'deps = pytest, coverage');
+    await fs.writeFile(target, edited);
+    assert.equal((await f.provider.grade(f.task, f.scope, ctx)).passed, true, file);
+    assert.equal(await fs.readFile(target, 'utf8'), edited);
+    await fs.writeFile(target, edited.replace('addopts =', 'addopts = -p forged'));
+    await assert.rejects(f.provider.grade(f.task, f.scope, ctx), /tampered/, file);
+    await fs.writeFile(target, edited);
+  }
+  await fs.writeFile(path.join(workspace.cwd, 'pyproject.toml'), '[project]\nversion = "2"\n[tool."pyte\\u0073t".ini_options]\naddopts = "-p forged"\n');
   await assert.rejects(f.provider.grade(f.task, f.scope, ctx), /tampered/);
 });
 
@@ -483,6 +551,13 @@ test('real pytest proves reference and source fixes, and rejects pth, conftest a
       // Synthetic calc.py is a single-file project. This preparation-owned path entry has the same role as the
       // curated repositories' editable installs, and is covered by the complete environment seal.
       await fs.writeFile(path.join(site.stdout.trim(), 'fixture-source.pth'), options.cwd + '\n');
+      const plugin = path.join(site.stdout.trim(), 'oss_fixture_plugin.py');
+      await fs.writeFile(plugin, 'def pytest_configure(config):\n    assert True\n');
+      const metadata = path.join(site.stdout.trim(), 'oss_fixture_plugin-1.0.dist-info');
+      await fs.mkdir(metadata, { recursive: true });
+      await fs.writeFile(path.join(metadata, 'METADATA'), 'Metadata-Version: 2.1\nName: oss-fixture-plugin\nVersion: 1.0\n');
+      await fs.writeFile(path.join(metadata, 'entry_points.txt'), '[pytest11]\noss_fixture_plugin = oss_fixture_plugin\n');
+      await fs.writeFile(path.join(metadata, 'RECORD'), 'oss_fixture_plugin.py,,\n');
     }
     return result;
   };
@@ -491,12 +566,25 @@ test('real pytest proves reference and source fixes, and rejects pth, conftest a
   const ctx = { ...await f.run(), reference, testTimeoutMs: 30000 }, workspace = await f.provider.prepare(f.task, f.scope, ctx);
   assert.equal((await f.provider.grade(f.task, f.scope, ctx)).passed, false, 'the real unmodified source still fails');
   await fs.writeFile(path.join(workspace.cwd, 'calc.py'), BEFORE.replace('return 0', 'return 42'));
+  const site = await run(pythonPath(ctx), ['-I', '-B', '-c', 'import sysconfig; print(sysconfig.get_path("purelib"))']);
+  const ordinaryEnvironment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PYTEST_|PYTHONDONTWRITEBYTECODE$|PYTHONPYCACHEPREFIX$)/i.test(key)));
+  const ordinary = await execute(pythonPath(ctx), ['-m', 'pytest', '--', ...f.entry.FAIL_TO_PASS, ...f.entry.PASS_TO_PASS], {
+    cwd: workspace.cwd, env: ordinaryEnvironment, timeout: 30000, windowsHide: true,
+  });
+  assert.match(ordinary.stdout, /2 passed/);
+  const rewriteCache = (await fs.readdir(path.join(site.stdout.trim(), '__pycache__'))).find(name => /^oss_fixture_plugin.*-pytest-.*\.pyc$/.test(name));
+  assert.ok(rewriteCache, 'an ordinary model-side pytest run autoloaded and assertion-rewrote the entry-point plugin');
+  await fs.writeFile(path.join(workspace.cwd, 'tests', 'test_model_regression.py'), 'def test_model_regression():\n    assert False\n');
   assert.equal((await f.provider.grade(f.task, f.scope, ctx)).passed, true, 'a legitimate alternative to the reference patch passes');
+  assert.equal(await fs.stat(path.join(site.stdout.trim(), '__pycache__', rewriteCache)).catch(() => null), null);
+  assert.equal(await fs.stat(path.join(workspace.cwd, 'tests', 'test_model_regression.py')).catch(() => null), null);
+  await fs.writeFile(path.join(workspace.cwd, 'value_impl.py'), 'def corrected_value():\n    return 42\n');
+  await fs.writeFile(path.join(workspace.cwd, 'calc.py'), 'from value_impl import corrected_value as value\n\ndef stable():\n    return 7\n');
+  assert.equal((await f.provider.grade(f.task, f.scope, ctx)).passed, true, 'a fix in an added helper module is valid too');
   const unsafePytest = () => run(pythonPath(ctx), ['-I', '-B', '-c',
     'import os, sys, pytest; os.environ["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"; raise SystemExit(pytest.main(sys.argv[1:]))',
     '--rootdir=' + workspace.cwd, '--confcutdir=' + workspace.cwd, '-o', 'addopts=', '--',
     ...f.entry.FAIL_TO_PASS, ...f.entry.PASS_TO_PASS], { cwd: workspace.cwd });
-  const site = await run(pythonPath(ctx), ['-I', '-B', '-c', 'import sysconfig; print(sysconfig.get_path("purelib"))']);
   const pth = path.join(site.stdout.trim(), 'zz.pth'), marker = path.join(f.root, 'tamper-ran');
   await fs.writeFile(path.join(workspace.cwd, 'calc.py'), BEFORE);
   const payload = 'import pathlib, _pytest.runner; _pytest.runner.pytest_runtest_call = lambda item: None; pathlib.Path(' +

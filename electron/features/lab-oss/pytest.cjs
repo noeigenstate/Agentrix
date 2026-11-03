@@ -5,6 +5,7 @@ const { testPath, patchPaths, replaceFile, mirrorDirectory, taskDirectory, abort
 const { pythonPath, environmentPath } = require('./environment.cjs');
 const {
   verifyEnvironment, workspaceControls, verifyControls, discardBytecode, rejectReports, logError,
+  walk, subjectPlugin,
 } = require('./integrity.cjs');
 
 const cwdFor = ctx => path.join(ctx.workspaceRoot, 'worktree');
@@ -17,18 +18,28 @@ function caseKey(nodeid) {
 
 async function restoreTests(entry, row, ctx) {
   const cwd = cwdFor(ctx), mirror = mirrorDirectory(ctx, entry);
-  const files = [...new Set([...testsFor(entry).map(testPath), ...patchPaths(row.test_patch)])];
-  const helpers = new Set(['conftest.py', 'pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini']);
-  for (const file of files) {
+  const selected = [...new Set([...testsFor(entry).map(testPath), ...patchPaths(row.test_patch)])];
+  const roots = new Set(selected.flatMap(file => {
+    const parts = file.split('/'), index = parts.findIndex(part => /^(?:tests?|testing)$/.test(part));
+    return index < 0 ? [] : [parts.slice(0, index + 1).join('/') + '/'];
+  }));
+  const inTests = file => [...roots].some(root => file.startsWith(root));
+  const helpers = new Set(['conftest.py']);
+  for (const file of selected) {
     const parts = file.split('/'); parts.pop();
     while (parts.length) { helpers.add(parts.join('/') + '/conftest.py'); parts.pop(); }
   }
   const fixes = new Set(patchPaths(row.patch));
-  for (const file of helpers) if (!files.includes(file) && !fixes.has(file)) files.push(file);
-  const present = new Set((await ctx.tools.git(mirror, ['ls-tree', '-rz', '--name-only', entry.base, '--', ...files], {
+  const baseFiles = (await ctx.tools.git(mirror, ['ls-tree', '-rz', '--name-only', entry.base], {
     signal: ctx.signal,
-  })).split('\0').filter(Boolean));
+  })).split('\0').filter(Boolean);
+  const files = new Set([...selected, ...baseFiles.filter(inTests), ...helpers]);
+  await walk(cwd, ctx, async (file, record) => {
+    if (record.type !== 'directory' && inTests(file)) files.add(file);
+  });
+  const present = new Set(baseFiles);
   for (const file of files) {
+    if (fixes.has(file) && !selected.includes(file)) continue;
     abort(ctx);
     const content = present.has(file) ? await ctx.tools.git(mirror, ['show', entry.base + ':' + file], {
       signal: ctx.signal, raw: true,
@@ -79,7 +90,7 @@ async function runTests(entry, ctx, label) {
     await verifyEnvironment(ctx, environmentPath(ctx));
     await verifyControls(ctx, controls);
     const report = evidenceOf(entry, output, nonce), measured = resultOf(entry, report, output.code);
-    if (ctx.reference && report.plugins.some(file => !ctx.reference.plugins?.includes(file))) {
+    if (ctx.reference && report.plugins.some(file => !subjectPlugin(file, entry.repo) && !ctx.reference.plugins?.includes(file))) {
       throw new Error('An OSS pytest plugin was not present in the validated reference.');
     }
     // Main writes the artifact from this grading invocation's events. No model-owned report is ever read.
