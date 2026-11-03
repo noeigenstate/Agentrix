@@ -126,10 +126,32 @@ function spawnWithLocalPipes(file, args, options = {}, trace = () => {}) {
   return child;
 }
 
-module.exports = { spawnWithLocalPipes };
+let meterSink;
+function windowsMeterSink(bootstrap) {
+  if (!meterSink) {
+    const filename = path.join(__dirname, 'meter-sink.cjs');
+    let source = fs.readFileSync(filename, 'utf8');
+    // A Windows named-pipe shutdown closes the read side too. Keep it open until the framed acknowledgement.
+    for (const [from, to] of [
+      ["socket.once('connect', () => socket.end(JSON.stringify({", "socket.once('connect', () => socket.write(JSON.stringify({"],
+      ['acknowledged = JSON.parse(answer.trim()).ok === true;', 'acknowledged = JSON.parse(answer.trim()).ok === true; socket.destroy();'],
+    ]) {
+      if (!source.includes(from)) throw new Error('The trusted lab meter has changed.');
+      source = source.replace(from, to);
+    }
+    const Module = require('node:module'), compiled = new Module(filename, module);
+    compiled.filename = filename; compiled._compile(source, filename);
+    meterSink = compiled.exports.meterSink;
+  }
+  return meterSink(bootstrap);
+}
+
+module.exports = { spawnWithLocalPipes, windowsMeterSink };
 if (require.main === module) {
   let source = fs.readFileSync(path.join(__dirname, 'executor.cjs'), 'utf8');
   for (const [from, to] of [
+    ["const { meterSink } = require('./meter-sink.cjs');",
+      "const { windowsMeterSink: meterSink } = require('./sandbox-win32-executor.cjs');"],
     ["const { spawn } = require('node:child_process');",
       "const { spawnWithLocalPipes } = require('./sandbox-win32-executor.cjs'); const spawn = (file, args, options) => spawnWithLocalPipes(file, args, options, trace);"],
     ["const input = fs.createReadStream(null, { fd: 3, autoClose: false, encoding: 'utf8' });",

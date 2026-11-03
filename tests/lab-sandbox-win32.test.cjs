@@ -173,8 +173,10 @@ test('Windows LPAC reaches its own broker and rejects another run pipe and capab
   await own.session.broker(async () => { accepted++; return { code: 0, stdout: 'own broker', stderr: '' }; });
   await other.session.broker(async () => { foreign++; return { code: 0, stdout: 'other broker', stderr: '' }; });
   own.session.active = true; other.session.active = true;
+  own.session.allowDelegation = false;
+  const rpc = JSON.parse(await fs.readFile(path.join(own.session.tools, 'client.json'), 'utf8'));
   const code = `const net=require('node:net'),diagnostics=[];
-    const own=JSON.parse(process.env.AGENTRIX_LAB_BROKER),other=JSON.parse(process.argv[1]);
+    const own=JSON.parse(process.env.AGENTRIX_LAB_BROKER),other=JSON.parse(process.argv[1]),rpc=JSON.parse(process.argv[2]);
     function request(address,capability,role){return new Promise(resolve=>{
       const socket=net.connect(address);let body='',done=false,connected=false;
       const finish=value=>{if(done)return;done=true;socket.destroy();resolve(value)};
@@ -190,8 +192,9 @@ test('Windows LPAC reaches its own broker and rejects another run pipe and capab
       replies.wrongCapability=await request(own.address,other.capability,'wrong-capability');
       replies.foreignPipe=await request(other.address,own.capability,'foreign');
       replies.foreignPipeWithItsCapability=await request(other.address,other.capability,'foreign-known-capability');
+      replies.rpc=await request(rpc.address,rpc.capability,'rpc');
       console.log(JSON.stringify({...replies,diagnostics}));})().catch(()=>process.exit(1));`;
-  const result = await own.session.execute(own.nodePath, ['-e', code, other.session.brokerEnvironment],
+  const result = await own.session.execute(own.nodePath, ['-e', code, other.session.brokerEnvironment, JSON.stringify(rpc)],
     { cwd: own.workspaceRoot, timeoutMs: 15000 });
   assert.equal(result.code, 0, result.stderr);
   const replies = JSON.parse(result.stdout);
@@ -203,6 +206,21 @@ test('Windows LPAC reaches its own broker and rejects another run pipe and capab
   assert.deepEqual(replies.foreignPipe, { denied: true });
   assert.deepEqual(replies.foreignPipeWithItsCapability, { denied: true });
   assert.equal(accepted, 9); assert.equal(foreign, 0);
+  assert.equal(replies.rpc.exitCode, 1, 'RPC reaches its host handler and is denied by dispatch policy, not by pipe lookup');
+  assert.match(replies.rpc.output, /Invalid lab dispatch request/);
+  const { LabUsage } = require('../electron/features/lab/usage.cjs');
+  const usage = new LabUsage({ directory: own.session.privateDirectory, socketDirectory: own.labRoot,
+    runId: own.session.runId, project: { id: 'fixture' }, prices: {} });
+  await usage.start(); own.session.usage = usage;
+  try {
+    own.session.trustedHelper = path.join(own.session.privateDirectory, 'trusted-fixture.json');
+    await fs.writeFile(own.session.trustedHelper, JSON.stringify({ 'dispatch.cjs':
+      "module.exports.run=async()=>{console.log('trusted helper reached');return 0;};" }));
+    const metered = await own.session.root([], { cwd: own.workspaceRoot, network: false, timeoutMs: 10000 });
+    assert.equal(metered.code, 0, metered.stderr);
+    assert.match(metered.stdout, /trusted helper reached/, 'the trusted executor completed its real meter handshake');
+    assert.equal(own.session.modelStarted, false);
+  } finally { await usage.close(); }
 });
 
 test('Windows root leases serialize cleanup after launcher exit and remove inherited and protected grants', windows, async t => {
@@ -341,8 +359,17 @@ public partial class LabSandbox {
     } finally { LocalFree(descriptor);LocalFree(own);LocalFree(foreign); }
   }
   static byte[] CopyDescriptor(IntPtr descriptor) { var bytes=new byte[GetSecurityDescriptorLength(descriptor)];Marshal.Copy(descriptor,bytes,0,bytes.Length);return bytes; }
+  public static string TestPipeNamespace(string run,string job) { return PipeNamespace(run,job); }
+  public static void TestScopedPipeAcl(string pipe,string run,string job) {
+    IntPtr sid;CheckCode((uint)DeriveAppContainerSidFromAppContainerName(ProfileName(run,job),out sid));
+    try { PipeAcl(pipe,sid);if(!Allows(FileAcl(pipe),SidString(sid),0x12019f))throw new Exception("scoped pipe grant missing"); }
+    finally { FreeSid(sid); }
+  }
 }
-class PipeSecurityProbe { public static void Main(string[] args) { LabSandbox.TestPipeSecurity(args[0]); } }
+class PipeSecurityProbe { public static void Main(string[] args) {
+  if(args.Length==4) LabSandbox.TestScopedPipeAcl(args[1],args[2],args[3]);
+  else if(args.Length==3) Console.Write(LabSandbox.TestPipeNamespace(args[1],args[2])); else LabSandbox.TestPipeSecurity(args[0]);
+} }
 `;
     const input = path.join(root, 'probe.cs'), executable = path.join(root, 'probe.exe');
     await fs.writeFile(input, require('../electron/features/lab/sandbox-win32-native.cjs') + nativeSource + probe);
@@ -359,6 +386,63 @@ class PipeSecurityProbe { public static void Main(string[] args) { LabSandbox.Te
     const result = await execute(executable, [address], { timeout: 3000, windowsHide: true });
     if (result.stdout === 'restricted-test-host') return t.skip('A restricted test host cannot create independent restricting SID lists. Elevated CI exercises both access checks.');
     assert.equal(result.stdout, 'user-and-own-package-only');
+    const runId = randomUUID(), job = randomUUID();
+    const namespace = (await execute(executable, ['namespace', runId, job], { timeout: 3000, windowsHide: true })).stdout;
+    assert.match(namespace, /^\\\\\.\\pipe\\Sessions\\\d+\\AppContainerNamedObjects\\S-1-15-2(?:-\d+){7}\\$/);
+    assert.equal((await execute(executable, ['namespace', runId, job], { timeout: 3000, windowsHide: true })).stdout, namespace);
+    assert.notEqual((await execute(executable, ['namespace', runId, randomUUID()], { timeout: 3000, windowsHide: true })).stdout, namespace);
+    const { createPipeRelays } = require('../electron/features/lab/sandbox-win32-host.cjs');
+    const local = ['rpc', 'meter', 'broker'].map(prefix => '\\\\.\\pipe\\LOCAL\\agentrix-lab-' + prefix + '-' + randomUUID());
+    const servers = [], backendSockets = new Set();
+    t.after(() => Promise.all(servers.map(server => new Promise(resolve => {
+      server.close(resolve); for (const socket of backendSockets) socket.destroy();
+    }))), { timeout: 3000 });
+    for (const pipe of local) {
+      const server = require('node:net').createServer({ allowHalfOpen: true }, socket => {
+        backendSockets.add(socket); socket.on('close', () => backendSockets.delete(socket));
+        socket.on('error', () => {}); let bytes = 0;
+        socket.on('data', chunk => {
+          bytes += chunk.length;
+          if (bytes >= 131072) socket.end('reply:' + bytes + ':' + 'x'.repeat(262144));
+          else if (chunk.includes(10)) setTimeout(() => socket.end('{"ok":true}\n'), 75);
+        });
+        socket.on('end', () => socket.end());
+      });
+      servers.push(server);
+      await new Promise((resolve, reject) => { server.once('error', reject); server.listen(pipe, resolve); });
+    }
+    const relays = await createPipeRelays(local, namespace);
+    t.after(() => relays.close(), { timeout: 3000 });
+    for (const pipe of relays.pipes) await execute(executable, ['grant', pipe, runId, job], { timeout: 3000, windowsHide: true });
+    for (const [i, pipe] of relays.pipes.entries()) {
+      assert.equal(pipe, namespace + local[i].split('\\').at(-1));
+      for (let repeat = 0; repeat < 3; repeat++) {
+        const reply = await new Promise((resolve, reject) => {
+          const socket = require('node:net').connect(pipe); let body = '';
+          socket.setTimeout(2000, () => socket.destroy(new Error('Scoped pipe relay timed out.')));
+          socket.on('error', reject); socket.on('data', chunk => { body += chunk; });
+          socket.on('end', () => resolve(body)); socket.write(Buffer.alloc(131072));
+        });
+        assert.equal(reply.length, 'reply:131072:'.length + 262144); assert.equal(reply.slice(0, 14), 'reply:131072:x');
+      }
+    }
+    const { windowsMeterSink } = require('../electron/features/lab/sandbox-win32-executor.cjs');
+    const send = windowsMeterSink({ pipeName: relays.pipes[1], sessionKey: 'synthetic-key', projectId: 'fixture' });
+    assert.equal(await send({ type: 'lab-handshake' }), true, 'the delayed meter acknowledgement survives the namespace relay');
+    const partial = '\\\\.\\pipe\\LOCAL\\agentrix-lab-partial-' + randomUUID();
+    await assert.rejects(createPipeRelays([partial, local[2]], namespace), { code: 'EADDRINUSE' });
+    await assert.rejects(new Promise((resolve, reject) => {
+      const socket = require('node:net').connect(namespace + partial.split('\\').at(-1));
+      socket.on('error', reject); socket.on('connect', () => { socket.destroy(); resolve(); });
+    }), { code: 'ENOENT' }, 'a partial listener failure retires earlier namespace pipes');
+    const held = require('node:net').connect(relays.pipes[0]); held.on('error', () => {});
+    await new Promise(resolve => held.once('connect', resolve));
+    const heldClosed = new Promise(resolve => held.once('close', resolve));
+    await relays.close();
+    await heldClosed;
+    for (const pipe of relays.pipes) await assert.rejects(new Promise((resolve, reject) => {
+      const socket = require('node:net').connect(pipe); socket.on('error', reject); socket.on('connect', () => { socket.destroy(); resolve(); });
+    }), { code: 'ENOENT' });
   });
 
 test('preparation PowerShell parses without executing either bootstrap', { skip: process.platform !== 'win32' }, () => {
@@ -462,7 +546,7 @@ test('Windows lab stop signals its guardian before job recovery and never taskki
 });
 
 test('the Windows guardian keeps a control pipe open and cancellation sends EOF without killing its child', async () => {
-  const messages = [];
+  const messages = [], addresses = [], closed = [], calls = [];
   const host = Object.assign(new EventEmitter(), {
     argv: ['node', 'guardian', 'config'], env: {}, stdout: new PassThrough(), stderr: new PassThrough(), channel: { unref() {} },
     connected: true, send: (message, callback) => { messages.push(message); callback(); },
@@ -470,13 +554,26 @@ test('the Windows guardian keeps a control pipe open and cancellation sends EOF 
   const child = Object.assign(new EventEmitter(), {
     stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: () => assert.fail('launcher must finish'),
   });
-  const config = { windows: { executable: 'not executed' }, executor: 'executor', cwd: 'workspace' };
-  await loadModule('sandbox-win32-host.cjs', {
-    'node:fs': { readFileSync: () => JSON.stringify(config) }, 'node:child_process': { spawn: () => child },
+  const namespace = '\\\\.\\pipe\\Sessions\\4\\AppContainerNamedObjects\\S-1-15-2-1-2-3-4-5-6-7\\';
+  const pipes = ['rpc', 'meter', 'broker'].map(prefix => '\\\\.\\pipe\\LOCAL\\agentrix-lab-' + prefix + '-fixture');
+  const config = { windows: { executable: 'not executed', runId: randomUUID(), job: randomUUID(), pipes }, executor: 'executor', cwd: 'workspace' };
+  const guardian = await loadModule('sandbox-win32-host.cjs', {
+    'node:fs': { readFileSync: () => JSON.stringify(config) }, 'node:child_process': {
+      spawn: () => child, execFileSync: (file, args, options) => { calls.push({ file, args, options }); return namespace; },
+    },
+    'node:net': { createServer: () => Object.assign(new EventEmitter(), {
+      listen(address, ready) { addresses.push(address); ready(); }, close(done) { closed.push(this); done(); },
+    }) },
   }, { process: host });
+  await guardian.runGuardian();
   assert.equal(child.stdin.writableEnded, false);
   const frame = JSON.parse(child.stdin.read().toString());
   assert.equal(frame.cwd, 'workspace');
+  assert.deepEqual(frame.pipes, pipes.map(pipe => namespace + pipe.split('\\').at(-1)));
+  assert.deepEqual(addresses, frame.pipes);
+  assert.deepEqual(Array.from(calls[0].args), ['pipe-namespace', config.windows.runId, config.windows.job]);
+  assert.equal(calls[0].options.timeout, 5000);
+  assert.deepEqual(JSON.parse(frame.input).config.windows.pipes, pipes, 'worker-facing LOCAL addresses stay unchanged');
   let stderr = ''; host.stderr.on('data', chunk => { stderr += chunk; });
   child.stderr.emit('data', 'short error\n');
   assert.equal(stderr, 'short error\n', 'short stderr must not wait for another chunk or process exit');
@@ -489,7 +586,18 @@ test('the Windows guardian keeps a control pipe open and cancellation sends EOF 
   host.emit('message', { type: 'lab-stop' });
   assert.equal(child.stdin.writableEnded, true);
   host.emit('disconnect');
+  child.emit('close', 0); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(closed.length, 3);
   for (const stream of [host.stdout, host.stderr, child.stdin, child.stdout, child.stderr]) stream.destroy();
+});
+
+test('Windows namespace relays reject forged addresses and broad or foreign namespace formats', async () => {
+  const { createPipeRelays } = require('../electron/features/lab/sandbox-win32-host.cjs');
+  const namespace = '\\\\.\\pipe\\Sessions\\4\\AppContainerNamedObjects\\S-1-15-2-1-2-3-4-5-6-7\\';
+  for (const pipes of [['tcp://host'], ['\\\\.\\pipe\\LOCAL\\agentrix-lab-x\\escape'], Array(9).fill('x'), ['same', 'same']]) {
+    await assert.rejects(createPipeRelays(pipes, namespace), /Invalid Windows lab pipe/);
+  }
+  await assert.rejects(createPipeRelays([], '\\\\.\\pipe\\LOCAL\\'), /Invalid Windows lab pipe namespace/);
 });
 
 test('Windows diagnostics are opt-in, bounded and accept only fixed events with numeric counters', async () => {
@@ -509,6 +617,9 @@ test('Windows diagnostics are opt-in, bounded and accept only fixed events with 
   assert.doesNotMatch(trace.summary(), /secret|private/);
   trace.feed('[lab-win32] executor launch error phase=stdio code=EACCES errno=-4092\n');
   assert.match(trace.summary(), /phase=stdio code=EACCES errno=-4092/);
+  trace.feed('[lab-win32] host pipes ready count=3\n[lab-win32] host pipe setup error phase=listen code=ENOENT errno=-4058\n');
+  assert.match(trace.summary(), /host pipes ready count=3/);
+  assert.match(trace.summary(), /phase=listen code=ENOENT errno=-4058/);
   for (const env of [{ NODE_TEST_CONTEXT: 'child-v8' }, { AGENTRIX_LAB_TEST_PREPARE_HOST: '1' }]) {
     const disabled = await loadModule('process.cjs', {}, { process: { platform: 'win32', env } });
     assert.equal(disabled.windowsDiagnostics(), null);
