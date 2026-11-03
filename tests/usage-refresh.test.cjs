@@ -314,28 +314,45 @@ test('a missing CodePulse folder is followed from its parent and watcher errors 
   assert.equal(reads, 3); assert.equal(watched.watchers.length, 3);
 });
 
-test('real folder watchers read once per atomic file replacement and remain attached', async t => {
+test('real folder watchers read atomic file replacements with bounded reads and remain attached', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-watch-'));
   const file = path.join(root, '.claude.json');
   fs.writeFileSync(file, JSON.stringify(account()));
   let reads = 0, changed;
   const api = runtime({ fs, claudeAccountFiles: () => [file], claudeAccount: async () => {
-    ++reads; const value = JSON.parse(await fs.promises.readFile(file, 'utf8')); changed?.(); return value;
+    ++reads; const value = JSON.parse(await fs.promises.readFile(file, 'utf8')); changed?.(value); return value;
   } });
   t.after(() => { api.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const settle = async () => {
+    for (let attempt = 0; attempt < 8; ++attempt) {
+      const before = reads;
+      await new Promise(resolve => setTimeout(resolve, 250));
+      const { claudeAccountSoon, claudeAccountPending } = api.resources();
+      if (reads === before && !claudeAccountSoon && !claudeAccountPending) return;
+    }
+    assert.fail('watcher reads did not settle within two seconds');
+  };
   await api.refreshClaudeAccounts();
   assert.equal(api.resources().claudeAccountTimer.hasRef(), false);
   assert.equal(api.resources().claudeAccountWatchers.size, 1);
+  const watcher = api.resources().claudeAccountWatchers.get(root);
+  // FSEvents may deliver the initial write or replacement events after the 25 ms coalescing window.
+  await settle();
   for (const at of [2000, 3000]) {
+    const before = reads;
     const notified = new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('watcher did not read replacement')), 2000);
-      changed = () => { clearTimeout(timer); resolve(); };
+      changed = value => { if (value.at === at) { clearTimeout(timer); resolve(); } };
     });
     const replacement = path.join(root, 'atomic.tmp');
     fs.writeFileSync(replacement, JSON.stringify(account(at)));
     fs.renameSync(replacement, file);
-    await notified; await new Promise(resolve => setTimeout(resolve, 60));
-    assert.equal(reads, at / 1000);
+    await notified; await settle();
+    const replacementReads = reads - before;
+    assert.ok(replacementReads >= 1 && replacementReads <= 4, `replacement ${at} caused ${replacementReads} reads`);
+    assert.equal(api.publicState().projects[0].terminals[0].agentUsage.limitsAt, at);
+    assert.equal(api.resources().claudeAccountWatchers.size, 1);
+    assert.equal(api.resources().claudeAccountWatchers.get(root), watcher, 'the original folder watcher remains attached');
   }
 });
 
