@@ -9,10 +9,13 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { Arch } = require('builder-util');
 const { trimElectronPak } = require('./trim-electron-pak.cjs');
+const { verifyPackage } = require('./claude-sdk-pack.cjs');
 
 // extraResources excludes its source files from app.asar on POSIX. Both the app and plain Node need these modules.
 async function copyDispatchRuntime(integration) {
-  for (const [name, source] of Object.entries(require('../integration/dispatch.cjs').runtimeFiles())) {
+  const files = { ...require('../integration/dispatch.cjs').runtimeFiles(),
+    'features/native-session/routing.cjs': await fs.readFile(path.join(__dirname, '../electron/features/native-session/routing.cjs'), 'utf8') };
+  for (const [name, source] of Object.entries(files)) {
     const target = path.join(integration, 'electron', name);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, source);
@@ -33,6 +36,7 @@ exports.default = async context => {
   console.log(`Trimmed Chromium resources.pak: ${removedBytes} bytes removed`);
   const integration = path.join(resources, 'integration');
   await copyDispatchRuntime(integration);
+  await verifyPackage(resources);
   if (platform === 'win32') {
     for (const name of ['dxcompiler.dll', 'dxil.dll']) await fs.rm(path.join(context.appOutDir, name), { force: true });
     return;

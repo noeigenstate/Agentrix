@@ -32,7 +32,8 @@ function cleanSSHHistory(input) {
 
 // Which coding agent a terminal restores (Codex unless recorded as Claude Code), whether its last Claude turn was
 // left unfinished. Only non-default values are stored.
-const agentFields = restore => ({ ...(restore?.agent === 'claude' ? { agent: 'claude' } : {}), ...(restore?.interrupted === true ? { interrupted: true } : {}) });
+const agentFields = restore => ({ ...(restore?.agent === 'claude' ? { agent: 'claude' } : {}), ...(restore?.interrupted === true ? { interrupted: true } : {}),
+  ...(restore?.nativeTransport === 'claude-sdk' || restore?.nativeTransport === 'codex-app-server' ? { nativeTransport: restore.nativeTransport } : {}) });
 
 function cleanRestore(input, kind) {
   return {
@@ -246,6 +247,8 @@ class WorkspaceStore {
     else if (/^[a-f\d-]{36}$/i.test(patch.threadId || '')) next.threadId = patch.threadId;
     if (patch.agent === 'codex' || patch.agent === 'claude') { delete next.agent; delete next.interrupted; Object.assign(next, agentFields({ ...record.restore, agent: patch.agent })); }
     if (typeof patch.interrupted === 'boolean') { delete next.interrupted; Object.assign(next, agentFields({ interrupted: patch.interrupted })); }
+    if (patch.nativeTransport === null) delete next.nativeTransport;
+    else if (['claude-sdk', 'codex-app-server'].includes(patch.nativeTransport)) next.nativeTransport = patch.nativeTransport;
     const wasClosed = project.primaryTerminalClosed;
     if (record === project) {
       if (patch.terminal === true) project.primaryTerminalClosed = false;

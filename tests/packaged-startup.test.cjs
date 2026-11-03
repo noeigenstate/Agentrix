@@ -11,6 +11,28 @@ const { build } = require('../package.json');
 
 const root = path.resolve(__dirname, '..');
 
+for (const provider of ['claude', 'codex']) test(`packaged native provider smoke starts, sends, resumes and stops a fake ${provider} child`, async t => {
+  const { spawn } = require('node:child_process'), readline = require('node:readline');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-fake-provider-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const fixture = path.join(directory, 'fake-provider.cjs');
+  fs.copyFileSync(path.join(__dirname, 'fixtures/claude-sdk-process.cjs'), fixture);
+  const home = path.join(directory, 'home'); fs.mkdirSync(home);
+  const child = spawn(process.execPath, [fixture, provider], { windowsHide: true, cwd: directory,
+    env: { HOME: home, USERPROFILE: home, CODEX_HOME: home, CLAUDE_CONFIG_DIR: home, AGENTRIX_DATA_DIR: directory }, stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => child.kill());
+  const input = readline.createInterface({ input: child.stdout });
+  const iterator = input[Symbol.asyncIterator]();
+  child.stdin.write(JSON.stringify({ text: 'first' }) + '\n');
+  const first = JSON.parse((await iterator.next()).value);
+  assert.equal(first.provider, provider); const session = first.sessionId || first.threadId;
+  child.stdin.write(JSON.stringify({ resume: session, text: 'second' }) + '\n');
+  const second = JSON.parse((await iterator.next()).value);
+  assert.equal(second.sessionId || second.threadId, session); assert.match(second.text, /second/);
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  child.stdin.write('{"type":"stop"}\n'); assert.equal(await exited, 0);
+});
+
 // Run electron-builder's real filters with POSIX paths even when this test runs on Windows.
 function posixBuilderModule(name) {
   const filename = require.resolve(`app-builder-lib/out/${name}`), localRequire = createRequire(filename);

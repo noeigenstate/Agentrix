@@ -1,4 +1,5 @@
 import type { ThemeId } from './themes';
+import type { AgentEvent, NativeAnswer, NativeSettings, NativeSnapshot, NativeUsage } from './agent-events';
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 // A delivery the owner passed or sent back (the review card). submission counts from 1; note is the sent-back text.
 export type DeliveryGrade = { projectId: string; terminalId: string; outcome: 'passed' | 'sent-back'; submission: number; note?: string };
@@ -42,7 +43,7 @@ export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | nul
 export type AgentIntervention = { id: string; callId: string; text: string; at: number; route: 'dispatch' | 'parent'; status: 'queued' };
 export type AgentRelay = { id: number; terminalId: string; sessionId: string; agent: 'claude' | 'codex'; text: string; deadline: number };
 export type AgentUsage = { provider: string | null; context: { used: number; window: number } | null; round: AgentTokens | null; total: AgentTokens | null; limits: { minutes: number | null; percent: number; resetsAt: number | null }[]; limitsAt?: number | null; limitsFrom?: string | null; resets?: { left: number | null; total: number | null } | null; resetQuery?: { state: 'loading' | 'ready' | 'unavailable' | 'error'; reason?: string; at?: number }; calls?: AgentCall[]; model?: string | null; rate?: TokenRate | null };
-export type ProjectTerminal = { readingHistory?: ReadingHistoryScope | null; mainTurn?: MainAgentTurn | null; agentStarting?: boolean; nativeMode?: 'codex-native' | null; agentStartedAt?: number | null; agentSettings?: AgentSettings | null; agentUsage?: AgentUsage | null; agentCommand?: string | null; action: AgentActionBrief | null; task: string; taskTitle?: string; prompts: PendingPrompt[]; id: string; title: string; shell: 'powershell' | 'cmd' | 'bash' | 'zsh'; sessionId: string | null; status: Project['status']; codexActive: boolean; agent: Project['agent']; codexActivity: Project['codexActivity']; needsInput: string | null; shellReady: boolean; codexAvailable: boolean | null; lastActivityAt: number | null; lastCompletedAt: number | null; error: string | null };
+export type ProjectTerminal = { readingHistory?: ReadingHistoryScope | null; mainTurn?: MainAgentTurn | null; agentStarting?: boolean; nativeMode?: 'codex-native' | 'claude-sdk' | 'codex-app-server' | null; nativeRuntimeSessionId?: string | null; nativePathReason?: string | null; agentStartedAt?: number | null; agentSettings?: AgentSettings | null; agentUsage?: AgentUsage | null; agentCommand?: string | null; action: AgentActionBrief | null; task: string; taskTitle?: string; prompts: PendingPrompt[]; id: string; title: string; shell: 'powershell' | 'cmd' | 'bash' | 'zsh'; sessionId: string | null; status: Project['status']; codexActive: boolean; agent: Project['agent']; codexActivity: Project['codexActivity']; needsInput: string | null; shellReady: boolean; codexAvailable: boolean | null; lastActivityAt: number | null; lastCompletedAt: number | null; error: string | null };
 export type Settings = { startView: 'decisions' | 'workspace'; surface: 'glass' | 'solid'; glassBackground: 'theme' | 'desktop'; glassTransparency: number | null; terminalRenderer: 'gpu' | 'dom'; autoSave: boolean; activityPane: boolean; notifications: boolean; sound: boolean; closeToTray: boolean; explorerCollapsed: boolean; hideTreeNoise: boolean; fontSize: number; terminalFontWeight: 400 | 500 | 600; terminalFontFamily: string; terminalCjkFontFamily: string; userAvatar: string; restoreSessions: boolean; focusAnimation: 'smooth' | 'system' | 'off'; uiZoom: number | null; language: 'zh' | 'en'; theme: ThemeId; shortcuts: Partial<Record<'search' | 'addProject' | 'voice' | 'overview' | 'decisions' | 'explorer' | 'settings' | 'nextProject' | 'previousProject' | 'projectAbove' | 'projectBelow' | 'maximize' | 'fullscreen' | 'newTerminal' | 'removeProject', string>>; guideVersion: string; shell: 'powershell' | 'cmd' | 'bash' | 'zsh'; voiceModel: string; updateChannel: 'stable' | 'beta'; betaAgreement: string | null };
 export type RecentProject = { path: string; name: string; lastOpenedAt: number; exists: boolean };
 export type RecentSSH = { host: string; path: string; name: string; lastOpenedAt: number };
@@ -149,6 +150,21 @@ export type TitlebarStyle = {
 // `style` rides along only when it changed.
 export type TitlebarState = { view: TitlebarView; decisions: number; style?: TitlebarStyle };
 type Bridge = {
+  nativeSession: {
+    start(terminalId: string, options: { agent: 'claude' | 'codex'; resume?: boolean }): Promise<Result<{ runtimeSessionId: string }>>;
+    send(terminalId: string, runtimeSessionId: string, clientMessageId: string, text: string, images?: string[]): Promise<Result<unknown>>;
+    interrupt(terminalId: string, runtimeSessionId: string): Promise<Result<unknown>>;
+    stop(terminalId: string, runtimeSessionId: string): Promise<Result<unknown>>;
+    answer(terminalId: string, runtimeSessionId: string, requestId: string, answer: NativeAnswer): Promise<Result<unknown>>;
+    snapshot(terminalId: string): Promise<Result<NativeSnapshot | null>>;
+    onEvent(listener: (event: AgentEvent) => void): () => void;
+    getSettings(): Promise<Result<NativeSettings>>;
+    setSettings(patch: Partial<NativeSettings>): Promise<Result<NativeSettings>>;
+    keySave(key: string): Promise<Result<{ saved: boolean }>>;
+    keyClear(): Promise<Result<{ saved: boolean }>>;
+    keyStatus(): Promise<Result<{ saved: boolean }>>;
+    usage(): Promise<Result<NativeUsage>>;
+  };
   getState(): Promise<Result<Workspace>>;
   getAgents(): Promise<Result<AgentsState>>;
   installAgent(agent: 'codex' | 'claude'): Promise<Result<AgentsState>>;

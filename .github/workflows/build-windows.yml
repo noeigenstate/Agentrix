@@ -70,6 +70,8 @@ jobs:
         # A dropped connection (npm's ECONNRESET) once failed a release build before any test ran: one more try.
         shell: bash
         run: npm ci --ignore-scripts --no-audit --no-fund || { sleep 10; npm ci --ignore-scripts --no-audit --no-fund; }
+      - name: Remove bundled Claude platform binaries
+        run: node scripts/claude-sdk-pack.cjs --clean
       - name: Test remote files and recovery state
         run: python3 -m unittest discover -s tests -p 'remote_worker_test.py' -v
       - name: Test real SSH and Linux PTY integration
@@ -121,6 +123,8 @@ jobs:
         # A dropped connection (npm's ECONNRESET) once failed a release build before any test ran: one more try.
         shell: bash
         run: npm ci --no-audit --no-fund || { sleep 10; npm ci --no-audit --no-fund; }
+      - name: Remove bundled Claude platform binaries
+        run: node scripts/claude-sdk-pack.cjs --clean
 
       - name: Install Codex CLI for offline startup checks
         run: npm install --global @openai/codex@0.163.0 --no-audit --no-fund
@@ -233,6 +237,8 @@ jobs:
       - name: Install locked dependencies
         shell: bash
         run: npm ci --no-audit --no-fund || { sleep 10; npm ci --no-audit --no-fund; }
+      - name: Remove bundled Claude platform binaries
+        run: node scripts/claude-sdk-pack.cjs --clean
 
       - name: Install Codex CLI for offline startup checks
         run: npm install --global @openai/codex@0.163.0 --no-audit --no-fund
@@ -415,6 +421,8 @@ jobs:
         # A dropped connection (npm's ECONNRESET) once failed a release build before any test ran: one more try.
         shell: bash
         run: npm ci --no-audit --no-fund || { sleep 10; npm ci --no-audit --no-fund; }
+      - name: Remove bundled Claude platform binaries
+        run: node scripts/claude-sdk-pack.cjs --clean
 
       - name: Run unit and integration tests, including Bash and a real zsh terminal
         shell: bash
@@ -552,6 +560,8 @@ jobs:
         # A dropped connection (npm's ECONNRESET) once failed a release build before any test ran: one more try.
         shell: bash
         run: npm ci --no-audit --no-fund || { sleep 10; npm ci --no-audit --no-fund; }
+      - name: Remove bundled Claude platform binaries
+        run: node scripts/claude-sdk-pack.cjs --clean
 
       - name: Run unit and integration tests, including real Bash and zsh terminals
         run: npm test

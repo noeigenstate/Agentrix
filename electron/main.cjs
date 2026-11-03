@@ -14,6 +14,10 @@ const { registerTerminalIpc } = require('./features/terminal/ipc.cjs');
 const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-guard.cjs');
 const { createNativeSession } = require('./features/terminal/native-session.cjs');
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
+const { createNativeSessions } = require('./features/native-session/index.cjs');
+const { createClaudeRuntime } = require('./features/claude-sdk/index.cjs');
+const { createSdkLoader } = require('./features/claude-sdk/runtime.cjs');
+const { registerClaudeWorker } = require('./features/native-session/worker.cjs');
 const { registerWorkspaceIpc } = require('./features/workspace/ipc.cjs');
 const { listProjectImageCandidates, LIMITS: PROJECT_IMAGE_LIMITS } = require('./features/workspace/project-images.cjs');
 const { createProjectImageAuto } = require('./features/workspace/project-image-auto.cjs');
@@ -151,6 +155,8 @@ const capturePage = require('./features/files/capture-page.cjs').createPageCaptu
 const fileCard = createFileCards({ previews: previewResources, capture: capturePage, shrink: pictureOf, shrinkBytes: bytes => small(nativeImage.createFromBuffer(bytes)) });
 let stateTimer;
 let runtimeDir;
+let nativeSessions, claudeRuntime, dispatchControl, controlAddress;
+const nativeSpecs = new Map();
 const { prepareAskpass, cleanupAskpass } = createSshRuntime({ fs, execFileSync, tempDirectory: () => app.getPath('temp'), integrationDir });
 let zshStartup;
 let shellPathReady = Promise.resolve();
@@ -181,11 +187,11 @@ function publicState() {
       const terminals = shownTerminalIds(p).map(id => {
         const s = sessions.get(id);
         const reading = !s?.error && !startupErrors.has(id) && (s?.codexActive || !s?.inputDirty && (restorePlans.has(id) || s?.agentStarting)) ? readingHistory.summary(id) : null;
-        return { id, title: t('终端 {n}', { n: opened.indexOf(id) + 1 }), shell: s?.shellKind || (p.kind === 'ssh' ? 'bash' : localShell().kind), sessionId: s?.sessionId || null, status: s?.status || 'stopped', codexActive: s?.codexActive || false, agent: s?.codexActive ? s.agent || 'codex' : null,
+        return { id, title: t('终端 {n}', { n: opened.indexOf(id) + 1 }), shell: s?.shellKind || (p.kind === 'ssh' ? 'bash' : localShell().kind), sessionId: s?.nativeStructured ? null : s?.sessionId || null, status: s?.status || 'stopped', codexActive: s?.codexActive || false, agent: s?.codexActive ? s.agent || 'codex' : null,
           ...(reading ? { readingHistory: reading } : {}),
           agentStarting: !!s?.agentStarting && !s.codexActive && s.status !== 'exited' && !s.error,
           agentStartedAt: s?.codexActive ? s.activitySince : null,
-          nativeMode: s?.nativeMode || null,
+          nativeMode: s?.nativeMode || null, nativeRuntimeSessionId: s?.nativeRuntimeSessionId || null, nativePathReason: s?.nativePathReason || null,
           // The model, effort and fast mode its records show, above the reading view's message box.
           agentSettings: s?.codexActive ? s.agentSettings || null : null,
           // The service its model is reached through, the context it fills and the tokens it took, for the activity pane.
@@ -549,7 +555,9 @@ function relayResult(id, error) {
   relays.delete(id); clearTimeout(relay.timer);
   if (error) relay.reject(new Error(String(error).slice(0, 300))); else relay.resolve();
 }
-const interventions = createInterventions({ resolve: resolveIntervention, sendParentPrompt });
+const interventions = createInterventions({ resolve: resolveIntervention, sendParentPrompt,
+  pushControl: (runId, control) => dispatchControl?.pushControl(runId, control),
+  sendDirect: async () => { throw new Error('该子代理没有直达控制通道。'); } });
 // The dashboard's 正在运行 strip: every terminal's running sub-agents and dispatched workers, with their project.
 function syncDashboardLive() {
   dashboardWindow?.live([...sessions.values()].flatMap(s => (s.calls?.running() ?? []).map(call => ({ ...call, project: s.projectId ?? null }))));
@@ -1129,6 +1137,136 @@ function nativeSessionEvent(id, sessionId, message) {
   }
 }
 
+function nativeSpec(id, agent, resume, validateOnly = false) {
+  const project = findProject(id), old = sessions.get(id);
+  if (project.kind === 'ssh') throw new Error('原生会话仅支持本地项目。');
+  if (validateOnly) return;
+  if (old?.nativeStructured && old.status !== 'exited') return old.nativeSpec;
+  if (old?.codexActive && old.status !== 'exited') throw new Error('请先停止当前会话。');
+  if (old) disposeTerminal(id, { preserveNative: !!old.nativeStructured });
+  const saved = store.findTerminal(id).record.restore;
+  const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
+  const bootstrapFile = path.join(runtimeDir, `${sessionId}.json`);
+  fs.writeFileSync(bootstrapFile, JSON.stringify({ projectId: id, projectPath: project.path, sessionKey,
+    controlAddress, controlCapability, pipeName: process.platform === 'win32' ? eventServer.name : eventServer.address }), { mode: 0o600 });
+  const env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile);
+  const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
+    skills.delivery(project, false, sessionId, { agent, started: true }), path.join(integrationDir, 'dispatch.cjs'));
+  const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd: project.path, env, context,
+    sessionId, sessionKey, bootstrapFile, controlCapability, model: null, effort: 'high', fast: true,
+    providerSessionId: resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null };
+  if (spec.providerSessionId && [...sessions.values()].some(s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId))) throw new Error('该会话正在其他终端运行。');
+  nativeSpecs.set(id, spec); return spec;
+}
+
+function structuredEvent(id, event) {
+  if (event.replay || quitting) return;
+  const spec = nativeSpecs.get(id), project = store.findTerminal(id)?.project;
+  if (!spec || !project) return;
+  let s = sessions.get(id);
+  if (!s || !s.nativeStructured || s.nativeRuntimeSessionId !== event.runtimeSessionId) {
+    if (event.type !== 'session.state' || event.payload.state !== 'starting') return;
+    s = { nativeStructured: true, nativeSpec: spec, terminalId: id, projectId: project.id, sessionId: spec.sessionId,
+      sessionKey: spec.sessionKey, controlCapability: spec.controlCapability, bootstrapFile: spec.bootstrapFile,
+      status: 'codex', ready: false, codexActive: true, agent: spec.agent, nativeMode: event.transport,
+      activitySince: Date.now(), codexActivity: 'unknown', error: null, nativeMessages: new Map(), usageEnv: spec.env,
+      recordRun: (call, value) => dashboard.run(project, call, value),
+      terminal: { kill: () => { void nativeSessions.stop(id, event.runtimeSessionId).catch(report); }, resize() {} },
+      gate: { dispose() {}, write() { throw new Error('请使用原生会话输入框。'); } },
+      promptQueue: new PromptQueue(() => scheduleState()), completionWork: new CompletionWork(),
+      actions: new ActionLog(() => {}), conversation: new ConversationLog(() => {}) };
+    sessions.set(id, s);
+  }
+  s.nativeRuntimeSessionId = event.runtimeSessionId;
+  if (event.providerSessionId) {
+    if (spec.agent === 'claude') s.claudeSessionId = event.providerSessionId;
+    else s.reportedThreadId = event.providerSessionId;
+  }
+  if (event.type === 'routing.updated') s.agentSettings = event.payload.observed;
+  if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && event.payload.content.text) {
+    const clientId = event.payload.content.clientMessageId || event.itemId;
+    s.nativeMessages.set(clientId, event.payload.content.text);
+    s.promptQueue.enqueue(event.payload.content.text, event.receivedAtMs, clientId);
+  }
+  if (event.type === 'input.receipt' && event.payload.status === 'consumed') {
+    const text = s.nativeMessages.get(event.payload.clientMessageId);
+    if (text) s.promptQueue.start(text, event.receivedAtMs, event.payload.clientMessageId);
+  }
+  if (event.type === 'turn.started') {
+    if (event.payload.origin === 'user') { s.completionWork.begin(event.receivedAtMs); store.expectCompletion(project.id); }
+    s.activityInputAt = event.receivedAtMs;
+    applyActivity(project, s, { threadId: event.providerSessionId || event.runtimeSessionId, turnId: event.turnId, state: 'working', updatedAt: event.receivedAtMs });
+  }
+  if (event.type === 'turn.completed') applyActivity(project, s, { threadId: event.providerSessionId || event.runtimeSessionId, turnId: event.turnId,
+    state: event.payload.status === 'completed' ? 'complete' : 'interrupted', updatedAt: event.receivedAtMs });
+  if (event.type === 'session.state') {
+    s.nativeState = event.payload.state;
+    if (['stopped', 'failed', 'disconnected'].includes(event.payload.state)) {
+      s.status = 'exited'; s.codexActive = false;
+      store.setRestore(id, { terminal: false, codex: false });
+    }
+    if (event.payload.state === 'failed') s.error = event.payload.reason;
+  }
+  scheduleState();
+}
+
+async function initializeNativeSessions() {
+  // Load optional provider composition after app.ready; neither module starts a real account session here.
+  const { createCodexRuntime } = await import('./features/codex-app-server/index.cjs');
+  const { createDispatchControl } = await import('./features/agents/dispatch-control.cjs');
+  const { projectTeam } = require('./features/team/team.cjs');
+  dispatchControl = createDispatchControl({ resolveRun: registration => {
+    const s = sessions.get(registration.projectId), project = store.findTerminal(registration.projectId)?.project;
+    if (!s || !project || s.sessionKey !== registration.sessionKey || s.controlCapability !== registration.capability) return null;
+    const worker = projectTeam(project.path)?.live().find(run => run.id === registration.runId);
+    if (!worker) return null;
+    return { runId: worker.id, projectId: registration.projectId, cwd: worker.cwd, worktree: worker.cwd, allow: worker.allow,
+      readOnly: worker.readOnly === true || worker.role === '调查' || worker.role === '审查', roundtable: worker.role === '圆桌' };
+  } });
+  ({ address: controlAddress } = await dispatchControl.listen());
+  const directory = path.join(app.getPath('userData'), 'native-session');
+  claudeRuntime = createClaudeRuntime({ directory, safeStorage: require('electron').safeStorage,
+    loadSdk: createSdkLoader({ packaged: app.isPackaged }),
+    onCost: entry => {
+      if (entry.spec.owner === 'dispatch') return;
+      const project = store.findTerminal(entry.spec.terminalId)?.project; if (!project) return;
+      dashboard.run(project, { source: 'native', sourceAgent: 'claude', title: 'Claude API', startedAt: Date.now(), model: entry.spec.model },
+        { id: entry.usageRecordId, source: 'native', model: entry.spec.model, endedAt: Date.now(), reportedCostUsd: entry.deltaUsdMicros / 1e6,
+          billingPath: 'api', usageRecordId: entry.usageRecordId, costCompleteness: 'estimated', reason: 'exit', exitCode: 0 });
+    },
+  });
+  const codexFactory = createCodexRuntime();
+  const codex = { create(spec, emit) {
+    const runtime = codexFactory.create(spec, emit), start = runtime.start, resume = runtime.resume, close = runtime.close;
+    let accountBinding, accountWatch;
+    const attach = async (open, value) => {
+      const result = await open(value);
+      const options = { cwd: spec.cwd, env: spec.env, projectId: spec.projectId };
+      accountBinding = codexAccounts.attachRuntime?.(options, runtime);
+      accountWatch = codexAccounts.watch(options, () => scheduleState());
+      return result;
+    };
+    runtime.start = value => attach(start, value); runtime.resume = value => attach(resume, value);
+    runtime.close = async () => { accountWatch?.dispose(); accountBinding?.dispose(); await close(); };
+    return runtime;
+  } };
+  nativeSessions = createNativeSessions({ directory, claude: claudeRuntime, codex, resolveSpec: nativeSpec,
+    emit: event => send('native:event', event), changed: (id, event) => { if (event) structuredEvent(id, event); else scheduleState(); },
+    saveSession: (id, saved) => store.setRestore(id, { terminal: true, codex: true, agent: saved.agent, threadId: saved.providerSessionId,
+      nativeTransport: saved.agent === 'claude' ? 'claude-sdk' : 'codex-app-server' }),
+    terminal: async (spec, reason) => {
+      const current = sessions.get(spec.terminalId); if (current?.nativeStructured) disposeTerminal(spec.terminalId);
+      nativeSpecs.delete(spec.terminalId);
+      if (spec.bootstrapFile) fs.rmSync(spec.bootstrapFile, { force: true });
+      const history = spec.providerSessionId ? { id: spec.providerSessionId } : null;
+      launchPlans.set(spec.terminalId, { agent: spec.agent, command: launchCommand(spec.agent, history), threadId: history?.id || null });
+      store.setRestore(spec.terminalId, { nativeTransport: null });
+      startTerminal(spec.terminalId, null, true);
+      const s = sessions.get(spec.terminalId); if (s) s.nativePathReason = reason;
+    } });
+  registerClaudeWorker({ control: dispatchControl, claude: claudeRuntime, settings: nativeSessions.getSettings });
+}
+
 function startTerminal(id, nativeMode = null, agentStarting = false) {
   if (nativeMode !== null && nativeMode !== 'codex-native') throw new Error('Unsupported native session mode');
   const project = findProject(id);
@@ -1139,13 +1277,14 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   if (project.kind !== 'ssh' && !fs.existsSync(project.path)) throw new Error('项目目录不存在，请重新添加。');
   const sessionId = randomUUID();
   const sessionKey = randomUUID();
+  const controlCapability = randomUUID();
   const startPath = restorePlans.get(id)?.cwd || store.findTerminal(id)?.record.restore?.cwd || project.path;
   // Local terminals use the shell chosen in settings; SSH projects always run Bash on the server.
   const shell = project.kind === 'ssh' ? { kind: 'bash', file: null } : localShell(true), shellKind = shell.kind;
   const bootstrapFile = project.kind !== 'ssh' ? path.join(runtimeDir, `${sessionId}.json`) : null;
   const skillNoteFile = project.kind === 'ssh' ? null : path.join(runtimeDir, `${sessionId}-skills.txt`);
   if (bootstrapFile) fs.writeFileSync(bootstrapFile, JSON.stringify({
-    projectId: id, projectPath: startPath, sessionKey, pipeName: process.platform === 'win32' ? eventServer.name : eventServer.address,
+    projectId: id, projectPath: startPath, sessionKey, controlAddress, controlCapability, pipeName: process.platform === 'win32' ? eventServer.name : eventServer.address,
     powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath: path.join(integrationDir, 'claude-hook.ps1'),
     nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'),
   }), { mode: 0o600 });
@@ -1191,7 +1330,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     : shellKind === 'cmd' ? pty.spawn(cmdPath, ['/D', '/Q', '/K', path.join(integrationDir, 'bootstrap.cmd')], terminalOptions)
     : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions));
   const s = {
-    terminal, terminalId: id, projectId: project.id, sessionId, skillSessionId: nativeMode ? sessionId : null, sessionKey, bootstrapFile, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
+    terminal, terminalId: id, projectId: project.id, sessionId, skillSessionId: nativeMode ? sessionId : null, sessionKey, controlCapability, bootstrapFile, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
     recordRun: (call, event) => dashboard.run(project, call, event),
     recordQuota: (provider, limits) => dashboard.quota(provider, limits, quotaScope(provider, project, s)),
     // Command Prompt reports its prompts through markers in its output instead of the event pipe.
@@ -1334,11 +1473,13 @@ function cleanupTerminalFiles(s) {
   if (s.skillNoteFile) fs.rmSync(s.skillNoteFile, { force: true });
 }
 
-function disposeTerminal(id) {
+function disposeTerminal(id, { preserveNative = false } = {}) {
   readingHistory.close(id);
   const s = sessions.get(id);
   if (!s) return;
   sessions.delete(id);
+  nativeSpecs.delete(id);
+  if (s.nativeStructured && !preserveNative) void nativeSessions?.forget(id).catch(report);
   s.calls?.dispose(); syncDashboardLive();
   endSkillSession(s);
   skills.endSession(s.projectId, s.sessionId);
@@ -1346,12 +1487,13 @@ function disposeTerminal(id) {
   clearTimeout(s.flushTimer); clearTimeout(s.actionTimer); clearTimeout(s.conversationTimer);
   for (const timer of s.submissionPolls || []) clearTimeout(timer);
   s.activityMonitor?.stop(); s.gate.dispose(); s.promptQueue.reset(); s.completionWork?.reset();
-  try { s.terminal.kill(); } catch { }
+  try { if (!s.nativeStructured) s.terminal.kill(); } catch { }
   cleanupTerminalFiles(s);
 }
 
 function registerIpc() {
   const { handle, listen } = createIpcAdapter({ ipcMain, getWindow: () => window, devUrl, t, report });
+  nativeSessions?.register(handle);
   if (process.platform === 'darwin') listen('titlebar:state', state => macTitlebar?.update(state));
   registerSkillsIpc({ handle, skills, dialog, getWindow: () => window });
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
@@ -1486,6 +1628,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     runtimeDir = fs.mkdtempSync(path.join(app.getPath('userData'), 'runtime-'));
     eventServer = await createEventServer(onEvent);
+    await initializeNativeSessions();
     sshAuth = await new SSHAuthServer(queue => send('ssh:auth-changed', queue)).start();
     let menuUpdateReady = false;
     updateManager = new UpdateManager({
@@ -1545,7 +1688,11 @@ if (!app.requestSingleInstanceLock()) {
     for (const project of store.projects) projectImageAuto.enqueue(project);
     updateIndicators();
     if (!process.env.AGENTRIX_DATA_DIR) updateManager.start();
-    restoreTerminals({ store, restorePlans, startupErrors, startTerminal, broadcast, isQuitting: () => quitting });
+    restoreTerminals({ store, restorePlans, startupErrors, startTerminal: (id, ...args) => {
+      const saved = store.findTerminal(id)?.record.restore;
+      if (saved?.nativeTransport && nativeSessions) void nativeSessions.start(id, { agent: saved.agent || 'codex', resume: true }).catch(error => { startupErrors.set(id, error.message); broadcast(); });
+      else startTerminal(id, ...args);
+    }, broadcast, isQuitting: () => quitting });
     for (const project of store.projects) void checkProjectAccount(project);
   }).catch(error => {
     dialog.showErrorBox(t('Agentrix 无法启动'), t(String(error?.stack || error)));
@@ -1553,6 +1700,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 app.on('before-quit', event => {
+  let nativeDrain;
   // On macOS the Dock's Quit and logging out reach here directly; they ask about running terminals like ⌘Q.
   if (process.platform === 'darwin' && !quitting && window && !window.isDestroyed()) { event.preventDefault(); showWindow(); requestQuit().catch(report); return; }
   if (!quitCleaned) {
@@ -1563,6 +1711,7 @@ app.on('before-quit', event => {
     voiceManager?.close(); fileOperations?.cancel();
     skills?.close();
     quitting = true;
+    nativeDrain = Promise.allSettled([nativeSessions?.close(), claudeRuntime?.close()]);
     updateManager?.dispose();
     codexAccounts.dispose();
     claudeAccounts.dispose();
@@ -1572,6 +1721,7 @@ app.on('before-quit', event => {
     for (const id of sessions.keys()) disposeTerminal(id);
     sshAuth?.close();
     eventServer?.close();
+    dispatchControl?.close();
     tray?.destroy();
     cleanupAskpass();
     if (runtimeDir) {
@@ -1579,7 +1729,7 @@ app.on('before-quit', event => {
       try { fs.rmdirSync(runtimeDir); } catch { }
     }
   }
-  const drains = [dashboard.waitForQuit(), labWindow?.waitForQuit()].filter(Boolean);
+  const drains = [dashboard.waitForQuit(), labWindow?.waitForQuit(), nativeDrain].filter(Boolean);
   if (drains.length) {
     event.preventDefault();
     void Promise.allSettled(drains).then(() => app.quit());
