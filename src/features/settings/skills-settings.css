@@ -30,12 +30,13 @@
 .skills-title b { font-size: 16px; font-weight: 600; }
 .skills-title b em { margin-left: 8px; font-size: 12px; font-weight: 400; font-style: normal; color: var(--text-3); }
 .skills-title-tools { display: flex; align-items: center; gap: 12px; }
-.skills-desc { margin: 4px 0 0; font-size: 13px; line-height: 20px; color: var(--text-2); }
-.skills-summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.skills-desc { margin: 4px 0 0; font-size: 13px; line-height: 20px; color: var(--text-2); text-wrap: pretty; }
+/* The clamp hides overflow, so as a flex item it would be the one child to shrink when the pane is short. */
+.skills-summary { flex: none; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .skills-new-note { color: var(--text-1); }
 .skills-desc .text-button { margin-left: 12px; font-size: 13px; }
 .skills-facts { margin: 8px 0 0; padding: 0; }
-.skills-facts > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 48px; border-bottom: 1px solid var(--divider); font-size: 13px; }
+.skills-facts > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 48px; padding: 8px 0; border-bottom: 1px solid var(--divider); font-size: 13px; }
 .skills-facts > .skills-facts-pair { justify-content: flex-start; }
 .skills-facts > .skills-trigger-row { flex-wrap: wrap; gap: 8px 24px; padding: 8px 0; }
 .skills-trigger-row:not(.skills-facts-pair) > .skills-pair { flex: 1 0 auto; justify-content: space-between; }
@@ -46,7 +47,7 @@
 .skills-form dd { flex: 1 1 0; justify-content: flex-end; }
 .skills-form .skills-input { flex: 1 1 0; width: auto; min-width: 0; max-width: 320px; }
 .skills-facts dt { color: var(--text-2); }
-.skills-facts dt small { display: block; margin-top: 2px; font-size: 12px; line-height: 20px; color: var(--text-3); }
+.skills-facts dt small { display: block; margin-top: 2px; font-size: 12px; line-height: 20px; color: var(--text-3); text-wrap: pretty; }
 .skills-facts dd { display: flex; align-items: center; min-width: 0; margin: 0; color: var(--text-1); }
 .skills-facts dd.is-quiet { color: var(--text-3); }
 .skills-facts .select-trigger { width: 208px; }
@@ -79,7 +80,7 @@
 .skills-tabs .skills-view-toggle button[aria-pressed="true"] { border: 0; color: var(--text-1); background: var(--bg-selected); }
 .skills-reading, .skills-textarea { box-sizing: border-box; flex: 1 0 200px; margin: 0; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); font: 12px/20px var(--font-mono); color: var(--text-1); }
 .skills-reading { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; }
-.skills-rendered { box-sizing: border-box; flex: 1 0 200px; padding: 16px 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); font: 14px/1.7 var(--font-ui); color: var(--text-1); overflow: auto; }
+.skills-rendered { box-sizing: border-box; flex: 1 0 auto; min-height: 200px; padding: 16px 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); font: 14px/1.7 var(--font-ui); color: var(--text-1); overflow-wrap: anywhere; }
 .skills-rendered .reading-code-bar button { display: none; }
 .skills-textarea { display: block; flex: 1 1 120px; width: 100%; min-height: 120px; resize: none; }
 .skills-diff { padding: 12px 0; white-space: normal; }
