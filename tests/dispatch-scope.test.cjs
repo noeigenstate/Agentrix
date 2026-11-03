@@ -6,6 +6,7 @@ const os = require('node:os');
 const { spawn, execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { run } = require('../integration/dispatch.cjs');
+const { projectTeam } = require('../electron/features/team/team.cjs');
 
 async function until(predicate) {
   for (let n = 0; n < 600; n++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); }
@@ -147,16 +148,20 @@ test('L4: an owner edit in an exclusive worktree is preserved before restoring t
 });
 
 test('L4: backup failure leaves the current bytes live instead of overwriting them', async t => {
-  const f = fixture(t), file = path.join(f.linked, 'b/base.txt'), rename = fs.renameSync;
+  const f = fixture(t), file = path.join(f.linked, 'b/base.txt');
   const worker = f.start('backup-failure', 'a/**', [['b/base.txt', 'Current owner bytes.']]);
   fs.writeFileSync(worker.writeGate, 'go'); await until(() => fs.existsSync(worker.written));
-  t.mock.method(fs, 'renameSync', (source, destination) => {
-    if (source === file && destination.includes('scope-quarantine')) throw new Error('Synthetic backup failure');
-    return rename(source, destination);
-  });
+  // Use an actual filesystem collision: Windows may give one file both an 8.3 and a long
+  // path, so a rename mock comparing path strings can silently miss the backup operation.
+  const blocker = path.join(projectTeam(f.linked).directory, 'scope-quarantine');
+  fs.writeFileSync(blocker, 'Synthetic backup path blocker.', { flag: 'wx' });
   fs.writeFileSync(worker.release, 'done'); assert.equal(await worker.result, 0);
-  assert.match(worker.stdout(), /scope restore failed: Synthetic backup failure/);
+  assert.match(worker.stdout(), /scope restore failed: .*scope-quarantine/);
+  assert.match(worker.stdout(), /OUT OF SCOPE: b\/base.txt/);
+  assert.doesNotMatch(worker.stdout(), /restored 1 out-of-scope paths/);
   assert.equal(fs.readFileSync(file, 'utf8'), 'Current owner bytes.');
+  assert.equal(fs.readFileSync(blocker, 'utf8'), 'Synthetic backup path blocker.');
+  assert.equal(fs.readdirSync(path.dirname(file)).some(name => name.startsWith('.dispatch-restore-')), false);
 });
 
 test('N1: unavailable board history makes a linked worktree report-only', { timeout: 15000 }, async t => {
