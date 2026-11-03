@@ -51,6 +51,9 @@ test('the page shows the saved settings, whether a key is saved, and the three C
     assert.match(view.select('Claude 的运行方式').props.options[0].label, /默认/, 'API, then the terminal when the quota is used up, is the default');
     assert.deepEqual([view.select('Codex 的界面').props.value, view.select('Codex 的界面').props.options.map(option => option.value)], ['native', ['native', 'terminal']]);
     assert.equal(view.budget().props.value, '50');
+    assert.equal(view.select('Claude 的运行方式').props.className, 'runtime-select', 'its trigger is wide enough for “（默认）”');
+    const css = fs.readFileSync(path.join(__dirname, '../src/features/settings/agent-runtime-settings.css'), 'utf8');
+    assert.match(css, /\.setting-row \.select-trigger\.runtime-select \{ width: 300px; max-width: 48%; \}/);
     assert.equal(view.secret().props.value, '', 'the saved key is never shown, only that it is saved');
   } finally { view.done(); }
 });
@@ -69,6 +72,7 @@ test('a key is sent once, its field empties at once, it never shows again, and c
     assert.equal(view.status(), '已保存'); assert.ok(!view.html().includes(SECRET), 'the page never holds the key again');
     assert.equal(view.secret().props.placeholder, '输入新的 key 以替换');
     view.secret().props.onKeyDown({ key: 'Enter' }); assert.equal(bridge.calls.length, 1, 'Enter on an empty field sends nothing');
+    assert.match(view.button('保存').props.className, /\bbutton secondary\b/); assert.equal(view.button('清除').props.className, 'text-button', 'clearing is the quieter action beside saving');
     view.button('清除').props.onClick(); await settle();
     assert.deepEqual(bridge.calls.at(-1), ['clear']); assert.equal(view.status(), '未保存');
   } finally { view.done(); }

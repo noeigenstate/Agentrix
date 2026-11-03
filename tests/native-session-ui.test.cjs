@@ -37,10 +37,11 @@ function makeLoader(overrides = {}) {
 }
 
 // The heavy neighbours are stood in: Markdown by an element that says its text, the avatar and the width-fitting hook by plain ones.
+const fit = { index: 0 };   // which hint the width-fitting hook says fits; one past the list is "none does"
 const load = makeLoader({
   '../reading/ReadingView': { Markdown: ({ text }) => React.createElement('div', { className: 'md' }, text) },
   '../../shared/UserAvatar': { UserAvatar: () => React.createElement('i', { className: 'avatar' }) },
-  '../../shared/useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[0] },
+  '../../shared/useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[fit.index] ?? '' },
 });
 const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
 before(() => { Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: { dataset: {}, lang: '' } } }); load('shared/i18n.ts').applyLanguage('zh'); });
@@ -553,6 +554,64 @@ test('terminal fallback exposes unsent text for copying without submitting it or
   } finally { harness.dispose(); }
 });
 
+// ---- the acceptance fixes -----------------------------------------------------------------------------------------------------------
+test('the plan, the diff and the requests stand on the agent’s own content edge, and a request grows in the conversation instead of scrolling inside its card', async () => {
+  const html = await viewHtml(richSession), content = html.slice(html.indexOf('reading-content'), html.indexOf('class="reading-composer"'));
+  assert.match(content, /<div class="native-summary">/); assert.match(content, /<div class="native-requests">/);
+  assert.ok(content.indexOf('native-summary') < content.indexOf('native-requests'), 'the request waits at the end of the conversation');
+  assert.doesNotMatch(html, /reading-choice-host/, 'no host below the conversation whose card would scroll inside it');
+  const css = fs.readFileSync(path.join(src, 'features/native-session/native-session.css'), 'utf8');
+  assert.match(css, /\.native-summary, \.native-requests \{[^}]*margin-left: var\(--reading-inset\);/, 'the same left edge as the reply text and the tool pills');
+  assert.match(css, /\.native-requests \.native-request \{ max-height: none; overflow: visible; \}/, 'the base card’s 45vh cap and scrollbar are off');
+  assert.doesNotMatch(await viewHtml(ev => [ev('session.state', { state: 'idle', reason: null })]), /native-summary|native-requests/, 'nothing to show, no empty wrapper');
+});
+
+test('a new request pulls the view to it even when the owner had scrolled up; an ordinary step does not', () => {
+  const view = sessionView(idle, {});
+  try {
+    const log = () => view.find(node => node.props?.role === 'log'), pane = { scrollTop: 0, scrollHeight: 900 };
+    log().props.ref.current = pane;
+    view.show([...idle(view.ev), view.ev('item.delta', { channel: 'text', text: 'one' }, { itemId: 'a1' })]); view.tree();
+    assert.equal(pane.scrollTop, 900, 'at the end, new steps are followed');
+    log().props.onScroll({ currentTarget: { scrollHeight: 2000, scrollTop: 0, clientHeight: 300 } }); pane.scrollTop = 0;
+    view.show([...idle(view.ev), view.ev('item.delta', { channel: 'text', text: 'two' }, { itemId: 'a2' })]); view.tree();
+    assert.equal(pane.scrollTop, 0, 'scrolled up, an ordinary step leaves the view where it is');
+    view.show([...idle(view.ev), view.ev('request.opened', { requestId: 'r1', kind: 'command', title: 'Run it' })]); view.tree();
+    assert.equal(pane.scrollTop, 900, 'a request waiting for the owner is brought into view');
+  } finally { view.done(); }
+});
+
+test('a command’s folder reads as its last two parts on one line with the whole path as the tooltip', async () => {
+  const { shortPath } = words(), cwd = '/home/someone/work/very/long/path/to/the/project';
+  assert.deepEqual([shortPath('/work'), shortPath('C:\\Users\\someone\\work\\very\\long\\path\\project\\sub'), shortPath(cwd)], ['/work', '…\\project\\sub', '…/the/project']);
+  const html = await viewHtml(ev => [ev('session.state', { state: 'running', reason: null }), ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'npm test', cwd } }, { itemId: 'k' })]);
+  assert.match(html, new RegExp(`<small class="native-facts" title="${cwd}">…/the/project</small>`));
+  assert.doesNotMatch(html.replace(/ title="[^"]*"/g, ''), /\/home\/someone/, 'the folder’s head is not drawn');
+  assert.match(fs.readFileSync(path.join(src, 'features/native-session/native-session.css'), 'utf8'), /\.native-facts \{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; \}/);
+});
+
+test('the message box always has a hint: the longest that fits, and the shortest when none does', async () => {
+  try {
+    fit.index = 0; assert.match(await viewHtml(ev => idle(ev)), /placeholder="给它发消息 · Enter 发送，Shift\+Enter 换行"/);
+    fit.index = 9; assert.match(await viewHtml(ev => idle(ev)), /placeholder="发消息"/, 'a width that fits none of them still names the box');
+  } finally { fit.index = 0; }
+});
+
+test('Codex falling back to the terminal leaves its reason where the native view stood, in words', async () => {
+  const cases = [['codex_cli_required', '未找到 Codex 命令行，无法使用原生界面'], ['unsupported_codex_version', '这个 Codex 版本不支持原生界面']];
+  for (const [reason, words] of cases) {
+    const ev = stream({ provider: 'codex', transport: 'codex-app-server' }), events = [ev('path.changed', { previous: null, selected: 'terminal', reason })];
+    let html = '', shown = null;
+    await withBridge({ onEvent: () => () => {}, snapshot: async () => ({ ok: true, value: { runtimeSessionId: 'rs1', lastSequence: 1, events } }) }, async store => {
+      store.ensureNativeSession('t1'); await settle();
+      shown = store.nativeShown(entriesOf(store).get('t1'));
+      html = renderToStaticMarkup(React.createElement(load('features/native-session/NativePathNote.tsx').NativePathNote, { terminalId: 't1' }));
+    });
+    assert.equal(shown, false, 'the terminal’s own view takes the cell');
+    assert.ok(html.includes(`已改用终端 · ${words}`), reason);
+  }
+});
+
 // ---- the API usage card -------------------------------------------------------------------------------------------------------------
 const words = () => load('features/native-session/native-words.ts');
 const usageOf = (patch = {}) => ({
@@ -589,6 +648,7 @@ test('the usage card says 未知 for what nobody gave and keeps a real zero as $
   assert.match(html, /<dt>月预算<\/dt><dd><span>未设置<\/span><\/dd>/); assert.doesNotMatch(html, /role="meter"/);
   assert.match(html, /<dt>Claude 额度<\/dt><dd><span>未知<\/span><\/dd>/); assert.match(html, /已限流，恢复时间未知/); assert.match(html, /还没有切换过/);
   assert.match(await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ monthUsdMicros: null }) }) }), /\$50\.00 · 已用 未知/, 'a budget with no known spend has no share');
+  assert.match(await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ todayUsdMicros: null, monthUsdMicros: null }) }) }), /今日 未知 · 本月 未知<\/span>/, 'no ledger from the main process is shown as unknown, never as $0.00');
 });
 
 test('a failed read says so, a window without the bridge shows no card, and limits read as their provider gave them', async () => {

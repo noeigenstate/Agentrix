@@ -20,6 +20,11 @@
 .native-path { overflow-wrap: anywhere; font: 500 calc(12px * var(--reading-text))/1.6 var(--font-mono); color: var(--text-1); }
 .native-path small { font-weight: 400; color: var(--text-3); }
 .native-facts, .native-receipt { font-size: calc(11.5px * var(--reading-text)); color: var(--text-3); }
+.native-facts { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The plan and the turn's diff, and the requests waiting on you, stand on the content edge and width of the agent's own cards (reading-flow.css:
+   the reply text and the tool pills start --reading-inset in from the rail). A request is never scrolled inside: it grows in the conversation. */
+.native-summary, .native-requests { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin-left: var(--reading-inset); }
+.native-requests .native-request { max-height: none; overflow: visible; }
 .native-thought { color: var(--text-2); }
 .native-plan { margin: 0; padding-left: 20px; }
 .native-plan .is-done { color: var(--text-3); text-decoration: line-through; }

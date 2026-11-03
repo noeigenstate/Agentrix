@@ -17,7 +17,7 @@ import './native-session.css';
 
 // Within this many pixels of the end, the view follows the newest step.
 const FOLLOW_SLACK = 40;
-const hints = () => [t('给它发消息 · Enter 发送，Shift+Enter 换行'), t('给它发消息 · Enter 发送'), t('给它发消息')];
+const hints = () => [t('给它发消息 · Enter 发送，Shift+Enter 换行'), t('给它发消息 · Enter 发送'), t('给它发消息'), t('发消息')];
 const failure = (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) });
 
 type Sent = { id: string; text: string };
@@ -55,13 +55,17 @@ export function NativeSession({ terminalId, entry, autoFocus }: { terminalId: st
   const open = canSend(model), over = isOver(model), working = !over && isWorking(model), waiting = model.session?.state === 'waiting';
   const turns = groups(model), echoed = new Set(Object.values(model.items).map(item => item.content.clientMessageId));
   const pending = sent.filter(item => !echoed.has(item.id));
-  const shownHints = open ? hints() : [t('会话已结束，不能再发消息')], hint = useFittingHint(box, shownHints), hintId = `native-hint-${terminalId}`, fullHint = fullHintProps(shownHints, hint, hintId);
+  const shownHints = open ? hints() : [t('会话已结束，不能再发消息')], hint = useFittingHint(box, shownHints) || shownHints.at(-1)!, hintId = `native-hint-${terminalId}`, fullHint = fullHintProps(shownHints, hint, hintId);
 
-  // New steps keep the end in view while the owner is at the end; scrolling up pauses that until they come back.
+  // New steps keep the end in view while the owner is at the end; scrolling up pauses that until they come back. A new request waits at the
+  // end of the conversation, so it pulls the view down to it.
+  const asked = model.requests.length, askedBefore = useRef(0);
   useLayoutEffect(() => {
     const node = scroller.current;
+    if (asked > askedBefore.current) following.current = true;
+    askedBefore.current = asked;
     if (node && following.current) node.scrollTop = node.scrollHeight;
-  }, [model.lastSequence, pending.length]);
+  }, [model.lastSequence, pending.length, asked]);
   useEffect(() => { if (autoFocus && open) box.current?.focus(); }, [autoFocus, sessionId]);
 
   const send = async () => {
@@ -110,11 +114,11 @@ export function NativeSession({ terminalId, entry, autoFocus }: { terminalId: st
           <NativeSummary model={model} />
           {status && <p className={`reading-status is-${identity.provider}${waiting ? ' is-waiting' : ''}`} role="status"><i className="reading-status-mark" aria-hidden="true" /><span>{status}</span></p>}
           {finished?.message && <p className="form-error" role="alert">{finished.message}{finished.willRetry ? ` · ${t('正在重试')}` : ''}</p>}
+          {model.requests.length > 0 && <div className="native-requests">{model.requests.map(request => <NativeRequestCard key={request.id} request={request} terminalId={terminalId} sessionId={sessionId} />)}</div>}
         </div>
       </div>
       {behind && <div className="reading-latest"><button type="button" className="icon-button reading-jump" title={t('回到最新')} aria-label={t('回到最新')} onClick={() => { following.current = true; setBehind(false); scroller.current?.scrollTo({ top: scroller.current.scrollHeight }); }}><ArrowDown size={16} /></button></div>}
     </div>
-    {model.requests.length > 0 && <div className="reading-choice-host">{model.requests.map(request => <NativeRequestCard key={request.id} request={request} terminalId={terminalId} sessionId={sessionId} />)}</div>}
     {error && <p className="form-error native-error" role="alert">{error}</p>}
     {over && <div className="native-ended"><span>{reasonWords(model.session?.reason) ?? t('这个会话已经结束')}</span><button type="button" className="button secondary small" onClick={() => dismissNative(terminalId)}>{t('开始新的对话')}</button></div>}
     <div className="reading-composer">

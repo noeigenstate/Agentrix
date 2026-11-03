@@ -5,7 +5,7 @@ import { CaretDown, CaretUp, Check, X } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
 import { Markdown } from '../reading/ReadingView';
 import type { NativeModel, NativeItem } from './native-model.ts';
-import { type StepMark, commandOf, fileChanges, itemState, messageText, planText, reasoningText, toolOf } from './native-words';
+import { type StepMark, commandOf, fileChanges, itemState, messageText, planText, reasoningText, shortPath, toolOf } from './native-words';
 
 const first = (value: string) => value.split('\n', 1)[0];
 
@@ -33,10 +33,11 @@ export function Diff({ text }: { text: string }) {
 
 function CommandStep({ item }: { item: NativeItem }) {
   const { command, cwd, exitCode, durationMs, output } = commandOf(item), state: StepMark = exitCode ? 'failed' : itemState(item);
-  const facts = [cwd, exitCode !== null && t('退出码 {code}', { code: exitCode }), durationMs !== null && t('用时 {seconds} 秒', { seconds: (durationMs / 1000).toFixed(1) })].filter(Boolean).join(' · ');
+  // The folder is its last two parts on one line; the whole path is the line's tooltip.
+  const facts = [cwd && shortPath(cwd), exitCode !== null && t('退出码 {code}', { code: exitCode }), durationMs !== null && t('用时 {seconds} 秒', { seconds: (durationMs / 1000).toFixed(1) })].filter(Boolean).join(' · ');
   return <Step state={state} label={t('运行命令')} detail={first(command)}>
     <pre className="native-pre">{`$ ${command}`}</pre>
-    {facts && <small className="native-facts">{facts}</small>}
+    {facts && <small className="native-facts" title={cwd ?? undefined}>{facts}</small>}
     {output && <pre className="native-pre">{output}</pre>}
   </Step>;
 }
@@ -81,12 +82,13 @@ export function NativeItemView({ item }: { item: NativeItem }) {
 
 // The turn's cumulative diff and the plan's steps: one card each at the end of the conversation, each replaced as the agent updates it.
 export function NativeSummary({ model }: { model: NativeModel }) {
-  const { diff, plan } = model;
-  return <>
-    {plan && plan.steps.length > 0 && <Step state={null} label={t('计划')} detail={t('{done} / {total} 步', { done: plan.steps.filter(step => /^(completed|done)$/i.test(step.status ?? '')).length, total: plan.steps.length })} open>
+  const { diff, plan } = model, steps = plan?.steps.length ?? 0;
+  if (!diff && !steps) return null;
+  return <div className="native-summary">
+    {plan && steps > 0 && <Step state={null} label={t('计划')} detail={t('{done} / {total} 步', { done: plan.steps.filter(step => /^(completed|done)$/i.test(step.status ?? '')).length, total: plan.steps.length })} open>
       {plan.explanation && <p className="reading-plain native-thought">{plan.explanation}</p>}
       <ol className="native-plan">{plan.steps.map((step, index) => <li key={index} className={/^(completed|done)$/i.test(step.status ?? '') ? 'is-done' : undefined}>{step.text}</li>)}</ol>
     </Step>}
     {diff && <Step state={null} label={t('本轮改动')}><Diff text={diff} /></Step>}
-  </>;
+  </div>;
 }

@@ -195,7 +195,7 @@ function paneLoader(state, react = hookApi) {
   loader('shared/i18n.ts').applyLanguage('zh');
   return loader('features/agents/SubagentPane.tsx').SubagentPane;
 }
-const paneProps = (patch = {}) => ({ terminalId: 't1', callId: 'agent:a', projectId: 'p1', onClose() {}, onError() {}, onOpenLink() {}, ...patch });
+const paneProps = (patch = {}) => ({ terminalId: 't1', callId: 'dispatch:a', projectId: 'p1', onClose() {}, onError() {}, onOpenLink() {}, ...patch });
 const paneMarkup = (state, patch, react) => renderToStaticMarkup(React.createElement(paneLoader(state, react), paneProps(patch)));
 const ok = (patch, status = 'ok') => ({ feed: feed(3, patch), status, error: null });
 
@@ -630,24 +630,34 @@ test('the task keeps the header’s width: only the state, the clock and the clo
   assert.match(css, /\.subagent-head \{ position: relative; z-index: 1;[^}]*background: var\(--bg-app\); \}/, 'the feed scrolling to its end clips under the header, never over it');
 }));
 
+// A sub-agent inside the session has no direct channel (main answers 未送达 for it), so its split offers no box, only the reason; a dispatched worker keeps its box.
+test('a sub-agent of the session shows a grey line instead of a message box; a dispatched worker shows the box as before', () => zh(() => {
+  const inside = paneMarkup(ok({}), { callId: 'agent:toolu_1' }), worker = paneMarkup(ok({}), { callId: 'dispatch:run-1' });
+  assert.equal(count(inside, /<textarea/g), 0); assert.doesNotMatch(inside, /停下|icon-button reading-send/);
+  assert.match(inside, /<div class="subagent-input"><p class="subagent-input-note">会话内的子代理没有直达通道，只能通过主会话与它交流。<\/p><\/div>/);
+  assert.doesNotMatch(inside, /规划员|转发|粘贴/, 'nothing pasted into the planner is promised');
+  assert.equal(count(worker, /<textarea/g), 1); assert.doesNotMatch(worker, /没有直达通道/);
+  assert.match(paneMarkup(ok({ state: 'done', endedAt: 5000 }), { callId: 'agent:toolu_1' }), /没有直达通道/, 'a finished one gives the same reason');
+}));
+
 test('a narrow message box shows a shorter hint that fits, never a cut-off one: the longest hint comes first, the reason a finished view gives has a short form', () => {
-  const view = inputView({}, {}, 2);
+  const view = inputView({}, { name: '实现分块偏移的修复（default） · GPT-6.1-Sol' }, 3);
   try {
-    assert.equal(view.find('textarea').props.placeholder, '给 Sol 发消息', 'the shortest, for the narrowest box');
-    assert.deepEqual(view.hints, ['给 Sol 发消息，Enter 发送，Shift+Enter 换行', '给 Sol 发消息，Enter 发送', '给 Sol 发消息']);
+    assert.equal(view.find('textarea').props.placeholder, '发消息', 'the shortest, for the narrowest box');
+    assert.deepEqual(view.hints, ['给它发消息，Enter 发送，Shift+Enter 换行', '给它发消息，Enter 发送', '给它发消息', '发消息'], 'no hint carries the worker’s long name');
   } finally { view.done(); }
 });
 
-test('whenever the box shows a shortened hint, or none, the full one with its keys is its tooltip and a hidden accessible description; the full hint needs neither', () => {
-  const full = '给 Sol 发消息，Enter 发送，Shift+Enter 换行';
-  for (const fit of [1, 2, 3]) {   // a shorter hint, the shortest, nothing fits
+test('whenever the box shows a shortened hint, or the last resort, the full one with its keys is its tooltip and a hidden accessible description; the full hint needs neither; the box is never empty', () => {
+  const full = '给它发消息，Enter 发送，Shift+Enter 换行';
+  for (const fit of [1, 2, 3, 4]) {   // a shorter hint, a short one, the shortest, nothing fits
     const view = inputView({}, {}, fit);
     try {
       const box = view.find('textarea'), note = view.note();
       assert.equal(box.props.title, full); assert.equal(box.props['aria-describedby'], 'subagent-hint-t1-agent:a');
       assert.equal(note.props.id, box.props['aria-describedby']); assert.equal(note.props.children, full);
       assert.equal(note.props.style.position, 'absolute', 'not drawn');
-      assert.equal(box.props.placeholder, ['给 Sol 发消息，Enter 发送', '给 Sol 发消息', ''][fit - 1], 'the visible hint is the longest that fits, empty when none does');
+      assert.equal(box.props.placeholder, ['给它发消息，Enter 发送', '给它发消息', '发消息', '发消息'][fit - 1], 'the visible hint is the longest that fits; when none does, the shortest — never an empty box');
     } finally { view.done(); }
   }
   const whole = inputView({}, {}, 0);

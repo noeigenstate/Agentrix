@@ -10,14 +10,16 @@ import './subagent-input.css';
 
 export const MAX_INTERVENTION = 4000;
 
-// The hint, longest first: the box shows the first that fits its width, so a narrow split gets a short one instead of a cut-off one.
-const openHints = (agent: string) => [t('给 {agent} 发消息，Enter 发送，Shift+Enter 换行', { agent }), t('给 {agent} 发消息，Enter 发送', { agent }), t('给 {agent} 发消息', { agent })];
+// The hint, longest first: the box shows the first that fits its width, so a narrow split gets a short one instead of a cut-off one. None
+// carries the worker's name (a long task title would push every one out of the box; the box's accessible name has it), and the last is short
+// enough for any box, so an empty box always says what it is for.
+const openHints = () => [t('给它发消息，Enter 发送，Shift+Enter 换行'), t('给它发消息，Enter 发送'), t('给它发消息'), t('发消息')];
 const closedHints = () => [t('它已结束或不可用，不能再发消息'), t('已结束，不能再发消息')];
 
 export function SubagentInput({ terminalId, callId, name, closed, onSent }: {
   terminalId: string; callId: string; name: string; closed: boolean; onSent(intervention: AgentIntervention): void;
 }) {
-  const box = useRef<HTMLTextAreaElement>(null), hints = closed ? closedHints() : openHints(name), hint = useFittingHint(box, hints);
+  const box = useRef<HTMLTextAreaElement>(null), hints = closed ? closedHints() : openHints(), hint = useFittingHint(box, hints) || hints.at(-1)!;
   const hintId = `subagent-hint-${terminalId}-${callId}`, fullHint = fullHintProps(hints, hint, hintId);
   const [text, setText] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null), [receipt, setReceipt] = useState<string | null>(null);
   async function run(request: Promise<Result<AgentIntervention>>, done: (value: AgentIntervention) => void) {
