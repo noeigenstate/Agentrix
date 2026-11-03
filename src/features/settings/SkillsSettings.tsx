@@ -61,10 +61,12 @@ export function SkillsSettings({ projects }: { projects: Project[] }) {
   }, [selected?.id, selected?.version, selected?.pending]);
 
   const change = async <T,>(request: Promise<Result<T>>) => { const value = await call(request); if (value !== undefined) await refresh(); return value; };
-  const choose = (id: string) => { setEditing(null); setSelectedId(id); };
+  // An error belongs to the form or skill it came from: leaving, cancelling or starting another form drops it.
+  const closeForm = () => { setEditing(null); setConfirm(null); setError(''); };
+  const choose = (id: string) => { setError(''); setEditing(null); setSelectedId(id); };
   const editedSkill = editing?.id ? skills.find(skill => skill.id === editing.id) : undefined;
   const draftOf = (skill: SkillInfo, text: string): SkillDraft => ({ name: skill.name, description: skill.description, scope: skill.scope === 'project' ? 'project' : 'global', projectId: skill.projectId, text });
-  const create = () => { setSelectedId(null); setConfirm(null); setEditing({ id: null, draft: { name: '', description: '', scope: 'global', projectId: null, text: '' } }); };
+  const create = () => { setSelectedId(null); setConfirm(null); setError(''); setEditing({ id: null, draft: { name: '', description: '', scope: 'global', projectId: null, text: '' } }); };
   const importFolder = async () => { const imported = await change(api.importSkill('global', null)); if (imported) choose(imported.id); };
   // The name field shows the SKILL.md name, but saving sends the folder's name unless it was edited: the name renames the folder and so changes the id.
   const send = (skill: SkillInfo | undefined, draft: SkillDraft) => api.saveSkill(skill?.id ?? null, skill && draft.name === skill.name ? { ...draft, name: folderName(skill) } : draft);
@@ -101,7 +103,7 @@ export function SkillsSettings({ projects }: { projects: Project[] }) {
     <div className="skills-pane">
       {error && <p className="form-error skills-error" role="alert">{error}</p>}
       {editing ? <SkillEditForm id={editing.id} name={editedSkill?.name ?? ''} draft={editing.draft} scopes={scopeOptions(projects, scopeOf)} confirm={confirm}
-        onChange={draft => setEditing({ ...editing, draft })} onSave={() => void save()} onCancel={() => { setEditing(null); setConfirm(null); }} onDelete={() => void remove()} onDismiss={() => setConfirm(null)} />
+        onChange={draft => { if (draft.name !== editing.draft.name) setError(''); setEditing({ ...editing, draft }); }} onSave={() => void save()} onCancel={closeForm} onDelete={() => void remove()} onDismiss={() => setConfirm(null)} />
         : selected && actions ? <SkillDetailPane skill={selected} detail={shown} scopes={scopeOptions(projects, scopeOf)} tab={tab} now={Date.now()} actions={actions} />
         : loaded && <EmptyMine onNew={create} onImport={() => void importFolder()} />}
     </div>

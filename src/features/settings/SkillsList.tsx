@@ -2,7 +2,7 @@ import { FolderOpen, MagnifyingGlass, Plus } from '@phosphor-icons/react';
 import type { SkillInfo } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { IconButton } from '../../shared/IconButton';
-import { dependency, extensionTag, replacedCount, skillRows, skillSummary, skillTitle } from './skill-text';
+import { dependency, replacedCount, skillRows, skillSummary, skillTitle } from './skill-text';
 
 // Below this many skills a list needs no search.
 const SEARCH_FROM = 8;
@@ -22,11 +22,12 @@ export function SkillsList({ skills, selectedId, query, onQuery, onSelect, onNew
   const matches = (skill: SkillInfo) => !needle || `${skillTitle(skill)} ${skillSummary(skill)} ${skill.name} ${skill.id}`.toLowerCase().includes(needle);
   const rows = skillRows(skills, matches), builtinTotal = skills.filter(skill => skill.source === 'builtin').length;
   const row = (skill: SkillInfo) => {
-    const tag = extensionTag(skill), replaced = replacedCount(skill);
-    return <button type="button" key={skill.id} className={tag ? 'skills-item is-extension' : 'skills-item'} data-skill-id={skill.id} data-skill-extends={skill.extends ?? undefined} data-skill-replaced={replaced || undefined}
+    const title = skillTitle(skill), extension = skill.extends !== null, replaced = replacedCount(skill);
+    // The row is only 240px wide: the tag stays short (the detail title has the base's name) and the title holds the full name.
+    return <button type="button" key={skill.id} title={title} className={extension ? 'skills-item is-extension' : 'skills-item'} data-skill-id={skill.id} data-skill-extends={skill.extends ?? undefined} data-skill-replaced={replaced || undefined}
       aria-current={skill.id === selectedId ? 'true' : undefined} onClick={() => onSelect(skill.id)}>
-      <span className="skills-item-name">{skillTitle(skill)}</span>
-      {tag && <span className="skills-tag">{tag}</span>}
+      <span className="skills-item-name">{title}</span>
+      {extension && <span className="skills-tag">{t('扩展')}</span>}
       {replaced > 0 && <span className="skills-count">{t('已替换 {n}', { n: replaced })}</span>}
       <Mark skill={skill} />
     </button>;
