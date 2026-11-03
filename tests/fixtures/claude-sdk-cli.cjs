@@ -24,7 +24,8 @@ let total = costs[sessionId] || 0, turns = 0, activeTurn;
 const baseline = total, budgetIndex = args.indexOf('--max-budget-usd');
 const budgetValue = args.find(arg => arg.startsWith('--max-budget-usd='))?.split('=')[1] ?? (budgetIndex < 0 ? undefined : args[budgetIndex + 1]);
 const budget = budgetValue === undefined ? Infinity : Number(budgetValue);
-append({ spawn: true, pid: process.pid, args, scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1' });
+append({ spawn: true, pid: process.pid, parentPid: process.ppid, node: process.execPath, args, scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1' });
+process.once('exit', code => append({ exit: true, pid: process.pid, code }));
 function toolEnvironment() {
   const env = { ...process.env };
   if (env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1') for (const name of Object.keys(env)) {
@@ -70,6 +71,7 @@ reader.on('line', line => {
     return;
   }
   const params = message.params || {};
+  append({ rpc: message.method, pid: process.pid });
   if (['thread/resume', 'turn/start', 'turn/steer', 'turn/interrupt'].includes(message.method)
       && !params.threadId) {
     send({ id: message.id, error: { code: -32602, message: 'Missing required threadId' } });

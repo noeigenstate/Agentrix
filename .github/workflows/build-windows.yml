@@ -475,6 +475,7 @@ jobs:
 
       - name: Verify packaged SDK and app-server through fake native executables
         run: node scripts/retry.mjs npm run test:native-session -- --packaged --runtime
+        timeout-minutes: 6
 
       - name: Verify the packaged app runs a zsh terminal and follows Codex
         run: node scripts/retry.mjs node scripts/mac-smoke.mjs --packaged --shell zsh

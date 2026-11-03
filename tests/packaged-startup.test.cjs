@@ -9,8 +9,59 @@ const { spawnSync } = require('node:child_process');
 const { copyDispatchRuntime } = require('../scripts/after-pack.cjs');
 const { build } = require('../package.json');
 const { fixtureProcesses } = require('./fixtures/claude-sdk-processes.cjs');
+const { createSmokeStages, closeSmokeApplication, offlineStorage } = require('./fixtures/claude-sdk-smoke.cjs');
 
 const root = path.resolve(__dirname, '..');
+
+test('native runtime smoke never consults the real Keychain even when encryption is available', () => {
+  let calls = 0;
+  const blocked = () => { calls++; throw new Error('would block for a Keychain prompt'); };
+  const safeStorage = { isEncryptionAvailable: blocked, getSelectedStorageBackend: blocked, encryptString: blocked, decryptString: blocked };
+  offlineStorage({ safeStorage });
+  assert.equal(safeStorage.isEncryptionAvailable(), true);
+  assert.equal(safeStorage.decryptString(safeStorage.encryptString('offline-only')), 'offline-only');
+  assert.equal(calls, 0);
+});
+
+test('native runtime smoke answers the macOS quit confirmation for its isolated application', async () => {
+  const stages = createSmokeStages({ log() {} }), dialog = { showMessageBox: () => new Promise(() => {}) };
+  const child = { exitCode: null, signalCode: null }; let closed = false;
+  const app = { evaluate: async callback => callback({ dialog }), process: () => { if (closed) throw new Error('application handle disposed'); return child; },
+    close: async () => { assert.equal((await dialog.showMessageBox()).response, 1); child.exitCode = 0; closed = true; } };
+  try { await closeSmokeApplication(app, stages, 50); assert.equal(closed, true); }
+  finally { stages.dispose(); }
+});
+
+test('native smoke bounds a hung IPC promise and prints the exact stage without credentials', { timeout: 2000 }, async () => {
+  const logs = [], stages = createSmokeStages({ timeoutMs: 30, log: line => logs.push(line) });
+  try {
+    await assert.rejects(stages.run('claude send: injected hung IPC', () => new Promise(() => {})), /Stage timed out.*claude send/);
+    await assert.rejects(stages.run('fake error', () => { throw new Error('sk-ant-api03-offline-private-value'); }), /offline-private/);
+    assert.ok(logs.some(line => line.includes('DIAGNOSTICS') && line.includes('claude send')));
+    assert.ok(!logs.join('').includes('sk-ant-api03'));
+  } finally { stages.dispose(); }
+});
+
+test('native smoke kills only its registered child when Electron close stalls and fails the check', { timeout: 10000 }, async t => {
+  const scope = fixtureProcesses(t, 'agx-smoke-close-'), logs = [];
+  const child = scope.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const exited = new Promise(resolve => child.once('close', resolve));
+  const stages = createSmokeStages({ log: line => logs.push(line) });
+  const app = { process: () => child, evaluate: async callback => callback({ dialog: {} }), close: () => new Promise(() => {}) };
+  stages.attach(app);
+  try {
+    await assert.rejects(closeSmokeApplication(app, stages, 30), /Stage timed out.*close Electron/);
+    await scope.wait(exited, 'owned smoke child exits after the close deadline');
+    assert.ok(logs.some(line => line.includes(`FORCE owned Electron pid=${child.pid}`)));
+  } finally { stages.dispose(); }
+});
+
+test('native smoke overall watchdog terminates a lost stage instead of waiting for the CI job limit', { timeout: 5000 }, () => {
+  const helper = require.resolve('./fixtures/claude-sdk-smoke.cjs');
+  const source = `const { createSmokeStages } = require(${JSON.stringify(helper)}); const stages = createSmokeStages({ timeoutMs: 10000, totalMs: 40 }); stages.run('injected overall hang', () => new Promise(() => {}));`;
+  const result = spawnSync(process.execPath, ['-e', source], { encoding: 'utf8', windowsHide: true, timeout: 2000 });
+  assert.ifError(result.error); assert.equal(result.status, 1); assert.match(result.stdout, /DIAGNOSTICS overall deadline exceeded.*injected overall hang/);
+});
 
 test('Linux native desktop smoke retains Xvfb access while isolating credentials', async () => {
   const { desktopEnvironment } = await import('../scripts/native-session-smoke.mjs');
@@ -23,6 +74,8 @@ test('Linux native desktop smoke retains Xvfb access while isolating credentials
   const commands = [...workflow.matchAll(/- name: Verify packaged SDK and app-server through fake native executables\s+(?:if:[^\n]+\s+)?run: ([^\n]+)/g)].map(match => match[1].trim());
   assert.equal(commands.length, 3); assert.ok(commands[2].startsWith('xvfb-run -a '));
   assert.ok(commands.slice(0, 2).every(command => !command.includes('xvfb-run')));
+  const limits = [...workflow.matchAll(/- name: Verify packaged SDK and app-server through fake native executables\s+(?:if:[^\n]+\s+)?run: [^\n]+\s+timeout-minutes: (\d+)/g)].map(match => Number(match[1]));
+  assert.deepEqual(limits, [6]);
 });
 
 test('native desktop smoke constructs event sequence numbers in delivery order', async () => {
