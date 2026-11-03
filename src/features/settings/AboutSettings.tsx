@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowUpRight, ArrowsClockwise, CaretRight, DownloadSimple, Info, ListBullets } from '@phosphor-icons/react';
 import type { AppUpdateState, Distribution } from '../../shared/types';
 import { t } from '../../shared/i18n';
@@ -45,12 +45,22 @@ function LinkRow({ title, page }: { title: string; page: ProjectPage }) {
 
 // The update channel: a select for stable or beta. Beta waits behind the agreement dialog and is only asked for with the version that was read; stable switches at once.
 // An unsupported build keeps the choice in settings but updates nothing, so it gets a line instead of the select.
-function UpdateChannel({ updates, onChanged }: { updates: AppUpdateState; onChanged: (state: AppUpdateState) => void }) {
+export function UpdateChannel({ updates, onChanged }: { updates: AppUpdateState; onChanged: (state: AppUpdateState) => void }) {
   const [dialog, setDialog] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [toStable, setToStable] = useState(false);
-  if (!updates.supported) return <p className="about-channel-note">{t('安装版 Windows 才能选择更新通道。')}</p>;
+  const root = useRef<HTMLDivElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const openDialog = () => { opener.current = document.activeElement as HTMLElement | null; setDialog(true); };
+  // A closing modal leaves focus on the page body. Give it back to what opened the dialog, or to the select when that is gone (the agree button leaves once the agreement holds).
+  useEffect(() => {
+    if (dialog || !opener.current) return;
+    const target = opener.current.isConnected && opener.current !== document.body ? opener.current : root.current?.querySelector<HTMLElement>('.select-trigger');
+    opener.current = null;
+    target?.focus();
+  }, [dialog]);
+  if (!updates.supported) return <p className="about-channel-note">{t('只有 Windows 安装版可以选择更新通道。')}</p>;
   const apply = async (channel: AppUpdateState['channel'], agreementVersion?: string) => {
     setBusy(true); setError('');
     try {
@@ -60,15 +70,15 @@ function UpdateChannel({ updates, onChanged }: { updates: AppUpdateState; onChan
     } catch (reason) { setError(String(reason)); }
     finally { setBusy(false); }
   };
-  return <div className="about-channel">
+  return <div className="about-channel" ref={root}>
     <div className="setting-row">
-      <span><ArrowsClockwise size={19} /><span><b>{t('更新通道')}</b><small>{t('稳定版只接收正式版；测试版更早收到新版本，但可能不稳定。')}</small></span></span>
-      <Select label={t('更新通道')} value={updates.channel} disabled={busy} onChange={value => value === 'beta' ? setDialog(true) : void apply('stable')}
+      <span><ArrowsClockwise size={19} /><span><b>{t('更新通道')}</b><small>{t('稳定版只收正式版；测试版更早更新，需先同意测试协议。')}</small></span></span>
+      <Select label={t('更新通道')} value={updates.channel} disabled={busy} onChange={value => value === 'beta' ? openDialog() : void apply('stable')}
         options={[{ value: 'stable', label: t('稳定版') }, { value: 'beta', label: t('测试版') }]} />
     </div>
     {updates.channel === 'beta' && !updates.agreed && <>
       <p className="about-channel-note" role="status">{t('测试协议已更新，需要重新同意后才会接收测试版更新。')}</p>
-      <button type="button" className="button secondary" onClick={() => setDialog(true)}>{t('阅读并同意')}</button>
+      <button type="button" className="button secondary" onClick={openDialog}>{t('阅读并同意')}</button>
     </>}
     {toStable && updates.channel === 'stable' && <p className="about-channel-note">{t('之后只接收正式版更新；已安装的测试版会保留，直到有更新的正式版。')}</p>}
     {error && !dialog && <p className="form-error" role="alert">{t(error)}</p>}
