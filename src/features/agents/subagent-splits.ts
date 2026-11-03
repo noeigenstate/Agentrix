@@ -4,11 +4,6 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { Result, SubagentFeed, SubagentFeedEvent } from '../../shared/types';
 
 export type SubagentSplit = { terminalId: string; callId: string };
-// At most two views per terminal: a third click replaces the oldest, so the conversation always keeps the larger share.
-export const MAX_SPLITS = 2;
-// A centre narrower than this has room for one view only.
-export const NARROW_CENTRE = 600;
-export const splitLimit = (centre: number) => centre < NARROW_CENTRE ? 1 : MAX_SPLITS;
 
 // The feed each view last read, so a view opened again shows it at once; dropped when the view closes or its terminal goes.
 const lastFeeds = new Map<string, SubagentFeed>();
@@ -21,15 +16,11 @@ const same = (a: SubagentSplit, terminalId: string, callId: string) => a.termina
 export const isSplitOpen = (open: readonly SubagentSplit[], terminalId: string, callId: string) => open.some(item => same(item, terminalId, callId));
 export const splitsOf = (open: readonly SubagentSplit[], terminalId: string) => open.filter(item => item.terminalId === terminalId);
 
-// Keeps the newest `limit` views of a terminal; the rest close.
-export function limitSplits(terminalId: string, limit: number) {
-  const mine = splitsOf(splits, terminalId), keep = mine.slice(mine.length - limit);
-  if (mine.length > limit) publish(splits.filter(item => item.terminalId !== terminalId || keep.includes(item)));
-}
-export function openSplit(terminalId: string, callId: string, limit = MAX_SPLITS) {
+// A terminal has one view beside its conversation, at any width: opening another sub-agent replaces it (and drops the feed kept for it).
+export function openSplit(terminalId: string, callId: string) {
   if (isSplitOpen(splits, terminalId, callId)) return;
-  publish([...splits, { terminalId, callId }]);
-  limitSplits(terminalId, limit);
+  for (const replaced of splitsOf(splits, terminalId)) lastFeeds.delete(feedKey(terminalId, replaced.callId));
+  publish([...splits.filter(item => item.terminalId !== terminalId), { terminalId, callId }]);
 }
 export function closeSplit(terminalId: string, callId: string) {
   lastFeeds.delete(feedKey(terminalId, callId));
