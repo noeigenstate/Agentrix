@@ -219,3 +219,6 @@
 .reading-composer { margin: 4px var(--reading-edge-right) 16px var(--reading-edge-left); }
 .focus-mode .reading-composer { margin-bottom: 20px; }
 .reading-commands.is-inline { margin: 4px var(--reading-edge-right) 4px var(--reading-edge-left); }
+.reading-outbox { padding: 8px var(--reading-inset, 12px); color: var(--text-2); font-size: 12px; max-height: 160px; overflow: auto; }
+.reading-outbox ol { margin: 4px 0; padding-left: 20px; }
+.reading-outbox li { white-space: pre-wrap; overflow-wrap: anywhere; }

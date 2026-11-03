@@ -1,0 +1,4 @@
+■ Conversation interrupted - tell the model what to do differently.
+› next instruction
+
+? for shortcuts

@@ -108,7 +108,7 @@ if (require.main === module) {
       const h = popupHarness(t, agent, typing ? idle[agent] : read(file), activity);
       if (typing) { h.edit('draft retained'); h.view.rows = read(file); h.render(); }
       h.tick(DIALOG_SETTLE * 2);
-      assert.ok(h.popup(), file); assert.equal(h.node.disabled, true);
+      assert.ok(h.popup(), file); assert.equal(h.node.disabled, false);
       if (typing) { assert.equal(h.popup().props.focus, false); assert.equal(h.node.value, 'draft retained'); }
       assert.equal(elements(h.tree()).some(element => /^(ReadingChoice|ReadingQuestion|NativeApprovalCard|NativeQuestionCard)$/.test(element.type?.name)), false);
       assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
@@ -120,10 +120,10 @@ if (require.main === module) {
   });
   for (const agent of ['claude', 'codex']) {
     for (const activity of ['complete', 'working']) {
-      test(agent + ': an unknown dialog opens after settling while ' + activity + ', without a parsed choice or notice', t => {
-        const h = popupHarness(t, agent, ['UNRECOGNISED GATE', 'Choose whether to continue: maybe / later'], activity);
+      test(agent + ': an explicit panel key strip opens immediately while ' + activity + ', without a parsed choice or notice', t => {
+        const h = popupHarness(t, agent, ['Settings', 'Esc to close'], activity);
         const wait = DIALOG_SETTLE * (activity === 'working' ? 2 : 1);
-        assert.equal(h.popup(), undefined); h.tick(wait - 1); assert.equal(h.popup(), undefined);
+        assert.ok(h.popup()); h.tick(wait - 1); assert.ok(h.popup());
         h.tick(1); assert.ok(h.popup()); assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
       });
       test(agent + ': an idle input stays available despite ' + activity + ' activity', t => {
@@ -137,9 +137,9 @@ if (require.main === module) {
         assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
       });
     }
-    test(agent + ': a working line without an input box cannot hide an unknown dialog', t => {
+    test(agent + ': a working line without an input box cannot hide an explicit panel', t => {
       const line = agent === 'claude' ? '✻ Working…' : '• Working (5s · esc to interrupt)';
-      const h = popupHarness(t, agent, [line, 'Unknown dialog'], 'working'); h.tick(DIALOG_SETTLE * 2);
+      const h = popupHarness(t, agent, [line, 'Settings', 'Esc to close'], 'working'); h.tick(DIALOG_SETTLE * 2);
       assert.ok(h.popup()); assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
     });
     if (agent === 'claude') for (const name of ['claude-bang-running', 'claude-bang-empty-running', 'claude-bang-empty-model-working', 'claude-wrapped-draft']) {
@@ -154,25 +154,25 @@ if (require.main === module) {
       const h = popupHarness(t, agent, read(file)); h.tick(DIALOG_SETTLE * 2);
       assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, false);
     });
-    for (const activity of ['complete', 'working']) test(agent + ': while ' + activity + ' and typing an unknown dialog opens without xterm focus and preserves the draft', t => {
+    for (const activity of ['complete', 'working']) test(agent + ': while ' + activity + ' and typing an explicit panel opens without xterm focus and preserves the draft', t => {
       const h = popupHarness(t, agent, idle[agent], activity);
-      h.edit('keep this draft'); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE * (activity === 'working' ? 2 : 1));
+      h.edit('keep this draft'); h.view.rows = ['Settings', 'Esc to close']; h.render(); h.tick(DIALOG_SETTLE * (activity === 'working' ? 2 : 1));
       assert.ok(h.popup()); assert.equal(h.popup().props.focus, false); assert.equal(h.node.value, 'keep this draft');
-      assert.equal(h.node.disabled, true); h.keys('Enter'); h.keys('Tab');
+      assert.equal(h.node.disabled, false); h.keys('Enter'); h.keys('Tab');
       assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
     });
     for (const restoreFocus of [true, false]) test(agent + ': closing /status at idle ' + (restoreFocus ? 'focuses the enabled composer after commit' : 'leaves another editor focused'), async t => {
       const rows = agent === 'claude' ? ['────', '❯ ', '────', '  ⏸ manual mode on'] : idle.codex;
       const h = popupHarness(t, agent, rows);
       h.edit('/status'); h.keys('Enter');
-      assert.equal(h.popup().props.command, '/status'); assert.equal(h.node.disabled, true);
+      assert.equal(h.popup().props.command, '/status'); assert.equal(h.node.disabled, false);
       h.popup().props.onReady(); await Promise.resolve();
       h.tick(60); await Promise.resolve(); h.tick(150); await Promise.resolve();
       assert.deepEqual(h.writes.map(([, text]) => text), ['\x15', '/status', '\r']);
       const before = h.writes.slice(), otherEditor = { matches: () => true };
       document.activeElement = restoreFocus ? document.body : otherEditor;
       h.popup().props.onClose(restoreFocus);
-      assert.equal(h.node.disabled, true, 'the close handler runs before the DOM commit');
+      assert.equal(h.node.disabled, false, 'the composer stays editable while the popup closes');
       h.render();
       assert.equal(h.node.disabled, false); assert.equal(h.popup(), undefined);
       assert.equal(document.activeElement, restoreFocus ? h.node : otherEditor);
@@ -181,20 +181,19 @@ if (require.main === module) {
     });
     test(agent + ': a popup opened while typing preserves focus and draft, then restores the composer when closed at idle', t => {
       const h = popupHarness(t, agent);
-      h.edit('keep this draft'); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE);
+      h.edit('keep this draft'); h.view.rows = ['Settings', 'Esc to close']; h.render(); h.tick(DIALOG_SETTLE);
       assert.equal(h.popup().props.focus, false); assert.equal(document.activeElement, h.node);
       h.view.rows = idle[agent]; h.render();
-      assert.equal(h.node.disabled, true); document.activeElement = document.body;
-      h.popup().props.onClose(); h.render();
+      assert.equal(h.popup(), undefined);
       assert.equal(h.node.disabled, false); assert.equal(document.activeElement, h.node); assert.equal(h.node.value, 'keep this draft');
       assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
     });
   }
   test('an inactive dialog opens when activated; dismissal and redraw do not rearm it', t => {
-    const h = popupHarness(t); h.props.active = false; h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE);
+    const h = popupHarness(t); h.props.active = false; h.view.rows = ['Settings', 'Esc to close']; h.render(); h.tick(DIALOG_SETTLE);
     assert.equal(h.popup(), undefined); h.props.active = true; h.render(); assert.ok(h.popup());
     h.popup().props.onClose(); h.render(); assert.ok(h.waiting());
-    for (let i = 0; i < 5; i++) { h.view.rows = ['Unknown dialog', String(i)]; h.render(); h.tick(DIALOG_SETTLE); assert.equal(h.popup(), undefined); }
+    for (let i = 0; i < 5; i++) { h.view.rows = ['Settings ' + i, 'Esc to close']; h.render(); h.tick(DIALOG_SETTLE); assert.equal(h.popup(), undefined); }
     h.waiting().props.onOpenTerminal(); h.render(); assert.ok(h.popup());
   });
   // What the closed popup leaves: the dialog's own heading, and nothing at all rather than the tail of a wrapped paragraph.
@@ -207,23 +206,23 @@ if (require.main === module) {
       assert.equal(h.waiting().props.title, title);
     });
   }
-  for (const agent of ['claude', 'codex']) test(agent + ': while a dialog waits the locked composer says so in its hint, and its draft stays', t => {
+  for (const agent of ['claude', 'codex']) test(agent + ': while a dialog waits the queueing composer says so in its hint, and its draft stays', t => {
     const h = popupHarness(t, agent, idle[agent]);
-    h.edit('keep this draft'); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE);
+    h.edit('keep this draft'); h.view.rows = ['Settings', 'Esc to close']; h.render(); h.tick(DIALOG_SETTLE);
     const box = elements(h.tree()).find(element => element.type === 'textarea').props;
-    assert.equal(box.disabled, true); assert.equal(box.value, 'keep this draft');
-    assert.equal(box.placeholder, '终端里有待处理的界面');
-    h.view.rows = idle[agent]; h.popup().props.onClose(); h.render();
-    assert.notEqual(elements(h.tree()).find(element => element.type === 'textarea').props.placeholder, '终端里有待处理的界面', 'the hint goes with the dialog');
+    assert.equal(box.disabled, false); assert.equal(box.value, 'keep this draft');
+    assert.equal(box.placeholder, '等终端处理完后发送');
+    h.view.rows = idle[agent]; h.popup()?.props.onClose(); h.render();
+    assert.notEqual(elements(h.tree()).find(element => element.type === 'textarea').props.placeholder, '等终端处理完后发送', 'the hint goes with the dialog');
   });
   test('busy output and a transient redraw do not open a dialog, and returning to input cancels the timer', t => {
     const h = popupHarness(t, 'codex', ['• Working (5s · esc to interrupt)', ...idle.codex], 'working'); h.tick(DIALOG_SETTLE * 3);
-    assert.equal(h.popup(), undefined); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE - 1);
+    assert.equal(h.popup(), undefined); h.view.rows = ['Settings', 'Esc to close']; h.render(); h.tick(DIALOG_SETTLE - 1);
     h.view.rows = idle.codex; h.render(); h.tick(DIALOG_SETTLE * 2); assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, false);
   });
   test('finishing activity shortens a pending unknown dialog wait, without suppressing it or sending keys', t => {
-    const h = popupHarness(t, 'codex', ['Unknown dialog'], 'working'); h.tick(DIALOG_SETTLE);
-    assert.equal(h.popup(), undefined); h.props.terminal.codexActivity = 'complete'; h.render();
+    const h = popupHarness(t, 'codex', ['Settings', 'Esc to close'], 'working'); h.tick(DIALOG_SETTLE);
+    assert.ok(h.popup()); h.props.terminal.codexActivity = 'complete'; h.render();
     assert.ok(h.popup()); assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
   });
 }

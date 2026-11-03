@@ -461,6 +461,21 @@ const expected = {
   // /plugins takes the input's place: its list's cursor row is no input, and its key hints are no footer.
   'codex-plugins-view': emptyScreen,
   'codex-plugins-view-before': codexScreen({ banner: freshBanner, status: freshStatus }),
+  // Synthetic compatibility layouts; input detection lives in cli-panel, not the banner/choice parser.
+  'claude-compat-auto-notice': emptyScreen,
+  'claude-compat-clipped': emptyScreen,
+  'claude-compat-long-draft': emptyScreen,
+  'claude-compat-no-footer': emptyScreen,
+  'claude-compat-redraw-rule': emptyScreen,
+  'claude-compat-stream': emptyScreen,
+  'codex-compat-clipped': emptyScreen,
+  'codex-compat-context-footer': emptyScreen,
+  'codex-compat-interrupted': emptyScreen,
+  'codex-compat-long-draft': emptyScreen,
+  'codex-compat-resize': emptyScreen,
+  'codex-compat-short-footer': emptyScreen,
+  'codex-compat-worded-draft': emptyScreen,
+  'codex-compat-stream': emptyScreen,
   'codex-resume-linux': resumeScreen([['合并远端主分支', '3h ago'], ['修复阅读视图', '10h ago'], ['整理发布说明', '11h ago'], ['继承 Claude 日志', '2d ago'], ['查找 resume 记忆', '20d ago'],
     ['合并主分支', '26d ago'], ['删除显示和系统监控功能', '28d ago'], ['删除所有 mcp、plugin 和 skill', '35d ago']], 'new'),
 };

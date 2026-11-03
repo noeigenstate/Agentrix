@@ -1,0 +1,34 @@
+────
+❯ first line
+  continuation 0
+  continuation 1
+  continuation 2
+  continuation 3
+  continuation 4
+  continuation 5
+  continuation 6
+  continuation 7
+  continuation 8
+  continuation 9
+  continuation 10
+  continuation 11
+  continuation 12
+  continuation 13
+  continuation 14
+  continuation 15
+  continuation 16
+  continuation 17
+  continuation 18
+  continuation 19
+  continuation 20
+  continuation 21
+  continuation 22
+  continuation 23
+  continuation 24
+  continuation 25
+  continuation 26
+  continuation 27
+
+  last line
+────
+  Background tasks: 1

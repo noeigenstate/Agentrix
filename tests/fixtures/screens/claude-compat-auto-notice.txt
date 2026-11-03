@@ -1,0 +1,6 @@
+────
+❯ draft from terminal
+────
+  auto mode on · shift+tab to cycle
+  Background task finished
+  Usage: 12%
