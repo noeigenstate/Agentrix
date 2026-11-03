@@ -7,10 +7,13 @@ using System.Text;
 using System.Linq;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Security.AccessControl;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Web.Script.Serialization;
 using Microsoft.Win32.SafeHandles;
 
@@ -27,7 +30,33 @@ public partial class LabSandbox {
     public Dictionary<string,string> env;
     public bool network;
   }
-  public class Lease { public string sid, profile; public string[] paths; }
+  // Missing roots/launcher fields identify the previous per-file lease format.
+  public class Lease {
+    public string sid, profile; public string[] paths, roots;
+    public int launcherPid; public long launcherCreated;
+  }
+  sealed class LeaseGuard : IDisposable {
+    readonly Mutex mutex;
+    public LeaseGuard(string manifest) {
+      string key;
+      using(var hash=SHA256.Create()) key=BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(Path.GetFullPath(manifest).ToUpperInvariant()))).Replace("-","");
+      mutex=new Mutex(false,"Local\\AgentrixLabLease-"+key);
+      try { mutex.WaitOne(); } catch(AbandonedMutexException) { }
+    }
+    public void Dispose() { mutex.ReleaseMutex(); mutex.Dispose(); }
+  }
+  sealed class RunLifetime : IDisposable {
+    readonly object gate=new object(); IntPtr job; bool stopped;
+    public void Bind(IntPtr value) { lock(gate) { job=value; if(stopped) Check(TerminateJobObject(job,1)); } }
+    public void Stop() { lock(gate) { stopped=true; if(job!=IntPtr.Zero) Check(TerminateJobObject(job,1)); } }
+    public void CheckRunning() { lock(gate) { if(stopped) throw new OperationCanceledException(); } }
+    public void Resume(IntPtr thread) { lock(gate) { CheckRunning(); if(ResumeThread(thread)==0xffffffff) Check(false); } }
+    public void Dispose() { lock(gate) { job=IntPtr.Zero; } }
+  }
+  sealed class Grant {
+    public string root; public uint rights; public bool propagate=true;
+    public readonly List<string> boundaries=new List<string>();
+  }
   [StructLayout(LayoutKind.Sequential)] struct SA { public int size; public IntPtr descriptor; public int inherit; }
   [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct SI {
     public int cb; public string reserved, desktop, title; public uint x,y,xSize,ySize,xChars,yChars,fill,flags;
@@ -82,6 +111,9 @@ public partial class LabSandbox {
   [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text,uint revision,out IntPtr descriptor,out uint size);
   [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern uint GetNamedSecurityInfoW(string name,int type,uint info,out IntPtr owner,out IntPtr group,out IntPtr dacl,out IntPtr sacl,out IntPtr descriptor);
   [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern uint SetNamedSecurityInfoW(string name,int type,uint info,IntPtr owner,IntPtr group,IntPtr dacl,IntPtr sacl);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern uint SetSecurityInfo(IntPtr handle,int type,uint info,IntPtr owner,IntPtr group,IntPtr dacl,IntPtr sacl);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetSecurityDescriptorControl(IntPtr descriptor,out ushort control,out uint revision);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetSecurityDescriptorSacl(IntPtr descriptor,out bool present,out IntPtr sacl,out bool defaulted);
   [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern uint SetEntriesInAclW(int count,ref Access entry,IntPtr oldAcl,out IntPtr acl);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool InitializeSecurityDescriptor(IntPtr descriptor,uint revision);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool SetSecurityDescriptorDacl(IntPtr descriptor,bool present,IntPtr acl,bool defaulted);
@@ -122,7 +154,7 @@ public partial class LabSandbox {
       return handle;
     } catch { CloseHandle(handle); throw; }
   }
-  static void Acl(string file,IntPtr sid,uint rights,bool remove,bool deny=false,bool inherit=true) {
+  static void Acl(string file,IntPtr sid,uint rights,bool remove,bool deny=false,bool inherit=true,bool propagate=false) {
     IntPtr owner,group,oldAcl,sacl,descriptor,acl=IntPtr.Zero,handle=IntPtr.Zero;
     bool pipe=file.StartsWith("\\\\.\\pipe\\",StringComparison.OrdinalIgnoreCase);
     FileIdentity identity=new FileIdentity(); uint code;
@@ -139,13 +171,20 @@ public partial class LabSandbox {
         if(oldAcl==IntPtr.Zero) return;
         byte[] bytes=new byte[(ushort)Marshal.ReadInt16(oldAcl,2)]; Marshal.Copy(oldAcl,bytes,0,bytes.Length);
         string trusteeSid=SidString(sid);
-        if(!new RawAcl(bytes,0).Cast<GenericAce>().OfType<QualifiedAce>().Any(ace=>ace.SecurityIdentifier.Value==trusteeSid)) return;
+        var filtered=new RawAcl(bytes,0); bool changed=false;
+        for(int i=filtered.Count-1;i>=0;i--) {
+          var ace=filtered[i] as QualifiedAce;
+          if(ace!=null && ace.SecurityIdentifier.Value==trusteeSid) { filtered.RemoveAce(i); changed=true; }
+        }
+        if(!changed) return;
+        bytes=new byte[filtered.BinaryLength]; filtered.GetBinaryForm(bytes,0);
+        acl=Marshal.AllocHGlobal(bytes.Length); Marshal.Copy(bytes,0,acl,bytes.Length);
       }
-      var entry = new Access { permissions=rights,mode=remove?4:deny?3:1,inheritance=inherit && Directory.Exists(file)?INHERIT:0,
-        trustee=new Trustee { form=0,type=5,name=sid } };
-      CheckCode(SetEntriesInAclW(1,ref entry,oldAcl,out acl));
-      // SetNamedSecurityInfo propagates the entire existing DACL through a directory tree, even for a new
-      // non-inheriting metadata ACE. Handle-based updates change exactly one verified object.
+      else {
+        var entry = new Access { permissions=rights,mode=deny?3:1,inheritance=inherit && Directory.Exists(file)?INHERIT:0,
+          trustee=new Trustee { form=0,type=5,name=sid } };
+        CheckCode(SetEntriesInAclW(1,ref entry,oldAcl,out acl));
+      }
       if(pipe) {
         CheckCode(SetNamedSecurityInfoW(file,1,DACL,IntPtr.Zero,IntPtr.Zero,acl,IntPtr.Zero));
       } else {
@@ -155,12 +194,23 @@ public partial class LabSandbox {
           try {
             if(current.Key!=identity.Key) throw new Exception();
             if(!remove && (rights & 0x116)!=0 && (current.attributes & 0x10)==0 && current.links>1 && !credentialIdentities.Contains(current.Key)) throw new Exception();
-            Check(SetKernelObjectSecurity(write,DACL,security));
+            // Propagate only a preflighted grant root. Metadata and cleanup change one verified object.
+            if(propagate) CheckCode(SetSecurityInfo(write,1,DACL,IntPtr.Zero,IntPtr.Zero,acl,IntPtr.Zero));
+            else Check(SetKernelObjectSecurity(write,DACL,security));
           } finally { CloseHandle(write); }
         }
         finally { Marshal.FreeHGlobal(security); }
       }
-    } finally { LocalFree(acl); LocalFree(descriptor); if(handle!=IntPtr.Zero) CloseHandle(handle); }
+    } finally { if(remove) Marshal.FreeHGlobal(acl); else LocalFree(acl); LocalFree(descriptor); if(handle!=IntPtr.Zero) CloseHandle(handle); }
+  }
+  static void PipeLabel(string pipe) {
+    IntPtr descriptor; uint size;
+    Check(ConvertStringSecurityDescriptorToSecurityDescriptorW("S:(ML;;NW;;;LW)",1,out descriptor,out size));
+    try {
+      bool present,defaulted; IntPtr sacl;
+      Check(GetSecurityDescriptorSacl(descriptor,out present,out sacl,out defaulted));
+      CheckCode(SetNamedSecurityInfoW(pipe,1,LABEL,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,sacl));
+    } finally { LocalFree(descriptor); }
   }
   static IntPtr NewJob(string name,IntPtr descriptor) {
     var security = new SA { size=Marshal.SizeOf(typeof(SA)),descriptor=descriptor };
@@ -218,14 +268,37 @@ public partial class LabSandbox {
       using(var input=new FileStream(new SafeFileHandle(handle,true),FileAccess.Read,8192,false)) { input.CopyTo(output); output.Flush(); }
     },TaskCreationOptions.LongRunning);
   }
-  static IEnumerable<string> Tree(string root) {
-    var pending=new Stack<string>(); pending.Push(root); int count=0;
+  static IEnumerable<string> Tree(string root,Action reparse=null) {
+    var pending=new Stack<string>(); pending.Push(root);
     while(pending.Count>0) {
-      string file=pending.Pop(); if(++count>200000) throw new Exception();
+      string file=pending.Pop();
       var attributes=File.GetAttributes(file);
-      if((attributes & FileAttributes.ReparsePoint)!=0) continue;
+      if((attributes & FileAttributes.ReparsePoint)!=0) { if(reparse!=null) reparse(); continue; }
       yield return file;
       if((attributes & FileAttributes.Directory)!=0) foreach(var child in Directory.EnumerateFileSystemEntries(file)) pending.Push(child);
+    }
+  }
+  static Grant PrepareGrant(string root,uint rights) {
+    var grant=new Grant { root=root,rights=rights }; grant.boundaries.Add(root);
+    foreach(string file in Tree(root,delegate { grant.propagate=false; })) {
+      FileIdentity identity; IntPtr handle=CheckedFile(file,0x20080,out identity);
+      try {
+        if((rights & 0x116)!=0 && (identity.attributes & 0x10)==0 && identity.links>1 && !credentialIdentities.Contains(identity.Key)) throw new Exception();
+        IntPtr owner,group,dacl,sacl,descriptor;
+        CheckCode(GetSecurityInfo(handle,1,DACL,out owner,out group,out dacl,out sacl,out descriptor));
+        try {
+          ushort control; uint revision; Check(GetSecurityDescriptorControl(descriptor,out control,out revision));
+          if((control & 0x1000)!=0 && !String.Equals(root,file,StringComparison.OrdinalIgnoreCase)) grant.boundaries.Add(file);
+        } finally { LocalFree(descriptor); }
+      } finally { CloseHandle(handle); }
+    }
+    return grant;
+  }
+  static void ApplyGrant(Grant grant,IntPtr sid) {
+    // A link-bearing tree keeps the previous object-by-object grants; never propagate across an alias.
+    foreach(string file in grant.propagate ? grant.boundaries : Tree(grant.root)) {
+      if(grant.rights==RX && Allows(FileAcl(file),PackageSids[1],RX)) continue;
+      Acl(file,sid,grant.rights,false,false,true,grant.propagate);
     }
   }
   static bool Under(string root,string file) {
@@ -261,137 +334,168 @@ public partial class LabSandbox {
       }
     } finally { Marshal.FreeHGlobal(privileges); CloseHandle(duplicate); }
   }
+  static void WriteLease(string manifest,Lease lease) {
+    string temporary=manifest+".tmp";
+    File.WriteAllText(temporary,json.Serialize(lease));
+    if(File.Exists(manifest)) File.Replace(temporary,manifest,null); else File.Move(temporary,manifest);
+  }
   static void Clean(string manifest) {
-    if (!File.Exists(manifest)) return;
-    Lease lease;
-    try { lease=json.Deserialize<Lease>(File.ReadAllText(manifest)); } catch(FileNotFoundException) { return; }
-    IntPtr sid; Check(ConvertStringSidToSidW(lease.sid,out sid));
-    try {
-      Exception failure=null;
-      foreach(var file in lease.paths.Reverse()) { try { Acl(file,sid,0,true); } catch(Exception error) { failure=error; } }
-      if(!String.IsNullOrEmpty(lease.profile)) {
-        uint code=unchecked((uint)DeleteAppContainerProfile(lease.profile));
-        if(code!=0 && code!=0x80070002 && code!=0x80070490) failure=new Win32Exception((int)code);
+    using(var guard=new LeaseGuard(manifest)) {
+      if (!File.Exists(manifest)) return;
+      Lease lease;
+      try { lease=json.Deserialize<Lease>(File.ReadAllText(manifest)); } catch(FileNotFoundException) { return; }
+      if(lease.launcherPid>0) {
+        Process launcher=null;
+        try { launcher=Process.GetProcessById(lease.launcherPid); }
+        catch(ArgumentException) { }
+        if(launcher!=null) using(launcher) {
+          try { if(launcher.StartTime.ToUniversalTime().Ticks==lease.launcherCreated) launcher.WaitForExit(); }
+          catch(InvalidOperationException) { }
+          catch(Win32Exception error) { if(error.NativeErrorCode!=87 && error.NativeErrorCode!=1168) throw; }
+        }
       }
-      if(failure!=null) throw failure;
-      File.Delete(manifest);
+      IntPtr sid; Check(ConvertStringSidToSidW(lease.sid,out sid));
+      try {
+        Exception failure=null;
+        // Workers may have created links or protected DACLs. Remove only our SID, without propagating other ACEs.
+        foreach(string root in lease.roots ?? new string[0]) {
+          try {
+            if(!File.Exists(root) && !Directory.Exists(root)) continue;
+            foreach(string file in Tree(root)) { try { Acl(file,sid,0,true); } catch(Exception error) { failure=error; } }
+          } catch(Exception error) { failure=error; }
+        }
+        foreach(var file in (lease.paths ?? new string[0]).Reverse()) { try { Acl(file,sid,0,true); } catch(Exception error) { failure=error; } }
+        if(!String.IsNullOrEmpty(lease.profile)) {
+          uint code=unchecked((uint)DeleteAppContainerProfile(lease.profile));
+          if(code!=0 && code!=0x80070002 && code!=0x80070490) failure=new Win32Exception((int)code);
+        }
+        if(failure!=null) throw failure;
+        File.Delete(manifest);
+      }
+      finally { LocalFree(sid); }
     }
-    finally { LocalFree(sid); }
   }
   static int Run(Plan plan) {
-    stage="identity";
-    Id(plan.runId); Id(plan.job);
-    string profile="agentrix.lab."+plan.runId.Substring(0,8)+"."+plan.job.Replace("-","");
-    IntPtr sid; CheckCode((uint)CreateAppContainerProfile(profile,profile,"Agentrix isolated lab run",IntPtr.Zero,0,out sid));
-    var paths=new List<string>(); var memory=new List<IntPtr>(); var handles=new List<IntPtr>();
-    IntPtr descriptor=IntPtr.Zero,list=IntPtr.Zero; PI process=new PI();
-    try {
-      File.WriteAllText(plan.manifest,json.Serialize(new Lease { sid=SidString(sid),profile=profile,paths=new string[0] }));
-      descriptor=Descriptor();
-      foreach(string file in plan.credentialFiles ?? new string[0]) {
-        FileIdentity identity; IntPtr handle=CheckedFile(file,0x20080,out identity);
-        try { credentialIdentities.Add(identity.Key); } finally { CloseHandle(handle); }
-      }
-      // Write the undo record before granting access, so even a killed launcher can be recovered.
-      var reads=(plan.readRoots ?? new string[0]).SelectMany(Tree).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-      var writes=(plan.writeRoots ?? new string[0]).SelectMany(Tree).Concat(plan.credentialFiles ?? new string[0]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-      paths.AddRange(reads); paths.AddRange(writes); paths.AddRange(plan.pipes ?? new string[0]);
-      var ancestors=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-      foreach(var file in (plan.readRoots ?? new string[0]).Concat(plan.writeRoots ?? new string[0])) {
-        var parent=Directory.GetParent(file);
-        while(parent!=null) { ancestors.Add(parent.FullName); parent=parent.Parent; }
-      }
-      paths.AddRange(ancestors);
-      paths=paths.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-      File.WriteAllText(plan.manifest,json.Serialize(new Lease { sid=SidString(sid),profile=profile,paths=paths.ToArray() }));
-      IntPtr profilePath; CheckCode((uint)GetAppContainerFolderPath(SidString(sid),out profilePath));
-      try { foreach(var file in Tree(Directory.GetParent(Marshal.PtrToStringUni(profilePath)).FullName)) Acl(file,sid,0xd0156,false,true); }
-      finally { Marshal.FreeCoTaskMem(profilePath); }
-      stage="ancestor metadata ACL";
-      foreach(var ancestor in ancestors) {
-        if(Allows(FileAcl(ancestor),PackageSids[1],METADATA)) continue;
-        // Traversal is supplied by SeChangeNotifyPrivilege. Metadata grants help tools that stat
-        // their parents, but must not require rewriting system-owned ancestors such as Users/.
-        try { Acl(ancestor,sid,METADATA,false,false,false); }
-        catch(Win32Exception aclError) { if(aclError.NativeErrorCode!=5) throw; }
-      }
-      stage="read ACL";
-      foreach(var file in reads) {
-        if(Allows(FileAcl(file),PackageSids[1],RX)) continue;
-        Acl(file,sid,RX,false);
-      }
-      stage="write ACL";
-      foreach(var file in writes) Acl(file,sid,MODIFY,false);
-      stage="pipe ACL";
-      foreach(var pipe in plan.pipes ?? new string[0]) Acl(pipe,sid,0x12019f,false);
-      stage="job";
-      IntPtr run=NewJob(JobName(plan.runId,null),descriptor),job=NewJob(JobName(plan.runId,plan.job),descriptor);
-      handles.Add(run); handles.Add(job);
-      IntPtr inRead,inWrite,outRead,outWrite,errRead,errWrite;
-      var inherit=new SA { size=Marshal.SizeOf(typeof(SA)),inherit=1 };
-      stage="stdio";
-      Check(CreatePipe(out inRead,out inWrite,ref inherit,0)); handles.Add(inRead); handles.Add(inWrite);
-      Check(CreatePipe(out outRead,out outWrite,ref inherit,0)); handles.Add(outRead); handles.Add(outWrite);
-      Check(CreatePipe(out errRead,out errWrite,ref inherit,0)); handles.Add(errRead); handles.Add(errWrite);
-      foreach(var handle in new[]{inWrite,outRead,errRead}) Check(SetHandleInformation(handle,1,0));
-      IntPtr length=IntPtr.Zero; InitializeProcThreadAttributeList(IntPtr.Zero,4,0,ref length);
-      stage="attributes";
-      list=Marshal.AllocHGlobal(length); Check(InitializeProcThreadAttributeList(list,4,0,ref length));
-      // Winsock initialization reads its system catalog even when the phase has no network capability.
-      var capabilitySids=new List<IntPtr>(); capabilitySids.Add(Capability("registryRead"));
-      if(plan.network) capabilitySids.Add(Capability("internetClient"));
-      memory.AddRange(capabilitySids);
-      IntPtr capArray=Marshal.AllocHGlobal(capabilitySids.Count*Marshal.SizeOf(typeof(SidAttr))); memory.Add(capArray);
-      for(int i=0;i<capabilitySids.Count;i++) Marshal.StructureToPtr(new SidAttr { sid=capabilitySids[i],attributes=4 },
-        IntPtr.Add(capArray,i*Marshal.SizeOf(typeof(SidAttr))),false);
-      var caps=new Cap { sid=sid,capabilities=capArray,count=capabilitySids.Count };
-      Attribute(list,0x20009,Pointer(caps,memory),Marshal.SizeOf(caps));
-      Attribute(list,0x2000f,Pointer(1,memory),4); // ALL_APPLICATION_PACKAGES opt-out: LPAC.
-      IntPtr jobs=Marshal.AllocHGlobal(2*IntPtr.Size); memory.Add(jobs); Marshal.WriteIntPtr(jobs,0,run); Marshal.WriteIntPtr(jobs,IntPtr.Size,job);
-      Attribute(list,0x2000d,jobs,2*IntPtr.Size);
-      IntPtr stdio=Marshal.AllocHGlobal(3*IntPtr.Size); memory.Add(stdio);
-      int offset=0; foreach(var handle in new[]{inRead,outWrite,errWrite}) { Marshal.WriteIntPtr(stdio,offset,handle); offset+=IntPtr.Size; }
-      Attribute(list,0x20002,stdio,3*IntPtr.Size);
-      var start=new SX(); start.info.cb=Marshal.SizeOf(start); start.attributes=list;
-      start.info.flags=0x100; start.info.input=inRead; start.info.output=outWrite; start.info.error=errWrite;
-      string environment=String.Join("\0",plan.env.OrderBy(e=>e.Key,StringComparer.OrdinalIgnoreCase).Select(e=>e.Key+"="+e.Value))+"\0\0";
-      IntPtr env=Marshal.StringToHGlobalUni(environment); memory.Add(env);
-      var security=new SA { size=Marshal.SizeOf(typeof(SA)),descriptor=descriptor };
-      string arguments=Quote(plan.file)+" "+String.Join(" ",(plan.args ?? new string[0]).Select(Quote));
-      stage="process creation";
-      Check(CreateProcessW(plan.file,new StringBuilder(arguments),ref security,ref security,true,0x08080404,env,plan.cwd,ref start,out process));
-      handles.Add(process.process); handles.Add(process.thread);
-      stage="protected paths"; VerifyBlocked(plan,process.process);
-      foreach(var handle in new[]{inRead,outWrite,errWrite}) { CloseHandle(handle); handles.Remove(handle); }
-      Task output=Relay(outRead,Console.OpenStandardOutput()),error=Relay(errRead,Console.OpenStandardError());
-      handles.Remove(outRead); handles.Remove(errRead);
-      Task input=Task.Factory.StartNew(delegate {
-        using(var stream=new FileStream(new SafeFileHandle(inWrite,true),FileAccess.Write,8192,false)) {
-          byte[] bytes=Encoding.UTF8.GetBytes(plan.input ?? ""); stream.Write(bytes,0,bytes.Length);
+    using(var guard=new LeaseGuard(plan.manifest)) {
+      stage="identity";
+      Id(plan.runId); Id(plan.job);
+      string profile="agentrix.lab."+plan.runId.Substring(0,8)+"."+plan.job.Replace("-","");
+      IntPtr sid; CheckCode((uint)CreateAppContainerProfile(profile,profile,"Agentrix isolated lab run",IntPtr.Zero,0,out sid));
+      var paths=new List<string>(); var memory=new List<IntPtr>(); var handles=new List<IntPtr>();
+      var lifetime=new RunLifetime();
+      Task.Factory.StartNew(delegate { try { Console.In.Read(); } finally { lifetime.Stop(); } },TaskCreationOptions.LongRunning);
+      IntPtr descriptor=IntPtr.Zero,list=IntPtr.Zero; PI process=new PI();
+      try {
+        Lease lease;
+        using(var launcher=Process.GetCurrentProcess()) lease=new Lease { sid=SidString(sid),profile=profile,paths=new string[0],
+          roots=new string[0],launcherPid=launcher.Id,launcherCreated=launcher.StartTime.ToUniversalTime().Ticks };
+        WriteLease(plan.manifest,lease);
+        descriptor=Descriptor();
+        IntPtr run=NewJob(JobName(plan.runId,null),descriptor); handles.Add(run);
+        IntPtr job=NewJob(JobName(plan.runId,plan.job),descriptor); handles.Add(job); lifetime.Bind(job);
+        lifetime.CheckRunning();
+        foreach(string file in plan.credentialFiles ?? new string[0]) {
+          FileIdentity identity; IntPtr handle=CheckedFile(file,0x20080,out identity);
+          try { credentialIdentities.Add(identity.Key); } finally { CloseHandle(handle); }
         }
-      }); handles.Remove(inWrite);
-      if(ResumeThread(process.thread)==0xffffffff) Check(false);
-      WaitForSingleObject(process.process,0xffffffff); uint code; Check(GetExitCodeProcess(process.process,out code));
-      Check(TerminateJobObject(job,1));
-      for(int i=0;i<200 && Pids(job).Length>0;i++) System.Threading.Thread.Sleep(10);
-      if(Pids(job).Length>0) throw new Exception();
-      Task.WaitAll(output,error); try { input.Wait(); } catch(AggregateException) { }
-      return (int)code;
-    } finally {
-      if(list!=IntPtr.Zero) { DeleteProcThreadAttributeList(list); Marshal.FreeHGlobal(list); }
-      foreach(var handle in handles.AsEnumerable().Reverse()) if(handle!=IntPtr.Zero) CloseHandle(handle);
-      foreach(var pointer in memory) Marshal.FreeHGlobal(pointer);
-      LocalFree(descriptor); FreeSid(sid);
-      if(File.Exists(plan.manifest)) Clean(plan.manifest); else DeleteAppContainerProfile(profile);
+        // Write the undo record before granting access, so even a killed launcher can be recovered.
+        var grants=(plan.readRoots ?? new string[0]).Distinct(StringComparer.OrdinalIgnoreCase).Select(root=>PrepareGrant(root,RX))
+          .Concat((plan.writeRoots ?? new string[0]).Distinct(StringComparer.OrdinalIgnoreCase).Select(root=>PrepareGrant(root,MODIFY))).ToArray();
+        paths.AddRange(plan.credentialFiles ?? new string[0]); paths.AddRange(plan.pipes ?? new string[0]);
+        var ancestors=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach(var file in (plan.readRoots ?? new string[0]).Concat(plan.writeRoots ?? new string[0])) {
+          var parent=Directory.GetParent(file);
+          while(parent!=null) { ancestors.Add(parent.FullName); parent=parent.Parent; }
+        }
+        paths.AddRange(ancestors);
+        paths=paths.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        lease.paths=paths.ToArray(); lease.roots=grants.Select(grant=>grant.root).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        WriteLease(plan.manifest,lease);
+        lifetime.CheckRunning();
+        IntPtr profilePath; CheckCode((uint)GetAppContainerFolderPath(SidString(sid),out profilePath));
+        try { foreach(var file in Tree(Directory.GetParent(Marshal.PtrToStringUni(profilePath)).FullName)) Acl(file,sid,0xd0156,false,true); }
+        finally { Marshal.FreeCoTaskMem(profilePath); }
+        stage="ancestor metadata ACL";
+        foreach(var ancestor in ancestors) {
+          if(Allows(FileAcl(ancestor),PackageSids[1],METADATA)) continue;
+          // Traversal is supplied by SeChangeNotifyPrivilege. Metadata grants help tools that stat
+          // their parents, but must not require rewriting system-owned ancestors such as Users/.
+          try { Acl(ancestor,sid,METADATA,false,false,false); }
+          catch(Win32Exception aclError) { if(aclError.NativeErrorCode!=5) throw; }
+        }
+        stage="root ACL";
+        foreach(var grant in grants) { lifetime.CheckRunning(); ApplyGrant(grant,sid); }
+        foreach(var file in plan.credentialFiles ?? new string[0]) Acl(file,sid,MODIFY,false);
+        stage="pipe ACL";
+        foreach(var pipe in plan.pipes ?? new string[0]) { Acl(pipe,sid,0x12019f,false); PipeLabel(pipe); }
+        IntPtr inRead,inWrite,outRead,outWrite,errRead,errWrite;
+        var inherit=new SA { size=Marshal.SizeOf(typeof(SA)),inherit=1 };
+        stage="stdio";
+        Check(CreatePipe(out inRead,out inWrite,ref inherit,0)); handles.Add(inRead); handles.Add(inWrite);
+        Check(CreatePipe(out outRead,out outWrite,ref inherit,0)); handles.Add(outRead); handles.Add(outWrite);
+        Check(CreatePipe(out errRead,out errWrite,ref inherit,0)); handles.Add(errRead); handles.Add(errWrite);
+        foreach(var handle in new[]{inWrite,outRead,errRead}) Check(SetHandleInformation(handle,1,0));
+        IntPtr length=IntPtr.Zero; InitializeProcThreadAttributeList(IntPtr.Zero,4,0,ref length);
+        stage="attributes";
+        list=Marshal.AllocHGlobal(length); Check(InitializeProcThreadAttributeList(list,4,0,ref length));
+        // Winsock initialization reads its system catalog even when the phase has no network capability.
+        var capabilitySids=new List<IntPtr>(); capabilitySids.Add(Capability("registryRead"));
+        if(plan.network) capabilitySids.Add(Capability("internetClient"));
+        memory.AddRange(capabilitySids);
+        IntPtr capArray=Marshal.AllocHGlobal(capabilitySids.Count*Marshal.SizeOf(typeof(SidAttr))); memory.Add(capArray);
+        for(int i=0;i<capabilitySids.Count;i++) Marshal.StructureToPtr(new SidAttr { sid=capabilitySids[i],attributes=4 },
+          IntPtr.Add(capArray,i*Marshal.SizeOf(typeof(SidAttr))),false);
+        var caps=new Cap { sid=sid,capabilities=capArray,count=capabilitySids.Count };
+        Attribute(list,0x20009,Pointer(caps,memory),Marshal.SizeOf(caps));
+        Attribute(list,0x2000f,Pointer(1,memory),4); // ALL_APPLICATION_PACKAGES opt-out: LPAC.
+        IntPtr jobs=Marshal.AllocHGlobal(2*IntPtr.Size); memory.Add(jobs); Marshal.WriteIntPtr(jobs,0,run); Marshal.WriteIntPtr(jobs,IntPtr.Size,job);
+        Attribute(list,0x2000d,jobs,2*IntPtr.Size);
+        IntPtr stdio=Marshal.AllocHGlobal(3*IntPtr.Size); memory.Add(stdio);
+        int offset=0; foreach(var handle in new[]{inRead,outWrite,errWrite}) { Marshal.WriteIntPtr(stdio,offset,handle); offset+=IntPtr.Size; }
+        Attribute(list,0x20002,stdio,3*IntPtr.Size);
+        var start=new SX(); start.info.cb=Marshal.SizeOf(start); start.attributes=list;
+        start.info.flags=0x100; start.info.input=inRead; start.info.output=outWrite; start.info.error=errWrite;
+        string environment=String.Join("\0",plan.env.OrderBy(e=>e.Key,StringComparer.OrdinalIgnoreCase).Select(e=>e.Key+"="+e.Value))+"\0\0";
+        IntPtr env=Marshal.StringToHGlobalUni(environment); memory.Add(env);
+        var security=new SA { size=Marshal.SizeOf(typeof(SA)),descriptor=descriptor };
+        string arguments=Quote(plan.file)+" "+String.Join(" ",(plan.args ?? new string[0]).Select(Quote));
+        stage="process creation";
+        lifetime.CheckRunning();
+        Check(CreateProcessW(plan.file,new StringBuilder(arguments),ref security,ref security,true,0x08080404,env,plan.cwd,ref start,out process));
+        handles.Add(process.process); handles.Add(process.thread);
+        stage="protected paths"; VerifyBlocked(plan,process.process);
+        foreach(var handle in new[]{inRead,outWrite,errWrite}) { CloseHandle(handle); handles.Remove(handle); }
+        Task output=Relay(outRead,Console.OpenStandardOutput()),error=Relay(errRead,Console.OpenStandardError());
+        handles.Remove(outRead); handles.Remove(errRead);
+        Task input=Task.Factory.StartNew(delegate {
+          using(var stream=new FileStream(new SafeFileHandle(inWrite,true),FileAccess.Write,8192,false)) {
+            byte[] bytes=Encoding.UTF8.GetBytes(plan.input ?? ""); stream.Write(bytes,0,bytes.Length);
+          }
+        }); handles.Remove(inWrite);
+        lifetime.Resume(process.thread);
+        WaitForSingleObject(process.process,0xffffffff); uint code; Check(GetExitCodeProcess(process.process,out code));
+        Check(TerminateJobObject(job,1));
+        for(int i=0;i<200 && Pids(job).Length>0;i++) System.Threading.Thread.Sleep(10);
+        if(Pids(job).Length>0) throw new Exception();
+        Task.WaitAll(output,error); try { input.Wait(); } catch(AggregateException) { }
+        return (int)code;
+      } finally {
+        lifetime.Dispose();
+        if(list!=IntPtr.Zero) { DeleteProcThreadAttributeList(list); Marshal.FreeHGlobal(list); }
+        foreach(var handle in handles.AsEnumerable().Reverse()) if(handle!=IntPtr.Zero) CloseHandle(handle);
+        foreach(var pointer in memory) Marshal.FreeHGlobal(pointer);
+        LocalFree(descriptor); FreeSid(sid);
+        // The host is the only cleaner. Its lease lock and process wait cover normal exits, stops and crashes.
+        if(!File.Exists(plan.manifest)) DeleteAppContainerProfile(profile);
+      }
     }
   }
   public static int Main(string[] args) {
     try {
-      Check(SetDefaultDllDirectories(0x800)); // System32 only; never load an adjacent DLL during elevated preparation.
+      Check(SetDefaultDllDirectories(0x800)); // Subsequent native loads use System32; preparation starts in a protected directory.
       if(args.Length==1 && args[0]=="host-ready") { Console.Write(json.Serialize(new { ready=HostReady(),elevated=Elevated() })); return 0; }
       if(args.Length==1 && args[0]=="prepare-host") return PrepareHost();
-      if(args.Length==1 && args[0]=="elevate-host") return ElevateHost();
-      if(args.Length==1 && args[0]=="run") return Run(json.Deserialize<Plan>(Console.In.ReadToEnd()));
+      if(args.Length==1 && args[0]=="run") return Run(json.Deserialize<Plan>(Console.In.ReadLine()));
       if(args.Length==2 && args[0]=="clean") { Clean(args[1]); return 0; }
       if(args.Length>=2 && (args[0]=="list" || args[0]=="kill")) {
         string name=JobName(args[1],args.Length>2?args[2]:null);
