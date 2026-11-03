@@ -148,6 +148,15 @@ export type TitlebarStyle = {
 };
 // `style` rides along only when it changed.
 export type TitlebarState = { view: TitlebarView; decisions: number; style?: TitlebarStyle };
+export type ConnectionTest = {
+  checkedAt: number;
+  key: { status: 'ok' | 'missing' | 'invalid' | 'forbidden' | 'rate_limited' | 'unreachable' | 'error'; detail: string | null; latencyMs: number | null };
+  models: string[] | null;
+  cli: { status: 'ok' | 'missing' | 'too_old'; version: string | null; required: string };
+  path: 'api' | 'terminal' | null; reason: string | null;
+};
+export type BillingConnection = { kind: 'api' | 'subscription' | 'none' | 'unknown'; source: string | null; observedAt: number | null };
+type ConnectedUsage = Omit<NativeUsage, 'agents'> & { agents: Record<'claude' | 'codex', NativeUsage['agents']['claude'] & { connection: BillingConnection }> };
 type Bridge = {
   nativeSession: {
     start(terminalId: string, options: { agent: 'claude' | 'codex'; resume?: boolean }): Promise<Result<{ runtimeSessionId: string }>>;
@@ -162,7 +171,8 @@ type Bridge = {
     keySave(key: string): Promise<Result<{ saved: boolean }>>;
     keyClear(): Promise<Result<{ saved: boolean }>>;
     keyStatus(): Promise<Result<{ saved: boolean }>>;
-    usage(): Promise<Result<NativeUsage>>;
+    usage(): Promise<Result<ConnectedUsage>>;
+    testConnection(): Promise<Result<ConnectionTest>>;
   };
   getState(): Promise<Result<Workspace>>;
   getAgents(): Promise<Result<AgentsState>>;

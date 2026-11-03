@@ -32,4 +32,9 @@ function tokenUsage(value) {
     costUsdMicros: null, costEstimated: false };
 }
 
-module.exports = { mergeLimits, tokenUsage };
+function accountConnection(result, observedAt = Date.now()) {
+  const type = result?.account?.type;
+  return { kind: type === 'apiKey' ? 'api' : ['chatgpt', 'chatgptAuthTokens'].includes(type) ? 'subscription' : 'unknown',
+    source: 'codex-app-server account/read', observedAt };
+}
+module.exports = { mergeLimits, tokenUsage, accountConnection };

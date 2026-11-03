@@ -560,6 +560,7 @@ function startUsage(project, s, event) {
   const usage = s.usage = new UsageMeter(s.agent, { rates: project.kind !== 'ssh', calls: callsOf(s, project), codexHome: event.codexHome || s.codexHome,
     changed: () => { if (s.usage === usage && !s.usageHistory) scheduleState(); } });
   if (s.agent === 'codex') {
+    s.terminalAccount = null;
     let binding;
     s.bindUsageAccount = () => {
       const options = { codexHome: event.codexHome || s.codexHome, cwd: event.cwd || project.path,
@@ -570,6 +571,7 @@ function startUsage(project, s, event) {
       s.usageAccount?.dispose(); binding = next;
       s.usageAccount = codexAccounts.watch(options, account => {
         if (s.usage === usage && s.codexActive && sessions.get(s.terminalId) === s) {
+          s.terminalAccount = account;
           usage.codexAccount(account); s.recordQuota?.('codex', usage.limits); scheduleState(); scheduleUsageRollover();
         }
       });
@@ -1189,6 +1191,30 @@ function structuredEvent(id, event) {
   scheduleState();
 }
 
+async function readNativeConnections() {
+  const result = {}, observed = new Map();
+  for (const agent of ['claude', 'codex']) {
+    const host = [...sessions.values()].reverse().find(s => s.agent === agent && s.codexActive === true && s.status !== 'exited');
+    if (!host) { result[agent] = { kind: 'none', source: null, observedAt: null }; continue; }
+    observed.set(agent, host);
+    if (host.nativeStructured) {
+      if (agent === 'claude') result[agent] = claudeRuntime.connection(host.nativeRuntimeSessionId);
+      else {
+        try { result[agent] = await host.nativeReadConnection?.(); } catch { }
+        result[agent] ||= { kind: 'unknown', source: 'codex-app-server account/read', observedAt: null };
+      }
+    } else if (agent === 'claude') result[agent] = { kind: 'subscription', source: 'Claude Code terminal login', observedAt: host.activitySince || null };
+    else {
+      // The existing terminal reader may have no login-mode evidence. Quota alone proves neither billing path.
+      const connection = host.terminalAccount?.connection;
+      result[agent] = { kind: ['api', 'subscription'].includes(connection?.kind) ? connection.kind : 'unknown',
+        source: 'codex-account-usage', observedAt: host.terminalAccount?.at || null };
+    }
+  }
+  for (const [agent, host] of observed) if (sessions.get(host.terminalId) !== host || !host.codexActive || host.status === 'exited') result[agent] = { kind: 'none', source: null, observedAt: null };
+  return result;
+}
+
 async function initializeNativeSessions() {
   // Load optional provider composition after app.ready; neither module starts a real account session here.
   const { createCodexRuntime } = await import('./features/codex-app-server/index.cjs');
@@ -1223,6 +1249,8 @@ async function initializeNativeSessions() {
       const options = { cwd: spec.cwd, env: spec.env, projectId: spec.projectId };
       accountBinding = codexAccounts.attachRuntime?.(options, runtime);
       accountWatch = codexAccounts.watch(options, () => scheduleState());
+      const host = sessions.get(spec.terminalId);
+      if (host) host.nativeReadConnection = () => runtime.readAccount();
       return result;
     };
     runtime.start = value => attach(start, value); runtime.resume = value => attach(resume, value);
@@ -1230,6 +1258,7 @@ async function initializeNativeSessions() {
     return runtime;
   } };
   nativeSessions = createNativeSessions({ directory, claude: claudeRuntime, codex, resolveSpec: nativeSpec,
+    connections: readNativeConnections,
     emit: event => send('native:event', event), changed: (id, event) => { if (event) structuredEvent(id, event); else scheduleState(); },
     saveSession: (id, saved) => store.setRestore(id, { terminal: true, codex: true, agent: saved.agent, threadId: saved.providerSessionId,
       nativeTransport: saved.agent === 'claude' ? 'claude-sdk' : 'codex-app-server' }),
@@ -1486,12 +1515,19 @@ function registerUnavailableNative(handle) {
   handle('native:resume', (id, options) => start(id, { ...options, resume: true }));
   handle('native:settings-get', () => ({ ...settings }));
   handle('native:snapshot', id => { findProject(id); return null; });
-  handle('native:usage', () => ({ month: new Date().toISOString().slice(0, 7), todayUsdMicros: null, monthUsdMicros: null,
-    estimated: true, budgetUsd: null, agents: { claude: { path: 'terminal', reason: 'native_unavailable', limits: null },
-      codex: { path: 'terminal', reason: 'native_unavailable', limits: null } }, lastSwitch: null }));
+  handle('native:usage', async () => {
+    const connections = await readNativeConnections();
+    return { month: new Date().toISOString().slice(0, 7), todayUsdMicros: null, monthUsdMicros: null,
+      estimated: true, budgetUsd: null, agents: { claude: { path: 'terminal', reason: 'native_unavailable', limits: null, connection: connections.claude },
+        codex: { path: 'terminal', reason: 'native_unavailable', limits: null, connection: connections.codex } }, lastSwitch: null };
+  });
   for (const name of ['send', 'interrupt', 'stop', 'answer', 'settings-set', 'key-save', 'key-clear', 'key-status']) {
     handle(`native:${name}`, () => { throw new Error('原生会话暂不可用，已保留终端模式。'); });
   }
+  handle('native:test-connection', (...args) => {
+    if (args.length) throw new Error('无效的原生会话请求。');
+    throw new Error('原生会话暂不可用，已保留终端模式。');
+  });
 }
 
 function registerIpc() {

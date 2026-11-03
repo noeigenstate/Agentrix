@@ -89,7 +89,8 @@ reader.on('line', line => {
     return;
   } else if (message.method === 'turn/interrupt') {
     send({ method: 'turn/completed', params: { threadId: sessionId, turn: { id: activeTurn, status: 'interrupted' } } });
-  } else if (message.method === 'account/rateLimits/read') result = {};
+  } else if (message.method === 'account/read') result = { account: { type: 'chatgpt', email: 'private-offline-fixture' } };
+  else if (message.method === 'account/rateLimits/read') result = {};
   if (message.id !== undefined) send({ id: message.id, result });
 });
 reader.on('close', () => process.exit(0));

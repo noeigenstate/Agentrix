@@ -37,6 +37,7 @@ function createClaudeSession(spec, emit, dependencies) {
   const sent = new Map(), results = new Set();
   let active, preparing, closing, sdk, executable, started = false, closed = false, stopping = false;
   let providerId = spec.providerSessionId || null, state = 'starting', turnId = null;
+  let apiObservedAt = null;
   function clean(value) {
     let text = value;
     for (const key of secrets) text = text.replaceAll(key, '<secret>');
@@ -93,6 +94,7 @@ function createClaudeSession(spec, emit, dependencies) {
         if (message.type === 'system' && message.subtype === 'init' && !message.parent_tool_use_id) {
           if (message.apiKeySource !== 'ANTHROPIC_API_KEY') throw Object.assign(new Error(), { code: 'billing_identity_mismatch' });
           run.initialized = true; providerId = message.session_id; stream.provider(providerId);
+          apiObservedAt = now();
           usage.bind?.(run.reservation?.id, providerId); onSession(providerId);
           run.model = message.model || null;
           publish('routing.updated', {
@@ -259,6 +261,10 @@ function createClaudeSession(spec, emit, dependencies) {
     return closing;
   }
   return { start, resume: start, send, close, answer: requests.answer, snapshot: stream.snapshot,
+    connection: () => !active || closed || ['stopped', 'failed', 'disconnected'].includes(state)
+      ? { kind: 'none', source: null, observedAt: null }
+      : { kind: active.initialized ? 'api' : 'unknown', source: active.initialized ? 'claude-sdk init: ANTHROPIC_API_KEY' : null,
+        observedAt: active.initialized ? apiObservedAt : null },
     async interrupt() {
       requests.cancel();
       if (active && !active.closing) { active.interrupted = true; await active.query.interrupt?.(); }

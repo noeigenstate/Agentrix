@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('agentrix', {
     keyClear: () => ipcRenderer.invoke('native:key-clear'),
     keyStatus: () => ipcRenderer.invoke('native:key-status'),
     usage: () => ipcRenderer.invoke('native:usage'),
+    testConnection: () => ipcRenderer.invoke('native:test-connection'),
   },
   getState: () => ipcRenderer.invoke('workspace:state'),
   onMenuCommand: callback => listen('menu:command', callback),

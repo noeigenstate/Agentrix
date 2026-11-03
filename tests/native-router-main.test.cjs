@@ -57,9 +57,9 @@ test('late native shutdown events cannot recreate a disposed host session', () =
   assert.equal(main.sessions.size, 0);
 });
 
-test('M5 failed native initialization keeps terminal starts and safe settings available', () => {
+test('M5 failed native initialization keeps terminal starts and safe settings available', async () => {
   const handlers = new Map(), starts = [], plans = new Map();
-  const context = { randomUUID: () => 'fallback-runtime', launchPlans: plans,
+  const context = { randomUUID: () => 'fallback-runtime', launchPlans: plans, readNativeConnections: async () => ({}),
     findProject: id => { assert.equal(id, 't'); return { kind: 'local' }; },
     store: { findTerminal: () => ({ record: { restore: { agent: 'claude', threadId: '11111111-1111-4111-8111-111111111111' } } }) },
     launchCommand: (agent, history) => ({ agent, history }), startTerminal: (...args) => starts.push(args), broadcast() {} };
@@ -67,7 +67,7 @@ test('M5 failed native initialization keeps terminal starts and safe settings av
   vm.runInContext(source.slice(source.indexOf('function registerUnavailableNative('), source.indexOf('function registerIpc(')), context);
   context.registerUnavailableNative((name, handler) => handlers.set(name, handler));
   assert.equal(handlers.get('native:settings-get')().claudePath, 'terminal-only');
-  assert.equal(handlers.get('native:usage')().agents.codex.path, 'terminal');
+  assert.equal((await handlers.get('native:usage')()).agents.codex.path, 'terminal');
   assert.equal(handlers.get('native:start')('t', { agent: 'claude', resume: true }).runtimeSessionId, 'fallback-runtime');
   assert.equal(plans.get('t').threadId, '11111111-1111-4111-8111-111111111111');
   assert.equal(starts.length, 1);
