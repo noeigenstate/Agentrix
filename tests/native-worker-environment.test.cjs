@@ -1,4 +1,4 @@
-const { test } = require('node:test');
+const { test, resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -12,6 +12,7 @@ const synthetic = { PATH: '', ANTHROPIC_API_KEY: 'synthetic-key', anthropic_auth
   CLAUDE_CONFIG_DIR: 'synthetic-config', AGENTRIX_CONTROL_CAPABILITY: 'synthetic-control', AGENTRIX_BOOTSTRAP: 'synthetic-bootstrap' };
 
 for (const sdkParent of [false, true]) test(`N5: CLI preserves owner authentication and strips only marked SDK authentication (marked=${sdkParent})`, async t => {
+  const lifetime = resources(t);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-env-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const brief = path.join(root, 'brief.md'), out = path.join(root, 'answer.md'); fs.writeFileSync(brief, 'Synthetic task');
@@ -23,19 +24,19 @@ for (const sdkParent of [false, true]) test(`N5: CLI preserves owner authenticat
       launched = true;
       const expected = sdkParent ? { PATH: '', CLAUDE_CONFIG_DIR: 'synthetic-config' } : { ...synthetic };
       delete expected.AGENTRIX_CONTROL_CAPABILITY; delete expected.AGENTRIX_BOOTSTRAP;
-      assert.deepEqual(options.env, expected); return spawn(file, args, options);
+      assert.deepEqual(options.env, expected); return lifetime.child(spawn(file, args, options));
     } });
   assert.equal(code, 0); assert.equal(launched, true); assert.match(stdout, /claude-cli fallback/);
   assert.equal(synthetic.ANTHROPIC_API_KEY, 'synthetic-key', 'parent environment is never mutated');
 });
 
 for (const sdkParent of [false, true]) test(`N5: native Codex retains owner variables outside an SDK parent (marked=${sdkParent})`, async t => {
-  let child, env;
+  const lifetime = resources(t); let env;
   const runtime = createCodexRuntime({ resolveExecutable: async () => 'synthetic-only', spawnProcess: (_file, _args, options) => {
     env = options.env;
-    return child = spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], options);
+    return lifetime.child(spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], options));
   } }).create({ cwd: os.tmpdir(), projectId: 'p', terminalId: 't', env: { ...synthetic, ...(sdkParent ? { AGENTRIX_SDK_PARENT: '1' } : {}) } }, () => {});
-  t.after(async () => { await runtime.close(); if (child?.exitCode == null) await new Promise(resolve => child.once('exit', resolve)); });
+  lifetime.defer('close runtime', () => runtime.close());
   await runtime.start();
   assert.equal(env.ANTHROPIC_API_KEY, sdkParent ? undefined : synthetic.ANTHROPIC_API_KEY);
   assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, sdkParent ? undefined : synthetic.CLAUDE_CODE_OAUTH_TOKEN);

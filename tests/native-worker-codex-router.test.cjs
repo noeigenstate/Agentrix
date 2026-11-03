@@ -1,4 +1,4 @@
-const { test } = require('node:test');
+const { test, resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const os = require('node:os');
@@ -7,15 +7,15 @@ const { createRouter } = require('../electron/features/native-session/router.cjs
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
 
 function fixture(t, mode) {
-  const children = [], events = [], terminals = [];
+  const lifetime = resources(t), events = [], terminals = [];
   const codex = createCodexRuntime({ resolveExecutable: async () => mode === 'absent' ? null : 'synthetic-only', spawnProcess: (_file, _args, options) => {
-    const child = spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], options); children.push(child); return child;
+    return lifetime.child(spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], options));
   } });
   const claude = { apiState: () => ({ status: 'no_key' }), usage: { summary: () => ({}) } };
   const router = createRouter({ codex, claude, settings: { get: () => ({ codexView: 'native', claudePath: 'api-only', monthlyBudgetUsd: null }) },
     resolveSpec: id => ({ projectId: 'p', terminalId: id, cwd: os.tmpdir(), env: { PATH: '', SYNTHETIC_CODEX_MODE: mode } }),
     terminal: async (spec, reason) => { terminals.push({ spec, reason }); await router.forget(spec.terminalId); }, emit: event => events.push(event) });
-  t.after(async () => { await router.close(); await Promise.all(children.map(child => child.exitCode != null ? null : new Promise(resolve => child.once('exit', resolve)))); });
+  lifetime.defer('close router', () => router.close());
   return { router, events, terminals };
 }
 

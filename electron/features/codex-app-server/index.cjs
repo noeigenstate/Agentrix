@@ -12,7 +12,7 @@ const { workerEnvironment } = require('./environment.cjs');
 
 const occupied = new Map();
 function stopProcess(child) {
-  if (!child || child.exitCode != null) return;
+  if (!child || child.exitCode != null || child.signalCode != null) return;
   if (process.platform === 'win32' && child.pid) {
     execFile('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 2000 }, () => {});
   } else {

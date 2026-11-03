@@ -1,4 +1,4 @@
-const { test } = require('node:test');
+const { test, resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const os = require('node:os');
@@ -15,17 +15,17 @@ async function until(predicate) {
   throw new Error('Synthetic runtime timeout');
 }
 function fixture(t, mode = 'normal') {
-  const events = [], children = [], calls = [];
+  const events = [], lifetime = resources(t), calls = [];
   const factory = createCodexRuntime({ resolveExecutable: async () => 'synthetic-only', now: () => 1000,
     spawnProcess: (_file, args, options) => {
       calls.push({ args, options });
       const child = spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], {
-        ...options, env: { ...options.env, SYNTHETIC_CODEX_MODE: mode } }); children.push(child); return child;
+        ...options, env: { ...options.env, SYNTHETIC_CODEX_MODE: mode } }); return lifetime.child(child);
     } });
   const spec = { projectId: 'project', terminalId: 'terminal', runtimeSessionId: 'runtime', cwd: os.tmpdir(),
     model: 'synthetic-model', effort: 'high', fast: true, env: { PATH: '', CODEX_HOME: path.join(os.tmpdir(), 'synthetic-codex-home') } };
   const runtime = factory.create(spec, event => events.push(event));
-  t.after(async () => { await runtime.close(); await Promise.all(children.map(child => child.exitCode != null ? null : new Promise(resolve => child.once('exit', resolve)))); });
+  lifetime.defer('close runtime', () => runtime.close());
   return { events, factory, runtime, spec, calls };
 }
 
