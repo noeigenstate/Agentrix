@@ -1360,7 +1360,7 @@ function registerIpc() {
     listAgentCommands, interventions, relayResult, t });
   registerSshIpc({ handle, getSSHInfo, sshAuth, addSSH: input => store.addSSH(input), hasSession: id => sessions.has(id), getSession: id => sessions.get(id),
     startTerminal, setStartupError: (id, message) => startupErrors.set(id, message), broadcast });
-  updatesIpc = registerUpdatesIpc({ handle, updateManager, openExternal: url => shell.openExternal(url), getWindow: () => window, dialog, t,
+  updatesIpc = registerUpdatesIpc({ handle, updateManager, updateSettings: patch => { updateStoreSettings(patch); broadcast(); }, openExternal: url => shell.openExternal(url), getWindow: () => window, dialog, t,
     allowEditorClose, liveTerminalCount, setQuitting: value => { quitting = value; } });
   registerWorkspaceIpc({ handle, publicState, dialog, getWindow: () => window, t, addProject: (folder, name) => {
     const added = store.add(folder, name); checkProjectAccount(added.project); projectImageAuto.enqueue(added.project); return added;
@@ -1490,6 +1490,7 @@ if (!app.requestSingleInstanceLock()) {
     let menuUpdateReady = false;
     updateManager = new UpdateManager({
       updater: isInstalledBuild(app.isPackaged, process.execPath) ? require('electron-updater').autoUpdater : null,
+      channel: store.settings.updateChannel, betaAgreement: store.settings.betaAgreement,
       version: app.getVersion(), distribution: distributionOf({ isPackaged: app.isPackaged, platform: process.platform, installed }), onChange: state => {
         updatesIpc?.onStateChange(state);
         send('updates:changed', state);
