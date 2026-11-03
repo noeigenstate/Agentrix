@@ -173,7 +173,7 @@ test('the form needs a source, a scope and a task for each chosen source, two ap
   assert.equal(w.missing(2, { ...draft, sources: ['history', 'aa'], aa: { benchmark: '', tasks: [] } }).source, 'aa');
   assert.equal(w.missing(2, { ...draft, sources: ['history'], oss: { repos: [], tasks: [] } }), null, 'an unchosen source needs nothing');
   assert.equal(lackText({ need: 'scope', source: 'oss' }, false), '先选至少一个开源仓库。');
-  assert.equal(lackText({ need: 'tasks', source: 'aa' }, true), 'AA 同款：这个基准还没有可用的任务。');
+  assert.equal(lackText({ need: 'tasks', source: 'aa' }, true), 'AA 测试：这个基准还没有可用的任务。');
   assert.equal(lackText({ need: 'scope', source: 'history' }, false), '先选一个项目。');
   assert.equal(lackText({ need: 'sources' }, false), '先选至少一个任务来源。');
   assert.deepEqual(w.toggleArm(['opus', 'sol'], 'opus'), ['sol']); assert.deepEqual(w.toggleArm(['opus'], 'sonnet'), ['opus', 'sonnet']);
@@ -256,8 +256,8 @@ test('the source step offers every source the bridge reports to be chosen togeth
   const two = show(['history', 'aa']);
   assert.equal(count(two, /aria-pressed="true"/g), 2, 'sources are multi-select'); assert.equal(count(two, /class="tick"/g), 2);
   assert.equal(count(show(['oss']), /class="tick"/g), 0, 'a chosen source that cannot run shows no tick');
-  assert.ok(two.indexOf('本项目的历史改动') < two.indexOf('知名开源项目') && two.indexOf('知名开源项目') < two.indexOf('AA 同款'), 'history, oss, aa');
-  assert.ok(show([], [infos[2], infos[0]]).indexOf('本项目的历史改动') < show([], [infos[2], infos[0]]).indexOf('AA 同款'), 'the order is fixed whatever order the bridge answers in');
+  assert.ok(two.indexOf('本项目的历史改动') < two.indexOf('知名开源项目') && two.indexOf('知名开源项目') < two.indexOf('AA 测试'), 'history, oss, aa');
+  assert.ok(show([], [infos[2], infos[0]]).indexOf('本项目的历史改动') < show([], [infos[2], infos[0]]).indexOf('AA 测试'), 'the order is fixed whatever order the bridge answers in');
   assert.match(show([], null), /正在读取/);
   assert.equal(count(show(['aa'], [info('oss', { available: false, reason: null })]), /暂不可用/g), 1);
 }));
@@ -627,7 +627,7 @@ test('running with several sources groups the cards and tiles by source, each wi
   assert.equal(count(out, /class="lane"/g), 2); assert.equal(count(out, /class="panel overall"/g), 1, 'one overall ring and one stop button');
   assert.equal(count(out, />停止</g), 1);
   const [history, aa] = out.split('<section class="lane"').slice(1);
-  assert.match(history, /本项目的历史改动/); assert.match(aa, /AA 同款<span class="hint">Terminal-Bench 4\.0<\/span>/);
+  assert.match(history, /本项目的历史改动/); assert.match(aa, /AA 测试<span class="hint">Terminal-Bench 4\.0<\/span>/);
   assert.match(history, /class="tag tone-success">已完成/); assert.match(aa, /class="tag tone-running">运行中/);
   assert.equal(count(history, /class="arm-card running-card/g), 2); assert.equal(count(aa, /class="arm-card running-card/g), 2);
   assert.match(history, /通过 = 隐藏测试全部通过/); assert.match(aa, /通过 = 任务自带的测试全部通过/); assert.doesNotMatch(aa, /隐藏测试/);

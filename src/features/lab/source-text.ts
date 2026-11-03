@@ -3,7 +3,7 @@ import type { LabLane, LabMetric, LabSource } from '../../shared/lab-types';
 import { t } from '../../shared/i18n';
 import type { Missing } from './wizard-math';
 
-export const SOURCE_NAMES: Record<LabSource, () => string> = { history: () => t('本项目的历史改动'), oss: () => t('知名开源项目'), aa: () => t('AA 同款') };
+export const SOURCE_NAMES: Record<LabSource, () => string> = { history: () => t('本项目的历史改动'), oss: () => t('知名开源项目'), aa: () => t('AA 测试') };
 export const SOURCE_BLURBS: Record<LabSource, () => string> = {
   history: () => t('从项目自己的提交历史里挑带测试的改动，用当时的测试来评分。'),
   oss: () => t('从著名的 GitHub 项目里各摘取几个代表性问题。'),
