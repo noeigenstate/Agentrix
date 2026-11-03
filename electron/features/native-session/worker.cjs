@@ -17,6 +17,8 @@ function registerClaudeWorker({ control, claude, settings, context = () => '', e
     const pathEvent = reason => createEventStream(spec, event => stream.emit(event)).publish('path.changed', { previous: null, selected: 'terminal', reason });
     if (selection.path === 'terminal') { pathEvent(selection.reason); return; }
     if (!selection.path) throw new Error('Claude API 路径当前不可用。');
+    // Descendant helpers may remove only authentication supplied by this SDK parent.
+    runtimeEnv.AGENTRIX_SDK_PARENT = '1';
     let finish, done = false, stopping = false, state = 'starting', outcome = 'failed';
     const completed = new Promise(resolve => { finish = resolve; });
     void completed.catch(() => {});

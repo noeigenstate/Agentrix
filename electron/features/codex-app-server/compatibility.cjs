@@ -12,6 +12,8 @@ async function probeCapabilities(rpc) {
       if (error.code === -32602) continue;
       throw Object.assign(new Error('unsupported_codex_capabilities'), { code: 'unsupported_codex_capabilities' });
     }
+    // Success means this server defaults missing mandatory identifiers. It is unsafe to probe further.
+    throw Object.assign(new Error('unsupported_codex_capabilities'), { code: 'unsupported_codex_capabilities' });
   }
 }
 

@@ -6,6 +6,7 @@ const { spawn, execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
 const { homedir, constants: { signals } } = require('node:os');
+const { setImmediate } = require('node:timers');
 
 // Plain Node cannot read app.asar. Packaged and SSH helpers carry these same pure modules beside them.
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
@@ -472,7 +473,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   }
   if (['minutes', 'consolidate', 'stop'].includes(argv[0])) return teamCommand(argv, stdout);
   const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
-  // Keep reporting authority in the helper. Neither CLI workers nor app-server tools inherit it or API credentials.
+  // Keep reporting authority in the helper; preserve the owner's environment outside marked SDK parents.
   const workerEnv = workerEnvironment(env);
   let finalize, options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, endSent = false;
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
@@ -483,21 +484,27 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   let controlClient = null, activeRuntime = null, nativeTurn = null, settleNative, nativeFallback = null, nativeRunning = false;
   let bootstrap, controlOpening = false, controlAttemptAt = 0, ending = false;
   let nativeBilling = null;
+  let boardWatch, scopeRestoreBlocked = false, scopeRestoreNote = '';
   const controlReceipts = new Map();
   const deferredControlIds = [];
   let resumeControlIds = [], resumeInputId;
   let receiptTail = Promise.resolve();
-  function recordReceipt(messageId, status) {
+  function recordReceipt(messageId, status, reason) {
     if (!['queued', 'delivered', 'consumed', 'rejected', 'unknown'].includes(status)) status = 'unknown';
     const previous = controlReceipts.get(messageId);
     if (previous === status || previous === 'consumed' || previous === 'delivered' && status === 'queued') return receiptTail;
     controlReceipts.set(messageId, status);
-    signal(`intervention ${id} ${messageId} ${status}`);
+    signal(`intervention ${id} ${messageId} ${status}${reason ? `: ${reason}` : ''}`);
     receiptTail = receiptTail.catch(() => {}).then(() => team?.locked(() => {
-      team.append({ type: 'control-receipt', id, messageId, status, at: Date.now() });
-      fs.appendFileSync(team.memory, `\n\n[dispatch] intervention ${id} ${messageId} ${status}\n`);
+      team.append({ type: 'control-receipt', id, messageId, status, ...(reason ? { reason } : {}), at: Date.now() });
+      fs.appendFileSync(team.memory, `\n\n[dispatch] intervention ${id} ${messageId} ${status}${reason ? `: ${reason}` : ''}\n`);
     }));
     return receiptTail;
+  }
+  async function rejectDeferredControls() {
+    for (const messageId of [...deferredControlIds, ...resumeControlIds]) {
+      if (controlReceipts.get(messageId) === 'queued') await recordReceipt(messageId, 'rejected', 'worker_ended_without_resume');
+    }
   }
   const billing = () => nativeBilling ? { billingPath: nativeBilling, usageRecordId: `dispatch:${id}`, costCompleteness: output.reportedCostUsd === null ? 'unknown' : 'estimated' } : {};
   const usage = (live = false) => {
@@ -514,6 +521,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const interventionNote = () => (interventions ? ` · owner intervened ${interventions}` : '') + (stops ? ` · owner stopped ${stops}` : '');
   const restoreSkills = changedFiles => {
     if (!skillGuard) return;
+    if (scopeRestoreBlocked) skillGuard.restoreRoot = null;
     const total = skillGuard.finish(id, changedFiles);
     skillProposals = skillGuard.restoredCount;
     skillChangesLeftLive = total - skillProposals;
@@ -569,6 +577,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (resumeSession && output.sessionId !== resumeSession) { spawnError = new Error('Resumed worker reported a different session'); stop('SIGTERM', false); return; }
     if (!output.confirmed) { if (!final && options.agent === 'codex') void rollout.read(); return; }
     segmentConfirmed = true; clearTimeout(startTimer);
+    if (!activeRuntime) for (const messageId of resumeControlIds) void recordReceipt(messageId, 'delivered').catch(() => {});
     const actual = output.routing(), requested = declared();
     const unverified = Object.keys(requested).filter(key => output[key] === null);
     const decision = routingVerdict(output, requested), mismatch = decision === 'mismatch';
@@ -645,9 +654,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
             }
             await recordReceipt(control.id, receipt?.status);
           } else {
-            messages.push(control.text);
+            messages.push(control.text); deferredControlIds.push(control.id);
             signal(`intervened ${id}: ${JSON.stringify(control.text).slice(1, -1)}`);
-            signal(`intervention ${id} ${control.id} queued`);
+            await recordReceipt(control.id, 'queued');
           }
         }
       }
@@ -660,6 +669,36 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     options = argumentsOf(argv);
     process.on('SIGINT', onInterrupt); process.on('SIGTERM', onTerminate); process.on('SIGHUP', onHangup);
     team = projectTeam(options.cwd, true);
+    // Watch before admission: a peer that finishes before us must still disable restoration.
+    // Lost, malformed or unresolvable board evidence is report-only, never proof of exclusive ownership.
+    let scopeRoot;
+    if (team) try {
+      // Resolve Git outside the team lock; peer checks then need only canonical paths.
+      const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: options.cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      scopeRoot = fs.realpathSync(root);
+    } catch { scopeRestoreBlocked = true; }
+    const checkPeer = name => {
+      if (name === id + '.json' || name === id + '.tmp') return;
+      try {
+        const entry = JSON.parse(fs.readFileSync(path.join(team.board, name), 'utf8'));
+        if (!Number.isSafeInteger(entry.pid) || entry.pid <= 0 || typeof entry.cwd !== 'string') throw new Error('invalid_board');
+        try { process.kill(entry.pid, 0); } catch (error) { if (error.code === 'ESRCH') return; if (error.code !== 'EPERM') throw error; }
+        const relative = path.relative(scopeRoot, fs.realpathSync(entry.cwd));
+        if (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)) scopeRestoreBlocked = true;
+      } catch { scopeRestoreBlocked = true; }
+    };
+    const checkBoard = () => {
+      if (!team) { scopeRestoreBlocked = true; return; }
+      try { for (const name of fs.readdirSync(team.board)) checkPeer(name); }
+      catch { scopeRestoreBlocked = true; }
+    };
+    if (team) {
+      try {
+        boardWatch = fs.watch(team.board, (_event, name) => { if (name) checkPeer(String(name)); else scopeRestoreBlocked = true; });
+        boardWatch.on('error', () => { scopeRestoreBlocked = true; });
+        await team.locked(checkBoard);
+      } catch { scopeRestoreBlocked = true; }
+    }
     roundtable = Boolean(team && options.meeting);
     if (options.meeting && !team) throw new Error('roundtables need a git repository');
     if (team) admission = await team.admit(options, id, __filename);
@@ -690,7 +729,14 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     }
     function restoreScope(files) {
       if (!files?.length) return;
-      if (!skillGuard.restoreRoot) { signal('out-of-scope changes left live (shared checkout; author unknown)'); return; }
+      if (!skillGuard.restoreRoot) { scopeRestoreNote = ' · out-of-scope changes left live (shared checkout or worktree; author unknown)'; return; }
+      let restored = 0, quarantine;
+      const preserveNew = (filename, file) => {
+        if (!fs.lstatSync(filename, { throwIfNoEntry: false })) return;
+        quarantine ||= path.join(team.directory, 'scope-quarantine', id);
+        const destination = path.join(quarantine, file);
+        fs.mkdirSync(path.dirname(destination), { recursive: true }); fs.renameSync(filename, destination);
+      };
       for (const file of files) {
         const filename = path.resolve(before.root, file), relative = path.relative(before.root, filename);
         if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep) || relative.split(path.sep).includes('.git')) throw new Error('scope_restore_path');
@@ -703,17 +749,19 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         };
         if (dirtyBytes.has(file)) replace(dirtyBytes.get(file));
         else if (before.files.has(file)) {
-          if (before.files.get(file) === 'deleted' && fs.existsSync(filename)) fs.unlinkSync(filename);
-          else if (before.files.get(file) !== 'deleted') signal(`scope restore unavailable for pre-existing file: ${file}`);
+          if (before.files.get(file) === 'deleted') preserveNew(filename, file);
+          else if (before.files.get(file) !== 'deleted') { signal(`scope restore unavailable for pre-existing file: ${file}`); continue; }
         }
         else {
           let contents;
           try { contents = execFileSync('git', ['show', `${before.head}:${file.split(path.sep).join('/')}`], { cwd: before.root, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024, windowsHide: true }); } catch {}
           if (contents) replace(contents);
           else if (repo?.files.includes(file)) throw new Error('scope_restore_unavailable');
-          else if (fs.lstatSync(filename, { throwIfNoEntry: false })) fs.unlinkSync(filename);
+          else preserveNew(filename, file);
         }
+        restored++;
       }
+      scopeRestoreNote = ` · restored ${restored} out-of-scope paths${quarantine ? ` · quarantined new files: ${quarantine}` : ''}`;
     }
     const inspectScope = () => {
       const after = checking ? snapshot(options.cwd, before) : null;
@@ -769,8 +817,17 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     }
     finalize = async result => {
       const { after, changed, outOfScope } = inspectScope();
-      restoreSkills(after?.status.map(entry => entry.file));
-      try { restoreScope(outOfScope); } catch (error) { signal(`scope restore failed: ${String(error.message).replace(/[\r\n]+/g, ' ')}`); }
+      const restore = () => {
+        checkBoard();
+        if (scopeRestoreBlocked) skillGuard.restoreRoot = null;
+        restoreSkills(after?.status.map(entry => entry.file));
+        restoreScope(outOfScope);
+      };
+      // Drain board notifications before taking the lock for the final exclusive check.
+      await new Promise(resolve => setImmediate(resolve));
+      try { if (team) await team.locked(restore); else restore(); }
+      catch (error) { signal(`scope restore failed: ${String(error.message).replace(/[\r\n]+/g, ' ')}`); }
+      await rejectDeferredControls();
       const route = output.routing();
       let reason = 'exit';
       if (unconfirmed) reason = 'unconfirmed';
@@ -791,7 +848,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
       const exitCode = Number.isInteger(result.code) ? (result.code === 0 && (unconfirmed || roundtable && reason !== 'exit') ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
       const measured = usage(), rate = measured.outputTokens !== null && measured.activeMs > 0 ? `${Math.round(measured.outputTokens * 1000 / measured.activeMs)} token/s (${measured.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(measured.activeMs / 1000)} s)` : 'token/s unreported';
-      signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()}${interventionNote()} · out ${options.out}`);
+      signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${scopeRestoreNote}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()}${interventionNote()} · out ${options.out}`);
       if (!endSent) send({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured, verdict: routingVerdict(output, declared()),
         ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
         ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
@@ -972,9 +1029,12 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     return 1;
   } finally {
     ending = true;
+    boardWatch?.close();
     clearTimeout(startTimer);
     clearInterval(pollTimer); clearInterval(rateTimer); clearInterval(inboxTimer);
-    await inboxRead; await treeStop; await receiptTail; clearTimeout(forceTimer);
+    await inboxRead; await treeStop;
+    await rejectDeferredControls().catch(() => { signal('deferred control receipts unavailable'); });
+    await receiptTail; clearTimeout(forceTimer);
     await rollout.pending;
     await activeRuntime?.close(); controlClient?.close();
     team?.release(id);
