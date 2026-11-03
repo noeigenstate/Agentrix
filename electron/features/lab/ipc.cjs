@@ -22,8 +22,7 @@ function registerLabIpc({ ipcMain, labWindow, getMainWindow, engine, open, devUr
   const adapter = lab => createIpcAdapter({ ipcMain: registration, getWindow: () => allowedWindow(lab), devUrl: devUrl?.replace(/\/$/, ''), t, report() {} });
   adapter(false).handle('lab:open', open);
   const ipc = adapter(true);
-  for (const action of ['list', 'projects', 'sources', 'sample', 'estimate', 'start', 'stop', 'remove']) ipc.handle(`lab:${action}`, engine[action].bind(engine));
-  ipc.handle('lab:aa-key', value => engine.aaKey(value));
+  for (const action of ['list', 'projects', 'sample', 'estimate', 'start', 'stop', 'remove']) ipc.handle(`lab:${action}`, engine[action].bind(engine));
   ipc.handle('lab:appearance', labWindow.appearance);
   for (const action of ['close', 'minimize', 'maximize']) ipc.listen(`lab:${action}`, () => {
     const window = labWindow.getWindow();

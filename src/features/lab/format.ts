@@ -24,15 +24,12 @@ export function duration(ms: number | null) {
 // What the page says for an engine message: "this platform cannot run the lab safely" and "the project's Git would not give us a workspace" are put in plain
 // words (the second with a next step); every other message is the engine's own sentence, translated.
 export function friendlyError(message: string) {
-  if (/unavailable on this platform/i.test(message)) return t('虚拟实验室目前只支持 macOS 和 Windows。');
+  if (/unavailable on this platform/i.test(message)) return t('虚拟实验室目前只支持 macOS。');
   // Only the first line is the error itself; the lines after it (the test-log path) are kept as they are.
   const [first, ...rest] = message.split('\n');
   if (!/worktree|^Git:|工作区/i.test(first)) return t(message);
   return [t('无法创建独立工作区。请重试；仍然失败时，先检查这个项目的 Git 状态，再新建实验。'), ...rest].join('\n');
 }
-
-// A download is written in the unit a person reads: "320 MB", "1.2 GB".
-export const bytesLabel = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
 
 // An estimate is given in minutes.
 export const minutesLabel = (minutes: number) => duration(minutes * 60000);

@@ -2,32 +2,24 @@
 // The one strong action is "新建实验"; deleting an experiment is a quiet action on its card that shows on hover or focus.
 import { useState } from 'react';
 import { Plus, Trash } from '@phosphor-icons/react';
-import type { LabArm, LabExperiment } from '../../shared/lab-types';
+import type { LabExperiment } from '../../shared/lab-types';
 import { t } from '../../shared/i18n';
 import { IconButton } from '../../shared/IconButton';
 import { ArmMark, ArmName } from './Marks';
 import { friendlyError, outOf, percent, stateLabel, taskCount } from './format';
 import { ALL_ARMS, armSummary, isDone, ranArms, runsFor } from './results-math';
-import { combine, scopeLabel } from './source-math';
 
 const TONES = { running: 'running', done: 'success', stopped: 'warning', error: 'danger' } as const;
 
-// One bar per approach: its task pass rate; a running experiment shows how far each approach has got instead, since its rates are not final; with several
-// sources a finished experiment shows in how many of them each approach leads, because a pass rate over different sources would mix their scales.
+// One bar per approach: its task pass rate; a running experiment shows how far each approach has got instead, since its rates are not final.
 function MiniChart({ experiment }: { experiment: LabExperiment }) {
-  const mode = experiment.state === 'running' ? 'progress' : experiment.lanes.length > 1 ? 'leads' : 'rate', combined = mode === 'leads' ? combine(experiment) : null;
-  const caption = { progress: t('各方案的运行进度'), leads: t('各方案领先的来源数'), rate: t('各方案的任务通过率') }[mode];
-  const bar = (arm: LabArm) => {
-    if (combined) { const leads = combined.rows.find(row => row.arm === arm)!.leads; return { share: leads / combined.sources, text: outOf(leads, combined.sources) }; }
-    if (mode === 'progress') { const runs = runsFor(experiment, arm), done = runs.filter(isDone).length; return { share: runs.length ? done / runs.length : 0, text: outOf(done, runs.length) }; }
-    const { rate } = armSummary(experiment, arm);
-    return { share: rate ?? 0, text: percent(rate) };
-  };
-  return <div className="mini" role="img" aria-label={caption}>
-    <span className="muted">{mode === 'rate' ? t('任务通过率') : caption}</span>
+  const running = experiment.state === 'running';
+  return <div className="mini" role="img" aria-label={running ? t('各方案的运行进度') : t('各方案的任务通过率')}>
+    <span className="muted">{running ? t('各方案的运行进度') : t('任务通过率')}</span>
     {ranArms(experiment).map(arm => {
-      const { share, text } = bar(arm);
-      return <div key={arm} className={`bar-row arm-${arm}`}><ArmName arm={arm} /><span className="track"><i style={{ width: `${share * 100}%` }} /></span><b>{text}</b></div>;
+      const runs = runsFor(experiment, arm), done = runs.filter(isDone).length, rate = armSummary(experiment, arm).rate;
+      const share = running ? (runs.length ? done / runs.length : 0) : rate ?? 0;
+      return <div key={arm} className={`bar-row arm-${arm}`}><ArmName arm={arm} /><span className="track"><i style={{ width: `${share * 100}%` }} /></span><b>{running ? outOf(done, runs.length) : percent(rate)}</b></div>;
     })}
   </div>;
 }
@@ -41,7 +33,7 @@ function Card({ experiment, onOpen, onRemove }: { experiment: LabExperiment; onO
       <span className={`status tone-${TONES[experiment.state]}`}><i />{stateLabel(experiment.state)}</span>
       <IconButton label={experiment.state === 'running' ? t('先停止实验') : t('删除')} className="card-delete" disabled={experiment.state === 'running'} onClick={() => setConfirm(true)}><Trash size={16} /></IconButton>
     </div>
-    <p className="muted">{scopeLabel(experiment)} · {taskCount(experiment)}</p>
+    <p className="muted">{experiment.projectName} · {taskCount(experiment)}</p>
     <MiniChart experiment={experiment} />
     {error && <p className="banner" role="alert">{t('删除失败：{message}', { message: friendlyError(error) })}</p>}
     {confirm && <div className="card-confirm" role="alert">

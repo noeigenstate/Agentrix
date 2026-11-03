@@ -12,13 +12,12 @@ import { createLabStore, type LabState, type LabStore } from './lab-store';
 import { BackButton } from './Marks';
 import { Results } from './Results';
 import { Running } from './Running';
-import { scopeLabel } from './source-math';
 import { Wizard } from './Wizard';
 
 export type View = { kind: 'home' } | { kind: 'new' } | { kind: 'experiment'; id: string };
 type Actions = Pick<LabBridge, 'minimize' | 'maximize' | 'close'>;
 export type LabViewProps = {
-  state: LabState; store: Pick<LabStore, 'begin' | 'refresh' | 'remove' | 'saveAaKey' | 'stopExperiment'>; bridge: Pick<LabBridge, 'sample' | 'estimate'>;
+  state: LabState; store: Pick<LabStore, 'begin' | 'refresh' | 'remove' | 'stopExperiment'>; bridge: Pick<LabBridge, 'sample' | 'estimate'>;
   named: boolean; actions: Actions; initial?: View;
 };
 
@@ -50,13 +49,13 @@ export function LabView({ state, store, bridge, named, actions, initial = { kind
   const [view, setView] = useState<View>(initial);
   const experiment = view.kind === 'experiment' ? state.experiments?.find(item => item.id === view.id) : undefined;
   const home = () => setView({ kind: 'home' });
-  const note = view.kind === 'new' ? t('新建实验') : view.kind === 'experiment' ? experiment ? scopeLabel(experiment) : '' : t('比较不同模型和编排方式在有标准答案的任务上的表现');
+  const note = view.kind === 'new' ? t('新建实验') : view.kind === 'experiment' ? experiment?.projectName ?? '' : t('比较不同模型和编排方式在有标准答案的任务上的表现');
   return <div className="lab">
     <TitleBar title={t('虚拟实验室')} note={note} named={named} actions={actions} />
     <main className="lab-main">
       {state.error && <p className="banner" role="alert">{t('读取数据失败：{message}', { message: friendlyError(state.error) })} <button type="button" className="button small" onClick={() => void store.refresh()}>{t('重试')}</button></p>}
       {view.kind === 'home' && <Home experiments={state.experiments} onNew={() => setView({ kind: 'new' })} onOpen={id => setView({ kind: 'experiment', id })} onRemove={store.remove} />}
-      {view.kind === 'new' && <Wizard projects={state.projects} sources={state.sources} api={bridge} begin={store.begin} onAaKey={store.saveAaKey} onClose={home} onStarted={id => setView({ kind: 'experiment', id })} />}
+      {view.kind === 'new' && <Wizard projects={state.projects} api={bridge} begin={store.begin} onClose={home} onStarted={id => setView({ kind: 'experiment', id })} />}
       {view.kind === 'experiment' && <Experiment experiment={experiment} onStop={store.stopExperiment} onBack={home} />}
     </main>
   </div>;

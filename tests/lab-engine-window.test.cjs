@@ -45,8 +45,6 @@ function fixture(t, extra = {}) {
     subscribe(listener) { this.changes = listener; return () => { this.changes = null; }; },
     async list() { return structuredClone(this.experiments); },
     async projects() { return [{ id: 'p', name: 'Project' }]; },
-    async sources() { return []; },
-    async aaKey(value) { this.calls.push(['aaKey', value]); return value !== null; },
     async sample(value) { this.calls.push(['sample', value]); return []; },
     async estimate(value) { this.calls.push(['estimate', value]); return { runs: 2, minutes: 2, costUsd: 0.5, basis: 'default' }; },
     async start(value) { if (this.error) throw new Error(this.error); this.calls.push(['start', value]); return 'id'; },
@@ -132,7 +130,7 @@ test('lab IPC requires the exact main frame and page and only the main window ma
   assert.equal((await ipcMain.invoke('lab:open', { ...sender(main), senderFrame: { url: main.webContents.mainFrame.url } })).ok, false);
   assert.equal((await ipcMain.invoke('lab:open', sender(main))).ok, true);
   const own = created[0];
-  const requests = [['list'], ['projects'], ['sources'], ['aa-key', null], ['sample', {}], ['estimate', {}], ['start', {}], ['stop', 'id'], ['remove', 'id'], ['appearance']];
+  const requests = [['list'], ['projects'], ['sample', {}], ['estimate', {}], ['start', {}], ['stop', 'id'], ['remove', 'id'], ['appearance']];
   for (const [action, arg] of requests) {
     assert.equal((await ipcMain.invoke('lab:' + action, sender(main), arg)).ok, false, action);
     assert.equal((await ipcMain.invoke('lab:' + action, sender(foreign), arg)).ok, false, action);
@@ -190,12 +188,11 @@ test('lab preload exposes exactly LabBridge and removes event listeners without 
     return { ipcRenderer, contextBridge: { exposeInMainWorld(key, value) { name = key; bridge = value; } } };
   } });
   assert.equal(name, 'agentrixLab');
-  assert.deepEqual(Object.keys(bridge).sort(), ['aaKey', 'appearance', 'close', 'estimate', 'list', 'maximize', 'minimize', 'onAppearance', 'onChange', 'projects', 'remove', 'sample', 'sources', 'start', 'stop']);
+  assert.deepEqual(Object.keys(bridge).sort(), ['appearance', 'close', 'estimate', 'list', 'maximize', 'minimize', 'onAppearance', 'onChange', 'projects', 'remove', 'sample', 'start', 'stop']);
   await bridge.list(); await bridge.projects(); await bridge.sample({ size: 1 }); await bridge.estimate({}); await bridge.start({});
   await bridge.stop('id'); await bridge.remove('id'); await bridge.appearance(); bridge.close(); bridge.minimize(); bridge.maximize();
-  await bridge.sources(); await bridge.aaKey(null);
   assert.deepEqual(calls, [['lab:list'], ['lab:projects'], ['lab:sample', { size: 1 }], ['lab:estimate', {}], ['lab:start', {}],
-    ['lab:stop', 'id'], ['lab:remove', 'id'], ['lab:appearance'], ['lab:close'], ['lab:minimize'], ['lab:maximize'], ['lab:sources'], ['lab:aa-key', null]]);
+    ['lab:stop', 'id'], ['lab:remove', 'id'], ['lab:appearance'], ['lab:close'], ['lab:minimize'], ['lab:maximize']]);
   let experiments, appearance;
   const off = bridge.onChange(value => { experiments = value; }), offAppearance = bridge.onAppearance(value => { appearance = value; });
   ipcRenderer.emit('lab:changed', { secret: true }, [{ id: 'a' }]); ipcRenderer.emit('lab:appearance-changed', {}, { theme: 'light' });

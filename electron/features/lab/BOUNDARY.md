@@ -1,14 +1,13 @@
 # Boundary: Lab engine
 
-Runs Virtual Lab experiments on macOS and Windows: takes tasks from its sources (the project's own past changes, and the oss and aa providers behind `sources/contract.cjs`), runs each source as one lane
-and each approach in its own sandboxed workspace through the dispatch helper, grades it by the source's own tests and, when the provider asks, a blind review, and owns the lab window, its IPC and dedicated preload. Unknown measurements stay null.
+Runs Virtual Lab experiments: samples a project's past changes that came with tests, runs each approach in its own worktree through the dispatch helper,
+grades it with the change's hidden tests and a blind review, and owns the lab window, its IPC and dedicated preload. Unknown measurements stay null.
 
 ## Owns
 - `electron/features/lab/**`
 
 ## Interface
 - `createLab` (`electron/features/lab/index.cjs`) — injected main-process composition: the lab window, its IPC and the experiment engine; open, sync and dispose
-- `assertProvider` (`electron/features/lab/sources/contract.cjs`) — the task-source contract providers meet: its typedefs, LAB_SOURCES, LAB_ARMS, TASK_ID and taskKey
 
 ## May import
 - `electron/i18n.cjs`
@@ -16,18 +15,15 @@ and each approach in its own sandboxed workspace through the dispatch helper, gr
 - `electron/features/dashboard/cost.cjs`
 - `electron/features/dashboard/records-routing.cjs`
 - `electron/features/dashboard/prices.json`
-- `electron/features/lab-oss/index.cjs`
-- `electron/features/lab-aa/index.cjs`
-- `src/shared/lab-types.ts`
 
 ## Invariants
-- Lab IPC requires the exact main frame and page, only the main window may open the lab, and the lab preload exposes exactly LabBridge — other pages cannot start or read experiments and the lab page gets no other main-process power — test: `tests/lab-engine-window.test.cjs` › "lab IPC requires the exact main frame and page and only the main window may open it"; test: `tests/lab-engine-window.test.cjs` › "lab preload exposes exactly LabBridge and removes event listeners without exposing IPC events"
-- Runs never change the project's own working tree or its team journal — an experiment must not touch the owner's work — test: `tests/lab-engine.test.cjs` › "history samples only source changes with executable Node tests and profiles modules without exposing a diff"; test: `tests/lab-engine-sources.test.cjs` › "the history provider conforms and restores its real Node tests over an isolated Git snapshot"
-- Main rebuilds every selected task, rejects unsupported or duplicate sources, forged ids and more than 600 runs, and fetches then rebuilds tasks and validates every source's references before any model starts; an AA key is stored encrypted, travels only in the AA request header and never enters an experiment or returned data, and downloads are hash-checked, size-bounded and redirect-restricted — the page cannot point a run at arbitrary code or files and no secret or unpinned file reaches a run — test: `tests/lab-engine-sources.test.cjs` › "all source references finish before models start and lanes overlap with stable per-lane order"; test: `tests/lab-engine-sources.test.cjs` › "throwing describe becomes unavailable and forged ids, duplicate sources and over 600 runs are rejected"; test: `tests/lab-engine-sources.test.cjs` › "AA keys use encrypted storage, never enter experiments, clear correctly and fail closed without encryption"; test: `tests/lab-engine-sources.test.cjs` › "downloads verify hashes atomically, restrict every redirect and enforce size limits"
-- Each source owns its grader and score: a task passes only when all its tests pass in a strict majority of repeats, a test that cannot run is an error, never a pass, and scores of different sources are never merged — the lab must not invent success — test: `tests/lab-engine.test.cjs` › "pass rule needs all hidden tests in a strict majority and never counts a tie or zero tests"; test: `tests/lab-engine.test.cjs` › "grading treats failed assertions as failed tests and unavailable or incomplete tests as errors"
-- Source budget slices sum to the experiment budget and never rebalance; insufficient funds stop that lane before its next run without rejecting the start, and unknown real cost stays null while the estimate is reserved — spending is bounded and never made up — test: `tests/lab-engine-sources.test.cjs` › "budget slices follow source estimates, sum to the budget and never rebalance"; test: `tests/lab-engine-sources.test.cjs` › "an insufficient single-source budget persists a stopped experiment without rejecting start"
-- Model code runs only inside a sandbox session that is offline by default, and only a preparation call that asks for it opens the network; on Windows each admission rechecks the real host permissions, a refused or failed preparation starts no worker, and the one elevated step is a fixed operation with no task argument — a run cannot reach the network or protected files by accident — test: `tests/lab-session.test.cjs` › "execute defaults to offline for every call and never retains a preparation allowance"; test: `tests/lab-sandbox-win32.test.cjs` › "prepared hosts are verified on every admission without requesting elevation"; test: `tests/lab-sandbox-win32.test.cjs` › "UAC refusal and unsuccessful preparation fail closed without repeated prompts"
-- Container commands reach a task's container only through the run's broker (one capability per run, bounded in size, time and concurrency, cancelled when the run closes) and models never get Docker access; stop and timeouts end every descendant worker (on Windows the whole Job) and every container of the run before the workspace is removed, and a broker that ignores cancellation blocks that cleanup — a model cannot touch another container, and no worker or container keeps running or writing after a stop — test: `tests/lab-session.test.cjs` › "a broker capability belongs to one run and is rejected by another run"; test: `tests/lab-session.test.cjs` › "a handler that refuses cancellation cannot cause live workspace cleanup"; test: `tests/lab-engine-sources.test.cjs` › "Docker uses pinned images without mounts, bounds exec, preserves task exits and removes only owned containers"; test: `tests/lab-engine-sources.test.cjs` › "background startup cleanup reaps a persisted run container without needing a live session"; test: `tests/lab-engine.test.cjs` › "the guardian closes its process group and detached descendants when the app IPC disconnects"; test: `tests/lab-sandbox-win32.test.cjs` › "Windows Job Objects reap detached descendants whose environment markers were erased"
+- Lab IPC requires the exact main frame and page, and only the main window may open the lab — other pages cannot start or read experiments — test: `tests/lab-engine-window.test.cjs` › "lab IPC requires the exact main frame and page and only the main window may open it"
+- The lab preload exposes exactly LabBridge — the page gets no other main-process power — test: `tests/lab-engine-window.test.cjs` › "lab preload exposes exactly LabBridge"
+- Runs never change the project's own working tree or its team journal — an experiment must not touch the owner's work — test: `tests/lab-engine.test.cjs` › "a fake helper runs, grades and saves both arms without changing the original tree or team journal"
+- Tasks are rebuilt and validated in the main process: unsupported sources, duplicate arms, forged commits and path-like ids are rejected — the page cannot point a run at arbitrary code or files — test: `tests/lab-engine.test.cjs` › "validation rejects unsupported sources, duplicate arms, forged commits, bounds and path-like ids"
+- A task passes only when all its hidden tests pass in a strict majority of repeats; a test that cannot run is an error, never a pass — the lab must not invent success — test: `tests/lab-engine.test.cjs` › "pass rule needs all hidden tests in a strict majority and never counts a tie or zero tests"
+- Unknown cost stays null while the budget reserves the estimate, and no run starts once the reservation would exceed the budget — spending is bounded and never made up — test: `tests/lab-engine.test.cjs` › "unknown real cost remains null while budget accounting reserves the estimate"
+- Stop and timeouts end every descendant worker before the run's worktree is removed — no worker keeps running or writing after a stop — test: `tests/lab-engine.test.cjs` › "stop kills detached descendants before worktree cleanup and marks the remaining runs stopped"
 - Experiments still running at startup are marked stopped, and store ids cannot leave userData — a crash cannot resume spending or escape the data folder — test: `tests/lab-engine.test.cjs` › "persisted running experiments are stopped on reload and store ids cannot escape userData"
 
 ## Not ours
@@ -35,4 +31,3 @@ and each approach in its own sandboxed workspace through the dispatch helper, gr
 - The contract between page and engine — `src/shared/lab-types.ts` (changed only through the lead)
 - Starting, authenticating and reporting workers — Dispatch (`integration/dispatch.cjs`)
 - Run records, public prices and cost estimates — Dashboard records (`electron/features/dashboard`)
-- The oss and aa task sources — Lab oss source (`electron/features/lab-oss`), Lab aa source (`electron/features/lab-aa`)

@@ -6,8 +6,6 @@ import { barEnds, linear, shapePath } from './chart-math';
 import { armName, DASH, kindLabel, percent } from './format';
 import { kindScore, kindsOf, ranArms, SHAPES } from './results-math';
 import { Legend, Panel, ScrollRegion } from './Marks';
-import { metricOf } from './source-math';
-import { METRIC_WORDS } from './source-text';
 import { useWidth } from './useWidth';
 
 const ROW = 32, TOP = 32, LEFT = 76, VALUES = 104, AXIS = 28, TICKS = [0, 0.5, 1];
@@ -38,7 +36,7 @@ function Dot({ arm, score, x, y, valueX }: { arm: LabArm; score: ReturnType<type
 
 export function DotPlots({ experiment }: { experiment: LabExperiment }) {
   const arms = ranArms(experiment), kinds = kindsOf(experiment);
-  return <Panel title={t('能力比较')} hint={METRIC_WORDS[metricOf(experiment)].axis()}>
+  return <Panel title={t('能力比较')} hint={t('点 = 各次重复的均值，横线 = 标准差；没有横线的点，各次结果相同或只重复了 1 次。横轴是隐藏测试的通过率（0–100）')}>
     <Legend arms={arms} />
     <div className="small-multiples">{kinds.map(kind => <KindPlot key={kind} experiment={experiment} kind={kind} />)}</div>
     <details className="data">

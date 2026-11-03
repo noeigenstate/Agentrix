@@ -17,8 +17,7 @@ function cleanEnvironment(environment = process.env) {
   return gitEnvironment(Object.fromEntries(Object.entries(environment).filter(([key]) => INHERITED_ENV.has(key.toUpperCase()))));
 }
 
-async function requireIsolation(options) {
-  if (process.platform === 'win32') return require('./sandbox-win32.cjs').requireIsolation(options);
+async function requireIsolation() {
   if (process.platform !== 'darwin') {
     throw new Error('Secure lab execution is unavailable on this platform. No workers were started.');
   }
@@ -60,7 +59,7 @@ function socketPathAliases(file) {
 
 function sandboxProfile({
   labRoot, readRoots, writeRoots, protectedPaths, credentialPaths = [], deniedExecutables = [],
-  codexSource, sharedAuth, network = true, ipcPaths = [], deniedSockets = daemonSocketPaths(),
+  codexSource, sharedAuth, deniedSockets = daemonSocketPaths(),
 }) {
   const blocked = protectedPaths.map(subpath).join(' ');
   const credentialBlocks = credentialPaths.map(subpath).join(' ');
@@ -80,8 +79,6 @@ function sandboxProfile({
     '(version 1)', '(allow default)',
     '(deny process-info* (target others))',
     '(deny signal (require-not (target same-sandbox)))',
-    ...(!network ? ['(deny network*)', ...ipcPaths
-      .map(file => '(allow network-outbound (remote unix-socket ' + subpath(file) + '))')] : []),
     '(deny file-read-data ' + deniedOutside(labRoot, readRoots) + ')',
     ...(codexRead ? ['(deny file-read-data ' + codexRead + ')'] : []),
     ...(blocked ? ['(deny file-read* ' + blocked + ')'] : []),
@@ -102,7 +99,7 @@ function sandboxProfile({
 async function channelAddress(directory, prefix) {
   const name = prefix + '-' + require('node:crypto').randomUUID().slice(0, 8);
   if (process.platform === 'win32') {
-    return { address: '\\\\.\\pipe\\LOCAL\\agentrix-lab-' + name, async close() {} };
+    return { address: '\\\\.\\pipe\\agentrix-lab-' + name, async close() {} };
   }
   let address = path.join(directory, name), alias = null;
   if (Buffer.byteLength(address) > 100) {
@@ -144,32 +141,13 @@ async function credentialAccess(environment = process.env, credentials = true) {
     if (error.code === 'ENOENT') return false;
     throw error;
   }) ? await fs.realpath(candidate) : null;
-  if (process.platform !== 'win32') return { codexSource, sharedAuth };
-  const claudeSource = await physicalPath(environment.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
-  const claudeFile = path.join(claudeSource, '.credentials.json');
-  const claudeAuth = credentials && await fs.stat(claudeFile).then(stat => stat.isFile(), error => {
-    if (error.code === 'ENOENT') return false;
-    throw error;
-  }) ? await fs.realpath(claudeFile) : null;
-  return { codexSource, sharedAuth, claudeSource, claudeAuth };
+  return { codexSource, sharedAuth };
 }
 
 async function gitCredentialHelpers() {
   const result = await command('git', ['--exec-path'], { timeoutMs: 5000 });
   if (result.code !== 0) throw new Error('Could not locate the Git credential helper for isolation.');
-  const names = process.platform === 'win32'
-    ? ['git-credential-manager.exe', 'git-credential-manager-core.exe', 'git-credential-wincred.exe']
-    : ['git-credential-osxkeychain'];
-  return Promise.all(names.map(name => physicalPath(path.join(result.stdout.trim(), name))));
-}
-
-async function linkCredential(source, target, { platform = process.platform, files = fs } = {}) {
-  try { await files.symlink(source, target); }
-  catch (error) {
-    if (platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error;
-    // A hard link shares the file without copying its contents. Cross-volume links deliberately fail closed.
-    await files.link(source, target);
-  }
+  return [await physicalPath(path.join(result.stdout.trim(), 'git-credential-osxkeychain'))];
 }
 
 async function cliHomes(environment = process.env, directory, credentials = true, access) {
@@ -188,9 +166,8 @@ async function cliHomes(environment = process.env, directory, credentials = true
     }
   }
   if (credentials && access.sharedAuth) {
-    await linkCredential(access.sharedAuth, path.join(codex, 'auth.json'));
+    await fs.symlink(access.sharedAuth, path.join(codex, 'auth.json'));
   }
-  if (credentials && access.claudeAuth) await linkCredential(access.claudeAuth, path.join(claude, '.credentials.json'));
   const secure = environment?.CLAUDE_SECURESTORAGE_CONFIG_DIR ??
     environment?.CLAUDE_CONFIG_DIR ?? '';
   const temporary = path.join(directory, 'tmp');
@@ -199,17 +176,12 @@ async function cliHomes(environment = process.env, directory, credentials = true
   env[search] = String(env[search] || '').split(path.delimiter).filter(path.isAbsolute).join(path.delimiter);
   return {
     ...env, CODEX_HOME: codex, CLAUDE_CONFIG_DIR: claude,
-    CLAUDE_SECURESTORAGE_CONFIG_DIR: credentials && process.platform !== 'win32' ? secure : claude, ELECTRON_RUN_AS_NODE: '1',
+    CLAUDE_SECURESTORAGE_CONFIG_DIR: credentials ? secure : claude, ELECTRON_RUN_AS_NODE: '1',
     TMPDIR: temporary, TMP: temporary, TEMP: temporary, XDG_CACHE_HOME: temporary,
-    ...(process.platform === 'win32' ? {
-      HOME: directory, USERPROFILE: directory, APPDATA: path.join(directory, 'AppData/Roaming'),
-      LOCALAPPDATA: path.join(directory, 'AppData/Local'),
-      HOMEDRIVE: path.parse(directory).root.slice(0, 2), HOMEPATH: directory.slice(path.parse(directory).root.length - 1),
-    } : {}),
   };
 }
 
 module.exports = {
   cleanEnvironment, requireIsolation, sandboxProfile, channelAddress, cliHomes,
-  credentialAccess, gitCredentialPaths, gitCredentialHelpers, physicalPath, linkCredential, daemonSocketPaths,
+  credentialAccess, gitCredentialPaths, gitCredentialHelpers, physicalPath, daemonSocketPaths,
 };
