@@ -5,6 +5,7 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { createHash, randomUUID } = require('node:crypto');
 const preparation = require('./sandbox-win32-preparation.cjs');
+const { windowsDiagnostics } = require('./process.cjs');
 const source = require('./sandbox-win32-native.cjs') + preparation.nativeSource;
 const exec = promisify(execFile);
 const runs = new Map();
@@ -19,10 +20,19 @@ const contained = (root, target) => {
 
 async function native(args, options = {}) {
   if (!executable) throw infrastructure('Windows lab isolation has not been initialized.');
-  try { return await exec(executable, args, {
-    windowsHide: true, timeout: args[0] === 'clean' ? 0 : 10000, maxBuffer: 1024 * 1024, ...options,
-  }); }
-  catch { throw infrastructure('Windows lab isolation could not complete its operation.'); }
+  const diagnostics = windowsDiagnostics();
+  try {
+    const running = exec(executable, args, {
+      windowsHide: true, timeout: args[0] === 'clean' ? 0 : 10000, maxBuffer: 1024 * 1024,
+      ...(diagnostics ? { env: { ...process.env, AGENTRIX_LAB_DIAGNOSTICS: '1' } } : {}), ...options,
+    });
+    if (diagnostics) running.child?.stderr?.on('data', chunk => diagnostics.feed(chunk));
+    return await running;
+  } catch {
+    const error = infrastructure('Windows lab isolation could not complete its operation.');
+    if (diagnostics?.summary()) error.message += '\n' + diagnostics.summary();
+    throw error;
+  }
 }
 
 async function initialize({ directory } = {}) {
@@ -72,12 +82,18 @@ async function hostState(options) {
 
 async function requireIsolation(options = {}) {
   await initialize(options);
+  const diagnostics = windowsDiagnostics();
   const prepare = elevate => {
+    diagnostics?.feed('[lab-win32] host preparation begin\n');
     const call = preparation.prepCommand(executable, executableHash, { elevate });
     return exec(call.file, call.args, call.options);
   };
   await prepareHost({
-    verify: () => hostState(options), prompt: options.prompt !== false && !process.env.NODE_TEST_CONTEXT,
+    verify: async () => {
+      const state = await hostState(options);
+      diagnostics?.feed(`[lab-win32] host ready=${Number(state.ready)} elevated=${Number(state.elevated)}\n`);
+      return state;
+    }, prompt: options.prompt !== false && !process.env.NODE_TEST_CONTEXT,
     prepare: () => prepare(false), elevate: () => prepare(true),
   });
 }

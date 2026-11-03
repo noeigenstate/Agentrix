@@ -4,6 +4,41 @@ const { spawn, execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const execute = promisify(execFile);
 const OUTPUT_LIMIT = 8 * 1024 * 1024;
+const WINDOWS_DIAGNOSTIC_EVENTS = new Set([
+  ...['cleanup lease lock', 'cleanup launcher exit', 'cleanup ACL', 'run lease lock', 'identity', 'root preflight',
+    'profile ACL', 'ancestor metadata ACL', 'root ACL', 'pipe ACL', 'stdio', 'attributes', 'process creation',
+    'protected paths', 'worker resume', 'worker running', 'stdio drain', 'launcher release', 'frame read', 'frame parsed']
+    .map(stage => 'stage ' + stage),
+  'frame chars=#', 'preflight objects=#', 'preflight complete objects=#', 'cleanup objects=#', 'cleanup complete objects=#',
+  'worker created pid=#', 'worker exited code=#', 'payload write begin', 'payload write closed',
+  'payload write failed hresult=#', 'control cancelled', 'stdout first bytes=#', 'stdout closed', 'stderr first bytes=#', 'stderr closed',
+  'host spawned pid=#', 'host frame queued bytes=#', 'host frame written', 'host cancel EOF', 'host closed code=#',
+  'host preparation begin', 'host ready=# elevated=#', 'executor entry', 'executor input wait',
+  'executor input first bytes=#', 'executor input end chars=#', 'executor payload parsed', 'executor child spawned pid=#',
+  'executor child exit code=#', 'executor complete code=#', 'executor execute failed',
+]);
+
+// CI diagnostics contain fixed stage names and numeric counters, never argv, environment or worker output.
+function windowsDiagnostics() {
+  if (process.platform !== 'win32' || !process.env?.NODE_TEST_CONTEXT || process.env.AGENTRIX_LAB_TEST_PREPARE_HOST !== '1') return null;
+  let tail = '', emitted = 0;
+  const recent = [];
+  return {
+    feed(chunk) {
+      tail += String(chunk);
+      for (let index; (index = tail.indexOf('\n')) !== -1;) {
+        const line = tail.slice(0, index).replace(/\r$/, ''); tail = tail.slice(index + 1);
+        if (!line.startsWith('[lab-win32] ')) continue;
+        const event = line.slice(12).replace(/ ms=\d+$/, '').replace(/=(?:-?\d+|null)(?= |$)/g, '=#');
+        if (!WINDOWS_DIAGNOSTIC_EVENTS.has(event) && !/^executor child error code=(?:E[A-Z0-9_]{1,20}|UNKNOWN)$/.test(event)) continue;
+        recent.push(line); if (recent.length > 8) recent.shift();
+        if (emitted++ < 128) console.error(line);
+      }
+      if (tail.length > 4096) tail = tail.slice(-4096);
+    },
+    summary: () => recent.join('\n'),
+  };
+}
 
 function gitEnvironment(environment = process.env) {
   const env = { ...environment };
@@ -113,6 +148,8 @@ async function command(file, args, {
     throw new Error('Invalid lab process input.');
   }
   env = gitEnvironment(env);
+  const diagnostics = ipc && env.AGENTRIX_LAB_RUN ? windowsDiagnostics() : null;
+  if (diagnostics) env.AGENTRIX_LAB_DIAGNOSTICS = '1';
   const output = log ? await fs.open(log, 'w', 0o600) : null;
   let child, timer, stopping = null, failure = null, stdout = '', stderr = '', bytes = 0;
   const binary = [];
@@ -140,6 +177,7 @@ async function command(file, args, {
       if (!raw || key === 'stderr') stream.setEncoding('utf8');
       let tail = '';
       stream.on('data', chunk => {
+        if (key === 'stderr') diagnostics?.feed(chunk);
         bytes += Buffer.byteLength(chunk);
         if (bytes > maxOutput) { stop(new Error('实验日志超过大小限制。')); return; }
         if (key === 'stdout') { if (raw) binary.push(chunk); else stdout += chunk; }
@@ -155,7 +193,10 @@ async function command(file, args, {
     const result = await closed;
     clearTimeout(timer); signal?.removeEventListener('abort', abort);
     await stopping; await writes;
-    if (failure) throw failure;
+    if (failure) {
+      if (diagnostics?.summary()) failure.message += '\n' + diagnostics.summary();
+      throw failure;
+    }
     return { ...result, stdout: raw ? Buffer.concat(binary) : stdout, stderr };
   } finally {
     clearTimeout(timer); signal?.removeEventListener('abort', abort);
@@ -175,4 +216,4 @@ async function git(cwd, args, options) {
   return result.stdout;
 }
 
-module.exports = { command, git, gitEnvironment, aborted, stopTree, markedPids, killMarked };
+module.exports = { command, git, gitEnvironment, aborted, stopTree, markedPids, killMarked, windowsDiagnostics };

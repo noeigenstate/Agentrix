@@ -14,7 +14,7 @@ const backend = require('../electron/features/lab/sandbox-win32.cjs');
 const { markedPids, command } = require('../electron/features/lab/process.cjs');
 const { prepCommand, createHostPreparation, ISOLATION_ERROR, nativeSource } = require('../electron/features/lab/sandbox-win32-preparation.cjs');
 
-const windows = { timeout: 120000, skip: process.platform !== 'win32' ? 'Windows LPAC and Job Objects are required' :
+const windows = { timeout: 45000, skip: process.platform !== 'win32' ? 'Windows LPAC and Job Objects are required' :
   process.env.AGENTRIX_LAB_TEST_PREPARE_HOST !== '1' ? 'Windows sandbox tests require explicit AGENTRIX_LAB_TEST_PREPARE_HOST=1 consent on the elevated CI runner.' :
     process.env.CI !== 'true' ? 'Real Windows LPAC and Job tests run only on the elevated CI runner.' : false };
 
@@ -51,7 +51,7 @@ async function fixture(t) {
   await fs.copyFile(process.execPath, nodePath);
   const session = new LabSession({
     labRoot, workspaceRoot, directory: workspaceRoot, nodePath, runId: randomUUID(), protectedPaths: [path.join(root, 'protected')],
-    hostPrompt: false,
+    hostPrompt: false, signal: t.signal,
     env: { SystemRoot: process.env.SystemRoot, PATH: install + path.delimiter + path.join(process.env.SystemRoot, 'System32'),
       CODEX_HOME: path.join(root, 'fixture-codex'), CLAUDE_CONFIG_DIR: path.join(root, 'fixture-claude') },
   });
@@ -60,12 +60,16 @@ async function fixture(t) {
     await session.close(); await fs.rm(root, { recursive: true, force: true });
   });
   const state = await backend.hostState({ directory: labRoot });
+  t.diagnostic(`[lab-win32] fixture host ready=${Number(state.ready)} elevated=${Number(state.elevated)}`);
   if (!state.elevated && !state.ready) {
     t.skip('Windows host is unprepared and the test process is not elevated; tests never request UAC.');
     return null;
   }
   await fs.mkdir(path.join(root, 'protected')); await fs.writeFile(path.join(root, 'protected', 'secret'), 'synthetic secret');
   await session.start();
+  t.diagnostic('[lab-win32] fixture session started');
+  const execute = session.execute.bind(session);
+  session.execute = (file, args, options = {}) => execute(file, args, { timeoutMs: 15000, ...options });
   return { root, labRoot, workspaceRoot, session, install, nodePath };
 }
 
@@ -145,7 +149,7 @@ test('Windows timeout reaps the full job before returning to workspace cleanup',
   const f = await fixture(t); if (!f) return; let pid;
   const code = `const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],
     {detached:true,stdio:'ignore',env:{SystemRoot:process.env.SystemRoot}});console.log(c.pid);c.unref();setInterval(()=>{},1000);`;
-  await assert.rejects(f.session.execute(f.nodePath, ['-e', code], { cwd: f.workspaceRoot, timeoutMs: 3000,
+  await assert.rejects(f.session.execute(f.nodePath, ['-e', code], { cwd: f.workspaceRoot, timeoutMs: 10000,
     onLine: line => { if (/^\d+$/.test(line.trim())) pid = Number(line.trim()); } }), /超时/);
   assert.ok(pid > 0); assert.deepEqual(await markedPids(f.session.runId), []);
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
@@ -210,7 +214,7 @@ test('Windows root leases serialize cleanup after launcher exit and remove inher
   const started = new Promise(resolve => { ready = resolve; });
   const running = f.session.execute(f.nodePath, ['-e', `const fs=require('node:fs');
     fs.appendFileSync(process.argv[1],' writable');console.log('ready');setInterval(()=>{},1000);`, protectedFile],
-  { cwd: f.workspaceRoot, signal: control.signal, timeoutMs: 60000,
+  { cwd: f.workspaceRoot, signal: control.signal, timeoutMs: 15000,
     onLine: line => { if (line === 'ready') ready(); } });
   const stopped = assert.rejects(running, { name: 'AbortError' });
   await Promise.race([started, running.then(() => assert.fail('worker exited before readiness'))]);
@@ -373,8 +377,10 @@ test('Windows lab stop signals its guardian before job recovery and never taskki
 });
 
 test('the Windows guardian keeps a control pipe open and cancellation sends EOF without killing its child', async () => {
+  const messages = [];
   const host = Object.assign(new EventEmitter(), {
     argv: ['node', 'guardian', 'config'], env: {}, stdout: new PassThrough(), stderr: new PassThrough(), channel: { unref() {} },
+    connected: true, send: (message, callback) => { messages.push(message); callback(); },
   });
   const child = Object.assign(new EventEmitter(), {
     stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: () => assert.fail('launcher must finish'),
@@ -384,9 +390,60 @@ test('the Windows guardian keeps a control pipe open and cancellation sends EOF 
     'node:fs': { readFileSync: () => JSON.stringify(config) }, 'node:child_process': { spawn: () => child },
   }, { process: host });
   assert.equal(child.stdin.writableEnded, false);
-  assert.equal(JSON.parse(child.stdin.read().toString()).cwd, 'workspace');
+  const frame = JSON.parse(child.stdin.read().toString());
+  assert.equal(frame.cwd, 'workspace');
+  let stderr = ''; host.stderr.on('data', chunk => { stderr += chunk; });
+  child.stderr.emit('data', 'short error\n');
+  assert.equal(stderr, 'short error\n', 'short stderr must not wait for another chunk or process exit');
+  const marker = JSON.parse(frame.input).config.startMarker;
+  child.stderr.emit('data', marker.slice(0, 9));
+  assert.equal(stderr, 'short error\n');
+  child.stderr.emit('data', marker.slice(9) + 'next stage\n');
+  assert.equal(stderr, 'short error\nnext stage\n');
+  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ type: 'lab-model-started' }]);
   host.emit('message', { type: 'lab-stop' });
   assert.equal(child.stdin.writableEnded, true);
   host.emit('disconnect');
   for (const stream of [host.stdout, host.stderr, child.stdin, child.stdout, child.stderr]) stream.destroy();
+});
+
+test('Windows diagnostics are opt-in, bounded and accept only fixed events with numeric counters', async () => {
+  const printed = [];
+  const { windowsDiagnostics } = await loadModule('process.cjs', {}, {
+    process: { platform: 'win32', env: { NODE_TEST_CONTEXT: 'child-v8', AGENTRIX_LAB_TEST_PREPARE_HOST: '1' } },
+    console: { error: line => printed.push(line) },
+  });
+  const trace = windowsDiagnostics();
+  trace.feed('[lab-win32] stage frame read ms=1\r'); trace.feed('\n');
+  trace.feed('[lab-win32] private-path=C:\\private\\secret\n[lab-win32] unrecognized secret\nworker stderr\n');
+  assert.deepEqual(printed, ['[lab-win32] stage frame read ms=1']);
+  for (let i = 0; i < 200; i++) trace.feed(`[lab-win32] frame chars=${i} ms=${i}\n`);
+  assert.equal(printed.length, 128);
+  assert.equal(trace.summary().split('\n').length, 8);
+  assert.match(trace.summary(), /frame chars=199/);
+  assert.doesNotMatch(trace.summary(), /secret|private/);
+  for (const env of [{ NODE_TEST_CONTEXT: 'child-v8' }, { AGENTRIX_LAB_TEST_PREPARE_HOST: '1' }]) {
+    const disabled = await loadModule('process.cjs', {}, { process: { platform: 'win32', env } });
+    assert.equal(disabled.windowsDiagnostics(), null);
+  }
+});
+
+test('the Windows executor consumes a UTF-8 payload, closes stdin and reports every transport stage without LPAC', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lab-executor-transport-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const value = '\u6d4b\u8bd5-\u03bb';
+  const payload = JSON.stringify({ config: { cwd: root, isolatedEnvironment: {}, padding: 'x'.repeat(32768),
+    command: { file: process.execPath, args: ['-e',
+      "console.log(JSON.stringify({value:process.argv[1],diagnostics:process.env.AGENTRIX_LAB_DIAGNOSTICS||null}))", value] } },
+  bootstrap: null, modules: null });
+  const executor = path.join(__dirname, '../electron/features/lab/sandbox-win32-executor.cjs');
+  const result = await command(process.execPath, [executor], { cwd: root, stdin: payload, timeoutMs: 10000,
+    env: { ...process.env, AGENTRIX_LAB_DIAGNOSTICS: '1' } });
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { value, diagnostics: null });
+  for (const stage of ['entry', 'input wait', 'input first bytes=', 'input end chars=', 'payload parsed',
+    'child spawned pid=', 'child exit code=0', 'complete code=0']) assert.ok(result.stderr.includes('[lab-win32] executor ' + stage), stage);
+  assert.ok(!result.stderr.includes(root)); assert.ok(!result.stderr.includes(value));
+  const malformed = await command(process.execPath, [executor], { cwd: root, stdin: 'invalid JSON', timeoutMs: 5000 });
+  assert.equal(malformed.code, 1); assert.match(malformed.stderr, /Invalid trusted dispatch payload/);
 });
