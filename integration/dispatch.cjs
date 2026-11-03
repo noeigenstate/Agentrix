@@ -521,7 +521,6 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const interventionNote = () => (interventions ? ` · owner intervened ${interventions}` : '') + (stops ? ` · owner stopped ${stops}` : '');
   const restoreSkills = changedFiles => {
     if (!skillGuard) return;
-    if (scopeRestoreBlocked) skillGuard.restoreRoot = null;
     const total = skillGuard.finish(id, changedFiles);
     skillProposals = skillGuard.restoredCount;
     skillChangesLeftLive = total - skillProposals;
@@ -675,7 +674,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (team) try {
       // Resolve Git outside the team lock; peer checks then need only canonical paths.
       const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: options.cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-      scopeRoot = fs.realpathSync(root);
+      scopeRoot = fs.realpathSync.native(root);
     } catch { scopeRestoreBlocked = true; }
     const checkPeer = name => {
       if (name === id + '.json' || name === id + '.tmp') return;
@@ -683,7 +682,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         const entry = JSON.parse(fs.readFileSync(path.join(team.board, name), 'utf8'));
         if (!Number.isSafeInteger(entry.pid) || entry.pid <= 0 || typeof entry.cwd !== 'string') throw new Error('invalid_board');
         try { process.kill(entry.pid, 0); } catch (error) { if (error.code === 'ESRCH') return; if (error.code !== 'EPERM') throw error; }
-        const relative = path.relative(scopeRoot, fs.realpathSync(entry.cwd));
+        // Native canonicalization expands Windows 8.3 names as well as junctions.
+        const relative = path.relative(scopeRoot, fs.realpathSync.native(entry.cwd));
         if (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)) scopeRestoreBlocked = true;
       } catch { scopeRestoreBlocked = true; }
     };
@@ -729,7 +729,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     }
     function restoreScope(files) {
       if (!files?.length) return;
-      if (!skillGuard.restoreRoot) { scopeRestoreNote = ' · out-of-scope changes left live (shared checkout or worktree; author unknown)'; return; }
+      if (scopeRestoreBlocked || !skillGuard.restoreRoot) { scopeRestoreNote = ' · out-of-scope changes left live (shared checkout or worktree; author unknown)'; return; }
       let restored = 0, quarantine;
       const preserveNew = (filename, file) => {
         if (!fs.lstatSync(filename, { throwIfNoEntry: false })) return;
@@ -819,7 +819,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       const { after, changed, outOfScope } = inspectScope();
       const restore = () => {
         checkBoard();
-        if (scopeRestoreBlocked) skillGuard.restoreRoot = null;
+        // Skill proposals keep their original snapshot/ownership policy; N1 covers ordinary files only.
         restoreSkills(after?.status.map(entry => entry.file));
         restoreScope(outOfScope);
       };

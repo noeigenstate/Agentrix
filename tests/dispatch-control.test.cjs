@@ -1,4 +1,4 @@
-const { test } = require('node:test');
+const { test, resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
@@ -34,6 +34,7 @@ test('broker forwards later controls to the registered provider handler without 
   const control = createDispatchControl({ resolveRun: () => run });
   const { address } = await control.listen(); t.after(() => control.close());
   let ready, finish;
+  t.after(() => finish?.());
   const waiting = new Promise(resolve => { ready = resolve; });
   control.onRequest('claude-sdk.run', async (_run, _payload, stream) => {
     stream.onControl(input => { assert.equal(input.text, 'change'); return { status: 'delivered' }; }); ready();
@@ -82,6 +83,7 @@ test('M9: SDK execution is limited to one request on its verified Claude run bin
 });
 
 for (const action of ['intervene', 'stop']) test(`helper delivers ${action} to a fake app-server before its turn ends`, { timeout: 15000 }, async t => {
+  const lifetime = resources(t);
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-native-dispatch-'))), repo = path.join(root, 'repo'); fs.mkdirSync(repo);
   execFileSync('git', ['init', '-q'], { cwd: repo, windowsHide: true });
   const team = projectTeam(repo, true), bootstrap = path.join(root, 'bootstrap.json'), brief = path.join(root, 'brief.md'), out = path.join(root, 'answer.md');
@@ -89,6 +91,7 @@ for (const action of ['intervene', 'stop']) test(`helper delivers ${action} to a
   const control = createDispatchControl({ resolveRun: auth => auth.sessionKey === 'synthetic-key' && team.live().some(x => x.id === auth.runId)
     ? { runId: auth.runId, projectId: 'p', cwd: repo, worktree: repo, allow: [], readOnly: false, roundtable: false } : null });
   const { address } = await control.listen();
+  lifetime.defer('close control', () => control.close());
   fs.writeFileSync(bootstrap, JSON.stringify({ pipeName: address + '-unused', controlAddress: address, projectId: 'p', sessionKey: 'synthetic-key' }));
   let stdout = '', finished = false;
   const result = run(['codex', '--role', 'exec', '--title', 'Synthetic native', '--model', 'synthetic-model', '--effort', 'high', '--fast',
@@ -96,12 +99,13 @@ for (const action of ['intervene', 'stop']) test(`helper delivers ${action} to a
     env: { PATH: '', CODEX_HOME: path.join(root, 'home'), AGENTRIX_BOOTSTRAP: bootstrap, SYNTHETIC_CODEX_MODE: 'worker' },
     stdout: { write: text => { stdout += text; } },
     resolveExecutable: (_agent, args) => ({ file: process.execPath, args: [path.join(__dirname, 'fixtures/codex-app-server.cjs'), ...args] }),
-    launch: (file, args, options) => spawn(file, args, options),
+    launch: (file, args, options) => lifetime.child(spawn(file, args, options)),
   }).finally(() => { finished = true; });
-  t.after(async () => {
+  lifetime.defer('finish Codex helper', async () => {
     if (!finished) for (const worker of team.live()) await team.queueControl(worker.id, { id: randomUUID(), type: 'stop', at: Date.now(), noResume: true }).catch(() => {});
-    await result; control.close(); fs.rmSync(root, { recursive: true, force: true });
+    await result;
   });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (let n = 0; !stdout.includes('[dispatch] started') && n < 400 && !finished; n++) await new Promise(resolve => setTimeout(resolve, 10));
   assert.match(stdout, /\[dispatch\] started/);
   const id = /\[dispatch\] started ([\w-]+)/.exec(stdout)[1];

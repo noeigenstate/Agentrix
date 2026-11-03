@@ -1,4 +1,4 @@
-const { test } = require('node:test');
+const { test, resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -55,6 +55,7 @@ function sdkFixture() {
 }
 
 async function fixture(t, { late = false, lateStop = false, reopenFailure = false, disconnectAtFinish = false } = {}) {
+  const lifetime = resources(t);
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-claude-worker-'))), main = path.join(root, 'main'), repo = path.join(root, 'worker');
   fs.mkdirSync(main); fs.mkdirSync(path.join(main, 'src'));
   fs.writeFileSync(path.join(main, 'src/a.js'), 'base'); fs.writeFileSync(path.join(main, '.gitignore'), '.dispatch/\n');
@@ -65,6 +66,7 @@ async function fixture(t, { late = false, lateStop = false, reopenFailure = fals
   const team = projectTeam(repo, true), sdk = sdkFixture(), events = [], calls = new AgentCalls({ local: false });
   const owner = { terminalId: 'terminal', sessionKey: 'synthetic-owner' };
   const eventServer = await createEventServer(event => { events.push(event); acceptDispatch(owner, event, calls); });
+  lifetime.defer('close events', () => eventServer.close());
   const control = createDispatchControl({ resolveRun: auth => {
     const entry = team.live().find(value => value.id === auth.runId);
     return auth.sessionKey === owner.sessionKey && auth.capability === 'synthetic-capability' && entry ? {
@@ -72,9 +74,11 @@ async function fixture(t, { late = false, lateStop = false, reopenFailure = fals
     } : null;
   } });
   const { address } = await control.listen();
+  lifetime.defer('close control', () => control.close());
   const claude = createClaudeRuntime({ directory: path.join(root, 'data'), loadSdk: async () => sdk.sdk, resolveExecutable: async () => 'synthetic-only',
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   claude.credentials.save('sk-ant-synthetic-worker-only-000000');
+  lifetime.defer('close Claude runtime', () => claude.close());
   let api, target, sentLate = false;
   registerClaudeWorker({ control, claude, settings: () => ({ claudePath: 'api-only', monthlyBudgetUsd: null }), env: () => ({ PATH: '' }) });
   const bootstrap = path.join(root, 'bootstrap.json'), brief = path.join(root, 'brief.md'), out = path.join(repo, '.dispatch/answer.md');
@@ -108,12 +112,11 @@ async function fixture(t, { late = false, lateStop = false, reopenFailure = fals
     resolveExecutable: (_agent, args) => ({ file: process.execPath, args: [path.join(__dirname, 'fixtures/codex-app-server-env.cjs'), ...args] }),
     launch: () => assert.fail('API-only worker must not spawn a CLI'),
   }).finally(() => { finished = true; });
-  t.after(async () => {
-    if (!finished) { control.close(); await claude.close(); }
-    let timer;
-    await Promise.race([result, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(stdout)), 2000); })]).finally(() => clearTimeout(timer));
-    await claude.close(); control.close(); eventServer.close(); calls.reset(); fs.rmSync(root, { recursive: true, force: true });
+  lifetime.defer('finish Claude helper', async () => {
+    if (!finished) { control.close(); await lifetime.wait(claude.close(), 'stop Claude'); }
+    await lifetime.wait(result, `helper result; output=${stdout}`);
   });
+  t.after(() => { calls.reset(); fs.rmSync(root, { recursive: true, force: true }); });
   await until(() => sdk.inputs.length === 1);
   const id = team.live()[0].id;
   target = { terminalId: 'terminal', callId: `dispatch:${id}`, parentSessionId: 'planner', confirmed: true, route: 'dispatch', runId: id,
