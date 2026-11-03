@@ -15,7 +15,7 @@ Owns the host's Claude Agent SDK sessions, protected credentials, worker tool de
 - `electron/boundaries.cjs`
 
 ## Invariants
-- Streaming input keeps one query alive across results — test: `tests/claude-sdk-runtime.test.cjs` › "streaming sends share one query and results do not end the session"
+- Idle queries release unused reservations and the next send resumes the logical session — test: `tests/claude-sdk-runtime.test.cjs` › "idle query retirement preserves the logical session and resumes on the next send"
 - Workers explicitly isolate disk settings and failed policy hooks block execution — test: `tests/claude-sdk-runtime.test.cjs` › "a worker explicitly disables disk setting sources and blocks failed hooks"
 - API identity is verified before accepting usage — test: `tests/claude-sdk-runtime.test.cjs` › "billing identity mismatch fails without trusting a subscription init"
 - Stopping cancels pending approvals and preserves uncertain delivery — test: `tests/claude-sdk-runtime.test.cjs` › "stop rejects queued input and stale permission answers"

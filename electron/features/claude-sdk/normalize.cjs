@@ -1,5 +1,6 @@
 function createNormalizer(emit, clean = value => value) {
   const completed = new Set();
+  const tools = new Map();
   let messageId = null;
   const blocks = new Map();
   const preview = value => clean(typeof value === 'string' ? value : JSON.stringify(value) || '').slice(0, 65536);
@@ -25,8 +26,17 @@ function createNormalizer(emit, clean = value => value) {
     for (const [index, block] of (Array.isArray(content) ? content : []).entries()) {
       const itemId = `${id}:${index}`;
       if (block.type === 'text' || block.type === 'thinking') publish('item.upsert', { kind: block.type === 'thinking' ? 'reasoning-summary' : message.type === 'user' ? 'user-message' : 'agent-message', status: 'completed', content: { text: preview(block.text || block.thinking || '') } }, { itemId });
-      if (block.type === 'tool_use') publish('item.upsert', { kind: block.name === 'Bash' ? 'command' : /Edit|Write/.test(block.name) ? 'file-change' : 'tool', status: 'in-progress', content: { name: block.name, input: preview(block.input) } }, { itemId: block.id });
-      if (block.type === 'tool_result') publish('item.upsert', { kind: 'tool', status: block.is_error ? 'failed' : 'completed', content: { output: preview(block.content) } }, { itemId: block.tool_use_id });
+      if (block.type === 'tool_use') {
+        const payload = { kind: block.name === 'Bash' ? 'command' : /Edit|Write/.test(block.name) ? 'file-change' : 'tool', status: 'in-progress', content: { name: block.name, input: preview(block.input) } };
+        tools.set(block.id, payload);
+        if (tools.size > 1000) tools.delete(tools.keys().next().value);
+        publish('item.upsert', payload, { itemId: block.id });
+      }
+      if (block.type === 'tool_result') {
+        const previous = tools.get(block.tool_use_id);
+        publish('item.upsert', { kind: previous?.kind || 'tool', status: block.is_error ? 'failed' : 'completed', content: { ...previous?.content, output: preview(block.content) } }, { itemId: block.tool_use_id });
+        tools.delete(block.tool_use_id);
+      }
     }
   };
 }

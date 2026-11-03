@@ -22,7 +22,7 @@ function createPolicy(spec, audit = () => {}) {
   return (name, input) => {
     const intent = toolIntent(name, input, root);
     let reasonCode = 'allowed';
-    if (spec.owner !== 'dispatch') return { behavior: 'ask', reasonCode: 'owner', reason: '需要确认。' };
+    if (spec.owner !== 'dispatch') return { behavior: 'defer', reasonCode: 'owner', reason: '由 Claude Code 权限规则决定。' };
     if (intent.operation === 'network' || intent.operation === 'other') reasonCode = 'unsupported_tool';
     if ((spec.readOnly || spec.roundtable) && ['command', 'edit'].includes(intent.operation)) reasonCode = 'read_only';
     // This catches explicit forbidden Git operations; it is a policy check, not a shell sandbox.
