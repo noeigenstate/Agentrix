@@ -44,5 +44,5 @@ The dispatch helper that every command-line Codex or Claude worker is started th
 - The event pipe server and its bootstrap file — electron/events.cjs and main.cjs
 - Telling a session where the helper is — the startup note (electron/features/agents/handoff.cjs)
 - Copying the runtime into packaged builds and onto SSH hosts — scripts/after-pack.cjs, electron/remote-connection.cjs, integration/remote-worker.py
-- Which model takes a task and what its brief says — the lead (skills/model-routing)
+- Which model takes a task and what its brief says — the lead (the system model-routing skill)
 - The BOUNDARY.md format and its checker — scripts/module-boundaries.cjs

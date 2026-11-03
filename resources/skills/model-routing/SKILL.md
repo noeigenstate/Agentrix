@@ -1,8 +1,8 @@
 ---
 name: model-routing
-description: Use before any task that changes the project, however small (a new feature or a change to one, a bug fix or debugging, a UI tweak, tests, a refactor, a review or a release), before doing any of it yourself, unless the project has its own model-routing skill; route the task among an architect, core engineer, execution engineer and visual verifier, with fallbacks for either installed agent, fixed model settings and cross review.
+description: Use before any task that changes the project, however small (a new feature or a change to one, a bug fix or debugging, a UI tweak, tests, a refactor, a review or a release), before doing any of it yourself; route the task among an architect, core engineer, execution engineer and visual verifier, with fallbacks for either installed agent, fixed model settings and cross review.
 trigger: auto
-when: 新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算；项目已有同名技能时以项目为准
+when: 新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算
 requires: any-agent
 title: 模型路由
 summary: 任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能、前端并验证界面。GPT 默认 max + fast，Claude 默认 high。
@@ -12,10 +12,13 @@ summary: 任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常
 
 ## When this applies
 
-Read and follow this skill before any task that is more than a quick answer or a one-line change, before planning or
-doing the work. A quick answer or a one-line fix needs no routing.
-If the project has its own model-routing skill in skills/, .claude/skills/ or .codex/skills/, or names it as a word
-in its root AGENTS.md or CLAUDE.md, follow that project's skill instead of this built-in.
+Read and follow this skill before any task that changes the project, however small, before planning or doing the work:
+a new feature or a change to one, debugging or a bug fix, a UI tweak, tests, a refactor, a review or a release. Every
+such change goes to a worker and the orchestrator never builds it alone. A task too small for a roundtable (one worker
+and a one-line fix, for example) skips the roundtable with a stated reason, but is still routed. A plain question that
+changes nothing needs no routing.
+This skill is the single home of routing. To add project-specific routing rules, extend it with a skill named
+model-routing-<id>; follow this skill first, and where the two conflict this skill wins.
 
 ## What to do
 
@@ -33,7 +36,7 @@ do their task themselves; a worker never hands it on to another.
 
 | Role | Takes |
 | --- | --- |
-| Orchestrator | Plans, briefs, decides, reviews every diff, verifies and releases; takes a task over only when its worker failed |
+| Orchestrator | Plans, briefs, decides, reviews every diff, verifies and releases; takes a task over only when its worker failed, or for one quick lookup faster than writing a brief |
 | Architect | Technology choices, design, task breakdown, interface contracts, architecture review |
 | Core engineer | Complex implementation, cross-module refactors, debugging, fixing failing tests |
 | Execution engineer | Routine features, front-end components and polish, unit tests, maintenance, docs |
@@ -185,12 +188,16 @@ node "<helper>" consolidate --cwd <dir> --meeting <id> --summary <summary.md>
   running worker's, refuses a build without a confirmed roundtable for the same `--allow` (`--skip-meeting <reason>` is
   the recorded exception), and refuses a new round's roundtable while the last round is not consolidated. Outside a git
   repository none of this applies.
+- Every worker starts with the project memory, the list of what the others are working on now and the repository's
+  state, put before its brief by the helper.
 
 ### 1. Plan
 
 Write the plan before any worker starts:
 - The requirement split into tasks by module, each with an owner and an exact file scope. No file appears in two tasks.
   A good split lets each worker stay inside its own module without touching the others.
+- Each task's module and its boundary file, if the project keeps one: the task's file scope is that module's owned
+  files, or a part of them. A task that needs another module is split, or the architect changes the boundary first.
 - The interface contract between them (shared types, payloads, names, test hooks). Write it first so every worker builds
   against the same shape.
 - Acceptance criteria that can be checked: test names, measured numbers, the screenshots and states to see.
@@ -239,7 +246,8 @@ no longer open builds.
 
 The build then resumes each worker's meeting session with the same `--allow` globs. A subagent started through an Agent
 call has no helper session: give it the whole plan, ask it to change nothing and restate its task, and show what it
-restated beside the minutes.
+restated beside the minutes. An investigation or review worker may take part with `--meeting` too; the gates apply only
+to execution runs.
 
 ### 3. Build in worktrees
 
@@ -255,23 +263,32 @@ A task with one side may run in the project itself. Every brief holds:
 - The goal, what was wrong before, the files the worker may change, the behaviour it must keep, the contract from stage 1.
 - The `code-standard` skill's rules and the project's own conventions and code standards, pasted in.
 - Never: commit, push, release, touch secrets, or touch anything outside its worktree.
-- Its report: files changed, the checks it ran with results, what it left open.
+- Its report: files changed, the checks it ran with results, what it left open; for debugging, the root cause with evidence.
 
 A Codex run has no approvals, so its scope comes from the prompt alone. An "at capacity" error at the end of a run can
 come after the work is done: check the outputs before rerunning.
+
+A command-line Claude worker under `--permission acceptEdits` can edit files, but every shell command is refused and it
+cannot commit. Its brief says so: it writes the code and the tests, then you run them in its worktree, send failures back
+by resuming the same session, and commit on its branch once they pass.
 
 ### 4a. Integrate and test
 
 - Read every diff against the project's conventions and the contract before accepting it; send a diff that breaks them back with the specific lines.
 - Commit each worktree on its branch, merge in dependency order (the side that defines data first), resolve conflicts against the contract, not by taking one side.
+- Validate a resolved file that has a format (parse a JSON file, for example) before committing, and never chain the
+  commit after a resolving script on a separate line, where it runs even when the script fails.
 - Run the project's type check, tests and build. When a test fails, run it on the last commit to tell a regression from an old failure.
-- Remove the worktrees and branches when done.
+- Before anything reaches the main branch, run the project's full CI-equivalent locally, including desktop or end-to-end
+  suites where it has them, and get its remote CI green on a pushed branch. Move the main branch only to a commit that
+  is green there, so it never needs "fix CI" commits; unit tests alone can miss regressions only those suites catch.
+- Remove the worktrees and branches when done, removing any dependency link inside a worktree first.
 
 ### 4b. Review
 
 Run both on the merged result, in parallel where the setup allows:
 - **Architecture:** the architect, read-only, given the diff range and the contract, not your conclusions. It checks module boundaries, data flow, duplication and consistency. Findings: file:line, the failure, severity.
-- **UI and interaction:** the visual engineer, read-only, with screenshots of each state and the acceptance criteria. Findings: what is wrong, where, which rule.
+- **UI and interaction:** the visual engineer, read-only, with screenshots of each state, the state each one shows, the acceptance criteria and the project's own interaction rules. Findings: what is wrong, where, which rule.
 
 Each confirmed finding goes back to the worker that owns the file (a command-line worker through `--resume`), then stage 4a runs again.
 
@@ -294,6 +311,7 @@ project memory itself is not committed. The next round's roundtable (a new meeti
 ## Rules
 
 - The lead orchestrates and holds permissions; workers stay within their brief and never delegate further.
+- Route every change to a worker, however small; the lead never builds alone. A task too small for a roundtable skips it with a stated reason.
 - Route by difficulty and responsibility, not by renderer versus main-process location.
 - Use separate worktrees for parallel builds, with no overlapping file ownership.
 - Paste the project's code-standard rules into every worker brief and review every diff against them before accepting it.
