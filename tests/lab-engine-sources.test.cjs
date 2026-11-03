@@ -13,7 +13,8 @@ const { LabEngine } = require('../electron/features/lab/engine.cjs');
 const { LabStore } = require('../electron/features/lab/store.cjs');
 const { experimentInput } = require('../electron/features/lab/values.cjs');
 const tools = require('../electron/features/lab/sources/tools.cjs');
-const { runTask, validateReference } = require('../electron/features/lab/runner.cjs');
+const { runTask, validateReference, recoverRuns } = require('../electron/features/lab/runner.cjs');
+const { createAaSource } = require('../electron/features/lab-aa/index.cjs');
 const { cleanEnvironment } = require('../electron/features/lab/sandbox.cjs');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
@@ -66,6 +67,7 @@ async function fixture(t, providers, options = {}) {
     sourceTools: { ...tools, docker: { async sweep() {}, async remove() {} } },
     referenceRunner: options => options.provider.reference(options.task, options.scope, { ...options.context, reference: null }),
     runner: async () => passed(), ...options });
+  await engine.ready; await engine.cleanupTail;
   t.after(async () => { engine.close(); await engine.active?.done; await engine.startDone?.catch(() => {}); });
   return { root, engine, input: { selections: providers.map(provider => selection(provider)),
     arms: ['sol', 'sonnet'], repeats: 1, budgetUsd: 10 } };
@@ -423,13 +425,13 @@ test('Docker exec timeouts reap the container and recovery verifies its lab labe
   await legacy.docker.removeRecorded(id); assert.deepEqual(calls.at(-1), ['rm', '--force', id]);
 });
 
-test('startup reaps a persisted run container before returning experiments without needing a live session', async t => {
+test('background startup cleanup reaps a persisted run container without needing a live session', async t => {
   const root = await temporary(t), store = new LabStore(root), id = randomUUID(), runId = randomUUID(), removed = [];
   await store.save({ id, createdAt: 1, source: 'history', state: 'done', tasks: [], runs: [{ id: runId, state: 'error' }] });
   const directory = path.join(store.folder(id), 'runs', runId); await fs.mkdir(directory, { recursive: true });
   await fs.writeFile(path.join(directory, 'container.json'), JSON.stringify({ id: 'a'.repeat(64) }));
   const engine = new LabEngine({ userData: root, providers: [], sourceTools: { ...tools, docker: { async remove(id) { removed.push(id); } } } });
-  await engine.ready; engine.close();
+  await engine.ready; await engine.cleanupTail; engine.close();
   assert.deepEqual(removed, ['a'.repeat(64)]);
   assert.equal(await fs.stat(path.join(directory, 'container.json')).catch(() => null), null);
 });
@@ -445,6 +447,7 @@ function fakeDaemon() {
     daemon.calls.push({ args, options });
     const result = (stdout = '', code = 0, stderr = '') => ({ stdout, code, stderr });
     if (!daemon.reachable) return result('', 1, 'Cannot connect to the Docker daemon');
+    if (args[0] === 'info') return result('fixture-version');
     if (args[0] === 'create') {
       const labels = Object.fromEntries(args.flatMap((arg, index) => arg === '--label' ? [args[index + 1].split('=')] : []));
       const id = daemon.add(labels); await daemon.onCreate?.(id); return result(id);
@@ -466,6 +469,109 @@ function fakeDaemon() {
   };
   return daemon;
 }
+
+for (const failure of ['missing binary', 'stopped daemon']) test('AA keeps its provider reason and throttles empty recovery with a ' + failure, async t => {
+  const root = await temporary(t), daemon = fakeDaemon(), store = new LabStore(root);
+  let clock = 1000, recoveries = 0;
+  if (failure === 'stopped daemon') await store.save({ id: randomUUID(), createdAt: 1, state: 'done', sources: ['aa'],
+    tasks: [], lanes: [{ source: 'aa', state: 'done' }], runs: [{ id: randomUUID(), source: 'aa', state: 'passed' }] });
+  daemon.reachable = false;
+  const command = failure === 'missing binary' ? async (_file, args) => {
+    daemon.calls.push({ args }); throw Object.assign(new Error('fixture missing binary'), { code: 'ENOENT' });
+  } : daemon.command;
+  const engine = new LabEngine({ userData: root, providers: [createAaSource()], now: () => clock,
+    sourceTools: { ...tools, ...tools.createTools({ command }) }, recovery: async () => { recoveries++; return []; } });
+  try {
+    await engine.ready; await engine.cleanupTail;
+    for (let index = 0; index < 3; index++) {
+      const [info] = await engine.sources();
+      assert.equal(info.available, false); assert.equal(info.reason, 'Docker 不可用，请先安装并启动 Docker。');
+      await engine.cleanupTail;
+    }
+    assert.equal(daemon.calls.filter(call => call.args[0] === 'ps').length, 1);
+    assert.equal(recoveries, 1);
+    clock += 30001;
+    assert.equal((await engine.sources())[0].reason, 'Docker 不可用，请先安装并启动 Docker。');
+    await engine.cleanupTail;
+    assert.equal(daemon.calls.filter(call => call.args[0] === 'ps').length, 2); assert.equal(recoveries, 2);
+  } finally { await engine.cleanupTail; engine.close(); }
+});
+
+test('an identified orphan keeps the cleanup reason even without a run record, until its later sweep succeeds', async t => {
+  const root = await temporary(t), installId = await new LabStore(root).installId(), daemon = fakeDaemon();
+  const orphan = daemon.add({ 'agentrix.lab.install': installId, 'agentrix.lab.run': randomUUID() });
+  daemon.refused.add(orphan);
+  const engine = new LabEngine({ userData: root, providers: [createAaSource()],
+    sourceTools: { ...tools, ...tools.createTools({ command: daemon.command }) } });
+  try {
+    await engine.ready; await engine.cleanupTail;
+    assert.deepEqual(await engine.list(), []);
+    assert.match((await engine.sources())[0].reason, /上次实验的容器尚未清理完成/);
+    daemon.reachable = false;
+    assert.match((await engine.sources())[0].reason, /上次实验的容器尚未清理完成/);
+    daemon.reachable = true; daemon.refused.clear();
+    await engine.retryCleanup(true, true);
+    assert.equal((await engine.sources())[0].available, true); assert.ok(daemon.removed.includes(orphan));
+  } finally { await engine.cleanupTail; engine.close(); }
+});
+
+for (const phase of ['Docker sweep', 'lease recovery']) test('slow background ' + phase + ' permits listing, source descriptions and new history and OSS runs', { timeout: 10000 }, async t => {
+  const root = await temporary(t), store = new LabStore(root), id = randomUUID(), runId = randomUUID();
+  const directory = path.join(store.folder(id), 'runs', runId), lease = path.join(store.directory, 'private', runId);
+  await fs.mkdir(path.join(directory, 'workspaces'), { recursive: true }); await fs.mkdir(lease, { recursive: true });
+  await fs.writeFile(path.join(directory, 'container.json'), JSON.stringify({ id: 'a'.repeat(64) }));
+  await fs.writeFile(path.join(lease, 'manifest.json'), JSON.stringify({ runId, directory }));
+  await store.save({ id, createdAt: 1, state: 'running', sources: ['aa'], tasks: [],
+    lanes: [{ source: 'aa', state: 'running' }], runs: [{ id: runId, source: 'aa', state: 'running' }] });
+  if (process.platform === 'win32') t.mock.method(require('../electron/features/lab/sandbox-win32.cjs'), 'killMarked', async () => {});
+  const entered = deferred(), release = deferred(), model = deferred(), modelEntered = deferred(), killed = [], fresh = [];
+  const wait = async action => {
+    let timer;
+    try { return await Promise.race([action, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('A public lab operation waited for background cleanup.')), 2000);
+    })]); } finally { clearTimeout(timer); }
+  };
+  const pause = async () => { entered.resolve(); await release.promise; };
+  const providers = ['history', 'oss', 'aa'].map(id => fakeProvider(id));
+  const engine = new LabEngine({ userData: root, providers, prices: { models: {} },
+    sourceTools: { ...tools, docker: { async sweep() { if (phase === 'Docker sweep') await pause(); }, async remove() {} } },
+    recovery: async (root, options) => {
+      if (phase === 'lease recovery') await pause();
+      return recoverRuns(root, { ...options, platform: 'linux', kill: async id => killed.push(id) });
+    }, referenceRunner: async () => ({ diffFiles: [] }), runner: async options => {
+      const workspace = path.join(options.directory, 'workspaces');
+      const privateDirectory = path.join(store.directory, 'private', options.run.id);
+      await fs.mkdir(workspace, { recursive: true }); await fs.mkdir(privateDirectory, { recursive: true });
+      await fs.writeFile(path.join(workspace, 'live'), 'live');
+      await fs.writeFile(path.join(privateDirectory, 'manifest.json'), JSON.stringify({ runId: options.run.id, directory: options.directory }));
+      fresh.push({ id: options.run.id, workspace, privateDirectory });
+      if (options.run.source === 'oss') { modelEntered.resolve(); await model.promise; }
+      return passed();
+    } });
+  try {
+    const [experiments, infos] = await wait(Promise.all([engine.list(), engine.sources()]));
+    await wait(entered.promise);
+    assert.equal(experiments[0].state, 'stopped');
+    assert.deepEqual(infos.map(info => info.available), [true, true, false]);
+    const input = provider => ({ selections: [selection(provider)], arms: ['sol', 'sonnet'], repeats: 1, budgetUsd: 10 });
+    await wait(engine.start(input(providers[0]))); await wait(engine.active.done);
+    await wait(engine.start(input(providers[1]))); await wait(modelEntered.promise);
+    let changed = 0; engine.subscribe(() => changed++);
+    release.resolve(); await wait(engine.cleanupTail);
+    assert.ok(changed > 0); assert.ok(engine.active);
+    assert.equal(await fs.stat(path.join(directory, 'container.json')).catch(() => null), null);
+    assert.equal(await fs.stat(path.join(directory, 'workspaces')).catch(() => null), null);
+    for (const run of fresh) {
+      assert.notEqual(run.id, runId); assert.equal(killed.includes(run.id), false);
+      assert.equal(await fs.readFile(path.join(run.workspace, 'live'), 'utf8'), 'live');
+      assert.ok(await fs.stat(path.join(run.privateDirectory, 'manifest.json')));
+    }
+    assert.ok(killed.includes(runId));
+  } finally {
+    release.resolve(); model.resolve(); await engine.ready.catch(() => {}); await engine.cleanupTail;
+    await engine.active?.done; engine.close();
+  }
+});
 
 test('the installation label is durably published once, shared by concurrent stores and different for another installation', async t => {
   const root = await temporary(t), stores = Array.from({ length: 4 }, () => new LabStore(root));
@@ -491,6 +597,7 @@ test('a failed startup Docker inspection keeps its records, stops the experiment
   const engine = new LabEngine({ userData: root, providers, sourceTools: { ...tools, ...tools.createTools({ command: daemon.command }) },
     prices: { models: {} }, runner: async () => passed(), referenceRunner: async () => ({ diffFiles: [] }) });
   t.after(() => engine.close());
+  await engine.ready; await engine.cleanupTail;
   const [stopped] = await engine.list();
   assert.equal(stopped.state, 'stopped'); assert.equal(stopped.runs[0].state, 'stopped');
   assert.equal(stopped.runs[0].activeModel, null); assert.match(stopped.runs[0].error, /清理.*Docker/);
@@ -561,6 +668,7 @@ test('failed recovery keeps the worktree retry list across a stopped experiment 
     runner: async () => passed(), referenceRunner: async () => ({ diffFiles: [] }),
     recovery: async () => { throw new Error('fixture recovery timeout'); } });
   assert.equal((await first.list())[0].state, 'stopped');
+  await first.cleanupTail;
   assert.deepEqual((await first.sources()).map(info => info.available), [true, true, false]);
   for (const provider of providers.slice(0, 2)) {
     await first.start({ selections: [selection(provider)], arms: ['sol', 'sonnet'], repeats: 1, budgetUsd: 10 });
@@ -570,7 +678,7 @@ test('failed recovery keeps the worktree retry list across a stopped experiment 
   assert.equal((await store.readCleanup()).length, 1); assert.ok(await fs.stat(path.join(directory, 'workspaces')));
   if (process.platform === 'win32') t.mock.method(require('../electron/features/lab/sandbox-win32.cjs'), 'killMarked', async () => {});
   const next = new LabEngine({ userData: root, providers: [], sourceTools });
-  await next.ready; next.close();
+  await next.ready; await next.cleanupTail; next.close();
   assert.equal((await next.list()).find(experiment => experiment.id === id).state, 'stopped'); assert.deepEqual(await store.readCleanup(), []);
   assert.equal(await fs.stat(path.join(directory, 'workspaces')).catch(() => null), null);
 });

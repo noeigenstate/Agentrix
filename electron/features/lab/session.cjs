@@ -367,10 +367,13 @@ class LabSession {
 }
 
 async function recoverRuns(labRoot, { platform = process.platform, kill = killMarked, cleanup = cleanupWorktrees,
-  remove = removePath, sandbox } = {}) {
+  remove = removePath, sandbox, runIds } = {}) {
   const failures = [], failed = new Set();
   const entriesAt = async directory => {
-    try { return await fs.readdir(directory, { withFileTypes: true }); }
+    try {
+      const entries = await fs.readdir(directory, { withFileTypes: true });
+      return runIds ? entries.filter(entry => runIds.has(entry.name)) : entries;
+    }
     catch (error) { if (error.code !== 'ENOENT') failures.push({ runId: null, directory, error }); return []; }
   };
   const directory = path.join(labRoot, 'private');

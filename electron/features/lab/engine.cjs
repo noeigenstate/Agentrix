@@ -15,6 +15,7 @@ const tools = require('./sources/tools.cjs');
 const { createHistorySource } = require('./sources/history.cjs');
 const { createOssSource } = require('../lab-oss/index.cjs');
 const { createAaSource } = require('../lab-aa/index.cjs');
+const CLEANUP_RETRY_MS = 30000;
 
 function stopRemaining(experiment, now, error, source) {
   for (const run of experiment.runs) if ((!source || run.source === source) && ['queued', 'running'].includes(run.state)) {
@@ -49,6 +50,8 @@ class LabEngine {
     this.starting = false; this.startingId = null; this.closed = false; this.quitWaited = false;
     this.referenceFailures = new Map(); this.sampleScopes = new Map(); this.key = null;
     this.pendingCleanup = []; this.recoveryFailures = []; this.cleanupTail = Promise.resolve();
+    this.cleanupTask = null; this.lastCleanupAt = -Infinity; this.recoveryIds = new Set();
+    this.pendingContainers = new Set(); this.orphanedContainers = new Set(); this.recoveryScanFailure = null;
     this.containerFailure = null; this.cleanupRecordFailure = null; this.installConfigured = false;
     this.keyPending = Promise.resolve(); this.ready = this.load();
   }
@@ -58,14 +61,30 @@ class LabEngine {
     this.experiments = await this.store.list();
     try { this.pendingCleanup = await this.store.readCleanup(); } catch (error) { this.cleanupRecordFailure = error; }
     const pending = new Map(this.pendingCleanup.map(item => [item.runId, item]));
+    const inspect = async directory => {
+      const names = await fs.readdir(directory).catch(error => error.code === 'ENOENT' ? [] : null);
+      if (names?.includes('container.json')) this.pendingContainers.add(directory);
+      return names;
+    };
+    for (const item of pending.values()) await inspect(path.join(this.store.folder(item.experimentId), 'runs', item.runId));
     for (const experiment of this.experiments) for (const run of experiment.runs) if (validId(run.id)) {
       const directory = path.join(this.store.folder(experiment.id), 'runs', run.id);
-      const names = await fs.readdir(directory).catch(error => error.code === 'ENOENT' ? [] : null);
-      if (!pending.has(run.id)) pending.set(run.id, { experimentId: experiment.id, runId: run.id, source: run.source,
-        worktrees: ['queued', 'running'].includes(run.state) || names === null || names.some(name =>
-          ['worktree', 'workers', 'workspaces', 'repository.git', 'runtime'].includes(name)) });
+      const names = await inspect(directory), worktrees = ['queued', 'running'].includes(run.state) || names === null ||
+        names.some(name => ['worktree', 'workers', 'workspaces', 'repository.git', 'runtime'].includes(name));
+      if (!pending.has(run.id) && (worktrees || this.pendingContainers.has(directory))) {
+        pending.set(run.id, { experimentId: experiment.id, runId: run.id, source: run.source, worktrees });
+      }
     }
     this.pendingCleanup = [...pending.values()];
+    this.recoveryIds = new Set(pending.keys());
+    // Freeze the recovery scope before admitting new sessions with fresh ids.
+    for (const name of ['private', 'references']) {
+      try {
+        for (const entry of await fs.readdir(path.join(this.store.directory, name), { withFileTypes: true })) {
+          if (entry.isDirectory() && validId(entry.name)) this.recoveryIds.add(entry.name);
+        }
+      } catch (error) { if (error.code !== 'ENOENT') this.recoveryScanFailure = error; }
+    }
     if (!this.cleanupRecordFailure) {
       try { await this.store.writeCleanup(this.pendingCleanup); } catch (error) { this.cleanupRecordFailure = error; }
     }
@@ -74,15 +93,27 @@ class LabEngine {
       for (const lane of experiment.lanes) if (['queued', 'running'].includes(lane.state)) lane.state = 'stopped';
       await this.store.save(experiment);
     }
-    await this.retryCleanup(true);
+    void this.retryCleanup(true);
   }
   cleanupReason(containers = false) {
     return this.t(containers ? '上次实验的容器尚未清理完成。请启动 Docker 后重试；如仍失败，请重启应用。'
       : '上次实验尚未清理完成。请重启应用后重试。');
   }
-  retryCleanup(docker) {
-    const operation = this.cleanupTail.then(() => this.cleanPending(docker));
-    this.cleanupTail = operation.catch(() => {}); return operation;
+  retryCleanup(docker, force = false) {
+    if (this.cleanupTask) return this.cleanupTask;
+    if (this.closed || !force && this.now() - this.lastCleanupAt < CLEANUP_RETRY_MS) return this.cleanupTail;
+    this.lastCleanupAt = this.now();
+    this.cleanupTask = Promise.resolve().then(() => this.cleanPending(docker)).catch(error => {
+      this.recoveryFailures = [{ runId: null, error }];
+    }).finally(() => {
+      this.lastCleanupAt = this.now(); this.cleanupTask = null;
+      if (!this.closed) this.changed();
+    });
+    this.cleanupTail = this.cleanupTask; return this.cleanupTask;
+  }
+  async cleanupResources(directory, worktrees = true) {
+    await cleanupContainer(directory, this.sourceTools); this.pendingContainers.delete(directory);
+    if (worktrees) await cleanupWorktrees(directory);
   }
   async cleanPending(docker) {
     if (this.cleanupRecordFailure) {
@@ -100,14 +131,18 @@ class LabEngine {
       } catch (error) { this.containerFailure = error; }
     }
     if (docker && this.installConfigured) {
-      try { await this.sourceTools.docker.sweep?.(); this.containerFailure = null; }
-      catch (error) { this.containerFailure = error; }
+      try { await this.sourceTools.docker.sweep?.(); this.containerFailure = null; this.orphanedContainers.clear(); }
+      catch (error) {
+        this.containerFailure = error;
+        if (error.failures?.length) this.orphanedContainers = new Set(error.failures.map(failure => failure.id));
+      }
     }
     try {
-      this.recoveryFailures = await this.recovery(this.store.directory, { cleanup: async directory => {
-        await cleanupContainer(directory, this.sourceTools); await cleanupWorktrees(directory);
-      } }) || [];
+      this.recoveryFailures = await this.recovery(this.store.directory, {
+        runIds: this.recoveryIds, cleanup: directory => this.cleanupResources(directory),
+      }) || [];
     } catch (error) { this.recoveryFailures = [{ runId: null, error }]; }
+    if (this.recoveryScanFailure) this.recoveryFailures.push({ runId: null, error: this.recoveryScanFailure });
     const pending = [], changed = new Set();
     for (const item of this.pendingCleanup) {
       if (!docker && item.source === 'aa') { pending.push(item); continue; }
@@ -120,8 +155,7 @@ class LabEngine {
         }
         const directory = path.join(this.store.folder(item.experimentId), 'runs', item.runId);
         if (item.worktrees) await killMarked(item.runId);
-        await cleanupContainer(directory, this.sourceTools);
-        if (item.worktrees) await cleanupWorktrees(directory);
+        await this.cleanupResources(directory, item.worktrees);
         if (run && [this.cleanupReason(), this.cleanupReason(true)].includes(run.error)) {
           run.error = null; changed.add(experiment);
         }
@@ -177,16 +211,17 @@ class LabEngine {
         size: { min: 1, max: 1, standard: 1 }, options: [], manifest: null, published: null, downloadBytes: null,
         keyStored: provider.id === 'aa' ? !!this.key : null };
     }
-    if (provider.id === 'aa' && (this.containerFailure || this.cleanupRecordFailure || this.recoveryFailures.length ||
-      this.pendingCleanup.some(item => item.source === 'aa'))) {
-      info = { ...info, available: false, reason: this.cleanupReason(!!this.containerFailure || this.pendingCleanup.some(item => item.source === 'aa')) };
+    const containersPending = this.pendingContainers.size > 0 || this.orphanedContainers.size > 0;
+    if (provider.id === 'aa' && (containersPending || info.available &&
+      (this.cleanupRecordFailure || this.recoveryScanFailure || this.recoveryFailures.length || this.pendingCleanup.some(item => item.source === 'aa')))) {
+      info = { ...info, available: false, reason: this.cleanupReason(containersPending) };
     }
     return { ...info, keyStored: provider.id === 'aa' ? !!this.key : null };
   }
   async sources() {
     await this.ready;
     if (!this.active && !this.starting && (this.containerFailure || this.cleanupRecordFailure ||
-      this.recoveryFailures.length || this.pendingCleanup.length)) await this.retryCleanup(true);
+      this.recoveryScanFailure || this.recoveryFailures.length || this.pendingCleanup.length)) void this.retryCleanup(true);
     return Promise.all(LAB_SOURCES.filter(id => this.providers.has(id))
       .map(id => this.describe(this.providers.get(id), this.context(id))));
   }
@@ -288,10 +323,12 @@ class LabEngine {
   }
   async prepareStart(value, signal) {
     await this.ready; aborted(signal);
-    await this.retryCleanup(Array.isArray(value?.selections) && value.selections.some(selection => selection.source === 'aa'));
+    const docker = Array.isArray(value?.selections) && value.selections.some(selection => selection.source === 'aa');
+    if (docker) { await this.cleanupTail; await this.retryCleanup(true, true); }
     aborted(signal);
     if (this.experiments.length >= MAX_EXPERIMENTS) throw new Error('实验记录已满，请先删除旧实验。');
     const { input, lanes } = await this.canonical(value, false, signal), id = randomUUID(), createdAt = this.now();
+    if (docker && (!this.installConfigured || this.containerFailure)) throw new Error(this.t('Docker 操作失败。'));
     for (const lane of lanes) {
       lane.guard = await lane.provider.guard(lane.scope, lane.ctx);
     }
@@ -439,7 +476,7 @@ class LabEngine {
     if (!validId(id)) throw new Error('无效的实验编号。');
     await this.ready;
     if (this.active?.id === id || this.starting) throw new Error('请先停止正在运行的实验。');
-    if (!this.active) await this.retryCleanup(true);
+    if (!this.active) await this.retryCleanup(true, true);
     if (this.pendingCleanup.some(item => item.experimentId === id)) throw new Error(this.cleanupReason());
     for (const run of this.experiments.find(experiment => experiment.id === id)?.runs || []) if (validId(run.id)) {
       await cleanupContainer(path.join(this.store.folder(id), 'runs', run.id), this.sourceTools);
