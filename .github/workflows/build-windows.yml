@@ -130,6 +130,8 @@ jobs:
         run: npm install --global @openai/codex@0.163.0 --no-audit --no-fund
 
       - name: Run unit and integration tests
+        env:
+          AGENTRIX_LAB_TEST_PREPARE_HOST: '1'
         run: npm test
 
       - name: Build Windows installer

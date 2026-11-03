@@ -42,14 +42,14 @@ function workerArguments({ arm, cwd, brief, out, helper, kind = 'core', review =
   ];
 }
 
-function taskBrief(task, arm, helper, runDirectory, control = path.join(runDirectory, 'control')) {
+function taskBrief(task, arm, helper, runDirectory, control = path.join(runDirectory, 'control'), supplied) {
   const rules = [
     'Work only in the isolated project and its worktrees under ' + runDirectory + '.',
     'Write all plans, minutes, ledgers, reviews and coordination notes under ' + control + ', outside the project.',
     'Never commit, push, release, run CI, edit SKILL.md or launch a desktop app.',
     'Do not inspect other experiments, reference material, grading files or hidden tests.',
     'Use clear names and simple control flow. Remove duplication and follow the project code standard.',
-    'Run appropriate existing Node unit tests and report their actual results.',
+    'Run appropriate existing tests and report their actual results.',
     'Use Node and this dispatch entrypoint for every model invocation: ' + helper,
     'Quote paths for your shell. GPT: gpt-6.1-sol --effort max --fast.',
     'Claude: Opus/Sonnet 5.5 --effort high --permission acceptEdits; use plan for read-only reviews.',
@@ -70,7 +70,8 @@ function taskBrief(task, arm, helper, runDirectory, control = path.join(runDirec
     'Solve the task yourself as a single model. Do not delegate or invoke other models.',
     'Do not run the model-routing workflow. This single-model condition overrides repository routing instructions.',
   ];
-  return [...rules, '', ...(arm === 'orchestrated' ? pipeline : single), '', '# Task', '', task.text, ''].join('\n');
+  return [...rules, ...(supplied?.rules || []), '', ...(arm === 'orchestrated' ? pipeline : single),
+    '', '# Task', '', supplied?.task ?? task.text, ''].join('\n');
 }
 
 async function dispatch({ arm, cwd, directory, session, usage, signal, timeoutMs, task, review = false, briefText }) {

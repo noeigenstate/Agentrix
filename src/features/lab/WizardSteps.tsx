@@ -1,67 +1,28 @@
-// The four steps of the new-experiment form. Each is a controlled view: the form (Wizard.tsx) holds the state and the bridge calls.
-import type { ReactNode } from 'react';
-import { ChartLineUp, Check, GitCommit, GithubLogo, Minus, Plus } from '@phosphor-icons/react';
-import type { LabArm, LabEstimate, LabTask } from '../../shared/lab-types';
+// The steps of the new-experiment form after the source panels (SourcePanels.tsx): the sources, the approaches, the size and the estimate. Each is a controlled
+// view: the form (Wizard.tsx) holds the state and the bridge calls.
+import { ChartLineUp, GitCommit, GithubLogo } from '@phosphor-icons/react';
+import type { LabArm, LabEstimate, LabSource, LabSourceInfo } from '../../shared/lab-types';
 import { t } from '../../shared/i18n';
-import { armName, DASH, kindLabel, minutesLabel, money, percent } from './format';
-import { ArmMark, Ring, Tag } from './Marks';
+import { Choice, Stepper } from './Controls';
+import { armName, bytesLabel, DASH, minutesLabel, money, percent } from './format';
+import { ArmMark, Ring, ScrollRegion } from './Marks';
 import { ALL_ARMS } from './results-math';
-import { MIN_ARMS, REPEATS, SIZE, type Draft } from './wizard-math';
+import { SOURCE_ORDER } from './source-math';
+import { SOURCE_BLURBS, SOURCE_NAMES } from './source-text';
+import { MIN_ARMS, REPEATS, taskTotal, type Draft } from './wizard-math';
 
-const Tick = () => <span className="tick" aria-hidden="true"><Check size={12} weight="bold" /></span>;
+const ICONS = { history: GitCommit, oss: GithubLogo, aa: ChartLineUp };
 
-// A choice card: a native toggle button, and only the chosen one carries the tick.
-function Choice({ chosen, disabled = false, onClick, className = '', children }: { chosen: boolean; disabled?: boolean; onClick: () => void; className?: string; children: ReactNode }) {
-  return <button type="button" className={`choice ${className}`} aria-pressed={chosen} disabled={disabled} onClick={onClick}>{chosen && <Tick />}{children}</button>;
-}
-
-export function SourceStep() {
-  const sources = [
-    { id: 'history', Icon: GitCommit, title: t('本项目的历史改动'), text: t('从项目自己的提交历史里挑带测试的改动，用当时的测试来评分。'), open: true },
-    { id: 'oss', Icon: GithubLogo, title: t('知名开源项目'), text: t('从著名的 GitHub 项目里各摘取几个代表性问题。'), open: false },
-    { id: 'aa', Icon: ChartLineUp, title: t('AA 测试'), text: t('Artificial Analysis 的公开基准，可以和他们公布的分数对照。'), open: false },
-  ];
-  return <div className="choices three">{sources.map(({ id, Icon, title, text, open }) => <Choice key={id} chosen={open} disabled={!open} onClick={() => undefined}>
-    <Icon size={32} aria-hidden="true" /><b>{title}</b><span className="muted">{text}</span>{!open && <Tag>{t('下一轮')}</Tag>}
-  </Choice>)}</div>;
-}
-
-export function Stepper({ label, hint, value, min, max, onChange }: { label: string; hint: string; value: number; min: number; max: number; onChange: (value: number) => void }) {
-  return <div className="field"><div><b>{label}</b><p className="muted">{hint}</p></div>
-    <div className="control"><div className="stepper" role="group" aria-label={label}>
-      <button type="button" className="icon-button" aria-label={t('减少')} disabled={value <= min} onClick={() => onChange(value - 1)}><Minus size={16} /></button>
-      <output aria-live="polite">{value}</output>
-      <button type="button" className="icon-button" aria-label={t('增加')} disabled={value >= max} onClick={() => onChange(value + 1)}><Plus size={16} /></button>
-    </div></div></div>;
-}
-
-export type Sampling = { size: number; preferShortComplex: boolean };
-export type SampleView = { tasks: LabTask[]; loading: boolean; error: string | null; exhausted: boolean };
-
-export function ProjectStep({ projects, projectId, sampling, sample, onProject, onSampling, onShuffle, onRetry }: {
-  projects: { id: string; name: string }[]; projectId: string; sampling: Sampling; sample: SampleView;
-  onProject: (id: string) => void; onSampling: (patch: Partial<Sampling>) => void; onShuffle: () => void; onRetry: () => void;
-}) {
-  return <div className="project-step">
-    <p className="muted">{t('每个项目自动抽取代表性问题，覆盖不同模块和难度；样本会随实验保存，之后可以重跑同一批问题，对比才公平。')}</p>
-    {!projects.length && <p className="empty">{t('没有可用的项目。先在 Agentrix 里添加一个项目。')}</p>}
-    <div className="choices">{projects.map(project => <Choice key={project.id} chosen={project.id === projectId} onClick={() => onProject(project.id)}><b>{project.name}</b></Choice>)}</div>
-    {projectId && <section className="panel sample" aria-live="polite">
-      <div className="sample-controls">
-        <Stepper label={t('抽取几个问题')} hint={t('默认 {n}，可选 {min}–{max}', { n: SIZE.standard, min: SIZE.min, max: SIZE.max })} value={sampling.size} min={SIZE.min} max={SIZE.max} onChange={size => onSampling({ size })} />
-        <label className="check"><input type="checkbox" checked={sampling.preferShortComplex} onChange={event => onSampling({ preferShortComplex: event.target.checked })} />{t('偏好短而复杂的任务（改动行数少，但跨多个模块）')}</label>
-      </div>
-      <div className="sample-head"><span className="muted">{sample.loading ? t('正在挑选…') : t('已选 {n} 个代表性问题', { n: sample.tasks.length })}</span>
-        <button type="button" className="button small" disabled={sample.loading} onClick={sample.exhausted ? onRetry : onShuffle}>{sample.exhausted ? t('从头再来') : t('换一组')}</button></div>
-      {sample.error && <p className="banner" role="alert">{t('挑选任务失败：{message}', { message: sample.error })} <button type="button" className="button small" onClick={onRetry}>{t('重试')}</button></p>}
-      {!sample.loading && !sample.error && !sample.tasks.length && <p className="muted">{sample.exhausted ? t('没有更多可换的任务了。') : t('这个项目里没有带测试的历史改动可以挑选。')}</p>}
-      <ul className="task-list">{sample.tasks.map(task => <li key={task.id}>
-        <i aria-hidden="true" />
-        <div><b>{task.title}</b><p className="muted">{t(task.why)}</p></div>
-        <Tag>{kindLabel(task.kind)}</Tag>
-      </li>)}</ul>
-    </section>}
-  </div>;
+// Every source the bridge reports, to be chosen together; one that cannot run is disabled and says why. Only a chosen source carries a tick.
+export function SourceStep({ sources, chosen, onToggle }: { sources: LabSourceInfo[] | null; chosen: LabSource[]; onToggle: (source: LabSource) => void }) {
+  if (!sources) return <p className="empty">{t('正在读取…')}</p>;
+  return <div className="choices three">{[...sources].sort((a, b) => SOURCE_ORDER.indexOf(a.id) - SOURCE_ORDER.indexOf(b.id)).map(info => {
+    const Icon = ICONS[info.id];
+    return <Choice key={info.id} chosen={info.available && chosen.includes(info.id)} disabled={!info.available} onClick={() => onToggle(info.id)}>
+      <Icon size={32} aria-hidden="true" /><b>{SOURCE_NAMES[info.id]()}</b><span className="muted">{SOURCE_BLURBS[info.id]()}</span>
+      {!info.available && <span className="muted reason">{info.reason ?? t('暂不可用')}</span>}
+    </Choice>;
+  })}</div>;
 }
 
 // The orchestrated approach as it is tested: a lead plans, Sol and Sonnet build, Opus reviews, and review findings go back to the lead.
@@ -94,8 +55,25 @@ export function ArmStep({ arms, onToggle }: { arms: LabArm[]; onToggle: (arm: La
 // The estimate as three large numbers; the one ring says how much of the budget the estimated cost is.
 const Stat = ({ value, label }: { value: string; label: string }) => <div className="stat"><b className="figure">{value}</b><span className="muted">{label}</span></div>;
 
-export function ScaleStep({ draft, estimate, error, onRetry, onRepeats, onBudget, onName, defaultName }: {
-  draft: Draft; estimate: LabEstimate | null; error: string | null; defaultName: string; onRetry: () => void;
+// Where the estimate comes from, per source, when more than one is chosen or the one is not history: its runs, time and cost, its share of the budget (main's
+// own split: the page only shows it) and what it will download at the start.
+function SourceRows({ estimate, infos }: { estimate: LabEstimate; infos: LabSourceInfo[] }) {
+  return <ScrollRegion label={t('各来源的估算')}>
+    <table className="wide">
+      <thead><tr><th>{t('来源')}</th><th className="num">{t('次运行')}</th><th className="num">{t('用时')}</th><th className="num">{t('费用')}</th><th className="num">{t('预算占比')}</th><th className="num">{t('下载')}</th></tr></thead>
+      <tbody>{estimate.sources.map(row => {
+        const download = infos.find(info => info.id === row.source)?.downloadBytes ?? null;
+        return <tr key={row.source}>
+          <td>{SOURCE_NAMES[row.source]()}</td><td className="num">{row.runs}</td><td className="num">{minutesLabel(row.minutes)}</td>
+          <td className="num">{money(row.costUsd)}</td><td className="num">{percent(row.share)}</td><td className="num">{download === null ? DASH : bytesLabel(download)}</td>
+        </tr>;
+      })}</tbody>
+    </table>
+  </ScrollRegion>;
+}
+
+export function ScaleStep({ draft, infos, estimate, error, onRetry, onRepeats, onBudget, onName, defaultName }: {
+  draft: Draft; infos: LabSourceInfo[]; estimate: LabEstimate | null; error: string | null; defaultName: string; onRetry: () => void;
   onRepeats: (value: number) => void; onBudget: (value: number) => void; onName: (value: string) => void;
 }) {
   const share = estimate && draft.budgetUsd > 0 ? estimate.costUsd / draft.budgetUsd : null, over = share !== null && share > 1;
@@ -112,6 +90,7 @@ export function ScaleStep({ draft, estimate, error, onRetry, onRepeats, onBudget
           <span className="muted">{over ? t('超出预算') : t('占预算的比例')}</span>
         </div>
       </div>
+      {estimate && (estimate.sources.length > 1 || estimate.sources[0]?.source !== 'history') && <SourceRows estimate={estimate} infos={infos} />}
     </section>
     <section className="panel fields">
       <Stepper label={t('每个问题重复几次')} hint={t('结果有随机性，{min}–{max} 次', { min: REPEATS.min, max: REPEATS.max })} value={draft.repeats} min={REPEATS.min} max={REPEATS.max} onChange={onRepeats} />
@@ -119,7 +98,7 @@ export function ScaleStep({ draft, estimate, error, onRetry, onRepeats, onBudget
         <div className="control"><input className="input" type="number" min={1} step={1} inputMode="decimal" aria-label={t('预算（美元）')} value={draft.budgetUsd || ''} onChange={event => onBudget(Number(event.target.value))} /></div></label>
       <label className="field"><div><b>{t('实验名称')}</b><p className="muted">{t('留空则用默认名称')}</p></div>
         <div className="control"><input className="input" type="text" placeholder={defaultName} aria-label={t('实验名称')} value={draft.name} onChange={event => onName(event.target.value)} /></div></label>
-      <p className="note">{t('{tasks} 个问题 × {arms} 种方案 × {repeats} 次', { tasks: draft.tasks.length, arms: draft.arms.length, repeats: draft.repeats })}</p>
+      <p className="note">{t('{tasks} 个问题 × {arms} 种方案 × {repeats} 次', { tasks: taskTotal(draft), arms: draft.arms.length, repeats: draft.repeats })}</p>
     </section>
   </>;
 }

@@ -50,6 +50,42 @@ test('B3 the real SDK launches a fake native CLI whose helper, hook, MCP and tra
     const file = path.join(home, relative); if (fs.statSync(file).isFile()) assert.ok(!fs.readFileSync(file).includes(Buffer.from(key)), relative);
   }
 });
+test('N2 a real SDK owner query keeps its fake native process alive across idle turns', {
+  skip: !sdkModule && 'SDK dependency is not installed in this isolated worktree', timeout: 30000,
+}, async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-owner-wire-'));
+  t.after(() => fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 }));
+  const { prepareProviders } = await import('../scripts/native-session-smoke.mjs');
+  const { bin, cli } = await prepareProviders(directory);
+  const config = path.join(directory, 'claude'); fs.mkdirSync(config);
+  const factory = createClaudeRuntime({ directory: path.join(directory, 'records'),
+    safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value).reverse(), decryptString: value => Buffer.from(value).reverse().toString() },
+    loadSdk: () => import(pathToFileURL(sdkModule).href),
+    resolveExecutable: async () => path.join(bin, process.platform === 'win32' ? 'claude.exe' : 'claude') });
+  t.after(() => factory.close());
+  factory.credentials.save('sk-ant-api03-owner-wire-fixture-never-real');
+  const env = { PATH: bin, HOME: directory, USERPROFILE: directory, CLAUDE_CONFIG_DIR: config,
+    AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_FAKE_CLI: cli, AGENTRIX_FAKE_OUTPUT: directory,
+    ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}) };
+  const session = factory.create({ agent: 'claude', owner: 'gui', cwd: directory, env, projectId: 'p', terminalId: 't',
+    runtimeSessionId: randomUUID(), monthlyBudgetUsd: 10 }, () => {});
+  await session.start();
+  const wire = () => fs.readFileSync(path.join(directory, 'claude-wire.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  for (let count = 1; count <= 2; count++) {
+    await session.send({ clientMessageId: randomUUID(), text: 'first' });
+    const deadline = Date.now() + 10000;
+    while ((session.snapshot().state !== 'idle' || factory.usage.summary().monthUsdMicros !== count * 10000) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(session.snapshot().state, 'idle');
+    assert.equal(factory.usage.available(10), 10000000 - count * 10000);
+    const spawned = wire().filter(row => row.spawn); assert.equal(spawned.length, 1);
+    assert.equal(spawned[0].scrub, false); assert.doesNotThrow(() => process.kill(spawned[0].pid, 0));
+  }
+  assert.ok(wire().filter(row => row.childResults).every(row => row.childResults.every(child => child.keyPresent)));
+  await session.close();
+});
+
 test('B3 installed Claude scrub implementation removes API credentials only when its real switch is enabled', {
   skip: !process.env.AGENTRIX_TEST_CLAUDE_BINARY && 'offline installed-binary probe is opt-in',
 }, () => {

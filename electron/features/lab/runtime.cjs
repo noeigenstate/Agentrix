@@ -10,7 +10,8 @@ async function resolveNode({ nodePath, env = process.env, protectedPaths = [], s
   const search = Object.keys(env).find(key => key.toLowerCase() === 'path');
   const candidates = [
     nodePath, !process.versions.electron && process.execPath,
-    ...String(env[search] || '').split(path.delimiter).filter(path.isAbsolute).map(folder => path.join(folder, 'node')),
+    ...String(env[search] || '').split(path.delimiter).filter(path.isAbsolute)
+      .map(folder => path.join(folder, process.platform === 'win32' ? 'node.exe' : 'node')),
     '/opt/homebrew/bin/node', '/usr/local/bin/node',
   ].filter(Boolean);
   const allowed = file => !protectedPaths.some(root => inside(root, file));

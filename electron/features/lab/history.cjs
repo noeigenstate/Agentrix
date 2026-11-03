@@ -59,7 +59,7 @@ async function profileTask(projectPath, commit, { signal, t = (source, values) =
       (parts.length > 1 ? parts.slice(0, Math.min(depth, parts.length - 1)).join('/') : 'root');
   }))].sort();
   const linesChanged = changes.reduce((sum, change) => sum + change.lines, 0), title = message.split('\n')[0];
-  return { id: commit, title, text: message, commit, base, modules, linesChanged, hiddenTests: tests, kind: category(files, title),
+  return { id: commit, source: 'history', title, text: message, commit, base, modules, linesChanged, hiddenTests: tests, kind: category(files, title),
     why: t('跨 {modules} 个模块 · 改动 {lines} 行', { modules: modules.length, lines: linesChanged }) };
 }
 
@@ -82,7 +82,7 @@ function selectTasks(tasks, size, preferShortComplex, exclude = []) {
 }
 
 async function sampleHistory(projectPath, input, { signal, t, limit = 120 } = {}) {
-  const request = sampleRequest(input);
+  const request = sampleRequest({ ...input, source: 'history' });
   const commits = (await git(projectPath, ['log', '--no-merges', `--max-count=${limit}`, '--format=%H', 'HEAD'], { signal }))
     .trim().split('\n');
   const tasks = [];

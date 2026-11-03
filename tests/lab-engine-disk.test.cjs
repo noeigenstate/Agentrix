@@ -8,6 +8,7 @@ const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { copyDependencies, cleanupWorktrees } = require('../electron/features/lab/workspace.cjs');
 const { removePath } = require('../electron/features/lab/disk.cjs');
+const { pruneCache } = require('../electron/features/lab/disk.cjs');
 const { recoverRuns } = require('../electron/features/lab/session.cjs');
 const { randomUUID } = require('node:crypto');
 
@@ -40,6 +41,7 @@ test('Electron workspace removal uses original-fs so a physical ASAR is not mist
     require: name => {
       if (name === 'original-fs') return original;
       if (name === 'node:fs') return patched;
+      if (name === 'node:path') return path;
       throw new Error('Unexpected module ' + name);
     },
   });
@@ -74,7 +76,9 @@ test('dependency copies retain Node package metadata, skip Electron distribution
   await fs.writeFile(path.join(source, 'electron/index.js'), 'module.exports = "fixture";');
   await fs.writeFile(path.join(source, 'fixture-pkg/cli.cjs'), 'module.exports = 1;');
   const binTarget = path.join('..', 'fixture-pkg', 'cli.cjs');
-  await fs.symlink(binTarget, path.join(source, '.bin/fixture'));
+  try { await fs.symlink(binTarget, path.join(source, '.bin/fixture')); }
+  catch (error) { if (process.platform !== 'win32' || error.code !== 'EPERM') throw error;
+    t.skip('Windows file-symlink privilege is unavailable'); return; }
   const destination = path.join(root, 'workspace/node_modules');
   await copyDependencies(project, destination);
   assert.equal(await fs.stat(path.join(destination, 'electron/dist')).catch(() => null), null);
@@ -108,7 +112,9 @@ test('an unavailable APFS clone falls back to a private copy without Electron di
   await fs.writeFile(path.join(source, 'electron/package.json'), '{"name":"electron"}');
   await fs.writeFile(path.join(source, 'fixture-pkg/cli.cjs'), 'module.exports = 1;');
   const binTarget = path.join('..', 'fixture-pkg', 'cli.cjs');
-  await fs.symlink(binTarget, path.join(source, '.bin/fixture'));
+  try { await fs.symlink(binTarget, path.join(source, '.bin/fixture')); }
+  catch (error) { if (process.platform !== 'win32' || error.code !== 'EPERM') throw error;
+    t.skip('Windows file-symlink privilege is unavailable'); return; }
   const file = path.join(__dirname, '../electron/features/lab/workspace.cjs'), module = { exports: {} };
   const localRequire = createRequire(file);
   let cloneCalls = 0;
@@ -133,4 +139,20 @@ test('an unavailable APFS clone falls back to a private copy without Electron di
   assert.equal(path.isAbsolute(binTarget), false);
   await fs.writeFile(path.join(destination, 'fixture-pkg/cli.cjs'), 'module.exports = 2;');
   assert.equal(await fs.readFile(path.join(source, 'fixture-pkg/cli.cjs'), 'utf8'), 'module.exports = 1;');
+});
+
+test('cache eviction removes the oldest whole entry, preserves active hashes and never follows links', async t => {
+  const root = await temporary(t), cache = path.join(root, 'cache'), owner = path.join(root, 'owner');
+  const old = path.join(cache, 'oss/pip/old'), active = path.join(cache, 'oss/pip/active'), newer = path.join(cache, 'aa/tasks/new');
+  for (const folder of [old, active, newer, owner]) await fs.mkdir(folder, { recursive: true });
+  await fs.writeFile(path.join(old, 'wheel'), '1234567890'); await fs.writeFile(path.join(active, 'wheel'), '1234567890');
+  await fs.writeFile(path.join(newer, 'task'), '1234567890'); await fs.writeFile(path.join(owner, 'keep'), 'owner data');
+  await fs.symlink(owner, path.join(cache, 'history'), process.platform === 'win32' ? 'junction' : 'dir');
+  await fs.utimes(path.join(old, 'wheel'), new Date(1000), new Date(1000)); await fs.utimes(old, new Date(1000), new Date(1000));
+  await fs.utimes(path.join(active, 'wheel'), new Date(2000), new Date(2000)); await fs.utimes(active, new Date(2000), new Date(2000));
+  const remaining = await pruneCache(cache, { limitBytes: 20, inUse: [active] });
+  assert.ok(remaining <= 20); assert.equal(await fs.stat(old).catch(() => null), null);
+  assert.equal(await fs.readFile(path.join(active, 'wheel'), 'utf8'), '1234567890');
+  assert.equal(await fs.readFile(path.join(owner, 'keep'), 'utf8'), 'owner data');
+  await assert.rejects(pruneCache(cache, { limitBytes: 1, inUse: [active] }), error => error.infrastructure === true);
 });

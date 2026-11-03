@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const {
-  cliHomes, credentialAccess, gitCredentialPaths, gitCredentialHelpers, sandboxProfile, cleanEnvironment,
+  cliHomes, credentialAccess, gitCredentialPaths, gitCredentialHelpers, sandboxProfile, cleanEnvironment, linkCredential,
 } = require('../electron/features/lab/sandbox.cjs');
 const { command, git, gitEnvironment } = require('../electron/features/lab/process.cjs');
 const { dispatch, claudeLoginFailed, CLAUDE_LOGIN_ERROR } = require('../electron/features/lab/dispatch.cjs');
@@ -35,7 +35,8 @@ test('job environments inherit only process essentials and remove named and opaq
     await cliHomes({ ...input, CODEX_HOME: path.join(root, 'codex'), CLAUDE_CONFIG_DIR: path.join(root, 'claude') }, path.join(root, 'model')),
     await cliHomes(input, path.join(root, 'grading'), false)]) {
     for (const key of Object.keys(credentials)) assert.equal(env[key], key === 'GIT_ASKPASS' ? askpass : undefined, key);
-    assert.equal(env.HOME, root); assert.equal(env.PATH, input.PATH); assert.equal(env.LANG, input.LANG);
+    assert.ok(env.HOME === root || (process.platform === 'win32' && [path.join(root, 'model'), path.join(root, 'grading')].includes(env.HOME)));
+    assert.equal(env.PATH, input.PATH); assert.equal(env.LANG, input.LANG);
     assert.equal(env.LC_CTYPE, input.LC_CTYPE);
     const result = await command(process.execPath, ['-e',
       'console.log(JSON.stringify(Object.fromEntries(' + JSON.stringify(Object.keys(credentials)) +
@@ -51,7 +52,7 @@ test('every run process ignores global Git config, disables prompts and optional
   const root = await temporary(t), global = path.join(root, 'gitconfig');
   await fs.writeFile(global, '[credential]\n\thelper = forbidden-owner-helper\n');
   const dirty = {
-    ...process.env, GIT_CONFIG_GLOBAL: global, GIT_CONFIG_NOSYSTEM: '0',
+    ...cleanEnvironment(process.env), GIT_CONFIG_GLOBAL: global, GIT_CONFIG_NOSYSTEM: '0',
     GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: 'another-owner-helper',
     GIT_OPTIONAL_LOCKS: '1', GIT_TERMINAL_PROMPT: '1', SSH_AUTH_SOCK: path.join(root, 'agent.sock'),
   };
@@ -87,17 +88,20 @@ test('Codex auth is a shared file link, refresh writes reach the owner file and 
   await fs.writeFile(path.join(source, 'config.toml'), 'model = "fixture"\n');
   const env = await cliHomes({ CODEX_HOME: source, CLAUDE_CONFIG_DIR: path.join(root, 'owner-claude') }, run);
   const local = path.join(env.CODEX_HOME, 'auth.json');
-  assert.equal((await fs.lstat(local)).isSymbolicLink(), true);
-  assert.equal(await fs.realpath(local), auth);
+  const linked = await fs.lstat(local), original = await fs.stat(auth);
+  assert.ok(linked.isSymbolicLink() || (process.platform === 'win32' && linked.nlink >= 2 && linked.ino === original.ino));
+  if (linked.isSymbolicLink()) assert.equal(await fs.realpath(local), auth);
   await fs.writeFile(local, '{"fakeAccess":"new","fakeRefresh":"two"}\n');
   assert.equal(await fs.readFile(auth, 'utf8'), '{"fakeAccess":"new","fakeRefresh":"two"}\n');
-  assert.equal((await fs.lstat(local)).isSymbolicLink(), true);
+  assert.equal((await fs.lstat(local)).isSymbolicLink(), linked.isSymbolicLink());
   assert.equal(await fs.stat(path.join(env.CLAUDE_CONFIG_DIR, '.credentials.json')).catch(() => null), null);
   const grading = await cliHomes({ CODEX_HOME: source }, path.join(root, 'grading'), false);
   assert.equal(await fs.lstat(path.join(grading.CODEX_HOME, 'auth.json')).catch(() => null), null);
 });
 
-test('Claude keeps the owner Keychain service identity while its run directory stays separate', async t => {
+test('Claude keeps the owner Keychain service identity while its run directory stays separate', {
+  skip: process.platform === 'win32' ? 'Windows uses the run-local credential file instead of Keychain' : false,
+}, async t => {
   const root = await temporary(t), custom = path.join(root, 'custom-claude'), secure = path.join(root, 'secure');
   for (const [original, expected] of [
     [{}, ''],
@@ -106,12 +110,51 @@ test('Claude keeps the owner Keychain service identity while its run directory s
     [{ CLAUDE_CONFIG_DIR: custom, CLAUDE_SECURESTORAGE_CONFIG_DIR: '' }, ''],
   ]) {
     const dir = path.join(root, 'run-' + Math.random().toString(16).slice(2));
-    const env = await cliHomes({ CODEX_HOME: path.join(root, 'unused'), ...original }, dir);
+    const input = { CODEX_HOME: path.join(root, 'unused'), ...original };
+    if (!original.CLAUDE_CONFIG_DIR) {
+      input.CLAUDE_CONFIG_DIR = path.join(root, 'isolated-default-claude');
+      input.CLAUDE_SECURESTORAGE_CONFIG_DIR = expected;
+    }
+    const env = await cliHomes(input, dir);
     assert.equal(env.CLAUDE_SECURESTORAGE_CONFIG_DIR, expected);
     assert.equal(env.CLAUDE_CONFIG_DIR, path.join(dir, 'claude'));
     assert.notEqual(env.CLAUDE_CONFIG_DIR, custom);
     assert.equal(await fs.stat(path.join(env.CLAUDE_CONFIG_DIR, '.credentials.json')).catch(() => null), null);
   }
+});
+
+test('Windows auth falls back to a hard link only for missing link privilege and never copies credentials', async () => {
+  const calls = [], denied = Object.assign(new Error('privilege missing'), { code: 'EPERM' });
+  const files = { symlink: async () => { throw denied; }, link: async (...args) => { calls.push(args); } };
+  await linkCredential('fixture-source', 'fixture-target', { platform: 'win32', files });
+  assert.deepEqual(calls, [['fixture-source', 'fixture-target']]);
+  await assert.rejects(linkCredential('source', 'target', { platform: 'darwin', files }), { code: 'EPERM' });
+  await assert.rejects(linkCredential('source', 'target', { platform: 'win32', files: {
+    ...files, link: async () => { throw Object.assign(new Error('different volume'), { code: 'EXDEV' }); },
+  } }), { code: 'EXDEV' });
+  await assert.rejects(linkCredential('source', 'target', { platform: 'win32', files: {
+    ...files, symlink: async () => { throw Object.assign(new Error('unexpected failure'), { code: 'EIO' }); },
+  } }), { code: 'EIO' });
+  assert.equal(calls.length, 1);
+});
+
+test('Windows Claude authentication shares only the synthetic credential file and grading receives none', {
+  skip: process.platform !== 'win32' ? 'Windows file-backed Claude credentials are required' : false,
+}, async t => {
+  const root = await temporary(t), source = path.join(root, 'fixture-claude'); await fs.mkdir(source);
+  const auth = path.join(source, '.credentials.json');
+  await fs.writeFile(auth, '{"fixture":"before"}');
+  await fs.writeFile(path.join(source, 'private-history'), 'not shared');
+  const input = { CODEX_HOME: path.join(root, 'fixture-codex'), CLAUDE_CONFIG_DIR: source };
+  const env = await cliHomes(input, path.join(root, 'model'));
+  const link = path.join(env.CLAUDE_CONFIG_DIR, '.credentials.json');
+  await fs.writeFile(link, '{"fixture":"after"}');
+  assert.equal(await fs.readFile(auth, 'utf8'), '{"fixture":"after"}');
+  assert.equal(await fs.stat(path.join(env.CLAUDE_CONFIG_DIR, 'private-history')).catch(() => null), null);
+  const grading = await cliHomes(input, path.join(root, 'grading'), false);
+  assert.equal(await fs.stat(path.join(grading.CLAUDE_CONFIG_DIR, '.credentials.json')).catch(() => null), null);
+  assert.equal(grading.USERPROFILE, path.join(root, 'grading'));
+  assert.equal(env.CLAUDE_SECURESTORAGE_CONFIG_DIR, env.CLAUDE_CONFIG_DIR);
 });
 
 test('sandbox blocks Git credential paths and helper execution but permits only shared Codex auth content', {

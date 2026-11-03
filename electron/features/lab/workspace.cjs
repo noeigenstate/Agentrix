@@ -34,14 +34,21 @@ async function assertOwner(projectPath, before) {
   return after;
 }
 
-async function validateLinks(directory, root) {
+const excludedPath = (file, exclude) => exclude.some(name => file === name || file.startsWith(name + '/'));
+
+async function validateLinks(directory, root, { exclude = [], signal, onFile } = {}) {
   root ||= await fs.realpath(directory);
+  aborted(signal);
   for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-    const file = path.join(directory, entry.name);
+    const file = path.join(directory, entry.name), relative = path.relative(root, file).split(path.sep).join('/');
     if (entry.isSymbolicLink()) {
       const target = await fs.realpath(file);
       if (!inside(root, target)) throw new Error('A snapshot or dependency link escapes the isolated workspace.');
-    } else if (entry.isDirectory()) await validateLinks(file, root);
+    }
+    // Excluded environments may have runtime links of their own. Never walk them, but still check a root link.
+    if (excludedPath(relative, exclude)) continue;
+    if (entry.isDirectory()) await validateLinks(file, root, { exclude, signal, onFile });
+    else onFile?.(relative);
   }
 }
 
@@ -88,32 +95,33 @@ async function copyDependencies(projectPath, destination, signal, { electronDist
   return source;
 }
 
-async function archiveSnapshot(projectPath, revision, destination, { signal, dependencies = true, electronDist = false } = {}) {
+async function archiveSnapshot(projectPath, revision, destination, { signal, dependencies = true, electronDist = false, exclude = [] } = {}) {
   aborted(signal);
+  destination = path.resolve(destination);
   await fs.mkdir(destination, { recursive: true, mode: 0o700 });
   const archive = destination + '.tar';
   try {
     const names = (await git(projectPath, ['ls-tree', '-rz', '--name-only', revision], { signal })).split('\0').filter(Boolean);
     if (names.some(file => !safePath(file))) throw new Error('The project archive contains an unsafe path.');
     await git(projectPath, ['archive', '--format=tar', '--output', archive, revision], { signal });
-    const extracted = await command('tar', ['-xf', archive, '-C', destination], { signal, timeoutMs: 120000 });
+    // A drive letter in GNU tar's archive argument is parsed as a remote host. Both paths are siblings here.
+    const extracted = await command('tar', ['-xf', path.basename(archive), '-C', path.basename(destination)],
+      { cwd: path.dirname(destination), signal, timeoutMs: 120000 });
     if (extracted.code !== 0) throw new Error('Could not extract the project snapshot.');
-    await validateLinks(destination);
+    await validateLinks(destination, undefined, { exclude, signal });
     const dependencySource = dependencies
       ? await copyDependencies(projectPath, path.join(destination, 'node_modules'), signal, { electronDist }) : null;
-    return { files: names, dependencySource };
+    return { files: names.filter(file => !excludedPath(file, exclude)), dependencySource };
   } finally { await removePath(archive); }
 }
 
-async function prepareWorktree(projectPath, directory, task, signal, { electronDist = false } = {}) {
-  let cwd = path.join(directory, 'worktree');
-  const snapshot = await archiveSnapshot(projectPath, task.base, cwd, { signal, electronDist });
-  cwd = await fs.realpath(cwd);
+// A private repository over a filled folder: its files become the baseline commit, and commits and pushes are blocked.
+async function initBaseline(cwd, files, signal, { exclude = ['node_modules'] } = {}) {
   await git(cwd, ['init', '--initial-branch=lab-base'], { signal });
-  for (let offset = 0; offset < snapshot.files.length; offset += 100) {
-    await git(cwd, ['add', '-f', '--', ...snapshot.files.slice(offset, offset + 100)], { signal });
+  for (let offset = 0; offset < files.length; offset += 100) {
+    await git(cwd, ['add', '-f', '--', ...files.slice(offset, offset + 100)], { signal });
   }
-  await fs.writeFile(path.join(cwd, '.git/info/exclude'), 'node_modules\n');
+  await fs.writeFile(path.join(cwd, '.git/info/exclude'), exclude.map(name => name + '\n').join(''));
   const tree = (await git(cwd, ['write-tree'], { signal })).trim();
   const baseline = (await git(cwd, [
     '-c', 'user.name=Virtual Lab', '-c', 'user.email=lab@localhost',
@@ -126,6 +134,14 @@ async function prepareWorktree(projectPath, directory, task, signal, { electronD
     await fs.writeFile(path.join(hooks, name), '#!/bin/sh\nexit 1\n', { mode: 0o700 });
   }
   await git(cwd, ['config', 'core.hooksPath', hooks], { signal });
+  return baseline;
+}
+
+async function prepareWorktree(projectPath, directory, task, signal, { electronDist = false, exclude = [] } = {}) {
+  let cwd = path.join(directory, 'worktree');
+  const snapshot = await archiveSnapshot(projectPath, task.base, cwd, { signal, electronDist, exclude });
+  cwd = await fs.realpath(cwd);
+  const baseline = await initBaseline(cwd, snapshot.files, signal, { exclude: ['node_modules', ...exclude] });
   return { ...snapshot, cwd, baseline, real: await fs.realpath(cwd), gitDirectory: path.join(cwd, '.git') };
 }
 
@@ -181,6 +197,6 @@ async function cleanupWorktrees(directory) {
 }
 
 module.exports = {
-  inside, ownerState, assertOwner, archiveSnapshot, copyDependencies,
-  prepareWorktree, verifyWorktree, captureDiff, cleanupWorktrees,
+  inside, ownerState, assertOwner, validateLinks, archiveSnapshot, copyDependencies,
+  initBaseline, prepareWorktree, verifyWorktree, captureDiff, cleanupWorktrees,
 };

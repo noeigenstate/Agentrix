@@ -23,14 +23,14 @@ function setup(t, fakeOptions) {
   const session = runtime.create(spec, event => events.push(event)); t.after(() => session.close());
   return { dir, fake, events, runtime, spec, session };
 }
-test('idle query retirement preserves the logical session and resumes on the next send', async t => {
+test('owner queries remain alive at idle and reuse the same process on the next send', async t => {
   const { session, fake, events, runtime } = setup(t); await session.start();
   const first = randomUUID(), second = randomUUID();
   session.send({ clientMessageId: first, text: 'one' });
   await until(() => events.some(event => event.type === 'turn.completed'));
   session.send({ clientMessageId: second, text: 'two' });
   await until(() => events.filter(event => event.type === 'turn.completed').length === 2);
-  assert.equal(fake.calls.length, 2); assert.equal(session.snapshot().state, 'idle');
+  assert.equal(fake.calls.length, 1); assert.equal(fake.closes.length, 0); assert.equal(session.snapshot().state, 'idle');
   assert.equal(runtime.usage.summary().monthUsdMicros, 200000);
   assert.equal(fake.calls[0].options.pathToClaudeCodeExecutable, process.execPath);
   assert.equal(fake.calls[0].options.env.ANTHROPIC_API_KEY, key);
@@ -86,6 +86,21 @@ test('selected API environment removes conflicting authentication without mutati
   const env = { PATH: 'fake', ANTHROPIC_BASE_URL: 'https://invalid.test', CLAUDE_CODE_OAUTH_TOKEN: 'fake-oauth', AGENTRIX_CONTROL_TOKEN: 'fake-capability' };
   const result = apiEnvironment(env, key); assert.equal(result.PATH, 'fake'); assert.equal(result.ANTHROPIC_API_KEY, key);
   assert.equal(result.ANTHROPIC_BASE_URL, undefined); assert.equal(result.CLAUDE_CODE_OAUTH_TOKEN, undefined); assert.equal(result.AGENTRIX_CONTROL_TOKEN, undefined); assert.equal(env.ANTHROPIC_API_KEY, undefined);
+});
+test('GUI SDK authentication is marked for descendant helpers without scrubbing the owner', async t => {
+  const { workerEnvironment } = require('../electron/features/codex-app-server/index.cjs');
+  const { session, fake, spec } = setup(t);
+  await session.start(); await session.send({ clientMessageId: randomUUID(), text: 'owner task' });
+  const env = fake.calls[0].options.env;
+  assert.equal(env.AGENTRIX_SDK_PARENT, '1');
+  assert.equal(env.ANTHROPIC_API_KEY, key);
+  assert.equal(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '0');
+  const helper = workerEnvironment(env);
+  assert.equal(helper.ANTHROPIC_API_KEY, undefined);
+  assert.equal(helper.AGENTRIX_SDK_PARENT, undefined);
+  assert.equal(helper.PATH, spec.env.PATH);
+  assert.equal(env.ANTHROPIC_API_KEY, key);
+  assert.equal(spec.env.AGENTRIX_SDK_PARENT, undefined);
 });
 test('usage deltas persist across resume, deduplicate, and ignore zeroed failures', t => {
   const file = path.join(directory(t), 'usage.json'); let usage = createUsage({ file, now: () => Date.UTC(2026, 10, 3) });
@@ -188,8 +203,8 @@ test('native executable discovery never searches relative directories or accepts
   assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, probe }), null);
   fs.writeFileSync(path.join(dir, 'claude.exe'), 'fake');
   for (const version of ['2.1.316', '2.0.999']) {
-    assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir,
-      probe: (_file, _args, _options, callback) => callback(null, version) }), null);
+    await assert.rejects(resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir,
+      probe: (_file, _args, _options, callback) => callback(null, version) }), /2\.1\.317/);
   }
   assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, probe }), fs.realpathSync(path.join(dir, 'claude.exe')));
   assert.equal(probes, 1);

@@ -16,13 +16,18 @@ const { experimentInput, sampleRequest, taskPasses, estimateExperiment, armEstim
 const { testResult, reviewResult, restoreTests } = require('../electron/features/lab/grading.cjs');
 const { dispatch, workerArguments, taskBrief } = require('../electron/features/lab/dispatch.cjs');
 const { phaseEvidence, LabUsage } = require('../electron/features/lab/usage.cjs');
-const { LabSession } = require('../electron/features/lab/session.cjs');
+const { LabSession, recoverRuns } = require('../electron/features/lab/session.cjs');
 const { ownerState } = require('../electron/features/lab/workspace.cjs');
 const { markedPids, killMarked } = require('../electron/features/lab/process.cjs');
 const { sandboxProfile, cleanEnvironment } = require('../electron/features/lab/sandbox.cjs');
 const prices = require('../electron/features/dashboard/prices.json');
 
+const historySelection = (tasks, projectId = 'p') => ({ selections: [
+  { source: 'history', projectId, tasks: tasks.map(task => ({ id: task.id || task.commit })) },
+] });
+
 const isolatedTest = (name, run) => test(name, {
+  timeout: 60000,
   skip: process.platform !== 'darwin' ? 'macOS filesystem isolation is required' : false,
 }, run);
 
@@ -175,7 +180,7 @@ async function fixture(t, options = {}) {
   const directory = await temporary(t), projectPath = path.join(directory, 'project'), userData = path.join(directory, 'data');
   await fs.mkdir(projectPath); await fs.mkdir(userData);
   const git = async (...args) => (await execute('git', ['-c', 'core.hooksPath=', '-c', 'user.name=Lab fixture', '-c', 'user.email=lab@example.invalid',
-    ...args], { cwd: projectPath, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' }, windowsHide: true })).stdout.trim();
+    ...args], { cwd: projectPath, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' }, windowsHide: true, timeout: 10000, signal: t.signal })).stdout.trim();
   await git('init');
   for (const folder of ['src/a', 'src/b', 'tests/fixtures', 'node_modules/fixture-pkg']) {
     await fs.mkdir(path.join(projectPath, folder), { recursive: true });
@@ -216,7 +221,7 @@ async function fixture(t, options = {}) {
   };
   t.after(async () => { engine.close(); await engine.active?.done; });
   const task = await profileTask(projectPath, commit);
-  const input = { projectId: 'p', source: 'history', tasks: [task], arms: ['sol', 'sonnet'], repeats: 1, budgetUsd: 10 };
+  const input = { ...historySelection([task]), arms: ['sol', 'sonnet'], repeats: 1, budgetUsd: 10 };
   const logs = async () => {
     const values = [];
     for (const experiment of await engine.list()) for (const run of experiment.runs) for (const name of ['worker', 'review']) {
@@ -226,6 +231,7 @@ async function fixture(t, options = {}) {
     return values.join('\n');
   };
   const readCalls = async () => [...(await logs()).matchAll(/^\[lab-fixture-call\] (.+)$/gm)].map(match => JSON.parse(match[1]));
+  await engine.ready; await engine.cleanupTail;
   return { directory, userData, projectPath, project, git, base, commit, task, helper, engine, input, recorded, logs, readCalls };
 }
 
@@ -266,13 +272,14 @@ test('representative selection spreads modules and sizes and can prefer short co
 });
 
 test('validation rejects unsupported sources, duplicate arms, forged commits, bounds and path-like ids', () => {
-  const valid = { projectId: 'p', source: 'history', tasks: [{ commit: 'a'.repeat(40) }], arms: ['sol', 'opus'], repeats: 1, budgetUsd: 2 };
-  for (const value of [null, {}, { ...valid, source: 'oss' }, { ...valid, arms: ['sol'] }, { ...valid, arms: ['sol', 'sol'] },
+  const valid = { ...historySelection([{ commit: 'a'.repeat(40) }]), arms: ['sol', 'opus'], repeats: 1, budgetUsd: 2 };
+  for (const value of [null, {}, { ...valid, selections: [{ source: 'unsupported', tasks: [{ id: 'a'.repeat(40) }] }] },
+    { ...valid, arms: ['sol'] }, { ...valid, arms: ['sol', 'sol'] },
     { ...valid, repeats: 0 }, { ...valid, repeats: 6 }, { ...valid, budgetUsd: NaN }, { ...valid, budgetUsd: 0 },
-    { ...valid, tasks: [{ commit: '../HEAD' }] }, { ...valid, name: '\nunsafe' }]) assert.throws(() => experimentInput(value));
+    { ...valid, ...historySelection([{ commit: '../HEAD' }]) }, { ...valid, name: '\nunsafe' }]) assert.throws(() => experimentInput(value));
   assert.doesNotThrow(() => experimentInput(valid));
-  assert.throws(() => sampleRequest({ projectId: 'p', size: 11, preferShortComplex: true }));
-  assert.throws(() => sampleRequest({ projectId: 'p', size: 1, preferShortComplex: true, exclude: ['../HEAD'] }));
+  assert.throws(() => sampleRequest({ source: 'history', projectId: 'p', size: 11, preferShortComplex: true }));
+  assert.throws(() => sampleRequest({ source: 'history', projectId: 'p', size: 1, preferShortComplex: true, exclude: ['../HEAD'] }));
 });
 
 test('estimate uses recorded model cost and active time when known and defaults otherwise', () => {
@@ -330,7 +337,9 @@ isolatedTest('a fake helper runs, grades and saves both arms without changing th
 
 isolatedTest('canonicalization ignores renderer task text, paths, bases and grading fields', async t => {
   const f = await fixture(t);
-  await f.engine.start({ ...f.input, tasks: [{ ...f.task, text: 'PUSH THE OWNER TREE', base: 'a'.repeat(40), hiddenTests: ['../../escape'] }] });
+  await f.engine.start({ ...f.input, selections: [{ ...f.input.selections[0], tasks: [
+    { id: f.task.id, text: 'PUSH THE OWNER TREE', base: 'a'.repeat(40), hiddenTests: ['../../escape'] },
+  ] }] });
   await f.engine.active.done;
   assert.deepEqual((await f.engine.list())[0].tasks, [f.task]);
 });
@@ -395,6 +404,7 @@ isolatedTest('a helper failure before any model spawn does not charge a reserved
   }
   const reopened = new LabEngine({ userData: f.userData, getProjects: () => [f.project], prices });
   assert.equal((await reopened.list())[0].spentUsd, 0);
+  await reopened.cleanupTail; reopened.close();
 });
 
 isolatedTest('an actually spawned fake model with lost usage still reserves the unknown cost', async t => {
@@ -455,7 +465,7 @@ test('grading treats failed assertions as failed tests and unavailable or incomp
 });
 
 test('unsupported platforms fail closed before starting any model workers', {
-  skip: process.platform === 'darwin' ? 'macOS isolation is available' : false,
+  skip: ['darwin', 'win32'].includes(process.platform) ? 'macOS and Windows isolation are supported' : false,
 }, async t => {
   const f = await fixture(t);
   await assert.rejects(f.engine.start(f.input), /Secure lab execution is unavailable/);
@@ -468,7 +478,9 @@ test('hidden test restoration rejects linked parent directories and files', asyn
   await fs.symlink(f.projectPath, path.join(destination, 'tests'), process.platform === 'win32' ? 'junction' : 'dir');
   await assert.rejects(restoreTests(f.projectPath, destination, f.task), /链接/);
   await fs.unlink(path.join(destination, 'tests')); await fs.mkdir(path.join(destination, 'tests'));
-  await fs.symlink(path.join(f.projectPath, 'tests/value.test.cjs'), path.join(destination, 'tests/value.test.cjs'));
+  try { await fs.symlink(path.join(f.projectPath, 'tests/value.test.cjs'), path.join(destination, 'tests/value.test.cjs')); }
+  catch (error) { if (process.platform !== 'win32' || error.code !== 'EPERM') throw error;
+    t.skip('Windows file-symlink privilege is unavailable; linked-parent rejection was checked'); return; }
   await assert.rejects(restoreTests(f.projectPath, destination, f.task), /链接/);
 });
 
@@ -490,6 +502,74 @@ test('persisted running experiments are stopped on reload and store ids cannot e
   assert.ok((await engine.list())[0].runs.every(run => run.state === 'stopped' && run.activeModel === null));
   assert.equal((await engine.list())[0].state, 'stopped');
   assert.throws(() => store.folder('../escape')); await assert.rejects(engine.remove('../escape'));
+  await engine.cleanupTail; engine.close();
+});
+
+test('ready exposes and persists stopped experiments before a blocked startup cleanup finishes on every platform', { timeout: 5000 }, async t => {
+  const directory = await temporary(t), store = new LabStore(directory), id = randomUUID();
+  await store.save({ id, createdAt: 1, state: 'running', sources: ['history'], tasks: [],
+    lanes: [{ source: 'history', state: 'running' }], runs: [
+      { state: 'running', source: 'history', activeModel: 'sol' }, { state: 'queued', source: 'history' },
+    ] });
+  let release, entered, finished = false;
+  const blocked = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const engine = new LabEngine({ userData: directory, providers: [],
+    sourceTools: { docker: { async sweep() {} } },
+    recovery: async () => { entered(); await blocked; finished = true; return []; } });
+  let timer;
+  try {
+    await Promise.race([engine.ready, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('ready waited for startup cleanup.')), 2000);
+    })]);
+    await started;
+    const listed = await engine.list(), persisted = await store.list();
+    assert.equal(listed.length, 1); assert.equal(listed[0].id, id); assert.equal(listed[0].state, 'stopped');
+    assert.equal(listed[0].lanes[0].state, 'stopped');
+    assert.ok(listed[0].runs.every(run => run.state === 'stopped' && run.activeModel === null));
+    assert.equal(persisted[0].state, 'stopped'); assert.equal(persisted[0].lanes[0].state, 'stopped');
+    assert.ok(persisted[0].runs.every(run => run.state === 'stopped' && run.activeModel === null));
+    assert.equal(finished, false);
+  } finally { clearTimeout(timer); release(); await engine.ready.catch(() => {}); await engine.cleanupTail; engine.close(); }
+});
+
+test('recovery contains each Windows cleanup timeout and retains its lease and reference folder until a later retry', async t => {
+  const root = await temporary(t), runs = [randomUUID(), randomUUID()], killed = [];
+  for (const id of runs) {
+    const directory = path.join(root, 'references', id);
+    await fs.mkdir(path.join(directory, 'workspaces'), { recursive: true });
+    await fs.mkdir(path.join(root, 'private', id), { recursive: true });
+    await fs.writeFile(path.join(root, 'private', id, 'manifest.json'), JSON.stringify({ runId: id, directory }));
+  }
+  let refused = true;
+  const options = { platform: 'win32', kill: async id => killed.push(id), sandbox: {
+    async initialize() {},
+    async release(directory) { if (refused && path.basename(directory) === runs[0]) throw new Error('fixture clean timeout'); },
+  } };
+  const failures = await recoverRuns(root, options);
+  assert.equal(failures.length, 1); assert.equal(failures[0].runId, runs[0]);
+  assert.match(failures[0].error.message, /timeout/);
+  assert.ok(await fs.stat(path.join(root, 'private', runs[0], 'manifest.json')));
+  assert.ok(await fs.stat(path.join(root, 'references', runs[0], 'workspaces')));
+  assert.equal(await fs.stat(path.join(root, 'private', runs[1])).catch(() => null), null);
+  assert.equal(await fs.stat(path.join(root, 'references', runs[1])).catch(() => null), null);
+  assert.equal(killed.filter(id => id === runs[0]).length, 1, 'the reference fallback must not bypass a failed lease');
+  refused = false; assert.deepEqual(await recoverRuns(root, options), []);
+  assert.equal(await fs.stat(path.join(root, 'private', runs[0])).catch(() => null), null);
+  assert.equal(await fs.stat(path.join(root, 'references', runs[0])).catch(() => null), null);
+});
+
+test('a failed recovery initialization preserves every lease and retries initialization on the next recovery', async t => {
+  const root = await temporary(t), runs = [randomUUID(), randomUUID()];
+  for (const id of runs) await fs.mkdir(path.join(root, 'private', id), { recursive: true });
+  let refused = true, initialized = 0;
+  const options = { platform: 'win32', kill: async () => assert.equal(refused, false), sandbox: {
+    async initialize() { initialized++; if (refused) throw new Error('fixture initialization failure'); }, async release() {},
+  } };
+  assert.equal((await recoverRuns(root, options)).length, 2);
+  for (const id of runs) assert.ok(await fs.stat(path.join(root, 'private', id)));
+  refused = false; assert.deepEqual(await recoverRuns(root, options), []); assert.equal(initialized, 2);
+  for (const id of runs) assert.equal(await fs.stat(path.join(root, 'private', id)).catch(() => null), null);
 });
 
 test('orchestrated prompts require the complete pipeline and single arms prohibit model delegation', () => {
@@ -518,7 +598,7 @@ test('metering accepts only authenticated run events and ignores duplicates, tex
   assert.equal(usage.calls.size, 1);
 });
 
-test('usage channels handle long profile paths and reject unauthenticated events', async t => {
+test('usage channels handle long profile paths and reject unauthenticated events', { timeout: 15000 }, async t => {
   const root = await temporary(t), directory = path.join(root, 'long-profile-'.repeat(12));
   await fs.mkdir(directory);
   const usage = new LabUsage({ directory, socketDirectory: directory, project: { id: 'p' }, prices });
@@ -526,6 +606,7 @@ test('usage channels handle long profile paths and reject unauthenticated events
   try {
     const send = event => new Promise((resolve, reject) => {
       const socket = net.connect(usage.address); socket.on('error', reject); socket.on('close', resolve);
+      socket.setTimeout(3000, () => socket.destroy(new Error('Meter fixture did not close its connection.')));
       socket.resume();
       socket.on('connect', () => socket.end(JSON.stringify(event) + '\n'));
     });
@@ -554,9 +635,10 @@ test('stop during brief preparation cannot launch a worker afterwards', async t 
   assert.equal(await fs.stat(path.join(directory, 'worker.log')).catch(() => null), null);
 });
 
-test('closing the lab during initial persistence prevents a late experiment launch', async t => {
+test('closing the lab during initial persistence prevents a late experiment launch', { timeout: 15000 }, async t => {
   const f = await fixture(t, { referenceRunner: async () => ({ total: 1, names: ['value'], files: [] }) }), original = f.engine.store.save.bind(f.engine.store);
   let release, saving;
+  t.signal.addEventListener('abort', () => release?.(), { once: true });
   const entered = new Promise(resolve => { saving = resolve; });
   f.engine.store.save = async experiment => {
     if (!release) { await new Promise(resolve => { release = resolve; saving(); }); }
@@ -570,7 +652,7 @@ test('closing the lab during initial persistence prevents a late experiment laun
   assert.deepEqual(await f.readCalls(), []);
 });
 
-test('stop cancels the persisted reference stage without starting any model', async t => {
+test('stop cancels the persisted reference stage without starting any model', { timeout: 15000 }, async t => {
   let entered;
   const checking = new Promise(resolve => { entered = resolve; });
   const f = await fixture(t, { referenceRunner: ({ signal }) => new Promise((resolve, reject) => {
@@ -647,7 +729,7 @@ isolatedTest('a failing reference rejects start with its reason and is excluded 
     "const { test } = require('node:test');\ntest('bad reference', () => { throw new Error('reference is broken'); });\n");
   await f.git('add', '.'); await f.git('commit', '-m', 'Invalid historical reference');
   const task = await profileTask(f.projectPath, await f.git('rev-parse', 'HEAD'));
-  const failure = await f.engine.start({ ...f.input, tasks: [task] }).catch(error => error);
+  const failure = await f.engine.start({ ...f.input, ...historySelection([task]) }).catch(error => error);
   assert.match(failure.message, /参考测试未通过[\s\S]*Invalid historical reference/);
   assert.deepEqual(await f.readCalls(), []); assert.equal(f.engine.active, null);
   const experiment = (await f.engine.list())[0];
@@ -658,8 +740,9 @@ isolatedTest('a failing reference rejects start with its reason and is excluded 
   assert.match(await fs.readFile(log, 'utf8'), /reference is broken/);
   const reopened = new LabEngine({ userData: f.userData, getProjects: () => [f.project], prices });
   assert.equal((await reopened.list())[0].state, 'error');
+  await reopened.cleanupTail; reopened.close();
   assert.match(await fs.readFile(log, 'utf8'), /reference is broken/);
-  const next = await f.engine.sample({ projectId: 'p', size: 3, preferShortComplex: true });
+  const next = await f.engine.sample({ source: 'history', projectId: 'p', size: 3, preferShortComplex: true });
   assert.ok(next.every(candidate => candidate.id !== task.id));
 });
 
@@ -707,7 +790,7 @@ isolatedTest('a hidden test needing Electron distribution data retries the refer
   const validate = f.engine.referenceRunner;
   let reference;
   f.engine.referenceRunner = async options => (reference = await validate(options));
-  const id = await f.engine.start({ ...f.input, tasks: [task] }); await f.engine.active.done;
+  const id = await f.engine.start({ ...f.input, ...historySelection([task]) }); await f.engine.active.done;
   const experiment = (await f.engine.list())[0], artifacts = path.join(f.engine.store.folder(id), 'references', task.id);
   assert.equal(reference.electronDist, true); assert.equal(reference.total, 3);
   assert.match(await fs.readFile(path.join(artifacts, 'tests-compact.log'), 'utf8'), /ENOENT/);
@@ -722,7 +805,7 @@ test('reference infrastructure cleanup errors do not blacklist a valid task', as
   });
   await assert.rejects(f.engine.start(f.input), /temporary cleanup failure/);
   assert.equal(f.engine.referenceFailures.size, 0);
-  const sample = await f.engine.sample({ projectId: 'p', size: 1, preferShortComplex: true });
+  const sample = await f.engine.sample({ source: 'history', projectId: 'p', size: 1, preferShortComplex: true });
   assert.equal(sample[0].id, f.task.id);
 });
 
@@ -810,11 +893,16 @@ test('startup kills reparented marked processes and removes stale repositories a
   t.after(() => killMarked(runId));
   assert.ok((await markedPids(runId)).includes(pid));
   await f.engine.store.save({
-    ...f.input, id, createdAt: 1, state: 'running', spentUsd: 0,
+    id, createdAt: 1, state: 'running', spentUsd: 0, tasks: [f.task],
     runs: [{ id: runId, state: 'running', activeModel: 'gpt-6.1-sol' }],
   });
+  assert.equal((await f.engine.store.list()).find(experiment => experiment.id === id)?.state, 'running');
   const restored = new LabEngine({ userData: f.userData, getProjects: () => [f.project], prices });
-  assert.equal((await restored.list())[0].state, 'stopped');
+  await restored.ready;
+  const stopped = (await restored.list()).find(experiment => experiment.id === id);
+  assert.ok(stopped, 'the valid persisted experiment must be visible when ready resolves');
+  assert.equal(stopped.state, 'stopped');
+  await restored.cleanupTail; restored.close();
   assert.deepEqual(await markedPids(runId), []);
   for (const file of [privateDirectory, path.join(directory, 'repository.git'), path.join(directory, 'workspaces')]) {
     assert.equal(await fs.stat(file).catch(() => null), null);

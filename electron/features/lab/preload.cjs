@@ -9,6 +9,8 @@ const subscribe = (channel, callback) => {
 contextBridge.exposeInMainWorld('agentrixLab', {
   list: () => ipcRenderer.invoke('lab:list'),
   projects: () => ipcRenderer.invoke('lab:projects'),
+  sources: () => ipcRenderer.invoke('lab:sources'),
+  aaKey: value => ipcRenderer.invoke('lab:aa-key', value),
   sample: request => ipcRenderer.invoke('lab:sample', request),
   estimate: input => ipcRenderer.invoke('lab:estimate', input),
   start: input => ipcRenderer.invoke('lab:start', input),

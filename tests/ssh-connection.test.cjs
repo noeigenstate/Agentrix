@@ -2,29 +2,189 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const net = require('node:net');
+const { spawn } = require('node:child_process');
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
+const vm = require('node:vm');
+const { createRequire } = require('node:module');
 const { randomUUID } = require('node:crypto');
 const { SSHAuthServer } = require('../electron/ssh-auth.cjs');
 const { RemoteConnection } = require('../electron/remote-connection.cjs');
 const { PreviewResources, resourceResponse } = require('../electron/preview-resources.cjs');
 const { FileOperations } = require('../electron/file-operations.cjs');
-const { createSSHFixture } = require('./helpers/ssh-fixture.cjs');
+const { createSSHFixture, SSHWorker } = require('./helpers/ssh-fixture.cjs');
 const { ProjectGit, gitEnvironment } = require('../electron/project-git.cjs');
 const execGit = require('node:util').promisify(require('node:child_process').execFile);
 
 const integrationDir = path.resolve(__dirname, '..', 'integration');
 const sshPath = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/OpenSSH/ssh.exe') : 'ssh';
-const waitFor = async (callback, what = 'SSH test') => { const started = Date.now(); while (Date.now() - started < 15000) { if (await callback()) return; await new Promise(resolve => setTimeout(resolve, 50)); } throw new Error(`Timed out waiting for ${what}`); };
+const waitFor = async (callback, what = 'SSH test', timeoutMs = 15000) => { const started = Date.now(); while (Date.now() - started < timeoutMs) { if (await callback()) return; await new Promise(resolve => setTimeout(resolve, 50)); } throw new Error(`Timed out waiting for ${what}`); };
+
+async function loadSSHWorker(processStub, execFile) {
+  const filename = path.join(__dirname, 'helpers/ssh-fixture.cjs'), localRequire = createRequire(filename), module = { exports: {} };
+  vm.runInNewContext(await fs.readFile(filename, 'utf8'), { module, require: name => name === 'node:child_process'
+    ? { execFile, spawn: () => assert.fail('No worker may spawn in this regression.') } : localRequire(name),
+  setTimeout, clearTimeout, process: processStub }, { filename });
+  return module.exports.SSHWorker;
+}
+
+async function fixtureFor(t, options = {}) {
+  t.diagnostic('[ssh-test] begin ' + t.name);
+  const value = await createSSHFixture({ ...options, diagnostic: line => t.diagnostic(line) });
+  // Register before Git, askpass copies or authentication setup: a failed setup must still retire the listener.
+  t.after(() => value.close(), { timeout: 12000 });
+  t.signal.addEventListener('abort', () => {
+    if (!t.passed) t.diagnostic('[ssh-test] aborted ' + JSON.stringify(value.snapshot()));
+  }, { once: true });
+  return value;
+}
+
+async function askpassFor(fixture) {
+  if (process.platform !== 'win32') return undefined;
+  const target = path.join(fixture.directory, 'askpass.exe');
+  try { await fs.copyFile(path.join(integrationDir, 'ssh-askpass.exe'), target); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    await execGit(path.join(process.env.SystemRoot, 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),
+      ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', '/out:' + target, path.join(integrationDir, 'ssh-askpass.cs')],
+      { windowsHide: true, timeout: 10000 });
+  }
+  return target;
+}
+
+test('SSH fixture cleanup has a hard deadline and reports the worker without exposing its output', { timeout: 2000 }, async () => {
+  const child = Object.assign(new EventEmitter(), {
+    exitCode: null, signalCode: null, stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough(),
+    kill() {}, unref() { this.unreferenced = true; },
+  });
+  const messages = [], worker = new SSHWorker(child, line => messages.push(line), { graceMs: 10, timeoutMs: 20 });
+  child.stdout.write('private fixture output'); child.stderr.write('private fixture error');
+  await assert.rejects(worker.close(), /worker did not close: pid=0 exitCode=null signal=null stdoutBytes=22 stderrBytes=21/);
+  assert.equal(child.unreferenced, true);
+  assert.ok(child.stdin.destroyed && child.stdout.destroyed && child.stderr.destroyed);
+  assert.ok(messages.some(message => /cleanup force pid=0/.test(message)));
+  assert.doesNotMatch(messages.join('\n'), /private fixture/);
+  await assert.rejects(worker.close(), /worker did not close/);
+});
+
+test('SSH fixture cleanup finds a reparented worker by process group and its separate PTY session', { timeout: 2000 }, async () => {
+  const signals = [], messages = [];
+  const rows = [{ pid: 900001, parent: 1, group: 900000, name: 'python3' },
+    { pid: 900002, parent: 900001, group: 900002, name: 'bash' },
+    { pid: 900003, parent: 1, group: 900003, name: 'unrelated' }];
+  const child = Object.assign(new EventEmitter(), { pid: 900000, exitCode: null, signalCode: null,
+    stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), unref() {} });
+  const execFile = () => assert.fail('No real process may run in the fixture cleanup regression.');
+  execFile[require('node:util').promisify.custom] = async (file, args, options) => {
+    assert.equal(file, '/bin/ps'); assert.equal(options.timeout, 1000);
+    return { stdout: rows.filter(row => !row.dead).map(row => `${row.pid} ${row.parent} ${row.group} S ${row.name}`).join('\n') };
+  };
+  const Worker = await loadSSHWorker({ platform: 'linux', pid: process.pid, kill(pid, signal) {
+    signals.push([pid, signal]);
+    if (signal === 'SIGKILL') for (const row of rows) if (row.pid === pid || row.group === -pid) row.dead = true;
+    if (rows[0].dead && rows[1].dead) queueMicrotask(() => child.emit('close', 1, 'SIGKILL'));
+  } }, execFile);
+  const worker = new Worker(child, line => messages.push(line), { graceMs: 10, timeoutMs: 50 });
+  await worker.close();
+  assert.ok(rows[0].dead && rows[1].dead); assert.ok(!rows[2].dead);
+  for (const pid of [900001, 900002]) {
+    assert.ok(signals.some(([id, signal]) => id === pid && signal === 'SIGSTOP'));
+    assert.ok(signals.some(([id, signal]) => id === pid && signal === 'SIGKILL'));
+  }
+  assert.ok(!signals.some(([pid]) => Math.abs(pid) === 900003));
+  assert.ok(messages.includes('[ssh-fixture] cleanup reap pid=900002 name=bash'));
+  for (const stream of [child.stdin, child.stdout, child.stderr]) stream.destroy();
+});
+
+test('SSH fixture verifies process state after EPERM and refuses surviving descendants', { timeout: 2000 }, async t => {
+  for (const outcome of ['missing', 'zombie', 'live', 'unseen-live']) await t.test(outcome, { timeout: 500 }, async t => {
+    const root = 900010, descendant = 900011, messages = [];
+    const rows = [{ pid: root, parent: 1, group: root, state: 'S' },
+      { pid: descendant, parent: root, group: outcome === 'unseen-live' ? root : descendant, state: 'S' }];
+    const child = Object.assign(new EventEmitter(), { pid: root, exitCode: null, signalCode: null,
+      stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), unref() {} });
+    t.after(() => { for (const stream of [child.stdin, child.stdout, child.stderr]) stream.destroy(); });
+    let scans = 0;
+    const execFile = () => assert.fail('No real process may run in the EPERM regression.');
+    execFile[require('node:util').promisify.custom] = async () => {
+      scans++;
+      const visible = outcome === 'unseen-live' && scans <= 2 ? [] : rows.filter(row => row.state);
+      return { stdout: visible.map(row => `${row.pid} ${row.parent} ${row.group} ${row.state} node`).join('\n') };
+    };
+    const Worker = await loadSSHWorker({ platform: 'darwin', pid: process.pid, kill(pid, signal) {
+      if (pid === descendant) {
+        rows[1].parent = 1;
+        if (signal === 'SIGKILL' && outcome === 'missing') rows[1].state = null;
+        if (signal === 'SIGKILL' && outcome === 'zombie') rows[1].state = 'Z';
+        throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      }
+      if (signal === 'SIGKILL' && (pid === root || pid === -root)) {
+        rows[0].state = null;
+        queueMicrotask(() => child.emit('close', null, 'SIGKILL'));
+        if (pid < 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      }
+    } }, execFile);
+    const worker = new Worker(child, line => messages.push(line), { graceMs: 5, timeoutMs: 40 });
+    if (outcome.endsWith('live')) await assert.rejects(worker.close(), /descendants did not exit: pid=900011 name=node state=S/);
+    else { await worker.close(); assert.equal(rows[1].state, outcome === 'missing' ? null : 'Z'); }
+    assert.equal(worker.didClose, true);
+    assert.ok(scans >= 3, 'closing stdio and EPERM must still be followed by a process-state check');
+    assert.ok(messages.some(message => /cleanup signal denied .*code=EPERM/.test(message)));
+  });
+});
+
+test('SSH fixture closes an unauthenticated transport that refuses to finish its connection', { timeout: 5000 }, async t => {
+  const messages = [], value = await createSSHFixture({ nativeWorker: false, diagnostic: line => messages.push(line) });
+  t.after(() => value.close(), { timeout: 3000 });
+  const socket = net.connect({ port: value.port, host: '127.0.0.1', allowHalfOpen: true });
+  t.after(() => socket.destroy()); socket.on('error', () => {}); socket.resume();
+  await new Promise((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
+  const ended = new Promise(resolve => { socket.once('end', resolve); socket.once('close', resolve); });
+  await value.close();
+  await Promise.race([ended, new Promise((_, reject) => {
+    const timer = setTimeout(() => reject(new Error('SSH fixture left its unauthenticated transport open.')), 1000);
+    ended.then(() => clearTimeout(timer));
+  })]);
+  assert.ok(socket.readableEnded || socket.destroyed, 'the unauthenticated peer observes EOF or closure');
+  assert.equal(value.snapshot().transports, 0);
+  assert.ok(messages.includes('[ssh-fixture] cleanup complete failures=0'));
+});
+
+test('SSH fixture reaps a TERM-resistant worker and a detached descendant retaining stdio',
+  { timeout: 10000, skip: process.platform === 'win32' }, async t => {
+    const childCode = "process.on('SIGTERM',()=>{});process.send('ready');setInterval(()=>{},1000);";
+    const code = `const {spawn}=require('node:child_process');process.on('SIGTERM',()=>{});
+      const child=spawn(process.execPath,['-e',${JSON.stringify(childCode)}],{detached:true,stdio:['ignore','inherit','ignore','ipc']});
+      child.once('message',()=>console.log(child.pid));setInterval(()=>{},1000);`;
+    const child = spawn(process.execPath, ['-e', code], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const messages = [], worker = new SSHWorker(child, line => messages.push(line), { graceMs: 50 });
+    t.after(() => worker.close(), { timeout: 7000 });
+    let output = ''; child.stdout.on('data', chunk => { output += chunk; });
+    await waitFor(() => /^\d+\s*$/.test(output), 'the detached SSH fixture descendant', 2000);
+    const descendant = Number(output.trim());
+    await worker.close();
+    assert.equal(worker.didClose, true);
+    assert.equal(child.signalCode, 'SIGKILL');
+    assert.ok(child.stdout.destroyed && child.stderr.destroyed, 'the descendant releases the inherited worker stdout');
+    assert.ok(messages.some(message => /cleanup force pid=/.test(message)));
+    assert.ok(messages.some(message => message.includes('cleanup reap pid=' + descendant)));
+    const state = await execGit('/bin/ps', ['-p', String(descendant), '-o', 'stat='], { timeout: 1000 }).catch(error => {
+      if (error.code === 1) return { stdout: '' }; throw error;
+    });
+    assert.ok(!state.stdout.trim() || state.stdout.trim().startsWith('Z'), 'the descendant cannot keep running');
+  });
 
 test('native OpenSSH reuses host config, authenticates once and carries terminal plus file requests', { timeout: 30000 }, async t => {
-  const fixture = await createSSHFixture();
-  for (const args of [['init', '-b', 'main'], ['config', 'user.name', 'SSH Test'], ['config', 'user.email', 'test@example.invalid'], ['commit', '--allow-empty', '-m', 'SSH history']]) await execGit('git', ['-C', fixture.project, ...args], { env: gitEnvironment(), windowsHide: true });
+  const fixture = await fixtureFor(t);
+  for (const args of [['init', '-b', 'main'], ['config', 'user.name', 'SSH Test'], ['config', 'user.email', 'test@example.invalid'], ['commit', '--allow-empty', '-m', 'SSH history']]) await execGit('git', ['-C', fixture.project, ...args], { env: gitEnvironment(), windowsHide: true, timeout: 5000, signal: t.signal });
   await fs.writeFile(path.join(fixture.project, 'git-status.txt'), 'untracked');
   const auth = await new SSHAuthServer().start();
   const events = []; let output = '';
   const project = { id: randomUUID(), kind: 'ssh', path: process.platform === 'win32' ? '/srv/fixture' : fixture.project, ssh: { host: 'fixture', configFile: fixture.configFile } };
   const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: 'test-session-key', onEvent: event => events.push(event) });
   connection.onData(data => { output += data; });
-  t.after(async () => { connection.close(); auth.close(); await fixture.close(); });
+  t.after(async () => { connection.close(); auth.close(); await fixture.close(); }, { timeout: 12000 });
   await connection.ready;
   const gitReader = new ProjectGit(() => connection);
   assert.equal((await gitReader.read(project, 'status')).files[0].path, 'git-status.txt');
@@ -53,9 +213,8 @@ test('native OpenSSH reuses host config, authenticates once and carries terminal
 });
 
 test('terminals on one host share its SSH connection: one login, their own output, and each closes on its own', { timeout: 30000 }, async t => {
-  const fixture = await createSSHFixture({ password: true });
-  const askpassPath = process.platform === 'win32' ? path.join(fixture.directory, 'askpass.exe') : undefined;
-  if (askpassPath) await fs.copyFile(path.join(integrationDir, 'ssh-askpass.exe'), askpassPath);
+  const fixture = await fixtureFor(t, { password: true });
+  const askpassPath = await askpassFor(fixture);
   const prompts = new Set();
   const auth = await new SSHAuthServer(queue => {
     const prompt = queue[0];
@@ -68,7 +227,7 @@ test('terminals on one host share its SSH connection: one login, their own outpu
     output[key] = ''; connection.onData(data => { output[key] += data; }); opened.push(connection);
     return connection;
   };
-  t.after(async () => { for (const connection of opened) connection.close(); auth.close(); await fixture.close(); });
+  t.after(async () => { for (const connection of opened) connection.close(); auth.close(); await fixture.close(); }, { timeout: 12000 });
   const prompted = key => waitFor(() => events.some(event => event.type === 'shell-prompt' && event.sessionKey === key), `the ${key} prompt`);
   const first = open('first'), second = open('second');
   await Promise.all([first.ready, second.ready, prompted('first'), prompted('second')]);
@@ -96,13 +255,13 @@ test('terminals on one host share its SSH connection: one login, their own outpu
 });
 
 test('SSH sends unchanged skills by key on the same link and resends only when the bundle changes', { timeout: 30000 }, async t => {
-  const fixture = await createSSHFixture(), auth = await new SSHAuthServer().start(), opened = [];
+  const fixture = await fixtureFor(t), auth = await new SSHAuthServer().start(), opened = [];
   const project = { id: randomUUID(), kind: 'ssh', path: process.platform === 'win32' ? '/srv/fixture' : fixture.project, ssh: { host: 'fixture', configFile: fixture.configFile } };
   const open = skills => {
     const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: randomUUID(), skills });
     opened.push(connection); return connection;
   };
-  t.after(async () => { for (const connection of opened) connection.close(); auth.close(); await fixture.close(); });
+  t.after(async () => { for (const connection of opened) connection.close(); auth.close(); await fixture.close(); }, { timeout: 12000 });
   const bundle = { key: 'a'.repeat(64), instructions: 'Read-only references.', files: [{ id: 'user:test', scope: 'global', name: 'test', text: '---\nname: test\ndescription: Test.\n---\nBody.' }] };
   const first = open(bundle); await first.ready;
   const sent = [], write = first.link.child.stdin.write.bind(first.link.child.stdin);
@@ -118,9 +277,8 @@ test('SSH sends unchanged skills by key on the same link and resends only when t
 });
 
 test('native SSH prompts for a first host key and password without writing credentials to project config',{ timeout: 30000 }, async t => {
-  const fixture = await createSSHFixture({ password: true, unknownHost: true, nativeWorker: false });
-  const askpassPath = process.platform === 'win32' ? path.join(fixture.directory, 'askpass.exe') : undefined;
-  if (askpassPath) await fs.copyFile(path.join(integrationDir, 'ssh-askpass.exe'), askpassPath);
+  const fixture = await fixtureFor(t, { password: true, unknownHost: true, nativeWorker: false });
+  const askpassPath = await askpassFor(fixture);
   const prompts = [];
   const auth = await new SSHAuthServer(queue => {
     const prompt = queue[0];
@@ -129,7 +287,7 @@ test('native SSH prompts for a first host key and password without writing crede
     setImmediate(() => auth.answer(prompt.id, prompt.kind === 'confirm' ? 'yes' : fixture.secret));
   }).start();
   const connection = new RemoteConnection({ id: randomUUID(), kind: 'ssh', path: '/srv/fixture', ssh: { host: 'fixture', configFile: fixture.configFile } }, { integrationDir, auth, sshPath, askpassPath, sessionKey: 'test-auth-key' });
-  t.after(async () => { connection.close(); auth.close(); await fixture.close(); });
+  t.after(async () => { connection.close(); auth.close(); await fixture.close(); }, { timeout: 12000 });
   await connection.ready;
   assert.ok(prompts.includes('confirm'));
   assert.ok(prompts.includes('secret'));
@@ -137,17 +295,17 @@ test('native SSH prompts for a first host key and password without writing crede
   assert.ok((await fs.readFile(fixture.knownHosts, 'utf8')).trim().length > 0);
 });
 
-test('untrusted askpass requests are rejected without displaying a credential prompt', async t => {
+test('untrusted askpass requests are rejected without displaying a credential prompt', { timeout: 10000 }, async t => {
   const auth = await new SSHAuthServer().start();
   t.after(() => auth.close());
   auth.register('test-project', 'fixture', () => {});
-  const response = await fetch(auth.url, { method: 'POST', headers: { Authorization: 'Bearer wrong', 'Content-Type': 'application/json' }, body: JSON.stringify({ connectionId: 'test-project', prompt: 'password' }) });
+  const response = await fetch(auth.url, { method: 'POST', signal: AbortSignal.any([t.signal, AbortSignal.timeout(3000)]), headers: { Authorization: 'Bearer wrong', 'Content-Type': 'application/json' }, body: JSON.stringify({ connectionId: 'test-project', prompt: 'password' }) });
   assert.equal(response.status, 403);
   assert.equal(auth.getPending().length, 0);
 });
 
 test('Linux SSH Claude wrapper forwards hooks and reads compacted transcripts over the worker', { timeout: 40000, skip: process.platform === 'win32' }, async t => {
-  const fixture = await createSSHFixture({ nativeWorker: true });
+  const fixture = await fixtureFor(t, { nativeWorker: true });
   const auth = await new SSHAuthServer().start(), events = [];
   const project = { id: randomUUID(), kind: 'ssh', path: fixture.project, ssh: { host: 'fixture', configFile: fixture.configFile } };
   const stub = `#!/usr/bin/env python3
@@ -193,7 +351,7 @@ hook("Stop")
   const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: 'test-claude-key', readingNote, skills, onEvent: event => events.push(event) });
   let output = '';
   connection.onData(data => { output += data; });
-  t.after(async () => { connection.close(); auth.close(); await fixture.close(); });
+  t.after(async () => { connection.close(); auth.close(); await fixture.close(); }, { timeout: 12000 });
   await connection.ready;
   await waitFor(() => events.some(event => event.type === 'shell-prompt' && event.claudeAvailable));
   connection.write('claude --resume fixture\r');
@@ -222,7 +380,7 @@ hook("Stop")
 });
 
 test('Linux remote worker reads real files, enforces boundaries and emits Codex completion', { timeout: 40000, skip: process.platform === 'win32' }, async t => {
-  const fixture = await createSSHFixture({ nativeWorker: true });
+  const fixture = await fixtureFor(t, { nativeWorker: true });
   const auth = await new SSHAuthServer().start();
   const project = { id: randomUUID(), kind: 'ssh', path: fixture.project, ssh: { host: 'fixture', configFile: fixture.configFile } };
   const events = []; let output = '';
@@ -234,7 +392,7 @@ test('Linux remote worker reads real files, enforces boundaries and emits Codex 
   await fs.writeFile(path.join(fixture.home, 'bin', 'codex'), stub, { mode: 0o755 });
   const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: 'test-linux-key', onEvent: event => events.push(event) });
   connection.onData(data => { output += data; });
-  t.after(async () => { connection.close(); auth.close(); await fixture.close(); });
+  t.after(async () => { connection.close(); auth.close(); await fixture.close(); }, { timeout: 12000 });
   await connection.ready;
   assert.equal((await connection.request('preview', { path: 'hello.txt', page: 0 })).content, '中文 remote file');
   assert.equal((await connection.request('preview', { path: 'image.png', page: 0 })).kind, 'image');

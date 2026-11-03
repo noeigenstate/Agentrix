@@ -69,7 +69,7 @@ async function runtimeSmoke(output) {
     const page = await app.firstWindow(); await page.waitForSelector('.project-panel');
     await app.evaluate((_electron, bin) => { process.env.PATH = bin; }, bin);
     const recovered = await page.evaluate(() => window.agentrix.nativeSession.getSettings());
-    assert.equal(recovered.value.claudePath, 'terminal-only');
+    assert.equal(recovered.value.claudePath, 'api-then-terminal');
     assert.ok((await fs.readdir(path.join(profile, 'native-session'))).some(name => name.includes('.corrupt')));
     checks.push('corrupt usage is quarantined without blocking the real main window');
     // The test process owns this isolated profile. A fake secure backend also permits the offline Linux CI runner.
@@ -112,7 +112,9 @@ async function runtimeSmoke(output) {
     assert.ok(claude.some(row => row.control === 'initialize'), 'the packaged SDK performs its real initialize handshake');
     assert.ok(claude.some(row => row.args?.some(arg => arg === '--resume' || arg.startsWith('--resume='))));
     assert.equal(new Set(claude.filter(row => row.user).map(row => row.sessionId)).size, 1, 'Claude resumes its original provider session');
-    assert.ok(claude.filter(row => row.childResults).every(row => row.childResults.every(child => !child.keyPresent)));
+    assert.ok(claude.filter(row => row.spawn).every(row => !row.scrub));
+    assert.ok(claude.some(row => row.childResults?.length === 3));
+    assert.ok(claude.filter(row => row.childResults).every(row => row.childResults.every(child => child.keyPresent)));
     if (packaged) {
       const resources = await app.evaluate(() => process.resourcesPath);
       const entry = path.join(resources, 'app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs');
@@ -124,7 +126,8 @@ async function runtimeSmoke(output) {
         if (stat.isFile()) assert.ok(!(await fs.readFile(absolute)).includes(Buffer.from(fakeKey)), `key persisted in ${path.basename(file)}`);
       }
     }
-    checks.push('fake tool/hook/MCP child environments and persisted SDK profile contain no key');
+    checks.push('owner tool/hook/MCP children retain the owner environment; persisted SDK profile contains no key');
+    // Dispatched workers scrub credentials in the independent claude-sdk-wire test.
     await page.screenshot({ path: path.join(output, 'runtime-providers.png') });
   } finally {
     await fs.writeFile(path.join(output, 'runtime-results.json'), JSON.stringify({ checks }, null, 2));

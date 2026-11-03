@@ -4,6 +4,7 @@ const { EventEmitter } = require('node:events');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createRequire } = require('node:module');
 const { createLab } = require('../electron/features/lab/index.cjs');
 const { createLabWindow } = require('../electron/features/lab/window.cjs');
 const { buildMacMenuTemplate } = require('../electron/app/mac-menu.cjs');
@@ -45,6 +46,8 @@ function fixture(t, extra = {}) {
     subscribe(listener) { this.changes = listener; return () => { this.changes = null; }; },
     async list() { return structuredClone(this.experiments); },
     async projects() { return [{ id: 'p', name: 'Project' }]; },
+    async sources() { return []; },
+    async aaKey(value) { this.calls.push(['aaKey', value]); return value !== null; },
     async sample(value) { this.calls.push(['sample', value]); return []; },
     async estimate(value) { this.calls.push(['estimate', value]); return { runs: 2, minutes: 2, costUsd: 0.5, basis: 'default' }; },
     async start(value) { if (this.error) throw new Error(this.error); this.calls.push(['start', value]); return 'id'; },
@@ -59,6 +62,85 @@ function fixture(t, extra = {}) {
   t.after(() => lab.dispose());
   return { main, created, ipcMain, settings, engine, lab };
 }
+
+test('importing and wiring the lab before the first window never loads the engine or touches Electron safeStorage', async () => {
+  const file = path.join(__dirname, '../electron/features/lab/index.cjs'), localRequire = createRequire(file);
+  const module = { exports: {} }, ipcMain = new Ipc(); let engineLoads = 0, storageReads = 0;
+  vm.runInNewContext(await fs.readFile(file, 'utf8'), {
+    module, __dirname: path.dirname(file), process: { platform: 'darwin', versions: { electron: 'fixture' } },
+    setTimeout, clearTimeout, setImmediate, clearImmediate,
+    require(name) {
+      if (name === './engine.cjs') { engineLoads++; throw new Error('Engine loaded before a window was shown.'); }
+      if (name === 'electron') return { get safeStorage() { storageReads++; throw new Error('Keychain touched during startup.'); } };
+      return localRequire(name);
+    },
+  });
+  const lab = module.exports.createLab({ userData: '/unused', getSettings: () => ({ theme: 'dark', language: 'zh' }),
+    getProjects: () => [], getMainWindow: () => null, BrowserWindow: Window, ipcMain });
+  lab.sync(); assert.equal(lab.waitForQuit(), null); lab.dispose();
+  assert.equal(engineLoads, 0); assert.equal(storageReads, 0); assert.equal(ipcMain.handlers.size, 0);
+});
+
+async function mainStartup(t, engineFactory) {
+  const main = await fs.readFile(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const start = main.indexOf('    window = new BrowserWindow({');
+  const end = main.indexOf('    for (const project of store.projects) projectImageAuto.enqueue(project);', start);
+  assert.ok(start > main.indexOf('app.whenReady()') && end > start);
+  const created = [], ipcMain = new Ipc(), noop = () => {};
+  const context = vm.createContext({ path, root: '/fixture/app', __dirname: '/fixture/app/electron', integrationDir: '/fixture/integration',
+    app: { getPath: () => '/unused' }, process: { platform: 'darwin' }, minWidth: 820, minHeight: 560,
+    store: { projects: [], settings: { theme: 'dark', language: 'zh', uiZoom: 100, shortcuts: {} } },
+    t: value => value, windowBackgroundColor: () => '#181818', desktopGlassWindow: false,
+    BrowserWindow: class extends Window {
+      constructor(options) { super(options); created.push(this); }
+      async loadURL(url) { await super.loadURL(url); this.emit('ready-to-show'); }
+      show() { super.show(); this.emit('show'); }
+    },
+    macTitlebar: null, registerMacTitlebar: noop, send: noop, broadcast: noop, screen: {},
+    windowZoom: null, registerWindowZoom: () => ({ percent: 100 }), dashboardWindow: null, createDashboard: noop,
+    dashboard: {}, syncDashboardLive: noop, ipcMain, devUrl: null, labWindow: null,
+    createLab: options => createLab({ ...options, engineFactory }), registerWindowContents: noop,
+    registerWindowLifecycle: ({ window }) => window.once('ready-to-show', () => window.show()),
+    Menu: { setApplicationMenu: noop }, clipboard: {}, previewResources: {}, pictureFrom: noop,
+    quitting: false, requestQuit: noop, report: noop, updateIndicators: noop, attentionTimer: null, clearTimeout,
+    tray: null, Tray: class extends EventEmitter { setToolTip() {} }, trayImage: noop, trayMenu: noop,
+    showWindow: noop, macMenu: noop, captureBranch: noop,
+  });
+  await vm.runInContext(`(async () => { ${main.slice(start, end)} })()`, context);
+  t.after(() => context.labWindow.dispose());
+  return { context, created, ipcMain };
+}
+
+test('the actual main-window startup creates and shows its page while lab initialization never resolves', { timeout: 3000 }, async t => {
+  let calls = 0;
+  const { context, created } = await mainStartup(t, () => { calls++; return new Promise(() => {}); });
+  assert.equal(created.length, 1); assert.equal(context.window.shown, true);
+  assert.equal(context.window.url, 'agentrix://app/index.html'); assert.equal(calls, 0);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 1); assert.equal(context.labWindow.waitForQuit(), null);
+  assert.equal(context.window.shown, true); assert.equal(context.window.isDestroyed(), false);
+});
+
+test('an engine construction failure is returned only to lab IPC after the main window has loaded', async t => {
+  let calls = 0;
+  const { context, created, ipcMain } = await mainStartup(t, () => { calls++; throw new Error('fixture lab initialization failure'); });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(context.window.shown, true); assert.equal(context.window.url, 'agentrix://app/index.html');
+  await context.labWindow.open();
+  assert.deepEqual(await ipcMain.invoke('lab:list', sender(created[1])), { ok: false, error: 'fixture lab initialization failure' });
+  assert.equal(calls, 1); assert.equal(context.window.isDestroyed(), false);
+});
+
+test('disposing during deferred initialization closes a late engine without leaking its rejected readiness promise', async t => {
+  let complete, closed = 0;
+  const { context, ipcMain } = await mainStartup(t, () => new Promise(resolve => { complete = resolve; }));
+  await new Promise(resolve => setImmediate(resolve));
+  context.labWindow.dispose();
+  complete({ ready: Promise.reject(new Error('fixture late initialization failure')), close() { closed++; },
+    subscribe() { assert.fail('a disposed lab cannot subscribe to its engine'); } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(closed, 1); assert.equal(ipcMain.handlers.size, 0);
+});
 
 test('lab window has one sandboxed instance, its own preload and synchronized appearance without refocusing', async t => {
   let zoom = 90;
@@ -130,7 +212,7 @@ test('lab IPC requires the exact main frame and page and only the main window ma
   assert.equal((await ipcMain.invoke('lab:open', { ...sender(main), senderFrame: { url: main.webContents.mainFrame.url } })).ok, false);
   assert.equal((await ipcMain.invoke('lab:open', sender(main))).ok, true);
   const own = created[0];
-  const requests = [['list'], ['projects'], ['sample', {}], ['estimate', {}], ['start', {}], ['stop', 'id'], ['remove', 'id'], ['appearance']];
+  const requests = [['list'], ['projects'], ['sources'], ['aa-key', null], ['sample', {}], ['estimate', {}], ['start', {}], ['stop', 'id'], ['remove', 'id'], ['appearance']];
   for (const [action, arg] of requests) {
     assert.equal((await ipcMain.invoke('lab:' + action, sender(main), arg)).ok, false, action);
     assert.equal((await ipcMain.invoke('lab:' + action, sender(foreign), arg)).ok, false, action);
@@ -188,11 +270,12 @@ test('lab preload exposes exactly LabBridge and removes event listeners without 
     return { ipcRenderer, contextBridge: { exposeInMainWorld(key, value) { name = key; bridge = value; } } };
   } });
   assert.equal(name, 'agentrixLab');
-  assert.deepEqual(Object.keys(bridge).sort(), ['appearance', 'close', 'estimate', 'list', 'maximize', 'minimize', 'onAppearance', 'onChange', 'projects', 'remove', 'sample', 'start', 'stop']);
+  assert.deepEqual(Object.keys(bridge).sort(), ['aaKey', 'appearance', 'close', 'estimate', 'list', 'maximize', 'minimize', 'onAppearance', 'onChange', 'projects', 'remove', 'sample', 'sources', 'start', 'stop']);
   await bridge.list(); await bridge.projects(); await bridge.sample({ size: 1 }); await bridge.estimate({}); await bridge.start({});
   await bridge.stop('id'); await bridge.remove('id'); await bridge.appearance(); bridge.close(); bridge.minimize(); bridge.maximize();
+  await bridge.sources(); await bridge.aaKey(null);
   assert.deepEqual(calls, [['lab:list'], ['lab:projects'], ['lab:sample', { size: 1 }], ['lab:estimate', {}], ['lab:start', {}],
-    ['lab:stop', 'id'], ['lab:remove', 'id'], ['lab:appearance'], ['lab:close'], ['lab:minimize'], ['lab:maximize']]);
+    ['lab:stop', 'id'], ['lab:remove', 'id'], ['lab:appearance'], ['lab:close'], ['lab:minimize'], ['lab:maximize'], ['lab:sources'], ['lab:aa-key', null]]);
   let experiments, appearance;
   const off = bridge.onChange(value => { experiments = value; }), offAppearance = bridge.onAppearance(value => { appearance = value; });
   ipcRenderer.emit('lab:changed', { secret: true }, [{ id: 'a' }]); ipcRenderer.emit('lab:appearance-changed', {}, { theme: 'light' });

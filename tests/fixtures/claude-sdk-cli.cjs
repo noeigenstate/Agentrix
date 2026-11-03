@@ -6,7 +6,7 @@ const { spawnSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const mode = process.argv[2], args = process.argv.slice(3);
 if (mode === 'tool') {
-  process.stdout.write(JSON.stringify({ keyPresent: Object.keys(process.env).some(name => /^(ANTHROPIC_|CLAUDE_CODE_OAUTH)/i.test(name)), leaked: process.env.ANTHROPIC_API_KEY || null }));
+  process.stdout.write(JSON.stringify({ keyPresent: Object.keys(process.env).some(name => /^(ANTHROPIC_|CLAUDE_CODE_OAUTH)/i.test(name)) }));
   process.exit(0);
 }
 if (args.includes('--version')) {
@@ -21,7 +21,7 @@ let sessionId = resume || randomUUID();
 const costsFile = path.join(output, 'fake-costs.json');
 const costs = fs.existsSync(costsFile) ? JSON.parse(fs.readFileSync(costsFile, 'utf8')) : {};
 let total = costs[sessionId] || 0, turns = 0, activeTurn;
-append({ spawn: true, args, scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1' });
+append({ spawn: true, pid: process.pid, args, scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1' });
 function toolEnvironment() {
   const env = { ...process.env };
   if (env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1') for (const name of Object.keys(env)) {
@@ -66,6 +66,11 @@ reader.on('line', line => {
     return;
   }
   const params = message.params || {};
+  if (['thread/resume', 'turn/start', 'turn/steer', 'turn/interrupt'].includes(message.method)
+      && !params.threadId) {
+    send({ id: message.id, error: { code: -32602, message: 'Missing required threadId' } });
+    return;
+  }
   let result = {};
   if (message.method === 'initialize') result = { userAgent: 'codex/0.166.0' };
   else if (message.method === 'thread/start' || message.method === 'thread/resume') {

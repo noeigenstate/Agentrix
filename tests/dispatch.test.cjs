@@ -538,7 +538,7 @@ test('a worker that changes files outside --allow ends out of scope, with the fi
     setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'src/a.js': '', 'other/b.js': '', 'ledger.md': '# Ledger\n' }),
   });
   const { stdout } = await finished;
-  assert.match(stdout, /reason scope · OUT OF SCOPE: other\/b\.js · out /);
+  assert.match(stdout, /reason scope · OUT OF SCOPE: other\/b\.js · out-of-scope changes left live .* · out /);
   const end = events.find(event => event.type === 'dispatch-end');
   assert.equal(end.reason, 'scope');
   assert.deepEqual(end.outOfScope, ['other/b.js']);

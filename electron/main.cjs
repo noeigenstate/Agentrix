@@ -1156,6 +1156,7 @@ function structuredEvent(id, event) {
     sessions.set(id, s);
   }
   s.nativeRuntimeSessionId = event.runtimeSessionId;
+  if (event.type === 'error' && event.payload.code === 'native_cli_outdated') store.warning = t(event.payload.message);
   if (event.providerSessionId) {
     if (spec.agent === 'claude') s.claudeSessionId = event.providerSessionId;
     else s.reportedThreadId = event.providerSessionId;

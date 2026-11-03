@@ -17,31 +17,38 @@ function validUsage(value) {
     (value.unknownDays === undefined || Array.isArray(value.unknownDays) && value.unknownDays.every(day => /^\d{4}-\d{2}-\d{2}$/.test(day))) &&
     Object.values(value.days).every(value => count(value) !== null) &&
     Object.values(value.sessions).every(value => object(value) && count(value.cost) !== null && Array.isArray(value.seen)) &&
-    Object.values(value.reservations).every(value => object(value) && /^\d{4}-\d{2}$/.test(value.month) && count(value.micros) !== null);
+    [value.reservations, value.estimates || {}].every(entries => object(entries) &&
+      Object.values(entries).every(value => object(value) && /^\d{4}-\d{2}$/.test(value.month) && count(value.micros) !== null));
 }
 function createUsage({ file, now = Date.now }) {
   let data = readJson(file, { version: 1, days: {}, sessions: {}, reservations: {}, unknownDays: [] }, { validate: validUsage });
   data.unknownDays ||= [];
+  data.estimates ||= {};
   const commit = next => { writeJson(file, next); data = next; };
   const monthOf = () => utcDay(now()).slice(0, 7);
   const spent = (month = monthOf()) => Object.entries(data.days).filter(([day]) => day.startsWith(month)).reduce((sum, [, value]) => sum + value, 0);
-  const held = (month = monthOf()) => Object.values(data.reservations).filter(value => value.month === month).reduce((sum, value) => sum + value.micros, 0);
+  const pending = value => [...Object.values(value.reservations), ...Object.values(value.estimates)];
+  const held = (month = monthOf()) => pending(data).filter(value => value.month === month).reduce((sum, value) => sum + value.micros, 0);
   function uncertain(next, id) {
     const lease = next.reservations[id];
     if (!lease) return;
     lease.uncertain = true; lease.day ||= utcDay(now());
   }
   function settle(next, sessionId, exclude) {
-    for (const [id, lease] of Object.entries(next.reservations)) {
-      if (id !== exclude && lease.uncertain && lease.sessionId === sessionId) delete next.reservations[id];
+    for (const entries of [next.reservations, next.estimates]) {
+      for (const [id, lease] of Object.entries(entries)) {
+        if (id !== exclude && lease.uncertain && lease.sessionId === sessionId) delete entries[id];
+      }
     }
   }
   return {
     available(budget) { return budget === null ? Infinity : Math.max(0, micros(budget) - spent() - held()); },
-    reserve(budget, { sessionId = null, resume = false } = {}) {
+    reserve(budget, { sessionId = null, resume = false, maxBudgetUsd = Infinity } = {}) {
       const available = this.available(budget);
       if (available <= 0) throw Object.assign(new Error('本月 API 预算已用完。'), { code: 'budget_exhausted' });
-      const id = randomUUID(), amount = budget === null ? 0 : Math.min(available, 5e6);
+      const cap = maxBudgetUsd === Infinity ? Infinity : micros(maxBudgetUsd);
+      const id = randomUUID(), amount = budget === null ? 0 : Math.min(available, 5e6, cap ?? 0);
+      if (budget !== null && amount <= 0) throw Object.assign(new Error('本轮 API 预算已用完。'), { code: 'budget_exhausted' });
       const baseline = sessionId && data.sessions[sessionId] ? data.sessions[sessionId].cost : resume ? null : 0;
       const next = structuredClone(data);
       next.reservations[id] = { month: monthOf(), micros: amount, sessionId, baseline, day: utcDay(now()) };
@@ -60,6 +67,13 @@ function createUsage({ file, now = Date.now }) {
       if (!data.reservations[id]) return;
       const next = structuredClone(data); uncertain(next, id); commit(next);
     },
+    finish(id, { started = true } = {}) {
+      if (!data.reservations[id]) return;
+      const next = structuredClone(data), lease = next.reservations[id];
+      // A closed request has no live reservation. Its proved remaining cap is an unverified upper estimate.
+      if (started && lease.uncertain) next.estimates[id] = lease;
+      delete next.reservations[id]; commit(next);
+    },
     record(sessionId, result, { replay = false, resume = false, reservationId } = {}) {
       const snapshot = snapshotOf(result);
       if (replay || !sessionId) return { snapshot, deltaUsdMicros: null };
@@ -76,7 +90,7 @@ function createUsage({ file, now = Date.now }) {
         return { snapshot, deltaUsdMicros: null };
       }
       const next = structuredClone(data), lease = next.reservations[reservationId];
-      const knownLease = Object.values(data.reservations).find(value => value.sessionId === sessionId && value.baseline !== null && value.baseline !== undefined);
+      const knownLease = pending(data).find(value => value.sessionId === sessionId && value.baseline !== null && value.baseline !== undefined);
       const baseline = previous?.cost ?? knownLease?.baseline ?? (resume ? null : 0);
       const regression = baseline !== null && snapshot.costUsdMicros < baseline;
       const delta = baseline === null ? null : regression ? snapshot.costUsdMicros : snapshot.costUsdMicros - baseline;
@@ -104,7 +118,7 @@ function createUsage({ file, now = Date.now }) {
       return { snapshot, deltaUsdMicros: delta, usageRecordId: `${sessionId}:${epoch}:${resultId || snapshot.costUsdMicros}` };
     },
     summary() {
-      const unknown = [...data.unknownDays, ...Object.values(data.reservations).filter(value => value.uncertain).map(value => value.day)];
+      const unknown = [...data.unknownDays, ...pending(data).filter(value => value.uncertain).map(value => value.day)];
       const observed = Object.keys(data.sessions).length > 0;
       return { month: monthOf(), todayUsdMicros: !observed || unknown.includes(utcDay(now())) ? null : data.days[utcDay(now())] || 0,
         monthUsdMicros: !observed || unknown.some(day => day?.startsWith(monthOf())) ? null : spent(), estimated: true };

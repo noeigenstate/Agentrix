@@ -84,11 +84,13 @@
 .marks { display: flex; gap: 16px; }
 
 /* The new-experiment form. */
-.wizard { display: flex; flex-direction: column; gap: 16px; min-height: 100%; }
+/* `flex: none`: the form may be taller than the page, and a shrinking form would let its footer overflow past the page's bottom padding. */
+.wizard { display: flex; flex: none; flex-direction: column; gap: 16px; min-height: 100%; }
 .back { align-self: flex-start; }
 .steps { display: flex; align-items: center; gap: 16px; }
-.steps li { display: flex; flex: 1; align-items: center; gap: 16px; }
-.steps li:not(:last-child)::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+/* The items add no box of their own, so the button and the connector after it are siblings: every connector takes an equal share of what the buttons leave. */
+.steps li { display: contents; }
+.steps li:not(:last-child)::after { content: ""; flex: 1 1 0; min-width: 8px; height: 1px; background: var(--border); }
 .steps button { display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; background: none; color: var(--text-2); font: inherit; white-space: nowrap; }
 .steps button:not(:disabled) { cursor: pointer; }
 .steps li[aria-current="step"] button { color: var(--text-1); font-weight: 600; }
@@ -104,7 +106,9 @@
 .choices.four { grid-template-columns: repeat(4, 1fr); }
 .choice { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; padding: 16px; border: 1px solid var(--panel-line); border-radius: 12px; background: var(--bg-card); color: var(--text-1); font: inherit; text-align: left; cursor: pointer; }
 .choice:hover:not(:disabled) { border-color: var(--border-hover); }
-.choice:disabled { color: var(--text-3); cursor: default; }
+/* A card that cannot be chosen dims its icon and words, but not the reason: that is the one thing the owner can act on, so it keeps the muted text colour. */
+.choice:disabled { opacity: 1; color: var(--text-3); cursor: default; }
+.choice:disabled > :not(.reason) { opacity: .45; }
 /* The chosen card has the selected fill, the stronger border and a tick; an unchosen one has none of them. */
 .choice[aria-pressed="true"] { border-color: var(--border-hover); background: var(--bg-selected); }
 .choice[aria-pressed="true"]:disabled { color: var(--text-1); }
@@ -115,6 +119,7 @@
 .sample-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 24px; }
 .sample-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .task-list { display: flex; flex-direction: column; }
+.sample-toggle { align-self: flex-start; }
 .task-list li { display: grid; grid-template-columns: 8px 1fr auto; align-items: start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--divider); }
 .task-list li > i { width: 8px; height: 8px; margin-top: 8px; border-radius: 999px; background: var(--text-2); }
 .task-list p { font-size: 12px; }
@@ -232,10 +237,22 @@ details.data summary:hover { border-color: var(--border-hover); background: var(
 details.data[open] summary { border-color: var(--border-hover); background: var(--bg-selected); color: var(--text-1); }
 details.data .scroll { margin-top: 8px; }
 
+/* Several sources: a section per source (its name and scope, state and spend), the combined view's lines, tags side by side and the AA key row. */
+.source-section, .lane { display: flex; flex-direction: column; gap: 16px; }
+.source-section > h2, .lane-head h2 { font-size: 14px; line-height: 20px; font-weight: 600; }
+.lane-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.lane-head h2 { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.lane-head .hint { color: var(--text-3); font-size: 12px; font-weight: 400; }
+.lead-line { margin-bottom: 8px; font-size: 16px; line-height: 24px; font-weight: 600; }
+.tags { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.key-row { display: flex; align-items: center; gap: 8px; }
+.key-row .input { flex: 1; min-width: 0; }
+.published .note { margin-top: 4px; }
+
 /* Narrow window (the minimum is 820): side-by-side panels stack and the choices wrap. */
 @media (max-width: 1000px) {
   .scatter { grid-template-columns: minmax(0, 1fr); }
   .estimate { grid-template-columns: repeat(2, 1fr); }
-  .choices.three, .choices.four { grid-template-columns: repeat(2, 1fr); }
+  .choices.four { grid-template-columns: repeat(2, 1fr); }
   .steps li > button { white-space: normal; }
 }

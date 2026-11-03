@@ -29,12 +29,12 @@ function runtime(t, overrides = {}) {
   const session = factory.create(spec, event => events.push(event)); t.after(() => factory.close());
   return { dir, fake, events, factory, spec, session };
 }
-test('B4 stop with a real-style AbortError holds only its own reservation and a resumed cumulative total settles it', async t => {
+test('B4 stop requests a final result before AbortError and a resumed cumulative total is counted once', async t => {
   const { session, fake, factory, spec } = runtime(t);
   await session.start(); await session.send({ clientMessageId: randomUUID(), text: 'hold' }); await until(() => fake.inputs.length === 1);
   await session.close();
-  assert.equal(factory.apiState(10).status, 'ready'); assert.equal(factory.usage.available(10), 5000000);
-  assert.equal(factory.usage.summary().monthUsdMicros, null);
+  assert.equal(factory.apiState(10).status, 'ready'); assert.equal(factory.usage.available(10), 10000000);
+  assert.equal(factory.usage.summary().monthUsdMicros, 0);
   const resumed = factory.create({ ...spec, providerSessionId: fake.sessionId }, () => {});
   await resumed.resume(); await resumed.send({ clientMessageId: randomUUID(), text: 'resume' }); await until(() => fake.inputs.length === 2);
   fake.emit({ type: 'result', uuid: 'resume', subtype: 'success', total_cost_usd: 1, modelUsage: {}, queued_turn_count: 0 });
@@ -115,16 +115,21 @@ test('M4 a finished Claude tool keeps its kind, name and input in live events an
   stream.publish('item.upsert', { kind: 'command', status: 'completed', content: { output: 'final' } }, { itemId: 'tool' });
   assert.equal(stream.snapshot().events[0].payload.content.name, 'Bash');
 });
-for (const file of ['settings.json', 'usage.json', 'policy-audit.json']) test(`M5 corrupt ${file} is quarantined, preserves a warning and defaults to terminal without throwing`, t => {
-  const dir = temp(t); fs.writeFileSync(path.join(dir, file), '{broken');
+for (const file of ['settings.json', 'usage.json', 'policy-audit.json']) test(`N7 corrupt ${file} is quarantined without changing unrelated settings`, t => {
+  const dir = temp(t), original = { claudePath: 'api-only', codexView: 'terminal', monthlyBudgetUsd: 7 };
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(original));
+  fs.writeFileSync(path.join(dir, file), '{broken');
   const factory = createClaudeRuntime({ directory: dir, safeStorage, loadSdk: async () => ({}), resolveExecutable: async () => null });
   const settings = createSettings(path.join(dir, 'settings.json'));
-  assert.equal(settings.get().claudePath, 'terminal-only'); assert.equal(settings.get().codexView, 'terminal');
+  assert.deepEqual(settings.get(), file === 'settings.json' ? { claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: null } : original);
+  if (file !== 'settings.json') assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'))), original);
   assert.ok(fs.readdirSync(dir).some(name => name.startsWith(file + '.') && name.endsWith('.corrupt')));
-  assert.ok(recoveryWarnings(dir, true).length); assert.equal(factory.usage.summary().monthUsdMicros, null);
+  const warnings = recoveryWarnings(dir, true);
+  assert.ok(warnings.some(message => message.includes(file === 'settings.json' ? '已使用默认设置' : '运行方式设置未改变')));
+  assert.equal(factory.usage.summary().monthUsdMicros, null);
 });
 test('B3 SDK spawn forces credential scrubbing and all persisted app metadata omit the fake key', async t => {
-  const { session, fake, dir } = runtime(t); await session.start(); await session.send({ clientMessageId: randomUUID(), text: 'work' });
+  const { session, fake, dir } = runtime(t, { owner: 'dispatch', allow: ['**'] }); await session.start(); await session.send({ clientMessageId: randomUUID(), text: 'work' });
   await until(() => fake.inputs.length === 1);
   assert.equal(fake.calls[0].options.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
   fake.emit({ type: 'result', uuid: 'r', total_cost_usd: 0.1, modelUsage: {}, queued_turn_count: 0 });
