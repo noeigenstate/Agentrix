@@ -24,7 +24,7 @@ model-routing-<id>; follow this skill first, and where the two conflict this ski
 
 1. Check the installed agents and the project's model settings, then choose the matching setup below.
 2. Have the architect plan the work by module, define separate file scopes and agree the shared contracts before implementation.
-3. Hold a roundtable: every worker restates its task from the whole plan, you answer its questions, everyone confirms, and the user sees the minutes as tables.
+3. Hold a roundtable: every worker restates its task from the whole plan, the planner checks the restatement and corrects misreadings, everyone confirms, and the user sees the minutes as tables.
 4. Route the builds by difficulty, integrate in dependency order and run the project's checks.
 5. Complete stage 4 architecture review and UI acceptance where applicable, resolve findings, consolidate the round into the shared project memory and report the result.
 
@@ -55,7 +55,7 @@ and a one-line fix, skips it with a recorded reason).
 | Stage | What happens | Output |
 | --- | --- | --- |
 | 1 Plan | Architect: split the task by module, set constraints, write the interface contract and the acceptance criteria | A written plan |
-| 2 Roundtable | Every worker gets the whole plan, changes nothing and restates its task; the orchestrator answers; all confirm | Minutes, shown to the user as tables |
+| 2 Roundtable | Every worker gets the whole plan, changes nothing and restates its task; the planner checks and corrects misreadings; all confirm | Minutes, shown to the user as tables |
 | 3A Core build | Core engineer in worktree A | Complex logic, refactors, debugging, failing-test fixes |
 | 3B Routine build | Execution engineer in worktree B | Routine features, front end, tests, docs |
 | 4a Integrate and test | Orchestrator merges the branches in dependency order, runs build and tests | A green merged tree |
@@ -206,35 +206,40 @@ Write the plan before any worker starts:
 
 ### 2. Roundtable
 
-Before anyone builds, every worker gets the whole plan plus its own task, changes nothing and restates its understanding;
-you check it against the plan. `--meeting` needs a git repository. Pick a **new meeting id every round** (`<topic>-r1`,
-`<topic>-r2`, `[\w.-]{1,64}`) and keep it through that round's understanding, confirmation, minutes and consolidation;
+Before anyone builds, the roundtable lets the planner check that its brief reached each worker as meant. Every worker
+gets the whole plan plus its own task, changes nothing and restates its own task. Do not propose alternatives or reopen
+decisions: design debate is outside the roundtable and the planner decides. `--meeting` needs a git repository. Pick a
+**new meeting id every round** (`<topic>-r1`, `<topic>-r2`, `[\w.-]{1,64}`) and keep it through that round's understanding, confirmation, minutes and consolidation;
 reusing an earlier round's id is refused, and once a round is consolidated its meeting is closed, so its confirmations
 no longer open builds.
 
 1. **Understanding.** One run per worker, in parallel, each in its own worktree, with the role and `--allow` it will have
    at work plus `--meeting <id>` (never `--read-only`: the same session builds later; the helper checks that no file
    changed). The brief is the whole plan and that worker's task; the helper adds the request to end with a
-   `## Roundtable understanding` block (Goal, Files, Provides, Uses, Done when, Questions and risks). For a Claude worker
-   use `--permission plan`:
+   `## Roundtable understanding` block (Goal, Files, Provides, Uses, Done when, Questions and risks). Under Questions and
+   risks, list only points where the brief is ambiguous or contradicts itself, and facts in the code that make it
+   impossible as written; write `none` if there are none. For a Claude worker use `--permission plan`:
 
    ```
    node "<helper>" codex --role <role> --meeting <id> --title "<one line>" --model <model> --effort <effort> --fast --cwd <worktree> --brief <plan.md> --out <meeting.md> --allow '<module glob>'
    ```
 
-2. **Your check.** Read each answer against the plan: do the workers agree on the interfaces they share, are the files
-   disjoint, are the questions real? Answer them, write the disagreements and answers to `issues.json`, and build the
-   minutes (two Markdown tables, plus the same as an HTML page beside it; a worker's unresolved confirmation questions
-   are appended to its questions cell, marked as open in the minutes language):
+2. **Your check.** Check each restatement against what you meant. Correct misreadings and answer real ambiguities,
+   contradictions or code facts that block the brief as written; check that shared interfaces match and file scopes are
+   disjoint. The planner decides design questions outside this check. Write the clarifications, corrections and answers
+   to `issues.json`, and build the minutes (two Markdown tables, plus the same as an HTML page beside it; a worker's
+   unresolved confirmation questions are appended to its questions cell, marked as open in the minutes language):
 
    ```
-   [{ "issue": "<question or disagreement>", "raisedBy": "<worker>", "answer": "<your answer>", "result": "<settled | changed the plan | open>" }]
+   [{ "issue": "<ambiguity, misreading or blocker>", "raisedBy": "<worker>", "answer": "<your answer>", "result": "<settled | changed the plan | open>" }]
    node "<helper>" minutes --cwd <repo> --meeting <id> --out <minutes.md> --issues <issues.json> [--language zh|en]
    ```
 
-3. **Confirmation.** Resume each worker's session with `minutes.md` as the brief; the helper adds the request to end with
-   `## Roundtable confirmation` and `Status: confirmed`, or `Status: open` and what is unresolved. Answer any `open` and
-   repeat from the minutes. A build refused for lack of a confirmed roundtable gets this same flow back from the helper:
+3. **Confirmation.** Resume each worker's session with `minutes.md` as the brief. Check that the minutes record its task
+   as restated, with the planner's corrections, and that its shared interfaces match the others'. The helper requests
+   `## Roundtable confirmation` and `Status: confirmed`; use `Status: open` only for a misreading that is still
+   uncorrected, followed by bullets naming it. Correct that misreading and repeat from the minutes. A build refused for
+   lack of a confirmed roundtable gets this same flow back from the helper:
    hold the roundtable with `--meeting <new id>` and the build's `--allow`, then resume that session for the build.
 
    ```

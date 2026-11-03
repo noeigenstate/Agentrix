@@ -70,6 +70,10 @@ A round is plan → roundtable → build → integrate and review → consolidat
 with a team folder and three refusals, so the process does not rest on the lead remembering it. The code is the Team
 module (`electron/features/team/`, `team.cjs`; its page for the owner is `minutes-page.cjs`).
 
+The roundtable lets the planner check that each worker received the brief as meant through task restatements and
+corrected minutes, with questions limited to ambiguities, contradictions or code facts that make the brief impossible
+as written, and design decisions left to the planner.
+
 **The team folder** is `<common>/agentrix/`, `<common>` being `git rev-parse --git-common-dir` from the worker's `--cwd`:
 every worktree of one repository sees the same folder, and nothing in it is committed. Outside a git repository there is
 no team folder, every rule here is off and the helper behaves as before.
@@ -95,8 +99,8 @@ with reason `scope` and `OUT OF SCOPE`. An 执行 meeting still needs `--allow`;
 files it will change after the roundtable. The start line carries ` · roundtable <id>`; the end line the same and
 ` · understanding complete|incomplete` or ` · confirmed|open`.
 - A first meeting run of a session (no `--resume`, or a resumed session with no understanding yet) gets the
-  **understanding request** appended to its brief: read the whole plan, change no file, answer in the plan's language and
-  end with exactly
+  **understanding request** appended to its brief: read the whole plan, restate your own task without proposing alternatives
+  or reopening decisions, change no file, answer in the plan's language and end with exactly
 
   ```
   ## Roundtable understanding
@@ -112,10 +116,10 @@ files it will change after the roundtable. The start line carries ` · roundtabl
   makes the block incomplete. Parsed into goal / files / provides / uses / doneWhen / questions: status `understood`
   when all six are present and non-empty, with no duplicate fields or a field containing only the template placeholder;
   otherwise `incomplete`.
-- A resumed session that already has an understanding in this meeting gets the **confirmation request**: the brief carries
-  the minutes, the worker checks that the others' understanding of the interfaces it shares matches its own and that its
-  questions are answered, and ends with `## Roundtable confirmation` and `Status: confirmed`, or `Status: open` followed
-  by bullets with what is still unresolved. Anything else counts as `open`.
+- A resumed session that already has an understanding in this meeting gets the **confirmation request**: the worker checks
+  that the minutes record its task as restated, with the planner's corrections, and that its shared interfaces match the
+  others', then ends with `## Roundtable confirmation` and `Status: confirmed`; use `Status: open` only for a misreading
+  that is still uncorrected, followed by bullets naming it. Anything else counts as `open`.
 - A meeting run that ends with any reason other than `exit` is journaled as `invalid`, whatever its answer says; only
   `confirmed` from a clean run opens the second gate.
 

@@ -27,21 +27,25 @@ test('every value of every row and issue is escaped, in both languages', () => {
 test('the zh page labels both tables, the title and the summary in Chinese', () => {
   const html = minutesPage(minutes({ rows: [row('confirmed'), row('open', 'Sonnet')] }));
   assert.match(html, /<html lang="zh-CN">/);
-  for (const label of ['子模型', '任务', '负责的文件', '提供的接口', '用到的接口', '怎样算完成', '疑问或风险', '状态', '分歧或疑问', '谁提出', '主模型的答复', '结果']) {
+  for (const label of ['子模型', '任务', '负责的文件', '提供的接口', '用到的接口', '怎样算完成', '歧义或阻碍', '状态', '歧义、误读或阻碍', '谁提出', '规划师的答复', '结果']) {
     assert.ok(html.includes(`<th>${label}</th>`), label);
   }
   assert.match(html, /<h1>第 1 轮圆桌 · roundtable-1<\/h1>/);
   assert.match(html, /<title>第 1 轮圆桌 · roundtable-1<\/title>/);
+  assert.match(html, /<h2>各子模型的任务复述<\/h2>/);
+  assert.match(html, /<h2>澄清与纠正<\/h2>/);
   assert.match(html, /已确认 1 \/ 2/);
 });
 
 test('the en page has English labels only', () => {
   const html = minutesPage(minutes({ language: 'en', rows: [row('confirmed'), row('understood', 'Sonnet')] }));
   assert.match(html, /<html lang="en">/);
-  for (const label of ['Worker', 'Task', 'Files owned', 'Provides', 'Uses', 'Done when', 'Questions or risks', 'Status', 'Disagreement or question', 'Raised by', "Lead's answer", 'Result']) {
+  for (const label of ['Worker', 'Task', 'Files owned', 'Provides', 'Uses', 'Done when', 'Ambiguities or blockers', 'Status', 'Ambiguity, misreading or blocker', 'Raised by', "Planner's answer", 'Result']) {
     assert.ok(html.includes(`<th>${label}</th>`), label);
   }
   assert.match(html, /<h1>Round 1 roundtable · roundtable-1<\/h1>/);
+  assert.match(html, /<h2>Each worker's task restatement<\/h2>/);
+  assert.match(html, /<h2>Clarifications and corrections<\/h2>/);
   assert.match(html, /Confirmed 1 of 2/);
   assert.doesNotMatch(html, cjk);
 });
@@ -76,13 +80,13 @@ test('a missing or unknown status reads as incomplete, keeping an unknown value 
 test('empty data keeps both tables and their headers, with the note in one full-width row', () => {
   const noIssues = minutesPage(minutes({ issues: [] }));
   assert.equal(noIssues.match(/<table/g).length, 2);
-  assert.ok(noIssues.includes('<td class="empty" colspan="4">没有分歧或疑问</td>'));
-  assert.ok(noIssues.includes('<th>主模型的答复</th>'));
-  assert.ok(minutesPage(minutes({ language: 'en', issues: [] })).includes('<td class="empty" colspan="4">No disagreements or questions</td>'));
+  assert.ok(noIssues.includes('<td class="empty" colspan="4">没有需要澄清或纠正的问题</td>'));
+  assert.ok(noIssues.includes('<th>规划师的答复</th>'));
+  assert.ok(minutesPage(minutes({ language: 'en', issues: [] })).includes('<td class="empty" colspan="4">No clarifications or corrections needed</td>'));
   const empty = minutesPage(minutes({ rows: [], issues: [] }));
   assert.equal(empty.match(/<table/g).length, 2);
   assert.ok(empty.includes('<td class="empty" colspan="8">还没有子模型的记录</td>'));
-  assert.ok(empty.includes('<td class="empty" colspan="4">没有分歧或疑问</td>'));
+  assert.ok(empty.includes('<td class="empty" colspan="4">没有需要澄清或纠正的问题</td>'));
   assert.ok(empty.includes('<th>状态</th>'));
   assert.ok(minutesPage(minutes({ language: 'en', rows: [] })).includes('<td class="empty" colspan="8">No worker has answered yet</td>'));
   assert.match(empty, /已确认 0 \/ 0/);
