@@ -1,12 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react';
 import { ArrowDown, Image as ImageIcon, PaperPlaneRight, Stop } from '@phosphor-icons/react';
 import type { AgentCommand, ProjectTerminal } from '../../shared/types';
 import { actionText } from '../agents/action-text';
 import { dictateInto } from '../voice/voice-input';
 import { createDictationSend } from './dictation-send';
 import { bindApproval, useScreen } from '../terminal/terminal-screen';
-import { parseAgentScreen } from '../agents/agent-screen';
-import { hasCliInput, isAtPrompt, isCliWorking } from './cli-panel';
+import { parseAgentScreen, waitingTitle } from '../agents/agent-screen';
+import { cliDialogShown, hasCliInput, isAtPrompt, isCliWorking } from './cli-panel';
 import { cliReady, DIALOG_SETTLE, endDialog, rememberReady, startDialog } from './reading-ready';
 import { WaitingCard } from './WaitingCard';
 import { ReadingWelcome } from './ReadingWelcome';
@@ -24,6 +24,7 @@ import { blocks, useVisibleTail } from './useVisibleTail';
 import './reading.css';
 import './reading-flow.css';
 import { t } from '../../shared/i18n';
+import { fullHintProps, HIDDEN_NOTE, useFittingHint } from '../../shared/useFittingHint';
 import { useMentions } from './useMentions';
 import { MentionPalette } from './MentionPalette';
 import { isTypedCommand, pendingPromptCards, sameMessage, type PendingPrompt } from './pending-prompts';
@@ -95,10 +96,11 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const screen = preview ? { ...parsedScreen, choice: null, waiting: null } : parsedScreen;
   const idleInput = inputShown && isAtPrompt(kind, visibleScreen?.rows ?? [], parsedScreen);
   const live = terminal.codexActive && !!terminal.sessionId && terminal.status !== 'exited';
-  const knownDialog = !!parsedScreen.choice || !!parsedScreen.waiting || terminal.needsInput != null && !idleInput;
-  const working = live && !knownDialog && (isCliWorking(kind, visibleScreen?.rows ?? []) || terminal.codexActivity === 'working' && (kind === 'codex' || !idleInput));
+  const knownDialog = cliDialogShown(kind, visibleScreen?.rows ?? [], parsedScreen) || terminal.needsInput != null && !idleInput;
+  const working = live && !knownDialog && inputShown && isCliWorking(kind, visibleScreen?.rows ?? [], parsedScreen);
   const hasChoice = live && (knownDialog || !!visibleScreen && !idleInput && !working);
-  const waiting = screen.waiting ?? (screen.choice ? { title: screen.choice.title } : null);
+  // Activity can lag a mid-turn dialog. It gives unknown screens more time to settle, never a veto.
+  const dialogSettle = DIALOG_SETTLE * (terminal.codexActivity === 'working' ? 2 : 1);
   const waitingShown = hasChoice;
   const absence = useRef<{ conversation: string; at: number | null }>({ conversation, at: null });
   if (absence.current.conversation !== conversation || !hasChoice) absence.current = { conversation, at: null };
@@ -164,11 +166,11 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       cancelSend(); setTerminalPopup({ command: '', focus });
     };
     if (knownDialog) { open(); return; }
-    const wait = Math.max(0, DIALOG_SETTLE - (Date.now() - (absence.current.at ?? Date.now())));
+    const wait = Math.max(0, dialogSettle - (Date.now() - (absence.current.at ?? Date.now())));
     if (!wait) { open(); return; }
     const timer = setTimeout(open, wait);
     return () => clearTimeout(timer);
-  }, [terminal.id, conversation, live, idleInput, knownDialog, hasChoice, active, working]);
+  }, [terminal.id, conversation, live, idleInput, knownDialog, hasChoice, active, working, dialogSettle]);
   const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, entries, conversation);
   useEffect(() => { if (stuck) void historyPage.compact(); }, [stuck, conversationEntries, historyPage.compact]);
   // A step hops only when the pointer moves onto it: moving arms the hops, any scroll disarms them until it moves again,
@@ -524,36 +526,43 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   </>;
   const lastBlock = grouped.at(-1);
   const statusInTurn = !!lastBlock && (lastBlock.kind === 'tools' || lastBlock.entry.role !== 'user') && pending.every(queued);
-  let body: ReactNode;
-  if (terminal.agentCommand) body = <AgentCommandRun agent={kind} command={terminal.agentCommand} rows={visibleScreen?.rows ?? []} onShowTerminal={onShowTerminal} />;
-  else if (!entries.length && !cards.prompts.length) body = <ReadingWelcome agent={kind} commands={commands} complete={complete} disabled={inputBlocked} screen={screen} starting={welcomeIsStarting} />;
-  else body = <>
+  const afterFeed = <><PendingPromptEntries prompts={cards.prompts} queued={queued} undelivered={undelivered} onResend={resend} onDiscard={prompt => cancelEcho(prompt.id)} />
+    {status && !statusInTurn && <TimelineStep at={pending.at(-1)?.at ?? entries.at(-1)?.at} kind="agent" who={agent} state={statusRunning ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}</>;
+  const beforeFeed = terminal.agentCommand ? <AgentCommandRun agent={kind} command={terminal.agentCommand} rows={visibleScreen?.rows ?? []} onShowTerminal={onShowTerminal} />
+    : !entries.length && !cards.prompts.length ? <ReadingWelcome agent={kind} commands={commands} complete={complete} disabled={inputBlocked} screen={screen} starting={welcomeIsStarting} /> : <>
     {tail.hasEarlier && <button type="button" className="text-button reading-earlier" disabled={historyPage.loading} onClick={() => void tail.showEarlier()}>{historyPage.paged ? t('显示更早的对话') : t('显示更早的对话（{count}）', { count: tail.earlier })}</button>}
-    {historyPage.error && <p role="status">{t(historyPage.error)}</p>}
-    <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: statusRunning, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions, quote: { disabled: inputBlocked ? t('输入框暂时不可用，等它可用后再引用') : null, pick: quoteMessage } }}>
-      <ConversationFeed entries={entries} agent={kind} projectId={projectId} live={!settled} onError={onError} onOpenLink={onOpenLink} />
-    </ConversationDecorations.Provider>
-  </>;
+    {historyPage.error && <p role="status">{t(historyPage.error)}</p>}</>;
+  const body = <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: statusRunning, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
+    quote: { disabled: inputBlocked ? t('输入框暂时不可用，等它可用后再引用') : null, pick: quoteMessage },
+    frame: { ref: content, style: { visibility: entries.length && !ready ? 'hidden' : undefined }, before: beforeFeed } }}>
+      <ConversationFeed entries={terminal.agentCommand ? [] : entries} agent={kind} projectId={projectId} live={!settled} onError={onError} onOpenLink={onOpenLink}>{afterFeed}</ConversationFeed>
+    </ConversationDecorations.Provider>;
+  // The hint, longest first: the box shows the first that fits its width, so a narrow composer gets a short hint instead of a cut-off one.
+  // The first is the full hint: when the box shows a shorter one (or none), it is the box's tooltip and accessible description.
+  const hints = preview ? [t('正在启动…')] : hasChoice ? [t('终端里有待处理的界面')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.codexActive
+    ? [t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }), t('给 {agent} 发消息，/ 查看命令，@ 提及文件', { agent }), t('给 {agent} 发消息', { agent })]
+    : [t('输入命令，Enter 发送'), t('输入命令')];
+  const hint = useFittingHint(input, hints), hintId = `reading-hint-${terminal.id}`, fullHint = fullHintProps(hints, hint, hintId);
   return <div className="reading-view" data-agent={kind} ref={readingView}>
     <div className="reading-scroll-area">
-      <div className="reading-scroll" ref={scroller} tabIndex={0}><div className="reading-content" ref={content} style={{ visibility: entries.length && !ready ? 'hidden' : undefined }}>{body}<PendingPromptEntries prompts={cards.prompts} queued={queued} undelivered={undelivered} onResend={resend} onDiscard={prompt => cancelEcho(prompt.id)} />
-        {status && !statusInTurn && <TimelineStep at={pending.at(-1)?.at ?? entries.at(-1)?.at} kind="agent" who={agent} state={statusRunning ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}</div></div>
+      <div className="reading-scroll" ref={scroller} tabIndex={0}>{body}</div>
       {!stuck && <div className="reading-latest">
         {unseen > 0 && <span className="reading-unseen" role="status">{t('{count} 条新消息', { count: unseen })}</span>}
         <button type="button" className="icon-button reading-jump" title={t('跳到最新消息')} aria-label={t('跳到最新消息')} onClick={() => toBottom('smooth')}><ArrowDown size={18} /></button>
       </div>}
+      {terminalPopup !== null && <ReadingTerminalPopup key={sendCounter.current} terminalId={terminal.id} sessionId={terminal.sessionId} command={terminalPopup.command} focus={terminalPopup.focus} onReady={readyPopup} onClose={closePopup} onError={onError} />}
     </div>
-    {terminalPopup !== null && <ReadingTerminalPopup key={sendCounter.current} terminalId={terminal.id} sessionId={terminal.sessionId} command={terminalPopup.command} focus={terminalPopup.focus} onReady={readyPopup} onClose={closePopup} onError={onError} />}
     {attachedCount > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: attachedCount })}<UserImages images={shownImages} numbers={imageNumbers} onRemove={index => void removeImage(index)} /></div>}
     {quote && <QuoteChip quote={quote} onRemove={() => { holdQuote(null); input.current?.focus(); }} />}
-    {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waiting?.title ?? null} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
+    {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waitingTitle(screen)} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
     {/* The command list is part of the page, above the message box, not a popup over the conversation. */}
     {palette && <div className="reading-commands is-inline" id={listId} role="listbox" aria-label={t('命令')}>{matches.map((command, index) => <div key={command.name} id={optionId(index)} role="option" aria-selected={selection === index} className="reading-command" onMouseDown={event => event.preventDefault()} onClick={() => complete(command)}>
         <code>{command.name}</code><span>{command.source === 'builtin' ? t(command.description) : command.description}</span>{command.source !== 'builtin' && <small>{command.source === 'project' ? t('项目') : command.source === 'user' ? t('用户') : t('技能')}</small>}
     </div>)}</div>}
     <div ref={composer} tabIndex={-1} className={`reading-composer${sendingSoon ? ' is-sending-soon' : ''}`} style={terminal.agentCommand ? { display: 'none' } : undefined}>
       <MentionPalette mentions={mentions} />
-      <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} aria-expanded={palette || mentions.open} aria-controls={palette ? listId : mentions.open ? mentions.listId : undefined} aria-activedescendant={palette && selected ? optionId(selection) : mentions.open && mentions.files[mentions.selection] ? mentions.optionId(mentions.selection) : undefined} placeholder={preview ? t('正在启动…') : result ? t('继续修改，或描述下一步…') : terminal.codexActive ? t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }) : t('输入命令，Enter 发送')} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
+      {fullHint['aria-describedby'] && <span id={hintId} style={HIDDEN_NOTE}>{hints[0]}</span>}
+      <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} aria-expanded={palette || mentions.open} aria-controls={palette ? listId : mentions.open ? mentions.listId : undefined} aria-activedescendant={palette && selected ? optionId(selection) : mentions.open && mentions.files[mentions.selection] ? mentions.optionId(mentions.selection) : undefined} placeholder={hint} {...fullHint} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
         onCompositionStart={() => dictationSend.cancel()} onFocus={() => window.agentrix.terminalFocus(terminal.id, false)} />
       {working && <button type="button" className="icon-button" disabled={inputBlocked} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={interrupt}><Stop size={15} weight="fill" /></button>}
       <button type="button" className="icon-button reading-send" title={t('发送')} aria-label={t('发送')} disabled={inputBlocked || (!draft.trim() && !attachedCount) || !terminal.sessionId} onClick={() => void send()}><PaperPlaneRight size={15} weight="fill" /></button>

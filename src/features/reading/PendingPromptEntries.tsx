@@ -3,6 +3,7 @@ import { TimelineStep } from './Timeline';
 import type { PendingPrompt } from './pending-prompts';
 import { withPictures } from './pasted-pictures';
 import { splitQuote } from './message-quote';
+import { Markdown } from './Markdown';
 import './reading-quote.css';
 import { omitted as omittedPicture, unavailable as unavailablePicture } from '../../../electron/picture-values.json';
 import { showPopup } from '../files/file-popup';
@@ -34,7 +35,7 @@ export function UserText({ text }: { text: string }) {
 // shows as that picture. Only the words fold: the quote is bounded when it is made.
 export function UserMessage({ text, images }: { text: string; images?: readonly string[] }) {
   const { quote, rest } = splitQuote(text), shown = withPictures(rest, images);
-  return <>{quote && <blockquote className="reading-user-quote">{quote}</blockquote>}
+  return <>{quote && <blockquote className="reading-user-quote"><Markdown text={quote} /></blockquote>}
     {shown.text && <UserText text={shown.text} />}{shown.images.length > 0 && <UserImages images={shown.images} />}</>;
 }
 

@@ -168,6 +168,72 @@ test('first-open launch snapshots stay correct when later sessions rewrite the c
   assert.equal(sessionContext({ session_id: 'second-cli', source: 'resume' }, secondNote), null);
 });
 
+for (const trigger of ['always', 'first-open']) test(`${trigger} live Claude sessions keep first-run instructions only for their claimant after compact/clear`, async t => {
+  const f = await fixture(t);
+  f.store.setOptions('user:sample', { trigger });
+  const first = f.note('live-first'), second = f.note('live-second');
+  const initial = readDelivery(first).instructions;
+  assert.match(sessionContext({ session_id: 'first-cli', source: 'startup' }, first).hookSpecificOutput.additionalContext, /this is its first run/);
+  assert.doesNotMatch(sessionContext({ session_id: 'second-cli', source: 'startup' }, second).hookSpecificOutput.additionalContext, /this is its first run/);
+  await f.store.save('user:sample', { ...f.draft, description: 'Updated live instructions.' });
+  for (const source of ['compact', 'clear']) for (const [note, id] of [[first, 'first-cli'], [second, 'second-cli']]) {
+    const context = sessionContext({ session_id: id, source }, note).hookSpecificOutput.additionalContext;
+    assert.equal(context.includes('this is its first run'), id === 'first-cli');
+    assert.equal(sessionContext({ session_id: id, source: 'resume' }, note), null);
+  }
+  assert.equal(readDelivery(first).instructions, initial, 'the original launch snapshot is immutable');
+  assert.equal(f.store.options['user:sample'].firstOpenedProjects[f.project.id], 'live-first');
+  f.store.setOptions('user:sample', { trigger: 'auto' });
+  for (const [note, id] of [[first, 'first-cli'], [second, 'second-cli']]) {
+    const context = sessionContext({ session_id: id, source: 'compact' }, note).hookSpecificOutput.additionalContext;
+    assert.match(context, /Updated live instructions/); assert.doesNotMatch(context, /this is its first run/);
+  }
+  f.store.setOptions('user:sample', { enabled: false });
+  const disabled = sessionContext({ session_id: 'first-cli', source: 'compact' }, first).hookSpecificOutput.additionalContext;
+  assert.doesNotMatch(disabled, /Updated live instructions/);
+  const metadata = JSON.parse(fs.readFileSync(`${readDelivery(first).manifest}.json`, 'utf8'));
+  assert.match(path.basename(metadata.current), /^[a-f0-9]{64}-[a-f0-9]{32}\.md$/);
+  assert.ok(metadata.current.length < 260);
+});
+
+test('a claiming session keeps its pending first-run review across compact and store recreation', async t => {
+  const f = await fixture(t);
+  await f.store.save('user:sample', { ...f.draft, description: 'On its first run, change nothing until the user agrees.' });
+  f.store.setOptions('user:sample', { trigger: 'always' });
+  const first = f.note('claimant');
+  sessionContext({ session_id: 'claimant-cli', source: 'startup' }, first);
+  f.store.close();
+  const reopened = new SkillsStore({ dataDir: f.store.dataDir, builtinDir: f.store.builtinDir, getProjects: () => [f.project] });
+  t.after(() => reopened.close());
+  await reopened.save('user:sample', { ...f.draft, description: 'On its first run, change nothing until the user agrees. Updated review.' });
+  const later = startupNote('Read.', null, null, reopened.delivery(f.project, false, 'later', { agent: 'claude', started: true }));
+  for (const source of ['compact', 'clear']) {
+    const context = sessionContext({ session_id: 'claimant-cli', source }, first).hookSpecificOutput.additionalContext;
+    assert.match(context, /this is its first run/);
+    assert.doesNotMatch(sessionContext({ session_id: 'later-cli', source }, later).hookSpecificOutput.additionalContext, /this is its first run/);
+  }
+  assert.equal(reopened.options['user:sample'].firstOpenedProjects[f.project.id], 'claimant');
+  reopened.setOptions('user:sample', { trigger: 'auto' });
+  assert.doesNotMatch(sessionContext({ session_id: 'claimant-cli', source: 'compact' }, first).hookSpecificOutput.additionalContext, /this is its first run/);
+});
+
+test('live current snapshots survive watcher recreation, refresh external edits, and stop updating after session end', async t => {
+  const f = await fixture(t), note = f.note('live');
+  sessionContext({ session_id: 'cli', source: 'startup' }, note);
+  const metadata = JSON.parse(fs.readFileSync(`${readDelivery(note).manifest}.json`, 'utf8'));
+  f.store.close();
+  const reopened = new SkillsStore({ dataDir: f.store.dataDir, builtinDir: f.store.builtinDir, getProjects: () => [f.project] });
+  t.after(() => reopened.close());
+  const file = reopened.entry('user:sample').path;
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('Use when testing 中文说明.', 'External update.'));
+  reopened.refresh();
+  assert.match(sessionContext({ session_id: 'cli', source: 'compact' }, note).hookSpecificOutput.additionalContext, /External update/);
+  reopened.endSession(f.project.id, 'live');
+  const settled = fs.readFileSync(metadata.current, 'utf8');
+  await reopened.save('user:sample', { ...f.draft, description: 'After session end.' });
+  assert.equal(fs.readFileSync(metadata.current, 'utf8'), settled);
+});
+
 function hookProcess(file, args, input, noteFile) {
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, { env: { ...process.env, AGENTRIX_BOOTSTRAP: '', AGENTRIX_READING_NOTE_FILE: noteFile }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -274,6 +340,29 @@ test('PowerShell and Node share receipts and force a delivery after compact/clea
     assert.equal(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, `Agentrix skill instructions:\n${readDelivery(note).instructions}`);
     assert.equal(sessionContext({ session_id: 'same-cli', source: 'resume' }, note), null);
   }
+});
+
+test('PowerShell compact/clear reads updated per-session instructions and keeps startup/resume receipts', { skip: process.platform !== 'win32' }, async t => {
+  const f = await fixture(t); f.store.setOptions('user:sample', { trigger: 'first-open' });
+  const note = f.note('live-powershell'), noteFile = path.join(f.root, 'note.txt'); fs.writeFileSync(noteFile, note);
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
+  const args = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, '../integration/claude-hook.ps1'),
+    '-PipeName', 'absent-agentrix-skill-test', '-ProjectId', 'project', '-SessionKey', 'key', '-Kind', 'session'];
+  const launch = await hookProcess(powershell, args, { session_id: 'ps-cli', source: 'startup' }, noteFile);
+  assert.match(JSON.parse(launch.stdout).hookSpecificOutput.additionalContext, /this is its first run/);
+  await f.store.save('user:sample', { ...f.draft, description: 'Updated Windows hook instructions.' });
+  for (const source of ['compact', 'clear']) {
+    const result = await hookProcess(powershell, args, { session_id: 'ps-cli', source }, noteFile);
+    assert.equal(result.code, 0); assert.equal(result.stderr, '');
+    const context = JSON.parse(result.stdout).hookSpecificOutput.additionalContext;
+    assert.match(context, /this is its first run/);
+    assert.equal(sessionContext({ session_id: 'ps-cli', source: 'resume' }, note), null);
+  }
+  f.store.setOptions('user:sample', { trigger: 'auto' });
+  const updated = await hookProcess(powershell, args, { session_id: 'ps-cli', source: 'compact' }, noteFile);
+  assert.equal(updated.code, 0); assert.equal(updated.stderr, '');
+  const context = JSON.parse(updated.stdout).hookSpecificOutput.additionalContext;
+  assert.match(context, /Updated Windows hook instructions/); assert.doesNotMatch(context, /this is its first run/);
 });
 
 test('PowerShell 5.1 fallback passes a settings file through a real fake claude.cmd with the startup note intact', { skip: process.platform !== 'win32' }, async t => {

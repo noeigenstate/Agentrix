@@ -96,7 +96,7 @@ class SessionFiles {
       } catch { this.files.delete(filename); }
     }));
   }
-  async refresh() {
+  async refresh(fresh) {
     // Nothing asks once the last Codex session has closed; release the watcher then.
     clearTimeout(this.idle);
     this.idle = setTimeout(() => { this.unwatch(); if (listings.get(this.directory) === this) listings.delete(this.directory); }, IDLE_CLOSE);
@@ -105,7 +105,7 @@ class SessionFiles {
     if (this.watcher && !fs.existsSync(this.directory)) { this.unwatch(); this.missed = true; }
     this.watch();
     const full = !this.walkedAt || this.missed || Date.now() - this.walkedAt >= (this.watcher ? WATCHED_WALK_INTERVAL : WALK_INTERVAL);
-    if (full || Date.now() - this.namesAt >= NAMES_INTERVAL) {
+    if (fresh || full || Date.now() - this.namesAt >= NAMES_INTERVAL) {
       if (full) { this.missed = false; this.changed.clear(); }
       await this.walk(full);
       this.namesAt = Date.now(); if (full) this.walkedAt = this.namesAt;
@@ -113,20 +113,20 @@ class SessionFiles {
     if (this.changed.size) await this.update();
     return [...this.files.values()];
   }
-  // Terminals asking at the same time share one read.
-  list() {
-    if (this.pending) return this.pending;
-    const pending = this.pending = this.refresh().finally(() => { if (this.pending === pending) this.pending = null; });
+  // Share cached reads; a fresh lookup must start after any in-flight walk, which may predate its worker.
+  list(fresh = false) {
+    if (this.pending) return fresh ? this.pending.then(() => this.list(true)) : this.pending;
+    const pending = this.pending = this.refresh(fresh).finally(() => { if (this.pending === pending) this.pending = null; });
     return pending;
   }
 }
 
 const listings = new Map();
 // Every rollout file under a sessions folder as { filename, name, modified }, in no particular order.
-function rolloutFiles(directory) {
+function rolloutFiles(directory, fresh = false) {
   let listing = listings.get(directory);
   if (!listing) listings.set(directory, listing = new SessionFiles(directory));
-  return listing.list();
+  return listing.list(fresh);
 }
 
 // A rollout file opens with its session_meta record, which never changes, so it is read once per file.
@@ -161,7 +161,8 @@ async function containedFile(directory, filename, { file = null, exact = false, 
       const opened = await file.stat({ bigint: true });
       if (opened.dev !== stat.dev || opened.ino !== stat.ino) return null;
     }
-    return resolved;
+    // Keep the trusted root's spelling so later handle checks do not mix an alias with its realpath.
+    return path.resolve(filename);
   } catch { return null; }
 }
 
@@ -177,7 +178,8 @@ async function sessionHeader(file) {
 async function findRolloutSession(directory, id, cwd) {
   if (typeof id !== 'string' || !/^[\w-]{1,160}$/.test(id) || !path.isAbsolute(cwd || '')) return null;
   let found = null;
-  for (const item of await rolloutFiles(directory)) {
+  // A fast worker can end before its file's watcher event arrives. Final snapshots need current names.
+  for (const item of await rolloutFiles(directory, true)) {
     if (!item.name.includes(id)) continue;
     const filename = await containedFile(directory, item.filename);
     if (!filename) continue;

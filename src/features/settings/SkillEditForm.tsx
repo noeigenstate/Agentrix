@@ -15,7 +15,7 @@ export function SkillEditForm({ id, name, draft, scopes, confirm, onChange, onSa
   const scope = draft.scope === 'project' && draft.projectId ? draft.projectId : 'global';
   return <div className="skills-detail">
     <div className="skills-title"><b>{id ? t('编辑 {name}', { name }) : t('新建技能')}</b></div>
-    <dl className="skills-facts">
+    <dl className="skills-facts skills-form">
       <div><dt>{t('名称')}</dt><dd><input className="skills-input" data-field="name" value={draft.name} placeholder={t('例如 发布流程')} aria-label={t('名称')} onChange={field('name')} /></dd></div>
       <div><dt>{t('描述')}</dt><dd><input className="skills-input" data-field="description" value={draft.description} placeholder={t('一句话：什么时候该用它')} aria-label={t('描述')} onChange={field('description')} /></dd></div>
       <div><dt>{t('范围')}</dt><dd><Select label={t('范围')} className="skills-scope" value={scope} options={scopes}

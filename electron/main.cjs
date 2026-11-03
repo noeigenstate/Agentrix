@@ -531,12 +531,16 @@ function resolveIntervention(terminalId, callId) {
 const relays = new Map();
 let relaySequence = 0;
 function sendParentPrompt(terminalId, text) {
+  if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return Promise.reject(new Error('无法把插话转给规划员。'));
   const s = sessions.get(terminalId);
   if (!s?.sessionId || !s.codexActive || !['claude', 'codex'].includes(s.agent)) return Promise.reject(new Error('规划员会话已变化，消息未发送。'));
   return new Promise((resolve, reject) => {
-    const id = ++relaySequence, timer = setTimeout(() => { relays.delete(id); reject(new Error('无法把插话转给规划员。')); }, 15000);
+    // Admission holds the team lock, which expires after 10 s. A stalled renderer must release it well before then.
+    const id = ++relaySequence, deadline = Date.now() + 3000;
+    const timer = setTimeout(() => { relays.delete(id); reject(new Error('无法把插话转给规划员。')); }, 3000);
     relays.set(id, { resolve, reject, timer });
-    send('agents:relay', { id, terminalId, sessionId: s.sessionId, agent: s.agent, text });
+    try { window.webContents.send('agents:relay', { id, terminalId, sessionId: s.sessionId, agent: s.agent, text, deadline }); }
+    catch (error) { relayResult(id, error?.message || String(error)); }
   });
 }
 function relayResult(id, error) {
@@ -1356,7 +1360,7 @@ function registerIpc() {
     listAgentCommands, interventions, relayResult, t });
   registerSshIpc({ handle, getSSHInfo, sshAuth, addSSH: input => store.addSSH(input), hasSession: id => sessions.has(id), getSession: id => sessions.get(id),
     startTerminal, setStartupError: (id, message) => startupErrors.set(id, message), broadcast });
-  updatesIpc = registerUpdatesIpc({ handle, updateManager, openExternal: url => shell.openExternal(url), getWindow: () => window, dialog, t,
+  updatesIpc = registerUpdatesIpc({ handle, updateManager, updateSettings: patch => { updateStoreSettings(patch); broadcast(); }, openExternal: url => shell.openExternal(url), getWindow: () => window, dialog, t,
     allowEditorClose, liveTerminalCount, setQuitting: value => { quitting = value; } });
   registerWorkspaceIpc({ handle, publicState, dialog, getWindow: () => window, t, addProject: (folder, name) => {
     const added = store.add(folder, name); checkProjectAccount(added.project); projectImageAuto.enqueue(added.project); return added;
@@ -1486,6 +1490,7 @@ if (!app.requestSingleInstanceLock()) {
     let menuUpdateReady = false;
     updateManager = new UpdateManager({
       updater: isInstalledBuild(app.isPackaged, process.execPath) ? require('electron-updater').autoUpdater : null,
+      channel: store.settings.updateChannel, betaAgreement: store.settings.betaAgreement,
       version: app.getVersion(), distribution: distributionOf({ isPackaged: app.isPackaged, platform: process.platform, installed }), onChange: state => {
         updatesIpc?.onStateChange(state);
         send('updates:changed', state);

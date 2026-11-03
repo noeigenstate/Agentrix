@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { FINAL_LIMIT, FINAL_TTL } = require('../electron/features/agents/subagent-feed.cjs');
 const { encodeClaudeCwd, findClaudeSession } = require('../electron/claude-sessions.cjs');
-const { containedFile, findRolloutSession } = require('../electron/session-files.cjs');
+const { containedFile, findRolloutSession, rolloutFiles } = require('../electron/session-files.cjs');
 const { ConversationLog, claudeConversation, codexConversation } = require('../electron/conversation.cjs');
 const { registerAgentsIpc } = require('../electron/features/agents/ipc.cjs');
 const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
@@ -131,6 +131,62 @@ test('dispatched Claude workers use dispatch cwd rather than the parent cwd and 
   await assert.rejects(f.calls.feed('dispatch:wrong-project'), /^Error: unavailable$/);
 });
 
+test('contained files keep their trusted root spelling across aliases and repeated handle checks', async t => {
+  const f = await fixture(t), filename = await task(f), alias = path.join(f.root, 'claude-alias');
+  await fs.symlink(f.claudeHome, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const candidate = path.join(alias, path.relative(f.claudeHome, filename));
+  const verified = await containedFile(alias, candidate, { exact: true });
+  assert.equal(verified, path.resolve(candidate));
+  const file = await fs.open(verified, 'r');
+  try { assert.equal(await containedFile(alias, verified, { file, exact: true }), verified); }
+  finally { await file.close(); }
+  const other = path.join(f.folder, 'agent-other.jsonl'); await fs.writeFile(other, lines(childRecords('-other')));
+  const wrongFile = await fs.open(other, 'r');
+  try { assert.equal(await containedFile(alias, verified, { file: wrongFile, exact: true }), null); }
+  finally { await wrongFile.close(); }
+  assert.equal(await containedFile(alias, filename, { exact: true }), null, 'a canonical path outside the lexical root is not a capability');
+});
+
+test('aliased CLI homes support Task, Codex and Claude dispatch feeds through cached and tail-reset reads', async t => {
+  const f = await fixture(t), codexHome = path.join(f.root, 'codex-alias'), claudeHome = path.join(f.root, 'claude-alias');
+  for (const [target, alias] of [[f.codexHome, codexHome], [f.claudeHome, claudeHome]]) {
+    await fs.symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  const calls = new AgentCalls({ codexHome, claudeHome, since: BASE }); t.after(() => calls.dispose());
+  const folder = path.join(claudeHome, 'projects', encodeClaudeCwd(f.cwd), 'parent-session', 'subagents');
+  const aliased = { ...f, codexHome, claudeHome, calls, folder }; calls.setFolder(folder);
+  const filename = await task(aliased);
+  assert.ok((await calls.feed('agent:worker')).entries.some(entry => entry.text === 'Synthetic finding.'));
+  await fs.rename(filename, `${filename}.old`); await fs.writeFile(filename, lines(childRecords('-aliased')));
+  assert.ok((await calls.feed('agent:worker')).entries.some(entry => entry.text === 'Synthetic finding-aliased.'));
+  const sessionId = dispatch(aliased, 'codex');
+  await rollout(aliased, sessionId, {}, [{ type: 'event_msg', timestamp: iso(1), payload: { type: 'agent_message', message: 'Aliased Codex answer.' } }]);
+  const codexFeed = await calls.feed('dispatch:codex');
+  assert.equal(codexFeed.entries.at(-1).text, 'Aliased Codex answer.');
+  assert.deepEqual(await calls.feed('dispatch:codex'), codexFeed);
+  const claudeId = dispatch(aliased, 'claude', 'claude', 'aliased-session');
+  const transcript = path.join(claudeHome, 'projects', encodeClaudeCwd(f.cwd), `${claudeId}.jsonl`);
+  await fs.writeFile(transcript, lines(childRecords().map(record => ({ ...record, isSidechain: false, sessionId: claudeId }))));
+  const claudeFeed = await calls.feed('dispatch:claude');
+  assert.ok(claudeFeed.entries.some(entry => entry.text === 'Synthetic finding.'));
+  assert.deepEqual(await calls.feed('dispatch:claude'), claudeFeed);
+});
+
+test('an aliased trusted root still rejects redirected descendants in exact mode and escaped descendants in either mode', async t => {
+  const f = await fixture(t), filename = await task(f), alias = path.join(f.root, 'claude-alias');
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  await fs.symlink(f.claudeHome, alias, linkType);
+  const projects = path.join(alias, 'projects'), redirected = path.join(projects, 'redirected');
+  await fs.symlink(f.folder, redirected, linkType);
+  const candidate = path.join(redirected, path.basename(filename));
+  assert.equal(await containedFile(projects, candidate, { exact: true }), null);
+  assert.equal(await containedFile(projects, candidate), path.resolve(candidate));
+  const outside = path.join(f.root, 'outside'); await fs.mkdir(outside);
+  await fs.writeFile(path.join(outside, 'escape.jsonl'), lines(childRecords()));
+  await fs.symlink(outside, path.join(projects, 'escaped'), linkType);
+  for (const exact of [true, false]) assert.equal(await containedFile(projects, path.join(projects, 'escaped', 'escape.jsonl'), { exact }), null);
+});
+
 test('rollout discovery rejects another session, another cwd, ambiguous identities and traversal-like session ids', async t => {
   const f = await fixture(t), directory = path.join(f.codexHome, 'sessions');
   dispatch(f, 'wrong-id'); await rollout(f, 'session-wrong-id', { id: 'different' });
@@ -209,7 +265,43 @@ test('entry-only and header-only changes push a newer revision, coalesced to fou
   assert.equal(f.events.length, 3); assert.ok(f.events.at(-1).revision > latest.revision);
   assert.equal((await f.calls.feed('agent:worker')).state, 'reviewing');
   f.calls.reset(); const count = f.events.length;
-  t.mock.timers.tick(1000); assert.equal(f.events.length, count, 'reset cancels queued callbacks');
+  t.mock.timers.tick(250); assert.equal(f.events.length, count + 1, 'reset replaces queued content with the retirement revision');
+  assert.ok(f.events.at(-1).revision > latest.revision);
+  await assert.rejects(f.calls.feed('agent:worker'), /^Error: gone$/);
+  t.mock.timers.tick(1000); assert.equal(f.events.length, count + 1, 'no stale content callbacks follow retirement');
+});
+
+test('repeated full resets notify an open split of gone even while a content revision is pending', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: BASE });
+  const f = await fixture(t), filename = await task(f), before = await f.calls.feed('agent:worker');
+  await fs.appendFile(filename, lines([{ type: 'assistant', uuid: 'pending', timestamp: iso(5), isSidechain: true,
+    message: { content: [{ type: 'text', text: 'Pending synthetic step.' }] } }]));
+  const pending = await f.calls.feed('agent:worker'); assert.ok(pending.revision > before.revision);
+  f.calls.reset(); f.calls.reset();
+  await assert.rejects(f.calls.feed('agent:worker'), /^Error: gone$/);
+  assert.equal(f.events.length, 1);
+  t.mock.timers.tick(250);
+  assert.equal(f.events.length, 2); assert.equal(f.events.at(-1).callId, before.id);
+  assert.ok(f.events.at(-1).revision > pending.revision);
+  t.mock.timers.tick(1000); assert.equal(f.events.length, 2);
+  assert.ok(before.entries.length, 'the split can retain its last successful snapshot');
+});
+
+test('folder changes retire removed Task feeds with a newer revision while preserving dispatched and completed feeds', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: BASE });
+  const f = await fixture(t);
+  await task(f, 'removed'); const removed = await f.calls.feed('agent:removed');
+  await task(f, 'completed'); f.calls.apply(notice('completed')); await f.calls.work;
+  const completed = await f.calls.feed('agent:completed');
+  const sessionId = dispatch(f, 'kept'); await rollout(f, sessionId);
+  const kept = await f.calls.feed('dispatch:kept');
+  f.calls.setFolder(path.join(f.root, 'another-folder'));
+  await assert.rejects(f.calls.feed(removed.id), /^Error: gone$/);
+  assert.deepEqual(await f.calls.feed(completed.id), completed);
+  assert.deepEqual(await f.calls.feed(kept.id), kept);
+  t.mock.timers.tick(250);
+  assert.ok(f.events.some(event => event.callId === removed.id && event.revision > removed.revision));
+  assert.ok(!f.events.some(event => event.callId === kept.id && event.revision > kept.revision));
 });
 
 test('successful dispatch rows disappear after three seconds while their final snapshots expire at thirty minutes', async t => {
@@ -226,16 +318,40 @@ test('successful dispatch rows disappear after three seconds while their final s
 });
 
 test('completed feed retention is bounded at twenty calls, including after a preserving reset', async t => {
+  // macOS can deliver file notifications after all of these fast workers have already ended.
+  t.mock.method(require('node:fs'), 'watch', () => ({ on() {}, close() {} }));
   const f = await fixture(t);
   for (let i = 0; i <= FINAL_LIMIT; i++) {
     const id = `final-${i}`, sessionId = dispatch(f, id); await rollout(f, sessionId);
     endDispatch(f, id); await f.calls.work;
   }
   await assert.rejects(f.calls.feed('dispatch:final-0'), /^Error: gone$/);
-  assert.equal((await f.calls.feed(`dispatch:final-${FINAL_LIMIT}`)).state, 'done');
+  for (let i = 1; i <= FINAL_LIMIT; i++) assert.equal((await f.calls.feed(`dispatch:final-${i}`)).state, 'done');
   assert.equal(f.calls.feeds.entries.size, FINAL_LIMIT);
   f.calls.reset(true);
   assert.equal((await f.calls.feed(`dispatch:final-${FINAL_LIMIT}`)).state, 'done');
+});
+
+test('dispatch completion waits for an older directory walk before discovering its new rollout', async t => {
+  t.mock.method(require('node:fs'), 'watch', () => ({ on() {}, close() {} }));
+  const f = await fixture(t), directory = path.join(f.codexHome, 'sessions'), readdir = fs.readdir;
+  const scanned = Promise.withResolvers(), resume = Promise.withResolvers();
+  let held = false;
+  t.after(() => resume.resolve());
+  t.mock.method(fs, 'readdir', async (...args) => {
+    const entries = await readdir(...args);
+    if (args[0] === directory && !held) { held = true; scanned.resolve(); await resume.promise; }
+    return entries;
+  });
+  const older = rolloutFiles(directory);
+  await scanned.promise;
+  const sessionId = dispatch(f, 'during-scan');
+  await rollout(f, sessionId, {}, [{ type: 'event_msg', timestamp: iso(1), payload: { type: 'agent_message', message: 'Created after the scan.' } }]);
+  endDispatch(f, 'during-scan');
+  await Promise.resolve(); resume.resolve();
+  await older; await f.calls.work;
+  const feed = await f.calls.feed('dispatch:during-scan');
+  assert.equal(feed.state, 'done'); assert.equal(feed.entries.at(-1).text, 'Created after the scan.');
 });
 
 test('a final snapshot keeps its last verified contents if the transcript disappears before the end receipt', async t => {

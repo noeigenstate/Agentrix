@@ -49,7 +49,7 @@ const DEFAULT_START = process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST
 // Isolated test profiles keep pixel layouts exact at 100 % unless they choose 自动 themselves (a test machine's small
 // display would otherwise shrink every layout under test).
 const DEFAULT_ZOOM = process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST_ZOOM !== 'auto' ? 100 : null;
-const defaults = { startView: DEFAULT_START, surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', autoSave: true, activityPane: true, notifications: true, sound: true, language: 'en', theme: 'mono', shortcuts: {}, guideVersion: '', shell: 'powershell', closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', restoreSessions: true, focusAnimation: 'smooth', uiZoom: DEFAULT_ZOOM, voiceModel: DEFAULT_VOICE_MODEL };
+const defaults = { startView: DEFAULT_START, surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', autoSave: true, activityPane: true, notifications: true, sound: true, language: 'en', theme: 'mono', shortcuts: {}, guideVersion: '', shell: 'powershell', closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', restoreSessions: true, focusAnimation: 'smooth', uiZoom: DEFAULT_ZOOM, voiceModel: DEFAULT_VOICE_MODEL, updateChannel: 'stable', betaAgreement: null };
 
 // Keyboard shortcuts the user changed, by action; defaults live in the window (src/features/shortcuts/shortcuts.ts).
 // "Ctrl+Shift+F": Ctrl, Alt and Shift in that order, then one letter, digit, F-key or punctuation key.
@@ -80,6 +80,8 @@ function validProjectImage(input) {
 
 function cleanSettings(input = {}) {
   return {
+    updateChannel: ['stable', 'beta'].includes(input.updateChannel) ? input.updateChannel : defaults.updateChannel,
+    betaAgreement: typeof input.betaAgreement === 'string' && input.betaAgreement.length > 0 && input.betaAgreement.length <= 80 && input.betaAgreement === input.betaAgreement.trim() && !/[\u0000-\u001f\u007f]/.test(input.betaAgreement) ? input.betaAgreement : defaults.betaAgreement,
     fontSize: Number.isInteger(input.fontSize) && input.fontSize >= 10 && input.fontSize <= 20 ? input.fontSize : defaults.fontSize,
     terminalFontWeight: [400, 500, 600].includes(input.terminalFontWeight) ? input.terminalFontWeight : defaults.terminalFontWeight,
     terminalFontFamily: typeof input.terminalFontFamily === 'string' && input.terminalFontFamily.length <= 80 && !/[\u0000-\u001f\u007f]/.test(input.terminalFontFamily) ? input.terminalFontFamily.trim() : defaults.terminalFontFamily,

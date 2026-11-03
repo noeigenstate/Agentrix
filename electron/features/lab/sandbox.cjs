@@ -1,4 +1,5 @@
 const fs = require('node:fs/promises');
+const { realpathSync } = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { command, gitEnvironment } = require('./process.cjs');
@@ -31,13 +32,44 @@ const subpath = file => '(subpath ' + JSON.stringify(file) + ')';
 const deniedOutside = (root, allowed) => '(require-all ' + subpath(root) + ' ' +
   allowed.map(file => '(require-not ' + subpath(file) + ')').join(' ') + ')';
 
+function daemonSocketPaths(home = os.homedir(), environment = process.env) {
+  const host = environment.DOCKER_HOST;
+  const sockets = ['/var/run/docker.sock', '/private/var/run/docker.sock', path.join(home, '.docker/run/docker.sock')];
+  if (typeof host === 'string' && host.startsWith('unix://') && host.length > 7) sockets.push(path.resolve(host.slice(7)));
+  const directories = [
+    ...['.docker/desktop', 'Library/Containers/com.docker.docker', '.colima', '.orbstack', '.rd', '.lima', '.local/share/containers'].map(file => path.join(home, file)),
+    '/var/run/podman', '/private/var/run/podman',
+  ];
+  return [...sockets.map(file => ({ path: file, filter: 'path-literal' })),
+    ...directories.map(file => ({ path: file, filter: 'subpath' }))];
+}
+
+function socketPathAliases(file) {
+  let parent = file;
+  const suffix = [];
+  for (;;) {
+    try { return [...new Set([file, path.join(realpathSync.native(parent), ...suffix)])]; }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      const next = path.dirname(parent);
+      if (next === parent) return [file];
+      suffix.unshift(path.basename(parent)); parent = next;
+    }
+  }
+}
+
 function sandboxProfile({
   labRoot, readRoots, writeRoots, protectedPaths, credentialPaths = [], deniedExecutables = [],
-  codexSource, sharedAuth, network = true, ipcPaths = [],
+  codexSource, sharedAuth, network = true, ipcPaths = [], deniedSockets = daemonSocketPaths(),
 }) {
   const blocked = protectedPaths.map(subpath).join(' ');
   const credentialBlocks = credentialPaths.map(subpath).join(' ');
   const executableBlocks = deniedExecutables.map(file => '(literal ' + JSON.stringify(file) + ')').join(' ');
+  const socketFiles = new Set(), socketConnects = new Set();
+  for (const { path: file, filter } of deniedSockets) for (const alias of socketPathAliases(file)) {
+    socketFiles.add(subpath(alias));
+    socketConnects.add('(remote unix-socket (' + filter + ' ' + JSON.stringify(alias) + '))');
+  }
   const writes = [...writeRoots, '/dev/null'];
   const writeFilter = '(require-all ' + subpath('/') + ' ' +
     writes.map(file => '(require-not ' + subpath(file) + ')').join(' ') +
@@ -54,6 +86,11 @@ function sandboxProfile({
     ...(codexRead ? ['(deny file-read-data ' + codexRead + ')'] : []),
     ...(blocked ? ['(deny file-read* ' + blocked + ')'] : []),
     ...(credentialBlocks ? ['(deny file-read* ' + credentialBlocks + ')'] : []),
+    // AF_UNIX connect is checked as network-outbound, independently of file-read permissions.
+    ...(socketConnects.size ? [
+      '(deny file-read* ' + [...socketFiles].join(' ') + ')',
+      '(deny network-outbound ' + [...socketConnects].join(' ') + ')',
+    ] : []),
     ...(executableBlocks ? [
       '(deny file-read* ' + executableBlocks + ')',
       '(deny process-exec ' + executableBlocks + ')',
@@ -174,5 +211,5 @@ async function cliHomes(environment = process.env, directory, credentials = true
 
 module.exports = {
   cleanEnvironment, requireIsolation, sandboxProfile, channelAddress, cliHomes,
-  credentialAccess, gitCredentialPaths, gitCredentialHelpers, physicalPath, linkCredential,
+  credentialAccess, gitCredentialPaths, gitCredentialHelpers, physicalPath, linkCredential, daemonSocketPaths,
 };

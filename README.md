@@ -134,8 +134,8 @@ A skill is a folder with a `SKILL.md` that tells an agent how you want work done
 
 - **Built in, updated with the app, read-only.** *Model routing* (on demand, for anything beyond a quick answer or a one-line change) splits the work by role: the lead orchestrates, Opus plans and reviews the architecture, GPT-6.1-Sol takes the core code, Sonnet the routine and front-end work and checks the interface. GPT runs at max effort in fast mode and Claude at high by default; when Codex is installed it asks once per project, and you can change either in conversation. It has plans for both agents, Claude Code only, Codex only and Codex leading. *Code standard* (always) reviews a project's code in the first session there and proposes a staged plan, changing nothing until you agree; afterwards every code change follows it. *UI standard* (on demand) guides UI work in any project: for development beyond a small fix, a clickable mockup first; then five measured acceptance questions, a grayscale checklist and restrained colour; screenshots are accepted by another model, or by the user if no second model is available. What a built-in changed is described in the update notes.
 - **Your own.** Create, edit or import a folder, turn each on or off, and scope it to all projects or one. Skills live in Agentrix's data folder, or in the project's `skills/` folder.
-- **Three triggers.** *Always* (before every task; the first session in a project is also told it is the skill's first run there), *On demand* (when the description fits), *First open* (the first session in a project that doesn't have it yet, then on demand).
-- **The project wins.** A built-in steps aside where the project has its own copy: a skill of the same name in `skills/`, `.claude/skills` or `.codex/skills`, or one named in `AGENTS.md` / `CLAUDE.md`.
+- **Three triggers.** *Always* (before every task; the first session in a project is also told it is the skill's first run there), *On demand* (when the description fits), *First open* (the first session in a project, then on demand).
+- **Built-ins always apply.** A project skill with the same name as a built-in (in `skills/`, `.claude/skills` or `.codex/skills`) is moved out to a recovery folder automatically and listed under that built-in in Settings → Skills; naming it in `AGENTS.md` / `CLAUDE.md` changes nothing. To extend a built-in, name your skill `<built-in name>-<id>` (e.g. `code-standard-team`): it is delivered right after its base and never moved, and where they conflict the built-in wins.
 - **Skills that improve.** Agents refine your skills as a project goes on. Every version is kept, with a diff and a way back. Skills an agent created are marked *New*; turn off *Let agents improve it* to freeze one, or turn on *Ask me before a change takes effect* to review each proposal first. Personal data (user names, paths, hosts, emails, keys) is replaced by placeholders before it is kept in a project's skills.
 - **Proof it's used.** *Taking effect* shows when an agent last read the skill, in which project and which agent. `SKILL.md` is shown as formatted text, with a *Source* toggle.
 
@@ -182,6 +182,8 @@ New installs default to English. Choose 中文 under **Settings → Appearance �
 | **Linux arm64** | `Agentrix-<version>-linux-arm64.AppImage` / `Agentrix-<version>-linux-arm64.tar.xz` | Same steps as Linux x64; update manually |
 
 Windows portable folders and development builds do not update themselves; Settings identifies the distribution and explains the available update action. Windows builds are installers only; there is no portable executable.
+
+Installed Windows copies can follow the stable or the beta update channel in Settings › About; the beta channel needs you to accept a test agreement, and switching back to stable never downgrades.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | bash

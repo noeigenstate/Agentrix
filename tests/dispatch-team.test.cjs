@@ -338,13 +338,18 @@ test('execution requires a confirmed resumed session and the same scope set', as
   assert.equal(team.entries().at(-1).understanding.files, 'src/a.js\n  src/b.js');
   const meetingEnd = team.entries().find(entry => entry.type === 'end' && entry.role === '圆桌');
   assert.equal(meetingEnd.kind, 'roundtable'); assert.equal(meetingEnd.reason, 'exit'); assert.equal(meetingEnd.model, 'gpt-6.1-sol');
-  assert.match((await json(first.capture)).brief, /fields may continue on following lines/);
+  const firstBrief = (await json(first.capture)).brief;
+  assert.match(firstBrief, /restate your own task so the planner can check that the brief reached you as meant/);
+  assert.match(firstBrief, /Do not propose alternatives or reopen decisions/);
+  assert.match(firstBrief, /Under "Questions and risks", list only points where the brief is ambiguous or contradicts itself, and facts in the code that make it impossible as written; write none if there are none/);
+  assert.match(firstBrief, /fields may continue on following lines/);
   const notConfirmed = await start(f, { resume: session, allow });
   assert.match((await output(notConfirmed)).stdout, /roundtable not confirmed/);
   const confirm = await start(f, { meeting: 'r1', resume: session, session, allow, answer: confirmation });
   assert.match((await output(confirm)).stdout, /roundtable r1 · confirmed/);
   const captured = await json(confirm.capture);
-  assert.match(captured.brief, /# Roundtable before work[\s\S]*other workers[\s\S]*## Roundtable confirmation/);
+  assert.match(captured.brief, /# Roundtable before work[\s\S]*minutes record your task as you restated it, including the planner's corrections[\s\S]*shared interfaces match those of the other workers[\s\S]*## Roundtable confirmation\nStatus: confirmed/);
+  assert.match(captured.brief, /Use Status: open only for a misreading that is still uncorrected, followed by bullet lines naming it/);
   assert.deepEqual(captured.args.slice(0, 3), ['exec', 'resume', session]); assert.ok(!captured.args.includes('-s'));
   const differs = await start(f, { resume: session, allow: ['src/a.js'] });
   assert.match((await output(differs)).stdout, /scope differs from the one agreed/); assert.equal(exists(differs.capture), false);
@@ -511,7 +516,7 @@ test('minutes write two escaped Markdown tables and the HTML companion without a
   assert.equal(data.rows.length, 2); assert.equal(data.rows[0].title, entry.title); assert.equal(data.rows[0].status, 'confirmed');
   assert.equal(data.rows[1].status, 'invalid'); assert.equal(data.language, 'zh'); assert.equal(typeof data.generatedAt, 'number');
   assert.match(minutesMarkdown(data), /\| 子模型 \| 任务 \|/);
-  assert.match(minutesMarkdown({ ...data, issues: [] }), /\| 分歧或疑问 \| 谁提出 \| 主模型的答复 \| 结果 \|/);
+  assert.match(minutesMarkdown({ ...data, issues: [] }), /\| 歧义、误读或阻碍 \| 谁提出 \| 规划师的答复 \| 结果 \|/);
 });
 
 test('team subcommand errors are one line and never launch a worker', async t => {

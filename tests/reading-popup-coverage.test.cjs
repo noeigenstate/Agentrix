@@ -5,7 +5,7 @@ const path = require('node:path');
 const React = require('react');
 const jsx = require('react/jsx-runtime');
 const { hookHarness } = require('./helpers/hook-harness.cjs');
-const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
+const { parseAgentScreen, waitingTitle } = require('../src/features/agents/agent-screen.ts');
 const panel = require('../src/features/reading/cli-panel.ts');
 const { blocks } = require('../src/features/reading/useVisibleTail.ts');
 const { DIALOG_SETTLE } = require('../src/features/reading/reading-ready.ts');
@@ -17,7 +17,7 @@ const read = file => fs.readFileSync(path.join(__dirname, 'fixtures', file), 'ut
 idle.claude = read('screens/claude-idle-2-1-296.txt');
 let nextId = 0;
 
-function popupHarness(t, agent = 'codex', rows = idle[agent]) {
+function popupHarness(t, agent = 'codex', rows = idle[agent], activity = 'complete') {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 10000 });
   const previous = { window: global.window, document: global.document, textarea: global.HTMLTextAreaElement };
   global.HTMLTextAreaElement = class {};
@@ -56,9 +56,9 @@ function popupHarness(t, agent = 'codex', rows = idle[agent]) {
     './pending-prompts': require('../src/features/reading/pending-prompts.ts'),
     './composer-prefill': { onComposerPrefill: () => () => {} },
     './terminal-screen': { useScreen: () => ({ rows: view.rows }), bindApproval: choice => choice },
-    './agent-screen': { parseAgentScreen }, './cli-panel': panel,
+    './agent-screen': { parseAgentScreen, waitingTitle }, './cli-panel': panel,
     './reading-mode': { setChoiceVisible() {} }, './reading.css': {}, './reading-flow.css': {},
-    './Markdown': { Markdown: noop }, './ConversationFeed': { ConversationFeed },
+    './Markdown': { Markdown: noop }, './ConversationFeed': { ConversationFeed, ConversationDecorations: React.createContext(null) },
     './ReadingQuote': { QuoteChip: noop }, './message-quote': require('../src/features/reading/message-quote.ts'),
     './ReadingTerminalPopup': { ReadingTerminalPopup }, './WaitingCard': { WaitingCard: function WaitingCard() {} },
     './ReadingWelcome': { ReadingWelcome: noop }, './reading-welcome': { useWelcomeStarting: () => false },
@@ -66,6 +66,7 @@ function popupHarness(t, agent = 'codex', rows = idle[agent]) {
     './useReadingConversation': { useReadingHistory: () => ({ entries, compact }) },
     './useStickToBottom': { useStickToBottom: () => ({ stuck: true, unseen: 0, ready: true, holdPosition() {}, toBottom() {} }) },
     './useVisibleTail': { blocks, useVisibleTail: grouped => ({ visible: grouped, earlier: 0, hasEarlier: false }) },
+    './useFittingHint': { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, hints) => hints[0] },
     './useNativePictures': { useNativePictures: () => ({ images: [], clear() {}, readInput: () => null }) },
     './usePendingPrompts': { usePendingPrompts: () => ({ pending: [], echo: noop, cancelEcho() {} }) },
     './useMentions': { useMentions: () => ({ open: false, keys: () => false }) },
@@ -77,7 +78,7 @@ function popupHarness(t, agent = 'codex', rows = idle[agent]) {
     './i18n': { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match) },
   });
   const props = { projectId: 'fixture', terminal: { id: 'popup-fixture-' + ++nextId, sessionId: 'fixture-session', agent,
-    codexActive: true, codexActivity: 'complete', status: 'codex', needsInput: null }, active: true, autoFocus: false,
+    codexActive: true, codexActivity: activity, status: 'codex', needsInput: null }, active: true, autoFocus: false,
     onShowTerminal() {}, onError: assert.fail, onOpenLink() {} };
   let tree;
   const render = () => {
@@ -99,14 +100,14 @@ function popupHarness(t, agent = 'codex', rows = idle[agent]) {
 if (require.main === module) {
   // All captured dialog variants, not just the parser's successfully recognised choices.
   const screenDir = path.join(__dirname, 'fixtures/screens'), questionDir = path.join(__dirname, 'fixtures/questions');
-  const screens = fs.readdirSync(screenDir).filter(name => /(?:sign-in|trust-folder|permission|model-menu|resume-(?:inside|linux|start|empty)|investigation-(?:question|single|multi|tabs|review|plan|mcp|trust|bash|edit|write|web|patch|permissions|command|script|api-key|tall)|memories-dialog|plugins-view|0-163-(?:model|plugins|permissions|memories))/.test(name) && !name.endsWith('-before.txt'));
+  const screens = fs.readdirSync(screenDir).filter(name => /(?:sign-in|trust-folder|permission|model-menu|mention|shortcuts|resume-(?:inside|linux|start|empty)|investigation-(?:question|single|multi|tabs|review|plan|mcp|trust|bash|edit|write|web|patch|permissions|command|script|api-key|tall)|memories-dialog|plugins-view|(?:config|usage)-working|2-1-302-(?:status|config)|0-163-(?:model|plugins|permissions|memories))/.test(name) && !name.endsWith('-before.txt'));
   const fixtures = [...screens.map(name => ['screens/' + name, name.startsWith('claude') ? 'claude' : 'codex']),
     ...fs.readdirSync(questionDir).filter(name => name.endsWith('.txt')).map(name => ['questions/' + name, name.startsWith('claude') ? 'claude' : 'codex'])];
-  for (const [file, agent] of fixtures) for (const typing of [false, true]) {
-    test(file + (typing ? ' while typing' : '') + ': the actual reading view opens its terminal and never emits answer keys', t => {
-      const h = popupHarness(t, agent, typing ? idle[agent] : read(file));
+  for (const [file, agent] of fixtures) for (const activity of ['complete', 'working']) for (const typing of [false, true]) {
+    test(file + ' while ' + activity + (typing ? ' and typing' : '') + ': the actual reading view opens its terminal and never emits answer keys', t => {
+      const h = popupHarness(t, agent, typing ? idle[agent] : read(file), activity);
       if (typing) { h.edit('draft retained'); h.view.rows = read(file); h.render(); }
-      h.tick(DIALOG_SETTLE + 1);
+      h.tick(DIALOG_SETTLE * 2);
       assert.ok(h.popup(), file); assert.equal(h.node.disabled, true);
       if (typing) { assert.equal(h.popup().props.focus, false); assert.equal(h.node.value, 'draft retained'); }
       assert.equal(elements(h.tree()).some(element => /^(ReadingChoice|ReadingQuestion|NativeApprovalCard|NativeQuestionCard)$/.test(element.type?.name)), false);
@@ -118,19 +119,44 @@ if (require.main === module) {
     assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, false);
   });
   for (const agent of ['claude', 'codex']) {
-    test(agent + ': an unknown dialog opens after settling, without a parsed choice or notice', t => {
-      const h = popupHarness(t, agent, ['UNRECOGNISED GATE', 'Choose whether to continue: maybe / later']);
-      assert.equal(h.popup(), undefined); h.tick(DIALOG_SETTLE - 1); assert.equal(h.popup(), undefined);
-      h.tick(1); assert.ok(h.popup()); assert.deepEqual(h.writes, []);
+    for (const activity of ['complete', 'working']) {
+      test(agent + ': an unknown dialog opens after settling while ' + activity + ', without a parsed choice or notice', t => {
+        const h = popupHarness(t, agent, ['UNRECOGNISED GATE', 'Choose whether to continue: maybe / later'], activity);
+        const wait = DIALOG_SETTLE * (activity === 'working' ? 2 : 1);
+        assert.equal(h.popup(), undefined); h.tick(wait - 1); assert.equal(h.popup(), undefined);
+        h.tick(1); assert.ok(h.popup()); assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
+      });
+      test(agent + ': an idle input stays available despite ' + activity + ' activity', t => {
+        const h = popupHarness(t, agent, idle[agent], activity); h.tick(DIALOG_SETTLE * 3);
+        assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, false);
+      });
+      test(agent + ': working output with its input drawn stays in the reader while ' + activity, t => {
+        const line = agent === 'claude' ? '✻ Working…' : '• Working (5s · esc to interrupt)';
+        const h = popupHarness(t, agent, [line, ...idle[agent]], activity); h.tick(DIALOG_SETTLE * 3);
+        assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, true);
+        assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
+      });
+    }
+    test(agent + ': a working line without an input box cannot hide an unknown dialog', t => {
+      const line = agent === 'claude' ? '✻ Working…' : '• Working (5s · esc to interrupt)';
+      const h = popupHarness(t, agent, [line, 'Unknown dialog'], 'working'); h.tick(DIALOG_SETTLE * 2);
+      assert.ok(h.popup()); assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
     });
+    if (agent === 'claude') for (const name of ['claude-bang-running', 'claude-bang-empty-running', 'claude-bang-empty-model-working', 'claude-wrapped-draft']) {
+      for (const activity of ['complete', 'working']) test(name + ': actual working input stays in the reader despite ' + activity + ' activity', t => {
+        const h = popupHarness(t, agent, read('screens/' + name + '.txt'), activity); h.tick(DIALOG_SETTLE * 3);
+        assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, true);
+        assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
+      });
+    }
     test(agent + ': an idle prompt with its footer keeps the composer available', t => {
       const file = agent === 'claude' ? 'screens/claude-idle-2-1-296.txt' : 'screens/codex-fresh-default.txt';
       const h = popupHarness(t, agent, read(file)); h.tick(DIALOG_SETTLE * 2);
       assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, false);
     });
-    test(agent + ': while typing an unknown dialog opens without xterm focus and preserves the draft', t => {
-      const h = popupHarness(t, agent, read(agent === 'claude' ? 'screens/claude-idle-2-1-296.txt' : 'screens/codex-fresh-default.txt'));
-      h.edit('keep this draft'); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE);
+    for (const activity of ['complete', 'working']) test(agent + ': while ' + activity + ' and typing an unknown dialog opens without xterm focus and preserves the draft', t => {
+      const h = popupHarness(t, agent, idle[agent], activity);
+      h.edit('keep this draft'); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE * (activity === 'working' ? 2 : 1));
       assert.ok(h.popup()); assert.equal(h.popup().props.focus, false); assert.equal(h.node.value, 'keep this draft');
       assert.equal(h.node.disabled, true); h.keys('Enter'); h.keys('Tab');
       assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
@@ -171,10 +197,34 @@ if (require.main === module) {
     for (let i = 0; i < 5; i++) { h.view.rows = ['Unknown dialog', String(i)]; h.render(); h.tick(DIALOG_SETTLE); assert.equal(h.popup(), undefined); }
     h.waiting().props.onOpenTerminal(); h.render(); assert.ok(h.popup());
   });
+  // What the closed popup leaves: the dialog's own heading, and nothing at all rather than the tail of a wrapped paragraph.
+  const wrappedModelMenu = ['  Select model', '  Switch between Claude models. Your pick becomes', '  the default for new sessions. For other/previous', '  model names, specify with --model.', '',
+    ...read('screens/claude-model-menu-narrow.txt').slice(2)];
+  for (const [what, rows, title] of [['the heading in view', wrappedModelMenu, 'Select model'], ['the heading scrolled off', read('screens/claude-model-menu-narrow.txt'), null]]) {
+    test('claude: /model closed again leaves ' + (title ? 'its heading' : 'no title') + ' as the notice with ' + what + ', never a wrapped line of the paragraph', t => {
+      const h = popupHarness(t, 'claude', rows); h.tick(DIALOG_SETTLE * 2);
+      h.popup().props.onClose(); h.render();
+      assert.equal(h.waiting().props.title, title);
+    });
+  }
+  for (const agent of ['claude', 'codex']) test(agent + ': while a dialog waits the locked composer says so in its hint, and its draft stays', t => {
+    const h = popupHarness(t, agent, idle[agent]);
+    h.edit('keep this draft'); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE);
+    const box = elements(h.tree()).find(element => element.type === 'textarea').props;
+    assert.equal(box.disabled, true); assert.equal(box.value, 'keep this draft');
+    assert.equal(box.placeholder, '终端里有待处理的界面');
+    h.view.rows = idle[agent]; h.popup().props.onClose(); h.render();
+    assert.notEqual(elements(h.tree()).find(element => element.type === 'textarea').props.placeholder, '终端里有待处理的界面', 'the hint goes with the dialog');
+  });
   test('busy output and a transient redraw do not open a dialog, and returning to input cancels the timer', t => {
-    const h = popupHarness(t); h.props.terminal.codexActivity = 'working'; h.view.rows = ['Busy output']; h.render(); h.tick(DIALOG_SETTLE * 2);
-    assert.equal(h.popup(), undefined); h.props.terminal.codexActivity = 'complete'; h.render(); h.tick(DIALOG_SETTLE - 1);
+    const h = popupHarness(t, 'codex', ['• Working (5s · esc to interrupt)', ...idle.codex], 'working'); h.tick(DIALOG_SETTLE * 3);
+    assert.equal(h.popup(), undefined); h.view.rows = ['Unknown dialog']; h.render(); h.tick(DIALOG_SETTLE - 1);
     h.view.rows = idle.codex; h.render(); h.tick(DIALOG_SETTLE * 2); assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, false);
+  });
+  test('finishing activity shortens a pending unknown dialog wait, without suppressing it or sending keys', t => {
+    const h = popupHarness(t, 'codex', ['Unknown dialog'], 'working'); h.tick(DIALOG_SETTLE);
+    assert.equal(h.popup(), undefined); h.props.terminal.codexActivity = 'complete'; h.render();
+    assert.ok(h.popup()); assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
   });
 }
 module.exports = { popupHarness, elements, idle };

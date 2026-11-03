@@ -48,8 +48,8 @@
 .reading-markdown :not(pre) > code { padding: 1px 6px; border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: 500 .88em var(--font-mono); white-space: break-spaces; }
 .reading-markdown strong { color: var(--text-1); font-weight: 700; }
 .reading-markdown a { color: var(--text-1); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
-.reading-view [data-reading-path] { user-select: text; }
-.reading-view[data-reveal-modifier] [data-reading-path]:hover { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+:is(.reading-view, .conversation-feed) [data-reading-path] { user-select: text; }
+:is(.reading-view, .conversation-feed)[data-reveal-modifier] [data-reading-path]:hover { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .reading-markdown blockquote { margin: 8px 0; padding: 2px 12px; border-left: 2px solid var(--border); color: var(--text-2); }
 .reading-markdown hr { border: 0; border-top: 1px solid var(--divider); margin: 12px 0; }
 /* A table reads at the size of the text around it: smaller, its cells were too small to read. */
@@ -101,7 +101,8 @@
 .reading-command small { flex: none; padding: 2px 4px; border-radius: 999px; background: var(--bg-selected); color: var(--text-1); font-size: calc(11px * var(--reading-text)); }
 .reading-composer:focus-within { border-color: var(--focus-ring); }
 .reading-composer textarea { flex: 1; min-width: 0; max-height: 140px; field-sizing: content; resize: none; border: 0; outline: 0; padding: 4px 0; min-height: 32px; background: transparent; color: var(--text-1); font: 400 calc(14px * var(--reading-text))/calc(24px * var(--reading-text)) var(--font-ui); }
-.reading-composer textarea::placeholder { color: var(--text-2); }
+/* One line at any width, so the empty box keeps its height; Chromium gives a textarea placeholder no ellipsis, so ReadingView swaps in a shorter hint that fits (useFittingHint). */
+.reading-composer textarea::placeholder { color: var(--text-2); white-space: nowrap; overflow: hidden; }
 .reading-attachments { display: flex; align-items: center; gap: 8px; margin: 0 var(--reading-edge-right) 8px var(--reading-edge-left); font-size: calc(12px * var(--reading-text)); color: var(--text-2); }
 .reading-composer .icon-button { flex: none; width: 32px; height: 32px; border-radius: 8px; }
 .reading-send:not(:disabled) { color: var(--button-primary-text); background: var(--button-primary); }
@@ -111,6 +112,9 @@
 .reading-composer textarea:focus-visible { outline: none; box-shadow: none; }
 /* The disabled cursor also overrides the desktop-glass compatibility cursor. */
 .reading-composer textarea:disabled { cursor: not-allowed !important; }
+/* A locked composer reads as locked: no input fill and the quiet divider as its edge, the send button already off; a draft kept in it stays in the secondary text colour, readable. */
+.reading-composer:has(textarea:disabled) { background: transparent; border-color: var(--divider); }
+.reading-composer textarea:disabled { color: var(--text-2); }
 
 /* Native CLI prompts remain above the input until the CLI dismisses them. */
 .reading-choice-host { flex: 0 1 auto; min-height: 0; margin: 0 var(--reading-edge-right) 8px var(--reading-edge-left); overflow: auto; }

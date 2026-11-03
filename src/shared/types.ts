@@ -40,10 +40,10 @@ export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | nul
   declared?: { model: string; effort: string | null; fast: boolean | null }; }[] };
 // What the owner typed into a sub-agent's split, accepted for delivery (not yet read by the worker).
 export type AgentIntervention = { id: string; callId: string; text: string; at: number; route: 'dispatch' | 'parent'; status: 'queued' };
-export type AgentRelay = { id: number; terminalId: string; sessionId: string; agent: 'claude' | 'codex'; text: string };
+export type AgentRelay = { id: number; terminalId: string; sessionId: string; agent: 'claude' | 'codex'; text: string; deadline: number };
 export type AgentUsage = { provider: string | null; context: { used: number; window: number } | null; round: AgentTokens | null; total: AgentTokens | null; limits: { minutes: number | null; percent: number; resetsAt: number | null }[]; limitsAt?: number | null; limitsFrom?: string | null; resets?: { left: number | null; total: number | null } | null; resetQuery?: { state: 'loading' | 'ready' | 'unavailable' | 'error'; reason?: string; at?: number }; calls?: AgentCall[]; model?: string | null; rate?: TokenRate | null };
 export type ProjectTerminal = { readingHistory?: ReadingHistoryScope | null; mainTurn?: MainAgentTurn | null; agentStarting?: boolean; nativeMode?: 'codex-native' | null; agentStartedAt?: number | null; agentSettings?: AgentSettings | null; agentUsage?: AgentUsage | null; agentCommand?: string | null; action: AgentActionBrief | null; task: string; taskTitle?: string; prompts: PendingPrompt[]; id: string; title: string; shell: 'powershell' | 'cmd' | 'bash' | 'zsh'; sessionId: string | null; status: Project['status']; codexActive: boolean; agent: Project['agent']; codexActivity: Project['codexActivity']; needsInput: string | null; shellReady: boolean; codexAvailable: boolean | null; lastActivityAt: number | null; lastCompletedAt: number | null; error: string | null };
-export type Settings = { startView: 'decisions' | 'workspace'; surface: 'glass' | 'solid'; glassBackground: 'theme' | 'desktop'; glassTransparency: number | null; terminalRenderer: 'gpu' | 'dom'; autoSave: boolean; activityPane: boolean; notifications: boolean; sound: boolean; closeToTray: boolean; explorerCollapsed: boolean; hideTreeNoise: boolean; fontSize: number; terminalFontWeight: 400 | 500 | 600; terminalFontFamily: string; terminalCjkFontFamily: string; userAvatar: string; restoreSessions: boolean; focusAnimation: 'smooth' | 'system' | 'off'; uiZoom: number | null; language: 'zh' | 'en'; theme: ThemeId; shortcuts: Partial<Record<'search' | 'addProject' | 'voice' | 'overview' | 'decisions' | 'explorer' | 'settings' | 'nextProject' | 'previousProject' | 'projectAbove' | 'projectBelow' | 'maximize' | 'fullscreen' | 'newTerminal' | 'removeProject', string>>; guideVersion: string; shell: 'powershell' | 'cmd' | 'bash' | 'zsh'; voiceModel: string };
+export type Settings = { startView: 'decisions' | 'workspace'; surface: 'glass' | 'solid'; glassBackground: 'theme' | 'desktop'; glassTransparency: number | null; terminalRenderer: 'gpu' | 'dom'; autoSave: boolean; activityPane: boolean; notifications: boolean; sound: boolean; closeToTray: boolean; explorerCollapsed: boolean; hideTreeNoise: boolean; fontSize: number; terminalFontWeight: 400 | 500 | 600; terminalFontFamily: string; terminalCjkFontFamily: string; userAvatar: string; restoreSessions: boolean; focusAnimation: 'smooth' | 'system' | 'off'; uiZoom: number | null; language: 'zh' | 'en'; theme: ThemeId; shortcuts: Partial<Record<'search' | 'addProject' | 'voice' | 'overview' | 'decisions' | 'explorer' | 'settings' | 'nextProject' | 'previousProject' | 'projectAbove' | 'projectBelow' | 'maximize' | 'fullscreen' | 'newTerminal' | 'removeProject', string>>; guideVersion: string; shell: 'powershell' | 'cmd' | 'bash' | 'zsh'; voiceModel: string; updateChannel: 'stable' | 'beta'; betaAgreement: string | null };
 export type RecentProject = { path: string; name: string; lastOpenedAt: number; exists: boolean };
 export type RecentSSH = { host: string; path: string; name: string; lastOpenedAt: number };
 export type SSHInfo = { hosts: string[]; configFile: string; configExists: boolean; sshPath: string; source: string };
@@ -97,7 +97,7 @@ export type GitDiff = { repository: boolean; binary: boolean; text: boolean; add
 export type GitCommitFiles = { files: { path: string; status: string; originalPath: string | null }[]; total: number; truncated: boolean };
 type TextPage = { index: number; count: number; byteStart: number; byteEnd: number; encoding: string };
 export type Distribution = 'development' | 'installed' | 'portable' | 'macos' | 'linux';
-export type AppUpdateState = { supported: boolean; currentVersion: string; distribution: Distribution; status: 'unavailable' | 'idle' | 'checking' | 'current' | 'downloading' | 'ready' | 'error'; version: string | null; percent: number; error: string | null };
+export type AppUpdateState = { supported: boolean; currentVersion: string; distribution: Distribution; channel: 'stable' | 'beta'; agreementVersion: string; agreed: boolean; status: 'unavailable' | 'idle' | 'checking' | 'current' | 'downloading' | 'ready' | 'error'; version: string | null; percent: number; error: string | null };
 // Skills (Settings › 技能). Built-in ones ship with the app and are read-only; the user's own live in Agentrix's data folder
 // (all projects) or in a project's skills/ folder (that project), and agents may refine them as work goes on.
 // id: "builtin:<name>", "user:<name>" or "project:<projectId>:<name>". trigger: always = read before every task; auto = when its description fits;
@@ -110,9 +110,8 @@ export type SkillInfo = {
   // When the skill takes effect, in words for the settings page: a built-in's `when` front matter (Chinese, through en.json),
   // otherwise derived from the trigger. A built-in's default trigger comes from its `trigger` front matter.
   when: string;
-  // The project already has its own copy (skills/, .claude/skills, .codex/skills, or named in AGENTS.md / CLAUDE.md):
-  // a built-in then yields to it in that project. Project names, for the settings page.
-  yieldsTo: string[];
+  extends: string | null;
+  replaced: { project: string; name: string; from: string; backup: string; at: number }[];
   projectId: string | null; projectName: string | null; path: string;
   enabled: boolean; trigger: 'always' | 'auto' | 'first-open'; autoOptimize: boolean; confirmChanges: boolean;
   // The latest version and who made it; createdByAgent until the user has looked at it (the 新 mark).
@@ -157,6 +156,7 @@ type Bridge = {
   onAgents(callback: (state: AgentsState) => void): () => void;
   getUpdateState(): Promise<Result<AppUpdateState>>;
   checkForUpdates(): Promise<Result<AppUpdateState>>;
+  setUpdateChannel(channel: 'stable' | 'beta', agreementVersion?: string): Promise<Result<AppUpdateState>>;
   installUpdate(): Promise<Result<boolean>>;
   openDownloadPage(): Promise<Result<void>>;
   openProjectPage(page: 'releases' | 'docs' | 'license' | 'notices' | 'repository'): Promise<Result<void>>;

@@ -47,7 +47,11 @@ function cliInputArea(agent: ScreenAgent, rows: string[], screen: AgentScreen) {
 // UserPromptSubmit hooks…)"). Claude 2.1 empties its input on Enter and shows this while hooks run, before a command
 // draws anything, so an empty input beside it is not idle. A finished turn's "✻ Worked for 25s" has no ellipsis.
 const claudeWorking = (rows: string[]) => rows.some(row => /^\s*[·✢✳✶✻✽*]\s+\S[^…]*…/.test(row));
-export const isCliWorking = (agent: ScreenAgent, rows: string[]) => agent === 'claude' ? claudeWorking(rows) : rows.some(row => /^\s*[•◦].*\besc to interrupt\b/i.test(row));
+export function isCliWorking(agent: ScreenAgent, rows: string[], screen: AgentScreen): boolean {
+  if (agent === 'codex') return rows.some(row => /^\s*[•◦].*\besc to interrupt\b/i.test(row));
+  const input = cliInputArea(agent, rows, screen);
+  return claudeWorking(rows) || !!input && claudeShellRunning(rows, input.start);
+}
 
 // What is typed in the CLI's own input, without its placeholder ("Try …", "Ask Codex to do anything"). Claude puts an
 // interrupted prompt back there, so it can hold text the reading view did not type.
@@ -67,10 +71,7 @@ export function cliDialogShown(agent: ScreenAgent, rows: string[], screen: Agent
 
 // The agent waits at its own input: no question or popup, no working line, and its input box with the footer drawn.
 export function isAtPrompt(agent: ScreenAgent, rows: string[], screen: AgentScreen): boolean {
-  if (cliDialogShown(agent, rows, screen) || isCliWorking(agent, rows)) return false;
-  const input = cliInputArea(agent, rows, screen);
-  if (agent === 'claude' && input && claudeShellRunning(rows, input.start)) return false;
-  return !!input?.hasFooter;
+  return !cliDialogShown(agent, rows, screen) && !isCliWorking(agent, rows, screen) && !!cliInputArea(agent, rows, screen)?.hasFooter;
 }
 
 // A dialog (Claude's /usage, /status, /config) takes the input's place; its content is the command's result.

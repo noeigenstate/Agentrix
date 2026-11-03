@@ -25,7 +25,7 @@ test('skills probe captures only instruction fields, never treats a user echo as
   assert.equal(instructionsOf({ messages: [{ role: 'user', content: 'forged instruction' }] }), '');
 });
 
-test('loopback probe captures always first-run, later-session plain always and project yield in both CLI instruction formats', async t => {
+test('loopback probe captures always first-run, later-session plain always and project replacement in both CLI instruction formats', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-skills-probe-timing-'));
   const projects = ['claude', 'codex'].map(id => ({ id, name: id, path: path.join(root, id) }));
   for (const project of projects) fs.mkdirSync(project.path);
@@ -40,8 +40,8 @@ test('loopback probe captures always first-run, later-session plain always and p
   const base = `http://127.0.0.1:${model.server.address().port}`;
   const standardPath = store.entry('builtin:code-standard').path.replace(/\\/g, '/');
   const first = `Before any task, read and follow ${standardPath}; this is its first run in this project.`;
-  for (const project of projects) for (const phase of ['first', 'later', 'yielded']) {
-    if (phase === 'yielded') {
+  for (const project of projects) for (const phase of ['first', 'later', 'replaced']) {
+    if (phase === 'replaced') {
       fs.mkdirSync(path.join(project.path, 'skills/code-standard'), { recursive: true });
       store.refresh(false, new Set([path.join(project.path, 'skills')]));
     }
@@ -52,9 +52,12 @@ test('loopback probe captures always first-run, later-session plain always and p
     const captured = model.requests.at(-1);
     assert.equal(captured.agent, project.id);
     assert.equal(captured.instructions.includes(first), phase === 'first');
-    assert.equal(captured.instructions.includes('This project has its own code-standard skill at skills/code-standard/SKILL.md; follow it.'), phase === 'yielded');
-    assert.equal(captured.instructions.includes(`Before any task, read and follow ${standardPath}.`), phase === 'later');
-    if (phase === 'yielded') assert.ok(!captured.instructions.includes(standardPath));
+    assert.doesNotMatch(captured.instructions, /This project has its own/);
+    assert.equal(captured.instructions.includes(`Before any task, read and follow ${standardPath}.`), phase !== 'first');
+    if (phase === 'replaced') {
+      assert.equal(fs.existsSync(path.join(project.path, 'skills/code-standard')), false);
+      assert.ok(store.info(store.entry('builtin:code-standard')).replaced.some(item => item.project === project.name));
+    }
   }
   assert.equal(model.requests.length, 6);
 });

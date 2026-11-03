@@ -1,8 +1,12 @@
-/* The 引用 action sits in the corner of a message card, out of the text's way until the pointer or the keyboard is on it. */
+/* The 引用 action sits in the corner of a message card, out of the text's way until the pointer or the keyboard is on it. It is the compact 28px icon button
+   with the standard hover fill, and its column is reserved on the card's right, so it never lies over the text. */
 .reading-user, .reading-assistant { position: relative; }
-.reading-quote-action { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; opacity: 0; }
+.reading-user:has(> .reading-quote-action), .reading-assistant:has(> .reading-quote-action) { padding-right: 40px; }
+.reading-quote-action { position: absolute; top: 4px; right: 8px; width: 28px; height: 28px; opacity: 0; }
+.reading-quote-action:not(:disabled):hover { color: var(--text-1); background: var(--bg-selected); }
 .reading-user:hover > .reading-quote-action, .reading-assistant:hover > .reading-quote-action,
 .reading-quote-action:focus-visible { opacity: 1; }
+.reading-quote-action:disabled { color: var(--text-disabled); cursor: not-allowed; }
 .reading-quote-action:focus-visible, .reading-quote .icon-button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
 /* The quote the next message will carry, above the message box, in the attachments row's column. */
@@ -13,4 +17,5 @@
 .reading-quote .icon-button { width: 24px; height: 24px; }
 
 /* A quote inside a sent message: the lines it quoted, set apart by a rule at their side. */
-.reading-user-quote { margin: 0; padding: 0 0 0 12px; border-left: 2px solid var(--border); color: var(--text-2); font-size: calc(12px * var(--reading-text)); white-space: pre-wrap; overflow-wrap: anywhere; }
+.reading-user-quote { margin: 0; padding: 0 0 0 12px; border-left: 2px solid var(--border); color: var(--text-2); font-size: calc(12px * var(--reading-text)); overflow-wrap: anywhere; }
+.reading-user-quote .reading-markdown p { margin: 0; }

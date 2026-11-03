@@ -78,3 +78,15 @@ test('a failed popup mount restores xterm instead of leaving it in a discarded m
   assert.throws(() => mountReadingTerminal('t', 's', h.popup), /focus failed/);
   assert.equal(h.element.parentElement, h.original); assert.equal(h.observers[0].stopped, true);
 });
+
+test('the popup sits in the conversation area, so it never covers the message box, and the box keeps one placeholder line', () => {
+  const fs = require('node:fs'), path = require('node:path');
+  const dir = path.join(__dirname, '../src/features/reading'), read = file => fs.readFileSync(path.join(dir, file), 'utf8').replace(/\r\n/g, '\n');
+  const view = read('ReadingView.tsx');
+  const area = view.indexOf('className="reading-scroll-area"'), popup = view.indexOf('<ReadingTerminalPopup'), areaEnd = view.indexOf('</div>\n    {attachedCount', area);
+  assert.ok(area !== -1 && area < popup && popup < areaEnd, 'the popup is rendered inside .reading-scroll-area, above the composer in the layout');
+  const popupCss = read('reading-terminal-popup.css');
+  assert.doesNotMatch(popupCss, /padding:[^;]*\b7\d+px/, 'no guessed room for the composer');
+  assert.match(popupCss, /\.reading-terminal-popup \{[^}]*height: min\(760px, 100%\)/, 'as tall as the conversation area allows, so a tall dialog shows whole');
+  assert.match(read('reading.css'), /\.reading-composer textarea::placeholder \{[^}]*white-space: nowrap; overflow: hidden; \}/);
+});

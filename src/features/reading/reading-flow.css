@@ -105,6 +105,8 @@
 .reading-tools-tree li > b { font-weight: 500; color: var(--flow-muted); white-space: nowrap; }
 .reading-tools-tree li > code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 calc(12px * var(--reading-text))/1.6 var(--font-mono); color: var(--flow-muted); }
 .reading-tools-tree li > small { grid-column: 3; font-size: calc(11.5px * var(--reading-text)); color: var(--flow-faint); overflow-wrap: anywhere; }
+/* A sub-agent's role ("general-purpose") is one word: one line with an ellipsis, never broken letter by letter; its title says it whole. */
+.reading-tools-tree li.reading-tool-agent > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reading-tools-tree li.is-failed { padding: 6px 10px; border-radius: 12px; background: var(--bg-app); }
 .reading-tools-tree li.is-failed > code { font-weight: 600; }
 /* What the steps wrote (cards, a picture being drawn) sits under the pill or inside the opened card. */

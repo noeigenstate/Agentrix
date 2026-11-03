@@ -157,6 +157,27 @@ dialog { color: var(--text-1); }
 .update-module-title svg { color: var(--text-2); }
 .update-module p { margin: 0; font-size: 13px; line-height: 20px; color: var(--text-2); }
 .update-module .button svg { flex: none; }
+/* The update channel sits under the update card; its row is a settings row without the divider, and the notes and the agreement button stack below it. */
+.about-channel { display: flex; flex-direction: column; gap: 12px; }
+.about-channel > .setting-row { padding: 0; border-bottom: 0; }
+/* Title and hint stack the way an .about-row's do (2px apart), and the text column takes the room the select leaves, so the hint does not wrap early. */
+.about-channel > .setting-row > span:first-child { flex: 1; min-width: 0; }
+.about-channel > .setting-row small { margin-top: 2px; }
+.about-channel > .button { align-self: flex-start; }
+.about-channel-note, .about-channel .form-error, .beta-agreement-dialog .form-error { margin: 0; font-size: 12px; line-height: 20px; }
+.about-channel-note, .about-channel .setting-row small { text-wrap: pretty; }
+.about-channel-note { color: var(--text-2); }
+/* The beta agreement: a card whose text scrolls on its own, so the checkbox and the buttons stay in view in a short window. */
+.beta-agreement-dialog[open] { display: flex; flex-direction: column; }
+.beta-agreement-dialog form { display: flex; flex: 1; flex-direction: column; gap: 16px; min-height: 0; }
+.beta-agreement-dialog .dialog-heading h2 { margin: 0; }
+.beta-agreement-version { margin: 0; font-size: 12px; line-height: 20px; color: var(--text-2); }
+.beta-agreement-text { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); }
+.beta-agreement-text ol { margin: 0; padding-left: 20px; font-size: 13px; line-height: 20px; }
+.beta-agreement-text li + li { margin-top: 8px; }
+.beta-agreement-check { display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: 14px; cursor: pointer; }
+.beta-agreement-check input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--text-1); }
+.beta-agreement-actions { display: flex; justify-content: flex-end; gap: 12px; }
 .about-rows { display: flex; flex-direction: column; }
 .about-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 16px 20px; border: 0; border-bottom: 1px solid var(--divider); border-radius: 0; text-align: left; color: var(--text-1); background: transparent; }
 .about-row:last-child { border-bottom: 0; }

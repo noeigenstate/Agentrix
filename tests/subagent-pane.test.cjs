@@ -89,6 +89,23 @@ test('subscribers hear every change to the open views and stop hearing when they
   assert.equal(heard.length, 2); s.closeSplit('t-hear', 'b');
 });
 
+test('a closed view and the views of a removed terminal leave nothing behind: no open view, no kept feed', async () => {
+  const s = splits(), bridge = stubBridge(() => Promise.resolve({ ok: true, value: feed(4) }));
+  const firstState = (terminalId, callId) => { let first; s.followFeed(bridge, terminalId, callId, state => { first ??= state; })(); return first.status; };
+  for (const [terminalId, callId] of [['t-keep', 'a'], ['t-shut', 'b'], ['t-gone', 'c'], ['t-gone', 'd']]) { s.openSplit(terminalId, callId); s.followFeed(bridge, terminalId, callId, () => {})(); }
+  await settle();
+  assert.equal(firstState('t-shut', 'b'), 'ok', 'a view that opens again at once shows the feed it had');
+  s.closeSplit('t-shut', 'b');
+  assert.equal(firstState('t-shut', 'b'), 'loading', 'closing the view dropped its kept feed');
+  const heard = [], leave = s.subscribeSplits(() => heard.push(true));
+  s.pruneSplits(new Set(['t-keep', 't-gone']));
+  assert.deepEqual(heard, [], 'nothing to prune: nobody is told');
+  s.pruneSplits(new Set(['t-keep']));
+  assert.deepEqual([openIds('t-keep'), openIds('t-gone'), heard.length], [['a'], [], 1], 'the views of a terminal that went close');
+  assert.deepEqual([firstState('t-keep', 'a'), firstState('t-gone', 'c')], ['ok', 'loading'], 'its kept feeds went too, the live terminal keeps its own');
+  leave(); s.closeSplit('t-keep', 'a');
+});
+
 // ---- following one agent --------------------------------------------------------------------------------------------------------
 function stubBridge(answer) {
   const calls = [], hear = { listener: null };
@@ -167,20 +184,20 @@ const paneProps = (patch = {}) => ({ terminalId: 't1', callId: 'agent:a', projec
 const paneMarkup = (state, patch, react) => renderToStaticMarkup(React.createElement(paneLoader(state, react), paneProps(patch)));
 const ok = (patch, status = 'ok') => ({ feed: feed(3, patch), status, error: null });
 
-test('the view names the agent, its model, settings, state, speed and time, and renders the feed read-only with live links', () => zh(() => {
+test('the view names the task first, then the model, settings, state, speed and time, and renders the feed read-only with live links', () => zh(() => {
   const html = paneMarkup(ok({}));
-  assert.match(html, /<section class="subagent-split" aria-label="GPT-6\.1-Sol 的输出，只读">/);
-  assert.match(html, /<span class="subagent-name" title="gpt-6\.1-sol">GPT-6\.1-Sol<\/span><span class="subagent-tag subagent-role">执行<\/span><span class="subagent-how">max · 快速<\/span>/);
-  assert.match(html, /<span class="subagent-tag subagent-state is-running">运行中<\/span><span class="subagent-rate">94 token\/s<\/span>/);
+  assert.match(html, /<section class="subagent-split" aria-label="Refactor the grid · GPT-6\.1-Sol 的输出，只读">/);
+  assert.match(html, /<span class="subagent-title" title="Refactor the grid">Refactor the grid<\/span><span class="subagent-tag subagent-state is-running">运行中<\/span>/);
+  assert.match(html, /<div class="subagent-meta" title="执行 · GPT-6\.1-Sol · max · 快速 · 94 token\/s · gpt-6\.1-sol">执行 · GPT-6\.1-Sol · max · 快速 · 94 token\/s<\/div>/, 'role, model, settings and speed on the quiet second line');
   assert.match(html, /<span class="subagent-elapsed" title="已运行">2:05<\/span>/, 'now is 126 s, it started at 1 s');
-  assert.match(html, /<button type="button" class="icon-button" title="关闭分屏（Esc）" aria-label="关闭 GPT-6\.1-Sol 的分屏">/);
-  assert.match(html, /<div class="subagent-body" tabindex="0" role="log" aria-live="off" aria-label="GPT-6\.1-Sol 的消息和工具步骤，只读">/);
+  assert.match(html, /<button type="button" class="icon-button" title="关闭分屏（Esc）" aria-label="关闭 Refactor the grid · GPT-6\.1-Sol 的分屏">/);
+  assert.match(html, /<div class="subagent-body" tabindex="0" role="log" aria-live="off" aria-label="Refactor the grid · GPT-6\.1-Sol 的消息和工具步骤，只读">/);
   assert.match(html, /<div class="conversation-feed" data-agent="codex" data-live="true" data-entries="2" data-project="p1" data-link="function">/, 'the feed gets the agent, the project and the link handler');
   assert.match(html, /只读 · 自动跟随最新一步/);
   assert.equal(count(html, /<textarea/g), 1, 'the owner’s one text box, for the word to the agent');
   assert.match(paneMarkup(ok({ agent: 'Claude Code', rate: null })), /data-agent="claude"/);
-  assert.doesNotMatch(paneMarkup(ok({ effort: null, fast: null })), /subagent-how/);
-  assert.match(paneMarkup(ok({ rate: null })), /<span class="subagent-rate">— token\/s<\/span>/, 'an unknown speed is a dash, not 0');
+  assert.doesNotMatch(paneMarkup(ok({ effort: null, fast: null })), /max · 快速/);
+  assert.doesNotMatch(paneMarkup(ok({ rate: null })), /token\/s/, 'an unknown speed takes no room in the header: no dash, no unit');
   assert.match(html, /<\/div><div class="subagent-input"><div class="subagent-input-row"><textarea[^>]*maxLength="4000"[^>]*><\/textarea><button type="button" class="button">停下<\/button><\/div><\/div><footer class="subagent-foot">/, 'the input sits above the status line');
 }));
 
@@ -198,16 +215,58 @@ test('a finished view stays until closed, shows the time it took, and a lost rec
   assert.match(loading, /aria-label="子 agent 的输出，只读"/); assert.match(loading, /<p class="subagent-empty">正在读取…<\/p>/); assert.doesNotMatch(loading, /conversation-feed/);
   assert.match(paneMarkup({ feed: null, status: 'error', error: 'no bridge' }), /<p class="subagent-empty">读取失败：no bridge<\/p>/);
   assert.match(paneMarkup(ok({ startedAt: null })), /title="已运行">—<\/span>/, 'a start the records do not give is a dash');
+  assert.match(paneMarkup(ok({ state: 'done', startedAt: 1000, endedAt: null })), /title="用时">—<\/span>/, 'a finished view with no recorded end does not count on to now');
+  assert.match(paneMarkup(ok({ state: 'done', startedAt: 66_000, endedAt: 66_000 })), /title="用时">—<\/span>/, 'an end that is not after the start is unknown, not 0:00');
 }));
 
 test('the view closes on Escape and on its button, and Escape never travels on to the terminal', () => zh(() => {
   const closed = [], tree = paneLoader(ok({}))(paneProps({ onClose: () => closed.push('closed') })), stopped = [];
   assert.equal(tree.type, 'section');
-  const key = name => tree.props.onKeyDown({ key: name, stopPropagation: () => stopped.push(name) });
+  const key = name => tree.props.onKeyDown({ key: name, target: { tagName: 'DIV' }, stopPropagation: () => stopped.push(name) });
   key('Enter'); key('a'); assert.deepEqual([closed, stopped], [[], []]);
   key('Escape'); assert.deepEqual([closed, stopped], [['closed'], ['Escape']]);
   elements(tree).find(node => node.type === 'button' && node.props.title === '关闭分屏（Esc）').props.onClick();
   assert.deepEqual(closed, ['closed', 'closed']);
+}));
+
+test('Escape inside the message box leaves the box with the typed word kept; Escape elsewhere in the view closes it', () => zh(() => {
+  const closed = [], stopped = [], focused = [];
+  const react = { ...hookApi, useRef: current => ({ current: current === null ? { focus: () => focused.push(true) } : current }) };
+  const tree = paneLoader(ok({}), react)(paneProps({ onClose: () => closed.push(true) }));
+  const press = tagName => tree.props.onKeyDown({ key: 'Escape', target: { tagName }, stopPropagation: () => stopped.push(tagName) });
+  press('TEXTAREA');
+  assert.deepEqual([closed.length, focused.length, stopped], [0, 1, ['TEXTAREA']], 'the box gives up focus, the view stays, the terminal still hears nothing');
+  press('DIV');
+  assert.deepEqual([closed.length, focused.length], [1, 1], 'the next Escape (focus now in the view) closes it');
+}));
+
+test('a finished Task subagent (reviewing, with an end time) takes no word, keeps the time it took and says it is done', () => zh(() => {
+  const html = paneMarkup(ok({ state: 'reviewing', startedAt: 1000, endedAt: 66_000 }));
+  assert.match(html, /<textarea[^>]*disabled[^>]*placeholder="它已结束或不可用，不能再发消息"/); assert.doesNotMatch(html, /<button[^>]*>停下/);
+  assert.match(html, /subagent-state is-done">已完成</, 'the header agrees with the footer: the end time decides, not the feed state'); assert.doesNotMatch(html, /审核中/);
+  assert.match(html, /<span class="subagent-elapsed" title="用时">1:05<\/span>/, 'the clock stopped at the end');
+  assert.match(html, /只读 · 已完成，分屏保留到你关闭/);
+  const reviewing = paneMarkup(ok({ state: 'reviewing', endedAt: null }));
+  assert.doesNotMatch(reviewing, /<textarea[^>]*disabled/, 'a reviewer still at work can be told something'); assert.match(reviewing, /subagent-state is-reviewing">审核中</);
+}));
+
+test('a word to a dispatched worker is delivered once its resumed transcript carries it; a parent relay and a word not yet seen stay queued', () => {
+  const { deliveredIds } = splits(), user = text => ({ id: text, role: 'user', text }), item = (id, text, route = 'dispatch') => ({ id, text, route });
+  const entries = [user('first brief'), { id: 'a', role: 'assistant', text: '业主插话：fix the test' }, user('业主插话：fix the test\n\n业主插话：and the docs\n\n继续执行当前任务。')];
+  const delivered = sent => [...deliveredIds(entries, sent)];
+  assert.deepEqual(delivered([item('1', 'fix the test'), item('2', 'and the docs'), item('3', 'later word')]), ['1', '2'], 'only the owner\'s own lines count, and only words found');
+  assert.deepEqual(delivered([item('1', 'fix the test'), item('2', 'fix the test')]), ['1'], 'the same word twice needs two lines');
+  assert.deepEqual(delivered([item('1', 'fix the test', 'parent')]), [], 'a relay through the parent leaves no trace to check');
+  assert.deepEqual([...deliveredIds([], [item('1', 'x')])], []);
+});
+
+test('a delivered word reads 已送达 under the conversation, a queued one 已排队', () => zh(() => {
+  const withSent = items => { let slot = 0; return { ...hookApi, useState: start => [slot++ === 1 ? items : typeof start === 'function' ? start() : start, () => {}] }; };
+  const entries = [{ id: 'u1', role: 'user', text: '业主插话：fix the test\n\n继续执行当前任务。' }];
+  const html = paneMarkup(ok({ entries }), undefined, withSent([intervention(), intervention({ id: 'i2', text: 'and the docs' }), intervention({ id: 'i3', text: 'fix the test', route: 'parent' })]));
+  assert.match(html, /<p>fix the test<\/p><small>已送达<\/small>/);
+  assert.match(html, /<p>and the docs<\/p><small>已排队<\/small>/);
+  assert.match(html, /<p>fix the test<\/p><small>已排队 · 已转告主会话<\/small>/);
 }));
 
 // ---- the owner's word to the agent --------------------------------------------------------------------------------------------------
@@ -216,15 +275,16 @@ const fill = (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, key) => v
 const intervention = (patch = {}) => ({ id: 'i1', callId: 'agent:a', text: 'fix the test', at: 5, route: 'dispatch', status: 'queued', ...patch });
 
 // SubagentInput with real hooks and a stand-in bridge; `find` looks in the view as it stands, `done` puts the globals back.
-function inputView(bridge, patch = {}) {
+function inputView(bridge, patch = {}, fit = 0) {
   const sent = [], saved = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge } });
-  const harness = hookHarness('src/features/agents/SubagentInput.tsx', { './i18n': { t: fill }, './subagent-input.css': {} });
+  // The width-fitting hook has its own tests below; here the box shows the hint at index `fit` of the list it was given.
+  const hints = [], harness = hookHarness('src/features/agents/SubagentInput.tsx', { './i18n': { t: fill }, './subagent-input.css': {}, './useFittingHint': { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, list) => (hints.splice(0, hints.length, ...list), list[fit] ?? '') } });
   const props = { terminalId: 't1', callId: 'agent:a', name: 'Sol', closed: false, onSent: item => sent.push(item), ...patch };
-  const find = tag => elements(harness.render('SubagentInput', props).result).find(node => node.type === tag);
+  const find = tag => elements(harness.render('SubagentInput', props).result).find(node => node.type === tag), note = () => elements(harness.render('SubagentInput', props).result).find(node => node.type === 'span' && node.props.id);
   const press = (init = {}) => { const prevented = []; find('textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, preventDefault: () => prevented.push(true), ...init }); return prevented.length; };
   const type = value => find('textarea').props.onChange({ target: { value } });
-  return { sent, find, press, type, done() { harness.dispose(); if (saved) Object.defineProperty(globalThis, 'window', saved); else delete globalThis.window; } };
+  return { sent, hints, find, note, press, type, done() { harness.dispose(); if (saved) Object.defineProperty(globalThis, 'window', saved); else delete globalThis.window; } };
 }
 
 test('Enter sends the trimmed word; Shift+Enter, an empty box and an IME composition send nothing; a sent word clears the box and is handed on', async () => {
@@ -272,12 +332,15 @@ test('停下 asks the agent to stop through the main process and says so; the pa
   } finally { view.done(); }
 });
 
-test('a finished or lost view takes no word: box and button are off, a note says why, and a keypress that gets through still sends nothing', async () => {
+test('a finished or lost view takes no word: the box is off and says why in its hint, 停下 is gone, and a keypress that gets through still sends nothing', async () => {
   const calls = [], answer = async (...args) => { calls.push(args); return { ok: true, value: intervention() }; };
   const view = inputView({ interveneAgent: answer, stopAgent: answer }, { closed: true });
   try {
-    assert.deepEqual([view.find('textarea').props.disabled, view.find('button').props.disabled], [true, true]);
-    assert.equal(view.find('p').props.children, '它已结束或不可用，不能再发消息');
+    assert.equal(view.find('textarea').props.disabled, true);
+    assert.equal(view.find('button'), undefined, 'a button that can never work is not shown beside a disabled box');
+    assert.equal(view.find('textarea').props.placeholder, '它已结束或不可用，不能再发消息', 'the reason is the box’s own hint, not a second line under it');
+    assert.equal(view.find('p'), undefined);
+    assert.deepEqual(view.hints, ['它已结束或不可用，不能再发消息', '已结束，不能再发消息'], 'a narrow box falls back to the short reason');
     view.type('too late'); view.press(); await settle();
     assert.deepEqual(calls, []);
   } finally { view.done(); }
@@ -336,6 +399,12 @@ test('an open view makes its row pressed and the hint offers to close it; a clic
 
 // ---- the terminal grid ----------------------------------------------------------------------------------------------------------
 const terminal = id => ({ id, title: id, sessionId: `s-${id}`, status: 'running', codexActive: true, agent: 'claude', readingHistory: false });
+test('a viewable row is a plain row with one full-width button: the row has a single column, so the button never lands in the 16px icon column', () => {
+  const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
+  assert.match(css, /\.activity-call-rows li:has\(> \.activity-call-open\) \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(css, /\.activity-call-rows li > \.activity-call-open \{ display: grid; grid-template-columns: 16px minmax\(0, 1fr\) auto;/, 'the button carries the same 16 | text | state grid inside');
+});
+
 const gridMarkup = (terminals, focused) => renderToStaticMarkup(React.createElement(load('features/terminal/ProjectTerminals.tsx').ProjectTerminals, {
   project: { id: 'p1', name: 'Project', kind: 'local', terminals }, focused, fontSize: 14, activeId: terminals[0].id, setActiveId() {}, onExpand() {}, onAction: async () => undefined, onError() {}, onOpenLink() {} }));
 
@@ -357,7 +426,9 @@ test('open views take cells of the expanded grid after the terminals, are not te
   assert.deepEqual([...gridMarkup(one, true).matchAll(/data-call="([^"]+)"/g)].map(match => match[1]), ['agent:b', 'agent:c'], 'a third view replaces the oldest');
   assert.equal(count(gridMarkup(one, false), /subagent-/g), 0, 'a small card shows no views');
   assert.doesNotMatch(gridMarkup(one, false), /has-splits/);
+  assert.doesNotMatch(single, /has-terminals/, 'a lone conversation beside views is not picked out by the active-split edge');
   const two = gridMarkup([terminal('t-grid'), terminal('t-grid-2')], true);
+  assert.match(two, /has-terminals/, 'with several terminals the one in use is');
   assert.match(two, /terminal-split-tools/, 'with several terminals the terminals keep their own tools'); assert.doesNotMatch(two, /grid-row/);
   s.limitSplits('t-grid', 0);
 }));
@@ -371,3 +442,194 @@ test('the grid is not rearranged by views of another terminal, and a narrow cent
   assert.deepEqual([...gridMarkup([terminal('t-mine')], true).matchAll(/data-call="([^"]+)"/g)].map(match => match[1]), ['agent:b']);
   s.limitSplits('t-mine', 0); s.limitSplits('t-elsewhere', 0);
 }));
+
+// ---- the narrow window's way in -------------------------------------------------------------------------------------------------
+// CSS hides the activity pane below 1000px; the header of the expanded project then carries a chip that opens the pane's own rows in a popover.
+const chipTerminal = (id, items) => ({ id, agentUsage: { provider: 'Anthropic', limits: [], calls: [call(items)] } });
+const chipMarkup = (terminal, open) => {
+  const chipLoader = makeLoader({ '../terminal/terminal-screen': screenStub, '../home/send-to-agent': sendStub,
+    react: { ...React, useState: () => [open, () => {}], useRef: current => ({ current }), useEffect() {}, useSyncExternalStore: (subscribe, snapshot) => snapshot() } });
+  chipLoader('shared/i18n.ts').applyLanguage('zh');
+  return renderToStaticMarkup(React.createElement(chipLoader('features/agents/SubagentChip.tsx').SubagentChip, { terminal }));
+};
+
+test("the narrow window's header chip: counts the called models, shows the running ones, lists the pane's own rows, and exists only for a viewable sub-agent", () => zh(() => {
+  const items = [item('agent:a'), item('agent:b', { state: 'done' }), item('dispatch:c', { viewable: false, state: 'preparing' })];
+  const closed = chipMarkup(chipTerminal('t-chip', items), false);
+  assert.match(closed, /^<div class="subagent-chip-anchor"><button type="button" class="button small subagent-chip" aria-expanded="false" aria-haspopup="dialog">子 agent 3<span class="subagent-chip-run" title="1 个运行中"><i aria-hidden="true"><\/i>1<\/span><\/button><\/div>$/);
+  assert.equal(chipMarkup(chipTerminal('t-chip', [item('agent:b', { state: 'done' })]), false).includes('subagent-chip-run'), false, 'nothing running, no running count');
+  assert.equal(chipMarkup(chipTerminal('t-chip', [item('dispatch:c', { viewable: false })]), false), '', 'no readable record, no chip');
+  assert.equal(chipMarkup({ id: 't-chip', agentUsage: null }, false), '', 'no calls, no chip');
+  // Open: the same card the pane shows, row for row (the same buttons, so the same click and the same pressed state).
+  const open = chipMarkup(chipTerminal('t-chip', items), true), pane = paneRows(items, 't-chip');
+  assert.match(open, /<div class="subagent-menu" role="dialog" aria-label="子 agent">/);
+  assert.match(open, /aria-expanded="true"/);
+  const rows = html => html.match(/<li class="is-[^"]*"[^>]*>.*?<\/li>/gs);
+  assert.equal(rows(open).length, 3, 'the three calls');
+  assert.deepEqual(rows(open), rows(pane), 'the same rows as the activity pane');
+  assert.equal(count(open, /<button type="button" class="activity-call-open"/g), 2);
+}));
+
+test('the chip opens on a click and closes on Escape (focus back on it, the key goes no further), on a press outside, on Tab out of it and on choosing a row', () => zh(() => {
+  const slots = [], effects = [], listeners = [], focused = [];
+  let cursor = 0;
+  const hooks = { ...React,
+    useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = initial; return [slots[index], value => { slots[index] = value; }]; },
+    useRef(initial) { const index = cursor++; return slots[index] ??= { current: initial }; },
+    useEffect(callback, deps) {
+      const index = cursor++, previous = slots[index];
+      if (previous && deps.every((value, i) => Object.is(value, previous.deps[i]))) return;
+      effects.push(() => { previous?.cleanup?.(); slots[index] = { deps, cleanup: callback() }; });
+    },
+    useSyncExternalStore: (subscribe, snapshot) => snapshot() };
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: { dataset: {}, lang: '' },
+    addEventListener: (name, listener, capture) => listeners.push({ name, listener, capture }),
+    removeEventListener: (name, listener) => listeners.splice(0, listeners.length, ...listeners.filter(entry => entry.name !== name || entry.listener !== listener)) } });
+  try {
+    const chipLoader = makeLoader({ '../terminal/terminal-screen': screenStub, '../home/send-to-agent': sendStub, react: hooks });
+    chipLoader('shared/i18n.ts').applyLanguage('zh');
+    const { SubagentChip } = chipLoader('features/agents/SubagentChip.tsx'), { CallsCard } = chipLoader('features/agents/ActivityPane.tsx');
+    const terminal = chipTerminal('t-esc', [item('agent:a')]), popup = {}, elsewhere = {};
+    // Slot 0 is the open state, 1 the anchor ref, 2 the chip ref: a mounted tree would fill the refs; here the anchor knows `popup` and the chip counts focus.
+    const render = () => {
+      cursor = 0;
+      const tree = elements(SubagentChip({ terminal }));
+      slots[1] = { current: { contains: node => node === popup } }; slots[2] = { current: { focus: () => focused.push('chip') } };
+      while (effects.length) effects.shift()();
+      return tree;
+    };
+    const chip = () => render().find(node => node.type === 'button' && node.props.className === 'button small subagent-chip');
+    const anchor = () => render().find(node => node.props.className === 'subagent-chip-anchor');
+    const dialog = () => render().find(node => node.props.role === 'dialog');
+    const listener = name => listeners.filter(entry => entry.name === name).at(-1);
+
+    render();
+    assert.equal(dialog(), undefined, 'closed at first');
+    chip().props.onClick();
+    assert.ok(dialog(), 'a click opens it'); assert.equal(chip().props['aria-expanded'], true);
+    assert.equal(dialog().props['aria-label'], '子 agent');
+    assert.equal(elements(dialog()).find(node => node.type === CallsCard).props.terminalId, 't-esc', 'the pane\'s card for this terminal');
+
+    // Escape closes it, puts focus back on the chip and is swallowed in the capture phase, before the terminal sees it.
+    const swallowed = [];
+    assert.equal(listener('keydown').capture, true);
+    listener('keydown').listener({ key: 'a', stopPropagation: () => swallowed.push('a') });
+    assert.ok(dialog(), 'another key leaves it open'); assert.deepEqual(swallowed, []);
+    listener('keydown').listener({ key: 'Escape', stopPropagation: () => swallowed.push('Escape') });
+    assert.equal(dialog(), undefined); assert.deepEqual([swallowed, focused], [['Escape'], ['chip']]);
+    assert.equal(listeners.length, 0, 'its listeners are let go of once it is closed');
+
+    // A press outside closes it; one inside does not.
+    chip().props.onClick(); render();
+    listener('pointerdown').listener({ target: popup }); assert.ok(dialog(), 'a press inside stays');
+    listener('pointerdown').listener({ target: elsewhere }); assert.equal(dialog(), undefined, 'a press outside closes');
+
+    // Tab out of the popover closes it; moving within it does not.
+    chip().props.onClick();
+    anchor().props.onBlur({ relatedTarget: popup }); assert.ok(dialog());
+    anchor().props.onBlur({ relatedTarget: elsewhere }); assert.equal(dialog(), undefined);
+
+    // Choosing a row closes it and hands focus back (the pane's row has already toggled its view); the popover's own space is no choice.
+    chip().props.onClick(); focused.length = 0;
+    dialog().props.onClick({ target: { closest: () => null } }); assert.ok(dialog());
+    dialog().props.onClick({ target: { closest: selector => selector === '.activity-call-open' ? {} : null } });
+    assert.equal(dialog(), undefined); assert.deepEqual(focused, ['chip']);
+  } finally { if (previous) Object.defineProperty(globalThis, 'document', previous); else delete globalThis.document; }
+}));
+
+test("the chip's popover is the pane's card on the menu colour, and the chip itself opens no view, writes nothing and expands nothing", () => {
+  const read = file => fs.readFileSync(path.join(src, file), 'utf8'), css = read('features/agents/subagent-chip.css');
+  assert.match(css, /\.subagent-menu \{ --flow-line: var\(--divider\); --flow-ink: var\(--text-1\); --flow-muted: var\(--text-2\); --flow-faint: var\(--text-3\);/, 'the pane\'s ink levels');
+  assert.match(css, /\.subagent-menu \{[^}]*background: var\(--bg-menu\);/);
+  assert.doesNotMatch(css, /\.subagent-menu \{[^}]*box-shadow/, 'no new shadow');
+  assert.doesNotMatch(read('features/agents/SubagentChip.tsx').replace(/\/\/.*$/gm, ''), /\b(openSplit|toggleSplit|closeSplit)\(|window\.agentrix|writeTerminal|onFocus|onExpand/);
+});
+
+test("a sub-agent view's hint stays on one line, so the box keeps its 36px at any width while typed text still grows it", () => {
+  const css = fs.readFileSync(path.join(src, 'features/agents/subagent-input.css'), 'utf8');
+  assert.match(css, /\.subagent-input textarea::placeholder \{ color: var\(--text-2\); white-space: nowrap; overflow: hidden; \}/);
+  assert.match(css, /\.subagent-input textarea \{[^}]*min-height: 36px;[^}]*field-sizing: content;/);
+});
+
+test('two splits of one model are told apart by their task: it leads the header and every accessible name, the model follows', () => zh(() => {
+  const first = paneMarkup(ok({ model: 'claude-sonnet-5-5', agent: 'Claude Code', title: 'Trace the parser' })), second = paneMarkup(ok({ model: 'claude-sonnet-5-5', agent: 'Claude Code', title: 'Plan the split' }));
+  const head = html => html.match(/<header class="subagent-head">.*?<\/header>/)[0];
+  assert.notEqual(head(first), head(second));
+  assert.ok(head(first).indexOf('Trace the parser') < head(first).indexOf('subagent-meta'), 'the task before the model');
+  assert.match(head(first), /<div class="subagent-meta"[^>]*>[^<]*Sonnet 5\.5/, 'the model is on the second line');
+  for (const [html, title] of [[first, 'Trace the parser'], [second, 'Plan the split']]) {
+    assert.match(html, new RegExp(`aria-label="${title} · Sonnet 5\.5 的输出，只读"`));
+    assert.match(html, new RegExp(`aria-label="关闭 ${title} · Sonnet 5\.5 的分屏"`));
+    assert.match(html, new RegExp(`aria-label="${title} · Sonnet 5\.5 的消息和工具步骤，只读"`));
+  }
+  assert.match(paneMarkup(ok({ title: '' })), /aria-label="GPT-6\.1-Sol 的输出，只读"/, 'a task with no title is named by its model, as before');
+}));
+
+test('the task keeps the header’s width: only the state, the clock and the close button share its row, who it is goes on one quiet line under it, and the header stays above the feed', () => zh(() => {
+  const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
+  const row = paneMarkup(ok({})).match(/<div class="subagent-head-row">(.*?)<\/div>/)[1];
+  assert.deepEqual([...row.matchAll(/class="([^"]+)"/g)].map(match => match[1]), ['agent-brand-icon agent-brand-codex', 'subagent-title', 'subagent-tag subagent-state is-running', 'subagent-elapsed', 'icon-button'], 'no role, model, settings or speed beside the task');
+  assert.match(css, /\.subagent-title \{ flex: 1 1 0; min-width: 0; overflow: hidden;[^}]*text-overflow: ellipsis; white-space: nowrap; \}/);
+  assert.match(css, /\.subagent-meta \{ overflow: hidden;[^}]*text-overflow: ellipsis; white-space: nowrap; \}/);
+  assert.match(css, /\.subagent-body \{[^}]*mask-image: linear-gradient\(to bottom, transparent 0, #000 14px\);/, 'a line scrolled under the header fades instead of showing half');
+  assert.match(css, /\.subagent-head \{ position: relative; z-index: 1;[^}]*background: var\(--bg-app\); \}/, 'the feed scrolling to its end clips under the header, never over it');
+}));
+
+test('a narrow message box shows a shorter hint that fits, never a cut-off one: the longest hint comes first, the reason a finished view gives has a short form', () => {
+  const view = inputView({}, {}, 2);
+  try {
+    assert.equal(view.find('textarea').props.placeholder, '给它发消息', 'the shortest, for the narrowest box');
+    assert.deepEqual(view.hints, ['给它发消息 · Enter 发送，Shift+Enter 换行', '给它发消息 · Enter 发送', '给它发消息']);
+  } finally { view.done(); }
+});
+
+test('whenever the box shows a shortened hint, or none, the full one with its keys is its tooltip and a hidden accessible description; the full hint needs neither', () => {
+  const full = '给它发消息 · Enter 发送，Shift+Enter 换行';
+  for (const fit of [1, 2, 3]) {   // a shorter hint, the shortest, nothing fits
+    const view = inputView({}, {}, fit);
+    try {
+      const box = view.find('textarea'), note = view.note();
+      assert.equal(box.props.title, full); assert.equal(box.props['aria-describedby'], 'subagent-hint-t1-agent:a');
+      assert.equal(note.props.id, box.props['aria-describedby']); assert.equal(note.props.children, full);
+      assert.equal(note.props.style.position, 'absolute', 'not drawn');
+      assert.equal(box.props.placeholder, ['给它发消息 · Enter 发送', '给它发消息', ''][fit - 1], 'the visible hint is the longest that fits, empty when none does');
+    } finally { view.done(); }
+  }
+  const whole = inputView({}, {}, 0);
+  try { assert.equal(whole.find('textarea').props.title, undefined); assert.equal(whole.find('textarea').props['aria-describedby'], undefined); assert.equal(whole.note(), undefined); } finally { whole.done(); }
+  const closed = inputView({}, { closed: true }, 1);
+  try { assert.equal(closed.find('textarea').props.title, '它已结束或不可用，不能再发消息', 'a finished view keeps its whole reason too'); assert.equal(closed.note().props.children, '它已结束或不可用，不能再发消息'); } finally { closed.done(); }
+});
+
+// ---- the hint that fits ---------------------------------------------------------------------------------------------------------
+test('the first hint that fits the box is the one shown; when none does, none is', () => {
+  const { fittingIndex } = load('shared/useFittingHint.ts'), width = text => text.length * 10, hints = ['a'.repeat(30), 'a'.repeat(20), 'a'.repeat(10)];
+  assert.deepEqual([400, 300, 299, 200, 100, 99, 0].map(room => fittingIndex(hints, room, width)), [0, 0, 1, 1, 2, -1, -1]);
+  assert.equal(fittingIndex(['only'], 0, width), -1);
+});
+
+test('the hook measures the box in its own font, minus its padding, and again whenever the box is resized', () => {
+  const saved = ['document', 'getComputedStyle', 'ResizeObserver'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]), fonts = new Set(), observers = [];
+  const canvas = { font: '', measureText: text => (fonts.add(canvas.font), { width: text.length * 10 }) };
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElement: () => ({ getContext: () => canvas }) } });
+  Object.defineProperty(globalThis, 'getComputedStyle', { configurable: true, value: () => ({ font: '400 14px UI', paddingLeft: '12px', paddingRight: '12px' }) });
+  Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: class { constructor(run) { this.run = run; observers.push(this); } observe() {} disconnect() { this.gone = true; } } });
+  const node = { clientWidth: 224 }, box = { current: node }, harness = hookHarness('src/shared/useFittingHint.ts'), hints = ['x'.repeat(25), 'x'.repeat(15), 'x'.repeat(5)];
+  const shown = list => harness.render('useFittingHint', box, list).result;
+  try {
+    assert.equal(shown(hints), hints[1], 'room is 224 - 24 = 200: the 250 wide hint does not fit, the 150 wide one does');
+    assert.deepEqual([...fonts], ['400 14px UI'], 'measured in the box’s own font');
+    node.clientWidth = 100; observers.at(-1).run();
+    assert.equal(shown(hints), hints[2], 'the box was narrowed');
+    node.clientWidth = 400; observers.at(-1).run();
+    assert.equal(shown(hints), hints[0], 'and widened again');
+    node.clientWidth = 224;
+    assert.equal(shown(['y'.repeat(60)]), '', 'a list that changes under the box is measured afresh; when its only hint does not fit the box shows none, not a cut-off one');
+    assert.equal(shown(['y'.repeat(5)]), 'y'.repeat(5), 'and shows it as soon as it does');
+    assert.ok(observers[0].gone, 'the old list’s observer was let go');
+  } finally {
+    harness.dispose();
+    for (const [name, descriptor] of saved) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
+  }
+});

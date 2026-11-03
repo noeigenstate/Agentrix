@@ -101,10 +101,11 @@ class SubagentFeeds {
     this.update(call);
     this.prune();
   }
-  retire(entry, notify = true) {
+  retire(entry, updateActivity = true) {
     clearTimeout(entry.timer); entry.timer = null; this.notifications.delete(entry);
     this.entries.delete(entry.call.id); entry.call.viewable = false; entry.call.feedExpired = true;
-    if (notify) { entry.revision++; this.notify(entry); this.retired(); }
+    entry.revision++; this.notify(entry);
+    if (updateActivity) this.retired();
   }
   prune() {
     clearTimeout(this.expiry); this.expiry = null;
@@ -116,12 +117,9 @@ class SubagentFeeds {
     }
   }
   reset(keep = null) {
-    if (!keep) {
-      for (const entry of this.notifications) { clearTimeout(entry.timer); entry.timer = null; }
-      this.notifications.clear();
-    }
     for (const entry of this.entries.values()) {
       if (keep && (keep.has(entry.call) || entry.completedAt != null)) continue;
+      // The reset's caller replaces activity state; open splits still need the retirement revision.
       this.retire(entry, false);
     }
     this.prune();

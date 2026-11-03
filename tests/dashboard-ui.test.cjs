@@ -137,6 +137,8 @@ test('models, kinds and weights are named the way the owner writes them', () => 
   const f = dashboard('format.ts');
   assert.deepEqual(['claude-opus-5-5', 'gpt-6.1-sol', 'gpt-6.1-terra', 'unknown-model'].map(f.modelShort), ['Opus', 'Sol', 'Terra', 'unknown-model']);
   assert.deepEqual(['claude-sonnet-5-5', 'gpt-6.1-sol', 'x'].map(f.modelLabel), ['Sonnet 5.5', 'Sol · gpt-6.1-sol', 'x']);
+  assert.deepEqual(['sonnet', 'Opus', 'haiku'].map(f.modelShort), ['Sonnet', 'Opus', 'Haiku'], 'an alias is written like the full id');
+  assert.deepEqual(['sonnet', 'claude-sonnet-5-5'].map(f.modelLabel), ['Sonnet', 'Sonnet 5.5']);
   assert.deepEqual(['core', 'ui-check', 'review', 'odd'].map(f.kindLabel), ['复杂代码', '界面验收', '审查', 'odd']);
   assert.equal(f.weightChange(weight), '测试 1.0 → 0.7 ↓ 降权');
   assert.equal(f.weightChange({ ...weight, to: 1.2 }), '测试 1.0 → 1.2 ↑ 升权');
@@ -157,6 +159,10 @@ test('chart scales: round tops, half-pixel gridlines, labels that never overlap'
   for (let i = 1; i < sorted.length; i++) assert.ok(sorted[i] - sorted[i - 1] >= 14);
   assert.ok(Math.max(...m.spreadLabels([148, 149, 150], 14, 28, 150)) <= 150, 'a crowd at the bottom is pulled back into the plot');
   assert.equal(m.spreadLabels([], 14, 0, 10).length, 0);
+  // labels beside points: only neighbours in x are spread, a far point keeps its y
+  const near = m.spreadNearby([{ x: 575, y: 100 }, { x: 587, y: 100 }, { x: 350, y: 101 }], 88, 16, 20, 200);
+  assert.ok(Math.abs(near[0] - near[1]) >= 16, 'two points at one spot get labels a line apart'); assert.equal(near[2], 101, 'a point far to the left keeps its label where it was');
+  assert.deepEqual(m.spreadNearby([{ x: 10, y: 50 }], 88, 16, 20, 200), [50]); assert.deepEqual(m.spreadNearby([], 88, 16, 20, 200), []);
 });
 
 test('a missing reading breaks a line; a run of one is a lone mark', () => {
@@ -176,6 +182,15 @@ test('every model keeps one colour and one shape for the whole page, whichever m
     [[0, 'circle'], [1, 'square'], [2, 'diamond'], [3, 'triangle'], [4, 'inverted'], [5, 'hexagon']], 'the six models told apart so far keep the slots they always had');
   assert.deepEqual(m.modelLooks(['gpt-6.1-sol']).get('gpt-6.1-sol'), all.get('gpt-6.1-sol'), 'a filter that leaves fewer models does not repaint the others');
   assert.equal(m.PALETTE, 6); assert.equal(new Set(m.SHAPES).size, 6);
+});
+
+test('an alias is the same model as its full id, and what the records do not name is grey outside the palette', () => {
+  const m = dashboard('chart-math.ts'), looks = m.modelLooks(['sonnet', 'claude-sonnet-5-5', 'gpt-6.1-sol', 'unreported', 'opus']);
+  assert.deepEqual(looks.get('sonnet'), looks.get('claude-sonnet-5-5'), 'one colour and one shape for one model');
+  assert.equal(looks.get('opus').slot, 0, 'an alias with no full id on the page takes the slot the model always had');
+  assert.equal(looks.get('unreported'), m.NEUTRAL); assert.equal(m.NEUTRAL.neutral, true);
+  assert.ok(![...looks.entries()].some(([model, look]) => model !== 'unreported' && look.slot < 0), 'no model takes the neutral slot');
+  assert.deepEqual(m.modelLooks(['unreported', 'claude-opus-5-5']).get('claude-opus-5-5').slot, 0, 'it takes no palette slot from a model');
 });
 
 test('a model past the six takes a free slot, and no two models share both colour and shape', () => {
@@ -218,6 +233,8 @@ test('heat steps: a rate spans 45%..100% over five steps and a count spans 0..th
   const m = dashboard('chart-math.ts');
   assert.deepEqual([0.3, 0.45, 0.46, 0.6, 0.8, 0.9, 1].map(m.rateStep), [1, 1, 1, 2, 4, 5, 5]);
   assert.deepEqual([0, 1, 3, 6, 9].map(count => m.countStep(count, 9)), [1, 1, 2, 4, 5]);
+  assert.deepEqual([[0.46, 0.9], [0.45, 1], []].map(m.rateLegendLow), ['45%', '45%', '45%'], 'every rate on the ramp: its lower end is the rate it says');
+  assert.deepEqual([[0.33, 0.9], [0.449]].map(m.rateLegendLow), ['≤45%', '≤45%'], 'a lower rate shares the lightest step, so the end says at most');
   assert.equal(m.countStep(0, 0), 1, 'no findings at all is the lightest step, not a division by zero');
 });
 
@@ -361,7 +378,7 @@ test('the charts name every model in words, have a text alternative and a data t
   assert.equal(count(html, /class="legend"/g), 2);
   for (const [name, value] of [['Sol', 101], ['Sonnet', 72], ['Terra', 141]]) assert.match(html, new RegExp(`<text class="end"[^>]*>${name} ${value}</text>`), 'a line is named at its end');
   // lines: Sol and Terra have three readings (one polyline each), Sonnet's two readings are lone marks around its gap
-  assert.equal(count(html, /<polyline/g), 2);
+  assert.equal(count(html, /<polyline class="line"/g), 2);
   for (const slot of [1, 2, 3]) assert.match(html, new RegExp(`stroke="var\\(--m-${slot}\\)"`), `model slot ${slot} draws in its own colour`);
   assert.match(html, /<polygon/); assert.match(html, /<circle/);
   assert.equal(count(html, /fill="url\(#/g), 0, 'no textures: a model is told apart by colour and mark, and named beside them');
@@ -388,6 +405,34 @@ test('the first-pass heat map shades each model-kind cell on five steps, says th
   assert.match(docs, /<td class="cell na" title="没有记录">—<\/td>/); assert.match(docs, /<td class="num muted">2 次<\/td>/, 'the sample column counts the runs even when no rate is known');
   assert.match(html, /<div class="scale"><span>45%<\/span><span class="ramp"><i class="step-1"><\/i>.*<i class="step-5"><\/i><\/span><span>100%<\/span><span>· 无记录显示为 —<\/span><\/div>/);
 }));
+
+test('the heat map legend names its low end honestly: 45% while every rate is on the ramp, at most 45% when a lower one is clamped into it', () => zh(() => {
+  assert.match(view(), /<div class="scale"><span>45%<\/span>/);
+  const data = fixture();
+  data.kinds.push({ kind: 'review', model: 'gpt-6.1-sol', runs: 3, firstPassRate: 0.33 });
+  const html = view({ summary: data });
+  assert.match(html, /step-1" title="审查 · Sol：33%（3 次）">33<\/td>/); assert.match(html, /<div class="scale"><span>≤45%<\/span>/);
+}));
+
+test('the heat map hints are theme-neutral: the darkest cell is the highest in light and the lightest in dark, so neither says dark', () => {
+  const tabs = fs.readFileSync(path.join(dashboardDir, 'Tabs.tsx'), 'utf8');
+  assert.doesNotMatch(tabs, /颜色越深/);
+  for (const language of ['zh', 'en']) {
+    applyLanguage(language);
+    const [models, team] = [view(), view({ tab: 'team' })];
+    assert.match(models, language === 'zh' ? /<span class="hint">%，颜色越醒目越高<\/span>/ : /<span class="hint">%, the more prominent the colour, the higher<\/span>/);
+    assert.match(team, language === 'zh' ? /次数，颜色越醒目越多/ : /Counts, the more prominent the colour, the more/);
+    assert.doesNotMatch(models + team, /darker|越深/);
+  }
+  applyLanguage('zh');
+});
+
+test('every tile title of a row sits on one baseline: the hero tile keeps the top padding of the others and puts its extra room below', () => {
+  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const top = rule => Number(new RegExp(String.raw`\.kpi${rule} \{[^}]*padding: (\d+)px`).exec(css)[1]);
+  assert.equal(top('.hero'), top(''), 'the same top padding, so the labels share a row');
+  assert.match(css, /\.kpi\.hero \{ padding: 12px 16px 24px; \}/);
+});
 
 test('there is no limit to the models drawn: a fourth model gets its own colour, mark and end label', () => zh(() => {
   const data = fixture();
@@ -475,6 +520,28 @@ test('the live strip lists the running workers with their elapsed time and speed
   const none = view({ summary: fixture({ live: { running: [], at: 0 } }) });
   assert.match(none, /现在没有子任务在运行/); assert.doesNotMatch(none, /class="live-item /);
   assert.match(view({ now: at(10, 31, 14) + 61_000 }), /已运行 <span>1:01:01<\/span>/, 'the clock moves with the page clock');
+}));
+
+test('a running worker named by an alias reads and looks like the same model in the key', () => zh(() => {
+  const html = view({ summary: fixture({ live: { running: [live('agent:b', 'sonnet', { title: 'Plan it', role: '规划' }), live('agent:c', 'unreported')], at: at(10, 31, 14) } }) });
+  const strip = html.slice(html.indexOf('class="live-list"'), html.indexOf('class="live-list"') + 1700), key = html.slice(html.indexOf('class="keybar"'), html.indexOf('class="keybar"') + 1500);
+  assert.match(strip, /<span title="Sonnet">Sonnet<\/span>/, 'the model name, not the lowercase alias');
+  const fillBefore = (text, word) => [...text.slice(0, text.indexOf(word)).matchAll(/class="mk"[^>]*fill="([^"]+)"/g)].at(-1)[1];
+  assert.equal(fillBefore(strip, '</svg><span title="Sonnet">'), fillBefore(key, '</svg>Sonnet'), 'the same colour as the key chip');
+  assert.match(strip, /<svg class="mk"[^>]*fill="var\(--text-3\)"[^>]*><circle[^]*?unreported/, 'unreported is a neutral grey, not a model colour');
+  const picked = view({ summary: fixture({ live: { running: [live('agent:b', 'sonnet')], at: at(10, 31, 14) } }) });
+  assert.match(picked, /class="live-item "/, 'with nothing picked nothing is dim');
+}));
+
+test('two points on one spot get labels a line apart tied back by a thin line; a lone point has none', () => zh(() => {
+  const crowded = fixture();
+  crowded.models[0] = row('gpt-6.1-sol', 'codex', { runs: 18, tokensPerSecond: 71, costUsd: 11 * 1.0, costedRuns: 11 });
+  crowded.models[1] = row('claude-sonnet-5-5', 'claude', { runs: 11, tokensPerSecond: 71, costUsd: 11 * 1.0, costedRuns: 11 });
+  const html = view({ summary: crowded })
+  const ys = [...html.matchAll(/<text class="end" x="[\d.]+" y="([\d.]+)" text-anchor="\w+">(Sol|Sonnet)<\/text>/g)].map(match => [match[2], Number(match[1])]);
+  assert.equal(ys.length, 2); assert.ok(Math.abs(ys[0][1] - ys[1][1]) >= 16, 'the labels do not overlap');
+  assert.equal(count(html, /<line class="leader"/g), 1, 'the pushed label is tied to its point');
+  assert.equal(count(view(), /<line class="leader"/g), 0, 'labels that meet nothing stay where they were');
 }));
 
 test('the freshness chip says live, refreshing or stale with the age of the numbers, and the button reads again', () => zh(() => {
@@ -710,9 +777,89 @@ test('every heat step has an ink that reads on it at 4.5:1 in both themes, and t
   assert.deepEqual([0, 1, 2, 3, 4, 5].filter(slot => ratio(hex('light', `m-${slot}`), tokens.light['bg-card']) < 3), [2, 3, 4]);
 });
 
+test('the donut’s centre figure and its 子任务 caption both take a text token and read on the card at 4.5:1 in both themes', () => {
+  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  // An SVG <text> with no fill is painted black, which is ~1.4:1 on the dark card: every label in the ring names its colour.
+  assert.match(css, /\.donut svg text \{ fill: var\(--text-2\); \}/);
+  assert.match(css, /\.donut svg text\.centre \{ fill: var\(--text-1\);/);
+  const themes = fs.readFileSync(path.join(src, 'shared/styles/themes.css'), 'utf8');
+  const block = selector => themes.slice(themes.indexOf(`
+${selector} {`), themes.indexOf('}', themes.indexOf(`
+${selector} {`)));
+  const token = (body, name) => body.match(new RegExp(`--${name}: (#[0-9a-f]{6});`, 'i'))[1];
+  const luminance = hex => { const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const ratio = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+  for (const [theme, body] of [['dark', block(':root')], ['light', block(':root[data-theme="light"]')]]) for (const ink of ['text-1', 'text-2']) {
+    assert.ok(ratio(token(body, ink), token(body, 'bg-card')) >= 4.5, `${theme} ${ink} on the card ${ratio(token(body, ink), token(body, 'bg-card')).toFixed(2)}`);
+  }
+});
+
 test('the page reads only the dashboard bridge and never the main window’s', () => {
   const files = fs.readdirSync(dashboardDir).filter(name => /\.tsx?$/.test(name));
   for (const name of files) assert.doesNotMatch(fs.readFileSync(path.join(dashboardDir, name), 'utf8'), /window\.agentrix\b(?!Dashboard)/, name);
   const imports = files.flatMap(name => [...fs.readFileSync(path.join(dashboardDir, name), 'utf8').matchAll(/from '(\.\.\/\.\.\/[^']+|\.\.\/[^']+)'/g)].map(match => match[1]));
   assert.deepEqual([...new Set(imports.filter(spec => !spec.startsWith('../../shared/')))], [], 'only src/shared is imported from outside the feature');
+});
+
+test('the page keeps time with the shared clock hook, not a copy of its own', () => {
+  assert.equal(fs.existsSync(path.join(dashboardDir, 'use-now.ts')), false, 'the duplicate hook is gone');
+  const asked = [], clockLoad = makeLoader({ '../../shared/useNow': { useNow: initial => { asked.push(initial); return at(10, 31, 14); } } });
+  const { DashboardView } = clockLoad('features/dashboard/Dashboard.tsx');
+  zh(() => renderToStaticMarkup(React.createElement(DashboardView, { summary: fixture(), query: { projectId: null, range: '30d' }, error: null, tab: 'models', named: true,
+    onTab() {}, onQuery() {}, decide: async () => null, actions: { minimize() {}, maximize() {}, close() {} } })));
+  assert.deepEqual(asked, [Date.now], 'the page starts the shared clock at Date.now');
+});
+
+// ---- round r7 acceptance: labels clear of marks, whole cells, an opaque key -----------------------------------------------------
+test('the speed chart writes every end label in a gutter right of the plot, level with a tail to its line, clear of every mark and line', () => zh(() => {
+  const html = view(), chart = html.slice(html.lastIndexOf('<svg class="chart"'), html.lastIndexOf('</svg>') + 6);
+  const labels = [...chart.matchAll(/<text class="end"[^>]*x="([\d.]+)" y="([\d.]+)"[^>]*>([^<]+)<\/text>/g)].map(match => ({ x: +match[1], y: +match[2], text: match[3] }));
+  assert.equal(labels.length, 3, 'Sol, Sonnet and Terra each named once');
+  const width = 640, plotRight = width - 120;
+  assert.deepEqual([...new Set(labels.map(label => label.x))], [plotRight + 24], 'one column, 24px past the plot');
+  // every mark (circle, square or polygon) and every line stays inside the plot plus the mark's radius; no label reaches back over them
+  const xs = [...chart.matchAll(/(?:cx|x)="([\d.]+)"|points="([^"]+)"/g)].flatMap(match => match[1] ? [+match[1]] : match[2].split(' ').map(point => +point.split(',')[0]));
+  const markXs = xs.filter(x => x < plotRight + 24 - 4);
+  assert.ok(Math.max(...markXs) + 5 < plotRight + 24, 'the right-most mark ends before the gutter');
+  const ys = labels.map(label => label.y).sort((p, q) => p - q);
+  for (let i = 1; i < ys.length; i++) assert.ok(ys[i] - ys[i - 1] >= 14, 'labels a line apart');
+  const tails = [...chart.matchAll(/<polyline class="tail" points="([^"]+)"/g)].map(match => match[1].split(' ').map(point => point.split(',').map(Number)));
+  assert.equal(tails.length, 3, 'a tail from each line\'s last mark');
+  for (const tail of tails) {
+    assert.equal(tail.length, 3); assert.equal(tail[0][1], tail[1][1], 'level with the mark first');
+    assert.ok(tail[2][0] < plotRight + 24 && tail[2][0] > tail[1][0], 'then into the gutter, short of the text');
+  }
+  assert.ok(labels.every(label => label.text.length <= 16), 'a long name is cut');
+  const chartMath = fs.readFileSync(path.join(dashboardDir, 'SpeedChart.tsx'), 'utf8');
+  assert.match(chartMath, /const clip = \(name: string\) => name\.length > NAME_MAX/, 'with an ellipsis');
+  assert.match(fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8'), /\.chart \.tail \{ fill: none; stroke-width: 1; stroke-dasharray: 2 3;/);
+}));
+
+test('a table the region cuts through hides the cut columns until they are whole in view: nothing half-shown beside the pinned column or at the right edge', () => {
+  // A region 400 wide from x = 0 with a pinned first column of 100 and five more of 100 each; the scroll moves everything but the pinned column.
+  const { hideCutColumns } = dashboard('ScrollRegion.tsx'), classes = new Set();
+  const cell = (index, scrolled) => {
+    const left = index === 0 ? 0 : 100 * index - scrolled, right = left + 100;
+    return { getBoundingClientRect: () => ({ left, right, width: 100 }), classList: { toggle: (name, on) => on ? classes.add(`${name}:${index}`) : classes.delete(`${name}:${index}`) } };
+  };
+  const cut = scrolled => {
+    const row = () => ({ children: [0, 1, 2, 3, 4, 5].map(index => cell(index, scrolled)) }), head = row(), body = row();
+    classes.clear();
+    hideCutColumns({ clientWidth: 400, getBoundingClientRect: () => ({ left: 0 }), querySelectorAll: selector => selector === '.sticky th' ? head.children : [head, body] });
+    return [...classes].map(entry => entry.split(':')[1]).sort().filter((index, at, all) => all.indexOf(index) === at).join('');
+  };
+  assert.equal(cut(0), '45', 'at the start columns 1 to 3 are whole beside the pin; the fourth is cut by the right edge, and the fifth is beyond it');
+  assert.equal(cut(100), '15', 'scrolled one column: column 1 is under the pin, 2 to 4 are whole, 5 is cut');
+  assert.equal(cut(150), '125', 'between column edges, the columns half under the pin are cut as well as the one at the right edge');
+  assert.equal(cut(200), '12', 'at the end of the scroll, 3 to 5 are whole and only those under the pin are cut');
+  assert.equal(cut(0).includes('0'), false, 'the pinned column is never hidden');
+  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8');
+  assert.match(css, /\.sticky \.is-cut \{ color: transparent; \}\s*\.sticky \.is-cut \* \{ visibility: hidden; \}/, 'its cells keep their lines and show no value');
+});
+
+test('the key is opaque to the top of the scroll area: the page has no top padding to show through, and the key carries the 16px', () => {
+  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8');
+  assert.match(css, /\.dash-main \{[^}]*padding: 0 16px 16px;/, 'a sticky box stops at the padding, so there is none above it');
+  assert.match(css, /\.dash-main > :first-child \{ margin-top: 16px; \}/, 'the toolbar keeps its 16px as a margin');
+  assert.match(css, /\.keybar \{ position: sticky; top: 0;[^}]*margin-top: -16px; padding: 24px 0 8px; background: var\(--bg-app\); \}/, 'its own top padding covers what scrolls under it, up to its top edge');
 });

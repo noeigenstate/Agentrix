@@ -20,12 +20,23 @@ function createDashboardWindow({ BrowserWindow, getSettings, getMainWindow, getU
   async function open() {
     if (!window || window.isDestroyed()) {
       const settings = getSettings();
-      const created = new BrowserWindow({ width: 1180, height: 820, minWidth: 820, minHeight: 600,
+      const width = 1180, height = 820, minWidth = 820, minHeight = 600;
+      const created = new BrowserWindow({ width, height, minWidth, minHeight, useContentSize: true,
         title: t('数据看板'), backgroundColor: backgroundColor ? backgroundColor() : settings.theme === 'light' ? '#f8f9fb' : '#181818',
         ...(platform === 'darwin' ? { titleBarStyle: 'hidden', trafficLightPosition: { x: 16, y: 12 } } : { frame: false }),
         show: false, icon: path.join(root, 'assets/icon.png'),
         webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, nodeIntegrationInSubFrames: false,
           contextIsolation: true, sandbox: true, spellcheck: false, backgroundThrottling: false } });
+      if (platform === 'win32') {
+        // Windows rounds native minimum constraints at fractional DPI; measure the clamp while hidden.
+        created.setContentSize(1, 1);
+        const content = created.getContentSize(), minimum = created.getMinimumSize();
+        // Some platforms accept 1x1: calibrate only a clamp near the requested content minimum.
+        if (Math.abs(minWidth - content[0]) <= 4 && Math.abs(minHeight - content[1]) <= 4) {
+          created.setMinimumSize(minimum[0] + minWidth - content[0], minimum[1] + minHeight - content[1]);
+        }
+        created.setContentSize(width, height);
+      }
       window = created; lastAppearance = '';
       const contents = created.webContents;
       contents.setZoomMode('isolated');

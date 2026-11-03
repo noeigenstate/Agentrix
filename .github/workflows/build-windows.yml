@@ -699,6 +699,7 @@ jobs:
           changes=$(node scripts/release-notes.mjs --version "$RELEASE_VERSION")
           cd release-assets
           test -f "$RELEASE_INSTALLER"
+          test -f "$RELEASE_INSTALLER.blockmap"
           test -f latest.yml
           test -f "$MAC_ARCHIVE"
           test -f "$MAC_IMAGE"
@@ -710,15 +711,21 @@ jobs:
           sha256sum --check SHA256SUMS-linux-x64.txt SHA256SUMS-linux-arm64.txt
           assets=("$RELEASE_INSTALLER" "$RELEASE_INSTALLER.blockmap" latest.yml SHA256SUMS.txt BUILD-INFO.txt "$MAC_IMAGE" "$MAC_ARCHIVE" SHA256SUMS-mac.txt "${linux[@]}" SHA256SUMS-linux-x64.txt SHA256SUMS-linux-arm64.txt)
 
+          release_notice=''
+          macos_install='bash'
+          if [[ "$RELEASE_VERSION" == *-* ]]; then
+            release_notice="**Test build:** This prerelease may be unstable. Windows updates use the Stable channel by default; choose Beta in Settings > About and accept the test agreement to receive test updates."$'\n\n'
+            macos_install="AGENTRIX_VERSION=$RELEASE_VERSION bash"
+          fi
           cat > release-notes.md <<EOF
-          The Windows x64 installer of Agentrix, a macOS edition for Apple silicon, and Linux editions for x64 and arm64.
+          ${release_notice}The Windows x64 installer of Agentrix, a macOS edition for Apple silicon, and Linux editions for x64 and arm64.
 
           **Windows — recommended:** install **$RELEASE_INSTALLER** to enable automatic update checks and background downloads.
 
           **macOS (Apple silicon, macOS 12 or later):** install or update with one command; the app opens directly, without the "cannot verify the developer" prompt:
 
           \`\`\`
-          curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | $macos_install
           \`\`\`
 
           Or download **$MAC_IMAGE** and drag Agentrix to Applications. The app is signed ad hoc, not notarized by Apple: on first open, allow it once in System Settings › Privacy & Security (Open Anyway), or run \`xattr -dr com.apple.quarantine "/Applications/Agentrix.app"\`. The macOS edition does not update itself; run the command again to update.
@@ -763,7 +770,7 @@ jobs:
             # A rerun may finish its own draft, but must never replace a published installer.
             jq -e --arg commit "$GITHUB_SHA" '.targetCommitish == $commit' existing-release.json
             if [[ "$(jq -r '.isDraft' existing-release.json)" == 'false' ]]; then
-              jq -e --arg installer "$RELEASE_INSTALLER" 'any(.assets[]; .name == $installer) and any(.assets[]; .name == "latest.yml")' existing-release.json
+              jq -e --arg installer "$RELEASE_INSTALLER" 'any(.assets[]; .name == $installer) and any(.assets[]; .name == ($installer + ".blockmap")) and any(.assets[]; .name == "latest.yml")' existing-release.json
               echo "Release $RELEASE_TAG is already published."
               exit 0
             fi

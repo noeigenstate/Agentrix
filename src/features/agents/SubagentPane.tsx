@@ -1,6 +1,7 @@
 // A view of one sub-agent, opened from the activity pane beside the terminal's conversation: who it is, what state it is in, and the
 // conversation it is having, followed live. The conversation is read-only; the owner's word for the agent goes through SubagentInput,
-// and what the owner sent shows under the conversation as queued until the agent's own record carries it.
+// and what the owner sent shows under the conversation as queued until the agent's own record carries it (a word relayed through the
+// parent leaves no trace there, so it stays queued).
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { ArrowDown, Lock, X } from '@phosphor-icons/react';
 import type { AgentIntervention, SubagentFeed } from '../../shared/types';
@@ -11,24 +12,26 @@ import { ConversationFeed } from '../reading/ConversationFeed';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { CALL_STATES, elapsedClock, failureWord, rateValue } from './ActivityPane';
 import { SubagentInput } from './SubagentInput';
-import { type FeedState, unreadAfter, useSubagentFeed } from './subagent-splits.ts';
+import { type FeedState, deliveredIds, unreadAfter, useSubagentFeed } from './subagent-splits.ts';
 import './activity-pane.css';
 
 // Within this many pixels of the end, the view is following the newest step.
 const FOLLOW_SLACK = 24;
 const atEnd = (node: HTMLElement) => node.scrollHeight - node.scrollTop - node.clientHeight <= FOLLOW_SLACK;
 
-// The state in words: a feed the main process no longer keeps reads 不可用, whatever it last was.
-function stateWord(feed: SubagentFeed, status: FeedState['status']) {
+// The state in words: a feed the main process no longer keeps reads 不可用, whatever it last was; one that has ended reads 已完成
+// (a finished Task sub-agent's feed state stays 'reviewing', so the end time decides).
+function stateWord(feed: SubagentFeed, status: FeedState['status'], over: boolean) {
   if (status === 'gone') return t('不可用');
-  return feed.failure ? failureWord(feed.failure) : t(CALL_STATES[feed.state].word);
+  if (feed.failure) return failureWord(feed.failure);
+  return t(CALL_STATES[over ? 'done' : feed.state].word);
 }
 
 // The footer says what the view is doing, in one line.
-function footerText(status: FeedState['status'], error: string | null, following: boolean, unread: number, done: boolean) {
+function footerText(status: FeedState['status'], error: string | null, following: boolean, unread: number, over: boolean) {
   if (status === 'gone') return t('只读 · 记录已不在，分屏保留最后的内容');
   if (status === 'error') return t('只读 · 读取失败：{message}，下次变化时重试', { message: error ?? '' });
-  if (done) return t('只读 · 已完成，分屏保留到你关闭');
+  if (over) return t('只读 · 已完成，分屏保留到你关闭');
   if (following) return t('只读 · 自动跟随最新一步');
   return unread ? t('只读 · 已暂停跟随，有 {count} 个新步骤', { count: unread }) : t('只读 · 已暂停跟随');
 }
@@ -57,39 +60,49 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
   }, [feed !== null]);
 
   const follow = () => { followingNow.current = true; setPaused(null); const node = body.current; if (node) node.scrollTop = node.scrollHeight; };
-  const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } };
+  // Escape closes the split, except inside the message box: there it only leaves the box (the typed word stays), and the next Escape closes.
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape') return;
+    event.stopPropagation();
+    if ((event.target as HTMLElement).tagName === 'TEXTAREA') body.current?.focus(); else onClose();
+  };
   const name = feed ? modelName(feed.model) : t('子 agent'), Mark = feed?.agent === 'Codex' ? CodexLogo : ClaudeLogo;
-  const over = feed?.state === 'done' || status === 'gone';
+  // The task first, then the model: two splits of one model are told apart by their task, in the header and in every accessible name.
+  const title = feed?.title ?? '', who = title ? `${title} · ${name}` : name;
+  // A finished Task subagent is 'reviewing' but has an end time; either way nothing more can be said to it.
+  const over = feed?.state === 'done' || feed?.endedAt != null || status === 'gone', delivered = deliveredIds(entries, sent);
   const how = feed ? [feed.effort === 'default' ? t('默认') : feed.effort, feed.fast != null && (feed.fast ? t('快速') : t('普通'))].filter(Boolean).join(' · ') : '';
   const rate = feed ? rateValue(feed.rate) : null;
-  const ended = feed?.endedAt ?? (status === 'gone' ? null : now);
-  const elapsed = !feed || feed.startedAt === null || (over && ended === null) ? '—' : elapsedClock((over ? ended! : now) - feed.startedAt);
+  // A finished view counts to its recorded end; without one, or with an end not after the start, the time it took is unknown, not 0:00.
+  const ended = over ? feed?.endedAt ?? null : now;
+  const elapsed = feed?.startedAt != null && ended !== null && (!over || ended > feed.startedAt) ? elapsedClock(ended - feed.startedAt) : '—';
+  // Who it is, quietly under the task: the task takes the header's width; the role, model, settings and a known speed go on a second line.
+  const meta = feed ? [t(feed.role), name, how, rate !== null && `${rate} token/s`].filter(Boolean).join(' · ') : '';
 
-  return <section className="subagent-split" aria-label={t('{name} 的输出，只读', { name })} onKeyDown={onKeyDown}>
+  return <section className="subagent-split" aria-label={t('{name} 的输出，只读', { name: who })} onKeyDown={onKeyDown}>
     <header className="subagent-head">
-      <Mark size={16} /><span className="subagent-name" title={feed?.model}>{name}</span>
-      {feed && <span className="subagent-tag subagent-role">{t(feed.role)}</span>}
-      {how && <span className="subagent-how">{how}</span>}
-      <span className="subagent-space" />
-      {feed && <span className={`subagent-tag subagent-state is-${over ? 'done' : feed.state}`}>{stateWord(feed, status)}</span>}
-      <span className="subagent-rate">{rate === null ? '—' : rate} token/s</span>
-      <span className="subagent-elapsed" title={t(over ? '用时' : '已运行')}>{elapsed}</span>
-      <button type="button" className="icon-button" title={t('关闭分屏（Esc）')} aria-label={t('关闭 {name} 的分屏', { name })} onClick={onClose}><X size={13} /></button>
+      <div className="subagent-head-row">
+        <Mark size={16} /><span className="subagent-title" title={title}>{title || name}</span>
+        {feed && <span className={`subagent-tag subagent-state is-${over ? 'done' : feed.state}`}>{stateWord(feed, status, over)}</span>}
+        <span className="subagent-elapsed" title={t(over ? '用时' : '已运行')}>{elapsed}</span>
+        <button type="button" className="icon-button" title={t('关闭分屏（Esc）')} aria-label={t('关闭 {name} 的分屏', { name: who })} onClick={onClose}><X size={13} /></button>
+      </div>
+      {meta && <div className="subagent-meta" title={feed?.model ? `${meta} · ${feed.model}` : meta}>{meta}</div>}
     </header>
     <div className="subagent-main">
-      <div ref={body} className="subagent-body" tabIndex={0} role="log" aria-live="off" aria-label={t('{name} 的消息和工具步骤，只读', { name })}
+      <div ref={body} className="subagent-body" tabIndex={0} role="log" aria-live="off" aria-label={t('{name} 的消息和工具步骤，只读', { name: who })}
         onScroll={event => { const end = atEnd(event.currentTarget); setPaused(current => end ? null : current ?? { after: lastId }); }}>
         {feed ? <ConversationFeed entries={feed.entries} agent={feed.agent === 'Codex' ? 'codex' : 'claude'} projectId={projectId} live={feed.state === 'running' && status === 'ok'} onError={onError} onOpenLink={onOpenLink} />
           : <p className="subagent-empty">{status === 'error' ? t('读取失败：{message}', { message: error ?? '' }) : t('正在读取…')}</p>}
         {sent.map(item => <div key={item.id} className="subagent-sent">
-          <p>{item.text}</p><small>{[t('已排队'), item.route === 'parent' && t('已转告主会话')].filter(Boolean).join(' · ')}</small>
+          <p>{item.text}</p><small>{[t(delivered.has(item.id) ? '已送达' : '已排队'), item.route === 'parent' && t('已转告主会话')].filter(Boolean).join(' · ')}</small>
         </div>)}
       </div>
       {unread > 0 && <button type="button" className="subagent-jump button" onClick={follow}><ArrowDown size={16} />{t('{count} 个新步骤', { count: unread })}</button>}
     </div>
-    <SubagentInput terminalId={terminalId} callId={callId} name={name} closed={over} onSent={item => setSent(items => [...items, item])} />
+    <SubagentInput terminalId={terminalId} callId={callId} name={who} closed={over} onSent={item => setSent(items => [...items, item])} />
     <footer className="subagent-foot">
-      <Lock size={14} aria-hidden="true" /><span>{footerText(status, error, following, unread, feed?.state === 'done')}</span><span className="subagent-space" />
+      <Lock size={14} aria-hidden="true" /><span>{footerText(status, error, following, unread, over)}</span><span className="subagent-space" />
       {!following && !over && <button type="button" className="button" onClick={follow}>{t('回到最新')}</button>}
     </footer>
   </section>;

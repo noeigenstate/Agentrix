@@ -1,6 +1,8 @@
-/* A compact window above the composer; the light backdrop keeps the conversation readable and a press on it closes. */
-.reading-terminal-overlay { position: absolute; inset: 0; z-index: 6; display: flex; align-items: flex-end; justify-content: center; padding: 12px 12px 76px; }
-.reading-terminal-popup { position: relative; display: flex; flex-direction: column; width: min(720px, 100%); height: min(420px, 100%); max-width: none; max-height: none; min-width: 0; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 16px; color: var(--text-1); background: var(--bg-menu); overflow: hidden; }
+/* A window over the conversation, never over the composer: the overlay is the conversation's own area (the scroll area), so
+   whatever stands under it (message box, quote chip, notices, command list) keeps its place at every size. It is as tall as
+   that area allows, up to 760px, so a tall dialog (/model) shows whole; a press on the backdrop closes. */
+.reading-terminal-overlay { position: absolute; inset: 0; z-index: 6; display: flex; align-items: flex-end; justify-content: center; padding: 12px; }
+.reading-terminal-popup { position: relative; display: flex; flex-direction: column; width: min(720px, 100%); height: min(760px, 100%); max-width: none; max-height: none; min-width: 0; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 16px; color: var(--text-1); background: var(--bg-menu); overflow: hidden; }
 .reading-terminal-popup > header { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 2px 10px; border-bottom: 1px solid var(--divider); }
 .reading-terminal-popup > header strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 12px var(--font-mono); }
 .terminal-split-body .reading-terminal-popup > .terminal-host { position: relative; inset: auto; flex: 1; min-width: 0; min-height: 0; margin: 4px 6px; visibility: visible; }

@@ -6,6 +6,7 @@ import { ProjectExplorer } from './features/files/ProjectExplorer';
 import { AddProjectDialog } from './features/workspace/AddProjectDialog';
 import { SSHAuthDialog } from './features/ssh/SSHAuthDialog';
 import { useProjectReorder } from './features/workspace/useProjectReorder';
+import { pruneSplits } from './features/agents/subagent-splits';
 import { pruneReadingCli } from './features/terminal/terminal-popup';
 import { setReading } from './features/reading/reading-mode';
 import { useProjectFocusMotion } from './features/workspace/useProjectFocusMotion';
@@ -54,7 +55,8 @@ function focusOverviewProject(id: string) {
 }
 
 const NO_PROJECTS: Project[] = [];
-const dialogOpen = () => !!document.querySelector('dialog[open], .tour-layer');
+// Terminal popups are modeless: only their own keys belong to the CLI, even while other projects are hidden.
+const dialogOpen = (target: EventTarget | null = document.activeElement) => !!document.querySelector('dialog:modal, .tour-layer') || !!(target as Element | null)?.closest?.('.reading-terminal-popup');
 
 export function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
@@ -154,6 +156,7 @@ export function App() {
     const live = workspace.projects.flatMap(project => project.terminals)
       .filter(terminal => terminal.sessionId && terminal.status !== 'exited');
     pruneReadingCli(new Set(live.map(terminal => JSON.stringify([terminal.id, terminal.sessionId]))));
+    pruneSplits(new Set(workspace.projects.flatMap(project => project.terminals.map(terminal => terminal.id))));
   }, [workspace]);
 
   // Project order for next/previous (set each render), and the current card even if focus fails.
@@ -241,10 +244,10 @@ export function App() {
   useEffect(() => {
     // App shortcuts (configurable in settings). In text boxes and the editor, standard editing keys such as
     // Ctrl+A keep their meaning; in terminals and elsewhere the shortcut wins, before xterm sees the key.
-    // While a dialog is open (including recording a new shortcut) nothing is intercepted.
+    // Modal dialogs (including recording a new shortcut) block everywhere; terminal popups keep their own keys.
     const handler = (event: KeyboardEvent) => {
       const action = actionFor(event);
-      if (!action || editingKeyInField(event) || dialogOpen()) return;
+      if (!action || editingKeyInField(event) || dialogOpen(event.target)) return;
       event.preventDefault(); event.stopPropagation();
       if (!event.repeat) runAction(action);
     };

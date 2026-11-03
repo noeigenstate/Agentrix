@@ -30,7 +30,7 @@ export function ReadingTerminalPopup({ terminalId, sessionId, command, focus = t
     if (event.button === 0 && event.target === event.currentTarget) { event.preventDefault(); onClose(); }
   }}
     onKeyDown={event => event.stopPropagation()} onKeyUp={event => event.stopPropagation()}>
-    {/* An open, modeless dialog also keeps the app's shortcuts out of xterm. Escape belongs to the CLI. */}
+    {/* Keys inside this modeless dialog belong to the CLI, including Escape; other app controls keep their shortcuts. */}
     <dialog open className="reading-terminal-popup" aria-modal="true" aria-label={command || t('项目终端')} data-terminal-popup-id={terminalId} onCancel={event => event.preventDefault()}>
       <header><TerminalWindow size={16} /><strong>{command || t('项目终端')}</strong>
         <button type="button" className="icon-button" title={t('关闭')} aria-label={t('关闭')} onClick={() => onClose()}><X size={16} /></button>

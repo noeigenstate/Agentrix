@@ -37,7 +37,7 @@ function loadUI(name, overrides = {}) {
     if (name === 'react' && overrides.react) return { ...React, ...overrides.react };
     // Stubbed screen modules keep their pure helpers (bindApproval, choiceIdentity) unless a test replaces them too.
     if (Object.hasOwn(overrides, key) && key === './terminal-screen') return { bindApproval: require('../src/features/terminal/terminal-screen.ts').bindApproval, ...overrides[key] };
-    if (Object.hasOwn(overrides, key) && key === './agent-screen') return { choiceIdentity: require('../src/features/agents/agent-screen.ts').choiceIdentity, ...overrides[key] };
+    if (Object.hasOwn(overrides, key) && key === './agent-screen') { const { choiceIdentity, waitingTitle } = require('../src/features/agents/agent-screen.ts'); return { choiceIdentity, waitingTitle, ...overrides[key] }; }
     if (Object.hasOwn(overrides, key)) return overrides[key];
     if (name.endsWith('.css')) return {};
     // Every icon renders as a plain svg carrying its class name.
@@ -70,6 +70,8 @@ function loadUI(name, overrides = {}) {
     if (key === './composer-prefill') return require('../src/features/reading/composer-prefill.ts');
     if (key === './image-thumbnail') return require('../src/shared/image-thumbnail.ts');
     if (key === './image-input') return require('../src/features/reading/image-input.ts');
+    // Width fitting needs a real box; here the composer shows its longest hint.
+    if (key === './useFittingHint') return { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, hints) => hints[0] };
     if (key === './useNativePictures') return loadUI('features/reading/useNativePictures.ts', overrides);
     if (key === './markdown-escape') return require('../src/features/reading/markdown-escape.ts');
     if (key === './pasted-pictures') return require('../src/features/reading/pasted-pictures.ts');
@@ -117,6 +119,7 @@ function projectHeaderHarness(t) {
     react: hooks,
     './ProjectTerminals': { ProjectTerminals: () => null },
     './ActivityPane': { ActivityPane: () => null },
+    './SubagentChip': { SubagentChip: () => null },
     './ProjectImageDialog': { ProjectImageDialog: () => null },
     './IconButton': loadUI('shared/IconButton.tsx'),
     './active-terminal': { useActiveTerminal: () => null, setActiveTerminal() {} },
@@ -154,6 +157,25 @@ test('only a focused project with the activity toggle off omits the header actio
     assert.equal(nodes.some(node => node.props.className === 'panel-menu-anchor'), visible, `more menu: ${label}`);
     assert.equal(nodes.find(node => node.props.className === 'panel-name').props.children[0].props.children, 'Example');
   }
+});
+
+// The narrow window hides the activity pane in CSS, so its sub-agent rows are reached from the header of the expanded project.
+test('the sub-agent chip is in the header of an expanded project only: never on a small card, and the header stays a one-row control cluster', t => {
+  const h = projectHeaderHarness(t), chips = () => h.render().filter(node => node.type?.name === 'SubagentChip');
+  for (const activityOpen of [false, true]) {
+    Object.assign(h.props, { focused: false, activityOpen });
+    assert.equal(chips().length, 0, `a small card has no chip (activityOpen=${activityOpen})`);
+    h.props.focused = true;
+    const [chip] = chips();
+    assert.equal(chips().length, 1, `an expanded project has one (activityOpen=${activityOpen})`);
+    assert.equal(chip.props.terminal.id, 'terminal', 'for the terminal in use');
+  }
+  h.props.focused = true; h.props.project.terminals = [];
+  assert.equal(chips().length, 0, 'no terminal, no chip');
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/workspace/workspace.css'), 'utf8');
+  assert.match(css, /\.subagent-chip-anchor \{ display: none;/, 'hidden by default');
+  assert.match(css, /@media \(max-width: 1000px\) \{ \.subagent-chip-anchor \{ display: block; \} \}/, 'shown only where the pane is hidden, at the same 1000px as the rule that hides the pane');
+  assert.match(css, /@media \(max-width: 1000px\) \{[^]*?\.activity-pane, \.project-panel\.has-activity::before \{ display: none; \}/, 'the pane-hiding rule this one pairs with');
 });
 
 test('the unread status button still opens a grid card with either activity toggle setting', t => {
@@ -290,7 +312,7 @@ function elements(node) {
 
 const composerRows = (agent, activity = 'idle', draft = '') => [
   ...(activity === 'working' ? [agent === 'claude' ? '✶ Swooping… (12s)' : '• Working (12s • esc to interrupt)'] : []),
-  ...(activity === 'shell' ? ['! sleep 10', '  ⎿ Running…'] : []),
+  ...(activity === 'shell' ? agent === 'claude' ? ['! sleep 10', '  ⎿ Running…'] : ['• Running shell command (12s · esc to interrupt)'] : []),
   ...(agent === 'claude' ? ['────', '❯ ' + draft, '────', '  ⏸ manual mode on']
     : ['› ' + draft, '', 'GPT-6.1-Sol high · C:\\work', '? for shortcuts']),
 ];
@@ -566,6 +588,25 @@ test('an identity-checked restored history may show before the CLI, respects raw
   assert.equal(isReading(mode, { ...value, readingHistory: null }), false);
 });
 
+test('the composer offers its hint longest first and shows the one that fits, so a narrow box reads a short hint instead of a cut-off one', async t => {
+  const offered = [], narrow = { './useFittingHint': { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, hints) => (offered.splice(0, offered.length, ...hints), hints.at(-1)) } };
+  const h = dictationHarness(t, narrow);
+  Object.assign(h.props.terminal, { codexActive: true, readingHistory: null });
+  const shown = h.render().props.placeholder;
+  const strictlyShorter = list => list.every((hint, index) => index === 0 || hint.length < list[index - 1].length);
+  assert.equal(offered.length, 3); assert.ok(strictlyShorter(offered), 'longest first');
+  assert.equal(offered[0], en['给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行'].replace('{agent}', /Claude Code|Codex/.exec(offered[0])[0]), 'the full hint is the one that was always shown');
+  assert.ok(offered.every(hint => hint.includes(/Claude Code|Codex/.exec(offered[0])[0])), 'each form still says who it is for');
+  assert.equal(shown, offered[2], 'the shortest hint is the one the narrow box shows');
+  const box = h.render(), note = elements(h.tree()).find(element => element.props.id === box.props['aria-describedby']);
+  assert.equal(box.props.title, offered[0], 'the full hint, shortcuts included, is the narrow box’s tooltip');
+  assert.match(box.props['aria-describedby'], /^reading-hint-/); assert.equal(note.props.children, offered[0], 'and its accessible description, in a hidden element');
+  assert.equal(note.props.style.position, 'absolute', 'the description is not drawn');
+  Object.assign(h.props.terminal, { codexActive: false });
+  h.render();
+  assert.equal(offered.length, 2); assert.equal(offered[0], en['输入命令，Enter 发送']); assert.ok(strictlyShorter(offered));
+});
+
 test('a restored preview cannot send until its own CLI input is ready, and a different thread disables it again', async t => {
   let rows = [];
   const h = dictationHarness(t, { './terminal-screen': { useScreen: () => ({ rows }), readScreen: () => ({ rows }) } });
@@ -690,9 +731,10 @@ function readingHarness(t, entries = [], overrides = {}) {
   });
   const state = { entries, pending: [], terminal: { id: 'terminal', sessionId: 'session', agent: 'codex', codexActive: true, needsInput: null } };
   const parsed = [], icon = () => React.createElement('svg');
+  // A sent message's quote block is laid out by the same Markdown renderer, so it gets the same stubs.
+  const markdownStubs = { './markdown-escape': { readingMarked: { parse: text => { parsed.push(text); return text; } } }, dompurify: { default: () => ({ sanitize: html => html }) }, ...overrides };
   const environment = {
-    './markdown-escape': { readingMarked: { parse: text => { parsed.push(text); return text; } } },
-    dompurify: { default: () => ({ sanitize: html => html }) },
+    './markdown-escape': markdownStubs['./markdown-escape'], dompurify: markdownStubs.dompurify,
     '@phosphor-icons/react': new Proxy({}, { get: () => icon }),
     './action-text': { stepVerb: tool => tool.kind, actionText: tool => tool.target }, './voice-input': {}, './terminal-screen': { useScreen: () => ({ rows: composerRows(state.terminal.agent, state.terminal.codexActivity === 'working' ? 'working' : 'idle') }) },
     './typing': { isTyping: () => false, hasEditingFocus: () => false },
@@ -705,7 +747,7 @@ function readingHarness(t, entries = [], overrides = {}) {
     './useMentions': { useMentions: () => ({ open: false }) }, './MentionPalette': { MentionPalette: () => null },
     './pending-prompts': require('../src/features/reading/pending-prompts.ts'),
     './usePendingPrompts': { usePendingPrompts: () => ({ pending: state.pending, echo() {}, cancelEcho() {} }) },
-    './PendingPromptEntries': loadUI('features/reading/PendingPromptEntries.tsx'),
+    './PendingPromptEntries': loadUI('features/reading/PendingPromptEntries.tsx', markdownStubs),
     './markdown-parse': { parseMarkdown: async () => null, parsedMarkdown: () => undefined },
     './FileCards': { FileCards: ({ files }) => React.createElement('div', { className: 'file-cards' }, files.join(',')), previewable: () => true },
     './reading-command': require('../src/features/reading/reading-command.ts'),
@@ -759,6 +801,8 @@ test('Claude and Codex render user and agent parents with ordered child replies,
   for (const agent of ['claude', 'codex']) {
     state.terminal.agent = agent;
     const html = render(), sections = timelineSections(html);
+    assert.equal((html.match(/class="reading-content\b/g) || []).length, 1, 'one content container owns the timeline rail');
+    assert.match(html, /class="reading-content conversation-feed"[^>]*><div class="reading-step is-user/, 'the feed preserves direct rail children');
     assert.deepEqual(sections.map(section => section.match(/reading-step is-(\w+)/)[1]), ['user', 'agent', 'user', 'agent']);
     assert.equal((html.match(/class="reading-node"/g) || []).length, 4);
     assert.equal((html.match(/class="reading-turn-tools/g) || []).length, 3);
@@ -774,6 +818,14 @@ test('Claude and Codex render user and agent parents with ordered child replies,
     assert.match(sections[3], /failed command/); assert.match(sections[3], /still processing/);
     assert.match(sections[3], /class="file-cards">report.md/);
   }
+});
+
+test('a sub-agent step names its role on one line with an ellipsis and the whole role in its title, never broken letter by letter', t => {
+  const { render } = readingHarness(t, [readingEntry('u1', 'user', 10, { text: 'go' }), readingTool('检查现有测试覆盖', 11, { kind: 'agent', tool: 'Task', done: false, detail: 'general-purpose' })]);
+  const html = render();
+  assert.match(html, /<li class="[^"]*reading-tool-agent"[^>]*>[\s\S]*<small title="general-purpose">general-purpose<\/small>/);
+  const flow = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading-flow.css'), 'utf8');
+  assert.match(flow, /\.reading-tools-tree li\.reading-tool-agent > small \{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; \}/);
 });
 
 test('live thinking and confirmation stay inside the latest agent, including a tools-only history', t => {
@@ -985,7 +1037,7 @@ test('an unconfirmed image receipt stays visible and cannot retry or resend as t
 });
 
 test('an unconfirmed image receipt advises checking the conversation instead of removing a composer picture', () => {
-  const { PendingPromptEntries } = loadUI('features/reading/PendingPromptEntries.tsx');
+  const { PendingPromptEntries } = loadUI('features/reading/PendingPromptEntries.tsx', { './Markdown': { Markdown: ({ text }) => text } });
   const html = renderToStaticMarkup(React.createElement(PendingPromptEntries, {
     prompts: [{ id: 'pending-image', role: 'user', text: 'describe', at: 1000, sending: false, imageCount: 1 }], undelivered: () => true,
   }));
@@ -1133,7 +1185,7 @@ test('completion smoke: a live Codex input forwards the exact four-byte PNG and 
 
 test('composer thumbnails each have the decision page remove label and 12px bold X, while message pictures only zoom', () => {
   const removed = [], opened = [];
-  const { UserImages } = loadUI('features/reading/PendingPromptEntries.tsx', { './file-popup': { showPopup: picture => opened.push(picture) } });
+  const { UserImages } = loadUI('features/reading/PendingPromptEntries.tsx', { './Markdown': { Markdown: ({ text }) => text }, './file-popup': { showPopup: picture => opened.push(picture) } });
   const images = ['data:image/png;base64,one', 'data:image/png;base64,two', 'data:image/png;base64,three'];
   const tree = UserImages({ images, onRemove: index => removed.push(index) }), nodes = elements(tree);
   const buttons = nodes.filter(element => element.props.className === 'reading-user-image-remove');
@@ -1565,7 +1617,7 @@ for (const agent of ['claude', 'codex']) {
           actions.push(text); draft += text; return { ok: true };
         };
         if (activity !== 'idle') {
-          h.edit('next message'); assert.equal(h.render().props.disabled, true); h.press('Enter'); await h.tick(1000);
+          h.edit('next message'); assert.equal(h.render().props.disabled, true); h.press('Enter'); await h.tick(9000);
           assert.equal(h.node.value, 'next message'); assert.deepEqual(actions, []); assert.deepEqual(received, []); assert.equal(h.popup(), undefined); return;
         }
         if (picture !== 'none') {
@@ -2081,9 +2133,9 @@ function quoteHarness(t, overrides = {}) {
 test('a quote goes before the words of the next ordinary message once, and the pending echo carries it', async t => {
   const { h, pick, chip } = quoteHarness(t);
   pick('Codex', 'the plan:\n\nstep one\nstep two');
-  assert.deepEqual(chip().props.quote, { who: 'Codex', excerpt: 'the plan:\nstep one\nstep two' });
+  assert.deepEqual(chip().props.quote, { who: 'Codex', excerpt: 'the plan:\n\nstep one\nstep two' });
   h.edit('please fix'); h.press('Enter'); await h.tick(0);
-  assert.deepEqual(h.pasted.map(item => item.text), ['> the plan:\n> step one\n> step two\n\nplease fix']);
+  assert.deepEqual(h.pasted.map(item => item.text), ['> the plan:\n>\n> step one\n> step two\n\nplease fix']);
   assert.equal(h.echoed[0].text, h.pasted[0].text);
   assert.equal(chip(), undefined);
 });
@@ -2174,8 +2226,24 @@ test('a sent message shows its quote as a block, in the timeline and while pendi
   const { state, render } = readingHarness(t, [readingEntry('u1', 'user', 10, { text: '> quoted line\n> second\n\nmy question' })]);
   state.pending = [{ id: 'p', role: 'user', text: '> pending quote\n\nmy echo', at: new Date(2026, 9, 17, 16, 20).getTime(), sending: true }];
   const html = render();
-  assert.match(html, /<blockquote class="reading-user-quote">quoted line\nsecond<\/blockquote>/);
-  assert.match(html, /<blockquote class="reading-user-quote">pending quote<\/blockquote>/);
+  assert.match(html, /<blockquote class="reading-user-quote"><div class="reading-markdown">quoted line\nsecond<\/div><\/blockquote>/);
+  assert.match(html, /<blockquote class="reading-user-quote"><div class="reading-markdown">pending quote<\/div><\/blockquote>/);
   assert.match(html, /my question/); assert.match(html, /my echo/);
   assert.doesNotMatch(html, /&gt; quoted|&gt; pending/);
+});
+
+test('a sent quote is laid out as Markdown: inline code and lists are not shown raw', t => {
+  const { render } = readingHarness(t, [readingEntry('u1', 'user', 10, { text: '> 读了 `parser.cjs`：\n> 1. 第一点\n> 2. 第二点\n\n同意' })],
+    { './markdown-escape': require('../src/features/reading/markdown-escape.ts') });
+  const html = render();
+  assert.match(html, /<blockquote class="reading-user-quote">[\s\S]*<code>parser\.cjs<\/code>[\s\S]*<ol>[\s\S]*<li>第一点<\/li>[\s\S]*<li>第二点<\/li>[\s\S]*<\/blockquote>/);
+  assert.doesNotMatch(html, /`parser|1\. 第一点/);
+});
+
+test('a locked composer looks locked: no input fill, the quiet divider edge and a readable draft, in theme tokens only', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading.css'), 'utf8');
+  const locked = /\.reading-composer:has\(textarea:disabled\) \{([^}]*)\}/.exec(css)?.[1] ?? '';
+  assert.match(locked, /background: transparent;/); assert.match(locked, /border-color: var\(--divider\);/);
+  assert.match(css, /\.reading-composer textarea:disabled \{ color: var\(--text-2\); \}/, 'the draft kept in it stays readable');
+  assert.doesNotMatch(locked, /#[0-9a-f]{3,8}\b|rgba?\(/i, 'tokens only');
 });

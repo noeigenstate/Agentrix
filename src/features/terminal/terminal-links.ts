@@ -8,15 +8,16 @@ export function findLinkCandidates(text: string, includeDirectories = false): Li
     if (target.length > 4096 || links.some(link => start < link.end && end > link.start)) return;
     links.push({ start, end, target });
   };
-  const looksLikeLink = (value: string) => /^(?:https?:\/\/|file:\/\/|www\.)/i.test(value) || /\.[a-z][a-z\d]{0,15}(?::\d+(?::\d+)?|#L\d+(?:C\d+)?)?$/i.test(value)
-    || includeDirectories && (/[\\/]/.test(value) || /^(?:\.{1,2}|~|[\p{L}_][\p{L}\p{N}_.-]*)$/u.test(value));
+  // A bare name (docs, LICENSE) is a path only inside code ticks (not in prose quotes or brackets); in prose quotes such as 「…」 it is an ordinary phrase.
+  const looksLikeLink = (value: string, bareName = false) => /^(?:https?:\/\/|file:\/\/|www\.)/i.test(value) || /\.[a-z][a-z\d]{0,15}(?::\d+(?::\d+)?|#L\d+(?:C\d+)?)?$/i.test(value)
+    || includeDirectories && (/[\\/]/.test(value) || bareName && /^(?:\.{1,2}|~|[\p{L}_][\p{L}\p{N}_.-]*)$/u.test(value));
   for (const match of text.matchAll(/\[[^\]\r\n]+\]\(((?:[^()\r\n]|\([^()\r\n]*\))+)\)/g)) {
     const target = match[1].replace(/^<|>$/g, '');
     if (looksLikeLink(target)) add(match.index, match.index + match[0].length, target);
   }
   for (const match of text.matchAll(/(["'`])([^\r\n]+?)\1|[“「‘]([^\r\n]+?)[”」’]/g)) {
     const target = match[2] ?? match[3];
-    if (looksLikeLink(target)) add(match.index + 1, match.index + match[0].length - 1, target);
+    if (looksLikeLink(target, match[1] === '`')) add(match.index + 1, match.index + match[0].length - 1, target);
   }
   for (const match of text.matchAll(/(?:https?:\/\/|file:\/\/|www\.)[^\s<>"'`，。；！？]+/gi)) {
     let target = match[0].replace(/[.,;，。；]+$/, '');

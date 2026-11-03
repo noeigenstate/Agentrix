@@ -11,9 +11,15 @@ const guard = source.slice(source.indexOf('const dialogOpen ='), source.indexOf(
 const handlerStart = source.indexOf('api.onTitlebarNavigate(') + 'api.onTitlebarNavigate('.length;
 const handler = source.slice(handlerStart, source.indexOf('\n    });', handlerStart) + '\n    }'.length);
 
-function titlebar(open = '') {
+function titlebar(open = '', inPopup = false) {
   const views = [];
-  const context = vm.createContext({ document: { querySelector: selector => selector.split(', ').includes(open) ? {} : null }, setView: view => views.push(view) });
+  const context = vm.createContext({
+    document: {
+      activeElement: { closest: selector => inPopup && selector === '.reading-terminal-popup' ? {} : null },
+      querySelector: selector => selector.split(', ').includes(open) ? {} : null,
+    },
+    setView: view => views.push(view),
+  });
   vm.runInContext(ts.transpileModule(`${guard}\nglobalThis.navigate = ${handler};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { navigate: context.navigate, views };
 }
@@ -24,10 +30,18 @@ test('the native title-bar buttons switch the page', () => {
   assert.deepEqual(views, ['decisions', 'workspace']);
 });
 
-test('a dialog or the tour blocks the native title-bar buttons', () => {
-  for (const open of ['dialog[open]', '.tour-layer']) {
+test('a modal dialog or the tour blocks the native title-bar buttons', () => {
+  for (const open of ['dialog:modal', '.tour-layer']) {
     const { navigate, views } = titlebar(open);
     navigate('decisions'); navigate('workspace');
     assert.deepEqual(views, [], `${open} blocks the buttons`);
+  }
+});
+
+test('a modeless terminal popup blocks the native title-bar buttons only while its CLI owns focus', () => {
+  for (const inPopup of [false, true]) {
+    const { navigate, views } = titlebar('dialog[open]', inPopup);
+    navigate('decisions'); navigate('workspace');
+    assert.deepEqual(views, inPopup ? [] : ['decisions', 'workspace']);
   }
 });

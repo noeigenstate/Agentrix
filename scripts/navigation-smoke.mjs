@@ -110,10 +110,12 @@ try {
   const hiddenShell = (await state()).projects.find(project => project.id === local.id).terminals[0].id;
   const agentId = (await page.evaluate(id => window.agentrix.addTerminal(id), local.id)).value;
   await waitFor(async () => (await state()).projects.find(project => project.id === local.id).terminals.find(terminal => terminal.id === agentId)?.shellReady, 'navigation agent shell ready');
-  await page.evaluate(id => window.agentrix.writeTerminal(id, "Send-AgentrixEvent 'codex-started' -Agent 'codex'; Start-Sleep 3600\r"), agentId);
+  // Agent lifecycle alone no longer enables the composer: draw the CLI's positive idle-input evidence too.
+  await page.evaluate(id => window.agentrix.writeTerminal(id, "Send-AgentrixEvent 'codex-started' -Agent 'codex'; Clear-Host; Write-Host '› Ask Codex to do anything'; Write-Host ''; Write-Host 'gpt-6.1-sol · high · 100% context left'; Start-Sleep 3600\r"), agentId);
   await waitFor(async () => (await state()).projects.find(project => project.id === local.id).terminals.find(terminal => terminal.id === agentId)?.codexActive, 'navigation fake agent session');
   const agent = first.locator(`[data-terminal-id="${agentId}"]`);
   await agent.locator('.reading-composer textarea').waitFor();
+  await page.waitForFunction(id => document.querySelector(`[data-terminal-id="${id}"] .reading-composer textarea`)?.disabled === false, agentId);
   assert.equal(await first.locator(`[data-terminal-id="${hiddenShell}"]`).isVisible(), false, 'the ordinary shell stays hidden beside the visible reading agent');
   assert.equal(await first.locator('.terminal-split:visible').count(), 1);
   await setMode(page, local.name, 'terminal', { terminalId: agentId });

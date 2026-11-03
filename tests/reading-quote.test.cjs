@@ -2,7 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { QUOTE_LINES, QUOTE_CHARS, splitQuote, quoteExcerpt, withQuote } = require('../src/features/reading/message-quote.ts');
+const { readingMarked } = require('../src/features/reading/markdown-escape.ts');
+const { QUOTE_LINES, QUOTE_CHARS, splitQuote, quoteExcerpt, plainExcerpt, withQuote } = require('../src/features/reading/message-quote.ts');
 
 // The rendering and send-flow tests of quotes sit beside the harnesses they use, in reading-ui.test.cjs.
 
@@ -16,9 +17,22 @@ test('a quote is the message\'s own words: at most 6 lines and 400 characters, c
   assert.equal(quoteExcerpt(`a${'😀'.repeat(250)}`), `a${'😀'.repeat(199)}…`, 'a cut never leaves half a character');
 });
 
-test('blank lines and trailing spaces are dropped, and an empty message has nothing to quote', () => {
-  assert.equal(quoteExcerpt('a\n\n  \nb  \r\nc'), 'a\nb\nc');
-  assert.equal(quoteExcerpt('  \n\n'), '');
+test('one blank line stays between blocks and counts toward the 6 lines; its edges, repeats and trailing spaces go', () => {
+  assert.equal(quoteExcerpt('a\n\n  \n\nb  \r\nc'), 'a\n\nb\nc');
+  assert.equal(quoteExcerpt('\n\n  a\n\n'), '  a', 'blank edges are dropped');
+  assert.equal(quoteExcerpt('  \n\n'), '', 'an empty message has nothing to quote');
+  assert.equal(quoteExcerpt('1\n2\n3\n4\n5\n\n7'), '1\n2\n3\n4\n5…', 'the blank line is the 6th line, and nothing hangs before the ellipsis');
+  assert.equal(quoteExcerpt('1\n2\n3\n4\n\n6'), '1\n2\n3\n4\n\n6', 'six lines with a blank one are not cut');
+  assert.ok(quoteExcerpt(`${'x'.repeat(100)}\n\n${'y'.repeat(400)}`).length <= QUOTE_CHARS + 1, 'a blank line never lifts the character bound');
+});
+
+test('a paragraph after a list stays its own block in the sent quote, so it never nests in the last item', () => {
+  const excerpt = quoteExcerpt('读取分块：\n- 保留偏移量\n- 补上换行\n\n文件结束时冲刷剩余内容。');
+  const sent = withQuote(excerpt, '继续');
+  assert.equal(sent, '> 读取分块：\n> - 保留偏移量\n> - 补上换行\n>\n> 文件结束时冲刷剩余内容。\n\n继续');
+  assert.deepEqual(splitQuote(sent), { quote: excerpt, rest: '继续' });
+  assert.match(readingMarked.parse(excerpt), /<\/ul>\s*<p>文件结束时冲刷剩余内容。<\/p>/, 'the paragraph is outside the list');
+  assert.doesNotMatch(readingMarked.parse(excerpt.replace('\n\n', '\n')), /<\/ul>\s*<p>/, 'without the blank line it would be a lazy continuation');
 });
 
 test('quoting a message that carries a quote takes its words only, so quotes never nest', () => {
@@ -50,4 +64,31 @@ test('the quote styles use theme tokens and the spacing scale only', () => {
   const scale = new Set([0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64]);
   const spacing = [...css.matchAll(/(?:padding|margin|gap|top|right|left|bottom)[a-z-]*:\s*([^;}]+)/g)].flatMap(match => match[1].match(/-?\d+(?:\.\d+)?px/g) ?? []);
   for (const value of spacing) assert.ok(scale.has(Math.abs(parseFloat(value))), `${value} is off the spacing scale`);
+});
+
+test('the 引用 button is a compact 28px icon button with the standard hover fill, and its column is reserved so it never lies over the text', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading-quote.css'), 'utf8');
+  assert.match(css, /\.reading-quote-action \{[^}]*width: 28px; height: 28px;/);
+  assert.match(css, /\.reading-quote-action:not\(:disabled\):hover \{[^}]*background: var\(--bg-selected\);/, 'a visible fill and bounds when the pointer is on it');
+  assert.match(css, /\.reading-user:has\(> \.reading-quote-action\), \.reading-assistant:has\(> \.reading-quote-action\) \{ padding-right: 40px; \}/, '28px button + 4px gap + 8px edge: the text ends before it');
+  const right = Number(/\.reading-quote-action \{[^}]*right: (\d+)px/.exec(css)[1]);
+  assert.ok(right + 28 <= 40, 'the button lies inside the reserved column');
+});
+
+test('the chip shows the excerpt as one clean line: Markdown markers dropped, lists and lines joined', () => {
+  assert.equal(plainExcerpt('我读了 `parser.cjs`，问题出在分块读取：\n1. 读到半行时没有保留偏移量；\n2. 文件末尾没有换行。'),
+    '我读了 parser.cjs，问题出在分块读取： 读到半行时没有保留偏移量； 文件末尾没有换行。');
+  assert.equal(plainExcerpt('## Title\n- **bold** and *it* and ~~gone~~\n> quoted\n[a link](https://x.y/z) end'), 'Title bold and it and gone quoted a link end');
+  assert.equal(plainExcerpt('3) third\n+ plus item'), 'third plus item');
+  assert.equal(plainExcerpt('snake_case stays'), 'snake_case stays', 'single underscores are words, not emphasis');
+  assert.equal(plainExcerpt('a…'), 'a…'); assert.equal(plainExcerpt(''), '');
+});
+
+test('the quote block is laid out by the Markdown renderer and the chip is one line with an ellipsis', () => {
+  const read = file => fs.readFileSync(path.join(__dirname, '../src/features/reading', file), 'utf8');
+  const css = read('reading-quote.css');
+  assert.doesNotMatch(/\.reading-user-quote \{[^}]*\}/.exec(css)[0], /pre-wrap/, 'not raw pre-wrapped text');
+  assert.match(css, /\.reading-quote > span \{[^}]*white-space: nowrap/); assert.match(css, /\.reading-quote > span \{[^}]*text-overflow: ellipsis/);
+  assert.match(read('PendingPromptEntries.tsx'), /<blockquote className="reading-user-quote"><Markdown text=\{quote\} \/><\/blockquote>/);
+  assert.match(read('ReadingQuote.tsx'), /plainExcerpt\(quote\.excerpt\)/);
 });

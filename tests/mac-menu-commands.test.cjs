@@ -11,10 +11,13 @@ const guard = source.slice(source.indexOf('const dialogOpen ='), source.indexOf(
 const handlerStart = source.indexOf('api.onMenuCommand(') + 'api.onMenuCommand('.length;
 const handler = source.slice(handlerStart, source.indexOf('\n    });', handlerStart) + '\n    }'.length);
 
-function menu(open = '') {
+function menu(open = '', inPopup = false) {
   const calls = [];
   const context = vm.createContext({
-    document: { querySelector: selector => selector.split(', ').includes(open) ? {} : null },
+    document: {
+      activeElement: { closest: selector => inPopup && selector === '.reading-terminal-popup' ? {} : null },
+      querySelector: selector => selector.split(', ').includes(open) ? {} : null,
+    },
     installUpdate: () => calls.push(['installUpdate']), runAction: action => calls.push(['action', action]),
   });
   vm.runInContext(ts.transpileModule(`${guard}\nglobalThis.onCommand = ${handler};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
@@ -28,11 +31,21 @@ test('menu commands run what the shortcuts run, and installUpdate installs', () 
 });
 
 test('a dialog or the tour blocks every menu command except installUpdate', () => {
-  for (const open of ['dialog[open]', '.tour-layer']) {
+  for (const open of ['dialog:modal', '.tour-layer']) {
     const { send, calls } = menu(open);
     for (const command of ['addProject', 'settings']) send(command);
     assert.deepEqual(calls, [], `${open} blocks the commands`);
     send('installUpdate');
     assert.deepEqual(calls, [['installUpdate']], `${open} does not block installUpdate`);
+  }
+});
+
+test('a modeless terminal popup blocks menu commands only while its CLI owns focus', () => {
+  for (const inPopup of [false, true]) {
+    const { send, calls } = menu('dialog[open]', inPopup);
+    for (const command of ['addProject', 'settings']) send(command);
+    assert.deepEqual(calls, inPopup ? [] : [['action', 'addProject'], ['action', 'settings']]);
+    send('installUpdate');
+    assert.deepEqual(calls.at(-1), ['installUpdate']);
   }
 });

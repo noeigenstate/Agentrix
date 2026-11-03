@@ -569,7 +569,14 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const readInbox = (finish = false) => {
     if (!inbox) return Promise.resolve();
     const task = inboxRead.then(async () => {
-      for (const control of await inbox.take(finish && !messages.length)) {
+      let controls;
+      try { controls = await inbox.take(finish && !messages.length); }
+      catch (error) {
+        // Polling failures must not interrupt the worker. Only an unreadable final empty check prevents closure.
+        if (finish && !messages.length) throw error;
+        return;
+      }
+      for (const control of controls) {
         if (control.type === 'stop') {
           stops++; segmentStopped = true; noResume ||= !!control.noResume;
           signal(`stop requested ${id}${control.reason ? ': ' + JSON.stringify(control.reason).slice(1, -1) : ''}${control.noResume ? ' · no resume' : ''}`);
@@ -580,7 +587,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         }
       }
     });
-    inboxRead = task.catch(error => { spawnError ||= error; noResume = true; stop('SIGTERM', false); });
+    inboxRead = task.catch(() => {});
     return task;
   };
   const onInterrupt = () => stop('SIGINT'), onTerminate = () => stop('SIGTERM'), onHangup = () => stop('SIGHUP');

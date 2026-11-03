@@ -12,13 +12,30 @@ export const skillWhen = (skill: SkillInfo) => skill.source === 'builtin' ? t(sk
 // A SKILL.md without its front matter: the page shows those fields above the text.
 export const skillBody = (text: string) => text.replace(/^﻿?---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/, '');
 
-// The projects whose own copy a built-in yields to: the first three by name, the full list in the tooltip.
-const NAMED_PROJECTS = 3;
-export function yieldNote(names: string[]) {
-  if (!names.length) return null;
-  const note = (projects: string) => t('以项目自己的版本为准：{projects}', { projects });
-  const some = names.slice(0, NAMED_PROJECTS).join(' · ');
-  return { text: note(names.length > NAMED_PROJECTS ? `${some} ${t('等 {count} 个项目', { count: names.length })}` : some), title: note(names.join(' · ')) };
+// The tag of a skill that extends a built-in (named <built-in>-<id>); null for every other skill.
+export const extensionTag = (skill: SkillInfo) => skill.extends === null ? null : t('扩展 {base}', { base: skill.extends });
+
+// How many project copies a built-in has replaced (the latest ones the store keeps).
+export const replacedCount = (skill: SkillInfo) => skill.source === 'builtin' ? skill.replaced.length : 0;
+
+const pad = (value: number) => String(value).padStart(2, '0');
+// A moment in the owner's local time, as YYYY-MM-DD HH:mm.
+export function localDateTime(at: number) {
+  const date = new Date(at);
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+type SkillRows = { builtin: SkillInfo[]; mine: SkillInfo[]; mineTotal: number };
+
+// The list's two groups. An extension sits in the system group right under its base built-in, whether or not the base itself
+// matches the search, and leaves 我的技能; mineTotal counts the user's skills that stay there, matching or not.
+export function skillRows(skills: SkillInfo[], matches: (skill: SkillInfo) => boolean): SkillRows {
+  const bases = new Set(skills.filter(skill => skill.source === 'builtin').map(skill => skill.name));
+  const placed = (skill: SkillInfo) => skill.extends !== null && bases.has(skill.extends);
+  const user = skills.filter(skill => skill.source === 'user'), own = user.filter(skill => !placed(skill));
+  const extensions = user.filter(placed).filter(matches);
+  const builtin = skills.filter(skill => skill.source === 'builtin').flatMap(base => [...(matches(base) ? [base] : []), ...extensions.filter(skill => skill.extends === base.name)]);
+  return { builtin, mine: own.filter(matches), mineTotal: own.length };
 }
 
 // The skill's folder name: the id follows the name sent when saving, which may differ from the SKILL.md front matter.

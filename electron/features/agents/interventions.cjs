@@ -34,7 +34,7 @@ function createInterventions({ resolve, sendParentPrompt, now = Date.now }) {
       }
       if (target.local !== true || !runId(target.runId) || callId !== `dispatch:${target.runId}` || typeof target.cwd !== 'string' || typeof target.projectPath !== 'string') throw new Error('此工作者的插话通道不可用。');
       const team = projectTeam(target.cwd), parent = projectTeam(target.projectPath);
-      if (!team || !parent || fs.realpathSync(team.directory) !== fs.realpathSync(parent.directory)) throw new Error('此工作者的插话通道不可用。');
+      if (!team || !parent || fs.realpathSync.native(team.directory) !== fs.realpathSync.native(parent.directory)) throw new Error('此工作者的插话通道不可用。');
       await team.queueControl(target.runId, control, notify);
       return receipt;
     });

@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { projectTeam } = require('../electron/features/team/team.cjs');
+const { projectTeam, minutesMarkdown } = require('../electron/features/team/team.cjs');
+const { minutesPage } = require('../electron/features/team/minutes-page.cjs');
 
 function lab(t) {
   const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'team-issues-')));
@@ -26,6 +27,18 @@ test('minutes persist bounded latest issues snapshots and distinguish explicit z
   assert.deepEqual(team.entries().findLast(entry => entry.type === 'issues').issues, [issue]);
   assert.deepEqual(team.minutes('r').issues, [issue]);
   assert.equal(team.entries().filter(entry => entry.type === 'issues').length, 1);
+  for (const [language, heading, column, answer] of [
+    ['zh', '澄清与纠正', '歧义、误读或阻碍', '规划师的答复'],
+    ['en', 'Clarifications and corrections', 'Ambiguity, misreading or blocker', "Planner's answer"],
+  ]) {
+    const data = team.minutes('r', undefined, language);
+    assert.deepEqual(data.issues, [issue]);
+    const md = minutesMarkdown(data), html = minutesPage(data);
+    assert.ok(html.includes(heading));
+    assert.ok(md.includes('| ' + column + ' |')); assert.ok(html.includes('<th>' + column + '</th>'));
+    assert.ok(md.includes('| ' + answer + ' |'));
+    assert.doesNotMatch(md, /分歧|Disagreement/); assert.doesNotMatch(html, /分歧|Disagreement/);
+  }
   await team.locked(() => team.minutes('r', []));
   assert.deepEqual(team.minutes('r').issues, []);
   assert.equal(team.entries().filter(entry => entry.type === 'issues').length, 2);

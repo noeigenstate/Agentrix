@@ -50,6 +50,7 @@ function registerWorkspaceIpc({ handle, publicState, dialog, getWindow, t, addPr
   handle('workspace:reorder-terminals', (projectId, ids) => { reorderTerminals(projectId, ids); broadcast(); });
   function updateSettings(patch) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('无效的设置。');
+    if (Object.hasOwn(patch, 'updateChannel') || Object.hasOwn(patch, 'betaAgreement')) throw new Error('请在“关于”页面切换更新通道。');
     updateStoreSettings(patch); broadcast();
     if (patch.restoreSessions === false) clearRestorePlans();
     chooseVoiceModel(getSettings().voiceModel);

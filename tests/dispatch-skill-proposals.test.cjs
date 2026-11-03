@@ -46,6 +46,35 @@ test('only a literal approved SKILL.md path can remain changed', t => {
   assert.equal(fs.readFileSync(other, 'utf8'), 'Other original.');
 });
 
+for (const allow of [['skills/**'], ['skills/standard/SKILL.md']]) test(`same-name user skill proposals are rejected with ${allow[0]} while preserving their versions`, t => {
+  const f = fixture(t, allow), builtinRoot = path.join(f.parent, 'builtins'), globalRoot = path.join(f.parent, 'global');
+  put(path.join(builtinRoot, 'standard/SKILL.md'), 'System rules.');
+  const manifest = path.join(f.root, 'delivery/manifest.md'), fingerprint = digest('reserved-names'); put(manifest, 'Instructions.');
+  put(`${manifest}.json`, JSON.stringify({ projectRoot: f.root, fingerprint, roots: [builtinRoot, globalRoot], builtinRoot, builtinNames: ['standard'] }));
+  const guard = new WorkerSkillProposals(f.options, { AGENTRIX_READING_NOTE: `Note. ${deliveryMarker({ manifest, fingerprint })}` }, null);
+  const collision = path.join(f.root, 'skills/standard/SKILL.md');
+  put(collision, '---\nname: standard\ndescription: A collision.\n---\nWorker text.');
+  assert.equal(guard.finish('collision'), 1);
+  const { proposals } = JSON.parse(fs.readFileSync(`${f.options.out}.skill-proposals-collision/index.json`));
+  assert.equal(proposals[0].rejected, true);
+  assert.equal(proposals[0].error, '与系统技能「standard」同名。要扩展它，请命名为 standard-<标识>，例如 standard-team。');
+  assert.equal(fs.existsSync(collision), false);
+  assert.match(fs.readFileSync(`${f.options.out}.skill-proposals-collision/${proposals[0].content}`, 'utf8'), /Worker text/);
+  assert.ok(guard.notes.has(proposals[0].error));
+});
+
+test('the user-name guard does not reject an explicitly approved shipped skill source', t => {
+  const f = fixture(t, ['resources/skills/standard/SKILL.md']), file = path.join(f.root, 'resources/skills/standard/SKILL.md');
+  put(file, '---\nname: standard\n---\nOriginal system source.');
+  const builtinRoot = path.join(f.parent, 'shipped'), globalRoot = path.join(f.parent, 'global');
+  const manifest = path.join(f.root, 'delivery/manifest.md'), fingerprint = digest('system-source'); put(manifest, 'Instructions.');
+  put(`${manifest}.json`, JSON.stringify({ projectRoot: f.root, fingerprint, roots: [builtinRoot, globalRoot], builtinRoot, builtinNames: ['standard'] }));
+  const guard = new WorkerSkillProposals(f.options, { AGENTRIX_READING_NOTE: `Note. ${deliveryMarker({ manifest, fingerprint })}` });
+  put(file, '---\nname: standard\n---\nApproved system update.');
+  assert.equal(guard.finish('system'), 0);
+  assert.match(fs.readFileSync(file, 'utf8'), /Approved system update/);
+});
+
 test('concurrent owner edits to global and built-in skills are report-only, unrelated inherited deliveries are ignored', t => {
   const f = fixture(t), external = path.join(f.root, 'managed'), global = path.join(external, 'global/a/SKILL.md'), builtin = path.join(external, 'builtin/a/SKILL.md');
   put(global, 'Global.'); put(builtin, 'Built in.');

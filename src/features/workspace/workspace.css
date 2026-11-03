@@ -94,6 +94,9 @@
   .focus-mode .project-panel.has-activity .panel-name { flex: 0 1 auto; max-width: calc(100% - 332px); margin-right: auto; }
 }
 @media (max-width: 1000px) { .project-panel.has-activity .panel-terminal-area { margin-right: 0; } .activity-pane, .project-panel.has-activity::before { display: none; } }
+/* The header's sub-agent chip stands in for the pane, so it shows only where the rule above hides the pane. */
+.subagent-chip-anchor { display: none; position: relative; flex: none; }
+@media (max-width: 1000px) { .subagent-chip-anchor { display: block; } }
 /* With the explorer showing, the header holds nothing over the conversation (the project's name and image are in the explorer; with the pane open its cluster is on the pane strip, with the
    pane closed there is none): the reading view runs up under it to the panel's top, so a scrolling conversation is never cut off below an empty band. The header lets clicks through to it,
    except on its own controls. Where the pane is hidden by CSS the cluster is in the header, and the band stays. */
@@ -126,7 +129,7 @@
 .panel-error > svg { flex: none; color: var(--danger); }
 .panel-error span { min-width: 0; }
 
-/* Split terminals: divided by 1px, with no bars. The split in use has a thin inner edge; a small cluster (drag grip, restart, close) shows in its corner while the pointer or the keyboard is in it. */
+/* Split terminals: divided by 1px, with no bars. The split in use has a thin inner edge (only among several terminals: a lone conversation beside sub-agent views is not picked out); a small cluster (drag grip, restart, close) shows in its corner while the pointer or the keyboard is in it. */
 .terminal-grid { display: grid; grid-template-columns: repeat(var(--terminal-columns), minmax(0, 1fr)); grid-template-rows: repeat(var(--terminal-rows), minmax(0, 1fr)); }
 .terminal-grid.has-splits { gap: 1px; padding: 0; overflow: auto; grid-template-rows: repeat(var(--terminal-rows), minmax(170px, 1fr)); background: var(--divider); }
 .terminal-split { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-card); }
@@ -136,7 +139,7 @@
 /* A sub-agent's read-only view takes a cell of the terminal grid: no grip, no restart or close tools, and it is never reordered or saved. */
 .subagent-slot { position: relative; display: flex; min-width: 0; min-height: 0; }
 .terminal-split-body { position: relative; flex: 1; min-height: 0; overflow: hidden; }
-.has-splits .is-active-terminal::after { content: ''; position: absolute; inset: 0; z-index: 2; box-shadow: inset 0 0 0 1px var(--border-hover); pointer-events: none; }
+.has-terminals .is-active-terminal::after { content: ''; position: absolute; inset: 0; z-index: 2; box-shadow: inset 0 0 0 1px var(--border-hover); pointer-events: none; }
 .terminal-split-tools { position: absolute; top: 6px; right: 16px; z-index: 3; display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 8px; background: color-mix(in srgb, var(--bg-card) 88%, transparent); opacity: 0; pointer-events: none; transition: opacity .12s linear; }
 .focus-mode .terminal-split-tools { background: color-mix(in srgb, var(--bg-app) 88%, transparent); }
 .terminal-split:hover .terminal-split-tools, .terminal-split:focus-within .terminal-split-tools { opacity: 1; pointer-events: auto; }

@@ -1,8 +1,11 @@
-import { useState } from 'react';
-import { ArrowLeft, ArrowUpRight, CaretRight, DownloadSimple, Info, ListBullets } from '@phosphor-icons/react';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowLeft, ArrowUpRight, ArrowsClockwise, CaretRight, DownloadSimple, Info, ListBullets } from '@phosphor-icons/react';
 import type { AppUpdateState, Distribution } from '../../shared/types';
 import { t } from '../../shared/i18n';
+import { Select } from '../../shared/Select';
 import { ReleaseNotes } from '../guide/ReleaseNotes';
+import { BetaAgreementDialog } from './BetaAgreementDialog';
+import { BETA_AGREEMENT_VERSION } from './beta-agreement';
 
 type Page = 'changelog' | 'info';
 type ProjectPage = Parameters<Window['agentrix']['openProjectPage']>[0];
@@ -40,8 +43,54 @@ function LinkRow({ title, page }: { title: string; page: ProjectPage }) {
   return <button type="button" className="about-link" onClick={() => open(page)}><span>{title}</span><ArrowUpRight size={14} /></button>;
 }
 
-export function AboutSettings({ updates, onCheck, onInstall, onDownloadPage }: { updates: AppUpdateState | null; onCheck: () => void; onInstall: () => void; onDownloadPage: () => void }) {
+// The update channel: a select for stable or beta. Beta waits behind the agreement dialog and is only asked for with the version that was read; stable switches at once.
+// An unsupported build keeps the choice in settings but updates nothing, so it gets a line instead of the select.
+export function UpdateChannel({ updates, onChanged }: { updates: AppUpdateState; onChanged: (state: AppUpdateState) => void }) {
+  const [dialog, setDialog] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [toStable, setToStable] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const openDialog = () => { opener.current = document.activeElement as HTMLElement | null; setDialog(true); };
+  // A closing modal leaves focus on the page body. Give it back to what opened the dialog, or to the select when that is gone (the agree button leaves once the agreement holds).
+  useEffect(() => {
+    if (dialog || !opener.current) return;
+    const target = opener.current.isConnected && opener.current !== document.body ? opener.current : root.current?.querySelector<HTMLElement>('.select-trigger');
+    opener.current = null;
+    target?.focus();
+  }, [dialog]);
+  if (!updates.supported) return <p className="about-channel-note">{t('只有 Windows 安装版可以选择更新通道。')}</p>;
+  const apply = async (channel: AppUpdateState['channel'], agreementVersion?: string) => {
+    setBusy(true); setError('');
+    try {
+      const result = await window.agentrix.setUpdateChannel(channel, agreementVersion);
+      if (!result.ok) { setError(result.error); return; }
+      onChanged(result.value); setToStable(channel === 'stable'); setDialog(false);
+    } catch (reason) { setError(String(reason)); }
+    finally { setBusy(false); }
+  };
+  return <div className="about-channel" ref={root}>
+    <div className="setting-row">
+      <span><ArrowsClockwise size={19} /><span><b>{t('更新通道')}</b><small>{t('稳定版只收正式版；测试版更早更新，需先同意测试协议。')}</small></span></span>
+      <Select label={t('更新通道')} value={updates.channel} disabled={busy} onChange={value => value === 'beta' ? openDialog() : void apply('stable')}
+        options={[{ value: 'stable', label: t('稳定版') }, { value: 'beta', label: t('测试版') }]} />
+    </div>
+    {updates.channel === 'beta' && !updates.agreed && <>
+      <p className="about-channel-note" role="status">{t('测试协议已更新，需要重新同意后才会接收测试版更新。')}</p>
+      <button type="button" className="button secondary" onClick={openDialog}>{t('阅读并同意')}</button>
+    </>}
+    {toStable && updates.channel === 'stable' && <p className="about-channel-note">{t('之后只接收正式版更新；已安装的测试版会保留，直到有更新的正式版。')}</p>}
+    {error && !dialog && <p className="form-error" role="alert">{t(error)}</p>}
+    {dialog && <BetaAgreementDialog busy={busy} error={error} onAgree={() => void apply('beta', BETA_AGREEMENT_VERSION)} onCancel={() => { setDialog(false); setError(''); }} />}
+  </div>;
+}
+
+export function AboutSettings({ updates: broadcast, onCheck, onInstall, onDownloadPage }: { updates: AppUpdateState | null; onCheck: () => void; onInstall: () => void; onDownloadPage: () => void }) {
   const [page, setPage] = useState<Page | null>(null);
+  // The state a channel change returned, shown until main broadcasts a newer one (the prop then no longer equals the one it was returned against).
+  const [returned, setReturned] = useState<{ against: AppUpdateState | null; state: AppUpdateState } | null>(null);
+  const updates = returned && returned.against === broadcast ? returned.state : broadcast;
   const version = updates?.currentVersion;
   const back = <button type="button" className="text-button" onClick={() => setPage(null)}><ArrowLeft size={15} />{t('返回更新与关于')}</button>;
   if (page === 'changelog') return <div className="about-page">{back}
@@ -78,6 +127,7 @@ export function AboutSettings({ updates, onCheck, onInstall, onDownloadPage }: {
         {block.install && <button className="button primary" onClick={onInstall}>{block.install}</button>}
         {block.check && <button className="button secondary" onClick={onCheck}>{block.check}</button>}
       </section>}
+      {updates && <UpdateChannel updates={updates} onChanged={state => setReturned({ against: broadcast, state })} />}
     </section>
     <div className="about-rows">
       <EntryRow icon={<ListBullets size={19} />} title={t('更新日志')} hint={t('了解最近的版本改进与修复')} onClick={() => setPage('changelog')} />
