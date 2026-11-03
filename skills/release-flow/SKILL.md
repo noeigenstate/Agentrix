@@ -1,20 +1,52 @@
 ---
 name: release-flow
-description: Publish a new Agentrix version — bump, update notes, the full local test pass, commit, tag, push and watch CI. Use when asked to 发布新版本 / release.
+description: Publish a new Agentrix version — a beta prerelease on the one `beta` branch first, then, after the owner approves, the stable release. Covers the bump, update notes, the full local test pass, commit, tag, push and watching CI. Use when asked to 发布新版本 / release.
 ---
 
 # Releasing Agentrix
 
-1. **Version.** `npm version X.Y.Z --no-git-tag-version` (updates package.json and package-lock.json).
-2. **Docs.** `docs/usage.md` names the version four times (the `AGENTRIX_VERSION=` lines and the macOS zip name);
-   replace them all.
+## The default: a beta first, stable after approval
+
+Every release goes out as a beta first. The owner's rule: at most one branch, a test version, and only after the owner
+agrees does it become the stable release.
+
+- **One branch: `beta`.** Create it from `main` when it does not exist (`git switch -c beta main`). Release work lives
+  there. Never create a `ci/preflight-*` branch and never run `ci-preflight remote` for a beta: the tag run is the full
+  matrix.
+- **Beta version `X.Y.Z-beta.N`** (N starts at 1 and rises for each further beta of the same X.Y.Z):
+  `npm version X.Y.Z-beta.N --no-git-tag-version`. Write the update notes (step 3) now. Leave the versions in
+  `docs/usage.md` (step 2) alone until the stable bump.
+- **Check, commit, tag, push.** Local checks (step 4), commit (step 6), then `git tag vX.Y.Z-beta.N` on `beta` and push
+  the branch and the tag. A push to the `beta` branch triggers nothing; the tag matches `v*`. The tag run is the full
+  matrix (it builds and tests everything unless a successful run of this exact commit can be reused, step 7) and
+  publishes a GitHub **prerelease** (`--prerelease --latest=false`) with the installer, its `.blockmap` and `latest.yml`.
+  Installed Windows copies on the beta channel (Settings › About › 更新通道) receive it; stable-channel copies do not.
+  A failed job is step 9; a code defect needs a new commit and the next beta number, keeping the old tag.
+- **Nothing merges to `main` and no stable tag exists until the owner approves the beta.** Report the prerelease and
+  wait; do not bump, merge or tag stable on your own judgment.
+- **After the owner approves:** on `beta`, `npm version X.Y.Z --no-git-tag-version`, replace the `docs/usage.md`
+  versions (step 2), finish the notes, commit `Release X.Y.Z: …`; then `git switch main`, `git merge --ff-only beta`,
+  `git tag vX.Y.Z`, push `main` and then the tag. Both pushes run the full matrix (the tag run reuses a green run of
+  this exact commit when there is one, step 7) and the tag publishes only if every job is green. The code is the code
+  the beta tag already passed; the bump changes only the version, docs and notes. If `main` has moved and cannot be
+  fast-forwarded, rebase `beta` onto it and release a new beta first.
+- **Delete `beta`** once the stable release is published (`git push origin --delete beta` if it was pushed, and
+  `git branch -d beta`), so only `main` remains.
+
+The numbered steps below apply to both; where a step differs for a beta or outside this flow, it says so.
+
+1. **Version.** `npm version X.Y.Z --no-git-tag-version` for the stable bump (updates package.json and
+   package-lock.json); `X.Y.Z-beta.N` for a beta.
+2. **Docs.** At the stable bump only, `docs/usage.md` names the version four times (the `AGENTRIX_VERSION=` lines and
+   the macOS zip name); replace them all.
 3. **Update notes.** Replace `WHATS_NEW` in `src/features/guide/guide.ts` with this release's changes: each note is
    `{ title, text }`, a short Chinese title (2 to 6 characters, what changed) and one plain sentence of what the user sees,
    no internals and no repeating the title. Add the English of every title and sentence to the end of
    `electron/locales/en.json` (keep the older entries). The notes show as a list in the guide, which opens on this page
    after an update, and on the About page; about seven fit the guide card, a longer list scrolls.
 4. **Local checks, in order.** Prefer `node scripts/ci-preflight.mjs local` from the main checkout, which runs the Windows
-   CI job's own steps under CI conditions, then `node scripts/ci-preflight.mjs remote` before tagging. By hand: `npm run build`, `npm test`, `python -m unittest discover -s tests -p '*_test.py'`,
+   CI job's own steps under CI conditions. In the beta flow that is the only preflight: the beta tag's run is the remote
+   check. Outside the beta flow, run `node scripts/ci-preflight.mjs remote` before tagging. By hand: `npm run build`, `npm test`, `python -m unittest discover -s tests -p '*_test.py'`,
    then the sixteen desktop suites one at a time (each starts Electron with its own isolated profile; never run
    them in parallel or against the real app): `test:desktop`, `test:path-refresh`, `test:sessions`,
    `test:restore-slow`, `test:completion`, `test:gpu-terminal`, `test:workspace`, `test:editor-terminals`,
@@ -23,26 +55,33 @@ description: Publish a new Agentrix version — bump, update notes, the full loc
    For a follow-up changing only test fixtures, docs and version metadata after a recorded full pass, verify that
    `electron/`, `src/`, `integration/`, `assets/` and dependency definitions are unchanged. Reuse the unaffected local
    desktop results; rerun the changed unit/fixture tests and their packaged desktop cases in the failing environment.
-   Rebuild and verify the new version's artifacts. The entire CI matrix must still pass before publication; a green
-   `remote` preflight on the release commit is that pass, and the tag's release is published from its builds (step 7).
+   Rebuild and verify the new version's artifacts. The entire CI matrix must still pass before publication: in the beta
+   flow the tag run is that pass; outside it, a green `remote` preflight on the release commit is. The tag's release is
+   published from its builds (step 7).
 5. **Look at the pictures.** `test:workspace` saves `guide-whats-new.png` and `guide-shortcuts.png` in its
    `.test-output/workspace-*` folder: check the notes fit and read well before committing.
 6. **Commit.** Stage everything except local-only files (`.claude/`, personal product drafts under `docs/`), scan
    the staged diff for personal data (user names, home paths, host addresses, emails, secrets) and commit as
-   `Release X.Y.Z: <the user-visible changes>` with a bulleted body.
-7. **Tag and push.** `git tag vX.Y.Z`, push `main`, then push the tag. Both pushes first run the "Select tested build" job, which looks
-   for a successful run of this workflow on exactly this commit (the `remote` preflight's dispatch run, every build and
+   `Release X.Y.Z: <the user-visible changes>` with a bulleted body (a beta: `Beta X.Y.Z-beta.N: <the changes>`).
+7. **Tag and push.** A beta: `git tag vX.Y.Z-beta.N` on `beta`, push the branch, then the tag; nothing goes to `main`.
+   The stable release: `git tag vX.Y.Z` on `main` after the fast-forward, push `main`, then the tag. Pushes of `main` and of
+   tags first run the "Select tested build" job, which looks
+   for a successful run of this workflow on exactly this commit (the stable `main` push's own run, or outside the beta
+   flow the `remote` preflight's dispatch run; every build and
    test job really run, installer artifacts not expired). If it finds one, the build and test jobs are skipped; only
    the tag's run adds the "Publish GitHub Release" job, which downloads that run's installers, checks their sha256
-   sums and the version, and publishes exactly the tested files in about 1–2 minutes. If no such run exists (no
-   preflight on this commit, a failed or expired one) the run builds and tests everything as before, ~14 minutes.
+   sums and the version, and publishes exactly the tested files in about 1–2 minutes (as a prerelease for a beta tag).
+   If no such run exists (the first beta tag of a commit, a failed or expired run) the run builds and tests
+   everything, ~14 minutes.
    The release page's "## Changes in X.Y.Z" list is printed from `WHATS_NEW` by `node scripts/release-notes.mjs
    --version X.Y.Z` (the English of each note); it fails if a note has no English.
 8. **CI.** Query the runs for the full commit SHA (`/actions/runs?head_sha=<full sha>`; a short SHA returns
    nothing). Read the token from `git credential fill` inside the script and never print it. The jobs: Windows x64
    (build, then the "Windows desktop interaction / terminals / reading" shards that run the packaged desktop suites in
    parallel against the uploaded `win-unpacked`), Linux x64, Linux arm64, macOS Apple silicon, and Linux SSH integration (the real-ssh check of the
-   remote worker). Wait for both runs, then confirm the release lists its assets. To rehearse the release without
+   remote worker). Wait for the tag's run (and, for the stable release, the `main` run), then confirm the release lists its
+   assets: for a beta, the installer, its `.blockmap` and `latest.yml`, marked as a prerelease. Outside the beta flow, to
+   rehearse the release without
    publishing, dispatch the workflow on the release commit with `release_dry_run=true`: it runs the reuse check, the
    download, the sha256 and version checks and the notes, prints what it would publish and creates or edits nothing.
    Dispatch it only after the preflight run on that commit has finished, and never on a tag whose run is still
@@ -56,7 +95,8 @@ description: Publish a new Agentrix version — bump, update notes, the full loc
    A passing branch run alone does not prove a tag failure is environmental: allocator-dependent transcript loss can
    appear only on one runner. Reproduce the exact assertion before deciding. Rerun unchanged jobs only for a diagnosed
    environment or timing failure, within the session's publication authorization; ask only if that authorization is
-   absent. A demonstrated code defect needs a new commit and patch version, preserving the old tag. A smoke that passed and
+   absent. A demonstrated code defect needs a new commit and the next beta number (or, for a stable release, a patch
+   version), preserving the old tag. A smoke that passed and
    then timed out in its cleanup ("isolated shell exit") lost the `exit` typed right after Ctrl+C on a slow runner: a
    cleanup sends `exit` again every few seconds until the shell has gone (as `git-smoke.mjs` does).
 10. **Short temp paths on Windows CI.** The runner's temp folder is an 8.3 name (`<home>\…`). A test
@@ -131,11 +171,12 @@ description: Publish a new Agentrix version — bump, update notes, the full loc
    terminal chunk through `output()`) must keep the whole interface; a unit test calls each method main calls.
 29. **Owner forbids the system clipboard.** `test:sessions`, `test:composer`, `test:workspace`, `test:editor-terminals` and
    `test:clipboard` write the system clipboard. Then run every other local step with `--only` (not a full `local` run)
-   and leave those five suites to `ci-preflight remote`, which must be green before main moves.
+   and leave those five suites to the CI run: in the beta flow the beta tag's run, which must be green before the owner is
+   asked to approve; outside it `ci-preflight remote`, which must be green before main moves.
 30. **Wrapper changes on a Windows machine.** The Bash/zsh wrapper tests (`linux-integration`, `zsh-integration`) and the
    real SSH worker test (`ssh-connection` with the native worker) run only on Linux and macOS, so `npm test` here skips them.
-   After any change to `integration/*.bash`, `integration/*.zsh` or `remote-worker.py`, run `ci-preflight remote` before
-   integrating further, and read the failed jobs' logs (`/actions/jobs/<id>/logs`) for the `✖` lines. Python's
+   After any change to `integration/*.bash`, `integration/*.zsh` or `remote-worker.py`, get a full CI run before
+   integrating further (in the beta flow, tag the next beta; outside it, `ci-preflight remote`), and read the failed jobs' logs (`/actions/jobs/<id>/logs`) for the `✖` lines. Python's
    `os.makedirs(path, mode)` applies `mode` only to the last folder: create a private tree one folder at a time.
 31. **Aliased temp paths break path checks on CI only.** Runners give temp folders under aliases: macOS `TMPDIR` lives in
    `/var/folders`, a link to `/private/var`; Windows `TEMP` is an 8.3 short path (`C:\Users\RUNNER~1\…`) and the checkout is on

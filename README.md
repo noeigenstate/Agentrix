@@ -183,6 +183,8 @@ New installs default to English. Choose 中文 under **Settings → Appearance �
 
 Windows portable folders and development builds do not update themselves; Settings identifies the distribution and explains the available update action. Windows builds are installers only; there is no portable executable.
 
+Installed Windows copies can follow the stable or the beta update channel in Settings › About; the beta channel needs you to accept a test agreement, and switching back to stable never downgrades.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | bash
 ```

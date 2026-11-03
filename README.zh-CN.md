@@ -183,6 +183,8 @@ Codex 的**重置额度**行在同一行显示剩余次数或查询状态。点�
 
 Windows 便携目录和开发版不会自动更新；设置会识别分发形式并说明可用的更新方式。Windows 只发布安装程序，没有独立的便携版可执行文件。
 
+Windows 安装版可在「设置 › 关于」选择稳定版或测试版更新通道；测试版需要先同意测试协议，切回稳定版不会自动降级。
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | bash
 ```
