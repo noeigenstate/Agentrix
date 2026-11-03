@@ -415,12 +415,135 @@ function dictationHarness(t, overrides = {}) {
     dictate: (text, submit = true) => { insert(text, submit); render(); },
     edit: text => { render().props.onChange({ target: { value: text } }); render(); },
     pending: () => elements(root).some(element => /\bis-sending-soon\b/.test(element.props.className)),
-    press(key) {
-      const event = { key, currentTarget: node, nativeEvent: {}, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
+    press(key, modifiers = {}) {
+      const event = { key, currentTarget: node, nativeEvent: {}, ...modifiers, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
       render().props.onKeyDown(event); render(); return event;
     },
     async tick(ms) { t.mock.timers.tick(ms); for (let i = 0; i < 12; i++) await Promise.resolve(); render(); },
   };
+}
+
+function workingComposerHarness(t, agent, overrides = {}) {
+  let clock = 10000, sequence = 0;
+  t.mock.method(Date, 'now', () => clock);
+  const prompts = require('../src/features/reading/pending-prompts.ts');
+  let state = prompts.createPendingPrompts('session');
+  const view = { working: true, draft: '', records: [], accept: true, retain: agent === 'codex' };
+  const filename = agent === 'claude' ? 'claude-idle-2-1-296.txt' : 'codex-fresh-default.txt';
+  const fixture = fs.readFileSync(path.join(__dirname, 'fixtures/screens', filename), 'utf8').split(/\r?\n/);
+  const inputRow = fixture.findLastIndex(row => /^\s*[❯›](?:\s|$)/.test(row));
+  assert.ok(inputRow >= 0);
+  const rows = () => [
+    ...(view.working ? [agent === 'claude' ? '✶ Swooping… (12s)' : '• Working (12s · esc to interrupt)'] : []),
+    ...fixture.flatMap((row, index) => index === inputRow ? view.draft.split(/\r?\n/).map((line, part) => (part ? '  ' : agent === 'claude' ? '❯ ' : '› ') + line) : [row]),
+  ];
+  const h = dictationHarness(t, {
+    './terminal-screen': { useScreen: () => ({ rows: rows() }), readScreen: () => ({ rows: rows() }) },
+    './agent-screen': { parseAgentScreen },
+    './useReadingConversation': { useReadingHistory: () => historySnapshot(view.records) },
+    './usePendingPrompts': { usePendingPrompts: () => {
+      state = prompts.reconcilePendingPrompts(state, 'session', view.records, clock);
+      return { pending: state.prompts,
+        echo(text, images) { const id = 'working-' + ++sequence; state = prompts.addPendingPrompt(state, id, text, clock, images); h.echoed.push({ text, images }); return id; },
+        cancelEcho(id) { state = prompts.removePendingPrompt(state, id); },
+      };
+    } },
+    ...overrides,
+  });
+  Object.assign(h.props.terminal, { id: 'working-' + agent, agent, codexActivity: 'working' });
+  window.agentrix.terminalCommands = async () => ({ ok: true, value: [{ name: '/model', source: 'builtin', description: '', view: 'terminal' }] });
+  window.agentrix.pasteTerminal = async (id, text) => { h.pasted.push({ id, text }); view.draft += text; return { ok: true }; };
+  window.agentrix.writeTerminal = (id, text) => {
+    h.written.push({ id, text });
+    if (text === '\x15') view.draft = '';
+    if (text === '\r' && view.accept && view.draft) {
+      view.records.push({ id: 'receipt-' + ++sequence, role: 'user', text: view.draft, at: clock, queued: view.working });
+      if (!view.retain) view.draft = '';
+    }
+  };
+  h.render();
+  return { ...h, view, async tick(ms) { clock += ms; await h.tick(ms); } };
+}
+
+for (const agent of ['claude', 'codex']) {
+  test(agent + ': a working fixture accepts typing, Shift+Enter and the Send button, and renders the CLI queue', async t => {
+    const h = workingComposerHarness(t, agent);
+    h.edit('first line');
+    assert.equal(h.render().props.disabled, false);
+    assert.match(h.render().props.placeholder, /Enter/);
+    assert.equal(h.press('Enter', { shiftKey: true }).prevented, undefined);
+    assert.deepEqual(h.pasted, []);
+    h.edit('first line\nsecond line');
+    const send = elements(h.tree()).find(element => element.props.className === 'icon-button reading-send');
+    assert.equal(send.props.disabled, false); send.props.onClick(); await h.tick(0);
+    assert.deepEqual(h.pasted.map(item => item.text), ['first line\nsecond line']);
+    assert.equal(h.node.value, '');
+    await h.tick(400);
+    const card = elements(h.tree()).find(element => element.props.queued);
+    assert.equal(card.props.prompts.length, 1); assert.equal(card.props.queued(card.props.prompts[0]), true);
+    await h.tick(700); await h.tick(30000);
+    assert.deepEqual(h.written.map(item => item.text), ['\r']);
+    assert.equal(h.pasted.length, 1);
+  });
+
+  test(agent + ': working Stop and Esc interrupt, while dictation and the slash palette keep Escape priority', async t => {
+    const h = workingComposerHarness(t, agent);
+    const stop = () => elements(h.tree()).find(element => element.props.title === en['中断（Esc）']);
+    assert.equal(stop().props.disabled, false); stop().props.onClick();
+    h.edit('keep editing'); h.press('Escape');
+    assert.deepEqual(h.written.map(item => item.text), ['\x1b', '\x1b']);
+    assert.equal(h.node.value, 'keep editing');
+    h.dictate('spoken words'); assert.equal(h.pending(), true);
+    const cancel = h.press('Escape');
+    assert.equal(cancel.prevented, true); assert.equal(cancel.stopped, true); assert.equal(h.pending(), false);
+    assert.equal(h.written.length, 2);
+    h.edit('/mo'); await h.tick(0);
+    const palette = () => elements(h.tree()).find(element => element.props.role === 'listbox');
+    assert.ok(palette()); h.press('Escape'); assert.equal(palette(), undefined); assert.equal(h.written.length, 2);
+    h.edit('/mo'); elements(h.tree()).find(element => element.props.role === 'option').props.onClick(); h.render();
+    assert.equal(h.node.value, '/model ');
+    h.edit('/model'); h.press('Enter'); await h.tick(0);
+    assert.equal(h.popup().props.command, '/model'); assert.equal(h.node.disabled, true); assert.equal(stop().props.disabled, true);
+    const before = h.written.slice(); h.press('Escape'); h.press('Enter');
+    assert.deepEqual(h.written, before, 'an open popup still owns the keys');
+    h.popup().props.onClose(); h.render();
+    assert.equal(h.node.disabled, false); assert.equal(stop().props.disabled, false);
+  });
+
+  test(agent + ': working input enables the mention hook and quotes on the next ordinary message', async t => {
+    let mention;
+    const h = workingComposerHarness(t, agent, {
+      './useMentions': { useMentions: options => { mention = options; return { open: false, keys: () => false }; } },
+    });
+    h.edit('@src'); assert.equal(mention.disabled, false);
+    mention.edit('@src/main.ts '); h.render(); assert.equal(h.node.value, '@src/main.ts ');
+    const quote = elements(h.tree()).find(element => element.props.value?.quote).props.value.quote;
+    assert.equal(quote.disabled, null); quote.pick(agent, 'earlier reply'); h.render();
+    assert.equal(elements(h.tree()).find(element => element.type?.name === 'QuoteChip').props.quote.excerpt, 'earlier reply');
+    h.edit('@src/main.ts please fix'); h.press('Enter'); await h.tick(0);
+    assert.deepEqual(h.pasted.map(item => item.text), ['> earlier reply\n\n@src/main.ts please fix']);
+  });
+
+  for (const retain of [false, true]) test(`${agent}: a queued message with ${retain ? 'retained' : 'cleared'} CLI input is never re-Entered or resent, even after idle`, async t => {
+    const h = workingComposerHarness(t, agent); h.view.retain = retain;
+    h.edit('queued message'); h.press('Enter'); await h.tick(0); await h.tick(400);
+    assert.equal(h.view.draft, retain ? 'queued message' : '');
+    h.view.working = false; h.render(); await h.tick(700); await h.tick(30000);
+    assert.deepEqual(h.written.map(item => item.text), ['\r']); assert.equal(h.pasted.length, 1);
+    h.view.retain = false;
+    h.edit('next message'); h.press('Enter'); await h.tick(80);
+    assert.equal(h.written.filter(item => item.text === '\r').length, 1, 'the queued draft is never submitted as a stalled previous send');
+    await h.tick(400); await h.tick(700);
+    assert.deepEqual(h.pasted.map(item => item.text), ['queued message', 'next message']);
+    assert.equal(h.written.filter(item => item.text === '\r').length, 2);
+  });
+
+  test(agent + ': busy input without a receipt never retries Enter or safety-net resends', async t => {
+    const h = workingComposerHarness(t, agent); h.view.accept = false;
+    h.edit('not acknowledged yet'); h.press('Enter'); await h.tick(0); await h.tick(400);
+    await h.tick(700); await h.tick(30000);
+    assert.deepEqual(h.written.map(item => item.text), ['\r']); assert.equal(h.pasted.length, 1);
+  });
 }
 
 test('submitted dictation appears at the caret for half a second, then uses the composer send with pictures', async t => {
@@ -1616,10 +1739,7 @@ for (const agent of ['claude', 'codex']) {
           assert.equal(id, h.props.terminal.id); assert.equal(sessionId, h.props.terminal.sessionId);
           actions.push(text); draft += text; return { ok: true };
         };
-        if (activity !== 'idle') {
-          h.edit('next message'); assert.equal(h.render().props.disabled, true); h.press('Enter'); await h.tick(9000);
-          assert.equal(h.node.value, 'next message'); assert.deepEqual(actions, []); assert.deepEqual(received, []); assert.equal(h.popup(), undefined); return;
-        }
+        assert.equal(h.render().props.disabled, false);
         if (picture !== 'none') {
           h.render().props.onPaste({ preventDefault() {}, clipboardData: { getData: () => '', items: [{ kind: 'file', type: 'image/png', getAsFile: () => ({ size: 1 }) }] } });
           await h.tick(0);
