@@ -2230,5 +2230,17 @@
   "原路径": "Original path",
   "备份位置": "Backup location",
   "与系统技能「{name}」同名。要扩展它，请命名为 {name}-<标识>，例如 {name}-team。": "Same name as the built-in skill “{name}”. To extend it, name it {name}-<id>, for example {name}-team.",
-  "扩展": "Extension"
+  "扩展": "Extension",
+  "确认在终端": "Confirm in terminal",
+  "需要你确认或选择时，以及输入任何斜杠命令时，都会直接弹出终端，不再显示选项卡片；你正在输入时弹出的终端不会抢走焦点。": "When an agent needs a confirmation or a choice, or you type any slash command, the terminal pops up instead of an option card; if you are typing, it opens without taking focus.",
+  "子代理分屏": "Sub-agent split",
+  "在活动栏点一个子代理，输出区会分屏显示它正在做什么；你也可以在分屏里给它发提示，规划员会同时收到。": "Click a sub-agent in the activity pane and the output splits to show what it is doing; you can also send it a note there, and the planner is told too.",
+  "引用消息": "Quote a message",
+  "阅读视图里可以引用一条消息，带着它继续对话。": "In the reading view you can quote a message and continue the conversation from it.",
+  "技能即时更新": "Skills update live",
+  "技能改动后，正在运行的 Claude Code 会话在下一次压缩或清空对话时就会拿到新版本。": "After a skill changes, a running Claude Code session receives the new version at its next compact or clear.",
+  "实验室更安全": "Safer lab",
+  "虚拟实验室里的模型连不到本机的 Docker 等容器服务。": "Models in the Virtual Lab can no longer reach Docker or other container services on your computer.",
+  "改用彩色图表，各模型的用时、费用和通过率一眼可比，数据每分钟自动更新。": "Colour charts now compare each model’s time, cost and pass rate at a glance, refreshed every minute.",
+  "始终以系统自带的为准：项目里同名的副本会被自动移到恢复文件夹；想扩展，请把技能命名为「系统技能名-标识」。": "The built-in version always applies: a project copy with the same name is moved to a recovery folder automatically; to extend one, name your skill “<built-in name>-<id>”."
 }
