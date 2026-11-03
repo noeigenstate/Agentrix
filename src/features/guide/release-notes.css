@@ -3,3 +3,6 @@
 .release-notes li { position: relative; padding-left: 16px; }
 .release-notes li::before { content: ''; position: absolute; left: 0; top: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--usage); }
 .release-notes b { margin-right: 8px; font-weight: 600; color: var(--text-1); }
+/* Two groups (what this beta adds, then the rest of the release): a small secondary heading over each list, groups 20px apart. */
+.release-groups { display: grid; gap: 20px; text-align: left; }
+.release-groups h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; line-height: 20px; color: var(--text-2); }
