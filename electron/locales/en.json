@@ -855,7 +855,7 @@
   "无法加载 Claude 会话。": "Could not load Claude sessions.",
   "命令输出": "Command output",
   "展开": "Expand",
-  "收起": "Show less",
+  "收起": "Collapse",
   "展开提示词": "Show prompt",
   "标准 · 速度快": "Standard · fast",
   "高精度 · 中英混合": "High accuracy · mixed Chinese and English",
