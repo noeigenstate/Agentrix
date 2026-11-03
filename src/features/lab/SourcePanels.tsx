@@ -19,7 +19,9 @@ function TaskTags({ task }: { task: LabTask }) {
   return <Tag>{kindLabel(task.kind)}</Tag>;
 }
 
-function SamplePanel({ panel: { sample, size, range, onSize, onShuffle, onRetry }, extra, emptyText }: { panel: PanelProps; extra?: ReactNode; emptyText: string }) {
+// `cap` keeps a long sample short: that many rows show, the rest behind a toggle that says how many there are.
+function SamplePanel({ panel: { sample, size, range, onSize, onShuffle, onRetry }, extra, emptyText, cap }: { panel: PanelProps; extra?: ReactNode; emptyText: string; cap?: number }) {
+  const [all, setAll] = useState(false), folded = cap !== undefined && !all && sample.tasks.length > cap;
   return <section className="panel sample" aria-live="polite">
     <div className="sample-controls">
       <Stepper label={t('抽取几个问题')} hint={t('默认 {n}，可选 {min}–{max}', { n: range.standard, min: range.min, max: range.max })} value={size} min={range.min} max={range.max} onChange={onSize} />
@@ -29,11 +31,13 @@ function SamplePanel({ panel: { sample, size, range, onSize, onShuffle, onRetry 
       <button type="button" className="button small" disabled={sample.loading} onClick={sample.exhausted ? onRetry : onShuffle}>{sample.exhausted ? t('从头再来') : t('换一组')}</button></div>
     {sample.error && <p className="banner" role="alert">{t('挑选任务失败：{message}', { message: sample.error })} <button type="button" className="button small" onClick={onRetry}>{t('重试')}</button></p>}
     {!sample.loading && !sample.error && !sample.tasks.length && <p className="muted">{sample.exhausted ? t('没有更多可换的任务了。') : emptyText}</p>}
-    <ul className="task-list">{sample.tasks.map(task => <li key={task.id}>
+    <ul className="task-list">{(folded ? sample.tasks.slice(0, cap) : sample.tasks).map(task => <li key={task.id}>
       <i aria-hidden="true" />
       <div><b>{task.title}</b><p className="muted">{t(task.why)}</p></div>
       <TaskTags task={task} />
     </li>)}</ul>
+    {cap !== undefined && sample.tasks.length > cap && <button type="button" className="button small sample-toggle" aria-expanded={!folded} onClick={() => setAll(!all)}>
+      {folded ? t('显示全部 {n} 个', { n: sample.tasks.length }) : t('收起')}</button>}
   </section>;
 }
 
@@ -89,14 +93,17 @@ function AaKeyField({ stored, onSave }: { stored: boolean | null; onSave: (key: 
   </section>;
 }
 
+// The benchmark's sample is long and only informs; the key, which switches on the real scores, comes before it and the list shows this many rows first.
+const AA_ROWS = 5;
+
 export function AaStep({ info, benchmark, panel, onBenchmark, onKey }: {
   info: LabSourceInfo | undefined; benchmark: string; panel: PanelProps; onBenchmark: (id: string) => void; onKey: (key: string | null) => Promise<string | null>;
 }) {
   return <div className="project-step">
     <p className="muted">{t('Terminal-Bench 是公开的终端任务基准，每个任务在容器里完成，由任务自带的测试评分。这里只抽取其中一部分任务，分数不等于 AA 公布的成绩。')}</p>
     <Options options={info?.options ?? []} chosen={id => id === benchmark} onPick={onBenchmark} />
-    {benchmark && <SamplePanel panel={panel} emptyText={t('这个基准里没有可以挑选的任务。')} />}
     <AaKeyField stored={info?.keyStored ?? null} onSave={onKey} />
+    {benchmark && <SamplePanel panel={panel} emptyText={t('这个基准里没有可以挑选的任务。')} cap={AA_ROWS} />}
   </div>;
 }
 

@@ -20,7 +20,7 @@ export function SourceStep({ sources, chosen, onToggle }: { sources: LabSourceIn
     const Icon = ICONS[info.id];
     return <Choice key={info.id} chosen={info.available && chosen.includes(info.id)} disabled={!info.available} onClick={() => onToggle(info.id)}>
       <Icon size={32} aria-hidden="true" /><b>{SOURCE_NAMES[info.id]()}</b><span className="muted">{SOURCE_BLURBS[info.id]()}</span>
-      {!info.available && <span className="muted">{info.reason ?? t('暂不可用')}</span>}
+      {!info.available && <span className="muted reason">{info.reason ?? t('暂不可用')}</span>}
     </Choice>;
   })}</div>;
 }
