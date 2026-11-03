@@ -36,6 +36,7 @@ public partial class LabSandbox {
   // Missing roots/launcher fields identify the previous per-file lease format.
   public class Lease {
     public string sid, profile; public string[] paths, roots;
+    public Dictionary<string,string[]> objects;
     public int launcherPid; public long launcherCreated;
   }
   sealed class LeaseGuard : IDisposable {
@@ -57,8 +58,9 @@ public partial class LabSandbox {
     public void Dispose() { lock(gate) { job=IntPtr.Zero; } }
   }
   sealed class Grant {
-    public string root; public uint rights; public bool propagate=true;
+    public string root; public uint rights; public bool owned,propagate=true;
     public readonly List<string> boundaries=new List<string>();
+    public readonly List<string> objects=new List<string>();
   }
   [StructLayout(LayoutKind.Sequential)] struct SA { public int size; public IntPtr descriptor; public int inherit; }
   [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct SI {
@@ -75,10 +77,6 @@ public partial class LabSandbox {
   [StructLayout(LayoutKind.Sequential)] struct Cap { public IntPtr sid, capabilities; public int count, reserved; }
   [StructLayout(LayoutKind.Sequential)] struct SidAttr { public IntPtr sid; public uint attributes; }
   [StructLayout(LayoutKind.Sequential)] struct Mapping { public uint read,write,execute,all; }
-  [StructLayout(LayoutKind.Sequential)] struct Trustee {
-    public IntPtr multiple; public int operation, form, type; public IntPtr name;
-  }
-  [StructLayout(LayoutKind.Sequential)] struct Access { public uint permissions; public int mode; public uint inheritance; public Trustee trustee; }
   [StructLayout(LayoutKind.Sequential)] struct BasicLimits {
     public long processTime, jobTime; public uint flags; public UIntPtr minimum, maximum;
     public uint active; public UIntPtr affinity; public uint priority, scheduling;
@@ -119,9 +117,6 @@ public partial class LabSandbox {
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetSecurityDescriptorControl(IntPtr descriptor,out ushort control,out uint revision);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetSecurityDescriptorSacl(IntPtr descriptor,out bool present,out IntPtr sacl,out bool defaulted);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetSecurityDescriptorDacl(IntPtr descriptor,out bool present,out IntPtr dacl,out bool defaulted);
-  [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern uint SetEntriesInAclW(int count,ref Access entry,IntPtr oldAcl,out IntPtr acl);
-  [DllImport("advapi32.dll",SetLastError=true)] static extern bool InitializeSecurityDescriptor(IntPtr descriptor,uint revision);
-  [DllImport("advapi32.dll",SetLastError=true)] static extern bool SetSecurityDescriptorDacl(IntPtr descriptor,bool present,IntPtr acl,bool defaulted);
   [DllImport("advapi32.dll",SetLastError=true)] static extern uint GetSecurityInfo(IntPtr handle,int type,uint info,out IntPtr owner,out IntPtr group,out IntPtr dacl,out IntPtr sacl,out IntPtr descriptor);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(IntPtr handle,out FileIdentity information);
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern uint GetFinalPathNameByHandleW(IntPtr handle,StringBuilder path,uint length,uint flags);
@@ -173,7 +168,11 @@ public partial class LabSandbox {
       return handle;
     } catch { CloseHandle(handle); throw; }
   }
+  [DllImport("advapi32.dll",EntryPoint="GetSecurityDescriptorLength")] static extern uint DescriptorLength(IntPtr descriptor);
   static void Acl(string file,IntPtr sid,uint rights,bool remove,bool deny=false,bool inherit=true,bool propagate=false) {
+    using(var guard=new LeaseGuard(file)) ChangeAcl(file,sid,rights,remove,deny,inherit,propagate);
+  }
+  static void ChangeAcl(string file,IntPtr sid,uint rights,bool remove,bool deny,bool inherit,bool propagate) {
     IntPtr owner,group,oldAcl,sacl,descriptor,acl=IntPtr.Zero,handle=IntPtr.Zero;
     bool pipe=file.StartsWith("\\\\.\\pipe\\",StringComparison.OrdinalIgnoreCase);
     FileIdentity identity=new FileIdentity(); uint code;
@@ -186,41 +185,47 @@ public partial class LabSandbox {
     if (remove && (code == 2 || code == 3)) return;
     CheckCode(code);
     try {
+      if(oldAcl==IntPtr.Zero) return;
+      byte[] bytes=new byte[(ushort)Marshal.ReadInt16(oldAcl,2)]; Marshal.Copy(oldAcl,bytes,0,bytes.Length);
+      string trusteeSid=SidString(sid);
+      var filtered=new RawAcl(bytes,0);
       if(remove) {
-        if(oldAcl==IntPtr.Zero) return;
-        byte[] bytes=new byte[(ushort)Marshal.ReadInt16(oldAcl,2)]; Marshal.Copy(oldAcl,bytes,0,bytes.Length);
-        string trusteeSid=SidString(sid);
-        var filtered=new RawAcl(bytes,0); bool changed=false;
+        bool changed=false;
         for(int i=filtered.Count-1;i>=0;i--) {
           var ace=filtered[i] as QualifiedAce;
           if(ace!=null && ace.SecurityIdentifier.Value==trusteeSid) { filtered.RemoveAce(i); changed=true; }
         }
         if(!changed) return;
-        bytes=new byte[filtered.BinaryLength]; filtered.GetBinaryForm(bytes,0);
-        acl=Marshal.AllocHGlobal(bytes.Length); Marshal.Copy(bytes,0,acl,bytes.Length);
       }
       else {
-        var entry = new Access { permissions=rights,mode=deny?3:1,inheritance=inherit && Directory.Exists(file)?INHERIT:0,
-          trustee=new Trustee { form=0,type=5,name=sid } };
-        CheckCode(SetEntriesInAclW(1,ref entry,oldAcl,out acl));
+        // Preserve the order and flags of every existing ACE, including stale inherited entries.
+        int index=0;
+        if(!deny) while(index<filtered.Count && (filtered[index].AceFlags & AceFlags.Inherited)==0) index++;
+        filtered.InsertAce(index,new CommonAce(inherit && Directory.Exists(file)?(AceFlags)INHERIT:AceFlags.None,
+          deny?AceQualifier.AccessDenied:AceQualifier.AccessAllowed,unchecked((int)rights),new SecurityIdentifier(trusteeSid),false,null));
       }
+      bytes=new byte[filtered.BinaryLength]; filtered.GetBinaryForm(bytes,0);
+      acl=Marshal.AllocHGlobal(bytes.Length); Marshal.Copy(bytes,0,acl,bytes.Length);
       if(pipe) {
         CheckCode(SetNamedSecurityInfoW(file,1,DACL,IntPtr.Zero,IntPtr.Zero,acl,IntPtr.Zero));
       } else {
-        IntPtr security=Marshal.AllocHGlobal(40);
-        try { Check(InitializeSecurityDescriptor(security,1)); Check(SetSecurityDescriptorDacl(security,true,acl,false));
+        byte[] original=new byte[DescriptorLength(descriptor)]; Marshal.Copy(descriptor,original,0,original.Length);
+        var updated=new RawSecurityDescriptor(original,0); updated.DiscretionaryAcl=filtered;
+        byte[] replacement=new byte[updated.BinaryLength]; updated.GetBinaryForm(replacement,0);
+        IntPtr security=Marshal.AllocHGlobal(replacement.Length); Marshal.Copy(replacement,0,security,replacement.Length);
+        try {
           FileIdentity current; IntPtr write=CheckedFile(file,0x60080,out current);
           try {
             if(current.Key!=identity.Key) throw new Exception();
             if(!remove && (rights & 0x116)!=0 && (current.attributes & 0x10)==0 && current.links>1 && !credentialIdentities.Contains(current.Key)) throw new Exception();
-            // Propagate only a preflighted grant root. Metadata and cleanup change one verified object.
+            // Only lab-owned roots may propagate; owner runtimes, metadata and cleanup change one object.
             if(propagate) CheckCode(SetSecurityInfo(write,1,DACL,IntPtr.Zero,IntPtr.Zero,acl,IntPtr.Zero));
             else Check(SetKernelObjectSecurity(write,DACL,security));
           } finally { CloseHandle(write); }
         }
         finally { Marshal.FreeHGlobal(security); }
       }
-    } finally { if(remove) Marshal.FreeHGlobal(acl); else LocalFree(acl); LocalFree(descriptor); if(handle!=IntPtr.Zero) CloseHandle(handle); }
+    } finally { if(acl!=IntPtr.Zero) Marshal.FreeHGlobal(acl); LocalFree(descriptor); if(handle!=IntPtr.Zero) CloseHandle(handle); }
   }
   static IntPtr PipeDescriptor(IntPtr sid) {
     string user=WindowsIdentity.GetCurrent().User.Value;
@@ -308,47 +313,70 @@ public partial class LabSandbox {
       }
     },TaskCreationOptions.LongRunning);
   }
-  static IEnumerable<string> Tree(string root,Action reparse=null) {
+  static IEnumerable<string> Tree(string root,Action reparse=null,Action check=null) {
     var pending=new Stack<string>(); pending.Push(root);
     while(pending.Count>0) {
+      if(check!=null)check();
       string file=pending.Pop();
       var attributes=File.GetAttributes(file);
       if((attributes & FileAttributes.ReparsePoint)!=0) { if(reparse!=null) reparse(); continue; }
       yield return file;
-      if((attributes & FileAttributes.Directory)!=0) foreach(var child in Directory.EnumerateFileSystemEntries(file)) pending.Push(child);
+      if((attributes & FileAttributes.Directory)!=0) foreach(var child in Directory.EnumerateFileSystemEntries(file)) {
+        if(check!=null)check(); pending.Push(child);
+      }
     }
   }
-  static Grant PrepareGrant(string root,uint rights) {
-    var grant=new Grant { root=root,rights=rights }; grant.boundaries.Add(root);
+  static bool InheritedRuntimeAccess(RawAcl acl) {
+    return Allows(acl,PackageSids[1],RX) && acl.Cast<GenericAce>().OfType<QualifiedAce>().Any(ace=>
+      ace.SecurityIdentifier.Value==PackageSids[1] && ace.AceQualifier==AceQualifier.AccessAllowed &&
+      (ace.AceFlags & (AceFlags.ObjectInherit|AceFlags.ContainerInherit|AceFlags.InheritOnly|AceFlags.NoPropagateInherit))==
+        (AceFlags.ObjectInherit|AceFlags.ContainerInherit) && (FileMask(unchecked((uint)ace.AccessMask)) & RX)==RX);
+  }
+  static Grant PrepareGrant(string root,uint rights,bool owned,RunLifetime lifetime) {
+    lifetime.CheckRunning();
+    if(rights==RX && InheritedRuntimeAccess(FileAcl(root))) return null;
+    var grant=new Grant { root=root,rights=rights,owned=owned,propagate=owned }; grant.boundaries.Add(root);
     int count=0;
-    foreach(string file in Tree(root,delegate { grant.propagate=false; })) {
+    foreach(string file in Tree(root,delegate { grant.propagate=false; },lifetime.CheckRunning)) {
       if(++count==2048 || count%32768==0) Trace("preflight objects="+count);
       FileIdentity identity; IntPtr handle=CheckedFile(file,0x20080,out identity);
       try {
         if((rights & 0x116)!=0 && (identity.attributes & 0x10)==0 && identity.links>1 && !credentialIdentities.Contains(identity.Key)) throw new Exception();
+        // A lab-owned tools directory can contain a credential hard link to an owner file. Never re-inherit it.
+        if((identity.attributes & 0x10)==0 && identity.links>1)grant.propagate=false;
         IntPtr owner,group,dacl,sacl,descriptor;
         CheckCode(GetSecurityInfo(handle,1,DACL,out owner,out group,out dacl,out sacl,out descriptor));
         try {
           ushort control; uint revision; Check(GetSecurityDescriptorControl(descriptor,out control,out revision));
           if((control & 0x1000)!=0 && !String.Equals(root,file,StringComparison.OrdinalIgnoreCase)) grant.boundaries.Add(file);
+          var security=new RawSecurityDescriptor(CopySecurity(descriptor),0);
+          if(rights!=RX || !Allows(security.DiscretionaryAcl,PackageSids[1],RX)) grant.objects.Add(file);
         } finally { LocalFree(descriptor); }
       } finally { CloseHandle(handle); }
     }
     Trace("preflight complete objects="+count);
     return grant;
   }
-  static void ApplyGrant(Grant grant,IntPtr sid) {
+  static byte[] CopySecurity(IntPtr descriptor) {
+    var bytes=new byte[DescriptorLength(descriptor)]; Marshal.Copy(descriptor,bytes,0,bytes.Length); return bytes;
+  }
+  static void ApplyGrant(Grant grant,IntPtr sid,RunLifetime lifetime) {
     // A link-bearing tree keeps the previous object-by-object grants; never propagate across an alias.
-    foreach(string file in grant.propagate ? grant.boundaries : Tree(grant.root)) {
+    foreach(string file in grant.propagate ? grant.boundaries : grant.objects) {
+      lifetime.CheckRunning();
       if(grant.rights==RX && Allows(FileAcl(file),PackageSids[1],RX)) continue;
-      Acl(file,sid,grant.rights,false,false,true,grant.propagate);
+      Acl(file,sid,grant.rights,false,false,grant.owned,grant.propagate);
     }
   }
   static bool Under(string root,string file) {
     root=Path.GetFullPath(root).TrimEnd('\\'); file=Path.GetFullPath(file).TrimEnd('\\');
     return String.Equals(root,file,StringComparison.OrdinalIgnoreCase) || file.StartsWith(root+"\\",StringComparison.OrdinalIgnoreCase);
   }
-  static void VerifyBlocked(Plan plan,IntPtr process) {
+  static string[] GrantObjects(Grant grant) {
+    string prefix=grant.root.TrimEnd('\\')+"\\";
+    return grant.objects.Select(file=>String.Equals(file,grant.root,StringComparison.OrdinalIgnoreCase)?"":file.Substring(prefix.Length)).ToArray();
+  }
+  static void VerifyBlocked(Plan plan,IntPtr process,RunLifetime lifetime) {
     IntPtr token,duplicate; Check(OpenProcessToken(process,10,out token));
     try { Check(DuplicateToken(token,2,out duplicate)); } finally { CloseHandle(token); }
     IntPtr privileges=Marshal.AllocHGlobal(1024);
@@ -363,7 +391,7 @@ public partial class LabSandbox {
         // This inspects security metadata only; protected file contents never enter the host's output.
         try { File.GetAttributes(root); }
         catch(FileNotFoundException) { continue; } catch(DirectoryNotFoundException) { continue; }
-        foreach(string file in Tree(root)) {
+        foreach(string file in Tree(root,null,lifetime.CheckRunning)) {
           if(Under(plan.labRoot,file) && (plan.readRoots ?? new string[0]).Any(admitted=>Under(plan.labRoot,admitted) && Under(admitted,file))) continue;
           if((plan.credentialFiles ?? new string[0]).Any(admitted=>String.Equals(admitted,file,StringComparison.OrdinalIgnoreCase))) continue;
           IntPtr owner,group,dacl,sacl,descriptor;
@@ -414,6 +442,13 @@ public partial class LabSandbox {
           } catch(Exception error) { failure=error; }
         }
         foreach(var file in (lease.paths ?? new string[0]).Reverse()) { try { Acl(file,sid,0,true); } catch(Exception error) { failure=error; } }
+        foreach(var entry in lease.objects ?? new Dictionary<string,string[]>()) foreach(string relative in entry.Value) {
+          try {
+            string file=Path.GetFullPath(Path.Combine(entry.Key,relative));
+            if(Path.IsPathRooted(relative) || !Under(entry.Key,file))throw new Exception();
+            Acl(file,sid,0,true); count++;
+          } catch(Exception error) { failure=error; }
+        }
         if(!String.IsNullOrEmpty(lease.profile)) {
           uint code=unchecked((uint)DeleteAppContainerProfile(lease.profile));
           if(code!=0 && code!=0x80070002 && code!=0x80070490) failure=new Win32Exception((int)code);
@@ -453,17 +488,20 @@ public partial class LabSandbox {
         }
         // Write the undo record before granting access, so even a killed launcher can be recovered.
         Stage("root preflight");
-        var grants=(plan.readRoots ?? new string[0]).Distinct(StringComparer.OrdinalIgnoreCase).Select(root=>PrepareGrant(root,RX))
-          .Concat((plan.writeRoots ?? new string[0]).Distinct(StringComparer.OrdinalIgnoreCase).Select(root=>PrepareGrant(root,MODIFY))).ToArray();
+        var grants=(plan.readRoots ?? new string[0]).Distinct(StringComparer.OrdinalIgnoreCase).Select(root=>PrepareGrant(root,RX,Under(plan.labRoot,root),lifetime))
+          .Concat((plan.writeRoots ?? new string[0]).Distinct(StringComparer.OrdinalIgnoreCase).Select(root=>PrepareGrant(root,MODIFY,Under(plan.labRoot,root),lifetime)))
+          .Where(grant=>grant!=null).ToArray();
         paths.AddRange(plan.credentialFiles ?? new string[0]); paths.AddRange(plan.pipes ?? new string[0]);
         var ancestors=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach(var file in (plan.readRoots ?? new string[0]).Concat(plan.writeRoots ?? new string[0])) {
           var parent=Directory.GetParent(file);
           while(parent!=null) { ancestors.Add(parent.FullName); parent=parent.Parent; }
         }
-        paths.AddRange(ancestors);
+        paths.AddRange(ancestors.Where(file=>!Allows(FileAcl(file),PackageSids[1],METADATA)));
         paths=paths.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        lease.paths=paths.ToArray(); lease.roots=grants.Select(grant=>grant.root).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        lease.paths=paths.ToArray(); lease.roots=grants.Where(grant=>Under(plan.labRoot,grant.root)).Select(grant=>grant.root).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        // Runtime records contain only candidate mutations, relative to each root; recovery never rewalks owner trees.
+        lease.objects=grants.Where(grant=>!Under(plan.labRoot,grant.root)).ToDictionary(grant=>grant.root,GrantObjects,StringComparer.OrdinalIgnoreCase);
         WriteLease(plan.manifest,lease);
         lifetime.CheckRunning();
         Stage("profile ACL");
@@ -479,7 +517,7 @@ public partial class LabSandbox {
           catch(Win32Exception aclError) { if(aclError.NativeErrorCode!=5) throw; }
         }
         Stage("root ACL");
-        foreach(var grant in grants) { lifetime.CheckRunning(); ApplyGrant(grant,sid); }
+        foreach(var grant in grants) ApplyGrant(grant,sid,lifetime);
         foreach(var file in plan.credentialFiles ?? new string[0]) Acl(file,sid,MODIFY,false);
         Stage("pipe ACL");
         foreach(var pipe in plan.pipes ?? new string[0]) {
@@ -522,7 +560,7 @@ public partial class LabSandbox {
         Check(CreateProcessW(plan.file,new StringBuilder(arguments),ref security,ref security,true,0x08080404,env,plan.cwd,ref start,out process));
         handles.Add(process.process); handles.Add(process.thread);
         Trace("worker created pid="+process.pid);
-        Stage("protected paths"); VerifyBlocked(plan,process.process);
+        Stage("protected paths"); VerifyBlocked(plan,process.process,lifetime);
         foreach(var handle in new[]{inRead,outWrite,errWrite}) { CloseHandle(handle); handles.Remove(handle); }
         Task output=Relay(outRead,Console.OpenStandardOutput(),"stdout"),error=Relay(errRead,Console.OpenStandardError(),"stderr");
         handles.Remove(outRead); handles.Remove(errRead);

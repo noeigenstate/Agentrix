@@ -39,9 +39,15 @@ function daemonSocketPaths(home = os.homedir(), environment = process.env) {
   const directories = [
     ...['.docker/desktop', 'Library/Containers/com.docker.docker', '.colima', '.orbstack', '.rd', '.lima', '.local/share/containers'].map(file => path.join(home, file)),
     '/var/run/podman', '/private/var/run/podman',
+    path.join(environment.TMPDIR || os.tmpdir(), 'podman'),
   ];
+  const ports = new Set([2375, 2376]);
+  if (typeof host === 'string' && host.startsWith('tcp://')) {
+    try { const endpoint = new URL(host); ports.add(Number(endpoint.port || 2375)); } catch {}
+  }
   return [...sockets.map(file => ({ path: file, filter: 'path-literal' })),
-    ...directories.map(file => ({ path: file, filter: 'subpath' }))];
+    ...directories.map(file => ({ path: file, filter: 'subpath' })),
+    ...[...ports].map(port => ({ port, filter: 'tcp-loopback' }))];
 }
 
 function socketPathAliases(file) {
@@ -66,9 +72,16 @@ function sandboxProfile({
   const credentialBlocks = credentialPaths.map(subpath).join(' ');
   const executableBlocks = deniedExecutables.map(file => '(literal ' + JSON.stringify(file) + ')').join(' ');
   const socketFiles = new Set(), socketConnects = new Set();
-  for (const { path: file, filter } of deniedSockets) for (const alias of socketPathAliases(file)) {
-    socketFiles.add(subpath(alias));
-    socketConnects.add('(remote unix-socket (' + filter + ' ' + JSON.stringify(alias) + '))');
+  for (const { path: file, filter, port } of deniedSockets) {
+    if (filter === 'tcp-loopback') {
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid daemon TCP port.');
+      socketConnects.add('(remote tcp "localhost:' + port + '")');
+      continue;
+    }
+    for (const alias of socketPathAliases(file)) {
+      socketFiles.add(subpath(alias));
+      socketConnects.add('(remote unix-socket (' + filter + ' ' + JSON.stringify(alias) + '))');
+    }
   }
   const writes = [...writeRoots, '/dev/null'];
   const writeFilter = '(require-all ' + subpath('/') + ' ' +

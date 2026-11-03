@@ -1,16 +1,39 @@
 const path = require('node:path');
+const { gzipSync } = require('node:zlib');
 const ISOLATION_ERROR = 'Windows 安全实验执行不可用，未启动工作者。';
 const failure = () => Object.assign(new Error(ISOLATION_ERROR), { infrastructure: true, code: 'ERR_LAB_WINDOWS_ISOLATION' });
+// Distribution pin for sandbox-win32-native.cjs + nativeSource. Tests require updates when the C# changes.
+const SOURCE_SHA256 = '78fa5718cb809be2dc6c6a4647ca0cad5a4c1660609fcf559ebcfa64ab82fe3a';
 
-// UAC starts the Windows-owned PowerShell, never an executable or CLR configuration in userData.
-// The bootstrap accepts only the freshly compiled payload's identity; the helper's operation is constant.
-function prepCommand(binary, sha256, { elevate = true } = {}) {
-  if (typeof binary !== 'string' || !path.win32.isAbsolute(binary) || !/^[a-f0-9]{64}$/.test(sha256)) throw failure();
+function cleanPowerShellCommand(script) {
   const system = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
   const file = path.win32.join(system, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  // cmd has an 8191-character limit. The checked bootstrap travels compressed, not through a writable script file.
+  const packed = gzipSync(Buffer.from(script)).toString('base64');
+  const loader = `$bytes=[Convert]::FromBase64String('${packed}');$memory=[IO.MemoryStream]::new($bytes);` +
+    '$gzip=[IO.Compression.GZipStream]::new($memory,[IO.Compression.CompressionMode]::Decompress);' +
+    '$reader=[IO.StreamReader]::new($gzip);try{& ([ScriptBlock]::Create($reader.ReadToEnd()))}finally{$reader.Dispose();$memory.Dispose()}';
+  const encoded = Buffer.from(loader, 'utf16le').toString('base64');
+  // UAC can rebuild the environment from HKCU. cmd is native: scrub before the first elevated CLR loads.
+  // No CALL or delayed expansion: FOR variable contents must never become a second command expansion.
+  const scrub = '(for %P in (COR_ CORECLR_ COMPlus_ DOTNET_ APPDOMAIN_) do for /f "tokens=1 delims==" %V in (\'set %P\') do set "%V=") 2>nul';
+  // FOR /F itself starts ComSpec; pin it before inspecting the rebuilt environment.
+  const prefix = 'set "ComSpec=' + path.win32.join(system, 'cmd.exe') + '" & set "PATH=' + system + '" & set "PSModulePath=' +
+    path.win32.join(system, 'WindowsPowerShell/v1.0/Modules') + '" & set "DEVPATH=" & ' + scrub;
+  if (encoded.length + prefix.length + file.length > 7900) throw failure();
+  return { file: path.win32.join(system, 'cmd.exe'), args: ['/d', '/q', '/v:off', '/s', '/c',
+    '"' + prefix + ' & "' + file + '" -NoLogo -NoProfile -NonInteractive -EncodedCommand ' + encoded + '"'],
+  options: { windowsHide: true, windowsVerbatimArguments: true, cwd: system, timeout: 120000, maxBuffer: 4096,
+    env: { SystemRoot: process.env.SystemRoot || 'C:\\Windows', PATH: system } } };
+}
+
+// The expected source hash is shipped with the app, never taken from a user-writable compiler output.
+function prepCommand(input, sha256, { elevate = true } = {}) {
+  if (typeof input !== 'string' || !path.win32.isAbsolute(input) || !input.endsWith('.cs') || sha256 !== SOURCE_SHA256) throw failure();
+  const system = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
   const bootstrap = `
 $ErrorActionPreference='Stop'
-$source=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(binary).toString('base64')}'))
+$source=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(input).toString('base64')}'))
 $hash=[Security.Cryptography.SHA256]::Create()
 $payloadStream=[IO.FileStream]::new($source,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
 try {
@@ -25,13 +48,26 @@ $acl=[Security.AccessControl.DirectorySecurity]::new()
 $acl.SetSecurityDescriptorSddlForm('O:BAG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
 $null=[IO.Directory]::CreateDirectory($root,$acl)
 try {
+  $sourceCopy=[IO.Path]::Combine($root,'prepare.cs')
   $binary=[IO.Path]::Combine($root,'prepare.exe')
   if([IO.Directory]::GetFileSystemEntries($root).Length -ne 0){throw 'Preparation directory is not empty.'}
-  [IO.File]::WriteAllBytes($binary,$bytes)
-  $pinned=[IO.FileStream]::new($binary,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+  [IO.File]::WriteAllBytes($sourceCopy,$bytes)
+  $pinned=[IO.FileStream]::new($sourceCopy,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
   try {
     if([BitConverter]::ToString($hash.ComputeHash($pinned)).Replace('-','').ToLowerInvariant() -ne '${sha256}'){throw 'Preparation copy changed.'}
-    if([IO.Directory]::GetFileSystemEntries($root).Length -ne 1){throw 'Unexpected preparation neighbour.'}
+    $start=[Diagnostics.ProcessStartInfo]::new()
+    $start.FileName=[IO.Path]::Combine([IO.Directory]::GetParent([Environment]::SystemDirectory).FullName,'Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe')
+    $start.Arguments='/nologo /optimize+ /target:exe /reference:System.Web.Extensions.dll /out:"'+$binary+'" "'+$sourceCopy+'"'
+    $start.WorkingDirectory=[Environment]::SystemDirectory
+    $start.UseShellExecute=$false
+    $start.CreateNoWindow=$true
+    $start.EnvironmentVariables.Clear()
+    $start.EnvironmentVariables['SystemRoot']=[IO.Directory]::GetParent([Environment]::SystemDirectory).FullName
+    $start.EnvironmentVariables['TEMP']=$root
+    $start.EnvironmentVariables['TMP']=$root
+    $compiler=[Diagnostics.Process]::Start($start)
+    try {$compiler.WaitForExit();if($compiler.ExitCode -ne 0){throw 'Preparation compilation failed.'}} finally {$compiler.Dispose()}
+    if([IO.Directory]::GetFileSystemEntries($root).Length -ne 2){throw 'Unexpected preparation neighbour.'}
     $start=[Diagnostics.ProcessStartInfo]::new()
     $start.FileName=$binary
     $start.Arguments='prepare-host'
@@ -48,22 +84,23 @@ try {
 } finally {[IO.Directory]::Delete($root,$true);$hash.Dispose()}
 exit $code
 `;
-  const encoded = Buffer.from(bootstrap, 'utf16le').toString('base64');
-  const script = elevate ? `
+  const clean = cleanPowerShellCommand(bootstrap);
+  if (!elevate) return clean;
+  const arguments64 = Buffer.from(clean.args.join(' ')).toString('base64');
+  const script = `
 $ErrorActionPreference='Stop'
 $start=[Diagnostics.ProcessStartInfo]::new()
-$start.FileName=[IO.Path]::Combine([Environment]::SystemDirectory,'WindowsPowerShell\\v1.0\\powershell.exe')
-$start.Arguments='-NoLogo -NoProfile -NonInteractive -EncodedCommand ${encoded}'
+$start.FileName=[IO.Path]::Combine([Environment]::SystemDirectory,'cmd.exe')
+$start.Arguments=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${arguments64}'))
 $start.WorkingDirectory=[Environment]::SystemDirectory
 $start.Verb='runas'
 $start.UseShellExecute=$true
 $start.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
 $helper=[Diagnostics.Process]::Start($start)
 try {$helper.WaitForExit();exit $helper.ExitCode} finally {$helper.Dispose()}
-` : bootstrap;
-  const command = Buffer.from(script, 'utf16le').toString('base64');
-  if (command.length > 30000) throw failure();
-  return { file, args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', command], options: {
+`;
+  if (script.length > 30000) throw failure();
+  return { file: path.win32.join(system, 'WindowsPowerShell/v1.0/powershell.exe'), args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], options: {
     windowsHide: true, cwd: system, timeout: 120000, maxBuffer: 4096,
     env: { SystemRoot: process.env.SystemRoot || 'C:\\Windows', PATH: system },
   } };
@@ -180,4 +217,4 @@ public partial class LabSandbox {
 }
 `;
 
-module.exports = { ISOLATION_ERROR, prepCommand, createHostPreparation, nativeSource };
+module.exports = { ISOLATION_ERROR, SOURCE_SHA256, cleanPowerShellCommand, prepCommand, createHostPreparation, nativeSource };
