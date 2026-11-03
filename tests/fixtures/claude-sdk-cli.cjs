@@ -31,7 +31,7 @@ function toolEnvironment() {
 }
 function claudeUser(message) {
   const childResults = ['bash', 'hook', 'mcp'].map(kind => {
-    const child = spawnSync(process.execPath, [__filename, 'tool'], { env: toolEnvironment(), windowsHide: true, encoding: 'utf8' });
+    const child = spawnSync(process.execPath, [__filename, 'tool'], { env: toolEnvironment(), windowsHide: true, encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' });
     if (child.status !== 0) throw new Error('fake tool failed');
     return { kind, ...JSON.parse(child.stdout) };
   });

@@ -2,16 +2,23 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
-const { pathToFileURL } = require('node:url');
 const { randomUUID } = require('node:crypto');
 const vm = require('node:vm');
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
+const { createSdkLoader } = require('../electron/features/claude-sdk/runtime.cjs');
+const { fixtureProcesses } = require('./fixtures/claude-sdk-processes.cjs');
 let sdkModule = process.env.AGENTRIX_TEST_SDK_MODULE;
 try { sdkModule ||= require.resolve('@anthropic-ai/claude-agent-sdk'); } catch { }
+function isolatedSdk(scope) {
+  const resources = path.join(scope.directory, 'resources');
+  const entry = path.join(resources, 'app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs');
+  fs.mkdirSync(path.dirname(entry), { recursive: true }); fs.copyFileSync(sdkModule, entry);
+  // Deliberately no peer packages: exercise the actual packaged entry's runtime import closure.
+  return createSdkLoader({ packaged: true, resourcesPath: resources });
+}
 test('B3 the real SDK launches a fake native CLI whose helper, hook, MCP and transcript contain no key', { skip: !sdkModule && 'SDK dependency is not installed in this isolated worktree', timeout: 30000 }, async t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-sdk-wire-'));
-  t.after(() => fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 }));
+  const scope = fixtureProcesses(t, 'agx-sdk-wire-'), { directory } = scope;
+  const loadSdk = isolatedSdk(scope);
   const { prepareProviders } = await import('../scripts/native-session-smoke.mjs');
   const { bin, cli } = await prepareProviders(directory);
   const home = path.join(directory, 'home'), config = path.join(home, 'claude');
@@ -23,15 +30,16 @@ test('B3 the real SDK launches a fake native CLI whose helper, hook, MCP and tra
   const factory = createClaudeRuntime({ directory: path.join(directory, 'records'),
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value).reverse(), decryptString: value => Buffer.from(value).reverse().toString() },
     loadSdk: async () => {
-      const sdk = await import(pathToFileURL(sdkModule).href);
+      const sdk = await loadSdk();
       return { query(spec) {
-        const query = sdk.query({ ...spec, stderr: text => stderr.push(text) });
+        const query = sdk.query({ ...spec, options: { ...spec.options, stderr: text => stderr.push(text),
+          spawnClaudeCodeProcess: scope.sdkSpawn.bind(scope) } });
         return { close: () => query.close(), interrupt: () => query.interrupt(), async *[Symbol.asyncIterator]() {
           try { yield* query; } catch (error) { wireFailure = error.message; throw error; }
         } };
       } };
     }, resolveExecutable: async () => path.join(bin, process.platform === 'win32' ? 'claude.exe' : 'claude') });
-  t.after(() => factory.close());
+  scope.defer(() => factory.close());
   const key = 'sk-ant-api03-actual-sdk-offline-fixture-never-real'; factory.credentials.save(key);
   const events = [], session = factory.create({ agent: 'claude', owner: 'dispatch', allow: ['**'], cwd: directory, projectId: 'p', terminalId: 't', runtimeSessionId: randomUUID(), env, monthlyBudgetUsd: 10 }, event => events.push(event));
   await session.start(); await session.send({ clientMessageId: randomUUID(), text: 'first' });
@@ -53,16 +61,19 @@ test('B3 the real SDK launches a fake native CLI whose helper, hook, MCP and tra
 test('N2 a real SDK owner query keeps its fake native process alive across idle turns', {
   skip: !sdkModule && 'SDK dependency is not installed in this isolated worktree', timeout: 30000,
 }, async t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-owner-wire-'));
-  t.after(() => fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 }));
+  const scope = fixtureProcesses(t, 'agx-owner-wire-'), { directory } = scope;
+  const loadSdk = isolatedSdk(scope);
   const { prepareProviders } = await import('../scripts/native-session-smoke.mjs');
   const { bin, cli } = await prepareProviders(directory);
   const config = path.join(directory, 'claude'); fs.mkdirSync(config);
   const factory = createClaudeRuntime({ directory: path.join(directory, 'records'),
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value).reverse(), decryptString: value => Buffer.from(value).reverse().toString() },
-    loadSdk: () => import(pathToFileURL(sdkModule).href),
+    loadSdk: async () => {
+      const sdk = await loadSdk();
+      return { query: spec => sdk.query({ ...spec, options: { ...spec.options, spawnClaudeCodeProcess: scope.sdkSpawn.bind(scope) } }) };
+    },
     resolveExecutable: async () => path.join(bin, process.platform === 'win32' ? 'claude.exe' : 'claude') });
-  t.after(() => factory.close());
+  scope.defer(() => factory.close());
   factory.credentials.save('sk-ant-api03-owner-wire-fixture-never-real');
   const env = { PATH: bin, HOME: directory, USERPROFILE: directory, CLAUDE_CONFIG_DIR: config,
     AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_FAKE_CLI: cli, AGENTRIX_FAKE_OUTPUT: directory,
@@ -114,16 +125,15 @@ test('B3 installed Claude scrub implementation removes API credentials only when
   assert.equal(scrub(true).PATH, '/fake/bin');
 });
 test('M12 the real Codex adapter discovers and speaks to the compiled fake app-server executable', { timeout: 15000 }, async t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-codex-wire-'));
-  t.after(() => fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 }));
+  const scope = fixtureProcesses(t, 'agx-codex-wire-'), { directory } = scope;
   const { prepareProviders } = await import('../scripts/native-session-smoke.mjs');
   const { bin, cli } = await prepareProviders(directory);
   const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
   const events = [], env = { PATH: bin, HOME: directory, USERPROFILE: directory, CODEX_HOME: directory,
     AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_FAKE_CLI: cli, AGENTRIX_FAKE_OUTPUT: directory,
     ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}) };
-  const session = createCodexRuntime().create({ agent: 'codex', cwd: directory, env, projectId: 'p', terminalId: 't', runtimeSessionId: randomUUID(), effort: 'high', fast: true }, event => events.push(event));
-  t.after(() => session.close()); await session.start();
+  const session = createCodexRuntime({ spawnProcess: scope.spawn }).create({ agent: 'codex', cwd: directory, env, projectId: 'p', terminalId: 't', runtimeSessionId: randomUUID(), effort: 'high', fast: true }, event => events.push(event));
+  scope.defer(() => session.close()); await session.start();
   assert.equal((await session.send({ clientMessageId: randomUUID(), text: 'first' })).status, 'delivered');
   const deadline = Date.now() + 3000;
   while (!events.some(event => event.type === 'turn.completed') && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
