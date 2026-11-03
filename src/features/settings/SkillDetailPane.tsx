@@ -4,7 +4,7 @@ import { t } from '../../shared/i18n';
 import { Select } from '../../shared/Select';
 import { Markdown } from '../reading/ReadingView';
 import { diffLines } from './skill-diff';
-import { changeSummary, dependency, latestTwo, type ScopeOption, skillBody, skillSummary, skillTitle, skillWhen, usedText, yieldNote } from './skill-text';
+import { changeSummary, dependency, extensionTag, latestTwo, localDateTime, replacedCount, type ScopeOption, skillBody, skillSummary, skillTitle, skillWhen, usedText } from './skill-text';
 
 // text: the SKILL.md laid out as reading text; source: the same file as plain text; diff: the latest two versions;
 // pending: the text now against the change an agent proposed.
@@ -36,19 +36,32 @@ function RenderedText({ text }: { text: string }) {
   return <div className="skills-rendered" onClick={event => { if ((event.target as Element).closest('a')) event.preventDefault(); }}><Markdown text={skillBody(text)} softBreaks /></div>;
 }
 
+// The project copies a built-in has replaced: where each was, when, and the folder it was moved to (selectable, so it can be copied).
+function ReplacedCopies({ entries }: { entries: SkillInfo['replaced'] }) {
+  return <section className="skills-replaced" data-skill-replaced-list>
+    <h3 className="skills-heading">{t('已替换的项目副本')}</h3>
+    <ul>{entries.map(entry => <li key={entry.backup}>
+      <span><small>{t('项目')}</small>{entry.project}</span>
+      <span><small>{t('原路径')}</small>{entry.from}</span>
+      <span><small>{t('时间')}</small>{localDateTime(entry.at)}</span>
+      <span className="skills-replaced-backup"><small>{t('备份位置')}</small><code>{entry.backup}</code></span>
+    </li>)}</ul>
+  </section>;
+}
+
 // The right side: one skill's switches, trigger, scope, version history, proof of use, and below them its SKILL.md or a change.
 export function SkillDetailPane({ skill, detail, scopes, tab, now, actions }: {
   skill: SkillInfo; detail: SkillDetail | null; scopes: ScopeOption[]; tab: SkillTab; now: number; actions: SkillActions;
 }) {
   const mine = skill.source === 'user', title = skillTitle(skill), summary = skillSummary(skill), needs = dependency(skill), pair = mine && detail && latestTwo(detail.versions), proposal = detail?.pending ?? null;
-  const changeTab = pair ? 'diff' : 'pending', hasChanges = !!pair || proposal !== null, note = yieldNote(skill.yieldsTo);
+  const changeTab = pair ? 'diff' : 'pending', hasChanges = !!pair || proposal !== null, tag = extensionTag(skill);
   const changes = (tab === 'diff' || tab === 'pending') && (tab === 'pending' && proposal !== null
     ? <Changes heading={t('当前 → Agent 的提议')} before={detail!.text} after={proposal} />
     : pair && <Changes heading={`v${pair[0].version} → v${pair[1].version} · ${changeSummary(skill, now)}`} before={pair[0].text} after={pair[1].text} />);
   const text = detail?.text ?? '';
   const body = changes || (tab === 'source' ? <pre className="skills-reading">{text}</pre> : <RenderedText text={text} />);
   return <div className="skills-detail" data-skill-detail={skill.id}>
-    <div className="skills-title"><b>{title}<em>{mine ? `v${skill.version}` : `v${skill.version} · ${t('随应用更新')}`}</em></b>
+    <div className="skills-title" data-skill-extends={skill.extends ?? undefined}><b>{title}<em>{mine ? `v${skill.version}` : `v${skill.version} · ${t('随应用更新')}`}</em>{tag && <span className="skills-tag">{tag}</span>}</b>
       <span className="skills-title-tools">
         {mine && <button type="button" className="button" data-skill-edit onClick={actions.onEdit}><PencilSimple size={16} />{t('编辑')}</button>}
         <Switch label={t('启用 {name}', { name: title })} checked={skill.enabled} onChange={enabled => actions.onOptions({ enabled })} />
@@ -66,7 +79,6 @@ export function SkillDetailPane({ skill, detail, scopes, tab, now, actions }: {
           options={[{ value: 'always', label: t('始终') }, { value: 'auto', label: t('按需') }, { value: 'first-open', label: t('首次打开项目') }]} /></dd>
         {mine && <><dt>{t('范围')}</dt><dd><Select label={t('范围')} className="skills-scope" value={skill.scope === 'project' && skill.projectId ? skill.projectId : 'global'} options={scopes} onChange={actions.onScope} /></dd></>}
         <dd className="skills-when" data-skill-when>{skillWhen(skill)}</dd>
-        {note && <dd className="skills-when" data-skill-yield title={note.title}>{note.text}</dd>}
       </div>
       {needs && <div><dt>{t('依赖')}</dt><dd className="skills-dependency"><i className={`skills-dot${needs.hollow ? ' is-hollow' : ''}`} aria-hidden="true" />
         <span>{needs.text}{needs.state && <small>{needs.state}</small>}</span></dd></div>}
@@ -81,6 +93,7 @@ export function SkillDetailPane({ skill, detail, scopes, tab, now, actions }: {
       </>}
       <div><dt>{t('生效证据')}</dt><dd className={skill.lastUsed ? undefined : 'is-quiet'} data-skill-used>{usedText(skill.lastUsed)}</dd></div>
     </dl>
+    {replacedCount(skill) > 0 && <ReplacedCopies entries={skill.replaced} />}
     <div className="skills-tabs">
       <button type="button" aria-pressed={!changes} onClick={() => actions.onTab('text')}>SKILL.md</button>
       {hasChanges && <button type="button" aria-pressed={!!changes} onClick={() => actions.onTab(changeTab)}>{t('变更')}</button>}
