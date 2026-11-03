@@ -25,12 +25,17 @@ function inputQueue(onTake) {
     },
   };
 }
+async function waitWithin(task, milliseconds) {
+  let timer;
+  try { await Promise.race([task, new Promise(resolve => { timer = setTimeout(resolve, milliseconds); })]); }
+  finally { clearTimeout(timer); }
+}
 function createClaudeSession(spec, emit, dependencies) {
   const { loadSdk, resolveExecutable, credentials, usage, now = Date.now, audit,
     onCost = () => {}, onFailure = () => {}, onSession = () => {} } = dependencies;
   const stream = createEventStream(spec, emit, now), secrets = new Set();
   const sent = new Map(), results = new Set();
-  let active, preparing, closing, sdk, executable, started = false, closed = false;
+  let active, preparing, closing, sdk, executable, started = false, closed = false, stopping = false;
   let providerId = spec.providerSessionId || null, state = 'starting', turnId = null;
   function clean(value) {
     let text = value;
@@ -39,7 +44,7 @@ function createClaudeSession(spec, emit, dependencies) {
   }
   const publish = (type, payload, extra) => stream.publish(type, JSON.parse(clean(JSON.stringify(payload))), extra);
   const setState = (next, reason = null) => { state = next; publish('session.state', { state, reason }); };
-  const requests = createRequests({ publish, state: next => { if (!closed && state !== 'stopping') setState(next); } });
+  const requests = createRequests({ publish, state: next => { if (!closed && !stopping) setState(next); } });
   const normalize = createNormalizer(publish, clean), policy = createPolicy(spec, audit);
   function receipt(id, status) {
     if (!sent.has(id) || sent.get(id) === status) return;
@@ -48,6 +53,21 @@ function createClaudeSession(spec, emit, dependencies) {
   function begin(origin, clientMessageId) {
     turnId = randomUUID(); stream.turn(turnId);
     publish('turn.started', { origin, clientMessageId }); setState('running');
+  }
+  function reserve(run) {
+    run.reservation ||= usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId,
+      maxBudgetUsd: run.remainingBudgetUsd });
+  }
+  function releaseIdle(run) {
+    if (!run.reservation) return;
+    usage.release(run.reservation.id); run.reservation = null;
+  }
+  function finishReservation(run) {
+    if (!run.reservation) return;
+    if (run.busy && run.initialized) usage.unverified(run.reservation.id);
+    if (usage.finish) usage.finish(run.reservation.id, { started: run.initialized });
+    else usage.release(run.reservation.id);
+    run.reservation = null;
   }
   function cancelQuery(run, reason) {
     if (run.closing) return;
@@ -73,7 +93,7 @@ function createClaudeSession(spec, emit, dependencies) {
         if (message.type === 'system' && message.subtype === 'init' && !message.parent_tool_use_id) {
           if (message.apiKeySource !== 'ANTHROPIC_API_KEY') throw Object.assign(new Error(), { code: 'billing_identity_mismatch' });
           run.initialized = true; providerId = message.session_id; stream.provider(providerId);
-          usage.bind?.(run.reservation.id, providerId); onSession(providerId);
+          usage.bind?.(run.reservation?.id, providerId); onSession(providerId);
           run.model = message.model || null;
           publish('routing.updated', {
             declared: { model: spec.model || null, effort: spec.effort || null, fast: spec.fast ?? null },
@@ -82,17 +102,21 @@ function createClaudeSession(spec, emit, dependencies) {
           });
         }
         if (message.isReplay === true) { normalize(message); continue; }
+        if (stopping && (message.type !== 'result' || message.parent_tool_use_id)) continue;
         if (!run.initialized && message.type !== 'system') throw Object.assign(new Error(), { code: 'billing_identity_mismatch' });
         if (message.user_message_uuid) receipt(message.user_message_uuid, 'consumed');
         for (const id of message.user_message_uuids || []) receipt(id, 'consumed');
         unavailable(message);
-        if (message.type === 'assistant' && !turnId && !message.parent_tool_use_id) begin('automatic', message.user_message_uuid || null);
+        if (message.type === 'assistant' && !turnId && !message.parent_tool_use_id) {
+          reserve(run); run.busy = true; begin('automatic', message.user_message_uuid || null);
+        }
         normalize(message);
         if (message.type !== 'result' || message.parent_tool_use_id) continue;
         const resultId = message.uuid || message.result_index;
         if (resultId !== undefined && results.has(resultId)) continue;
         if (resultId !== undefined) results.add(resultId);
-        const entry = usage.record(providerId, message, { resume: !!run.resumeId, reservationId: run.reservation.id });
+        const entry = usage.record(providerId, message, { resume: !!run.resumeId, reservationId: run.reservation?.id });
+        if (entry.deltaUsdMicros > 0) run.remainingBudgetUsd = Math.max(0, Math.round(run.remainingBudgetUsd * 1e6 - entry.deltaUsdMicros) / 1e6);
         publish('usage.updated', entry.snapshot);
         if (entry.deltaUsdMicros > 0) onCost({ ...entry, spec: { ...spec, model: run.model || spec.model }, providerSessionId: providerId });
         requests.cancel();
@@ -102,14 +126,18 @@ function createClaudeSession(spec, emit, dependencies) {
         turnId = null; stream.turn(null);
         if (message.subtype === 'error_max_budget_usd') onFailure('budget_exhausted');
         if (!(message.queued_turn_count > 0)) {
-          idle = true; cancelQuery(run, 'idle'); break;
+          run.busy = false;
+          releaseIdle(run);
+          run.onStoppedResult?.();
+          if (spec.owner === 'dispatch' || stopping) { idle = !stopping; cancelQuery(run, stopping ? 'stop' : 'idle'); break; }
+          setState('idle');
         }
       }
-      if (!closed && !idle) { unknownInput(); requests.cancel(); setState('stopped'); }
+      if (!closed && !idle && !run.closing) { unknownInput(); requests.cancel(); setState('stopped'); }
     } catch (error) {
       // close()/idle retirement may reject iteration with AbortError. Its accounting was already settled above.
       if (!run.closing) {
-        usage.unverified(run.reservation.id);
+        usage.unverified(run.reservation?.id);
         if (!closed) {
           const code = error.code === 'billing_identity_mismatch' ? error.code : 'sdk_failed';
           onFailure(code);
@@ -119,9 +147,9 @@ function createClaudeSession(spec, emit, dependencies) {
       }
     } finally {
       cancelQuery(run, 'ended');
-      usage.release(run.reservation.id); secrets.delete(run.key);
-      if (active === run) active = null;
-      if (idle && !closed) setState('idle');
+      try { finishReservation(run); }
+      finally { secrets.delete(run.key); if (active === run) active = null; }
+      if (idle && !closed && !stopping) setState('idle');
     }
   }
   async function start() {
@@ -135,7 +163,10 @@ function createClaudeSession(spec, emit, dependencies) {
       return { runtimeSessionId: spec.runtimeSessionId };
     } catch (error) {
       setState('failed', error.code || 'sdk_failed');
-      throw Object.assign(new Error(error.code === 'native_cli_required' ? '未找到原生 Claude Code，无法通过 API 运行' : 'Claude API 会话无法启动。'), { code: error.code || 'sdk_failed' });
+      const message = error.outdated ? 'Claude Code 版本过低，请升级到 2.1.317 或更高'
+        : error.code === 'native_cli_required' ? '未找到原生 Claude Code，无法通过 API 运行' : 'Claude API 会话无法启动。';
+      if (error.outdated) publish('error', { code: 'native_cli_outdated', message, retryable: false, willRetry: false, stage: 'startup' });
+      throw Object.assign(new Error(message), { code: error.code || 'sdk_failed' });
     }
   }
   async function createQuery() {
@@ -143,12 +174,13 @@ function createClaudeSession(spec, emit, dependencies) {
     const key = credentials.read();
     if (!key) throw new Error('请先保存 API 密钥。');
     const reservation = usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId });
-    const run = { key, reservation, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null };
+    const run = { key, reservation, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
+      remainingBudgetUsd: reservation.maxBudgetUsd ?? Infinity, busy: false };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
     const options = {
       cwd: spec.cwd, model: spec.model || undefined, effort: spec.effort || 'high', pathToClaudeCodeExecutable: executable,
-      settings: { fastMode: spec.fast === true }, env: apiEnvironment(spec.env || process.env, key),
+      settings: { fastMode: spec.fast === true }, env: apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
       abortController: run.abort, permissionMode: 'default', includePartialMessages: true,
       settingSources: spec.owner === 'dispatch' ? [] : ['user', 'project', 'local'],
       systemPrompt: { type: 'preset', preset: 'claude_code', append: spec.context || '' },
@@ -159,7 +191,7 @@ function createClaudeSession(spec, emit, dependencies) {
         return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision.behavior, permissionDecisionReason: decision.reason } };
       }] }] },
       canUseTool: async (name, input, context) => {
-        if (closed || run.closing) return { behavior: 'deny', message: '会话已停止。' };
+        if (closed || stopping || run.closing) return { behavior: 'deny', message: '会话已停止。' };
         if (name === 'AskUserQuestion') return requests.open(name, input, context);
         const decision = policy(name, input);
         if (decision.behavior === 'defer' || decision.behavior === 'ask') return requests.open(name, input, context);
@@ -173,7 +205,7 @@ function createClaudeSession(spec, emit, dependencies) {
     return run;
   }
   async function send({ clientMessageId, text, images = [] }) {
-    if (closed || !started || ['failed', 'stopped'].includes(state)) throw new Error('会话已停止。');
+    if (closed || stopping || !started || ['failed', 'stopped'].includes(state)) throw new Error('会话已停止。');
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
     if (sent.size >= 2000) throw new Error('会话消息过多，请启动新会话。');
     if (/^\/clear(?:\s|$)/.test(text)) throw new Error('原生会话不支持此命令。');
@@ -183,12 +215,19 @@ function createClaudeSession(spec, emit, dependencies) {
       return { type: 'image', source: { type: 'base64', media_type, data } };
     })] : text;
     if (active?.closing) await active.task;
+    if (active && !active.busy && (active.remainingBudgetUsd <= 0 ||
+      usage.available(spec.monthlyBudgetUsd ?? null) < active.remainingBudgetUsd * 1e6)) {
+      // Only a smaller remaining allowance requires restarting an otherwise persistent owner query.
+      cancelQuery(active, 'budget'); await active.task;
+    }
     if (!active) {
       preparing ||= createQuery().finally(() => { preparing = null; });
       await preparing;
     }
-    if (closed) throw new Error('会话已停止。');
+    if (closed || stopping) throw new Error('会话已停止。');
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
+    reserve(active);
+    active.busy = true;
     sent.set(clientMessageId, 'queued');
     if (!turnId) begin('user', clientMessageId);
     publish('input.receipt', { clientMessageId, status: 'queued' });
@@ -198,20 +237,24 @@ function createClaudeSession(spec, emit, dependencies) {
   }
   function close() {
     if (closing) return closing;
-    closed = true;
+    stopping = true;
     closing = (async () => {
       if (preparing) await preparing.catch(() => {});
       const run = active;
-      try { if (run && turnId) usage.unverified(run.reservation.id); } catch { }
       setState('stopping'); requests.cancel();
+      if (run?.busy && run.initialized && !run.closing) {
+        // Interrupt can return the final cumulative usage; keep consuming only that result before closing.
+        const result = new Promise(resolve => { run.onStoppedResult = resolve; });
+        run.interrupted = true;
+        try { Promise.resolve(run.query.interrupt?.()).catch(() => {}); } catch { }
+        await waitWithin(result, 750); run.onStoppedResult = null;
+      }
+      closed = true;
       if (run) cancelQuery(run, 'stop');
+      try { if (run) finishReservation(run); } catch { }
       for (const [id, status] of sent) if (status !== 'consumed') receipt(id, status === 'queued' ? 'rejected' : 'unknown');
       setState('stopped');
-      if (run) {
-        let timer;
-        await Promise.race([run.task, new Promise(resolve => { timer = setTimeout(resolve, 1500); })]);
-        clearTimeout(timer);
-      }
+      if (run) await waitWithin(run.task.catch(() => {}), 1500);
     })();
     return closing;
   }

@@ -8,7 +8,7 @@ function host() {
   const queued = [];
   const terminal = { nativeStructured: true, nativeRuntimeSessionId: 'runtime', promptQueue: { enqueue: text => queued.push(text), start() {} }, completionWork: { begin() {} }, nativeMessages: new Map() };
   const starts = [], activity = [], restored = [], sessions = new Map([['t', terminal]]);
-  const context = { quitting: false, nativeSpecs: new Map([['t', { agent: 'claude' }]]), sessions, scheduleState() {},
+  const context = { quitting: false, nativeSpecs: new Map([['t', { agent: 'claude' }]]), sessions, scheduleState() {}, t: text => text,
     store: { findTerminal: () => ({ project: { id: 'p' } }), expectCompletion: id => starts.push(id), setRestore: (id, patch) => restored.push({ id, patch }) },
     applyActivity: (_project, _session, snapshot) => activity.push(snapshot) };
   vm.createContext(context);
@@ -16,6 +16,15 @@ function host() {
   return { ...context, starts, activity, restored, terminal, queued };
 }
 const event = (type, payload, replay = false) => ({ type, payload, replay, runtimeSessionId: 'runtime', providerSessionId: 'provider', turnId: 'turn', receivedAtMs: 1 });
+
+test('N8 an outdated Claude upgrade notice survives terminal fallback without a replay notification', () => {
+  const main = host(), message = 'Claude Code 版本过低，请升级到 2.1.317 或更高';
+  main.structuredEvent('t', event('error', { code: 'native_cli_outdated', message }, true));
+  assert.equal(main.store.warning, undefined);
+  main.structuredEvent('t', event('error', { code: 'native_cli_outdated', message }));
+  main.structuredEvent('t', event('session.state', { state: 'stopped', reason: 'native_cli_required' }));
+  assert.equal(main.store.warning, message);
+});
 
 test('fallback recovery drafts never enter the native sent-message queue', () => {
   const main = host();
