@@ -1,4 +1,14 @@
 const { test } = require('node:test');
+
+test('native run records retain billing provenance without SDK payloads or credentials', () => {
+  const { runRecord } = require('../electron/features/dashboard/records-values.cjs');
+  const record = runRecord({ id: 'p', path: '/fake/project' }, { source: 'native', sourceAgent: 'claude' },
+    { id: 'result', source: 'native', model: 'fake', billingPath: 'api', usageRecordId: 'session:result', costIncludedIn: 'root',
+      costCompleteness: 'estimated', reportedCostUsd: 0.1, secret: 'fake-hidden', input: 'not evaluation data' });
+  assert.equal(record.source, 'native'); assert.equal(record.billingPath, 'api'); assert.equal(record.usageRecordId, 'session:result');
+  assert.equal(record.costIncludedIn, 'root'); assert.equal(record.costCompleteness, 'estimated');
+  assert.equal(record.secret, undefined); assert.equal(record.input, undefined);
+});
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -262,18 +272,19 @@ test('main quit cleanup runs once and a late dashboard append cannot prevent the
     app: { on: (_, listener) => { handler = listener; }, quit: () => { quits++; notifyQuit(); } }, process: { platform: 'win32' }, dashboard: records, labWindow,
     clearTimeout, attentionTimer: null, voiceManager: null, fileOperations: null, skills: { close: () => cleanups++ },
     updateManager: null, codexAccounts: { dispose() {} }, claudeAccounts: { dispose() {} }, disposeClaudeAccounts() {},
-    usageRolloverTimer: null, stateTimer: null, sessions: new Map(), sshAuth: null, eventServer: null, tray: null, cleanupAskpass() {}, runtimeDir: null,
+    usageRolloverTimer: null, stateTimer: null, sessions: new Map(), sshAuth: null, eventServer: null, dispatchControl: null,
+    nativeSessions: { close: () => { cleanups++; } }, claudeRuntime: null, tray: null, cleanupAskpass() {}, runtimeDir: null,
   });
   const first = records.append('runs', { index: 1 });
   handler({ preventDefault: () => prevented++ });
   const drain = records.quitDrain;
-  assert.equal(prevented, 1); assert.equal(cleanups, 1); assert.equal(labDisposals, 1); assert.equal(labWaits, 1);
+  assert.equal(prevented, 1); assert.equal(cleanups, 2); assert.equal(labDisposals, 1); assert.equal(labWaits, 1);
   await drain; await first;
   assert.equal(quits, 0, 'the lab still has a worker to stop');
   releaseLab(); await quit;
   assert.equal(quits, 1);
   const late = records.append('grades', { index: 2 });
   handler({ preventDefault: () => prevented++ });
-  assert.equal(prevented, 1); assert.equal(cleanups, 1); assert.equal(labDisposals, 1); assert.equal(labWaits, 2);
+  assert.equal(prevented, 1); assert.equal(cleanups, 2); assert.equal(labDisposals, 1); assert.equal(labWaits, 2);
   await late;
 });
