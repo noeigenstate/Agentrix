@@ -2038,7 +2038,7 @@
   "{n} 小时": "{n} h",
   "{h} 小时 {m} 分": "{h} h {m} min",
   "还没有足够的结果可以比较。": "There are not enough results to compare yet.",
-  "{a}与 {b}在 {tasks} 个任务中都通过了 {passed} 个。":"{a} and {b} each passed {passed} of {tasks} tasks.",
+  "{a}与 {b}在 {tasks} 个任务中都通过了 {passed} 个。": "{a} and {b} each passed {passed} of {tasks} tasks.",
   "{leader}在 {tasks} 个任务中通过 {leaderPassed} 个，{other}通过 {otherPassed} 个。": "{leader} passed {leaderPassed} of {tasks} tasks, {other} passed {otherPassed}.",
   "{leader}在 {tasks} 个任务中通过 {leaderPassed} 个，{other}通过 {otherPassed} 个；成本为 {base} 的 {ratio} 倍。": "{leader} passed {leaderPassed} of {tasks} tasks, {other} passed {otherPassed}; the cost is {ratio} times that of {base}.",
   "任务通过 {rate}": "{rate} of tasks passed",
@@ -2332,5 +2332,7 @@
   "AA 评分证据缺失或无效。": "AA grading evidence is missing or invalid.",
   "AA 运行已经准备完成。": "The AA run has already been prepared.",
   "AA 参考解未通过任务验证。": "The AA reference solution failed task verification.",
-  "AA 运行尚未准备完成。": "The AA run has not been prepared."
+  "AA 运行尚未准备完成。": "The AA run has not been prepared.",
+  "Windows 安全实验执行不可用，未启动工作者。": "Secure Windows lab execution is unavailable. No workers were started.",
+  "虚拟实验室目前只支持 macOS 和 Windows。": "The Virtual Lab works on macOS and Windows for now."
 }
