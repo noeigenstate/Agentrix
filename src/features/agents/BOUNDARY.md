@@ -20,6 +20,7 @@ a text box and 停下 that go to the main process, never to a terminal — plus 
 - `src/features/agents/AgentBrandIcon.ts`
 - `src/features/agents/subagent-splits.ts`
 - `src/features/home/send-to-agent.ts`
+- `src/features/native-session/native-words.ts` (delivery receipt words)
 - `src/features/reading/ConversationFeed.tsx`
 
 ## Invariants
