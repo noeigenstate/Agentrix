@@ -36,8 +36,11 @@ async function createPipeRelays(addresses, namespace, failed = () => {}, diagnos
       // Older libuv versions crash closing a failed bind with custom pending instances. Reject known collisions first.
       if (ownedPipes.has(target)) throw Object.assign(new Error('Windows lab pipe already exists.'), { code: 'EADDRINUSE' });
       const requests = new Map(), relay = { sockets, active, pending, requests, target, index: relays.length, closed: false };
+      // The broker admits four operations and eight sockets, including sockets whose close event is pending.
+      // Keep room for the retiring batch; reusing all eight slots can outrun the host's close callbacks.
+      const limit = match[1].startsWith('agentrix-lab-broker-') ? 4 : 8;
       const drain = () => {
-        while (!relay.closed && active.size < 8 && pending.length) {
+        while (!relay.closed && active.size < limit && pending.length) {
           const socket = pending.shift();
           if (socket.destroyed) continue;
           active.add(socket);
@@ -63,7 +66,7 @@ async function createPipeRelays(addresses, namespace, failed = () => {}, diagnos
           // Named pipes can retain their writable half after EOF. Retire both handles once the reply drains.
           upstream.once('end', () => {
             request.phase = 'reply'; trace(relay, request, 'reply');
-            socket.end(() => socket.destroy()); upstream.destroy();
+            socket.end(() => socket.destroy()); upstream.end();
           });
           socket.pipe(upstream); upstream.pipe(socket, { end: false });
         }
