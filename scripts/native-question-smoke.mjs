@@ -108,14 +108,15 @@ async function run(theme, output) {
     assert.equal(await page.locator('.native-question, .reading-choice-option, .reading-question-option').count(), 0);
     await page.keyboard.press('Enter'); await page.waitForTimeout(150);
     assert.equal(await fs.stat(answered).then(() => true, () => false), false, 'a composer Enter did not answer');
-    await page.screenshot({ path: path.join(dir, 'popup-no-focus.png') }); checks.push('popup visible without focus, composer locked, no host answer');
+    await page.screenshot({ path: path.join(dir, 'popup-no-focus.png') }); checks.push('popup visible without focus, the composer queues its text, no host answer');
     await popup.locator('.xterm-screen').click(); await page.keyboard.press('Enter');
     await waitFor(() => fs.stat(answered).then(() => true, () => false), 'the owner clicked the TUI and answered there');
     assert.deepEqual(JSON.parse(await fs.readFile(answered, 'utf8')), { answers: { q: { answers: ['One'] } } });
     await waitFor(() => popup.locator('.xterm-rows').innerText().then(text => text.includes('Ask Codex to do anything')), 'TUI returned to input');
     await popup.getByRole('button', { name: 'Close', exact: true }).click();
-    await waitFor(() => composer.isEnabled(), 'composer unlocked after dialog'); assert.equal(await composer.inputValue(), 'keep this draft');
-    checks.push('explicit TUI click + Enter resolves the exact provider request; draft survives');
+    // The text queued behind the question goes out once the TUI is back at its input (the owner's always-accept rule).
+    await waitFor(async () => await composer.isEnabled() && await composer.inputValue() === '', 'the queued message left the box after the dialog');
+    checks.push('explicit TUI click + Enter resolves the exact provider request; the queued message is sent afterwards');
     await page.screenshot({ path: path.join(dir, 'returned-to-input.png') }); assert.deepEqual(errors, []);
   } catch (error) {
     if (app) {
