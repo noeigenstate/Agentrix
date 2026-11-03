@@ -1,8 +1,11 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { testPath, patchPaths, replaceFile, mirrorDirectory, taskDirectory, abort } = require('./data.cjs');
-const { pythonPath } = require('./environment.cjs');
+const { testPath, patchPaths, replaceFile, mirrorDirectory, taskDirectory, abort, safePath } = require('./data.cjs');
+const { pythonPath, environmentPath } = require('./environment.cjs');
+const {
+  verifyEnvironment, workspaceControls, verifyControls, discardBytecode, rejectReports, logError,
+} = require('./integrity.cjs');
 
 const cwdFor = ctx => path.join(ctx.workspaceRoot, 'worktree');
 const testsFor = entry => [...entry.FAIL_TO_PASS, ...entry.PASS_TO_PASS];
@@ -20,7 +23,8 @@ async function restoreTests(entry, row, ctx) {
     const parts = file.split('/'); parts.pop();
     while (parts.length) { helpers.add(parts.join('/') + '/conftest.py'); parts.pop(); }
   }
-  for (const file of helpers) if (!files.includes(file)) files.push(file);
+  const fixes = new Set(patchPaths(row.patch));
+  for (const file of helpers) if (!files.includes(file) && !fixes.has(file)) files.push(file);
   const present = new Set((await ctx.tools.git(mirror, ['ls-tree', '-rz', '--name-only', entry.base, '--', ...files], {
     signal: ctx.signal,
   })).split('\0').filter(Boolean));
@@ -53,37 +57,87 @@ function resultOf(entry, report, code) {
 
 async function runTests(entry, ctx, label) {
   abort(ctx);
-  const report = path.join(ctx.workspaceRoot, '.oss-junit-' + randomUUID() + '.xml');
   const log = path.join(ctx.artifactDirectory, label + '.log');
+  const nonce = randomUUID();
   const plugins = entry.repo === 'pytest-dev/pytest' ? ['-p', 'pytester'] : [];
-  const args = ['--rootdir=' + cwdFor(ctx), '-o', 'addopts=', '-o', 'junit_family=legacy', ...plugins,
-    '-rA', '--tb=short', '--junitxml=' + report, '--', ...testsFor(entry)];
-  const script = [
-    'import os, sys',
-    'os.environ["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"',
-    'import pytest',
-    'raise SystemExit(pytest.main(sys.argv[1:]))',
-  ].join('\n');
   await fs.mkdir(ctx.artifactDirectory, { recursive: true });
-  let output;
+  let temporary;
   try {
-    output = await ctx.session.execute(pythonPath(ctx), ['-I', '-c', script, ...args], {
+    await rejectReports(ctx);
+    await verifyEnvironment(ctx, environmentPath(ctx));
+    await discardBytecode(ctx);
+    const controls = await workspaceControls(ctx);
+    const config = await pytestConfig(ctx);
+    temporary = config.temporary;
+    const args = ['--rootdir=' + cwdFor(ctx), '--confcutdir=' + cwdFor(ctx), '-c', config.file,
+      '-o', 'addopts=', ...plugins, '-rA', '--tb=short', '--', ...testsFor(entry)];
+    const runner = await fs.readFile(path.join(__dirname, 'pytest-runner.py'), 'utf8');
+    const output = await ctx.session.execute(pythonPath(ctx), ['-I', '-B', '-c', runner, nonce, ...args], {
       cwd: cwdFor(ctx), timeoutMs: ctx.testTimeoutMs, log, network: false,
     });
-    const stat = await fs.lstat(report);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8 * 1024 * 1024) throw new Error('Invalid OSS JUnit report.');
-    const xml = await fs.readFile(report, 'utf8');
-    if (!/^\s*(?:<\?xml[^>]*>\s*)?<testsuites?\b/.test(xml) || !/<\/testsuites?>\s*$/.test(xml) ||
-      /<!DOCTYPE|<!ENTITY/.test(xml) || (xml.match(/<testsuite\b/g) || []).length !== (xml.match(/<\/testsuite>/g) || []).length) {
-      throw new Error('Invalid OSS JUnit report.');
+    await rejectReports(ctx);
+    await verifyEnvironment(ctx, environmentPath(ctx));
+    await verifyControls(ctx, controls);
+    const report = evidenceOf(entry, output, nonce), measured = resultOf(entry, report, output.code);
+    if (ctx.reference && report.plugins.some(file => !ctx.reference.plugins?.includes(file))) {
+      throw new Error('An OSS pytest plugin was not present in the validated reference.');
     }
-    const measured = resultOf(entry, ctx.tools.junit(xml), output.code);
-    await fs.writeFile(path.join(ctx.artifactDirectory, label + '.xml'), xml, { mode: 0o600 });
-    return { ...measured, evidence: log };
+    // Main writes the artifact from this grading invocation's events. No model-owned report is ever read.
+    await fs.writeFile(path.join(ctx.artifactDirectory, label + '.xml'), xmlOf(report), { mode: 0o600 });
+    return { ...measured, evidence: log, plugins: report.plugins };
   } catch (error) {
+    await logError(ctx, label, error);
     if (ctx.signal?.aborted || error.fatal || error.infrastructure) throw error;
     throw new Error('OSS tests could not be graded; see the test log.');
-  } finally { await fs.rm(report, { force: true }); }
+  } finally { if (temporary) await fs.rm(temporary, { force: true }); }
+}
+
+async function pytestConfig(ctx) {
+  for (const [name, section] of [['pytest.ini'], ['.pytest.ini'], ['pyproject.toml', 'tool.pytest.ini_options'],
+    ['tox.ini', 'pytest'], ['setup.cfg', 'tool:pytest']]) {
+    const file = path.join(cwdFor(ctx), name);
+    const content = await fs.readFile(file, 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; });
+    if (content !== undefined && (!section || content.split(/\r?\n/).some(line => line.trim() === '[' + section + ']'))) {
+      return { file };
+    }
+  }
+  const file = path.join(ctx.workspaceRoot, '.oss-config-' + randomUUID() + '.ini');
+  await fs.writeFile(file, '[pytest]\n', { flag: 'wx', mode: 0o600 });
+  return { file, temporary: file };
+}
+
+function evidenceOf(entry, output, nonce) {
+  const prefix = 'AGENTRIX_OSS_EVIDENCE_' + nonce + '=';
+  const frames = output.stdout.split(/\r?\n/).filter(line => line.startsWith(prefix));
+  if (frames.length !== 1 || frames[0].length > 8 * 1024 * 1024) throw new Error('Missing or duplicate OSS process evidence.');
+  const report = JSON.parse(frames[0].slice(prefix.length));
+  if (report.version !== 1 || report.code !== output.code || !Array.isArray(report.collectionErrors) || report.collectionErrors.length ||
+    !Array.isArray(report.events) || !report.events.length || !Array.isArray(report.plugins) || report.plugins.some(file => !safePath(file)) ||
+    new Set(report.plugins).size !== report.plugins.length) throw new Error('Incomplete OSS process evidence.');
+  const cases = new Map();
+  const expected = new Set(testsFor(entry));
+  for (const event of report.events) {
+    if (!Array.isArray(event) || event.length !== 4 || !expected.has(event[0]) ||
+      !['setup', 'call', 'teardown'].includes(event[1]) || !['passed', 'failed', 'skipped'].includes(event[2]) ||
+      typeof event[3] !== 'boolean') throw new Error('Invalid OSS test phase evidence.');
+    const [id, phase, outcome, xfail] = event;
+    if (!cases.has(id)) cases.set(id, new Map());
+    const phases = cases.get(id);
+    if (phases.has(phase)) throw new Error('Duplicate OSS test phase evidence.');
+    phases.set(phase, xfail ? 'skipped' : outcome);
+  }
+  return { plugins: report.plugins, cases: [...cases].map(([id, phases]) => {
+    const [classname, name] = caseKey(id).split('\0');
+    const outcome = phases.size !== 3 || phases.get('setup') !== 'passed' || phases.get('teardown') !== 'passed'
+      ? 'error' : phases.get('call');
+    return { classname, name, outcome };
+  }) };
+}
+
+function xmlOf(report) {
+  const escape = value => value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[character]);
+  return '<testsuite>' + report.cases.map(item => '<testcase classname="' + escape(item.classname) + '" name="' + escape(item.name) + '">' +
+    (item.outcome === 'passed' ? '' : '<' + (item.outcome === 'failed' ? 'failure' : item.outcome) + '/>') + '</testcase>').join('') + '</testsuite>';
 }
 
 module.exports = { cwdFor, testsFor, caseKey, restoreTests, resultOf, runTests };

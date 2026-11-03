@@ -3,6 +3,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { sha256, infrastructure, fatal, abort } = require('./data.cjs');
 const { locked, lease } = require('./cache.cjs');
+const { sealEnvironment } = require('./integrity.cjs');
 
 // pip's isolated option alone does not disable netrc or keyring. All installation commands also get an empty home,
 // an empty netrc and no inherited Python path; no package manager setting from the owner's profile is consulted.
@@ -120,6 +121,9 @@ async function prepareEnvironment(entry, cwd, ctx, python) {
     }
     if (!hit) await saveWheels(directory, wheelhouse, ctx);
   }));
+  // Warm editable-install startup files before sealing; grading uses -B, so it cannot add bytecode to this seal.
+  await checkedExecute(ctx, pythonPath(ctx), ['-I', '-c', RUNTIME], { cwd, timeoutMs: 10000, log, network: false });
+  await sealEnvironment(ctx, environmentPath(ctx));
 }
 
 async function finalizeWorkspace(workspace, ctx) {

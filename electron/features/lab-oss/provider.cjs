@@ -4,6 +4,7 @@ const { sha256, validateManifest, cachedRow, patchPaths, taskDirectory, mirrorDi
 const { fetchTask, guard } = require('./cache.cjs');
 const { prepareEnvironment, finalizeWorkspace, requirementsHash } = require('./environment.cjs');
 const { cwdFor, caseKey, restoreTests, runTests } = require('./pytest.cjs');
+const { sealWorkspace, verifyWorkspace, trustWorkspace, referenceControls, logError } = require('./integrity.cjs');
 
 function createProvider(input, python) {
   const manifest = validateManifest(input), hash = sha256(JSON.stringify(manifest));
@@ -94,12 +95,14 @@ function createProvider(input, python) {
     },
     async prepare(task, scope, ctx) {
       const entry = entryOf(task, scope);
-      await cachedRow(ctx, entry);
+      const row = await cachedRow(ctx, entry);
       try {
         const workspace = await ctx.tools.snapshot(mirrorDirectory(ctx, entry), ctx.workspaceRoot, entry.base, { signal: ctx.signal });
         if (workspace.cwd !== cwdFor(ctx)) throw new Error('Unexpected OSS snapshot location.');
         await prepareEnvironment(entry, workspace.cwd, ctx, python);
-        return await finalizeWorkspace(workspace, ctx);
+        const prepared = await finalizeWorkspace(workspace, ctx);
+        await sealWorkspace(ctx, row);
+        return prepared;
       }
       catch (error) {
         if (ctx.signal?.aborted || error.fatal || error.infrastructure) throw error;
@@ -123,6 +126,8 @@ function createProvider(input, python) {
       return {
         taskId: entry.id, manifest: hash, requirements: requirementsHash(entry), diffFiles: patchPaths(row.patch),
         total: after.testsTotal, names: [...entry.FAIL_TO_PASS, ...entry.PASS_TO_PASS].map(caseKey),
+        controls: await referenceControls(ctx),
+        plugins: [...new Set([...before.plugins, ...after.plugins])].sort(),
       };
     },
     brief(task, scope) {
@@ -138,7 +143,14 @@ function createProvider(input, python) {
       const entry = entryOf(task, scope), row = await cachedRow(ctx, entry);
       if (ctx.reference?.taskId !== entry.id || ctx.reference.manifest !== hash ||
         ctx.reference.requirements !== requirementsHash(entry)) throw new Error('Missing validated OSS reference.');
-      await restoreTests(entry, row, ctx);
+      try {
+        await verifyWorkspace(ctx, ctx.reference.controls);
+        await restoreTests(entry, row, ctx);
+        await trustWorkspace(ctx);
+      } catch (error) {
+        await logError(ctx, 'tests', error);
+        throw error;
+      }
       const result = await runTests(entry, ctx, 'tests'), passed = result.testsPassed === result.testsTotal;
       return { testsPassed: result.testsPassed, testsTotal: result.testsTotal, score: passed ? 1 : 0, passed, evidence: result.evidence };
     },
