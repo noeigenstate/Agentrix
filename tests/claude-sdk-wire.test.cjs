@@ -134,6 +134,8 @@ test('M12 the real Codex adapter discovers and speaks to the compiled fake app-s
     ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}) };
   const session = createCodexRuntime({ spawnProcess: scope.spawn }).create({ agent: 'codex', cwd: directory, env, projectId: 'p', terminalId: 't', runtimeSessionId: randomUUID(), effort: 'high', fast: true }, event => events.push(event));
   scope.defer(() => session.close()); await session.start();
+  const account = await session.readAccount(); assert.equal(account.kind, 'subscription');
+  assert.ok(!JSON.stringify(account).includes('private-offline-fixture'));
   assert.equal((await session.send({ clientMessageId: randomUUID(), text: 'first' })).status, 'delivered');
   const deadline = Date.now() + 3000;
   while (!events.some(event => event.type === 'turn.completed') && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));

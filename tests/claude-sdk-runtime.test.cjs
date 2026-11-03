@@ -25,12 +25,15 @@ function setup(t, fakeOptions) {
 }
 test('owner queries remain alive at idle and reuse the same process on the next send', async t => {
   const { session, fake, events, runtime } = setup(t); await session.start();
+  assert.equal(session.connection().kind, 'none');
   const first = randomUUID(), second = randomUUID();
   session.send({ clientMessageId: first, text: 'one' });
   await until(() => events.some(event => event.type === 'turn.completed'));
   session.send({ clientMessageId: second, text: 'two' });
   await until(() => events.filter(event => event.type === 'turn.completed').length === 2);
   assert.equal(fake.calls.length, 1); assert.equal(fake.closes.length, 0); assert.equal(session.snapshot().state, 'idle');
+  assert.equal(session.connection().kind, 'api');
+  assert.equal(runtime.connection(session.snapshot().runtimeSessionId).kind, 'api');
   assert.equal(runtime.usage.summary().monthUsdMicros, 200000);
   assert.equal(fake.calls[0].options.pathToClaudeCodeExecutable, process.execPath);
   assert.equal(fake.calls[0].options.env.ANTHROPIC_API_KEY, key);
@@ -210,6 +213,8 @@ test('native executable discovery never searches relative directories or accepts
   assert.equal(resolved, await fs.promises.realpath(resolved));
   assert.equal(await fs.promises.realpath(resolved), await fs.promises.realpath(path.join(dir, 'claude.exe')));
   assert.equal(probes, 1);
+  for (const version of ['2.2.0', '3.0.0']) assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir,
+    probe: (_file, _args, _options, callback) => callback(null, version) }), resolved);
 });
 test('GUI and helper cannot resume the same Claude session concurrently', async t => {
   const { session, runtime, fake, spec } = setup(t, { auto: false }); await session.start(); session.send({ clientMessageId: randomUUID(), text: 'hold session' });

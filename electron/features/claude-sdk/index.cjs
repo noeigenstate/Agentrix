@@ -1,12 +1,13 @@
 const path = require('node:path');
 const { createCredentials } = require('./credentials.cjs');
 const { createSdkLoader } = require('./runtime.cjs');
-const { resolveClaudeExecutable } = require('./executable.cjs');
+const { resolveClaudeExecutable, inspectClaudeExecutable } = require('./executable.cjs');
+const { createConnectionTest } = require('./connection.cjs');
 const { createUsage } = require('./usage.cjs');
 const { createClaudeSession } = require('./session.cjs');
 const { readJson, writeJson } = require('../native-session/storage.cjs');
 function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader(), resolveExecutable = resolveClaudeExecutable,
-  now = Date.now, onCost, onSession, audit } = {}) {
+  now = Date.now, onCost, onSession, audit, request, inspectCli = inspectClaudeExecutable } = {}) {
   const credentials = createCredentials({ file: path.join(directory, 'credentials.json'), safeStorage });
   const usage = createUsage({ file: path.join(directory, 'usage.json'), now });
   const sessions = new Set(), leases = new Map(); let unavailable = null;
@@ -16,7 +17,8 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
     writeJson(path.join(directory, 'policy-audit.json'), next); decisions = next;
   });
   return {
-    credentials, usage,
+    credentials, usage, testConnection: createConnectionTest({ credentials, inspectCli, request, now }),
+    connection(id) { return [...sessions].find(session => session.snapshot().runtimeSessionId === id)?.connection() || { kind: 'none', source: null, observedAt: null }; },
     apiState(budget) {
       if (!credentials.status().saved) return { status: 'no_key' };
       if (usage.available(budget) <= 0) return { status: 'budget_exhausted' };

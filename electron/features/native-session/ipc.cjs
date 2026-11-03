@@ -18,5 +18,6 @@ function registerIpc({ handle, router, settings, claude }) {
   handle('native:key-clear', () => router.keyClear());
   handle('native:key-status', () => claude.credentials.status());
   handle('native:usage', () => router.usage());
+  handle('native:test-connection', (...args) => { assert(args.length === 0); return router.testConnection(); });
 }
 module.exports = { registerIpc };

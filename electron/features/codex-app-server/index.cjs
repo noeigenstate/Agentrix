@@ -5,7 +5,7 @@ const { homedir } = require('node:os');
 const { createRpc } = require('./rpc.cjs');
 const { createEvents, itemPayload } = require('./events.cjs');
 const { createRequests } = require('./requests.cjs');
-const { mergeLimits } = require('./account.cjs');
+const { mergeLimits, accountConnection } = require('./account.cjs');
 const { assertCompatible, probeCapabilities } = require('./compatibility.cjs');
 const { codexExecutable } = require('../agents/codex-account-usage.cjs');
 const { workerEnvironment } = require('./environment.cjs');
@@ -29,6 +29,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       const events = createEvents(spec, emit, now), receipts = new Map(), finished = new Set();
       let rpc, child, requests, state = 'stopped', closed = false, sending = Promise.resolve(), origin = 'user', clientMessageId = null;
       let lockKey, active = false, threadResponse, accountGeneration = 0, limitsRead = null;
+      let accountRead = null;
       const setState = (value, reason = null) => { state = value; events.publish('session.state', { state, reason }); };
       function bind(threadId) {
         const home = spec.codexHome || spec.env?.CODEX_HOME || path.join(spec.env?.HOME || spec.env?.USERPROFILE || homedir(), '.codex');
@@ -58,6 +59,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           scopes.set(scope, value); events.publish('limits.updated', value);
         } else if (method === 'account/updated') {
           ++accountGeneration;
+          accountRead = null;
           limitsRead = null;
           scopes.delete(spec.scopeId || spec.runtimeSessionId);
           events.publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'unknown', observedAtMs: now(), state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: 'codex-app-server' });
@@ -168,9 +170,20 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         })();
         limitsRead = task.finally(() => { if (generation === accountGeneration) limitsRead = null; }); return limitsRead;
       }
+      function readAccount() {
+        if (closed || !rpc) return Promise.resolve({ kind: 'none', source: null, observedAt: null });
+        if (accountRead) return accountRead;
+        const generation = accountGeneration;
+        const task = rpc.request('account/read', { refreshToken: false }).then(value => {
+          if (closed || generation !== accountGeneration) return { kind: 'unknown', source: null, observedAt: null };
+          return accountConnection(value, now());
+        }).catch(() => ({ kind: 'unknown', source: 'codex-app-server account/read', observedAt: null }));
+        accountRead = task.finally(() => { if (generation === accountGeneration) accountRead = null; });
+        return accountRead;
+      }
       return { start: override => open(false, override), resume: override => open(true, override), send, interrupt,
         answer: (id, answer) => requests.answer(id, answer), snapshot: () => ({ ...events.snapshot(), state, requests: requests?.snapshot() || [] }), close,
-        readLimits,
+        readLimits, readAccount,
         readUsage: () => rpc.request('account/usage/read', {}),
         history: cursor => rpc.request('thread/turns/list', { threadId: events.binding.providerSessionId, cursor: cursor || null, limit: 50, sortDirection: 'desc', itemsView: 'full' }),
         get pid() { return child?.pid; }, get threadResponse() { return threadResponse; },
