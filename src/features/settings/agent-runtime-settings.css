@@ -1,0 +1,7 @@
+/* 运行方式: the key and budget fields take the settings pane's input look (settings.css, terminal-font-row). */
+.runtime-key, .runtime-budget { flex: none; justify-content: flex-end; }
+.runtime-key input, .runtime-budget input { width: 220px; max-width: 48%; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; font: inherit; color: var(--text-1); background: var(--bg-input); }
+.runtime-budget input { width: 120px; text-align: right; }
+.runtime-key input::placeholder, .runtime-budget input::placeholder { color: var(--text-2); opacity: 1; }
+.runtime-key input:disabled, .runtime-budget input:disabled { color: var(--text-2); }
+.runtime-error { margin: 12px 0 0; }

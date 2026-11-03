@@ -7,8 +7,11 @@ import { TerminalPane } from './TerminalPane';
 import { terminalInUse, visibleTerminals } from './terminal-visibility.ts';
 import { ReadingView } from '../reading/ReadingView';
 import { readingShown, setReading, syncReading, useTerminalChoice } from '../reading/reading-mode';
+import { NativePathNote } from '../native-session/NativePathNote';
+import { NativeSessionView } from '../native-session/NativeSessionView';
+import { ensureNativeSession, nativeShown, useNativeEntries } from '../native-session/native-store.ts';
 import { TERMINAL_SPLITS, useReorder } from '../workspace/useProjectReorder';
-import type { Project, Result } from '../../shared/types';
+import type { Project, ProjectTerminal, Result } from '../../shared/types';
 import { t } from '../../shared/i18n';
 
 
@@ -20,8 +23,10 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
   const area = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const terminals = project.terminals;
+  // A session without a terminal (the Claude API or Codex's app-server) has no pty to be "active" by: the native view stands where a terminal's would.
+  const nativeEntries = useNativeEntries(), isNative = (terminal: ProjectTerminal) => !terminal.sessionId && nativeShown(nativeEntries.get(terminal.id));
   const base = new Set(visibleTerminals(terminals, focused).map(terminal => terminal.id));
-  const visible = terminals.filter(terminal => base.has(terminal.id) || !focused && terminal.readingHistory);
+  const visible = terminals.filter(terminal => base.has(terminal.id) || !focused && (terminal.readingHistory || isNative(terminal)));
   const visibleIds = new Set(visible.map(terminal => terminal.id));
   const multiple = visible.length > 1;
   // The sub-agent view the owner opened beside a conversation (one per terminal) takes a cell of the same grid, only while the project is expanded;
@@ -36,6 +41,8 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
   const openTerminal = (id: string) => { setActiveId(id); if (!focused) onExpand(); };
   const raw = useTerminalChoice();
   useEffect(() => { terminals.forEach(syncReading); }, [terminals, raw]);
+  // A window opened (or reloaded) onto a native session that runs asks once for it; terminals with a pty have none.
+  useEffect(() => { for (const terminal of terminals) if (!terminal.sessionId) ensureNativeSession(terminal.id); }, [terminals]);
   useEffect(() => {
     const node = area.current; if (!node) return;
     const observer = new ResizeObserver(() => setWidth(node.clientWidth));
@@ -55,7 +62,8 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
   return <div ref={area} className={`panel-terminal-area terminal-grid ${cells > 1 ? 'has-splits' : ''} ${multiple ? 'has-terminals' : ''} ${reorder.drag ? 'is-reordering' : ''}`} style={{ '--terminal-columns': columns, '--terminal-rows': rows } as CSSProperties}
     onPointerDown={reorder.onPointerDown} onClickCapture={reorder.onClickCapture}>
     {shown.map(terminal => {
-      if (!focused && !terminal.sessionId && !terminal.readingHistory) return null;
+      const native = isNative(terminal);
+      if (!focused && !terminal.sessionId && !terminal.readingHistory && !native) return null;
       const stopped = terminal.status === 'stopped' || terminal.status === 'exited';
       const reading = readingShown(terminal, raw);
       const name = `${project.name} ${terminal.title}`;
@@ -67,9 +75,11 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
           <button className="icon-button" title={t('重启此终端')} aria-label={t('重启 {name}', { name })} onClick={() => void onAction(window.agentrix.restartTerminal(terminal.id))}><ArrowCounterClockwise size={13} /></button>
           <button className="icon-button" title={t('关闭此终端')} aria-label={t('关闭 {name}', { name })} onClick={() => void onAction(window.agentrix.closeTerminal(terminal.id))}><X size={13} /></button>
         </div>}
-        <div className="terminal-split-body" data-reading={reading || !!terminal.agentStarting}>
+        <div className="terminal-split-body" data-reading={reading || native || !!terminal.agentStarting}>
           {reading && <ReadingView projectId={project.id} terminal={terminal} remote={project.kind === 'ssh'} autoFocus={focused && selected === terminal.id} active={selected === terminal.id} onShowTerminal={() => setReading(terminal.id, false)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />}
+          {terminal.sessionId && <NativePathNote terminalId={terminal.id} />}
           {terminal.sessionId ? <TerminalPane id={terminal.id} sessionId={terminal.sessionId} fontSize={fontSize} focused={focused && selected === terminal.id && !reading && !terminal.agentStarting} onError={onError} onOpenLink={(_id, target) => onOpenLink(project.id, target)} remote={project.kind === 'ssh'} />
+            : native ? <NativeSessionView terminalId={terminal.id} autoFocus={focused && selected === terminal.id} />
             // A local project starts with the agent chosen here; an SSH project connects first, in its terminal.
             : reading ? null : project.kind !== 'ssh' ? <AgentLauncher terminalId={terminal.id} projectId={project.id} onAction={onAction} onOpenTerminal={openTerminal} />
             : sshEmpty(terminal.id)}
