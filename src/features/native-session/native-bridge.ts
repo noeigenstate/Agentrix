@@ -1,7 +1,7 @@
 // The renderer's one view of the main process's native sessions: window.agentrix.nativeSession (contract-addendum 4). The bridge itself
 // and its preload wiring belong to the main side; this file is the consumer-side shape of it, so the rest of the module never reaches
 // into window. Every call returns a Result; a build or a test without the bridge reads as "no native sessions" (null).
-import type { Result } from '../../shared/types';
+import type { ConnectionTest, Result } from '../../shared/types';
 import type { AgentEvent } from '../../shared/agent-events';
 
 export type NativeAgent = 'claude' | 'codex';
@@ -24,15 +24,8 @@ export type AgentConnection = { kind: ConnectionKind; source: string | null; obs
 export type AgentPathState = { path: 'api' | 'native' | 'terminal' | null; reason: string | null; limits: LimitsPayload | null; connection?: AgentConnection | null };
 
 // The answer to the owner's click on 测试连接 (contract addendum 2); it never carries the key.
-export type KeyCheck = 'ok' | 'missing' | 'invalid' | 'forbidden' | 'rate_limited' | 'unreachable' | 'error';
-export type ConnectionTest = {
-  checkedAt: number;
-  key: { status: KeyCheck; detail: string | null; latencyMs: number | null };
-  models: string[] | null;
-  cli: { status: 'ok' | 'missing' | 'too_old'; version: string | null; required: string };
-  path: 'api' | 'terminal' | null;
-  reason: string | null;
-};
+export type KeyCheck = ConnectionTest['key']['status'];
+export type { ConnectionTest };
 export type NativeUsage = {
   month: string; todayUsdMicros: number | null; monthUsdMicros: number | null; estimated: true; budgetUsd: number | null;
   agents: Record<NativeAgent, AgentPathState>;
