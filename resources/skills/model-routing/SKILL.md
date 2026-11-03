@@ -5,7 +5,7 @@ trigger: auto
 when: 新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算
 requires: any-agent
 title: 模型路由
-summary: 任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能、前端并验证界面。GPT 默认 max + fast，Claude 默认 high。
+summary: 任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能、前端并验证界面。GPT 默认 high + fast，Claude 默认 high。
 ---
 
 # Routing work between models
@@ -37,10 +37,14 @@ do their task themselves; a worker never hands it on to another.
 | Role | Takes |
 | --- | --- |
 | Orchestrator | Plans, briefs, decides, reviews every diff, verifies and releases; takes a task over only when its worker failed, or for one quick lookup faster than writing a brief |
-| Architect | Technology choices, design, task breakdown, interface contracts, architecture review |
-| Core engineer | Complex implementation, cross-module refactors, debugging, fixing failing tests |
+| Architect | Task breakdown by module, technology choices, front-end and interaction design, cross-module contracts, architecture review |
+| Core engineer | Back-end design (main process, IPC, storage, data flow and their contracts), complex implementation, cross-module refactors, debugging, fixing failing tests |
 | Execution engineer | Routine features, front-end components and polish, unit tests, maintenance, docs |
 | Visual and verification | UI checks, reading screenshots, driving the interface, small quick tasks |
+
+Back-end design and debugging go almost entirely to the core engineer: in the plan the architect splits the work and
+names the back-end modules, the core engineer drafts their design (data, interfaces, IPC, storage, failure handling) and
+the architect checks it against the module split; every debugging task, front end included, starts with the core engineer.
 
 Pick by the task, not by the side of the code: a hard cross-module change goes to the core engineer wherever it lives,
 a routine tweak or a doc edit to the execution engineer, a one-line fix or a screenshot check to the visual engineer.
@@ -54,7 +58,7 @@ and a one-line fix, skips it with a recorded reason).
 
 | Stage | What happens | Output |
 | --- | --- | --- |
-| 1 Plan | Architect: split the task by module, set constraints, write the interface contract and the acceptance criteria | A written plan |
+| 1 Plan | Architect: split the task by module, set constraints, write the cross-module contract and the acceptance criteria; the core engineer drafts the back-end design | A written plan |
 | 2 Roundtable | Every worker gets the whole plan, changes nothing and restates its task; the planner checks and corrects misreadings; all confirm | Minutes, shown to the user as tables |
 | 3A Core build | Core engineer in worktree A | Complex logic, refactors, debugging, failing-test fixes |
 | 3B Routine build | Execution engineer in worktree B | Routine features, front end, tests, docs |
@@ -65,12 +69,12 @@ and a one-line fix, skips it with a recorded reason).
 
 ### Model settings
 
-- **GPT models** (Sol and any other `gpt-*`): default `model_reasoning_effort=max` and `service_tier="fast"`.
+- **GPT models** (Sol and any other `gpt-*`): default `model_reasoning_effort=high` and `service_tier="fast"`.
 - **Claude models** (Opus, Sonnet, Haiku): default effort `high` (`effort: "high"` on an Agent call, `--effort high` for a command-line Claude worker).
 - **Whenever Codex is installed**, before the first task of a project, ask the user with options, not an open question
   (the AskUserQuestion tool in Claude Code, a numbered list in Codex):
-  1. max + fast (default, recommended): quickest, spends more of the plan's limits
-  2. max, fast off: same depth, slower, spends less
+  1. high + fast (default, recommended): quick, spends more of the plan's limits
+  2. high, fast off: same depth, slower, spends less
   3. Custom: the effort (low, medium, high, xhigh, max) and fast on or off, per model if wanted
 
   Use the answer for every Codex run in that project. If the session's startup note already carries the project's choice,
@@ -99,7 +103,7 @@ Check first: `claude --version` and `codex --version` (a startup note may alread
 - Sol, as a background command, brief in a file:
 
   ```
-  node "<helper>" codex --role <role> --title "<one line>" --model gpt-6.1-sol --effort max --fast --cwd <worktree-a> --brief <prompt.md> --out <out.md>
+  node "<helper>" codex --role <role> --title "<one line>" --model gpt-6.1-sol --effort high --fast --cwd <worktree-a> --brief <prompt.md> --out <out.md>
   ```
 
 - Visual checks, small tasks and UI acceptance go to a Sonnet subagent the same way; UI acceptance by one that did not build the change, given the screenshot paths.
@@ -142,7 +146,7 @@ Every worker is an Agent call with `model` set and `effort: "high"`; worktrees t
 
 #### 4. Codex only
 
-Every worker is a background Codex worker (`node "<helper>" codex --model <model> --effort max --fast --cwd <worktree> …`).
+Every worker is a background Codex worker (`node "<helper>" codex --model <model> --effort high --fast --cwd <worktree> …`).
 
 | Role | Model |
 | --- | --- |
@@ -321,7 +325,7 @@ project memory itself is not committed. The next round's roundtable (a new meeti
 - Route by difficulty and responsibility, not by renderer versus main-process location.
 - Use separate worktrees for parallel builds, with no overlapping file ownership.
 - Paste the project's code-standard rules into every worker brief and review every diff against them before accepting it.
-- GPT models default to max effort with fast mode; Claude models default to high effort. Honor the user's chosen settings.
+- GPT models default to high effort with fast mode; Claude models default to high effort. Honor the user's chosen settings.
 - Start command-line workers only through the dispatch helper as background commands, read the start line to confirm the launch and routing, and act on `failed to start` or `routing MISMATCH`.
 - Give a worker that changes files `--allow` for its scope and reject any `OUT OF SCOPE` result.
 - Hold the roundtable before the build and consolidate the round after the review; show the user the minutes as tables.
