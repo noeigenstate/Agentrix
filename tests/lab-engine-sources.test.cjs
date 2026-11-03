@@ -216,6 +216,18 @@ test('AA keys use encrypted storage, never enter experiments, clear correctly an
   storage.isEncryptionAvailable = () => false; await assert.rejects(f.engine.aaKey(key), /安全密钥存储/);
 });
 
+test('a fresh profile loads without asking the operating system for encryption availability', async t => {
+  let probes = 0;
+  const storage = { isEncryptionAvailable() { probes++; throw new Error('fixture locked keychain'); },
+    decryptString() { assert.fail('there is no encrypted key to decrypt'); } };
+  const f = await fixture(t, [fakeProvider('history')], { safeStorage: storage });
+  assert.deepEqual(await f.engine.list(), []); assert.equal(probes, 0);
+  const secret = path.join(f.engine.store.directory, 'secrets/aa.key');
+  await fs.mkdir(path.dirname(secret), { recursive: true }); await fs.writeFile(secret, 'synthetic encrypted bytes');
+  assert.equal(await f.engine.store.readAaKey(storage), null); assert.equal(probes, 1);
+  assert.equal(await fs.readFile(secret, 'utf8'), 'synthetic encrypted bytes');
+});
+
 function fakeGet(responses, calls) {
   return (url, options, callback) => {
     calls.push({ url: String(url), headers: { ...options.headers } });
