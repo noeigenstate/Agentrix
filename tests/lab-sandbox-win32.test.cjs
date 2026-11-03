@@ -189,6 +189,7 @@ test('Windows LPAC reaches its own broker and rejects another run pipe and capab
     })}
     (async()=>{const replies={own:await request(own.address,own.capability,'own'),repeated:[]};
       for(let i=0;i<8 && replies.own.code===0;i++)replies.repeated.push(await request(own.address,own.capability,'own'));
+      replies.concurrent=await Promise.all(Array.from({length:24},()=>request(own.address,own.capability,'own-concurrent')));
       replies.wrongCapability=await request(own.address,other.capability,'wrong-capability');
       replies.foreignPipe=await request(other.address,own.capability,'foreign');
       replies.foreignPipeWithItsCapability=await request(other.address,other.capability,'foreign-known-capability');
@@ -202,10 +203,11 @@ test('Windows LPAC reaches its own broker and rejects another run pipe and capab
   const expected = { code: 0, stdout: 'own broker', stderr: '' };
   assert.deepEqual(replies.own, expected);
   assert.deepEqual(replies.repeated, Array(8).fill(expected));
+  assert.deepEqual(replies.concurrent, Array(24).fill(expected));
   assert.equal(replies.wrongCapability.code, 125);
   assert.deepEqual(replies.foreignPipe, { denied: true });
   assert.deepEqual(replies.foreignPipeWithItsCapability, { denied: true });
-  assert.equal(accepted, 9); assert.equal(foreign, 0);
+  assert.equal(accepted, 33); assert.equal(foreign, 0);
   assert.equal(replies.rpc.exitCode, 1, 'RPC reaches its host handler and is denied by dispatch policy, not by pipe lookup');
   assert.match(replies.rpc.output, /Invalid lab dispatch request/);
   const { LabUsage } = require('../electron/features/lab/usage.cjs');
@@ -394,6 +396,9 @@ class PipeSecurityProbe { public static void Main(string[] args) {
     const { createPipeRelays } = require('../electron/features/lab/sandbox-win32-host.cjs');
     const local = ['rpc', 'meter', 'broker'].map(prefix => '\\\\.\\pipe\\LOCAL\\agentrix-lab-' + prefix + '-' + randomUUID());
     const servers = [], backendSockets = new Set();
+    let heldRequests = 0, releaseHeld;
+    const heldReply = new Promise(resolve => { releaseHeld = resolve; });
+    t.after(() => releaseHeld());
     t.after(() => Promise.all(servers.map(server => new Promise(resolve => {
       server.close(resolve); for (const socket of backendSockets) socket.destroy();
     }))), { timeout: 3000 });
@@ -404,6 +409,10 @@ class PipeSecurityProbe { public static void Main(string[] args) {
         socket.on('data', chunk => {
           bytes += chunk.length;
           if (bytes >= 131072) socket.end('reply:' + bytes + ':' + 'x'.repeat(262144));
+          else if (chunk.toString() === 'hold\n') {
+            heldRequests++;
+            void heldReply.then(() => socket.end('{"code":0}\n'));
+          } else if (chunk.toString() === 'reject\n') socket.end('{"code":125}\n');
           else if (chunk.includes(10)) setTimeout(() => socket.end('{"ok":true}\n'), 75);
         });
         socket.on('end', () => socket.end());
@@ -429,6 +438,31 @@ class PipeSecurityProbe { public static void Main(string[] args) {
     const { windowsMeterSink } = require('../electron/features/lab/sandbox-win32-executor.cjs');
     const send = windowsMeterSink({ pipeName: relays.pipes[1], sessionKey: 'synthetic-key', projectId: 'fixture' });
     assert.equal(await send({ type: 'lab-handshake' }), true, 'the delayed meter acknowledgement survives the namespace relay');
+    const request = body => new Promise((resolve, reject) => {
+      const socket = require('node:net').connect(relays.pipes[2]); let reply = '';
+      socket.setTimeout(3000, () => socket.destroy(new Error('Queued pipe relay timed out.')));
+      socket.on('error', reject);
+      socket.on('data', chunk => {
+        reply += chunk;
+        if (reply.includes('\n')) { socket.destroy(); resolve(JSON.parse(reply)); }
+      });
+      socket.once('close', () => { if (!reply.includes('\n')) reject(new Error('Pipe relay closed before its reply.')); });
+      socket.write(body);
+    });
+    // Match the LPAC broker client: destroy after its newline reply, without waiting for server EOF.
+    for (let repeat = 0; repeat < 24; repeat++) assert.deepEqual(await request('reject\n'), { code: 125 });
+    const queued = Promise.all(Array.from({ length: 24 }, () => request('hold\n')));
+    // Attach immediately so an early socket failure remains a test failure, not an unhandled rejection.
+    queued.catch(() => {});
+    const waiting = Date.now();
+    while (heldRequests < 8 && Date.now() - waiting < 2000) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(heldRequests, 8, 'eight requests occupy the relay slots');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(heldRequests, 8, 'excess clients wait without opening additional backend connections');
+    releaseHeld();
+    assert.deepEqual(await queued, Array.from({ length: 24 }, () => ({ code: 0 })));
+    assert.equal(heldRequests, 24, 'every queued request eventually reaches the backend');
+    assert.deepEqual(await request('reject\n'), { code: 125 }, 'the listener continues serving protocol refusals');
     const partial = '\\\\.\\pipe\\LOCAL\\agentrix-lab-partial-' + randomUUID();
     await assert.rejects(createPipeRelays([partial, local[2]], namespace), { code: 'EADDRINUSE' });
     await assert.rejects(new Promise((resolve, reject) => {

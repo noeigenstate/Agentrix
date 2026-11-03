@@ -98,8 +98,13 @@ test('SSH fixture closes an unauthenticated transport that refuses to finish its
   const socket = net.connect({ port: value.port, host: '127.0.0.1', allowHalfOpen: true });
   t.after(() => socket.destroy()); socket.on('error', () => {}); socket.resume();
   await new Promise((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
+  const ended = new Promise(resolve => { socket.once('end', resolve); socket.once('close', resolve); });
   await value.close();
-  assert.ok(messages.includes('[ssh-fixture] cleanup force connections=1'));
+  await Promise.race([ended, new Promise((_, reject) => {
+    const timer = setTimeout(() => reject(new Error('SSH fixture left its unauthenticated transport open.')), 1000);
+    ended.then(() => clearTimeout(timer));
+  })]);
+  assert.ok(socket.readableEnded || socket.destroyed, 'the unauthenticated peer observes EOF or closure');
   assert.equal(value.snapshot().transports, 0);
   assert.ok(messages.includes('[ssh-fixture] cleanup complete failures=0'));
 });
