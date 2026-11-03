@@ -106,6 +106,7 @@ public partial class LabSandbox {
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetDefaultDllDirectories(uint flags);
   [DllImport("advapi32.dll")] static extern IntPtr FreeSid(IntPtr sid);
   [DllImport("userenv.dll",CharSet=CharSet.Unicode)] static extern int CreateAppContainerProfile(string name,string display,string description,IntPtr caps,int count,out IntPtr sid);
+  [DllImport("userenv.dll",CharSet=CharSet.Unicode)] static extern int DeriveAppContainerSidFromAppContainerName(string name,out IntPtr sid);
   [DllImport("userenv.dll",CharSet=CharSet.Unicode)] static extern int DeleteAppContainerProfile(string name);
   [DllImport("userenv.dll",CharSet=CharSet.Unicode)] static extern int GetAppContainerFolderPath(string sid,out IntPtr path);
   [DllImport("kernelbase.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool DeriveCapabilitySidsFromName(string name,out IntPtr groups,out uint groupCount,out IntPtr caps,out uint capCount);
@@ -136,6 +137,15 @@ public partial class LabSandbox {
   }
   static void Stage(string value) { stage=value; Trace("stage "+value); }
   static string Id(string value) { Guid parsed; if (!Guid.TryParseExact(value,"D",out parsed)) throw new Exception(); return parsed.ToString(); }
+  static string ProfileName(string run,string job) { return "agentrix.lab."+Id(run).Substring(0,8)+"."+Id(job).Replace("-",""); }
+  static string PipePrefix(IntPtr sid) {
+    using(var current=Process.GetCurrentProcess()) return "\\\\.\\pipe\\Sessions\\"+current.SessionId+
+      "\\AppContainerNamedObjects\\"+SidString(sid)+"\\";
+  }
+  static string PipeNamespace(string run,string job) {
+    IntPtr sid; CheckCode((uint)DeriveAppContainerSidFromAppContainerName(ProfileName(run,job),out sid));
+    try { return PipePrefix(sid); } finally { FreeSid(sid); }
+  }
   static string JobName(string run,string job) { return "Local\\AgentrixLab-"+Id(run)+(String.IsNullOrEmpty(job)?"":"-"+Id(job)); }
   static string SidString(IntPtr sid) {
     IntPtr text; Check(ConvertSidToStringSidW(sid,out text));
@@ -222,7 +232,11 @@ public partial class LabSandbox {
     return descriptor;
   }
   static void PipeAcl(string pipe,IntPtr sid) {
-    if(!pipe.StartsWith("\\\\.\\pipe\\LOCAL\\agentrix-lab-",StringComparison.OrdinalIgnoreCase)) throw new Exception();
+    string local="\\\\.\\pipe\\LOCAL\\";
+    string scoped=PipePrefix(sid);
+    string name=pipe.StartsWith(scoped,StringComparison.OrdinalIgnoreCase)?pipe.Substring(scoped.Length):
+      pipe.StartsWith(local,StringComparison.OrdinalIgnoreCase)?pipe.Substring(local.Length):"";
+    if(!System.Text.RegularExpressions.Regex.IsMatch(name,@"\Aagentrix-lab-[a-zA-Z0-9-]{1,128}\z")) throw new Exception();
     IntPtr descriptor=PipeDescriptor(sid);
     try {
       bool present,defaulted; IntPtr sacl,dacl;
@@ -416,7 +430,7 @@ public partial class LabSandbox {
     using(var guard=new LeaseGuard(plan.manifest)) {
       Stage("identity");
       Id(plan.runId); Id(plan.job);
-      string profile="agentrix.lab."+plan.runId.Substring(0,8)+"."+plan.job.Replace("-","");
+      string profile=ProfileName(plan.runId,plan.job);
       IntPtr sid; CheckCode((uint)CreateAppContainerProfile(profile,profile,"Agentrix isolated lab run",IntPtr.Zero,0,out sid));
       var paths=new List<string>(); var memory=new List<IntPtr>(); var handles=new List<IntPtr>();
       var lifetime=new RunLifetime();
@@ -468,7 +482,10 @@ public partial class LabSandbox {
         foreach(var grant in grants) { lifetime.CheckRunning(); ApplyGrant(grant,sid); }
         foreach(var file in plan.credentialFiles ?? new string[0]) Acl(file,sid,MODIFY,false);
         Stage("pipe ACL");
-        foreach(var pipe in plan.pipes ?? new string[0]) PipeAcl(pipe,sid);
+        foreach(var pipe in plan.pipes ?? new string[0]) {
+          if(!pipe.StartsWith(PipePrefix(sid),StringComparison.OrdinalIgnoreCase)) throw new Exception();
+          PipeAcl(pipe,sid);
+        }
         IntPtr inRead,inWrite,outRead,outWrite,errRead,errWrite;
         var inherit=new SA { size=Marshal.SizeOf(typeof(SA)),inherit=1 };
         Stage("stdio");
@@ -548,6 +565,7 @@ public partial class LabSandbox {
       Check(SetDefaultDllDirectories(0x800)); // Subsequent native loads use System32; preparation starts in a protected directory.
       if(args.Length==1 && args[0]=="host-ready") { Console.Write(json.Serialize(new { ready=HostReady(),elevated=Elevated() })); return 0; }
       if(args.Length==1 && args[0]=="prepare-host") return PrepareHost();
+      if(args.Length==3 && args[0]=="pipe-namespace") { Console.Write(PipeNamespace(args[1],args[2])); return 0; }
       if(args.Length==1 && args[0]=="run") {
         // The host writes UTF-8. Keep this reader alive for cancellation without Console's OEM decoder.
         var control=new StreamReader(Console.OpenStandardInput(),new UTF8Encoding(false,true),false,4096);
