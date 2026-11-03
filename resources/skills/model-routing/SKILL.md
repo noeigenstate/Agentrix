@@ -67,6 +67,13 @@ and a one-line fix, skips it with a recorded reason).
 | 5 Consolidate | Orchestrator writes the round's results and architecture changes into the shared project memory and adjusts the module boundaries | The next round starts from them |
 | Final acceptance | Tests pass, every finding is fixed or dismissed with a reason, the user has seen the key changes | Done |
 
+### Language and reports
+
+- Every worker writes its visible messages, restatements and reports in the user's language: the language the user writes to
+  the orchestrator in. Code, identifiers and commit messages follow the project's own convention. Say this in every brief.
+- The orchestrator reports to the user in that language. It states the execution logic, then for each problem the cause, the
+  fix and the result, with the evidence (tests, CI, review verdicts). A problem still open says so and says what comes next.
+
 ### Model settings
 
 - **GPT models** (Sol and any other `gpt-*`): default `model_reasoning_effort=high` and `service_tier="fast"`.
