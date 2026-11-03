@@ -699,6 +699,7 @@ jobs:
           changes=$(node scripts/release-notes.mjs --version "$RELEASE_VERSION")
           cd release-assets
           test -f "$RELEASE_INSTALLER"
+          test -f "$RELEASE_INSTALLER.blockmap"
           test -f latest.yml
           test -f "$MAC_ARCHIVE"
           test -f "$MAC_IMAGE"
@@ -763,7 +764,7 @@ jobs:
             # A rerun may finish its own draft, but must never replace a published installer.
             jq -e --arg commit "$GITHUB_SHA" '.targetCommitish == $commit' existing-release.json
             if [[ "$(jq -r '.isDraft' existing-release.json)" == 'false' ]]; then
-              jq -e --arg installer "$RELEASE_INSTALLER" 'any(.assets[]; .name == $installer) and any(.assets[]; .name == "latest.yml")' existing-release.json
+              jq -e --arg installer "$RELEASE_INSTALLER" 'any(.assets[]; .name == $installer) and any(.assets[]; .name == ($installer + ".blockmap")) and any(.assets[]; .name == "latest.yml")' existing-release.json
               echo "Release $RELEASE_TAG is already published."
               exit 0
             fi
