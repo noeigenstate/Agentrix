@@ -16,7 +16,7 @@ const { experimentInput, sampleRequest, taskPasses, estimateExperiment, armEstim
 const { testResult, reviewResult, restoreTests } = require('../electron/features/lab/grading.cjs');
 const { dispatch, workerArguments, taskBrief } = require('../electron/features/lab/dispatch.cjs');
 const { phaseEvidence, LabUsage } = require('../electron/features/lab/usage.cjs');
-const { LabSession } = require('../electron/features/lab/session.cjs');
+const { LabSession, recoverRuns } = require('../electron/features/lab/session.cjs');
 const { ownerState } = require('../electron/features/lab/workspace.cjs');
 const { markedPids, killMarked } = require('../electron/features/lab/process.cjs');
 const { sandboxProfile, cleanEnvironment } = require('../electron/features/lab/sandbox.cjs');
@@ -499,6 +499,45 @@ test('persisted running experiments are stopped on reload and store ids cannot e
   assert.ok((await engine.list())[0].runs.every(run => run.state === 'stopped' && run.activeModel === null));
   assert.equal((await engine.list())[0].state, 'stopped');
   assert.throws(() => store.folder('../escape')); await assert.rejects(engine.remove('../escape'));
+});
+
+test('recovery contains each Windows cleanup timeout and retains its lease and reference folder until a later retry', async t => {
+  const root = await temporary(t), runs = [randomUUID(), randomUUID()], killed = [];
+  for (const id of runs) {
+    const directory = path.join(root, 'references', id);
+    await fs.mkdir(path.join(directory, 'workspaces'), { recursive: true });
+    await fs.mkdir(path.join(root, 'private', id), { recursive: true });
+    await fs.writeFile(path.join(root, 'private', id, 'manifest.json'), JSON.stringify({ runId: id, directory }));
+  }
+  let refused = true;
+  const options = { platform: 'win32', kill: async id => killed.push(id), sandbox: {
+    async initialize() {},
+    async release(directory) { if (refused && path.basename(directory) === runs[0]) throw new Error('fixture clean timeout'); },
+  } };
+  const failures = await recoverRuns(root, options);
+  assert.equal(failures.length, 1); assert.equal(failures[0].runId, runs[0]);
+  assert.match(failures[0].error.message, /timeout/);
+  assert.ok(await fs.stat(path.join(root, 'private', runs[0], 'manifest.json')));
+  assert.ok(await fs.stat(path.join(root, 'references', runs[0], 'workspaces')));
+  assert.equal(await fs.stat(path.join(root, 'private', runs[1])).catch(() => null), null);
+  assert.equal(await fs.stat(path.join(root, 'references', runs[1])).catch(() => null), null);
+  assert.equal(killed.filter(id => id === runs[0]).length, 1, 'the reference fallback must not bypass a failed lease');
+  refused = false; assert.deepEqual(await recoverRuns(root, options), []);
+  assert.equal(await fs.stat(path.join(root, 'private', runs[0])).catch(() => null), null);
+  assert.equal(await fs.stat(path.join(root, 'references', runs[0])).catch(() => null), null);
+});
+
+test('a failed recovery initialization preserves every lease and retries initialization on the next recovery', async t => {
+  const root = await temporary(t), runs = [randomUUID(), randomUUID()];
+  for (const id of runs) await fs.mkdir(path.join(root, 'private', id), { recursive: true });
+  let refused = true, initialized = 0;
+  const options = { platform: 'win32', kill: async () => assert.equal(refused, false), sandbox: {
+    async initialize() { initialized++; if (refused) throw new Error('fixture initialization failure'); }, async release() {},
+  } };
+  assert.equal((await recoverRuns(root, options)).length, 2);
+  for (const id of runs) assert.ok(await fs.stat(path.join(root, 'private', id)));
+  refused = false; assert.deepEqual(await recoverRuns(root, options), []); assert.equal(initialized, 2);
+  for (const id of runs) assert.equal(await fs.stat(path.join(root, 'private', id)).catch(() => null), null);
 });
 
 test('orchestrated prompts require the complete pipeline and single arms prohibit model delegation', () => {

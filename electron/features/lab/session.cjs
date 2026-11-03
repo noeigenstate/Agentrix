@@ -366,37 +366,48 @@ class LabSession {
   }
 }
 
-async function recoverRuns(labRoot) {
+async function recoverRuns(labRoot, { platform = process.platform, kill = killMarked, cleanup = cleanupWorktrees,
+  remove = removePath, sandbox } = {}) {
+  const failures = [], failed = new Set();
+  const entriesAt = async directory => {
+    try { return await fs.readdir(directory, { withFileTypes: true }); }
+    catch (error) { if (error.code !== 'ENOENT') failures.push({ runId: null, directory, error }); return []; }
+  };
   const directory = path.join(labRoot, 'private');
-  const entries = await fs.readdir(directory, { withFileTypes: true }).catch(error => {
-    if (error.code === 'ENOENT') return [];
-    throw error;
-  });
-  if (process.platform === 'win32' && entries.length) await require('./sandbox-win32.cjs').initialize({ directory: labRoot });
+  const entries = await entriesAt(directory);
+  let initialization;
+  if (platform === 'win32' && entries.length) {
+    sandbox ||= require('./sandbox-win32.cjs');
+    try { await sandbox.initialize({ directory: labRoot }); } catch (error) { initialization = error; }
+  }
   for (const entry of entries) {
     if (!entry.isDirectory() || !/^[a-f0-9-]{36}$/.test(entry.name)) continue;
-    await killMarked(entry.name);
-    if (process.platform === 'win32') await require('./sandbox-win32.cjs').release(path.join(directory, entry.name));
-    let manifest;
-    try { manifest = JSON.parse(await fs.readFile(path.join(directory, entry.name, 'manifest.json'), 'utf8')); } catch {}
-    if (manifest?.runId === entry.name && typeof manifest.directory === 'string' &&
-      inside(path.resolve(labRoot), path.resolve(manifest.directory)) && path.resolve(manifest.directory) !== path.resolve(labRoot)) {
-      await cleanupWorktrees(manifest.directory);
-    }
-    for (const root of ['private', 'tools', 'reviews', 'references']) {
-      await removePath(path.join(labRoot, root, entry.name));
-    }
+    try {
+      if (initialization) throw initialization;
+      await kill(entry.name);
+      if (platform === 'win32') await sandbox.release(path.join(directory, entry.name));
+      let manifest;
+      try { manifest = JSON.parse(await fs.readFile(path.join(directory, entry.name, 'manifest.json'), 'utf8')); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (manifest && (manifest.runId !== entry.name || typeof manifest.directory !== 'string' ||
+        !inside(path.resolve(labRoot), path.resolve(manifest.directory)) || path.resolve(manifest.directory) === path.resolve(labRoot))) {
+        throw new Error('Invalid lab recovery lease.');
+      }
+      if (manifest) {
+        await cleanup(manifest.directory);
+      }
+      // The lease is the retry record. Remove it only after every resource was released.
+      for (const root of ['tools', 'reviews', 'references', 'private']) await remove(path.join(labRoot, root, entry.name));
+    } catch (error) { failed.add(entry.name); failures.push({ runId: entry.name, error }); }
   }
   // A previous cleanup can fail after its session manifest was removed. Those reference folders still need recovery.
   const references = path.join(labRoot, 'references');
-  const stale = await fs.readdir(references, { withFileTypes: true }).catch(error => {
-    if (error.code === 'ENOENT') return [];
-    throw error;
-  });
-  for (const entry of stale) if (entry.isDirectory() && /^[a-f0-9-]{36}$/.test(entry.name)) {
-    await killMarked(entry.name);
-    await removePath(path.join(references, entry.name));
+  const stale = await entriesAt(references);
+  for (const entry of stale) if (entry.isDirectory() && /^[a-f0-9-]{36}$/.test(entry.name) && !failed.has(entry.name)) {
+    try { await kill(entry.name); await cleanup(path.join(references, entry.name)); await remove(path.join(references, entry.name)); }
+    catch (error) { failures.push({ runId: entry.name, error }); }
   }
+  return failures;
 }
 
 module.exports = { LabSession, recoverRuns, copyHelper };

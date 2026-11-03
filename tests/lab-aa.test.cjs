@@ -11,6 +11,7 @@ const { reward } = require('../electron/features/lab-aa/container.cjs');
 const { installWrappers } = require('../electron/features/lab-aa/wrappers.cjs');
 const { conformance, fakeSession } = require('./helpers/lab-provider-conformance.cjs');
 const baseTools = require('../electron/features/lab/sources/tools.cjs');
+const { LabStore } = require('../electron/features/lab/store.cjs');
 const fixtureData = require('./fixtures/lab-aa/task.json');
 const catalog = require('../electron/features/lab-aa/manifest.json');
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -227,6 +228,64 @@ test('reference proves the oracle with the real verifier path and always removes
   const copied = f.docker.calls.filter(call => call[0] === 'copyTo');
   assert.ok(copied.some(call => call[3] === '/solution'));
   assert.ok(copied.some(call => call[3] === '/tests/test.sh'));
+});
+
+async function labelledDocker(f) {
+  const store = new LabStore(f.root), installId = await store.installId(), labels = new Map();
+  const state = { refuseRemoval: false, calls: [] };
+  const command = async (_file, args) => {
+    state.calls.push(args);
+    const result = (stdout = '', code = 0, stderr = '') => ({ stdout, code, stderr });
+    if (args[0] === 'create') {
+      assert.equal(await fs.readFile(path.join(store.directory, 'install-id'), 'utf8'), installId);
+      const [image, digest] = args.find(value => value.includes('@sha256:')).split('@');
+      const id = await f.docker.create({ image, digest, network: args[args.indexOf('--network') + 1], workdir: args[args.indexOf('--workdir') + 1] });
+      labels.set(id, Object.fromEntries(args.flatMap((value, index) => value === '--label' ? [args[index + 1].split('=')] : [])));
+      return result(id);
+    }
+    if (args[0] === 'ps') return result([...labels].filter(([id, value]) => !f.docker.containers.get(id).removed &&
+      value['agentrix.lab.install'] === args.at(-1).split('=').at(-1)).map(([id]) => id).join('\n'));
+    const id = args.at(-1);
+    if (!f.docker.containers.has(id) || f.docker.containers.get(id).removed) return result('', 1, 'No such container');
+    if (args[0] === 'start') { f.docker.containers.get(id).started = true; return result(id); }
+    if (args[0] === 'inspect') return result(JSON.stringify(labels.get(id)));
+    if (args[0] === 'rm') {
+      if (state.refuseRemoval) return result('', 1, 'fixture interrupted cleanup');
+      await f.docker.remove(id); return result(id);
+    }
+    throw new Error('Unexpected fake Docker operation');
+  };
+  const host = baseTools.createTools({ command }), docker = host.docker.forInstall(installId), run = docker.forRun(randomUUID());
+  f.tools.docker = { ...f.docker, create: run.create, remove: run.remove };
+  return { state, installId, labels, run, restart: () => host.docker.forInstall(installId) };
+}
+
+test('an agent container started before the runner writes its record is found by the next installation sweep', async t => {
+  const f = await fixture(t), task = await f.fetch(), labelled = await labelledDocker(f);
+  const workspace = await f.provider.prepare(task, f.canonical.scope, f.runCtx);
+  assert.equal(f.docker.containers.get(workspace.container.id).started, true);
+  assert.equal(await fs.stat(path.join(f.root, 'container.json')).catch(() => null), null);
+  assert.equal(labelled.labels.get(workspace.container.id)['agentrix.lab.install'], labelled.installId);
+  await labelled.restart().sweep();
+  assert.equal(f.docker.containers.get(workspace.container.id).removed, true);
+  await labelled.run.close();
+});
+
+test('reference and verifier containers left by an interrupted cleanup are swept after a simulated restart', async t => {
+  const f = await fixture(t), task = await f.fetch(), labelled = await labelledDocker(f);
+  labelled.state.refuseRemoval = true;
+  await assert.rejects(f.provider.reference(task, f.canonical.scope, f.runCtx), /Docker 操作失败/);
+  assert.equal(f.docker.containers.size, 2);
+  assert.deepEqual([...f.docker.containers.values()].map(container => container.config.image).sort(), ['fixture/agent', 'fixture/verifier']);
+  for (const [id, container] of f.docker.containers) {
+    assert.equal(container.started, true); assert.equal(container.removed, false);
+    assert.equal(labelled.labels.get(id)['agentrix.lab.install'], labelled.installId);
+    assert.ok(labelled.labels.get(id)['agentrix.lab.run']);
+  }
+  labelled.state.refuseRemoval = false;
+  await labelled.restart().sweep();
+  assert.ok([...f.docker.containers.values()].every(container => container.removed));
+  await labelled.run.close();
 });
 
 test('a failed oracle rejects reference validation and cleans up before any model run', async t => {

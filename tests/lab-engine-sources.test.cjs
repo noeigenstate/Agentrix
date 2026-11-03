@@ -63,6 +63,7 @@ const selection = (provider, count = 1) => ({ source: provider.id,
 async function fixture(t, providers, options = {}) {
   const root = await temporary(t);
   const engine = new LabEngine({ userData: root, getProjects: () => [], providers, prices: { models: {} },
+    sourceTools: { ...tools, docker: { async sweep() {}, async remove() {} } },
     referenceRunner: options => options.provider.reference(options.task, options.scope, { ...options.context, reference: null }),
     runner: async () => passed(), ...options });
   t.after(async () => { engine.close(); await engine.active?.done; await engine.startDone?.catch(() => {}); });
@@ -275,26 +276,31 @@ test('AA score requests use header-only authentication, paginate and return sani
 });
 
 test('Docker uses pinned images without mounts, bounds exec, preserves task exits and removes only owned containers', async t => {
-  const root = await temporary(t), id = 'c'.repeat(64), calls = [];
-  const host = tools.createTools({ command: async (file, args, options) => {
+  const root = await temporary(t), id = 'c'.repeat(64), calls = [], installId = randomUUID();
+  const host = tools.createTools({ installId, command: async (file, args, options) => {
     calls.push({ file, args, options });
     return { code: args[0] === 'exec' ? 1 : 0, stdout: args[0] === 'create' ? id : '', stderr: '' };
   } });
+  const run = host.docker.forRun(randomUUID());
   const config = { image: 'example/task', digest: 'sha256:' + 'd'.repeat(64), workdir: '/workspace', network: 'none' };
-  assert.equal(await host.docker.create(config), id);
+  assert.equal(await run.create(config), id);
   const create = calls.find(call => call.args[0] === 'create');
   assert.ok(create.args.includes(config.image + '@' + config.digest));
   assert.ok(!create.args.some(arg => /mount|volume|privileged|docker.sock/.test(arg)));
   assert.equal(create.args[create.args.indexOf('--network') + 1], 'none');
+  assert.ok(create.args.includes('--rm')); assert.ok(create.args.includes('--cap-drop=ALL'));
+  assert.ok(create.args.includes('--security-opt=no-new-privileges:true'));
+  assert.ok(create.args.includes('agentrix.lab.install=' + installId));
+  assert.equal(create.options.env.DOCKER_HOST, undefined);
   assert.equal((await host.docker.exec(id, ['sh', '-c', 'exit 1'], { stdin: 'fixture' })).code, 1);
   await fs.writeFile(path.join(root, 'test.sh'), 'fixture');
   await host.docker.copyTo(id, path.join(root, 'test.sh'), '/tests/test.sh');
   await assert.rejects(host.docker.exec(id, ['true'], { timeoutMs: 0 }));
   await assert.rejects(host.docker.copyTo(id, path.join(root, 'test.sh'), '/../escape'));
-  await host.docker.remove(id); await assert.rejects(host.docker.exec(id, ['true']));
-  const unavailable = tools.createTools({ command: async () => { throw new Error('missing Docker'); } });
+  await run.remove(id); await run.close(); await assert.rejects(host.docker.exec(id, ['true']));
+  const unavailable = tools.createTools({ installId, command: async () => { throw new Error('missing Docker'); } });
   assert.equal((await unavailable.docker.probe()).available, false);
-  await assert.rejects(unavailable.docker.create(config), error => error.infrastructure === true);
+  await assert.rejects(unavailable.docker.forRun(randomUUID()).create(config), error => error.infrastructure === true);
 });
 
 test('generic references and the runner use the provider context and bind the broker to its container', async t => {
@@ -391,22 +397,30 @@ test('the history provider conforms and restores its real Node tests over an iso
 });
 
 test('Docker exec timeouts reap the container and recovery verifies its lab label before removal', async () => {
-  const id = 'e'.repeat(64), calls = [];
-  const host = tools.createTools({ command: async (_file, args) => {
+  const id = 'e'.repeat(64), calls = [], installId = randomUUID();
+  const host = tools.createTools({ installId, command: async (_file, args) => {
     calls.push(args);
     if (args[0] === 'exec') throw new Error('timeout');
     return { code: 0, stdout: args[0] === 'create' ? id : '', stderr: '' };
   } });
-  await host.docker.create({ image: 'fixture/task', digest: 'sha256:' + 'f'.repeat(64), workdir: '/app', network: 'none' });
+  const run = host.docker.forRun(randomUUID());
+  await run.create({ image: 'fixture/task', digest: 'sha256:' + 'f'.repeat(64), workdir: '/app', network: 'none' });
   await assert.rejects(host.docker.exec(id, ['sleep', '999']), error => error.infrastructure === true);
   assert.deepEqual(calls.at(-1), ['rm', '--force', id]);
   const removedCalls = calls.length; await host.docker.remove(id); assert.equal(calls.length, removedCalls);
-  const recovered = tools.createTools({ command: async (_file, args) => {
-    calls.push(args); return { code: 0, stdout: args[0] === 'inspect' ? 'true' : '', stderr: '' };
+  await run.close();
+  const recovered = tools.createTools({ installId, command: async (_file, args) => {
+    calls.push(args); return { code: 0, stdout: args[0] === 'inspect' ? JSON.stringify({ 'agentrix.lab.install': installId }) : '', stderr: '' };
   } });
   await recovered.docker.remove(id); assert.equal(calls.at(-2)[0], 'inspect'); assert.equal(calls.at(-1)[0], 'rm');
-  const foreign = tools.createTools({ command: async () => ({ code: 0, stdout: 'false', stderr: '' }) });
+  const foreign = tools.createTools({ installId, command: async () => ({ code: 0, stdout: JSON.stringify({ 'agentrix.lab.install': randomUUID() }), stderr: '' }) });
   await assert.rejects(foreign.docker.remove(id), /无效/);
+  await assert.rejects(foreign.docker.removeRecorded(id), /无效/);
+  const legacy = tools.createTools({ installId, command: async (_file, args) => {
+    calls.push(args); return { code: 0, stdout: JSON.stringify({ 'agentrix.lab': 'true' }), stderr: '' };
+  } });
+  await assert.rejects(legacy.docker.remove(id), /无效/);
+  await legacy.docker.removeRecorded(id); assert.deepEqual(calls.at(-1), ['rm', '--force', id]);
 });
 
 test('startup reaps a persisted run container before returning experiments without needing a live session', async t => {
@@ -418,6 +432,181 @@ test('startup reaps a persisted run container before returning experiments witho
   await engine.ready; engine.close();
   assert.deepEqual(removed, ['a'.repeat(64)]);
   assert.equal(await fs.stat(path.join(directory, 'container.json')).catch(() => null), null);
+});
+
+function fakeDaemon() {
+  const daemon = { reachable: true, containers: new Map(), calls: [], removed: [], refused: new Set(), extras: [] };
+  let serial = 0;
+  daemon.add = labels => {
+    const id = (++serial).toString(16).padStart(64, '0');
+    daemon.containers.set(id, { labels, started: false }); return id;
+  };
+  daemon.command = async (_file, args, options) => {
+    daemon.calls.push({ args, options });
+    const result = (stdout = '', code = 0, stderr = '') => ({ stdout, code, stderr });
+    if (!daemon.reachable) return result('', 1, 'Cannot connect to the Docker daemon');
+    if (args[0] === 'create') {
+      const labels = Object.fromEntries(args.flatMap((arg, index) => arg === '--label' ? [args[index + 1].split('=')] : []));
+      const id = daemon.add(labels); await daemon.onCreate?.(id); return result(id);
+    }
+    if (args[0] === 'ps') {
+      const install = args.at(-1).split('=').at(-1);
+      return result([...daemon.containers].filter(([, value]) => value.labels['agentrix.lab.install'] === install)
+        .map(([id]) => id).concat(daemon.extras).join('\n'));
+    }
+    const id = args.at(-1), container = daemon.containers.get(id);
+    if (!container) return result('', 1, 'No such container');
+    if (args[0] === 'inspect') return result(JSON.stringify(container.labels));
+    if (args[0] === 'start') { container.started = true; return result(id); }
+    if (args[0] === 'rm') {
+      if (daemon.refused.has(id)) return result('', 1, 'fixture removal failure');
+      daemon.containers.delete(id); daemon.removed.push(id); return result(id);
+    }
+    throw new Error('Unexpected fake Docker command: ' + args[0]);
+  };
+  return daemon;
+}
+
+test('the installation label is durably published once, shared by concurrent stores and different for another installation', async t => {
+  const root = await temporary(t), stores = Array.from({ length: 4 }, () => new LabStore(root));
+  const ids = await Promise.all(stores.map(store => store.installId()));
+  assert.equal(new Set(ids).size, 1); assert.match(ids[0], /^[a-f0-9-]{36}$/);
+  assert.equal(await new LabStore(root).installId(), ids[0]);
+  assert.equal(await fs.readFile(path.join(root, 'lab/install-id'), 'utf8'), ids[0]);
+  assert.notEqual(await new LabStore(path.join(root, 'another')).installId(), ids[0]);
+  assert.deepEqual(await fs.readdir(path.join(root, 'lab')), ['install-id']);
+});
+
+test('a failed startup Docker inspection keeps its records, stops the experiment and permits history and OSS before a later AA retry', async t => {
+  const root = await temporary(t), store = new LabStore(root), installId = await store.installId(), daemon = fakeDaemon();
+  const id = randomUUID(), runId = randomUUID(), container = daemon.add({ 'agentrix.lab': 'true' });
+  const directory = path.join(store.folder(id), 'runs', runId), record = path.join(directory, 'container.json');
+  await fs.mkdir(path.join(directory, 'workspaces'), { recursive: true });
+  await fs.writeFile(record, JSON.stringify({ id: container }));
+  await store.save({ id, createdAt: 1, sources: ['aa'], tasks: [], state: 'running',
+    lanes: [{ source: 'aa', state: 'running' }], runs: [{ id: runId, source: 'aa', state: 'running', activeModel: 'sol' }] });
+  if (process.platform === 'win32') t.mock.method(require('../electron/features/lab/sandbox-win32.cjs'), 'killMarked', async () => {});
+  daemon.reachable = false;
+  const providers = ['history', 'oss', 'aa'].map(id => fakeProvider(id));
+  const engine = new LabEngine({ userData: root, providers, sourceTools: { ...tools, ...tools.createTools({ command: daemon.command }) },
+    prices: { models: {} }, runner: async () => passed(), referenceRunner: async () => ({ diffFiles: [] }) });
+  t.after(() => engine.close());
+  const [stopped] = await engine.list();
+  assert.equal(stopped.state, 'stopped'); assert.equal(stopped.runs[0].state, 'stopped');
+  assert.equal(stopped.runs[0].activeModel, null); assert.match(stopped.runs[0].error, /清理.*Docker/);
+  assert.equal((await store.list())[0].state, 'stopped');
+  assert.ok(await fs.stat(record)); assert.ok(await fs.stat(path.join(directory, 'workspaces')));
+  assert.equal((await store.readCleanup()).length, 1);
+  assert.ok(daemon.calls.some(call => call.args[0] === 'inspect'));
+  const infos = await engine.sources();
+  assert.deepEqual(infos.map(info => info.available), [true, true, false]); assert.match(infos[2].reason, /启动 Docker.*重试/);
+  const input = provider => ({ selections: [selection(provider)], arms: ['sol', 'sonnet'], repeats: 1, budgetUsd: 10 });
+  for (const provider of providers.slice(0, 2)) {
+    await engine.start(input(provider)); await engine.active.done;
+    assert.equal((await engine.list())[0].state, 'done');
+  }
+  await assert.rejects(engine.start(input(providers[2])), /清理.*Docker/);
+  assert.ok(await fs.stat(record)); assert.equal((await store.readCleanup()).length, 1);
+  daemon.reachable = true;
+  await engine.start(input(providers[2])); await engine.active.done;
+  assert.equal(daemon.containers.has(container), false); assert.ok(daemon.removed.includes(container));
+  assert.equal(await fs.stat(record).catch(() => null), null);
+  assert.equal(await fs.stat(path.join(directory, 'workspaces')).catch(() => null), null);
+  assert.deepEqual(await store.readCleanup(), []); assert.equal((await engine.sources())[2].available, true);
+  const recovered = (await engine.list()).find(experiment => experiment.id === id);
+  assert.equal(recovered.runs[0].error, null); assert.equal(recovered.lanes[0].error, null);
+});
+
+test('the labelled sweep excludes live creations and foreign installations, contains each removal failure and retries it', async t => {
+  const store = new LabStore(await temporary(t)), installId = await store.installId(), daemon = fakeDaemon();
+  const host = tools.createTools({ installId, command: daemon.command }), owner = randomUUID(), run = host.docker.forRun(owner);
+  const barrier = deferred(), creating = deferred();
+  daemon.onCreate = async id => { creating.resolve(id); await barrier.promise; };
+  const creation = run.create({ image: 'fixture/task', digest: 'sha256:' + 'f'.repeat(64), workdir: '/app', network: 'none' });
+  const liveId = await creating.promise;
+  const stale = daemon.add({ 'agentrix.lab.install': installId, 'agentrix.lab.run': randomUUID() });
+  const failed = daemon.add({ 'agentrix.lab.install': installId, 'agentrix.lab.run': randomUUID() });
+  const foreign = daemon.add({ 'agentrix.lab.install': randomUUID() }), user = daemon.add({ 'agentrix.lab': 'true' });
+  daemon.extras = [foreign, user]; daemon.refused.add(failed);
+  await assert.rejects(host.docker.sweep(), error => error.failures.length === 1 && error.failures[0].id === failed);
+  assert.deepEqual(daemon.removed, [stale]); assert.ok(daemon.containers.has(liveId));
+  assert.ok(daemon.containers.has(foreign)); assert.ok(daemon.containers.has(user));
+  barrier.resolve(); assert.equal(await creation, liveId);
+  await assert.rejects(host.docker.remove(liveId), /正在运行/);
+  await assert.rejects(host.docker.remove(foreign), /无效/);
+  daemon.refused.clear(); await host.docker.sweep();
+  assert.equal(daemon.containers.has(failed), false); assert.equal(daemon.containers.has(liveId), true);
+  await run.close(); assert.equal(daemon.containers.has(liveId), false);
+});
+
+test('the first AA start sweeps again after a successful startup, before reference or model execution', async t => {
+  const daemon = fakeDaemon(), provider = fakeProvider('aa');
+  const f = await fixture(t, [provider], { sourceTools: { ...tools, ...tools.createTools({ command: daemon.command }) },
+    referenceRunner: async () => { assert.equal(daemon.containers.size, 0); return { diffFiles: [] }; } });
+  await f.engine.ready;
+  const installId = await f.engine.store.installId();
+  const orphan = daemon.add({ 'agentrix.lab.install': installId, 'agentrix.lab.run': randomUUID() });
+  await f.engine.start(f.input); await f.engine.active.done;
+  assert.ok(daemon.removed.includes(orphan)); assert.equal(daemon.calls.filter(call => call.args[0] === 'ps').length, 2);
+});
+
+test('failed recovery keeps the worktree retry list across a stopped experiment and the next engine launch', async t => {
+  const root = await temporary(t), store = new LabStore(root), id = randomUUID(), runId = randomUUID();
+  const directory = path.join(store.folder(id), 'runs', runId);
+  await fs.mkdir(path.join(directory, 'workspaces'), { recursive: true });
+  await store.save({ id, createdAt: 1, state: 'running', tasks: [], runs: [{ id: runId, state: 'running' }] });
+  const sourceTools = { ...tools, docker: { async sweep() {}, async remove() {} } };
+  const providers = ['history', 'oss', 'aa'].map(id => fakeProvider(id));
+  const first = new LabEngine({ userData: root, providers, sourceTools, prices: { models: {} },
+    runner: async () => passed(), referenceRunner: async () => ({ diffFiles: [] }),
+    recovery: async () => { throw new Error('fixture recovery timeout'); } });
+  assert.equal((await first.list())[0].state, 'stopped');
+  assert.deepEqual((await first.sources()).map(info => info.available), [true, true, false]);
+  for (const provider of providers.slice(0, 2)) {
+    await first.start({ selections: [selection(provider)], arms: ['sol', 'sonnet'], repeats: 1, budgetUsd: 10 });
+    await first.active.done; assert.equal((await first.list())[0].state, 'done');
+  }
+  first.close();
+  assert.equal((await store.readCleanup()).length, 1); assert.ok(await fs.stat(path.join(directory, 'workspaces')));
+  if (process.platform === 'win32') t.mock.method(require('../electron/features/lab/sandbox-win32.cjs'), 'killMarked', async () => {});
+  const next = new LabEngine({ userData: root, providers: [], sourceTools });
+  await next.ready; next.close();
+  assert.equal((await next.list()).find(experiment => experiment.id === id).state, 'stopped'); assert.deepEqual(await store.readCleanup(), []);
+  assert.equal(await fs.stat(path.join(directory, 'workspaces')).catch(() => null), null);
+});
+
+test('an unwritable cleanup journal leaves listing and history and OSS available and is retried before AA use', async t => {
+  const root = await temporary(t), store = new LabStore(root), writeCleanup = store.writeCleanup.bind(store);
+  let refused = true;
+  t.mock.method(store, 'writeCleanup', entries => refused ? Promise.reject(new Error('fixture journal locked')) : writeCleanup(entries));
+  const providers = ['history', 'oss', 'aa'].map(id => fakeProvider(id));
+  const engine = new LabEngine({ userData: root, store, providers, prices: { models: {} },
+    sourceTools: { ...tools, docker: { async sweep() {}, async remove() {} } },
+    runner: async () => passed(), referenceRunner: async () => ({ diffFiles: [] }) });
+  t.after(() => engine.close());
+  assert.deepEqual(await engine.list(), []);
+  assert.deepEqual((await engine.sources()).map(info => info.available), [true, true, false]);
+  const input = provider => ({ selections: [selection(provider)], arms: ['sol', 'sonnet'], repeats: 1, budgetUsd: 10 });
+  for (const provider of providers.slice(0, 2)) { await engine.start(input(provider)); await engine.active.done; }
+  refused = false;
+  await engine.start(input(providers[2])); await engine.active.done;
+  assert.equal((await engine.list())[0].state, 'done'); assert.deepEqual(await store.readCleanup(), []);
+  assert.equal((await engine.sources())[2].available, true);
+});
+
+test('deleting an old experiment while another run is live never enters startup process recovery', async t => {
+  let recovering = 0, hold = false;
+  const entered = deferred(), finish = deferred();
+  const f = await fixture(t, [fakeProvider('oss')], { recovery: async () => { recovering++; return []; },
+    runner: async () => { if (hold) { entered.resolve(); await finish.promise; } return passed(); } });
+  await f.engine.start(f.input); await f.engine.active.done;
+  const old = (await f.engine.list())[0].id;
+  hold = true; await f.engine.start(f.input); const active = f.engine.active.done;
+  await entered.promise;
+  const before = recovering;
+  try { await f.engine.remove(old); assert.equal(recovering, before); }
+  finally { finish.resolve(); await active; }
+  assert.equal((await f.engine.list()).length, 1);
 });
 
 test('a data directory inside any owner project is rejected before creating or changing files', async t => {

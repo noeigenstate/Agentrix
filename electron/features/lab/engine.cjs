@@ -39,33 +39,109 @@ class LabEngine {
   constructor({ userData, getProjects = () => [], helper, prices, records, now = Date.now, store = new LabStore(userData),
     runner = runTask, referenceRunner = validateReference, nodePath, env, timeoutMs, testTimeoutMs, reviewTimeoutMs,
     providers = [createHistorySource(), createOssSource(), createAaSource()], sourceTools = tools,
-    platform = process.platform, sessionFactory, safeStorage, laneConcurrency,
+    platform = process.platform, sessionFactory, safeStorage, laneConcurrency, recovery = recoverRuns,
     t = (source, values) => translate('zh', source, values) }) {
     Object.assign(this, { store, getProjects, helper, prices, records, now, runner, referenceRunner,
-      nodePath, env, timeoutMs, testTimeoutMs, reviewTimeoutMs, sourceTools, platform, sessionFactory, safeStorage, laneConcurrency, t });
+      nodePath, env, timeoutMs, testTimeoutMs, reviewTimeoutMs, sourceTools, platform, sessionFactory, safeStorage, laneConcurrency, recovery, t });
     this.providers = new Map(providers.map(provider => [assertProvider(provider).id, provider]));
     if (this.providers.size !== providers.length) throw new TypeError('Duplicate lab source provider.');
     this.experiments = []; this.listeners = new Set(); this.active = null;
     this.starting = false; this.startingId = null; this.closed = false; this.quitWaited = false;
     this.referenceFailures = new Map(); this.sampleScopes = new Map(); this.key = null;
+    this.pendingCleanup = []; this.recoveryFailures = []; this.cleanupTail = Promise.resolve();
+    this.containerFailure = null; this.cleanupRecordFailure = null; this.installConfigured = false;
     this.keyPending = Promise.resolve(); this.ready = this.load();
   }
   async load() {
     await this.dataDirectory();
-    await recoverRuns(this.store.directory);
     this.key = await this.store.readAaKey(this.safeStorage);
     this.experiments = await this.store.list();
+    try { this.pendingCleanup = await this.store.readCleanup(); } catch (error) { this.cleanupRecordFailure = error; }
+    const pending = new Map(this.pendingCleanup.map(item => [item.runId, item]));
     for (const experiment of this.experiments) for (const run of experiment.runs) if (validId(run.id)) {
-      await cleanupContainer(path.join(this.store.folder(experiment.id), 'runs', run.id), this.sourceTools);
+      const directory = path.join(this.store.folder(experiment.id), 'runs', run.id);
+      const names = await fs.readdir(directory).catch(error => error.code === 'ENOENT' ? [] : null);
+      if (!pending.has(run.id)) pending.set(run.id, { experimentId: experiment.id, runId: run.id, source: run.source,
+        worktrees: ['queued', 'running'].includes(run.state) || names === null || names.some(name =>
+          ['worktree', 'workers', 'workspaces', 'repository.git', 'runtime'].includes(name)) });
+    }
+    this.pendingCleanup = [...pending.values()];
+    if (!this.cleanupRecordFailure) {
+      try { await this.store.writeCleanup(this.pendingCleanup); } catch (error) { this.cleanupRecordFailure = error; }
     }
     for (const experiment of this.experiments) if (experiment.state === 'running') {
-      for (const run of experiment.runs) if (['queued', 'running'].includes(run.state)) {
-        if (run.state === 'running' && validId(run.id)) await killMarked(run.id);
-        if (validId(run.id)) await cleanupWorktrees(path.join(this.store.folder(experiment.id), 'runs', run.id));
-      }
       experiment.state = 'stopped'; stopRemaining(experiment, this.now());
       for (const lane of experiment.lanes) if (['queued', 'running'].includes(lane.state)) lane.state = 'stopped';
       await this.store.save(experiment);
+    }
+    await this.retryCleanup(true);
+  }
+  cleanupReason(containers = false) {
+    return this.t(containers ? '上次实验的容器尚未清理完成。请启动 Docker 后重试；如仍失败，请重启应用。'
+      : '上次实验尚未清理完成。请重启应用后重试。');
+  }
+  retryCleanup(docker) {
+    const operation = this.cleanupTail.then(() => this.cleanPending(docker));
+    this.cleanupTail = operation.catch(() => {}); return operation;
+  }
+  async cleanPending(docker) {
+    if (this.cleanupRecordFailure) {
+      try {
+        const recovered = await this.store.readCleanup();
+        this.pendingCleanup = [...new Map([...recovered, ...this.pendingCleanup].map(item => [item.runId, item])).values()];
+        this.cleanupRecordFailure = null;
+      } catch {}
+    }
+    if (!this.installConfigured) {
+      try {
+        const id = await this.store.installId();
+        if (this.sourceTools.docker.forInstall) this.sourceTools = { ...this.sourceTools, docker: this.sourceTools.docker.forInstall(id) };
+        this.installConfigured = true;
+      } catch (error) { this.containerFailure = error; }
+    }
+    if (docker && this.installConfigured) {
+      try { await this.sourceTools.docker.sweep?.(); this.containerFailure = null; }
+      catch (error) { this.containerFailure = error; }
+    }
+    try {
+      this.recoveryFailures = await this.recovery(this.store.directory, { cleanup: async directory => {
+        await cleanupContainer(directory, this.sourceTools); await cleanupWorktrees(directory);
+      } }) || [];
+    } catch (error) { this.recoveryFailures = [{ runId: null, error }]; }
+    const pending = [], changed = new Set();
+    for (const item of this.pendingCleanup) {
+      if (!docker && item.source === 'aa') { pending.push(item); continue; }
+      const experiment = this.experiments.find(experiment => experiment.id === item.experimentId);
+      const run = experiment?.runs.find(run => run.id === item.runId);
+      const lane = experiment?.lanes.find(lane => lane.source === item.source);
+      try {
+        if (this.recoveryFailures.some(failure => failure.runId === null || failure.runId === item.runId)) {
+          throw this.recoveryFailures[0].error;
+        }
+        const directory = path.join(this.store.folder(item.experimentId), 'runs', item.runId);
+        if (item.worktrees) await killMarked(item.runId);
+        await cleanupContainer(directory, this.sourceTools);
+        if (item.worktrees) await cleanupWorktrees(directory);
+        if (run && [this.cleanupReason(), this.cleanupReason(true)].includes(run.error)) {
+          run.error = null; changed.add(experiment);
+        }
+      } catch {
+        pending.push(item);
+        if (run) run.error = this.cleanupReason(item.source === 'aa');
+        if (lane) lane.error = this.cleanupReason(item.source === 'aa');
+        if (experiment) changed.add(experiment);
+      }
+    }
+    for (const experiment of this.experiments) for (const lane of experiment.lanes) {
+      if (!pending.some(item => item.experimentId === experiment.id && item.source === lane.source) &&
+        [this.cleanupReason(), this.cleanupReason(true)].includes(lane.error)) {
+        lane.error = null; changed.add(experiment);
+      }
+    }
+    for (const experiment of changed) await this.store.save(experiment);
+    this.pendingCleanup = pending;
+    if (!this.cleanupRecordFailure) {
+      try { await this.store.writeCleanup(pending); } catch (error) { this.cleanupRecordFailure = error; }
     }
   }
   subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
@@ -89,21 +165,28 @@ class LabEngine {
       cacheDirectory: path.join(this.store.directory, 'cache', source), credential: () => source === 'aa' ? this.key : null };
   }
   async describe(provider, ctx) {
+    let info;
     try {
-      const info = await provider.describe(ctx);
+      info = await provider.describe(ctx);
       if (info.id !== provider.id || typeof info.available !== 'boolean' ||
         ![info.size.min, info.size.max, info.size.standard].every(Number.isInteger) || info.size.min < 1 ||
         info.size.min > info.size.standard || info.size.standard > info.size.max) throw new Error();
-      return { ...info, keyStored: provider.id === 'aa' ? !!this.key : null };
     } catch {
-      return { id: provider.id, available: false, reason: this.t('实验来源暂时不可用。'),
+      info = { id: provider.id, available: false, reason: this.t('实验来源暂时不可用。'),
         metric: { history: 'hidden-tests', oss: 'resolved', aa: 'tests' }[provider.id], review: provider.review === 'diff',
         size: { min: 1, max: 1, standard: 1 }, options: [], manifest: null, published: null, downloadBytes: null,
         keyStored: provider.id === 'aa' ? !!this.key : null };
     }
+    if (provider.id === 'aa' && (this.containerFailure || this.cleanupRecordFailure || this.recoveryFailures.length ||
+      this.pendingCleanup.some(item => item.source === 'aa'))) {
+      info = { ...info, available: false, reason: this.cleanupReason(!!this.containerFailure || this.pendingCleanup.some(item => item.source === 'aa')) };
+    }
+    return { ...info, keyStored: provider.id === 'aa' ? !!this.key : null };
   }
   async sources() {
     await this.ready;
+    if (!this.active && !this.starting && (this.containerFailure || this.cleanupRecordFailure ||
+      this.recoveryFailures.length || this.pendingCleanup.length)) await this.retryCleanup(true);
     return Promise.all(LAB_SOURCES.filter(id => this.providers.has(id))
       .map(id => this.describe(this.providers.get(id), this.context(id))));
   }
@@ -205,6 +288,8 @@ class LabEngine {
   }
   async prepareStart(value, signal) {
     await this.ready; aborted(signal);
+    await this.retryCleanup(Array.isArray(value?.selections) && value.selections.some(selection => selection.source === 'aa'));
+    aborted(signal);
     if (this.experiments.length >= MAX_EXPERIMENTS) throw new Error('实验记录已满，请先删除旧实验。');
     const { input, lanes } = await this.canonical(value, false, signal), id = randomUUID(), createdAt = this.now();
     for (const lane of lanes) {
@@ -354,6 +439,11 @@ class LabEngine {
     if (!validId(id)) throw new Error('无效的实验编号。');
     await this.ready;
     if (this.active?.id === id || this.starting) throw new Error('请先停止正在运行的实验。');
+    if (!this.active) await this.retryCleanup(true);
+    if (this.pendingCleanup.some(item => item.experimentId === id)) throw new Error(this.cleanupReason());
+    for (const run of this.experiments.find(experiment => experiment.id === id)?.runs || []) if (validId(run.id)) {
+      await cleanupContainer(path.join(this.store.folder(id), 'runs', run.id), this.sourceTools);
+    }
     await this.store.remove(id); this.experiments = this.experiments.filter(experiment => experiment.id !== id); this.changed();
   }
   close() { this.closed = true; this.active?.controller.abort(); this.startController?.abort(); }
