@@ -119,15 +119,18 @@ function aborted(signal) {
   if (signal?.aborted) throw Object.assign(new Error('实验已停止。'), { name: 'AbortError' });
 }
 
-async function descendants(pid) {
-  if (process.platform === 'win32') return [];
-  try {
-    const { stdout } = await execute('/bin/ps', ['-axo', 'pid=,ppid='], { timeout: 2000, maxBuffer: 2 * 1024 * 1024 });
-    const rows = stdout.trim().split('\n').map(line => line.trim().split(/\s+/).map(Number)), found = new Set([pid]);
-    let previous;
-    do { previous = found.size; for (const [child, parent] of rows) if (found.has(parent)) found.add(child); } while (previous !== found.size);
-    return [...found].filter(child => child !== pid);
-  } catch { return []; }
+async function processTree(pid, known, group, timeout) {
+  const { stdout } = await execute('/bin/ps', ['-axo', 'pid=,ppid=,pgid=,stat='], { timeout, maxBuffer: 4 * 1024 * 1024 });
+  const rows = stdout.trim() ? stdout.trim().split('\n').map(line => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line);
+    if (!match) throw new Error('Invalid process listing.');
+    return { pid: Number(match[1]), parent: Number(match[2]), group: Number(match[3]), state: match[4] };
+  }) : [];
+  const found = new Set([pid, ...known]);
+  if (group) for (const row of rows) if (row.group === pid) found.add(row.pid);
+  let previous;
+  do { previous = found.size; for (const row of rows) if (found.has(row.parent)) found.add(row.pid); } while (previous !== found.size);
+  return rows.filter(row => found.has(row.pid) && row.pid !== process.pid && !/^[ZX]/.test(row.state));
 }
 
 // Dispatch detaches its model process. Killing only the helper's process group leaves nested workers alive.
@@ -142,15 +145,43 @@ async function stopTree(child) {
     await execute('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 5000 }).catch(() => child.kill());
     return;
   }
-  const children = await descendants(child.pid);
-  for (const pid of [...children.reverse(), child.pid]) { try { process.kill(pid, 'SIGSTOP'); } catch {} }
-  // Freeze the known parents before the second scan, so they cannot start more children during cleanup.
-  const all = new Set([...children, ...await descendants(child.pid), child.pid]);
-  for (const pid of [...all].reverse()) { try { process.kill(pid, 'SIGKILL'); } catch {} }
-  // The parent may already have exited while a reparented worker keeps its stdio open.
-  // Retire the owned group before waiting for close, which requires those inherited pipes to close too.
-  if (child.labGroup) {
-    try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+  const end = Date.now() + 2000, known = new Set([child.pid]);
+  let live = [], denied = false;
+  const failure = reason => Object.assign(new Error(`Lab process cleanup failed for pid=${child.pid}: ${reason}` +
+    (denied ? ' (signal EPERM)' : '') + live.slice(0, 8).map(row => `; pid=${row.pid} pgid=${row.group} state=${row.state}`).join('')),
+  { code: 'ERR_LAB_PROCESS_REAP', infrastructure: true, fatal: true });
+  const signal = (pid, value) => {
+    try { process.kill(pid, value); } catch (error) {
+      if (!['ESRCH', 'EPERM'].includes(error.code)) throw error;
+      // A denied stale group or zombie is possible on macOS. Only the subsequent ps scan establishes exit.
+      if (error.code === 'EPERM') denied = true;
+    }
+  };
+  const scan = async () => {
+    const remaining = end - Date.now();
+    if (remaining <= 0) throw failure('reap deadline exceeded');
+    try { live = await processTree(child.pid, known, child.labGroup, Math.min(1000, remaining)); }
+    catch { throw failure('process state could not be verified'); }
+    for (const row of live) known.add(row.pid);
+  };
+  try {
+    if (child.labGroup) signal(-child.pid, 'SIGSTOP');
+    await scan();
+    for (const row of live) signal(row.pid, 'SIGSTOP');
+    // Keep identities across scans: detached descendants can change parent and group as their launcher exits.
+    await scan();
+    for (const pid of [...known].reverse()) signal(pid, 'SIGKILL');
+    if (child.labGroup) signal(-child.pid, 'SIGKILL');
+    for (;;) {
+      await scan();
+      if (!live.length) return;
+      for (const row of live) signal(row.pid, 'SIGKILL');
+      await new Promise(resolve => setTimeout(resolve, Math.min(25, Math.max(1, end - Date.now()))));
+    }
+  } catch (error) {
+    // Even a failed state scan must not leave the known workers frozen.
+    for (const pid of [...known, ...(child.labGroup ? [-child.pid] : [])]) { try { signal(pid, 'SIGKILL'); } catch {} }
+    throw error;
   }
 }
 
@@ -168,9 +199,15 @@ async function command(file, args, {
   const output = log ? await fs.open(log, 'w', 0o600) : null;
   let child, timer, stopping = null, failure = null, stdout = '', stderr = '', bytes = 0;
   const binary = [];
+  let rejectCleanup;
+  const cleanupFailure = new Promise((resolve, reject) => { rejectCleanup = reject; });
   const stop = error => {
     failure ||= error;
-    stopping ||= stopTree(child).catch(error => { failure = error; }).finally(() => {
+    stopping ||= stopTree(child).catch(error => {
+      failure = error; rejectCleanup(error);
+      if (child.connected) child.disconnect();
+      child.unref?.();
+    }).finally(() => {
       // A failed reap remains a failure, but an inherited descriptor must not hold this promise forever.
       child.stdout?.destroy(); child.stderr?.destroy();
     });
@@ -212,7 +249,7 @@ async function command(file, args, {
       });
       stream.on('end', () => { if (tail && onLine) { try { onLine(tail); } catch (error) { stop(error); } } });
     }
-    const result = await closed;
+    const result = await Promise.race([closed, cleanupFailure]);
     clearTimeout(timer); signal?.removeEventListener('abort', abort);
     await stopping; await writes;
     if (failure) {
@@ -224,9 +261,7 @@ async function command(file, args, {
     clearTimeout(timer); signal?.removeEventListener('abort', abort);
     await stopping; await output?.close();
     // A trusted host owns its process group. This also catches children that replace their environment.
-    if (ipc && child?.pid && process.platform !== 'win32') {
-      try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
-    }
+    if (ipc && child?.pid && process.platform !== 'win32' && !stopping) await stopTree(child);
   }
 }
 
