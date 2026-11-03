@@ -20,7 +20,7 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 
 ## Interface
 - `ActivityPane` (`src/features/agents/ActivityPane.tsx`) — the pane; rendered by the workspace's ProjectPanel from a `ProjectTerminal`; the file also exports CALL_STATES, elapsedClock, failureWord and rateValue, which the sub-agent view reuses, and its called-model rows open a sub-agent view
-- `useSplits` (`src/features/agents/subagent-splits.ts`) — the sub-agent views the owner opened beside a terminal (transient, at most two per terminal); the file also exports splitsOf, closeSplit, limitSplits and splitLimit
+- `useSplits` (`src/features/agents/subagent-splits.ts`) — the sub-agent views the owner opened beside a terminal (transient, one per terminal: opening another replaces it); the file also exports splitsOf and closeSplit
 - `actionText` (`src/features/agents/action-text.ts`) — the words for the agent's current step (with `stepVerb`), shared by the reading view and the decision inbox
 - `UsageMeter` (`electron/features/agents/agent-usage.cjs`) — per-session meter main.cjs feeds records to and publishes as `agentUsage` (with `claudeProvider`, `codexProvider`, `claudeAccount`, `claudeAccountFiles`)
 - `agentSettings` (`electron/features/agents/agent-settings.cjs`) — model, effort and fast mode from an agent's own records; used by main.cjs and the dispatch helper
