@@ -19,11 +19,20 @@ const { RunInbox, runId, validText } = require(path.join(runtime, 'features/team
 const { minutesPage } = require(path.join(runtime, 'features/team/minutes-page.cjs'));
 const { TASK_KINDS, taskKind, routingVerdict } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
 const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
+const { createCodexRuntime } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
+const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const RUNTIME_FILES = ['boundaries.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs',
   'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/team/inbox.cjs', 'features/dashboard/records-routing.cjs',
-  'features/skills/session.cjs', 'features/skills/worker-proposals.cjs'];
-const runtimeFiles = () => Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
+  'features/skills/session.cjs', 'features/skills/worker-proposals.cjs', 'features/agents/dispatch-control.cjs',
+  'features/agents/codex-account-usage.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/rpc.cjs',
+  'features/codex-app-server/events.cjs', 'features/codex-app-server/requests.cjs', 'features/codex-app-server/account.cjs', 'features/codex-app-server/compatibility.cjs'];
+const runtimeFiles = () => {
+  // A supplies this pure module in the merged tree. Older or standalone helper trees remain usable without it.
+  const routing = 'features/native-session/routing.cjs';
+  const files = fs.existsSync(path.join(runtime, routing)) ? [...RUNTIME_FILES, routing] : RUNTIME_FILES;
+  return Object.fromEntries(files.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
+};
 
 const START_TIMEOUT = 30000;
 const RATE_INTERVAL = 5000;
@@ -279,6 +288,16 @@ class WorkerOutput {
       outputTokens: this.outputTokens, totalOutputTokens: total?.outputTokens ?? null,
       activeMs: this.activeMs, reportedCostUsd: this.reportedCostUsd };
   }
+  nativeUsage(value, resumed) {
+    // Native usage is cumulative; a resumed query without an invocation baseline cannot report its history as new cost.
+    if (resumed) return;
+    const input = count(value.input), cached = count(value.cachedInput), creation = count(value.cacheWrite);
+    this.stdoutUsage = { inputTokens: this.agent === 'claude' ? (input !== null && creation !== null ? count(input + creation) : null)
+      : input !== null && cached !== null && input >= cached ? input - cached : null,
+      cachedTokens: cached, outputTokens: count(value.output) };
+    const micros = count(value.costUsdMicros);
+    if (this.agent === 'claude' && micros !== null && (this.reportedCostUsd === null || micros / 1e6 >= this.reportedCostUsd)) this.reportedCostUsd = micros / 1e6;
+  }
   line(line) {
     const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
     let record;
@@ -459,6 +478,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   let inbox = null, inboxTimer, inboxRead = Promise.resolve(), messages = [], noResume = false, segmentStopped = false;
   let interventions = 0, stops = 0, completedUsage = null, resumeSession = null, segmentConfirmed = false;
   let treeStop = Promise.resolve(), stoppingChild = null;
+  let controlClient = null, activeRuntime = null, nativeTurn = null, settleNative, nativeFallback = null, nativeRunning = false;
+  let bootstrap, controlOpening = false, controlAttemptAt = 0, ending = false;
+  let nativeBilling = null;
+  const billing = () => nativeBilling ? { billingPath: nativeBilling, usageRecordId: `dispatch:${id}`, costCompleteness: output.reportedCostUsd === null ? 'unknown' : 'estimated' } : {};
   const usage = (live = false) => {
     const current = output.usage();
     if (!completedUsage) return current;
@@ -500,6 +523,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const signal = line => stdout.write(`[dispatch] ${line}\n`);
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
   const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
+    ...billing(),
     kind: taskKind(options, roundtable), meeting: admission?.meeting || options.meeting || null, skipMeeting: options.skipMeeting || null,
     cwd: options.cwd, brief: options.brief, out: options.out, sessionId: output.sessionId, startedAt: Date.now() });
   const failed = (reason, exitCode = null) => {
@@ -549,6 +573,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   let rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
   const stop = (kind, requested = true) => {
     if (requested) killed = true;
+    if (activeRuntime) {
+      treeStop = Promise.resolve(activeRuntime.interrupt()).catch(() => {}).then(() => activeRuntime.close()).finally(() => settleNative?.({ code: 1, killedBy: kind }));
+      return;
+    }
     if (exited || !child?.pid || child.exitCode !== null) return;
     const victim = child;
     if (stoppingChild === victim) return;
@@ -580,10 +608,27 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         if (control.type === 'stop') {
           stops++; segmentStopped = true; noResume ||= !!control.noResume;
           signal(`stop requested ${id}${control.reason ? ': ' + JSON.stringify(control.reason).slice(1, -1) : ''}${control.noResume ? ' · no resume' : ''}`);
+          const direct = !!activeRuntime;
           stop('SIGTERM', false);
+          if (direct) {
+            let status = 'delivered';
+            try { await treeStop; } catch { status = 'unknown'; }
+            await inbox.recordReceipt(control.id, status); signal(`intervention ${id} ${control.id} ${status}`);
+          }
         } else {
-          interventions++; messages.push(control.text);
-          signal(`intervened ${id}: ${JSON.stringify(control.text).slice(1, -1)}`);
+          interventions++;
+          if (activeRuntime) {
+            let receipt;
+            try { receipt = await activeRuntime.send({ clientMessageId: control.id, text: control.text }); }
+            catch { receipt = { status: 'unknown' }; }
+            const status = ['delivered', 'rejected', 'unknown'].includes(receipt?.status) ? receipt.status : 'unknown';
+            signal(`intervention ${id} ${control.id} ${status}`);
+            await inbox.recordReceipt(control.id, status);
+          } else {
+            messages.push(control.text);
+            signal(`intervened ${id}: ${JSON.stringify(control.text).slice(1, -1)}`);
+            signal(`intervention ${id} ${control.id} queued`);
+          }
         }
       }
     });
@@ -600,7 +645,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (team) admission = await team.admit(options, id, __filename);
     if (team && !roundtable) {
       inbox = new RunInbox(team, id); await inbox.open();
-      inboxTimer = setInterval(() => { void readInbox().catch(() => {}); }, POLL_INTERVAL);
+      inboxTimer = setInterval(() => {
+        void readInbox().catch(() => {});
+        if (activeRuntime && options.agent === 'codex' && controlClient?.connected === false && Date.now() - controlAttemptAt >= 1000) void openControl();
+      }, POLL_INTERVAL);
     }
     if (killed) throw new Error('Dispatch interrupted before launch');
     const repo = admission?.repo || (options.allow.length ? repoFiles(options.cwd) : undefined);
@@ -619,9 +667,97 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     let brief = briefOf(options, fs.readFileSync(options.brief), team, { id, phase: admission?.phase, repo, before: checking ? before : undefined });
     log = fs.createWriteStream(options.out + '.log');
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
+    async function openControl() {
+      if (controlOpening || ending) return;
+      controlOpening = true; controlAttemptAt = Date.now();
+      try {
+        if (env.AGENTRIX_BOOTSTRAP && fs.statSync(env.AGENTRIX_BOOTSTRAP).size <= 16384) bootstrap = JSON.parse(fs.readFileSync(env.AGENTRIX_BOOTSTRAP, 'utf8').replace(/^\uFEFF/, ''));
+        if (!bootstrap?.controlAddress) return;
+        const client = await connectDispatchControl({ address: bootstrap.controlAddress, runId: id,
+        projectId: bootstrap.projectId, sessionKey: bootstrap.sessionKey, capability: bootstrap.controlCapability,
+        readOnly: !!options.readOnly || options.permission === 'plan', roundtable,
+        onControl: async messageId => { await readInbox(); return inbox?.receipt(messageId) || 'queued'; },
+        onEvent: event => acceptNative(event) });
+        if (ending) client.close(); else controlClient = client;
+      } catch { /* A reconnect only restores control; it never restarts a provider invocation. */ }
+      finally { controlOpening = false; }
+    }
+    await openControl();
+    function acceptNative(event) {
+      if (event.providerSessionId) output.sessionId = event.providerSessionId;
+      if (event.type === 'turn.started') {
+        nativeTurn = event.turnId; nativeRunning = true; output.confirmed = true; confirm();
+      } else if (event.type === 'routing.updated' && event.payload.observed) output.settings(event.payload.observed);
+      else if (event.type === 'usage.updated' && !event.replay) output.nativeUsage(event.payload, !!options.resume);
+      else if (event.type === 'item.upsert' && event.payload.kind === 'agent-message' && event.payload.status === 'completed') {
+        const content = event.payload.content;
+        if (typeof content?.text === 'string' && (!content.phase || content.phase === 'final_answer')) output.result = content.text;
+      } else if (event.type === 'turn.completed' && event.turnId === nativeTurn) {
+        nativeRunning = false;
+        settleNative?.({ code: event.payload.status === 'completed' ? 0 : 1, killedBy: event.payload.status === 'interrupted' ? 'SIGTERM' : null });
+      } else if (event.type === 'session.state' && ['disconnected', 'failed'].includes(event.payload.state)) {
+        nativeRunning = false;
+        settleNative?.({ code: 1, killedBy: null });
+      } else if (event.type === 'path.changed' && event.payload.selected === 'terminal' && !nativeTurn) {
+        nativeFallback = event.payload.reason || 'terminal_selected';
+      }
+      log.write(JSON.stringify(event) + '\n');
+    }
     let result;
     for (;;) {
       const effective = resumeSession ? { ...options, resume: resumeSession } : options;
+      if (controlClient) {
+        const spec = { owner: 'dispatch', projectId: bootstrap.projectId, terminalId: bootstrap.projectId, runtimeSessionId: id, runId: id,
+          cwd: options.cwd, worktree: options.cwd, model: options.model, effort: options.effort, fast: options.fast,
+          readOnly: options.readOnly || options.permission === 'plan', roundtable, allow: options.allow, env,
+          policy: { approvalPolicy: 'never' },
+          providerSessionId: options.resume || null };
+        const completion = new Promise(resolve => { settleNative = resolve; });
+        if (options.agent === 'codex') {
+          activeRuntime = createCodexRuntime({ resolveExecutable: async () => 'codex', spawnProcess: (_file, args, spawnOptions) => {
+            const command = resolveExecutable('codex', args, env); return launch(command.file, command.args, spawnOptions);
+          } }).create(spec, acceptNative);
+          if (options.resume) await rollout.prepare(options.resume);
+          try { if (options.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
+          catch {
+            await activeRuntime.close(); activeRuntime = null; controlClient.close(); controlClient = null;
+            signal(`transport ${id} codex-exec fallback: native runtime unavailable before input`); continue;
+          }
+          child = { pid: activeRuntime.pid, exitCode: null };
+          pollTimer = setInterval(() => { void rollout.read(); }, POLL_INTERVAL);
+          const receipt = await activeRuntime.send({ clientMessageId: id, text: brief.toString('utf8'), images: options.images });
+          if (receipt.status !== 'delivered') throw new Error('native_input_' + receipt.status);
+          result = await completion;
+        } else {
+          nativeBilling = 'api';
+          activeRuntime = { send: async input => {
+            const receipt = await controlClient.request('control.deliver', { messageId: input.clientMessageId, type: 'intervene', text: input.text });
+            return typeof receipt === 'string' ? { status: receipt } : receipt;
+          },
+            interrupt: () => controlClient.request('control.deliver', { messageId: randomUUID(), type: 'stop' }), close() {} };
+          // Main's broker owns this process. It supplies execution evidence in the streamed events.
+          child = { pid: 'broker', exitCode: null };
+          await controlClient.request('claude-sdk.run', { prompt: brief.toString('utf8'), model: options.model, effort: options.effort,
+            fast: options.fast, resume: options.resume || null, out: options.out });
+          if (nativeFallback) {
+            activeRuntime = null; nativeBilling = null; controlClient.close(); controlClient = null;
+            signal(`transport ${id} claude-cli fallback: ${String(nativeFallback).replace(/[\r\n]+/g, ' ')}`); continue;
+          }
+          result = await completion;
+        }
+        for (;;) {
+          await readInbox(true); await inboxRead;
+          if (!nativeRunning) break;
+          result = await new Promise(resolve => { settleNative = resolve; });
+        }
+        if (options.agent === 'codex') { await rollout.pending; await rollout.read(); }
+        confirm(true);
+        if (typeof output.result === 'string') fs.writeFileSync(options.out, output.result);
+        await activeRuntime.close(); activeRuntime = null; child.exitCode = result.code; clearInterval(pollTimer);
+        if (!started) failed('worker ended without execution evidence', 1);
+        break;
+      }
+      if (!resumeSession) signal(`transport ${id} ${options.agent === 'codex' ? 'codex-exec' : 'claude-cli'} fallback: Agentrix control unavailable`);
       const command = resolveExecutable(options.agent, commandOf(effective), env);
       if (options.agent === 'codex' && effective.resume && !resumeSession) await rollout.prepare(effective.resume);
       if (resumeSession) {
@@ -710,7 +846,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     const exitCode = Number.isInteger(result.code) ? (result.code === 0 && (unconfirmed || roundtable && reason !== 'exit') ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
     const measured = usage(), rate = measured.outputTokens !== null && measured.activeMs > 0 ? `${Math.round(measured.outputTokens * 1000 / measured.activeMs)} token/s (${measured.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(measured.activeMs / 1000)} s)` : 'token/s unreported';
     signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()}${interventionNote()} · out ${options.out}`);
-    if (!endSent) send({ type: 'dispatch-end', id, ...route, exitCode, reason, ...measured, verdict: routingVerdict(output, declared()),
+    if (!endSent) send({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured, verdict: routingVerdict(output, declared()),
       ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
       ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
     await new Promise(resolve => log.end(resolve));
@@ -729,10 +865,12 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     log?.destroy();
     return 1;
   } finally {
+    ending = true;
     clearTimeout(startTimer);
     clearInterval(pollTimer); clearInterval(rateTimer); clearInterval(inboxTimer);
     await inboxRead; await treeStop; clearTimeout(forceTimer);
     await rollout.pending;
+    await activeRuntime?.close(); controlClient?.close();
     team?.release(id);
     process.removeListener('SIGINT', onInterrupt); process.removeListener('SIGTERM', onTerminate); process.removeListener('SIGHUP', onHangup);
   }

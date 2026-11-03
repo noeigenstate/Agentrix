@@ -267,7 +267,15 @@ class CodexAccountUsage {
   #disposed = false;
 
   constructor({ read = readCodexAccount, scope = accountConfigScope, interval = 30000 } = {}) {
-    this.read = read; this.scope = scope; this.interval = interval; this.entries = new Map();
+    this.read = read; this.scope = scope; this.interval = interval; this.entries = new Map(); this.runtimes = new Map();
+  }
+  // The verified scope is the same one used by the terminal reader. Attaching a transport never broadens it.
+  attachRuntime(options, runtime) {
+    const scope = this.scopeFor(options);
+    if (scope.reason) return { dispose() {} };
+    const binding = { read: runtime.readLimits };
+    this.runtimes.set(scope.key, binding);
+    return { dispose: () => { if (this.runtimes.get(scope.key) === binding) this.runtimes.delete(scope.key); } };
   }
   openProject(id, options) {
     if (this.#disposed) return Promise.resolve(null);
@@ -388,7 +396,14 @@ class CodexAccountUsage {
       if (abort.signal.aborted) return null;
       if (reason) return unavailable(reason);
       entry.lastReadAt = Date.now();
-      return this.read({ ...entry.options, signal: abort.signal });
+      const native = this.runtimes.get(this.scopeFor(entry.options).key);
+      if (!native) return this.read({ ...entry.options, signal: abort.signal });
+      const limits = await native.read();
+      if (abort.signal.aborted) return null;
+      const buckets = Object.values(limits.limitsById || {}), first = buckets[0] || {};
+      return accountResult({ rateLimitResetCredits: limits.resetCredits,
+        rateLimits: Object.fromEntries(['primary', 'secondary'].map(name => [name, first[name] ? {
+          ...first[name], resetsAt: first[name].resetsAtMs == null ? null : first[name].resetsAtMs / 1000 } : null])) }, limits.observedAtMs);
     }).catch(() => ({ resets: null, resetQuery: { state: 'error', reason: 'query' } })).then(value => {
       if (entry.generation !== generation) return;
       entry.pending = false;
@@ -411,7 +426,7 @@ class CodexAccountUsage {
     for (const project of this.#projects.values()) project.finish(null);
     this.#projects.clear(); this.#projectQueue.length = 0;
     for (const entry of this.entries.values()) { entry.listeners.clear(); entry.checks.clear(); ++entry.generation; clearTimeout(entry.timer); entry.abort?.abort(); }
-    this.entries.clear();
+    this.entries.clear(); this.runtimes.clear();
   }
 }
 
