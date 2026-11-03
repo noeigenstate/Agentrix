@@ -131,15 +131,17 @@ claude() {
     return 127
   fi
   local -a program=("${__pg_words[@]}")
-  local hook=ELECTRON_RUN_AS_NODE=1 word REPLY start stop notify session
+  local hook=ELECTRON_RUN_AS_NODE=1 word REPLY start stop notify session progress permission
   for word in "$__pg_node" "$__pg_helper" claude-hook "$__pg_socket" "$__pg_project" "$__pg_key"; do
     __pg_quote "$word"; hook+=" $REPLY"
   done
   __pg_json "$hook start"; start=$REPLY
   __pg_json "$hook stop"; stop=$REPLY
   __pg_json "$hook notify"; notify=$REPLY
+  __pg_json "$hook progress"; progress=$REPLY
+  __pg_json "$hook permission"; permission=$REPLY
   __pg_quote "$__pg_note_file"; __pg_json "$hook session $REPLY"; session=$REPLY
-  local settings="{\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":$start,\"timeout\":10}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":$stop,\"timeout\":10}]}],\"Notification\":[{\"hooks\":[{\"type\":\"command\",\"command\":$notify,\"timeout\":10}]}],\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":$session,\"timeout\":10}]}]}}"
+  local settings="{\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":$start,\"timeout\":10}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":$stop,\"timeout\":10}]}],\"Notification\":[{\"hooks\":[{\"type\":\"command\",\"command\":$notify,\"timeout\":10}]}],\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":$session,\"timeout\":10}]}],\"PreToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":$progress,\"timeout\":10}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":$progress,\"timeout\":10}]}],\"PostToolUseFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":$progress,\"timeout\":10}]}],\"PermissionDenied\":[{\"hooks\":[{\"type\":\"command\",\"command\":$progress,\"timeout\":10}]}],\"ElicitationResult\":[{\"hooks\":[{\"type\":\"command\",\"command\":$progress,\"timeout\":10}]}],\"PermissionRequest\":[{\"hooks\":[{\"type\":\"command\",\"command\":$permission,\"timeout\":10}]}],\"Elicitation\":[{\"hooks\":[{\"type\":\"command\",\"command\":$permission,\"timeout\":10}]}]}}"
   __pg_send codex-started 0 claude "$(__pg_command "$@")"
   # What the reading view can show; a later --append-system-prompt of the user's wins.
   local -a note=()

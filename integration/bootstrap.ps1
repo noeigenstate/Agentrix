@@ -193,7 +193,10 @@ function global:claude {
         '-SessionKey', $global:AgentrixSession.sessionKey
     ) -join ' '
     $hook = { param($kind) @{ hooks = @(@{ type = 'command'; command = ($hookCommand + ' -Kind ' + $kind); timeout = 10 }) } }
-    $settings = @{ hooks = @{ UserPromptSubmit = @(& $hook 'start'); Stop = @(& $hook 'stop'); Notification = @(& $hook 'notify'); SessionStart = @(& $hook 'session') } } | ConvertTo-Json -Depth 6 -Compress
+    $hooks = @{ UserPromptSubmit = @(& $hook 'start'); Stop = @(& $hook 'stop'); Notification = @(& $hook 'notify'); SessionStart = @(& $hook 'session') }
+    foreach ($name in @('PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'ElicitationResult')) { $hooks[$name] = @(& $hook 'progress') }
+    foreach ($name in @('PermissionRequest', 'Elicitation')) { $hooks[$name] = @(& $hook 'permission') }
+    $settings = @{ hooks = $hooks } | ConvertTo-Json -Depth 6 -Compress
     $sessionFolder = if ($env:AGENTRIX_BOOTSTRAP) { [IO.Path]::GetDirectoryName($env:AGENTRIX_BOOTSTRAP) } elseif ($env:AGENTRIX_READING_NOTE_FILE) { [IO.Path]::GetDirectoryName($env:AGENTRIX_READING_NOTE_FILE) } else { [IO.Path]::GetTempPath() }
     $sessionName = if ($env:AGENTRIX_BOOTSTRAP) { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_BOOTSTRAP) } else { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_READING_NOTE_FILE) -replace '-skills$', '' }
     $settingsFile = Join-Path $sessionFolder ($sessionName + '-claude-settings-' + [Guid]::NewGuid().ToString('N') + '.json')

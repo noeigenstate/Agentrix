@@ -26,7 +26,8 @@ const fixtureIdle = new Function('parseAgentScreen', 'hasCliInput', 'isCliIdle',
 test('fixture readiness rejects partial frames, helper input and an ordinary shell prompt', () => {
   const frame = ['─'.repeat(40), '❯ ', '─'.repeat(40), '  ⏸ manual mode on'];
   assert.equal(fixtureIdle(frame), true);
-  assert.equal(fixtureIdle(frame.slice(0, 3)), false, 'a drawn box without its footer is not idle');
+  assert.equal(fixtureIdle(frame.slice(0, 3)), true, 'a complete input box stays idle without a recognised status footer');
+  assert.equal(fixtureIdle(frame.slice(0, 2)), false, 'an unfinished input box is not ready');
   assert.equal(fixtureIdle(frame.map(row => row === '❯ ' ? '❯ Clear-Host; Write-Host pending' : row)), false, 'the idle-rendering script itself is not an empty input');
   assert.equal(fixtureIdle(['reading-fixture> ']), false);
   assert.equal(fixtureIdle([]), false);

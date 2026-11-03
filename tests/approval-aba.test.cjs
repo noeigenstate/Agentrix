@@ -195,7 +195,7 @@ for (const agent of ['claude', 'codex']) {
     Object.assign(s, { activitySince: 0, activityInputAt: 0, promptQueue: {} });
     const context = vm.createContext({ sessions: new Map([['aba', s]]), summarizeTask: () => '',
       store: { setRestore() {} }, broadcast() {} });
-    const start = main.indexOf('function applyActivity(');
+    const start = main.indexOf('function publishCliState(');
     vm.runInContext(main.slice(start, main.indexOf('// Claude Code hooks:', start)), context);
     const observe = (threadId, turnId) => context.applyActivity({ id: 'p' }, s, { threadId, turnId, state: 'working', updatedAt: 100 });
     observe('thread-A', 'turn-A'); const first = s.approval.stamp();
@@ -203,7 +203,13 @@ for (const agent of ['claude', 'codex']) {
     observe('thread-A', 'turn-B'); observe('thread-A', 'turn-A');
     assert.throws(() => h.s.approval.send(first, '\r', 'old', key => h.writes.push(key)), /审批操作已失效/);
     const second = s.approval.stamp();
-    observe('thread-B', 'turn-A'); observe('thread-A', 'turn-A');
+    // A provider switch comes from the trusted session/title entry point, never a polled result.
+    context.publishCliState(s, 'idle', { threadId: 'thread-B', bind: true, at: 100 });
+    observe('thread-B', 'turn-A');
+    const switched = s.cliState.revision;
+    observe('thread-A', 'turn-A'); assert.equal(s.cliState.revision, switched, 'old provider observations are rejected');
+    context.publishCliState(s, 'idle', { threadId: 'thread-A', bind: true, at: 100 });
+    observe('thread-A', 'turn-A');
     assert.throws(() => h.s.approval.send(second, '\r', 'old', key => h.writes.push(key)), /审批操作已失效/); assert.deepEqual(h.writes, []);
   });
 }

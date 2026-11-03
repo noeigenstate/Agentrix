@@ -10,7 +10,7 @@ const { isLocalAgentCommand } = require('../electron/agent-commands.cjs');
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 // Exercise the actual event handlers without opening Electron or the user's terminals.
 function handlers() {
-  const project = { id: 'p', completionArmed: false }, session = { terminalId: 't', projectId: 'p', sessionKey: 'key', codexActive: true, agent: 'claude', codexActivity: 'working', promptQueue: { reset() {} }, submissions: { reset() {} }, approval: new (require('../electron/features/terminal/approval-guard.cjs').ApprovalGuard)('pty') };
+  const project = { id: 'p', completionArmed: false }, session = { terminalId: 't', projectId: 'p', sessionId: 'pty', sessionKey: 'key', codexActive: true, agent: 'claude', codexActivity: 'working', promptQueue: { reset() {} }, submissions: { reset() {} }, approval: new (require('../electron/features/terminal/approval-guard.cjs').ApprovalGuard)('pty') };
   const calls = { broadcast: 0, restore: 0, activity: 0, follow: 0, completion: [], usageDispose: 0 };
   session.usageAccount = { dispose() { calls.usageDispose++; } };
   session.bindUsageAccount = () => {};
@@ -24,8 +24,10 @@ function handlers() {
   // onEvent owns account-query cleanup on real agent/shell exit. Include that
   // legitimate dependency, with an observable subscription instead of a PTY.
   vm.runInContext(main.slice(main.indexOf('function stopUsageAccount('), main.indexOf('let claudeAccountTimer =')), context);
+  vm.runInContext(main.slice(main.indexOf('function publishCliState('), main.indexOf('function applyActivity(')), context);
   vm.runInContext(main.slice(main.indexOf('function claudeActivity('), main.indexOf('async function resumeAfterPrompt(')), context);
-  return { context, project, session, calls, send: event => context.onEvent({ projectId: 't', sessionKey: 'key', type: 'agent-activity', sessionId: 'session', eventId: 'session:1', ...event }) };
+  let eventSequence = 0;
+  return { context, project, session, calls, send: event => context.onEvent({ projectId: 't', sessionKey: 'key', type: 'agent-activity', sessionId: 'session', eventId: `session:${++eventSequence}`, ...event }) };
 }
 
 test('Claude permission notices broadcast waiting state without changing activity or restore plans', () => {
@@ -72,7 +74,7 @@ test('working and complete clear waiting without disposing usage; actual agent/s
     assert.equal(session.needsInput, null);
     assert.equal(calls.restore, 1);
     assert.equal(calls.activity, event.state ? 1 : 0);
-    assert.equal(calls.broadcast, event.state ? 1 : 2);
+    assert.equal(calls.broadcast, 2, 'waiting and its release are each pushed immediately');
     assert.deepEqual(calls.completion, event.state === 'working' ? [['p', true]] : []);
     assert.equal(calls.usageDispose, event.state ? 0 : 1);
     assert.equal(session.usageAccount, event.state ? account : null);
@@ -106,8 +108,10 @@ test('only distinct Claude UserPromptSubmit events arm completion; attention and
   assert.equal(project.completionArmed, false);
 
   waiting();
+  const waitingRevision = session.cliState.revision;
   send({ state: 'working', eventId: 'session:prompt-1', prompt: 'Run the task' });
-  assert.equal(session.needsInput, null, 'a duplicated hook still clears the waiting notice');
+  assert.equal(session.needsInput.message, 'Approve tool', 'a duplicated old hook cannot clear newer waiting');
+  assert.equal(session.cliState.revision, waitingRevision);
   assert.deepEqual(calls.completion, [['p', true]], 'the same submission event cannot arm twice');
   assert.equal(project.completionArmed, false);
 

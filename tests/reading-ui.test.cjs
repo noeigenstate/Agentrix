@@ -433,7 +433,7 @@ function workingComposerHarness(t, agent, overrides = {}) {
   const fixture = fs.readFileSync(path.join(__dirname, 'fixtures/screens', filename), 'utf8').split(/\r?\n/);
   const inputRow = fixture.findLastIndex(row => /^\s*[❯›](?:\s|$)/.test(row));
   assert.ok(inputRow >= 0);
-  const rows = () => [
+  const rows = () => view.rows ?? [
     ...(view.working ? [agent === 'claude' ? '✶ Swooping… (12s)' : '• Working (12s · esc to interrupt)'] : []),
     ...fixture.flatMap((row, index) => index === inputRow ? view.draft.split(/\r?\n/).map((line, part) => (part ? '  ' : agent === 'claude' ? '❯ ' : '› ') + line) : [row]),
   ];
@@ -466,6 +466,58 @@ function workingComposerHarness(t, agent, overrides = {}) {
 }
 
 for (const agent of ['claude', 'codex']) {
+  test(agent + ': dialog messages queue FIFO and drain after the first idle frame without answering the dialog', async t => {
+    const h = workingComposerHarness(t, agent);
+    h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render();
+    assert.ok(h.popup()); assert.equal(h.node.disabled, false);
+    h.edit('first queued instruction'); h.press('Enter');
+    h.edit('second queued instruction'); h.press('Enter');
+    await h.tick(1000);
+    assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+    assert.equal(elements(h.tree()).find(node => node.props.className === 'reading-outbox').props.children[1].props.children.length, 2);
+    h.remount();
+    assert.equal(elements(h.tree()).find(node => node.props.className === 'reading-outbox').props.children[1].props.children.length, 2, 'the outbox survives a raw/reading remount in the same session');
+    h.edit('another draft stays here');
+    delete h.view.rows; h.view.working = false; h.render(); h.render();
+    assert.equal(h.popup(), undefined);
+    for (let step = 0; step < 8; step++) await h.tick(800);
+    assert.deepEqual(h.view.records.map(record => record.text), ['first queued instruction', 'second queued instruction']);
+    assert.equal(h.node.value, 'another draft stays here');
+    assert.equal(elements(h.tree()).some(node => node.props.className === 'reading-outbox'), false);
+  });
+
+  test(agent + ': terminal drafts mirror immediately and local edits survive conflicting terminal changes', t => {
+    const h = workingComposerHarness(t, agent);
+    h.view.draft = 'typed in terminal'; h.render(); h.render();
+    assert.equal(h.node.value, 'typed in terminal');
+    h.view.draft = 'terminal edit'; h.render(); h.render(); assert.equal(h.node.value, 'terminal edit');
+    h.edit('local edit'); h.view.draft = 'conflicting terminal edit'; h.render(); h.render();
+    assert.equal(h.node.value, 'local edit');
+    assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+  });
+
+  test(agent + ': remounting during an outbox send preserves uncertainty instead of replaying it', async t => {
+    const h = workingComposerHarness(t, agent);
+    h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render();
+    h.edit('queued instruction'); h.press('Enter');
+    delete h.view.rows; h.view.working = false; h.render(); h.render(); await h.tick(0);
+    assert.equal(h.pasted.length, 1);
+    const takeBack = elements(h.tree()).find(node => node.props.className === 'reading-outbox').props.children[1].props.children[0].props.children.at(-1);
+    assert.equal(takeBack.props.disabled, true); takeBack.props.onClick(); h.render(); assert.equal(h.node.value, '');
+    h.remount(); h.view.draft = ''; h.render();
+    await h.tick(1000); await h.tick(30000);
+    assert.equal(h.pasted.length, 1);
+    assert.ok(elements(h.tree()).some(node => node.props.children === en['送达未确认，请在终端检查']));
+  });
+
+  test(agent + ': a dialog arriving after paste cancels the delayed Enter', async t => {
+    const h = workingComposerHarness(t, agent);
+    h.edit('ordinary instruction'); h.press('Enter'); await h.tick(0);
+    assert.equal(h.pasted.length, 1);
+    h.view.rows = ['Settings', 'Esc to close']; h.render(); await h.tick(1000);
+    assert.equal(h.written.some(write => write.text === '\r'), false);
+  });
+
   test(agent + ': a working fixture accepts typing, Shift+Enter and the Send button, and renders the CLI queue', async t => {
     const h = workingComposerHarness(t, agent);
     h.edit('first line');
@@ -503,7 +555,7 @@ for (const agent of ['claude', 'codex']) {
     h.edit('/mo'); elements(h.tree()).find(element => element.props.role === 'option').props.onClick(); h.render();
     assert.equal(h.node.value, '/model ');
     h.edit('/model'); h.press('Enter'); await h.tick(0);
-    assert.equal(h.popup().props.command, '/model'); assert.equal(h.node.disabled, true); assert.equal(stop().props.disabled, true);
+    assert.equal(h.popup().props.command, '/model'); assert.equal(h.node.disabled, false); assert.equal(stop().props.disabled, true);
     const before = h.written.slice(); h.press('Escape'); h.press('Enter');
     assert.deepEqual(h.written, before, 'an open popup still owns the keys');
     h.popup().props.onClose(); h.render();
@@ -707,11 +759,12 @@ test('terminal changes, split selection and unmount cancel pending dictation', a
   });
 });
 
-test('the delayed send respects a newly blocked composer', async t => {
+test('the delayed send queues text when a confirmation arrives before dictation submits', async t => {
   const h = dictationHarness(t); h.dictate('wait');
   h.screen.choice = fakeChoice(); h.render();
   await h.tick(1000);
-  assert.deepEqual(h.pasted, []); assert.equal(h.node.value, 'wait'); assert.equal(h.pending(), false);
+  assert.deepEqual(h.pasted, []); assert.equal(h.node.value, ''); assert.equal(h.pending(), false);
+  assert.ok(elements(h.tree()).some(node => node.props.className === 'reading-outbox'));
 });
 
 test('dictation without submit inserts and focuses without scheduling a send', async t => {
@@ -731,11 +784,32 @@ test('welcome command rows call the existing completion callback with the cached
   assert.deepEqual(picked, [command]);
 });
 
-function readingMode() {
-  return loadUI('features/reading/reading-mode.ts', { react: { useSyncExternalStore: (_subscribe, snapshot) => snapshot() } });
+function readingMode(overrides = {}) {
+  return loadUI('features/reading/reading-mode.ts', { react: { useSyncExternalStore: (_subscribe, snapshot) => snapshot() }, ...overrides });
 }
 const terminal = (id, needsInput = 'Allow command?') => ({ id, sessionId: 'session', codexActive: true, needsInput });
 const isReading = (mode, value) => mode.readingShown(value, mode.useTerminalChoice());
+
+test('terminal screen callbacks return an automatic raw handoff immediately without another host update', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let rows = ['Settings', 'Esc to close'], notify;
+  const mode = readingMode({ './terminal-screen.ts': { readScreen: () => ({ rows }), subscribeScreen: (_id, callback) => { notify = callback; return () => {}; } } });
+  const value = { ...terminal('live-screen-return'), agent: 'codex' };
+  mode.syncReading(value); t.mock.timers.tick(1500); assert.equal(isReading(mode, value), false);
+  rows = composerRows('codex'); notify();
+  assert.equal(isReading(mode, value), true);
+  assert.equal(value.needsInput, 'Allow command?', 'the stale host notice did not need to change');
+  mode.setReading(value.id, false); notify(); assert.equal(isReading(mode, value), false, 'manual raw selection remains the owner choice');
+});
+
+test('a late host CLI revision cannot rearm reading-mode handoff after a newer idle event', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const mode = readingMode({ './terminal-screen.ts': { readScreen: () => ({ rows: ['Settings', 'Esc to close'] }), subscribeScreen: () => () => {} } });
+  const value = { ...terminal('ordered-handoff'), agent: 'codex', cliState: { sessionId: 'session', revision: 2, updatedAt: 2000, state: 'idle' } };
+  mode.syncReading(value);
+  value.cliState = { ...value.cliState, revision: 1, state: 'waiting' }; mode.syncReading(value);
+  t.mock.timers.tick(3000); assert.equal(isReading(mode, value), true);
+});
 
 test('needsInput falls back at 1.5 seconds and automatically returns after acknowledgment', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -830,7 +904,7 @@ test('the composer offers its hint longest first and shows the one that fits, so
   assert.equal(note.props.style.position, 'absolute', 'the description is not drawn');
   Object.assign(h.props.terminal, { codexActive: false });
   h.render();
-  assert.equal(offered.length, 2); assert.equal(offered[0], en['输入命令，Enter 发送']); assert.ok(strictlyShorter(offered));
+  assert.equal(offered.length, 1); assert.equal(offered[0], en['会话未启动或已退出']);
 });
 
 test('a restored preview cannot send until its own CLI input is ready, and a different thread disables it again', async t => {
@@ -838,7 +912,7 @@ test('a restored preview cannot send until its own CLI input is ready, and a dif
   const h = dictationHarness(t, { './terminal-screen': { useScreen: () => ({ rows }), readScreen: () => ({ rows }) } });
   Object.assign(h.props.terminal, { sessionId: null, codexActive: false, readingHistory: { key: 'history-a', agent: 'codex', threadId: 'restored' } });
   assert.equal(h.render().props.disabled, true);
-  assert.equal(h.render().props.placeholder, en['正在启动…']);
+  assert.equal(h.render().props.placeholder, en['历史预览，等待会话输入就绪']);
   h.edit('do not send before ready'); h.press('Enter'); await h.tick(1000);
   h.command('/status'); await h.tick(1000);
   h.dictate('/status', true); await h.tick(1000);
@@ -848,9 +922,9 @@ test('a restored preview cannot send until its own CLI input is ready, and a dif
   rows = ['› Ask Codex to do anything', '', 'gpt-6.1-sol · high · 100% context left'];
   assert.equal(h.render().props.disabled, false);
   rows = ['Working...'];
-  assert.equal(h.render().props.disabled, true, 'the composer requires current positive input, not latched readiness');
+  assert.equal(h.render().props.disabled, false, 'a live session stays editable during an unrecognised redraw');
   h.props.terminal.readingHistory = { key: 'new-capability', agent: 'codex', threadId: 'restored' };
-  assert.equal(h.render().props.disabled, true, 'a page capability cannot substitute for current CLI input');
+  assert.equal(h.render().props.disabled, false, 'the draft remains usable while delivery waits for the CLI input');
   h.props.terminal.readingHistory = { key: 'history-b', agent: 'codex', threadId: 'different' };
   assert.equal(h.render().props.disabled, true);
 });
@@ -900,7 +974,7 @@ for (const type of ['input', 'textarea', 'select', 'contenteditable']) test('a d
   // Textareas are also protected while typing outside the reader; other editors are within its root.
   h.tree().props.ref.current = { contains: target => target === editable };
   document.activeElement = editable;
-  h.view.rows = ['Unrecognised dialog']; h.render();
+  h.view.rows = ['Settings', 'Esc to close']; h.render();
   h.tree().props.ref.current = { contains: target => target === editable };
   h.tick(3000);
   assert.ok(h.popup()); assert.equal(h.popup().props.focus, false); assert.equal(document.activeElement, editable);
@@ -1437,7 +1511,7 @@ for (const agent of ['claude', 'codex']) {
       await h.paste(1); h.edit('keep this picture');
       if (change === 'split blur') { h.props.active = false; h.render(); h.props.active = true; h.render(); }
       else {
-        h.setScreen(['Unknown dialog']); await h.tick(3000);
+        h.setScreen(['Settings', 'Esc to close']); await h.tick(3000);
         assert.ok(h.popup()); h.popup().props.onClose(); h.render(); h.setScreen(undefined);
       }
       if (action === 'send') {
@@ -1928,7 +2002,7 @@ for (const agent of ['claude', 'codex']) {
 
   test(agent + ': a dialog preserves staged pictures and a locked draft until the owner returns to input', async t => {
     const h = imageComposerHarness(t, agent); await h.paste(1); h.edit('keep this message'); h.written.length = 0;
-    h.setScreen(['Unknown dialog']); await h.tick(3000); assert.ok(h.popup()); assert.equal(h.popup().props.focus, false);
+    h.setScreen(['Settings', 'Esc to close']); await h.tick(3000); assert.ok(h.popup()); assert.equal(h.popup().props.focus, false);
     h.press('Enter'); await h.tick(1000); assert.equal(h.node.value, 'keep this message'); assert.equal(h.previews().length, 1);
     assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
     h.popup().props.onClose(); h.render(); h.setScreen(undefined); h.press('Enter'); await h.tick(0); await h.tick(400);
@@ -2339,7 +2413,7 @@ test('an automatic stalled resend with a missing native input never opens or foc
 test('a popup also preserves focus in another project composer after its typing grace expired', t => {
   const h = popupHarness(t), editable = { matches: selector => selector.split(/,\s*/).includes('textarea') };
   document.body.contains = target => target === editable; document.activeElement = editable;
-  h.view.rows = ['Unknown dialog']; h.render(); h.tick(3000);
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.tick(3000);
   assert.ok(h.popup()); assert.equal(h.popup().props.focus, false); assert.equal(document.activeElement, editable);
   assert.deepEqual(h.writes, []);
 });

@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowCounterClockwise, CheckCircle, Circle, CircleNotch, Record as RecordDot, WarningCircle } from '@phosphor-icons/react';
-import type { AgentCall, AgentTokens, AgentUsage, ProjectTerminal, TokenRate } from '../../shared/types';
+import type { AgentCall, AgentTokens, AgentUsage, CliState, ProjectTerminal, TokenRate } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { modelName } from '../../shared/model-name';
 import { useNow } from '../../shared/useNow';
-import { readScreen, subscribeScreen } from '../terminal/terminal-screen';
+import { readScreen, subscribeScreen, cliStateFor, nextCliState } from '../terminal/terminal-screen.ts';
 import { sendToAgent } from '../home/send-to-agent';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { actionText } from './action-text';
@@ -77,7 +77,18 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
   const actual = usage?.model || null, configured = settings?.model || null, model = actual ?? configured, name = model ? modelName(model) : agent;
   const title = [[agent, usage?.provider, model && name].filter(Boolean).join(' / '),
     actual && configured && actual !== configured && t('设置为 {configured}，实际回复来自 {actual}', { configured: modelName(configured), actual: name })].filter(Boolean).join('\n');
-  const now = useNow(Date.now), activity = terminal.mainTurn?.state ?? terminal.codexActivity, prompts = terminal.prompts || [], working = prompts.find(prompt => prompt.state === 'working');
+  const [frame, setFrame] = useState(() => readScreen(terminal.id));
+  useEffect(() => {
+    setFrame(readScreen(terminal.id));
+    return subscribeScreen(terminal.id, setFrame);
+  }, [terminal.id, terminal.sessionId]);
+  const latestSignal = useRef<CliState | null>(null);
+  const signal = latestSignal.current = nextCliState(latestSignal.current, terminal);
+  const cli = cliStateFor(terminal.agent === 'claude' ? 'claude' : 'codex', frame, terminal, signal);
+  const hasState = !!signal || !!frame && (cli.input || cli.waiting || cli.working);
+  const now = useNow(Date.now), activity = cli.waiting ? 'waiting' : cli.working ? 'working' : hasState
+    ? terminal.mainTurn?.state === 'interrupted' ? 'interrupted' : 'complete' : terminal.mainTurn?.state ?? terminal.codexActivity;
+  const prompts = (terminal.prompts || []).filter(prompt => !hasState || prompt.state !== 'working' || cli.working || cli.waiting), working = prompts.find(prompt => prompt.state === 'working');
   const source = terminal.mainTurn?.background, background = activity === 'working' ? source : null;
   const summary = source ? t('处理后台结果：{summary}', { summary: source.summary }) + (source.count > 1 ? t(' 等 {count} 项', { count: source.count }) : '') : '';
   const current = source ? { session: terminal.sessionId, summary, text: source.text } : working ? { session: terminal.sessionId, summary: working.summary, text: working.text } : null;
@@ -99,10 +110,11 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
       {!model && <li className="activity-call-note"><span /><p>{t('第一次回复后显示模型。')}</p><span /></li>}
     </ul>
     <ul className="activity-call-rows activity-main-tasks" aria-label={t('提示')}>
+      {cli.waiting && <li className="is-idle" role="status"><span className="activity-row-icon"><WarningCircle size={14} /></span><p>{cli.message || t('等待你确认')}</p><span /></li>}
       {background && <>{task(CALL_STATES.running.icon, 'is-working', '', summary, background.text, elapsedClock(now - background.at))}{step}</>}
       {activity === 'working' && !working && !background && task(CALL_STATES.running.icon, 'is-working', running ? t('正在') : '', running ? actionText(action) : state, running ? action.detail || action.target : state, '')}
       {prompts.map(prompt => <Fragment key={prompt.id}>
-        {task(prompt.state === 'working' ? CALL_STATES.running.icon : <Circle size={14} aria-hidden="true" />, prompt.state === 'working' ? 'is-working' : 'is-queued', t(prompt.state === 'working' ? '处理中' : '排队中'),
+        {task(prompt.state === 'working' && activity === 'working' ? CALL_STATES.running.icon : <Circle size={14} aria-hidden="true" />, prompt.state === 'working' && activity === 'working' ? 'is-working' : 'is-queued', t(prompt.state === 'working' && activity === 'working' ? '处理中' : activity === 'waiting' ? '等待你确认' : '排队中'),
           prompt.summary, prompt.text, prompt.at ? elapsedClock(now - prompt.at) : '')}
         {prompt === working && !background && step}
       </Fragment>)}

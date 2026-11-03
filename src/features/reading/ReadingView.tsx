@@ -6,8 +6,9 @@ import { dictateInto } from '../voice/voice-input';
 import { createDictationSend } from './dictation-send';
 import { bindApproval, useScreen } from '../terminal/terminal-screen';
 import { parseAgentScreen, waitingTitle } from '../agents/agent-screen';
-import { cliDialogShown, hasCliInput, isAtPrompt, isCliWorking } from './cli-panel';
-import { cliReady, DIALOG_SETTLE, endDialog, rememberReady, startDialog } from './reading-ready';
+import { cliInputDraft, hasCliInput, isAtPrompt } from './cli-panel';
+import { readingState, nextCliState, type CliState } from './reading-state.ts';
+import { cliReady, endDialog, rememberReady, startDialog } from './reading-ready';
 import { WaitingCard } from './WaitingCard';
 import { ReadingWelcome } from './ReadingWelcome';
 import { typeReadingCommand } from './reading-command';
@@ -44,6 +45,9 @@ export { groupSummary } from './ResultCard';
 
 // Switching to the CLI unmounts the composer; sent messages still belong to that terminal.
 const history = new Map<string, string[]>();
+type WaitingMessage = { id: number; text: string; uncertain?: boolean };
+const waitingMessages = new WeakMap<object, WaitingMessage[]>();
+let nextWaitingMessage = 0;
 // Retain actual message text across reading/terminal switches, bounded to this terminal's current conversation.
 const sentMessages = new Map<string, { session: string | null; thread?: string; texts: string[] }>();
 type ServerPicture = { generation: number; src: string; path?: string; error?: string; ready?: Promise<void>; sent?: boolean };
@@ -99,11 +103,11 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     || latestMessages.current.entries.some(entry => entry.role === 'user' && (sameMessage(entry.text ?? '', text) || sameMessage(entry.original ?? '', text)))
     || ownHistory.texts.some(message => sameMessage(message, text));
   const sendCounter = useRef(0);
-  const visibleScreen = useScreen(terminal.id);
+  const visibleScreen = useScreen(terminal.id, terminal.sessionId);
   const parsedScreen = useMemo(() => {
     const parsed = parseAgentScreen(kind, visibleScreen?.rows ?? []);
     return { ...parsed, choice: bindApproval(parsed.choice, kind, visibleScreen) };
-  }, [terminal.agent, visibleScreen]);
+  }, [kind, visibleScreen]);
   // Readiness outlives this component: a dialog with no input box must still show after a trip to the raw terminal.
   // Rendering only reads it; the effect remembers it.
   const inputShown = hasCliInput(kind, visibleScreen?.rows ?? [], parsedScreen);
@@ -111,21 +115,24 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const preview = !!terminal.readingHistory && !cliReady(terminal.id, run, inputShown);
   useEffect(() => rememberReady(terminal.id, run, inputShown));
   const screen = preview ? { ...parsedScreen, choice: null, waiting: null } : parsedScreen;
-  const idleInput = inputShown && isAtPrompt(kind, visibleScreen?.rows ?? [], parsedScreen);
+  const latestSignal = useRef<CliState | null>(null);
+  const signal = latestSignal.current = nextCliState(latestSignal.current, terminal);
+  const state = readingState(kind, visibleScreen?.rows ?? [], parsedScreen, terminal, signal, visibleScreen);
+  const idleInput = state.idle;
   const live = terminal.codexActive && !!terminal.sessionId && terminal.status !== 'exited';
-  const knownDialog = cliDialogShown(kind, visibleScreen?.rows ?? [], parsedScreen) || terminal.needsInput != null && !idleInput;
-  const working = live && !knownDialog && inputShown && isCliWorking(kind, visibleScreen?.rows ?? [], parsedScreen);
-  const hasChoice = live && (knownDialog || !!visibleScreen && !idleInput && !working);
-  // Activity can lag a mid-turn dialog. It gives unknown screens more time to settle, never a veto.
-  const dialogSettle = DIALOG_SETTLE * (terminal.codexActivity === 'working' ? 2 : 1);
+  const working = live && state.working;
+  const hasChoice = live && state.waiting;
   const waitingShown = hasChoice;
-  const absence = useRef<{ conversation: string; at: number | null }>({ conversation, at: null });
-  if (absence.current.conversation !== conversation || !hasChoice) absence.current = { conversation, at: null };
-  if (hasChoice) absence.current.at ??= Date.now();
   const welcomeIsStarting = useWelcomeStarting(terminal.agentStartedAt, screen);
   const choiceVisible = useRef(hasChoice), mounted = useRef(true);
   const choiceHost = useRef<HTMLDivElement>(null), restoreComposer = useRef(false), wasChoice = useRef(false), editingAtChoice = useRef(false);
   const [draft, setDraft] = useState('');
+  const [outbox, setOutbox] = useState<WaitingMessage[]>(() => waitingMessages.get(ownHistory) ?? []);
+  const saveOutbox = (messages: WaitingMessage[]) => {
+    if (messages.length) waitingMessages.set(ownHistory, messages); else waitingMessages.delete(ownHistory);
+    setOutbox(messages);
+  };
+  useLayoutEffect(() => { setOutbox(waitingMessages.get(ownHistory) ?? []); }, [ownHistory]);
   const [sendingSoon, setSendingSoon] = useState(false);
   const [commands, setCommands] = useState<AgentCommand[]>([]), [requested, setRequested] = useState(false);
   const [dismissed, setDismissed] = useState(false), [selection, setSelection] = useState(0);
@@ -143,8 +150,10 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const holdQuote = (next: MessageQuote | null) => { quoteRef.current = next; setQuote(next); };
   useLayoutEffect(() => { holdQuote(null); }, [conversation]);
   const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null), composer = useRef<HTMLDivElement>(null);
-  const [terminalPopup, setTerminalPopup] = useState<{ command: string; focus?: boolean } | null>(null);
-  const inputBlocked = preview || !live || (!idleInput && !working) || hasChoice || terminalPopup !== null;
+  const [terminalPopup, setTerminalPopup] = useState<{ command: string; focus?: boolean; automatic?: boolean } | null>(null);
+  const inputBlocked = preview || !live;
+  const deliveryBlocked = !state.canDeliver || terminalPopup !== null;
+  const canWrite = useRef(state.canDeliver); canWrite.current = state.canDeliver;
   choiceVisible.current = hasChoice || terminalPopup !== null;
   const focusAfterPopup = useRef(false);
   const popupReady = useRef<(() => void) | null>(null);
@@ -153,7 +162,10 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const closePopup = (restoreFocus = true) => {
     cancelSend(); focusAfterPopup.current = restoreFocus; setTerminalPopup(null);
   };
-  // The popup disables the textarea; restore focus only after closing has enabled it in the DOM.
+  useEffect(() => {
+    if (!hasChoice && state.canDeliver && terminalPopup?.automatic) closePopup(false);
+  }, [hasChoice, state.canDeliver, terminalPopup]);
+  // Restore focus after the popup has left the DOM, without taking it from another editor.
   useLayoutEffect(() => {
     if (terminalPopup !== null || !focusAfterPopup.current) return;
     focusAfterPopup.current = false;
@@ -168,26 +180,18 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     const previous = ownership.current; ownership.current = { active, autoFocus };
     if (previous.active && !active || previous.autoFocus && !autoFocus) { cancelSend(); setTerminalPopup(null); }
   }, [active, autoFocus]);
-  // Unknown screens default to the TUI. A settled absence is one dialog episode, shared across remounts;
+  // Only positive waiting evidence opens the TUI. One dialog episode is shared across remounts;
   // a hidden view never consumes its opening, and closing it does not rearm it on redraw.
   useEffect(() => {
-    if (!live || idleInput && !knownDialog) { endDialog(terminal.id); return; }
-    if (working) {
-      const timer = setTimeout(() => endDialog(terminal.id), DIALOG_SETTLE);
-      return () => clearTimeout(timer);
-    }
+    if (!live || !hasChoice && (state.canDeliver || working || signal?.state === 'idle')) { endDialog(terminal.id); return; }
     if (!hasChoice) return;
     const open = () => {
       if (!active || !startDialog(terminal.id, conversation) || terminalPopup !== null) return;
       const focus = !editingAtChoice.current && !hasEditingFocus(document.body) && !hasEditingFocus(readingView.current) && !isTyping(document.activeElement);
-      cancelSend(); setTerminalPopup({ command: '', focus });
+      cancelSend(); setTerminalPopup({ command: '', focus, automatic: true });
     };
-    if (knownDialog) { open(); return; }
-    const wait = Math.max(0, dialogSettle - (Date.now() - (absence.current.at ?? Date.now())));
-    if (!wait) { open(); return; }
-    const timer = setTimeout(open, wait);
-    return () => clearTimeout(timer);
-  }, [terminal.id, conversation, live, idleInput, knownDialog, hasChoice, active, working, dialogSettle]);
+    open();
+  }, [terminal.id, conversation, live, hasChoice, active, state.canDeliver, working, signal?.state]);
   const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, entries, conversation);
   useEffect(() => { if (stuck) void historyPage.compact(); }, [stuck, conversationEntries, historyPage.compact]);
   // A step hops only when the pointer moves onto it: moving arms the hops, any scroll disarms them until it moves again,
@@ -242,6 +246,17 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   useEffect(() => { setSelection(0); }, [draft, commands]);
   useEffect(() => { if (palette) document.getElementById(optionId(selection))?.scrollIntoView({ block: 'nearest' }); }, [palette, selection]);
   const edit = (value: string) => { dictationSend.cancel(); setDraft(value); setDismissed(false); historyAt.current = null; };
+  const lastNativeDraft = useRef({ conversation, text: '' });
+  // Reflect terminal edits only when they replace the last reflected draft. A separate reading draft wins a conflict.
+  useEffect(() => {
+    if (lastNativeDraft.current.conversation !== conversation) { lastNativeDraft.current = { conversation, text: '' }; setDraft(''); }
+    if (!state.canDeliver || sending.current || images.length || serverPictures.current.length) return;
+    const text = cliInputDraft(kind, visibleScreen?.rows ?? [], parsedScreen);
+    const previous = lastNativeDraft.current.text;
+    lastNativeDraft.current.text = text;
+    if (text === previous || text && (ownInput(text) || IMAGE_PLACEHOLDER.test(text))) return;
+    setDraft(current => !current || current === previous ? text : current);
+  }, [conversation, visibleScreen, state.canDeliver]);
   // Text written for this terminal on the home page waits here for the reader to send it.
   useEffect(() => onComposerPrefill(terminal.id, text => { dictationSend.cancel(); setDraft(text); setDismissed(true); requestAnimationFrame(() => input.current?.focus()); }), [terminal.id]);
   const complete = (command: AgentCommand) => {
@@ -268,10 +283,21 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const pictureNotAccepted = () => onError(t('图片未发送。请在输入框中移除后重新粘贴。'));
   const send = async (text = draft.trim(), own = true, automatic = false) => {
     if (own) dictationSend.cancel();
-    if (sending.current) return;
+    if (inputBlocked || !text && !images.length && !serverPictures.current.length) return false;
+    if (deliveryBlocked || outbox.length && !automatic || sending.current) {
+      if (automatic) return false;
+      if (images.length || serverPictures.current.length) return false; // Native chips stay with the draft until their CLI input returns.
+      const carried = own && !isTypedCommand(text) ? quoteRef.current : null;
+      saveOutbox([...(waitingMessages.get(ownHistory) ?? []), { id: ++nextWaitingMessage, text: withQuote(carried?.excerpt, text) }]);
+      if (carried) holdQuote(null);
+      if (own) edit('');
+      return false;
+    }
     const owner = ++sendCounter.current;
     sending.current = true;
-    try { await deliver(text, own, owner, automatic); } catch (error) { if (ownsSend(owner)) onError(String(error)); } finally { if (ownsSend(owner)) sending.current = false; }
+    try { return await deliver(text, own, owner, automatic); } catch (error) { if (ownsSend(owner)) onError(String(error)); } finally {
+      if (ownsSend(owner)) { sending.current = false; setOutbox(messages => [...messages]); }
+    }
   };
   const interrupt = () => window.agentrix.writeTerminal(terminal.id, '\x1b');
   const keepNativeInput = () => {
@@ -282,7 +308,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // own: written in the composer here (it is cleared, with its pictures); otherwise a message sent again, which leaves
   // whatever is being written now alone and takes no pictures with it.
   const deliver = async (words: string, own: boolean, owner: number, automatic: boolean) => {
-    if (inputBlocked) return;
+    if (inputBlocked || deliveryBlocked) return false;
     if (!own && images.length) { onError(t('请先发送或移除输入框中的图片，再发送这条消息。')); return; }
     const batch = own ? images : [], uploads = own ? serverPictures.current.slice() : [];
     const pictureSend = !!(batch.length || uploads.length);
@@ -312,16 +338,12 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       const ready = new Promise<void>(resolve => { popupReady.current = resolve; });
       setTerminalPopup({ command: text });
       await ready;
-      const sent = await typeReadingCommand(text, value => window.agentrix.writeTerminal(terminal.id, value), () => ownsSend(owner));
+      const sent = await typeReadingCommand(text, value => window.agentrix.writeTerminal(terminal.id, value), () => ownsSend(owner) && canWrite.current);
       if (sent && clears(terminal.agent, text)) { const ids = new Set(conversationEntries.map(entry => entry.id)); cleared.set(conversation, ids); setHidden(ids); }
-      return;
+      return sent ? true : undefined; // A cancelled typed command may already have written keys; never replay it automatically.
     }
-    // A closed popup can leave the CLI's dialog open. Looking is harmless; guessing a close key is not.
-    if (!native.readInput()) {
-      if (automatic) return;
-      setTerminalPopup({ command: '' });
-      return;
-    }
+    // The screen may have changed since this render. Preserve the message; an absent input is not a dialog.
+    if (!native.readInput()) return false;
     if (batch.length) {
       await native.prepare(batch);
       for (let attempt = 0; ; attempt++) {
@@ -354,7 +376,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       uploads.forEach(picture => { picture.sent = true; });
       if (pictureSend) clearDraft(); if (own) clearPictures();
       toBottom(); window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(text, owner, returnedQueued);
-      remember(); return;
+      remember(); return true;
     }
     if (left && (returnedQueued || !queuedLeft && pending.some(prompt => sameMessage(prompt.text, left)))) {
       window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(left, owner, returnedQueued);
@@ -383,7 +405,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (pictureSend) clearDraft();
     toBottom();
     if (text) await new Promise(resolve => setTimeout(resolve, 400));
-    if (!ownsSend(owner) || choiceVisible.current) {
+    if (!ownsSend(owner) || choiceVisible.current || !native.readInput()) {
       if (pendingId) cancelEcho(pendingId);
       restoreQuote();
       if (ownsSend(owner) && own && !input.current?.value) edit(words);
@@ -399,6 +421,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (own) clearPictures();
     window.agentrix.writeTerminal(terminal.id, '\r');
     if (text) await submitted(text, owner);
+    return true;
   };
   // A message is sent once it has left the CLI's input. An Enter the CLI did not take (it arrived while the CLI was
   // redrawing or taking the paste) leaves it there: retry only at a current idle input. A queue receipt is final unless
@@ -413,6 +436,23 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     }
   };
   const sendRef = useRef(send); sendRef.current = send;
+  const outboxAttempt = useRef('');
+  useEffect(() => {
+    if (!active || inputBlocked || deliveryBlocked || !outbox.length || outbox[0].uncertain || sending.current || images.length || serverPictures.current.length) return;
+    const held = native.readInput()?.text;
+    if (held) return; // Never replace a draft the owner is editing in the terminal.
+    const head = outbox[0], attempt = JSON.stringify([conversation, head.id, visibleScreen?.rows, signal?.revision]);
+    if (outboxAttempt.current === attempt) return;
+    outboxAttempt.current = attempt;
+    // A raw/reading switch can interrupt this async send. Persist uncertainty before writing so a remount never replays it.
+    saveOutbox(outbox.map(message => message.id === head.id ? { ...message, uncertain: true } : message));
+    void sendRef.current(head.text, false, true).then(sent => {
+      if (!mounted.current || identity.current.epoch !== epoch) return;
+      const messages = waitingMessages.get(ownHistory) ?? [];
+      saveOutbox(sent ? messages.filter(message => message.id !== head.id)
+        : messages.map(message => message.id === head.id ? { ...message, uncertain: sent !== false } : message));
+    });
+  });
   const [dictationSend] = useState(() => createDictationSend(() => { void sendRef.current(); }, setSendingSoon));
   // A terminal can stay mounted when another split is selected. Cancel before it loses composer ownership.
   useLayoutEffect(() => () => { dictationSend.cancel(); }, [dictationSend, terminal.id, terminal.sessionId, active, autoFocus]);
@@ -459,7 +499,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // Dictation into this terminal lands here while the reading view shows: the words appear at the cursor as
   // soon as they are recognised. Enter (or the shortcut again) allows a second to edit before sending normally.
   useEffect(() => dictateInto(terminal.id, (text, submit) => {
-    if (choiceVisible.current || terminalPopup !== null) return;
+    if (inputBlocked) return;
     const node = input.current, value = node?.value ?? '', here = !!node && document.activeElement === node;
     const at = here ? node.selectionStart : value.length, end = here ? node.selectionEnd : value.length;
     const next = value.slice(0, at) + text + value.slice(end);
@@ -517,11 +557,11 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   };
   const keys = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Escape' && dictationSend.cancel()) { event.preventDefault(); event.stopPropagation(); return; }
-    if (inputBlocked || choiceVisible.current) { event.preventDefault(); event.stopPropagation(); return; }
+    if (inputBlocked) { event.preventDefault(); event.stopPropagation(); return; }
     markTyping(event.currentTarget);
     if (event.nativeEvent.isComposing) { dictationSend.cancel(); return; }
     if (event.key === 'Enter') dictationSend.cancel();
-    if (event.key === 'Tab' && event.shiftKey) { event.preventDefault(); window.agentrix.writeTerminal(terminal.id, '\x1b[Z'); return; }
+    if (event.key === 'Tab' && event.shiftKey && !deliveryBlocked) { event.preventDefault(); window.agentrix.writeTerminal(terminal.id, '\x1b[Z'); return; }
     if (mentions.keys(event)) return;
     if (palette) {
       if (event.key === 'Escape') { event.preventDefault(); setDismissed(true); return; }
@@ -530,7 +570,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
         event.preventDefault(); if (event.key === 'Enter' && draft === selected.name) void send(); else complete(selected); return;
       }
     } else {
-      if (event.key === 'Escape') { if (working) { event.preventDefault(); interrupt(); } return; }
+      if (event.key === 'Escape') { if (working && !deliveryBlocked) { event.preventDefault(); interrupt(); } return; }
       const node = event.currentTarget, sent = history.get(terminal.id) || [];
       if (!event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && node.selectionStart === node.selectionEnd && ((event.key === 'ArrowUp' && node.selectionStart === 0) || (event.key === 'ArrowDown' && node.selectionEnd === draft.length))) {
         if (event.key === 'ArrowUp' && sent.length) {
@@ -549,10 +589,10 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); }
   };
   // What the agent is doing, written at the end of the conversation the way its CLI writes it, never in a corner.
-  const statusRunning = working || pending.some(prompt => prompt.sending);
-  const status = screen.choice?.kind === 'question' ? <div className="reading-status is-waiting" role="status">{t('等待你回答问题')}</div>
+  const statusRunning = working;
+  const status = hasChoice && screen.choice?.kind === 'question' ? <div className="reading-status is-waiting" role="status">{t('等待你回答问题')}</div>
     // Without a choice to answer here (one the reading view cannot lay out), the terminal is a click away.
-    : terminal.needsInput !== null ? <div className="reading-status is-waiting" role="status"><span>{t('等待你确认：{message}', { message: terminal.needsInput })}</span>
+    : hasChoice && state.message != null ? <div className="reading-status is-waiting" role="status"><span>{t('等待你确认：{message}', { message: state.message })}</span>
       {!screen.choice && <button type="button" className="text-button" onClick={onShowTerminal}>{t('切换到终端')}</button>}</div>
     : statusRunning ? <WorkingLine key={terminal.sessionId} agent={kind} label={terminal.action ? t('正在{step}', { step: actionText(terminal.action) }) : t('{agent} 正在思考', { agent })} />
     : null;
@@ -589,7 +629,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     </ConversationDecorations.Provider>;
   // The hint, longest first: the box shows the first that fits its width, so a narrow composer gets a short hint instead of a cut-off one.
   // The first is the full hint: when the box shows a shorter one (or none), it is the box's tooltip and accessible description.
-  const hints = preview ? [t('正在启动…')] : hasChoice ? [t('终端里有待处理的界面')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.codexActive
+  const hints = preview ? [t('历史预览，等待会话输入就绪')] : !live ? [t('会话未启动或已退出')] : hasChoice ? [t('等终端处理完后发送')] : deliveryBlocked ? [t('等待终端输入就绪后发送')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.codexActive
     ? [t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }), t('给 {agent} 发消息，/ 查看命令，@ 提及文件', { agent }), t('给 {agent} 发消息', { agent })]
     : [t('输入命令，Enter 发送'), t('输入命令')];
   const hint = useFittingHint(input, hints), hintId = `reading-hint-${terminal.id}`, fullHint = fullHintProps(hints, hint, hintId);
@@ -604,6 +644,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     </div>
     {attachedCount > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: attachedCount })}<UserImages images={shownImages} numbers={imageNumbers} onRemove={index => void removeImage(index)} /></div>}
     {quote && <QuoteChip quote={quote} onRemove={() => { holdQuote(null); input.current?.focus(); }} />}
+    {outbox.length > 0 && <div className="reading-outbox" role="status"><span>{hasChoice ? t('等终端处理完后发送') : t('等待终端输入就绪后发送')}</span><ol>{outbox.map(message => <li key={message.id}>{message.text}{message.uncertain && <span>{sending.current ? t('发送中') : t('送达未确认，请在终端检查')}</span>}<button type="button" className="text-button" onClick={() => { if (draft || sending.current) return; saveOutbox(outbox.filter(item => item.id !== message.id)); edit(message.text); }} disabled={!!draft || sending.current}>{t('取回')}</button></li>)}</ol></div>}
     {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waitingTitle(screen)} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
     {/* The command list is part of the page, above the message box, not a popup over the conversation. */}
     {palette && <div className="reading-commands is-inline" id={listId} role="listbox" aria-label={t('命令')}>{matches.map((command, index) => <div key={command.name} id={optionId(index)} role="option" aria-selected={selection === index} className="reading-command" onMouseDown={event => event.preventDefault()} onClick={() => complete(command)}>
@@ -614,7 +655,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       {fullHint['aria-describedby'] && <span id={hintId} style={HIDDEN_NOTE}>{hints[0]}</span>}
       <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} aria-expanded={palette || mentions.open} aria-controls={palette ? listId : mentions.open ? mentions.listId : undefined} aria-activedescendant={palette && selected ? optionId(selection) : mentions.open && mentions.files[mentions.selection] ? mentions.optionId(mentions.selection) : undefined} placeholder={hint} {...fullHint} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
         onCompositionStart={() => dictationSend.cancel()} onFocus={() => window.agentrix.terminalFocus(terminal.id, false)} />
-      {working && <button type="button" className="icon-button" disabled={inputBlocked} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={interrupt}><Stop size={15} weight="fill" /></button>}
+      {working && <button type="button" className="icon-button" disabled={inputBlocked || deliveryBlocked} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={interrupt}><Stop size={15} weight="fill" /></button>}
       <button type="button" className="icon-button reading-send" title={t('发送')} aria-label={t('发送')} disabled={inputBlocked || (!draft.trim() && !attachedCount) || !terminal.sessionId} onClick={() => void send()}><PaperPlaneRight size={15} weight="fill" /></button>
     </div>
   </div>;

@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory=$true)][string]$PipeName,
     [Parameter(Mandatory=$true)][string]$ProjectId,
     [Parameter(Mandatory=$true)][string]$SessionKey,
-    [Parameter(Mandatory=$true)][ValidateSet('start', 'stop', 'notify', 'session')][string]$Kind,
+    [Parameter(Mandatory=$true)][ValidateSet('start', 'stop', 'notify', 'session', 'progress', 'permission')][string]$Kind,
     [string]$NoteFile = $env:AGENTRIX_READING_NOTE_FILE
 )
 
@@ -64,6 +64,7 @@ function Get-AgentrixSessionContext($hook) {
 }
 
 try {
+    $sentAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
     [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
     $hook = [Console]::In.ReadToEnd() | ConvertFrom-Json
@@ -77,15 +78,21 @@ try {
         sessionKey = $SessionKey
         type = 'agent-activity'
         agent = 'claude'
-        state = $(if ($Kind -eq 'notify') { 'attention' } elseif ($Kind -eq 'stop') { 'complete' } elseif ($Kind -eq 'session') { 'session' } else { 'working' })
-        message = $(if ($Kind -eq 'notify') { ([string]$hook.message).Substring(0, [Math]::Min(300, ([string]$hook.message).Length)) } else { $null })
+        state = $(if ($Kind -in @('notify', 'permission')) { 'attention' } elseif ($Kind -eq 'stop') { 'complete' } elseif ($Kind -eq 'session') { 'session' } elseif ($Kind -eq 'progress') { 'progress' } else { 'working' })
+        message = $(if ($Kind -in @('notify', 'permission')) { $text = if ($null -ne $hook.message) { [string]$hook.message } else { [string]$hook.tool_name }; $text.Substring(0, [Math]::Min(300, $text.Length)) } else { $null })
+        sentAt = $sentAt
+        hookEvent = [string]$hook.hook_event_name
+        sessionSource = [string]$hook.source
         sessionId = $sessionId
         # Where Claude writes this conversation; Agentrix reads the steps of the round from it.
         transcriptPath = [string]$hook.transcript_path
         eventId = $sessionId + ':' + [DateTime]::UtcNow.Ticks
         # The submitted prompt names the work; the spoken completion notice says what finished.
         prompt = $(if ($Kind -eq 'start' -and $hook.prompt) { ([string]$hook.prompt).Substring(0, [Math]::Min(2000, ([string]$hook.prompt).Length)) } else { $null })
-    } | ConvertTo-Json -Compress
+    }
+    if ($hook.turn_id -is [string]) { $eventData.turnId = $hook.turn_id }
+    if ($hook.tool_use_id -is [string]) { $eventData.requestId = $hook.tool_use_id }
+    $eventData = $eventData | ConvertTo-Json -Compress
     $pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [System.IO.Pipes.PipeDirection]::Out)
     try {
         $pipe.Connect(750)

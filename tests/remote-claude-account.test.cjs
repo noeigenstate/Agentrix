@@ -123,11 +123,13 @@ test('SSH Claude startUsage binds only the remote channel and quota scopes separ
 
 test('SSH Claude attention events show the waiting notice without rearming completion or sending any input', () => {
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const cliState = source.slice(source.indexOf('function publishCliState('), source.indexOf('function applyActivity('));
   const body = source.slice(source.indexOf('function claudeActivity('), source.indexOf('\nfunction onEvent('));
-  const session = { codexActive: true, agent: 'claude', needsInput: null, codexActivity: 'complete' };
+  const session = { terminalId: 't', sessionId: 'pty', codexActive: true, agent: 'claude', needsInput: null, codexActivity: 'complete' };
   const event = { state: 'attention', sessionId: 'fixture-session', eventId: 'fixture-session:notify:1', message: 'Claude needs your answer' };
   let broadcasts = 0;
-  vm.runInNewContext(body + '\nclaudeActivity(project, session, event);', { project: { kind: 'ssh' }, session, event,
+  vm.runInNewContext(cliState + body + '\nclaudeActivity(project, session, event);', { project: { kind: 'ssh' }, session, event,
+    sessions: new Map([['t', session]]),
     broadcast() { broadcasts++; }, store: { expectCompletion() { assert.fail('attention cannot rearm completion'); } },
     applyActivity() { assert.fail('attention cannot change round state'); }, followClaude() { assert.fail('attention cannot rebind the transcript'); } });
   assert.equal(session.needsInput.message, event.message); assert.equal(session.codexActivity, 'complete'); assert.equal(broadcasts, 1);
