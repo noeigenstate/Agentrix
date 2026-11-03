@@ -504,6 +504,34 @@ test('persisted running experiments are stopped on reload and store ids cannot e
   await engine.cleanupTail; engine.close();
 });
 
+test('ready exposes and persists stopped experiments before a blocked startup cleanup finishes on every platform', { timeout: 5000 }, async t => {
+  const directory = await temporary(t), store = new LabStore(directory), id = randomUUID();
+  await store.save({ id, createdAt: 1, state: 'running', sources: ['history'], tasks: [],
+    lanes: [{ source: 'history', state: 'running' }], runs: [
+      { state: 'running', source: 'history', activeModel: 'sol' }, { state: 'queued', source: 'history' },
+    ] });
+  let release, entered, finished = false;
+  const blocked = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const engine = new LabEngine({ userData: directory, providers: [],
+    sourceTools: { docker: { async sweep() {} } },
+    recovery: async () => { entered(); await blocked; finished = true; return []; } });
+  let timer;
+  try {
+    await Promise.race([engine.ready, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('ready waited for startup cleanup.')), 2000);
+    })]);
+    await started;
+    const listed = await engine.list(), persisted = await store.list();
+    assert.equal(listed.length, 1); assert.equal(listed[0].id, id); assert.equal(listed[0].state, 'stopped');
+    assert.equal(listed[0].lanes[0].state, 'stopped');
+    assert.ok(listed[0].runs.every(run => run.state === 'stopped' && run.activeModel === null));
+    assert.equal(persisted[0].state, 'stopped'); assert.equal(persisted[0].lanes[0].state, 'stopped');
+    assert.ok(persisted[0].runs.every(run => run.state === 'stopped' && run.activeModel === null));
+    assert.equal(finished, false);
+  } finally { clearTimeout(timer); release(); await engine.ready.catch(() => {}); await engine.cleanupTail; engine.close(); }
+});
+
 test('recovery contains each Windows cleanup timeout and retains its lease and reference folder until a later retry', async t => {
   const root = await temporary(t), runs = [randomUUID(), randomUUID()], killed = [];
   for (const id of runs) {
@@ -862,11 +890,15 @@ test('startup kills reparented marked processes and removes stale repositories a
   t.after(() => killMarked(runId));
   assert.ok((await markedPids(runId)).includes(pid));
   await f.engine.store.save({
-    ...f.input, id, createdAt: 1, state: 'running', spentUsd: 0,
+    id, createdAt: 1, state: 'running', spentUsd: 0, tasks: [f.task],
     runs: [{ id: runId, state: 'running', activeModel: 'gpt-6.1-sol' }],
   });
+  assert.equal((await f.engine.store.list()).find(experiment => experiment.id === id)?.state, 'running');
   const restored = new LabEngine({ userData: f.userData, getProjects: () => [f.project], prices });
-  assert.equal((await restored.list())[0].state, 'stopped');
+  await restored.ready;
+  const stopped = (await restored.list()).find(experiment => experiment.id === id);
+  assert.ok(stopped, 'the valid persisted experiment must be visible when ready resolves');
+  assert.equal(stopped.state, 'stopped');
   await restored.cleanupTail; restored.close();
   assert.deepEqual(await markedPids(runId), []);
   for (const file of [privateDirectory, path.join(directory, 'repository.git'), path.join(directory, 'workspaces')]) {
