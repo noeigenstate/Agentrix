@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('agentrix', {
   onAgents: callback => listen('agents:changed', callback),
   getUpdateState: () => ipcRenderer.invoke('updates:state'),
   checkForUpdates: () => ipcRenderer.invoke('updates:check'),
+  setUpdateChannel: (channel, agreementVersion) => ipcRenderer.invoke('updates:set-channel', channel, agreementVersion),
   installUpdate: () => ipcRenderer.invoke('updates:install'),
   openDownloadPage: () => ipcRenderer.invoke('updates:download-page'),
   openProjectPage: page => ipcRenderer.invoke('updates:open-page', page),

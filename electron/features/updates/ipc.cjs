@@ -1,7 +1,15 @@
-function registerUpdatesIpc({ handle, updateManager, openExternal, getWindow, dialog, t, allowEditorClose, liveTerminalCount, setQuitting }) {
+const { BETA_AGREEMENT_VERSION, assertUpdateChannel } = require('../../updates.cjs');
+
+function registerUpdatesIpc({ handle, updateManager, updateSettings, openExternal, getWindow, dialog, t, allowEditorClose, liveTerminalCount, setQuitting }) {
   let installingUpdate = false;
   handle('updates:state', () => updateManager.getState());
   handle('updates:check', () => updateManager.check());
+  handle('updates:set-channel', (channel, agreementVersion) => {
+    assertUpdateChannel(channel);
+    if (channel === 'beta' && agreementVersion !== BETA_AGREEMENT_VERSION) throw new Error('请先阅读并同意测试协议。');
+    updateSettings({ updateChannel: channel, ...(channel === 'beta' ? { betaAgreement: agreementVersion } : {}) });
+    return updateManager.setChannel(channel, channel === 'beta' ? agreementVersion : undefined);
+  });
   handle('updates:download-page', () => openExternal('https://github.com/noeigenstate/Agentrix/releases/latest'));
   // The About page's links: the renderer names a page, never a URL.
   const pages = { releases: 'releases', docs: '#readme', license: 'blob/main/LICENSE', notices: 'blob/main/assets/THIRD-PARTY-NOTICES.txt', repository: '' };
