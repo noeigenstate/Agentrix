@@ -246,10 +246,11 @@ try {
     const rows = await physicalRows();
     return hasCliInput('claude', rows, parseAgentScreen('claude', rows));
   }, 'working CLI still has its input');
-  await resetWrites(); assert.equal(await composer.isDisabled(), true);
-  await page.keyboard.press('Enter'); assert.deepEqual(await writes(), []); assert.equal(await popup.count(), 0);
+  // The owner keeps typing while the agent works (the CLI queues the message); an empty Enter still sends nothing.
+  await resetWrites(); assert.equal(await composer.isDisabled(), false);
+  await composer.focus(); await page.keyboard.press('Enter'); assert.deepEqual(await writes(), []); assert.equal(await popup.count(), 0);
   await renderIdle('working frame returned to idle');
-  checks.push('a working CLI cannot receive a composer message until its idle input returns');
+  checks.push('a working CLI keeps the composer usable, and an empty Enter sends nothing');
   await composer.fill('/'); await palette.waitFor(); await resetWrites(); await composer.press('Escape');
   await waitFor(async () => await composer.getAttribute('aria-expanded') === 'false', 'palette Escape closes the list');
   assert.deepEqual(await writes(), [], 'palette Escape sends no CLI key');
