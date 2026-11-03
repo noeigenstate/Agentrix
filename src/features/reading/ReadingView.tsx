@@ -44,6 +44,8 @@ export { groupSummary } from './ResultCard';
 
 // Switching to the CLI unmounts the composer; sent messages still belong to that terminal.
 const history = new Map<string, string[]>();
+// Retain actual message text across reading/terminal switches, bounded to this terminal's current conversation.
+const sentMessages = new Map<string, { session: string | null; thread?: string; texts: string[] }>();
 type ServerPicture = { generation: number; src: string; path?: string; error?: string; ready?: Promise<void>; sent?: boolean };
 // The entries on screen when /clear (or Codex's /new) was sent from here, per conversation. The agent starts a new
 // conversation at once, but its file only appears with the next message; until then these stay hidden.
@@ -66,6 +68,11 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   } else if (thread) identity.current.thread = thread;
   const epoch = identity.current.epoch;
   const conversation = JSON.stringify([terminal.id, readingSession, epoch]);
+  const previousMessages = sentMessages.get(terminal.id);
+  const ownHistory = previousMessages?.session === readingSession && (!thread || !previousMessages.thread || previousMessages.thread === thread)
+    ? previousMessages : { session: readingSession, thread, texts: [] };
+  if (thread) ownHistory.thread = thread;
+  sentMessages.set(terminal.id, ownHistory);
   const historyPage = useReadingHistory(terminal.id, terminal.sessionId, terminal.readingHistory);
   const conversationEntries = historyPage.entries;
   const [hidden, setHidden] = useState(() => cleared.get(conversation));
@@ -81,6 +88,16 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // Queued records wait after the active turn, with or without a renderer echo. They never start a new agent turn.
   const cards = useMemo(() => pendingPromptCards(pending, conversationEntries.filter(entry => !hidden?.has(entry.id))), [pending, conversationEntries, hidden]);
   const queued = (prompt: PendingPrompt) => cards.queuedIds.has(prompt.id);
+  // A send's delayed Enter must see queue receipts that arrived after the send started.
+  const latestMessages = useRef({ cards, entries: conversationEntries }); latestMessages.current = { cards, entries: conversationEntries };
+  const queuedInput = (text: string) => {
+    const current = latestMessages.current.cards;
+    return current.prompts.some(prompt => current.queuedIds.has(prompt.id) && sameMessage(prompt.text, text));
+  };
+  const receivedInput = (text: string) => latestMessages.current.entries.some(entry => entry.role === 'user' && !entry.queued && !entry.cancelled && sameMessage(entry.text ?? '', text));
+  const ownInput = (text: string) => latestMessages.current.cards.prompts.some(prompt => sameMessage(prompt.text, text))
+    || latestMessages.current.entries.some(entry => entry.role === 'user' && (sameMessage(entry.text ?? '', text) || sameMessage(entry.original ?? '', text)))
+    || ownHistory.texts.some(message => sameMessage(message, text));
   const sendCounter = useRef(0);
   const visibleScreen = useScreen(terminal.id);
   const parsedScreen = useMemo(() => {
@@ -115,7 +132,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const historyAt = useRef<number | null>(null), unsent = useRef(''), caret = useRef<number | null>(null), sending = useRef(false);
   const interaction = useRef(0), pictureGeneration = useRef(0);
   const native = useNativePictures({ owner: conversation, terminalId: terminal.id, agent: kind, sending, interaction,
-    blocked: () => choiceVisible.current, preserveDraft: text => pending.some(prompt => sameMessage(prompt.text, text)), onError });
+    blocked: () => choiceVisible.current, preserveDraft: ownInput, onError });
   const images = native.images;
   // Reserve remote slots at paste time, so Send can await uploads in order without a stale render's path list.
   const serverPictures = useRef<ServerPicture[]>([]), [, setPictureTick] = useState(0);
@@ -127,7 +144,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   useLayoutEffect(() => { holdQuote(null); }, [conversation]);
   const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null), composer = useRef<HTMLDivElement>(null);
   const [terminalPopup, setTerminalPopup] = useState<{ command: string; focus?: boolean } | null>(null);
-  const inputBlocked = preview || !live || !idleInput || working || hasChoice || terminalPopup !== null;
+  const inputBlocked = preview || !live || (!idleInput && !working) || hasChoice || terminalPopup !== null;
   choiceVisible.current = hasChoice || terminalPopup !== null;
   const focusAfterPopup = useRef(false);
   const popupReady = useRef<(() => void) | null>(null);
@@ -257,6 +274,10 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     try { await deliver(text, own, owner, automatic); } catch (error) { if (ownsSend(owner)) onError(String(error)); } finally { if (ownsSend(owner)) sending.current = false; }
   };
   const interrupt = () => window.agentrix.writeTerminal(terminal.id, '\x1b');
+  const keepNativeInput = () => {
+    setTerminalPopup({ command: '', focus: false });
+    onError(t('终端输入框中还有先前发送的消息。为避免丢失或重复发送，请先在终端中处理；本次输入已保留。'));
+  };
   // The CLI recognises slash commands and shell mode from typed keys, not bracketed paste.
   // own: written in the composer here (it is cleared, with its pictures); otherwise a message sent again, which leaves
   // whatever is being written now alone and takes no pictures with it.
@@ -280,7 +301,11 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if ((!text && !batch.length) || !terminal.sessionId) return;
     // Commands clear the native input; they cannot silently consume pictures waiting for a normal message.
     if (batch.length && isTypedCommand(text)) { onError(t('请先发送或移除输入框中的图片，再发送这条消息。')); return; }
-    const remember = () => { if (words) history.set(terminal.id, [...(history.get(terminal.id) || []), words].slice(-50)); };
+    const remember = () => {
+      if (!ownsSend(owner)) return;
+      if (words) history.set(terminal.id, [...(history.get(terminal.id) || []), words].slice(-50));
+      if (text && !isTypedCommand(text)) ownHistory.texts = [...ownHistory.texts, text].slice(-50);
+    };
     if (isTypedCommand(text)) {
       if (own) { edit(''); clearPictures(); }
       remember();
@@ -308,20 +333,41 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     }
     const pendingId = text || batch.length ? echo(text, attached, batch.length) : null;
     if (pendingId) toBottom();
+    const currentInput = text && !batch.length ? native.readInput() : null;
+    const left = currentInput?.text ?? '';
+    const queuedLeft = !!left && queuedInput(left);
+    const ownedLeft = !!left && ownInput(left);
+    // Claude restores cancelled queue entries after Esc; its removal receipt can already have retired the echo.
+    // Codex has no captured equivalent: keep its input for manual inspection rather than risk submitting it twice.
+    const returnedQueued = kind === 'claude' && ownedLeft && currentInput !== null && isAtPrompt(kind, currentInput.rows, parseAgentScreen(kind, currentInput.rows));
+    if (ownedLeft && !returnedQueued && !(automatic && sameMessage(text, left) && !queuedLeft && !receivedInput(left))) {
+      if (own && pendingId) cancelEcho(pendingId);
+      if (!automatic) keepNativeInput();
+      return;
+    }
     // From here the message shows as sent; the quote went with it, and returns with the draft if the send fails.
     if (carried && quoteRef.current === carried) holdQuote(null);
     const restoreQuote = () => { if (carried && !quoteRef.current && ownsSend(owner)) holdQuote(carried); };
-    const left = text && !batch.length ? inputDraft() : '';
     const clearDraft = () => { if (own && input.current?.value.trim() === words) edit(''); };
     if (own && !pictureSend) edit('');
-    if (left && sameMessage(text, left)) {
+    if (left && (!queuedLeft || returnedQueued) && sameMessage(text, left)) {
       uploads.forEach(picture => { picture.sent = true; });
       if (pictureSend) clearDraft(); if (own) clearPictures();
-      toBottom(); window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(text, owner);
+      toBottom(); window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(text, owner, returnedQueued);
       remember(); return;
     }
-    if (left && pending.some(prompt => sameMessage(prompt.text, left))) { window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(left, owner); }
-    else if (left && !IMAGE_PLACEHOLDER.test(left)) await native.clearInput(() => ownsSend(owner));
+    if (left && (returnedQueued || !queuedLeft && pending.some(prompt => sameMessage(prompt.text, left)))) {
+      window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(left, owner, returnedQueued);
+      if (returnedQueued && ownsSend(owner)) {
+        const current = native.readInput();
+        if (!current || current.text) {
+          if (pendingId) cancelEcho(pendingId);
+          restoreQuote();
+          if (own && !input.current?.value) edit(words);
+          return;
+        }
+      }
+    } else if (left && !IMAGE_PLACEHOLDER.test(left)) await native.clearInput(() => ownsSend(owner));
     if (!ownsSend(owner)) return;
     if (text) {
       const pasted = await window.agentrix.pasteTerminal(terminal.id, text, terminal.sessionId);
@@ -354,13 +400,15 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     window.agentrix.writeTerminal(terminal.id, '\r');
     if (text) await submitted(text, owner);
   };
-  const inputDraft = () => native.readInput()?.text ?? '';
   // A message is sent once it has left the CLI's input. An Enter the CLI did not take (it arrived while the CLI was
-  // busy redrawing, compacting or taking the paste) leaves it there: Enter again, a few times.
-  const submitted = async (text: string, owner: number) => {
+  // redrawing or taking the paste) leaves it there: retry only at a current idle input. A queue receipt is final unless
+  // the owner's next send explicitly submits an input restored after interruption.
+  const submitted = async (text: string, owner: number, returnedQueued = false) => {
     for (let attempt = 0; attempt < 3; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 700));
-      if (!ownsSend(owner) || choiceVisible.current || !sameMessage(text, inputDraft())) return;
+      if (!ownsSend(owner) || choiceVisible.current || !returnedQueued && (queuedInput(text) || receivedInput(text))) return;
+      const current = native.readInput();
+      if (!current || !sameMessage(text, current.text) || !isAtPrompt(kind, current.rows, parseAgentScreen(kind, current.rows))) return;
       window.agentrix.writeTerminal(terminal.id, '\r');
     }
   };
@@ -429,6 +477,8 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (sending.current) return;
     if (inputBlocked || choiceVisible.current) { onError(t('图片未能附加，已从输入框移除。请等终端准备好后重新粘贴。')); return; }
     if (!terminal.codexActive || !terminal.sessionId) { onError(t('启动 Codex 或 Claude Code 后才能粘贴图片。')); return; }
+    const held = native.readInput()?.text;
+    if (held && ownInput(held)) { keepNativeInput(); return; }
     const file = item.getAsFile();
     if (!file) return;
     if (!remote && file.size > 25 * 1024 * 1024) { onError(t('图片太大（超过 25 MB），请压缩后再粘贴。')); return; }

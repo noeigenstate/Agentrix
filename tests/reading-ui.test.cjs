@@ -415,13 +415,239 @@ function dictationHarness(t, overrides = {}) {
     dictate: (text, submit = true) => { insert(text, submit); render(); },
     edit: text => { render().props.onChange({ target: { value: text } }); render(); },
     pending: () => elements(root).some(element => /\bis-sending-soon\b/.test(element.props.className)),
-    press(key) {
-      const event = { key, currentTarget: node, nativeEvent: {}, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
+    press(key, modifiers = {}) {
+      const event = { key, currentTarget: node, nativeEvent: {}, ...modifiers, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
       render().props.onKeyDown(event); render(); return event;
     },
     async tick(ms) { t.mock.timers.tick(ms); for (let i = 0; i < 12; i++) await Promise.resolve(); render(); },
   };
 }
+
+function workingComposerHarness(t, agent, overrides = {}) {
+  let clock = 10000, sequence = 0;
+  t.mock.method(Date, 'now', () => clock);
+  const prompts = require('../src/features/reading/pending-prompts.ts');
+  let state = prompts.createPendingPrompts('session');
+  const view = { working: true, draft: '', records: [], accept: true, retain: false };
+  const filename = agent === 'claude' ? 'claude-idle-2-1-296.txt' : 'codex-fresh-default.txt';
+  const fixture = fs.readFileSync(path.join(__dirname, 'fixtures/screens', filename), 'utf8').split(/\r?\n/);
+  const inputRow = fixture.findLastIndex(row => /^\s*[❯›](?:\s|$)/.test(row));
+  assert.ok(inputRow >= 0);
+  const rows = () => [
+    ...(view.working ? [agent === 'claude' ? '✶ Swooping… (12s)' : '• Working (12s · esc to interrupt)'] : []),
+    ...fixture.flatMap((row, index) => index === inputRow ? view.draft.split(/\r?\n/).map((line, part) => (part ? '  ' : agent === 'claude' ? '❯ ' : '› ') + line) : [row]),
+  ];
+  const h = dictationHarness(t, {
+    './terminal-screen': { useScreen: () => ({ rows: rows() }), readScreen: () => ({ rows: rows() }) },
+    './agent-screen': { parseAgentScreen },
+    './useReadingConversation': { useReadingHistory: () => historySnapshot(view.records) },
+    './usePendingPrompts': { usePendingPrompts: () => {
+      state = prompts.reconcilePendingPrompts(state, 'session', view.records, clock);
+      return { pending: state.prompts,
+        echo(text, images) { const id = 'working-' + ++sequence; state = prompts.addPendingPrompt(state, id, text, clock, images); h.echoed.push({ text, images }); return id; },
+        cancelEcho(id) { state = prompts.removePendingPrompt(state, id); },
+      };
+    } },
+    ...overrides,
+  });
+  Object.assign(h.props.terminal, { id: 'working-' + agent, agent, codexActivity: 'working' });
+  window.agentrix.terminalCommands = async () => ({ ok: true, value: [{ name: '/model', source: 'builtin', description: '', view: 'terminal' }] });
+  window.agentrix.pasteTerminal = async (id, text) => { h.pasted.push({ id, text }); view.draft += text; return { ok: true }; };
+  window.agentrix.writeTerminal = (id, text) => {
+    h.written.push({ id, text });
+    if (text === '\x15') view.draft = '';
+    if (text === '\r' && view.accept && view.draft) {
+      view.records.push({ id: 'receipt-' + ++sequence, role: 'user', text: view.draft, at: clock, queued: view.working });
+      if (!view.retain) view.draft = '';
+    }
+  };
+  h.render();
+  return { ...h, view, async tick(ms) { clock += ms; await h.tick(ms); } };
+}
+
+for (const agent of ['claude', 'codex']) {
+  test(agent + ': a working fixture accepts typing, Shift+Enter and the Send button, and renders the CLI queue', async t => {
+    const h = workingComposerHarness(t, agent);
+    h.edit('first line');
+    assert.equal(h.render().props.disabled, false);
+    assert.match(h.render().props.placeholder, /Enter/);
+    assert.equal(h.press('Enter', { shiftKey: true }).prevented, undefined);
+    assert.deepEqual(h.pasted, []);
+    h.edit('first line\nsecond line');
+    const send = elements(h.tree()).find(element => element.props.className === 'icon-button reading-send');
+    assert.equal(send.props.disabled, false); send.props.onClick(); await h.tick(0);
+    assert.deepEqual(h.pasted.map(item => item.text), ['first line\nsecond line']);
+    assert.equal(h.node.value, '');
+    await h.tick(400);
+    const card = elements(h.tree()).find(element => element.props.queued);
+    assert.equal(card.props.prompts.length, 1); assert.equal(card.props.queued(card.props.prompts[0]), true);
+    await h.tick(700); await h.tick(30000);
+    assert.deepEqual(h.written.map(item => item.text), ['\r']);
+    assert.equal(h.pasted.length, 1);
+  });
+
+  test(agent + ': working Stop and Esc interrupt, while dictation and the slash palette keep Escape priority', async t => {
+    const h = workingComposerHarness(t, agent);
+    const stop = () => elements(h.tree()).find(element => element.props.title === en['中断（Esc）']);
+    assert.equal(stop().props.disabled, false); stop().props.onClick();
+    h.edit('keep editing'); h.press('Escape');
+    assert.deepEqual(h.written.map(item => item.text), ['\x1b', '\x1b']);
+    assert.equal(h.node.value, 'keep editing');
+    h.dictate('spoken words'); assert.equal(h.pending(), true);
+    const cancel = h.press('Escape');
+    assert.equal(cancel.prevented, true); assert.equal(cancel.stopped, true); assert.equal(h.pending(), false);
+    assert.equal(h.written.length, 2);
+    h.edit('/mo'); await h.tick(0);
+    const palette = () => elements(h.tree()).find(element => element.props.role === 'listbox');
+    assert.ok(palette()); h.press('Escape'); assert.equal(palette(), undefined); assert.equal(h.written.length, 2);
+    h.edit('/mo'); elements(h.tree()).find(element => element.props.role === 'option').props.onClick(); h.render();
+    assert.equal(h.node.value, '/model ');
+    h.edit('/model'); h.press('Enter'); await h.tick(0);
+    assert.equal(h.popup().props.command, '/model'); assert.equal(h.node.disabled, true); assert.equal(stop().props.disabled, true);
+    const before = h.written.slice(); h.press('Escape'); h.press('Enter');
+    assert.deepEqual(h.written, before, 'an open popup still owns the keys');
+    h.popup().props.onClose(); h.render();
+    assert.equal(h.node.disabled, false); assert.equal(stop().props.disabled, false);
+  });
+
+  test(agent + ': working input enables the mention hook and quotes on the next ordinary message', async t => {
+    let mention;
+    const h = workingComposerHarness(t, agent, {
+      './useMentions': { useMentions: options => { mention = options; return { open: false, keys: () => false }; } },
+    });
+    h.edit('@src'); assert.equal(mention.disabled, false);
+    mention.edit('@src/main.ts '); h.render(); assert.equal(h.node.value, '@src/main.ts ');
+    const quote = elements(h.tree()).find(element => element.props.value?.quote).props.value.quote;
+    assert.equal(quote.disabled, null); quote.pick(agent, 'earlier reply'); h.render();
+    assert.equal(elements(h.tree()).find(element => element.type?.name === 'QuoteChip').props.quote.excerpt, 'earlier reply');
+    h.edit('@src/main.ts please fix'); h.press('Enter'); await h.tick(0);
+    assert.deepEqual(h.pasted.map(item => item.text), ['> earlier reply\n\n@src/main.ts please fix']);
+  });
+
+  for (const retain of [false, true]) test(`${agent}: a queued message with ${retain ? 'retained' : 'cleared'} CLI input never retries automatically and survives the next idle send`, async t => {
+    const h = workingComposerHarness(t, agent); h.view.retain = retain;
+    const errors = []; h.props.onError = error => errors.push(error);
+    h.edit('queued message'); h.press('Enter'); await h.tick(0); await h.tick(400);
+    assert.equal(h.view.draft, retain ? 'queued message' : '');
+    h.view.working = false; h.render(); await h.tick(700); await h.tick(30000);
+    assert.deepEqual(h.written.map(item => item.text), ['\r']); assert.equal(h.pasted.length, 1);
+    h.view.retain = false;
+    h.edit('next message'); h.press('Enter'); await h.tick(0);
+    if (agent === 'codex' && retain) {
+      await h.tick(30000);
+      assert.deepEqual(h.written.map(item => item.text), ['\r']);
+      assert.deepEqual(h.pasted.map(item => item.text), ['queued message']);
+      assert.equal(h.view.draft, 'queued message'); assert.equal(h.node.value, 'next message');
+      assert.ok(h.popup()); assert.equal(errors.length, 1); return;
+    }
+    assert.equal(h.written.filter(item => item.text === '\r').length, retain ? 2 : 1, 'an idle returned input is submitted only by the next explicit send');
+    await h.tick(700); await h.tick(400); await h.tick(700);
+    assert.deepEqual(h.pasted.map(item => item.text), ['queued message', 'next message']);
+    assert.equal(h.written.filter(item => item.text === '\r').length, retain ? 3 : 2);
+    assert.equal(h.written.some(item => item.text === '\x15'), false);
+  });
+
+  test(agent + ': busy input without a receipt never retries Enter or safety-net resends', async t => {
+    const h = workingComposerHarness(t, agent); h.view.accept = false;
+    h.edit('not acknowledged yet'); h.press('Enter'); await h.tick(0); await h.tick(400);
+    await h.tick(700); await h.tick(30000);
+    assert.deepEqual(h.written.map(item => item.text), ['\r']); assert.equal(h.pasted.length, 1);
+  });
+}
+
+for (const removal of ['stale', 'popAll', 'remove', 'history-only', 'history-remount']) for (const dropped of [0, 1, 4]) test(`claude: Esc restores a queued input before the next send (${removal}, ${dropped} dropped Enters)`, async t => {
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const log = new ConversationLog(), accepted = [], first = 'RESTORED_MESSAGE', next = 'NEXT_MESSAGE';
+  const h = workingComposerHarness(t, 'claude');
+  Object.defineProperty(h.view, 'records', { get: () => log.list });
+  let remaining = dropped, sequence = 0;
+  window.agentrix.writeTerminal = (id, text) => {
+    h.written.push({ id, text });
+    if (text === '\x15') h.view.draft = '';
+    if (text === '\x1b') {
+      h.view.working = false; h.view.draft = first;
+      if (removal !== 'stale') claudeConversation(log, { type: 'queue-operation', operation: removal === 'remove' ? 'remove' : 'popAll',
+        timestamp: new Date(Date.now()).toISOString(), ...(removal === 'remove' ? { content: first, reason: 'cleared_on_cancel' } : {}) });
+    }
+    if (text !== '\r' || !h.view.draft) return;
+    if (!h.view.working && remaining) { remaining--; return; }
+    const content = h.view.draft, timestamp = new Date(Date.now()).toISOString();
+    accepted.push(content);
+    claudeConversation(log, h.view.working
+      ? { type: 'queue-operation', operation: 'enqueue', uuid: 'queue-' + ++sequence, timestamp, content }
+      : { type: 'user', uuid: 'user-' + ++sequence, timestamp, message: { content } });
+    h.view.draft = ''; h.view.working = true;
+  };
+  h.edit(first); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700);
+  assert.deepEqual(accepted, [first]);
+  assert.deepEqual(log.list.filter(entry => entry.queued).map(entry => entry.text), [first]);
+  h.press('Escape');
+  if (removal.startsWith('history-')) { for (const entry of [...log.list]) log.drop(entry.id); h.render(); }
+  if (removal === 'history-remount') h.remount();
+  // Reuse the captured Claude input box and footer, with the queued words returned to its editable row.
+  assert.equal(h.view.draft, first); assert.equal(h.node.disabled, false);
+  const queued = () => elements(h.tree()).find(element => element.props.queued);
+  assert.equal(queued().props.prompts.length, removal === 'stale' ? 1 : 0, 'cancellation retires the old card and its echo');
+  await h.tick(3000);
+  h.edit(next); h.press('Enter'); await h.tick(0);
+  for (let attempt = 0; attempt < 5; attempt++) await h.tick(700);
+  assert.equal(h.written.some(item => item.text === '\x15'), false, 'the returned queued input must never be cleared');
+  if (dropped === 4) {
+    assert.deepEqual(accepted, [first]); assert.equal(h.view.draft, first); assert.equal(h.node.value, next);
+    assert.deepEqual(h.pasted.map(item => item.text), [first], 'do not paste the next message over an unaccepted returned draft');
+    assert.deepEqual(queued().props.prompts.map(prompt => prompt.text), removal === 'stale' ? [first] : [], 'the next message has no false sent card');
+  } else {
+    assert.deepEqual(accepted, [first, first, next], 'submit the restored message before queueing the next one');
+    assert.equal(log.list.filter(entry => entry.role === 'user' && !entry.queued && entry.text === first).length, 1);
+    assert.deepEqual(queued().props.prompts.map(prompt => prompt.text), [next]);
+    assert.equal(queued().props.queued(queued().props.prompts[0]), true, 'only the next message remains queued');
+  }
+});
+
+test('codex: a delivered receipt with retained input never causes another Enter or clears either draft', async t => {
+  const h = workingComposerHarness(t, 'codex'), errors = [];
+  h.view.retain = true;
+  h.props.onError = error => errors.push(error);
+  h.edit('already delivered'); h.press('Enter'); await h.tick(0); await h.tick(400);
+  h.view.working = false; h.view.records[0].queued = false; h.render();
+  await h.tick(700); await h.tick(30000);
+  assert.deepEqual(h.written.map(item => item.text), ['\r'], 'a delivery receipt also stops delayed Enter retries');
+  const quote = elements(h.tree()).find(element => element.props.value?.quote).props.value.quote;
+  quote.pick('Codex', 'keep this quote'); h.render();
+  h.edit('next message'); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(h.written.map(item => item.text), ['\r']);
+  assert.deepEqual(h.pasted.map(item => item.text), ['already delivered']);
+  assert.equal(h.view.draft, 'already delivered'); assert.equal(h.node.value, 'next message');
+  assert.equal(h.popup().props.focus, false); assert.equal(errors.length, 1);
+  assert.equal(elements(h.tree()).find(element => element.type?.name === 'QuoteChip').props.quote.excerpt, 'keep this quote');
+  assert.equal(elements(h.tree()).find(element => element.props.queued).props.prompts.length, 0);
+});
+
+for (const change of ['session', 'thread']) test('own send history does not cross a different ' + change, async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.props.terminal.readingHistory = { key: 'old', agent: 'claude', threadId: 'old' }; h.render();
+  h.edit('old message'); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700);
+  h.view.records[0].cancelled = true; h.render();
+  h.view.records.length = 0; h.view.working = false; h.view.draft = 'old message';
+  if (change === 'session') h.props.terminal.sessionId = 'different-session';
+  else h.props.terminal.readingHistory = { key: 'new', agent: 'claude', threadId: 'new' };
+  h.render(); h.render();
+  h.edit('new message'); h.press('Enter'); await h.tick(80);
+  assert.equal(h.written.filter(item => item.text === '\r').length, 1, 'never submit a prior session or thread through the history recovery path');
+  assert.deepEqual(h.pasted.map(item => item.text), ['old message', 'new message']);
+});
+
+test('codex: picture paste cannot erase or attach to a previously delivered input', async t => {
+  const h = workingComposerHarness(t, 'codex'), errors = [];
+  h.props.onError = error => errors.push(error);
+  h.view.draft = 'already delivered'; h.view.records.push({ id: 'delivered', role: 'user', text: h.view.draft, at: Date.now() });
+  h.edit('next message');
+  h.render().props.onPaste({ preventDefault() {}, clipboardData: { getData: () => '', items: [{ kind: 'file', type: 'image/png', getAsFile: () => ({ size: 1 }) }] } });
+  await h.tick(0);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+  assert.equal(h.view.draft, 'already delivered'); assert.equal(h.node.value, 'next message');
+  assert.ok(h.popup()); assert.equal(errors.length, 1);
+});
 
 test('submitted dictation appears at the caret for half a second, then uses the composer send with pictures', async t => {
   const h = imageComposerHarness(t, 'codex');
@@ -1616,10 +1842,7 @@ for (const agent of ['claude', 'codex']) {
           assert.equal(id, h.props.terminal.id); assert.equal(sessionId, h.props.terminal.sessionId);
           actions.push(text); draft += text; return { ok: true };
         };
-        if (activity !== 'idle') {
-          h.edit('next message'); assert.equal(h.render().props.disabled, true); h.press('Enter'); await h.tick(9000);
-          assert.equal(h.node.value, 'next message'); assert.deepEqual(actions, []); assert.deepEqual(received, []); assert.equal(h.popup(), undefined); return;
-        }
+        assert.equal(h.render().props.disabled, false);
         if (picture !== 'none') {
           h.render().props.onPaste({ preventDefault() {}, clipboardData: { getData: () => '', items: [{ kind: 'file', type: 'image/png', getAsFile: () => ({ size: 1 }) }] } });
           await h.tick(0);

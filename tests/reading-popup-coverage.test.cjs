@@ -133,7 +133,7 @@ if (require.main === module) {
       test(agent + ': working output with its input drawn stays in the reader while ' + activity, t => {
         const line = agent === 'claude' ? '✻ Working…' : '• Working (5s · esc to interrupt)';
         const h = popupHarness(t, agent, [line, ...idle[agent]], activity); h.tick(DIALOG_SETTLE * 3);
-        assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, true);
+        assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, false);
         assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
       });
     }
@@ -145,7 +145,7 @@ if (require.main === module) {
     if (agent === 'claude') for (const name of ['claude-bang-running', 'claude-bang-empty-running', 'claude-bang-empty-model-working', 'claude-wrapped-draft']) {
       for (const activity of ['complete', 'working']) test(name + ': actual working input stays in the reader despite ' + activity + ' activity', t => {
         const h = popupHarness(t, agent, read('screens/' + name + '.txt'), activity); h.tick(DIALOG_SETTLE * 3);
-        assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, true);
+        assert.equal(h.popup(), undefined); assert.equal(h.node.disabled, false);
         assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
       });
     }
