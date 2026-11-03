@@ -507,6 +507,33 @@ test('saving over a pending agent proposal asks first, and 取消 keeps editing'
   assert.equal(h.nodes().some(node => node.props['data-skill-detail']), true);
 });
 
+test('the reserved-name message keeps each skill name whole on one line', async t => {
+  const h = mount(t, [builtinRouting(), release]); await h.settle();
+  h.byLabel('新建技能').props.onClick(); await h.settle();
+  h.byLabel('名称').props.onChange({ target: { value: 'code-standard' } }); await h.settle();
+  h.byLabel('描述').props.onChange({ target: { value: 'A naming collision.' } }); await h.settle();
+  h.state.failure = '与系统技能「code-standard」同名。要扩展它，请命名为 code-standard-<标识>，例如 code-standard-team。';
+  h.button('创建').props.onClick(); await h.settle();
+  const names = h.all(node => node.props.className === 'skills-name').map(node => h.text(node));
+  assert.deepEqual(names, ['code-standard', 'code-standard-<标识>', 'code-standard-team']);
+  const css = fs.readFileSync(path.join(root, 'features/settings/skills-settings.css'), 'utf8');
+  assert.match(css, /\.skills-error \.skills-name \{ white-space: nowrap; \}/);
+  assert.equal(h.text(h.one(node => node.props.role === 'alert')), h.state.failure);
+});
+
+test('the skills stylesheet pads on the spacing scale and the render/source toggle has a 32 px hit area', () => {
+  const css = fs.readFileSync(path.join(root, 'features/settings/skills-settings.css'), 'utf8');
+  const scale = new Set([0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64]);
+  const off = [...css.matchAll(/(?:^|[;{\s])padding(?:-[a-z]+)?: ([^;}]+)[;}]/g)]
+    .flatMap(match => match[1].match(/-?\d+(?:\.\d+)?(?=px)/g) ?? []).map(Number).filter(value => !scale.has(value));
+  assert.deepEqual(off, [], 'every padding value is on the 2 4 8 12 16 20 24 32 40 48 64 scale');
+  const button = /\.skills-view-toggle button \{([^}]*)\}/.exec(css), hit = /\.skills-view-toggle button::after \{([^}]*)\}/.exec(css);
+  assert.ok(button && hit, 'the toggle buttons and an ::after hit area');
+  assert.match(button[1], /position: relative/);
+  assert.match(hit[1], /position: absolute; inset: -4px 0/);
+  assert.ok(Number(/height: (\d+)px/.exec(button[1])[1]) + 8 >= 32);
+});
+
 test('every settings switch has a hit area of at least 32 px around its 22 px look', () => {
   const css = fs.readFileSync(path.join(root, 'features/settings/settings.css'), 'utf8');
   const rule = /input\[type="checkbox"\]::after[^{]*\{([^}]*)\}/.exec(css);
