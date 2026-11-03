@@ -27,6 +27,7 @@ const historySelection = (tasks, projectId = 'p') => ({ selections: [
 ] });
 
 const isolatedTest = (name, run) => test(name, {
+  timeout: 60000,
   skip: process.platform !== 'darwin' ? 'macOS filesystem isolation is required' : false,
 }, run);
 
@@ -179,7 +180,7 @@ async function fixture(t, options = {}) {
   const directory = await temporary(t), projectPath = path.join(directory, 'project'), userData = path.join(directory, 'data');
   await fs.mkdir(projectPath); await fs.mkdir(userData);
   const git = async (...args) => (await execute('git', ['-c', 'core.hooksPath=', '-c', 'user.name=Lab fixture', '-c', 'user.email=lab@example.invalid',
-    ...args], { cwd: projectPath, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' }, windowsHide: true })).stdout.trim();
+    ...args], { cwd: projectPath, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' }, windowsHide: true, timeout: 10000, signal: t.signal })).stdout.trim();
   await git('init');
   for (const folder of ['src/a', 'src/b', 'tests/fixtures', 'node_modules/fixture-pkg']) {
     await fs.mkdir(path.join(projectPath, folder), { recursive: true });
@@ -597,7 +598,7 @@ test('metering accepts only authenticated run events and ignores duplicates, tex
   assert.equal(usage.calls.size, 1);
 });
 
-test('usage channels handle long profile paths and reject unauthenticated events', async t => {
+test('usage channels handle long profile paths and reject unauthenticated events', { timeout: 15000 }, async t => {
   const root = await temporary(t), directory = path.join(root, 'long-profile-'.repeat(12));
   await fs.mkdir(directory);
   const usage = new LabUsage({ directory, socketDirectory: directory, project: { id: 'p' }, prices });
@@ -605,6 +606,7 @@ test('usage channels handle long profile paths and reject unauthenticated events
   try {
     const send = event => new Promise((resolve, reject) => {
       const socket = net.connect(usage.address); socket.on('error', reject); socket.on('close', resolve);
+      socket.setTimeout(3000, () => socket.destroy(new Error('Meter fixture did not close its connection.')));
       socket.resume();
       socket.on('connect', () => socket.end(JSON.stringify(event) + '\n'));
     });
@@ -633,9 +635,10 @@ test('stop during brief preparation cannot launch a worker afterwards', async t 
   assert.equal(await fs.stat(path.join(directory, 'worker.log')).catch(() => null), null);
 });
 
-test('closing the lab during initial persistence prevents a late experiment launch', async t => {
+test('closing the lab during initial persistence prevents a late experiment launch', { timeout: 15000 }, async t => {
   const f = await fixture(t, { referenceRunner: async () => ({ total: 1, names: ['value'], files: [] }) }), original = f.engine.store.save.bind(f.engine.store);
   let release, saving;
+  t.signal.addEventListener('abort', () => release?.(), { once: true });
   const entered = new Promise(resolve => { saving = resolve; });
   f.engine.store.save = async experiment => {
     if (!release) { await new Promise(resolve => { release = resolve; saving(); }); }
@@ -649,7 +652,7 @@ test('closing the lab during initial persistence prevents a late experiment laun
   assert.deepEqual(await f.readCalls(), []);
 });
 
-test('stop cancels the persisted reference stage without starting any model', async t => {
+test('stop cancels the persisted reference stage without starting any model', { timeout: 15000 }, async t => {
   let entered;
   const checking = new Promise(resolve => { entered = resolve; });
   const f = await fixture(t, { referenceRunner: ({ signal }) => new Promise((resolve, reject) => {

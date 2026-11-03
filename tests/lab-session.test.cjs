@@ -15,8 +15,8 @@ const { command, gitEnvironment } = require('../electron/features/lab/process.cj
 async function fixture(t, Constructor = LabSession) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'lab-session-')));
   const workspaceRoot = path.join(root, 'workspaces'); await fs.mkdir(workspaceRoot);
-  const session = new Constructor({ directory: root, labRoot: root, workspaceRoot, runId: randomUUID(), hostPrompt: false });
-  t.after(async () => { await session.close(); await fs.rm(root, { recursive: true, force: true, maxRetries: 5 }); });
+  const session = new Constructor({ directory: root, labRoot: root, workspaceRoot, runId: randomUUID(), hostPrompt: false, signal: t.signal });
+  t.after(async () => { await session.close(); await fs.rm(root, { recursive: true, force: true, maxRetries: 5 }); }, { timeout: 10000 });
   return { root, session, workspaceRoot };
 }
 
@@ -106,31 +106,36 @@ test('a broker capability belongs to one run and is rejected by another run', as
   assert.equal(calls, 0);
 });
 
-test('the broker admits at most four concurrent handler operations', async t => {
+test('the broker admits at most four concurrent handler operations', { timeout: 5000 }, async t => {
   const { session } = await fixture(t); session.active = true;
   const release = []; let started;
-  const full = new Promise(resolve => { started = resolve; });
+  const full = new Promise((resolve, reject) => {
+    started = resolve; t.signal.addEventListener('abort', () => reject(t.signal.reason), { once: true });
+  });
   await session.broker(async () => new Promise(resolve => {
     release.push(() => resolve({ code: 0, stdout: '', stderr: '' }));
     if (release.length === 4) started();
   }));
   const running = Array.from({ length: 4 }, () => request(session.brokerEnvironment, { argv: ['fixture'] }));
-  await full;
-  assert.equal((await request(session.brokerEnvironment, { argv: ['fifth'] })).code, 125);
-  assert.equal(release.length, 4);
-  release.forEach(finish => finish());
+  try {
+    await full;
+    assert.equal((await request(session.brokerEnvironment, { argv: ['fifth'] })).code, 125);
+    assert.equal(release.length, 4);
+  } finally { release.forEach(finish => finish()); await Promise.allSettled(running); }
   assert.ok((await Promise.all(running)).every(result => result.code === 0));
 });
 
-test('broker timeout aborts the handler and replies without waiting for an ignored signal', async t => {
+test('broker timeout aborts the handler and replies without waiting for an ignored signal', { timeout: 5000 }, async t => {
   const { session } = await fixture(t); session.active = true; let release, signal;
   await session.broker(async (body, options) => { signal = options.signal;
     return new Promise(resolve => { release = () => resolve({ code: 0, stdout: '', stderr: '' }); }); });
-  const result = await request(session.brokerEnvironment, { argv: ['fixture'], timeoutMs: 30 });
-  assert.equal(result.code, 125); assert.equal(signal.aborted, true); release();
+  try {
+    const result = await request(session.brokerEnvironment, { argv: ['fixture'], timeoutMs: 30 });
+    assert.equal(result.code, 125); assert.equal(signal.aborted, true);
+  } finally { release?.(); }
 });
 
-test('closing the run aborts in-flight broker work and retires its endpoint', async t => {
+test('closing the run aborts in-flight broker work and retires its endpoint', { timeout: 5000 }, async t => {
   const { session } = await fixture(t); session.active = true; let started, wasAborted = false;
   const entered = new Promise(resolve => { started = resolve; });
   await session.broker(async (body, { signal }) => { started(); return new Promise(resolve => {
@@ -151,6 +156,7 @@ test('oversized broker output is refused instead of reaching the model', async t
 
 test('a handler that refuses cancellation cannot cause live workspace cleanup', { timeout: 5000 }, async t => {
   const { session, workspaceRoot } = await fixture(t); session.active = true; let entered, release;
+  t.signal.addEventListener('abort', () => release?.(), { once: true });
   const started = new Promise(resolve => { entered = resolve; });
   await fs.writeFile(path.join(workspaceRoot, 'still-live'), 'fixture');
   await session.broker(async () => { entered(); return new Promise(resolve => { release = () => resolve({ code: 0, stdout: '', stderr: '' }); }); });
@@ -162,9 +168,10 @@ test('a handler that refuses cancellation cannot cause live workspace cleanup', 
 });
 
 async function loopbackServer(t) {
-  const state = { connections: 0, errors: [] };
+  const state = { connections: 0, errors: [], sockets: new Set() };
   state.server = net.createServer(socket => {
     state.connections++;
+    state.sockets.add(socket); socket.on('close', () => state.sockets.delete(socket));
     socket.on('error', error => state.errors.push(error.code));
     socket.end('fixture');
   });
@@ -172,7 +179,7 @@ async function loopbackServer(t) {
     state.server.once('error', reject); state.server.listen(0, '127.0.0.1', resolve);
   });
   t.after(async () => {
-    await new Promise(resolve => state.server.close(resolve));
+    await new Promise(resolve => { state.server.close(resolve); for (const socket of state.sockets) socket.destroy(); });
     assert.deepEqual(state.errors, [], 'the loopback fixture must close without socket errors');
   });
   return state;
@@ -184,15 +191,16 @@ const loopbackProbe = port => `const net=require('node:net');const c=net.connect
   c.on('end',()=>{if(reply==='fixture')console.log('allowed');else{console.error('Unexpected loopback response.');process.exitCode=1}});
   c.on('error',error=>console.log('denied:'+error.code));`;
 
-test('the loopback probe consumes the complete response and closes without resetting its server', async t => {
+test('the loopback probe consumes the complete response and closes without resetting its server', { timeout: 10000 }, async t => {
   const listener = await loopbackServer(t);
   const result = await command(process.execPath, ['-e', loopbackProbe(listener.server.address().port)],
-    { timeoutMs: 5000, env: require('../electron/features/lab/sandbox.cjs').cleanEnvironment() });
+    { timeoutMs: 5000, signal: t.signal, env: require('../electron/features/lab/sandbox.cjs').cleanEnvironment() });
   assert.equal(result.code, 0, result.stderr); assert.equal(result.stdout.trim(), 'allowed');
   assert.equal(listener.connections, 1); assert.deepEqual(listener.errors, []);
 });
 
 test('macOS enforces an offline grade after a network-enabled preparation job', {
+  timeout: 30000,
   skip: process.platform !== 'darwin' ? 'macOS Seatbelt runtime is required' : false,
 }, async t => {
   const { root, session, workspaceRoot } = await fixture(t);

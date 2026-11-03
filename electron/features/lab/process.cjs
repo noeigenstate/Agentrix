@@ -144,7 +144,7 @@ async function stopTree(child) {
 
 async function command(file, args, {
   cwd, env = process.env, signal, timeoutMs = 30000, log, onLine, maxOutput = OUTPUT_LIMIT, ipc = false,
-  raw = false, onMessage, stdin,
+  raw = false, onMessage, stdin, windowsVerbatimArguments = false,
 } = {}) {
   aborted(signal);
   if (stdin !== undefined && ((typeof stdin !== 'string' && !Buffer.isBuffer(stdin)) || Buffer.byteLength(stdin) > OUTPUT_LIMIT)) {
@@ -161,7 +161,7 @@ async function command(file, args, {
   try {
     child = spawn(file, args, {
       cwd, env, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe', ...(ipc ? ['ipc'] : [])],
-      windowsHide: true, detached: ipc && process.platform !== 'win32',
+      windowsHide: true, windowsVerbatimArguments, detached: ipc && process.platform !== 'win32',
     });
     if (child.stdin) { child.stdin.on('error', () => {}); child.stdin.end(stdin); }
     if (ipc && process.platform === 'win32' && env.AGENTRIX_LAB_RUN) {
