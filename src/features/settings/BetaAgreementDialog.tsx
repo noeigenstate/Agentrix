@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { t } from '../../shared/i18n';
 import { BETA_AGREEMENT_VERSION, betaAgreementClauses } from './beta-agreement';
 
-// The modal the beta channel waits behind. The parent calls the switch from onAgree and closes this on success; a refusal comes back as `error` and the dialog stays.
+// The modal the beta channel waits behind. It sits inside the Settings dialog's React tree, where a synthetic cancel bubbles up to that dialog's own onCancel, so Esc stops here. The parent calls the switch from onAgree and closes this on success; a refusal comes back as `error` and the dialog stays.
 export function BetaAgreementDialog({ busy, error, onAgree, onCancel }: { busy: boolean; error: string; onAgree: () => void; onCancel: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [checked, setChecked] = useState(false);
   useEffect(() => { dialog.current?.showModal(); }, []);
-  return <dialog className="settings-dialog beta-agreement-dialog" ref={dialog} aria-labelledby="beta-agreement-title" onCancel={event => { event.preventDefault(); if (!busy) onCancel(); }}>
+  return <dialog className="settings-dialog beta-agreement-dialog" ref={dialog} aria-labelledby="beta-agreement-title" onCancel={event => { event.preventDefault(); event.stopPropagation(); if (!busy) onCancel(); }}>
     <form className="dialog-content" onSubmit={event => { event.preventDefault(); if (checked && !busy) onAgree(); }}>
       <div className="dialog-heading"><h2 id="beta-agreement-title">{t('测试协议')}</h2></div>
       <p className="beta-agreement-version">{t('协议版本 {version}', { version: BETA_AGREEMENT_VERSION })}</p>
