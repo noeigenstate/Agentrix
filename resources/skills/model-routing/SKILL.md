@@ -24,7 +24,7 @@ model-routing-<id>; follow this skill first, and where the two conflict this ski
 
 1. Check the installed agents and the project's model settings, then choose the matching setup below.
 2. Have the architect plan the work by module, define separate file scopes and agree the shared contracts before implementation.
-3. Hold a roundtable: every worker restates its task from the whole plan, the planner checks the restatement and corrects misreadings, everyone confirms, and the user sees the minutes as tables.
+3. Hold a roundtable: every worker restates its task from the whole plan, the planner (the orchestrator, checking against the architect's plan) checks the restatement and corrects misreadings, everyone confirms, and the user sees the minutes as tables.
 4. Route the builds by difficulty, integrate in dependency order and run the project's checks.
 5. Complete stage 4 architecture review and UI acceptance where applicable, resolve findings, consolidate the round into the shared project memory and report the result.
 
@@ -206,7 +206,8 @@ Write the plan before any worker starts:
 
 ### 2. Roundtable
 
-Before anyone builds, the roundtable lets the planner check that its brief reached each worker as meant. Every worker
+Before anyone builds, the roundtable lets the planner check that its brief reached each worker as meant. The planner is
+the orchestrator, who holds the architect's plan; the steps below are addressed to it. Every worker
 gets the whole plan plus its own task, changes nothing and restates its own task. Do not propose alternatives or reopen
 decisions: design debate is outside the roundtable and the planner decides. `--meeting` needs a git repository. Pick a
 **new meeting id every round** (`<topic>-r1`, `<topic>-r2`, `[\w.-]{1,64}`) and keep it through that round's understanding, confirmation, minutes and consolidation;
@@ -224,7 +225,7 @@ no longer open builds.
    node "<helper>" codex --role <role> --meeting <id> --title "<one line>" --model <model> --effort <effort> --fast --cwd <worktree> --brief <plan.md> --out <meeting.md> --allow '<module glob>'
    ```
 
-2. **Your check.** Check each restatement against what you meant. Correct misreadings and answer real ambiguities,
+2. **The planner's check.** Check each restatement against what the plan meant. Correct misreadings and answer real ambiguities,
    contradictions or code facts that block the brief as written; check that shared interfaces match and file scopes are
    disjoint. The planner decides design questions outside this check. Write the clarifications, corrections and answers
    to `issues.json`, and build the minutes (two Markdown tables, plus the same as an HTML page beside it; a worker's
