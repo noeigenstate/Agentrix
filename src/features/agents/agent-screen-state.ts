@@ -25,7 +25,7 @@ export function cliStateFor(agent: ScreenAgent, frame: CliFrame | null, terminal
   const newer = !!observed && current?.sessionId === terminal.sessionId && (current?.revision ?? 0) > 0
     && (current?.stateUpdatedAt?.[agent] ?? current?.updatedAt ?? 0) > (signal?.updatedAt ?? Infinity);
   const authority = signal && !newer ? signal : null;
-  const waiting = authority ? authority.state === 'waiting' : dialog || !signal && terminal.needsInput != null && !idle;
+  const waiting = dialog || (authority ? authority.state === 'waiting' : !signal && terminal.needsInput != null && !idle);
   const working = !waiting && (authority ? authority.state === 'working' : busy || !idle && (terminal.mainTurn?.state ?? terminal.codexActivity) === 'working');
   return { input, idle, waiting, working, message: authority?.state === 'waiting' ? authority.message : waiting ? terminal.needsInput : null,
     canDeliver: input && !dialog && !waiting && !current?.pending };

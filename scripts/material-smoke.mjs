@@ -22,6 +22,16 @@ const state = async () => (await page.evaluate(() => window.agentrix.getState())
 const theme = 'grey';
 const errors = [], performanceSamples = [], materials = [], typography = [], edges = [];
 const layoutGap = 12;
+// Let each fixture shell close its own ConPTY before Electron disposes the rest.
+// Killing all seven live PTYs together can block node-pty on loaded Windows runners.
+async function stopMaterialShells() {
+  for (const project of (await state()).projects) for (const terminal of project.terminals) {
+    if (!terminal.shellReady || terminal.codexActive) continue;
+    await page.evaluate(id => window.agentrix.writeTerminal(id, 'exit\r'), terminal.id);
+    await waitFor(async () => (await state()).projects.flatMap(value => value.terminals)
+      .find(value => value.id === terminal.id)?.status === 'exited', 'material fixture shell exits', 4000);
+  }
+}
 // Every card keeps the same gap to its neighbours, the title bar and the bottom of the window. In an expanded project the explorer and the project are bands flush with the window's edges
 // (the activity pane docks to the right one); the project's own content keeps the gap inside it.
 async function checkGaps(mode) {
@@ -176,5 +186,10 @@ try {
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, performanceSamples, materials, typography, edges, errors }, null, 2));
   console.log(`Material assertions passed; closing isolated Electron PID ${app.process().pid}. Evidence: ${output}`);
 } catch (error) { if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {}); throw error; }
-finally { if (app) await closeMaterialApp(app); }
+finally {
+  if (app) {
+    try { if (page && !page.isClosed()) await stopMaterialShells(); }
+    finally { await closeMaterialApp(app); }
+  }
+}
 console.log(`PASS: 6/16 flat grey cards with six streaming PTYs, split ANSI/selection/cursor, opaque surfaces under reduced transparency. Evidence: ${output}`);

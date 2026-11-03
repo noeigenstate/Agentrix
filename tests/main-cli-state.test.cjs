@@ -32,13 +32,13 @@ function fixture(agent = 'claude') {
 test('host CLI transitions broadcast synchronously and Stop does not await a stalled transcript reader', () => {
   const h = fixture();
   h.hook('working', { prompt: 'Do the task' }); assert.equal(h.s.cliState.state, 'working'); assert.equal(h.beginnings(), 1);
-  h.advance(); h.hook('attention', { message: 'Approve', requestId: 'tool' }); assert.equal(h.frames.at(-1).state, 'waiting');
-  h.advance(); h.hook('progress', { requestId: 'tool' }); assert.equal(h.frames.at(-1).state, 'working'); assert.equal(h.s.needsInput, null);
+  h.advance(); h.hook('attention', { hookEvent: 'PermissionRequest', message: 'Approve' }); assert.equal(h.frames.at(-1).state, 'waiting');
+  h.advance(); h.hook('progress', { hookEvent: 'PostToolUse', requestId: 'sibling-tool' }); assert.equal(h.frames.at(-1).state, 'waiting'); assert.ok(h.s.needsInput);
   h.s.activityMonitor = { poll: () => new Promise(() => {}) };
   h.advance(); h.hook('complete'); assert.equal(h.frames.at(-1).state, 'idle'); assert.equal(h.s.needsInput, null);
   assert.equal(h.beginnings(), 1); assert.equal(h.notifications(), 0);
   assert.ok(h.frames.every((frame, index) => !index || frame.revision >= h.frames[index - 1].revision));
-  assert.ok(h.frames.at(-1).revision >= 4);
+  assert.equal(h.frames.at(-1).revision, 4);
 });
 
 test('old session, old event time, duplicate events and another tool cannot clear newer attention', () => {
@@ -96,4 +96,64 @@ test('authenticated Codex completion notify publishes idle immediately and rejec
   notify('one'); assert.equal(h.s.cliState.state, 'idle');
   h.advance(); h.record('working', 'two'); const revision = h.s.cliState.revision;
   h.advance(); notify('one'); assert.equal(h.s.cliState.revision, revision); assert.equal(h.s.cliState.state, 'working');
+});
+
+for (const notifyFirst of [false, true]) test(`Codex ${notifyFirst ? 'notify-first' : 'record-first'} completion settles its own turn once`, () => {
+  const h = fixture('codex'), ended = [], finished = [];
+  h.s.completionWork.end = at => ended.push(at); h.s.promptQueue.finish = at => finished.push(at);
+  h.context.store.expectCompletion('p'); h.record('working', 'one');
+  const record = () => h.record('complete', 'one', 2010);
+  const notify = () => h.context.onEvent({ projectId: 't', sessionKey: 'cap', type: 'turn-complete', threadId: 'provider', turnId: 'one', eventId: 'provider:one' });
+  h.advance(260);
+  if (notifyFirst) { notify(); record(); } else { record(); notify(); }
+  assert.ok(ended.includes(2010)); assert.ok(finished.includes(2010));
+  assert.equal(h.s.codexActivity, 'complete'); assert.equal(h.notifications(), 1);
+  notify(); record(); assert.equal(h.notifications(), 1); assert.equal(h.beginnings(), 0);
+});
+
+test('SSH notify before the next 250 ms poll does not hide its earlier remote completion record', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = fixture('codex'); h.context.store.expectCompletion('p'); h.record('working', 'one');
+  h.s.activityClockOffset = 60000;
+  let endedAt = null; h.s.completionWork.end = at => { endedAt = at; };
+  h.s.activityMonitor = { poll: () => new Promise(resolve => setTimeout(() => {
+    h.record('complete', 'one', -57990 + h.s.activityClockOffset); resolve();
+  }, 250)) };
+  h.advance(50);
+  h.context.onEvent({ projectId: 't', sessionKey: 'cap', type: 'turn-complete', threadId: 'provider', turnId: 'one', eventId: 'provider:one' });
+  assert.equal(h.s.cliState.state, 'idle'); assert.equal(endedAt, null);
+  h.advance(250); t.mock.timers.tick(250); await Promise.resolve();
+  assert.equal(endedAt, 2010); assert.equal(h.s.codexActivity, 'complete'); assert.equal(h.notifications(), 1);
+});
+
+test('an uncorrelated PermissionRequest survives sibling progress and asynchronously reordered progress', () => {
+  const h = fixture(); h.hook('working', { prompt: 'Task' }); h.advance(10);
+  h.hook('attention', { hookEvent: 'PermissionRequest', message: 'Bash' });
+  const revision = h.s.cliState.revision;
+  for (const hookEvent of ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'ElicitationResult']) {
+    h.advance(); h.hook('progress', { hookEvent, requestId: 'sibling-tool' });
+    h.hook('progress', { hookEvent, sentAt: 2000 });
+  }
+  assert.equal(h.s.cliState.revision, revision); assert.equal(h.s.cliState.state, 'waiting'); assert.equal(h.s.needsInput.message, 'Bash');
+  h.advance(); h.hook('complete'); h.advance(); h.hook('progress', { hookEvent: 'PostToolUse', requestId: 'late-tool' });
+  assert.equal(h.s.cliState.state, 'idle'); assert.equal(h.beginnings(), 1); assert.equal(h.notifications(), 1);
+});
+
+test('a late async tool observation cannot raise the working watermark above an earlier Stop', () => {
+  const h = fixture(); h.hook('working', { prompt: 'Task' });
+  const revision = h.s.cliState.revision;
+  h.advance(100); h.hook('progress', { hookEvent: 'PostToolUse', requestId: 'delayed-child' });
+  assert.equal(h.s.cliState.revision, revision);
+  h.hook('complete', { sentAt: 2050 });
+  assert.equal(h.s.cliState.state, 'idle'); assert.equal(h.notifications(), 1); assert.equal(h.beginnings(), 1);
+});
+
+test('progress releases a correlated host wait only with its exact request identity', () => {
+  const h = fixture(); h.hook('working', { prompt: 'Task' }); h.advance();
+  h.context.publishCliState(h.s, 'waiting', { requestId: 'root-request', message: 'Known request' });
+  const revision = h.s.cliState.revision;
+  h.advance(); h.hook('progress'); h.hook('progress', { requestId: 'other-request' });
+  assert.equal(h.s.cliState.revision, revision);
+  h.hook('progress', { requestId: 'root-request' });
+  assert.equal(h.s.cliState.state, 'working'); assert.equal(h.s.needsInput, null); assert.equal(h.beginnings(), 1);
 });

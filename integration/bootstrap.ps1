@@ -192,7 +192,7 @@ function global:claude {
         '-ProjectId', $global:AgentrixSession.projectId,
         '-SessionKey', $global:AgentrixSession.sessionKey
     ) -join ' '
-    $hook = { param($kind) @{ hooks = @(@{ type = 'command'; command = ($hookCommand + ' -Kind ' + $kind); timeout = 10 }) } }
+    $hook = { param($kind) @{ hooks = @(@{ type = 'command'; command = ($hookCommand + ' -Kind ' + $kind); timeout = 10; async = ($kind -eq 'progress') }) } }
     $hooks = @{ UserPromptSubmit = @(& $hook 'start'); Stop = @(& $hook 'stop'); Notification = @(& $hook 'notify'); SessionStart = @(& $hook 'session') }
     foreach ($name in @('PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'ElicitationResult')) { $hooks[$name] = @(& $hook 'progress') }
     foreach ($name in @('PermissionRequest', 'Elicitation')) { $hooks[$name] = @(& $hook 'permission') }

@@ -737,9 +737,11 @@ function publishCliState(s, state, { at = Date.now(), threadId, turnId, requestI
   if (!bind && threadId && bound && threadId !== bound && !(s.agent === 'codex' && bound.length >= 8 && threadId.toLowerCase().startsWith(bound.toLowerCase()))) return false;
   if (at < Math.max(s.activitySince || 0, s.activityInputAt || 0, meta.at)) return false;
   if (eventId && meta.events.has(eventId)) return false;
-  if (progress && before?.state !== 'waiting' && before?.state !== 'working') return false;
   if (!bind && turnId && (meta.closed.has(turnId) || state !== 'working' && meta.turnId && turnId !== meta.turnId)) return false;
-  if (progress && requestId && meta.requestId && requestId !== meta.requestId) return false;
+  // PermissionRequest/Elicitation have no tool_use_id in Claude 2.1.317. A sibling's
+  // asynchronous progress cannot prove that such a dialog has been answered. A tool
+  // observation only releases a matching wait; it cannot advance a working turn's watermark.
+  if (progress && (before?.state !== 'waiting' || !meta.requestId || requestId !== meta.requestId)) return false;
   if (bind && threadId !== bound) { meta.closed.clear(); meta.turnId = null; }
   if (newTurn) { if (meta.turnId) meta.closed.add(meta.turnId); meta.turnId = null; }
   if (threadId) s.cliProviderId = threadId;
@@ -913,6 +915,8 @@ function onEvent(event) {
     s.agentStarting = false;
     const restored = store.findTerminal(s.terminalId)?.record.restore;
     const startingAgent = event.agent === 'claude' ? 'claude' : 'codex';
+    // A new CLI run must learn its own root before a received prompt can bind CLI state.
+    if (startingAgent === 'codex') s.rootThreadId = null;
     s.agentCwd = event.cwd || restored?.cwd || project.path;
     if (typeof event.codexHome === 'string') s.codexHome = event.codexHome;
     if (restored?.codex !== true || (restored.agent || 'codex') !== startingAgent) readingHistory.close(s.terminalId);
@@ -1054,7 +1058,9 @@ function onEvent(event) {
   } else if (event.type === 'turn-complete') {
     if (s.agent === 'codex' && event.threadId && event.turnId && s.cliStateMeta?.turnId === event.turnId
       && (s.cliProviderId || s.rootThreadId || s.reportedThreadId) === event.threadId) {
-      publishCliState(s, 'idle', { at: Number.isFinite(event.sentAt) ? event.sentAt : Date.now(), threadId: event.threadId, turnId: event.turnId, eventId: `notify:${event.eventId}` });
+      // Notify is an immediate UI hint, not a newer rollout record. Preserve the
+      // record watermark so this turn's earlier task_complete can still end its work.
+      publishCliState(s, 'idle', { at: s.cliStateMeta.at, threadId: event.threadId, turnId: event.turnId, eventId: `notify:${event.eventId}` });
     }
     // notify is inherited by child agents. It only requests a refresh; the
     // interactive parent's task lifecycle is the authority for completion.

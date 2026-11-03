@@ -166,8 +166,12 @@ if (require.main === module) {
       const h = popupHarness(t, agent, rows);
       h.edit('/status'); h.keys('Enter');
       assert.equal(h.popup().props.command, '/status'); assert.equal(h.node.disabled, false);
-      h.popup().props.onReady(); await Promise.resolve();
-      h.tick(60); await Promise.resolve(); h.tick(150); await Promise.resolve();
+      const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
+      h.popup().props.onReady(); await flush();
+      h.tick(59); await flush(); assert.deepEqual(h.writes.map(([, text]) => text), ['\x15']);
+      h.tick(1); await flush(); assert.deepEqual(h.writes.map(([, text]) => text), ['\x15', '/status']);
+      h.tick(149); await flush(); assert.equal(h.writes.length, 2);
+      h.tick(1); await flush();
       assert.deepEqual(h.writes.map(([, text]) => text), ['\x15', '/status', '\r']);
       const before = h.writes.slice(), otherEditor = { matches: () => true };
       document.activeElement = restoreFocus ? document.body : otherEditor;

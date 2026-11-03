@@ -21,6 +21,16 @@ for (const file of fs.readdirSync(path.join(__dirname, 'fixtures/screens')).filt
 }
 
 for (const agent of ['claude', 'codex']) {
+  test(agent + ': the current confirmation frame still opens the terminal after newer host work', t => {
+    const rows = fs.readFileSync(path.join(__dirname, `fixtures/screens/${agent}-permission.txt`), 'utf8').split(/\r?\n/);
+    const h = popupHarness(t, agent, idle[agent]);
+    h.props.terminal.cliState = { sessionId: 'fixture-session', revision: 2, state: 'working', updatedAt: 10002 };
+    h.view.rows = rows; h.view.frame = { sessionId: 'fixture-session', revision: 1, updatedAt: 10000 };
+    h.render(); h.tick(500);
+    assert.ok(h.popup()); assert.equal(h.node.disabled, false);
+    assert.equal(elements(h.tree()).some(node => node.type?.name === 'WorkingLine'), false);
+    h.edit('ordinary message'); h.keys('Enter'); assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
+  });
   test(agent + ': a newer PTY input frame clears host waiting in the same render, and a newer host event wins again', t => {
     const h = popupHarness(t, agent, ['Settings', 'Esc to close']);
     h.props.terminal.cliState = { sessionId: 'fixture-session', revision: 1, state: 'waiting', updatedAt: 10000 };
@@ -46,8 +56,8 @@ for (const agent of ['claude', 'codex']) {
     assert.equal(elements(h.tree()).some(node => node.type?.name === 'WorkingLine'), false);
   });
 
-  test(agent + ': versioned host state wins old rows and rejects a late revision or another PTY', t => {
-    const h = popupHarness(t, agent, ['Settings', 'Esc to close']);
+  test(agent + ': versioned host state wins old input rows and rejects a late revision or another PTY', t => {
+    const h = popupHarness(t, agent, idle[agent]);
     const signal = (revision, state) => ({ sessionId: 'fixture-session', revision, state, updatedAt: 10000 + revision });
     h.props.terminal.cliState = signal(2, 'idle'); h.render(); assert.equal(h.waiting(), undefined);
     h.props.terminal.cliState = signal(2, 'waiting'); h.render(); assert.equal(h.waiting(), undefined, 'duplicate revision cannot change state');
