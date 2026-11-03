@@ -30,7 +30,7 @@ test('persistent channel authenticates a binding, streams events and deduplicate
 });
 
 test('broker forwards later controls to the registered provider handler without an SDK in the helper', async t => {
-  const id = randomUUID(), run = { runId: id, projectId: 'p', cwd: os.tmpdir(), allow: [] };
+  const id = randomUUID(), run = { runId: id, projectId: 'p', cwd: os.tmpdir(), allow: [], agent: 'claude' };
   const control = createDispatchControl({ resolveRun: () => run });
   const { address } = await control.listen(); t.after(() => control.close());
   let ready, finish;
@@ -64,6 +64,21 @@ test('registration may tighten plan mode but cannot loosen the main-owned read-o
     try { await client.request('mode', {}); assert.equal(events[0].readOnly, true); }
     finally { client.close(); }
   }
+});
+
+test('M9: SDK execution is limited to one request on its verified Claude run binding', async t => {
+  const control = createDispatchControl({ resolveRun: auth => ({ runId: auth.runId, projectId: 'p', cwd: os.tmpdir(), allow: [], agent: auth.runId === 'claude-run' ? 'claude' : 'codex' }) });
+  const { address } = await control.listen(); t.after(() => control.close());
+  let requests = 0;
+  control.onRequest('claude-sdk.run', async () => { requests++; });
+  for (const runId of ['claude-run', 'codex-run']) {
+    const client = await connectDispatchControl({ address, runId, projectId: 'p', agent: 'claude' });
+    try {
+      if (runId === 'claude-run') await client.request('claude-sdk.run', {});
+      await assert.rejects(client.request('claude-sdk.run', { runId: 'claude-run' }), /run_binding_rejected/);
+    } finally { client.close(); }
+  }
+  assert.equal(requests, 1);
 });
 
 for (const action of ['intervene', 'stop']) test(`helper delivers ${action} to a fake app-server before its turn ends`, { timeout: 15000 }, async t => {

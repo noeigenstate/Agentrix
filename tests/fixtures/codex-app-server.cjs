@@ -6,8 +6,11 @@ const notify = (method, params) => send({ method, params: { threadId, ...params 
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const request = JSON.parse(line), params = request.params || {};
   if (!request.method) return;
+  if (['thread/resume', 'turn/start', 'turn/steer', 'turn/interrupt'].includes(request.method) && !params.threadId) {
+    return send({ id: request.id, error: { code: mode === 'missing-steer' && request.method === 'turn/steer' ? -32601 : -32602, message: 'Synthetic capability probe' } });
+  }
   let result = {};
-  if (request.method === 'initialize') result = { userAgent: 'codex/0.166.0' };
+  if (request.method === 'initialize') result = { userAgent: mode === 'unknown-version' ? 'codex/9.99.0' : 'codex/0.166.0' };
   else if (request.method === 'thread/start' || request.method === 'thread/resume') {
     threadId = params.threadId || threadId;
     result = { thread: { id: threadId, turns: [] }, cwd: params.cwd, model: params.model, serviceTier: params.serviceTier,
