@@ -11,6 +11,23 @@ async function until(predicate) {
   for (let n = 0; n < 600; n++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); }
   throw new Error('Synthetic scope fixture timed out');
 }
+function boardEvent(t, kind) {
+  const watch = fs.watch;
+  t.mock.method(fs, 'watch', (directory, listener) => {
+    const handle = watch(directory, listener);
+    queueMicrotask(() => {
+      if (kind === 'replaced') {
+        const stat = fs.statSync;
+        t.mock.method(fs, 'statSync', (file, options) => {
+          const value = stat(file, options);
+          return file === directory && options?.bigint ? { ...value, ino: value.ino + 1n } : value;
+        });
+      }
+      listener('change', kind === 'unknown' ? 'gone-peer.json' : kind === 'nameless' ? undefined : path.basename(directory));
+    });
+    return handle;
+  });
+}
 function fixture(t) {
   const lifetime = resources(t);
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-scope-'))), main = path.join(root, 'main'), linked = path.join(root, 'linked');
@@ -94,16 +111,52 @@ test('skill proposal restoration remains active when N1 leaves a peer ordinary e
 
 for (const main of [false, true]) test(`N1: exclusive scope violations are quarantined only in a linked worktree (main=${main})`, { timeout: 15000 }, async t => {
   const f = fixture(t), cwd = main ? f.main : f.linked;
+  if (!main) boardEvent(t, 'self'); // macOS also reports an event for the watched directory's own inode.
   const worker = f.start('exclusive', 'a/**', [['b/base.txt', 'worker violation'], ['b/new.txt', 'new worker violation']], cwd);
   fs.writeFileSync(worker.writeGate, 'go'); fs.writeFileSync(worker.release, 'done');
   assert.equal(await worker.result, 0); assert.match(worker.stdout(), /OUT OF SCOPE/);
   assert.equal(fs.readFileSync(path.join(cwd, 'b/base.txt'), 'utf8'), main ? 'worker violation' : 'original');
   if (main) assert.equal(fs.readFileSync(path.join(cwd, 'b/new.txt'), 'utf8'), 'new worker violation');
   else {
-    const quarantine = worker.stdout().match(/quarantined new files: (.*?) ·/)[1];
+    const quarantine = worker.stdout().match(/quarantined scope changes: (.*?) ·/)[1];
+    assert.equal(fs.readFileSync(path.join(quarantine, 'b/base.txt'), 'utf8'), 'worker violation');
     assert.equal(fs.readFileSync(path.join(quarantine, 'b/new.txt'), 'utf8'), 'new worker violation');
     assert.equal(fs.existsSync(path.join(cwd, 'b/new.txt')), false); assert.match(worker.stdout(), /restored 2/);
   }
+});
+
+for (const kind of ['unknown', 'nameless', 'replaced']) test(`N1: ${kind} board evidence still prevents restoration`, async t => {
+  const f = fixture(t); boardEvent(t, kind);
+  const worker = f.start('uncertain-event', 'a/**', [['b/base.txt', 'unattributed edit']]);
+  fs.writeFileSync(worker.writeGate, 'go'); fs.writeFileSync(worker.release, 'done');
+  assert.equal(await worker.result, 0); assert.match(worker.stdout(), /OUT OF SCOPE: .*left live/);
+  assert.equal(fs.readFileSync(path.join(f.linked, 'b/base.txt'), 'utf8'), 'unattributed edit');
+});
+
+test('L4: an owner edit in an exclusive worktree is preserved before restoring the dirty start snapshot', async t => {
+  const f = fixture(t), file = path.join(f.linked, 'b/base.txt');
+  fs.writeFileSync(file, 'Owner draft before dispatch.');
+  const worker = f.start('owner-edit', 'a/**', [['b/base.txt', 'Worker violation.']]);
+  fs.writeFileSync(worker.writeGate, 'go'); await until(() => fs.existsSync(worker.written));
+  fs.writeFileSync(file, 'Owner edit during dispatch.'); fs.writeFileSync(worker.release, 'done');
+  assert.equal(await worker.result, 0);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'Owner draft before dispatch.');
+  const quarantine = worker.stdout().match(/quarantined scope changes: (.*?) ·/)[1];
+  assert.equal(fs.readFileSync(path.join(quarantine, 'b/base.txt'), 'utf8'), 'Owner edit during dispatch.');
+  assert.match(worker.stdout(), /restored 1 out-of-scope paths/);
+});
+
+test('L4: backup failure leaves the current bytes live instead of overwriting them', async t => {
+  const f = fixture(t), file = path.join(f.linked, 'b/base.txt'), rename = fs.renameSync;
+  const worker = f.start('backup-failure', 'a/**', [['b/base.txt', 'Current owner bytes.']]);
+  fs.writeFileSync(worker.writeGate, 'go'); await until(() => fs.existsSync(worker.written));
+  t.mock.method(fs, 'renameSync', (source, destination) => {
+    if (source === file && destination.includes('scope-quarantine')) throw new Error('Synthetic backup failure');
+    return rename(source, destination);
+  });
+  fs.writeFileSync(worker.release, 'done'); assert.equal(await worker.result, 0);
+  assert.match(worker.stdout(), /scope restore failed: Synthetic backup failure/);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'Current owner bytes.');
 });
 
 test('N1: unavailable board history makes a linked worktree report-only', { timeout: 15000 }, async t => {
