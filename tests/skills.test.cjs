@@ -48,7 +48,7 @@ const until = async (check, label) => {
 
 test('skill defaults, exact public shape, read-only built-ins and local-only project scopes', async t => {
   const { store } = fixture(t), builtin = store.list()[0];
-  assert.deepEqual(Object.keys(builtin).sort(), ['id', 'name', 'description', 'title', 'summary', 'when', 'yieldsTo', 'source', 'scope', 'projectId', 'projectName', 'path', 'enabled', 'trigger', 'autoOptimize', 'confirmChanges', 'version', 'updatedAt', 'updatedBy', 'updatedIn', 'createdByAgent', 'pending', 'requires', 'lastUsed'].sort());
+  assert.deepEqual(Object.keys(builtin).sort(), ['id', 'name', 'description', 'title', 'summary', 'when', 'extends', 'replaced', 'source', 'scope', 'projectId', 'projectName', 'path', 'enabled', 'trigger', 'autoOptimize', 'confirmChanges', 'version', 'updatedAt', 'updatedBy', 'updatedIn', 'createdByAgent', 'pending', 'requires', 'lastUsed'].sort());
   assert.deepEqual([builtin.id, builtin.enabled, builtin.trigger, builtin.autoOptimize], ['builtin:model-routing', true, 'auto', false]);
   assert.deepEqual(builtin.requires, { claude: true, codex: false });
   await assert.rejects(() => store.save(builtin.id, draft('model-routing')), /只读/);

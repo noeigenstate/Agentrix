@@ -10,7 +10,7 @@ const { MAX_BYTES } = require('../electron/features/skills/files.cjs');
 const { startupNote } = require('../electron/features/agents/handoff.cjs');
 
 const resources = path.join(__dirname, '../resources/skills');
-const body = '# Example skill\n\n## When this applies\n\nUse when the task fits; the project copy takes precedence.\n\n## What to do\n\n1. Read the task and follow the procedure.\n\n## Rules\n\n- Preserve existing behavior.\n\n## Done when\n\n- The checks pass and the result is reported.\n';
+const body = '# Example skill\n\n## When this applies\n\nUse when the task fits.\n\n## What to do\n\n1. Read the task and follow the procedure.\n\n## Rules\n\n- Preserve existing behavior.\n\n## Done when\n\n- The checks pass and the result is reported.\n';
 const builtin = (name = 'example', fields = {}) => Object.entries({ name,
   description: 'Use when the task needs it; follow a tested procedure.', trigger: 'auto', when: '描述匹配时生效', requires: 'none',
   title: '示例技能', summary: '按步骤处理任务。', ...fields })
@@ -124,17 +124,17 @@ test('every shipped built-in passes the strict format and has English title, sum
   }
 });
 
-test('shipped descriptions include trigger timing and project precedence', () => {
+test('shipped descriptions include trigger timing and system precedence without yielding', () => {
   const fields = name => builtinMetadata(fs.readFileSync(path.join(resources, name, 'SKILL.md'), 'utf8'), name);
   const routing = fields('model-routing'), standard = fields('code-standard'), ui = fields('ui-standard');
   assert.equal(routing.trigger, 'auto');
   assert.match(routing.description, /^Use before any task that changes the project, however small \(a new feature or a change to one, a bug fix or debugging/);
-  assert.match(routing.description, /unless the project has its own model-routing skill/);
-  assert.equal(routing.when, '新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算；项目已有同名技能时以项目为准');
+  assert.doesNotMatch(routing.description, /unless the project has its own|yield/i);
+  assert.equal(routing.when, '新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算');
   assert.equal(standard.trigger, 'always');
-  assert.match(standard.description, /^Use before every task in any project that has no code standard of its own/);
+  assert.match(standard.description, /^Use before every task/);
   assert.match(standard.description, /on its first run in a project/);
-  assert.match(standard.description, /yield to the project's own standard/);
+  assert.doesNotMatch(standard.description, /yield|has no code standard of its own/i);
   assert.equal(standard.when, '每个任务开始前生效；在项目里第一次运行时先审查现有代码并提出接入计划');
   assert.deepEqual([ui.trigger, ui.requires, ui.title], ['auto', 'none', '界面规范']);
   assert.match(ui.description, /^Use when designing, building, changing, debugging, restyling or reviewing any user interface, a small fix included/);
@@ -170,7 +170,7 @@ test('defaults, timing and requirements come from front matter for any built-in 
   const english = JSON.parse(fs.readFileSync(path.join(__dirname, '../electron/locales/en.json'), 'utf8'));
   for (const [trigger, when] of Object.entries({ always: '每个任务开始前', auto: '描述匹配时', 'first-open': '首次打开项目时' })) {
     const skill = store.setOptions(saved.id, { trigger });
-    assert.equal(skill.when, when); assert.deepEqual(skill.yieldsTo, []); assert.equal(skill.requires, null);
+    assert.equal(skill.when, when); assert.equal(skill.extends, null); assert.equal(skill.requires, null);
     assert.match(english[when], /[A-Za-z]/);
   }
   store.setOptions('builtin:none', { trigger: 'always' });
@@ -178,57 +178,47 @@ test('defaults, timing and requirements come from front matter for any built-in 
   assert.equal(reopened.info(reopened.entry('builtin:none')).trigger, 'always');
 });
 
-for (const place of ['skills', '.claude/skills', '.codex/skills', 'AGENTS.md', 'CLAUDE.md']) for (const agent of ['claude', 'codex']) test(`${agent} built-ins yield to ${place} only where applicable, with watcher updates`, async t => {
+for (const place of ['skills', '.claude/skills', '.codex/skills']) test(`same-name ${place} folders are moved by the watcher and the built-in still applies`, async t => {
   const { store, projects, changes } = fixture(t), project = projects[0], target = path.join(project.path, place);
-  store.syncWatchers();
-  await store.watchers.get(target).poll();
-  const before = start(store, project, 'before', agent);
-  const first = place.endsWith('.md') ? target : path.join(target, 'code-standard');
-  if (place.endsWith('.md')) put(first, 'Follow `code-standard` before changing code.');
-  else fs.mkdirSync(first, { recursive: true }); // A project skill folder alone is enough; do not require SKILL.md.
+  store.syncWatchers(); await store.watchers.get(target).poll();
+  const before = start(store, project, 'before');
+  const copy = path.join(target, 'code-standard');
+  put(path.join(copy, 'asset.txt'), 'Recoverable contents.');
   await store.watchers.get(target).poll();
   const deadline = Date.now() + 5000;
-  while (!store.info(store.entry('builtin:code-standard')).yieldsTo.length) {
-    assert.ok(Date.now() < deadline, 'watcher publishes project skill detection');
+  while (!store.info(store.entry('builtin:code-standard')).replaced.length) {
+    assert.ok(Date.now() < deadline, 'watcher publishes replacement');
     await new Promise(resolve => setTimeout(resolve, 20));
   }
-  const info = store.info(store.entry('builtin:code-standard'));
-  assert.deepEqual(info.yieldsTo, ['First']); assert.ok(changes.length);
-  const yielded = store.delivery(project, false, 'after', { agent });
-  const applies = place === 'skills' || place === 'AGENTS.md' || (place === '.codex/skills' ? agent === 'codex' : agent === 'claude');
-  assert.notEqual(yielded, before); assert.equal(yielded.skills.some(skill => skill.id === info.id), !applies);
-  const location = place.endsWith('.md') ? place : `${place}/code-standard/SKILL.md`;
-  assert.equal(note(yielded).includes(`This project has its own code-standard skill at ${location}; follow it.`), applies);
-  assert.equal(note(yielded).includes(normalized(info.path)), !applies);
-  assert.deepEqual(store.info(store.entry('builtin:model-routing')).yieldsTo, []);
-  assert.ok(store.delivery(projects[1], false, 'other').skills.some(skill => skill.id === info.id));
-  projects[0].name = 'Renamed';
-  assert.deepEqual(store.info(store.entry(info.id)).yieldsTo, ['Renamed']);
-  if (place.endsWith('.md')) fs.unlinkSync(first); else fs.rmdirSync(first);
-  store.refresh(false, new Set([target]));
-  assert.deepEqual(store.info(store.entry(info.id)).yieldsTo, []);
-  const after = store.delivery(project, false, 'after-removal', { agent });
-  assert.equal(after.skills.find(skill => skill.id === info.id).trigger, 'always');
-  assert.ok(note(after).includes(alwaysInstruction(info.path)), 'the earlier agent ran before the project adopted its own skill');
+  const info = store.info(store.entry('builtin:code-standard')), [record] = info.replaced;
+  assert.equal(fs.existsSync(copy), false); assert.ok(changes.length);
+  assert.equal(record.project, project.name); assert.equal(record.from, `${place}/code-standard`);
+  assert.equal(fs.readFileSync(path.join(record.backup, 'asset.txt'), 'utf8'), 'Recoverable contents.');
+  const after = store.delivery(project, false, 'after');
+  assert.notEqual(after, before); assert.ok(after.skills.some(skill => skill.id === info.id));
+  assert.ok(note(after).includes(normalized(info.path)));
+  assert.equal('yielded' in after, false); assert.equal('yieldsTo' in info, false);
+  assert.doesNotMatch(note(after), /This project has its own/);
 });
 
-test('yield detection matches whole skill names only and does not scan SSH paths', t => {
+test('instruction-file mentions never override built-ins and SSH paths are never scanned', t => {
   const { store, projects } = fixture(t, ({ projects }) => {
     for (const project of projects) {
-      put(path.join(project.path, 'AGENTS.md'), 'pre-code-standard code-standard-extra code-standard_ignored code_standard 中文code-standard model-routing-more');
-      fs.mkdirSync(path.join(project.path, 'skills', 'code-standard-extra'), { recursive: true });
+      put(path.join(project.path, 'AGENTS.md'), 'Follow code-standard and model-routing.');
+      put(path.join(project.path, 'CLAUDE.md'), 'Follow code-standard and model-routing.');
     }
-    put(path.join(projects[2].path, 'CLAUDE.md'), 'Follow code-standard and model-routing.');
     fs.mkdirSync(path.join(projects[2].path, '.codex/skills/code-standard'), { recursive: true });
   });
-  assert.ok(store.infos().every(skill => !skill.yieldsTo.length));
-  const remote = store.delivery(projects[2], true, 'remote-first');
-  assert.ok(remote.bundle.files.some(file => file.id === 'builtin:code-standard'));
-  assert.ok(remote.bundle.instructions.includes(firstInstruction('{AGENTRIX_SKILLS}/builtin/code-standard/SKILL.md')));
-  assert.doesNotMatch(remote.bundle.instructions, /This project has its own/);
+  for (const project of projects) {
+    const delivery = store.delivery(project, project.kind === 'ssh', 'first');
+    assert.ok(delivery.skills.some(skill => skill.id === 'builtin:code-standard'));
+    assert.doesNotMatch(note(delivery), /This project has its own/);
+  }
+  assert.equal(fs.existsSync(path.join(projects[2].path, '.codex/skills/code-standard')), true);
+  assert.ok(store.infos().every(skill => skill.replaced.length === 0));
 });
 
-test('project override detection is reused for deliveries and refreshes of unrelated roots', t => {
+test('project scan results are reused for deliveries and refreshes of unrelated roots', t => {
   const { store, projects, dataDir } = fixture(t);
   const reads = t.mock.method(fs, 'readFileSync', fs.readFileSync), scans = t.mock.method(fs, 'readdirSync', fs.readdirSync);
   const delivery = store.delivery(projects[0]);
@@ -239,19 +229,20 @@ test('project override detection is reused for deliveries and refreshes of unrel
   assert.equal(reads.mock.callCount(), 0, 'instruction files and skill bodies are not reread');
 });
 
-test('newly added and moved projects yield before the first watcher scan', t => {
-  const { root, store, projects } = fixture(t);
+test('newly added and moved projects replace copies before the first watcher scan', t => {
+  const { root, store, projects, dataDir } = fixture(t);
   const project = { id: 'new', name: 'New project', path: path.join(root, 'new-project') };
-  fs.mkdirSync(path.join(project.path, '.codex/skills/code-standard'), { recursive: true });
-  projects.push(project);
-  const yielded = store.delivery(project, false, 'immediate');
-  assert.ok(note(yielded).includes('This project has its own code-standard skill at .codex/skills/code-standard/SKILL.md; follow it.'));
+  const copy = path.join(project.path, '.codex/skills/code-standard');
+  fs.mkdirSync(copy, { recursive: true }); projects.push(project);
+  const delivery = store.delivery(project, false, 'immediate');
+  assert.equal(fs.existsSync(copy), false);
+  assert.ok(delivery.skills.some(skill => skill.id === 'builtin:code-standard'));
+  assert.equal(store.info(store.entry('builtin:code-standard')).replaced[0].project, 'New project');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'skills.json')) )['builtin:code-standard'].replaced.length, 1);
   assert.equal(store.options['builtin:code-standard']?.firstOpenedProjects, undefined);
-  assert.deepEqual(store.info(store.entry('builtin:code-standard')).yieldsTo, ['New project']);
-  assert.equal(store.delivery(project, false, 'immediate'), yielded);
+  assert.equal(store.delivery(project, false, 'immediate'), delivery);
   project.path = path.join(root, 'moved-project'); fs.mkdirSync(project.path);
   assert.ok(note(store.delivery(project, false, 'after-move')).includes(firstInstruction(store.entry('builtin:code-standard').path)));
-  assert.deepEqual(store.info(store.entry('builtin:code-standard')).yieldsTo, []);
 });
 
 for (const trigger of ['always', 'first-open']) test(`${trigger} first run is claimed by an agent, never a shell or refresh`, t => {
@@ -297,16 +288,13 @@ for (const trigger of ['always', 'first-open']) test(`${trigger} first run is cl
   assert.equal(reopened.options[id].firstOpenedProjects[project.id], 'first');
 });
 
-for (const trigger of ['always', 'first-open']) test(`disabled or yielded ${trigger} skills are not recorded as run`, t => {
+for (const trigger of ['always', 'first-open']) test(`disabled ${trigger} skills are not recorded as run`, t => {
   const { store, projects } = fixture(t, ({ projects, builtinDir }) => {
     put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger }));
     fs.mkdirSync(path.join(projects[0].path, 'skills/code-standard'), { recursive: true });
   });
   const id = 'builtin:code-standard', project = projects[0];
-  const yielded = start(store, project, 'yielded');
-  assert.ok(note(yielded).includes('This project has its own code-standard skill at skills/code-standard/SKILL.md; follow it.'));
-  assert.equal(store.options[id]?.firstOpenedProjects, undefined);
-  fs.rmdirSync(path.join(project.path, 'skills/code-standard')); store.refresh();
+  assert.equal(fs.existsSync(path.join(project.path, 'skills/code-standard')), false);
   store.setOptions(id, { enabled: false }); start(store, project, 'disabled');
   assert.equal(store.options[id]?.firstOpenedProjects, undefined);
   store.setOptions(id, { enabled: true });
@@ -376,58 +364,17 @@ test('always skills reuse a persisted first-open claim after a default change', 
   assert.equal(reopened.options[id].firstOpenedProjects[project.id], 'first');
 });
 
-test('mentions of the built-in path do not override it; yielded info is computed once per entry', t => {
-  const { store, projects } = fixture(t), project = projects[0], id = 'builtin:code-standard';
-  put(path.join(project.path, 'AGENTS.md'), `Follow ${store.entry(id).path.replace(/\\/g, '/')} before coding.`);
-  put(path.join(project.path, 'CLAUDE.md'), `Follow ${store.entry(id).path} before coding.`);
-  store.refresh(); assert.deepEqual(store.info(store.entry(id)).yieldsTo, []);
-  put(path.join(project.path, 'AGENTS.md'), 'Follow code-standard.'); store.refresh();
-  const infos = t.mock.method(store, 'info', store.info);
-  const delivery = store.delivery(project, false, 'yielded', { agent: 'claude' });
-  assert.ok(note(delivery).includes('code-standard skill at AGENTS.md; follow it.'));
-  assert.equal(infos.mock.callCount(), store.entries.size);
-});
-
-test('oversized, non-file and inaccessible project instructions are silent and symlinked skill folders yield', t => {
-  const { store, root, projects, errors } = fixture(t), project = projects[0];
+test('project instruction files are never read for skill precedence, including unreadable and linked files', t => {
+  const { store, projects, errors } = fixture(t), project = projects[0], id = 'builtin:code-standard';
   put(path.join(project.path, 'AGENTS.md'), 'code-standard ' + 'x'.repeat(MAX_BYTES));
   fs.mkdirSync(path.join(project.path, 'CLAUDE.md'));
-  store.refresh(); assert.equal(errors.length, 0); assert.deepEqual(store.info(store.entry('builtin:code-standard')).yieldsTo, []);
-  const folder = path.join(root, 'linked-skill'); fs.mkdirSync(folder);
-  fs.mkdirSync(path.join(project.path, '.claude/skills'), { recursive: true });
-  fs.symlinkSync(folder, path.join(project.path, '.claude/skills/code-standard'), process.platform === 'win32' ? 'junction' : 'dir');
-  store.refresh();
-  assert.ok(note(store.delivery(project, false, 'claude', { agent: 'claude' })).includes('at .claude/skills/code-standard/SKILL.md; follow it.'));
-  assert.ok(store.delivery(project, false, 'codex', { agent: 'codex' }).skills.some(skill => skill.id === 'builtin:code-standard'));
-  const stat = fs.statSync;
-  t.mock.method(fs, 'statSync', (file, ...args) => {
-    if (file === path.join(project.path, 'AGENTS.md')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
-    return stat(file, ...args);
+  const read = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (file, ...args) => {
+    if (['AGENTS.md', 'CLAUDE.md'].includes(path.basename(String(file)))) throw new Error('Instruction files must not be read');
+    return read(file, ...args);
   });
-  assert.doesNotThrow(() => store.refresh()); assert.equal(errors.length, 0);
-});
-
-test('CLAUDE.md symlinked to AGENTS.md is followed and its target changes are detected', async t => {
-  const { store, projects, errors } = fixture(t), project = projects[0];
-  const target = path.join(project.path, 'AGENTS.md'), link = path.join(project.path, 'CLAUDE.md');
-  put(target, 'Follow code-standard.');
-  try { fs.symlinkSync(target, link, 'file'); }
-  catch (error) {
-    if (error.code !== 'EPERM') throw error;
-    // Windows without file-symlink privilege still exercises target reads and target metadata changes.
-    const stat = fs.statSync, read = fs.readFileSync, asyncStat = fs.promises.stat;
-    t.mock.method(fs, 'statSync', (file, ...args) => stat(file === link ? target : file, ...args));
-    t.mock.method(fs, 'readFileSync', (file, ...args) => read(file === link ? target : file, ...args));
-    t.mock.method(fs.promises, 'stat', (file, ...args) => asyncStat(file === link ? target : file, ...args));
-    t.diagnostic('File symlink privilege unavailable; following the link is emulated at the filesystem boundary.');
-  }
-  assert.equal(require('../electron/features/skills/files.cjs').readText(link), 'Follow code-standard.');
-  const { projectSkillSignature } = require('../electron/features/skills/project-skills.cjs');
-  const before = await projectSkillSignature(link);
   store.refresh(); assert.equal(errors.length, 0);
-  assert.deepEqual(store.info(store.entry('builtin:code-standard')).yieldsTo, ['First']);
-  put(target, 'No override.'); assert.notEqual(await projectSkillSignature(link), before);
-  store.refresh(); assert.deepEqual(store.info(store.entry('builtin:code-standard')).yieldsTo, []); assert.equal(errors.length, 0);
+  assert.ok(note(store.delivery(project, false, 'first')).includes(normalized(store.entry(id).path)));
 });
 
 test('project manifests and launch snapshots survive exits and restarts and are pruned only with their project', t => {

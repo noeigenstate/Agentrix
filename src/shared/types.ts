@@ -110,9 +110,8 @@ export type SkillInfo = {
   // When the skill takes effect, in words for the settings page: a built-in's `when` front matter (Chinese, through en.json),
   // otherwise derived from the trigger. A built-in's default trigger comes from its `trigger` front matter.
   when: string;
-  // The project already has its own copy (skills/, .claude/skills, .codex/skills, or named in AGENTS.md / CLAUDE.md):
-  // a built-in then yields to it in that project. Project names, for the settings page.
-  yieldsTo: string[];
+  extends: string | null;
+  replaced: { project: string; name: string; from: string; backup: string; at: number }[];
   projectId: string | null; projectName: string | null; path: string;
   enabled: boolean; trigger: 'always' | 'auto' | 'first-open'; autoOptimize: boolean; confirmChanges: boolean;
   // The latest version and who made it; createdByAgent until the user has looked at it (the 新 mark).

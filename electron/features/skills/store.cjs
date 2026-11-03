@@ -4,16 +4,17 @@ const { monitorActivity } = require('../../codex-activity.cjs');
 const { SkillHistory, safeId } = require('./history.cjs');
 const { metadata, draftText, readJson, writeFile, checkedPath, readText, listFolder, folderSignature, importFiles } = require('./files.cjs');
 const { skillInstructions } = require('./delivery.cjs');
-const { digest } = require('./session.cjs');
+const { digest, assertUserSkillName } = require('./session.cjs');
 const { pruneDeliveryFiles } = require('./delivery-cleanup.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
-const { projectSkillTargets, projectSkillNames, projectSkillSignature } = require('./project-skills.cjs');
+const { projectSkillTargets, replaceProjectSkills, projectSkillSignature, linkedSkillParent, extensionBase } = require('./project-skills.cjs');
 const MAX_SSH_BUNDLE_BYTES = 512 * 1024;
 // Closing a library watcher does not end its CLI sessions. Keep their references across store recreation in this process.
 const liveSessionSnapshots = new Map();
 
 const defaults = entry => ({ enabled: true, trigger: entry.source === 'builtin' ? entry.trigger : 'auto', autoOptimize: entry.source !== 'builtin', confirmChanges: false, createdByAgent: false, reviewed: false, lastUsed: null });
 const triggerWhen = { always: '每个任务开始前', auto: '描述匹配时', 'first-open': '首次打开项目时' };
+const replacementHistory = value => Array.isArray(value) ? value.filter(item => item && ['project', 'name', 'from', 'backup'].every(key => typeof item[key] === 'string') && Number.isFinite(item.at)).slice(0, 20) : [];
 const canonical = file => {
   const resolved = path.resolve(file);
   return process.platform === 'win32' ? resolved.replace(/\\/g, '/').toLowerCase() : resolved;
@@ -28,7 +29,7 @@ class SkillsStore {
       && Object.values(value).every(item => item && typeof item === 'object' && !Array.isArray(item)));
     this.history = new SkillHistory(dataDir, report);
     this.entries = new Map(); this.watchers = new Map(); this.writers = new Map();
-    this.projectSkills = new Map();
+    this.projectSkills = new Map(); this.replacementFailures = new Set();
     this.knownRoots = new Set(); this.baselines = new Set(); this.dirtyRoots = new Set(); this.deliveries = new Map();
     this.pruneDeliveryFiles();
     for (const folder of [this.globalFolder, path.join(dataDir, 'skill-pending')]) {
@@ -69,10 +70,24 @@ class SkillsStore {
 
   projectName(id, fallback = null) { return this.getProjects().find(project => project.id === id)?.name || fallback; }
   record(entry, text, by, projectId = null) { return this.history.record(entry.id, text, by, this.projectName(projectId), Date.now(), projectId); }
-  invalidateDelivery() { this.deliveries.clear(); }
+  invalidateDelivery() {
+    this.deliveries.clear();
+    for (const [key, session] of liveSessionSnapshots) {
+      if (!session.current || JSON.parse(key)[0] !== canonical(this.dataDir)) continue;
+      const project = this.getProjects().find(item => item.id === session.projectId && item.kind !== 'ssh');
+      if (project) this.writeCurrentSnapshot(session.current, this.deliveryInfo(project, false, session.sessionId, 'claude'));
+    }
+  }
+
+  builtinNames() { return [...this.entries.values()].filter(entry => entry.source === 'builtin').map(entry => entry.name); }
+
+  writeCurrentSnapshot(file, delivery) {
+    const skills = delivery.skills.map(skill => ({ ...skill, firstRun: false, trigger: skill.trigger === 'first-open' ? 'auto' : skill.trigger }));
+    try { writeFile(file, skillInstructions({ ...delivery, skills })); } catch (error) { this.report(error); }
+  }
 
   pruneDeliveryFiles(now = Date.now()) {
-    pruneDeliveryFiles(path.join(this.dataDir, 'skill-delivery'), new Set([...liveSessionSnapshots.values()].flatMap(files => [...files])), this.report, now);
+    pruneDeliveryFiles(path.join(this.dataDir, 'skill-delivery'), new Set([...liveSessionSnapshots.values()].flatMap(session => [...session.files])), this.report, now);
   }
 
   pruneProjects() {
@@ -96,21 +111,22 @@ class SkillsStore {
 
   refreshProjectSkills(selected) {
     const projects = this.getProjects().filter(project => project.kind !== 'ssh');
+    const names = this.builtinNames(), signature = JSON.stringify(names);
     let modified = false;
     for (const id of this.projectSkills.keys()) if (!projects.some(project => project.id === id)) { this.projectSkills.delete(id); modified = true; }
     for (const project of projects) {
       const previous = this.projectSkills.get(project.id);
-      if (previous?.path === project.path && selected && !projectSkillTargets(project).some(target => selected.has(target))) continue;
-      const names = projectSkillNames(project, [...this.entries.values()].filter(entry => entry.source === 'builtin').map(entry => entry.path));
-      modified ||= previous?.path !== project.path || JSON.stringify([...names]) !== JSON.stringify([...previous.names]);
-      this.projectSkills.set(project.id, { path: project.path, names });
+      if (previous?.path === project.path && previous.signature === signature && selected && !projectSkillTargets(project).some(target => selected.has(target))) continue;
+      const replaced = replaceProjectSkills(project, names, this.dataDir, this.replacementFailures, this.report);
+      for (const replacement of replaced) {
+        const entry = [...this.entries.values()].find(item => item.source === 'builtin' && item.name === replacement.name);
+        const options = this.options[entry.id] || {};
+        this.options[entry.id] = { ...options, replaced: [replacement, ...replacementHistory(options.replaced)].slice(0, 20) };
+      }
+      modified ||= previous?.path !== project.path || previous.signature !== signature || replaced.length > 0;
+      this.projectSkills.set(project.id, { path: project.path, signature });
     }
     return modified;
-  }
-
-  yields(entry, project, agent = null) {
-    const copies = entry.source === 'builtin' && project.kind !== 'ssh' && this.projectSkills.get(project.id)?.names.get(entry.name);
-    return copies && (agent ? copies[agent] : copies.claude || copies.codex) || null;
   }
 
   refresh(initial = false, selected = null) {
@@ -119,7 +135,13 @@ class SkillsStore {
     const knownRoots = new Set([...this.knownRoots].filter(root => rootPaths.has(root)));
     const entries = new Map([...this.entries].filter(([, entry]) => rootPaths.has(entry.root)));
     let modified = entries.size !== this.entries.size;
+    let scannedProjects = false;
     for (const { root, source, scope, project } of roots) {
+      if (source !== 'builtin' && !scannedProjects) {
+        this.entries = entries;
+        if (this.refreshProjectSkills(selected)) modified = true;
+        scannedProjects = true;
+      }
       if (selected && !selected.has(root)) continue;
       const baseline = initial || !this.knownRoots.has(root);
       const idFor = folder => scope === 'builtin' ? `builtin:${folder}` : scope === 'global' ? `user:${folder}` : `project:${project.id}:${folder}`;
@@ -131,8 +153,9 @@ class SkillsStore {
         if (folder === null) readable = false;
         else if (baseline) this.baselines.add(idFor(folder));
         if (source !== 'builtin') for (const entry of previousEntries) if (folder === null || entry.folder === folder) entries.set(entry.id, entry);
-      }, source === 'builtin' ? builtinMetadata : metadata);
+      }, source === 'builtin' ? builtinMetadata : metadata, folder => scope !== 'project' || !this.builtinNames().includes(folder));
       for (const file of files) {
+        if (scope === 'project' && this.builtinNames().includes(file.name)) continue;
         const id = idFor(file.folder), appBaseline = this.baselines.delete(id) || baseline;
         const entry = { ...file, id, root, source, scope, projectId: project?.id || null, projectName: project?.name || null };
         const previous = this.entries.get(id);
@@ -154,7 +177,7 @@ class SkillsStore {
     this.entries = entries;
     this.knownRoots = knownRoots;
     const pruned = this.pruneProjects();
-    if (this.refreshProjectSkills(selected) || pruned || modified) this.invalidateDelivery();
+    if (pruned || modified) this.invalidateDelivery();
     this.persistOptions();
     return this.infos();
   }
@@ -174,7 +197,8 @@ class SkillsStore {
     return { id: entry.id, name: entry.name, description: entry.description, title: entry.source === 'builtin' ? entry.title : entry.name,
       summary: entry.source === 'builtin' ? entry.summary : entry.description, source: entry.source, scope: entry.scope,
       when: entry.source === 'builtin' ? entry.when : triggerWhen[options.trigger],
-      yieldsTo: this.getProjects().filter(project => this.yields(entry, project)).map(project => project.name),
+      extends: entry.source === 'builtin' ? null : extensionBase(entry.name, this.builtinNames()),
+      replaced: entry.source === 'builtin' ? replacementHistory(options.replaced).map(item => ({ ...item })) : [],
       projectId: entry.projectId, projectName: this.projectName(entry.projectId), path: entry.path,
       enabled: options.enabled, trigger: options.trigger, autoOptimize: entry.source !== 'builtin' && options.autoOptimize,
       confirmChanges: entry.source !== 'builtin' && options.confirmChanges,
@@ -204,8 +228,10 @@ class SkillsStore {
 
   async save(id, draft, assets = []) {
     this.refresh();
+    const old = id === null ? null : this.entry(id, true);
+    assertUserSkillName(draft?.name, this.builtinNames());
     const root = this.target(draft?.scope, draft?.projectId), text = draftText(draft);
-    const file = checkedPath(root, draft.name), old = id === null ? null : this.entry(id, true);
+    const file = checkedPath(root, draft.name);
     const nextId = draft.scope === 'global' ? `user:${draft.name}` : `project:${draft.projectId}:${draft.name}`;
     const moved = old && old.id !== nextId, folderMoved = old && canonical(old.path) !== canonical(file);
     if ((!old || folderMoved) && fs.existsSync(path.dirname(file))) throw new Error('此作用范围已存在同名技能。');
@@ -264,7 +290,7 @@ class SkillsStore {
   }
 
   replace(entry, text, by, project) {
-    metadata(text);
+    assertUserSkillName(metadata(text).name, this.builtinNames());
     writeFile(entry.path, text);
     this.record(entry, text, by, project);
     entry.text = text;
@@ -334,19 +360,15 @@ class SkillsStore {
     }
   }
 
-  delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {
-    // A newly added or moved project can start a session before its watcher's first debounced scan.
-    if (!remote && project.kind !== 'ssh' && this.projectSkills.get(project.id)?.path !== project.path
-      && this.refreshProjectSkills(new Set())) this.invalidateDelivery();
+  deliveryInfo(project, remote, sessionId, agent) {
     const agents = this.getAgents(), routingNote = String(this.routingNote() || '').slice(0, 8192);
-    const key = JSON.stringify([project.id, remote, sessionId, agent, started, !!agents.claude?.installed, !!agents.codex?.installed, routingNote]);
-    if (this.deliveries.has(key)) return this.deliveries.get(key);
-    const entries = [...this.entries.values()].filter(entry => entry.scope !== 'project' || !remote && entry.projectId === project.id);
+    const names = this.builtinNames();
+    const entries = [...this.entries.values()].filter(entry => (entry.scope !== 'project' || !remote && entry.projectId === project.id)
+      && (entry.source === 'builtin' || !names.includes(entry.name) && !names.includes(entry.folder)));
     const remotePath = entry => `{AGENTRIX_SKILLS}/${entry.scope === 'builtin' ? 'builtin' : 'global'}/${entry.folder}/SKILL.md`;
-    // No remote project-skill discovery is available; SSH sessions never use host-side yield detection.
-    const infos = entries.map(entry => ({ ...this.info(entry), override: !remote && this.yields(entry, project, agent) }));
-    const yielded = infos.filter(info => info.override);
-    let skills = infos.filter(info => !info.override).map(({ override, ...info }) => {
+    const infos = entries.map(entry => this.info(entry));
+    const ordered = infos.flatMap(info => info.source === 'builtin' ? [info, ...infos.filter(item => item.extends === info.name)] : info.extends ? [] : [info]);
+    const skills = ordered.map(info => {
       if (info.enabled && (info.trigger === 'always' || info.trigger === 'first-open')) {
         const firstSession = this.options[info.id]?.firstOpenedProjects?.[project.id];
         info.firstRun = !firstSession || firstSession === sessionId;
@@ -356,14 +378,26 @@ class SkillsStore {
     });
     const manifest = remote ? '{AGENTRIX_SKILLS}/instructions.md' : path.join(this.dataDir, 'skill-delivery',
       `${safeId(project.id)}-${agent === 'claude' || agent === 'codex' ? agent : 'preview'}.md`);
-    const delivery = { skills, yielded: yielded.filter(info => info.enabled).map(info => ({ name: info.name, path: info.override })), remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
+    return { skills, remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
       pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)), manifest, routingNote };
+  }
+
+  delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {
+    // A newly added or moved project can launch before its first watcher scan.
+    if (!remote && project.kind !== 'ssh' && this.projectSkills.get(project.id)?.path !== project.path
+      && this.refreshProjectSkills(new Set())) { this.invalidateDelivery(); this.persistOptions(); }
+    const agents = this.getAgents(), routingNote = String(this.routingNote() || '').slice(0, 8192);
+    const key = JSON.stringify([project.id, remote, sessionId, agent, started, !!agents.claude?.installed, !!agents.codex?.installed, routingNote]);
+    if (this.deliveries.has(key)) return this.deliveries.get(key);
+    const delivery = this.deliveryInfo(project, remote, sessionId, agent), { manifest } = delivery;
+    let { skills } = delivery;
     let bundle = null;
     if (remote) {
       const files = [], included = [], enabled = skills.filter(skill => skill.enabled);
       const skippedNote = count => count ? `${count} enabled skills were omitted to keep the SSH bundle within its size limit.` : '';
       // Measure escaped JSON, including the manifest and omission notice, with ample room for the open envelope.
       for (const skill of enabled) {
+        if (skill.extends && !included.some(base => base.source === 'builtin' && base.name === skill.extends)) continue;
         const entry = this.entries.get(skill.id), file = { id: entry.id, name: entry.folder, scope: entry.scope, text: entry.text };
         const candidate = { ...delivery, skills: [...included, skill], skippedNote: skippedNote(enabled.length) };
         if (Buffer.byteLength(JSON.stringify({ files: [...files, file], instructions: skillInstructions(candidate), key: '0'.repeat(64) })) > MAX_SSH_BUNDLE_BYTES) continue;
@@ -380,12 +414,19 @@ class SkillsStore {
       // Like receipts, the launch hash keeps 128 bits so PowerShell 5.1 can read snapshots under a long profile path.
       delivery.sessionManifest = path.join(path.dirname(manifest), `${safeId(project.id)}-${safeId(JSON.stringify([sessionId, agent, delivery.fingerprint])).slice(0, 32)}.md`);
       try {
+        const current = agent === 'claude' && sessionId ? path.join(path.dirname(manifest), `${safeId(project.id)}-${digest(JSON.stringify([sessionId, agent, 'current'])).slice(0, 32)}.md`) : null;
         writeFile(delivery.sessionManifest, instructions);
-        writeFile(`${delivery.sessionManifest}.json`, JSON.stringify({ fingerprint: delivery.fingerprint, projectRoot: project.path, roots: [this.builtinDir, this.globalFolder] }));
+        writeFile(`${delivery.sessionManifest}.json`, JSON.stringify({ fingerprint: delivery.fingerprint, projectRoot: project.path, roots: [this.builtinDir, this.globalFolder], builtinRoot: this.builtinDir, builtinNames: this.builtinNames(), current }));
         if (sessionId) {
           const sessionKey = JSON.stringify([canonical(this.dataDir), project.id, sessionId]);
-          if (!liveSessionSnapshots.has(sessionKey)) liveSessionSnapshots.set(sessionKey, new Set());
-          liveSessionSnapshots.get(sessionKey).add(delivery.sessionManifest);
+          if (!liveSessionSnapshots.has(sessionKey)) liveSessionSnapshots.set(sessionKey, { files: new Set() });
+          const session = liveSessionSnapshots.get(sessionKey);
+          session.files.add(delivery.sessionManifest);
+          if (current) {
+            this.writeCurrentSnapshot(current, delivery);
+            session.files.add(current);
+            if (started) Object.assign(session, { projectId: project.id, sessionId, current });
+          }
         }
       } catch (error) { this.report(error); }
     }
@@ -444,7 +485,7 @@ class SkillsStore {
       // All directory events share one debounce, so N project watchers do not cause N full scans.
       const watcher = monitorActivity(async () => ({ signature: await (projectTargets.has(root) ? projectSkillSignature(root) : folderSignature(root, root === path.join(this.dataDir, 'skill-pending') ? 2 : 1)) }), () => this.queueRefresh(root),
         { interval: 2000, recursive: true, watch: () => {
-          try { return fs.lstatSync(root, { throwIfNoEntry: false })?.isDirectory() ? root : null; } catch { return null; }
+          try { return (!projectTargets.has(root) || !linkedSkillParent(root)) && fs.lstatSync(root, { throwIfNoEntry: false })?.isDirectory() ? root : null; } catch { return null; }
         } });
       this.watchers.set(root, watcher);
     }

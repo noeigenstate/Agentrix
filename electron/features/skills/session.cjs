@@ -9,6 +9,25 @@ const MAX_MANIFEST = 2 * 1024 * 1024;
 // Receipt names keep 128 bits of each digest: the full pair made paths past Windows PowerShell's 260-character limit.
 const RECEIPT = 32;
 
+// Also used by the carried, plain-Node worker guard, which cannot import the library store.
+function assertUserSkillName(name, builtinNames) {
+  if (builtinNames.includes(name)) throw new Error(`与系统技能「${name}」同名。要扩展它，请命名为 ${name}-<标识>，例如 ${name}-team。`);
+}
+
+function currentDelivery(delivery) {
+  try {
+    const file = `${delivery.manifest}.json`;
+    if (fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size > MAX_MANIFEST) return delivery;
+    const metadata = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const current = metadata.current;
+    if (metadata.fingerprint !== delivery.fingerprint || typeof current !== 'string' || !path.isAbsolute(current)
+      || path.dirname(current) !== path.dirname(delivery.manifest) || fs.lstatSync(current).isSymbolicLink()
+      || fs.statSync(current).size > MAX_MANIFEST) return delivery;
+    const instructions = fs.readFileSync(current, 'utf8');
+    return { ...delivery, instructions, context: `Agentrix skill instructions:\n${instructions}` };
+  } catch { return delivery; }
+}
+
 function deliveryMarker(delivery) {
   if (delivery.remote) return 'Agentrix skill delivery: remote. ';
   return delivery.fingerprint
@@ -47,14 +66,15 @@ function forgetReceipts(receipt) {
 
 function sessionContext(hook, note) {
   if (!/^[\w-]{1,160}$/.test(hook?.session_id || '') || !['startup', 'resume', 'compact', 'clear'].includes(hook.source)) return null;
-  const delivery = readDelivery(note);
+  let delivery = readDelivery(note);
   if (!delivery) return null;
   const receipt = receiptPath(delivery, hook.session_id);
   const force = hook.source === 'compact' || hook.source === 'clear';
+  if (force) delivery = currentDelivery(delivery);
   if (force) forgetReceipts(receipt);
   try { fs.closeSync(fs.openSync(receipt, force ? 'w' : 'wx', 0o600)); }
   catch (error) { if (error.code === 'EEXIST') return null; throw error; }
   return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: delivery.context } };
 }
 
-module.exports = { digest, deliveryMarker, readDelivery, sessionContext };
+module.exports = { digest, deliveryMarker, readDelivery, sessionContext, assertUserSkillName };
