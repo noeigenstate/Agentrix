@@ -2390,5 +2390,6 @@
   "请在“关于”页面切换更新通道。": "Change the update channel on the About page.",
   "设置的「关于」页可以选择稳定版或测试版；切到测试版前需同意测试协议，随时可以切回稳定版，不会被降级。": "Settings › About lets you choose the stable or beta channel; beta needs the beta agreement first, and you can switch back to stable at any time without a downgrade.",
   "上次实验的容器尚未清理完成。请启动 Docker 后重试；如仍失败，请重启应用。": "Containers from the previous experiment have not been cleaned up. Start Docker and try again; if it still fails, restart the app.",
-  "上次实验尚未清理完成。请重启应用后重试。": "The previous experiment has not been cleaned up. Restart the app and try again."
+  "上次实验尚未清理完成。请重启应用后重试。": "The previous experiment has not been cleaned up. Restart the app and try again.",
+  "终端输入框中还有先前发送的消息。为避免丢失或重复发送，请先在终端中处理；本次输入已保留。": "The terminal input still contains a previously sent message. To avoid losing it or sending it twice, handle it in the terminal first. Your current input has been kept."
 }

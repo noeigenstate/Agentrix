@@ -428,7 +428,7 @@ function workingComposerHarness(t, agent, overrides = {}) {
   t.mock.method(Date, 'now', () => clock);
   const prompts = require('../src/features/reading/pending-prompts.ts');
   let state = prompts.createPendingPrompts('session');
-  const view = { working: true, draft: '', records: [], accept: true, retain: agent === 'codex' };
+  const view = { working: true, draft: '', records: [], accept: true, retain: false };
   const filename = agent === 'claude' ? 'claude-idle-2-1-296.txt' : 'codex-fresh-default.txt';
   const fixture = fs.readFileSync(path.join(__dirname, 'fixtures/screens', filename), 'utf8').split(/\r?\n/);
   const inputRow = fixture.findLastIndex(row => /^\s*[❯›](?:\s|$)/.test(row));
@@ -526,12 +526,20 @@ for (const agent of ['claude', 'codex']) {
 
   for (const retain of [false, true]) test(`${agent}: a queued message with ${retain ? 'retained' : 'cleared'} CLI input never retries automatically and survives the next idle send`, async t => {
     const h = workingComposerHarness(t, agent); h.view.retain = retain;
+    const errors = []; h.props.onError = error => errors.push(error);
     h.edit('queued message'); h.press('Enter'); await h.tick(0); await h.tick(400);
     assert.equal(h.view.draft, retain ? 'queued message' : '');
     h.view.working = false; h.render(); await h.tick(700); await h.tick(30000);
     assert.deepEqual(h.written.map(item => item.text), ['\r']); assert.equal(h.pasted.length, 1);
     h.view.retain = false;
     h.edit('next message'); h.press('Enter'); await h.tick(0);
+    if (agent === 'codex' && retain) {
+      await h.tick(30000);
+      assert.deepEqual(h.written.map(item => item.text), ['\r']);
+      assert.deepEqual(h.pasted.map(item => item.text), ['queued message']);
+      assert.equal(h.view.draft, 'queued message'); assert.equal(h.node.value, 'next message');
+      assert.ok(h.popup()); assert.equal(errors.length, 1); return;
+    }
     assert.equal(h.written.filter(item => item.text === '\r').length, retain ? 2 : 1, 'an idle returned input is submitted only by the next explicit send');
     await h.tick(700); await h.tick(400); await h.tick(700);
     assert.deepEqual(h.pasted.map(item => item.text), ['queued message', 'next message']);
@@ -547,7 +555,7 @@ for (const agent of ['claude', 'codex']) {
   });
 }
 
-for (const dropped of [0, 1, 4]) test(`claude: Esc restores a queued input before the next send (${dropped} dropped Enters)`, async t => {
+for (const removal of ['stale', 'popAll', 'remove', 'history-only', 'history-remount']) for (const dropped of [0, 1, 4]) test(`claude: Esc restores a queued input before the next send (${removal}, ${dropped} dropped Enters)`, async t => {
   const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
   const log = new ConversationLog(), accepted = [], first = 'RESTORED_MESSAGE', next = 'NEXT_MESSAGE';
   const h = workingComposerHarness(t, 'claude');
@@ -556,7 +564,11 @@ for (const dropped of [0, 1, 4]) test(`claude: Esc restores a queued input befor
   window.agentrix.writeTerminal = (id, text) => {
     h.written.push({ id, text });
     if (text === '\x15') h.view.draft = '';
-    if (text === '\x1b') { h.view.working = false; h.view.draft = first; }
+    if (text === '\x1b') {
+      h.view.working = false; h.view.draft = first;
+      if (removal !== 'stale') claudeConversation(log, { type: 'queue-operation', operation: removal === 'remove' ? 'remove' : 'popAll',
+        timestamp: new Date(Date.now()).toISOString(), ...(removal === 'remove' ? { content: first, reason: 'cleared_on_cancel' } : {}) });
+    }
     if (text !== '\r' || !h.view.draft) return;
     if (!h.view.working && remaining) { remaining--; return; }
     const content = h.view.draft, timestamp = new Date(Date.now()).toISOString();
@@ -570,23 +582,71 @@ for (const dropped of [0, 1, 4]) test(`claude: Esc restores a queued input befor
   assert.deepEqual(accepted, [first]);
   assert.deepEqual(log.list.filter(entry => entry.queued).map(entry => entry.text), [first]);
   h.press('Escape');
+  if (removal.startsWith('history-')) { for (const entry of [...log.list]) log.drop(entry.id); h.render(); }
+  if (removal === 'history-remount') h.remount();
   // Reuse the captured Claude input box and footer, with the queued words returned to its editable row.
   assert.equal(h.view.draft, first); assert.equal(h.node.disabled, false);
   const queued = () => elements(h.tree()).find(element => element.props.queued);
-  assert.equal(queued().props.queued(queued().props.prompts[0]), true, 'the transcript still has the pre-interrupt queue receipt');
+  assert.equal(queued().props.prompts.length, removal === 'stale' ? 1 : 0, 'cancellation retires the old card and its echo');
+  await h.tick(3000);
   h.edit(next); h.press('Enter'); await h.tick(0);
   for (let attempt = 0; attempt < 5; attempt++) await h.tick(700);
   assert.equal(h.written.some(item => item.text === '\x15'), false, 'the returned queued input must never be cleared');
   if (dropped === 4) {
     assert.deepEqual(accepted, [first]); assert.equal(h.view.draft, first); assert.equal(h.node.value, next);
     assert.deepEqual(h.pasted.map(item => item.text), [first], 'do not paste the next message over an unaccepted returned draft');
-    assert.deepEqual(queued().props.prompts.map(prompt => prompt.text), [first], 'the next message has no false sent card');
+    assert.deepEqual(queued().props.prompts.map(prompt => prompt.text), removal === 'stale' ? [first] : [], 'the next message has no false sent card');
   } else {
     assert.deepEqual(accepted, [first, first, next], 'submit the restored message before queueing the next one');
     assert.equal(log.list.filter(entry => entry.role === 'user' && !entry.queued && entry.text === first).length, 1);
     assert.deepEqual(queued().props.prompts.map(prompt => prompt.text), [next]);
     assert.equal(queued().props.queued(queued().props.prompts[0]), true, 'only the next message remains queued');
   }
+});
+
+test('codex: a delivered receipt with retained input never causes another Enter or clears either draft', async t => {
+  const h = workingComposerHarness(t, 'codex'), errors = [];
+  h.view.retain = true;
+  h.props.onError = error => errors.push(error);
+  h.edit('already delivered'); h.press('Enter'); await h.tick(0); await h.tick(400);
+  h.view.working = false; h.view.records[0].queued = false; h.render();
+  await h.tick(700); await h.tick(30000);
+  assert.deepEqual(h.written.map(item => item.text), ['\r'], 'a delivery receipt also stops delayed Enter retries');
+  const quote = elements(h.tree()).find(element => element.props.value?.quote).props.value.quote;
+  quote.pick('Codex', 'keep this quote'); h.render();
+  h.edit('next message'); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(h.written.map(item => item.text), ['\r']);
+  assert.deepEqual(h.pasted.map(item => item.text), ['already delivered']);
+  assert.equal(h.view.draft, 'already delivered'); assert.equal(h.node.value, 'next message');
+  assert.equal(h.popup().props.focus, false); assert.equal(errors.length, 1);
+  assert.equal(elements(h.tree()).find(element => element.type?.name === 'QuoteChip').props.quote.excerpt, 'keep this quote');
+  assert.equal(elements(h.tree()).find(element => element.props.queued).props.prompts.length, 0);
+});
+
+for (const change of ['session', 'thread']) test('own send history does not cross a different ' + change, async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.props.terminal.readingHistory = { key: 'old', agent: 'claude', threadId: 'old' }; h.render();
+  h.edit('old message'); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700);
+  h.view.records[0].cancelled = true; h.render();
+  h.view.records.length = 0; h.view.working = false; h.view.draft = 'old message';
+  if (change === 'session') h.props.terminal.sessionId = 'different-session';
+  else h.props.terminal.readingHistory = { key: 'new', agent: 'claude', threadId: 'new' };
+  h.render(); h.render();
+  h.edit('new message'); h.press('Enter'); await h.tick(80);
+  assert.equal(h.written.filter(item => item.text === '\r').length, 1, 'never submit a prior session or thread through the history recovery path');
+  assert.deepEqual(h.pasted.map(item => item.text), ['old message', 'new message']);
+});
+
+test('codex: picture paste cannot erase or attach to a previously delivered input', async t => {
+  const h = workingComposerHarness(t, 'codex'), errors = [];
+  h.props.onError = error => errors.push(error);
+  h.view.draft = 'already delivered'; h.view.records.push({ id: 'delivered', role: 'user', text: h.view.draft, at: Date.now() });
+  h.edit('next message');
+  h.render().props.onPaste({ preventDefault() {}, clipboardData: { getData: () => '', items: [{ kind: 'file', type: 'image/png', getAsFile: () => ({ size: 1 }) }] } });
+  await h.tick(0);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+  assert.equal(h.view.draft, 'already delivered'); assert.equal(h.node.value, 'next message');
+  assert.ok(h.popup()); assert.equal(errors.length, 1);
 });
 
 test('submitted dictation appears at the caret for half a second, then uses the composer send with pictures', async t => {
