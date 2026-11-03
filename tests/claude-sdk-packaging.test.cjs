@@ -6,7 +6,27 @@ const os = require('node:os');
 const { cleanPlatformPackages, verifyInstall, verifyPackage, platformNames } = require('../scripts/claude-sdk-pack.cjs');
 const { createSdkLoader } = require('../electron/features/claude-sdk/runtime.cjs');
 const { build, dependencies, scripts } = require('../package.json');
+let sdkEntry = process.env.AGENTRIX_TEST_SDK_MODULE;
+try { sdkEntry ||= require.resolve('@anthropic-ai/claude-agent-sdk'); } catch { }
 function temporary(t) { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-sdk-pack-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true })); return dir; }
+
+test('the pinned SDK entry bundles its third-party imports so the unpack closure needs no peer packages', {
+  timeout: 10000, skip: !sdkEntry && 'SDK dependency is not installed in this isolated worktree',
+}, () => {
+  const ts = require('typescript'), { isBuiltin } = require('node:module');
+  const source = ts.createSourceFile('sdk.mjs', fs.readFileSync(sdkEntry, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const imports = new Set();
+  function visit(node) {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) imports.add(node.moduleSpecifier.text);
+    if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || node.expression.getText(source) === 'require')) {
+      assert.ok(ts.isStringLiteral(node.arguments[0]), 'SDK runtime gained a computed module import; review its unpack closure');
+      imports.add(node.arguments[0].text);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source); assert.ok(imports.size > 0);
+  assert.deepEqual([...imports].filter(name => !isBuiltin(name)), []);
+});
 test('SDK cleanup removes exactly the eight platform packages and keeps the JS runtime', t => {
   const root = temporary(t), scope = path.join(root, 'node_modules/@anthropic-ai');
   for (const name of [...platformNames, 'claude-agent-sdk', 'sdk']) fs.mkdirSync(path.join(scope, name), { recursive: true });
@@ -32,7 +52,8 @@ test('platform verification also finds nested production dependencies', t => {
 test('build configuration pins the SDK, keeps its dependency graph and cleans ignored-script CI installs', () => {
   assert.equal(dependencies['@anthropic-ai/claude-agent-sdk'], '0.3.317');
   assert.ok(scripts.postinstall.includes('claude-sdk-pack.cjs --clean'));
-  assert.ok(build.asarUnpack.includes('node_modules/**/*')); assert.ok(build.mac.asarUnpack.includes('node_modules/**/*'));
+  assert.ok(build.asarUnpack.includes('node_modules/@anthropic-ai/claude-agent-sdk/**/*'));
+  assert.ok(![...build.asarUnpack, ...build.mac.asarUnpack].includes('node_modules/**/*'));
   assert.ok(!build.files.includes('!node_modules/argparse/**/*'));
   assert.ok(build.files.some(value => value.includes('claude-agent-sdk-*')));
   const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows/build-windows.yml'), 'utf8');

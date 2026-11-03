@@ -132,7 +132,8 @@
       }
     ],
     "asarUnpack": [
-      "node_modules/**/*"
+      "node_modules/node-pty/**/*",
+      "node_modules/@anthropic-ai/claude-agent-sdk/**/*"
     ],
     "npmRebuild": false,
     "publish": [
@@ -174,7 +175,6 @@
         "native/mac-titlebar/build/Release/mac_titlebar.node"
       ],
       "asarUnpack": [
-        "node_modules/**/*",
         "native/mac-titlebar/build/Release/mac_titlebar.node"
       ],
       "icon": "assets/icon-mac.png",

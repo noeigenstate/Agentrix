@@ -199,14 +199,16 @@ test('native executable discovery never searches relative directories or accepts
   const { resolveClaudeExecutable } = require('../electron/features/claude-sdk/executable.cjs');
   const dir = directory(t); fs.writeFileSync(path.join(dir, 'claude.cmd'), 'not executable');
   let probes = 0;
-  const probe = (_file, _args, options, callback) => { probes++; assert.equal(options.shell, false); callback(null, '2.1.317 (Claude Code)'); };
+  const probe = (_file, _args, options, callback) => { probes++; assert.equal(options.shell, false); assert.equal(options.killSignal, 'SIGKILL'); callback(null, '2.1.317 (Claude Code)'); };
   assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, probe }), null);
   fs.writeFileSync(path.join(dir, 'claude.exe'), 'fake');
   for (const version of ['2.1.316', '2.0.999']) {
     await assert.rejects(resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir,
       probe: (_file, _args, _options, callback) => callback(null, version) }), /2\.1\.317/);
   }
-  assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, probe }), fs.realpathSync(path.join(dir, 'claude.exe')));
+  const resolved = await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, probe });
+  assert.equal(resolved, await fs.promises.realpath(resolved));
+  assert.equal(await fs.promises.realpath(resolved), await fs.promises.realpath(path.join(dir, 'claude.exe')));
   assert.equal(probes, 1);
 });
 test('GUI and helper cannot resume the same Claude session concurrently', async t => {
