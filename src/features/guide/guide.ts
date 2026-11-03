@@ -1,8 +1,13 @@
 // What the usage guide and the About page list for this release; the guide opens on it after an update.
 // Each note is a short title and one detail line, both with their English at the end of electron/locales/en.json.
 export const WHATS_NEW: { title: string; text: string }[] = [
+  { title: "原生界面", text: "Claude 通过 API、Codex 通过 app-server 在应用自己的界面里运行，命令、改动、计划和确认都直接显示；也可以在设置里改回终端界面。" },
+  { title: "运行方式", text: "设置里可以保存 API 密钥、测试连接、设定月预算；Claude 默认走 API，额度用完自动转到订阅登录的终端，接着同一段对话。" },
+  { title: "连接与额度", text: "活动栏显示 Claude、Codex 当前连接的是 API 还是订阅，以及 API 今日和本月的估算花费、预算和限流状态。" },
+  { title: "插话直达", text: "给子代理的话直接送到它那里（Claude 中途接收，Codex 在当前一步后接收），不再转给主会话，分屏里显示送达状态。" },
+  { title: "实时状态", text: "终端里的状态实时同步到阅读视图和活动栏，处理完立即可以继续；遇到终端里的确认时，你打的消息先排队，处理完再发出。" },
   { title: "更新通道", text: "设置的「关于」页可以选择稳定版或测试版；切到测试版前需同意测试协议，随时可以切回稳定版，不会被降级。" },
-  { title: "确认在终端", text: "需要你确认或选择时，以及输入任何斜杠命令时，都会直接弹出终端，不再显示选项卡片；你正在输入时弹出的终端不会抢走焦点。" },
+  { title: "确认在终端", text: "终端界面里需要你确认或选择时，以及输入任何斜杠命令时，都会直接弹出终端；你正在输入时弹出的终端不会抢走焦点。" },
   { title: "数据看板", text: "改用彩色图表，各模型的用时、费用和通过率一眼可比，数据每分钟自动更新。" },
   { title: "子代理分屏", text: "在活动栏点一个子代理，对话旁会显示它正在做什么，一次只显示一个，点另一个就替换；你也可以在这里给它发提示，规划员会同时收到。" },
   { title: "引用消息", text: "阅读视图里可以引用一条消息，带着它继续对话。" },
