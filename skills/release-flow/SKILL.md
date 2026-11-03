@@ -26,10 +26,13 @@ agrees does it become the stable release.
   wait; do not bump, merge or tag stable on your own judgment.
 - **After the owner approves:** on `beta`, `npm version X.Y.Z --no-git-tag-version`, replace the `docs/usage.md`
   versions (step 2), finish the notes, commit `Release X.Y.Z: …`; then `git switch main`, `git merge --ff-only beta`,
-  `git tag vX.Y.Z`, push `main` and then the tag. Both pushes run the full matrix (the tag run reuses a green run of
-  this exact commit when there is one, step 7) and the tag publishes only if every job is green. The code is the code
-  the beta tag already passed; the bump changes only the version, docs and notes. If `main` has moved and cannot be
-  fast-forwarded, rebase `beta` onto it and release a new beta first.
+  `git tag vX.Y.Z`, push `main` first and wait until its run is green; only then push the tag. Pushed back to back,
+  neither run can reuse the other and both build the full matrix in parallel. After the green `main` run the tag run
+  reuses it (step 7) and publishes in about 1–2 minutes, and only if every job is green. The code is the code the beta
+  tag already passed; the bump changes only the version, docs and notes. If `main` has moved and cannot be
+  fast-forwarded, rebase `beta` onto it, publish the rewritten branch with `git push --force-with-lease origin beta`
+  (it was already pushed with its beta tag), and tag a new beta (N+1) on the rebased commit first; the earlier beta
+  tags stay on their old commits.
 - **Delete `beta`** once the stable release is published (`git push origin --delete beta` if it was pushed, and
   `git branch -d beta`), so only `main` remains.
 
@@ -64,7 +67,7 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
    the staged diff for personal data (user names, home paths, host addresses, emails, secrets) and commit as
    `Release X.Y.Z: <the user-visible changes>` with a bulleted body (a beta: `Beta X.Y.Z-beta.N: <the changes>`).
 7. **Tag and push.** A beta: `git tag vX.Y.Z-beta.N` on `beta`, push the branch, then the tag; nothing goes to `main`.
-   The stable release: `git tag vX.Y.Z` on `main` after the fast-forward, push `main`, then the tag. Pushes of `main` and of
+   The stable release: `git tag vX.Y.Z` on `main` after the fast-forward, push `main`, wait for its run to go green, then push the tag. Pushes of `main` and of
    tags first run the "Select tested build" job, which looks
    for a successful run of this workflow on exactly this commit (the stable `main` push's own run, or outside the beta
    flow the `remote` preflight's dispatch run; every build and
