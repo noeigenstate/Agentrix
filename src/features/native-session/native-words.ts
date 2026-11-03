@@ -6,7 +6,7 @@
 // file changes `changes[{ path, kind, diff }]` or `path`, `kind`, `diff`; tools `name` or `tool`, `server`, `input` or `arguments`, `result` or
 // `output`. Quota windows are `{ usedPercent, windowDurationMins, resetsAtMs }` with `resetsAtMs` in milliseconds.
 import { t } from '../../shared/i18n';
-import type { LimitWindow } from './native-bridge.ts';
+import type { AgentConnection, ConnectionTest, LimitWindow, NativeAgent } from './native-bridge.ts';
 import type { NativeItem, Payload } from './native-model.ts';
 
 const str = (value: unknown) => (typeof value === 'string' && value !== '' ? value : null);
@@ -92,6 +92,45 @@ export function clockWords(at: number | null | undefined, now = Date.now()) {
   if (typeof at !== 'number') return t('未知');
   const date = new Date(at), time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
   return date.toDateString() === new Date(now).toDateString() ? time : `${date.toLocaleDateString([], { month: 'numeric', day: 'numeric' })} ${time}`;
+}
+
+// ── Connections ──
+// What an agent is connected through, in the pane's words (the agent's name is the row's label); the source is the tooltip. Not known says so.
+const CONNECTION_WORDS: Record<NativeAgent, Record<string, string>> = {
+  claude: { api: '已连接 API', subscription: '订阅（Claude Code 登录）', none: '未连接' },
+  codex: { api: 'API', subscription: 'ChatGPT 订阅', none: '未连接' },
+};
+export function connectionWord(agent: NativeAgent, connection: AgentConnection | null | undefined) {
+  const word = connection ? CONNECTION_WORDS[agent][connection.kind] : undefined;
+  return { text: word ? t(word) : t('未知'), source: connection?.source || null };
+}
+
+// The lines of a connection test, each with a tone (ok, warn, bad) the view marks with a symbol as well as colour, and a next step for
+// what failed. The key itself is never in a result; a detail is one plain sentence from the main process.
+const KEY_WORDS: Record<string, string> = { ok: '有效', missing: '没有保存密钥', invalid: '无效', forbidden: '无权限', rate_limited: '被限流', unreachable: '无法连接', error: '检查出错' };
+const KEY_HINTS: Record<string, string> = {
+  missing: '先保存 API key，再测试。', invalid: '请检查密钥是否完整，或是否已在 Anthropic 控制台被撤销。', forbidden: '这个密钥没有权限，请到 Anthropic 控制台检查它的权限。',
+  rate_limited: '请求太频繁，稍后再测试。', unreachable: '请检查网络或代理设置后重试。', error: '请稍后重试。',
+};
+const MODELS_SHOWN = 5;
+export type TestLine = { id: 'key' | 'models' | 'cli' | 'path'; tone: 'ok' | 'warn' | 'bad'; label: string; text: string; hint: string | null; title: string | null };
+
+export function connectionLines(test: ConnectionTest): TestLine[] {
+  const { key, models, cli } = test, keyTone = key.status === 'ok' ? 'ok' : key.status === 'rate_limited' ? 'warn' : 'bad';
+  const latency = key.status === 'ok' && typeof key.latencyMs === 'number' ? ` · ${Math.round(key.latencyMs)} ms` : '';
+  const keyHint = key.status === 'ok' ? null : [t(KEY_HINTS[key.status] ?? KEY_HINTS.error), key.status === 'error' ? key.detail : null].filter(Boolean).join(' ');
+  const shown = models?.slice(0, MODELS_SHOWN) ?? [];
+  const modelText = !models ? t('未知') : !models.length ? t('没有可用模型') : shown.join('、') + (models.length > shown.length ? ` ${t('等 {n} 个', { n: models.length })}` : '');
+  const required = cli.required, version = cli.version;
+  const cliText = cli.status === 'ok' ? (version ? t('版本 {version}（满足 ≥ {required}）', { version, required }) : t('已找到（需要 ≥ {required}）', { required }))
+    : cli.status === 'missing' ? t('未找到') : version ? t('版本 {version} 过低（需要 ≥ {required}）', { version, required }) : t('版本过低（需要 ≥ {required}）', { required });
+  const pathText = test.path === 'api' ? 'API' : test.path === 'terminal' ? t('终端（订阅）') : t('未知');
+  return [
+    { id: 'key', tone: keyTone, label: t('密钥'), text: (KEY_WORDS[key.status] ? t(KEY_WORDS[key.status]) : t('检查出错')) + latency, hint: keyHint, title: key.detail },
+    { id: 'models', tone: models?.length ? 'ok' : 'warn', label: t('可用模型'), text: modelText, hint: null, title: models?.join('\n') || null },
+    { id: 'cli', tone: cli.status === 'ok' ? 'ok' : 'bad', label: 'Claude Code', text: cliText, hint: cli.status === 'missing' ? t('请安装 Claude Code（需要 ≥ {required}）。', { required }) : cli.status === 'too_old' ? t('请升级 Claude Code。') : null, title: null },
+    { id: 'path', tone: test.path ? 'ok' : 'warn', label: t('新会话将使用'), text: [pathText, reasonWords(test.reason)].filter(Boolean).join(' · '), hint: null, title: null },
+  ];
 }
 
 export function windowWords(window: LimitWindow | null | undefined) {

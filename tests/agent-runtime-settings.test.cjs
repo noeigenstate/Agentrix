@@ -13,13 +13,15 @@ const fill = (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, key) => v
 const elements = node => Array.isArray(node) ? node.flatMap(elements) : React.isValidElement(node) ? [node, ...elements(node.props.children)] : [];
 const settle = async () => { for (let round = 0; round < 6; round++) await new Promise(resolve => setImmediate(resolve)); };
 const defaults = { claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: null };
+// The words of a connection test have their own tests (native-session-ui.test.cjs); here a result carries the lines it should show.
+const wordsStub = { clockWords: () => '09:00', connectionLines: test => test.lines };
 
 // The page with real hooks. The select is stood in by a component that keeps its props, so a test can read its value and choose an option.
 function page(bridge) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge ? { nativeSession: bridge } : {} } });
   const harness = hookHarness('src/features/settings/AgentRuntimeSettings.tsx', {
-    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './agent-runtime-settings.css': {},
+    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './agent-runtime-settings.css': {}, './native-words': wordsStub,
     './Select': { Select: props => React.createElement('select', { 'aria-label': props.label, value: props.value, disabled: props.disabled }) },
   });
   const render = () => harness.render('AgentRuntimeSettings').result, tree = () => elements(render());
@@ -117,6 +119,65 @@ test('the budget saves on leaving the field or Enter: dollars above zero, empty 
   } finally { view.done(); }
 });
 
+const LINES = [
+  { id: 'key', tone: 'ok', label: '密钥', text: '有效 · 182 ms', hint: null, title: null },
+  { id: 'cli', tone: 'bad', label: 'Claude Code', text: '版本过低', hint: '请升级 Claude Code。', title: null },
+  { id: 'path', tone: 'warn', label: '新会话将使用', text: '未知', hint: null, title: null },
+];
+const answer = lines => ({ ok: true, value: { checkedAt: 1, lines } });
+
+test('测试连接 waits for a saved key and for the owner’s click, shows its progress, then lists every line with a tone mark and the next step', async () => {
+  let finish; const calls = [];
+  const bridge = fake({ testConnection: (...args) => { calls.push(args); return new Promise(resolve => { finish = resolve; }); } }), view = page(bridge);
+  try {
+    view.render(); await settle();
+    assert.equal(view.button('测试连接').props.disabled, true, 'no key saved, nothing to test'); assert.equal(view.button('测试连接').props.title, '先保存 API key');
+    view.secret().props.onChange({ target: { value: SECRET } }); view.button('保存').props.onClick(); await settle();
+    assert.equal(view.button('测试连接').props.disabled, false); assert.equal(view.button('测试连接').props.title, undefined);
+    assert.equal(calls.length, 0, 'saving a key runs no test: only a click does');
+    view.button('测试连接').props.onClick();
+    assert.ok(view.html().includes('正在测试连接…')); assert.equal(view.button('测试连接').props.disabled, true, 'one test at a time');
+    assert.equal(view.secret().props.disabled, true); assert.equal(view.button('保存').props.disabled, true); assert.equal(view.button('清除').props.disabled, true);
+    // The bridge call starts asynchronously; a disabled button cannot receive another browser click.
+    await settle();
+    assert.deepEqual(calls, [[]], 'one owner click starts one test with no key in its arguments');
+    assert.equal(view.button('测试连接').props.disabled, true, 'the test stays pending until the bridge answers');
+    finish(answer(LINES)); await settle();
+    const html = view.html();
+    assert.ok(!html.includes('正在测试连接…'));
+    for (const text of ['<b>密钥</b><span>有效 · 182 ms</span>', '<b>Claude Code</b><span>版本过低<small>请升级 Claude Code。</small></span>', '<b>新会话将使用</b>', '检测于 09:00']) assert.ok(html.includes(text), text);
+    assert.deepEqual(['is-ok', 'is-bad', 'is-warn'].map(tone => html.includes(`<li class="${tone}"`)), [true, true, true], 'each line has a tone class beside its mark');
+    assert.equal((html.match(/runtime-test-mark/g) ?? []).length, 3, 'and a mark, so tone is not colour alone');
+    assert.deepEqual(calls, [[]], 'the call carries nothing: the key stays in the main process'); assert.ok(!html.includes(SECRET));
+  } finally { view.done(); }
+});
+
+test('a test that cannot finish says why, and a result goes stale when the key or the path changes', async () => {
+  const answers = [{ ok: false, error: 'bridge closed' }, answer(LINES), answer(LINES), answer(LINES)];
+  const bridge = fake({ testConnection: async () => answers.shift() ?? Promise.reject(new Error('boom')) }); bridge.state.saved = true;
+  const view = page(bridge);
+  try {
+    view.render(); await settle();
+    view.button('测试连接').props.onClick(); await settle();
+    assert.equal(view.alert(), '测试没有完成：bridge closed'); assert.ok(!view.html().includes('检测于'));
+    view.button('测试连接').props.onClick(); await settle();
+    assert.ok(view.html().includes('检测于 09:00')); assert.equal(view.alert(), undefined);
+    view.select('Claude 的运行方式').props.onChange('api-only'); await settle();
+    assert.ok(!view.html().includes('检测于'), 'another path, another answer: the old one is gone');
+    view.button('测试连接').props.onClick(); await settle();
+    assert.ok(view.html().includes('检测于 09:00'));
+    view.button('清除').props.onClick(); await settle();
+    assert.ok(!view.html().includes('检测于'), 'a cleared key leaves no result'); assert.equal(view.button('测试连接').props.disabled, true);
+  } finally { view.done(); }
+  const sync = page(fake({ testConnection: () => { throw new Error('no bridge call'); } }));
+  try {
+    sync.render(); await settle(); sync.secret().props.onChange({ target: { value: SECRET } }); sync.button('保存').props.onClick(); await settle();
+    sync.button('测试连接').props.onClick(); await settle();
+    assert.equal(sync.alert(), '测试没有完成：no bridge call', 'a bridge that throws is an error line, never a hang');
+    assert.equal(sync.button('测试连接').props.disabled, false, 'and the owner can try again');
+  } finally { sync.done(); }
+});
+
 test('a window without the bridge says so and offers nothing to change', () => {
   const view = page(null);
   try {
@@ -125,7 +186,7 @@ test('a window without the bridge says so and offers nothing to change', () => {
 });
 
 test('the budget parser: dollars above zero to the cent, empty is none, anything else is not a budget', () => {
-  const harness = hookHarness('src/features/settings/AgentRuntimeSettings.tsx', { '@phosphor-icons/react': {}, './i18n': { t: fill }, './agent-runtime-settings.css': {}, './Select': {} });
+  const harness = hookHarness('src/features/settings/AgentRuntimeSettings.tsx', { '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './agent-runtime-settings.css': {}, './Select': {}, './native-words': wordsStub });
   const parse = text => harness.render('parseBudget', text).result;
   assert.deepEqual(['50', '0.5', ' 12 ', '1e3', '', '   '].map(text => parse(text)), [50, 0.5, 12, 1000, null, null]);
   assert.deepEqual(['0', '-1', 'abc', 'Infinity', '1,5'].map(text => parse(text)), [undefined, undefined, undefined, undefined, undefined]);
@@ -134,9 +195,16 @@ test('the budget parser: dollars above zero to the cent, empty is none, anything
 test('the key goes only to keySave and is never read back, logged or stored; the page is a section of the settings dialog', () => {
   const code = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8').replace(/\/\/.*$/gm, '');
   const settings = code('src/features/settings/AgentRuntimeSettings.tsx');
-  assert.deepEqual([...new Set([...settings.matchAll(/\bbridge\.(\w+)\(/g)].map(match => match[1]))].sort(), ['getSettings', 'keyClear', 'keySave', 'keyStatus', 'setSettings']);
+  assert.deepEqual([...new Set([...settings.matchAll(/\bbridge\.(\w+)\(/g)].map(match => match[1]))].sort(), ['getSettings', 'keyClear', 'keySave', 'keyStatus', 'setSettings', 'testConnection']);
   assert.doesNotMatch(settings, /console\.|localStorage|sessionStorage|keyGet|readKey/, 'no way to read the key back, no log, no storage');
   assert.match(settings, /type="password"/);
   const dialog = code('src/features/settings/SettingsDialog.tsx');
   assert.match(dialog, /id: 'runtime', title: t\('运行方式'\)/); assert.match(dialog, /<AgentRuntimeSettings \/>/);
+});
+
+test('the page’s spacing values are on the scale and its buttons keep a 32px hit area', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/settings/agent-runtime-settings.css'), 'utf8'), scale = new Set([0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64]);
+  for (const [, property, value] of css.matchAll(/\b((?:padding|margin|gap|column-gap|row-gap)(?:-\w+)?): ([^;}]+)[;}]/g))
+    for (const size of value.match(/-?\d+(?:\.\d+)?px/g) ?? []) assert.ok(scale.has(Math.abs(parseFloat(size))), `${property}: ${size}`);
+  assert.match(css, /\.runtime-key \.text-button \{ min-height: 32px;/);
 });

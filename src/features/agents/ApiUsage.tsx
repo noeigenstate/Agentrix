@@ -6,7 +6,7 @@ import { type ReactNode, useEffect, useState } from 'react';
 import { t } from '../../shared/i18n';
 import { type AgentPathState, type LimitsPayload, type NativeAgent, type NativeUsage, nativeBridge } from '../native-session/native-bridge.ts';
 import { useUsageRevision } from '../native-session/native-store.ts';
-import { clockWords, money, reasonWords, routeWord, windowWords } from '../native-session/native-words';
+import { clockWords, connectionWord, money, reasonWords, routeWord, windowWords } from '../native-session/native-words';
 import './activity-pane.css';
 
 // Read again a minute after the last read (the month turns over, a limit recovers), and a second after an event says the numbers moved.
@@ -57,7 +57,11 @@ export function ApiUsage() {
   return <section className="activity-card activity-api" aria-label={label}>
     <h3 className="activity-card-title">{label}</h3>
     <dl className="api-usage">
-      {AGENTS.map(agent => <Row key={agent} label={NAMES[agent]}>{pathWord(agent, agents[agent])}</Row>)}
+      {AGENTS.map(agent => {
+        // The first line is what the agent is connected through; the source is its tooltip. Then the path a new session takes.
+        const connection = connectionWord(agent, agents[agent]?.connection);
+        return <Row key={agent} label={NAMES[agent]}><span title={connection.source ?? undefined}>{connection.text}</span><span>{pathWord(agent, agents[agent])}</span></Row>;
+      })}
       <Row label={t('API 花费')}><span>{t('今日 {amount}', { amount: money(usage.todayUsdMicros) })} · {t('本月 {amount}', { amount: money(monthUsdMicros) })}</span><small>{t('估算，按公开价格计算')}</small></Row>
       <Row label={t('月预算')}>
         <span>{budgetUsd === null ? t('未设置') : `$${budgetUsd.toFixed(2)} · ${share === null ? t('已用 未知') : t('已用 {percent}', { percent: `${share}%` })}`}</span>
