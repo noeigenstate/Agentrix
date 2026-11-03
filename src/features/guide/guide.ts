@@ -1,6 +1,7 @@
 // What the usage guide and the About page list for this release; the guide opens on it after an update.
 // Each note is a short title and one detail line, both with their English at the end of electron/locales/en.json.
 export const WHATS_NEW: { title: string; text: string }[] = [
+  { title: "更新通道", text: "设置的「关于」页可以选择稳定版或测试版；切到测试版前需同意测试协议，随时可以切回稳定版，不会被降级。" },
   { title: "确认在终端", text: "需要你确认或选择时，以及输入任何斜杠命令时，都会直接弹出终端，不再显示选项卡片；你正在输入时弹出的终端不会抢走焦点。" },
   { title: "数据看板", text: "改用彩色图表，各模型的用时、费用和通过率一眼可比，数据每分钟自动更新。" },
   { title: "子代理分屏", text: "在活动栏点一个子代理，输出区会分屏显示它正在做什么；你也可以在分屏里给它发提示，规划员会同时收到。" },
