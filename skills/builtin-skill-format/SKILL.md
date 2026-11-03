@@ -16,7 +16,7 @@ Exactly these keys, in this order, each on one line, no other keys, no quotes un
 | Key | Value |
 | --- | --- |
 | `name` | kebab-case, equal to the folder name |
-| `description` | English, one paragraph: start with the trigger condition (`Use when …`, `Use before …`, `Use on …`, `Use at …` or `Use whenever …`), including first-open and yield-to-project conditions when applicable; then state what it does |
+| `description` | English, one paragraph: start with the trigger condition (`Use when …`, `Use before …`, `Use on …`, `Use at …` or `Use whenever …`), including first-open conditions when applicable; then state what it does |
 | `trigger` | the default trigger: `always`, `auto` or `first-open` |
 | `when` | Chinese, one sentence: exactly when it takes effect (shown under 触发) |
 | `requires` | `none`, `any-agent` (Codex or Claude Code, at least one), `codex`, `claude` or `both` |
@@ -30,22 +30,30 @@ Triggers:
   also gets "this is its first run in this project" with it (claimed once per project, like `first-open`); the skill's
   body says what the first run does, and every later session gets the plain instruction.
 - `auto`: listed with its description; read when a task fits it.
-- `first-open`: read and run before the first task of the first session Agentrix starts in a project, only when the
-  project does not already have this skill; afterwards it behaves as `auto`.
-
-Every built-in yields to the project's own copy: when the project has a skill with the same `name` in `skills/`,
-`.claude/skills/` or `.codex/skills/`, or names it in `AGENTS.md` or `CLAUDE.md`, the built-in is not delivered in that
-project and the project's copy governs.
+- `first-open`: read and run before the first task of the first session Agentrix starts in a project; afterwards it
+  behaves as `auto`.
 
 `title`, `summary` and `when` are shown through `t()`: add their English to the end of `electron/locales/en.json`.
+
+## Extensions
+
+A built-in is always delivered; it never yields to a project copy. A project skill in `skills/`, `.claude/skills/` or
+`.codex/skills/` whose name equals a built-in's name is moved out of the project automatically during the project scan
+(kept in a recovery folder, not deleted), so the built-in applies whatever the copy says. Naming the built-in in
+`AGENTS.md` or `CLAUDE.md` does not change this.
+
+To extend a built-in, name the skill `<system name>-<id>`, with `<id>` matching `[a-z0-9]+(-[a-z0-9]+)*` (for example
+`code-standard-team`); the longest built-in name that is a prefix of it is its base. An extension is never moved out and
+is delivered right after its base: agents follow the base first, then the extension's additions, and where they conflict
+the system skill wins. Saving, importing or creating a user skill whose name equals a built-in's name is refused.
 
 ## Body
 
 English (agents read it), these sections in this order, each an `##` heading, no others at that level:
 
 1. `# <English title>` — one line.
-2. `## When this applies` — the trigger timing in full, including the yield-to-project rule and, for `first-open`
-   and for an `always` skill with a first-run step, what happens on that first run.
+2. `## When this applies` — the trigger timing in full, including, for `first-open` and for an `always` skill with a
+   first-run step, what happens on that first run.
 3. `## What to do` — numbered steps.
 4. `## Rules` — bullets; the non-negotiables.
 5. `## Done when` — checkable completion criteria and the report the agent gives.

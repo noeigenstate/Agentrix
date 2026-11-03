@@ -66,7 +66,7 @@ ledgers out of reach of a worker that must not know them.
 
 ## Roundtable, shared memory and rounds
 
-A round is plan → roundtable → build → integrate and review → consolidate (`skills/model-routing`). The helper backs it
+A round is plan → roundtable → build → integrate and review → consolidate (the system `model-routing` skill). The helper backs it
 with a team folder and three refusals, so the process does not rest on the lead remembering it. The code is the Team
 module (`electron/features/team/`, `team.cjs`; its page for the owner is `minutes-page.cjs`).
 
