@@ -18,12 +18,12 @@ const require = createRequire(import.meta.url), root = path.resolve(path.dirname
 const { isolatedEnvironment } = require('./native-approval-probe.cjs');
 const packaged = process.argv.includes('--packaged');
 
-export function desktopEnvironment(home, inherited = process.env, platform = process.platform) {
-  const env = isolatedEnvironment(home, inherited);
-  // xvfb-run supplies display access; credential isolation must not strip it before Electron starts.
-  if (platform === 'linux') for (const name of ['DISPLAY', 'XAUTHORITY']) if (inherited[name]) env[name] = inherited[name];
-  return env;
+// xvfb-run supplies display access; credential isolation must not strip it before Electron starts.
+export function displayEnvironment(inherited = process.env, platform = process.platform) {
+  return platform === 'linux' ? Object.fromEntries(['DISPLAY', 'XAUTHORITY'].filter(name => inherited[name]).map(name => [name, inherited[name]])) : {};
 }
+export const desktopEnvironment = (home, inherited = process.env, platform = process.platform) =>
+  ({ ...isolatedEnvironment(home, inherited), ...displayEnvironment(inherited, platform) });
 
 export async function prepareProviders(directory) {
   const bin = path.join(directory, 'bin'), cli = path.join(directory, 'fake-cli.cjs');
@@ -64,7 +64,7 @@ async function runtimeSmoke(output) {
       settings: { language: 'zh', restoreSessions: false, closeToTray: false, notifications: false } }));
     await fs.mkdir(path.join(profile, 'native-session'), { recursive: true });
     await fs.writeFile(path.join(profile, 'native-session/usage.json'), '{broken-offline-fixture');
-    const env = { ...desktopEnvironment(runtime), PATH: bin, AGENTRIX_DATA_DIR: profile,
+    const env = { ...isolatedEnvironment(runtime), ...displayEnvironment(), PATH: bin, AGENTRIX_DATA_DIR: profile,
       AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_FAKE_CLI: cli, AGENTRIX_FAKE_OUTPUT: runtime };
     delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
     if (process.platform === 'win32') delete env.Path;
@@ -152,7 +152,7 @@ async function run(output) {
   const profile = path.join(output, 'profile'), project = { id: randomUUID(), name: '原生会话', path: path.join(output, 'project'), kind: 'local', restore: { terminal: false, codex: false } };
   for (const dir of [profile, project.path]) await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, fontSize: 14 } }));
-  const env = { ...desktopEnvironment(output), AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+  const env = { ...isolatedEnvironment(output), ...displayEnvironment(), AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
   const errors = [], checks = [];
   let app;
   try {
