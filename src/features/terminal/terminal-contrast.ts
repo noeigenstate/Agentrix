@@ -16,8 +16,8 @@ type Atlas = {
 type Renderer = { _rowFactory?: DomRows; _charAtlas?: Atlas; _refreshCharAtlas?(): void };
 const patched = new WeakSet<object>();
 
-// Both pinned xterm renderers relax contrast for DIM. CSS can only reach the DOM one. Adapt their
-// resolved colours instead; the buffer, ANSI attributes, selection and dark-theme drawing stay native.
+// Adapt DIM and dark-CLI ink over the resolved light cell background in both pinned renderers.
+// The buffer, ANSI attributes, selection and dark-theme drawing stay native.
 // Like the selection and transparent-background adapters, leave unknown renderer versions alone.
 export function keepTerminalContrast(terminal: Terminal) {
   const renderer = (terminal as unknown as { _core?: { _renderService?: { _renderer?: { value?: Renderer } } } })._core?._renderService?._renderer?.value;
@@ -26,21 +26,14 @@ export function keepTerminalContrast(terminal: Terminal) {
   const apply = rowPrototype?._applyMinimumContrast;
   if (rowPrototype && typeof apply === 'function' && !patched.has(rowPrototype)) {
     patched.add(rowPrototype);
-    const colors = new Map<string, string>();
     rowPrototype._applyMinimumContrast = function (element, bg, fg, cell, bgOverride, fgOverride) {
       const code = cell.getCode();
       // Keep xterm's contrast exclusions for box/block and Powerline glyphs, as the GPU renderer does.
-      if (currentTheme() !== 'light' || !cell.isDim() || (code >= 0x2500 && code <= 0x259f) || (code >= 0xe0a4 && code <= 0xe0d6)) return apply.call(this, element, bg, fg, cell, bgOverride, fgOverride);
+      if (currentTheme() !== 'light' || (code >= 0x2500 && code <= 0x259f) || (code >= 0xe0a4 && code <= 0xe0d6)) return apply.call(this, element, bg, fg, cell, bgOverride, fgOverride);
       const foreground = (fgOverride ?? fg).rgba >>> 8, background = (bgOverride ?? bg).rgba >>> 8;
-      const key = `${foreground}:${background}`;
-      let ink = colors.get(key);
-      if (!ink) {
-        ink = terminalContrastColor(foreground, background, true).css;
-        // Most cells share their ink. Bound the cache when a program prints many truecolours.
-        if (colors.size >= 256) colors.clear();
-        colors.set(key, ink);
-      }
-      element.style.color = ink;
+      const dim = !!cell.isDim(), ink = terminalContrastColor(foreground, background, dim);
+      if (!dim && !ink.reflected) return apply.call(this, element, bg, fg, cell, bgOverride, fgOverride);
+      element.style.color = ink.css;
       return true;
     };
   }
@@ -60,7 +53,8 @@ function keepAtlasContrast(atlas: Atlas | undefined) {
   patched.add(prototype);
   prototype._getForegroundColor = function (...args) {
     const [, bgMode, bgColor, , fgMode, fgColor, inverse, dim, bold, excluded] = args;
-    if (currentTheme() !== 'light' || !dim || excluded) return draw.apply(this, args);
-    return terminalContrastColor(this._resolveForegroundRgba(fgMode, fgColor, inverse, bold) >>> 8, this._resolveBackgroundRgba(bgMode, bgColor, inverse) >>> 8, true);
+    if (currentTheme() !== 'light' || excluded) return draw.apply(this, args);
+    const ink = terminalContrastColor(this._resolveForegroundRgba(fgMode, fgColor, inverse, bold) >>> 8, this._resolveBackgroundRgba(bgMode, bgColor, inverse) >>> 8, dim);
+    return dim || ink.reflected ? ink : draw.apply(this, args);
   };
 }

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { terminalTheme, terminalOptions, terminalColorReply, terminalDecorationColors } = require('../src/features/terminal/terminal-theme.ts');
+const { terminalTheme, terminalOptions, terminalColorReply, terminalDecorationColors, terminalContrastColor } = require('../src/features/terminal/terminal-theme.ts');
 const { applyTheme } = require('../src/shared/themes.ts');
 const { styleTerminal } = require('../src/features/terminal/terminal-styling.ts');
 
@@ -71,6 +71,19 @@ test('default-colour replies report the palette RGB with opaque 16-bit channels 
   assert.equal(terminalColorReply(10), '\x1b]10;rgb:2424/2727/2d2d\x1b\\');
   assert.equal(terminalColorReply(11), '\x1b]11;rgb:ffff/ffff/ffff\x1b\\');
   assert.equal(terminalTheme().background, '#ffffff00', 'reporting white never makes the canvas opaque');
+});
+
+test('truecolour reflection changes no palette, cursor, selection or OSC default-colour reply', t => {
+  const switchTheme = themeDocument(t);
+  for (const theme of ['light', 'mono']) {
+    switchTheme(theme);
+    const palette = terminalTheme(), replies = [terminalColorReply(10), terminalColorReply(11)];
+    for (const fg of [0xffffff, 0x999999, 0x4eba65, 0xb1b9f9]) {
+      for (const dim of [false, true]) terminalContrastColor(fg, 0xffffff, dim);
+    }
+    assert.deepEqual(terminalTheme(), palette);
+    assert.deepEqual([terminalColorReply(10), terminalColorReply(11)], replies);
+  }
 });
 
 test('open terminals and existing decorations switch themes without output or recreation, then unsubscribe', async t => {
