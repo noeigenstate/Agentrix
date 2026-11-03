@@ -48,9 +48,17 @@ class SSHWorker {
     if (this.didClose) return;
     const pid = child.pid;
     let rows = [], scanFailure;
+    const denied = new Set();
     const signal = (id, value) => {
       if (!Number.isInteger(id) || id === 0 || Math.abs(id) === process.pid) return;
-      try { process.kill(id, value); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+      try { process.kill(id, value); } catch (error) {
+        if (!['ESRCH', 'EPERM'].includes(error.code)) throw error;
+        // macOS may deny a stale group or zombie. Only close + the final ps scan can establish it has exited.
+        if (error.code === 'EPERM' && !denied.has(id)) {
+          denied.add(id);
+          if (denied.size <= 8) diagnostic(`[ssh-fixture] cleanup signal denied pid=${id} signal=${value} code=EPERM`);
+        }
+      }
     };
     if (process.platform !== 'win32' && pid) {
       // Freeze parents before the final scan so cleanup cannot race another descendant spawn.
@@ -58,7 +66,7 @@ class SSHWorker {
       try {
         rows = await processTree(pid);
         for (const row of rows) signal(row.pid, 'SIGSTOP');
-        rows = await processTree(pid);
+        rows = await processTree(pid, rows.map(row => row.pid));
       } catch (error) { scanFailure = error; }
       for (const row of [...rows].reverse()) signal(row.pid, 'SIGTERM');
       signal(-pid, 'SIGTERM');
@@ -87,15 +95,15 @@ class SSHWorker {
       child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
       throw error;
     }
-    if (process.platform !== 'win32' && rows.length) {
-      const end = Date.now() + timeoutMs, ids = rows.map(row => row.pid);
+    if (process.platform !== 'win32' && pid) {
+      const end = Date.now() + timeoutMs, ids = [...rows.map(row => row.pid), ...[...denied].filter(id => id > 0)];
       let live;
       do {
         live = await processTree(pid, ids);
         if (!live.length) break;
         await new Promise(resolve => setTimeout(resolve, 25));
       } while (Date.now() < end);
-      if (live.length) throw new Error('SSH fixture descendants did not exit: ' + live.map(row => `pid=${row.pid} name=${row.name}`).join(', '));
+      if (live.length) throw new Error('SSH fixture descendants did not exit: ' + live.map(row => `pid=${row.pid} name=${row.name} state=${row.state}`).join(', '));
     }
     if (scanFailure) throw new Error('SSH fixture process-tree scan failed for pid=' + pid + ': ' +
       (scanFailure.killed ? 'deadline exceeded' : 'process listing unavailable'));
