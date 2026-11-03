@@ -32,27 +32,98 @@ function request(descriptor, body, raw) {
   });
 }
 
-test('process timeout closes retained pipes only after attempting the owned process group', { timeout: 3000 }, async () => {
+function processHarness({ snapshot = () => '', signal = () => {}, closeOnDestroy = true, completes = false } = {}) {
   const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
   const { promisify } = require('node:util');
   const child = new EventEmitter(), kills = [];
-  Object.assign(child, { pid: 12345, stdout: new PassThrough(), stderr: new PassThrough() });
-  let streams = 2;
+  Object.assign(child, { pid: 12345, labGroup: true, stdout: new PassThrough(), stderr: new PassThrough(), unref() { this.unreferenced = true; } });
+  let streams = 2, scans = 0;
   for (const stream of [child.stdout, child.stderr]) stream.once('close', () => {
-    if (--streams === 0) child.emit('close', 0, null);
+    if (--streams === 0 && closeOnDestroy) child.emit('close', 0, null);
   });
   const execFile = () => assert.fail('The timeout unit test must not spawn a process.');
-  execFile[promisify.custom] = async () => ({ stdout: '' });
+  execFile[promisify.custom] = async (file, args, options) => {
+    assert.equal(file, '/bin/ps'); assert.equal(args[1], 'pid=,ppid=,pgid=,stat=');
+    assert.ok(options.timeout > 0 && options.timeout <= 1000);
+    return { stdout: snapshot(++scans) };
+  };
   const filename = path.join(__dirname, '../electron/features/lab/process.cjs'), isolated = { exports: {} };
   const localRequire = createRequire(filename);
   vm.runInNewContext(syncFs.readFileSync(filename, 'utf8'), {
     module: isolated, Buffer, setTimeout, clearTimeout,
-    process: { platform: 'linux', pid: 99999, env: {}, kill: (pid, signal) => kills.push([pid, signal]) },
-    require: name => name === 'node:child_process' ? { execFile, spawn: () => child } : localRequire(name),
+    process: { platform: 'darwin', pid: 99999, env: {}, kill: (pid, value) => { kills.push([pid, value]); signal(pid, value); } },
+    require: name => name === 'node:child_process' ? { execFile, spawn: () => {
+      if (completes) queueMicrotask(() => { child.stdout.destroy(); child.stderr.destroy(); });
+      return child;
+    } } : localRequire(name),
   }, { filename });
-  await assert.rejects(isolated.exports.command('synthetic', [], { ipc: true, timeoutMs: 20 }), /实验运行超时/);
+  return { api: isolated.exports, child, kills, scans: () => scans };
+}
+
+test('process timeout closes retained pipes only after attempting the owned process group', { timeout: 3000 }, async () => {
+  const { api, child, kills } = processHarness();
+  await assert.rejects(api.command('synthetic', [], { ipc: true, timeoutMs: 20 }), /实验运行超时/);
   assert.ok(kills.some(([pid, signal]) => pid === -child.pid && signal === 'SIGKILL'));
   assert.equal(child.stdout.destroyed, true); assert.equal(child.stderr.destroyed, true);
+});
+
+const groupDenied = pid => { if (pid < 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' }); };
+for (const [name, rows] of [['absent', ''], ['zombie', '12345 1 12345 Z\n12346 1 12345 Z+\n']]) {
+  test(`EPERM on a process group that is ${name} preserves the timeout after state verification`, { timeout: 3000 }, async () => {
+    const fixture = processHarness({ snapshot: () => rows, signal: groupDenied });
+    await assert.rejects(fixture.api.command('synthetic', [], { ipc: true, timeoutMs: 20 }), /实验运行超时/);
+    assert.ok(fixture.scans() >= 3);
+    assert.equal(fixture.kills.filter(([pid, signal]) => pid < 0 && signal === 'SIGKILL').length, 1, 'finally must not signal the reaped group again');
+  });
+}
+
+test('EPERM on a retired group after normal completion is verified rather than replacing the result', { timeout: 3000 }, async () => {
+  const fixture = processHarness({ signal: groupDenied, completes: true });
+  assert.equal((await fixture.api.command('synthetic', [], { ipc: true, timeoutMs: 500 })).code, 0);
+  assert.ok(fixture.scans() >= 3);
+});
+
+test('EPERM on the group still reaps a live member that changes group and parent', { timeout: 3000 }, async () => {
+  const fixture = processHarness({ signal: groupDenied, snapshot: scan =>
+    scan <= 2 ? '12346 12345 12345 S\n' : scan === 3 ? '12346 1 54321 S\n' : '' });
+  await assert.rejects(fixture.api.command('synthetic', [], { ipc: true, timeoutMs: 20 }), /实验运行超时/);
+  assert.ok(fixture.scans() >= 4);
+  assert.equal(fixture.kills.filter(([pid, signal]) => pid === 12346 && signal === 'SIGKILL').length, 2);
+});
+
+test('EPERM with an empty initial scan still discovers a reparented group member', { timeout: 3000 }, async () => {
+  const fixture = processHarness({ signal: groupDenied, snapshot: scan => scan === 2 ? '12346 1 12345 S\n' : '' });
+  await fixture.api.stopTree(fixture.child);
+  assert.ok(fixture.kills.some(([pid, signal]) => pid === 12346 && signal === 'SIGKILL'));
+});
+
+test('cleanup never signals an unowned group or an unrelated member of that group', { timeout: 3000 }, async () => {
+  const fixture = processHarness({ snapshot: scan => scan <= 2 ? '12346 999 12345 S\n12347 12345 888 S\n' : '' });
+  fixture.child.labGroup = false;
+  await fixture.api.stopTree(fixture.child);
+  assert.ok(fixture.kills.every(([pid]) => pid > 0 && pid !== 12346));
+  assert.ok(fixture.kills.some(([pid, signal]) => pid === 12347 && signal === 'SIGKILL'));
+});
+
+test('EPERM on a surviving descendant fails within the reap deadline even when the child never closes', { timeout: 5000 }, async () => {
+  const fixture = processHarness({ closeOnDestroy: false, snapshot: () => '12346 1 12345 S\n',
+    signal: () => { throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' }); } });
+  const started = Date.now();
+  await assert.rejects(fixture.api.command('synthetic', [], { ipc: true, timeoutMs: 20 }), error => {
+    assert.equal(error.code, 'ERR_LAB_PROCESS_REAP'); assert.equal(error.fatal, true);
+    assert.match(error.message, /reap deadline exceeded.*EPERM.*pid=12346 pgid=12345 state=S/); return true;
+  });
+  assert.ok(Date.now() - started < 3500);
+  assert.equal(fixture.child.stdout.destroyed, true); assert.equal(fixture.child.unreferenced, true);
+});
+
+test('EPERM without a readable process listing cannot be mistaken for successful cleanup', { timeout: 3000 }, async () => {
+  const fixture = processHarness({ signal: groupDenied, snapshot: () => { throw new Error('ps unavailable'); } });
+  await assert.rejects(fixture.api.command('synthetic', [], { ipc: true, timeoutMs: 20 }), error => {
+    assert.equal(error.code, 'ERR_LAB_PROCESS_REAP'); assert.equal(error.fatal, true);
+    assert.match(error.message, /process state could not be verified.*EPERM/); return true;
+  });
+  assert.ok(fixture.kills.some(([pid, signal]) => pid === -12345 && signal === 'SIGKILL'), 'a failed scan must not leave the group frozen');
 });
 
 test('process timeout reaps an exited parent group whose descendant retains stdio', {
