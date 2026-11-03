@@ -10,7 +10,7 @@ const { createRequire } = require('node:module');
 const { randomUUID } = require('node:crypto');
 const { LabSession } = require('../electron/features/lab/session.cjs');
 const { sandboxProfile } = require('../electron/features/lab/sandbox.cjs');
-const { command, gitEnvironment } = require('../electron/features/lab/process.cjs');
+const { command, gitEnvironment, killMarked, markedPids } = require('../electron/features/lab/process.cjs');
 
 async function fixture(t, Constructor = LabSession) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'lab-session-')));
@@ -32,7 +32,48 @@ function request(descriptor, body, raw) {
   });
 }
 
-test('trusted process input reaches the child for docker exec without entering the output log', async t => {
+test('process timeout closes retained pipes only after attempting the owned process group', { timeout: 3000 }, async () => {
+  const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
+  const { promisify } = require('node:util');
+  const child = new EventEmitter(), kills = [];
+  Object.assign(child, { pid: 12345, stdout: new PassThrough(), stderr: new PassThrough() });
+  let streams = 2;
+  for (const stream of [child.stdout, child.stderr]) stream.once('close', () => {
+    if (--streams === 0) child.emit('close', 0, null);
+  });
+  const execFile = () => assert.fail('The timeout unit test must not spawn a process.');
+  execFile[promisify.custom] = async () => ({ stdout: '' });
+  const filename = path.join(__dirname, '../electron/features/lab/process.cjs'), isolated = { exports: {} };
+  const localRequire = createRequire(filename);
+  vm.runInNewContext(syncFs.readFileSync(filename, 'utf8'), {
+    module: isolated, Buffer, setTimeout, clearTimeout,
+    process: { platform: 'linux', pid: 99999, env: {}, kill: (pid, signal) => kills.push([pid, signal]) },
+    require: name => name === 'node:child_process' ? { execFile, spawn: () => child } : localRequire(name),
+  }, { filename });
+  await assert.rejects(isolated.exports.command('synthetic', [], { ipc: true, timeoutMs: 20 }), /实验运行超时/);
+  assert.ok(kills.some(([pid, signal]) => pid === -child.pid && signal === 'SIGKILL'));
+  assert.equal(child.stdout.destroyed, true); assert.equal(child.stderr.destroyed, true);
+});
+
+test('process timeout reaps an exited parent group whose descendant retains stdio', {
+  timeout: 10000, skip: !['linux', 'darwin'].includes(process.platform),
+}, async t => {
+  const runId = randomUUID(); let descendant;
+  t.after(() => killMarked(runId), { timeout: 6000 });
+  const code = `const child=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],
+    {stdio:['ignore',1,2]});console.log(child.pid);child.unref();`;
+  const started = Date.now();
+  await assert.rejects(command(process.execPath, ['-e', code], {
+    ipc: true, timeoutMs: 1000, signal: t.signal,
+    env: { ...process.env, AGENTRIX_LAB_RUN: runId, AGENTRIX_LAB_JOB: randomUUID() },
+    onLine: line => { if (/^\d+$/.test(line)) descendant = Number(line); },
+  }), /实验运行超时/);
+  assert.ok(descendant > 0, 'the descendant started before the parent exited');
+  assert.ok(Date.now() - started < 7000, 'an inherited pipe cannot prolong the timeout indefinitely');
+  assert.deepEqual(await markedPids(runId), [], 'the reparented worker is no longer running');
+});
+
+test('trusted process input reaches the child for docker exec without entering the output log', { timeout: 10000 }, async t => {
   const { root } = await fixture(t), log = path.join(root, 'process.log');
   const result = await command(process.execPath, ['-e',
     "let n=0;process.stdin.on('data',b=>n+=b.length);process.stdin.on('end',()=>console.log(n));"],
@@ -42,7 +83,7 @@ test('trusted process input reaches the child for docker exec without entering t
   assert.equal(gitEnvironment({ git_config_count: '1', ssh_auth_sock: 'fixture' }).git_config_count, undefined);
 });
 
-test('execute defaults to offline for every call and never retains a preparation allowance', async t => {
+test('execute defaults to offline for every call and never retains a preparation allowance', { timeout: 15000 }, async t => {
   const { session, workspaceRoot } = await fixture(t), calls = [];
   session.launch = async (args, options) => { calls.push(options); return { code: 0, stdout: 'fixture', stderr: '' }; };
   for (const options of [{}, { network: true }, {}]) await session.execute('fixture', ['argument'], { cwd: workspaceRoot, ...options });
@@ -52,7 +93,7 @@ test('execute defaults to offline for every call and never retains a preparation
   await assert.rejects(session.execute('fixture', ['bad\0argument'], { cwd: workspaceRoot }), /Invalid/);
 });
 
-test('isolation refusal occurs before servers, launch jobs or model workers exist', async t => {
+test('isolation refusal occurs before servers, launch jobs or model workers exist', { timeout: 15000 }, async t => {
   const filename = path.resolve(__dirname, '../electron/features/lab/session.cjs'), requireAt = createRequire(filename);
   const isolated = { exports: {} }; let launches = 0;
   vm.runInNewContext(syncFs.readFileSync(filename, 'utf8'), { module: isolated, __dirname: path.dirname(filename),
@@ -65,7 +106,7 @@ test('isolation refusal occurs before servers, launch jobs or model workers exis
   assert.equal(launches, 0); assert.equal(session.jobs.size, 0); assert.equal(session.server, undefined);
 });
 
-test('the broker forwards argv, input and the bounded timeout only for its active run', async t => {
+test('the broker forwards argv, input and the bounded timeout only for its active run', { timeout: 15000 }, async t => {
   const { session } = await fixture(t), calls = []; session.active = true;
   await session.broker(async (body, { signal }) => { calls.push(body); assert.equal(signal.aborted, false);
     return { code: 7, stdout: body.stdin, stderr: 'fixture error' }; });
@@ -77,7 +118,7 @@ test('the broker forwards argv, input and the bounded timeout only for its activ
   assert.equal(calls.length, 1);
 });
 
-test('foreign capabilities, invalid bounds and oversized frames cannot reach the broker handler', async t => {
+test('foreign capabilities, invalid bounds and oversized frames cannot reach the broker handler', { timeout: 15000 }, async t => {
   const { session } = await fixture(t); session.active = true; let calls = 0;
   await session.broker(async () => { calls++; return { code: 0, stdout: '', stderr: '' }; });
   const invalid = [{ capability: 'foreign', argv: ['x'] }, { argv: [] }, { argv: ['bad\0argument'] },
@@ -88,7 +129,7 @@ test('foreign capabilities, invalid bounds and oversized frames cannot reach the
   assert.equal(calls, 0);
 });
 
-test('broker failures redact handler details and preserve an infrastructure failure for the run', async t => {
+test('broker failures redact handler details and preserve an infrastructure failure for the run', { timeout: 15000 }, async t => {
   const { session } = await fixture(t); session.active = true;
   await session.broker(async () => { throw Object.assign(new Error('synthetic private diagnostic'), { infrastructure: true }); });
   const result = await request(session.brokerEnvironment, { argv: ['fixture'] });
@@ -96,7 +137,7 @@ test('broker failures redact handler details and preserve an infrastructure fail
   assert.equal(session.brokerFailure.infrastructure, true);
 });
 
-test('a broker capability belongs to one run and is rejected by another run', async t => {
+test('a broker capability belongs to one run and is rejected by another run', { timeout: 15000 }, async t => {
   const first = (await fixture(t)).session, second = (await fixture(t)).session;
   first.active = second.active = true; let calls = 0;
   await first.broker(async () => ({ code: 0, stdout: '', stderr: '' }));
@@ -147,7 +188,7 @@ test('closing the run aborts in-flight broker work and retires its endpoint', { 
   await assert.rejects(request(descriptor, { argv: ['late'] }));
 });
 
-test('oversized broker output is refused instead of reaching the model', async t => {
+test('oversized broker output is refused instead of reaching the model', { timeout: 15000 }, async t => {
   const { session } = await fixture(t); session.active = true;
   await session.broker(async () => ({ code: 0, stdout: 'x'.repeat(8 * 1024 * 1024 + 1), stderr: '' }));
   assert.deepEqual(await request(session.brokerEnvironment, { argv: ['fixture'] }),
@@ -181,7 +222,7 @@ async function loopbackServer(t) {
   t.after(async () => {
     await new Promise(resolve => { state.server.close(resolve); for (const socket of state.sockets) socket.destroy(); });
     assert.deepEqual(state.errors, [], 'the loopback fixture must close without socket errors');
-  });
+  }, { timeout: 3000 });
   return state;
 }
 

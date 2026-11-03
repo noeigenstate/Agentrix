@@ -95,7 +95,7 @@ test('sandbox-exec refuses daemon loopback TCP ports while allowing another loca
     socket.once('connect',()=>{socket.destroy();resolve('connected')});socket.once('error',error=>resolve(error.code));
   }))).then(result=>console.log(JSON.stringify(result)));`;
   const result = await command('/usr/bin/sandbox-exec', ['-p', profile, process.execPath, '-e', code, JSON.stringify(addresses)], {
-    env: cleanEnvironment(process.env), cwd: root, timeoutMs: 5000,
+    env: cleanEnvironment(process.env), cwd: root, timeoutMs: 5000, signal: t.signal,
   });
   assert.equal(result.code, 0, result.stderr);
   const replies = JSON.parse(result.stdout);
@@ -107,17 +107,21 @@ test('sandbox-exec refuses denied Unix socket connections while allowing the lab
   skip: process.platform !== 'darwin' ? 'macOS sandbox-exec and Unix sockets are required' : false,
   timeout: 20000,
 }, async t => {
-  const root = await fs.realpath(await fs.mkdtemp('/tmp/lab-sb-')), servers = [];
+  const root = await fs.realpath(await fs.mkdtemp('/tmp/lab-sb-')), servers = [], sockets = new Set();
   t.after(async () => {
-    await Promise.all(servers.map(server => new Promise(resolve => server.close(resolve))));
+    await Promise.all(servers.map(server => new Promise(resolve => {
+      server.close(resolve); for (const socket of sockets) socket.destroy();
+    })));
     await fs.rm(root, { recursive: true, force: true });
-  });
+  }, { timeout: 3000 });
   const denied = path.join(root, 'd/s'), allowed = path.join(root, 'channel');
   const podman = path.join(root, 'podman/podman-machine-default-api.sock');
   await fs.mkdir(path.dirname(denied));
   await fs.mkdir(path.dirname(podman));
   for (const address of [denied, allowed, podman]) {
-    const server = net.createServer(socket => socket.end());
+    const server = net.createServer(socket => {
+      sockets.add(socket); socket.once('close', () => sockets.delete(socket)); socket.on('error', () => {}); socket.end();
+    });
     servers.push(server);
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(address, resolve); });
   }
@@ -131,7 +135,7 @@ test('sandbox-exec refuses denied Unix socket connections while allowing the lab
   for (const [filter, file] of [['path-literal', denied], ['subpath', path.dirname(denied)]]) {
     const profile = profileAt(root, [...daemonSocketPaths(path.join(root, 'home'), { TMPDIR: root }), { path: file, filter }]);
     const run = value => command('/usr/bin/sandbox-exec', ['-p', value, process.execPath, '-e', client, JSON.stringify([denied, allowed, podman])], {
-      env: cleanEnvironment(process.env), cwd: root, timeoutMs: 5000,
+      env: cleanEnvironment(process.env), cwd: root, timeoutMs: 5000, signal: t.signal,
     });
     // File-read denies alone must not explain the refused connect.
     const control = await run(profile.replace(/^\(deny network-outbound .*\)\n/m, ''));

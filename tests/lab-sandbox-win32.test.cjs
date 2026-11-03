@@ -105,6 +105,28 @@ test('Windows LPAC permits the workspace, denies protected reads and outside wri
   assert.equal(await fs.readFile(path.join(f.workspaceRoot, 'allowed.txt'), 'utf8'), 'ok');
 });
 
+test('Windows concurrent jobs keep shared runtime grants until their own cleanup and restore exact ACLs', windows, async t => {
+  const f = await fixture(t); if (!f) return;
+  const before = await runtimeAclSnapshot(f, 'shared-before'), marker = path.join(f.workspaceRoot, 'peer-cleaned');
+  let ready;
+  const started = new Promise(resolve => { ready = resolve; });
+  const script = `const fs=require('node:fs');console.log('shared ready');
+    const timer=setInterval(()=>{if(fs.existsSync(process.argv[1])){
+      clearInterval(timer);fs.readFileSync(process.execPath);console.log('shared runtime readable');
+    }},25);`;
+  const running = f.session.execute(f.nodePath, ['-e', script, marker], {
+    cwd: f.workspaceRoot, timeoutMs: 10000, onLine: line => { if (line === 'shared ready') ready(); },
+  });
+  running.catch(() => {});
+  await Promise.race([started, running.then(() => assert.fail('the shared-runtime worker exited before readiness'))]);
+  const peer = await f.session.execute(f.nodePath, ['-e', "console.log('peer complete')"], { cwd: f.workspaceRoot });
+  assert.equal(peer.code, 0, peer.stderr);
+  await fs.writeFile(marker, 'the peer grant has been revoked');
+  const result = await running;
+  assert.equal(result.code, 0, result.stderr); assert.match(result.stdout, /shared runtime readable/);
+  assert.equal(await runtimeAclSnapshot(f, 'shared-after'), before);
+});
+
 test('Windows Job Objects reap detached descendants whose environment markers were erased', windows, async t => {
   const f = await fixture(t);
   if (!f) return;
@@ -270,10 +292,15 @@ test('Windows relay serves a child broker burst and closes every client without 
   { skip: process.platform !== 'win32', timeout: 12000 }, async t => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lab-broker-burst-'));
     const session = new LabSession({ directory: root, labRoot: root, workspaceRoot: root, runId: randomUUID() });
-    let relays, accepted = 0;
+    let relays, accepted = 0, peakWork = 0, activeWork = 0, peakSockets = 0;
     t.after(async () => { await relays?.close(); await session.close(); await fs.rm(root, { recursive: true, force: true }); }, { timeout: 3000 });
     session.active = true; session.allowDelegation = false;
-    await session.broker(async () => { accepted++; return { code: 0, stdout: 'own broker', stderr: '' }; });
+    await session.broker(async () => {
+      accepted++; peakWork = Math.max(peakWork, ++activeWork);
+      peakSockets = Math.max(peakSockets, session.brokerSockets.size);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      activeWork--; return { code: 0, stdout: 'own broker', stderr: '' };
+    });
     const net = require('node:net'), address = '\\\\.\\pipe\\LOCAL\\agentrix-lab-rpc-' + randomUUID();
     session.server = net.createServer(socket => session.connection(socket));
     await new Promise((resolve, reject) => { session.server.once('error', reject); session.server.listen(address, resolve); });
@@ -291,6 +318,8 @@ test('Windows relay serves a child broker burst and closes every client without 
     assert.equal(accepted, 33);
     assert.deepEqual([replies.own, ...replies.repeated, ...replies.concurrent], Array(33).fill({ code: 0, stdout: 'own broker', stderr: '' }));
     assert.equal(replies.wrongCapability.code, 125); assert.equal(replies.rpc.exitCode, 1);
+    assert.ok(peakWork <= 4, 'the relay queues beyond the broker operation limit');
+    assert.ok(peakSockets <= 8, 'retiring sockets keep room for the next batch');
     assert.equal(requests.filter(request => request.stage === 'release').length, 37);
     assert.ok(events.some(line => /stage=release /.test(line)));
   });
@@ -473,8 +502,13 @@ public partial class LabSandbox {
     finally { FreeSid(sid); }
   }
   static RawSecurityDescriptor FixtureSecurity(string file) {
-    IntPtr owner,group,dacl,sacl,descriptor;CheckCode(GetNamedSecurityInfoW(file,1,DACL,out owner,out group,out dacl,out sacl,out descriptor));
-    try { return new RawSecurityDescriptor(CopySecurity(descriptor),0); } finally { LocalFree(descriptor); }
+    FileIdentity identity;IntPtr handle=CheckedFile(file,0x20080,out identity);uint size;
+    try {
+      GetKernelObjectSecurity(handle,DACL,IntPtr.Zero,0,out size);
+      IntPtr descriptor=Marshal.AllocHGlobal((int)size);
+      try { Check(GetKernelObjectSecurity(handle,DACL,descriptor,size,out size));return new RawSecurityDescriptor(CopySecurity(descriptor),0); }
+      finally { Marshal.FreeHGlobal(descriptor); }
+    } finally { CloseHandle(handle); }
   }
   static string FixtureSnapshot(string file) {
     var security=FixtureSecurity(file);var acl=new byte[security.DiscretionaryAcl.BinaryLength];security.DiscretionaryAcl.GetBinaryForm(acl,0);
@@ -493,6 +527,12 @@ public partial class LabSandbox {
     Directory.CreateDirectory(root);Directory.CreateDirectory(Path.Combine(root,"protected"));
     string stale=Path.Combine(root,"stale.txt"),guarded=Path.Combine(root,"protected","guarded.txt");
     File.WriteAllText(stale,"fixture");File.WriteAllText(guarded,"fixture");
+    foreach(string file in Tree(root)) {
+      var explicitSecurity=FixtureSecurity(file);
+      foreach(GenericAce ace in explicitSecurity.DiscretionaryAcl)ace.AceFlags &= ~AceFlags.Inherited;
+      explicitSecurity.SetFlags(explicitSecurity.ControlFlags & ~(ControlFlags.DiscretionaryAclAutoInherited|ControlFlags.DiscretionaryAclAutoInheritRequired));
+      FixtureSecurity(file,explicitSecurity);
+    }
     FixturePrivateAcl(root);
     var security=FixtureSecurity(stale);
     security.DiscretionaryAcl.InsertAce(security.DiscretionaryAcl.Count,new CommonAce(AceFlags.Inherited,
@@ -504,12 +544,13 @@ public partial class LabSandbox {
     Check(ConvertStringSidToSidW("S-1-15-2-11-22-33-44-55-66-78",out other));
     try {
       using(var lifetime=new RunLifetime()) {
+        Acl(Directory.GetParent(root).FullName,own,METADATA,false,false,false);
         var grant=PrepareGrant(root,RX,false,lifetime);
         if(grant==null || grant.propagate || grant.objects.Count!=files.Length)throw new Exception("wrong owner runtime grant");
         string manifest=root+".acl.json";
         var records=new Dictionary<string,string[]> {{root,GrantObjects(grant)}};
         WriteLease(manifest,new Lease { sid=SidString(own),objects=records,roots=new string[0] });
-        ApplyGrant(grant,own,lifetime);ApplyGrant(grant,other,lifetime);
+        Task.WaitAll(Task.Run(()=>ApplyGrant(grant,own,lifetime)),Task.Run(()=>ApplyGrant(grant,other,lifetime)));
         string added=Path.Combine(root,"new.txt");File.WriteAllText(added,"fixture");
         if(Allows(FileAcl(added),SidString(own),RX))throw new Exception("runtime grant propagated to a new file");
         // Recovery uses the real persisted write-ahead lease and must preserve another live run's ACEs.
@@ -517,6 +558,7 @@ public partial class LabSandbox {
         foreach(string file in files)if(!Allows(FileAcl(file),SidString(other),RX))throw new Exception("concurrent grant lost");
         WriteLease(manifest,new Lease { sid=SidString(other),objects=records,roots=new string[0] });Clean(manifest);
         foreach(string file in files)if(FixtureSnapshot(file)!=before[file])throw new Exception("owner ACL changed: "+Path.GetFileName(file));
+        Acl(Directory.GetParent(root).FullName,own,0,true);
         string lab=root+"-lab";Directory.CreateDirectory(lab);Check(CreateHardLinkW(Path.Combine(lab,"credential.txt"),stale,IntPtr.Zero));
         FixturePrivateAcl(lab);
         var linked=PrepareGrant(lab,RX,true,lifetime);
@@ -636,10 +678,10 @@ class PipeSecurityProbe { public static void Main(string[] args) {
     // Attach immediately so an early socket failure remains a test failure, not an unhandled rejection.
     queued.catch(() => {});
     const waiting = Date.now();
-    while (heldRequests < 8 && Date.now() - waiting < 2000) await new Promise(resolve => setTimeout(resolve, 10));
-    assert.equal(heldRequests, 8, 'eight requests occupy the relay slots');
+    while (heldRequests < 4 && Date.now() - waiting < 2000) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(heldRequests, 4, 'four requests occupy the broker relay slots');
     await new Promise(resolve => setTimeout(resolve, 50));
-    assert.equal(heldRequests, 8, 'excess clients wait without opening additional backend connections');
+    assert.equal(heldRequests, 4, 'excess clients wait without opening additional backend connections');
     releaseHeld();
     assert.deepEqual(await queued, Array.from({ length: 24 }, () => ({ code: 0 })));
     assert.equal(heldRequests, 24, 'every queued request eventually reaches the backend');

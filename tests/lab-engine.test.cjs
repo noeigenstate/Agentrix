@@ -602,6 +602,7 @@ test('usage channels handle long profile paths and reject unauthenticated events
   const root = await temporary(t), directory = path.join(root, 'long-profile-'.repeat(12));
   await fs.mkdir(directory);
   const usage = new LabUsage({ directory, socketDirectory: directory, project: { id: 'p' }, prices });
+  t.after(() => usage.close(), { timeout: 5000 });
   await usage.start();
   try {
     const send = event => new Promise((resolve, reject) => {
@@ -875,6 +876,7 @@ isolatedTest('partially unknown costs charge at least the known sum and lab reco
 });
 
 test('startup kills reparented marked processes and removes stale repositories and workspaces', {
+  timeout: 20000,
   skip: !['darwin', 'linux'].includes(process.platform) ? 'POSIX process markers are required' : false,
 }, async t => {
   const f = await fixture(t), id = randomUUID(), runId = randomUUID();
@@ -886,11 +888,12 @@ test('startup kills reparented marked processes and removes stale repositories a
   await fs.writeFile(path.join(privateDirectory, 'manifest.json'), JSON.stringify({ runId, directory }));
   const childCode = "const c=require('node:child_process').spawn('/usr/bin/nohup',[process.execPath,'-e'," +
     "'setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});console.log(c.pid);c.unref();";
+  t.after(() => killMarked(runId), { timeout: 6000 });
   const result = await execute(process.execPath, ['-e', childCode], {
     env: { ...process.env, AGENTRIX_LAB_RUN: runId, AGENTRIX_LAB_JOB: randomUUID() },
+    timeout: 5000, signal: t.signal,
   });
   const pid = Number(result.stdout.trim());
-  t.after(() => killMarked(runId));
   assert.ok((await markedPids(runId)).includes(pid));
   await f.engine.store.save({
     id, createdAt: 1, state: 'running', spentUsd: 0, tasks: [f.task],
@@ -898,6 +901,7 @@ test('startup kills reparented marked processes and removes stale repositories a
   });
   assert.equal((await f.engine.store.list()).find(experiment => experiment.id === id)?.state, 'running');
   const restored = new LabEngine({ userData: f.userData, getProjects: () => [f.project], prices });
+  t.after(() => restored.close(), { timeout: 5000 });
   await restored.ready;
   const stopped = (await restored.list()).find(experiment => experiment.id === id);
   assert.ok(stopped, 'the valid persisted experiment must be visible when ready resolves');
@@ -930,7 +934,9 @@ test('the guardian closes its process group and detached descendants when the ap
     env: { ...cleanEnvironment(process.env), AGENTRIX_LAB_RUN: runId, AGENTRIX_LAB_JOB: job },
     detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
-  t.after(() => killMarked(runId));
+  t.after(async () => {
+    await killMarked(runId); host.stdout.destroy(); host.stderr.destroy(); host.kill('SIGKILL');
+  }, { timeout: 6000 });
   const done = new Promise((resolve, reject) => { host.once('error', reject); host.once('exit', resolve); });
   let errors = '';
   host.stderr.setEncoding('utf8'); host.stderr.on('data', value => { errors += value; });

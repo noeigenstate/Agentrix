@@ -3,7 +3,7 @@ const { gzipSync } = require('node:zlib');
 const ISOLATION_ERROR = 'Windows 安全实验执行不可用，未启动工作者。';
 const failure = () => Object.assign(new Error(ISOLATION_ERROR), { infrastructure: true, code: 'ERR_LAB_WINDOWS_ISOLATION' });
 // Distribution pin for sandbox-win32-native.cjs + nativeSource. Tests require updates when the C# changes.
-const SOURCE_SHA256 = '78fa5718cb809be2dc6c6a4647ca0cad5a4c1660609fcf559ebcfa64ab82fe3a';
+const SOURCE_SHA256 = '39fe5a2cf507240022c009decc6122df2eae004ab8d01af8f5bcfab4a2eb347a';
 
 function cleanPowerShellCommand(script) {
   const system = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32');

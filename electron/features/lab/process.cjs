@@ -147,6 +147,11 @@ async function stopTree(child) {
   // Freeze the known parents before the second scan, so they cannot start more children during cleanup.
   const all = new Set([...children, ...await descendants(child.pid), child.pid]);
   for (const pid of [...all].reverse()) { try { process.kill(pid, 'SIGKILL'); } catch {} }
+  // The parent may already have exited while a reparented worker keeps its stdio open.
+  // Retire the owned group before waiting for close, which requires those inherited pipes to close too.
+  if (child.labGroup) {
+    try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+  }
 }
 
 async function command(file, args, {
@@ -163,13 +168,20 @@ async function command(file, args, {
   const output = log ? await fs.open(log, 'w', 0o600) : null;
   let child, timer, stopping = null, failure = null, stdout = '', stderr = '', bytes = 0;
   const binary = [];
-  const stop = error => { failure ||= error; stopping ||= stopTree(child); };
+  const stop = error => {
+    failure ||= error;
+    stopping ||= stopTree(child).catch(error => { failure = error; }).finally(() => {
+      // A failed reap remains a failure, but an inherited descriptor must not hold this promise forever.
+      child.stdout?.destroy(); child.stderr?.destroy();
+    });
+  };
   const abort = () => stop(Object.assign(new Error('实验已停止。'), { name: 'AbortError' }));
   try {
     child = spawn(file, args, {
       cwd, env, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe', ...(ipc ? ['ipc'] : [])],
       windowsHide: true, windowsVerbatimArguments, detached: ipc && process.platform !== 'win32',
     });
+    child.labGroup = ipc && process.platform !== 'win32';
     if (child.stdin) { child.stdin.on('error', () => {}); child.stdin.end(stdin); }
     if (ipc && process.platform === 'win32' && env.AGENTRIX_LAB_RUN) {
       child.labRun = env.AGENTRIX_LAB_RUN; child.labJob = env.AGENTRIX_LAB_JOB;

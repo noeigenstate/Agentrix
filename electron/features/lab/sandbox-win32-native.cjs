@@ -175,12 +175,18 @@ public partial class LabSandbox {
   static void ChangeAcl(string file,IntPtr sid,uint rights,bool remove,bool deny,bool inherit,bool propagate) {
     IntPtr owner,group,oldAcl,sacl,descriptor,acl=IntPtr.Zero,handle=IntPtr.Zero;
     bool pipe=file.StartsWith("\\\\.\\pipe\\",StringComparison.OrdinalIgnoreCase);
-    FileIdentity identity=new FileIdentity(); uint code;
+    FileIdentity identity=new FileIdentity(); uint code=0;
     if(pipe) code=GetNamedSecurityInfoW(file,1,DACL,out owner,out group,out oldAcl,out sacl,out descriptor);
     else {
       try { handle=CheckedFile(file,0x20080,out identity); }
       catch(Win32Exception error) { if(remove && (error.NativeErrorCode==2 || error.NativeErrorCode==3)) return; throw; }
-      code=GetSecurityInfo(handle,1,DACL,out owner,out group,out oldAcl,out sacl,out descriptor);
+      // SE_FILE_OBJECT readers normalize legacy explicit ACEs into inherited ACEs in the returned copy.
+      // Pair the raw kernel reader with the raw writer; never persist that normalized representation.
+      uint size;GetKernelObjectSecurity(handle,DACL,IntPtr.Zero,0,out size);
+      descriptor=Marshal.AllocHGlobal((int)size);
+      try { Check(GetKernelObjectSecurity(handle,DACL,descriptor,size,out size));bool present,defaulted;
+        Check(GetSecurityDescriptorDacl(descriptor,out present,out oldAcl,out defaulted)); }
+      catch { Marshal.FreeHGlobal(descriptor);CloseHandle(handle);throw; }
     }
     if (remove && (code == 2 || code == 3)) return;
     CheckCode(code);
@@ -225,7 +231,9 @@ public partial class LabSandbox {
         }
         finally { Marshal.FreeHGlobal(security); }
       }
-    } finally { if(acl!=IntPtr.Zero) Marshal.FreeHGlobal(acl); LocalFree(descriptor); if(handle!=IntPtr.Zero) CloseHandle(handle); }
+    } finally { if(acl!=IntPtr.Zero) Marshal.FreeHGlobal(acl);
+      if(pipe)LocalFree(descriptor);else Marshal.FreeHGlobal(descriptor);
+      if(handle!=IntPtr.Zero) CloseHandle(handle); }
   }
   static IntPtr PipeDescriptor(IntPtr sid) {
     string user=WindowsIdentity.GetCurrent().User.Value;
