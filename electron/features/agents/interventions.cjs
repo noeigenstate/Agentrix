@@ -19,7 +19,7 @@ function createInterventions({ resolve, pushControl, sendDirect, now = Date.now 
       const receipt = { id: control.id, callId, text: stopping ? '停下' : text, at: control.at, route: target.route, status: 'queued' };
       const notify = async () => {
         const current = await resolve(terminalId, callId);
-        if (!current || current.parentSessionId !== target.parentSessionId || current.terminalId !== terminalId || current.callId !== callId || current.done || !current.confirmed) throw new Error('规划员会话已变化，消息未发送。');
+        if (!current || current.parentSessionId !== target.parentSessionId || current.terminalId !== terminalId || current.callId !== callId || current.done || !current.confirmed) throw new Error('工作者会话已变化，消息未发送。');
       };
       if (target.route === 'parent') {
         if (!sendDirect) throw new Error('此工作者的插话通道不可用。');
@@ -36,6 +36,7 @@ function createInterventions({ resolve, pushControl, sendDirect, now = Date.now 
         try {
           const result = await pushControl(target.runId, { messageId: control.id, type: stopping ? 'stop' : 'intervene', ...(!stopping ? { text } : {}) });
           if (['queued', 'delivered', 'rejected', 'unknown'].includes(result?.status)) receipt.status = result.status;
+          if (receipt.status === 'rejected' && typeof result.reason === 'string') receipt.reason = result.reason.slice(0, 300);
         } catch { receipt.status = 'unknown'; }
       }
       return receipt;

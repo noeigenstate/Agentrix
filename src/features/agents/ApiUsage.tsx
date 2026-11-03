@@ -25,7 +25,7 @@ export function limitLines(limits: LimitsPayload | null | undefined): string[] {
   if (!limits) return [t('未知')];
   const entries = Object.values(limits.limitsById ?? {}), windows = entries.flatMap(entry => [entry?.primary, entry?.secondary]);
   const lines = windows.flatMap(item => windowWords(item) ?? []).map(item => [item.span, t('已用 {percent}', { percent: item.used }), t('{time} 重置', { time: item.resets })].filter(Boolean).join(' · '));
-  const resets = windows.flatMap(item => typeof item?.resetsAt === 'number' ? [item.resetsAt] : []);
+  const resets = windows.flatMap(item => typeof item?.resetsAtMs === 'number' ? [item.resetsAtMs] : []);
   if (limits.state === 'rate_limited' || limits.ordinaryUsageAllowed === false) lines.unshift(resets.length ? t('已限流，约 {time} 恢复', { time: clockWords(Math.min(...resets)) }) : t('已限流，恢复时间未知'));
   else if (!lines.length) lines.push(limits.state === 'unavailable' || limits.state === 'error' ? t('暂时读不到') : t('未知'));
   if (limits.state === 'stale') lines.push(t('数据可能已过期'));

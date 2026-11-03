@@ -77,6 +77,7 @@ function settingsDialogFixture(t, props = {}) {
   mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
   const original = mod.require.bind(mod), empty = () => null;
   const components = {
+    './AgentRuntimeSettings': { AgentRuntimeSettings: empty },
     '../voice/VoiceButton': { VoiceModelSetting: empty }, '../shortcuts/ShortcutSettings': { ShortcutSettings: empty },
     '../agents/AgentsSettings': { AgentsSettings: empty }, './TerminalFontSettings': { TerminalFontSettings: empty },
     './UserAvatarSetting': { UserAvatarSetting: Avatar }, './ThemeSetting': { ThemeSetting: empty }, './ProjectImagesSettings': { ProjectImagesSettings: List }, './SkillsSettings': { SkillsSettings: empty }, './AboutSettings': { AboutSettings: empty },
@@ -100,7 +101,7 @@ function settingsDialogFixture(t, props = {}) {
 
 test('project thumbnails enter from one appearance row and keep the original sidebar categories', t => {
   const h = settingsDialogFixture(t), tree = nodes(h.render());
-  assert.deepEqual(tree.filter(node => node.props['data-settings-tab']).map(node => node.props['data-settings-tab']), ['appearance', 'notifications', 'terminal', 'agents', 'skills', 'shortcuts', 'about']);
+  assert.deepEqual(tree.filter(node => node.props['data-settings-tab']).map(node => node.props['data-settings-tab']), ['appearance', 'notifications', 'terminal', 'agents', 'runtime', 'skills', 'shortcuts', 'about']);
   const appearance = h.section('appearance'), children = React.Children.toArray(appearance.props.children);
   const avatar = children.findIndex(node => node.type === h.Avatar), entry = children.findIndex(node => node.props['data-project-images-setting'] === true);
   assert.equal(entry, avatar + 1); assert.equal(children[entry].props.className, 'setting-row');

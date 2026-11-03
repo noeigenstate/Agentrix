@@ -343,6 +343,10 @@ jobs:
         if: matrix.shard == 'reading'
         run: node scripts/retry.mjs npm run test:native-question -- --packaged
 
+      - name: Verify native session events, requests, settings and usage
+        if: matrix.shard == 'reading'
+        run: node scripts/retry.mjs npm run test:native-session -- --packaged
+
       - name: Verify agent hierarchy, queued messages, paged popups and slow autosave
         if: matrix.shard == 'reading'
         run: node scripts/retry.mjs node scripts/reading-hierarchy-smoke.mjs --packaged

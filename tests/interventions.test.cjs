@@ -3,23 +3,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { projectTeam } = require('../electron/features/team/team.cjs');
 const { RunInbox, MAX_INBOX } = require('../electron/features/team/inbox.cjs');
 const { createInterventions } = require('../electron/features/agents/interventions.cjs');
-
-function plannerRelay() {
-  const sent = [], context = { Date, setTimeout, clearTimeout,
-    sessions: new Map([['terminal', { sessionId: 'planner', codexActive: true, agent: 'codex' }]]),
-    window: { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: (channel, data) => sent.push({ channel, data }) } },
-  };
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  vm.runInNewContext(main.slice(main.indexOf('const relays = new Map();'), main.indexOf('const interventions = createInterventions('))
-    + '\nthis.sendParentPrompt = sendParentPrompt; this.relayResult = relayResult; this.relays = relays;', context);
-  return { context, sent };
-}
 
 async function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-interventions-')));
@@ -154,67 +142,6 @@ test('failed audit writes and rejected no-resume notifications leave no accepted
   assert.deepEqual(await f.inbox.take(), []);
   await f.api.interveneAgent('terminal', f.target.callId, 'accepted after recovery');
   assert.equal((await f.inbox.take())[0].text, 'accepted after recovery');
-});
-
-test('a missing or destroyed main window rejects the planner relay immediately without sending or starting a timeout', async t => {
-  for (const window of [null, { isDestroyed: () => true }, { isDestroyed: () => false, webContents: { isDestroyed: () => true } }]) {
-    const { context, sent } = plannerRelay(); context.window = window;
-    context.setTimeout = () => assert.fail('unavailable window started a relay timeout');
-    await assert.rejects(context.sendParentPrompt('terminal', 'synthetic notice'), /无法把插话转给规划员/);
-    assert.equal(context.relays.size, 0); assert.deepEqual(sent, []);
-  }
-  const f = await fixture(t), { context } = plannerRelay(); context.window = null;
-  const api = createInterventions({ resolve: () => f.target, sendParentPrompt: context.sendParentPrompt });
-  await api.interveneAgent('terminal', f.target.callId, 'window gone');
-  assert.equal((await f.inbox.take())[0].text, 'window gone');
-});
-
-test('planner acknowledgments and renderer send errors settle the relay and remove its timeout', async () => {
-  const { context, sent } = plannerRelay();
-  const prompt = context.sendParentPrompt('terminal', 'synthetic notice');
-  assert.equal(sent[0].channel, 'agents:relay'); assert.equal(sent[0].data.text, 'synthetic notice');
-  context.relayResult(sent[0].data.id); await prompt;
-  assert.equal(context.relays.size, 0);
-  context.window.webContents.send = () => { throw new Error('renderer destroyed during send'); };
-  await assert.rejects(context.sendParentPrompt('terminal', 'notice'), /renderer destroyed during send/);
-  assert.equal(context.relays.size, 0);
-});
-
-test('a planner relay carries its exact three-second deadline and a late acknowledgment cannot revive it', async t => {
-  const now = Date.UTC(2026, 10, 2);
-  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now });
-  const { context, sent } = plannerRelay();
-  const prompt = context.sendParentPrompt('terminal', 'synthetic notice');
-  const failed = assert.rejects(prompt, /无法把插话转给规划员/);
-  assert.equal(sent[0].data.deadline, now + 3000);
-  t.mock.timers.tick(2999); assert.equal(context.relays.size, 1);
-  t.mock.timers.tick(1); await failed;
-  assert.equal(context.relays.size, 0);
-  context.relayResult(sent[0].data.id);
-  assert.equal(context.relays.size, 0);
-});
-
-test('a stalled planner does not hold the inbox lock or block the helper', async t => {
-  const f = await fixture(t), { context } = plannerRelay();
-  const api = createInterventions({ resolve: () => f.target, sendParentPrompt: context.sendParentPrompt });
-  let observed = false;
-  const stat = fs.statSync;
-  t.mock.method(fs, 'statSync', (file, ...args) => {
-    const value = stat(file, ...args);
-    if (file === path.join(f.team.directory, 'lock') && Date.now() - value.mtimeMs > 10000) observed = true;
-    return value;
-  });
-  context.window.webContents.send = () => {
-    // A different writer may append memory without taking the team lock while the renderer is stalled.
-    fs.appendFileSync(f.team.memory, '\nConcurrent planner finding.\n');
-  };
-  await api.interveneAgent('terminal', f.target.callId, 'stalled notification');
-  assert.equal((await f.inbox.take())[0].text, 'stalled notification'); assert.equal(observed, false);
-  assert.equal(context.relays.size, 0);
-  assert.doesNotMatch(fs.readFileSync(f.team.memory, 'utf8'), /Concurrent planner finding\./);
-  const offset = f.inbox.offset;
-  await f.api.interveneAgent('terminal', f.target.callId, 'accepted after timeout');
-  assert.equal((await f.inbox.take())[0].text, 'accepted after timeout'); assert.ok(f.inbox.offset > offset);
 });
 
 test('partial audit failures append withdrawals and preserve concurrent memory and journal appends', async t => {

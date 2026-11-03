@@ -18,7 +18,7 @@ test('local plan replays the Windows build followed by every desktop shard in ma
   const ordered = [...parsed.jobs.windows.steps, ...desktop.strategy.matrix.include.flatMap(({ shard }) =>
     desktop.steps.filter(step => !step.if || step.if === 'always()' || step.if === `matrix.shard == '${shard}'`))];
   assert.deepEqual(steps.map(step => step.name), ordered.map(step => step.name));
-  assert.equal(steps.length, 55);
+  assert.equal(steps.length, 60);
   assert.deepEqual(steps.map(step => step.number), Array.from({ length: steps.length }, (_, index) => index + 1));
   assert.equal(new Set(steps.map(step => step.key)).size, steps.length);
   const skipped = steps.filter(step => step.skip);
@@ -38,7 +38,7 @@ test('local plan replays the Windows build followed by every desktop shard in ma
     assert.equal(step.timeoutMinutes, job['timeout-minutes']);
   }
   assert.equal(steps.find(step => step.run === 'npm test').kind, 'unit');
-  assert.equal(steps.filter(step => step.kind === 'gui').length, 21);
+  assert.equal(steps.filter(step => step.kind === 'gui').length, 22);
   assert.equal(steps.find(step => step.name === 'Build Windows installer').kind, 'command');
   assert.equal(steps.find(step => step.name === 'Create checksum and build notes').skip, null);
   const setup = steps.filter(step => step.run === 'node scripts/build-ssh-askpass.cjs');

@@ -16,13 +16,14 @@ import { withGuiLock } from './gui-lock.mjs';
 import { chooseFromAppMenu } from './app-menu-helper.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const { isolatedEnvironment } = require('./native-approval-probe.cjs');
 const packaged = process.argv.includes('--packaged');
 
 async function run(output) {
   const profile = path.join(output, 'profile'), project = { id: randomUUID(), name: '原生会话', path: path.join(output, 'project'), kind: 'local', restore: { terminal: false, codex: false } };
   for (const dir of [profile, project.path]) await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, fontSize: 14 } }));
-  const env = { ...process.env, AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+  const env = { ...isolatedEnvironment(output), AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
   const errors = [], checks = [];
   let app;
   try {

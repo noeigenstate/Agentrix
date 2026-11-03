@@ -532,30 +532,7 @@ function resolveIntervention(terminalId, callId) {
     confirmed: !call.unconfirmed, done: !!call.done, title: call.title, route: call.dispatch ? 'dispatch' : 'parent', projectPath: project.path,
     ...(call.dispatch ? { local: project.kind !== 'ssh', runId: callId.slice('dispatch:'.length), cwd: call.cwd } : {}) };
 }
-// The planner learns of every intervention as a message in its own terminal, sent by the window the way the owner's
-// messages are (queued while it works, never into a dialog). Resolves once the window accepted it.
-const relays = new Map();
-let relaySequence = 0;
-function sendParentPrompt(terminalId, text) {
-  if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return Promise.reject(new Error('无法把插话转给规划员。'));
-  const s = sessions.get(terminalId);
-  if (!s?.sessionId || !s.codexActive || !['claude', 'codex'].includes(s.agent)) return Promise.reject(new Error('规划员会话已变化，消息未发送。'));
-  return new Promise((resolve, reject) => {
-    // Admission holds the team lock, which expires after 10 s. A stalled renderer must release it well before then.
-    const id = ++relaySequence, deadline = Date.now() + 3000;
-    const timer = setTimeout(() => { relays.delete(id); reject(new Error('无法把插话转给规划员。')); }, 3000);
-    relays.set(id, { resolve, reject, timer });
-    try { window.webContents.send('agents:relay', { id, terminalId, sessionId: s.sessionId, agent: s.agent, text, deadline }); }
-    catch (error) { relayResult(id, error?.message || String(error)); }
-  });
-}
-function relayResult(id, error) {
-  const relay = relays.get(id);
-  if (!relay) return;
-  relays.delete(id); clearTimeout(relay.timer);
-  if (error) relay.reject(new Error(String(error).slice(0, 300))); else relay.resolve();
-}
-const interventions = createInterventions({ resolve: resolveIntervention, sendParentPrompt,
+const interventions = createInterventions({ resolve: resolveIntervention,
   pushControl: (runId, control) => dispatchControl?.pushControl(runId, control),
   sendDirect: async () => { throw new Error('该子代理没有直达控制通道。'); } });
 // The dashboard's 正在运行 strip: every terminal's running sub-agents and dispatched workers, with their project.
@@ -1183,7 +1160,7 @@ function structuredEvent(id, event) {
     else s.reportedThreadId = event.providerSessionId;
   }
   if (event.type === 'routing.updated') s.agentSettings = event.payload.observed;
-  if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && event.payload.content.text) {
+  if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && event.payload.content.unsent !== true && event.payload.content.text) {
     const clientId = event.payload.content.clientMessageId || event.itemId;
     s.nativeMessages.set(clientId, event.payload.content.text);
     s.promptQueue.enqueue(event.payload.content.text, event.receivedAtMs, clientId);
@@ -1499,7 +1476,8 @@ function registerIpc() {
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
     gradeDelivery: (grade, project, session) => dashboard.grade(grade, project, session),
     readingPage: (id, request) => readingHistory.page(id, request.key, request.cursor),
-    listAgentCommands, interventions, relayResult, t });
+    // The legacy reply IPC remains inert; no planner relay requests are emitted.
+    listAgentCommands, interventions, relayResult() {}, t });
   registerSshIpc({ handle, getSSHInfo, sshAuth, addSSH: input => store.addSSH(input), hasSession: id => sessions.has(id), getSession: id => sessions.get(id),
     startTerminal, setStartupError: (id, message) => startupErrors.set(id, message), broadcast });
   updatesIpc = registerUpdatesIpc({ handle, updateManager, updateSettings: patch => { updateStoreSettings(patch); broadcast(); }, openExternal: url => shell.openExternal(url), getWindow: () => window, dialog, t,

@@ -29,6 +29,7 @@ function compileAgentsFile(basename, language) {
     if (name === '../home/send-to-agent') return { sendToAgent: () => { throw new Error('render must not send input'); } };
     if (name === './AgentBrandIcon') return require('../src/features/agents/AgentBrandIcon.ts');
     if (name === './reset-count') return require('../src/features/agents/reset-count.ts');
+    if (name === './ApiUsage') return { ApiUsage: () => null };
     if (name === './ResetCountdown') return loadAgentsFile('ResetCountdown.tsx', language);
     if (name === './action-text') return loadAgentsFile('action-text.ts', language);
     if (name === 'react-dom') return { createPortal: children => children };

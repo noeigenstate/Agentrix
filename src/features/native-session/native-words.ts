@@ -4,7 +4,7 @@
 // The item content fields read here: messages, reasoning summaries and plans `text` (a string, or blocks with `text`; a reasoning summary
 // may also give `summary`); the owner's message `clientMessageId`; commands `command` (string or list), `cwd`, `exitCode`, `durationMs`, `output`;
 // file changes `changes[{ path, kind, diff }]` or `path`, `kind`, `diff`; tools `name` or `tool`, `server`, `input` or `arguments`, `result` or
-// `output`. Quota windows are `{ usedPercent, windowDurationMins, resetsAt }` with `resetsAt` in milliseconds.
+// `output`. Quota windows are `{ usedPercent, windowDurationMins, resetsAtMs }` with `resetsAtMs` in milliseconds.
 import { t } from '../../shared/i18n';
 import type { LimitWindow } from './native-bridge.ts';
 import type { NativeItem, Payload } from './native-model.ts';
@@ -89,5 +89,5 @@ export function clockWords(at: number | null | undefined, now = Date.now()) {
 export function windowWords(window: LimitWindow | null | undefined) {
   if (!window) return null;
   const mins = window.windowDurationMins, span = mins === null || mins === undefined ? null : mins >= 1440 ? t('{n} 天', { n: Math.round(mins / 1440) }) : mins >= 60 ? t('{n} 小时', { n: Math.round(mins / 60) }) : t('{n} 分钟', { n: mins });
-  return { span, used: typeof window.usedPercent === 'number' ? `${Math.round(window.usedPercent)}%` : t('未知'), resets: window.resetsAt === null || window.resetsAt === undefined ? t('未知') : clockWords(window.resetsAt) };
+  return { span, used: typeof window.usedPercent === 'number' ? `${Math.round(window.usedPercent)}%` : t('未知'), resets: window.resetsAtMs === null || window.resetsAtMs === undefined ? t('未知') : clockWords(window.resetsAtMs) };
 }

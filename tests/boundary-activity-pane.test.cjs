@@ -50,7 +50,5 @@ test('the API usage card only reads the main process, and the parent relay can n
   assert.deepEqual([...new Set([...card.matchAll(/\bbridge\.(\w+)\(/g)].map(match => match[1]))], ['usage'], 'its only bridge call is the usage read');
   assert.doesNotMatch(card, /sendToAgent|writeTerminal|setSettings|keySave|keyClear|\.answer\(|\.interrupt\(|\.send\(|\.start\(/, 'no write, no setting, no key, no answer');
   assert.match(read('src/features/agents/ActivityPane.tsx'), /<ApiUsage \/>/, 'and the pane shows it');
-  const relay = code('src/features/agents/parent-relay.ts');
-  assert.doesNotMatch(relay, /sendToAgent|writeTerminal|startTerminal|clipboard/i, 'a relay request is answered, never typed');
-  assert.deepEqual([...relay.matchAll(/window\.agentrix\.(\w+)/g)].map(match => match[1]).sort(), ['agentRelayResult', 'onAgentRelay']);
+  assert.equal(fs.existsSync(path.join(__dirname, '../src/features/agents/parent-relay.ts')), false);
 });

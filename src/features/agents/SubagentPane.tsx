@@ -1,7 +1,6 @@
 // A view of one sub-agent, opened from the activity pane beside the terminal's conversation: who it is, what state it is in, and the
 // conversation it is having, followed live. The conversation is read-only; the owner's word for the agent goes through SubagentInput,
-// and what the owner sent shows under the conversation as queued until the agent's own record carries it (a word relayed through the
-// parent leaves no trace there, so it stays queued).
+// and what the owner sent shows under the conversation with the worker's delivery receipt.
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { ArrowDown, Lock, X } from '@phosphor-icons/react';
 import type { AgentIntervention, SubagentFeed } from '../../shared/types';
@@ -12,6 +11,7 @@ import { ConversationFeed } from '../reading/ConversationFeed';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { CALL_STATES, elapsedClock, failureWord, rateValue } from './ActivityPane';
 import { SubagentInput } from './SubagentInput';
+import { receiptWord } from '../native-session/native-words';
 import { type FeedState, deliveredIds, unreadAfter, useSubagentFeed } from './subagent-splits.ts';
 import './activity-pane.css';
 
@@ -95,7 +95,7 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
         {feed ? <ConversationFeed entries={feed.entries} agent={feed.agent === 'Codex' ? 'codex' : 'claude'} projectId={projectId} live={feed.state === 'running' && status === 'ok'} onError={onError} onOpenLink={onOpenLink} />
           : <p className="subagent-empty">{status === 'error' ? t('读取失败：{message}', { message: error ?? '' }) : t('正在读取…')}</p>}
         {sent.map(item => <div key={item.id} className="subagent-sent">
-          <p>{item.text}</p><small>{[t(delivered.has(item.id) ? '已送达' : '已排队'), item.route === 'parent' && t('已转告主会话')].filter(Boolean).join(' · ')}</small>
+          <p>{item.text}</p><small>{receiptWord(delivered.has(item.id) ? 'delivered' : item.status)}</small>
         </div>)}
       </div>
       {unread > 0 && <button type="button" className="subagent-jump button" onClick={follow}><ArrowDown size={16} />{t('{count} 个新步骤', { count: unread })}</button>}

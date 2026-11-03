@@ -26,6 +26,9 @@ function loadUI(name, overrides = {}) {
     if (key === 'time') return { relativeTime: () => '' };
     if (key === 'active-terminal') return { useActiveTerminal: () => null, setActiveTerminal() {} };
     if (key === 'reading-mode') return { useTerminalChoice: () => [], syncReading() {}, readingShown: item => !!item.sessionId && item.codexActive };
+    if (key === 'NativeSessionView') return { NativeSessionView: () => null };
+    if (key === 'NativePathNote') return { NativePathNote: () => null };
+    if (key === 'native-store.ts') return { useNativeEntries: () => new Map(), nativeShown: () => false, ensureNativeSession() {} };
     if (key === 'ReadingView') return { ReadingView: () => null };
     if (key === 'VoiceButton') return { VoiceButton: () => null };
     if (key === 'useProjectReorder') return { useReorder: () => ({}) };

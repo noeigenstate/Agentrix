@@ -51,6 +51,7 @@
     "test:readability": "node scripts/readability-smoke.mjs",
     "test:appearance": "node scripts/appearance-smoke.mjs",
     "test:question-appearance": "node scripts/question-appearance-smoke.mjs",
+    "test:native-session": "node scripts/native-session-smoke.mjs",
     "test:native-question": "node scripts/native-question-smoke.mjs"
   },
   "dependencies": {

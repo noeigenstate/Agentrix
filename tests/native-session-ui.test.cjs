@@ -13,9 +13,6 @@ const { hookHarness } = require('./helpers/hook-harness.cjs');
 // SDK, app-server, key or account is ever touched.
 const src = path.join(__dirname, '..', 'src');
 
-const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
-before(() => { Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: { dataset: {}, lang: '' } } }); load('shared/i18n.ts').applyLanguage('zh'); });
-after(() => { if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument); else delete globalThis.document; });
 
 function makeLoader(overrides = {}) {
   const cache = new Map();
@@ -45,6 +42,10 @@ const load = makeLoader({
   '../../shared/UserAvatar': { UserAvatar: () => React.createElement('i', { className: 'avatar' }) },
   '../../shared/useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[0] },
 });
+const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+before(() => { Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: { dataset: {}, lang: '' } } }); load('shared/i18n.ts').applyLanguage('zh'); });
+after(() => { if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument); else delete globalThis.document; });
+
 const settle = async () => { for (let round = 0; round < 6; round++) await new Promise(resolve => setImmediate(resolve)); };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const elements = node => Array.isArray(node) ? node.flatMap(elements) : React.isValidElement(node) ? [node, ...elements(node.props.children)] : [];
@@ -138,8 +139,8 @@ test('words: receipts, routes, money and quota windows say what is known and "�
   assert.deepEqual(['budget_exhausted', 'native_cli_required', 'something_new', null].map(words.reasonWords), ['本月 API 预算已用完', '未找到原生 Claude Code，无法通过 API 运行', 'something_new', null], 'a code nobody mapped is shown as given');
   assert.equal(words.runtimeWord({ provider: 'claude', transport: 'claude-sdk' }), 'Claude · API');
   assert.equal(words.runtimeWord({ provider: 'codex', transport: 'codex-app-server' }), 'Codex · 原生');
-  assert.deepEqual(words.windowWords({ usedPercent: 40, windowDurationMins: 300, resetsAt: null }), { span: '5 小时', used: '40%', resets: '未知' });
-  assert.deepEqual([words.windowWords(null), words.windowWords({ usedPercent: null, windowDurationMins: 10080, resetsAt: null }).used], [null, '未知']);
+  assert.deepEqual(words.windowWords({ usedPercent: 40, windowDurationMins: 300, resetsAtMs: null }), { span: '5 小时', used: '40%', resets: '未知' });
+  assert.deepEqual([words.windowWords(null), words.windowWords({ usedPercent: null, windowDurationMins: 10080, resetsAtMs: null }).used], [null, '未知']);
   assert.deepEqual(['in_progress', 'completed', 'failed', 'declined', null].map(status => words.itemState(item('command', {}, { status }))), ['running', 'done', 'failed', null, null]);
   assert.deepEqual([words.messageText(item('agent-message', { text: 'final' }, { deltas: { text: 'streamed', output: '', reasoning: [], plan: '' } })), words.messageText(item('agent-message', { text: 'final' }))], ['streamed', 'final']);
   assert.deepEqual(words.commandOf(item('command', { command: ['npm', 'test'], exitCode: 1, durationMs: 1500, output: 'old' }, { deltas: { text: '', output: 'live', reasoning: [], plan: '' } })),
@@ -511,28 +512,45 @@ test('the native view writes to no terminal, never expands a project, and reache
   const dir = path.join(src, 'features/native-session'), files = fs.readdirSync(dir).filter(file => /\.tsx?$/.test(file));
   const code = file => fs.readFileSync(path.join(dir, file), 'utf8').replace(/\/\/.*$/gm, '');
   const all = files.map(code).join('\n');
-  assert.doesNotMatch(all, /writeTerminal|writeApproval|answerTerminal|startTerminal|closeTerminal|sendToAgent|readClipboard|\.copy\(|onExpand|expandProject/, 'typing in a small card cannot expand it, and nothing types into a pty');
+  assert.doesNotMatch(all, /writeTerminal|writeApproval|answerTerminal|startTerminal|closeTerminal|sendToAgent|readClipboard|onExpand|expandProject/, 'typing in a small card cannot expand it, and nothing types into a pty');
   assert.deepEqual(files.filter(file => /window\.agentrix/.test(code(file))), ['native-bridge.ts'], 'one file reads the bridge off window');
   assert.doesNotMatch(all, /console\.|localStorage|sessionStorage/, 'a secret answer is kept nowhere');
 });
 
-test('the parent relay answers a request once, by its id, with a refusal, and types nothing into any terminal', async () => {
-  const filename = path.join(src, 'features/agents/parent-relay.ts'), mod = new Module(filename, module);
-  mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
-  mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, filename);
-  const results = [], hear = { listener: null, off: 0 }, previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
-  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: {
-    onAgentRelay: listener => { hear.listener = listener; return () => { hear.off++; }; }, agentRelayResult: async (id, error) => { results.push([id, error]); return { ok: true, value: undefined }; },
-    writeTerminal: () => assert.fail('a relay must not type'), startTerminal: () => assert.fail('a relay must not start a terminal'),
-  } } });
+test('interventions have no planner relay sender or mounted renderer listener', () => {
+  assert.equal(fs.existsSync(path.join(src, 'features/agents/parent-relay.ts')), false);
+  const main = fs.readFileSync(path.join(src, '../electron/main.cjs'), 'utf8');
+  assert.doesNotMatch(main, /sendParentPrompt|webContents\.send\('agents:relay'/);
+  assert.doesNotMatch(fs.readFileSync(path.join(src, 'App.tsx'), 'utf8'), /startParentRelay/);
+});
+
+test('terminal fallback exposes unsent text for copying without submitting it or claiming delivery', async () => {
+  const { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
+  const text = 'keep this draft\n保留原文', copied = [], dismissed = [];
+  const model = applyEvents(emptyModel(), [
+    ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'already sent' } }, { itemId: 'old' }),
+    ev('item.upsert', { kind: 'user-message', status: 'interrupted', content: { text, clientMessageId: 'draft', unsent: true } }, { itemId: 'draft' }),
+    ev('input.receipt', { clientMessageId: 'draft', status: 'rejected' }),
+    ev('path.changed', { previous: 'api', selected: 'terminal', reason: 'budget_exhausted' }),
+  ]).model;
+  const entry = { model, dismissed: null, noteDismissed: false };
+  const harness = hookHarness('src/features/native-session/NativePathNote.tsx', {
+    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './native-session.css': {},
+    './native-store.ts': { useNativeEntries: () => new Map([['t1', entry]]), terminalSwitch: load('features/native-session/native-store.ts').terminalSwitch, dismissNote: id => dismissed.push(id) },
+    './native-words': words(), './native-bridge.ts': { copyNativeText: async value => { copied.push(value); return { ok: true }; } },
+  });
   try {
-    const stop = mod.exports.startParentRelay();
-    hear.listener({ id: 7, terminalId: 't1', sessionId: 's1', agent: 'claude', text: 'also update the docs', deadline: Date.now() + 3000 }); await settle();
-    hear.listener({ id: 8, terminalId: 't2', sessionId: 's2', agent: 'codex', text: 'stop', deadline: Date.now() + 3000 }); await settle();
-    assert.deepEqual(results, [[7, mod.exports.RELAY_REFUSED], [8, mod.exports.RELAY_REFUSED]]);
-    assert.match(mod.exports.RELAY_REFUSED, /worker directly/);
-    stop(); assert.equal(hear.off, 1, 'stopping lets go of the listener');
-  } finally { if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; }
+    const nodes = () => elements(harness.render('NativePathNote', { terminalId: 't1' }).result);
+    const box = nodes().find(node => node.type === 'textarea');
+    assert.equal(box.props.readOnly, true); assert.equal(box.props.value, text);
+    assert.equal(nodes().filter(node => node.type === 'textarea').length, 1, 'sent messages are not recovery drafts');
+    assert.equal(model.receipts.draft, 'rejected');
+    nodes().find(node => node.type === 'button' && node.props.children === '复制未发送的消息').props.onClick(); await settle();
+    assert.deepEqual(copied, [text]); assert.equal(model.receipts.draft, 'rejected', 'copying never changes delivery');
+    nodes().find(node => node.type === 'button' && node.props.title === '知道了').props.onClick();
+    assert.deepEqual(dismissed, ['t1']);
+    entry.noteDismissed = true; assert.equal(harness.render('NativePathNote', { terminalId: 't1' }).result, null);
+  } finally { harness.dispose(); }
 });
 
 // ---- the API usage card -------------------------------------------------------------------------------------------------------------
@@ -541,7 +559,7 @@ const usageOf = (patch = {}) => ({
   month: '2026-11', todayUsdMicros: 1_230_000, monthUsdMicros: 12_400_000, estimated: true, budgetUsd: 50, lastSwitch: { at: Date.UTC(2026, 10, 3, 9, 0), agent: 'claude', from: 'api', to: 'terminal', reason: 'budget_exhausted' },
   agents: {
     claude: { path: 'api', reason: null, limits: { state: 'ready', limitsById: {}, ordinaryUsageAllowed: true } },
-    codex: { path: 'native', reason: null, limits: { state: 'ready', ordinaryUsageAllowed: true, limitsById: { codex: { limitName: 'Codex', primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: Date.UTC(2026, 10, 3, 12, 30) }, secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAt: null } } } } },
+    codex: { path: 'native', reason: null, limits: { state: 'ready', ordinaryUsageAllowed: true, limitsById: { codex: { limitName: 'Codex', primary: { usedPercent: 40, windowDurationMins: 300, resetsAtMs: Date.UTC(2026, 10, 3, 12, 30) }, secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAtMs: null } } } } },
   }, ...patch,
 });
 
@@ -577,9 +595,9 @@ test('a failed read says so, a window without the bridge shows no card, and limi
   assert.match(await usageHtml({ usage: async () => ({ ok: false, error: 'locked' }) }), /role="alert">无法读取额度：locked/);
   assert.equal(await usageHtml(null), '');
   const { limitLines } = load('features/agents/ApiUsage.tsx'), soon = Date.now() + 3600_000;
-  assert.match(limitLines({ state: 'rate_limited', limitsById: { api: { primary: { usedPercent: 100, windowDurationMins: 60, resetsAt: soon } } } })[0], /^已限流，约 .+ 恢复$/);
+  assert.match(limitLines({ state: 'rate_limited', limitsById: { api: { primary: { usedPercent: 100, windowDurationMins: 60, resetsAtMs: soon } } } })[0], /^已限流，约 .+ 恢复$/);
   assert.deepEqual(limitLines({ ordinaryUsageAllowed: false }), ['已限流，恢复时间未知']);
   assert.deepEqual(limitLines({ state: 'unavailable' }), ['暂时读不到']);
   assert.deepEqual(limitLines(null), ['未知']);
-  assert.deepEqual(limitLines({ state: 'stale', limitsById: { a: { primary: { usedPercent: 5, windowDurationMins: 60, resetsAt: null } } } }), ['1 小时 · 已用 5% · 未知 重置', '数据可能已过期']);
+  assert.deepEqual(limitLines({ state: 'stale', limitsById: { a: { primary: { usedPercent: 5, windowDurationMins: 60, resetsAtMs: null } } } }), ['1 小时 · 已用 5% · 未知 重置', '数据可能已过期']);
 });

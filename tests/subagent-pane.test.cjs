@@ -213,7 +213,8 @@ test('the view names the task first, then the model, settings, state, speed and 
   assert.match(paneMarkup(ok({ agent: 'Claude Code', rate: null })), /data-agent="claude"/);
   assert.doesNotMatch(paneMarkup(ok({ effort: null, fast: null })), /max · 快速/);
   assert.doesNotMatch(paneMarkup(ok({ rate: null })), /token\/s/, 'an unknown speed takes no room in the header: no dash, no unit');
-  assert.match(html, /<\/div><div class="subagent-input"><div class="subagent-input-row"><textarea[^>]*maxLength="4000"[^>]*><\/textarea><button type="button" class="button">停下<\/button><\/div><\/div><footer class="subagent-foot">/, 'the input sits above the status line');
+  assert.match(html, /<div class="subagent-input-row reading-composer">/, "the input shares the reading composer");
+  assert.match(html, /title="停下"[\s\S]*class="icon-button reading-send"[\s\S]*<footer class="subagent-foot">/, "Stop precedes Send above the status line");
 }));
 
 test('a finished view stays until closed, shows the time it took, and a lost record says so without losing the content', () => zh(() => {
@@ -281,7 +282,7 @@ test('a delivered word reads 已送达 under the conversation, a queued one 已�
   const html = paneMarkup(ok({ entries }), undefined, withSent([intervention(), intervention({ id: 'i2', text: 'and the docs' }), intervention({ id: 'i3', text: 'fix the test', route: 'parent' })]));
   assert.match(html, /<p>fix the test<\/p><small>已送达<\/small>/);
   assert.match(html, /<p>and the docs<\/p><small>已排队<\/small>/);
-  assert.match(html, /<p>fix the test<\/p><small>已排队 · 已转告主会话<\/small>/);
+  assert.match(html, /<p>fix the test<\/p><small>已排队<\/small>/);
 }));
 
 // ---- the owner's word to the agent --------------------------------------------------------------------------------------------------
@@ -295,13 +296,36 @@ function inputView(bridge, patch = {}, fit = 0) {
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge } });
   // The width-fitting hook has its own tests below; here the box shows the hint at index `fit` of the list it was given.
   const words = { queued: '已排队', delivered: '已送达', consumed: '已被读取', rejected: '未送达', unknown: '送达状态未知' };
-  const hints = [], harness = hookHarness('src/features/agents/SubagentInput.tsx', { './i18n': { t: fill }, './subagent-input.css': {}, './native-words': { receiptWord: status => words[status] ?? null }, './useFittingHint': { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, list) => (hints.splice(0, hints.length, ...list), list[fit] ?? '') } });
+  const hints = [], harness = hookHarness('src/features/agents/SubagentInput.tsx', { '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './subagent-input.css': {}, './native-words': { receiptWord: status => words[status] ?? null }, './useFittingHint': { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, list) => (hints.splice(0, hints.length, ...list), list[fit] ?? '') } });
   const props = { terminalId: 't1', callId: 'agent:a', name: 'Sol', closed: false, onSent: item => sent.push(item), ...patch };
-  const find = tag => elements(harness.render('SubagentInput', props).result).find(node => node.type === tag), note = () => elements(harness.render('SubagentInput', props).result).find(node => node.type === 'span' && node.props.id);
+  const tree = () => elements(harness.render('SubagentInput', props).result);
+  const find = tag => tree().find(node => node.type === tag), note = () => tree().find(node => node.type === 'span' && node.props.id);
   const press = (init = {}) => { const prevented = []; find('textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, preventDefault: () => prevented.push(true), ...init }); return prevented.length; };
   const type = value => find('textarea').props.onChange({ target: { value } });
-  return { sent, hints, find, note, press, type, done() { harness.dispose(); if (saved) Object.defineProperty(globalThis, 'window', saved); else delete globalThis.window; } };
+  return { sent, hints, find, tree, note, press, type, done() { harness.dispose(); if (saved) Object.defineProperty(globalThis, 'window', saved); else delete globalThis.window; } };
 }
+
+test('the send button uses the same input path and a refused or failed delivery preserves the draft', async () => {
+  let answer, calls = 0;
+  const view = inputView({ interveneAgent: () => { calls++; return new Promise(resolve => { answer = resolve; }); } });
+  const send = () => view.tree().find(node => node.type === 'button' && node.props['aria-label'] === '发送');
+  try {
+    assert.equal(send().props.disabled, true);
+    view.type('original'); assert.equal(send().props.disabled, false); send().props.onClick();
+    assert.equal(send().props.disabled, true); assert.equal(calls, 1);
+    view.type('new draft'); answer({ ok: true, value: intervention({ status: 'rejected' }) }); await settle();
+    assert.equal(view.find('textarea').props.value, 'new draft'); assert.deepEqual(view.sent, []);
+    assert.equal(view.find('p').props.children, '未送达 · 工作者未提供原因。');
+    send().props.onClick(); answer({ ok: true, value: intervention({ status: 'delivered' }) }); await settle();
+    assert.equal(view.find('textarea').props.value, ''); assert.equal(view.sent.length, 1);
+  } finally { view.done(); }
+  const failed = inputView({ interveneAgent: async () => { throw new Error('worker disconnected'); } });
+  try {
+    failed.type('keep me'); failed.press(); await settle();
+    assert.equal(failed.find('textarea').props.value, 'keep me'); assert.equal(failed.find('p').props.children, '未送达 · worker disconnected');
+    assert.deepEqual(failed.sent, []);
+  } finally { failed.done(); }
+});
 
 test('Enter sends the trimmed word; Shift+Enter, an empty box and an IME composition send nothing; a sent word clears the box and is handed on', async () => {
   const calls = [], view = inputView({ interveneAgent: async (...args) => { calls.push(args); return { ok: true, value: intervention() }; } });
@@ -317,7 +341,7 @@ test('Enter sends the trimmed word; Shift+Enter, an empty box and an IME composi
     assert.equal(view.find('textarea').props.value, '', 'the box is empty once it was sent');
     assert.deepEqual(view.sent, [intervention()]);
     const receipt = view.find('p');
-    assert.deepEqual([receipt.props.role, receipt.props.children], ['status', '已发给它 · 已排队'], 'the receipt says how far the word got');
+    assert.deepEqual([receipt.props.role, receipt.props.children], ['status', '已排队'], 'the receipt says how far the word got');
   } finally { view.done(); }
 });
 
@@ -326,7 +350,7 @@ test('the receipt follows what main answered: delivered, read, refused or unknow
   try {
     const seen = [];
     for (let round = 0; round < 5; round++) { view.type('word ' + round); view.press(); await settle(); seen.push(view.find('p').props.children); }
-    assert.deepEqual(seen, ['已发给它 · 已送达', '已发给它 · 已被读取', '已发给它 · 未送达', '已发给它 · 送达状态未知', '已发给它'], 'a status nobody knows adds no word');
+    assert.deepEqual(seen, ['已送达', '已被读取', '未送达 · 工作者未提供原因。', '送达状态未知', '送达状态未知'], 'an unknown status stays unknown');
     assert.doesNotMatch(seen.join(), /主会话|规划员/);
   } finally { view.done(); }
 });
@@ -336,7 +360,7 @@ test('a refused word shows the reason beside the box, keeps the text and hands n
   try {
     view.type('please stop editing the lockfile'); view.press(); await settle();
     const note = view.find('p');
-    assert.deepEqual([note.props.role, note.props.children], ['alert', 'The agent is not running']);
+    assert.deepEqual([note.props.role, note.props.children], ['alert', '未送达 · The agent is not running']);
     assert.equal(view.find('textarea').props.value, 'please stop editing the lockfile');
     assert.deepEqual(view.sent, []);
     assert.equal(view.find('button').props.disabled, false, 'the owner can try again or stop it');
@@ -350,11 +374,11 @@ test('停下 asks the agent to stop through the main process and says so with it
     const stop = () => view.find('button').props.onClick();
     stop(); await settle();
     assert.deepEqual(calls, [['t1', 'agent:a']]);
-    assert.deepEqual([view.find('p').props.children, view.find('p').props.role], ['已请它停下 · 已排队', 'status']);
+    assert.deepEqual([view.find('p').props.children, view.find('p').props.role], ['已排队', 'status']);
     stop(); await settle();
-    assert.equal(view.find('p').props.children, '已请它停下 · 已送达');
+    assert.equal(view.find('p').props.children, '已送达');
     stop(); await settle();
-    assert.deepEqual([view.find('p').props.role, view.find('p').props.children], ['alert', 'no such call'], 'an error replaces the note');
+    assert.deepEqual([view.find('p').props.role, view.find('p').props.children], ['alert', '未送达 · no such call'], 'an error replaces the note');
     assert.deepEqual(view.sent, [], 'a stop is not an entry in the conversation');
   } finally { view.done(); }
 });
@@ -373,11 +397,11 @@ test('a finished or lost view takes no word: the box is off and says why in its 
   } finally { view.done(); }
 });
 
-test('what the owner sent shows under the conversation as queued, with the parent relay named when it went that way', () => zh(() => {
+test('what the owner sent shows under the conversation as queued, with only its worker receipt', () => zh(() => {
   const withSent = items => { let slot = 0; return { ...hookApi, useState: start => [slot++ === 1 ? items : typeof start === 'function' ? start() : start, () => {}] }; };
   const html = paneMarkup(ok({}), undefined, withSent([intervention(), intervention({ id: 'i2', text: 'and the docs', route: 'parent' })]));
   assert.match(html, /<div class="subagent-sent"><p>fix the test<\/p><small>已排队<\/small><\/div>/);
-  assert.match(html, /<div class="subagent-sent"><p>and the docs<\/p><small>已排队 · 已转告主会话<\/small><\/div>/);
+  assert.match(html, /<div class="subagent-sent"><p>and the docs<\/p><small>已排队<\/small><\/div>/);
   assert.ok(html.indexOf('conversation-feed') < html.indexOf('subagent-sent') && html.indexOf('subagent-sent') < html.indexOf('subagent-input'), 'after the conversation, before the box');
   assert.equal(count(paneMarkup(ok({})), /subagent-sent/g), 0);
 }));
@@ -576,9 +600,10 @@ test("the chip's popover is the pane's card on the menu colour, and the chip its
 });
 
 test("a sub-agent view's hint stays on one line, so the box keeps its 36px at any width while typed text still grows it", () => {
-  const css = fs.readFileSync(path.join(src, 'features/agents/subagent-input.css'), 'utf8');
-  assert.match(css, /\.subagent-input textarea::placeholder \{ color: var\(--text-2\); white-space: nowrap; overflow: hidden; \}/);
-  assert.match(css, /\.subagent-input textarea \{[^}]*min-height: 36px;[^}]*field-sizing: content;/);
+  const css = fs.readFileSync(path.join(src, 'features/reading/reading.css'), 'utf8');
+  assert.match(fs.readFileSync(path.join(src, 'features/agents/SubagentInput.tsx'), 'utf8'), /subagent-input-row reading-composer/);
+  assert.match(css, /\.reading-composer textarea::placeholder \{ color: var\(--text-2\); white-space: nowrap; overflow: hidden; \}/);
+  assert.match(css, /\.reading-composer textarea \{[^}]*field-sizing: content;[^}]*min-height: 32px;/);
 });
 
 test('two splits of one model are told apart by their task: it leads the header and every accessible name, the model follows', () => zh(() => {
@@ -608,13 +633,13 @@ test('the task keeps the header’s width: only the state, the clock and the clo
 test('a narrow message box shows a shorter hint that fits, never a cut-off one: the longest hint comes first, the reason a finished view gives has a short form', () => {
   const view = inputView({}, {}, 2);
   try {
-    assert.equal(view.find('textarea').props.placeholder, '给它发消息', 'the shortest, for the narrowest box');
-    assert.deepEqual(view.hints, ['给它发消息 · Enter 发送，Shift+Enter 换行', '给它发消息 · Enter 发送', '给它发消息']);
+    assert.equal(view.find('textarea').props.placeholder, '给 Sol 发消息', 'the shortest, for the narrowest box');
+    assert.deepEqual(view.hints, ['给 Sol 发消息，Enter 发送，Shift+Enter 换行', '给 Sol 发消息，Enter 发送', '给 Sol 发消息']);
   } finally { view.done(); }
 });
 
 test('whenever the box shows a shortened hint, or none, the full one with its keys is its tooltip and a hidden accessible description; the full hint needs neither', () => {
-  const full = '给它发消息 · Enter 发送，Shift+Enter 换行';
+  const full = '给 Sol 发消息，Enter 发送，Shift+Enter 换行';
   for (const fit of [1, 2, 3]) {   // a shorter hint, the shortest, nothing fits
     const view = inputView({}, {}, fit);
     try {
@@ -622,7 +647,7 @@ test('whenever the box shows a shortened hint, or none, the full one with its ke
       assert.equal(box.props.title, full); assert.equal(box.props['aria-describedby'], 'subagent-hint-t1-agent:a');
       assert.equal(note.props.id, box.props['aria-describedby']); assert.equal(note.props.children, full);
       assert.equal(note.props.style.position, 'absolute', 'not drawn');
-      assert.equal(box.props.placeholder, ['给它发消息 · Enter 发送', '给它发消息', ''][fit - 1], 'the visible hint is the longest that fits, empty when none does');
+      assert.equal(box.props.placeholder, ['给 Sol 发消息，Enter 发送', '给 Sol 发消息', ''][fit - 1], 'the visible hint is the longest that fits, empty when none does');
     } finally { view.done(); }
   }
   const whole = inputView({}, {}, 0);

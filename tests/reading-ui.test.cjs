@@ -911,6 +911,8 @@ test('the terminal surface follows reading intent even before the reading subtre
   const mode = readingMode(), value = { ...terminal('surface', null), title: 'Terminal', status: 'shell' };
   const { ProjectTerminals } = loadUI('features/terminal/ProjectTerminals.tsx', {
     './reading-mode': mode,
+    './NativeSessionView': { NativeSessionView: () => null }, './NativePathNote': { NativePathNote: () => null },
+    './native-store.ts': { useNativeEntries: () => new Map(), nativeShown: () => false, ensureNativeSession() {} },
     './ReadingView': { ReadingView: () => null },
     './TerminalPane': { TerminalPane: props => React.createElement('div', { className: 'terminal-host', 'data-focused': props.focused }) },
     './AgentLauncher': { AgentLauncher: () => null }, './VoiceButton': { VoiceButton: () => null },
@@ -931,6 +933,8 @@ test('the terminal surface follows reading intent even before the reading subtre
 
 test('a restored preview and live splits keep the same order and fallback selection in small and expanded cards', () => {
   const mode = readingMode(), { ProjectTerminals } = loadUI('features/terminal/ProjectTerminals.tsx', {
+    './NativeSessionView': { NativeSessionView: () => null }, './NativePathNote': { NativePathNote: () => null },
+    './native-store.ts': { useNativeEntries: () => new Map(), nativeShown: () => false, ensureNativeSession() {} },
     './reading-mode': mode, './ReadingView': { ReadingView: () => null }, './TerminalPane': { TerminalPane: () => null },
     './AgentLauncher': { AgentLauncher: () => null }, './useProjectReorder': { useReorder: () => ({}) },
   });

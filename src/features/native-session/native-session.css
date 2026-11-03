@@ -40,6 +40,11 @@
 .native-ended > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
 /* The notice over a card whose Claude session went to the terminal. */
-.native-path-note { position: absolute; z-index: 3; top: 8px; right: 12px; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); padding: 0 0 0 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-card); color: var(--text-1); font-size: 12px; }
-.native-path-note > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-path-note { position: absolute; z-index: 3; top: 8px; right: 12px; display: flex; flex-direction: column; max-width: calc(100% - 24px); border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); color: var(--text-1); font-size: 12px; }
+.native-path-summary { display: flex; align-items: center; gap: 8px; padding-left: 12px; }
+.native-path-summary > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .native-path-note .icon-button { flex: none; width: 32px; height: 32px; border-radius: 50%; }
+.native-unsent { min-width: 0; padding: 8px 12px; border-top: 1px solid var(--divider); }
+.native-unsent summary { cursor: pointer; min-height: 32px; }
+.native-unsent textarea { display: block; width: 100%; min-height: 64px; max-height: 160px; margin-bottom: 8px; resize: vertical; background: var(--bg-input); color: var(--text-1); border: 1px solid var(--border); border-radius: 8px; font: 400 14px/24px var(--font-ui); }
+.native-path-note > [role="alert"] { margin: 8px 12px; }

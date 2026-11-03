@@ -18,8 +18,8 @@ function look(terminalId: string, agent: Agent) {
 export async function sendToAgent(terminalId: string, sessionId: string, agent: Agent, text: string,
   { preserveDraft = false, deadline }: { preserveDraft?: boolean; deadline?: number } = {}): Promise<string | null> {
   const screenError = t('请先在终端中处理当前界面，再发送消息。');
-  const draftError = t('规划员输入框中有未发送的草稿，请先处理草稿后重试。');
-  const pastedError = t('已粘贴到规划员输入框，未能确认发送，请在终端里处理。');
+  const draftError = t('输入框中有未发送的草稿，请先处理草稿后重试。');
+  const pastedError = t('已粘贴到输入框，未能确认发送，请在终端里处理。');
   // Leave main time to receive the result before its admission timeout releases the team lock.
   const expired = () => deadline !== undefined && Date.now() > deadline - 300;
   const now = look(terminalId, agent);
@@ -29,7 +29,7 @@ export async function sendToAgent(terminalId: string, sessionId: string, agent: 
     if (preserveDraft) return draftError;
     window.agentrix.writeTerminal(terminalId, '\x15'); await pause(60);
   }
-  if (expired()) return t('转发已超时，消息未发送。');
+  if (expired()) return t('发送已超时，消息未发送。');
   const pasted = await window.agentrix.pasteTerminal(terminalId, text, sessionId);
   if (!pasted.ok) return pasted.error;
   let submitted = false;

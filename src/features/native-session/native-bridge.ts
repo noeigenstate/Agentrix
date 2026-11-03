@@ -12,7 +12,7 @@ export type NativeAnswer = { decision: 'allow' | 'deny' } | { answers: Record<st
 export type NativeSnapshot = { runtimeSessionId: string; lastSequence: number; events: AgentEvent[] };
 
 // One quota window (Codex's 5 hours or week, an API rate limit); a value the provider did not give is null, never 0.
-export type LimitWindow = { usedPercent: number | null; windowDurationMins: number | null; resetsAt: number | null };
+export type LimitWindow = { usedPercent: number | null; windowDurationMins: number | null; resetsAtMs: number | null };
 export type LimitsPayload = {
   state?: string | null; observedAtMs?: number | null; ordinaryUsageAllowed?: boolean | null;
   limitsById?: Record<string, { limitName?: string | null; primary?: LimitWindow | null; secondary?: LimitWindow | null } | null> | null;
@@ -54,3 +54,6 @@ export function launchRoute(agent: NativeAgent, settings: NativeSettings | null,
 
 // The one place that reads the bridge off window (Bridge's own type is the main side's).
 export const nativeBridge = (): NativeBridge | null => (typeof window === 'undefined' ? null : (window.agentrix as unknown as { nativeSession?: NativeBridge } | undefined)?.nativeSession ?? null);
+
+// Copying recovered input never submits it to either runtime.
+export const copyNativeText = (text: string) => window.agentrix.copy(text);
