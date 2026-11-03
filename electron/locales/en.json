@@ -2607,5 +2607,7 @@
   "终端里的状态实时同步到阅读视图和活动栏，处理完立即可以继续；遇到终端里的确认时，你打的消息先排队，处理完再发出。": "The terminal's state reaches the reading view and the activity pane at once, so you can continue the moment it finishes; while a terminal confirmation is open, your message waits and goes out afterwards.",
   "终端界面里需要你确认或选择时，以及输入任何斜杠命令时，都会直接弹出终端；你正在输入时弹出的终端不会抢走焦点。": "In the terminal view, whenever you need to confirm or choose, and whenever you type a slash command, the terminal pops up at once; a terminal that pops up while you type never takes the focus.",
   "你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入这里的预算估算。": "Commands run in your own API session can read the key; any spending they incur is excluded from this budget estimate.",
-  "本轮 API 预算上限已用完，请发送新消息继续。": "This turn has reached its API budget cap. Send a new message to continue."
+  "本轮 API 预算上限已用完，请发送新消息继续。": "This turn has reached its API budget cap. Send a new message to continue.",
+  "本次测试版新增": "New in this beta",
+  "1.3.26 的其他更新": "Also in 1.3.26"
 }

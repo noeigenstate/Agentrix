@@ -142,6 +142,8 @@ dialog { color: var(--text-1); }
 /* 更新与关于: one product module (the app's tile, name, version and distribution, then the update block), then two list rows with chevrons. Cards are radius 12 on the input colour with the border. */
 .about-page { display: flex; flex-direction: column; gap: 16px; padding-top: 24px; }
 .about-page > .text-button { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; }
+/* The change log reads as lines of about 45 characters, not the pane's whole width. */
+.about-page .release-groups, .about-page .release-notes { max-width: 640px; }
 .about-product, .about-rows { border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); }
 .about-product { display: flex; flex-direction: column; gap: 16px; padding: 20px; }
 .about-product-head { display: flex; align-items: center; gap: 16px; }
