@@ -12,11 +12,18 @@ const { randomUUID } = require('node:crypto');
 const { LabSession } = require('../electron/features/lab/session.cjs');
 const backend = require('../electron/features/lab/sandbox-win32.cjs');
 const { markedPids, command } = require('../electron/features/lab/process.cjs');
-const { prepCommand, createHostPreparation, ISOLATION_ERROR, nativeSource } = require('../electron/features/lab/sandbox-win32-preparation.cjs');
+const { prepCommand, cleanPowerShellCommand, SOURCE_SHA256, createHostPreparation, ISOLATION_ERROR, nativeSource } = require('../electron/features/lab/sandbox-win32-preparation.cjs');
 
 const windows = { timeout: 45000, skip: process.platform !== 'win32' ? 'Windows LPAC and Job Objects are required' :
   process.env.AGENTRIX_LAB_TEST_PREPARE_HOST !== '1' ? 'Windows sandbox tests require explicit AGENTRIX_LAB_TEST_PREPARE_HOST=1 consent on the elevated CI runner.' :
     process.env.CI !== 'true' ? 'Real Windows LPAC and Job tests run only on the elevated CI runner.' : false };
+
+function preparationScripts(outer) {
+  const args = Buffer.from(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/.exec(outer)[1], 'base64').toString();
+  const loader = Buffer.from(/-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(args)[1], 'base64').toString('utf16le');
+  const packed = /FromBase64String\('([A-Za-z0-9+/=]+)'\)/.exec(loader)[1];
+  return { args, loader, bootstrap: require('node:zlib').gunzipSync(Buffer.from(packed, 'base64')).toString() };
+}
 
 async function loadModule(name, overrides = {}, globals = {}) {
   const file = path.join(__dirname, '../electron/features/lab', name), localRequire = createRequire(file), module = { exports: {} };
@@ -73,8 +80,17 @@ async function fixture(t) {
   return { root, labRoot, workspaceRoot, session, install, nodePath };
 }
 
+async function runtimeAclSnapshot(fixture, name) {
+  const target = path.join(fixture.root, name + '.acl');
+  const result = await command(path.join(process.env.SystemRoot, 'System32', 'icacls.exe'),
+    [fixture.install, '/save', target, '/t'], { timeoutMs: 5000 });
+  assert.equal(result.code, 0, result.stderr);
+  return fs.readFile(target, 'utf16le');
+}
+
 test('Windows LPAC permits the workspace, denies protected reads and outside writes', windows, async t => {
   const f = await fixture(t); if (!f) return;
+  const before = await runtimeAclSnapshot(f, 'runtime-before');
   const outside = path.join(f.root, 'outside.txt');
   await fs.writeFile(outside, 'unchanged');
   const script = `const fs=require('node:fs');
@@ -84,6 +100,7 @@ test('Windows LPAC permits the workspace, denies protected reads and outside wri
   const result = await f.session.execute(f.nodePath, ['-e', script, path.join(f.root, 'protected', 'secret'), outside], { cwd: f.workspaceRoot, timeoutMs: 10000 });
   assert.equal(result.code, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), { read: false, write: false });
+  assert.equal(await runtimeAclSnapshot(f, 'runtime-after'), before, 'normal cleanup restores the owner runtime ACLs');
   assert.equal(await fs.readFile(outside, 'utf8'), 'unchanged');
   assert.equal(await fs.readFile(path.join(f.workspaceRoot, 'allowed.txt'), 'utf8'), 'ok');
 });
@@ -280,6 +297,7 @@ test('Windows relay serves a child broker burst and closes every client without 
 
 test('Windows root leases serialize cleanup after launcher exit and remove inherited and protected grants', windows, async t => {
   const f = await fixture(t); if (!f) return;
+  const before = await runtimeAclSnapshot(f, 'runtime-before');
   const tree = path.join(f.workspaceRoot, 'dependencies'), special = path.join(tree, 'protected-acl');
   await fs.mkdir(special, { recursive: true });
   const aclTool = path.join(process.env.SystemRoot, 'System32', 'icacls.exe');
@@ -311,6 +329,7 @@ test('Windows root leases serialize cleanup after launcher exit and remove inher
   assert.equal(cleaned, false, 'a live launcher retains its lease');
   control.abort();
   await Promise.all([stopped, cleaning]);
+  assert.equal(await runtimeAclSnapshot(f, 'runtime-after'), before, 'stopped-job recovery restores the owner runtime ACLs');
   assert.deepEqual(await markedPids(f.session.runId), []);
   assert.ok(!(await fs.readdir(f.session.privateDirectory)).some(name => name.endsWith('.acl.json')));
   for (const [index, file] of [f.workspaceRoot, inherited, protectedFile].entries()) {
@@ -335,27 +354,59 @@ test('Windows recovery still removes grants from legacy per-file leases', window
   assert.ok(!(await fs.readFile(snapshot, 'utf16le')).includes(sid));
 });
 
-test('UAC starts Windows PowerShell and stages a verified admin-only helper with a fixed operation', () => {
-  const binary = "C:\\isolated 'fixture\\launcher.exe", hash = 'a'.repeat(64), command = prepCommand(binary, hash);
+test('UAC scrubs CLR injection before PowerShell and compiles pinned source in an admin-only directory', () => {
+  const input = "C:\\isolated 'fixture\\launcher.cs", hash = SOURCE_SHA256, command = prepCommand(input, hash);
+  const source = require('../electron/features/lab/sandbox-win32-native.cjs') + nativeSource;
+  assert.equal(require('node:crypto').createHash('sha256').update(source).digest('hex'), hash, 'the distributed source pin must match the shipped C#');
   assert.equal(command.file, path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'));
   assert.equal(command.options.windowsHide, true);
   assert.equal(command.options.shell, undefined);
   assert.deepEqual(Object.keys(command.options.env).sort(), ['PATH', 'SystemRoot']);
-  const outer = Buffer.from(command.args.at(-1), 'base64').toString('utf16le');
-  const bootstrap = Buffer.from(/-EncodedCommand ([A-Za-z0-9+/=]+)'/.exec(outer)[1], 'base64').toString('utf16le');
+  const outer = command.args.at(-1);
+  const { args, bootstrap } = preparationScripts(outer);
   assert.match(outer, /\$start.Verb='runas'/);
   assert.match(outer, /\[Environment\]::SystemDirectory/);
-  assert.ok(!outer.includes(binary));
-  assert.ok(bootstrap.includes(Buffer.from(binary).toString('base64')));
+  assert.match(outer, /'cmd.exe'/);
+  assert.match(args, /^\/d \/q \/v:off \/s \/c /);
+  for (const prefix of ['COR_', 'CORECLR_', 'COMPlus_', 'DOTNET_', 'APPDOMAIN_']) assert.ok(args.includes(prefix));
+  assert.ok(!outer.includes(input));
+  assert.ok(bootstrap.includes(Buffer.from(input).toString('base64')));
   assert.equal((bootstrap.match(new RegExp(hash, 'g')) || []).length, 2, 'verify the input and the protected copy');
   assert.match(bootstrap, /O:BAG:SYD:P\(A;OICI;FA;;;SY\)\(A;OICI;FA;;;BA\)/);
   assert.match(bootstrap, /\[Environment\]::SystemDirectory,'AgentrixLabPrep-'/);
   assert.match(bootstrap, /\$start.Arguments='prepare-host'/);
+  assert.match(bootstrap, /Framework64\\v4.0.30319\\csc.exe/);
+  assert.match(bootstrap, /WriteAllBytes\(\$sourceCopy,\$bytes\)/);
   assert.match(bootstrap, /\$start.EnvironmentVariables.Clear\(\)/);
   assert.doesNotMatch(nativeSource, /runas|ElevateHost/);
-  assert.equal(Buffer.from(prepCommand(binary, hash, { elevate: false }).args.at(-1), 'base64').toString('utf16le'), bootstrap);
-  assert.throws(() => prepCommand(binary, 'not a hash'), { infrastructure: true });
+  assert.equal(prepCommand(input, hash, { elevate: false }).args.join(' '), args);
+  assert.throws(() => prepCommand(input, 'a'.repeat(64)), { infrastructure: true });
+  assert.throws(() => prepCommand(input.replace('.cs', '.exe'), hash), { infrastructure: true });
 });
+
+test('native preparation entry removes synthetic profiler and CLR injection variables without elevation',
+  { skip: process.platform !== 'win32', timeout: 10000 }, async () => {
+    const probe = `[Console]::Write(@([Environment]::GetEnvironmentVariables('Process').Keys | Where-Object {$_ -match '^(COR_|CORECLR_|COMPlus_|DOTNET_|APPDOMAIN_|DEVPATH$)'}).Count)`;
+    const call = cleanPowerShellCommand(probe);
+    const result = await command(call.file, call.args, { ...call.options, timeoutMs: 5000, env: {
+      ...call.options.env, COR_ENABLE_PROFILING: '1', COR_PROFILER_PATH: 'C:\\synthetic-missing.dll',
+      COMPlus_Test: 'synthetic', CORECLR_ENABLE_PROFILING: '1', DOTNET_STARTUP_HOOKS: 'synthetic',
+      APPDOMAIN_MANAGER_ASM: 'synthetic', DEVPATH: 'synthetic', 'COR_Test"&echo INJECTED&rem "': 'synthetic',
+      ComSpec: 'C:\\synthetic-missing-cmd.exe', PSModulePath: 'C:\\synthetic-missing-modules',
+    } });
+    assert.equal(result.code, 0, result.stderr); assert.equal(result.stdout.trim(), '0');
+    assert.doesNotMatch(result.stdout + result.stderr, /INJECTED/);
+  });
+
+test('preparation rejects a replaced source before staging or invoking a helper',
+  { skip: process.platform !== 'win32', timeout: 15000 }, async t => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lab-preparation-tamper-'));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    const input = path.join(root, 'replaced.cs'); await fs.writeFile(input, 'untrusted replacement, never executable');
+    const call = prepCommand(input, SOURCE_SHA256, { elevate: false });
+    const result = await command(call.file, call.args, { ...call.options, timeoutMs: 10000 });
+    assert.notEqual(result.code, 0); assert.match(result.stderr, /Preparation payload changed/);
+  });
 
 test('pipe ACL passes the user and exact restricted SID checks without administrator or broad package grants',
   { skip: process.platform !== 'win32', timeout: 15000 }, async t => {
@@ -364,6 +415,7 @@ test('pipe ACL passes the user and exact restricted SID checks without administr
     // This grants only a synthetic fixture pipe and checks restricted tokens in memory; no LPAC or host preparation.
     const probe = String.raw`
 public partial class LabSandbox {
+  [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)]static extern bool CreateHardLinkW(string file,string source,IntPtr security);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool CreateRestrictedToken(IntPtr token,uint flags,
     uint disableCount,[In] SidAttr[] disable,uint deleteCount,IntPtr deleted,uint restrictCount,[In] SidAttr[] restricted,out IntPtr result);
   [DllImport("advapi32.dll")] static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
@@ -420,9 +472,71 @@ public partial class LabSandbox {
     try { PipeAcl(pipe,sid);if(!Allows(FileAcl(pipe),SidString(sid),0x12019f))throw new Exception("scoped pipe grant missing"); }
     finally { FreeSid(sid); }
   }
+  static RawSecurityDescriptor FixtureSecurity(string file) {
+    IntPtr owner,group,dacl,sacl,descriptor;CheckCode(GetNamedSecurityInfoW(file,1,DACL,out owner,out group,out dacl,out sacl,out descriptor));
+    try { return new RawSecurityDescriptor(CopySecurity(descriptor),0); } finally { LocalFree(descriptor); }
+  }
+  static string FixtureSnapshot(string file) {
+    var security=FixtureSecurity(file);var acl=new byte[security.DiscretionaryAcl.BinaryLength];security.DiscretionaryAcl.GetBinaryForm(acl,0);
+    return security.ControlFlags+":"+Convert.ToBase64String(acl);
+  }
+  static void FixtureSecurity(string file,RawSecurityDescriptor security) {
+    var bytes=new byte[security.BinaryLength];security.GetBinaryForm(bytes,0);IntPtr descriptor=Marshal.AllocHGlobal(bytes.Length);
+    Marshal.Copy(bytes,0,descriptor,bytes.Length);FileIdentity identity;IntPtr handle=CheckedFile(file,0x60080,out identity);
+    try { Check(SetKernelObjectSecurity(handle,DACL,descriptor)); } finally { CloseHandle(handle);Marshal.FreeHGlobal(descriptor); }
+  }
+  static void FixturePrivateAcl(string root) {
+    IntPtr arap;Check(ConvertStringSidToSidW(PackageSids[1],out arap));
+    try { foreach(string file in Tree(root))Acl(file,arap,0,true); } finally { LocalFree(arap); }
+  }
+  public static void TestRuntimeSecurity(string root) {
+    Directory.CreateDirectory(root);Directory.CreateDirectory(Path.Combine(root,"protected"));
+    string stale=Path.Combine(root,"stale.txt"),guarded=Path.Combine(root,"protected","guarded.txt");
+    File.WriteAllText(stale,"fixture");File.WriteAllText(guarded,"fixture");
+    FixturePrivateAcl(root);
+    var security=FixtureSecurity(stale);
+    security.DiscretionaryAcl.InsertAce(security.DiscretionaryAcl.Count,new CommonAce(AceFlags.Inherited,
+      AceQualifier.AccessAllowed,unchecked((int)RX),new SecurityIdentifier("S-1-5-21-111-222-333-999"),false,null));
+    FixtureSecurity(stale,security);
+    security=FixtureSecurity(guarded);security.SetFlags(security.ControlFlags|ControlFlags.DiscretionaryAclProtected);FixtureSecurity(guarded,security);
+    var files=Tree(root).ToArray();var before=files.ToDictionary(file=>file,file=>FixtureSnapshot(file));
+    IntPtr own,other;Check(ConvertStringSidToSidW("S-1-15-2-11-22-33-44-55-66-77",out own));
+    Check(ConvertStringSidToSidW("S-1-15-2-11-22-33-44-55-66-78",out other));
+    try {
+      using(var lifetime=new RunLifetime()) {
+        var grant=PrepareGrant(root,RX,false,lifetime);
+        if(grant==null || grant.propagate || grant.objects.Count!=files.Length)throw new Exception("wrong owner runtime grant");
+        string manifest=root+".acl.json";
+        var records=new Dictionary<string,string[]> {{root,GrantObjects(grant)}};
+        WriteLease(manifest,new Lease { sid=SidString(own),objects=records,roots=new string[0] });
+        ApplyGrant(grant,own,lifetime);ApplyGrant(grant,other,lifetime);
+        string added=Path.Combine(root,"new.txt");File.WriteAllText(added,"fixture");
+        if(Allows(FileAcl(added),SidString(own),RX))throw new Exception("runtime grant propagated to a new file");
+        // Recovery uses the real persisted write-ahead lease and must preserve another live run's ACEs.
+        Clean(manifest);
+        foreach(string file in files)if(!Allows(FileAcl(file),SidString(other),RX))throw new Exception("concurrent grant lost");
+        WriteLease(manifest,new Lease { sid=SidString(other),objects=records,roots=new string[0] });Clean(manifest);
+        foreach(string file in files)if(FixtureSnapshot(file)!=before[file])throw new Exception("owner ACL changed: "+Path.GetFileName(file));
+        string lab=root+"-lab";Directory.CreateDirectory(lab);Check(CreateHardLinkW(Path.Combine(lab,"credential.txt"),stale,IntPtr.Zero));
+        FixturePrivateAcl(lab);
+        var linked=PrepareGrant(lab,RX,true,lifetime);
+        if(linked.propagate)throw new Exception("a lab hard link allowed ACL propagation");
+        WriteLease(manifest,new Lease { sid=SidString(own),roots=new[]{lab} });ApplyGrant(linked,own,lifetime);
+        string fresh=Path.Combine(lab,"fresh.txt");File.WriteAllText(fresh,"fixture");
+        if(!Allows(FileAcl(fresh),SidString(own),RX))throw new Exception("lab fallback did not admit a new file");
+        Clean(manifest);
+        if(FixtureSnapshot(stale)!=before[stale])throw new Exception("credential hard link changed the owner ACL");
+        IntPtr arap;Check(ConvertStringSidToSidW(PackageSids[1],out arap));
+        try { Acl(root,arap,RX,false,false,true,true); } finally { LocalFree(arap); }
+        if(PrepareGrant(root,RX,false,lifetime)!=null)throw new Exception("pre-admitted runtime was walked");
+      }
+      Console.Write("owner-acls-restored;new-files-unchanged;concurrent-grant-preserved;hard-link-owner-acl-restored;arap-root-skipped");
+    } finally { LocalFree(own);LocalFree(other); }
+  }
 }
 class PipeSecurityProbe { public static void Main(string[] args) {
-  if(args.Length==4) LabSandbox.TestScopedPipeAcl(args[1],args[2],args[3]);
+  if(args.Length==2 && args[0]=="runtime")LabSandbox.TestRuntimeSecurity(args[1]);
+  else if(args.Length==4) LabSandbox.TestScopedPipeAcl(args[1],args[2],args[3]);
   else if(args.Length==3) Console.Write(LabSandbox.TestPipeNamespace(args[1],args[2])); else LabSandbox.TestPipeSecurity(args[0]);
 } }
 `;
@@ -431,6 +545,8 @@ class PipeSecurityProbe { public static void Main(string[] args) {
     const execute = promisify(require('node:child_process').execFile);
     await execute(path.join(process.env.SystemRoot, 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),
       ['/nologo', '/reference:System.Web.Extensions.dll', '/main:PipeSecurityProbe', '/out:' + executable, input], { timeout: 10000, windowsHide: true });
+    const runtime = await execute(executable, ['runtime', path.join(root, 'owner-runtime')], { timeout: 5000, windowsHide: true });
+    assert.equal(runtime.stdout, 'owner-acls-restored;new-files-unchanged;concurrent-grant-preserved;hard-link-owner-acl-restored;arap-root-skipped');
     const sockets = new Set(), address = '\\\\.\\pipe\\LOCAL\\agentrix-lab-security-' + randomUUID();
     const server = require('node:net').createServer(socket => {
       sockets.add(socket); socket.on('error', () => {}); socket.on('close', () => sockets.delete(socket));
@@ -548,11 +664,11 @@ class PipeSecurityProbe { public static void Main(string[] args) {
   });
 
 test('preparation PowerShell parses without executing either bootstrap', { skip: process.platform !== 'win32' }, () => {
-  const prepare = prepCommand('C:\\fixture\\launcher.exe', 'b'.repeat(64));
-  const outer = Buffer.from(prepare.args.at(-1), 'base64').toString('utf16le');
-  const bootstrap = Buffer.from(/-EncodedCommand ([A-Za-z0-9+/=]+)'/.exec(outer)[1], 'base64').toString('utf16le');
+  const prepare = prepCommand('C:\\fixture\\launcher.cs', SOURCE_SHA256);
+  const outer = prepare.args.at(-1);
+  const { bootstrap, loader } = preparationScripts(outer);
   const parse = "$text=[Console]::In.ReadToEnd();$tokens=$null;$errors=$null;$null=[System.Management.Automation.Language.Parser]::ParseInput($text,[ref]$tokens,[ref]$errors);if($errors.Count){[Console]::Error.WriteLine(($errors.Message -join '; '));exit 1}";
-  for (const source of [outer, bootstrap]) require('node:child_process').execFileSync(prepare.file,
+  for (const source of [outer, loader, bootstrap]) require('node:child_process').execFileSync(prepare.file,
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', parse], { ...prepare.options, input: source, timeout: 30000 });
 });
 

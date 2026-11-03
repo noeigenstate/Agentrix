@@ -83,10 +83,15 @@ async function hostState(options) {
 async function requireIsolation(options = {}) {
   await initialize(options);
   const diagnostics = windowsDiagnostics();
-  const prepare = elevate => {
+  const prepare = async elevate => {
     diagnostics?.feed('[lab-win32] host preparation begin\n');
-    const call = preparation.prepCommand(executable, executableHash, { elevate });
-    return exec(call.file, call.args, call.options);
+    if (createHash('sha256').update(source).digest('hex') !== preparation.SOURCE_SHA256) throw infrastructure(preparation.ISOLATION_ERROR);
+    const input = path.join(path.dirname(executable), randomUUID() + '.cs');
+    try {
+      await fs.writeFile(input, source, { mode: 0o600 });
+      const call = preparation.prepCommand(input, preparation.SOURCE_SHA256, { elevate });
+      return await exec(call.file, call.args, call.options);
+    } finally { await fs.rm(input, { force: true }); }
   };
   await prepareHost({
     verify: async () => {
