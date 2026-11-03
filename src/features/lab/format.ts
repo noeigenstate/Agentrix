@@ -24,7 +24,7 @@ export function duration(ms: number | null) {
 // What the page says for an engine message: "this platform cannot run the lab safely" and "the project's Git would not give us a workspace" are put in plain
 // words (the second with a next step); every other message is the engine's own sentence, translated.
 export function friendlyError(message: string) {
-  if (/unavailable on this platform/i.test(message)) return t('虚拟实验室目前只支持 macOS。');
+  if (/unavailable on this platform/i.test(message)) return t('虚拟实验室目前只支持 macOS 和 Windows。');
   // Only the first line is the error itself; the lines after it (the test-log path) are kept as they are.
   const [first, ...rest] = message.split('\n');
   if (!/worktree|^Git:|工作区/i.test(first)) return t(message);
