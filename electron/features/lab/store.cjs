@@ -90,11 +90,12 @@ class LabStore {
     this.pending = operation.catch(() => {}); return operation;
   }
   async readAaKey(storage) {
-    if (!storage?.isEncryptionAvailable?.()) return null;
+    if (!storage) return null;
     try {
       const file = path.join(this.directory, 'secrets', 'aa.key');
       const stat = await fs.lstat(file);
       if (!stat.isFile() || stat.size > 16384) return null;
+      if (!storage.isEncryptionAvailable?.()) return null;
       const value = storage.decryptString(await fs.readFile(file));
       return typeof value === 'string' && /^[\x21-\x7e]{1,4096}$/.test(value) ? value : null;
     } catch { return null; }
