@@ -89,7 +89,11 @@ async function descendants(pid) {
 async function stopTree(child) {
   if (!child.pid) return;
   if (process.platform === 'win32') {
-    if (child.labRun) await killMarked(child.labRun, { job: child.labJob });
+    if (child.labRun) {
+      if (child.connected) await new Promise(resolve => child.send({ type: 'lab-stop' }, () => resolve()));
+      await killMarked(child.labRun, { job: child.labJob });
+      return; // The guardian exits after the launcher; taskkill would interrupt its lease handoff.
+    }
     await execute('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 5000 }).catch(() => child.kill());
     return;
   }

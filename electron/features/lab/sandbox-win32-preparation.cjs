@@ -1,19 +1,83 @@
+const path = require('node:path');
 const ISOLATION_ERROR = 'Windows 安全实验执行不可用，未启动工作者。';
 const failure = () => Object.assign(new Error(ISOLATION_ERROR), { infrastructure: true, code: 'ERR_LAB_WINDOWS_ISOLATION' });
 
-// The only elevated command is a constant operation in our compiled helper. No task, path or model argument follows it.
-function prepCommand(binary) {
-  return { file: binary, args: ['elevate-host'], options: { windowsHide: true, timeout: 120000, maxBuffer: 4096 } };
+// UAC starts the Windows-owned PowerShell, never an executable or CLR configuration in userData.
+// The bootstrap accepts only the freshly compiled payload's identity; the helper's operation is constant.
+function prepCommand(binary, sha256, { elevate = true } = {}) {
+  if (typeof binary !== 'string' || !path.win32.isAbsolute(binary) || !/^[a-f0-9]{64}$/.test(sha256)) throw failure();
+  const system = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
+  const file = path.win32.join(system, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const bootstrap = `
+$ErrorActionPreference='Stop'
+$source=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(binary).toString('base64')}'))
+$hash=[Security.Cryptography.SHA256]::Create()
+$payloadStream=[IO.FileStream]::new($source,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+try {
+  if($payloadStream.Length -gt 1048576){throw 'Invalid preparation payload.'}
+  $bytes=[byte[]]::new([int]$payloadStream.Length)
+  $offset=0
+  while($offset -lt $bytes.Length){$read=$payloadStream.Read($bytes,$offset,$bytes.Length-$offset);if($read -eq 0){throw 'Incomplete preparation payload.'};$offset+=$read}
+} finally {$payloadStream.Dispose()}
+if([BitConverter]::ToString($hash.ComputeHash($bytes)).Replace('-','').ToLowerInvariant() -ne '${sha256}'){throw 'Preparation payload changed.'}
+$root=[IO.Path]::Combine([Environment]::SystemDirectory,'AgentrixLabPrep-'+[Guid]::NewGuid().ToString('N'))
+$acl=[Security.AccessControl.DirectorySecurity]::new()
+$acl.SetSecurityDescriptorSddlForm('O:BAG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
+$null=[IO.Directory]::CreateDirectory($root,$acl)
+try {
+  $binary=[IO.Path]::Combine($root,'prepare.exe')
+  if([IO.Directory]::GetFileSystemEntries($root).Length -ne 0){throw 'Preparation directory is not empty.'}
+  [IO.File]::WriteAllBytes($binary,$bytes)
+  $pinned=[IO.FileStream]::new($binary,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+  try {
+    if([BitConverter]::ToString($hash.ComputeHash($pinned)).Replace('-','').ToLowerInvariant() -ne '${sha256}'){throw 'Preparation copy changed.'}
+    if([IO.Directory]::GetFileSystemEntries($root).Length -ne 1){throw 'Unexpected preparation neighbour.'}
+    $start=[Diagnostics.ProcessStartInfo]::new()
+    $start.FileName=$binary
+    $start.Arguments='prepare-host'
+    $start.WorkingDirectory=[Environment]::SystemDirectory
+    $start.UseShellExecute=$false
+    $start.CreateNoWindow=$true
+    $start.EnvironmentVariables.Clear()
+    $start.EnvironmentVariables['SystemRoot']=[IO.Directory]::GetParent([Environment]::SystemDirectory).FullName
+    $start.EnvironmentVariables['TEMP']=$root
+    $start.EnvironmentVariables['TMP']=$root
+    $helper=[Diagnostics.Process]::Start($start)
+    try {$helper.WaitForExit();$code=$helper.ExitCode} finally {$helper.Dispose()}
+  } finally {$pinned.Dispose()}
+} finally {[IO.Directory]::Delete($root,$true);$hash.Dispose()}
+exit $code
+`;
+  const encoded = Buffer.from(bootstrap, 'utf16le').toString('base64');
+  const script = elevate ? `
+$ErrorActionPreference='Stop'
+$start=[Diagnostics.ProcessStartInfo]::new()
+$start.FileName=[IO.Path]::Combine([Environment]::SystemDirectory,'WindowsPowerShell\\v1.0\\powershell.exe')
+$start.Arguments='-NoLogo -NoProfile -NonInteractive -EncodedCommand ${encoded}'
+$start.WorkingDirectory=[Environment]::SystemDirectory
+$start.Verb='runas'
+$start.UseShellExecute=$true
+$start.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
+$helper=[Diagnostics.Process]::Start($start)
+try {$helper.WaitForExit();exit $helper.ExitCode} finally {$helper.Dispose()}
+` : bootstrap;
+  const command = Buffer.from(script, 'utf16le').toString('base64');
+  if (command.length > 30000) throw failure();
+  return { file, args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', command], options: {
+    windowsHide: true, cwd: system, timeout: 120000, maxBuffer: 4096,
+    env: { SystemRoot: process.env.SystemRoot || 'C:\\Windows', PATH: system },
+  } };
 }
 
-function createHostPreparation() {
+function createHostPreparation({ testing = Boolean(process.env.NODE_TEST_CONTEXT),
+  consent = process.env.AGENTRIX_LAB_TEST_PREPARE_HOST === '1' } = {}) {
   let attempt;
   return async function ensureHostReady({ verify, prepare, elevate, prompt = true }) {
     try {
       const state = await verify();
       if (state.ready) return;
       if (!attempt) {
-        if (!state.elevated && !prompt) throw failure();
+        if ((testing && (!consent || !state.elevated)) || (!state.elevated && !prompt)) throw failure();
         attempt = Promise.resolve().then(() => state.elevated ? prepare() : elevate());
       }
       await attempt;
@@ -112,21 +176,6 @@ public partial class LabSandbox {
       try { Check(SetKernelObjectSecurity(handle,1|2|DACL|LABEL,descriptor)); } finally { LocalFree(descriptor); }
     } finally { CloseHandle(handle); }
     return HostReady()?0:125;
-  }
-  static int ElevateHost() {
-    // UseShellExecute + runas invokes ShellExecute's UAC flow. Arguments and the target operation are fixed.
-    string binary=System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
-    using(var pinned=new FileStream(binary,FileMode.Open,FileAccess.Read,FileShare.Read)) {
-    var info=new System.Diagnostics.ProcessStartInfo {
-      FileName=binary,
-      Arguments="prepare-host",WorkingDirectory=Environment.SystemDirectory,Verb="runas",UseShellExecute=true,
-      WindowStyle=System.Diagnostics.ProcessWindowStyle.Hidden
-    };
-    using(var helper=System.Diagnostics.Process.Start(info)) {
-      if(helper==null || !helper.WaitForExit(110000)) throw new Exception();
-      return helper.ExitCode;
-    }
-    }
   }
 }
 `;

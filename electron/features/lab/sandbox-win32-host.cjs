@@ -13,7 +13,10 @@ const isolatedEnvironment = Object.fromEntries([
   'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_SECURESTORAGE_CONFIG_DIR',
 ].filter(key => env[key] !== undefined).map(key => [key, env[key]]));
 const child = spawn(config.windows.executable, ['run'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-process.once('disconnect', () => { child.kill(); });
+// EOF cancels even a launcher that has not created its Job yet. Let it release handles before ACL recovery.
+const stop = () => child.stdin.end();
+process.once('disconnect', stop);
+process.on('message', message => { if (message?.type === 'lab-stop') stop(); });
 process.channel?.unref();
 child.stdout.pipe(process.stdout);
 let tail = '', started = false;
@@ -31,9 +34,9 @@ child.stderr.on('data', chunk => {
 });
 child.stderr.once('end', () => { if (tail) process.stderr.write(tail); });
 child.stdin.on('error', () => {});
-child.stdin.end(JSON.stringify({
+child.stdin.write(JSON.stringify({
   ...config.windows, file: process.execPath, args: [config.executor], cwd: config.cwd, env,
   input: JSON.stringify({ config: { ...config, startMarker: marker, isolatedEnvironment }, bootstrap, modules }),
-}));
+}) + '\n');
 child.once('error', () => { console.error('Windows lab launcher could not start.'); process.exitCode = 125; });
 child.once('close', code => { process.exitCode = code ?? 125; });

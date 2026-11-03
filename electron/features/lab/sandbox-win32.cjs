@@ -8,7 +8,7 @@ const preparation = require('./sandbox-win32-preparation.cjs');
 const source = require('./sandbox-win32-native.cjs') + preparation.nativeSource;
 const exec = promisify(execFile);
 const runs = new Map();
-let executable, preparing;
+let executable, executableHash, preparing;
 const prepareHost = preparation.createHostPreparation();
 
 const infrastructure = message => Object.assign(new Error(message), { infrastructure: true });
@@ -19,7 +19,9 @@ const contained = (root, target) => {
 
 async function native(args, options = {}) {
   if (!executable) throw infrastructure('Windows lab isolation has not been initialized.');
-  try { return await exec(executable, args, { windowsHide: true, timeout: 10000, maxBuffer: 1024 * 1024, ...options }); }
+  try { return await exec(executable, args, {
+    windowsHide: true, timeout: args[0] === 'clean' ? 0 : 10000, maxBuffer: 1024 * 1024, ...options,
+  }); }
   catch { throw infrastructure('Windows lab isolation could not complete its operation.'); }
 }
 
@@ -29,7 +31,8 @@ async function initialize({ directory } = {}) {
   const root = path.join(await fs.realpath(directory), 'private', '.win32-runtime');
   const hash = createHash('sha256').update(source).digest('hex').slice(0, 20);
   const binary = path.join(root, 'launcher-' + hash + '.exe');
-  if (executable === binary && await fs.stat(binary).catch(() => null)) return executable;
+  if (executable === binary && await fs.readFile(binary).then(bytes =>
+    createHash('sha256').update(bytes).digest('hex') === executableHash, () => false)) return executable;
   preparing = (async () => {
     await fs.mkdir(root, { recursive: true, mode: 0o700 });
     if (!contained(await fs.realpath(directory), await fs.realpath(root))) throw infrastructure('The Windows lab runtime directory is linked outside the lab.');
@@ -41,11 +44,13 @@ async function initialize({ directory } = {}) {
         windowsHide: true, timeout: 30000, maxBuffer: 65536,
         env: { SystemRoot: process.env.SystemRoot || 'C:\\Windows', TEMP: root, TMP: root },
       });
+      const digest = createHash('sha256').update(await fs.readFile(output)).digest('hex');
       await fs.rename(output, binary).catch(async error => {
         if (error.code !== 'EEXIST' && error.code !== 'EPERM') throw error;
-        if (!await fs.stat(binary).catch(() => null)) throw error;
+        const existing = await fs.readFile(binary).catch(() => null);
+        if (!existing || createHash('sha256').update(existing).digest('hex') !== digest) throw error;
       });
-      executable = binary;
+      executable = binary; executableHash = digest;
       return binary;
     } catch (error) {
       if (error.infrastructure) throw error;
@@ -67,13 +72,13 @@ async function hostState(options) {
 
 async function requireIsolation(options = {}) {
   await initialize(options);
+  const prepare = elevate => {
+    const call = preparation.prepCommand(executable, executableHash, { elevate });
+    return exec(call.file, call.args, call.options);
+  };
   await prepareHost({
     verify: () => hostState(options), prompt: options.prompt !== false && !process.env.NODE_TEST_CONTEXT,
-    prepare: () => native(['prepare-host']),
-    elevate: () => {
-      const call = preparation.prepCommand(executable);
-      return exec(call.file, call.args, call.options);
-    },
+    prepare: () => prepare(false), elevate: () => prepare(true),
   });
 }
 
