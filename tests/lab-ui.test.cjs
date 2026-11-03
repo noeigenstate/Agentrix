@@ -353,13 +353,13 @@ test('engine messages are shown in plain words with a next step, and other messa
   assert.equal(friendlyError('实验运行超时。'), '实验运行超时。');
 assert.equal(friendlyError('worktree 创建失败\n测试日志：/x/tests.log'), friendlyError('worktree 创建失败') + '\n测试日志：/x/tests.log');
 assert.doesNotMatch(friendlyError('实验运行超时。\n测试日志：/x/tests.log 工作区'), /无法创建独立工作区/);
-  assert.equal(friendlyError('Secure lab execution is unavailable on this platform. No workers were started.'), '虚拟实验室目前只支持 macOS。');
-  assert.equal(friendlyError('Reliable lab process isolation is unavailable on this platform.'), '虚拟实验室目前只支持 macOS。');
-  assert.equal(friendlyError('虚拟实验室目前只支持 macOS。'), '虚拟实验室目前只支持 macOS。');
+  assert.equal(friendlyError('Secure lab execution is unavailable on this platform. No workers were started.'), '虚拟实验室目前只支持 macOS 和 Windows。');
+  assert.equal(friendlyError('Reliable lab process isolation is unavailable on this platform.'), '虚拟实验室目前只支持 macOS 和 Windows。');
+  assert.equal(friendlyError('虚拟实验室目前只支持 macOS 和 Windows。'), '虚拟实验室目前只支持 macOS 和 Windows。');
   applyLanguage('en');
   try {
     assert.match(friendlyError('worktree 创建失败'), /Could not create the separate workspace\. Try again/);
-    assert.equal(friendlyError('Secure lab execution is unavailable on this platform.'), 'The Virtual Lab only works on macOS for now.');
+    assert.equal(friendlyError('Secure lab execution is unavailable on this platform.'), 'The Virtual Lab works on macOS and Windows for now.');
   } finally { applyLanguage('zh'); }
 }));
 

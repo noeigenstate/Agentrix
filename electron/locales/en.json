@@ -2017,7 +2017,6 @@
   "结果有随机性，{min}–{max} 次": "Results vary, {min} to {max} times",
   "预算（美元）": "Budget (USD)",
   "花到这个数就停止：不再开始新的运行，正在进行的运行也会在超出时停下。": "The experiment stops once this much is spent: no new run starts, and a run in progress is stopped when it goes over.",
-  "虚拟实验室目前只支持 macOS。": "The Virtual Lab only works on macOS for now.",
   "实验名称": "Experiment name",
   "留空则用默认名称": "Leave empty for the default name",
   "{tasks} 个问题 × {arms} 种方案 × {repeats} 次": "{tasks} problems × {arms} approaches × {repeats} repeats",
