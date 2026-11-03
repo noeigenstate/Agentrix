@@ -368,13 +368,13 @@ test('generic references and the runner use the provider context and bind the br
   assert.equal(invalid.state, 'error'); assert.match(invalid.error, /评分结果/);
 });
 
-test('the history provider conforms and restores its real Node tests over an isolated Git snapshot', async t => {
+test('the history provider conforms and restores its real Node tests over an isolated Git snapshot', { timeout: 45000 }, async t => {
   const root = await temporary(t), projectPath = path.join(root, 'project'), cache = path.join(root, 'cache');
   await fs.mkdir(path.join(projectPath, 'src'), { recursive: true }); await fs.mkdir(path.join(projectPath, 'tests'));
   await fs.mkdir(cache); await fs.mkdir(path.join(root, 'home'));
   const env = { ...cleanEnvironment(), HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home'), GIT_ALLOW_PROTOCOL: 'file' };
   const git = async (...args) => (await promisify(execFile)('git', ['-c', 'user.name=Lab fixture', '-c', 'user.email=lab@example.invalid',
-    ...args], { cwd: projectPath, env, windowsHide: true })).stdout.trim();
+    ...args], { cwd: projectPath, env, windowsHide: true, timeout: 5000, signal: t.signal })).stdout.trim();
   await git('init'); await fs.writeFile(path.join(projectPath, 'src/value.cjs'), 'module.exports = 0;\n');
   const testFile = expected => "const {test}=require('node:test'); const assert=require('node:assert/strict');\n" +
     "test('value',()=>assert.equal(require('../src/value.cjs')," + expected + "));\n";
@@ -384,7 +384,7 @@ test('the history provider conforms and restores its real Node tests over an iso
   await fs.writeFile(path.join(projectPath, 'tests/value.test.cjs'), testFile(1));
   await git('add', '.'); await git('commit', '-m', 'Fix fixture calculation');
   const provider = createHistorySource(), project = { id: 'fixture', name: 'Fixture', path: projectPath };
-  const ctx = { tools, getProjects: () => [project], t: text => text, signal: new AbortController().signal,
+  const ctx = { tools, getProjects: () => [project], t: text => text, signal: t.signal,
     cacheDirectory: cache, platform: process.platform, credential: () => null };
   const { canonical } = await conformance(provider, { query: { source: 'history', projectId: project.id, size: 1, preferShortComplex: false },
     selection: { source: 'history', projectId: project.id }, ctx });

@@ -117,6 +117,7 @@ public partial class LabSandbox {
   [DllImport("advapi32.dll",SetLastError=true)] static extern uint SetSecurityInfo(IntPtr handle,int type,uint info,IntPtr owner,IntPtr group,IntPtr dacl,IntPtr sacl);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetSecurityDescriptorControl(IntPtr descriptor,out ushort control,out uint revision);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetSecurityDescriptorSacl(IntPtr descriptor,out bool present,out IntPtr sacl,out bool defaulted);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetSecurityDescriptorDacl(IntPtr descriptor,out bool present,out IntPtr dacl,out bool defaulted);
   [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern uint SetEntriesInAclW(int count,ref Access entry,IntPtr oldAcl,out IntPtr acl);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool InitializeSecurityDescriptor(IntPtr descriptor,uint revision);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool SetSecurityDescriptorDacl(IntPtr descriptor,bool present,IntPtr acl,bool defaulted);
@@ -211,13 +212,23 @@ public partial class LabSandbox {
       }
     } finally { if(remove) Marshal.FreeHGlobal(acl); else LocalFree(acl); LocalFree(descriptor); if(handle!=IntPtr.Zero) CloseHandle(handle); }
   }
-  static void PipeLabel(string pipe) {
+  static IntPtr PipeDescriptor(IntPtr sid) {
+    string user=WindowsIdentity.GetCurrent().User.Value;
     IntPtr descriptor; uint size;
-    Check(ConvertStringSecurityDescriptorToSecurityDescriptorW("S:(ML;;NW;;;LW)",1,out descriptor,out size));
+    // An elevated creator's default owner can be Administrators, which is deny-only in a lowbox token.
+    // Both access checks must pass: the signed-in user, then this job's exact package SID (never AC/ARAP).
+    Check(ConvertStringSecurityDescriptorToSecurityDescriptorW("D:P(A;;GA;;;SY)(A;;GA;;;"+user+
+      ")(A;;RC;;;OW)(A;;0x12019f;;;"+SidString(sid)+")S:(ML;;NW;;;LW)",1,out descriptor,out size));
+    return descriptor;
+  }
+  static void PipeAcl(string pipe,IntPtr sid) {
+    if(!pipe.StartsWith("\\\\.\\pipe\\LOCAL\\agentrix-lab-",StringComparison.OrdinalIgnoreCase)) throw new Exception();
+    IntPtr descriptor=PipeDescriptor(sid);
     try {
-      bool present,defaulted; IntPtr sacl;
+      bool present,defaulted; IntPtr sacl,dacl;
+      Check(GetSecurityDescriptorDacl(descriptor,out present,out dacl,out defaulted));
       Check(GetSecurityDescriptorSacl(descriptor,out present,out sacl,out defaulted));
-      CheckCode(SetNamedSecurityInfoW(pipe,1,LABEL,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,sacl));
+      CheckCode(SetNamedSecurityInfoW(pipe,1,DACL|LABEL|0x80000000U,IntPtr.Zero,IntPtr.Zero,dacl,sacl));
     } finally { LocalFree(descriptor); }
   }
   static IntPtr NewJob(string name,IntPtr descriptor) {
@@ -457,7 +468,7 @@ public partial class LabSandbox {
         foreach(var grant in grants) { lifetime.CheckRunning(); ApplyGrant(grant,sid); }
         foreach(var file in plan.credentialFiles ?? new string[0]) Acl(file,sid,MODIFY,false);
         Stage("pipe ACL");
-        foreach(var pipe in plan.pipes ?? new string[0]) { Acl(pipe,sid,0x12019f,false); PipeLabel(pipe); }
+        foreach(var pipe in plan.pipes ?? new string[0]) PipeAcl(pipe,sid);
         IntPtr inRead,inWrite,outRead,outWrite,errRead,errWrite;
         var inherit=new SA { size=Marshal.SizeOf(typeof(SA)),inherit=1 };
         Stage("stdio");

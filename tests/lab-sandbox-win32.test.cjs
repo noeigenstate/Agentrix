@@ -173,28 +173,36 @@ test('Windows LPAC reaches its own broker and rejects another run pipe and capab
   await own.session.broker(async () => { accepted++; return { code: 0, stdout: 'own broker', stderr: '' }; });
   await other.session.broker(async () => { foreign++; return { code: 0, stdout: 'other broker', stderr: '' }; });
   own.session.active = true; other.session.active = true;
-  const code = `const net=require('node:net');
+  const code = `const net=require('node:net'),diagnostics=[];
     const own=JSON.parse(process.env.AGENTRIX_LAB_BROKER),other=JSON.parse(process.argv[1]);
-    function request(address,capability){return new Promise(resolve=>{
-      const socket=net.connect(address);let body='',done=false;
+    function request(address,capability,role){return new Promise(resolve=>{
+      const socket=net.connect(address);let body='',done=false,connected=false;
       const finish=value=>{if(done)return;done=true;socket.destroy();resolve(value)};
-      socket.setTimeout(2000,()=>finish({denied:true}));socket.on('error',()=>finish({denied:true}));
-      socket.on('connect',()=>socket.write(JSON.stringify({capability,argv:['probe'],timeoutMs:1000})+'\\n'));
+      socket.setTimeout(2000,()=>{diagnostics.push({role,stage:'reply',code:'ETIMEDOUT'});finish({denied:true})});
+      socket.on('error',error=>{diagnostics.push({role,stage:connected?'reply':'open',
+        code:/^E[A-Z0-9_]{1,31}$/.test(error.code)?error.code:'EIO'});finish({denied:true})});
+      socket.on('connect',()=>{connected=true;socket.write(JSON.stringify({capability,argv:['probe'],timeoutMs:1000})+'\\n')});
       socket.on('data',chunk=>{body+=chunk;if(body.includes('\\n')){try{finish(JSON.parse(body.trim()))}catch{finish({denied:true})}}});
       socket.on('end',()=>finish({denied:true}));
     })}
-    (async()=>console.log(JSON.stringify({own:await request(own.address,own.capability),
-      wrongCapability:await request(own.address,other.capability),foreignPipe:await request(other.address,own.capability),
-      foreignPipeWithItsCapability:await request(other.address,other.capability)})))().catch(()=>process.exit(1));`;
+    (async()=>{const replies={own:await request(own.address,own.capability,'own'),repeated:[]};
+      for(let i=0;i<8 && replies.own.code===0;i++)replies.repeated.push(await request(own.address,own.capability,'own'));
+      replies.wrongCapability=await request(own.address,other.capability,'wrong-capability');
+      replies.foreignPipe=await request(other.address,own.capability,'foreign');
+      replies.foreignPipeWithItsCapability=await request(other.address,other.capability,'foreign-known-capability');
+      console.log(JSON.stringify({...replies,diagnostics}));})().catch(()=>process.exit(1));`;
   const result = await own.session.execute(own.nodePath, ['-e', code, other.session.brokerEnvironment],
     { cwd: own.workspaceRoot, timeoutMs: 15000 });
   assert.equal(result.code, 0, result.stderr);
   const replies = JSON.parse(result.stdout);
-  assert.deepEqual(replies.own, { code: 0, stdout: 'own broker', stderr: '' });
+  for (const diagnostic of replies.diagnostics) t.diagnostic('[lab-win32] broker ' + JSON.stringify(diagnostic));
+  const expected = { code: 0, stdout: 'own broker', stderr: '' };
+  assert.deepEqual(replies.own, expected);
+  assert.deepEqual(replies.repeated, Array(8).fill(expected));
   assert.equal(replies.wrongCapability.code, 125);
   assert.deepEqual(replies.foreignPipe, { denied: true });
   assert.deepEqual(replies.foreignPipeWithItsCapability, { denied: true });
-  assert.equal(accepted, 1); assert.equal(foreign, 0);
+  assert.equal(accepted, 9); assert.equal(foreign, 0);
 });
 
 test('Windows root leases serialize cleanup after launcher exit and remove inherited and protected grants', windows, async t => {
@@ -275,6 +283,83 @@ test('UAC starts Windows PowerShell and stages a verified admin-only helper with
   assert.equal(Buffer.from(prepCommand(binary, hash, { elevate: false }).args.at(-1), 'base64').toString('utf16le'), bootstrap);
   assert.throws(() => prepCommand(binary, 'not a hash'), { infrastructure: true });
 });
+
+test('pipe ACL passes the user and exact restricted SID checks without administrator or broad package grants',
+  { skip: process.platform !== 'win32', timeout: 15000 }, async t => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lab-pipe-security-'));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    // This grants only a synthetic fixture pipe and checks restricted tokens in memory; no LPAC or host preparation.
+    const probe = String.raw`
+public partial class LabSandbox {
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool CreateRestrictedToken(IntPtr token,uint flags,
+    uint disableCount,[In] SidAttr[] disable,uint deleteCount,IntPtr deleted,uint restrictCount,[In] SidAttr[] restricted,out IntPtr result);
+  [DllImport("advapi32.dll")] static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
+  [DllImport("advapi32.dll")] static extern bool IsTokenRestricted(IntPtr token);
+  [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool WaitNamedPipeW(string pipe,uint timeout);
+  static bool PipeAccess(IntPtr descriptor,IntPtr restriction) {
+    IntPtr token=IntPtr.Zero,restricted=IntPtr.Zero,duplicate=IntPtr.Zero,admin=IntPtr.Zero,privileges=Marshal.AllocHGlobal(1024);
+    try {
+      Check(OpenProcessToken(Process.GetCurrentProcess().Handle,10,out token));
+      Check(ConvertStringSidToSidW("S-1-5-32-544",out admin));
+      if(!CreateRestrictedToken(token,0,1,new[]{new SidAttr { sid=admin }},0,IntPtr.Zero,
+        1,new[]{new SidAttr { sid=restriction }},out restricted)) throw new Win32Exception(Marshal.GetLastWin32Error(),"restricted token "+Marshal.GetLastWin32Error());
+      Check(DuplicateToken(restricted,2,out duplicate));
+      var raw=new RawSecurityDescriptor(CopyDescriptor(descriptor),0);
+      foreach(var ace in raw.DiscretionaryAcl.Cast<GenericAce>().OfType<QualifiedAce>()) ace.AccessMask=unchecked((int)FileMask(unchecked((uint)ace.AccessMask)));
+      var bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);
+      IntPtr mapped=Marshal.AllocHGlobal(bytes.Length);Marshal.Copy(bytes,0,mapped,bytes.Length);
+      uint length=1024,granted; bool allowed; var mapping=new Mapping {read=0x120089,write=0x120116,execute=0x1200a0,all=0x1f01ff};
+      try { if(!AccessCheck(mapped,duplicate,0x12019f,ref mapping,privileges,ref length,out granted,out allowed)) throw new Win32Exception(Marshal.GetLastWin32Error(),"pipe access check"); return allowed; } finally { Marshal.FreeHGlobal(mapped); }
+    } finally { if(token!=IntPtr.Zero)CloseHandle(token);if(restricted!=IntPtr.Zero)CloseHandle(restricted);
+      if(duplicate!=IntPtr.Zero)CloseHandle(duplicate);if(admin!=IntPtr.Zero)LocalFree(admin);Marshal.FreeHGlobal(privileges); }
+  }
+  public static void TestPipeSecurity(string pipe) {
+    IntPtr host;Check(OpenProcessToken(Process.GetCurrentProcess().Handle,8,out host));
+    try { if(IsTokenRestricted(host)) { Console.Write("restricted-test-host");return; } } finally { CloseHandle(host); }
+    IntPtr own,foreign; Check(ConvertStringSidToSidW("S-1-5-21-111-222-333-777",out own));
+    Check(ConvertStringSidToSidW("S-1-5-21-111-222-333-778",out foreign));
+    IntPtr descriptor=PipeDescriptor(own),old;uint size;
+    try {
+      PipeAcl(pipe,own);
+      for(int i=0;i<8;i++) {
+        Check(WaitNamedPipeW(pipe,2000));var acl=FileAcl(pipe);
+        if(!Allows(acl,SidString(own),0x12019f) || Allows(acl,SidString(foreign),0x12019f)) throw new Exception("wrong installed pipe ACL");
+      }
+      // Model the elevated default owner: BA remains deny-only and the normal user has no write grant.
+      string user=WindowsIdentity.GetCurrent().User.Value;
+      Check(ConvertStringSecurityDescriptorToSecurityDescriptorW("O:BAG:SYD:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;WD)(A;;0x12019f;;;"+SidString(own)+")",1,out old,out size));
+      try { if(PipeAccess(old,own)) throw new Exception("old elevated ACL unexpectedly allowed writing"); } finally{LocalFree(old);}
+      // AccessCheck needs owner/group even though the production call changes only DACL and label.
+      Check(ConvertStringSecurityDescriptorToSecurityDescriptorW("O:"+user+"G:SY"+
+        new RawSecurityDescriptor(CopyDescriptor(descriptor),0).GetSddlForm(AccessControlSections.Access|AccessControlSections.Audit),1,out old,out size));
+      try { if(!PipeAccess(old,own) || PipeAccess(old,foreign)) throw new Exception("wrong pipe access"); } finally{LocalFree(old);}
+      var raw=new RawSecurityDescriptor(CopyDescriptor(descriptor),0);
+      if(raw.DiscretionaryAcl.Cast<GenericAce>().OfType<QualifiedAce>().Any(a=>new[]{"S-1-1-0","S-1-15-2-1","S-1-15-2-2","S-1-5-32-544"}.Contains(a.SecurityIdentifier.Value))) throw new Exception("broad grant");
+      var label=new byte[raw.SystemAcl[0].BinaryLength];raw.SystemAcl[0].GetBinaryForm(label,0);
+      if(label[0]!=17 || BitConverter.ToUInt32(label,4)!=1 || new SecurityIdentifier(label,8).Value!="S-1-16-4096") throw new Exception("wrong integrity");
+      Console.Write("user-and-own-package-only");
+    } finally { LocalFree(descriptor);LocalFree(own);LocalFree(foreign); }
+  }
+  static byte[] CopyDescriptor(IntPtr descriptor) { var bytes=new byte[GetSecurityDescriptorLength(descriptor)];Marshal.Copy(descriptor,bytes,0,bytes.Length);return bytes; }
+}
+class PipeSecurityProbe { public static void Main(string[] args) { LabSandbox.TestPipeSecurity(args[0]); } }
+`;
+    const input = path.join(root, 'probe.cs'), executable = path.join(root, 'probe.exe');
+    await fs.writeFile(input, require('../electron/features/lab/sandbox-win32-native.cjs') + nativeSource + probe);
+    const execute = promisify(require('node:child_process').execFile);
+    await execute(path.join(process.env.SystemRoot, 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),
+      ['/nologo', '/reference:System.Web.Extensions.dll', '/main:PipeSecurityProbe', '/out:' + executable, input], { timeout: 10000, windowsHide: true });
+    const sockets = new Set(), address = '\\\\.\\pipe\\LOCAL\\agentrix-lab-security-' + randomUUID();
+    const server = require('node:net').createServer(socket => {
+      sockets.add(socket); socket.on('error', () => {}); socket.on('close', () => sockets.delete(socket));
+      socket.resume(); socket.on('end', () => socket.end());
+    });
+    t.after(() => new Promise(resolve => { server.close(resolve); for (const socket of sockets) socket.destroy(); }), { timeout: 3000 });
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(address, resolve); });
+    const result = await execute(executable, [address], { timeout: 3000, windowsHide: true });
+    if (result.stdout === 'restricted-test-host') return t.skip('A restricted test host cannot create independent restricting SID lists. Elevated CI exercises both access checks.');
+    assert.equal(result.stdout, 'user-and-own-package-only');
+  });
 
 test('preparation PowerShell parses without executing either bootstrap', { skip: process.platform !== 'win32' }, () => {
   const prepare = prepCommand('C:\\fixture\\launcher.exe', 'b'.repeat(64));

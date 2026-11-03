@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
-const { spawn } = require('node:child_process');
+const { command } = require('../electron/features/lab/process.cjs');
 const { createHash, randomUUID } = require('node:crypto');
 const { createAaSource } = require('../electron/features/lab-aa/index.cjs');
 const { reward } = require('../electron/features/lab-aa/container.cjs');
@@ -408,13 +408,16 @@ test('reward parsing never treats absent, partial, boolean or nonfinite evidence
   for (const text of ['{}', '{"reward":true}', '{"reward":null}', '{"reward":0.5}']) assert.throws(() => reward(text, true));
 });
 
-test('tb forwards exact argv and stdin through the capability broker and preserves stdout, stderr and exit code', async t => {
+test('tb forwards exact argv and stdin through the capability broker and preserves stdout, stderr and exit code', { timeout: 15000 }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lab-aa-broker-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await installWrappers(root, process.execPath);
   const address = process.platform === 'win32' ? '\\\\.\\pipe\\lab-aa-' + randomUUID() : path.join(root, 'broker.sock');
   let request;
+  const sockets = new Set();
   const server = net.createServer(socket => {
+    sockets.add(socket); socket.on('close', () => sockets.delete(socket)); socket.on('error', () => {});
+    socket.setTimeout(3000, () => socket.destroy());
     socket.setEncoding('utf8'); let text = '';
     socket.on('data', chunk => {
       text += chunk;
@@ -425,17 +428,13 @@ test('tb forwards exact argv and stdin through the capability broker and preserv
     });
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(address, resolve); });
-  t.after(() => new Promise(resolve => server.close(resolve)));
-  const invoke = (file, args, options = {}) => new Promise((resolve, reject) => {
-    const child = spawn(file, args, {
+  t.after(() => new Promise(resolve => {
+    server.close(resolve); for (const socket of sockets) socket.destroy();
+  }), { timeout: 3000 });
+  const invoke = (file, args, options = {}) => command(file, args, {
       env: { ...process.env, HOME: root, USERPROFILE: root, AGENTRIX_LAB_BROKER: JSON.stringify({ address, capability: 'synthetic-capability' }) },
-      stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, ...options,
-    });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
-    child.once('error', reject); child.once('close', code => resolve({ code, stdout, stderr }));
-    child.stdin.end('fixture stdin\n');
-  });
+      stdin: 'fixture stdin\n', signal: t.signal, timeoutMs: 5000, ...options,
+  }).then(({ code, stdout, stderr }) => ({ code, stdout, stderr }));
   const output = await invoke(process.execPath, [path.join(root, 'bin/tb.cjs'), 'printf', 'a b', '"quoted"']);
   assert.deepEqual(request.argv, ['printf', 'a b', '"quoted"']);
   assert.equal(request.stdin, 'fixture stdin\n'); assert.equal(request.capability, 'synthetic-capability');
