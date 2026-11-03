@@ -15,7 +15,7 @@ Owns the host's Claude Agent SDK sessions, protected credentials, worker tool de
 - `electron/boundaries.cjs`
 
 ## Invariants
-- Owner queries retain their processes across idle turns while releasing unused reservations — test: `tests/claude-sdk-runtime.test.cjs` › "owner queries remain alive at idle and reuse the same process on the next send"
+- Owner queries stay open at idle; explicit sends renew spent caps at safe message boundaries — test: `tests/claude-sdk-budget.test.cjs` › "M1 each explicit idle turn renews its five-dollar cap without charging resumed history"
 - Workers explicitly isolate disk settings and failed policy hooks block execution — test: `tests/claude-sdk-runtime.test.cjs` › "a worker explicitly disables disk setting sources and blocks failed hooks"
 - API identity is verified before accepting usage — test: `tests/claude-sdk-runtime.test.cjs` › "billing identity mismatch fails without trusting a subscription init"
 - Stopping cancels pending approvals and preserves uncertain delivery — test: `tests/claude-sdk-runtime.test.cjs` › "stop rejects queued input and stale permission answers"

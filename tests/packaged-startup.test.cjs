@@ -12,6 +12,28 @@ const { fixtureProcesses } = require('./fixtures/claude-sdk-processes.cjs');
 
 const root = path.resolve(__dirname, '..');
 
+test('Linux native desktop smoke retains Xvfb access while isolating credentials', async () => {
+  const { desktopEnvironment } = await import('../scripts/native-session-smoke.mjs');
+  const inherited = { DISPLAY: ':99', XAUTHORITY: '/offline/xauth', ANTHROPIC_API_KEY: 'offline-secret', GH_TOKEN: 'offline-token' };
+  const env = desktopEnvironment('/offline/home', inherited, 'linux');
+  assert.equal(env.DISPLAY, ':99'); assert.equal(env.XAUTHORITY, '/offline/xauth');
+  assert.equal(env.ANTHROPIC_API_KEY, undefined); assert.equal(env.GH_TOKEN, undefined);
+  for (const platform of ['win32', 'darwin']) assert.equal(desktopEnvironment('/offline/home', inherited, platform).DISPLAY, undefined);
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/build-windows.yml'), 'utf8');
+  const commands = [...workflow.matchAll(/- name: Verify packaged SDK and app-server through fake native executables\s+(?:if:[^\n]+\s+)?run: ([^\n]+)/g)].map(match => match[1].trim());
+  assert.equal(commands.length, 3); assert.ok(commands[2].startsWith('xvfb-run -a '));
+  assert.ok(commands.slice(0, 2).every(command => !command.includes('xvfb-run')));
+});
+
+test('native desktop smoke constructs event sequence numbers in delivery order', async () => {
+  const source = fs.readFileSync(path.join(root, 'scripts/native-session-smoke.mjs'), 'utf8'), frames = [];
+  const script = source.slice(source.indexOf('let sequence = 0;'), source.indexOf('await view.waitFor('));
+  const context = { project: { id: 'p', path: '/offline' }, terminalId: 't', assert,
+    page: { locator: () => ({ count: async () => 0 }) }, app: { evaluate: async (_fn, list) => frames.push(...list) } };
+  await vm.runInNewContext(`(async () => { ${script} })()`, context);
+  assert.deepEqual(frames.map(event => event.sequence), frames.map((_, index) => index + 1));
+});
+
 for (const provider of ['claude', 'codex']) test(`standalone wire fixture starts, sends, resumes and stops a fake ${provider} child`, { timeout: 15000 }, async t => {
   const readline = require('node:readline');
   const scope = fixtureProcesses(t, 'agentrix-fake-provider-'), { directory } = scope;
