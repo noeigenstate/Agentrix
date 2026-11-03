@@ -66,10 +66,17 @@ class LabSession {
     this.tools = path.join(this.labRoot, 'tools', this.runId);
     this.control = path.join(this.workspaceRoot, 'control');
     this.sockets = new Set(); this.jobs = new Set(); this.controller = new AbortController();
+    this.brokerSockets = new Set(); this.brokerJobs = new Set();
+    this.brokerWork = new Set();
     this.capability = randomUUID(); this.invocations = 0; this.active = false; this.closed = false; this.modelStarted = false;
   }
   async start() {
-    await requireIsolation();
+    if (this.closed || this.started) throw new Error('The lab session cannot be started again.');
+    aborted(this.signal);
+    await requireIsolation({ directory: this.labRoot, prompt: this.hostPrompt !== false });
+    aborted(this.signal);
+    this.started = true;
+    this.protectedPaths = await Promise.all(this.protectedPaths.map(physicalPath));
     this.nodePath = await resolveNode({
       nodePath: this.nodePath, env: this.env, protectedPaths: this.protectedPaths, signal: this.signal, t: this.t,
     });
@@ -86,11 +93,18 @@ class LabSession {
     this.workspaceRoot = await fs.realpath(this.workspaceRoot);
     this.control = await fs.realpath(this.control); this.tools = await fs.realpath(this.tools);
     this.privateDirectory = await fs.realpath(this.privateDirectory);
+    if (process.platform === 'win32') require('./sandbox-win32.cjs').register(this.runId, this.privateDirectory);
     await fs.writeFile(path.join(this.privateDirectory, 'manifest.json'), JSON.stringify({
       runId: this.runId, directory: this.directory,
     }), { mode: 0o600 });
     for (const file of ['host.cjs', 'process.cjs']) {
       await fs.copyFile(path.join(__dirname, file), path.join(this.privateDirectory, file));
+    }
+    if (process.platform === 'win32') {
+      for (const file of ['sandbox-win32-host.cjs', 'sandbox-win32.cjs', 'sandbox-win32-native.cjs', 'sandbox-win32-preparation.cjs']) {
+        await fs.copyFile(path.join(__dirname, file), path.join(this.privateDirectory, file));
+      }
+      await fs.copyFile(path.join(__dirname, 'sandbox-win32-executor.cjs'), path.join(this.tools, 'sandbox-win32-executor.cjs'));
     }
     this.trustedHelper = this.helper ? await copyHelper(this.helper, this.privateDirectory) : null;
     await fs.copyFile(path.join(__dirname, 'client.cjs'), path.join(this.tools, 'dispatch.cjs'));
@@ -106,11 +120,70 @@ class LabSession {
     await new Promise((resolve, reject) => {
       this.server.once('error', reject); this.server.listen(this.channel.address, resolve);
     });
-    await fs.chmod(this.channel.address, 0o600);
+    if (process.platform !== 'win32') await fs.chmod(this.channel.address, 0o600);
     this.signalAbort = () => this.controller.abort();
     this.signal?.addEventListener('abort', this.signalAbort, { once: true });
     if (this.signal?.aborted) this.controller.abort();
     return this;
+  }
+  async broker(handler) {
+    if (this.closed || this.brokerServer || typeof handler !== 'function') throw new Error('Invalid lab broker registration.');
+    this.brokerChannel = await channelAddress(this.labRoot, 'broker');
+    const capability = randomUUID();
+    this.brokerEnvironment = JSON.stringify({ address: this.brokerChannel.address, capability });
+    this.brokerServer = net.createServer(socket => {
+      if (this.closed || this.brokerSockets.size >= 8) return socket.destroy();
+      this.brokerSockets.add(socket); socket.setEncoding('utf8'); socket.setTimeout(5000, () => socket.destroy());
+      const control = new AbortController();
+      let buffer = '', submitted = false;
+      socket.on('data', chunk => {
+        if (submitted) return socket.destroy();
+        buffer += chunk;
+        if (Buffer.byteLength(buffer) > 256 * 1024) return socket.destroy();
+        if (!buffer.includes('\n')) return;
+        submitted = true;
+        const operation = (async () => {
+          let timer, signal, onAbort;
+          try {
+            const request = JSON.parse(buffer.trim()); buffer = '';
+            const { argv, stdin, timeoutMs = 120000 } = request;
+            if (request.capability !== capability || this.closed || !this.active || this.controller.signal.aborted ||
+              this.brokerWork.size >= 4 || !Array.isArray(argv) || !argv.length || argv.length > 256 ||
+              argv.some(arg => typeof arg !== 'string' || arg.includes('\0') || Buffer.byteLength(arg) > 8192) ||
+              (stdin !== undefined && (typeof stdin !== 'string' || Buffer.byteLength(stdin) > 128 * 1024)) ||
+              !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20 * 60000) throw new Error();
+            socket.setTimeout(timeoutMs + 1000, () => socket.destroy());
+            timer = setTimeout(() => control.abort(), timeoutMs);
+            signal = AbortSignal.any([control.signal, this.controller.signal]);
+            const running = Promise.resolve().then(() => handler({ argv, ...(stdin === undefined ? {} : { stdin }), timeoutMs }, { signal }));
+            this.brokerWork.add(running);
+            void running.finally(() => this.brokerWork.delete(running)).catch(error => {
+              if (error?.infrastructure || error?.fatal) this.brokerFailure = Object.assign(new Error('Lab broker command failed.'),
+                { infrastructure: true, ...(error.fatal ? { fatal: true } : {}) });
+            });
+            const cancelled = new Promise((resolve, reject) => {
+              onAbort = () => reject(new Error('Lab broker request cancelled.'));
+              signal.addEventListener('abort', onAbort, { once: true });
+              if (signal.aborted) onAbort();
+            });
+            const result = await Promise.race([running, cancelled]);
+            if (signal.aborted || !result || (result.code !== null && !Number.isInteger(result.code)) ||
+              typeof result.stdout !== 'string' || typeof result.stderr !== 'string' ||
+              Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) > 8 * 1024 * 1024) throw new Error();
+            if (!socket.destroyed) socket.end(JSON.stringify({ code: result.code, stdout: result.stdout, stderr: result.stderr }) + '\n');
+          } catch {
+            if (!socket.destroyed) socket.end(JSON.stringify({ code: 125, stdout: '', stderr: 'Lab broker command failed.' }) + '\n');
+          } finally { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); }
+        })();
+        this.brokerJobs.add(operation); void operation.finally(() => this.brokerJobs.delete(operation));
+      });
+      socket.on('error', () => {});
+      socket.on('close', () => { control.abort(); this.brokerSockets.delete(socket); });
+    });
+    await new Promise((resolve, reject) => {
+      this.brokerServer.once('error', reject); this.brokerServer.listen(this.brokerChannel.address, resolve);
+    });
+    if (process.platform !== 'win32') await fs.chmod(this.brokerChannel.address, 0o600);
   }
   connection(socket) {
     this.sockets.add(socket); socket.setEncoding('utf8'); socket.setTimeout(30 * 60000, () => socket.destroy());
@@ -178,8 +251,10 @@ class LabSession {
     return running;
   }
   async launchJob(job, args, {
-    cwd, log, onLine, timeoutMs = 20 * 60000, command: executable, review = false, signal,
+    cwd, log, onLine, timeoutMs = 20 * 60000, command: executable, review = false, signal, network = true,
   }) {
+    const root = review ? path.join(this.labRoot, 'reviews', this.runId) : this.workspaceRoot;
+    await localPath(cwd, cwd, [root], true);
     const folder = review ? path.join(cwd, '.control') : path.join(this.control, job);
     await fs.mkdir(folder, { recursive: true, mode: 0o700 });
     const access = await credentialAccess(this.env, !executable);
@@ -187,28 +262,53 @@ class LabSession {
     const search = Object.keys(env).find(key => key.toLowerCase() === 'path') || 'PATH';
     env[search] = [path.dirname(this.nodePath), env[search]].filter(Boolean).join(path.delimiter);
     Object.assign(env, { AGENTRIX_LAB_RUN: this.runId, AGENTRIX_LAB_JOB: job });
-    if (this.usage?.bootstrap) env.AGENTRIX_BOOTSTRAP = this.usage.bootstrap;
-    const sockets = [await fs.realpath(this.channel.address)];
-    if (this.usage?.address) sockets.push(await fs.realpath(this.usage.address));
+    if (!executable && this.usage?.bootstrap) env.AGENTRIX_BOOTSTRAP = this.usage.bootstrap;
+    if (this.brokerEnvironment) env.AGENTRIX_LAB_BROKER = this.brokerEnvironment;
+    const addresses = [this.channel.address, this.usage?.address, this.brokerChannel?.address].filter(Boolean);
+    const sockets = process.platform === 'win32' ? addresses : await Promise.all(addresses.map(file => fs.realpath(file)));
     const readRoots = review ? [cwd, this.tools, ...sockets] : [
       this.workspaceRoot, this.tools, ...sockets,
     ];
     const writeRoots = review ? [cwd, ...sockets] : [this.workspaceRoot, ...sockets];
     const profile = sandboxProfile({
       labRoot: this.labRoot, readRoots, writeRoots, protectedPaths: this.protectedPaths,
-      credentialPaths: this.credentialPaths, deniedExecutables: this.deniedExecutables, ...access,
+      credentialPaths: this.credentialPaths, deniedExecutables: this.deniedExecutables, network, ipcPaths: sockets, ...access,
     });
+    let windows;
+    if (process.platform === 'win32') {
+      const backend = require('./sandbox-win32.cjs');
+      const runtimes = await backend.runtimeRoots({ nodePath: this.nodePath, env, command: executable, protectedPaths: this.protectedPaths });
+      const physicalRead = readRoots.filter(file => !sockets.includes(file));
+      const physicalWrite = writeRoots.filter(file => !sockets.includes(file));
+      windows = {
+        executable: backend.executable, runId: this.runId, job, labRoot: this.labRoot,
+        manifest: path.join(this.privateDirectory, job + '.acl.json'), network,
+        readRoots: [...physicalRead, ...runtimes], writeRoots: physicalWrite,
+        credentialFiles: [access.sharedAuth, access.claudeAuth].filter(Boolean),
+        blockedPaths: [this.labRoot, ...this.protectedPaths, ...this.credentialPaths,
+          access.codexSource, access.claudeSource].filter(Boolean),
+        pipes: sockets,
+      };
+      if (executable) executable = { ...executable, file: await backend.resolveExecutable(executable.file, env) };
+    }
     const config = path.join(this.privateDirectory, job + '.json');
     await fs.writeFile(config, JSON.stringify({
       runId: this.runId, job, profile, helper: this.trustedHelper, args, cwd, command: executable,
-      executor: path.join(this.tools, 'executor.cjs'),
+      executor: path.join(this.tools, process.platform === 'win32' ? 'sandbox-win32-executor.cjs' : 'executor.cjs'), windows,
     }), { mode: 0o600 });
-    const running = command(this.nodePath || process.execPath, [path.join(this.privateDirectory, 'host.cjs'), config], {
+    const host = process.platform === 'win32' ? 'sandbox-win32-host.cjs' : 'host.cjs';
+    const running = command(this.nodePath || process.execPath, [path.join(this.privateDirectory, host), config], {
       cwd, env, signal: signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal,
       timeoutMs, log, onLine, ipc: true,
       onMessage: message => { if (message?.type === 'lab-model-started') this.modelStarted = true; },
     });
-    try { return await running; }
+    try {
+      const result = await running;
+      if (windows && result.code === 125 && result.stderr.includes('Windows lab isolation failed')) {
+        throw Object.assign(new Error('Windows 安全实验执行不可用，未启动工作者。'), { infrastructure: true });
+      }
+      return result;
+    }
     finally {
       await killMarked(this.runId, { job });
       await fs.rm(config, { force: true });
@@ -219,23 +319,47 @@ class LabSession {
       throw new Error('Authenticated lab metering is required.');
     }
     this.active = true;
-    try { return await this.launch(args, options); }
+    try {
+      const result = await this.launch(args, options);
+      if (this.brokerFailure) throw this.brokerFailure;
+      return result;
+    }
     finally { this.active = false; await killMarked(this.runId); }
   }
-  async execute(file, args, options) {
-    return this.launch([], { ...options, command: { file, args } });
+  async execute(file, args, { network = false, ...options } = {}) {
+    if (typeof network !== 'boolean' || typeof file !== 'string' || !file || file.includes('\0') || !Array.isArray(args) ||
+      args.some(arg => typeof arg !== 'string' || arg.includes('\0'))) throw new Error('Invalid lab execution request.');
+    return this.launch([], { ...options, network, command: { file, args } });
   }
   async close() {
     if (this.closed) return;
     this.closed = true; this.active = false; this.controller.abort();
     this.signal?.removeEventListener('abort', this.signalAbort);
-    await killMarked(this.runId);
+    let failure;
+    try { if (this.started) await killMarked(this.runId); } catch (error) { failure = error; }
+    if (this.brokerServer) {
+      await new Promise(resolve => { this.brokerServer.close(resolve); for (const socket of this.brokerSockets) socket.destroy(); });
+      this.brokerServer = null;
+    }
+    await Promise.allSettled(this.brokerJobs);
+    if (this.brokerWork.size) {
+      let timer;
+      try {
+        await Promise.race([Promise.allSettled(this.brokerWork), new Promise((resolve, reject) => {
+          timer = setTimeout(() => reject(Object.assign(new Error('Lab broker did not stop. Cleanup was refused.'),
+            { infrastructure: true, fatal: true })), 2000);
+        })]);
+      } catch (error) { failure ||= error; }
+      finally { clearTimeout(timer); }
+    }
+    await this.brokerChannel?.close();
     await Promise.allSettled(this.jobs);
     if (this.server) {
       await new Promise(resolve => { this.server.close(resolve); for (const socket of this.sockets) socket.destroy(); });
       this.server = null;
     }
     await this.channel?.close();
+    if (failure) throw failure;
     await removePath(this.tools);
     await removePath(path.join(this.labRoot, 'reviews', this.runId));
     await removePath(this.privateDirectory);
@@ -248,9 +372,11 @@ async function recoverRuns(labRoot) {
     if (error.code === 'ENOENT') return [];
     throw error;
   });
+  if (process.platform === 'win32' && entries.length) await require('./sandbox-win32.cjs').initialize({ directory: labRoot });
   for (const entry of entries) {
     if (!entry.isDirectory() || !/^[a-f0-9-]{36}$/.test(entry.name)) continue;
     await killMarked(entry.name);
+    if (process.platform === 'win32') await require('./sandbox-win32.cjs').release(path.join(directory, entry.name));
     let manifest;
     try { manifest = JSON.parse(await fs.readFile(path.join(directory, entry.name, 'manifest.json'), 'utf8')); } catch {}
     if (manifest?.runId === entry.name && typeof manifest.directory === 'string' &&
