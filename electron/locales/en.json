@@ -2405,5 +2405,18 @@
   "输入框中有未发送的草稿，请先处理草稿后重试。": "There is an unsent draft in the composer. Handle it before trying again.",
   "已粘贴到输入框，未能确认发送，请在终端里处理。": "Pasted into the composer, but delivery could not be confirmed. Check the terminal.",
   "发送已超时，消息未发送。": "Sending timed out. The message was not sent.",
-  "工作者未提供原因。": "The worker provided no reason."
+  "工作者未提供原因。": "The worker provided no reason.",
+  "原生会话记录损坏，已隔离并恢复默认设置。": "Native session records were damaged. They were quarantined and default settings were restored.",
+  "原生会话暂不可用，已保留终端模式。": "Native sessions are temporarily unavailable. Terminal mode remains available.",
+  "由 Claude Code 权限规则决定。": "Claude Code permission rules decide.",
+  "Codex 版本未经验证，已通过能力检查。": "This Codex version is unverified; required capabilities passed.",
+  "未找到 Codex 原生运行器，已切换到终端。": "Native Codex was not found; switched to the terminal.",
+  "Codex 原生连接不可用，已切换到终端。": "Native Codex is unavailable; switched to the terminal.",
+  "会话内的子代理没有直达通道，只能通过主会话与它交流。": "A sub-agent inside the session has no direct channel; it can only be reached through the main session.",
+  "给它发消息，Enter 发送，Shift+Enter 换行": "Message it, Enter to send, Shift+Enter for a new line",
+  "给它发消息，Enter 发送": "Message it, Enter to send",
+  "发消息": "Message",
+  "未找到 Codex 命令行，无法使用原生界面": "The Codex command line was not found; the native view cannot be used",
+  "这个 Codex 版本不支持原生界面": "This Codex version does not support the native view",
+  "按设置使用终端": "Using the terminal as set"
 }
