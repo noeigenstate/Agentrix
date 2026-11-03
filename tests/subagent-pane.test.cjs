@@ -60,24 +60,36 @@ const feed = (revision, patch = {}) => ({ id: 'agent:a', agent: 'Codex', model: 
   rate, entries: [{ id: 'e1' }, { id: 'e2' }], revision, ...patch });
 
 // ---- which views are open -------------------------------------------------------------------------------------------------------
-test('at most two views per terminal: a third click replaces the oldest, a repeated click closes, a narrow centre keeps one', () => {
-  const s = splits();
-  s.openSplit('t-limit', 'a'); s.openSplit('t-limit', 'b'); s.openSplit('t-limit', 'c');
-  assert.deepEqual(openIds('t-limit'), ['b', 'c'], 'the oldest view gave way');
+test('one view per terminal: a second open replaces the first at any width, a repeated click closes, terminals keep their own', () => {
+  const s = splits(), heard = [];
+  const leave = s.subscribeSplits(() => heard.push(openIds('t-limit')));
+  s.openSplit('t-limit', 'a'); s.openSplit('t-limit', 'b');
+  assert.deepEqual(openIds('t-limit'), ['b'], 'the second view replaced the first');
   s.openSplit('t-limit', 'b');
-  assert.deepEqual(openIds('t-limit'), ['b', 'c'], 'opening an open view changes nothing');
+  assert.deepEqual([openIds('t-limit'), heard], [['b'], [['a'], ['b']]], 'opening the open view changes nothing and tells nobody');
+  leave();
   s.openSplit('t-other', 'x');
-  assert.deepEqual([openIds('t-limit'), openIds('t-other')], [['b', 'c'], ['x']], 'terminals count their own views');
+  assert.deepEqual([openIds('t-limit'), openIds('t-other')], [['b'], ['x']], 'each terminal keeps its own view');
   s.toggleSplit('t-limit', 'b');
-  assert.deepEqual(openIds('t-limit'), ['c']); s.toggleSplit('t-limit', 'b');
-  assert.deepEqual(openIds('t-limit'), ['c', 'b']);
-  assert.equal(s.isSplitOpen(s.getSplits(), 't-limit', 'b'), true); assert.equal(s.isSplitOpen(s.getSplits(), 't-other', 'b'), false);
-  assert.deepEqual([599, 600, 1200].map(s.splitLimit), [1, 2, 2]);
-  s.limitSplits('t-limit', 1);
-  assert.deepEqual(openIds('t-limit'), ['b'], 'the newest one stays');
-  s.limitSplits('t-limit', 0); s.limitSplits('t-other', 0);
+  assert.deepEqual(openIds('t-limit'), [], 'a repeated click closes it');
+  s.toggleSplit('t-limit', 'b'); s.toggleSplit('t-limit', 'c');
+  assert.deepEqual(openIds('t-limit'), ['c'], 'a click on another sub-agent replaces the open one');
+  assert.equal(s.isSplitOpen(s.getSplits(), 't-limit', 'c'), true); assert.equal(s.isSplitOpen(s.getSplits(), 't-limit', 'b'), false); assert.equal(s.isSplitOpen(s.getSplits(), 't-other', 'c'), false);
+  assert.deepEqual(openIds('t-other'), ['x'], 'the other terminal was left alone');
+  for (const gone of ['limitSplits', 'splitLimit', 'MAX_SPLITS', 'NARROW_CENTRE']) assert.equal(gone in s, false, `${gone} existed only for the second view`);
+  s.closeSplit('t-limit', 'c'); s.closeSplit('t-other', 'x'); s.closeSplit('t-limit', 'nothing-open');
   assert.deepEqual([openIds('t-limit'), openIds('t-other')], [[], []]);
-  s.closeSplit('t-limit', 'nothing-open');
+});
+
+test('replacing a view drops the feed kept for it, the way closing does', async () => {
+  const s = splits(), bridge = stubBridge(() => Promise.resolve({ ok: true, value: feed(4) }));
+  const firstState = callId => { let first; s.followFeed(bridge, 't-swap', callId, state => { first ??= state; })(); return first.status; };
+  s.openSplit('t-swap', 'a'); s.followFeed(bridge, 't-swap', 'a', () => {})();
+  await settle();
+  assert.equal(firstState('a'), 'ok', 'the open view keeps its feed');
+  s.openSplit('t-swap', 'b');
+  assert.equal(firstState('a'), 'loading', 'the replaced view’s feed went with it');
+  s.closeSplit('t-swap', 'b');
 });
 
 test('subscribers hear every change to the open views and stop hearing when they leave', () => {
@@ -419,28 +431,30 @@ test('open views take cells of the expanded grid after the terminals, are not te
   assert.equal(count(single, /data-terminal-slot/g), 1, 'a view is no terminal slot, so the grip’s reordering never sees it');
   assert.doesNotMatch(single, /terminal-split-tools/, 'and with one terminal there are no restart or close tools to offer');
   s.openSplit('t-grid', 'agent:b');
-  const pair = gridMarkup(one, true);
-  assert.match(pair, /style="--terminal-columns:2;--terminal-rows:2"/); assert.match(pair, /data-terminal-slot="t-grid" style="grid-row:1 \/ span 2"/, 'the conversation keeps the left column whole');
-  assert.deepEqual([...pair.matchAll(/data-call="([^"]+)"/g)].map(match => match[1]), ['agent:a', 'agent:b'], 'views follow in the order they were opened');
-  s.openSplit('t-grid', 'agent:c');
-  assert.deepEqual([...gridMarkup(one, true).matchAll(/data-call="([^"]+)"/g)].map(match => match[1]), ['agent:b', 'agent:c'], 'a third view replaces the oldest');
+  const replaced = gridMarkup(one, true);
+  assert.deepEqual([...replaced.matchAll(/data-call="([^"]+)"/g)].map(match => match[1]), ['agent:b'], 'a second view replaces the first, never stacks beside it');
+  assert.match(replaced, /style="--terminal-columns:2;--terminal-rows:1"/, 'one conversation and one view stay side by side');
+  assert.doesNotMatch(replaced, /grid-row/, 'the conversation spans no rows: there is no second view to stack');
   assert.equal(count(gridMarkup(one, false), /subagent-/g), 0, 'a small card shows no views');
   assert.doesNotMatch(gridMarkup(one, false), /has-splits/);
   assert.doesNotMatch(single, /has-terminals/, 'a lone conversation beside views is not picked out by the active-split edge');
   const two = gridMarkup([terminal('t-grid'), terminal('t-grid-2')], true);
   assert.match(two, /has-terminals/, 'with several terminals the one in use is');
   assert.match(two, /terminal-split-tools/, 'with several terminals the terminals keep their own tools'); assert.doesNotMatch(two, /grid-row/);
-  s.limitSplits('t-grid', 0);
+  s.closeSplit('t-grid', 'agent:b');
 }));
 
-test('the grid is not rearranged by views of another terminal, and a narrow centre trims to one view', () => zh(() => {
+test('the grid is not rearranged by views of another terminal, and terminals of one project each keep their own view', () => zh(() => {
   const s = splits();
   s.openSplit('t-elsewhere', 'agent:z');
   assert.equal(count(gridMarkup([terminal('t-mine')], true), /subagent-slot/g), 0, 'a view belongs to the terminal whose pane opened it');
   s.openSplit('t-mine', 'agent:a'); s.openSplit('t-mine', 'agent:b');
-  s.limitSplits('t-mine', s.splitLimit(599));
   assert.deepEqual([...gridMarkup([terminal('t-mine')], true).matchAll(/data-call="([^"]+)"/g)].map(match => match[1]), ['agent:b']);
-  s.limitSplits('t-mine', 0); s.limitSplits('t-elsewhere', 0);
+  s.openSplit('t-mine-2', 'agent:c');
+  const both = gridMarkup([terminal('t-mine'), terminal('t-mine-2')], true);
+  assert.deepEqual([...both.matchAll(/data-terminal="([^"]+)" data-call="([^"]+)"/g)].map(match => [match[1], match[2]]), [['t-mine', 'agent:b'], ['t-mine-2', 'agent:c']], 'each terminal keeps its own view');
+  assert.doesNotMatch(both, /grid-row/);
+  s.closeSplit('t-mine', 'agent:b'); s.closeSplit('t-mine-2', 'agent:c'); s.closeSplit('t-elsewhere', 'agent:z');
 }));
 
 // ---- the narrow window's way in -------------------------------------------------------------------------------------------------
