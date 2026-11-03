@@ -46,6 +46,8 @@
 
 /* The notice over a card whose Claude session went to the terminal. */
 .native-path-note { position: absolute; z-index: 3; top: 8px; right: 12px; display: flex; flex-direction: column; max-width: calc(100% - 24px); border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); color: var(--text-1); font-size: 12px; }
+/* Split controls occupy the top 34px; keep the notice and its dismiss button below them. */
+.has-terminals .native-path-note { top: 40px; }
 .native-path-summary { display: flex; align-items: center; gap: 8px; padding-left: 12px; }
 .native-path-summary > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .native-path-note .icon-button { flex: none; width: 32px; height: 32px; border-radius: 50%; }
