@@ -670,6 +670,16 @@ test('the lab CSP allows its own assets and dev socket without external images o
   assert.match(config, /input: \{ main: 'index\.html', dashboard: 'dashboard\.html', lab: 'lab\.html' \}/); assert.match(config, /entries: \['index\.html', 'dashboard\.html', 'lab\.html'\]/);
 });
 
+test('a source card that cannot run keeps its reason at the secondary text colour, and the three source cards stay equal in one row at any width', () => {
+  const sheet = css();
+  assert.match(sheet, /\.choice:disabled > :not\(\.reason\) \{ opacity: \.45; \}/, 'the card dims its icon and words');
+  assert.match(sheet, /\.choice:disabled \.reason \{ opacity: 1; color: var\(--text-2\); \}/, 'the reason is not dimmed');
+  assert.match(sheet, /\.choices\.three \{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\); \}/);
+  const narrow = /@media \(max-width: 1000px\) \{([\s\S]*?)\n\}/.exec(sheet);
+  assert.ok(narrow && !/\.choices\.three/.test(narrow[1]), 'the narrow window does not re-flow the source cards');
+  assert.match(sheet, /\.steps li:not\(:last-child\)::after \{[^}]*flex: 1 1 0;/, 'every connector takes an equal share');
+});
+
 test('the lab stylesheet keeps the product scale and takes every colour from the theme tokens apart from the four approach colours', () => {
   const declarations = [...css().matchAll(/([^{}]+)\{([^}]*)\}/g)].flatMap(([, selector, body]) => body.split(';').map(item => item.trim()).filter(Boolean)
     .map(item => ({ selector: selector.trim(), name: item.slice(0, item.indexOf(':')).trim(), value: item.slice(item.indexOf(':') + 1).trim() })));

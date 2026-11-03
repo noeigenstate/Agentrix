@@ -1,5 +1,5 @@
 import { FolderOpen, Plus } from '@phosphor-icons/react';
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import type { Project, Result, SkillDetail, SkillDraft, SkillInfo, SkillOptions } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { SkillDetailPane, type SkillTab } from './SkillDetailPane';
@@ -20,6 +20,19 @@ function EmptyMine({ onNew, onImport }: { onNew: () => void; onImport: () => voi
       <button type="button" className="button primary" onClick={onNew}><Plus size={16} />{t('新建技能')}</button>
     </div>
   </div>;
+}
+
+// A message names skills such as code-standard-<标识>; a name never breaks across lines, so each one sits in a nowrap span.
+const SKILL_NAME = /[A-Za-z0-9][\w.]*(?:-[\w.]+|-<[^<>\s]+>)+/g;
+function withNames(message: string) {
+  const parts: ReactNode[] = [];
+  let last = 0;
+  for (const match of message.matchAll(SKILL_NAME)) {
+    parts.push(message.slice(last, match.index), <span key={match.index} className="skills-name">{match[0]}</span>);
+    last = match.index + match[0].length;
+  }
+  parts.push(message.slice(last));
+  return parts;
 }
 
 // Settings › 技能: the built-in and the user's own skills on the left, one skill's controls and text on the right.
@@ -101,7 +114,7 @@ export function SkillsSettings({ projects }: { projects: Project[] }) {
   return <div className="skills-settings">
     <SkillsList skills={skills} selectedId={editing ? editing.id : selected?.id ?? null} query={query} onQuery={setQuery} onSelect={choose} onNew={create} onImport={() => void importFolder()} />
     <div className="skills-pane">
-      {error && <p className="form-error skills-error" role="alert">{error}</p>}
+      {error && <p className="form-error skills-error" role="alert">{withNames(error)}</p>}
       {editing ? <SkillEditForm id={editing.id} name={editedSkill?.name ?? ''} draft={editing.draft} scopes={scopeOptions(projects, scopeOf)} confirm={confirm}
         onChange={draft => { if (draft.name !== editing.draft.name) setError(''); setEditing({ ...editing, draft }); }} onSave={() => void save()} onCancel={closeForm} onDelete={() => void remove()} onDismiss={() => setConfirm(null)} />
         : selected && actions ? <SkillDetailPane skill={selected} detail={shown} scopes={scopeOptions(projects, scopeOf)} tab={tab} now={Date.now()} actions={actions} />

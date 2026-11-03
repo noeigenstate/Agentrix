@@ -102,13 +102,15 @@
 .wizard-foot .muted { flex: 1; text-align: right; }
 
 .choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
-.choices.three { grid-template-columns: repeat(3, 1fr); }
+/* `minmax(0, 1fr)`: long words cannot widen one card, so the three source cards stay equal and in one row at any window width. */
+.choices.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .choices.four { grid-template-columns: repeat(4, 1fr); }
 .choice { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; padding: 16px; border: 1px solid var(--panel-line); border-radius: 12px; background: var(--bg-card); color: var(--text-1); font: inherit; text-align: left; cursor: pointer; }
 .choice:hover:not(:disabled) { border-color: var(--border-hover); }
 /* A card that cannot be chosen dims its icon and words, but not the reason: that is the one thing the owner can act on, so it keeps the muted text colour. */
 .choice:disabled { opacity: 1; color: var(--text-3); cursor: default; }
 .choice:disabled > :not(.reason) { opacity: .45; }
+.choice:disabled .reason { opacity: 1; color: var(--text-2); }
 /* The chosen card has the selected fill, the stronger border and a tick; an unchosen one has none of them. */
 .choice[aria-pressed="true"] { border-color: var(--border-hover); background: var(--bg-selected); }
 .choice[aria-pressed="true"]:disabled { color: var(--text-1); }

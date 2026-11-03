@@ -16,7 +16,7 @@
 .skills-item-name { flex: 1 1 0; min-width: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .skills-mark { flex: none; font-size: 12px; color: var(--text-1); }
 .skills-count { flex: none; font-size: 12px; color: var(--text-3); }
-.skills-tag { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 6px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; font-weight: 400; line-height: 18px; color: var(--text-2); }
+.skills-tag { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; font-weight: 400; line-height: 18px; color: var(--text-2); }
 .skills-item[aria-current="true"] .skills-tag { border-color: var(--border-hover); }
 .skills-title b .skills-tag { margin-left: 8px; vertical-align: 1px; }
 .skills-list-note { margin: 0; padding: 8px 12px; font-size: 12px; line-height: 20px; color: var(--text-2); }
@@ -25,6 +25,7 @@
 
 .skills-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .skills-error { margin: 16px 0 0; overflow-wrap: anywhere; }
+.skills-error .skills-name { white-space: nowrap; }
 .skills-detail { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; padding-top: 16px; scrollbar-gutter: stable; }
 .skills-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 36px; }
 .skills-title b { font-size: 16px; font-weight: 600; }
@@ -55,7 +56,7 @@
 .skills-facts dd .text-button { position: relative; margin-left: 12px; font-size: 13px; }
 .skills-facts dd .text-button::after { content: ''; position: absolute; inset: -8px -4px; }
 .skills-version { color: var(--text-2); }
-.skills-dependency { gap: 8px; padding: 6px 0; }
+.skills-dependency { gap: 8px; padding: 8px 0; }
 .skills-dependency > span { min-width: 0; overflow-wrap: anywhere; }
 .skills-dependency small { display: block; margin-top: 2px; font-size: 12px; line-height: 20px; color: var(--text-3); }
 .skills-heading { margin: 16px 0 8px; font-size: 14px; font-weight: 600; }
@@ -76,7 +77,9 @@
 .skills-tab-tools { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .skills-tab-note { font-size: 12px; color: var(--text-3); }
 .skills-tabs .skills-view-toggle { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--bg-input); }
-.skills-tabs .skills-view-toggle button { height: 24px; padding: 0 10px; border: 0; border-radius: 6px; font-size: 12px; font-weight: 500; color: var(--text-3); }
+/* The look stays 24 px; the invisible hit area grows to 32 px (vertical only: the buttons are 2 px apart). */
+.skills-tabs .skills-view-toggle button::after { content: ''; position: absolute; inset: -4px 0; }
+.skills-tabs .skills-view-toggle button { position: relative; height: 24px; padding: 0 12px; border: 0; border-radius: 6px; font-size: 12px; font-weight: 500; color: var(--text-3); }
 .skills-tabs .skills-view-toggle button[aria-pressed="true"] { border: 0; color: var(--text-1); background: var(--bg-selected); }
 .skills-reading, .skills-textarea { box-sizing: border-box; flex: 1 0 200px; margin: 0; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); font: 12px/20px var(--font-mono); color: var(--text-1); }
 .skills-reading { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; }
