@@ -113,7 +113,8 @@ async function run(theme, output) {
     await waitFor(() => fs.stat(answered).then(() => true, () => false), 'the owner clicked the TUI and answered there');
     assert.deepEqual(JSON.parse(await fs.readFile(answered, 'utf8')), { answers: { q: { answers: ['One'] } } });
     await waitFor(() => popup.locator('.xterm-rows').innerText().then(text => text.includes('Ask Codex to do anything')), 'TUI returned to input');
-    await popup.getByRole('button', { name: 'Close', exact: true }).click();
+    // Once the TUI is back at its input the popup may close by itself; close it only while it is still there.
+    await waitFor(async () => !(await popup.count()) || await popup.getByRole('button', { name: 'Close', exact: true }).click({ timeout: 1000 }).then(() => true, () => false), 'the question popup closed');
     // The text queued behind the question goes out once the TUI is back at its input (the owner's always-accept rule).
     await waitFor(async () => await composer.isEnabled() && await composer.inputValue() === '', 'the queued message left the box after the dialog');
     checks.push('explicit TUI click + Enter resolves the exact provider request; the queued message is sent afterwards');
