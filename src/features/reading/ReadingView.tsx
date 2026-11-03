@@ -317,18 +317,31 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     // From here the message shows as sent; the quote went with it, and returns with the draft if the send fails.
     if (carried && quoteRef.current === carried) holdQuote(null);
     const restoreQuote = () => { if (carried && !quoteRef.current && ownsSend(owner)) holdQuote(carried); };
-    const left = text && !batch.length ? inputDraft() : '';
+    const currentInput = text && !batch.length ? native.readInput() : null;
+    const left = currentInput?.text ?? '';
     const queuedLeft = !!left && queuedInput(left);
+    // Esc can return a queued message to the CLI's editable input before its old queue receipt changes.
+    const returnedQueued = queuedLeft && currentInput !== null && isAtPrompt(kind, currentInput.rows, parseAgentScreen(kind, currentInput.rows));
     const clearDraft = () => { if (own && input.current?.value.trim() === words) edit(''); };
     if (own && !pictureSend) edit('');
-    if (left && !queuedLeft && sameMessage(text, left)) {
+    if (left && (!queuedLeft || returnedQueued) && sameMessage(text, left)) {
       uploads.forEach(picture => { picture.sent = true; });
       if (pictureSend) clearDraft(); if (own) clearPictures();
-      toBottom(); window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(text, owner);
+      toBottom(); window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(text, owner, returnedQueued);
       remember(); return;
     }
-    if (left && !queuedLeft && pending.some(prompt => sameMessage(prompt.text, left))) { window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(left, owner); }
-    else if (left && !IMAGE_PLACEHOLDER.test(left)) await native.clearInput(() => ownsSend(owner));
+    if (left && (returnedQueued || !queuedLeft && pending.some(prompt => sameMessage(prompt.text, left)))) {
+      window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(left, owner, returnedQueued);
+      if (returnedQueued && ownsSend(owner)) {
+        const current = native.readInput();
+        if (!current || current.text) {
+          if (pendingId) cancelEcho(pendingId);
+          restoreQuote();
+          if (own && !input.current?.value) edit(words);
+          return;
+        }
+      }
+    } else if (left && !IMAGE_PLACEHOLDER.test(left)) await native.clearInput(() => ownsSend(owner));
     if (!ownsSend(owner)) return;
     if (text) {
       const pasted = await window.agentrix.pasteTerminal(terminal.id, text, terminal.sessionId);
@@ -361,13 +374,13 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     window.agentrix.writeTerminal(terminal.id, '\r');
     if (text) await submitted(text, owner);
   };
-  const inputDraft = () => native.readInput()?.text ?? '';
   // A message is sent once it has left the CLI's input. An Enter the CLI did not take (it arrived while the CLI was
-  // redrawing or taking the paste) leaves it there: retry only at a current idle input, never after a queue receipt.
-  const submitted = async (text: string, owner: number) => {
+  // redrawing or taking the paste) leaves it there: retry only at a current idle input. A queue receipt is final unless
+  // the owner's next send explicitly submits an input restored after interruption.
+  const submitted = async (text: string, owner: number, returnedQueued = false) => {
     for (let attempt = 0; attempt < 3; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 700));
-      if (!ownsSend(owner) || choiceVisible.current || queuedInput(text)) return;
+      if (!ownsSend(owner) || choiceVisible.current || !returnedQueued && queuedInput(text)) return;
       const current = native.readInput();
       if (!current || !sameMessage(text, current.text) || !isAtPrompt(kind, current.rows, parseAgentScreen(kind, current.rows))) return;
       window.agentrix.writeTerminal(terminal.id, '\r');
