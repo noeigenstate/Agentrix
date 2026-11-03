@@ -75,14 +75,17 @@ class SkillsStore {
     for (const [key, session] of liveSessionSnapshots) {
       if (!session.current || JSON.parse(key)[0] !== canonical(this.dataDir)) continue;
       const project = this.getProjects().find(item => item.id === session.projectId && item.kind !== 'ssh');
-      if (project) this.writeCurrentSnapshot(session.current, this.deliveryInfo(project, false, session.sessionId, 'claude'));
+      if (project) this.writeCurrentSnapshot(session.current, this.deliveryInfo(project, false, session.sessionId, 'claude'), project.id, session.sessionId);
     }
   }
 
   builtinNames() { return [...this.entries.values()].filter(entry => entry.source === 'builtin').map(entry => entry.name); }
 
-  writeCurrentSnapshot(file, delivery) {
-    const skills = delivery.skills.map(skill => ({ ...skill, firstRun: false, trigger: skill.trigger === 'first-open' ? 'auto' : skill.trigger }));
+  writeCurrentSnapshot(file, delivery, projectId, sessionId) {
+    const skills = delivery.skills.map(skill => {
+      const firstRun = this.options[skill.id]?.firstOpenedProjects?.[projectId] === sessionId;
+      return { ...skill, firstRun, trigger: skill.trigger === 'first-open' && !firstRun ? 'auto' : skill.trigger };
+    });
     try { writeFile(file, skillInstructions({ ...delivery, skills })); } catch (error) { this.report(error); }
   }
 
@@ -423,7 +426,7 @@ class SkillsStore {
           const session = liveSessionSnapshots.get(sessionKey);
           session.files.add(delivery.sessionManifest);
           if (current) {
-            this.writeCurrentSnapshot(current, delivery);
+            this.writeCurrentSnapshot(current, delivery, project.id, sessionId);
             session.files.add(current);
             if (started) Object.assign(session, { projectId: project.id, sessionId, current });
           }
