@@ -3,58 +3,100 @@ const fs = require('node:fs');
 const net = require('node:net');
 const { spawn, execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+const ownedPipes = new Map();
 
-async function createPipeRelays(addresses, namespace, failed = () => {}) {
+async function createPipeRelays(addresses, namespace, failed = () => {}, diagnostic = null) {
   if (!Array.isArray(addresses) || addresses.length > 8 || new Set(addresses).size !== addresses.length ||
     !/^\\\\\.\\pipe\\Sessions\\\d+\\AppContainerNamedObjects\\S-1-15-2(?:-\d+){7}\\$/.test(namespace)) {
     throw new Error('Invalid Windows lab pipe namespace.');
   }
-  const relays = [], pipes = [];
+  const relays = [], pipes = [], started = Date.now();
+  let sequence = 0, emitted = 0;
+  const trace = (relay, request, stage, code = 'OK') => {
+    if (!diagnostic || emitted >= 256 || (emitted >= 192 && !['wait', 'cancel'].includes(stage))) return;
+    emitted++;
+    const line = `relay pipe=${relay.index} id=${request.id} stage=${stage} phase=${request.phase} code=${code}` +
+      ` active=${relay.active.size} queued=${relay.pending.length} ms=${Date.now() - started}`;
+    diagnostic(line);
+  };
   const close = () => Promise.all(relays.map(relay => new Promise(resolve => {
     relay.closed = true;
-    relay.server.close(resolve); for (const socket of relay.sockets) socket.destroy();
+    for (const request of relay.requests.values()) trace(relay, request, 'cancel');
+    relay.server.close(() => {
+      if (ownedPipes.get(relay.target) === relay) ownedPipes.delete(relay.target);
+      resolve();
+    });
+    for (const socket of relay.sockets) socket.destroy();
   })));
   try {
     for (const address of addresses) {
       const match = /^\\\\\.\\pipe\\LOCAL\\(agentrix-lab-[a-zA-Z0-9-]{1,128})$/.exec(address);
       if (!match) throw new Error('Invalid Windows lab pipe address.');
       const sockets = new Set(), active = new Set(), pending = [], target = namespace + match[1];
-      const relay = { sockets, closed: false };
+      // Older libuv versions crash closing a failed bind with custom pending instances. Reject known collisions first.
+      if (ownedPipes.has(target)) throw Object.assign(new Error('Windows lab pipe already exists.'), { code: 'EADDRINUSE' });
+      const requests = new Map(), relay = { sockets, active, pending, requests, target, index: relays.length, closed: false };
       const drain = () => {
         while (!relay.closed && active.size < 8 && pending.length) {
           const socket = pending.shift();
           if (socket.destroyed) continue;
           active.add(socket);
+          const request = requests.get(socket); request.phase = 'active'; trace(relay, request, 'start');
           const upstream = net.connect({ path: address, allowHalfOpen: true });
           sockets.add(upstream);
           let remaining = 2;
           for (const [local, peer] of [[socket, upstream], [upstream, socket]]) {
-            local.on('error', () => { local.destroy(); peer.destroy(); });
+            local.on('error', error => {
+              trace(relay, request, 'error', /^E[A-Z0-9_]{1,31}$/.test(error.code) ? error.code : 'EIO');
+              local.destroy(); peer.destroy();
+            });
             local.once('close', () => {
               sockets.delete(local);
               if (!local.readableEnded) peer.destroy();
-              if (--remaining === 0) { active.delete(socket); drain(); }
+              if (--remaining === 0) {
+                active.delete(socket); requests.delete(socket); clearTimeout(request.timer);
+                trace(relay, request, 'release'); drain();
+              }
             });
           }
           upstream.setTimeout(30 * 60000, () => upstream.destroy());
           // Named pipes can retain their writable half after EOF. Retire both handles once the reply drains.
-          upstream.once('end', () => { socket.end(() => socket.destroy()); upstream.destroy(); });
+          upstream.once('end', () => {
+            request.phase = 'reply'; trace(relay, request, 'reply');
+            socket.end(() => socket.destroy()); upstream.destroy();
+          });
           socket.pipe(upstream); upstream.pipe(socket, { end: false });
         }
       };
       const server = net.createServer({ allowHalfOpen: true }, socket => {
         sockets.add(socket); socket.pause(); socket.on('error', () => {});
+        const request = { id: ++sequence, phase: 'queued' }; requests.set(socket, request);
+        if (diagnostic) request.timer = setTimeout(() => trace(relay, request, 'wait'), 2000);
         socket.setTimeout(30 * 60000, () => socket.destroy());
         socket.once('close', () => {
           sockets.delete(socket);
-          const index = pending.indexOf(socket); if (index !== -1) pending.splice(index, 1);
+          const index = pending.indexOf(socket);
+          if (index !== -1) {
+            pending.splice(index, 1); requests.delete(socket); clearTimeout(request.timer);
+            trace(relay, request, 'release');
+          }
         });
-        pending.push(socket); drain();
+        pending.push(socket); trace(relay, request, 'queue'); drain();
       });
-      relay.server = server; relays.push(relay);
+      relay.server = server; relays.push(relay); ownedPipes.set(target, relay);
       // The native launcher applies this job's user/package DACL and low label before resuming its worker.
       server.on('error', failed);
-      await new Promise((resolve, reject) => { server.once('error', reject); server.listen(target, resolve); });
+      await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        // Node otherwise preposts only four accepts. A burst can enter libuv's uncancellable 30s pipe-connect wait.
+        // This setting is read synchronously by listen; restore it before any other JS or worker environment is used.
+        const previous = process.env.NODE_PENDING_PIPE_INSTANCES;
+        try { process.env.NODE_PENDING_PIPE_INSTANCES = '32'; server.listen(target, resolve); }
+        finally {
+          if (previous === undefined) delete process.env.NODE_PENDING_PIPE_INSTANCES;
+          else process.env.NODE_PENDING_PIPE_INSTANCES = previous;
+        }
+      });
       pipes.push(target);
     }
     return { pipes, close };
@@ -79,7 +121,7 @@ async function runGuardian() {
       const namespace = execFileSync(config.windows.executable, ['pipe-namespace', config.windows.runId, config.windows.job],
         { windowsHide: true, timeout: 5000, maxBuffer: 4096, encoding: 'utf8' }).trim();
       stage = 'listen';
-      relays = await createPipeRelays(config.windows.pipes, namespace, () => { pipeFailure = true; stop(); });
+      relays = await createPipeRelays(config.windows.pipes, namespace, () => { pipeFailure = true; stop(); }, diagnostic ? trace : null);
       trace('pipes ready count=' + relays.pipes.length);
     }
     if (cancelled) { await relays?.close(); process.exitCode = 125; return; }

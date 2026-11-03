@@ -23,8 +23,8 @@ const WINDOWS_DIAGNOSTIC_EVENTS = new Set([
 // CI diagnostics contain fixed stage names and numeric counters, never argv, environment or worker output.
 function windowsDiagnostics() {
   if (process.platform !== 'win32' || !process.env?.NODE_TEST_CONTEXT || process.env.AGENTRIX_LAB_TEST_PREPARE_HOST !== '1') return null;
-  let tail = '', emitted = 0;
-  const recent = [];
+  let tail = '', emitted = 0, relayEmitted = 0;
+  const recent = [], recentRelays = [];
   return {
     feed(chunk) {
       tail += String(chunk);
@@ -32,6 +32,11 @@ function windowsDiagnostics() {
         const line = tail.slice(0, index).replace(/\r$/, ''); tail = tail.slice(index + 1);
         if (!line.startsWith('[lab-win32] ')) continue;
         const event = line.slice(12).replace(/ ms=\d+$/, '').replace(/=(?:-?\d+|null)(?= |$)/g, '=#');
+        if (/^host relay pipe=# id=# stage=(?:queue|start|reply|release|wait|cancel|error) phase=(?:queued|active|reply) code=(?:OK|E[A-Z0-9_]{1,31}) active=# queued=#$/.test(event)) {
+          recentRelays.push(line); if (recentRelays.length > 8) recentRelays.shift();
+          if (relayEmitted++ < 256) console.error(line);
+          continue;
+        }
         if (!WINDOWS_DIAGNOSTIC_EVENTS.has(event) &&
           !/^executor child error code=(?:E[A-Z0-9_]{1,31}|UNKNOWN)$/.test(event) &&
           !/^host pipe setup error phase=(?:namespace|listen|launch) code=E[A-Z0-9_]{1,31} errno=#$/.test(event) &&
@@ -41,7 +46,7 @@ function windowsDiagnostics() {
       }
       if (tail.length > 4096) tail = tail.slice(-4096);
     },
-    summary: () => recent.join('\n'),
+    summary: () => [...recentRelays, ...recent].join('\n'),
   };
 }
 

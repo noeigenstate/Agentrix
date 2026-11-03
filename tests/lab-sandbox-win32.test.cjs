@@ -166,6 +166,48 @@ test('Windows offline phases cannot reach a host loopback fixture', windows, asy
   assert.equal(result.code, 0, result.stderr); assert.equal(result.stdout.trim(), 'denied');
 });
 
+function brokerProbeScript() {
+  return `const net=require('node:net'),diagnostics=[],waiting=new Map(),started=Date.now();let next=0,events=0;
+    const own=JSON.parse(process.env.AGENTRIX_LAB_BROKER),other=JSON.parse(process.argv[1]),rpc=JSON.parse(process.argv[2]);
+    function trace(request,stage,code='OK'){
+      if(events++<224)console.log('[lab-broker] '+JSON.stringify({id:request.id,role:request.role,stage,
+        phase:request.phase,code,ms:Date.now()-started}));
+    }
+    const watchdog=setTimeout(()=>{
+      for(const request of waiting.values())trace(request,'wait','ETIMEDOUT');
+      console.log('[lab-broker] '+JSON.stringify({stage:'deadline',pending:waiting.size,ms:Date.now()-started}));
+      process.exit(1);
+    },8000);watchdog.unref();
+    function request(address,capability,role){return new Promise(resolve=>{
+      const state={id:++next,role,phase:'connecting'};waiting.set(state.id,state);trace(state,'queue');
+      const socket=net.connect(address);let body='',done=false,connected=false,response;
+      const finish=(value,code='OK')=>{
+        if(done)return;done=true;clearTimeout(timer);response=value;
+        if(code!=='OK')diagnostics.push({id:state.id,role,stage:connected?'reply':'open',code,ms:Date.now()-started});
+        trace(state,code==='OK'?'reply':'error',code);state.phase='closing';socket.destroy();
+      };
+      const timer=setTimeout(()=>finish({denied:true},'ETIMEDOUT'),2000);
+      socket.on('error',error=>finish({denied:true},/^E[A-Z0-9_]{1,31}$/.test(error.code)?error.code:'EIO'));
+      socket.on('connect',()=>{
+        if(done)return;connected=true;state.phase='reply';trace(state,'start');
+        socket.write(JSON.stringify({capability,argv:['probe'],timeoutMs:1000})+'\\n');
+      });
+      socket.on('data',chunk=>{body+=chunk;if(body.includes('\\n')){try{finish(JSON.parse(body.trim()))}catch{finish({denied:true},'EPROTO')}}});
+      socket.on('end',()=>finish({denied:true},'EPIPE'));
+      socket.once('close',()=>{
+        if(!done)finish({denied:true},'EPIPE');waiting.delete(state.id);trace(state,'release');resolve(response);
+      });
+    })}
+    (async()=>{const replies={own:await request(own.address,own.capability,'own'),repeated:[]};
+      for(let i=0;i<8 && replies.own.code===0;i++)replies.repeated.push(await request(own.address,own.capability,'own'));
+      replies.concurrent=await Promise.all(Array.from({length:24},()=>request(own.address,own.capability,'own-concurrent')));
+      replies.wrongCapability=await request(own.address,other.capability,'wrong-capability');
+      replies.foreignPipe=await request(other.address,own.capability,'foreign');
+      replies.foreignPipeWithItsCapability=await request(other.address,other.capability,'foreign-known-capability');
+      replies.rpc=await request(rpc.address,rpc.capability,'rpc');
+      clearTimeout(watchdog);console.log(JSON.stringify({...replies,diagnostics}));})().catch(()=>process.exit(1));`;
+}
+
 test('Windows LPAC reaches its own broker and rejects another run pipe and capability', windows, async t => {
   const own = await fixture(t); if (!own) return;
   const other = await fixture(t); if (!other) return;
@@ -175,30 +217,12 @@ test('Windows LPAC reaches its own broker and rejects another run pipe and capab
   own.session.active = true; other.session.active = true;
   own.session.allowDelegation = false;
   const rpc = JSON.parse(await fs.readFile(path.join(own.session.tools, 'client.json'), 'utf8'));
-  const code = `const net=require('node:net'),diagnostics=[];
-    const own=JSON.parse(process.env.AGENTRIX_LAB_BROKER),other=JSON.parse(process.argv[1]),rpc=JSON.parse(process.argv[2]);
-    function request(address,capability,role){return new Promise(resolve=>{
-      const socket=net.connect(address);let body='',done=false,connected=false;
-      const finish=value=>{if(done)return;done=true;socket.destroy();resolve(value)};
-      socket.setTimeout(2000,()=>{diagnostics.push({role,stage:'reply',code:'ETIMEDOUT'});finish({denied:true})});
-      socket.on('error',error=>{diagnostics.push({role,stage:connected?'reply':'open',
-        code:/^E[A-Z0-9_]{1,31}$/.test(error.code)?error.code:'EIO'});finish({denied:true})});
-      socket.on('connect',()=>{connected=true;socket.write(JSON.stringify({capability,argv:['probe'],timeoutMs:1000})+'\\n')});
-      socket.on('data',chunk=>{body+=chunk;if(body.includes('\\n')){try{finish(JSON.parse(body.trim()))}catch{finish({denied:true})}}});
-      socket.on('end',()=>finish({denied:true}));
-    })}
-    (async()=>{const replies={own:await request(own.address,own.capability,'own'),repeated:[]};
-      for(let i=0;i<8 && replies.own.code===0;i++)replies.repeated.push(await request(own.address,own.capability,'own'));
-      replies.concurrent=await Promise.all(Array.from({length:24},()=>request(own.address,own.capability,'own-concurrent')));
-      replies.wrongCapability=await request(own.address,other.capability,'wrong-capability');
-      replies.foreignPipe=await request(other.address,own.capability,'foreign');
-      replies.foreignPipeWithItsCapability=await request(other.address,other.capability,'foreign-known-capability');
-      replies.rpc=await request(rpc.address,rpc.capability,'rpc');
-      console.log(JSON.stringify({...replies,diagnostics}));})().catch(()=>process.exit(1));`;
-  const result = await own.session.execute(own.nodePath, ['-e', code, other.session.brokerEnvironment, JSON.stringify(rpc)],
-    { cwd: own.workspaceRoot, timeoutMs: 15000 });
+  const result = await own.session.execute(own.nodePath, ['-e', brokerProbeScript(), other.session.brokerEnvironment, JSON.stringify(rpc)],
+    { cwd: own.workspaceRoot, timeoutMs: 15000, onLine: line => {
+      if (line.startsWith('[lab-broker] ') && line.length < 512) t.diagnostic(line);
+    } });
   assert.equal(result.code, 0, result.stderr);
-  const replies = JSON.parse(result.stdout);
+  const replies = JSON.parse(result.stdout.trim().split('\n').at(-1));
   for (const diagnostic of replies.diagnostics) t.diagnostic('[lab-win32] broker ' + JSON.stringify(diagnostic));
   const expected = { code: 0, stdout: 'own broker', stderr: '' };
   assert.deepEqual(replies.own, expected);
@@ -224,6 +248,35 @@ test('Windows LPAC reaches its own broker and rejects another run pipe and capab
     assert.equal(own.session.modelStarted, false);
   } finally { await usage.close(); }
 });
+
+test('Windows relay serves a child broker burst and closes every client without sandbox preparation',
+  { skip: process.platform !== 'win32', timeout: 12000 }, async t => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lab-broker-burst-'));
+    const session = new LabSession({ directory: root, labRoot: root, workspaceRoot: root, runId: randomUUID() });
+    let relays, accepted = 0;
+    t.after(async () => { await relays?.close(); await session.close(); await fs.rm(root, { recursive: true, force: true }); }, { timeout: 3000 });
+    session.active = true; session.allowDelegation = false;
+    await session.broker(async () => { accepted++; return { code: 0, stdout: 'own broker', stderr: '' }; });
+    const net = require('node:net'), address = '\\\\.\\pipe\\LOCAL\\agentrix-lab-rpc-' + randomUUID();
+    session.server = net.createServer(socket => session.connection(socket));
+    await new Promise((resolve, reject) => { session.server.once('error', reject); session.server.listen(address, resolve); });
+    const own = JSON.parse(session.brokerEnvironment), events = [], requests = [];
+    relays = await require('../electron/features/lab/sandbox-win32-host.cjs').createPipeRelays([own.address, address],
+      '\\\\.\\pipe\\Sessions\\0\\AppContainerNamedObjects\\S-1-15-2-1-2-3-4-5-6-7\\', () => {}, line => events.push(line));
+    const result = await command(process.execPath, ['-e', brokerProbeScript(), JSON.stringify({
+      address: '\\\\.\\pipe\\LOCAL\\agentrix-lab-missing-' + randomUUID(), capability: randomUUID(),
+    }), JSON.stringify({ address: relays.pipes[1], capability: session.capability })], {
+      timeoutMs: 10000, env: { ...process.env, AGENTRIX_LAB_BROKER: JSON.stringify({ ...own, address: relays.pipes[0] }) },
+      onLine: line => { if (line.startsWith('[lab-broker] ')) requests.push(JSON.parse(line.slice(13))); },
+    });
+    assert.equal(result.code, 0, result.stdout + result.stderr);
+    const replies = JSON.parse(result.stdout.trim().split('\n').at(-1));
+    assert.equal(accepted, 33);
+    assert.deepEqual([replies.own, ...replies.repeated, ...replies.concurrent], Array(33).fill({ code: 0, stdout: 'own broker', stderr: '' }));
+    assert.equal(replies.wrongCapability.code, 125); assert.equal(replies.rpc.exitCode, 1);
+    assert.equal(requests.filter(request => request.stage === 'release').length, 37);
+    assert.ok(events.some(line => /stage=release /.test(line)));
+  });
 
 test('Windows root leases serialize cleanup after launcher exit and remove inherited and protected grants', windows, async t => {
   const f = await fixture(t); if (!f) return;
@@ -420,9 +473,21 @@ class PipeSecurityProbe { public static void Main(string[] args) {
       servers.push(server);
       await new Promise((resolve, reject) => { server.once('error', reject); server.listen(pipe, resolve); });
     }
-    const relays = await createPipeRelays(local, namespace);
+    const previousInstances = process.env.NODE_PENDING_PIPE_INSTANCES, events = [];
+    const relays = await createPipeRelays(local, namespace, () => {}, event => events.push(event));
+    assert.equal(process.env.NODE_PENDING_PIPE_INSTANCES, previousInstances, 'the accept setting never leaks into workers');
     t.after(() => relays.close(), { timeout: 3000 });
     for (const pipe of relays.pipes) await execute(executable, ['grant', pipe, runId, job], { timeout: 3000, windowsHide: true });
+    // Freeze JS accepts. With four instances, timed-out uv_connect requests keep this child alive for 30s.
+    const burst = `const net=require('node:net');Promise.all(Array.from({length:24},()=>new Promise(resolve=>{
+      const socket=net.connect(process.argv[1]);let done=false;
+      const finish=value=>{if(done)return;done=true;clearTimeout(timer);socket.destroy();resolve(value)};
+      const timer=setTimeout(()=>finish(false),1000);
+      socket.once('connect',()=>finish(true));socket.once('error',()=>finish(false));
+    }))).then(replies=>console.log(JSON.stringify({connected:replies.filter(Boolean).length})));`;
+    const burstResult = require('node:child_process').execFileSync(process.execPath, ['-e', burst, relays.pipes[2]],
+      { timeout: 3000, windowsHide: true, encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(burstResult), { connected: 24 }, 'the child exits naturally after every connection closes');
     for (const [i, pipe] of relays.pipes.entries()) {
       assert.equal(pipe, namespace + local[i].split('\\').at(-1));
       for (let repeat = 0; repeat < 3; repeat++) {
@@ -462,6 +527,9 @@ class PipeSecurityProbe { public static void Main(string[] args) {
     releaseHeld();
     assert.deepEqual(await queued, Array.from({ length: 24 }, () => ({ code: 0 })));
     assert.equal(heldRequests, 24, 'every queued request eventually reaches the backend');
+    assert.ok(events.some(event => /stage=queue .*queued=[1-9]/.test(event)));
+    assert.ok(events.some(event => /stage=reply /.test(event)));
+    assert.ok(events.some(event => /stage=release /.test(event)));
     assert.deepEqual(await request('reject\n'), { code: 125 }, 'the listener continues serving protocol refusals');
     const partial = '\\\\.\\pipe\\LOCAL\\agentrix-lab-partial-' + randomUUID();
     await assert.rejects(createPipeRelays([partial, local[2]], namespace), { code: 'EADDRINUSE' });
@@ -654,6 +722,14 @@ test('Windows diagnostics are opt-in, bounded and accept only fixed events with 
   trace.feed('[lab-win32] host pipes ready count=3\n[lab-win32] host pipe setup error phase=listen code=ENOENT errno=-4058\n');
   assert.match(trace.summary(), /host pipes ready count=3/);
   assert.match(trace.summary(), /phase=listen code=ENOENT errno=-4058/);
+  const relay = '[lab-win32] host relay pipe=1 id=7 stage=wait phase=active code=OK active=8 queued=16 ms=2000';
+  trace.feed(relay + '\n');
+  assert.ok(printed.includes(relay)); assert.ok(trace.summary().includes(relay));
+  trace.feed(relay.replace('code=OK', 'code=private-secret') + '\n');
+  assert.doesNotMatch(trace.summary(), /private-secret/);
+  const before = printed.length;
+  for (let i = 0; i < 300; i++) trace.feed(relay + '\n');
+  assert.equal(printed.length - before, 255, 'relay events have a separate bounded budget');
   for (const env of [{ NODE_TEST_CONTEXT: 'child-v8' }, { AGENTRIX_LAB_TEST_PREPARE_HOST: '1' }]) {
     const disabled = await loadModule('process.cjs', {}, { process: { platform: 'win32', env } });
     assert.equal(disabled.windowsDiagnostics(), null);
