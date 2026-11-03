@@ -1,5 +1,4 @@
-const path = require('node:path');
-const { readJson, writeJson, recoveryWarnings } = require('./storage.cjs');
+const { readJson, writeJson } = require('./storage.cjs');
 const defaults = { claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: null };
 function validSettings(value, partial = false) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !Object.hasOwn(defaults, key))) return false;
@@ -9,10 +8,6 @@ function validSettings(value, partial = false) {
 }
 function createSettings(file) {
   let value = readJson(file, defaults, { validate: validSettings });
-  if (recoveryWarnings(path.dirname(file)).length) {
-    value = { ...value, claudePath: 'terminal-only', codexView: 'terminal' };
-    try { writeJson(file, value); } catch { }
-  }
   return { get: () => ({ ...value }), set(patch) {
     if (!validSettings(patch, true)) throw new Error('无效的运行方式设置。');
     const next = { ...value, ...patch }; writeJson(file, next); value = next; return { ...value };

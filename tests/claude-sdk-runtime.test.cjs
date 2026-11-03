@@ -23,14 +23,14 @@ function setup(t, fakeOptions) {
   const session = runtime.create(spec, event => events.push(event)); t.after(() => session.close());
   return { dir, fake, events, runtime, spec, session };
 }
-test('idle query retirement preserves the logical session and resumes on the next send', async t => {
+test('owner queries remain alive at idle and reuse the same process on the next send', async t => {
   const { session, fake, events, runtime } = setup(t); await session.start();
   const first = randomUUID(), second = randomUUID();
   session.send({ clientMessageId: first, text: 'one' });
   await until(() => events.some(event => event.type === 'turn.completed'));
   session.send({ clientMessageId: second, text: 'two' });
   await until(() => events.filter(event => event.type === 'turn.completed').length === 2);
-  assert.equal(fake.calls.length, 2); assert.equal(session.snapshot().state, 'idle');
+  assert.equal(fake.calls.length, 1); assert.equal(fake.closes.length, 0); assert.equal(session.snapshot().state, 'idle');
   assert.equal(runtime.usage.summary().monthUsdMicros, 200000);
   assert.equal(fake.calls[0].options.pathToClaudeCodeExecutable, process.execPath);
   assert.equal(fake.calls[0].options.env.ANTHROPIC_API_KEY, key);
@@ -188,8 +188,8 @@ test('native executable discovery never searches relative directories or accepts
   assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, probe }), null);
   fs.writeFileSync(path.join(dir, 'claude.exe'), 'fake');
   for (const version of ['2.1.316', '2.0.999']) {
-    assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir,
-      probe: (_file, _args, _options, callback) => callback(null, version) }), null);
+    await assert.rejects(resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir,
+      probe: (_file, _args, _options, callback) => callback(null, version) }), /2\.1\.317/);
   }
   assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, probe }), fs.realpathSync(path.join(dir, 'claude.exe')));
   assert.equal(probes, 1);

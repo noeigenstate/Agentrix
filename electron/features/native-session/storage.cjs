@@ -5,8 +5,12 @@ const { randomUUID } = require('node:crypto');
 const warnings = new Map();
 function recoverJson(file, fallback) {
   const resolved = path.resolve(file);
-  try { fs.renameSync(resolved, `${resolved}.${Date.now()}-${randomUUID()}.corrupt`); } catch { }
-  warnings.set(resolved, '原生会话记录损坏，已隔离并恢复默认设置。');
+  let quarantined = false;
+  try { fs.renameSync(resolved, `${resolved}.${Date.now()}-${randomUUID()}.corrupt`); quarantined = true; } catch { }
+  const message = path.basename(file) === 'settings.json'
+    ? '原生会话设置损坏，已使用默认设置。'
+    : '原生会话记录损坏，已使用空记录；运行方式设置未改变。';
+  warnings.set(resolved, [message, quarantined ? '损坏的文件已隔离保留。' : '损坏的文件无法隔离，原文件已保留。']);
   return structuredClone(fallback);
 }
 function readJson(file, fallback, { validate = () => true } = {}) {
@@ -22,7 +26,7 @@ function readJson(file, fallback, { validate = () => true } = {}) {
 function recoveryWarnings(directory, clear = false) {
   const parent = path.resolve(directory), found = [...warnings].filter(([file]) => path.dirname(file) === parent);
   if (clear) for (const [file] of found) warnings.delete(file);
-  return [...new Set(found.map(([, message]) => message))];
+  return [...new Set(found.flatMap(([, messages]) => messages))];
 }
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
