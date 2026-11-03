@@ -347,6 +347,10 @@ jobs:
         if: matrix.shard == 'reading'
         run: node scripts/retry.mjs npm run test:native-session -- --packaged
 
+      - name: Verify packaged SDK and app-server through fake native executables
+        if: matrix.shard == 'reading'
+        run: node scripts/retry.mjs npm run test:native-session -- --packaged --runtime
+
       - name: Verify agent hierarchy, queued messages, paged popups and slow autosave
         if: matrix.shard == 'reading'
         run: node scripts/retry.mjs node scripts/reading-hierarchy-smoke.mjs --packaged
@@ -464,7 +468,11 @@ jobs:
           hdiutil verify "release/${{ steps.version.outputs.image }}"
 
       - name: Verify the packaged app runs a Bash terminal and follows Codex
+        # Separate isolated GUI run: the SDK import and both provider processes stay real up to the fake executables.
         run: node scripts/retry.mjs node scripts/mac-smoke.mjs --packaged
+
+      - name: Verify packaged SDK and app-server through fake native executables
+        run: node scripts/retry.mjs npm run test:native-session -- --packaged --runtime
 
       - name: Verify the packaged app runs a zsh terminal and follows Codex
         run: node scripts/retry.mjs node scripts/mac-smoke.mjs --packaged --shell zsh
@@ -596,6 +604,9 @@ jobs:
 
       - name: Verify the packaged app runs a Bash terminal and follows Codex
         run: xvfb-run -a node scripts/retry.mjs node scripts/linux-smoke.mjs --packaged
+
+      - name: Verify packaged SDK and app-server through fake native executables
+        run: xvfb-run -a node scripts/retry.mjs npm run test:native-session -- --packaged --runtime
 
       - name: Verify the packaged app runs a zsh terminal and follows Codex
         run: xvfb-run -a node scripts/retry.mjs node scripts/linux-smoke.mjs --packaged --shell zsh

@@ -10,7 +10,7 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
   const credentials = createCredentials({ file: path.join(directory, 'credentials.json'), safeStorage });
   const usage = createUsage({ file: path.join(directory, 'usage.json'), now });
   const sessions = new Set(), leases = new Map(); let unavailable = null;
-  let decisions = readJson(path.join(directory, 'policy-audit.json'), []);
+  let decisions = readJson(path.join(directory, 'policy-audit.json'), [], { validate: value => Array.isArray(value) && value.length <= 1000 });
   const recordDecision = audit || (decision => {
     const next = [...decisions, { ...decision, at: now() }].slice(-1000);
     writeJson(path.join(directory, 'policy-audit.json'), next); decisions = next;
@@ -26,14 +26,27 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
     resetAvailability() { unavailable = null; },
     create(spec, emit) {
       const owner = {}; let leasedId = null;
-      function acquire(id) { if (!id) return; if (leases.has(id) && leases.get(id) !== owner) throw new Error('该会话正在其他终端运行。'); leases.set(id, owner); leasedId = id; }
+      function acquire(id) {
+        if (!id) return;
+        if (leases.has(id) && leases.get(id) !== owner) throw new Error('该会话正在其他终端运行。');
+        leases.set(id, owner); leasedId = id;
+      }
       const release = () => { if (leasedId && leases.get(leasedId) === owner) leases.delete(leasedId); };
       const session = createClaudeSession(spec, emit, { loadSdk, resolveExecutable, credentials, usage, now, onCost, onSession: id => { acquire(id); onSession?.(spec, id); }, audit: decision => recordDecision({ runId: spec.runId || null, ...decision }),
-        onFailure(reason) { if (['rate_limited', 'credits_exhausted'].includes(reason)) unavailable = { reason, until: now() + 60000 }; } });
-      sessions.add(session); const close = session.close, start = session.start; let closing;
-      session.start = session.resume = async () => { acquire(spec.providerSessionId); try { return await start(); } catch (error) { release(); throw error; } };
-      session.close = () => closing ||= (async () => { try { await close(); } finally { release(); sessions.delete(session); } })();
-      return session;
+        onFailure(reason) { if (['rate_limited', 'credits_exhausted', 'invalid_key'].includes(reason)) unavailable = { reason, until: now() + 60000 }; } });
+      let closing;
+      const open = async () => {
+        acquire(spec.providerSessionId);
+        try { return await session.start(); } catch (error) { release(); throw error; }
+      };
+      const runtime = { ...session, start: open, resume: open,
+        close() {
+          return closing ||= (async () => {
+            try { await session.close(); } finally { release(); sessions.delete(runtime); }
+          })();
+        },
+      };
+      sessions.add(runtime); return runtime;
     },
     async close() { await Promise.allSettled([...sessions].map(session => session.close())); },
   };

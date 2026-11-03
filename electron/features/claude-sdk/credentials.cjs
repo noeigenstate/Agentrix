@@ -23,6 +23,7 @@ function apiEnvironment(env, key) {
   const clean = { ...env };
   for (const name of Object.keys(clean)) if (/^(ANTHROPIC_|CLAUDE_CODE_(OAUTH|USE_|API_KEY)|AGENTRIX_(SESSION|CONTROL|CAPABILITY|EVENT))/.test(name)) delete clean[name];
   clean.ANTHROPIC_API_KEY = key;
+  clean.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = '1';
   return clean;
 }
 module.exports = { createCredentials, apiEnvironment };

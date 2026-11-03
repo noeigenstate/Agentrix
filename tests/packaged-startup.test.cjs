@@ -11,7 +11,7 @@ const { build } = require('../package.json');
 
 const root = path.resolve(__dirname, '..');
 
-for (const provider of ['claude', 'codex']) test(`packaged native provider smoke starts, sends, resumes and stops a fake ${provider} child`, async t => {
+for (const provider of ['claude', 'codex']) test(`standalone wire fixture starts, sends, resumes and stops a fake ${provider} child`, async t => {
   const { spawn } = require('node:child_process'), readline = require('node:readline');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-fake-provider-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));

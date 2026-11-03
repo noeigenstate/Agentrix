@@ -12,8 +12,13 @@ function createEventStream(spec, emit, now = Date.now) {
     const key = type.startsWith('item.') ? `item:${itemId}` : type.startsWith('request.') ? `request:${payload.requestId}` : type === 'input.receipt' ? `input:${payload.clientMessageId}` : type;
     if (type === 'item.delta') {
       const previous = events.get(key);
-      const content = { ...(previous?.payload.content || {}), text: ((previous?.payload.content?.text || '') + payload.text).slice(-262144) };
+      const field = payload.channel === 'output' ? 'output' : 'text';
+      const content = { ...(previous?.payload.content || {}), [field]: ((previous?.payload.content?.[field] || '') + payload.text).slice(-262144) };
       events.set(key, { ...event, type: 'item.upsert', payload: { kind: previous?.payload.kind || (payload.channel === 'reasoning-summary' ? 'reasoning-summary' : 'agent-message'), status: 'in-progress', content } });
+    } else if (type === 'item.upsert') {
+      const previous = events.get(key);
+      const content = { ...previous?.payload.content, ...payload.content };
+      events.set(key, { ...event, payload: { ...payload, content } });
     } else events.set(key, event);
     bytes -= sizes.get(key) || 0;
     const size = Buffer.byteLength(JSON.stringify(events.get(key))); sizes.set(key, size); bytes += size;

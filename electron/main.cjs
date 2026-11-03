@@ -15,6 +15,7 @@ const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-g
 const { createNativeSession } = require('./features/terminal/native-session.cjs');
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
 const { createNativeSessions } = require('./features/native-session/index.cjs');
+const { recoveryWarnings } = require('./features/native-session/storage.cjs');
 const { createClaudeRuntime } = require('./features/claude-sdk/index.cjs');
 const { createSdkLoader } = require('./features/claude-sdk/runtime.cjs');
 const { registerClaudeWorker } = require('./features/native-session/worker.cjs');
@@ -1468,9 +1469,34 @@ function disposeTerminal(id, { preserveNative = false } = {}) {
   cleanupTerminalFiles(s);
 }
 
+function registerUnavailableNative(handle) {
+  const settings = { claudePath: 'terminal-only', codexView: 'terminal', monthlyBudgetUsd: null };
+  function start(id, options) {
+    if (!options || typeof options !== 'object' || Object.keys(options).some(key => !['agent', 'resume'].includes(key)) ||
+      !['claude', 'codex'].includes(options.agent) || options.resume !== undefined && typeof options.resume !== 'boolean') throw new Error('无效的原生会话请求。');
+    const project = findProject(id), saved = store.findTerminal(id).record.restore;
+    if (project.kind === 'ssh') throw new Error('原生会话仅支持本地项目。');
+    const history = options.resume && saved?.agent === options.agent && /^[a-f\d-]{36}$/i.test(saved.threadId || '') ? { id: saved.threadId } : null;
+    launchPlans.set(id, { agent: options.agent, command: launchCommand(options.agent, history), threadId: history?.id || null });
+    startTerminal(id, null, true); broadcast();
+    return { runtimeSessionId: randomUUID() };
+  }
+  handle('native:start', start);
+  handle('native:resume', (id, options) => start(id, { ...options, resume: true }));
+  handle('native:settings-get', () => ({ ...settings }));
+  handle('native:snapshot', id => { findProject(id); return null; });
+  handle('native:usage', () => ({ month: new Date().toISOString().slice(0, 7), todayUsdMicros: null, monthUsdMicros: null,
+    estimated: true, budgetUsd: null, agents: { claude: { path: 'terminal', reason: 'native_unavailable', limits: null },
+      codex: { path: 'terminal', reason: 'native_unavailable', limits: null } }, lastSwitch: null }));
+  for (const name of ['send', 'interrupt', 'stop', 'answer', 'settings-set', 'key-save', 'key-clear', 'key-status']) {
+    handle(`native:${name}`, () => { throw new Error('原生会话暂不可用，已保留终端模式。'); });
+  }
+}
+
 function registerIpc() {
   const { handle, listen } = createIpcAdapter({ ipcMain, getWindow: () => window, devUrl, t, report });
-  nativeSessions?.register(handle);
+  if (nativeSessions) nativeSessions.register(handle);
+  else registerUnavailableNative(handle);
   if (process.platform === 'darwin') listen('titlebar:state', state => macTitlebar?.update(state));
   registerSkillsIpc({ handle, skills, dialog, getWindow: () => window });
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
@@ -1606,7 +1632,14 @@ if (!app.requestSingleInstanceLock()) {
     });
     runtimeDir = fs.mkdtempSync(path.join(app.getPath('userData'), 'runtime-'));
     eventServer = await createEventServer(onEvent);
-    await initializeNativeSessions();
+    try { await initializeNativeSessions(); }
+    catch {
+      try { dispatchControl?.close(); } catch { }
+      dispatchControl = null; controlAddress = null; nativeSessions = null;
+      store.warning = t('原生会话暂不可用，已保留终端模式。');
+    }
+    const nativeWarnings = recoveryWarnings(path.join(app.getPath('userData'), 'native-session'), true);
+    if (nativeWarnings.length) store.warning = nativeWarnings.map(message => t(message)).join(' ');
     sshAuth = await new SSHAuthServer(queue => send('ssh:auth-changed', queue)).start();
     let menuUpdateReady = false;
     updateManager = new UpdateManager({

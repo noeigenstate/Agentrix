@@ -23,25 +23,26 @@ function setup(t, fakeOptions) {
   const session = runtime.create(spec, event => events.push(event)); t.after(() => session.close());
   return { dir, fake, events, runtime, spec, session };
 }
-test('streaming sends share one query and results do not end the session', async t => {
+test('idle query retirement preserves the logical session and resumes on the next send', async t => {
   const { session, fake, events, runtime } = setup(t); await session.start();
   const first = randomUUID(), second = randomUUID();
   session.send({ clientMessageId: first, text: 'one' });
   await until(() => events.some(event => event.type === 'turn.completed'));
   session.send({ clientMessageId: second, text: 'two' });
   await until(() => events.filter(event => event.type === 'turn.completed').length === 2);
-  assert.equal(fake.calls.length, 1); assert.equal(session.snapshot().state, 'idle');
+  assert.equal(fake.calls.length, 2); assert.equal(session.snapshot().state, 'idle');
   assert.equal(runtime.usage.summary().monthUsdMicros, 200000);
   assert.equal(fake.calls[0].options.pathToClaudeCodeExecutable, process.execPath);
   assert.equal(fake.calls[0].options.env.ANTHROPIC_API_KEY, key);
   assert.ok(!JSON.stringify(events).includes(key));
-  assert.equal(session.send({ clientMessageId: first, text: 'duplicate' }).status, 'consumed');
+  assert.equal((await session.send({ clientMessageId: first, text: 'duplicate' })).status, 'consumed');
   assert.equal(fake.inputs.length, 2);
 });
 test('a worker explicitly disables disk setting sources and blocks failed hooks', async t => {
-  const { runtime, spec, fake } = setup(t);
+  const { runtime, spec, fake } = setup(t, { auto: false });
   const session = runtime.create({ ...spec, owner: 'dispatch', readOnly: false, allow: ['**'] }, () => {}); t.after(() => session.close());
   await session.start();
+  await session.send({ clientMessageId: randomUUID(), text: 'worker' });
   assert.deepEqual(fake.calls[0].options.settingSources, []);
   assert.equal(fake.calls[0].options.hooks.PreToolUse[0].onFailure, 'block');
   assert.equal((await fake.calls[0].options.canUseTool('Bash', { command: 'node --version' }, {})).behavior, 'allow');
@@ -93,7 +94,7 @@ test('usage deltas persist across resume, deduplicate, and ignore zeroed failure
   assert.equal(usage.record('session', result).deltaUsdMicros, 0);
   usage = createUsage({ file, now: () => Date.UTC(2026, 10, 3) });
   assert.equal(usage.record('session', { ...result, uuid: 'second', total_cost_usd: 1.2 }, { resume: true }).deltaUsdMicros, 200000);
-  assert.equal(usage.record('session', { uuid: 'error', total_cost_usd: 0 }).deltaUsdMicros, null);
+  assert.equal(usage.record('session', { uuid: 'error', total_cost_usd: 0, is_error: true }).deltaUsdMicros, null);
   assert.equal(usage.baseline('session'), 1200000); assert.equal(usage.summary().monthUsdMicros, 1200000);
 });
 test('unknown resume baselines never charge historical totals', t => {
@@ -148,19 +149,19 @@ test('read-only workers deny edits and shell and require exact SKILL authorizati
 });
 
 test('a fresh reservation resumes the same SDK session only on the next explicit send', async t => {
-  const dir = directory(t), sessionId = randomUUID(), first = fakeSdk({ auto: false, sessionId }), second = fakeSdk({ auto: false, sessionId });
+  const dir = directory(t), sessionId = randomUUID(), first = fakeSdk({ auto: false, sessionId });
   let loads = 0; const events = [];
-  const runtime = createClaudeRuntime({ directory: dir, safeStorage, resolveExecutable: async () => process.execPath, loadSdk: async () => (++loads === 1 ? first : second).sdk });
+  const runtime = createClaudeRuntime({ directory: dir, safeStorage, resolveExecutable: async () => process.execPath, loadSdk: async () => { loads++; return first.sdk; } });
   runtime.credentials.save(key);
   const session = runtime.create({ agent: 'claude', owner: 'gui', cwd: dir, projectId: 'p', terminalId: 't', runtimeSessionId: 'runtime', monthlyBudgetUsd: 10 }, event => events.push(event));
   t.after(() => session.close()); await session.start();
   const id = randomUUID(); session.send({ clientMessageId: id, text: 'first task' }); await until(() => first.inputs.length === 1);
   first.emit({ type: 'result', uuid: 'one', user_message_uuid: id, is_error: true, subtype: 'error_max_budget_usd', total_cost_usd: 5, modelUsage: {} });
-  await until(() => events.some(event => event.type === 'session.state' && event.payload.reason === 'query_budget_exhausted'));
+  await until(() => events.some(event => event.type === 'turn.completed') && session.snapshot().state === 'idle');
   assert.equal(loads, 1);
-  await session.send({ clientMessageId: randomUUID(), text: 'next explicit task' }); await until(() => second.inputs.length === 1);
-  assert.equal(second.calls[0].options.resume, sessionId); assert.equal(second.inputs[0].message.content, 'next explicit task');
-  second.emit({ type: 'result', uuid: 'two', total_cost_usd: 5.1, modelUsage: {}, subtype: 'success' });
+  await session.send({ clientMessageId: randomUUID(), text: 'next explicit task' }); await until(() => first.inputs.length === 2);
+  assert.equal(first.calls[1].options.resume, sessionId); assert.equal(first.inputs[1].message.content, 'next explicit task');
+  first.emit({ type: 'result', uuid: 'two', total_cost_usd: 5.1, modelUsage: {}, subtype: 'success' });
   await until(() => runtime.usage.summary().monthUsdMicros === 5100000);
   assert.equal(session.snapshot().runtimeSessionId, 'runtime');
 });
@@ -186,6 +187,10 @@ test('native executable discovery never searches relative directories or accepts
   const probe = (_file, _args, options, callback) => { probes++; assert.equal(options.shell, false); callback(null, '2.1.317 (Claude Code)'); };
   assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, probe }), null);
   fs.writeFileSync(path.join(dir, 'claude.exe'), 'fake');
+  for (const version of ['2.1.316', '2.0.999']) {
+    assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir,
+      probe: (_file, _args, _options, callback) => callback(null, version) }), null);
+  }
   assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, probe }), fs.realpathSync(path.join(dir, 'claude.exe')));
   assert.equal(probes, 1);
 });
@@ -194,7 +199,7 @@ test('GUI and helper cannot resume the same Claude session concurrently', async 
   await until(() => fake.inputs.length === 1);
   const worker = runtime.create({ ...spec, owner: 'dispatch', monthlyBudgetUsd: null, providerSessionId: fake.sessionId }, () => {}); t.after(() => worker.close());
   await assert.rejects(worker.start()); assert.equal(fake.calls.length, 1);
-  await session.close(); await worker.start(); assert.equal(fake.calls.length, 2);
+  await session.close(); await worker.start(); await worker.send({ clientMessageId: randomUUID(), text: 'resumed worker' }); assert.equal(fake.calls.length, 2);
 });
 test('unknown reported cost preserves uncertainty and never refunds its reservation', t => {
   const usage = createUsage({ file: path.join(directory(t), 'usage.json') }), lease = usage.reserve(5);
@@ -215,10 +220,11 @@ test('worker search patterns and home-relative file paths cannot escape the work
 });
 test('SDK replay messages remain history without receipts or turn completion', async t => {
   const { session, fake, events } = setup(t, { auto: false }); await session.start();
+  await session.send({ clientMessageId: randomUUID(), text: 'current' }); await until(() => fake.inputs.length === 1);
   fake.emit({ type: 'user', uuid: 'historical', isReplay: true, user_message_uuid: 'old-input', message: { content: 'old text' } });
-  await until(() => events.some(event => event.type === 'item.upsert'));
-  const item = events.find(event => event.type === 'item.upsert'); assert.equal(item.replay, true);
-  assert.equal(events.filter(event => event.type === 'input.receipt' || event.type === 'turn.completed').length, 0);
+  await until(() => events.some(event => event.itemId === 'historical'));
+  const item = events.find(event => event.itemId === 'historical'); assert.equal(item.replay, true);
+  assert.equal(events.filter(event => event.type === 'input.receipt' && event.payload.clientMessageId === 'old-input' || event.type === 'turn.completed').length, 0);
 });
 test('an accounting write failure cannot prevent stopping the SDK child', async t => {
   const { createClaudeSession } = require('../electron/features/claude-sdk/session.cjs'), fake = fakeSdk({ auto: false }), dir = directory(t);

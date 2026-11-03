@@ -11,7 +11,8 @@ async function resolveClaudeExecutable({ env = process.env, platform = process.p
       if (!(await fs.stat(file)).isFile()) continue;
       await fs.access(file, platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK);
       const version = await new Promise((resolve, reject) => probe(file, ['--version'], { timeout: 4000, maxBuffer: 4096, windowsHide: true, shell: false, env }, (error, stdout) => error ? reject(error) : resolve(stdout)));
-      if (/\b2\.\d+\.\d+\b/.test(version)) return file;
+      const match = /\b2\.(\d+)\.(\d+)\b/.exec(version);
+      if (match && (Number(match[1]) > 1 || Number(match[1]) === 1 && Number(match[2]) >= 317)) return file;
     } catch { /* A broken candidate must not hide another installed native executable. */ }
   }
   return null;
