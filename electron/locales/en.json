@@ -852,7 +852,7 @@
   "无法加载 Claude 会话。": "Could not load Claude sessions.",
   "命令输出": "Command output",
   "展开": "Expand",
-  "收起": "Collapse",
+  "收起": "Show less",
   "展开提示词": "Show prompt",
   "标准 · 速度快": "Standard · fast",
   "高精度 · 中英混合": "High accuracy · mixed Chinese and English",
@@ -2334,5 +2334,6 @@
   "AA 参考解未通过任务验证。": "The AA reference solution failed task verification.",
   "AA 运行尚未准备完成。": "The AA run has not been prepared.",
   "Windows 安全实验执行不可用，未启动工作者。": "Secure Windows lab execution is unavailable. No workers were started.",
-  "虚拟实验室目前只支持 macOS 和 Windows。": "The Virtual Lab works on macOS and Windows for now."
+  "虚拟实验室目前只支持 macOS 和 Windows。": "The Virtual Lab works on macOS and Windows for now.",
+  "显示全部 {n} 个": "Show all {n}"
 }
