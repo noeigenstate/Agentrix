@@ -161,6 +161,37 @@ test('a handler that refuses cancellation cannot cause live workspace cleanup', 
   release(); await waiting;
 });
 
+async function loopbackServer(t) {
+  const state = { connections: 0, errors: [] };
+  state.server = net.createServer(socket => {
+    state.connections++;
+    socket.on('error', error => state.errors.push(error.code));
+    socket.end('fixture');
+  });
+  await new Promise((resolve, reject) => {
+    state.server.once('error', reject); state.server.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(async () => {
+    await new Promise(resolve => state.server.close(resolve));
+    assert.deepEqual(state.errors, [], 'the loopback fixture must close without socket errors');
+  });
+  return state;
+}
+
+const loopbackProbe = port => `const net=require('node:net');const c=net.connect(${port},'127.0.0.1');let reply='';
+  c.setEncoding('utf8');c.setTimeout(1000,()=>{console.error('Loopback probe timed out.');process.exitCode=1;c.destroy()});
+  c.on('data',chunk=>{reply+=chunk});
+  c.on('end',()=>{if(reply==='fixture')console.log('allowed');else{console.error('Unexpected loopback response.');process.exitCode=1}});
+  c.on('error',error=>console.log('denied:'+error.code));`;
+
+test('the loopback probe consumes the complete response and closes without resetting its server', async t => {
+  const listener = await loopbackServer(t);
+  const result = await command(process.execPath, ['-e', loopbackProbe(listener.server.address().port)],
+    { timeoutMs: 5000, env: require('../electron/features/lab/sandbox.cjs').cleanEnvironment() });
+  assert.equal(result.code, 0, result.stderr); assert.equal(result.stdout.trim(), 'allowed');
+  assert.equal(listener.connections, 1); assert.deepEqual(listener.errors, []);
+});
+
 test('macOS enforces an offline grade after a network-enabled preparation job', {
   skip: process.platform !== 'darwin' ? 'macOS Seatbelt runtime is required' : false,
 }, async t => {
@@ -169,13 +200,16 @@ test('macOS enforces an offline grade after a network-enabled preparation job', 
   session.env = { ...require('../electron/features/lab/sandbox.cjs').cleanEnvironment(),
     CODEX_HOME: path.join(root, 'synthetic-codex'), CLAUDE_CONFIG_DIR: path.join(root, 'synthetic-claude') };
   await session.start();
-  const server = net.createServer(socket => socket.end('fixture')); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
-  const code = `const net=require('node:net');const c=net.connect(${server.address().port},'127.0.0.1');
-    c.setTimeout(1000,()=>c.destroy());c.once('connect',()=>{console.log('allowed');c.destroy()});c.on('error',()=>console.log('denied'));`;
+  const listener = await loopbackServer(t), code = loopbackProbe(listener.server.address().port);
   for (const network of [false, true, false]) {
+    const connections = listener.connections;
+    assert.equal(listener.server.listening, true);
     const result = await session.execute(session.nodePath, ['-e', code], { cwd: workspaceRoot, timeoutMs: 5000, network });
-    assert.equal(result.code, 0, result.stderr); assert.equal(result.stdout.trim(), network ? 'allowed' : 'denied');
+    assert.equal(result.code, 0, result.stderr);
+    if (network) assert.equal(result.stdout.trim(), 'allowed');
+    else assert.match(result.stdout.trim(), /^denied:(?:EPERM|EACCES|ECONNREFUSED|ECONNRESET)$/);
+    assert.equal(listener.connections, connections + Number(network), 'offline jobs must not establish a loopback connection');
+    assert.deepEqual(listener.errors, [], 'a reset on the fixture server is not proof of sandbox denial');
   }
 });
 
