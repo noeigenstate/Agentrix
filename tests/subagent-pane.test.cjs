@@ -47,6 +47,9 @@ const load = makeLoader({
   './AgentLauncher': { AgentLauncher: () => null }, './TerminalPane': { TerminalPane: ({ id }) => React.createElement('div', { 'data-pane': id }) },
   '../reading/ReadingView': { ReadingView: () => null }, '../reading/reading-mode': { readingShown: () => false, setReading() {}, syncReading() {}, useTerminalChoice: () => [] },
   '../workspace/useProjectReorder': { TERMINAL_SPLITS: {}, useReorder: () => ({}) },
+  // Native sessions have their own tests (native-session-ui.test.cjs); here no terminal runs one, and the usage card is not under test.
+  '../native-session/NativeSessionView': { NativeSessionView: () => null }, '../native-session/NativePathNote': { NativePathNote: () => null },
+  '../native-session/native-store.ts': { useNativeEntries: () => new Map(), nativeShown: () => false, ensureNativeSession() {} }, './ApiUsage': { ApiUsage: () => null },
 });
 const zh = run => { load('shared/i18n.ts').applyLanguage('zh'); return run(); };
 const splits = () => load('features/agents/subagent-splits.ts');
@@ -291,7 +294,8 @@ function inputView(bridge, patch = {}, fit = 0) {
   const sent = [], saved = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge } });
   // The width-fitting hook has its own tests below; here the box shows the hint at index `fit` of the list it was given.
-  const hints = [], harness = hookHarness('src/features/agents/SubagentInput.tsx', { './i18n': { t: fill }, './subagent-input.css': {}, './useFittingHint': { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, list) => (hints.splice(0, hints.length, ...list), list[fit] ?? '') } });
+  const words = { queued: '已排队', delivered: '已送达', consumed: '已被读取', rejected: '未送达', unknown: '送达状态未知' };
+  const hints = [], harness = hookHarness('src/features/agents/SubagentInput.tsx', { './i18n': { t: fill }, './subagent-input.css': {}, './native-words': { receiptWord: status => words[status] ?? null }, './useFittingHint': { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, list) => (hints.splice(0, hints.length, ...list), list[fit] ?? '') } });
   const props = { terminalId: 't1', callId: 'agent:a', name: 'Sol', closed: false, onSent: item => sent.push(item), ...patch };
   const find = tag => elements(harness.render('SubagentInput', props).result).find(node => node.type === tag), note = () => elements(harness.render('SubagentInput', props).result).find(node => node.type === 'span' && node.props.id);
   const press = (init = {}) => { const prevented = []; find('textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, preventDefault: () => prevented.push(true), ...init }); return prevented.length; };
@@ -312,7 +316,18 @@ test('Enter sends the trimmed word; Shift+Enter, an empty box and an IME composi
     assert.deepEqual(calls, [['t1', 'agent:a', 'fix the test']]);
     assert.equal(view.find('textarea').props.value, '', 'the box is empty once it was sent');
     assert.deepEqual(view.sent, [intervention()]);
-    assert.equal(view.find('p'), undefined, 'a send that went through has nothing to add');
+    const receipt = view.find('p');
+    assert.deepEqual([receipt.props.role, receipt.props.children], ['status', '已发给它 · 已排队'], 'the receipt says how far the word got');
+  } finally { view.done(); }
+});
+
+test('the receipt follows what main answered: delivered, read, refused or unknown; a new send replaces it and nothing names the planner', async () => {
+  const answers = ['delivered', 'consumed', 'rejected', 'unknown', 'mystery'], view = inputView({ interveneAgent: async () => ({ ok: true, value: intervention({ status: answers.shift() }) }) });
+  try {
+    const seen = [];
+    for (let round = 0; round < 5; round++) { view.type('word ' + round); view.press(); await settle(); seen.push(view.find('p').props.children); }
+    assert.deepEqual(seen, ['已发给它 · 已送达', '已发给它 · 已被读取', '已发给它 · 未送达', '已发给它 · 送达状态未知', '已发给它'], 'a status nobody knows adds no word');
+    assert.doesNotMatch(seen.join(), /主会话|规划员/);
   } finally { view.done(); }
 });
 
@@ -328,16 +343,16 @@ test('a refused word shows the reason beside the box, keeps the text and hands n
   } finally { view.done(); }
 });
 
-test('停下 asks the agent to stop through the main process and says so; the parent relay is named', async () => {
-  const calls = [], answers = [{ ok: true, value: intervention({ route: 'dispatch' }) }, { ok: true, value: intervention({ route: 'parent' }) }, { ok: false, error: 'no such call' }];
+test('停下 asks the agent to stop through the main process and says so with its receipt; an error replaces the note', async () => {
+  const calls = [], answers = [{ ok: true, value: intervention() }, { ok: true, value: intervention({ status: 'delivered' }) }, { ok: false, error: 'no such call' }];
   const view = inputView({ stopAgent: async (...args) => { calls.push(args); return answers.shift(); } });
   try {
     const stop = () => view.find('button').props.onClick();
     stop(); await settle();
     assert.deepEqual(calls, [['t1', 'agent:a']]);
-    assert.deepEqual([view.find('p').props.children, view.find('p').props.role], ['已请它停下', 'status']);
+    assert.deepEqual([view.find('p').props.children, view.find('p').props.role], ['已请它停下 · 已排队', 'status']);
     stop(); await settle();
-    assert.equal(view.find('p').props.children, '已请它停下 · 已转告主会话');
+    assert.equal(view.find('p').props.children, '已请它停下 · 已送达');
     stop(); await settle();
     assert.deepEqual([view.find('p').props.role, view.find('p').props.children], ['alert', 'no such call'], 'an error replaces the note');
     assert.deepEqual(view.sent, [], 'a stop is not an entry in the conversation');

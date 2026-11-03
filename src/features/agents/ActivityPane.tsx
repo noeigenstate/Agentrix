@@ -8,6 +8,7 @@ import { readScreen, subscribeScreen } from '../terminal/terminal-screen';
 import { sendToAgent } from '../home/send-to-agent';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { actionText } from './action-text';
+import { ApiUsage } from './ApiUsage';
 import { ResetCountdown } from './ResetCountdown';
 import { codexResetCount, codexResetsSaid } from './reset-count';
 import { isSplitOpen, toggleSplit, useSplits } from './subagent-splits.ts';
@@ -29,6 +30,7 @@ export function ActivityPane({ terminal }: { terminal: ProjectTerminal }) {
     {terminal.codexActive ? <MainCard terminal={terminal} /> : <section className="activity-card">
       <p className="activity-empty">{t('在终端里启动 Codex 或 Claude Code 后，这里显示它的主模型、任务、上下文长度和用量。')}</p>
     </section>}
+    <ApiUsage />
     {!!calls?.length && <CallsCard calls={calls} terminalId={terminal.id} />}
     {terminal.codexActive && <div className="activity-gauges">
       <ContextCard usage={terminal.agentUsage} />

@@ -42,3 +42,15 @@ test('a sub-agent view opens only on the owner’s click on a row, reads the sub
   assert.doesNotMatch(code('SubagentPane.tsx'), /<textarea|<input|contentEditable|interveneAgent|stopAgent/, 'the view itself takes no typing; its input is SubagentInput');
   assert.equal(code('SubagentInput.tsx').match(/<textarea/g).length, 1, 'one text box, for the owner’s word to the agent');
 });
+
+// The API card shows state and changes nothing; a word for a sub-agent goes to the worker, so the relay into the planner's input is gone.
+test('the API usage card only reads the main process, and the parent relay can no longer type into a terminal', () => {
+  const code = file => read(file).replace(/\/\/.*$/gm, '');
+  const card = code('src/features/agents/ApiUsage.tsx');
+  assert.deepEqual([...new Set([...card.matchAll(/\bbridge\.(\w+)\(/g)].map(match => match[1]))], ['usage'], 'its only bridge call is the usage read');
+  assert.doesNotMatch(card, /sendToAgent|writeTerminal|setSettings|keySave|keyClear|\.answer\(|\.interrupt\(|\.send\(|\.start\(/, 'no write, no setting, no key, no answer');
+  assert.match(read('src/features/agents/ActivityPane.tsx'), /<ApiUsage \/>/, 'and the pane shows it');
+  const relay = code('src/features/agents/parent-relay.ts');
+  assert.doesNotMatch(relay, /sendToAgent|writeTerminal|startTerminal|clipboard/i, 'a relay request is answered, never typed');
+  assert.deepEqual([...relay.matchAll(/window\.agentrix\.(\w+)/g)].map(match => match[1]).sort(), ['agentRelayResult', 'onAgentRelay']);
+});
