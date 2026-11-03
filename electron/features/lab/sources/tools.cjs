@@ -89,8 +89,8 @@ function allowedUrl(value, hosts) {
   return url;
 }
 
-function createTools({ command = hostCommand, get = https.get, now = () => new Date().toISOString() } = {}) {
-  const fetches = new Map(), containers = new Set(), removed = new Set();
+function createTools({ command = hostCommand, get = https.get, now = () => new Date().toISOString(), installId } = {}) {
+  const fetches = new Map(), containers = new Map(), removed = new Set(), live = new Set();
   const environment = async operation => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-lab-tool-'));
     const env = { ...cleanEnvironment(), HOME: home, USERPROFILE: home, APPDATA: home, LOCALAPPDATA: home,
@@ -202,7 +202,7 @@ function createTools({ command = hostCommand, get = https.get, now = () => new D
     return result;
   };
   const containerId = id => {
-    if (typeof id !== 'string' || !/^[a-f0-9]{12,64}$/.test(id) || !containers.has(id)) throw infrastructure('无效的实验容器。');
+    if (typeof id !== 'string' || !/^[a-f0-9]{12,64}$/.test(id) || !live.has(containers.get(id))) throw infrastructure('无效的实验容器。');
     return id;
   };
   const containerPath = file => {
@@ -212,23 +212,68 @@ function createTools({ command = hostCommand, get = https.get, now = () => new D
     return file;
   };
   const docker = {
+    forInstall(id) {
+      if (typeof id !== 'string' || !/^[a-f0-9-]{36}$/.test(id)) throw infrastructure('无效的实验容器配置。');
+      return createTools({ command, get, now, installId: id }).docker;
+    },
+    forRun(owner) {
+      if (!installId || typeof owner !== 'string' || !/^[a-f0-9-]{36}$/.test(owner) || live.has(owner)) {
+        throw infrastructure('无效的实验容器配置。');
+      }
+      live.add(owner);
+      return { ...docker, create: config => docker.create(config, owner), remove: id => docker.remove(id, owner),
+        async close() {
+          const results = await Promise.allSettled([...containers].filter(([, run]) => run === owner)
+            .map(([id]) => docker.remove(id, owner)));
+          live.delete(owner);
+          const failed = results.find(result => result.status === 'rejected');
+          if (failed) throw failed.reason;
+        } };
+    },
+    async labels(id) {
+      if (!installId || typeof id !== 'string' || !/^[a-f0-9]{12,64}$/.test(id)) throw infrastructure('无效的实验容器。');
+      const result = await dockerCommand(['inspect', '--format', '{{json .Config.Labels}}', id], 5000);
+      if (result.code !== 0 && /No such (?:object|container)/i.test(result.stderr)) return null;
+      if (result.code !== 0) throw infrastructure('Docker 操作失败。');
+      try {
+        const labels = JSON.parse(result.stdout);
+        if (labels === null) return {};
+        if (typeof labels !== 'object' || Array.isArray(labels)) throw new Error();
+        return labels;
+      } catch { throw infrastructure('无效的实验容器。'); }
+    },
+    async sweep() {
+      if (!installId) throw infrastructure('无效的实验容器配置。');
+      const result = await checkedDocker(['ps', '--all', '--quiet', '--no-trunc', '--filter', 'label=agentrix.lab.install=' + installId], 5000);
+      const ids = result.stdout.trim() ? result.stdout.trim().split(/\s+/) : [], failures = [];
+      if (ids.length > 10000 || ids.some(id => !/^[a-f0-9]{12,64}$/.test(id))) throw infrastructure('无效的实验容器。');
+      for (const id of new Set(ids)) {
+        try {
+          const labels = await docker.labels(id);
+          if (labels?.['agentrix.lab.install'] !== installId || live.has(labels['agentrix.lab.run'])) continue;
+          await docker.remove(id);
+        } catch (error) { failures.push({ id, error }); }
+      }
+      if (failures.length) throw Object.assign(infrastructure('Docker 操作失败。'), { failures });
+    },
     async probe() {
       try { await checkedDocker(['info', '--format', '{{.ServerVersion}}'], 5000); return { available: true, reason: null }; }
       catch { return { available: false, reason: 'Docker 不可用，请先安装并启动 Docker。' }; }
     },
-    async create({ image, digest, workdir, network }) {
-      if (typeof image !== 'string' || !/^[a-z0-9][a-z0-9./:_-]{0,240}$/.test(image) ||
+    async create({ image, digest, workdir, network }, owner) {
+      if (!installId || !live.has(owner) || typeof image !== 'string' || !/^[a-z0-9][a-z0-9./:_-]{0,240}$/.test(image) ||
         !/^sha256:[a-f0-9]{64}$/.test(digest) || !['none', 'bridge'].includes(network)) throw infrastructure('无效的实验容器配置。');
       containerPath(workdir);
       const name = 'agentrix-lab-' + randomUUID(); let id;
       try {
-        const result = await checkedDocker(['create', '--pull=missing', '--name', name, '--label', 'agentrix.lab=true',
+        const result = await checkedDocker(['create', '--rm', '--pull=missing', '--name', name, '--label', 'agentrix.lab=true',
+          '--label', 'agentrix.lab.install=' + installId, '--label', 'agentrix.lab.run=' + owner,
           '--network', network, '--workdir', workdir, '--cap-drop=ALL', '--security-opt=no-new-privileges:true',
           '--pids-limit=256', '--entrypoint', '/bin/sh', image + '@' + digest,
           '-c', "trap 'exit 0' TERM INT; while :; do sleep 60; done"]);
         id = result.stdout.trim();
         if (!/^[a-f0-9]{12,64}$/.test(id)) throw infrastructure('Docker 操作失败。');
-        containers.add(id); await checkedDocker(['start', id]); return id;
+        containers.set(id, owner); await checkedDocker(['start', id]); return id;
       } catch (error) {
         await dockerCommand(['rm', '--force', id || name]).catch(() => {}); if (id) containers.delete(id); throw error;
       }
@@ -241,7 +286,7 @@ function createTools({ command = hostCommand, get = https.get, now = () => new D
         !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20 * 60000) throw infrastructure('无效的容器命令。');
       let result;
       try { result = await environment(async env => command('docker', ['exec', '-i', id, ...argv], { env, timeoutMs, stdin })); }
-      catch { await docker.remove(id).catch(() => {}); throw infrastructure('Docker 操作失败。'); }
+      catch { await docker.remove(id, containers.get(id)).catch(() => {}); throw infrastructure('Docker 操作失败。'); }
       if (result.code === null || /Error response from daemon|Cannot connect to the Docker daemon|OCI runtime exec failed/i.test(result.stderr)) {
         throw infrastructure('Docker 操作失败。');
       }
@@ -266,15 +311,25 @@ function createTools({ command = hostCommand, get = https.get, now = () => new D
       }
       if (copied.isDirectory()) await validateLinks(target);
     },
-    async remove(id) {
+    // A private runner record also proves ownership of a container from before installation labels existed.
+    removeRecorded(id) { return docker.remove(id, undefined, true); },
+    async remove(id, owner, recorded = false) {
       if (typeof id !== 'string' || !/^[a-f0-9]{12,64}$/.test(id)) throw infrastructure('无效的实验容器。');
       if (removed.has(id)) return;
       if (!containers.has(id)) {
-        const inspected = await dockerCommand(['inspect', '--format', '{{ index .Config.Labels "agentrix.lab" }}', id]);
-        if (inspected.code !== 0 && /No such (?:object|container)/i.test(inspected.stderr)) return;
-        if (inspected.code !== 0 || inspected.stdout.trim() !== 'true') throw infrastructure('无效的实验容器。');
+        const labels = await docker.labels(id);
+        if (!labels) { removed.add(id); return; }
+        if (labels['agentrix.lab.install'] !== installId &&
+          !(recorded && labels['agentrix.lab.install'] === undefined && labels['agentrix.lab'] === 'true')) {
+          throw infrastructure('无效的实验容器。');
+        }
+        if (live.has(labels['agentrix.lab.run']) && labels['agentrix.lab.run'] !== owner) throw infrastructure('已有实验正在运行。');
+      } else if (live.has(containers.get(id)) && containers.get(id) !== owner) {
+        throw infrastructure('已有实验正在运行。');
       }
-      await checkedDocker(['rm', '--force', id]); containers.delete(id); removed.add(id);
+      const result = await dockerCommand(['rm', '--force', id]);
+      if (result.code !== 0 && !/No such (?:object|container)/i.test(result.stderr)) throw infrastructure('Docker 操作失败。');
+      containers.delete(id); removed.add(id);
     },
   };
   return { fetchCommit, download, aaScores, docker };

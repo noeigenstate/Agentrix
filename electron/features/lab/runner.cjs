@@ -58,6 +58,13 @@ function runContext(source, session, workspaceRoot, artifactDirectory, options, 
     testTimeoutMs: options.testTimeoutMs ?? 120000, reference };
 }
 
+function containerLease(source, id) {
+  if (source.provider.id !== 'aa') return null;
+  const lease = source.context.tools.docker.forRun?.(id);
+  if (lease) source.context = { ...source.context, tools: { ...source.context.tools, docker: lease } };
+  return lease;
+}
+
 async function cleanupContainer(directory, tools = sourceTools) {
   const file = path.join(directory, 'container.json');
   const stat = await fs.lstat(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
@@ -65,7 +72,9 @@ async function cleanupContainer(directory, tools = sourceTools) {
   if (!stat.isFile() || stat.size > 1024) throw new Error('无效的实验容器记录。');
   const value = JSON.parse(await fs.readFile(file, 'utf8'));
   if (typeof value.id !== 'string' || !/^[a-f0-9]{12,64}$/.test(value.id)) throw new Error('无效的实验容器记录。');
-  await tools.docker.remove(value.id); await fs.rm(file);
+  if (tools.docker.removeRecorded) await tools.docker.removeRecorded(value.id);
+  else await tools.docker.remove(value.id);
+  await fs.rm(file);
 }
 
 async function validateReference(options) {
@@ -80,6 +89,7 @@ async function validateReference(options) {
   await fs.mkdir(workspaceRoot, { recursive: true, mode: 0o700 });
   await fs.mkdir(artifactDirectory, { recursive: true, mode: 0o700 });
   const session = sessionFor(options, await sessionOptions({ ...options, directory, run: { id }, t }, source.guard, workspaceRoot));
+  const containers = containerLease(source, id);
   let result, failure;
   try {
     await session.start();
@@ -90,10 +100,11 @@ async function validateReference(options) {
     }
   } catch (error) { failure = error; }
   finally {
-    for (const cleanup of [
-      () => session.close(), () => cleanupWorktrees(directory), () => removePath(directory),
-      () => source.guard.check(),
-    ]) {
+    let stopped = true;
+    for (const cleanup of [() => session.close(), () => containers?.close()]) {
+      try { await cleanup(); } catch (error) { stopped = false; if (!failure || error.fatal) failure = error; }
+    }
+    for (const cleanup of [...(stopped ? [() => cleanupWorktrees(directory), () => removePath(directory)] : []), () => source.guard.check()]) {
       try { await cleanup(); } catch (error) { if (!failure || error.ownerChanged || error.fatal) failure = error; }
     }
   }
@@ -113,6 +124,7 @@ async function runTask(options) {
   await fs.mkdir(artifacts, { mode: 0o700 }); await fs.mkdir(workspaceRoot, { recursive: true, mode: 0o700 });
   const control = new AbortController(), abort = () => control.abort();
   const session = sessionFor(options, { ...await sessionOptions(options, guard, workspaceRoot), signal: control.signal });
+  const containers = containerLease(source, run.id);
   signal.addEventListener('abort', abort, { once: true });
   if (signal.aborted) control.abort();
   const deadline = setTimeout(() => control.abort(), timeoutMs);
@@ -190,8 +202,10 @@ async function runTask(options) {
   } finally {
     clearTimeout(deadline); signal.removeEventListener('abort', abort);
     control.signal.removeEventListener('abort', stopContainer);
-    try { await removeContainer(); } catch (error) { failure ||= error; }
-    try { await session.close(); } catch (error) { failure ||= error; }
+    let stopped = true;
+    for (const cleanup of [removeContainer, () => session.close(), () => containers?.close()]) {
+      try { await cleanup(); } catch (error) { stopped = false; failure ||= error; }
+    }
     try { await usage.close(); } catch (error) { failure ||= error; }
     const measured = usage.measurements();
     result.costUsd = measured.costUsd; result.knownCostUsd = measured.knownCostUsd;
@@ -213,7 +227,7 @@ async function runTask(options) {
       await fs.writeFile(path.join(artifacts, 'measurements.json'),
         JSON.stringify({ ...measured, modelStarted: result.modelStarted }), { mode: 0o600 });
     } catch (error) { failure ||= error; }
-    try { await cleanupWorktrees(directory); } catch (error) { failure ||= error; }
+    if (stopped) try { await cleanupWorktrees(directory); } catch (error) { failure ||= error; }
     try {
       const after = await guard.check();
       if (guard.before) await fs.writeFile(path.join(artifacts, 'owner-after.json'), JSON.stringify(after), { mode: 0o600 });

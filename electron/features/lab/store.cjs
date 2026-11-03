@@ -1,5 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { validId, upgradeExperiment } = require('./values.cjs');
 const { removePath } = require('./disk.cjs');
 
@@ -45,6 +46,48 @@ class LabStore {
   async remove(id) {
     await this.pending;
     await removePath(this.folder(id));
+  }
+  async installId() {
+    const file = path.join(this.directory, 'install-id');
+    const read = async () => {
+      const stat = await fs.lstat(file);
+      if (!stat.isFile() || stat.size !== 36) throw new Error('Invalid lab installation identity.');
+      const id = await fs.readFile(file, 'utf8');
+      if (!validId(id)) throw new Error('Invalid lab installation identity.');
+      return id;
+    };
+    try { return await read(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
+    const temporary = file + '-' + randomUUID(), handle = await fs.open(temporary, 'wx', 0o600);
+    try {
+      await handle.writeFile(randomUUID()); await handle.sync(); await handle.close();
+      // Publish a complete identity without replacing one another engine has already published.
+      try { await fs.link(temporary, file); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+      return await read();
+    } finally { await handle.close(); await fs.rm(temporary, { force: true }); }
+  }
+  async readCleanup() {
+    await this.pending;
+    const file = path.join(this.directory, 'pending-cleanup.json');
+    let stat;
+    try { stat = await fs.lstat(file); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+    if (!stat.isFile() || stat.size > MAX_STATE) throw new Error('Invalid lab cleanup record.');
+    const entries = JSON.parse(await fs.readFile(file, 'utf8'));
+    if (!Array.isArray(entries) || entries.some(entry => !validId(entry.experimentId) || !validId(entry.runId) ||
+      !['history', 'oss', 'aa'].includes(entry.source) || typeof entry.worktrees !== 'boolean')) {
+      throw new Error('Invalid lab cleanup record.');
+    }
+    return entries;
+  }
+  writeCleanup(entries) {
+    const operation = this.pending.then(async () => {
+      await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
+      const file = path.join(this.directory, 'pending-cleanup.json'), temporary = file + '.tmp';
+      const handle = await fs.open(temporary, 'w', 0o600);
+      try { await handle.writeFile(JSON.stringify(entries)); await handle.sync(); } finally { await handle.close(); }
+      await fs.rename(temporary, file);
+    });
+    this.pending = operation.catch(() => {}); return operation;
   }
   async readAaKey(storage) {
     if (!storage?.isEncryptionAvailable?.()) return null;
