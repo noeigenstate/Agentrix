@@ -81,6 +81,12 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // Queued records wait after the active turn, with or without a renderer echo. They never start a new agent turn.
   const cards = useMemo(() => pendingPromptCards(pending, conversationEntries.filter(entry => !hidden?.has(entry.id))), [pending, conversationEntries, hidden]);
   const queued = (prompt: PendingPrompt) => cards.queuedIds.has(prompt.id);
+  // A send's delayed Enter must see queue receipts that arrived after the send started.
+  const latestCards = useRef(cards); latestCards.current = cards;
+  const queuedInput = (text: string) => {
+    const current = latestCards.current;
+    return current.prompts.some(prompt => current.queuedIds.has(prompt.id) && sameMessage(prompt.text, text));
+  };
   const sendCounter = useRef(0);
   const visibleScreen = useScreen(terminal.id);
   const parsedScreen = useMemo(() => {
@@ -127,7 +133,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   useLayoutEffect(() => { holdQuote(null); }, [conversation]);
   const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null), composer = useRef<HTMLDivElement>(null);
   const [terminalPopup, setTerminalPopup] = useState<{ command: string; focus?: boolean } | null>(null);
-  const inputBlocked = preview || !live || !idleInput || working || hasChoice || terminalPopup !== null;
+  const inputBlocked = preview || !live || (!idleInput && !working) || hasChoice || terminalPopup !== null;
   choiceVisible.current = hasChoice || terminalPopup !== null;
   const focusAfterPopup = useRef(false);
   const popupReady = useRef<(() => void) | null>(null);
@@ -312,15 +318,16 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (carried && quoteRef.current === carried) holdQuote(null);
     const restoreQuote = () => { if (carried && !quoteRef.current && ownsSend(owner)) holdQuote(carried); };
     const left = text && !batch.length ? inputDraft() : '';
+    const queuedLeft = !!left && queuedInput(left);
     const clearDraft = () => { if (own && input.current?.value.trim() === words) edit(''); };
     if (own && !pictureSend) edit('');
-    if (left && sameMessage(text, left)) {
+    if (left && !queuedLeft && sameMessage(text, left)) {
       uploads.forEach(picture => { picture.sent = true; });
       if (pictureSend) clearDraft(); if (own) clearPictures();
       toBottom(); window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(text, owner);
       remember(); return;
     }
-    if (left && pending.some(prompt => sameMessage(prompt.text, left))) { window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(left, owner); }
+    if (left && !queuedLeft && pending.some(prompt => sameMessage(prompt.text, left))) { window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(left, owner); }
     else if (left && !IMAGE_PLACEHOLDER.test(left)) await native.clearInput(() => ownsSend(owner));
     if (!ownsSend(owner)) return;
     if (text) {
@@ -356,11 +363,13 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   };
   const inputDraft = () => native.readInput()?.text ?? '';
   // A message is sent once it has left the CLI's input. An Enter the CLI did not take (it arrived while the CLI was
-  // busy redrawing, compacting or taking the paste) leaves it there: Enter again, a few times.
+  // redrawing or taking the paste) leaves it there: retry only at a current idle input, never after a queue receipt.
   const submitted = async (text: string, owner: number) => {
     for (let attempt = 0; attempt < 3; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 700));
-      if (!ownsSend(owner) || choiceVisible.current || !sameMessage(text, inputDraft())) return;
+      if (!ownsSend(owner) || choiceVisible.current || queuedInput(text)) return;
+      const current = native.readInput();
+      if (!current || !sameMessage(text, current.text) || !isAtPrompt(kind, current.rows, parseAgentScreen(kind, current.rows))) return;
       window.agentrix.writeTerminal(terminal.id, '\r');
     }
   };
