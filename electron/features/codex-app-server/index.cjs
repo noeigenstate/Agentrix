@@ -6,8 +6,9 @@ const { createRpc } = require('./rpc.cjs');
 const { createEvents, itemPayload } = require('./events.cjs');
 const { createRequests } = require('./requests.cjs');
 const { mergeLimits } = require('./account.cjs');
-const { assertCompatible } = require('./compatibility.cjs');
+const { assertCompatible, probeCapabilities } = require('./compatibility.cjs');
 const { codexExecutable } = require('../agents/codex-account-usage.cjs');
+const { workerEnvironment } = require('./environment.cjs');
 
 const occupied = new Map();
 function stopProcess(child) {
@@ -67,7 +68,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         Object.assign(spec, override || {}); setState('starting'); origin = resuming ? 'resume' : 'user';
         try {
           if (!path.isAbsolute(spec.cwd || '')) throw new Error('invalid_cwd');
-          const env = spec.env || process.env, executable = await resolveExecutable(env);
+          const env = workerEnvironment(spec.env || process.env), executable = await resolveExecutable(env);
           if (!executable) throw new Error('codex_cli_required');
           child = spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: spec.cwd, env, windowsHide: true,
             detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
@@ -78,8 +79,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             } });
           requests = createRequests(rpc, events, setState);
           const init = await rpc.request('initialize', { clientInfo: { name: 'agentrix', version: '1.0.0' }, capabilities: { experimentalApi: true } });
-          assertCompatible(init);
+          const compatibility = assertCompatible(init);
           rpc.notify('initialized');
+          await probeCapabilities(rpc);
           const threadId = spec.providerSessionId || spec.threadId || spec.sessionId;
           if (resuming && !threadId) throw new Error('missing_thread');
           if (resuming) bind(threadId);
@@ -97,8 +99,11 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           for (const turn of result.thread.turns || []) for (const item of turn.items || []) events.publish('item.upsert', itemPayload(item, true), { itemId: item.id, turnId: turn.id, replay: true });
           setState('idle');
           void readLimits().catch(() => {});
-          return { providerSessionId: result.thread.id, runtimeSessionId: spec.runtimeSessionId };
-        } catch (error) { await close(); setState('failed', typeof error.code === 'string' ? error.code : error.message); throw error; }
+          return { providerSessionId: result.thread.id, runtimeSessionId: spec.runtimeSessionId, reason: compatibility.reason };
+        } catch (error) {
+          if (error.code === -32601 || error.code === -32602) error.code = 'unsupported_codex_capabilities';
+          await close(); setState('failed', typeof error.code === 'string' ? error.code : error.message); throw error;
+        }
       }
       function send(input) {
         const imageValid = value => typeof value === 'string' && (spec.owner === 'dispatch' && path.isAbsolute(value) || /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value));
@@ -174,4 +179,4 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
   };
 }
 
-module.exports = { createCodexRuntime };
+module.exports = { createCodexRuntime, workerEnvironment };

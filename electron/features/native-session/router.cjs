@@ -59,19 +59,25 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         record.stream.publish(event.type, event.payload, { itemId: event.itemId, replay: event.replay, occurredAtMs: event.occurredAtMs });
       });
       record.runtime = runtime; sessions.set(id, record);
-      try { await runtime[resume ? 'resume' : 'start'](spec); }
+      let startup;
+      try { startup = await runtime[resume ? 'resume' : 'start'](spec); }
       catch (error) {
-        if (lock) occupied.delete(lock);
-        if (agent === 'claude' && config.claudePath === 'api-then-terminal' && error.code === 'native_cli_required') {
-          record.stream.publish('path.changed', { previous: 'api', selected: 'terminal', reason: error.code });
-          terminalStreams.set(id, record.stream);
-          await runtime.close(); sessions.delete(id); await terminal(spec, error.code); pathChanged(agent, 'terminal', error.code); changed();
+        if (record.lock) occupied.delete(record.lock);
+        const reason = error.code || error.message;
+        const codexUnavailable = agent === 'codex' && ['unsupported_codex_capabilities', 'unsupported_codex_version', 'codex_cli_required', 'rpc_timeout', 'process_failed', 'process_exited', 'disconnected', 'invalid_response', 'invalid_frame', 'invalid_json', 'ENOENT'].includes(reason);
+        if (codexUnavailable || agent === 'claude' && config.claudePath === 'api-then-terminal' && error.code === 'native_cli_required') {
+          const notice = codexUnavailable ? (reason === 'codex_cli_required' || reason === 'ENOENT'
+            ? '未找到 Codex 原生运行器，已切换到终端。' : 'Codex 原生连接不可用，已切换到终端。') : reason;
+          record.stream.publish('path.changed', { previous: agent === 'claude' ? 'api' : 'subscription', selected: 'terminal', reason: notice });
+          await runtime.close(); sessions.delete(id); await terminal(spec, notice);
+          terminalStreams.set(id, record.stream); pathChanged(agent, 'terminal', notice); changed();
           return { runtimeSessionId: spec.runtimeSessionId };
         }
         throw error;
       }
-      record.stream.publish('path.changed', { previous: null, selected: selection.path === 'api' ? 'api' : 'subscription', reason: selection.reason });
-      pathChanged(agent, selection.path, selection.reason); changed(); return { runtimeSessionId: spec.runtimeSessionId };
+      const reason = startup?.reason || selection.reason;
+      record.stream.publish('path.changed', { previous: null, selected: selection.path === 'api' ? 'api' : 'subscription', reason });
+      pathChanged(agent, selection.path, reason); changed(); return { runtimeSessionId: spec.runtimeSessionId };
     } finally { busy.delete(id); }
   }
   return { start,

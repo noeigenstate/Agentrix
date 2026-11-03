@@ -3,6 +3,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
+const { projectTeam } = require('../team/team.cjs');
 
 /**
  * @typedef {{operation:'read'|'edit'|'command'|'network'|'other', toolName:string, cwd:string|null,
@@ -60,8 +61,10 @@ function createDispatchControl({ resolveRun, now = Date.now }) {
         if (!verified || verified.runId !== value.runId || verified.projectId !== value.projectId || !path.isAbsolute(verified.cwd || '') || !Array.isArray(verified.allow) || socket.destroyed) return socket.destroy();
         // A worker may tighten its admitted mode (for example --permission plan), never loosen main's binding.
         const run = { ...verified, readOnly: !!verified.readOnly || value.readOnly === true, roundtable: !!verified.roundtable || value.roundtable === true };
+        const agent = verified.agent || projectTeam(verified.cwd)?.live().find(entry => entry.id === verified.runId)?.agent;
+        if (agent) run.agent = agent;
         if (clients.has(run.runId)) return socket.destroy();
-        client = { run, send, pending: new Map(), control: null, requests: new Set(), delivered: new Map() };
+        client = { run, send, pending: new Map(), control: null, requests: new Set(), delivered: new Map(), sdkRequested: false, supportsFinish: value.finishProtocol === 1 };
         clients.set(run.runId, client); socket.setTimeout(0);
         send({ type: 'registered', runId: run.runId }); return;
       }
@@ -71,7 +74,12 @@ function createDispatchControl({ resolveRun, now = Date.now }) {
       } else if (value.type === 'request' && validId(value.requestId) && typeof value.method === 'string') {
         if (client.requests.has(value.requestId) || client.requests.size >= 4000) return socket.destroy();
         client.requests.add(value.requestId);
-        const handler = value.method === 'control.deliver' ? async (run, payload) => {
+        if (value.method === 'claude-sdk.run') {
+          if (client.run.agent !== 'claude' || client.sdkRequested) return send({ type: 'result', requestId: value.requestId, ok: false, error: 'run_binding_rejected' });
+          client.sdkRequested = true;
+        }
+        const handler = value.method === 'control.finish' ? async () => client.control ? client.control({ type: 'finish' }) : { status: 'delivered' }
+          : value.method === 'control.deliver' ? async (run, payload) => {
           if (!client.control || !validId(payload?.messageId) || !['intervene', 'stop'].includes(payload.type)) throw new Error('control_unavailable');
           const previous = client.delivered.get(payload.messageId), signature = JSON.stringify(payload);
           if (previous) { if (previous.signature !== signature) throw new Error('message_id_conflict'); return previous.promise; }
@@ -82,12 +90,13 @@ function createDispatchControl({ resolveRun, now = Date.now }) {
         if (!handler) return send({ type: 'result', requestId: value.requestId, ok: false, error: 'unsupported_request' });
         try {
           const result = await handler(client.run, value.payload, {
+            supportsFinish: client.supportsFinish,
             emit: event => send({ type: 'event', requestId: value.requestId, event }),
             onControl(fn) { client.control = fn; return () => { if (client.control === fn) client.control = null; }; },
           });
           send({ type: 'result', requestId: value.requestId, ok: true, value: result });
-        } catch { send({ type: 'result', requestId: value.requestId, ok: false, error: 'run_failed' }); }
-        finally { if (value.method !== 'control.deliver') client.control = null; }
+        } catch (error) { send({ type: 'result', requestId: value.requestId, ok: false, error: error.message === 'control_unavailable' ? 'control_unavailable' : 'run_failed' }); }
+        finally { if (value.method === 'claude-sdk.run') client.control = null; }
       }
     };
     send = frames(socket, value => { void handle(value).catch(() => socket.destroy()); }, () => {
@@ -170,7 +179,7 @@ function connectDispatchControl({ address, runId, projectId, sessionKey, capabil
       }, close() { socket.destroy(); },
     };
     socket.once('connect', () => {
-      try { send({ type: 'register', runId, projectId, sessionKey, capability, readOnly, roundtable }); } catch { socket.destroy(); }
+      try { send({ type: 'register', runId, projectId, sessionKey, capability, readOnly, roundtable, finishProtocol: 1 }); } catch { socket.destroy(); }
     });
   });
 }

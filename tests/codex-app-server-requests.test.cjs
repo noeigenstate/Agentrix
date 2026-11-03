@@ -60,8 +60,8 @@ test('server resolution and stop expire tickets and unknown tool requests fail i
   f.open('item/tool/call', {}, 8); assert.equal(f.writes.at(-1).code, -32601);
 });
 
-test('compatibility uses a tested CLI series, never a nonexistent protocol version', () => {
+test('compatibility accepts unknown CLI versions for capability probing, never a nonexistent protocol version', () => {
   assert.doesNotThrow(() => assertCompatible({ userAgent: 'codex_cli_rs/0.166.0 (synthetic)' }));
-  assert.throws(() => assertCompatible({ userAgent: 'codex_cli_rs/0.1.0' }), /unsupported/);
+  assert.match(assertCompatible({ userAgent: 'codex_cli_rs/0.1.0' }).reason, /Codex 版本未经验证/);
   assert.throws(() => assertCompatible({ protocolVersion: 1 }), /unsupported/);
 });
