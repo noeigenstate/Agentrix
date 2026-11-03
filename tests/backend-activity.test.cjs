@@ -74,6 +74,26 @@ async function harness(t, kind = 'local', agent = 'codex') {
 
 const stamp = at => new Date(at).toISOString();
 
+test('a second Codex launch in the same PTY cannot bind its new input to the previous provider', async t => {
+  const h = await harness(t, 'ssh'), { s, context, project } = h;
+  Object.assign(context, { acceptShellEvent: () => true, agentCommand: () => null, quitting: false, stopUsageAccount() {},
+    sshHandoff: async () => false, startUsage() {}, monitorActivity: () => ({ stop() {}, poll: async () => null }) });
+  s.sessionKey = 'cap'; s.actions.reset = () => {};
+  vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('// The agent chosen on a new project')), context);
+  const event = type => context.onEvent({ projectId: s.terminalId, sessionKey: 'cap', type, agent: 'codex', cwd: project.path, sentAt: 2300 });
+  h.write('First task\r'); h.user('First task', 2000); h.apply('complete', 'first', 2100);
+  assert.equal(h.alerts(), 1); h.store.acknowledge(project.id);
+  const previous = s.rootThreadId;
+  event('codex-exited'); h.now(2300); event('codex-started');
+  h.now(2400); h.write('Second task\r'); h.user('Second task', 2400);
+  assert.notEqual(s.cliProviderId, previous, 'new input cannot revive the old root binding');
+  context.applyActivity(project, s, { threadId: 'new-provider', turnId: 'second', state: 'complete', updatedAt: 2500 });
+  assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 2); assert.equal(project.unread, 1);
+  const revision = s.cliState.revision;
+  context.applyActivity(project, s, { threadId: previous, turnId: 'first', state: 'complete', updatedAt: 2600 });
+  assert.equal(s.cliState.revision, revision); assert.equal(h.alerts(), 2);
+});
+
 test('completion catch-up hides provisional completion without finishing prompts, notifying or rearming', async t => {
   const h = await harness(t), { s, project, store } = h;
   h.user('Actual human prompt', 2000);

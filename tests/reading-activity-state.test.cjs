@@ -39,3 +39,15 @@ test('the activity monitor and reading view agree on host waiting, fresh input a
   terminal.cliState = { ...terminal.cliState, revision: 2, state: 'idle', updatedAt: 10003 };
   assert.equal(cliStateFor('claude', frame, terminal).working, false); assert.doesNotMatch(activity(terminal, frame), /class="is-working"/);
 });
+
+test('a positively parsed current permission dialog stays waiting after newer sibling progress', () => {
+  const terminal = { id: 't', sessionId: 'pty', agent: 'claude', codexActive: true, codexActivity: 'working',
+    cliState: { sessionId: 'pty', revision: 2, state: 'working', updatedAt: 10002 } };
+  const frame = { sessionId: 'pty', revision: 1, updatedAt: 10000,
+    rows: fs.readFileSync(path.join(__dirname, 'fixtures/screens/claude-permission.txt'), 'utf8').split(/\r?\n/) };
+  const state = cliStateFor('claude', frame, terminal);
+  assert.equal(state.waiting, true); assert.equal(state.working, false);
+  assert.match(activity(terminal, frame), /等待你确认/);
+  frame.pending = true; assert.equal(cliStateFor('claude', frame, terminal).waiting, true, 'an in-flight write cannot hide the dialog still on screen');
+  frame.sessionId = 'previous-pty'; assert.equal(cliStateFor('claude', frame, terminal).waiting, false);
+});

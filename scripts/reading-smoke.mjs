@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import net from 'node:net';
 import { _electron as electron } from 'playwright-core';
 import { waitFor, terminalsSettled } from './wait.mjs';
 import { setMode } from './mode-switch.mjs';
@@ -45,6 +46,17 @@ const physicalRows = () => page.locator(`[data-terminal-id="${terminalId}"] .xte
 const writes = () => app.evaluate(() => globalThis.voicePastes.filter(item => !['\x1b[I', '\x1b[O'].includes(item.data) && !/^\x1b\[\d+;\d+R$/.test(item.data)));
 const resetWrites = () => app.evaluate(() => { globalThis.voicePastes = []; });
 const hook = (kind, payload) => `'${JSON.stringify(payload)}' | & $global:AgentrixSession.powershellPath -NoProfile -ExecutionPolicy Bypass -File $global:AgentrixSession.claudeHookPath -PipeName $global:AgentrixSession.pipeName -ProjectId $global:AgentrixSession.projectId -SessionKey $global:AgentrixSession.sessionKey -Kind ${kind}\r`;
+async function backgroundHook(kind, payload) {
+  const runtime = (await fs.readdir(profile)).find(name => name.startsWith('runtime-'));
+  const bootstrap = JSON.parse(await fs.readFile(path.join(profile, runtime, `${(await state()).sessionId}.json`), 'utf8'));
+  const event = require('../integration/agent-event.cjs').claudeEvent(JSON.stringify(payload), bootstrap.projectId, bootstrap.sessionKey, kind);
+  await new Promise((resolve, reject) => {
+    const socket = net.connect(`\\\\.\\pipe\\${bootstrap.pipeName}`);
+    socket.setTimeout(2000, () => { socket.destroy(); reject(new Error('Fixture hook timed out')); });
+    socket.on('error', reject); socket.on('close', resolve);
+    socket.on('connect', () => socket.end(JSON.stringify(event) + '\n'));
+  });
+}
 try {
   app = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'), args: packaged ? [] : [root], cwd: root, env });
   page = await app.firstWindow(); page.on('pageerror', error => errors.push(error.message));
@@ -136,6 +148,10 @@ try {
     assert.equal(hidden.codexActive, false, 'the separate plain shell never becomes the agent fixture');
     await closePopup();
     await waitFor(async () => await composer.isEnabled(), `${label} returned to the reading view`);
+    // This Console-based stand-in has no CLI resize handler. Repaint its input
+    // after xterm moves out of the popup; old absolute cursor rows are no longer valid.
+    await renderIdle(`${label}: input after popup resize`);
+    return sent;
   };
   await reading(); await composer.fill('/');
   await palette.getByRole('option').filter({ has: page.getByText('/status', { exact: true }) }).waitFor();
@@ -168,8 +184,8 @@ try {
   await composer.fill('/sta'); await palette.getByRole('option').filter({ has: page.getByText('/status', { exact: true }) }).waitFor();
   await page.screenshot({ path: path.join(output, 'palette.png') });
   await composer.press('Tab'); assert.equal(await composer.inputValue(), '/status ');
-  await resetWrites(); await composer.press('Enter'); await settled('/status');
-  let sent = await writes();
+  await resetWrites(); await composer.press('Enter');
+  let sent = await settled('/status');
   assert.deepEqual(sent.map(item => item.data), ['\x15', '/status', '\r'], 'slash command is typed, never bracketed paste');
   assert.ok(sent[1].at - sent[0].at >= 50, 'Ctrl+U is processed before typing');
   assert.ok(sent[2].at - sent[1].at >= 140, 'Enter follows the command after its typing delay');
@@ -195,8 +211,9 @@ try {
   await composer.fill('/fix-issue'); await resetWrites(); await composer.press('Enter');
   await settled('exact command', '/fix-issue');
   assert.equal(await composer.isVisible(), true);
-  await composer.fill('/unknown-reading-command'); await resetWrites(); await composer.press('Enter'); await settled('unknown command', '/unknown-reading-command');
-  assert.deepEqual((await writes()).map(item => item.data), ['\x15', '/unknown-reading-command', '\r']);
+  await composer.fill('/unknown-reading-command'); await resetWrites(); await composer.press('Enter');
+  const unknownSent = await settled('unknown command', '/unknown-reading-command');
+  assert.deepEqual(unknownSent.map(item => item.data), ['\x15', '/unknown-reading-command', '\r']);
   await composer.fill('!echo reading-fixture'); await resetWrites(); await composer.press('Enter');
   await popup.waitFor();
   await waitFor(async () => (await writes()).some(item => item.data === '\r'), 'shell mode submitted');
@@ -204,6 +221,7 @@ try {
   assert.ok((await physicalRows()).some(row => row.includes('reading-fixture')));
   assert.deepEqual((await writes()).map(item => item.data), ['\x15', '!echo reading-fixture', '\r']);
   await closePopup();
+  await renderIdle('shell result: input after popup resize');
   await composer.fill('!true'); await resetWrites(); await composer.press('Enter');
   await popup.waitFor();
   await waitFor(async () => (await writes()).some(item => item.data === '\r'), 'silent shell command submitted');
@@ -213,6 +231,7 @@ try {
   await page.keyboard.press('Escape');
   assert.equal(await popup.count(), 1, 'Escape belongs to the CLI and keeps the popup open');
   await closePopup(true);
+  await renderIdle('silent shell result: input after popup resize');
   checks.push('slash and shell commands use the same live xterm; Escape stays in the CLI and closing sends nothing');
   await composer.fill('keep this draft'); await resetWrites();
   await page.evaluate(id => window.dispatchEvent(new CustomEvent('agentrix:command', { detail: { terminalId: id, text: '/status' }, cancelable: true })), terminalId);
@@ -232,8 +251,14 @@ try {
   // A real terminal frame owns every confirmation. It opens even while the composer holds a draft.
   const permissionRows = (await fs.readFile(path.join(root, 'tests/fixtures/screens/claude-permission.txt'), 'utf8')).split(/\r?\n/);
   await composer.fill('keep the confirmation draft');
+  await backgroundHook('permission', { session_id: 'permission-fixture', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'fixture command' }, permission_suggestions: [] });
+  await waitFor(async () => (await state()).cliState?.state === 'waiting', 'permission without request id waits');
+  const permissionRevision = (await state()).cliState.revision;
   await write('Clear-Host; ' + permissionRows.map(row => "Write-Host '" + row.replace(/'/g, "''") + "'").join('; ') + '; $global:ReadingFixtureClearOnPrompt = $true; Start-Sleep -Seconds 4\r');
   await popup.waitFor(); assert.equal(await composer.isDisabled(), false);
+  await backgroundHook('progress', { session_id: 'permission-fixture', hook_event_name: 'PostToolUse', tool_use_id: 'sibling-read', tool_name: 'Read' });
+  assert.equal((await state()).cliState.revision, permissionRevision, 'sibling progress cannot dismiss an uncorrelated permission');
+  assert.ok((await state()).needsInput); assert.equal(await popup.isVisible(), true);
   assert.equal(await popup.evaluate(node => node.contains(document.activeElement)), false);
   await page.screenshot({ path: path.join(output, 'permission-terminal.png') });
   await resetWrites(); await composer.press('Enter'); assert.deepEqual(await writes(), []);
@@ -258,6 +283,7 @@ try {
     const rows = await physicalRows();
     return hasCliInput('claude', rows, parseAgentScreen('claude', rows));
   }, 'working CLI still has its input');
+  await waitFor(async () => await popup.count() === 0, 'working input releases the earlier automatic popup', 500);
   // The owner keeps typing while the agent works (the CLI queues the message); an empty Enter still sends nothing.
   await resetWrites(); assert.equal(await composer.isDisabled(), false);
   await composer.focus(); await page.keyboard.press('Enter'); assert.deepEqual(await writes(), []); assert.equal(await popup.count(), 0);

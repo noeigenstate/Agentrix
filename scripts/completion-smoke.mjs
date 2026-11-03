@@ -180,7 +180,9 @@ try {
   await waitFor(async () => (await state()).terminals[0].prompts.map(item => item.state).join() === 'working,working', 'the waiting prompt is taken up when Codex records it');
   await input('稍后补上文档\r');
   await waitFor(async () => (await state()).terminals[0].prompts.map(item => item.state).join() === 'working,working,queued', 'a prompt sent now waits for the next round');
-  await fs.appendFile(transcript, record('task_complete', 'first')); await notify(thread, 'first');
+  const firstCompletion = record('task_complete', 'first');
+  await notify(thread, 'first');
+  await fs.appendFile(transcript, firstCompletion);
   const breathes = () => page.locator('.project-panel').evaluate(node => node.getAnimations({ subtree: true }).some(animation => animation.animationName === 'signal-breathe'));
   await waitFor(async () => (await state()).terminals[0].prompts.map(item => `${item.state}:${item.text}`).join() === 'queued:稍后补上文档', 'finished prompts leave the list; the waiting one stays');
   await notify(child, 'while-queued'); await notify(thread, 'first');
@@ -194,7 +196,10 @@ try {
   await waitFor(async () => (await state()).terminals[0].prompts.map(item => `${item.state}:${item.text}`).join() === 'working:稍后补上文档', 'the queued prompt is delivered to its own round');
   assert.equal((await state()).codexActivity, 'working');
   assert.equal((await state()).unread, 0); assert.equal(await notices(), 0);
-  await fs.appendFile(transcript, record('task_complete', 'queued')); await notify(thread, 'queued');
+  const queuedCompletion = record('task_complete', 'queued');
+  await notify(thread, 'queued');
+  await waitFor(async () => (await state()).terminals[0].cliState?.state === 'idle', 'notify publishes idle before rollout completion');
+  await fs.appendFile(transcript, queuedCompletion);
   await waitFor(async () => (await state()).unread === 1, 'the queued prompt round completes the project');
   assert.equal(await breathes(), true, 'a finished round not yet seen breathes a white glow');
   assert.deepEqual((await state()).terminals[0].prompts, [], 'all delivered work has finished');

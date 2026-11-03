@@ -802,9 +802,27 @@ test('terminal screen callbacks return an automatic raw handoff immediately with
   mode.setReading(value.id, false); notify(); assert.equal(isReading(mode, value), false, 'manual raw selection remains the owner choice');
 });
 
+test('removed terminals release reading monitors and handoff timers without a final exit event', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const before = global.window; let inventory, screen, screenDisposals = 0, stateDisposals = 0;
+  global.window = { agentrix: { onState(callback) { inventory = callback; return () => { stateDisposals++; }; } } };
+  t.after(() => { global.window = before; });
+  const mode = readingMode({ './terminal-screen.ts': { readScreen: () => null,
+    subscribeScreen(_id, callback) { screen = callback; return () => { screenDisposals++; }; } } });
+  const value = { ...terminal('removed-waiting'), agent: 'codex' };
+  mode.syncReading(value); inventory({ projects: [] }); t.mock.timers.tick(2000);
+  assert.equal(isReading(mode, value), true); assert.equal(screenDisposals, 1); assert.equal(stateDisposals, 1);
+  mode.syncReading(value); screen({ rows: [], sessionId: null }); t.mock.timers.tick(2000);
+  assert.equal(isReading(mode, value), true); assert.equal(screenDisposals, 2); assert.equal(stateDisposals, 2);
+  const blank = readingMode({ './terminal-screen.ts': { readScreen: () => null,
+    subscribeScreen(_id, callback) { callback({ rows: [], sessionId: null }); return () => { screenDisposals++; }; } } });
+  blank.syncReading(value);
+  assert.equal(screenDisposals, 3); assert.equal(stateDisposals, 2, 'a synchronous unmount cannot leave a state subscription');
+});
+
 test('a late host CLI revision cannot rearm reading-mode handoff after a newer idle event', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const mode = readingMode({ './terminal-screen.ts': { readScreen: () => ({ rows: ['Settings', 'Esc to close'] }), subscribeScreen: () => () => {} } });
+  const mode = readingMode({ './terminal-screen.ts': { readScreen: () => ({ rows: composerRows('codex') }), subscribeScreen: () => () => {} } });
   const value = { ...terminal('ordered-handoff'), agent: 'codex', cliState: { sessionId: 'session', revision: 2, updatedAt: 2000, state: 'idle' } };
   mode.syncReading(value);
   value.cliState = { ...value.cliState, revision: 1, state: 'waiting' }; mode.syncReading(value);
@@ -2028,6 +2046,41 @@ test('Claude paste IDs can begin above one and remain visible after deleting the
   assert.deepEqual(h.numbers(), [17, 18, 19]);
   h.remove(1); await h.tick(80);
   assert.deepEqual(h.numbers(), [17, 19]); assert.deepEqual(h.native().images, [1, 3]);
+});
+
+test('a typed command waits for a transient pending xterm frame without losing its remaining keys', async t => {
+  let pending = false;
+  const h = dictationHarness(t, { './terminal-screen': { useScreen: () => ({ rows: composerRows('claude'), pending }) } });
+  h.props.terminal.agent = 'claude'; h.render();
+  window.agentrix.writeTerminal = (id, text) => { h.written.push({ id, text }); if (text === '\x15') { pending = true; h.render(); } };
+  h.edit('/status'); h.press('Enter'); await h.tick(0); await h.tick(60);
+  assert.deepEqual(h.written.map(item => item.text), ['\x15']);
+  pending = false; h.render(); await h.tick(20); await h.tick(150);
+  assert.deepEqual(h.written.map(item => item.text), ['\x15', '/status', '\r']);
+  assert.deepEqual(h.pasted, []);
+});
+
+test('a real dialog cancels a typed command during its pending-frame wait', async t => {
+  let pending = false, rows = composerRows('claude');
+  const h = dictationHarness(t, { './terminal-screen': { useScreen: () => ({ rows, pending }) } });
+  h.props.terminal.agent = 'claude'; h.render();
+  window.agentrix.writeTerminal = (id, text) => { h.written.push({ id, text }); if (text === '\x15') { pending = true; h.render(); } };
+  h.edit('/status'); h.press('Enter'); await h.tick(0); await h.tick(60);
+  rows = ['Settings', 'Esc to close']; pending = false; h.render(); await h.tick(20);
+  rows = composerRows('claude'); h.render(); await h.tick(150); await h.tick(2000);
+  assert.deepEqual(h.written.map(item => item.text), ['\x15']); assert.deepEqual(h.pasted, []);
+});
+
+test('cancellation queued as readiness settles still prevents the next typed-command key', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let active = true, reads = 0; const writes = [];
+  const sending = require('../src/features/reading/reading-command.ts').typeReadingCommand('/status', key => writes.push(key), () => active, () => {
+    if (++reads === 2) queueMicrotask(() => { active = false; });
+    return true;
+  });
+  t.mock.timers.tick(60); for (let i = 0; i < 6; i++) await Promise.resolve();
+  t.mock.timers.tick(150); await sending;
+  assert.deepEqual(writes, ['\x15']);
 });
 
 test('session A to B to A, terminal selection and unmount cancel every delayed command key', async t => {

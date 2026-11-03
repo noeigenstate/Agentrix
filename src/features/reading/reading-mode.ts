@@ -15,6 +15,12 @@ const choices = new Set<string>();
 const handoffs = new Map<string, ReturnType<typeof setTimeout>>();
 const READING_HANDOFF_DELAY = 1500;
 const monitors = new Map<string, { terminal: ProjectTerminal; signal: CliState | null; dispose: () => void }>();
+let unsubscribeState: (() => void) | undefined;
+
+function releaseMonitor(id: string) {
+  monitors.get(id)?.dispose(); monitors.delete(id); cancelHandoff(id);
+  if (!monitors.size) { unsubscribeState?.(); unsubscribeState = undefined; }
+}
 
 function cancelHandoff(id: string) {
   const timer = handoffs.get(id);
@@ -43,7 +49,7 @@ export function useTerminalChoice() {
 export const readingShown = (terminal: ProjectTerminal, raw: string[]) => (!!terminal.sessionId && terminal.codexActive || !!terminal.readingHistory) && !raw.includes(terminal.id);
 // Forget a terminal's choice once its agent has exited.
 export function agentExited(terminal: ProjectTerminal) {
-  if (!terminal.codexActive || !terminal.sessionId) { monitors.get(terminal.id)?.dispose(); monitors.delete(terminal.id); }
+  if (!terminal.codexActive || !terminal.sessionId) releaseMonitor(terminal.id);
   if (terminal.codexActive || terminal.readingHistory) return;
   cancelHandoff(terminal.id); choices.delete(terminal.id); inputSeen.delete(terminal.id); automatic.delete(terminal.id);
   if (terminals.has(terminal.id)) setReading(terminal.id, true);
@@ -58,7 +64,21 @@ export function syncReading(terminal: ProjectTerminal) {
     else {
       const monitor = { terminal, signal: null, dispose: () => {} };
       monitors.set(terminal.id, monitor);
-      monitor.dispose = subscribeScreen(terminal.id, () => syncReading(monitor.terminal));
+      monitor.dispose = subscribeScreen(terminal.id, frame => {
+        if (frame?.sessionId === null) { releaseMonitor(terminal.id); return; }
+        syncReading(monitor.terminal);
+      });
+      if (monitors.get(terminal.id) !== monitor) { monitor.dispose(); return; }
+      // Removed terminals get no final exit update. Use the complete host inventory
+      // to retire their listeners, including a monitor created before xterm mounted.
+      if (!unsubscribeState && typeof window !== 'undefined') unsubscribeState = window.agentrix?.onState?.(state => {
+        const live = new Map(state.projects.flatMap(project => project.terminals || []).map(value => [value.id, value]));
+        for (const [id, watched] of monitors) {
+          const value = live.get(id);
+          if (value) syncReading(value);
+          else agentExited({ ...watched.terminal, sessionId: null, codexActive: false, readingHistory: undefined });
+        }
+      });
     }
   }
   const monitor = monitors.get(terminal.id), signal = nextCliState(monitor?.signal ?? null, terminal), screen = readScreen(terminal.id);

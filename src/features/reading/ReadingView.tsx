@@ -338,7 +338,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       const ready = new Promise<void>(resolve => { popupReady.current = resolve; });
       setTerminalPopup({ command: text });
       await ready;
-      const sent = await typeReadingCommand(text, value => window.agentrix.writeTerminal(terminal.id, value), () => ownsSend(owner) && canWrite.current);
+      const sent = await typeReadingCommand(text, value => window.agentrix.writeTerminal(terminal.id, value), () => ownsSend(owner) && !wasChoice.current, () => canWrite.current);
       if (sent && clears(terminal.agent, text)) { const ids = new Set(conversationEntries.map(entry => entry.id)); cleared.set(conversation, ids); setHidden(ids); }
       return sent ? true : undefined; // A cancelled typed command may already have written keys; never replay it automatically.
     }
