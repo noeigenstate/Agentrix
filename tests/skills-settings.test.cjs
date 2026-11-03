@@ -391,6 +391,29 @@ test('the create form shows the complete reserved-name message returned by the s
   assert.equal(h.byLabel('名称').props.value, 'model-routing');
 });
 
+test('a reserved-name error is dropped by 取消, by editing the name, by a new form and by choosing a skill', async t => {
+  const h = mount(t, [builtinRouting(), release]); await h.settle();
+  const alert = () => h.nodes().some(node => node.props.role === 'alert');
+  const fail = async name => {
+    h.byLabel('新建技能').props.onClick(); await h.settle();
+    h.byLabel('名称').props.onChange({ target: { value: name } }); await h.settle();
+    h.state.failure = `与系统技能「${name}」同名。`; h.button('创建').props.onClick(); await h.settle();
+    h.state.failure = null; assert.equal(alert(), true);
+  };
+  await fail('model-routing');
+  h.button('取消').props.onClick(); await h.settle();
+  assert.equal(alert(), false);
+  await fail('model-routing');
+  h.byLabel('名称').props.onChange({ target: { value: 'model-routing-team' } }); await h.settle();
+  assert.equal(alert(), false);
+  await fail('model-routing');
+  h.byLabel('新建技能').props.onClick(); await h.settle();
+  assert.equal(alert(), false);
+  await fail('model-routing');
+  h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
+  assert.equal(alert(), false);
+});
+
 test('the list follows what onSkills pushes', async t => {
   const h = mount(t, [builtinRouting()]);
   await h.settle();
@@ -534,9 +557,10 @@ test('extensions follow their base in the system group, carry both attributes, a
   assert.deepEqual(h.all(node => node.props['data-skill-id']).map(node => node.props['data-skill-id']), ['builtin:model-routing', extension.id, release.id]);
   assert.deepEqual(h.all(node => node.props['data-group']).map(node => h.text(node)), ['系统自带1', '我的技能1']);
   const row = h.one(node => node.props['data-skill-id'] === extension.id);
-  assert.equal(row.props['data-skill-extends'], 'model-routing'); assert.match(h.text(row), /扩展 model-routing/);
+  assert.equal(row.props['data-skill-extends'], 'model-routing'); assert.match(h.text(row), /扩展$/); assert.equal(row.props.title, 'model-routing-team');
   row.props.onClick(); await h.settle();
-  assert.equal(h.one(node => node.props.className === 'skills-title').props['data-skill-extends'], 'model-routing');
+  const title = h.one(node => node.props.className === 'skills-title');
+  assert.equal(title.props['data-skill-extends'], 'model-routing'); assert.match(h.text(title), /扩展 model-routing/);
   assert.equal(h.all(node => node.props['data-skill-extends'] === 'model-routing').length, 2);
   assert.equal(h.all(node => node.props['data-skill-yield']).length, 0);
 });

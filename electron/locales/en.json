@@ -2229,5 +2229,6 @@
   "已替换的项目副本": "Replaced project copies",
   "原路径": "Original path",
   "备份位置": "Backup location",
-  "与系统技能「{name}」同名。要扩展它，请命名为 {name}-<标识>，例如 {name}-team。": "Same name as the built-in skill “{name}”. To extend it, name it {name}-<id>, for example {name}-team."
+  "与系统技能「{name}」同名。要扩展它，请命名为 {name}-<标识>，例如 {name}-team。": "Same name as the built-in skill “{name}”. To extend it, name it {name}-<id>, for example {name}-team.",
+  "扩展": "Extension"
 }
