@@ -694,7 +694,19 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     };
     if (team) {
       try {
-        boardWatch = fs.watch(team.board, (_event, name) => { if (name) checkPeer(String(name)); else scopeRestoreBlocked = true; });
+        const board = fs.realpathSync.native(team.board), identity = fs.statSync(board, { bigint: true });
+        boardWatch = fs.watch(board, (_event, name) => {
+          if (!name) { scopeRestoreBlocked = true; return; }
+          // FSEvents names directory metadata events after the watched directory itself.
+          // Re-scan that same inode instead of treating "board/board" as an unreadable peer.
+          if (String(name) === path.basename(board)) {
+            try {
+              const current = fs.statSync(board, { bigint: true });
+              if (current.dev !== identity.dev || current.ino !== identity.ino) scopeRestoreBlocked = true;
+              else checkBoard();
+            } catch { scopeRestoreBlocked = true; }
+          } else checkPeer(String(name));
+        });
         boardWatch.on('error', () => { scopeRestoreBlocked = true; });
         await team.locked(checkBoard);
       } catch { scopeRestoreBlocked = true; }
@@ -731,11 +743,14 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       if (!files?.length) return;
       if (scopeRestoreBlocked || !skillGuard.restoreRoot) { scopeRestoreNote = ' · out-of-scope changes left live (shared checkout or worktree; author unknown)'; return; }
       let restored = 0, quarantine;
-      const preserveNew = (filename, file) => {
+      const restoredNote = () => { scopeRestoreNote = ` · restored ${restored} out-of-scope paths${quarantine ? ` · quarantined scope changes: ${quarantine}` : ''}`; };
+      const preserveCurrent = (filename, file) => {
         if (!fs.lstatSync(filename, { throwIfNoEntry: false })) return;
         quarantine ||= path.join(team.directory, 'scope-quarantine', id);
         const destination = path.join(quarantine, file);
+        if (fs.lstatSync(destination, { throwIfNoEntry: false })) throw new Error('scope_backup_exists');
         fs.mkdirSync(path.dirname(destination), { recursive: true }); fs.renameSync(filename, destination);
+        restoredNote();
       };
       for (const file of files) {
         const filename = path.resolve(before.root, file), relative = path.relative(before.root, filename);
@@ -744,12 +759,18 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         if (path.isAbsolute(parent) || parent === '..' || parent.startsWith('..' + path.sep)) throw new Error('scope_restore_path');
         const replace = contents => {
           const temporary = path.join(path.dirname(filename), `.dispatch-restore-${randomUUID()}`);
-          try { fs.writeFileSync(temporary, contents, { flag: 'wx' }); fs.renameSync(temporary, filename); }
+          try {
+            fs.writeFileSync(temporary, contents, { flag: 'wx' });
+            // Preserve the current leaf (including symlinks) without following it or guessing its author.
+            // If preservation fails, leave it live instead of overwriting bytes without a recovery copy.
+            preserveCurrent(filename, file);
+            fs.renameSync(temporary, filename);
+          }
           finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
         };
         if (dirtyBytes.has(file)) replace(dirtyBytes.get(file));
         else if (before.files.has(file)) {
-          if (before.files.get(file) === 'deleted') preserveNew(filename, file);
+          if (before.files.get(file) === 'deleted') preserveCurrent(filename, file);
           else if (before.files.get(file) !== 'deleted') { signal(`scope restore unavailable for pre-existing file: ${file}`); continue; }
         }
         else {
@@ -757,11 +778,11 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
           try { contents = execFileSync('git', ['show', `${before.head}:${file.split(path.sep).join('/')}`], { cwd: before.root, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024, windowsHide: true }); } catch {}
           if (contents) replace(contents);
           else if (repo?.files.includes(file)) throw new Error('scope_restore_unavailable');
-          else preserveNew(filename, file);
+          else preserveCurrent(filename, file);
         }
         restored++;
+        restoredNote();
       }
-      scopeRestoreNote = ` · restored ${restored} out-of-scope paths${quarantine ? ` · quarantined new files: ${quarantine}` : ''}`;
     }
     const inspectScope = () => {
       const after = checking ? snapshot(options.cwd, before) : null;

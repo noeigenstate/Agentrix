@@ -143,7 +143,8 @@ for (const ending of ['stop', 'failure']) test(`B2: ${ending} after an out-of-sc
   assert.equal(await f.result, 1); assert.match(f.stdout(), /OUT OF SCOPE: new-outside\.txt, outside\.txt/);
   assert.match(f.stdout(), ending === 'stop' ? /reason killed/ : /reason error/); assert.doesNotMatch(f.stdout(), /reason unconfirmed/);
   assert.equal(fs.readFileSync(path.join(f.repo, 'outside.txt'), 'utf8'), 'original'); assert.equal(fs.existsSync(path.join(f.repo, 'new-outside.txt')), false);
-  const quarantine = f.stdout().match(/quarantined new files: (.*?) ·/)[1];
+  const quarantine = f.stdout().match(/quarantined scope changes: (.*?) ·/)[1];
+  assert.equal(fs.readFileSync(path.join(quarantine, 'outside.txt'), 'utf8'), 'outside worker edit');
   assert.equal(fs.readFileSync(path.join(quarantine, 'new-outside.txt'), 'utf8'), 'new outside file');
   if (ending === 'stop') assert.ok(f.sdk.abortErrors() > 0, 'fake close exercises the SDK AbortError path');
   await until(() => f.events.some(event => event.type === 'dispatch-end'));
