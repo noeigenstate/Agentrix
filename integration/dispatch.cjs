@@ -2,10 +2,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
 const { homedir, constants: { signals } } = require('node:os');
+const { setImmediate } = require('node:timers');
 
 // Plain Node cannot read app.asar. Packaged and SSH helpers carry these same pure modules beside them.
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
@@ -19,11 +20,20 @@ const { RunInbox, runId, validText } = require(path.join(runtime, 'features/team
 const { minutesPage } = require(path.join(runtime, 'features/team/minutes-page.cjs'));
 const { TASK_KINDS, taskKind, routingVerdict } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
 const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
+const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
+const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const RUNTIME_FILES = ['boundaries.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs',
   'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/team/inbox.cjs', 'features/dashboard/records-routing.cjs',
-  'features/skills/session.cjs', 'features/skills/worker-proposals.cjs'];
-const runtimeFiles = () => Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
+  'features/skills/session.cjs', 'features/skills/worker-proposals.cjs', 'features/agents/dispatch-control.cjs',
+  'features/agents/codex-account-usage.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/rpc.cjs',
+  'features/codex-app-server/events.cjs', 'features/codex-app-server/requests.cjs', 'features/codex-app-server/account.cjs', 'features/codex-app-server/compatibility.cjs', 'features/codex-app-server/environment.cjs'];
+const runtimeFiles = () => {
+  // A supplies this pure module in the merged tree. Older or standalone helper trees remain usable without it.
+  const routing = 'features/native-session/routing.cjs';
+  const files = fs.existsSync(path.join(runtime, routing)) ? [...RUNTIME_FILES, routing] : RUNTIME_FILES;
+  return Object.fromEntries(files.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
+};
 
 const START_TIMEOUT = 30000;
 const RATE_INTERVAL = 5000;
@@ -279,6 +289,16 @@ class WorkerOutput {
       outputTokens: this.outputTokens, totalOutputTokens: total?.outputTokens ?? null,
       activeMs: this.activeMs, reportedCostUsd: this.reportedCostUsd };
   }
+  nativeUsage(value, resumed) {
+    // Native usage is cumulative; a resumed query without an invocation baseline cannot report its history as new cost.
+    if (resumed) return;
+    const input = count(value.input), cached = count(value.cachedInput), creation = count(value.cacheWrite);
+    this.stdoutUsage = { inputTokens: this.agent === 'claude' ? (input !== null && creation !== null ? count(input + creation) : null)
+      : input !== null && cached !== null && input >= cached ? input - cached : null,
+      cachedTokens: cached, outputTokens: count(value.output) };
+    const micros = count(value.costUsdMicros);
+    if (this.agent === 'claude' && micros !== null && (this.reportedCostUsd === null || micros / 1e6 >= this.reportedCostUsd)) this.reportedCostUsd = micros / 1e6;
+  }
   line(line) {
     const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
     let record;
@@ -453,12 +473,40 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   }
   if (['minutes', 'consolidate', 'stop'].includes(argv[0])) return teamCommand(argv, stdout);
   const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
-  let options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, endSent = false;
+  // Keep reporting authority in the helper; preserve the owner's environment outside marked SDK parents.
+  const workerEnv = workerEnvironment(env);
+  let finalize, options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, endSent = false;
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
   let team = null, admission = null, teamFinished = false, roundtable = false, skillGuard = null, skillProposals = 0, skillChangesLeftLive = 0;
   let inbox = null, inboxTimer, inboxRead = Promise.resolve(), messages = [], noResume = false, segmentStopped = false;
   let interventions = 0, stops = 0, completedUsage = null, resumeSession = null, segmentConfirmed = false;
   let treeStop = Promise.resolve(), stoppingChild = null;
+  let controlClient = null, activeRuntime = null, nativeTurn = null, settleNative, nativeFallback = null, nativeRunning = false;
+  let bootstrap, controlOpening = false, controlAttemptAt = 0, ending = false;
+  let nativeBilling = null;
+  let boardWatch, scopeRestoreBlocked = false, scopeRestoreNote = '';
+  const controlReceipts = new Map();
+  const deferredControlIds = [];
+  let resumeControlIds = [], resumeInputId;
+  let receiptTail = Promise.resolve();
+  function recordReceipt(messageId, status, reason) {
+    if (!['queued', 'delivered', 'consumed', 'rejected', 'unknown'].includes(status)) status = 'unknown';
+    const previous = controlReceipts.get(messageId);
+    if (previous === status || previous === 'consumed' || previous === 'delivered' && status === 'queued') return receiptTail;
+    controlReceipts.set(messageId, status);
+    signal(`intervention ${id} ${messageId} ${status}${reason ? `: ${reason}` : ''}`);
+    receiptTail = receiptTail.catch(() => {}).then(() => team?.locked(() => {
+      team.append({ type: 'control-receipt', id, messageId, status, ...(reason ? { reason } : {}), at: Date.now() });
+      fs.appendFileSync(team.memory, `\n\n[dispatch] intervention ${id} ${messageId} ${status}${reason ? `: ${reason}` : ''}\n`);
+    }));
+    return receiptTail;
+  }
+  async function rejectDeferredControls() {
+    for (const messageId of [...deferredControlIds, ...resumeControlIds]) {
+      if (controlReceipts.get(messageId) === 'queued') await recordReceipt(messageId, 'rejected', 'worker_ended_without_resume');
+    }
+  }
+  const billing = () => nativeBilling ? { billingPath: nativeBilling, usageRecordId: `dispatch:${id}`, costCompleteness: output.reportedCostUsd === null ? 'unknown' : 'estimated' } : {};
   const usage = (live = false) => {
     const current = output.usage();
     if (!completedUsage) return current;
@@ -473,6 +521,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const interventionNote = () => (interventions ? ` · owner intervened ${interventions}` : '') + (stops ? ` · owner stopped ${stops}` : '');
   const restoreSkills = changedFiles => {
     if (!skillGuard) return;
+    if (scopeRestoreBlocked) skillGuard.restoreRoot = null;
     const total = skillGuard.finish(id, changedFiles);
     skillProposals = skillGuard.restoredCount;
     skillChangesLeftLive = total - skillProposals;
@@ -500,6 +549,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const signal = line => stdout.write(`[dispatch] ${line}\n`);
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
   const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
+    ...billing(),
     kind: taskKind(options, roundtable), meeting: admission?.meeting || options.meeting || null, skipMeeting: options.skipMeeting || null,
     cwd: options.cwd, brief: options.brief, out: options.out, sessionId: output.sessionId, startedAt: Date.now() });
   const failed = (reason, exitCode = null) => {
@@ -527,6 +577,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (resumeSession && output.sessionId !== resumeSession) { spawnError = new Error('Resumed worker reported a different session'); stop('SIGTERM', false); return; }
     if (!output.confirmed) { if (!final && options.agent === 'codex') void rollout.read(); return; }
     segmentConfirmed = true; clearTimeout(startTimer);
+    if (!activeRuntime) for (const messageId of resumeControlIds) void recordReceipt(messageId, 'delivered').catch(() => {});
     const actual = output.routing(), requested = declared();
     const unverified = Object.keys(requested).filter(key => output[key] === null);
     const decision = routingVerdict(output, requested), mismatch = decision === 'mismatch';
@@ -549,6 +600,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   let rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
   const stop = (kind, requested = true) => {
     if (requested) killed = true;
+    if (activeRuntime) {
+      treeStop = Promise.resolve(activeRuntime.interrupt()).catch(() => {}).then(() => activeRuntime.close()).finally(() => settleNative?.({ code: 1, killedBy: kind }));
+      return;
+    }
     if (exited || !child?.pid || child.exitCode !== null) return;
     const victim = child;
     if (stoppingChild === victim) return;
@@ -580,10 +635,29 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         if (control.type === 'stop') {
           stops++; segmentStopped = true; noResume ||= !!control.noResume;
           signal(`stop requested ${id}${control.reason ? ': ' + JSON.stringify(control.reason).slice(1, -1) : ''}${control.noResume ? ' · no resume' : ''}`);
+          const direct = !!activeRuntime;
           stop('SIGTERM', false);
+          if (direct) {
+            let status = 'delivered';
+            try { await treeStop; } catch { status = 'unknown'; }
+            await recordReceipt(control.id, status);
+          }
         } else {
-          interventions++; messages.push(control.text);
-          signal(`intervened ${id}: ${JSON.stringify(control.text).slice(1, -1)}`);
+          interventions++;
+          if (activeRuntime) {
+            controlReceipts.set(control.id, null);
+            let receipt;
+            try { receipt = await activeRuntime.send({ clientMessageId: control.id, text: control.text }); }
+            catch (error) { receipt = { status: error.message === 'control_unavailable' ? 'rejected' : 'unknown', reason: error.message }; }
+            if (receipt?.status === 'rejected' && ['worker_ended', 'control_unavailable'].includes(receipt.reason)) {
+              messages.push(control.text); deferredControlIds.push(control.id); receipt.status = 'queued';
+            }
+            await recordReceipt(control.id, receipt?.status);
+          } else {
+            messages.push(control.text); deferredControlIds.push(control.id);
+            signal(`intervened ${id}: ${JSON.stringify(control.text).slice(1, -1)}`);
+            await recordReceipt(control.id, 'queued');
+          }
         }
       }
     });
@@ -595,12 +669,45 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     options = argumentsOf(argv);
     process.on('SIGINT', onInterrupt); process.on('SIGTERM', onTerminate); process.on('SIGHUP', onHangup);
     team = projectTeam(options.cwd, true);
+    // Watch before admission: a peer that finishes before us must still disable restoration.
+    // Lost, malformed or unresolvable board evidence is report-only, never proof of exclusive ownership.
+    let scopeRoot;
+    if (team) try {
+      // Resolve Git outside the team lock; peer checks then need only canonical paths.
+      const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: options.cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      scopeRoot = fs.realpathSync(root);
+    } catch { scopeRestoreBlocked = true; }
+    const checkPeer = name => {
+      if (name === id + '.json' || name === id + '.tmp') return;
+      try {
+        const entry = JSON.parse(fs.readFileSync(path.join(team.board, name), 'utf8'));
+        if (!Number.isSafeInteger(entry.pid) || entry.pid <= 0 || typeof entry.cwd !== 'string') throw new Error('invalid_board');
+        try { process.kill(entry.pid, 0); } catch (error) { if (error.code === 'ESRCH') return; if (error.code !== 'EPERM') throw error; }
+        const relative = path.relative(scopeRoot, fs.realpathSync(entry.cwd));
+        if (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)) scopeRestoreBlocked = true;
+      } catch { scopeRestoreBlocked = true; }
+    };
+    const checkBoard = () => {
+      if (!team) { scopeRestoreBlocked = true; return; }
+      try { for (const name of fs.readdirSync(team.board)) checkPeer(name); }
+      catch { scopeRestoreBlocked = true; }
+    };
+    if (team) {
+      try {
+        boardWatch = fs.watch(team.board, (_event, name) => { if (name) checkPeer(String(name)); else scopeRestoreBlocked = true; });
+        boardWatch.on('error', () => { scopeRestoreBlocked = true; });
+        await team.locked(checkBoard);
+      } catch { scopeRestoreBlocked = true; }
+    }
     roundtable = Boolean(team && options.meeting);
     if (options.meeting && !team) throw new Error('roundtables need a git repository');
     if (team) admission = await team.admit(options, id, __filename);
     if (team && !roundtable) {
       inbox = new RunInbox(team, id); await inbox.open();
-      inboxTimer = setInterval(() => { void readInbox().catch(() => {}); }, POLL_INTERVAL);
+      inboxTimer = setInterval(() => {
+        void readInbox().catch(() => {});
+        if (activeRuntime && options.agent === 'codex' && controlClient?.connected === false && Date.now() - controlAttemptAt >= 1000) void openControl();
+      }, POLL_INTERVAL);
     }
     if (killed) throw new Error('Dispatch interrupted before launch');
     const repo = admission?.repo || (options.allow.length ? repoFiles(options.cwd) : undefined);
@@ -609,6 +716,53 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (checking) before = snapshot(options.cwd, repo);
     if (roundtable && !before) throw new Error('Cannot verify the roundtable working tree');
     skillGuard = new WorkerSkillProposals(options, env, repo);
+    const dirtyBytes = new Map();
+    let capturedBytes = 0;
+    for (const { file } of before?.status || []) {
+      try {
+        const filename = path.join(before.root, file), stat = fs.lstatSync(filename);
+        const relative = path.relative(fs.realpathSync(before.root), fs.realpathSync(path.dirname(filename)));
+        if (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep) && stat.isFile() && stat.nlink === 1 && !stat.isSymbolicLink() && capturedBytes + stat.size <= 32 * 1024 * 1024) {
+          dirtyBytes.set(file, fs.readFileSync(filename)); capturedBytes += stat.size;
+        }
+      } catch { /* A missing original is captured as absent by the scope snapshot. */ }
+    }
+    function restoreScope(files) {
+      if (!files?.length) return;
+      if (!skillGuard.restoreRoot) { scopeRestoreNote = ' · out-of-scope changes left live (shared checkout or worktree; author unknown)'; return; }
+      let restored = 0, quarantine;
+      const preserveNew = (filename, file) => {
+        if (!fs.lstatSync(filename, { throwIfNoEntry: false })) return;
+        quarantine ||= path.join(team.directory, 'scope-quarantine', id);
+        const destination = path.join(quarantine, file);
+        fs.mkdirSync(path.dirname(destination), { recursive: true }); fs.renameSync(filename, destination);
+      };
+      for (const file of files) {
+        const filename = path.resolve(before.root, file), relative = path.relative(before.root, filename);
+        if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep) || relative.split(path.sep).includes('.git')) throw new Error('scope_restore_path');
+        const parent = path.relative(fs.realpathSync(before.root), fs.realpathSync(path.dirname(filename)));
+        if (path.isAbsolute(parent) || parent === '..' || parent.startsWith('..' + path.sep)) throw new Error('scope_restore_path');
+        const replace = contents => {
+          const temporary = path.join(path.dirname(filename), `.dispatch-restore-${randomUUID()}`);
+          try { fs.writeFileSync(temporary, contents, { flag: 'wx' }); fs.renameSync(temporary, filename); }
+          finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
+        };
+        if (dirtyBytes.has(file)) replace(dirtyBytes.get(file));
+        else if (before.files.has(file)) {
+          if (before.files.get(file) === 'deleted') preserveNew(filename, file);
+          else if (before.files.get(file) !== 'deleted') { signal(`scope restore unavailable for pre-existing file: ${file}`); continue; }
+        }
+        else {
+          let contents;
+          try { contents = execFileSync('git', ['show', `${before.head}:${file.split(path.sep).join('/')}`], { cwd: before.root, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024, windowsHide: true }); } catch {}
+          if (contents) replace(contents);
+          else if (repo?.files.includes(file)) throw new Error('scope_restore_unavailable');
+          else preserveNew(filename, file);
+        }
+        restored++;
+      }
+      scopeRestoreNote = ` · restored ${restored} out-of-scope paths${quarantine ? ` · quarantined new files: ${quarantine}` : ''}`;
+    }
     const inspectScope = () => {
       const after = checking ? snapshot(options.cwd, before) : null;
       const own = after ? new Set([options.out, `${options.out}.log`, options.ledger, team?.memory, ...skillGuard.artifacts].filter(Boolean)
@@ -619,11 +773,91 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     let brief = briefOf(options, fs.readFileSync(options.brief), team, { id, phase: admission?.phase, repo, before: checking ? before : undefined });
     log = fs.createWriteStream(options.out + '.log');
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
+    async function openControl() {
+      if (controlOpening || ending) return;
+      controlOpening = true; controlAttemptAt = Date.now();
+      try {
+        if (env.AGENTRIX_BOOTSTRAP && fs.statSync(env.AGENTRIX_BOOTSTRAP).size <= 16384) bootstrap = JSON.parse(fs.readFileSync(env.AGENTRIX_BOOTSTRAP, 'utf8').replace(/^\uFEFF/, ''));
+        if (!bootstrap?.controlAddress) return;
+        const client = await connectDispatchControl({ address: bootstrap.controlAddress, runId: id,
+        projectId: bootstrap.projectId, sessionKey: bootstrap.sessionKey, capability: bootstrap.controlCapability,
+        readOnly: !!options.readOnly || options.permission === 'plan', roundtable,
+        onControl: async messageId => { await readInbox(); const status = controlReceipts.get(messageId) || inbox?.receipt(messageId) || 'queued'; return status === 'consumed' ? 'delivered' : status; },
+        onEvent: event => acceptNative(event) });
+        if (ending) client.close(); else controlClient = client;
+      } catch { /* A reconnect only restores control; it never restarts a provider invocation. */ }
+      finally { controlOpening = false; }
+    }
+    await openControl();
+    function acceptNative(event) {
+      if (event.providerSessionId) output.sessionId = event.providerSessionId;
+      if (event.type === 'turn.started') {
+        nativeTurn = event.turnId; nativeRunning = true; output.confirmed = true; confirm();
+        if (resumeControlIds.length) resumeInputId = event.payload.clientMessageId;
+      } else if (event.type === 'routing.updated' && event.payload.observed) output.settings(event.payload.observed);
+      else if (event.type === 'input.receipt' && controlReceipts.has(event.payload.clientMessageId)) void recordReceipt(event.payload.clientMessageId, event.payload.status).catch(() => {});
+      else if (event.type === 'input.receipt' && event.payload.clientMessageId === resumeInputId) {
+        for (const id of resumeControlIds) void recordReceipt(id, event.payload.status).catch(() => {});
+      }
+      else if (event.type === 'usage.updated' && !event.replay) output.nativeUsage(event.payload, !!(options.resume || resumeSession));
+      else if (event.type === 'item.upsert' && event.payload.kind === 'agent-message' && event.payload.status === 'completed') {
+        const content = event.payload.content;
+        if (typeof content?.text === 'string' && (!content.phase || content.phase === 'final_answer')) output.result = content.text;
+      } else if (event.type === 'turn.completed' && event.turnId === nativeTurn) {
+        nativeRunning = false;
+        settleNative?.({ code: event.payload.status === 'completed' ? 0 : 1, killedBy: event.payload.status === 'interrupted' ? 'SIGTERM' : null });
+      } else if (event.type === 'session.state' && ['disconnected', 'failed'].includes(event.payload.state)) {
+        nativeRunning = false;
+        settleNative?.({ code: 1, killedBy: null });
+      } else if (event.type === 'path.changed' && event.payload.selected === 'terminal' && !nativeTurn) {
+        nativeFallback = event.payload.reason || 'terminal_selected';
+      }
+      if (event.providerSessionId && output.confirmed) confirm();
+      log.write(JSON.stringify(event) + '\n');
+    }
+    finalize = async result => {
+      const { after, changed, outOfScope } = inspectScope();
+      const restore = () => {
+        checkBoard();
+        if (scopeRestoreBlocked) skillGuard.restoreRoot = null;
+        restoreSkills(after?.status.map(entry => entry.file));
+        restoreScope(outOfScope);
+      };
+      // Drain board notifications before taking the lock for the final exclusive check.
+      await new Promise(resolve => setImmediate(resolve));
+      try { if (team) await team.locked(restore); else restore(); }
+      catch (error) { signal(`scope restore failed: ${String(error.message).replace(/[\r\n]+/g, ' ')}`); }
+      await rejectDeferredControls();
+      const route = output.routing();
+      let reason = 'exit';
+      if (unconfirmed) reason = 'unconfirmed';
+      else if (killed) reason = 'killed';
+      else if (spawnError) reason = 'error';
+      else if (segmentStopped || noResume) reason = 'killed';
+      else if (output.capacity) reason = 'capacity';
+      else if (result.killedBy) reason = 'killed';
+      else if (roundtable && outOfScope?.length) reason = 'scope';
+      else if (output.failed || result.code !== 0 || roundtable && changed === null) reason = 'error';
+      else if (outOfScope?.length) reason = 'scope';
+      let answer = '';
+      try { answer = fs.readFileSync(options.out, 'utf8'); } catch {}
+      const header = `${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${options.title} · ${options.agent} ${route.model} · session ${resumeSession || output.sessionId || 'unreported'}`;
+      const bookkeeping = await recordTeam({ answer, header, reason });
+      if (!team) { try { recordFindings(options, answer, header); } catch {} }
+      const scope = !checking ? '' : changed === null ? (team ? ' · scope unchecked (working tree unavailable)' : ' · scope unchecked (not a git working tree)')
+        : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
+      const exitCode = Number.isInteger(result.code) ? (result.code === 0 && (unconfirmed || roundtable && reason !== 'exit') ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
+      const measured = usage(), rate = measured.outputTokens !== null && measured.activeMs > 0 ? `${Math.round(measured.outputTokens * 1000 / measured.activeMs)} token/s (${measured.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(measured.activeMs / 1000)} s)` : 'token/s unreported';
+      signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${scopeRestoreNote}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()}${interventionNote()} · out ${options.out}`);
+      if (!endSent) send({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured, verdict: routingVerdict(output, declared()),
+        ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
+        ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
+      await new Promise(resolve => log.end(resolve));
+      return exitCode;
+    };
     let result;
     for (;;) {
       const effective = resumeSession ? { ...options, resume: resumeSession } : options;
-      const command = resolveExecutable(options.agent, commandOf(effective), env);
-      if (options.agent === 'codex' && effective.resume && !resumeSession) await rollout.prepare(effective.resume);
       if (resumeSession) {
         const nextOutput = new WorkerOutput(options.agent, () => confirm());
         const nextRollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), nextOutput);
@@ -631,13 +865,98 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         await readInbox();
         if (noResume || killed || spawnError) break;
         completedUsage = usage(); output = nextOutput; rollout = nextRollout;
+        resumeControlIds = deferredControlIds.splice(0); resumeInputId = null;
         segmentConfirmed = false; segmentStopped = false; exited = false;
         drained = new Promise(resolve => { drain = resolve; });
         brief = briefOf(options, Buffer.from(messages.splice(0).map(text => `业主插话：${text}`).join('\n\n') + '\n\n继续执行当前任务。'), team,
           { id, phase: admission?.phase, repo, before: checking ? before : undefined });
       }
+      if (controlClient) {
+        const spec = { owner: 'dispatch', projectId: bootstrap.projectId, terminalId: bootstrap.projectId, runtimeSessionId: id, runId: id,
+          cwd: options.cwd, worktree: options.cwd, model: options.model, effort: options.effort, fast: options.fast,
+          readOnly: options.readOnly || options.permission === 'plan', roundtable, allow: options.allow, env: workerEnv,
+          policy: { approvalPolicy: 'never' },
+          providerSessionId: effective.resume || null };
+        const completion = new Promise(resolve => { settleNative = resolve; });
+        if (options.agent === 'codex') {
+          activeRuntime = createCodexRuntime({ resolveExecutable: async () => 'codex', spawnProcess: (_file, args, spawnOptions) => {
+            const command = resolveExecutable('codex', args, env); return launch(command.file, command.args, spawnOptions);
+          } }).create(spec, acceptNative);
+          if (options.resume) await rollout.prepare(options.resume);
+          try { if (options.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
+          catch {
+            await activeRuntime.close(); activeRuntime = null; controlClient.close(); controlClient = null;
+            signal(`transport ${id} codex-exec fallback: native runtime unavailable before input`); continue;
+          }
+          child = { pid: activeRuntime.pid, exitCode: null };
+          pollTimer = setInterval(() => { void rollout.read(); }, POLL_INTERVAL);
+          const receipt = await activeRuntime.send({ clientMessageId: id, text: brief.toString('utf8'), images: options.images });
+          if (receipt.status !== 'delivered') throw new Error('native_input_' + receipt.status);
+          result = await completion;
+        } else {
+          nativeBilling = 'api';
+          activeRuntime = { send: async input => {
+            const receipt = await controlClient.request('control.deliver', { messageId: input.clientMessageId, type: 'intervene', text: input.text });
+            return typeof receipt === 'string' ? { status: receipt } : receipt;
+          },
+            interrupt: () => controlClient.request('control.deliver', { messageId: randomUUID(), type: 'stop' }), close() {} };
+          // Main's broker owns this process. It supplies execution evidence in the streamed events.
+          child = { pid: 'broker', exitCode: null };
+          const remote = controlClient.request('claude-sdk.run', { prompt: brief.toString('utf8'), model: options.model, effort: options.effort,
+            fast: options.fast, resume: effective.resume || null, out: options.out }).then(value => {
+            nativeRunning = false;
+            const result = value?.status ? { code: value.status === 'completed' ? 0 : 1, killedBy: value.status === 'interrupted' ? 'SIGTERM' : null } : undefined;
+            if (result) settleNative?.(result);
+            return result;
+          }).catch(() => {
+            nativeRunning = false;
+            const failed = { code: 1, killedBy: segmentStopped || killed ? 'SIGTERM' : null };
+            settleNative?.(failed); return failed;
+          });
+          result = await Promise.race([completion, remote]);
+          if (nativeFallback) {
+            activeRuntime = null; nativeBilling = null; controlClient.close(); controlClient = null;
+            signal(`transport ${id} claude-cli fallback: ${String(nativeFallback).replace(/[\r\n]+/g, ' ')}`); continue;
+          }
+          if (!result) result = await completion;
+          activeRuntime.finished = remote;
+        }
+        for (;;) {
+          await readInbox(true); await inboxRead;
+          if (!nativeRunning) {
+            if (options.agent === 'claude' && !segmentStopped && !killed && result.code === 0) {
+              const receipt = await controlClient.request('control.finish', {}).catch(() => ({ status: 'unknown' }));
+              if (receipt?.status === 'queued') { result = await new Promise(resolve => { settleNative = resolve; }); continue; }
+            }
+            break;
+          }
+          result = await new Promise(resolve => { settleNative = resolve; });
+        }
+        if (options.agent === 'codex') { await rollout.pending; await rollout.read(); }
+        confirm(true);
+        if (typeof output.result === 'string') fs.writeFileSync(options.out, output.result);
+        const remoteResult = await activeRuntime.finished;
+        if (remoteResult?.code) result = remoteResult;
+        await activeRuntime.close(); activeRuntime = null; child.exitCode = result.code; clearInterval(pollTimer);
+        if (!started) failed('worker ended without execution evidence', 1);
+        if (messages.length && result.code === 0 && !killed && !noResume && !spawnError && output.sessionId) {
+          const { changed, outOfScope } = inspectScope();
+          if (checking && (changed === null || outOfScope.length)) break;
+          resumeSession = output.sessionId; controlClient.close(); controlClient = null;
+          // The rejected correction is known not to have executed; resume only that input, on the same billing path.
+          await new Promise(resolve => setTimeout(resolve, 20)); await openControl();
+          if (!controlClient) throw new Error('native_resume_control_unavailable');
+          signal(`resuming ${id}: native worker ended before correction`);
+          continue;
+        }
+        break;
+      }
+      if (!resumeSession) signal(`transport ${id} ${options.agent === 'codex' ? 'codex-exec' : 'claude-cli'} fallback: Agentrix control unavailable`);
+      const command = resolveExecutable(options.agent, commandOf(effective), env);
+      if (options.agent === 'codex' && effective.resume && !resumeSession) await rollout.prepare(effective.resume);
+
       if (killed) throw new Error('Dispatch interrupted before launch');
-      child = launch(command.file, command.args, { cwd: options.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+      child = launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
         detached: process.platform !== 'win32' });
       if (killed) stop('SIGTERM');
       if (!resumeSession) log.on('error', error => { spawnError = error; stop('SIGTERM', false); });
@@ -687,35 +1006,15 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     }
     if (inbox) { await inbox.close(); await readInbox(); }
     clearInterval(inboxTimer); clearInterval(rateTimer);
-    const { after, changed, outOfScope } = inspectScope();
-    restoreSkills(after?.status.map(entry => entry.file));
-    const route = output.routing();
-    let reason = 'exit';
-    if (unconfirmed) reason = 'unconfirmed';
-    else if (killed) reason = 'killed';
-    else if (spawnError) reason = 'error';
-    else if (segmentStopped || noResume) reason = 'killed';
-    else if (output.capacity) reason = 'capacity';
-    else if (result.killedBy) reason = 'killed';
-    else if (roundtable && outOfScope?.length) reason = 'scope';
-    else if (output.failed || result.code !== 0 || roundtable && changed === null) reason = 'error';
-    else if (outOfScope?.length) reason = 'scope';
-    let answer = '';
-    try { answer = fs.readFileSync(options.out, 'utf8'); } catch {}
-    const header = `${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${options.title} · ${options.agent} ${route.model} · session ${resumeSession || output.sessionId || 'unreported'}`;
-    const bookkeeping = await recordTeam({ answer, header, reason });
-    if (!team) { try { recordFindings(options, answer, header); } catch {} }
-    const scope = !checking ? '' : changed === null ? (team ? ' · scope unchecked (working tree unavailable)' : ' · scope unchecked (not a git working tree)')
-      : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
-    const exitCode = Number.isInteger(result.code) ? (result.code === 0 && (unconfirmed || roundtable && reason !== 'exit') ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
-    const measured = usage(), rate = measured.outputTokens !== null && measured.activeMs > 0 ? `${Math.round(measured.outputTokens * 1000 / measured.activeMs)} token/s (${measured.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(measured.activeMs / 1000)} s)` : 'token/s unreported';
-    signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()}${interventionNote()} · out ${options.out}`);
-    if (!endSent) send({ type: 'dispatch-end', id, ...route, exitCode, reason, ...measured, verdict: routingVerdict(output, declared()),
-      ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
-      ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
-    await new Promise(resolve => log.end(resolve));
-    return exitCode;
+    return await finalize(result);
   } catch (error) {
+    if (finalize && child) {
+      spawnError ||= error;
+      try { stop('SIGTERM', false); await treeStop; await activeRuntime?.finished; } catch {}
+      if (!started) failed('worker ended without execution evidence', 1);
+      try { return await finalize({ code: 1, killedBy: killed || segmentStopped ? 'SIGTERM' : null }); }
+      catch (failure) { signal(`finalization failed: ${String(failure.message).replace(/[\r\n]+/g, ' ')}`); }
+    }
     try { restoreSkills(); } catch (recovery) { signal(`skill recovery failed: ${String(recovery.message).replace(/[\r\n]+/g, ' ')}`); }
     failed(error.message, 1);
     if (child?.pid) stop('SIGTERM', false);
@@ -729,10 +1028,15 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     log?.destroy();
     return 1;
   } finally {
+    ending = true;
+    boardWatch?.close();
     clearTimeout(startTimer);
     clearInterval(pollTimer); clearInterval(rateTimer); clearInterval(inboxTimer);
-    await inboxRead; await treeStop; clearTimeout(forceTimer);
+    await inboxRead; await treeStop;
+    await rejectDeferredControls().catch(() => { signal('deferred control receipts unavailable'); });
+    await receiptTail; clearTimeout(forceTimer);
     await rollout.pending;
+    await activeRuntime?.close(); controlClient?.close();
     team?.release(id);
     process.removeListener('SIGINT', onInterrupt); process.removeListener('SIGTERM', onTerminate); process.removeListener('SIGHUP', onHangup);
   }

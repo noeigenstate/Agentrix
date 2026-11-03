@@ -40,7 +40,7 @@ function updateWorker(team, id, patch) {
 }
 
 // Both producers and the helper's final empty check hold the team lock. A successful receipt therefore cannot race
-// past finalization. Publish to the inbox only after the original planner accepts its notification.
+// past finalization. The callback validates the binding; wake-up signals happen after this transaction commits.
 async function queueControl(team, id, input, notify = () => {}) {
   const control = controlOf(input);
   return team.locked(async () => {
@@ -83,7 +83,18 @@ async function recordControl(team, id, title, control, notify = () => {}, inbox)
 }
 
 class RunInbox {
-  constructor(team, id) { this.team = team; this.id = id; this.offset = 0; this.seen = new Set(); }
+  constructor(team, id) { this.team = team; this.id = id; this.offset = 0; this.seen = new Set(); this.receipts = new Map(); }
+  receipt(messageId) { return this.receipts.get(messageId) || null; }
+  async recordReceipt(messageId, status) {
+    if (!runId(messageId) || !['queued', 'delivered', 'rejected', 'unknown'].includes(status)) throw new Error('invalid_receipt');
+    await this.team.locked(() => {
+      if (this.receipts.has(messageId)) return;
+      const record = { type: 'control-receipt', id: this.id, messageId, status, at: Date.now() };
+      this.team.append(record);
+      fs.appendFileSync(this.team.memory, `\n\n[dispatch] intervention ${this.id} ${messageId} ${status}\n`);
+      this.receipts.set(messageId, status);
+    });
+  }
   async open() {
     await this.team.locked(() => {
       this.file = inboxFile(this.team, this.id, true);

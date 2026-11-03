@@ -4,6 +4,7 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 
 ## Owns
 - `src/features/agents/ActivityPane.tsx`
+- `src/features/agents/ApiUsage.tsx` (API spend, budget, limits and the active path per agent)
 - `src/features/agents/ResetCountdown.tsx`
 - `src/features/agents/reset-count.ts`
 - `src/features/agents/action-text.ts`
@@ -28,7 +29,7 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 - `CodexAccountUsage` (`electron/features/agents/codex-account-usage.cjs`) — the read-only Codex plan-limit and reset-count client; main.cjs uses `openProject`/`closeProject` for private, serialized project-check lifetimes and a polling `watch` per active Codex session, sharing a verified account scope
 - `ClaudeAccountUsage` (`electron/features/agents/claude-account-usage.cjs`) — the read-only Claude plan-limit poller (with `readClaudeAccount`); SSH injects a sanitized remote read through features/ssh/claude-account.cjs
 - `dispatch` (`electron/features/agents/agent-calls.cjs`) — `AgentCalls.dispatch(event)`, reached as `session.usage.calls.dispatch` with authenticated events; retains evaluation metadata and invokes the injected finished hook once per accepted end; `AgentCalls.feed(callId)` — serves `terminal:subagent-feed(terminalId, callId)`: a bounded read-only snapshot (newest 400 entries) of a sub-agent's or dispatched worker's conversation, pushed as `terminal:subagent-feed` events at most 4 per second; items carry stable `id` (`agent:<toolUseId>`, `dispatch:<id>`), `startedAt`, `endedAt` and `viewable`; `running()` feeds the dashboard's live strip
-- `createInterventions` (`electron/features/agents/interventions.cjs`) — `{ resolve, sendParentPrompt }` → `interveneAgent` / `stopAgent` for `agents:intervene` / `agents:stop`; targets come only from main's own call bindings, and the planner is told of every intervention
+- `createInterventions` (`electron/features/agents/interventions.cjs`) — `{ resolve, pushControl, sendDirect }` → `interveneAgent` / `stopAgent` for `agents:intervene` / `agents:stop`; targets come only from main's own call bindings, the worker receives it directly through the dispatch control channel and the planner learns the receipt from the helper's status line, never through its own input
 - `ReadingHistory` (`electron/reading-history.cjs`) — validates restored local transcript identities, prepares the latest page and serves `terminal:conversationPage(id, { key, cursor })` through agents IPC; `beforeCursor` alone indicates earlier history
 
 ## May import
@@ -36,12 +37,12 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 - `src/features/agents/AgentBrandIcon.ts`
 - `src/features/terminal/terminal-screen.ts`
 - `src/features/home/send-to-agent.ts`
+- `src/features/native-session/native-*.ts` (the bridge, store and words for usage and limits)
 - `electron/agent-actions.cjs`
 - `electron/prompt-queue.cjs`
-- `electron/session-*.cjs`
-- `electron/claude-sessions.cjs`
-- `electron/conversation*` (the record parser and the shared grouping rule)
+- `electron/*session*.cjs` (the session helpers and claude-sessions)
 - `electron/oversized-record.cjs`
+- `electron/conversation*` (the record parser and the shared grouping rule)
 - `electron/features/dashboard/records-routing.cjs`
 - `electron/features/team/*.cjs` (the team folder and a run's owner inbox)
 

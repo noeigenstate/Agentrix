@@ -3,23 +3,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { projectTeam } = require('../electron/features/team/team.cjs');
 const { RunInbox, MAX_INBOX } = require('../electron/features/team/inbox.cjs');
 const { createInterventions } = require('../electron/features/agents/interventions.cjs');
-
-function plannerRelay() {
-  const sent = [], context = { Date, setTimeout, clearTimeout,
-    sessions: new Map([['terminal', { sessionId: 'planner', codexActive: true, agent: 'codex' }]]),
-    window: { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: (channel, data) => sent.push({ channel, data }) } },
-  };
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  vm.runInNewContext(main.slice(main.indexOf('const relays = new Map();'), main.indexOf('const interventions = createInterventions('))
-    + '\nthis.sendParentPrompt = sendParentPrompt; this.relayResult = relayResult; this.relays = relays;', context);
-  return { context, sent };
-}
 
 async function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-interventions-')));
@@ -36,30 +24,32 @@ async function fixture(t) {
   return { root, repo, team, id, inbox, target, notifications, api };
 }
 
-test('send queues exact text, journals and notifies its planner; stop is a separate control', async t => {
+test('send persists exact text without a planner paste; stop is a separate control', async t => {
   const f = await fixture(t), text = '保留草稿\nUse the smaller change.';
   const receipt = await f.api.interveneAgent('terminal', f.target.callId, text);
   assert.deepEqual(receipt, { id: receipt.id, callId: f.target.callId, text, at: 1000, route: 'dispatch', status: 'queued' });
   assert.deepEqual(await f.inbox.take(), [{ id: receipt.id, text, at: 1000 }]);
   assert.deepEqual(await f.inbox.take(), []);
-  assert.match(f.notifications[0].text, /已排队，工作者本次运行结束后接着处理/);
-  assert.ok(f.notifications[0].text.includes(`dispatch.cjs stop ${f.id}`));
+  assert.deepEqual(f.notifications, []);
   assert.equal(f.team.entries().filter(entry => entry.type === 'intervention').length, 1);
   assert.ok(fs.readFileSync(f.team.memory, 'utf8').includes('保留草稿\\nUse the smaller change.'));
   const stopped = await f.api.stopAgent('terminal', f.target.callId);
   assert.deepEqual(await f.inbox.take(), [{ id: stopped.id, type: 'stop', at: 1000 }]);
-  assert.equal(stopped.text, '停下'); assert.match(f.notifications[1].text, /业主要求停下/);
+  assert.equal(stopped.text, '停下'); assert.deepEqual(f.notifications, []);
   assert.equal(f.team.entries().filter(entry => entry.type === 'stop').length, 1);
 });
 
-test('Task calls relay through the original parent and record the owner message without writing an inbox', async t => {
+test('Task calls require a direct transport and never paste a prompt into the parent', async t => {
   const f = await fixture(t);
   Object.assign(f.target, { route: 'parent', callId: 'agent:tool-use-1' });
-  const receipt = await f.api.interveneAgent('terminal', f.target.callId, 'Use the existing parser.');
+  await assert.rejects(f.api.interveneAgent('terminal', f.target.callId, 'Use the existing parser.'), /通道不可用/);
+  const direct = [];
+  const api = createInterventions({ resolve: () => f.target, sendDirect: (target, control) => direct.push({ target, control }) });
+  const receipt = await api.interveneAgent('terminal', f.target.callId, 'Use the existing parser.');
   assert.equal(receipt.route, 'parent');
-  assert.equal(f.notifications[0].text, '请转告子代理「Synthetic worker」：Use the existing parser.');
-  await f.api.stopAgent('terminal', f.target.callId);
-  assert.equal(f.notifications[1].text, '业主要求停下工作者「Synthetic worker」。');
+  assert.equal(direct[0].control.text, 'Use the existing parser.');
+  await api.stopAgent('terminal', f.target.callId);
+  assert.equal(direct[1].control.type, 'stop'); assert.deepEqual(f.notifications, []);
   assert.equal(fs.statSync(f.inbox.file).size, 0);
   assert.deepEqual(f.team.entries().map(entry => entry.type), ['intervention', 'stop']);
 });
@@ -80,28 +70,28 @@ test('invalid text, ownership, unconfirmed or finished targets and unavailable d
   await f.api.interveneAgent('terminal', f.target.callId, 'x'.repeat(4000));
 });
 
-test('parent rejection or rebinding withdraws its audit without publishing to the inbox or poisoning the next send', async t => {
-  const f = await fixture(t); let reject = true, reads = 0;
+test('rebinding withdraws admission, while a failed wake retains the durable control as unknown', async t => {
+  const f = await fixture(t); let reads = 0;
   const api = createInterventions({ resolve: () => ({ ...f.target, parentSessionId: ++reads === 2 ? 'replacement' : 'planner' }),
     sendParentPrompt: () => assert.fail('rebound parent was sent a prompt') });
   await assert.rejects(api.interveneAgent('terminal', f.target.callId, 'hello'), /会话已变化/);
-  const queue = createInterventions({ resolve: () => f.target, sendParentPrompt: () => { if (reject) throw new Error('queue unavailable'); } });
-  await assert.rejects(queue.interveneAgent('terminal', f.target.callId, 'hello'), /queue unavailable/);
-  assert.equal(fs.statSync(f.inbox.file).size, 0);
+  const queue = createInterventions({ resolve: () => f.target, pushControl: () => { throw new Error('control unavailable'); } });
+  const result = await queue.interveneAgent('terminal', f.target.callId, 'hello');
+  assert.equal(result.status, 'unknown');
+  assert.equal((await f.inbox.take())[0].text, 'hello');
   const audit = f.team.entries();
-  assert.deepEqual(audit.map(entry => entry.type), ['intervention', 'withdrawn', 'intervention', 'withdrawn']);
-  assert.equal(audit[0].messageId, audit[1].messageId); assert.equal(audit[2].messageId, audit[3].messageId);
+  assert.deepEqual(audit.map(entry => entry.type), ['intervention', 'withdrawn', 'intervention']);
+  assert.equal(audit[0].messageId, audit[1].messageId);
   assert.match(fs.readFileSync(f.team.memory, 'utf8'), /owner intervention withdrawn/);
-  reject = false;
   await queue.interveneAgent('terminal', f.target.callId, 'next');
   assert.equal((await f.inbox.take()).length, 1);
 });
 
-test('queued owner sends preserve submission order even while the first planner notification is pending', async t => {
+test('queued owner sends preserve submission order while the first direct wake is pending', async t => {
   const f = await fixture(t); let release;
   const waiting = new Promise(resolve => { release = resolve; });
   let calls = 0;
-  const api = createInterventions({ resolve: () => f.target, sendParentPrompt: () => ++calls === 1 ? waiting : undefined });
+  const api = createInterventions({ resolve: () => f.target, pushControl: () => ++calls === 1 ? waiting : undefined });
   const first = api.interveneAgent('terminal', f.target.callId, 'first');
   const second = api.interveneAgent('terminal', f.target.callId, 'second');
   release(); await Promise.all([first, second]);
@@ -152,68 +142,6 @@ test('failed audit writes and rejected no-resume notifications leave no accepted
   assert.deepEqual(await f.inbox.take(), []);
   await f.api.interveneAgent('terminal', f.target.callId, 'accepted after recovery');
   assert.equal((await f.inbox.take())[0].text, 'accepted after recovery');
-});
-
-test('a missing or destroyed main window rejects the planner relay immediately without sending or starting a timeout', async t => {
-  for (const window of [null, { isDestroyed: () => true }, { isDestroyed: () => false, webContents: { isDestroyed: () => true } }]) {
-    const { context, sent } = plannerRelay(); context.window = window;
-    context.setTimeout = () => assert.fail('unavailable window started a relay timeout');
-    await assert.rejects(context.sendParentPrompt('terminal', 'synthetic notice'), /无法把插话转给规划员/);
-    assert.equal(context.relays.size, 0); assert.deepEqual(sent, []);
-  }
-  const f = await fixture(t), { context } = plannerRelay(); context.window = null;
-  const api = createInterventions({ resolve: () => f.target, sendParentPrompt: context.sendParentPrompt });
-  await assert.rejects(api.interveneAgent('terminal', f.target.callId, 'window gone'), /无法把插话转给规划员/);
-  assert.deepEqual(await f.inbox.take(), []);
-});
-
-test('planner acknowledgments and renderer send errors settle the relay and remove its timeout', async () => {
-  const { context, sent } = plannerRelay();
-  const prompt = context.sendParentPrompt('terminal', 'synthetic notice');
-  assert.equal(sent[0].channel, 'agents:relay'); assert.equal(sent[0].data.text, 'synthetic notice');
-  context.relayResult(sent[0].data.id); await prompt;
-  assert.equal(context.relays.size, 0);
-  context.window.webContents.send = () => { throw new Error('renderer destroyed during send'); };
-  await assert.rejects(context.sendParentPrompt('terminal', 'notice'), /renderer destroyed during send/);
-  assert.equal(context.relays.size, 0);
-});
-
-test('a planner relay carries its exact three-second deadline and a late acknowledgment cannot revive it', async t => {
-  const now = Date.UTC(2026, 10, 2);
-  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now });
-  const { context, sent } = plannerRelay();
-  const prompt = context.sendParentPrompt('terminal', 'synthetic notice');
-  const failed = assert.rejects(prompt, /无法把插话转给规划员/);
-  assert.equal(sent[0].data.deadline, now + 3000);
-  t.mock.timers.tick(2999); assert.equal(context.relays.size, 1);
-  t.mock.timers.tick(1); await failed;
-  assert.equal(context.relays.size, 0);
-  context.relayResult(sent[0].data.id);
-  assert.equal(context.relays.size, 0);
-});
-
-test('a stalled planner releases admission before the stale-lock threshold and the helper never sees its uncommitted control', { timeout: 25000 }, async t => {
-  const f = await fixture(t), { context } = plannerRelay(), append = fs.appendFileSync;
-  const api = createInterventions({ resolve: () => f.target, sendParentPrompt: context.sendParentPrompt });
-  let observed = false, pending;
-  const stat = fs.statSync;
-  t.mock.method(fs, 'statSync', (file, ...args) => {
-    const value = stat(file, ...args);
-    if (file === path.join(f.team.directory, 'lock') && Date.now() - value.mtimeMs > 10000) observed = true;
-    return value;
-  });
-  context.window.webContents.send = () => {
-    // A different writer may append memory without taking the team lock while the renderer is stalled.
-    append(f.team.memory, '\nConcurrent planner finding.\n');
-    pending = f.inbox.take();
-  };
-  await assert.rejects(api.interveneAgent('terminal', f.target.callId, 'stalled notification'), /无法把插话转给规划员/);
-  assert.deepEqual(await pending, []); assert.equal(observed, false, 'the helper never breaks a stale notification lock');
-  assert.equal(context.relays.size, 0);
-  assert.match(fs.readFileSync(f.team.memory, 'utf8'), /Concurrent planner finding\./);
-  const offset = f.inbox.offset;
-  await f.api.interveneAgent('terminal', f.target.callId, 'accepted after timeout');
-  assert.equal((await f.inbox.take())[0].text, 'accepted after timeout'); assert.ok(f.inbox.offset > offset);
 });
 
 test('partial audit failures append withdrawals and preserve concurrent memory and journal appends', async t => {

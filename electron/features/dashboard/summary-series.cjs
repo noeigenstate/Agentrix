@@ -1,5 +1,6 @@
 const { estimateCost } = require('./cost.cjs');
 const { keyOf, localDay, sumActive, timedRate } = require('./summary-values.cjs');
+const costOf = (run, prices) => run.costIncludedIn ? null : estimateCost(run, prices).usd;
 
 function calendarDays(start, now) {
   const date = new Date(start), last = localDay(now), days = [];
@@ -22,7 +23,7 @@ function runSeries(runs, passes, prices, models, start, now) {
   const daily = [], speed = [];
   for (const day of calendarDays(start, now)) for (const model of models) {
     const group = groups.get(keyOf(day, model)) || [];
-    const costs = group.map(run => estimateCost(run, prices).usd).filter(value => value !== null);
+    const costs = group.map(run => costOf(run, prices)).filter(value => value !== null);
     daily.push({ day, model, runs: group.length, firstPass: group.filter(run => passes.get(run) === true).length,
       costUsd: group.length && !costs.length ? null : costs.reduce((sum, value) => sum + value, 0),
       activeMs: group.length ? sumActive(group) : 0 });
@@ -43,4 +44,4 @@ function trends(runs, models, now) {
   return new Map(models.map(model => [model, days.map(day => counts.get(keyOf(day, model)) || 0)]));
 }
 
-module.exports = { runSeries, trends };
+module.exports = { runSeries, trends, costOf };

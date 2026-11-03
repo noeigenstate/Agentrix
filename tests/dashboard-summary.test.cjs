@@ -15,6 +15,15 @@ const entry = (type, meeting, extra = {}) => ({ type, meeting, time: now - 500, 
 const summary = (extra = {}) => summarize({ now, query, projects, prices, ...extra });
 const model = (result, name = sol) => result.models.find(row => row.model === name);
 
+test('SDK billing provenance deduplicates root charges and excludes included subagent cost', () => {
+  const root = run('root', { title: 'root', agent: 'claude', model: sonnet, source: 'native', billingPath: 'api', reportedCostUsd: 2, usageRecordId: 'session:result' });
+  const child = run('child', { title: 'child', agent: 'claude', model: sonnet, source: 'subagent', reportedCostUsd: 1, costIncludedIn: 'session:result' });
+  const result = summary({ records: { runs: [root, { ...root, id: 'duplicate-end' }, child] } });
+  assert.equal(result.kpis.runs, 2); assert.equal(model(result, sonnet).costUsd, 2);
+  assert.equal(result.daily.reduce((sum, row) => sum + (row.costUsd || 0), 0), 2);
+  assert.equal(result.modelRuns.find(row => row.title === child.title && row.costUsd === null)?.costUsd, null);
+});
+
 test('empty dashboard preserves unknown rates, costs, times and previous-round averages', () => {
   const result = summary();
   assert.deepEqual(result.kpis, { firstPassRate: null, runs: 0, runsPrevious: 0, incidents: 0, quota: null,

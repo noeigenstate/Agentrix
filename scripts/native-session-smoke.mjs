@@ -1,0 +1,229 @@
+// Isolated desktop checks: default mode feeds renderer events for UI acceptance; --runtime drives the actual main,
+// SDK import and provider adapters against offline native executable fixtures. Neither mode uses real credentials or accounts.
+import { testRun } from './test-output.mjs';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import os from 'node:os';
+import { _electron as electron } from 'playwright-core';
+import { waitFor } from './wait.mjs';
+import { withGuiLock } from './gui-lock.mjs';
+import { chooseFromAppMenu } from './app-menu-helper.mjs';
+
+const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const { isolatedEnvironment } = require('./native-approval-probe.cjs');
+const packaged = process.argv.includes('--packaged');
+
+export async function prepareProviders(directory) {
+  const bin = path.join(directory, 'bin'), cli = path.join(directory, 'fake-cli.cjs');
+  await fs.mkdir(bin, { recursive: true });
+  await fs.copyFile(path.join(root, 'tests/fixtures/claude-sdk-cli.cjs'), cli);
+  if (process.platform === 'win32') {
+    const compiler = path.join(process.env.SystemRoot || 'C:/Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe');
+    const source = path.join(directory, 'launcher.cs');
+    await fs.writeFile(source, require('../tests/fixtures/claude-sdk-launcher.cjs').source);
+    const result = spawnSync(compiler, ['/nologo', '/target:exe', `/out:${path.join(bin, 'claude.exe')}`, source], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    await fs.copyFile(path.join(bin, 'claude.exe'), path.join(bin, 'codex.exe'));
+  } else for (const name of ['claude', 'codex']) {
+    await fs.writeFile(path.join(bin, name), `#!/bin/sh\nexec "$AGENTRIX_FAKE_NODE" "$AGENTRIX_FAKE_CLI" ${name} "$@"\n`, { mode: 0o755 });
+  }
+  return { bin, cli };
+}
+async function executable() {
+  const supplied = process.argv.indexOf('--executable');
+  if (supplied >= 0) return path.resolve(process.argv[supplied + 1]);
+  if (!packaged) return require('electron');
+  const candidates = process.platform === 'win32' ? ['release/win-unpacked/Agentrix.exe']
+    : process.platform === 'darwin' ? [`release/mac-${process.arch}/Agentrix.app/Contents/MacOS/Agentrix`]
+      : ['release/linux-unpacked/agentrix', `release/linux-${process.arch}-unpacked/agentrix`];
+  for (const candidate of candidates) try { await fs.access(path.join(root, candidate)); return path.join(root, candidate); } catch { }
+  throw new Error('Packaged app was not found');
+}
+async function runtimeSmoke(output) {
+  const runtime = await fs.mkdtemp(path.join(os.tmpdir(), 'agx-native-'));
+  const profile = path.join(runtime, 'profile'), projectPath = path.join(runtime, 'project');
+  const projectId = randomUUID(), checks = [];
+  let app;
+  try {
+    for (const folder of [profile, projectPath]) await fs.mkdir(folder, { recursive: true });
+    const { bin, cli } = await prepareProviders(runtime);
+    await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2,
+      projects: [{ id: projectId, name: 'Offline providers', path: projectPath, kind: 'local', restore: { terminal: false, codex: false } }],
+      settings: { language: 'zh', restoreSessions: false, closeToTray: false, notifications: false } }));
+    await fs.mkdir(path.join(profile, 'native-session'), { recursive: true });
+    await fs.writeFile(path.join(profile, 'native-session/usage.json'), '{broken-offline-fixture');
+    const env = { ...isolatedEnvironment(runtime), PATH: bin, AGENTRIX_DATA_DIR: profile,
+      AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_FAKE_CLI: cli, AGENTRIX_FAKE_OUTPUT: runtime };
+    delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+    if (process.platform === 'win32') delete env.Path;
+    for (const name of ['claude', 'codex']) {
+      const result = spawnSync(path.join(bin, name + (process.platform === 'win32' ? '.exe' : '')), ['--version'], { env, encoding: 'utf8', timeout: 10000, windowsHide: true });
+      assert.equal(result.status, 0); assert.match(result.stdout, name === 'claude' ? /2\.1\.317/ : /0\.166\.0/);
+    }
+    app = await electron.launch({ executablePath: await executable(), args: packaged ? [] : [root], cwd: root, env });
+    const page = await app.firstWindow(); await page.waitForSelector('.project-panel');
+    await app.evaluate((_electron, bin) => { process.env.PATH = bin; }, bin);
+    const recovered = await page.evaluate(() => window.agentrix.nativeSession.getSettings());
+    assert.equal(recovered.value.claudePath, 'api-then-terminal');
+    assert.ok((await fs.readdir(path.join(profile, 'native-session'))).some(name => name.includes('.corrupt')));
+    checks.push('corrupt usage is quarantined without blocking the real main window');
+    // The test process owns this isolated profile. A fake secure backend also permits the offline Linux CI runner.
+    await app.evaluate(({ safeStorage }) => {
+      if (!safeStorage.isEncryptionAvailable() || safeStorage.getSelectedStorageBackend?.() === 'basic_text') {
+        Object.assign(safeStorage, { isEncryptionAvailable: () => true, getSelectedStorageBackend: () => 'test-only',
+          encryptString: value => Buffer.from(value).reverse(), decryptString: value => Buffer.from(value).reverse().toString() });
+      }
+    });
+    const fakeKey = 'sk-ant-api03-packaged-offline-only-not-a-real-key';
+    assert.equal((await page.evaluate(key => window.agentrix.nativeSession.keySave(key), fakeKey)).ok, true);
+    assert.equal((await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-only', codexView: 'native', monthlyBudgetUsd: 10 }))).ok, true);
+    const terminalId = (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals[0].id;
+    for (const agent of ['claude', 'codex']) {
+      const first = await page.evaluate(({ terminalId, agent }) => window.agentrix.nativeSession.start(terminalId, { agent }), { terminalId, agent });
+      assert.equal(first.ok, true, JSON.stringify(first));
+      let id = first.value.runtimeSessionId;
+      for (const [text, marker] of [['first', agent === 'claude' ? 'PACKAGED_CLAUDE_OK' : 'PACKAGED_CODEX_OK'], ['second', agent === 'claude' ? 'PACKAGED_CLAUDE_OK' : 'PACKAGED_CODEX_OK']]) {
+        const messageId = randomUUID();
+        const sent = await page.evaluate(p => window.agentrix.nativeSession.send(p.terminalId, p.id, p.messageId, p.text), { terminalId, id, messageId, text });
+        assert.equal(sent.ok, true, JSON.stringify(sent));
+        await waitFor(async () => {
+          const value = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
+          return value.ok && value.value?.state === 'idle' && value.value.events.some(event => event.type === 'item.upsert' && event.payload.content.text === marker);
+        }, `${agent} real main received the fake provider result`, 20000);
+        if (text === 'first') {
+          assert.equal((await page.evaluate(p => window.agentrix.nativeSession.stop(p.terminalId, p.id), { terminalId, id })).ok, true);
+          const resumed = await page.evaluate(p => window.agentrix.nativeSession.start(p.terminalId, { agent: p.agent, resume: true }), { terminalId, agent });
+          assert.equal(resumed.ok, true, JSON.stringify(resumed)); id = resumed.value.runtimeSessionId;
+        }
+      }
+      const hold = await page.evaluate(p => window.agentrix.nativeSession.send(p.terminalId, p.id, p.messageId, 'HOLD'), { terminalId, id, messageId: randomUUID() });
+      assert.equal(hold.ok, true);
+      assert.equal((await page.evaluate(p => window.agentrix.nativeSession.stop(p.terminalId, p.id), { terminalId, id })).ok, true);
+      const snapshot = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
+      assert.equal(snapshot.value.state, 'stopped');
+      checks.push(`${agent}: main IPC, native executable discovery, wire handshake, send, resume and stop`);
+    }
+    const claude = (await fs.readFile(path.join(runtime, 'claude-wire.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.ok(claude.some(row => row.control === 'initialize'), 'the packaged SDK performs its real initialize handshake');
+    assert.ok(claude.some(row => row.args?.some(arg => arg === '--resume' || arg.startsWith('--resume='))));
+    assert.equal(new Set(claude.filter(row => row.user).map(row => row.sessionId)).size, 1, 'Claude resumes its original provider session');
+    assert.ok(claude.filter(row => row.spawn).every(row => !row.scrub));
+    assert.ok(claude.some(row => row.childResults?.length === 3));
+    assert.ok(claude.filter(row => row.childResults).every(row => row.childResults.every(child => child.keyPresent)));
+    if (packaged) {
+      const resources = await app.evaluate(() => process.resourcesPath);
+      const entry = path.join(resources, 'app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs');
+      await fs.access(entry); checks.push('SDK loaded from the packaged unpacked dependency graph');
+    }
+    for (const directory of [path.join(profile, 'native-session'), path.join(runtime, 'claude')]) {
+      for (const file of await fs.readdir(directory, { recursive: true })) {
+        const absolute = path.join(directory, file), stat = await fs.stat(absolute);
+        if (stat.isFile()) assert.ok(!(await fs.readFile(absolute)).includes(Buffer.from(fakeKey)), `key persisted in ${path.basename(file)}`);
+      }
+    }
+    checks.push('owner tool/hook/MCP children retain the owner environment; persisted SDK profile contains no key');
+    // Dispatched workers scrub credentials in the independent claude-sdk-wire test.
+    await page.screenshot({ path: path.join(output, 'runtime-providers.png') });
+  } finally {
+    await fs.writeFile(path.join(output, 'runtime-results.json'), JSON.stringify({ checks }, null, 2));
+    if (app) await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]);
+    await fs.rm(runtime, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+  }
+}
+
+async function run(output) {
+  const profile = path.join(output, 'profile'), project = { id: randomUUID(), name: '原生会话', path: path.join(output, 'project'), kind: 'local', restore: { terminal: false, codex: false } };
+  for (const dir of [profile, project.path]) await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, fontSize: 14 } }));
+  const env = { ...isolatedEnvironment(output), AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+  const errors = [], checks = [];
+  let app;
+  try {
+    app = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'), args: packaged ? [] : [root], cwd: root, env });
+    const page = await app.firstWindow(); page.on('pageerror', error => errors.push(error.message));
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1600, 900));
+    await page.waitForSelector('.project-panel');
+    const terminalId = (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals[0].id;
+    const card = page.locator(`[data-terminal-id="${terminalId}"]`), view = card.locator('.native-view'), box = view.locator('textarea');
+
+    // The contract's event envelope (contract §1); one stream, sequence counting up.
+    let sequence = 0;
+    const event = (type, payload = {}, extra = {}) => ({ schemaVersion: 1, eventId: `smoke-${++sequence}`, sequence, connectionEpoch: 'smoke', provider: 'claude', transport: 'claude-sdk', projectId: project.id, terminalId,
+      runtimeSessionId: 'rs-smoke', providerSessionId: null, runId: null, turnId: 'turn-1', itemId: null, receivedAtMs: Date.now(), occurredAtMs: Date.now(), replay: false, type, payload, ...extra });
+    const emit = events => app.evaluate(({ BrowserWindow }, list) => { for (const item of list) BrowserWindow.getAllWindows()[0].webContents.send('native:event', item); }, events);
+
+    assert.equal(await page.locator('.activity-pane').count(), 0, 'a small card has no activity pane');
+    const reply = event('item.delta', { channel: 'text', text: 'Done: it passes now.' }, { itemId: 'm1' });
+    await emit([
+      event('session.state', { state: 'running', reason: null }), event('turn.started', { origin: 'user', clientMessageId: 'c1' }),
+      event('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'fix the test', clientMessageId: 'c1' } }, { itemId: 'u1' }),
+      event('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'npm test', cwd: project.path } }, { itemId: 'k1' }), event('item.delta', { channel: 'output', text: 'FAIL a.test.js' }, { itemId: 'k1' }),
+      reply, event('request.opened', { requestId: 'r1', kind: 'command', blocking: true, title: 'Run rm -rf build', preview: 'rm -rf build', actions: [], providerData: {} }),
+    ]);
+    await view.waitFor({ timeout: 15000 });
+    assert.match(await view.locator('.native-runtime').innerText(), /Claude · API/);
+    await waitFor(async () => (await view.locator('.reading-user p').allInnerTexts()).includes('fix the test'), 'your message is drawn');
+    await waitFor(async () => (await view.locator('.reading-assistant').allInnerTexts()).some(text => text.includes('it passes now')), 'the agent’s words are drawn');
+    assert.match(await view.locator('.native-step-body').first().innerText(), /FAIL a\.test\.js/, 'a running command is open with its output');
+    const request = view.locator('.native-request');
+    await request.getByRole('button', { name: '允许本次', exact: true }).waitFor(); await request.getByRole('button', { name: '拒绝', exact: true }).waitFor();
+    assert.equal(await box.isEnabled(), true, 'the message box stays usable while the agent works');
+    checks.push('events drawn: message, words, running command, request card, usable composer');
+
+    // Typing and sending in a small card never expands the project; a refused send keeps the words and says why.
+    await box.click(); await box.fill('hello'); await page.keyboard.press('Enter');
+    await waitFor(async () => (await box.inputValue()) === 'hello' && await view.locator('.native-error').count() > 0, 'the refused send brings the words back with its reason');
+    assert.equal(await page.locator('.activity-pane').count(), 0, 'typing in the card did not expand the project');
+    await request.getByRole('button', { name: '允许本次', exact: true }).click();
+    await waitFor(async () => request.locator('[role="alert"]').count().then(count => count > 0), 'an answer the main process refuses shows its reason and the card stays');
+    await page.screenshot({ path: path.join(output, 'native-small-card.png') });
+    checks.push('small card: typing and a refused send keep the words, the project stays small, a refused answer keeps the card');
+
+    // A replay adds nothing; the request resolves and the card goes.
+    const assistantBefore = await view.locator('.reading-assistant').count();
+    await emit([{ ...reply, replay: true }, event('request.resolved', { requestId: 'r1', resolution: 'cancelled', reason: null }), event('turn.completed', { status: 'completed', error: null }), event('session.state', { state: 'idle', reason: null })]);
+    await waitFor(async () => (await view.locator('.native-request').count()) === 0, 'the resolved request is gone');
+    assert.equal(await view.locator('.reading-assistant').count(), assistantBefore, 'a replayed event adds nothing');
+    assert.equal(await view.locator('.native-stop').count(), 0, 'no Stop once idle');
+    checks.push('replay adds nothing; resolved request leaves; Stop only while working');
+
+    // Expanded: the activity pane shows the path and API usage card.
+    await page.locator(`[data-project-id="${project.id}"] .panel-name`).click();
+    await page.locator('.activity-api').waitFor({ timeout: 15000 });
+    assert.match(await page.locator('.activity-api').innerText(), /运行方式与 API 额度/); assert.match(await page.locator('.activity-api').innerText(), /最近切换/);
+    await page.screenshot({ path: path.join(output, 'native-expanded.png') });
+    checks.push('activity pane shows the usage card');
+
+    // The settings page: the key field is a password field, nothing is saved here.
+    await chooseFromAppMenu(page, '设置');
+    const settings = page.locator('dialog.settings-dialog');
+    await settings.locator('[data-settings-tab="runtime"]').click();
+    await settings.getByRole('heading', { name: '运行方式', exact: true }).waitFor();
+    assert.equal(await settings.locator('input[type="password"]').count(), 1);
+    assert.ok((await settings.locator('.select-trigger').count()) >= 2, 'Claude’s path and Codex’s view');
+    assert.match(await settings.locator('.runtime-key-row small[role="status"]').innerText(), /已保存|未保存/);
+    await page.screenshot({ path: path.join(output, 'native-settings.png') });
+    checks.push('运行方式 settings page');
+    assert.deepEqual(errors, []);
+  } catch (error) {
+    if (app) {
+      const page = await app.firstWindow().catch(() => null);
+      await page?.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});
+    }
+    throw error;
+  } finally {
+    await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ checks, errors }, null, 2));
+    if (app) await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]);
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const output = await testRun('native-session');
+  await withGuiLock('native-session', () => process.argv.includes('--runtime') ? runtimeSmoke(output) : run(output));
+  console.log('PASS: native session smoke. Evidence: ' + output);
+}

@@ -104,6 +104,14 @@
 .activity-metric.activity-tokens > small { grid-area: 1 / 2 / auto / -1; line-height: 20px; }
 .activity-metric.is-warn > b { color: var(--warning); }
 .activity-metric.is-warn .activity-meter i { background: var(--warning); }
+/* The path and API card (ApiUsage): a label and its lines per row, on the metrics' 88px label column. */
+.api-usage { display: grid; gap: 8px; margin: 0; }
+.api-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
+.api-row dt { overflow: hidden; font-size: 13px; line-height: 20px; color: var(--flow-muted); text-overflow: ellipsis; white-space: nowrap; }
+.api-row dd { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin: 0; font-size: 13px; line-height: 20px; color: var(--flow-ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.api-row dd small { font-size: 12px; line-height: 16px; color: var(--flow-faint); }
+.api-row .activity-meter { margin-top: 4px; }
+.api-row .activity-meter.is-warn i { background: var(--warning); }
 
 /* A limit reset: a 32px row on the task grid, its icon (or, counting down, the seconds), its label and, at the right, how many are left (or, counting down, the way out).
    With no reset to use it is the disabled grey. */

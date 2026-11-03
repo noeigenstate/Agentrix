@@ -8,7 +8,7 @@ function socketAddress(name, folder = require('node:os').tmpdir()) {
 }
 
 // A per-launch local pipe; the renderer never receives session credentials.
-async function createEventServer(onEvent) {
+async function createEventServer(onEvent, { dispatchControl } = {}) {
   const name = process.platform === 'win32' ? `agentrix-${randomUUID()}` : `pg-${randomBytes(12).toString('hex')}`;
   const address = process.platform === 'win32' ? `\\\\.\\pipe\\${name}` : socketAddress(name);
   const connections = new Set();
@@ -26,6 +26,11 @@ async function createEventServer(onEvent) {
       handled = true;
       try {
         const event = JSON.parse(buffer.slice(0, newline));
+        if (event?.type === 'dispatch-control-connect' && dispatchControl) {
+          socket.removeAllListeners('data'); socket.setTimeout(0);
+          dispatchControl.accept(socket, { ...event, type: 'register' });
+          return;
+        }
         if (event && typeof event.projectId === 'string' && typeof event.sessionKey === 'string' && typeof event.type === 'string') onEvent(event);
       } catch { /* Invalid messages never affect a terminal. */ }
       socket.end();

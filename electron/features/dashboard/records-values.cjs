@@ -10,7 +10,7 @@ const route = value => ({ model: text(value?.model) || 'unreported', effort: tex
 const projectName = project => (project.kind === 'ssh' ? path.posix : path).basename(project.path);
 
 function runRecord(project, call, event) {
-  const source = (event.source || call.source) === 'subagent' ? 'subagent' : 'dispatch';
+  const source = (event.source || call.source) === 'native' ? 'native' : (event.source || call.source) === 'subagent' ? 'subagent' : 'dispatch';
   const actual = call.unconfirmed ? route(null) : route(event);
   const declared = call.declared || call.unconfirmed ? route(call.declared || call) : null;
   const verdict = call.unconfirmed ? 'unverified' : event.verdict || routingVerdict({ ...actual, model: actual.model === 'unreported' ? null : actual.model }, declared);
@@ -22,6 +22,10 @@ function runRecord(project, call, event) {
     outputTokens: count(event.outputTokens), totalOutputTokens: count(event.totalOutputTokens),
     inputTokens: count(event.inputTokens), cachedTokens: count(event.cachedTokens),
     reportedCostUsd: number(event.reportedCostUsd), reason: text(event.reason, 32),
+    ...(['api', 'subscription', 'unknown'].includes(event.billingPath) ? { billingPath: event.billingPath } : {}),
+    ...(text(event.usageRecordId) ? { usageRecordId: text(event.usageRecordId) } : {}),
+    ...(text(event.costIncludedIn) ? { costIncludedIn: text(event.costIncludedIn) } : {}),
+    ...(['estimated', 'unknown'].includes(event.costCompleteness) ? { costCompleteness: event.costCompleteness } : {}),
     exitCode: Number.isSafeInteger(event.exitCode) ? event.exitCode : null,
     outOfScope: count(event.outOfScopeCount) ?? (Array.isArray(event.outOfScope) ? event.outOfScope.length : source === 'subagent' ? null : 0), verdict };
 }

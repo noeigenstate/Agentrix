@@ -1,7 +1,6 @@
 // A view of one sub-agent, opened from the activity pane beside the terminal's conversation: who it is, what state it is in, and the
 // conversation it is having, followed live. The conversation is read-only; the owner's word for the agent goes through SubagentInput,
-// and what the owner sent shows under the conversation as queued until the agent's own record carries it (a word relayed through the
-// parent leaves no trace there, so it stays queued).
+// and what the owner sent shows under the conversation with the worker's delivery receipt.
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { ArrowDown, Lock, X } from '@phosphor-icons/react';
 import type { AgentIntervention, SubagentFeed } from '../../shared/types';
@@ -12,6 +11,7 @@ import { ConversationFeed } from '../reading/ConversationFeed';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { CALL_STATES, elapsedClock, failureWord, rateValue } from './ActivityPane';
 import { SubagentInput } from './SubagentInput';
+import { receiptWord } from '../native-session/native-words';
 import { type FeedState, deliveredIds, unreadAfter, useSubagentFeed } from './subagent-splits.ts';
 import './activity-pane.css';
 
@@ -70,6 +70,8 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
   // The task first, then the model: two splits of one model are told apart by their task, in the header and in every accessible name.
   const title = feed?.title ?? '', who = title ? `${title} · ${name}` : name;
   // A finished Task subagent is 'reviewing' but has an end time; either way nothing more can be said to it.
+  // Only a dispatched worker has a direct channel (a word reaches it through the dispatch control); a sub-agent inside the session can only be told through the main session.
+  const direct = callId.startsWith('dispatch:');
   const over = feed?.state === 'done' || feed?.endedAt != null || status === 'gone', delivered = deliveredIds(entries, sent);
   const how = feed ? [feed.effort === 'default' ? t('默认') : feed.effort, feed.fast != null && (feed.fast ? t('快速') : t('普通'))].filter(Boolean).join(' · ') : '';
   const rate = feed ? rateValue(feed.rate) : null;
@@ -95,12 +97,13 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
         {feed ? <ConversationFeed entries={feed.entries} agent={feed.agent === 'Codex' ? 'codex' : 'claude'} projectId={projectId} live={feed.state === 'running' && status === 'ok'} onError={onError} onOpenLink={onOpenLink} />
           : <p className="subagent-empty">{status === 'error' ? t('读取失败：{message}', { message: error ?? '' }) : t('正在读取…')}</p>}
         {sent.map(item => <div key={item.id} className="subagent-sent">
-          <p>{item.text}</p><small>{[t(delivered.has(item.id) ? '已送达' : '已排队'), item.route === 'parent' && t('已转告主会话')].filter(Boolean).join(' · ')}</small>
+          <p>{item.text}</p><small>{receiptWord(delivered.has(item.id) ? 'delivered' : item.status)}</small>
         </div>)}
       </div>
       {unread > 0 && <button type="button" className="subagent-jump button" onClick={follow}><ArrowDown size={16} />{t('{count} 个新步骤', { count: unread })}</button>}
     </div>
-    <SubagentInput terminalId={terminalId} callId={callId} name={who} closed={over} onSent={item => setSent(items => [...items, item])} />
+    {direct ? <SubagentInput terminalId={terminalId} callId={callId} name={who} closed={over} onSent={item => setSent(items => [...items, item])} />
+      : <div className="subagent-input"><p className="subagent-input-note">{t('会话内的子代理没有直达通道，只能通过主会话与它交流。')}</p></div>}
     <footer className="subagent-foot">
       <Lock size={14} aria-hidden="true" /><span>{footerText(status, error, following, unread, over)}</span><span className="subagent-space" />
       {!following && !over && <button type="button" className="button" onClick={follow}>{t('回到最新')}</button>}

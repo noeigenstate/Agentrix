@@ -131,9 +131,10 @@ test('Codex receives stdin/argv/cwd and reads its rollout for routing and final 
   const f = await fixture(t), result = await f.finished;
   assert.equal(result.code, 0); assert.equal(result.stderr, '');
   const signals = result.stdout.trim().split('\n');
-  assert.equal(signals.length, 2);
-  assert.match(signals[0], /\[dispatch\] started [\w-]+ codex model gpt-6\.1-sol effort max fast on · routing ok · pid \d+ session /);
-  assert.match(signals[1], /38 token\/s \(150 output tokens in 4 s\) · exit 0 reason exit · out /);
+  assert.equal(signals.length, 3);
+  assert.match(signals[0], /codex-exec fallback: Agentrix control unavailable/);
+  assert.match(signals[1], /\[dispatch\] started [\w-]+ codex model gpt-6\.1-sol effort max fast on · routing ok · pid \d+ session /);
+  assert.match(signals[2], /38 token\/s \(150 output tokens in 4 s\) · exit 0 reason exit · out /);
   assert.deepEqual(f.events.map(event => event.type), ['dispatch-start', 'dispatch-end']);
   assert.ok(f.events.every(event => event.sessionKey === 'secret-for-test' && event.projectId === 'project'));
   const [start, end] = f.events;
@@ -537,7 +538,7 @@ test('a worker that changes files outside --allow ends out of scope, with the fi
     setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'src/a.js': '', 'other/b.js': '', 'ledger.md': '# Ledger\n' }),
   });
   const { stdout } = await finished;
-  assert.match(stdout, /reason scope · OUT OF SCOPE: other\/b\.js · out /);
+  assert.match(stdout, /reason scope · OUT OF SCOPE: other\/b\.js · out-of-scope changes left live .* · out /);
   const end = events.find(event => event.type === 'dispatch-end');
   assert.equal(end.reason, 'scope');
   assert.deepEqual(end.outOfScope, ['other/b.js']);

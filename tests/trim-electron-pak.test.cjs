@@ -28,7 +28,7 @@ async function temporary(t) {
 async function loadScript(name, overrides) {
   const module = { exports: {} };
   vm.runInNewContext(await fs.readFile(path.join(__dirname, '../scripts', name), 'utf8'), {
-    module, exports: module.exports, Buffer, process, console: { log() {} },
+    module, exports: module.exports, __dirname: path.join(__dirname, '../scripts'), Buffer, process, console: { log() {} },
     require: name => overrides[name] || require(name),
   });
   return module.exports;
@@ -93,9 +93,11 @@ for (const [platform, arch, key, relative] of [
 ]) {
   test(`afterPack trims and copies the dispatch runtime for ${key} before platform cleanup`, async () => {
     const calls = [], removed = [], created = [], written = [];
-    const runtime = { 'transcript-tail.cjs': 'tail source\n', 'features/agents/token-rate.cjs': 'rate source\n' };
+    const runtime = { 'transcript-tail.cjs': 'tail source\n', 'features/agents/token-rate.cjs': 'rate source\n', 'features/native-session/routing.cjs': 'routing source\n' };
+    const verified = [];
     const hook = await loadScript('after-pack.cjs', {
-      'node:fs/promises': { rm: async file => removed.push(file), readdir: async () => ['keep.sh', 'drop.ps1', 'drop.cmd', 'drop.exe', 'drop.cs'],
+      './claude-sdk-pack.cjs': { verifyPackage: async resources => verified.push(resources) },
+      'node:fs/promises': { readFile: async () => runtime['features/native-session/routing.cjs'], rm: async file => removed.push(file), readdir: async () => ['keep.sh', 'drop.ps1', 'drop.cmd', 'drop.exe', 'drop.cs'],
         mkdir: async folder => created.push(folder), writeFile: async (...args) => written.push(args) },
       './trim-electron-pak.cjs': { trimElectronPak: async (...args) => { calls.push(args); return { removedBytes: 1 }; } },
       '../integration/dispatch.cjs': { runtimeFiles: () => runtime },
@@ -105,6 +107,7 @@ for (const [platform, arch, key, relative] of [
     assert.deepEqual(calls, [[path.join(appOutDir, relative), key]]);
     const resources = path.join(appOutDir, platform === 'darwin' ? 'Named App.app/Contents/Resources' : 'resources');
     assert.deepEqual(written, Object.entries(runtime).map(([name, source]) => [path.join(resources, 'integration/electron', name), source]));
+    assert.deepEqual(verified, [resources]);
     assert.deepEqual(created, written.map(([file]) => path.dirname(file)));
     assert.equal(removed.some(file => file.endsWith('keep.sh')), false);
     assert.equal(removed.some(file => file.endsWith('dxcompiler.dll')), platform === 'win32');
@@ -114,6 +117,7 @@ for (const [platform, arch, key, relative] of [
 
 test('afterPack propagates trimming failures', async () => {
   const hook = await loadScript('after-pack.cjs', {
+    './claude-sdk-pack.cjs': { verifyPackage: async () => assert.fail('trim failure must abort package verification') },
     'node:fs/promises': { rm: async () => {} },
     './trim-electron-pak.cjs': { trimElectronPak: async () => { throw new Error('unrecognized pak'); } },
   });

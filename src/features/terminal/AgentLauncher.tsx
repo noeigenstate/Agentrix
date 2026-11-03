@@ -4,6 +4,8 @@ import type { AgentsState, Result } from '../../shared/types';
 import { relativeTime } from '../../shared/time';
 import { t } from '../../shared/i18n';
 import { ClaudeLogo, CodexLogo } from '../agents/AgentBrandIcon.ts';
+import { type NativeSettings, launchRoute, nativeBridge } from '../native-session/native-bridge.ts';
+import { noteTerminalSwitch, refreshNativeSession } from '../native-session/native-store.ts';
 import './agent-launcher.css';
 
 type Agent = 'claude' | 'codex';
@@ -12,7 +14,8 @@ const AGENTS: { agent: Agent; name: string; mark: ReactNode }[] = [{ agent: 'cla
 
 // A project with no agent on the card: pick the agent to work with, fresh or continuing this folder's latest conversation
 // with it. An agent not installed yet is installed by the same click (Node.js first, when even npm is missing), then
-// started. A plain terminal (for other CLIs) stays one click away.
+// started. A plain terminal (for other CLIs) stays one click away. By the settings (运行方式) the agent starts as a native session
+// (Claude on the API key, Codex on its app-server) or, as before, in a terminal.
 export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal, runningCount = 0, onExpand }: {
   terminalId: string; projectId: string; onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>;
   onOpenTerminal: (id: string) => void; runningCount?: number; onExpand?: () => void;
@@ -21,6 +24,15 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
   const [mode, setMode] = useState<'new' | 'continue' | 'native' | null>(null);
   const [starting, setStarting] = useState<Agent | 'terminal' | null>(null);
   const [agents, setAgents] = useState<AgentsState | null>(null);
+  const [runtime, setRuntime] = useState<{ settings: NativeSettings; keySaved: boolean | null } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    const bridge = nativeBridge();
+    if (!bridge) return;
+    let active = true;
+    void Promise.all([bridge.getSettings(), bridge.keyStatus()]).then(([settings, key]) => { if (active && settings.ok) setRuntime({ settings: settings.value, keySaved: key.ok ? key.value.saved : null }); });
+    return () => { active = false; };
+  }, []);
   useEffect(() => {
     let active = true;
     void window.agentrix.getAgents().then(result => { if (active && result.ok) setAgents(result.value); });
@@ -45,9 +57,22 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
     if (!terminal.sessionId || terminal.status === 'exited') return terminalId;
     return onAction(window.agentrix.addTerminal(projectId, false));
   };
+  // The route the settings give this agent; the Codex native-terminal mode is its own thing and never goes through them.
+  const routeOf = (agent: Agent) => chosen === 'native' ? launchRoute(agent, null, null) : launchRoute(agent, runtime?.settings ?? null, runtime?.keySaved ?? null);
+  const launch = async (id: string, agent: Agent) => {
+    const route = routeOf(agent), bridge = nativeBridge();
+    if (route.how === 'native' && bridge) {
+      const session = await onAction(bridge.start(id, { agent, resume: chosen === 'continue' }));
+      if (session) refreshNativeSession(id);
+    } else if (route.how === 'blocked') setNotice(t('只用 API 运行，但还没有保存 API key。请到设置的「运行方式」里保存。'));
+    else {
+      await onAction(window.agentrix.agentLaunch(id, agent, chosen));
+      if (route.how === 'terminal' && route.reason) noteTerminalSwitch(id, route.reason);
+    }
+  };
   const start = async (what: Agent | 'terminal') => {
     if (starting) return;
-    setStarting(what);
+    setStarting(what); setNotice(null);
     // Once started, the terminal (or the reading view) takes this card's place; a failure leaves it to try again.
     if (what === 'terminal') {
       await onAction(window.agentrix.startTerminal(terminalId));
@@ -59,7 +84,7 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
       if (installed) setAgents(installed);
       if (installed?.[what].installed) {
         const id = await prepareAgentTerminal();
-        if (id) await onAction(window.agentrix.agentLaunch(id, what, chosen));
+        if (id) await launch(id, what);
       }
     }
     setStarting(null);
@@ -73,6 +98,13 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
     const last = history[agent];
     return last ? t('接着上次的对话 · {time}', { time: relativeTime(last.at, Date.now()) }) : t('没有它的开发记录，将重新开始');
   };
+  // Where a click would run the agent, said beside the choice when it is not the terminal it always was.
+  const routeNote = (agent: Agent) => {
+    if (missing(agent) || chosen === 'native') return null;
+    const route = routeOf(agent);
+    if (route.how === 'native') return agent === 'claude' ? t('API · 原生界面') : t('原生界面');
+    return route.how === 'blocked' ? t('需先保存 API key') : route.reason ? t('没有 API key，改用终端') : null;
+  };
   return <div className="agent-launcher"><div className="agent-launcher-body">
     <p className="agent-launcher-title">{t('选择助手，开始开发')}</p>
     <div className="agent-launcher-mode" role="radiogroup" aria-label={t('开发方式')}>
@@ -82,9 +114,9 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
     </div>
     <div className="agent-launcher-agents">{AGENTS.filter(({ agent }) => chosen !== 'native' || agent === 'codex').map(({ agent, name, mark }) => <button type="button" key={agent} className={`agent-launcher-agent is-${agent}${missing(agent) ? ' is-missing' : ''}`} disabled={!!starting || !!agents?.installing} onClick={() => void start(agent)}>
       <span className="agent-launcher-mark" aria-hidden="true" data-audit-ignore>{starting === agent || agents?.installing === agent ? <CircleNotch size={16} className="loading-spinner" /> : mark}</span>
-      <b>{name}</b><small>{note(agent)}</small>
+      <b>{name}</b><small>{[note(agent), routeNote(agent)].filter(Boolean).join(' · ')}</small>
     </button>)}</div>
-    {agents?.error && <p className="agent-launcher-error" role="alert">{agents.error}</p>}
+    {(agents?.error || notice) && <p className="agent-launcher-error" role="alert">{agents?.error || notice}</p>}
     <div className="agent-launcher-more">
       <button type="button" className="text-button" disabled={!!starting} onClick={() => void start('terminal')}><TerminalIcon size={13} />{t('只打开终端')}</button>
     </div>

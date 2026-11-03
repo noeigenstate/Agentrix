@@ -8,6 +8,21 @@ const listen = (channel, callback) => {
 };
 
 contextBridge.exposeInMainWorld('agentrix', {
+  nativeSession: {
+    start: (terminalId, options) => ipcRenderer.invoke('native:start', terminalId, options),
+    send: (terminalId, runtimeSessionId, clientMessageId, text, images) => ipcRenderer.invoke('native:send', terminalId, runtimeSessionId, clientMessageId, text, images),
+    interrupt: (terminalId, runtimeSessionId) => ipcRenderer.invoke('native:interrupt', terminalId, runtimeSessionId),
+    stop: (terminalId, runtimeSessionId) => ipcRenderer.invoke('native:stop', terminalId, runtimeSessionId),
+    answer: (terminalId, runtimeSessionId, requestId, answer) => ipcRenderer.invoke('native:answer', terminalId, runtimeSessionId, requestId, answer),
+    snapshot: terminalId => ipcRenderer.invoke('native:snapshot', terminalId),
+    onEvent: callback => listen('native:event', callback),
+    getSettings: () => ipcRenderer.invoke('native:settings-get'),
+    setSettings: patch => ipcRenderer.invoke('native:settings-set', patch),
+    keySave: key => ipcRenderer.invoke('native:key-save', key),
+    keyClear: () => ipcRenderer.invoke('native:key-clear'),
+    keyStatus: () => ipcRenderer.invoke('native:key-status'),
+    usage: () => ipcRenderer.invoke('native:usage'),
+  },
   getState: () => ipcRenderer.invoke('workspace:state'),
   onMenuCommand: callback => listen('menu:command', callback),
   setTitlebarState: state => ipcRenderer.send('titlebar:state', state),
@@ -120,8 +135,6 @@ contextBridge.exposeInMainWorld('agentrix', {
   onSubagentFeed: callback => listen('terminal:subagent-feed', callback),
   interveneAgent: (terminalId, callId, text) => ipcRenderer.invoke('agents:intervene', terminalId, callId, text),
   stopAgent: (terminalId, callId) => ipcRenderer.invoke('agents:stop', terminalId, callId),
-  onAgentRelay: callback => listen('agents:relay', callback),
-  agentRelayResult: (id, error) => ipcRenderer.invoke('agents:relay-result', id, error),
   terminalCommands: id => ipcRenderer.invoke('terminal:commands', id),
   agentHistory: id => ipcRenderer.invoke('agent:history', id),
   agentImage: file => ipcRenderer.invoke('agent:image', file),

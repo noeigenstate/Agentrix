@@ -26,6 +26,7 @@ split is in use.
 - `src/features/agents/subagent-splits.ts`
 - `src/features/reading/ReadingView.tsx`
 - `src/features/reading/reading-mode.ts`
+- `src/features/native-session/*` (a terminal slot shows a native session or its terminal fallback)
 - `src/features/workspace/useProjectReorder.ts`
 
 ## Invariants

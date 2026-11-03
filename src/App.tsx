@@ -17,7 +17,6 @@ import { isMac } from './shared/platform';
 import { actionFor, applyShortcuts, editingKeyInField, shortcut, type ShortcutAction } from './features/shortcuts/shortcuts';
 import { gridColumns, gridNeighbor } from './features/workspace/grid-navigation';
 import { quickDictation } from './features/voice/voice-input';
-import { startParentRelay } from './features/agents/parent-relay';
 import { UsageGuide } from './features/guide/UsageGuide';
 import { GuideTour } from './features/guide/GuideTour';
 import { AppMenu } from './features/titlebar/AppMenu';
@@ -261,7 +260,6 @@ export function App() {
   const installUpdate = useCallback(() => { perform(api.installUpdate()); }, [perform]);
 
   // The main process hands a sub-agent's intervention to the planner's terminal through this window, for the app's whole life.
-  useEffect(startParentRelay, []);
   // The macOS menu bar's Agentrix menu: what it sends back runs here, as the matching shortcut would.
   useEffect(() => {
     if (!isMac || !api) return;

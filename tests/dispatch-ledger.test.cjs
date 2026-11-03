@@ -1,5 +1,17 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+
+test('native usage snapshots replace totals and resumed history never becomes invocation cost or response timing', () => {
+  const { WorkerOutput } = require('../integration/dispatch.cjs');
+  const output = new WorkerOutput('claude');
+  const value = { input: 10, cachedInput: 20, cacheWrite: 5, output: 30, costUsdMicros: 20000 };
+  output.nativeUsage(value, false); output.nativeUsage(value, false);
+  assert.equal(output.usage().inputTokens, 15); assert.equal(output.usage().totalOutputTokens, 30);
+  assert.equal(output.usage().reportedCostUsd, 0.02); assert.equal(output.usage().activeMs, null); assert.equal(output.usage().outputTokens, null);
+  output.nativeUsage({ ...value, costUsdMicros: 0 }, false); assert.equal(output.usage().reportedCostUsd, 0.02);
+  const resumed = new WorkerOutput('claude'); resumed.nativeUsage(value, true);
+  assert.equal(resumed.usage().reportedCostUsd, null); assert.equal(resumed.usage().totalOutputTokens, null);
+});
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');

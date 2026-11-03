@@ -2,7 +2,7 @@ const { estimateCost, priceOf } = require('./cost.cjs');
 const { currentWeights } = require('./decisions.cjs');
 const { suggestions } = require('./suggestions.cjs');
 const { journalEntries, roundData, incidentOf, CATEGORIES } = require('./rounds.cjs');
-const { runSeries, trends } = require('./summary-series.cjs');
+const { runSeries, trends, costOf } = require('./summary-series.cjs');
 const { nonnegative, text, modelOf, keyOf, execution, reviewFollowup, ratio, average, timedRate } = require('./summary-values.cjs');
 
 // Definitions shared by both pages:
@@ -20,7 +20,7 @@ function normalizeRuns(records, now) {
   for (const [index, record] of records.entries()) {
     if (!nonnegative(record?.at) || record.at > now || !['codex', 'claude'].includes(record.agent)) continue;
     const run = { ...record, model: modelOf(record.model), kind: text(record.kind, 32) || 'unreported' };
-    unique.set(keyOf(record.projectId, record.source === 'subagent' ? 'subagent' : 'dispatch', record.id || index), run);
+    unique.set(record.usageRecordId ? keyOf('usage', record.usageRecordId) : keyOf(record.projectId, record.source === 'native' ? 'native' : record.source === 'subagent' ? 'subagent' : 'dispatch', record.id || index), run);
   }
   return [...unique.values()].sort((a, b) => a.at - b.at);
 }
@@ -82,7 +82,7 @@ function taskList(runs, passes, prices) {
       kind: run.kind === 'unreported' ? null : run.kind, role: text(run.role, 32) || null, meeting: text(run.meeting, 64) || null,
       firstPass: passes.get(run), reason: text(run.reason, 32) || null,
       activeMs: nonnegative(run.activeMs) ? run.activeMs : null, outputTokens: nonnegative(outputTokens) ? outputTokens : null,
-      costUsd: estimateCost(run, prices).usd });
+      costUsd: costOf(run, prices) });
   }
   return rows;
 }
@@ -116,7 +116,7 @@ function summarize({ records = {}, journals = [], projects = [], prices = {}, de
     const agent = modelRuns[0]?.agent || modelGrades[0].agent;
     const outcomes = modelRuns.map(run => passes.get(run)).filter(value => value !== null)
       .concat(modelGrades.filter(grade => grade.submission === 1).map(grade => grade.outcome === 'passed'));
-    const costs = modelRuns.map(run => estimateCost(run, prices).usd).filter(value => value !== null);
+    const costs = modelRuns.map(run => costOf(run, prices)).filter(value => value !== null);
     const modelWeights = weights.filter(weight => weight.model === model);
     return { model, agent, runs: modelRuns.length, firstPassRate: ratio(outcomes.filter(Boolean).length, outcomes.length),
       avgActiveMs: average(modelRuns.map(run => run.activeMs).filter(nonnegative)), tokensPerSecond: timedRate(modelRuns),

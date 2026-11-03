@@ -116,6 +116,8 @@ test("typing, selecting or copying in a small card's terminal never expands the 
   const harness = hookHarness('src/features/terminal/ProjectTerminals.tsx', {
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }),
     './AgentLauncher': { AgentLauncher: () => null }, './TerminalPane': { TerminalPane: () => null },
+    './NativeSessionView': { NativeSessionView: () => null }, './NativePathNote': { NativePathNote: () => null },
+    './native-store.ts': { useNativeEntries: () => new Map(), nativeShown: () => false, ensureNativeSession() {} },
     './ReadingView': { ReadingView: () => null },
     './SubagentPane': { SubagentPane: () => null },
     './subagent-splits.ts': { closeSplit: noop, splitsOf: () => [], useSplits: () => [] },

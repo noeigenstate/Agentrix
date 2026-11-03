@@ -363,7 +363,7 @@ test('execution requires a confirmed resumed session and the same scope set', as
 test('skip reasons are printed and journaled while investigation and review bypass execution gates', async t => {
   const f = await lab(t), team = projectTeam(f.repo, true);
   const skipped = await start(f, { skip: 'isolated regression fixture' }), result = await output(skipped);
-  assert.equal(result.code, 0); assert.match(result.stdout.split('\n')[0], /roundtable skipped: isolated regression fixture/);
+  assert.equal(result.code, 0); assert.match(result.stdout.split('\n').find(line => line.startsWith('[dispatch] started ')), /roundtable skipped: isolated regression fixture/);
   assert.equal(team.entries().find(entry => entry.type === 'skip').reason, 'isolated regression fixture');
   const id = randomUUID(); await team.admit(options(f.repo, ['--allow', 'src/**', '--skip-meeting', 'test']), id);
   for (const role of ['investigate', 'review']) {

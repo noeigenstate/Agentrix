@@ -103,7 +103,14 @@ test('every original desktop step runs in exactly one shard with its entire comm
   const parsed = await workflow();
   const actual = localPlan(parsed).filter(step => step.kind === 'gui');
   assert.equal(originalDesktopSteps.length, 21);
-  assert.equal(actual.length, originalDesktopSteps.length);
+  assert.equal(actual.length, originalDesktopSteps.length + 2);
+  const native = actual.filter(step => step.run?.includes('npm run test:native-session'));
+  assert.equal(native.length, 2);
+  assert.deepEqual(native.map(step => step.run), [
+    'node scripts/retry.mjs npm run test:native-session -- --packaged',
+    'node scripts/retry.mjs npm run test:native-session -- --packaged --runtime',
+  ]);
+  assert.ok(native.every(step => step.key.startsWith('windows-desktop/reading/')));
   for (const original of originalDesktopSteps) {
     const matches = actual.filter(step => step.name === original.name);
     assert.equal(matches.length, 1, original.name);
@@ -111,7 +118,7 @@ test('every original desktop step runs in exactly one shard with its entire comm
     assert.ok(matches[0].key.startsWith('windows-desktop/'), original.name);
   }
   for (const { shard } of parsed.jobs['windows-desktop'].strategy.matrix.include) {
-    assert.equal(actual.filter(step => step.key.startsWith(`windows-desktop/${shard}/`)).length, 7);
+    assert.equal(actual.filter(step => step.key.startsWith(`windows-desktop/${shard}/`)).length, shard === 'reading' ? 9 : 7);
   }
 });
 
