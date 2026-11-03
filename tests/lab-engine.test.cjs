@@ -230,6 +230,7 @@ async function fixture(t, options = {}) {
     return values.join('\n');
   };
   const readCalls = async () => [...(await logs()).matchAll(/^\[lab-fixture-call\] (.+)$/gm)].map(match => JSON.parse(match[1]));
+  await engine.ready; await engine.cleanupTail;
   return { directory, userData, projectPath, project, git, base, commit, task, helper, engine, input, recorded, logs, readCalls };
 }
 
@@ -402,6 +403,7 @@ isolatedTest('a helper failure before any model spawn does not charge a reserved
   }
   const reopened = new LabEngine({ userData: f.userData, getProjects: () => [f.project], prices });
   assert.equal((await reopened.list())[0].spentUsd, 0);
+  await reopened.cleanupTail; reopened.close();
 });
 
 isolatedTest('an actually spawned fake model with lost usage still reserves the unknown cost', async t => {
@@ -499,6 +501,7 @@ test('persisted running experiments are stopped on reload and store ids cannot e
   assert.ok((await engine.list())[0].runs.every(run => run.state === 'stopped' && run.activeModel === null));
   assert.equal((await engine.list())[0].state, 'stopped');
   assert.throws(() => store.folder('../escape')); await assert.rejects(engine.remove('../escape'));
+  await engine.cleanupTail; engine.close();
 });
 
 test('recovery contains each Windows cleanup timeout and retains its lease and reference folder until a later retry', async t => {
@@ -706,6 +709,7 @@ isolatedTest('a failing reference rejects start with its reason and is excluded 
   assert.match(await fs.readFile(log, 'utf8'), /reference is broken/);
   const reopened = new LabEngine({ userData: f.userData, getProjects: () => [f.project], prices });
   assert.equal((await reopened.list())[0].state, 'error');
+  await reopened.cleanupTail; reopened.close();
   assert.match(await fs.readFile(log, 'utf8'), /reference is broken/);
   const next = await f.engine.sample({ source: 'history', projectId: 'p', size: 3, preferShortComplex: true });
   assert.ok(next.every(candidate => candidate.id !== task.id));
@@ -863,6 +867,7 @@ test('startup kills reparented marked processes and removes stale repositories a
   });
   const restored = new LabEngine({ userData: f.userData, getProjects: () => [f.project], prices });
   assert.equal((await restored.list())[0].state, 'stopped');
+  await restored.cleanupTail; restored.close();
   assert.deepEqual(await markedPids(runId), []);
   for (const file of [privateDirectory, path.join(directory, 'repository.git'), path.join(directory, 'workspaces')]) {
     assert.equal(await fs.stat(file).catch(() => null), null);
