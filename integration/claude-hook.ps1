@@ -23,6 +23,23 @@ function Get-AgentrixSessionContext($hook) {
     $info = Get-Item -LiteralPath $manifest
     if ($info.Attributes -band [IO.FileAttributes]::ReparsePoint -or $info.Length -gt 2097152) { return }
     $context = "Agentrix skill instructions:`n" + [IO.File]::ReadAllText($manifest, [Text.Encoding]::UTF8)
+    if ($hook.source -in @('compact', 'clear')) {
+        try {
+            $metadataFile = $manifest + '.json'
+            $metadataInfo = Get-Item -LiteralPath $metadataFile
+            if (-not ($metadataInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $metadataInfo.Length -le 2097152) {
+                $metadata = [IO.File]::ReadAllText($metadataFile, [Text.Encoding]::UTF8) | ConvertFrom-Json
+                $current = [string]$metadata.current
+                if ($metadata.fingerprint -eq $marker.Groups[1].Value -and [IO.Path]::IsPathRooted($current) -and
+                    [IO.Path]::GetDirectoryName($current) -eq [IO.Path]::GetDirectoryName($manifest)) {
+                    $currentInfo = Get-Item -LiteralPath $current
+                    if (-not ($currentInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $currentInfo.Length -le 2097152) {
+                        $context = "Agentrix skill instructions:`n" + [IO.File]::ReadAllText($current, [Text.Encoding]::UTF8)
+                    }
+                }
+            }
+        } catch { }
+    }
     $parent = Join-Path ([IO.Path]::GetDirectoryName($manifest)) 'receipts'
     [void][IO.Directory]::CreateDirectory($parent)
     if ((Get-Item -LiteralPath $parent).Attributes -band [IO.FileAttributes]::ReparsePoint) { return }

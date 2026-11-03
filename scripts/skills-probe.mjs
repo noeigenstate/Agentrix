@@ -23,7 +23,7 @@ const agents = selected ? [selected] : ['claude', 'codex'];
 const output = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-skills-probe-'));
 const profile = path.join(output, 'profile'), home = path.join(output, 'home');
 const projects = agents.map(agent => ({ id: randomUUID(), name: `Skills probe ${agent}`, path: path.join(output, agent), restore: { terminal: false, codex: false } }));
-const phases = ['first-open', 'later-session', 'yielded'];
+const phases = ['first-open', 'later-session', 'replaced'];
 const model = createSkillsModel(), summary = [];
 let app, page;
 
@@ -56,12 +56,14 @@ async function run() {
   const builtin = (await call('listSkills')).find(skill => skill.id === 'builtin:model-routing');
   assert.ok(builtin, 'Merge the built-in resources/skills/model-routing/SKILL.md before running this probe.');
   const standard = (await call('listSkills')).find(skill => skill.id === 'builtin:code-standard');
-  assert.equal(standard?.trigger, 'first-open', 'The built-in code standard defaults to first-open.');
+  assert.ok(standard, 'The built-in code standard is available.');
+  // Exercise both delivery timings in this isolated profile, independently of shipped defaults.
+  await call('setSkillOptions', builtin.id, { trigger: 'always' });
+  await call('setSkillOptions', standard.id, { trigger: 'first-open' });
   model.setSkill(builtin.path);
   const instruction = `Before any task, read and follow ${builtin.path.replace(/\\/g, '/')}.`;
   const standardPath = standard.path.replace(/\\/g, '/');
   const firstOpen = `Before the first task of this session, read and follow ${standardPath}; this is its first run in this project.`;
-  const yieldLine = 'This project has its own code-standard skill at skills/code-standard/SKILL.md; follow it.';
   await app.evaluate(({ app, BrowserWindow, dialog }, expectedProfile) => {
     if (app.getPath('userData') !== expectedProfile) throw new Error('Refusing a non-probe profile');
     // Closing generated test terminals must not leave a modal waiting for a person.
@@ -73,7 +75,7 @@ async function run() {
     let terminalId;
     try {
       assert.ok(onPath(agent, env), `${agent} is not installed in PATH`);
-      if (phase === 'yielded') await fs.mkdir(path.join(project.path, 'skills', 'code-standard'), { recursive: true });
+      if (phase === 'replaced') await fs.mkdir(path.join(project.path, 'skills', 'code-standard'), { recursive: true });
       const previousUse = (await call('listSkills')).find(skill => skill.id === builtin.id)?.lastUsed?.at || 0;
       const requestStart = model.requests.length;
       model.results.delete(agent);
@@ -106,12 +108,14 @@ async function run() {
       if (phase === 'first-open') assert.ok(captured.some(text => text.includes(firstOpen)), `${agent}: first session carries code-standard first-open`);
       else assert.ok(captured.every(text => !text.includes(firstOpen)), `${agent}: ${phase} does not repeat first-open`);
       if (phase === 'later-session') assert.ok(captured.some(text => text.includes(`code-standard: ${standard.description} (${standardPath})`)), `${agent}: later session offers code-standard as auto`);
-      if (phase === 'yielded') {
-        assert.ok(captured.some(text => text.includes(yieldLine)), `${agent}: project skill receives the yield note`);
-        assert.ok(captured.every(text => !text.includes(standardPath)), `${agent}: yielded built-in path is omitted`);
+      if (phase === 'replaced') {
+        assert.equal(await fs.stat(path.join(project.path, 'skills/code-standard')).then(() => true, () => false), false, `${agent}: the same-name project copy is moved`);
+        assert.ok(captured.some(text => text.includes(standardPath)), `${agent}: the built-in still applies`);
+        const replaced = (await call('listSkills')).find(skill => skill.id === standard.id).replaced;
+        assert.ok(replaced.some(item => item.project === project.name), `${agent}: replacement is recorded`);
       }
       const skill = (await call('listSkills')).find(skill => skill.id === builtin.id);
-      summary.push({ agent, phase, project: project.path, result: 'PASS', instruction, timing: phase === 'first-open' ? firstOpen : phase === 'yielded' ? yieldLine : 'code-standard offered as auto', lastUsed: skill.lastUsed });
+      summary.push({ agent, phase, project: project.path, result: 'PASS', instruction, timing: phase === 'first-open' ? firstOpen : 'code-standard offered as auto', lastUsed: skill.lastUsed });
       console.log(`PASS ${agent} ${phase}: captured always and timing instructions, executed SKILL.md read, lastUsed matches project/agent.`);
     } catch (error) {
       summary.push({ agent, phase, result: 'FAIL', error: error.message });

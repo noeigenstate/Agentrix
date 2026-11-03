@@ -4,7 +4,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { repoFiles } = require('../../boundaries.cjs');
-const { readDelivery } = require('./session.cjs');
+const { readDelivery, assertUserSkillName } = require('./session.cjs');
 
 const skillFile = file => path.basename(file).toLowerCase() === 'skill.md';
 const canonical = file => process.platform === 'win32' ? path.resolve(file).toLowerCase() : path.resolve(file);
@@ -34,19 +34,19 @@ function fileHash(file) {
   return hash.digest('hex');
 }
 
-function managedRoots(cwd, env) {
+function managedDelivery(cwd, env) {
   try {
     const note = env.AGENTRIX_READING_NOTE_FILE ? fs.readFileSync(env.AGENTRIX_READING_NOTE_FILE, 'utf8') : env.AGENTRIX_READING_NOTE;
     const delivery = readDelivery(note);
-    if (!delivery) return [];
+    if (!delivery) return {};
     const metadata = JSON.parse(fs.readFileSync(`${delivery.manifest}.json`, 'utf8'));
-    if (metadata.fingerprint !== delivery.fingerprint || typeof metadata.projectRoot !== 'string') return [];
+    if (metadata.fingerprint !== delivery.fingerprint || typeof metadata.projectRoot !== 'string') return {};
     // An inherited startup note for a different project must never make a test or unrelated worker read its skills.
     const sameRepo = commonDir(cwd), projectRepo = commonDir(metadata.projectRoot);
-    if (!within(metadata.projectRoot, cwd) && (!sameRepo || sameRepo !== projectRepo)) return [];
-    if (!Array.isArray(metadata.roots) || metadata.roots.length > 32 || !metadata.roots.every(root => typeof root === 'string' && path.isAbsolute(root))) return [];
-    return metadata.roots;
-  } catch { return []; }
+    if (!within(metadata.projectRoot, cwd) && (!sameRepo || sameRepo !== projectRepo)) return {};
+    if (!Array.isArray(metadata.roots) || metadata.roots.length > 32 || !metadata.roots.every(root => typeof root === 'string' && path.isAbsolute(root))) return {};
+    return metadata;
+  } catch { return {}; }
 }
 
 function noLinks(root, file) {
@@ -61,10 +61,14 @@ class WorkerSkillProposals {
   constructor(options, env, repo = repoFiles(options.cwd)) {
     this.options = options; this.repo = repo;
     const root = repo?.root || options.cwd;
-    this.managed = managedRoots(options.cwd, env);
+    const delivery = managedDelivery(options.cwd, env);
+    this.managed = delivery.roots || [];
+    this.builtinNames = Array.isArray(delivery.builtinNames) ? delivery.builtinNames.filter(name => typeof name === 'string') : [];
+    this.builtinRoot = this.managed.includes(delivery.builtinRoot) ? delivery.builtinRoot : null;
     this.restoreRoot = isolatedWorktree(options.cwd);
-    this.roots = [...new Set([root, options.cwd].flatMap(folder => ['skills', '.claude/skills', '.codex/skills'].map(name => path.join(folder, name)))
-      .concat(this.managed).map(folder => path.resolve(folder)))];
+    const projectRoots = [root, options.cwd].flatMap(folder => ['skills', '.claude/skills', '.codex/skills'].map(name => path.join(folder, name)));
+    this.userRoots = new Set(projectRoots.concat(this.managed.filter(folder => folder !== this.builtinRoot)).map(canonical));
+    this.roots = [...new Set(projectRoots.concat(this.managed).map(folder => path.resolve(folder)))];
     this.approved = new Set(options.allow.filter(file => skillFile(file) && !/[*?[\]{}]/.test(file)).map(file => canonical(path.resolve(root, file))));
     this.notes = new Set(); this.reportOnly = false;
     this.before = this.scan(); this.done = false; this.artifacts = new Set();
@@ -116,14 +120,24 @@ class WorkerSkillProposals {
     const folder = `${this.options.out}.skill-proposals-${id}`;
     for (const key of new Set([...this.before.keys(), ...after.keys()])) {
       const before = this.before.get(key), current = after.get(key);
-      if (this.approved.has(key) || before?.hash && before.hash === current?.hash
+      if (before?.hash && before.hash === current?.hash
         || before?.link && before.link === current?.link || before?.directory && current?.directory) continue;
       // A bounded scan cannot establish a deletion for a file it did not reach.
       if (!current && before && exists(before.file)) continue;
       const entry = before || current;
+      let rejected = null;
+      if (current && this.userRoots.has(canonical(path.dirname(path.dirname(entry.file))))) {
+        try {
+          assertUserSkillName(path.basename(path.dirname(entry.file)), this.builtinNames);
+          const declared = current.bytes?.toString('utf8').match(/^name:[ \t]*["']?([a-z0-9-]+)["']?[ \t]*\r?$/m)?.[1];
+          assertUserSkillName(declared, this.builtinNames);
+        } catch (error) { rejected = error.message; }
+      }
+      if (this.approved.has(key) && !rejected) continue;
       const restored = !this.reportOnly && this.restoreRoot && within(this.restoreRoot, entry.file)
         && !this.managed.some(root => within(root, entry.file)) && !current?.directory;
       const proposal = { path: entry.file, operation: !current ? 'delete' : !before ? 'create' : 'edit', restored: Boolean(restored) };
+      if (rejected) { proposal.rejected = true; proposal.error = rejected; this.notes.add(rejected); }
       if (!restored) proposal.note = 'changed during the run, author unknown';
       fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
       if (current?.bytes || current?.hash) {
