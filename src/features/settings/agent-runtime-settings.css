@@ -4,4 +4,7 @@
 .runtime-budget input { width: 120px; text-align: right; }
 .runtime-key input::placeholder, .runtime-budget input::placeholder { color: var(--text-2); opacity: 1; }
 .runtime-key input:disabled, .runtime-budget input:disabled { color: var(--text-2); }
+/* Claude's path names are long, and "(默认)" ends the first: the trigger is wide enough for the longest. */
+.setting-row .select-trigger.runtime-select { width: 300px; max-width: 48%; }
+.runtime-key .text-button { min-height: 32px; padding: 0 8px; }
 .runtime-error { margin: 12px 0 0; }

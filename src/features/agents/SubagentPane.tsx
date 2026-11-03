@@ -70,6 +70,8 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
   // The task first, then the model: two splits of one model are told apart by their task, in the header and in every accessible name.
   const title = feed?.title ?? '', who = title ? `${title} · ${name}` : name;
   // A finished Task subagent is 'reviewing' but has an end time; either way nothing more can be said to it.
+  // Only a dispatched worker has a direct channel (a word reaches it through the dispatch control); a sub-agent inside the session can only be told through the main session.
+  const direct = callId.startsWith('dispatch:');
   const over = feed?.state === 'done' || feed?.endedAt != null || status === 'gone', delivered = deliveredIds(entries, sent);
   const how = feed ? [feed.effort === 'default' ? t('默认') : feed.effort, feed.fast != null && (feed.fast ? t('快速') : t('普通'))].filter(Boolean).join(' · ') : '';
   const rate = feed ? rateValue(feed.rate) : null;
@@ -100,7 +102,8 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
       </div>
       {unread > 0 && <button type="button" className="subagent-jump button" onClick={follow}><ArrowDown size={16} />{t('{count} 个新步骤', { count: unread })}</button>}
     </div>
-    <SubagentInput terminalId={terminalId} callId={callId} name={who} closed={over} onSent={item => setSent(items => [...items, item])} />
+    {direct ? <SubagentInput terminalId={terminalId} callId={callId} name={who} closed={over} onSent={item => setSent(items => [...items, item])} />
+      : <div className="subagent-input"><p className="subagent-input-note">{t('会话内的子代理没有直达通道，只能通过主会话与它交流。')}</p></div>}
     <footer className="subagent-foot">
       <Lock size={14} aria-hidden="true" /><span>{footerText(status, error, following, unread, over)}</span><span className="subagent-space" />
       {!following && !over && <button type="button" className="button" onClick={follow}>{t('回到最新')}</button>}

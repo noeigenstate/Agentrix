@@ -66,10 +66,10 @@ export function AgentRuntimeSettings() {
         <input type="password" autoComplete="off" spellCheck={false} aria-label={t('Anthropic API key')} placeholder={saved ? t('输入新的 key 以替换') : 'sk-ant-…'} value={key} disabled={busy}
           onChange={event => setKey(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') saveKey(); }} />
         <button type="button" className="button secondary small" disabled={busy || !key.trim()} onClick={saveKey}>{t('保存')}</button>
-        {saved && <button type="button" className="button secondary small" disabled={busy} onClick={() => void run(() => bridge.keyClear(), () => void refreshKey())}>{t('清除')}</button>}
+        {saved && <button type="button" className="text-button" disabled={busy} onClick={() => void run(() => bridge.keyClear(), () => void refreshKey())}>{t('清除')}</button>}
       </span></div>
     <label className="setting-row"><span><Robot size={19} /><span><b>{t('Claude 的运行方式')}</b><small>{t('API：应用里的原生界面，按量计费；订阅：Claude Code 终端')}</small></span></span>
-      <Select label={t('Claude 的运行方式')} value={settings?.claudePath ?? 'api-then-terminal'} disabled={!settings || busy} options={CLAUDE_PATHS()} onChange={value => void change({ claudePath: value as ClaudePath })} /></label>
+      <Select label={t('Claude 的运行方式')} className="runtime-select" value={settings?.claudePath ?? 'api-then-terminal'} disabled={!settings || busy} options={CLAUDE_PATHS()} onChange={value => void change({ claudePath: value as ClaudePath })} /></label>
     <label className="setting-row"><span><TerminalIcon size={19} /><span><b>{t('Codex 的界面')}</b><small>{t('原生：Codex 的 app-server，在应用自己的界面里；终端：Codex 命令行')}</small></span></span>
       <Select label={t('Codex 的界面')} value={settings?.codexView ?? 'native'} disabled={!settings || busy} options={CODEX_VIEWS()} onChange={value => void change({ codexView: value as CodexView })} /></label>
     <div className="setting-row"><span><CurrencyDollar size={19} /><span><b>{t('API 月预算（美元）')}</b><small>{t('按 UTC 自然月累计的估算；用完后 Claude 按上面的选择处理。留空表示不限')}</small></span></span>
