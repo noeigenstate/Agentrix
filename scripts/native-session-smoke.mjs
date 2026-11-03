@@ -54,7 +54,7 @@ async function runtimeSmoke(output) {
     const { bin, cli } = await prepareProviders(runtime);
     await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2,
       projects: [{ id: projectId, name: 'Offline providers', path: projectPath, kind: 'local', restore: { terminal: false, codex: false } }],
-      settings: { language: 'en', restoreSessions: false, closeToTray: false, notifications: false } }));
+      settings: { language: 'zh', restoreSessions: false, closeToTray: false, notifications: false } }));
     await fs.mkdir(path.join(profile, 'native-session'), { recursive: true });
     await fs.writeFile(path.join(profile, 'native-session/usage.json'), '{broken-offline-fixture');
     const env = { ...isolatedEnvironment(runtime), PATH: bin, AGENTRIX_DATA_DIR: profile,

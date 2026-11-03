@@ -2400,8 +2400,6 @@
   "工作者会话已变化，消息未发送。": "The worker session has changed. The message was not sent.",
   "未发送的消息": "Unsent message",
   "复制未发送的消息": "Copy unsent message",
-  "给 {agent} 发消息，Enter 发送，Shift+Enter 换行": "Message {agent}, Enter to send, Shift+Enter for a new line",
-  "给 {agent} 发消息，Enter 发送": "Message {agent}, Enter to send",
   "输入框中有未发送的草稿，请先处理草稿后重试。": "There is an unsent draft in the composer. Handle it before trying again.",
   "已粘贴到输入框，未能确认发送，请在终端里处理。": "Pasted into the composer, but delivery could not be confirmed. Check the terminal.",
   "发送已超时，消息未发送。": "Sending timed out. The message was not sent.",

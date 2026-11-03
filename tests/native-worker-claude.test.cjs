@@ -46,11 +46,11 @@ function sdkFixture() {
     }, close() { done = true; wake?.(); } };
   } };
   return { sdk, calls, inputs, sessionId, end() { done = true; wake?.(); }, abortErrors: () => abortErrors, fail() { error = new Error('Synthetic mid-run failure'); wake?.(); },
-    finish(text = 'Synthetic answer') {
+    finish(text = 'Synthetic answer', queuedTurns = 0) {
       const input = inputs.at(-1);
       put({ type: 'assistant', uuid: randomUUID(), user_message_uuid: input.uuid, message: { id: randomUUID(), content: [{ type: 'text', text }] } });
       put({ type: 'result', uuid: randomUUID(), user_message_uuid: input.uuid, user_message_uuids: [input.uuid], subtype: 'success',
-        queued_turn_count: 0, total_cost_usd: ++count * 0.01, modelUsage: { synthetic: { inputTokens: count, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: count } } });
+        queued_turn_count: queuedTurns, total_cost_usd: ++count * 0.01, modelUsage: { synthetic: { inputTokens: count, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: count } } });
     } };
 }
 
@@ -139,14 +139,18 @@ test('M8: an accepted correction at the final result is processed before the wor
   f.sdk.finish('First result'); await until(() => f.sdk.inputs.length === 2);
   assert.equal(f.sdk.inputs[1].message.content, 'Late owner correction'); f.sdk.finish('Correction result');
   assert.equal(await f.result, 0); assert.equal(fs.readFileSync(f.out, 'utf8'), 'Correction result');
+  assert.equal(f.sdk.calls.length, 2); assert.equal(f.sdk.calls[1].options.resume, f.sdk.sessionId);
+  assert.doesNotMatch(f.stdout(), /native worker ended before correction/);
 });
 
 test('M8: a correction rejected by an already-ended runtime resumes the same session instead of disappearing', { timeout: 15000 }, async t => {
   const f = await fixture(t, { late: true }); await until(() => f.stdout().includes('[dispatch] started'));
-  f.sdk.finish('First result'); f.sdk.end();
+  // A queued turn prevents normal idle retirement; the ended stream stops the logical runtime instead.
+  f.sdk.finish('First result', 1); f.sdk.end();
   await until(() => f.sdk.inputs.length === 2); assert.match(f.sdk.inputs[1].message.content, /Late owner correction/);
   assert.equal(f.sdk.calls[1].options.resume, f.sdk.sessionId); f.sdk.finish('Resumed correction result');
   assert.equal(await f.result, 0); assert.equal(fs.readFileSync(f.out, 'utf8'), 'Resumed correction result');
+  assert.equal(f.sdk.inputs.length, 2); assert.equal(f.sdk.calls.length, 2);
   assert.match(f.stdout(), /native worker ended before correction/);
   assert.doesNotMatch(f.stdout(), /claude-cli fallback/);
 });
