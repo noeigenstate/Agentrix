@@ -66,6 +66,11 @@ reader.on('line', line => {
     return;
   }
   const params = message.params || {};
+  if (['thread/resume', 'turn/start', 'turn/steer', 'turn/interrupt'].includes(message.method)
+      && !params.threadId) {
+    send({ id: message.id, error: { code: -32602, message: 'Missing required threadId' } });
+    return;
+  }
   let result = {};
   if (message.method === 'initialize') result = { userAgent: 'codex/0.166.0' };
   else if (message.method === 'thread/start' || message.method === 'thread/resume') {

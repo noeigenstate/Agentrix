@@ -87,6 +87,21 @@ test('selected API environment removes conflicting authentication without mutati
   const result = apiEnvironment(env, key); assert.equal(result.PATH, 'fake'); assert.equal(result.ANTHROPIC_API_KEY, key);
   assert.equal(result.ANTHROPIC_BASE_URL, undefined); assert.equal(result.CLAUDE_CODE_OAUTH_TOKEN, undefined); assert.equal(result.AGENTRIX_CONTROL_TOKEN, undefined); assert.equal(env.ANTHROPIC_API_KEY, undefined);
 });
+test('GUI SDK authentication is marked for descendant helpers without scrubbing the owner', async t => {
+  const { workerEnvironment } = require('../electron/features/codex-app-server/index.cjs');
+  const { session, fake, spec } = setup(t);
+  await session.start(); await session.send({ clientMessageId: randomUUID(), text: 'owner task' });
+  const env = fake.calls[0].options.env;
+  assert.equal(env.AGENTRIX_SDK_PARENT, '1');
+  assert.equal(env.ANTHROPIC_API_KEY, key);
+  assert.equal(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '0');
+  const helper = workerEnvironment(env);
+  assert.equal(helper.ANTHROPIC_API_KEY, undefined);
+  assert.equal(helper.AGENTRIX_SDK_PARENT, undefined);
+  assert.equal(helper.PATH, spec.env.PATH);
+  assert.equal(env.ANTHROPIC_API_KEY, key);
+  assert.equal(spec.env.AGENTRIX_SDK_PARENT, undefined);
+});
 test('usage deltas persist across resume, deduplicate, and ignore zeroed failures', t => {
   const file = path.join(directory(t), 'usage.json'); let usage = createUsage({ file, now: () => Date.UTC(2026, 10, 3) });
   const result = { uuid: 'first', total_cost_usd: 1, modelUsage: {} };
