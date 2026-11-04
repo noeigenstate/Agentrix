@@ -95,13 +95,35 @@ test('M1 owner hooks stay silent so normal permission rules decide, and show a c
   const options = fake.calls[0].options;
   for (const name of ['Read', 'Grep', 'Glob', 'TodoWrite', 'Bash']) {
     const result = await options.hooks.PreToolUse[0].hooks[0]({ tool_name: name, tool_input: {} });
-    // A hook answering 'defer' makes the real CLI pause the tool and end the turn: tests/claude-sdk-real-cli-hook.test.cjs.
+    // A hook answering 'defer' makes the real CLI pause the tool and end the turn: tests/claude-sdk-real-cli.test.cjs.
     assert.deepEqual(result, {});
   }
   assert.equal(events.filter(event => event.type === 'request.opened').length, 0);
   const waiting = options.canUseTool('Bash', { command: 'needs confirmation' }, {});
   assert.equal(events.filter(event => event.type === 'request.opened').length, 1);
   await session.close(); assert.equal((await waiting).behavior, 'deny');
+});
+test('a reply the CLI writes as one record per block keeps every block, and a repeated record adds nothing', () => {
+  const events = [], normalize = createNormalizer((type, payload, extra) => events.push({ type, payload, itemId: extra?.itemId }));
+  const record = (uuid, ...content) => ({ type: 'assistant', uuid, message: { id: 'm1', content } });
+  const stream = event => ({ type: 'stream_event', event });
+  normalize(stream({ type: 'message_start', message: { id: 'm1' } }));
+  normalize(stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } }));
+  normalize(stream({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm' } }));
+  normalize(record('a', { type: 'thinking', thinking: '' }));
+  normalize(stream({ type: 'content_block_start', index: 1, content_block: { type: 'text' } }));
+  normalize(stream({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'par' } }));
+  normalize(record('b', { type: 'text', text: 'partial answer' }));
+  normalize(record('c', { type: 'tool_use', id: 'tool', name: 'Bash', input: { command: 'ls' } }));
+  normalize(stream({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: ' late' } }));
+  const seen = events.length;
+  normalize(record('b-again', { type: 'text', text: 'partial answer' }));
+  normalize(record('whole', { type: 'thinking', thinking: '' }, { type: 'text', text: 'partial answer' }, { type: 'tool_use', id: 'tool', name: 'Bash', input: { command: 'ls' } }));
+  assert.equal(events.length, seen);
+  const deltas = events.filter(event => event.type === 'item.delta'), items = events.filter(event => event.type === 'item.upsert');
+  assert.deepEqual(deltas.map(event => [event.itemId, event.payload.text]), [['m1:0', 'hmm'], ['m1:1', 'par']], 'a late delta of a finished block is dropped; the live text is not');
+  assert.deepEqual(items.map(event => [event.itemId, event.payload.kind]), [['m1:0', 'reasoning-summary'], ['m1:1', 'agent-message'], ['tool', 'command']]);
+  assert.equal(items[1].payload.content.text, 'partial answer');
 });
 test('M4 a finished Claude tool keeps its kind, name and input in live events and replay snapshots', () => {
   const live = [], stream = createEventStream({ agent: 'claude', projectId: 'p', terminalId: 't', runtimeSessionId: 'r' }, event => live.push(event));
