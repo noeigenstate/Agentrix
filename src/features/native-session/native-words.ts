@@ -72,6 +72,19 @@ export const turnFailed = () => t('本轮出错');
 const RECEIPT_WORDS: Record<string, string> = { queued: '已排队', delivered: '已送达', consumed: '已被读取', rejected: '未送达', unknown: '送达状态未知' };
 export const receiptWord = (status: string | null | undefined) => (status && RECEIPT_WORDS[status] ? t(RECEIPT_WORDS[status]) : null);
 
+// Why a worker's final refusal happened, by the code main gives; the code itself is never shown.
+const REJECTION_WORDS: Record<string, string> = {
+  worker_ended_without_resume: '工作者已结束，消息未能继续处理。', worker_ended_before_read: '工作者结束前未能读取消息，恢复一次后仍未处理。',
+};
+// Where a message to a worker stands: its status and, for a refusal, why.
+export type Receipt = { status: string; reason?: string | null };
+// A receipt in words. A refusal we know the reason of says that sentence; any other says 未送达 with the sentence main wrote, never a machine code.
+export function receiptLine({ status, reason }: Receipt) {
+  if (status !== 'rejected') return receiptWord(status) ?? t('送达状态未知');
+  if (reason && Object.hasOwn(REJECTION_WORDS, reason)) return t(REJECTION_WORDS[reason]);
+  return `${t('未送达')} · ${reason && !CODE.test(reason) ? reason : t('工作者未提供原因。')}`;
+}
+
 // The route codes the main process gives for a switch; one it does not know is shown as given, never hidden.
 const REASON_WORDS: Record<string, string> = {
   budget_exhausted: '本月 API 预算已用完', credits_exhausted: 'API 额度已用完', rate_limited: 'API 被限流', no_key: '还没有保存 API key',
@@ -171,8 +184,14 @@ const CONNECTION_WORDS: Record<NativeAgent, Record<string, string>> = {
   claude: { api: '已连接 API', subscription: '订阅（Claude Code 登录）', none: '未连接' },
   codex: { api: 'API', subscription: 'ChatGPT 订阅', none: '未连接' },
 };
-export function connectionWord(agent: NativeAgent, connection: AgentConnection | null | undefined) {
-  const word = connection ? CONNECTION_WORDS[agent][connection.kind] : undefined;
+// `active: false` is an account that is signed in while this agent has no session; only an API or a subscription can be signed in (none and unknown never are).
+const IDLE_CONNECTION_WORDS: Record<NativeAgent, Record<string, string>> = {
+  claude: { api: 'API（未开会话）', subscription: '订阅（未开会话）' },
+  codex: { api: 'API（未开会话）', subscription: 'ChatGPT 订阅（未开会话）' },
+};
+export function connectionWord(agent: NativeAgent, connection: (AgentConnection & { active?: boolean }) | null | undefined) {
+  const words = connection?.active === false ? { ...CONNECTION_WORDS[agent], ...IDLE_CONNECTION_WORDS[agent] } : CONNECTION_WORDS[agent];
+  const word = connection ? words[connection.kind] : undefined;
   return { text: word ? t(word) : t('未知'), source: connection?.source || null };
 }
 

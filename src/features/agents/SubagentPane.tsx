@@ -12,7 +12,7 @@ import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { elapsedClock } from './ActivityPane';
 import { CALL_STATES, failureWord, rateValue } from './AgentCalls';
 import { SubagentInput } from './SubagentInput';
-import { receiptWord } from '../native-session/native-words';
+import { type Receipt, receiptLine } from '../native-session/native-words';
 import { type FeedState, deliveredIds, unreadAfter, useSubagentFeed } from './subagent-splits.ts';
 import './activity-pane.css';
 
@@ -26,6 +26,13 @@ function stateWord(feed: SubagentFeed, status: FeedState['status'], over: boolea
   if (status === 'gone') return t('不可用');
   if (feed.failure) return failureWord(feed.failure);
   return t(CALL_STATES[over ? 'done' : feed.state].word);
+}
+
+// Where a sent word stands: the worker's own receipt for it comes first, then the answer it got when sent; a word that shows up in the worker's
+// resumed transcript is at least delivered, but a final answer (read, refused) is never taken back.
+function receiptOf(item: AgentIntervention, known: Receipt | undefined, delivered: boolean): Receipt {
+  const base = known ?? item;
+  return delivered && (base.status === 'queued' || base.status === 'unknown') ? { status: 'delivered' } : base;
 }
 
 // The owner scrolled up: the view stops following and remembers the last entry it had shown, so it can count what came after.
@@ -65,6 +72,9 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
   // Only a dispatched worker has a direct channel (a word reaches it through the dispatch control); a sub-agent inside the session can only be told through the main session.
   const direct = callId.startsWith('dispatch:');
   const over = feed?.state === 'done' || feed?.endedAt != null || status === 'gone', delivered = deliveredIds(entries, sent);
+  // Every receipt the worker's feed holds (a stop too), with the words sent here read by the rule above.
+  const receipts = new Map<string, Receipt>((feed?.controlReceipts ?? []).map(known => [known.id, known]));
+  for (const item of sent) receipts.set(item.id, receiptOf(item, receipts.get(item.id), delivered.has(item.id)));
   const how = feed ? [feed.effort === 'default' ? t('默认') : feed.effort, feed.fast != null && (feed.fast ? t('快速') : t('普通'))].filter(Boolean).join(' · ') : '';
   const rate = feed ? rateValue(feed.rate) : null;
   // A finished view counts to its recorded end; without one, or with an end not after the start, the time it took is unknown, not 0:00.
@@ -89,14 +99,14 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
         {feed ? <ConversationFeed entries={feed.entries} agent={feed.agent === 'Codex' ? 'codex' : 'claude'} projectId={projectId} live={feed.state === 'running' && status === 'ok'} onError={onError} onOpenLink={onOpenLink} />
           : <p className="subagent-empty">{status === 'error' ? t('读取失败：{message}', { message: error ?? '' }) : t('正在读取…')}</p>}
         {sent.map(item => <div key={item.id} className="subagent-sent">
-          <p>{item.text}</p><small>{receiptWord(delivered.has(item.id) ? 'delivered' : item.status)}</small>
+          <p>{item.text}</p><small>{receiptLine(receipts.get(item.id)!)}</small>
         </div>)}
       </div>
       {/* Scrolled up: the way back to the end, with how much came after. */}
       {(unread > 0 || !following && !over) && <button type="button" className="subagent-jump button" onClick={follow}><ArrowDown size={16} />{unread > 0 ? t('{count} 个新步骤', { count: unread }) : t('回到最新')}</button>}
     </div>
     {feed && status === 'error' && <p className="subagent-read-error" role="alert">{t('读取失败：{message}', { message: error ?? '' })}</p>}
-    {direct ? <SubagentInput terminalId={terminalId} callId={callId} name={who} closed={over} onSent={item => setSent(items => [...items, item])} />
+    {direct ? <SubagentInput terminalId={terminalId} callId={callId} name={who} closed={over} receipts={receipts} onSent={item => setSent(items => [...items, item])} />
       : <div className="subagent-input"><p className="subagent-input-note">{t('会话内的子代理没有直达通道，只能通过主会话与它交流。')}</p></div>}
   </section>;
 }

@@ -294,9 +294,9 @@ function inputView(bridge, patch = {}, fit = 0) {
   const sent = [], saved = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge } });
   // The width-fitting hook has its own tests below; here the box shows the hint at index `fit` of the list it was given.
-  const words = { queued: '已排队', delivered: '已送达', consumed: '已被读取', rejected: '未送达', unknown: '送达状态未知' };
-  const hints = [], harness = hookHarness('src/features/agents/SubagentInput.tsx', { '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './subagent-input.css': {}, './native-words': { receiptWord: status => words[status] ?? null }, './useFittingHint': { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, list) => (hints.splice(0, hints.length, ...list), list[fit] ?? '') } });
-  const props = { terminalId: 't1', callId: 'agent:a', name: 'Sol', closed: false, onSent: item => sent.push(item), ...patch };
+  load('shared/i18n.ts').applyLanguage('zh');
+  const hints = [], harness = hookHarness('src/features/agents/SubagentInput.tsx', { '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './subagent-input.css': {}, './native-words': load('features/native-session/native-words.ts'), './useFittingHint': { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, list) => (hints.splice(0, hints.length, ...list), list[fit] ?? '') } });
+  const props = { terminalId: 't1', callId: 'agent:a', name: 'Sol', closed: false, receipts: new Map(), onSent: item => sent.push(item), ...patch };
   const tree = () => elements(harness.render('SubagentInput', props).result);
   const find = tag => tree().find(node => node.type === tag), note = () => tree().find(node => node.type === 'span' && node.props.id);
   const press = (init = {}) => { const prevented = []; find('textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, preventDefault: () => prevented.push(true), ...init }); return prevented.length; };
@@ -404,6 +404,42 @@ test('what the owner sent shows under the conversation as queued, with only its 
   assert.ok(html.indexOf('conversation-feed') < html.indexOf('subagent-sent') && html.indexOf('subagent-sent') < html.indexOf('subagent-input'), 'after the conversation, before the box');
   assert.equal(count(paneMarkup(ok({})), /subagent-sent/g), 0);
 }));
+
+test('the worker\'s own receipt decides the bubble: read, a final refusal in words without the machine code, then the sent answer, then the transcript match', () => zh(() => {
+  const withSent = items => { let slot = 0; return { ...hookApi, useState: start => [slot++ === 1 ? items : typeof start === 'function' ? start() : start, () => {}] }; };
+  const entries = [{ id: 'u1', role: 'user', text: '业主插话：matched\n\n继续执行当前任务。' }];
+  const controlReceipts = [
+    { id: 'i1', status: 'consumed' }, { id: 'i2', status: 'rejected', reason: 'worker_ended_without_resume' }, { id: 'i3', status: 'rejected', reason: 'worker_ended_before_read' },
+    { id: 'i4', status: 'rejected', reason: 'some_new_code' }, { id: 'i5', status: 'queued' }, { id: 'i6', status: 'unknown' },
+  ];
+  const html = paneMarkup(ok({ entries, controlReceipts }), undefined, withSent([
+    intervention({ status: 'delivered', text: 'read one' }), intervention({ id: 'i2', status: 'delivered', text: 'ended A' }), intervention({ id: 'i3', status: 'delivered', text: 'ended B' }),
+    intervention({ id: 'i4', status: 'delivered', text: 'odd' }), intervention({ id: 'i5', text: 'matched' }), intervention({ id: 'i6', text: 'nobody saw' }), intervention({ id: 'i7', text: 'no receipt yet', status: 'delivered' }),
+  ]));
+  const bubble = text => html.match(new RegExp(`<p>${text}</p><small>([^<]*)</small>`))[1];
+  assert.equal(bubble('read one'), '已被读取', 'the receipt beats the answer given when it was sent');
+  assert.equal(bubble('ended A'), '工作者已结束，消息未能继续处理。'); assert.equal(bubble('ended B'), '工作者结束前未能读取消息，恢复一次后仍未处理。');
+  assert.equal(bubble('odd'), '未送达 · 工作者未提供原因。', 'another reason takes the existing unsent words'); assert.doesNotMatch(html, /worker_ended|some_new_code/);
+  assert.equal(bubble('matched'), '已送达', 'a queued receipt is lifted by the transcript match'); assert.equal(bubble('nobody saw'), '送达状态未知', 'unknown is not claimed delivered');
+  assert.equal(bubble('no receipt yet'), '已送达', 'without a receipt the sent answer stands');
+  const refusedAndMatched = paneMarkup(ok({ entries: [{ id: 'u', role: 'user', text: '业主插话：late' }], controlReceipts: [{ id: 'i1', status: 'rejected', reason: 'worker_ended_before_read' }] }), undefined, withSent([intervention({ text: 'late' })]));
+  assert.match(refusedAndMatched, /<small>工作者结束前未能读取消息，恢复一次后仍未处理。<\/small>/, 'a final refusal is not turned back into 已送达');
+}));
+
+test('the note under the box follows the last message: a delivered word later read or finally refused says so, even when the box is closed', async () => {
+  const receipts = new Map(), view = inputView({ interveneAgent: async () => ({ ok: true, value: intervention({ status: 'delivered' }) }) }, { receipts });
+  try {
+    view.type('hello'); view.press(); await settle();
+    assert.equal(view.find('p').props.children, '已送达');
+    receipts.set('i1', { id: 'i1', status: 'consumed' }); assert.equal(view.find('p').props.children, '已被读取');
+    receipts.set('i1', { id: 'i1', status: 'rejected', reason: 'worker_ended_without_resume' });
+    const note = view.find('p');
+    assert.deepEqual([note.props.children, note.props.className], ['工作者已结束，消息未能继续处理。', 'subagent-input-note is-error']);
+    assert.doesNotMatch(String(note.props.children), /worker_ended/);
+  } finally { view.done(); }
+  const ended = inputView({}, { closed: true, receipts: new Map() });
+  try { assert.equal(ended.find('textarea').props.disabled, true, 'the box stays closed when the worker ended'); } finally { ended.done(); }
+});
 
 test('the input is on while the agent runs and off in a finished view and in a lost one', () => zh(() => {
   const off = html => count(html, /<textarea[^>]*disabled/g);

@@ -4,7 +4,9 @@
 //   - an API connection shows the API spend and the monthly budget (a bar when one is set), never the subscription windows;
 //   - Claude on the API also has a link to the console's billing page (the spend is an estimate; the console has the bill);
 //   - the provider's own notice that a limit was reached is said under the agent it belongs to, with when it recovers only if the provider said;
-//   - not connected, or not known, says "额度 未知".
+//   - not connected, or not known, says "额度 未知";
+//   - an account that is signed in while the agent has no session (the connection's `active` is false) says so in the connection row; its bars or spend show as for any plan or API,
+//     and since no session is running it has no context length and no round or conversation tokens (only the session in view has them).
 // Windows come from the main process; the current session's agent falls back to what its own screen and records gave when the main process has none.
 // Read-only: it only asks the main process (for the current project's scope). A value nobody gave is 未知, never 0. What the main process does not give (a read
 // that has not come back, one that failed, a project it cannot answer for) leaves the connection and the allowance 未知; the current session's own context, bars and tokens stay.

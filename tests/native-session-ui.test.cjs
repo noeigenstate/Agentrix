@@ -1016,6 +1016,25 @@ test('the connection in use reads in words per agent: Claude API / subscription 
   assert.ok(usageSection(html, 'Codex').includes('<dt>连接</dt><dd><span title="account/read: API key">API</span></dd>'));
 });
 
+test('an account signed in while the agent has no session says so; none and unknown never read as signed in; the bars and spend stay, the context and tokens are not made up', async () => {
+  const { connectionWord } = words(), c = (kind, active) => ({ kind, source: 'src', observedAt: 1, ...(active === undefined ? {} : { active }) });
+  const kinds = ['api', 'subscription', 'none', 'unknown'];
+  assert.deepEqual(kinds.map(kind => connectionWord('claude', c(kind, false)).text), ['API（未开会话）', '订阅（未开会话）', '未连接', '未知']);
+  assert.deepEqual(kinds.map(kind => connectionWord('codex', c(kind, false)).text), ['API（未开会话）', 'ChatGPT 订阅（未开会话）', '未连接', '未知']);
+  assert.deepEqual(kinds.map(kind => connectionWord('claude', c(kind, true)).text), ['已连接 API', '订阅（Claude Code 登录）', '未连接', '未知'], 'an active connection reads as before');
+  assert.deepEqual(kinds.map(kind => connectionWord('codex', c(kind)).text), ['API', 'ChatGPT 订阅', '未连接', '未知'], 'a field that is missing (older data) reads as before');
+  const base = usageOf(), idle = usageOf({ agents: {
+    claude: { ...base.agents.claude, connection: c('api', false) },
+    codex: { ...base.agents.codex, connection: c('subscription', false), limits: { ...base.agents.codex.limits, observedAtMs: Date.now() - 60_000 } } } });
+  const html = await usageHtml({ usage: async () => ({ ok: true, value: idle }) }), claude = usageSection(html, 'Claude'), codex = usageSection(html, 'Codex');
+  assert.match(claude, /<dd><span[^>]*>API（未开会话）<\/span><\/dd>/); assert.match(codex, /<dd><span[^>]*>ChatGPT 订阅（未开会话）<\/span><\/dd>/);
+  assert.match(codex, /5 小时额度[\s\S]*?aria-valuenow="40"/); assert.match(codex, /每周额度/); assert.match(codex, /额度来自 Codex/);
+  assert.match(claude, /月预算/); assert.match(claude, /API 花费/);
+  assert.doesNotMatch(html, /上下文长度|本轮|本次对话|<dt>额度<\/dt>/, 'no session: no context, no round, no empty row');
+  const signed = { ...base.agents.codex, connection: c('api', false) }, codexApi = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ agents: { ...base.agents, codex: signed } }) }) }), 'Codex');
+  assert.match(codexApi, /还没有 API 用量记录/);
+});
+
 test('a connection test reads as four lines, each with a tone and a next step for what failed, and nothing in it can carry the key', () => {
   const { connectionLines } = words(), required = '2.1.317';
   const good = { checkedAt: 1, key: { status: 'ok', detail: null, latencyMs: 182.4 }, models: ['claude-opus-5-5', 'a', 'b', 'c', 'd', 'e', 'f'], cli: { status: 'ok', version: '2.1.317', required }, path: 'api', reason: null };
