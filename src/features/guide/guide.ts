@@ -3,7 +3,7 @@
 // group: "new" marks what this beta adds. Those notes come first; the list shows them under their own heading and the rest under "also in".
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
   { title: "用量卡", text: "活动栏里 Claude 和 Codex 分开显示连接方式、新会话走哪条路和额度，保存密钥或改运行方式后马上更新。", group: 'new' },
-  { title: "计费检查", text: "测试连接会确认 Claude Code 实际用的是不是你的密钥；不是的话，新会话转到终端并说明原因，不再直接失败。", group: 'new' },
+  { title: "计费检查", text: "测试连接会确认 Claude Code 报告的计费来源是 API 密钥；不是的话，新会话转到终端并说明原因，不再直接失败。", group: 'new' },
   { title: "原生通道修复", text: "修好了 Codex 的原生连接和 Claude 走 API 时的启动失败。", group: 'new' },
   { title: "原生界面", text: "Claude 通过 API、Codex 通过 app-server 在应用自己的界面里运行，命令、改动、计划和确认都直接显示；也可以在设置里改回终端界面。" },
   { title: "运行方式", text: "设置里可以保存 API 密钥、测试连接、设定月预算；Claude 默认走 API，额度用完自动转到订阅登录的终端，接着同一段对话。" },
