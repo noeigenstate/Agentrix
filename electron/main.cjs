@@ -57,7 +57,7 @@ const claudeAccounts = new ClaudeAccountUsage({ changed: () => queueClaudeAccoun
   fetch: (url, options) => electronNet.fetch(url, options),
 }) });
 const { agentCommand } = require('./features/agents/agent-command.cjs');
-const { setThumbnailer, isGeneratedImage, generatedImage } = require('./conversation.cjs');
+const { setThumbnailer, isGeneratedImage, generatedImage, setConversationTranslator } = require('./conversation.cjs');
 const { saveDialogOptions, saveTarget } = require('./image-save.cjs');
 const { registerVoiceIpc } = require('./features/voice/ipc.cjs');
 const { createIpcAdapter } = require('./shared/ipc.cjs');
@@ -110,6 +110,7 @@ registerAppSchemes(protocol);
 const { translate } = require('./i18n.cjs');
 // Text shown by the main process follows the language chosen in settings (Chinese source -> locales/en.json).
 const t = (text, values) => translate(store?.settings.language, text, values);
+setConversationTranslator(t);
 let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, dashboardWindow = null, labWindow = null, quitCleaned = false;
 let macTitlebar = null;
 const desktopGlassBackend = desktopGlassKind();

@@ -8,6 +8,7 @@ const { run } = require('../integration/dispatch.cjs');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
 
 const synthetic = { PATH: '', ANTHROPIC_API_KEY: 'synthetic-key', anthropic_auth_token: 'synthetic-token', CLAUDE_CODE_OAUTH_TOKEN: 'synthetic-oauth',
+  CLAUDE_CODE_ENTRYPOINT: 'agentrix-sdk', claude_code_entrypoint: 'agentrix-sdk',
   CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: '123', CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_SESSION_ACCESS_TOKEN: 'synthetic-session',
   CLAUDE_CONFIG_DIR: 'synthetic-config', AGENTRIX_CONTROL_CAPABILITY: 'synthetic-control', AGENTRIX_BOOTSTRAP: 'synthetic-bootstrap' };
 
@@ -24,6 +25,7 @@ for (const sdkParent of [false, true]) test(`N5: CLI preserves owner authenticat
       launched = true;
       const expected = sdkParent ? { PATH: '', CLAUDE_CONFIG_DIR: 'synthetic-config' } : { ...synthetic };
       delete expected.AGENTRIX_CONTROL_CAPABILITY; delete expected.AGENTRIX_BOOTSTRAP;
+      delete expected.CLAUDE_CODE_ENTRYPOINT; delete expected.claude_code_entrypoint;
       assert.deepEqual(options.env, expected); return lifetime.child(spawn(file, args, options));
     } });
   assert.equal(code, 0); assert.equal(launched, true); assert.match(stdout, /claude-cli fallback/);

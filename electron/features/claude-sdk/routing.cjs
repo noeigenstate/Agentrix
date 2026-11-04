@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { routeFailure } = require('./identity.cjs');
 
 // Flag settings override disk env without disabling the owner's project hooks and permissions.
 const ROUTE_ENV = [
@@ -21,15 +22,27 @@ const ROUTE_ENV = [
 ];
 const routeName = name => ROUTE_ENV.includes(name.toUpperCase()) || /^(?:ANTHROPIC_|CLAUDE_CODE_USE_)|(?:BASE_URL|PROXY|ENDPOINT|CA_CERT|CA_BUNDLE|CERT_STORE|CLIENT_CERT|CLIENT_KEY|GATEWAY|TLS_)/i.test(name);
 const HELPERS = ['apiKeyHelper', 'proxyAuthHelper', 'awsAuthRefresh', 'awsCredentialExport', 'gcpAuthRefresh'];
+// These CA search paths change default trust discovery when set to an empty string. Pin them only when needed.
+const conditionalRoute = name => /^(?:SSL_CERT_FILE|SSL_CERT_DIR|CURL_CA_BUNDLE|REQUESTS_CA_BUNDLE|HTTPLIB2_CA_CERTS|AWS_.*)$/.test(name);
+const SETTINGS_LIMIT = 64 * 1024 * 1024;
 function settings(file, project = false) {
+  let fd;
   try {
-    if (fs.statSync(file).size > 1048576) throw new Error('settings_too_large');
-    const value = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    if (size > SETTINGS_LIMIT) throw Object.assign(new Error(), { code: 'settings_too_large' });
+    const bytes = Buffer.alloc(size + 1);
+    let length = 0, read;
+    while (length < bytes.length && (read = fs.readSync(fd, bytes, length, bytes.length - length, length))) length += read;
+    if (length > SETTINGS_LIMIT) throw Object.assign(new Error(), { code: 'settings_too_large' });
+    const raw = bytes.subarray(0, length), utf16 = raw[0] === 0xff && raw[1] === 0xfe;
+    const value = JSON.parse(raw.toString(utf16 ? 'utf16le' : 'utf8').replace(/^\uFEFF/, ''));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
   } catch (error) {
-    if (project || error.code === 'ENOENT') return {};
-    throw Object.assign(new Error('无法读取 Claude 路由配置。'), { code: 'route_config_unreadable' });
-  }
+    if (error.code === 'ENOENT') return {};
+    if (project && error.code !== 'settings_too_large') return null;
+    throw routeFailure('route_config_unreadable', file);
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 function routeSettings(spec) {
   const cwd = path.resolve(spec.cwd || process.cwd()), root = path.resolve(spec.worktree || spec.projectRoot || cwd);
@@ -42,16 +55,19 @@ function routeSettings(spec) {
     // A user-config junction into the repository is still project-controlled.
     let real; try { real = fs.realpathSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const relative = real && path.relative(root, real);
-    if (real && (relative.startsWith('..' + path.sep) || path.isAbsolute(relative))) user = settings(file);
+    if (real && (relative.startsWith('..' + path.sep) || path.isAbsolute(relative))) user = settings(file) || {};
   }
   const trusted = new Map(Object.entries({ ...inherited, ...(user.env || {}) }).map(([name, value]) => [name.toUpperCase(), value]));
-  const names = new Set(ROUTE_ENV.filter(name => /^(?:ANTHROPIC_|CLAUDE_CODE_USE_)/.test(name)));
+  const names = new Set(ROUTE_ENV.filter(name => !conditionalRoute(name)));
   // Cover mixed-case spellings and newly added transport variables from every project settings source.
-  for (let folder = cwd; folder === root || folder.startsWith(root + path.sep); folder = path.dirname(folder)) {
+  for (let folder = cwd; spec.owner !== 'dispatch' && (folder === root || folder.startsWith(root + path.sep)); folder = path.dirname(folder)) {
     for (const filename of ['settings.json', 'settings.local.json']) {
-      const env = settings(path.join(folder, '.claude', filename), true).env;
+      const file = path.join(folder, '.claude', filename), config = settings(file, true);
+      // A parser mismatch must not remove route protection; malformed files still let the CLI start.
+      if (!config) { for (const name of ROUTE_ENV) names.add(name); continue; }
+      const env = config.env;
       if (Object.keys(env || {}).some(name => name.toUpperCase() === 'ANTHROPIC_API_KEY')) {
-        throw Object.assign(new Error('项目 Claude 配置不能覆盖应用保存的 API 密钥。'), { code: 'project_api_key_override' });
+        throw routeFailure('project_api_key_override', path.relative(cwd, file).split(path.sep).join('/'));
       }
       for (const name of Object.keys(env || {})) if (routeName(name)) names.add(name);
     }

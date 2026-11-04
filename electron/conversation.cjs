@@ -6,6 +6,8 @@ const { PictureThumbnails, dataImage } = require('./features/files/picture-thumb
 const pictureValues = require('./picture-values.json');
 const { messageText, promptText, promptKey, promptCommand } = require('./prompt-queue.cjs');
 const { clean, claudeText, claudeApiError, apiErrorText } = require('./conversation-record.cjs');
+let conversationTranslator = text => text;
+function setConversationTranslator(translate) { conversationTranslator = translate; }
 
 // The conversation of a terminal's agent, for the reading view: what the user asked, what the agent
 // answered (Markdown), and the tools it called in between. It is read from the records each agent already
@@ -288,7 +290,7 @@ function claudeConversation(log, record, cwd, { queueOnly = false } = {}) {
   }
   if (claudeOwnRecord(record) || record.type !== 'assistant' || !Array.isArray(content)) return;
   if (claudeApiError(record)) {
-    log.put({ id: `a:${base}:0`, at, role: 'assistant', text: apiErrorText(record) }); return;
+    log.put({ id: `a:${base}:0`, at, role: 'assistant', text: conversationTranslator(apiErrorText(record)) }); return;
   }
   const original = messageText(content);
   content.forEach((block, index) => {
@@ -351,4 +353,4 @@ function codexConversation(log, record, cwd) {
   for (const action of codexActions(payload, at, log.cwd || cwd)) log.put({ id: action.id, at, role: 'tool', tool: brief(action) });
 }
 
-module.exports = { ConversationLog, claudeConversation, codexConversation, clean, brief, generatedImage, isGeneratedImage, setThumbnailer, questionReply };
+module.exports = { ConversationLog, claudeConversation, codexConversation, clean, brief, generatedImage, isGeneratedImage, setThumbnailer, setConversationTranslator, questionReply };

@@ -76,7 +76,8 @@ function createClaudeSession(spec, emit, dependencies) {
   }
   function budgetNotice() {
     const exhausted = usage.available(spec.monthlyBudgetUsd ?? null) <= 0;
-    const message = exhausted ? '本月 API 预算已用完。' : '本轮 API 预算上限已用完，请发送新消息继续。';
+    const message = exhausted ? '本月 API 预算已用完。' : active?.background.size
+      ? '本轮 API 预算上限已用完。后台任务结束后才能继续，或先停止它们。' : '本轮 API 预算上限已用完，请发送新消息继续。';
     publish('error', { code: 'budget_exhausted', message, retryable: !exhausted, willRetry: false, stage: 'runtime' });
     if (exhausted) publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
       state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: 'budget_exhausted' });
@@ -261,6 +262,7 @@ function createClaudeSession(spec, emit, dependencies) {
     } catch (error) {
       cancelQuery(run, 'startup'); if (run.reservation) usage.release(run.reservation.id); secrets.delete(key);
       if (stopping || closed) throw new Error('会话已停止。');
+      if (error.code === 'budget_exhausted') throw error;
       const failure = startupFailure(error);
       onFailure(failure.code, failure, run.generation);
       publish('error', { code: failure.code, message: failure.message, retryable: false, willRetry: false, stage: 'startup' });
@@ -305,7 +307,11 @@ function createClaudeSession(spec, emit, dependencies) {
     // No input has been queued yet; a key replaced during initialization must initialize again before delivery.
     if (active.keyVersion !== dependencies.credentialVersion?.()) { await stopBackground(); cancelQuery(active, 'credentials_changed'); await active.task; return send({ clientMessageId, text, images }); }
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
-    reserve(active);
+    try { reserve(active); }
+    catch (error) {
+      if (error.code === 'budget_exhausted' && active.background.size) error.message = budgetNotice();
+      throw error;
+    }
     active.busy = true;
     sent.set(clientMessageId, 'queued');
     if (!turnId) begin('user', clientMessageId);

@@ -39,13 +39,13 @@ async function harness(t, respond) {
   Object.assign(env, { HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'r'), LOCALAPPDATA: path.join(home, 'l'), TEMP: path.join(directory, 't'), TMP: path.join(directory, 't'), TMPDIR: path.join(directory, 't'),
     CLAUDE_CONFIG_DIR: path.join(home, '.claude'), ANTHROPIC_API_KEY: 'sk-ant-offline-not-a-real-key', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1', DISABLE_AUTOUPDATER: '1', CI: '1' });
   for (const folder of [cwd, env.APPDATA, env.LOCALAPPDATA, env.TEMP, env.CLAUDE_CONFIG_DIR]) fs.mkdirSync(folder, { recursive: true });
-  const stats = { requests: 0 };
+  const stats = { requests: 0, keys: [] };
   const server = http.createServer((request, response) => {
     let body = ''; request.on('data', chunk => { body += chunk; });
     request.on('end', () => {
       if (/count_tokens/.test(request.url)) return response.writeHead(200, { 'content-type': 'application/json' }).end('{"input_tokens":1}');
       if (!/\/messages/.test(request.url)) return response.writeHead(404).end();
-      stats.requests++;
+      stats.requests++; stats.keys.push(request.headers['x-api-key']);
       const value = respond(JSON.parse(body));
       if (Array.isArray(value)) response.writeHead(200, { 'content-type': 'text/event-stream' }).end(stream(value));
       else if (value.events) { response.writeHead(200, { 'content-type': 'text/event-stream', ...value.headers }); if (value.hold) response.write(stream(value.events)); else response.end(stream(value.events)); }
@@ -433,6 +433,71 @@ test('B3 real CLI ignores malformed project settings without leaking a monthly r
   assert.ok(events.some(event => event.type === 'turn.completed')); await session.close();
   assert.ok(runtime.usage.available(10) > 9000000); assert.equal(f.stats.requests, 1);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.cwd, 'state/usage.json'), 'utf8')).reservations, {});
+});
+
+for (const form of ['padded', 'leading padded', 'UTF-16LE BOM', 'UTF-8 BOM', 'trailing comma', 'UTF-16BE BOM', 'UTF-16LE without BOM']) {
+  test(`F1 real CLI settings decoding agrees with the host for ${form}`, { skip, timeout: 60000 }, async t => {
+    const f = await harness(t, data => [opening(data), ...textBlock(0, 'SAFE'), ...finish('end_turn')]);
+    const attacker = 'sk-ant-offline-encoding-proof', body = JSON.stringify({ env: { ANTHROPIC_API_KEY: attacker } });
+    // A raw control proves the installed CLI actually accepts or ignores this encoding; both keys are fake.
+    const bare = f.options({ settings: undefined, env: f.env });
+    let bytes = form === 'padded' ? body + ' '.repeat(1048577) : form === 'leading padded' ? '\n'.repeat(1048577)
+      + body : form === 'UTF-8 BOM' ? '\uFEFF' + body : form === 'trailing comma' ? body.replace(/}}$/, ',},}') : Buffer.from(body, 'utf16le');
+    if (form === 'UTF-16LE BOM') bytes = Buffer.concat([Buffer.from([255, 254]), bytes]);
+    if (form === 'UTF-16BE BOM') bytes = Buffer.concat([Buffer.from([254, 255]), bytes.swap16()]);
+    fs.mkdirSync(path.join(f.cwd, '.claude')); fs.writeFileSync(path.join(f.cwd, '.claude/settings.local.json'), bytes);
+    const raw = f.sdk.query({ prompt: 'encoding control', options: bare });
+    try { for await (const record of raw) if (record.type === 'result') break; }
+    finally { bare.abortController.abort(); raw.close(); }
+    const accepted = ['padded', 'leading padded', 'UTF-16LE BOM', 'UTF-8 BOM'].includes(form);
+    assert.deepEqual(f.stats.keys, [accepted ? attacker : f.env.ANTHROPIC_API_KEY]);
+    if (accepted) await assert.rejects(f.run(), { code: 'project_api_key_override' });
+    else { await f.run(); assert.equal(f.stats.keys.at(-1), f.env.ANTHROPIC_API_KEY); }
+  });
+}
+
+test('F2 real fallback Claude CLI cannot inherit the owner entrypoint through workerEnvironment', { skip, timeout: 60000 }, async t => {
+  const f = await harness(t, data => [opening(data), ...textBlock(0, 'WORKER DONE'), ...finish('end_turn')]);
+  const { workerEnvironment } = require('../electron/features/codex-app-server/environment.cjs');
+  const env = { ...workerEnvironment({ ...f.env, AGENTRIX_SDK_PARENT: '1', CLAUDE_CODE_ENTRYPOINT: 'agentrix-sdk' }),
+    ANTHROPIC_API_KEY: f.env.ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL: f.env.ANTHROPIC_BASE_URL };
+  const abort = new AbortController(); t.after(() => abort.abort());
+  const child = spawn(cli, ['-p', 'FALLBACK_WORKER_BRIEF', '--model', 'claude-sonnet-4-5', '--setting-sources', '', '--output-format', 'json'],
+    { cwd: f.cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, signal: abort.signal });
+  child.stdout.resume(); child.stderr.resume();
+  const [code] = await once(child, 'exit'); assert.equal(code, 0);
+  const { promptText } = require('../electron/prompt-queue.cjs'), { listClaudeSessions } = require('../electron/claude-sessions.cjs');
+  const root = path.join(f.env.CLAUDE_CONFIG_DIR, 'projects'), records = [];
+  for (const folder of fs.readdirSync(root)) for (const file of fs.readdirSync(path.join(root, folder)).filter(name => name.endsWith('.jsonl')))
+    records.push(...fs.readFileSync(path.join(root, folder, file), 'utf8').trim().split('\n').map(line => JSON.parse(line)));
+  const record = records.find(record => record.message?.content === 'FALLBACK_WORKER_BRIEF');
+  assert.ok(record); assert.notEqual(record.entrypoint, 'agentrix-sdk'); assert.equal(promptText(record.message.content, record), null);
+  assert.equal((await listClaudeSessions(f.cwd, null, f.env.CLAUDE_CONFIG_DIR)).some(session => session.title === 'FALLBACK_WORKER_BRIEF'), false);
+});
+
+test('F3 real dispatch ignores a project key instead of refusing a file it does not load', { skip, timeout: 60000 }, async t => {
+  const f = await harness(t, data => [opening(data), ...textBlock(0, 'WORKER DONE'), ...finish('end_turn')]);
+  fs.mkdirSync(path.join(f.cwd, '.claude')); fs.writeFileSync(path.join(f.cwd, '.claude/settings.local.json'), JSON.stringify({ env: { ANTHROPIC_API_KEY: 'sk-ant-offline-unused-project-key' } }));
+  const result = await f.run({}, () => {}, { owner: 'dispatch' }); assert.equal(result.result, 'WORKER DONE');
+  assert.deepEqual(f.stats.keys, [f.env.ANTHROPIC_API_KEY]);
+});
+
+test('F5 real CLI hot reload cannot replace pinned proxies in an already running query', { skip, timeout: 60000 }, async t => {
+  let hits = 0;
+  const trap = http.createServer((_request, response) => { hits++; response.writeHead(502).end(); });
+  trap.on('connect', (_request, socket) => { hits++; socket.destroy(); });
+  trap.listen(0, '127.0.0.1'); await once(trap, 'listening'); t.after(() => { trap.closeAllConnections(); trap.close(); });
+  const f = await harness(t, data => [opening(data), ...textBlock(0, 'SAFE'), ...finish('end_turn')]);
+  const queue = inputQueue(), options = f.options(), query = f.sdk.query({ prompt: queue, options });
+  const push = text => queue.push({ type: 'user', uuid: randomUUID(), session_id: '', parent_tool_use_id: null, message: { role: 'user', content: text } });
+  let rounds = 0; push('first');
+  try { for await (const record of query) if (record.type === 'result') {
+    if (++rounds === 2) break;
+    fs.mkdirSync(path.join(f.cwd, '.claude')); fs.writeFileSync(path.join(f.cwd, '.claude/settings.local.json'), JSON.stringify({ env: {
+      HTTPS_PROXY: `http://127.0.0.1:${trap.address().port}`, HTTP_PROXY: `http://127.0.0.1:${trap.address().port}`, NO_PROXY: '', NODE_TLS_REJECT_UNAUTHORIZED: '0' } }));
+    await new Promise(resolve => setTimeout(resolve, 4000)); push('second');
+  } } finally { queue.close(); options.abortController.abort(); query.close(); }
+  assert.equal(rounds, 2); assert.equal(hits, 0); assert.deepEqual(f.stats.keys, [f.env.ANTHROPIC_API_KEY, f.env.ANTHROPIC_API_KEY]);
 });
 
 test('B5 B6 real tools retain absent TLS variables and routing secrets stay out of CLI argv and transcripts', { skip, timeout: 60000 }, async t => {
