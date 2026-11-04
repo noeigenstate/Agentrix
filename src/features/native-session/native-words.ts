@@ -2,12 +2,13 @@
 // absent, never guessed) and the words for states, receipts, routes and money.
 //
 // The item content fields read here: messages and plans `text` (a string, or blocks with `text`);
-// the owner's message `clientMessageId` and `images`; commands `command` (string or list), `cwd`, `exitCode`, `durationMs`, `output`;
+// the owner's message `clientMessageId` and `images`; commands `command` (string or list), `phrase` (main's few words for it), `cwd`, `exitCode`, `durationMs`, `output`;
 // file changes `changes[{ path, kind, diff }]` or `path`, `kind`, `diff`; tools `name` or `tool`, `server`, `input` or `arguments`, `result` or
 // `output`. Quota windows are `{ usedPercent, windowDurationMins, resetsAtMs }` with `resetsAtMs` in milliseconds.
 import { t } from '../../shared/i18n';
+import type { ResultFacts } from '../reading/feed-parts';
 import type { AgentConnection, ConnectionTest, LimitWindow, NativeAgent, SwitchState } from './native-bridge.ts';
-import type { NativeItem, Payload } from './native-model.ts';
+import type { LimitNotice, NativeItem, Payload, TurnEnd } from './native-model.ts';
 
 const str = (value: unknown) => (typeof value === 'string' && value !== '' ? value : null);
 const list = (value: unknown): Payload[] => (Array.isArray(value) ? value.filter(entry => entry && typeof entry === 'object') as Payload[] : []);
@@ -19,9 +20,9 @@ export const messageText = (item: NativeItem) => item.deltas.text || lines(item.
 export const planText = (item: NativeItem) => item.deltas.plan || lines(item.content.text);
 
 export function commandOf(item: NativeItem) {
-  const { command, cwd, exitCode, durationMs, output } = item.content;
+  const { command, phrase, cwd, exitCode, durationMs, output } = item.content;
   return {
-    command: Array.isArray(command) ? command.join(' ') : (str(command) ?? ''), cwd: str(cwd),
+    command: Array.isArray(command) ? command.join(' ') : (str(command) ?? ''), phrase: str(phrase), cwd: str(cwd),
     exitCode: typeof exitCode === 'number' ? exitCode : null, durationMs: typeof durationMs === 'number' ? durationMs : null, output: item.deltas.output || (str(output) ?? ''),
   };
 }
@@ -84,10 +85,49 @@ export function switchLine(state: SwitchState | null | undefined) {
   }
 }
 
-// A switch that failed leaves the session where it was; the note says so with main's reason. null while nothing failed.
-export function switchFailure(state: SwitchState | null | undefined) {
-  if (!state || !(state.phase === 'rolling-back' || state.phase === 'stable' && state.reason)) return null;
-  return [t('没有切换成功，仍使用 {path}', { path: routeWord(state.current) }), reasonWords(state.reason)].filter(Boolean).join(' · ');
+// What a change that has ended tells, by the outcome main gives (never by whether it left a reason): a failed one leaves the session where it was and
+// says so with main's reason; one that switched may still carry a warning (the old process did not exit cleanly), and a restored or stopped one says its
+// reason. A change still under way (but rolling back) is failing; an ended one that gives no outcome says nothing. null when there is nothing to tell.
+export function switchNote(state: SwitchState | null | undefined) {
+  if (!state) return null;
+  const outcome = state.phase === 'rolling-back' ? state.outcome ?? 'failed' : state.phase === 'stable' ? state.outcome : undefined, reason = reasonWords(state.reason);
+  if (outcome === 'failed') return [t('没有切换成功，仍使用 {path}', { path: routeWord(state.current) }), reason].filter(Boolean).join(' · ');
+  return outcome === 'switched' || outcome === 'restored' || outcome === 'stopped' ? reason : null;
+}
+
+// ── How a turn ended ──
+// A sentence main wrote for the owner, translated like any interface text (one without an English line stays as written); none gives none.
+export const sentence = (message: string | null | undefined) => (message ? t(message) : null);
+const exact = (value: number) => value.toLocaleString('en-US');
+
+// A turn's tokens in words. Claude counts the cached and cache-written input apart from `input`; Codex's `input` already holds its cache, and reasoning is part of
+// the output: neither is added twice. A turn that counted nothing says nothing.
+function tokenWords(tokens: NonNullable<TurnEnd['tokens']>, provider: NativeAgent) {
+  const input = tokens.input === null ? null : provider === 'claude' ? tokens.input + (tokens.cachedInput ?? 0) + (tokens.cacheWrite ?? 0) : tokens.input;
+  if (!input && !tokens.output) return undefined;
+  return [input !== null && t('输入 {count}', { count: exact(input) }), tokens.output !== null && t('输出 {count}', { count: exact(tokens.output) })].filter(Boolean).join(' · ');
+}
+
+// The facts the reading view's result row shows for the turn that just ended, from what turn.completed carried: the duration its provider measured, this turn's
+// spend (an estimate unless the provider says otherwise) and tokens, and for a turn that did not complete the sentence main wrote for it. What it did not give is
+// absent — no duration, spend or count is ever 0 — and Codex gives no spend. The turn's tokens are not the conversation's running total, so the two never add.
+export function turnFacts(end: TurnEnd | null | undefined, provider: NativeAgent, completed: boolean): ResultFacts | undefined {
+  if (!end) return undefined;
+  const facts: ResultFacts = {}, spend = end.costUsdMicros ? money(end.costUsdMicros) : null, tokens = end.tokens ? tokenWords(end.tokens, provider) : undefined;
+  if (end.durationMs) facts.durationMs = end.durationMs;
+  if (spend) facts.spend = end.costEstimated === false ? spend : t('约 {amount}', { amount: spend });
+  if (tokens) facts.tokens = tokens;
+  if (!completed && end.message) facts.message = t(end.message);
+  return Object.keys(facts).length ? facts : undefined;
+}
+
+// ── The provider's notice that a limit was reached ──
+// The sentence main wrote, without the recovery time it appends (the time is told from resetsAtMs in the window's own clock, or not at all), and when the
+// provider says it recovers. A notice whose recovery time has passed is over.
+const RECOVERY = /(?:服务未提供恢复时间。|恢复时间：\S+)$/;
+export function noticeWords(notice: LimitNotice | null | undefined, now = Date.now()) {
+  if (!notice || typeof notice.resetsAtMs === 'number' && notice.resetsAtMs <= now) return null;
+  return { text: t(notice.message.replace(RECOVERY, '')), resets: typeof notice.resetsAtMs === 'number' ? t('约 {time} 恢复', { time: clockWords(notice.resetsAtMs, now) }) : null };
 }
 
 // What the owner is told before choosing: a switch ends background tasks. Unknown is not none, so no count is guessed.

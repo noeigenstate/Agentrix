@@ -30,6 +30,10 @@ export const changeLabel = (change: Pick<GitChange, 'untracked' | 'index' | 'wor
 
 export type ResultKind = 'picture' | 'code' | 'text' | 'failed';
 export type RoundCheck = { id: string; phrase: string; target: string; done: boolean; failed: boolean };
+// What the source of a round said about how it ended, in the words the row shows (a native session's turn.completed; a terminal session has none):
+// how long the round took in milliseconds, the spend and the tokens as text, and the sentence for a round that did not complete. A fact the source did
+// not give is absent, never zero.
+export type ResultFacts = { durationMs?: number; spend?: string; tokens?: string; message?: string };
 export type LatestResult = {
   kind: ResultKind;
   // The entry the status row stands over and the actions under: the picture, the last reply, or the step the round ended on.
@@ -39,12 +43,14 @@ export type LatestResult = {
   picture: { path: string; prompt: string } | null;
   // What stopped a failed round: the step's target.
   failure: string;
+  facts?: ResultFacts;
 };
 
 // The latest round, once it has ended: its kind and what it left. Null while the agent works or waits (nothing to hand
 // in yet), and for a round that left neither a reply, a picture nor files. Only this round carries the result card.
 // failure: how the round failed when the source says so (a native session's turn.completed), when no step of it did.
-export function latestResult(entries: readonly ConversationEntry[], { idle, interrupted, failure: reported = '' }: { idle: boolean; interrupted: boolean; failure?: string }): LatestResult | null {
+// facts: what that source said about the end; stopped: the source says the round was stopped, which it is even when its last step failed.
+export function latestResult(entries: readonly ConversationEntry[], { idle, interrupted, failure: reported = '', facts, stopped = false }: { idle: boolean; interrupted: boolean; failure?: string; facts?: ResultFacts; stopped?: boolean }): LatestResult | null {
   const start = startOf(entries);
   if (!idle || start < 0) return null;
   const round = entries.slice(start + 1), last = round.at(-1);
@@ -55,8 +61,9 @@ export function latestResult(entries: readonly ConversationEntry[], { idle, inte
     request: entries[start].text ?? '', startedAt: entries[start].at, endedAt: last.at, reply: reply?.text ?? '', written: writtenBy(round),
     checks: tools.filter(entry => entry.tool!.kind === 'command' && entry.tool!.phrase && CHECKS.has(entry.tool!.phrase))
       .map(({ id, tool }) => ({ id, phrase: tool!.phrase!, target: tool!.target, done: tool!.done, failed: tool!.failed })),
+    ...(facts ? { facts } : {}),
   };
-  const failure = last.tool?.failed ? last.tool.target : reported;
+  const failure = stopped ? '' : last.tool?.failed ? last.tool.target : reported;
   if (interrupted || failure) return { ...base, kind: 'failed', anchor: last.id, picture: null, failure };
   const drawn = lastWhere(round, entry => entry.generated && entry.images?.[0]);
   if (drawn) return { ...base, kind: 'picture', anchor: drawn.id, picture: drawn.generated!, failure: '' };

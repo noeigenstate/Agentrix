@@ -32,9 +32,12 @@ function toolStep(item: NativeItem, state: ReturnType<typeof itemState>): Step {
 }
 
 function commandStep(item: NativeItem, state: ReturnType<typeof itemState>): Step {
-  const { command, cwd, exitCode, durationMs, output } = commandOf(item), failed = !!exitCode || state === 'failed';
+  // Claude names the command in the input of its Bash tool; Codex gives it as `command`. The phrase (运行测试, 检查类型…) is main's, from the same rules the
+  // terminal transcript uses (electron/agent-actions.cjs), so the result row's list of checks reads the same in both.
+  const { command: given, phrase, cwd, exitCode, durationMs, output } = commandOf(item), failed = !!exitCode || state === 'failed';
+  const command = given || field(fieldsOf(toolOf(item).input), 'command');
   const facts = [cwd && shortPath(cwd), exitCode !== null && t('退出码 {code}', { code: exitCode }), durationMs !== null && t('用时 {seconds} 秒', { seconds: (durationMs / 1000).toFixed(1) })].filter(Boolean).join(' · ');
-  return { kind: 'command', tool: 'command', target: command, detail: facts, done: state !== 'running', failed, output };
+  return { kind: 'command', tool: 'command', target: command, detail: facts, done: state !== 'running', failed, output, ...(phrase ? { phrase } : {}) };
 }
 
 function fileStep(item: NativeItem, state: ReturnType<typeof itemState>): Step {

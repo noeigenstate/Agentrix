@@ -2273,6 +2273,22 @@ test('completed text, code and picture headings omit the completion suffix and k
   }
 });
 
+test('a round’s facts from its source (a native session) change only the row’s duration, spend, tokens and sentence; a terminal round draws exactly as before', () => {
+  const ask = readingEntry('u', 'user', 1, { text: 'Finish the task.' }), reply = readingEntry('a', 'assistant', 3, { text: 'Done.' });
+  const plain = latestResult([ask, reply], idle), row = result => renderToStaticMarkup(ResultStatus({ result, taskTitle: undefined, onError() {} }));
+  assert.equal('facts' in plain, false, 'no facts, no field');
+  assert.ok(row(plain).includes('<span class="result-took"> · took 2 min 0 s</span>'), 'the time between the steps, as ever');
+  assert.equal(row(plain).split('result-sub').length, 2, 'and no second line');
+  const facts = { durationMs: 83000, spend: '约 $0.12', tokens: '输入 52,000 · 输出 300' }, told = latestResult([ask, reply], { ...idle, facts });
+  assert.ok(row(told).includes('<span class="result-took"> · took 1 min 23 s · 约 $0.12 · 输入 52,000 · 输出 300</span>'), 'the duration the source measured wins');
+  const failed = (options) => latestResult([ask, readingTool('npm test', 3, { failed: true })], { ...idle, ...options });
+  assert.equal(failed({}).failure, 'npm test'); assert.equal(failed({ interrupted: true, stopped: true }).failure, '', 'a source that says the round was stopped makes it stopped even when its last step failed');
+  assert.equal(failed({ interrupted: true }).failure, 'npm test', 'a terminal round keeps its earlier reading');
+  const stopped = failed({ interrupted: true, stopped: true, facts: { message: 'Stopped at the turn limit.' } });
+  assert.match(row(stopped), /aria-label="Interrupted"/); assert.ok(row(stopped).includes('<p class="result-sub">Stopped at the turn limit.</p>'));
+  assert.doesNotMatch(row(failed({ facts: { durationMs: 1000 } })), /result-sub">Stopped/);
+});
+
 test('failed and interrupted headings retain their visible labels and native tooltips', () => {
   const result = latestResult([readingEntry('u', 'user', 1, { text: 'Run checks.' }), readingTool('npm test', 2, { failed: true })], idle);
   for (const [failure, label] of [['npm test', 'Failed'], ['', 'Interrupted']]) {

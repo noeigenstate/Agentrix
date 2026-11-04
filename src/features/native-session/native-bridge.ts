@@ -2,7 +2,7 @@
 // and its preload wiring belong to the main side; this file is the consumer-side shape of it, so the rest of the module never reaches
 // into window. Every call returns a Result; a build or a test without the bridge reads as "no native sessions" (null).
 import type { ConnectionTest, Result } from '../../shared/types';
-import type { AgentEvent, NativeAnswer, NativeSnapshot } from '../../shared/agent-events';
+import type { AgentEvent, LimitsPayload as SharedLimits, NativeAnswer, NativeSnapshot } from '../../shared/agent-events';
 export type { NativeAnswer, NativeSnapshot, NativeDraft, NativeHandoff, NativeHandoffReceipt, NativePendingInput, SwitchState } from '../../shared/agent-events';
 
 export type NativeAgent = 'claude' | 'codex';
@@ -16,6 +16,8 @@ export type LimitsPayload = {
   state?: string | null; observedAtMs?: number | null; ordinaryUsageAllowed?: boolean | null;
   limitsById?: Record<string, { limitName?: string | null; primary?: LimitWindow | null; secondary?: LimitWindow | null } | null> | null;
   resetCredits?: { availableCount?: number | null } | null;
+  // What the provider itself says about the allowance: whether it rejects, and the notice that a limit was reached (with when it recovers, when it says).
+  providerStatus?: SharedLimits['providerStatus'] | null; notice?: SharedLimits['notice'];
 };
 // What an agent is connected through right now (contract addendum 2): the API key, the subscription login, nothing running, or not known.
 export type ConnectionKind = 'api' | 'subscription' | 'none' | 'unknown';
