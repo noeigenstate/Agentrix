@@ -29,6 +29,16 @@ function fixture(t, mode = 'normal') {
   return { events, factory, runtime, spec, calls };
 }
 
+for (const allowFreshResume of [false, true]) test(`F14 a missing empty thread starts fresh only when the host proves no history (${allowFreshResume})`, async t => {
+  const f = fixture(t, 'empty-thread');
+  const spec = { ...f.spec, providerSessionId: '11111111-1111-4111-8111-111111111111', allowFreshResume };
+  if (!allowFreshResume) await assert.rejects(f.runtime.resume(spec), error => error.missingThread === true);
+  else {
+    await f.runtime.resume(spec); assert.equal(f.runtime.threadResponse.thread.id, 'synthetic-thread');
+    assert.equal(f.events.some(event => event.type === 'turn.started' || event.type === 'input.receipt'), false);
+  }
+});
+
 test('native start, final snapshot replacement, completion dedup and limits are provider snapshots', async t => {
   const f = fixture(t); await f.runtime.start();
   assert.equal((await f.runtime.send({ clientMessageId: 'one', text: 'hello' })).status, 'delivered');

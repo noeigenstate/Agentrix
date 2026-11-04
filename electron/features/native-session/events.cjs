@@ -29,7 +29,7 @@ function createEventStream(spec, emit, now = Date.now) {
     }
     emit(event); return event;
   }
-  return { publish, provider(id) { providerSessionId = id; }, turn(id) { turnId = id; },
+  return { runtimeSessionId: spec.runtimeSessionId, publish, provider(id) { providerSessionId = id; }, turn(id) { turnId = id; },
     snapshot: () => ({ runtimeSessionId: spec.runtimeSessionId, lastSequence: sequence, state,
       events: [...events.values()].sort((a, b) => a.sequence - b.sequence).map(event => ({ ...event, replay: true })) }) };
 }

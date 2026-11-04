@@ -7,6 +7,7 @@ const { randomUUID } = require('node:crypto');
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
 const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
+const { terminalPreparation, completeSwitch } = require('./fixtures/native-switch.cjs');
 
 async function until(check) {
   for (let i = 0; i < 500; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 2)); }
@@ -78,6 +79,7 @@ for (const mode of ['api-only', 'api-then-terminal']) test(`M1 monthly exhaustio
   const f = fixture(t), terminals = [];
   fs.writeFileSync(path.join(f.directory, 'settings.json'), JSON.stringify({ claudePath: mode, codexView: 'native', monthlyBudgetUsd: 1 }));
   const native = createNativeSessions({ directory: f.directory, claude: f.runtime,
+    prepareTerminal: terminalPreparation(spec => terminals.push(spec)),
     resolveSpec: id => ({ agent: 'claude', owner: 'gui', projectId: 'p', terminalId: id, cwd: f.directory }),
     terminal: async (...args) => terminals.push(args), emit: event => f.events.push(event) });
   t.after(() => native.close());
@@ -85,11 +87,11 @@ for (const mode of ['api-only', 'api-then-terminal']) test(`M1 monthly exhaustio
   await native.send('t', runtimeSessionId, { clientMessageId: randomUUID(), text: 'first' });
   await until(() => f.fake.inputs.length === 1);
   f.fake.emit({ type: 'result', uuid: randomUUID(), subtype: 'error_max_budget_usd', is_error: true, total_cost_usd: 1, modelUsage: {} });
-  await until(() => native.snapshot('t').state === 'idle');
+  await until(() => native.snapshot('t').state === (mode === 'api-only' ? 'stopped' : 'idle'));
   const turn = f.events.findLast(event => event.type === 'turn.completed');
   assert.equal(turn.payload.status, 'interrupted'); assert.match(turn.payload.error, /本月 API 预算/);
   const next = () => native.send('t', runtimeSessionId, { clientMessageId: randomUUID(), text: 'keep this draft' });
-  if (mode === 'api-only') { await assert.rejects(next(), /API 路径当前不可用/); assert.equal(terminals.length, 0); }
-  else { assert.equal((await next()).status, 'rejected'); assert.equal(terminals[0][1], 'budget_exhausted'); }
+  assert.equal((await next()).status, 'rejected'); assert.equal(terminals.length, 0, 'unsent input cannot bypass the switch coordinator');
+  if (mode === 'api-then-terminal') { await completeSwitch(native, 't'); assert.equal(terminals.length, 1); }
   assert.equal(f.fake.inputs.length, 1, 'neither mode automatically resends a pending draft');
 });

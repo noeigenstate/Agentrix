@@ -39,6 +39,51 @@ test('missing SDK history cannot be accepted as a successful idle resume', async
   assert.equal(f.fake.calls.length, 0); assert.equal(f.fake.inputs.length, 0);
 });
 
+test('F14 an explicitly empty session initializes fresh without a resume id or inference', async t => {
+  const f = fixture(t, false); await f.session.resume();
+  assert.deepEqual(await f.session.prepareResume({ allowFresh: true }), { providerSessionId: null });
+  assert.equal(f.fake.calls[0].options.resume, undefined); assert.equal(f.fake.inputs.length, 0);
+});
+
+test('F6 a cleared idle query cannot wake automatically or accept another input', async t => {
+  const f = fixture(t); await f.session.resume(); await f.session.prepareResume();
+  f.fake.emit({ type: 'system', subtype: 'init', session_id: f.fake.sessionId, apiKeySource: 'ANTHROPIC_API_KEY' });
+  await new Promise(resolve => setImmediate(resolve));
+  f.runtime.credentials.clear(); f.session.policyChanged();
+  f.fake.emit({ type: 'assistant', uuid: 'late-auto', message: { content: [{ type: 'text', text: 'Late automatic work' }] } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.fake.closes.length, 1); assert.equal(f.events.some(event => event.type === 'turn.started'), false);
+  assert.equal((await f.session.send({ clientMessageId: 'after-clear', text: 'Never deliver' })).status, 'rejected');
+  assert.equal(f.fake.inputs.length, 0);
+});
+
+test('F22 a checkpoint created with the old key uses a replacement saved key when restored', async t => {
+  const f = fixture(t); await f.session.resume(); await f.session.prepareResume();
+  const restore = f.session.checkpoint(); f.runtime.credentials.clear();
+  f.runtime.credentials.save('sk-ant-offline-replacement-not-real'); await f.session.close();
+  const session = restore({ ...f.spec, runtimeSessionId: 'replacement' }, () => {});
+  await session.resume(); await session.prepareResume();
+  assert.equal(f.fake.calls.at(-1).options.env.ANTHROPIC_API_KEY, 'sk-ant-offline-replacement-not-real');
+});
+
+for (const action of ['clear', 'replace']) test(`F6/F22 ${action} during identity initialization cannot deliver using the retired key`, async t => {
+  const f = fixture(t); await f.session.resume();
+  let release; const gate = new Promise(resolve => { release = resolve; }), query = f.fake.sdk.query;
+  f.fake.sdk.query = spec => { const value = query(spec); return f.fake.calls.length === 1 ? { ...value, initializationResult: () => gate } : value; };
+  const pending = f.session.send({ clientMessageId: 'race', text: 'Offline race' });
+  while (!f.fake.calls.length) await new Promise(resolve => setImmediate(resolve));
+  f.runtime.credentials.clear();
+  if (action === 'replace') f.runtime.credentials.save('sk-ant-offline-replacement-not-real');
+  release({ account: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'none' } });
+  const result = await pending;
+  if (action === 'clear') { assert.equal(result.status, 'rejected'); assert.equal(f.fake.inputs.length, 0); }
+  else {
+    assert.equal(result.status, 'queued'); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.fake.inputs.length, 1); assert.equal(f.fake.calls.at(-1).options.env.ANTHROPIC_API_KEY, 'sk-ant-offline-replacement-not-real');
+  }
+  assert.ok(f.fake.closes.length >= 1);
+});
+
 for (const initialized of [false, true]) test(`a cleared key can restore its prior API session without re-saving credentials (initialized=${initialized})`, async t => {
   const f = fixture(t); await f.session.resume();
   if (initialized) await f.session.prepareResume();

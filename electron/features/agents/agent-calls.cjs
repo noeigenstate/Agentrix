@@ -18,6 +18,7 @@ function helperAlive(pid) {
 }
 
 class AgentCalls {
+  static alive(pid) { return helperAlive(pid); }
   constructor({ changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true, codexHome = null, claudeHome = null, now = Date.now, since = now(), dispatchAlive = call => helperAlive(call.helperPid) } = {}) {
     this.changed = changed; this.finished = finished; this.local = local; this.folder = null;
     this.now = now; this.since = since; this.claudeHome = claudeHome; this.finishedIds = new Set();
@@ -314,7 +315,9 @@ class AgentCalls {
         let alive;
         if (!call.done) { try { alive = await this.dispatchAlive(call); } catch {} }
         if (this.calls !== calls || calls.get(id) !== call) return;
-        if (alive === false && !call.done && !call.reviewed) this.dispatch({ type: 'dispatch-end', id, reason: 'killed', exitCode: null,
+        if (alive !== false) call.missingSince = null;
+        else call.missingSince ??= this.now();
+        if (alive === false && this.now() - call.missingSince >= 1000 && !call.done && !call.reviewed) this.dispatch({ type: 'dispatch-end', id, reason: 'killed', exitCode: null,
           model: call.model, effort: call.effort, fast: call.fast, endedAt: this.now(), outputTokens: null, activeMs: null });
         await this.feeds.readDispatch(call);
       }

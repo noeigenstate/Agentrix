@@ -43,7 +43,11 @@ function registerTerminalIpc({ handle, listen, findProject, getSession, hasSessi
     if (s.status === 'exited') return;
     // Native Codex reports accepted user items itself. Raw TUI answers (including secret free text)
     // must never become guessed prompts, queued messages or completion notifications.
-    if (answer === true || s.native) { s.gate.input(data); return; }
+    if (answer === true) { s.gate.input(data); return; }
+    if (s.native) {
+      if (!s.nativeInputRequests?.size) s.draftSubmissions?.write(data);
+      s.gate.input(data); return;
+    }
     const submitted = s.submissions.write(data);
     // A line of unknown text (arrows, then Enter) is as often a choice in a menu (Codex's update prompt, a /model
     // picker) as a prompt recalled from history: the agent's own records report a round it really starts.

@@ -15,6 +15,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   let result = {};
   if (request.method === 'initialize') result = { userAgent: mode === 'unknown-version' ? 'codex/9.99.0' : 'codex/0.166.0' };
   else if (request.method === 'thread/start' || request.method === 'thread/resume') {
+    if (mode === 'empty-thread' && request.method === 'thread/resume') return send({ id: request.id,
+      error: { code: -32600, message: 'no rollout found for thread id ' + params.threadId } });
     threadId = params.threadId || threadId;
     let sandbox = params.sandbox || 'workspace-write';
     if (mode === 'sandbox-persist') {

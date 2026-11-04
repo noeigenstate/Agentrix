@@ -9,6 +9,7 @@ const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.c
 const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
 const { registerClaudeWorker } = require('../electron/features/native-session/worker.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
+const { terminalPreparation, completeSwitch } = require('./fixtures/native-switch.cjs');
 
 const key = 'sk-ant-api03-availability-offline-only';
 const safeStorage = { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value).reverse(), decryptString: value => Buffer.from(value).reverse().toString() };
@@ -35,6 +36,7 @@ function fixture(t, { mode = 'api-then-terminal', sdkOptions, failure } = {}) {
   factory.credentials.save(key); factory.observeCli({ status: 'ok', version });
   fs.writeFileSync(path.join(root, 'data/settings.json'), JSON.stringify({ claudePath: mode, codexView: 'native', monthlyBudgetUsd: 10 }));
   const native = createNativeSessions({ directory: path.join(root, 'data'), claude: factory,
+    prepareTerminal: terminalPreparation(spec => terminals.push({ spec })),
     resolveSpec: id => ({ ...spec, terminalId: id }), terminal: async (value, reason) => terminals.push({ spec: value, reason }), emit: event => events.push(event) });
   native.register((name, handler) => handlers.set(name, handler));
   t.after(async () => { await native.close(); await factory.close(); fs.rmSync(root, { recursive: true, force: true }); });
@@ -71,8 +73,8 @@ for (const failure of ['timeout', 'query_refused', 'cli_refused']) for (const mo
       await assert.rejects(act(), error => error.beforeInput === true && /^Claude API (初始化超时|启动失败)，尚未发送消息。$/.test(error.message));
       assert.equal(f.terminals.length, 0); assert.ok(f.events.some(event => event.type === 'error'));
     } else {
-      await act(); assert.equal(f.terminals.length, 1);
-      assert.match(f.terminals[0].reason, /^Claude API (初始化超时|启动失败)，尚未发送消息。$/);
+      await act(); if (failure !== 'cli_refused') await completeSwitch(f.native, 't'); assert.equal(f.terminals.length, 1);
+      assert.match(f.events.findLast(event => event.type === 'path.changed').payload.reason, /^Claude API (初始化超时|启动失败)，尚未发送消息。$/);
       assert.equal(f.events.some(event => event.type === 'error' || event.type === 'session.state' && event.payload.state === 'failed'), false);
       assert.equal(f.native.snapshot('t').events.findLast(event => event.type === 'path.changed').payload.selected, 'terminal');
     }

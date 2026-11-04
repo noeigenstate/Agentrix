@@ -36,6 +36,7 @@ function createClaudeSession(spec, emit, dependencies) {
     turnId = randomUUID(); stream.turn(turnId);
     publish('turn.started', { origin, clientMessageId }); setState('running');
   }
+  const canContinue = () => dependencies.canContinue?.() !== false;
   function reserve(run) {
     run.reservation ||= usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId,
       maxBudgetUsd: run.remainingBudgetUsd });
@@ -117,6 +118,7 @@ function createClaudeSession(spec, emit, dependencies) {
         for (const id of message.user_message_uuids || []) receipt(id, 'consumed');
         unavailable(message, run.generation);
         if (message.type === 'assistant' && !turnId && !message.parent_tool_use_id) {
+          if (!canContinue()) { cancelQuery(run, 'path_changed'); break; }
           reserve(run); run.busy = true; begin('automatic', message.user_message_uuid || null);
         }
         normalize(message);
@@ -141,6 +143,7 @@ function createClaudeSession(spec, emit, dependencies) {
           run.busy = false; releaseIdle(run); run.onStoppedResult?.(); unknownInput();
           idle = !stopping; cancelQuery(run, 'budget'); break;
         }
+        if (!canContinue()) { run.busy = false; releaseIdle(run); unknownInput(); idle = true; cancelQuery(run, 'path_changed'); break; }
         if (!(message.queued_turn_count > 0)) {
           run.busy = false;
           releaseIdle(run);
@@ -201,7 +204,7 @@ function createClaudeSession(spec, emit, dependencies) {
     const reservation = prepareOnly ? null : usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId });
     const maxBudgetUsd = reservation?.maxBudgetUsd ?? (spec.monthlyBudgetUsd == null ? undefined : Math.min(usage.available(spec.monthlyBudgetUsd) / 1e6, 5));
     const run = { key, reservation, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
-      generation: dependencies.availabilityGeneration?.(),
+      generation: dependencies.availabilityGeneration?.(), keyVersion: dependencies.credentialVersion?.(),
       remainingBudgetUsd: maxBudgetUsd ?? Infinity, busy: false, background: new Map(), backgroundKnown: !providerId };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
@@ -223,6 +226,9 @@ function createClaudeSession(spec, emit, dependencies) {
       await readBillingIdentity(run.query, { signal: run.abort.signal, timeoutMs: dependencies.initializationTimeoutMs });
       dependencies.onIdentity?.(run.generation);
       if (closed || stopping || run.closing) throw new Error('会话已停止。');
+      if (!prepareOnly && !canContinue()) {
+        cancelQuery(run, 'path_changed'); if (reservation) usage.release(reservation.id); secrets.delete(key); return null;
+      }
     } catch (error) {
       cancelQuery(run, 'startup'); if (reservation) usage.release(reservation.id); secrets.delete(key);
       if (stopping || closed) throw new Error('会话已停止。');
@@ -239,6 +245,7 @@ function createClaudeSession(spec, emit, dependencies) {
   async function send({ clientMessageId, text, images = [] }) {
     if (closed || stopping || !started || ['failed', 'stopped'].includes(state)) throw new Error('会话已停止。');
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
+    if (!canContinue()) return { status: 'rejected' };
     if (sent.size >= 2000) throw new Error('会话消息过多，请启动新会话。');
     if (/^\/clear(?:\s|$)/.test(text)) throw new Error('原生会话不支持此命令。');
     const content = images.length ? [{ type: 'text', text }, ...images.map(image => {
@@ -247,6 +254,10 @@ function createClaudeSession(spec, emit, dependencies) {
       return { type: 'image', source: { type: 'base64', media_type, data } };
     })] : text;
     if (active?.closing) await active.task;
+    if (active && active.keyVersion !== dependencies.credentialVersion?.()) {
+      if (active.busy) return { status: 'rejected' };
+      cancelQuery(active, 'credentials_changed'); await active.task;
+    }
     if (active && !active.busy && !active.background.size) {
       const availableUsd = usage.available(spec.monthlyBudgetUsd ?? null) / 1e6;
       const freshBudgetUsd = spec.monthlyBudgetUsd == null ? Infinity : Math.min(availableUsd, 5);
@@ -260,6 +271,9 @@ function createClaudeSession(spec, emit, dependencies) {
       await preparing;
     }
     if (closed || stopping) throw new Error('会话已停止。');
+    if (!canContinue()) return { status: 'rejected' };
+    // No input has been queued yet; a key replaced during initialization must initialize again before delivery.
+    if (active.keyVersion !== dependencies.credentialVersion?.()) { cancelQuery(active, 'credentials_changed'); await active.task; return send({ clientMessageId, text, images }); }
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
     reserve(active);
     active.busy = true;
@@ -295,16 +309,20 @@ function createClaudeSession(spec, emit, dependencies) {
     return closing;
   }
   return { start, resume: start, send, close, answer: requests.answer, snapshot: stream.snapshot,
+    hasAllowance: () => !!active?.reservation && active.remainingBudgetUsd > 0,
     checkpoint(restore) {
-      const key = active?.key || credentials.read();
-      return key ? (spec, emit) => restore(spec, emit, { status: () => ({ saved: true }), read: () => key }) : null;
+      let key; try { key = active?.key || credentials.read(); } catch { return null; }
+      return key ? (spec, emit) => restore(spec, emit, { status: credentials.status,
+        read: () => credentials.status().saved ? credentials.read() : key }) : null;
     },
+    policyChanged() { if (!canContinue() && active && !active.busy) cancelQuery(active, 'path_changed'); },
     activity: () => ({ known: active?.backgroundKnown === true || !active && !providerId, count: active?.backgroundKnown ? active.background.size : !providerId ? 0 : null }),
-    async prepareResume() {
-      if (!providerId || !started || closed) throw new Error('resume_unavailable');
+    async prepareResume({ allowFresh = false } = {}) {
+      if (!started || closed || !providerId && !allowFresh) throw new Error('resume_unavailable');
       // Read the actual persisted chain, then initialize a real resumed CLI with an empty input queue.
-      const history = await sdk.getSessionMessages?.(providerId, { dir: spec.cwd, limit: 1000 });
-      if (!history?.length || history.some(message => message.session_id !== providerId)) throw new Error('resume_history_unavailable');
+      const history = providerId ? await sdk.getSessionMessages?.(providerId, { dir: spec.cwd, limit: 1000 }) : [];
+      if (!history || !history.length && !allowFresh || history.some(message => message.session_id !== providerId)) throw new Error('resume_history_unavailable');
+      if (!history.length) { providerId = null; stream.provider(null); }
       preparing ||= createQuery(true).finally(() => { preparing = null; });
       await preparing;
       for (const message of history) normalize({ ...message, isReplay: true });

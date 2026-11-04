@@ -34,6 +34,23 @@ function toolEnvironment() {
   }
   return env;
 }
+function transcriptFile() {
+  const key = process.cwd().replace(/[^A-Za-z0-9]/g, '-');
+  return path.join(process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || process.env.USERPROFILE, '.claude'), 'projects', key, sessionId + '.jsonl');
+}
+if (mode === 'claude' && !args.some(arg => arg === '--input-format' || arg.startsWith('--input-format='))) {
+  const transcript = transcriptFile();
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  if (!fs.existsSync(transcript)) fs.writeFileSync(transcript, '');
+  const bootstrap = JSON.parse(fs.readFileSync(process.env.AGENTRIX_BOOTSTRAP, 'utf8'));
+  const socket = process.platform === 'win32' && !bootstrap.pipeName.startsWith('\\') ? '\\\\.\\pipe\\' + bootstrap.pipeName : bootstrap.pipeName;
+  const connection = require('node:net').connect(socket);
+  connection.on('error', error => { throw error; });
+  connection.on('connect', () => connection.end(JSON.stringify({ projectId: bootstrap.projectId, sessionKey: bootstrap.sessionKey, type: 'agent-activity',
+    agent: 'claude', state: 'session', sessionId, eventId: randomUUID(), sentAt: Date.now(), sessionSource: resume ? 'resume' : 'startup', transcriptPath: transcript }) + '\n'));
+  console.log('OFFLINE_TERMINAL_READY'); process.stdin.resume();
+  return;
+}
 function claudeUser(message) {
   const childResults = ['bash', 'hook', 'mcp'].map(kind => {
     const child = spawnSync(process.execPath, [__filename, 'tool'], { env: toolEnvironment(), windowsHide: true, encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' });
@@ -44,6 +61,11 @@ function claudeUser(message) {
   const transcript = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || process.env.USERPROFILE, '.claude'), 'projects', 'fake-session.jsonl');
   fs.mkdirSync(path.dirname(transcript), { recursive: true });
   fs.appendFileSync(transcript, JSON.stringify({ sessionId, childResults }) + '\n');
+  const history = transcriptFile(), answerId = randomUUID(); fs.mkdirSync(path.dirname(history), { recursive: true });
+  for (const entry of [{ type: 'user', uuid: message.uuid, parentUuid: null, message: message.message },
+    { type: 'assistant', uuid: answerId, parentUuid: message.uuid, message: { role: 'assistant', content: [{ type: 'text', text: 'PACKAGED_CLAUDE_OK' }] } }]) {
+    fs.appendFileSync(history, JSON.stringify({ ...entry, sessionId, cwd: process.cwd(), timestamp: new Date().toISOString(), isSidechain: false, userType: 'external' }) + '\n');
+  }
   for (const state of ['queued', 'started']) send({ type: 'command_lifecycle', command_uuid: message.uuid, state, uuid: randomUUID(), session_id: sessionId });
   send({ type: 'system', subtype: 'init', session_id: sessionId, apiKeySource: 'ANTHROPIC_API_KEY', model: 'fake-claude',
     tools: ['Read'], mcp_servers: [], permissionMode: 'default', slash_commands: [], claude_code_version: '2.1.317', uuid: randomUUID() });

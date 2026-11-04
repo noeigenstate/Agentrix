@@ -1007,7 +1007,7 @@ test('native process exit cancels its pending work and alert without waiting for
   s.native = { registry: { close() {} } };
   h.write('background work\r'); h.user('background work');
   s.completionWork.start('pending-native-task', 2000); h.apply('complete', 'parent', 2100);
-  Object.assign(context, { id: s.terminalId, s, project: h.project, terminal: { onExit: callback => { exited = callback; } }, flush() {},
+  Object.assign(context, { id: s.terminalId, s, nativeSessions: null, project: h.project, terminal: { onExit: callback => { exited = callback; } }, flush() {},
     stopUsageAccount() {}, restorePlans: new Map(), quitting: false, bootstrapFile: null, skillNoteFile: null, sessionId: 'generation',
     endSkillSession() {}, skills: { endSession() {} } });
   const start = main.indexOf('  terminal.onExit(({ exitCode }) => {');

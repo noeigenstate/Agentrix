@@ -65,11 +65,11 @@ test('I4: a wrong terminal resume identity restores the original native surface 
   await assert.rejects(f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => true), /session_changed/);
   assert.equal(f.sessions.get('t'), f.old); assert.equal(f.saves.length, 0); assert.equal(f.signals.length, 0);
 });
-test('terminal input is retained when its text cannot be read reliably, including history recall', () => {
+test('terminal text blocks switching, but an arrow/history key alone is not proof of a draft', () => {
   const f = fixture();
   const host = { sessionId: 'pty', cliState: { sessionId: 'pty', state: 'idle' }, submissions: { hasText: true, history: false }, promptQueue: { list: () => [] } };
   assert.equal(f.context.observeSwitchTerminal({ identity: host }).draftBlocked, true);
   host.submissions = { hasText: false, history: true };
-  assert.equal(f.context.observeSwitchTerminal({ identity: host }).draftBlocked, true);
+  assert.equal(f.context.observeSwitchTerminal({ identity: host }).draftBlocked, false);
   assert.equal(f.context.observeSwitchTerminal({ identity: host }).background.known, false);
 });

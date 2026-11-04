@@ -49,6 +49,11 @@ class CompletionWork {
     this.expired = false;
     if (at > this.endedAt) this.reviewAt = Math.max(this.reviewAt, at);
   }
+  discardBackground() {
+    clearTimeout(this.timer); this.timer = null;
+    this.tasks.clear(); this.notifications.clear(); this.calls.clear(); this.services.clear(); this.deliveries.clear();
+    this.version++;
+  }
   find(id) {
     if (typeof id !== 'string') return undefined;
     for (const [key, task] of this.tasks) {
