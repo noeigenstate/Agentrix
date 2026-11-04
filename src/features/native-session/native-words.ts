@@ -189,7 +189,7 @@ const IDLE_CONNECTION_WORDS: Record<NativeAgent, Record<string, string>> = {
   claude: { api: 'API（未开会话）', subscription: '订阅（未开会话）' },
   codex: { api: 'API（未开会话）', subscription: 'ChatGPT 订阅（未开会话）' },
 };
-export function connectionWord(agent: NativeAgent, connection: (AgentConnection & { active?: boolean }) | null | undefined) {
+export function connectionWord(agent: NativeAgent, connection: (AgentConnection) | null | undefined) {
   const words = connection?.active === false ? { ...CONNECTION_WORDS[agent], ...IDLE_CONNECTION_WORDS[agent] } : CONNECTION_WORDS[agent];
   const word = connection ? words[connection.kind] : undefined;
   return { text: word ? t(word) : t('未知'), source: connection?.source || null };

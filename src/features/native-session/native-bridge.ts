@@ -21,7 +21,7 @@ export type LimitsPayload = {
 };
 // What an agent is connected through right now (contract addendum 2): the API key, the subscription login, nothing running, or not known.
 export type ConnectionKind = 'api' | 'subscription' | 'none' | 'unknown';
-export type AgentConnection = { kind: ConnectionKind; source: string | null; observedAt: number | null };
+export type AgentConnection = { kind: ConnectionKind; source: string | null; observedAt: number | null; active?: boolean };
 export type NextPath = { path: 'api' | 'native' | 'terminal' | null; reason: string | null };
 export type AgentPathState = { path: 'api' | 'native' | 'terminal' | null; reason: string | null; next: NextPath; limits: LimitsPayload | null; connection?: AgentConnection | null };
 

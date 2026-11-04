@@ -2720,5 +2720,10 @@
   "B13：stopTask(Agent) 自动请求": "CLI 在 host 收到自动 assistant 之前已可能发出 API 请求；本轮保留 query 并 interrupt 自动回合，不能倒推阻止已经发生的请求或费用。需研究 CLI 控制/通知抑制能力；不能把 Bash stop 的成功等同于 Agent 无额外请求。保留审查探针的已知行为，未声称修复。",
   "中文": "English",
   "CLAUDE_CODE_USE_BEDROCK / VERTEX / FOUNDRY / ANTHROPIC_AWS / MANTLE / GATEWAY；其它 CLAUDE_CODE_USE_*": "API runtime 强制 0；不允许项目选云提供方。flag 配置及真实混合配置验证。",
-  "模块边界": "All module boundaries hold；r12-a-boundaries-final.log；单测也通过"
+  "模块边界": "All module boundaries hold；r12-a-boundaries-final.log；单测也通过",
+  "API（未开会话）": "API (no session)",
+  "订阅（未开会话）": "Subscription (no session)",
+  "ChatGPT 订阅（未开会话）": "ChatGPT subscription (no session)",
+  "工作者已结束，消息未能继续处理。": "The worker ended before this message could be processed.",
+  "工作者结束前未能读取消息，恢复一次后仍未处理。": "The worker ended before reading this message, including one recovery attempt."
 }
