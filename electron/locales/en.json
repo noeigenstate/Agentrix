@@ -2716,5 +2716,8 @@
   "请看附上的图片。": "Please look at the attached pictures.",
   "只能附加 PNG、JPEG 或 WebP 图片。": "Only PNG, JPEG or WebP pictures can be attached.",
   "图片太大（超过 5 MB），请压缩后再附加。": "The picture is too large (over 5 MB). Please compress it first.",
-  "无法读取 Claude 路由配置。": "Unable to read Claude routing settings."
+  "无法读取 Claude 路由配置。": "Unable to read Claude routing settings.",
+  "Claude 尚未登录或身份验证失败。": "Claude is not signed in or authentication failed.",
+  "项目 Claude 配置不能覆盖应用保存的 API 密钥。": "Project Claude settings cannot override the API key saved by the app.",
+  "无效的消息。": "Invalid message."
 }
