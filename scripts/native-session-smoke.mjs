@@ -307,7 +307,7 @@ async function run(output, stages) {
     // Expanded: the activity pane shows the path and API usage card.
     await page.locator(`[data-project-id="${project.id}"] .panel-name`).click();
     await page.locator('.activity-api').waitFor({ timeout: 15000 });
-    assert.match(await page.locator('.activity-api').innerText(), /运行方式与 API 额度/); assert.doesNotMatch(await page.locator('.activity-api').innerText(), /最近切换/, 'a switch that never happened has no row');
+    assert.match(await page.locator('.activity-api').innerText(), /运行方式与额度/); assert.doesNotMatch(await page.locator('.activity-api').innerText(), /最近切换/, 'a switch that never happened has no row');
     await page.screenshot({ path: path.join(output, 'native-expanded.png') });
     checks.push('activity pane shows the usage card');
 
