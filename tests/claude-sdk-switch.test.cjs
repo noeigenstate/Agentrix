@@ -99,7 +99,7 @@ for (const initialized of [false, true]) test(`a cleared key can restore its pri
 test('background snapshots before stream init are authoritative and late task runs never clear newer work', async t => {
   const f = fixture(t); await f.session.resume(); await f.session.prepareResume();
   const tick = () => new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.session.activity().known, false);
+  assert.deepEqual(f.session.activity(), { known: true, count: 0 }, 'G5 the new process starts with no reported tasks');
   f.fake.emit({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'watcher', run_id: '002' }] }); await tick();
   assert.deepEqual(f.session.activity(), { known: true, count: 1 });
   f.fake.emit({ type: 'system', subtype: 'task_notification', task_id: 'watcher', run_id: '001' }); await tick();

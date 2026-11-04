@@ -49,7 +49,7 @@ function sdkFixture() {
     finish(text = 'Synthetic answer', queuedTurns = 0) {
       const input = inputs.at(-1);
       put({ type: 'assistant', uuid: randomUUID(), user_message_uuid: input.uuid, message: { id: randomUUID(), content: [{ type: 'text', text }] } });
-      put({ type: 'result', uuid: randomUUID(), user_message_uuid: input.uuid, user_message_uuids: [input.uuid], subtype: 'success',
+      put({ type: 'result', uuid: randomUUID(), user_message_uuid: input.uuid, user_message_uuids: [input.uuid], subtype: 'success', terminal_reason: 'completed',
         queued_turn_count: queuedTurns, total_cost_usd: ++count * 0.01, modelUsage: { synthetic: { inputTokens: count, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: count } } });
     } };
 }

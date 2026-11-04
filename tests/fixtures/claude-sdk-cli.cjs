@@ -39,6 +39,7 @@ function transcriptFile() {
   return path.join(process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || process.env.USERPROFILE, '.claude'), 'projects', key, sessionId + '.jsonl');
 }
 if (mode === 'claude' && !args.some(arg => arg === '--input-format' || arg.startsWith('--input-format='))) {
+  if (fs.existsSync(path.join(output, 'exit-terminal'))) process.exit(2);
   const transcript = transcriptFile();
   fs.mkdirSync(path.dirname(transcript), { recursive: true });
   if (!fs.existsSync(transcript)) fs.writeFileSync(transcript, '');
@@ -72,13 +73,13 @@ function claudeUser(message) {
   const text = typeof message.message?.content === 'string' ? message.message.content : 'image';
   if (text === 'HOLD') return;
   send({ type: 'assistant', session_id: sessionId, parent_tool_use_id: null, uuid: randomUUID(), user_message_uuid: message.uuid,
-    message: { id: randomUUID(), type: 'message', role: 'assistant', model: 'fake-claude', content: [{ type: 'text', text: 'PACKAGED_CLAUDE_OK' }], usage: { input_tokens: 1, output_tokens: 2 } } });
+    message: { id: randomUUID(), type: 'message', role: 'assistant', model: 'fake-claude', content: [{ type: 'text', text: 'PACKAGED_CLAUDE_OK' }], usage: { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 2 } } });
   total += text === 'BUDGET_TURN' ? 2 : 0.01;
   const limited = total - baseline >= budget;
   costs[sessionId] = total; fs.writeFileSync(costsFile, JSON.stringify(costs));
-  send({ type: 'result', session_id: sessionId, uuid: randomUUID(), subtype: limited ? 'error_max_budget_usd' : 'success', is_error: limited, result: 'PACKAGED_CLAUDE_OK',
+  send({ type: 'result', session_id: sessionId, uuid: randomUUID(), subtype: limited ? 'error_max_budget_usd' : 'success', terminal_reason: limited ? 'budget_exhausted' : 'completed', is_error: limited, result: 'PACKAGED_CLAUDE_OK',
     user_message_uuid: message.uuid, user_message_uuids: [message.uuid], queued_turn_count: 0, total_cost_usd: total,
-    duration_ms: 1, duration_api_ms: 1, num_turns: 1, permission_denials: [], usage: { input_tokens: 1, output_tokens: 2 },
+    duration_ms: 1, duration_api_ms: 1, num_turns: 1, permission_denials: [], usage: { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 2 },
     modelUsage: { 'fake-claude': { inputTokens: 1, outputTokens: 2, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, contextWindow: 100 } } });
 }
 const reader = readline.createInterface({ input: process.stdin });
@@ -115,9 +116,12 @@ reader.on('line', line => {
     send({ method: 'turn/started', params: { threadId: sessionId, turn: result.turn } });
     append({ user: true, sessionId });
     if (params.input?.[0]?.text === 'HOLD') return;
+    send({ method: 'thread/tokenUsage/updated', params: { threadId: sessionId, tokenUsage: {
+      total: { inputTokens: turns * 10, cachedInputTokens: turns * 2, cacheWriteInputTokens: 0, outputTokens: turns * 3, reasoningOutputTokens: 0, totalTokens: turns * 13 },
+      last: { inputTokens: 10, cachedInputTokens: 2, cacheWriteInputTokens: 0, outputTokens: 3, reasoningOutputTokens: 0, totalTokens: 13 }, modelContextWindow: 456789 } } });
     send({ method: 'item/completed', params: { threadId: sessionId, turnId: activeTurn,
       item: { id: `item-${turns}`, type: 'agentMessage', phase: 'final_answer', text: 'PACKAGED_CODEX_OK' } } });
-    send({ method: 'turn/completed', params: { threadId: sessionId, turn: { id: activeTurn, status: 'completed' } } });
+    send({ method: 'turn/completed', params: { threadId: sessionId, turn: { id: activeTurn, status: 'completed', durationMs: 2 } } });
     return;
   } else if (message.method === 'turn/interrupt') {
     send({ method: 'turn/completed', params: { threadId: sessionId, turn: { id: activeTurn, status: 'interrupted' } } });

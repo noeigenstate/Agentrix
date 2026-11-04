@@ -14,7 +14,7 @@ const { registerTerminalIpc } = require('./features/terminal/ipc.cjs');
 const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-guard.cjs');
 const { createNativeSession } = require('./features/terminal/native-session.cjs');
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
-const { createNativeSessions } = require('./features/native-session/index.cjs');
+const { createNativeSessions, createNativeUsage } = require('./features/native-session/index.cjs');
 const { subscriptionLimits } = require('./features/native-session/usage.cjs');
 const { inspectClaudeExecutable } = require('./features/claude-sdk/executable.cjs');
 const { recoveryWarnings } = require('./features/native-session/storage.cjs');
@@ -198,7 +198,8 @@ function publicState() {
           // The model, effort and fast mode its records show, above the reading view's message box.
           agentSettings: s?.codexActive ? s.agentSettings || null : null,
           // The service its model is reached through, the context it fills and the tokens it took, for the activity pane.
-          agentUsage: s?.codexActive && s.usage ? s.usage.snapshot(s.usageHistory) : dispatchedOnly(s),
+          agentUsage: s?.nativeStructured ? s.nativeUsage?.snapshot(s.calls?.snapshot()) || dispatchedOnly(s)
+            : s?.codexActive && s.usage ? s.usage.snapshot(s.usageHistory) : dispatchedOnly(s),
           // A run of the CLI that is no conversation (update, --version, login), for the reading view to say so.
           agentCommand: s?.codexActive ? s.agentCommand || null : null,
           codexActivity: s?.completionWork?.reading ? 'working' : s?.codexActivity || 'unknown', needsInput: s?.needsInput?.message || null, shellReady: !!s?.ready && !s?.inputDirty, codexAvailable: s?.codexAvailable ?? null,
@@ -1259,6 +1260,8 @@ function structuredEvent(id, event) {
     sessions.set(id, s);
   }
   s.nativeRuntimeSessionId = event.runtimeSessionId;
+  s.nativeUsage ||= createNativeUsage(spec.agent);
+  s.nativeUsage.apply(event);
   if (event.type === 'error' && event.payload.code === 'native_cli_outdated') store.warning = t(event.payload.message);
   if (event.providerSessionId) {
     if (spec.agent === 'claude') s.claudeSessionId = event.providerSessionId;
@@ -1351,11 +1354,14 @@ function localSwitchSessions() {
 }
 function observeSwitchTerminal(session) {
   const s = session.identity;
+  const work = s.completionWork;
+  const tasks = new Set([...(work?.tasks?.values() || [])].map(task => task.id));
+  for (const id of work?.services || []) tasks.add(id);
+  for (const call of s.calls?.running?.() || []) tasks.add(call.id);
   return { state: s.cliState?.sessionId === s.sessionId && s.cliState.state === 'idle' ? 'idle' : 'working',
     pending: !!s.nativeInputRequests?.size || s.promptQueue?.list().some(item => item.state === 'queued'),
     draftBlocked: !!(s.native ? s.draftSubmissions : s.submissions)?.hasText,
-    // Transcript completion deliberately excludes watchers; it cannot establish all live background processes.
-    background: { known: false, count: null } };
+    background: !work || work.uncertain || work.reading ? { known: false, count: null } : { known: true, count: tasks.size } };
 }
 function retainAgentState(target, source) {
   target.plannerSessionId = source.plannerSessionId || source.sessionId;

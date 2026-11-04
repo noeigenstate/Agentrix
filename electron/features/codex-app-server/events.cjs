@@ -4,6 +4,25 @@ const { tokenUsage } = require('./account.cjs');
 const KINDS = { userMessage: 'user-message', agentMessage: 'agent-message', reasoning: 'reasoning-summary', commandExecution: 'command',
   fileChange: 'file-change', mcpToolCall: 'tool', dynamicToolCall: 'tool', plan: 'plan', webSearch: 'web' };
 const bounded = value => typeof value === 'string' ? value.slice(0, 256 * 1024) : null;
+const ERRORS = {
+  contextWindowExceeded: '输入超过上下文长度，本轮未能完成。', sessionBudgetExceeded: 'Codex 本轮预算已用完。',
+  usageLimitExceeded: 'Codex 用量已达上限。', rateLimitExceeded: 'Codex 请求受到限流。', unauthorized: 'Codex 身份验证失败。',
+  sandboxError: 'Codex 执行环境拒绝了本轮操作。', flexUnavailable: '弹性服务暂不可用。', serverOverloaded: '服务繁忙，本轮未能完成。',
+  modelNotFound: '找不到请求的模型。', policyCapacityUnavailable: '当前策略下没有可用容量。', cyberPolicy: '安全策略阻止了本轮执行。',
+  misalignmentPolicyViolation: '策略检查阻止了本轮执行。', tooManyDenials: '操作多次被拒绝，本轮已停止。',
+  internalServerError: '服务内部出错，本轮未能完成。', badRequest: '请求无效，本轮未能完成。', threadRollbackFailed: '会话回退失败。',
+  httpConnectionFailed: '无法连接服务。', responseStreamConnectionFailed: '无法连接回复流。', responseStreamDisconnected: '回复连接已断开。',
+  responseTooManyFailedAttempts: '回复重试次数已用完。', activeTurnNotSteerable: '当前回合不能接收追加消息。', other: 'Codex 本轮执行失败',
+};
+function turnCompletion(turn, usage) {
+  const status = ['completed', 'failed', 'interrupted'].includes(turn.status) ? turn.status : 'failed';
+  const info = turn.error?.codexErrorInfo, code = typeof info === 'string' ? info : info && Object.keys(info)[0];
+  const reason = Object.hasOwn(ERRORS, code) ? code : turn.error ? 'unknown' : status;
+  const message = ERRORS[reason] || (status === 'completed' ? '本轮已完成。' : status === 'interrupted' ? '本轮已中断。' : 'Codex 本轮执行失败');
+  return { status, error: status === 'failed' || turn.error ? message : null, terminalReason: reason, message,
+    durationMs: Number.isSafeInteger(turn.durationMs) && turn.durationMs >= 0 ? turn.durationMs : null, apiDurationMs: null,
+    costUsdMicros: null, costEstimated: null, tokens: usage?.round || null };
+}
 
 function itemPayload(item, completed) {
   const kind = KINDS[item.type] || 'other';
@@ -22,8 +41,9 @@ function itemPayload(item, completed) {
 
 function createEvents(spec, emit, now) {
   let sequence = 0;
-  const events = [], items = new Map(), itemEvents = new Map(), completed = new Set();
+  const events = [], items = new Map(), itemEvents = new Map(), completed = new Set(), children = new Set();
   const binding = { connectionEpoch: randomUUID(), providerSessionId: null, turnId: null };
+  let cumulative = spec.providerSessionId ? null : { input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0 }, baseline = cumulative;
   function publish(type, payload, extra = {}) {
     const event = { schemaVersion: 1, eventId: randomUUID(), sequence: ++sequence, ...binding, provider: 'codex', transport: 'codex-app-server',
       projectId: spec.projectId, terminalId: spec.terminalId, runtimeSessionId: spec.runtimeSessionId, runId: spec.runId ?? null,
@@ -37,6 +57,11 @@ function createEvents(spec, emit, now) {
     if (method === 'item/started' || method === 'item/completed') {
       const item = params.item;
       if (!item || typeof item.id !== 'string' || completed.has(item.id)) return;
+      if (item.type === 'collabAgentToolCall') for (const id of item.receiverThreadIds || []) {
+        const status = item.agentsStates?.[id]?.status;
+        if (item.tool === 'closeAgent' || ['completed', 'failed', 'shutdown', 'notFound'].includes(status)) children.delete(id);
+        else if (['spawnAgent', 'sendInput', 'resumeAgent'].includes(item.tool)) children.add(id);
+      }
       const payload = itemPayload(item, method === 'item/completed'); items.set(item.id, payload);
       if (method === 'item/completed') completed.add(item.id);
       publish('item.upsert', payload, { itemId: item.id, turnId: params.turnId ?? binding.turnId });
@@ -56,12 +81,14 @@ function createEvents(spec, emit, now) {
       publish('item.delta', { channel, text: bounded(params.delta), ...(Number.isSafeInteger(params.summaryIndex) ? { index: params.summaryIndex } : {}) }, { itemId: params.itemId });
     } else if (method === 'turn/diff/updated') publish('turn.diff', { diff: bounded(params.diff) });
     else if (method === 'turn/plan/updated') publish('plan.updated', { explanation: bounded(params.explanation), steps: (params.plan || []).map(x => ({ step: x.step, status: x.status === 'inProgress' ? 'in-progress' : x.status })) });
-    else if (method === 'thread/tokenUsage/updated') publish('usage.updated', tokenUsage(params.tokenUsage));
+    else if (method === 'thread/tokenUsage/updated') { const usage = tokenUsage(params.tokenUsage, baseline); cumulative = usage; publish('usage.updated', usage); }
     else if (method === 'model/rerouted') publish('routing.updated', { declared: { model: null, effort: null, fast: null }, effective: { model: params.toModel ?? null, effort: null, fast: null }, observed: { model: null, effort: null, fast: null }, reason: params.reason ?? null });
     else if (method === 'error') publish('error', { code: 'provider_error', message: 'Codex 报告了错误', retryable: !!params.willRetry, willRetry: !!params.willRetry, stage: 'turn' });
     while (items.size > 400) { const id = items.keys().next().value; items.delete(id); completed.delete(id); itemEvents.delete(id); }
   }
   return { binding, publish, notification,
+    beginTurn() { baseline = cumulative; },
+    activity: () => ({ known: true, count: children.size + [...items.values()].filter(item => ['command', 'tool'].includes(item.kind) && ['running', 'in-progress', 'pending'].includes(item.status)).length }),
     snapshot: () => ({ runtimeSessionId: spec.runtimeSessionId, lastSequence: sequence,
       events: [...events.filter(x => x.type !== 'item.upsert' && x.type !== 'item.delta'), ...[...items].map(([itemId, payload]) => ({ ...itemEvents.get(itemId), type: 'item.upsert', payload }))]
         .sort((a, b) => a.sequence - b.sequence).map(x => ({ ...x, replay: true })),
@@ -69,4 +96,4 @@ function createEvents(spec, emit, now) {
   };
 }
 
-module.exports = { createEvents, itemPayload };
+module.exports = { createEvents, itemPayload, turnCompletion };

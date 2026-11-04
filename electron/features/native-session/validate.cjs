@@ -15,11 +15,17 @@ function validEvent(event) {
   if (event.type === 'switch.updated') return count(value.changeId) && ['api', 'native', 'terminal'].includes(value.current)
     && ['api', 'native', 'terminal'].includes(value.target) && ['stable', 'waiting-turn', 'awaiting-choice', 'waiting-background', 'preparing', 'switching', 'rolling-back'].includes(value.phase)
     && object(value.background) && typeof value.background.known === 'boolean' && nullableCount(value.background.count)
-    && (value.requestId === null || id(value.requestId)) && (value.reason === null || text(value.reason));
-  if (event.type === 'usage.updated') return ['input', 'cachedInput', 'cacheWrite', 'output', 'reasoning', 'contextWindow', 'costUsdMicros'].every(key => nullableCount(value[key])) && (value.costEstimated === null || typeof value.costEstimated === 'boolean');
+    && (value.requestId === null || id(value.requestId)) && (value.reason === null || text(value.reason))
+    && (value.outcome === undefined || ['switched', 'failed', 'restored', 'stopped'].includes(value.outcome));
+  if (event.type === 'usage.updated') return ['input', 'cachedInput', 'cacheWrite', 'output', 'reasoning', 'contextWindow', 'costUsdMicros'].every(key => nullableCount(value[key])) && (value.costEstimated === null || typeof value.costEstimated === 'boolean')
+    && (value.contextTokens === undefined || nullableCount(value.contextTokens))
+    && (value.round == null || ['input', 'cachedInput', 'cacheWrite', 'output', 'reasoning'].every(key => nullableCount(value.round[key])));
   if (event.type === 'session.state') return ['starting', 'idle', 'running', 'waiting', 'stopping', 'stopped', 'disconnected', 'failed'].includes(value.state);
   if (event.type === 'turn.started') return ['user', 'automatic', 'resume'].includes(value.origin) && (value.clientMessageId === null || id(value.clientMessageId));
-  if (event.type === 'turn.completed') return ['completed', 'failed', 'interrupted'].includes(value.status);
+  if (event.type === 'turn.completed') return ['completed', 'failed', 'interrupted'].includes(value.status)
+    && ['durationMs', 'apiDurationMs', 'costUsdMicros'].every(key => value[key] === undefined || nullableCount(value[key]))
+    && (value.terminalReason == null || text(value.terminalReason, 160)) && (value.message == null || text(value.message, 2000))
+    && (value.tokens == null || ['input', 'cachedInput', 'cacheWrite', 'output', 'reasoning'].every(key => nullableCount(value.tokens[key])));
   if (event.type === 'input.receipt') return id(value.clientMessageId) && ['queued', 'delivered', 'consumed', 'rejected', 'unknown'].includes(value.status);
   if (event.type === 'item.delta') return ['text', 'output', 'reasoning-summary', 'plan'].includes(value.channel) && typeof value.text === 'string' && value.text.length <= 262144;
   if (event.type === 'request.opened' || event.type === 'request.resolved') return id(value.requestId);

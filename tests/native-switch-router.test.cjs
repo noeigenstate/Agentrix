@@ -6,7 +6,7 @@ const { createEventStream } = require('../electron/features/native-session/event
 const tick = async () => { await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve)); };
 const empty = { version: 1, text: '', images: [], undelivered: [] };
 function fixture(t, agent = 'claude') {
-  let config = { claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: 10 }, terminals = [], saved = true, fail = false;
+  let config = { claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: 10 }, terminals = [], saved = true, fail = false, terminalFailure = false, attempts = 0;
   const created = [], events = [], paths = [];
   const provider = { usage: { summary: () => ({}) }, credentials: { clear() { saved = false; return { saved }; } },
     apiState: () => ({ status: saved ? 'ready' : 'no_key' }), create(spec, emit) {
@@ -27,6 +27,8 @@ function fixture(t, agent = 'claude') {
   const router = createRouter({ claude: provider, codex: provider, settings: { get: () => config }, resolveSpec: id => ({ agent, owner: 'gui', projectId: 'p', terminalId: id }),
     terminalSessions: () => terminals, observeTerminal: () => ({ state: 'idle', background: { known: true, count: 0 } }),
     async prepareTerminal(spec) {
+      attempts++;
+      if (terminalFailure) throw new Error('Synthetic terminal exited before readiness');
       const session = { identity: {}, spec, path: 'terminal' };
       return { session, commit() { terminals = [session]; paths.push('terminal'); }, cancel() {} };
     }, activateNative() { terminals = []; paths.push(agent === 'claude' ? 'api' : 'native'); }, emit: event => events.push(event), terminal() {} });
@@ -35,8 +37,32 @@ function fixture(t, agent = 'claude') {
     const snapshot = router.snapshot('t');
     return router.answer('t', snapshot.runtimeSessionId, 'handoff', { handoff: { changeId: snapshot.switchState.changeId, draft: empty } });
   };
-  return { router, created, events, paths, handoff, config: patch => { config = { ...config, ...patch }; router.reconcile(); }, fail: (value = true) => { fail = value; } };
+  return { router, created, events, paths, handoff, config: patch => { config = { ...config, ...patch }; router.reconcile(true); }, fail: (value = true) => { fail = value; },
+    failTerminal: () => { terminalFailure = true; }, attempts: () => attempts };
 }
+test('G1 a failed terminal switch keeps the API input usable without retrying on send or usage', async t => {
+  const f = fixture(t); const started = await f.router.start('t', { agent: 'claude' });
+  f.created[0].send = async () => {
+    assert.equal(f.created[0].spec.mayContinue(), true, 'a preference change cannot disable the retained path');
+    return { status: 'queued' };
+  };
+  f.failTerminal(); f.config({ claudePath: 'terminal-only' }); await tick(); f.handoff(); await tick();
+  assert.equal(f.attempts(), 1); assert.equal(f.router.switchState('t').current, 'api');
+  const result = await f.router.send('t', started.runtimeSessionId, { clientMessageId: 'after-rollback', text: 'Continue here' });
+  assert.equal(result.status, 'queued');
+  f.created[0].stream.publish('usage.updated', { input: 1, cachedInput: 0, cacheWrite: 0, output: 1, reasoning: null, contextWindow: null, costUsdMicros: 1, costEstimated: true });
+  await tick(); assert.equal(f.router.switchState('t').phase, 'stable'); assert.equal(f.attempts(), 1); assert.equal(f.created[0].closed, false);
+  f.router.keyClear(); await tick();
+  assert.equal((await f.router.send('t', started.runtimeSessionId, { clientMessageId: 'cleared', text: 'Cannot bill' })).status, 'rejected');
+});
+test('G3/G12 startup has no switch record and a source exit warning reports a successful destination', async t => {
+  const f = fixture(t); await f.router.start('t', { agent: 'claude' });
+  assert.equal(f.router.usage({}, 'p').lastSwitch, null);
+  f.created[0].close = () => { throw new Error('Synthetic old process exit timeout'); };
+  f.config({ claudePath: 'terminal-only' }); await tick(); f.handoff(); await tick();
+  const state = f.router.switchState('t'); assert.equal(state.current, 'terminal'); assert.equal(state.outcome, 'switched'); assert.match(state.reason, /已保留新会话/);
+  assert.equal(f.router.usage({}, 'another-project').lastSwitch, null);
+});
 const until = async check => { for (let i = 0; i < 200; i++) { if (check()) return; await tick(); } throw new Error('switch did not settle'); };
 for (const agent of ['claude', 'codex']) test(`router restores ${agent} both ways using one provider id, carries receipts and never submits history`, async t => {
   const f = fixture(t, agent); await f.router.start('t', { agent });

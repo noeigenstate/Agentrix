@@ -8,13 +8,27 @@ function host() {
   const queued = [];
   const terminal = { nativeStructured: true, nativeRuntimeSessionId: 'runtime', promptQueue: { enqueue: text => queued.push(text), start() {} }, completionWork: { begin() {} }, nativeMessages: new Map() };
   const starts = [], activity = [], restored = [], sessions = new Map([['t', terminal]]);
-  const context = { quitting: false, nativeSpecs: new Map([['t', { agent: 'claude' }]]), sessions, scheduleState() {}, t: text => text,
+  const context = { createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage, quitting: false, nativeSpecs: new Map([['t', { agent: 'claude' }]]), sessions, scheduleState() {}, t: text => text,
     store: { findTerminal: () => ({ project: { id: 'p' } }), expectCompletion: id => starts.push(id), setRestore: (id, patch) => restored.push({ id, patch }) },
     applyActivity: (_project, _session, snapshot) => activity.push(snapshot) };
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), context);
   return { ...context, starts, activity, restored, terminal, queued };
 }
+test('G2 real main structured events populate the same terminal agentUsage fields without a terminal meter', () => {
+  const main = host();
+  main.structuredEvent('t', event('turn.started', { origin: 'user', clientMessageId: 'usage' }));
+  main.structuredEvent('t', event('usage.updated', { input: 100, cachedInput: 20, cacheWrite: 10, output: 5, reasoning: null,
+    contextWindow: 234567, contextTokens: 88, costUsdMicros: 3000, costEstimated: true,
+    round: { input: 50, cachedInput: 2, cacheWrite: 3, output: 4, reasoning: null } }));
+  const s = main.sessions.get('t');
+  const expression = source.slice(source.indexOf('agentUsage: s?.nativeStructured') + 'agentUsage: '.length, source.indexOf('\n          // A run of the CLI')).trim().replace(/,$/, '');
+  const usage = vm.runInNewContext(expression, { s, dispatchedOnly() { throw new Error('not a terminal fallback'); } });
+  assert.deepEqual(usage.context, { used: 88, window: 234567 }); assert.deepEqual(usage.round, { input: 55, cached: 2, output: 4 });
+  assert.deepEqual(usage.total, { input: 130, cached: 20, output: 5 });
+  main.structuredEvent('t', event('usage.updated', { input: null, cachedInput: null, cacheWrite: null, output: null, contextWindow: null }));
+  assert.equal(s.nativeUsage.snapshot().context, null, 'no hard-coded window');
+});
 const event = (type, payload, replay = false) => ({ type, payload, replay, runtimeSessionId: 'runtime', providerSessionId: 'provider', turnId: 'turn', receivedAtMs: 1 });
 
 test('N8 an outdated Claude upgrade notice survives terminal fallback without a replay notification', () => {

@@ -198,13 +198,14 @@ test('duplicate SDK results never publish a second completion or cost', async t 
   fake.emit(result); fake.emit(result); await until(() => events.some(event => event.type === 'turn.completed'));
   await new Promise(resolve => setImmediate(resolve)); assert.equal(events.filter(event => event.type === 'turn.completed').length, 1); assert.equal(runtime.usage.summary().monthUsdMicros, 100000);
 });
-test('subscription rate-limit events never become API balance observations', async t => {
+test('G7 rate-limit events carry restrictions without inventing an API credit balance', async t => {
   const { session, fake, events } = setup(t, { auto: false }); await session.start(); session.send({ clientMessageId: randomUUID(), text: 'one' });
   await until(() => fake.inputs.length === 1); fake.emit({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 123 } });
-  await new Promise(resolve => setImmediate(resolve)); assert.equal(events.filter(event => event.type === 'limits.updated').length, 0);
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(events.filter(event => event.type === 'limits.updated').length, 1);
   fake.emit({ type: 'assistant', error: 'rate_limit', uuid: 'error', message: { content: [] } });
   await until(() => events.some(event => event.type === 'limits.updated')); const limits = events.find(event => event.type === 'limits.updated').payload;
   assert.equal(limits.billingRoute, 'api'); assert.deepEqual(limits.limitsById, {}); assert.equal(limits.resetCredits, null);
+  assert.equal(limits.ordinaryUsageAllowed, false); assert.equal(limits.notice.resetsAtMs, 123000);
 });
 test('native executable discovery never searches relative directories or accepts wrappers', async t => {
   const { resolveClaudeExecutable } = require('../electron/features/claude-sdk/executable.cjs');

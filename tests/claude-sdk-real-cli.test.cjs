@@ -40,7 +40,11 @@ async function harness(t, respond) {
     request.on('end', () => {
       if (/count_tokens/.test(request.url)) return response.writeHead(200, { 'content-type': 'application/json' }).end('{"input_tokens":1}');
       if (!/\/messages/.test(request.url)) return response.writeHead(404).end();
-      stats.requests++; response.writeHead(200, { 'content-type': 'text/event-stream' }).end(stream(respond(JSON.parse(body))));
+      stats.requests++;
+      const value = respond(JSON.parse(body));
+      if (Array.isArray(value)) response.writeHead(200, { 'content-type': 'text/event-stream' }).end(stream(value));
+      else if (value.events) { response.writeHead(200, { 'content-type': 'text/event-stream', ...value.headers }); if (value.hold) response.write(stream(value.events)); else response.end(stream(value.events)); }
+      else response.writeHead(value.status, { 'content-type': 'application/json', 'x-should-retry': 'false', ...value.headers }).end(JSON.stringify(value.body));
     });
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening'); t.after(() => server.close());
@@ -49,14 +53,54 @@ async function harness(t, respond) {
   return { stats, cwd, run: async (options, onMessage = () => {}) => {
     stats.requests = 0; const abort = new AbortController();
     try {
-      for await (const message of sdk.query({ prompt: 'go', options: { cwd, env, model: 'claude-sonnet-4-5', pathToClaudeCodeExecutable: cli, permissionMode: 'default', settingSources: [], abortController: abort, ...options } })) {
-        onMessage(message);
+      const query = sdk.query({ prompt: 'go', options: { cwd, env, model: 'claude-sonnet-4-5', pathToClaudeCodeExecutable: cli, permissionMode: 'default', settingSources: [], abortController: abort, ...options } });
+      for await (const message of query) {
+        onMessage(message, query);
         if (message.type === 'result') return message;
       }
     } finally { abort.abort(); }
     throw new Error('no result');
   } };
 }
+
+test('G4 the real CLI reports its interrupted streaming result instead of a completed task', { skip, timeout: 60000 }, async t => {
+  const { run } = await harness(t, data => ({ hold: true, events: [opening(data), ...textBlock(0, 'PARTIAL')] }));
+  let interrupted = false;
+  const result = await run({ includePartialMessages: true, tools: [] }, (message, query) => {
+    if (!interrupted && message.type === 'stream_event' && message.event.type === 'content_block_delta') { interrupted = true; void query.interrupt(); }
+  });
+  assert.equal(interrupted, true); assert.ok(['aborted_streaming', 'aborted_tools'].includes(result.terminal_reason));
+  const normalized = require('../electron/features/claude-sdk/result.cjs').turnResult(result, { interrupted: true }); assert.equal(normalized.status, 'interrupted');
+  t.diagnostic(JSON.stringify({ subtype: result.subtype, is_error: result.is_error, terminal_reason: result.terminal_reason }));
+});
+
+for (const [status, message] of [[429, 'enforced_spend_limit_reached'], [400, 'You have reached your specified API usage limits']]) {
+  test(`G7 real API-key CLI maps HTTP ${status} spend rejection from a local stub`, { skip, timeout: 60000 }, async t => {
+    const reset = Math.floor(Date.now() / 1000) + 3600;
+    const { run } = await harness(t, () => ({ status, headers: { 'anthropic-ratelimit-requests-reset': new Date(reset * 1000).toISOString(),
+      'anthropic-ratelimit-unified-status': 'rejected', 'anthropic-ratelimit-unified-reset': String(reset) }, body: { type: 'error', error: { type: 'rate_limit_error', message } } }));
+    const events = [], records = [], rateLimits = require('../electron/features/claude-sdk/limits.cjs').rateLimits;
+    const result = await run({ tools: [] }, item => { records.push(item); const limit = rateLimits(item, events.at(-1), 'offline', Date.now()); if (limit) events.push(limit); });
+    assert.equal(result.is_error, true); assert.ok(events.some(limit => limit.notice?.code === 'spend_limit'));
+    t.diagnostic(JSON.stringify({ status, subtype: result.subtype, terminal_reason: result.terminal_reason,
+      rateEvents: records.filter(item => item.type === 'rate_limit_event').map(item => item.rate_limit_info), notices: events.map(item => item.notice) }));
+  });
+}
+test('G7 real API-key CLI reports whether successful response headers produce rate-limit events', { skip, timeout: 60000 }, async t => {
+  const reset = Math.floor(Date.now() / 1000) + 3600;
+  const { run } = await harness(t, data => ({ headers: { 'anthropic-ratelimit-unified-status': 'allowed_warning',
+    'anthropic-ratelimit-unified-5h-utilization': '0.8', 'anthropic-ratelimit-unified-5h-reset': String(reset) }, events: [opening(data), ...textBlock(0, 'DONE'), ...finish('end_turn')] }));
+  const rates = []; const result = await run({ tools: [] }, item => { if (item.type === 'rate_limit_event') rates.push(item.rate_limit_info); });
+  assert.equal(result.terminal_reason, 'completed'); t.diagnostic(JSON.stringify({ rateEvents: rates }));
+});
+test('G7 real API-key CLI reports a credit-balance rejection without inventing reset credits', { skip, timeout: 60000 }, async t => {
+  const { run } = await harness(t, () => ({ status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.' } } }));
+  const notices = [], frames = [];
+  await run({ tools: [] }, item => { if (item.type === 'assistant' && item.error || item.type === 'rate_limit_event') frames.push({ type: item.type, error: item.error, rate_limit_info: item.rate_limit_info });
+    const value = require('../electron/features/claude-sdk/limits.cjs').rateLimits(item, notices.at(-1), 'offline', Date.now()); if (value) notices.push(value); });
+  assert.ok(notices.some(value => value.notice?.code === 'credits_required')); assert.ok(notices.every(value => value.resetCredits === null));
+  t.diagnostic(JSON.stringify({ frames, notices: notices.map(value => value.notice) }));
+});
 
 test('the real CLI pauses a tool on a hook defer and runs it when the hook answers nothing', { skip, timeout: 180000 }, async t => {
   const { run, stats } = await harness(t, toolThenDone);
