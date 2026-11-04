@@ -118,6 +118,67 @@ test('G4 the real CLI reports its interrupted streaming result instead of a comp
   t.diagnostic(JSON.stringify({ subtype: result.subtype, is_error: result.is_error, terminal_reason: result.terminal_reason }));
 });
 
+test('N1 real stopped tool results are interrupted without internal cancellation prose in either reader', { skip, timeout: 60000 }, async t => {
+  const f = await harness(t, useTool('Bash', { command: `"${process.execPath.split(path.sep).join('/')}" -e "setTimeout(()=>{},20000)"`, description: 'Wait for interruption' }));
+  const items = new Map(), records = [], normalize = createNormalizer((type, payload, extra) => { if (type === 'item.upsert') items.set(extra.itemId, payload); });
+  let timer;
+  t.after(() => clearTimeout(timer));
+  const result = await f.run({}, (message, query) => {
+    records.push(message); normalize(message);
+    if (!timer && message.type === 'assistant' && message.message?.content?.some(block => block.type === 'tool_use')) timer = setTimeout(() => { void query.interrupt(); }, 1200);
+  });
+  const toolResult = records.find(record => record.type === 'user' && record.message?.content?.some(block => block.type === 'tool_result'));
+  t.diagnostic(JSON.stringify({ sdkToolResult: toolResult, terminalReason: result.terminal_reason }));
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const { ActionLog, claudeRecord } = require('../electron/agent-actions.cjs');
+  const log = new ConversationLog(), actions = new ActionLog();
+  const projects = path.join(f.env.CLAUDE_CONFIG_DIR, 'projects');
+  const file = path.join(projects, fs.readdirSync(projects)[0], `${result.session_id}.jsonl`);
+  const persisted = fs.readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  t.diagnostic(JSON.stringify({ persistedToolResults: persisted.filter(record => record.type === 'user' && record.message?.content?.some(block => block.type === 'tool_result')) }));
+  for (const record of persisted) { claudeConversation(log, record); claudeRecord(actions, record); }
+  assert.ok(toolResult, 'the CLI must deliver the cancellation tool_result before the result');
+  const tool = [...items.values()].find(item => item.kind === 'command');
+  assert.equal(tool?.status, 'interrupted'); assert.equal(tool.content.output || '', '');
+  assert.equal(log.list.find(entry => entry.role === 'tool')?.tool.failed, false);
+  assert.equal(actions.list.find(action => action.tool === 'Bash')?.failed, false);
+});
+
+test('N1 real tool failures remain failed and retain their output in both readers', { skip, timeout: 60000 }, async t => {
+  const f = await harness(t, useTool('Bash', { command: `"${process.execPath.split(path.sep).join('/')}" -e "console.error('REAL_TOOL_FAILURE');process.exit(3)"`, description: 'Fail explicitly' }));
+  const items = new Map(), records = [], normalize = createNormalizer((type, payload, extra) => { if (type === 'item.upsert') items.set(extra.itemId, payload); });
+  await f.run({}, message => { records.push(message); normalize(message); });
+  const tool = [...items.values()].find(item => item.kind === 'command');
+  assert.equal(tool?.status, 'failed'); assert.match(tool.content.output, /REAL_TOOL_FAILURE/);
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const { ActionLog, claudeRecord } = require('../electron/agent-actions.cjs');
+  const log = new ConversationLog(), actions = new ActionLog();
+  for (const record of records) { claudeConversation(log, record); claudeRecord(actions, record); }
+  assert.equal(log.list.find(entry => entry.role === 'tool')?.tool.failed, true);
+  assert.equal(actions.list.find(action => action.tool === 'Bash')?.failed, true);
+});
+
+for (const background of [false, true]) test(`N2 real ${background ? 'asynchronous' : 'synchronous'} Agent results stay out of tool output like terminal reading`, { skip, timeout: 60000 }, async t => {
+  const f = await harness(t, data => {
+    const sent = JSON.stringify(data.messages);
+    if (sent.includes('tool_result')) return [opening(data), ...textBlock(0, 'MAIN DONE'), ...finish('end_turn')];
+    if (sent.includes('CHILD_ONLY_PROMPT')) return [opening(data), ...textBlock(0, 'CHILD_ONLY_FINAL'), ...finish('end_turn')];
+    return useTool('Agent', { description: 'Do isolated sub work', prompt: 'CHILD_ONLY_PROMPT', subagent_type: 'general-purpose', run_in_background: background })(data);
+  });
+  const items = new Map(), records = [], normalize = createNormalizer((type, payload, extra) => { if (type === 'item.upsert') items.set(extra.itemId, payload); });
+  await f.run({}, message => { records.push(message); normalize(message); });
+  t.diagnostic(JSON.stringify({ background, results: records.filter(record => record.type === 'user' && !record.parent_tool_use_id && record.message?.content?.some(block => block.type === 'tool_result')) }));
+  const tool = [...items.values()].find(item => item.content?.name === 'Agent');
+  assert.ok(tool); assert.equal(tool.content.output || '', '');
+  assert.match(tool.content.input, /Do isolated sub work/);
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const log = new ConversationLog();
+  for (const record of records.filter(record => !record.parent_tool_use_id)) claudeConversation(log, record);
+  const terminal = log.list.find(entry => entry.tool?.tool === 'Agent')?.tool;
+  assert.equal(terminal?.target, 'Do isolated sub work'); assert.equal(terminal.detail, 'general-purpose');
+  assert.equal(terminal.output, undefined);
+});
+
 for (const [status, message] of [[429, 'enforced_spend_limit_reached'], [400, 'You have reached your specified API usage limits']]) {
   test(`G7 real API-key CLI maps HTTP ${status} spend rejection from a local stub`, { skip, timeout: 60000 }, async t => {
     const reset = Math.floor(Date.now() / 1000) + 3600;

@@ -1,5 +1,6 @@
 const { commandPhrase } = require('../../command-phrase.cjs');
 const { claudeText, clean: conversationClean } = require('../../conversation-record.cjs');
+const { claudeToolInterrupted } = require('../../agent-actions.cjs');
 const LIMIT = 2000, PREVIEW = 65536;
 function remember(map, key, value) {
   map.set(key, value);
@@ -63,7 +64,9 @@ function createNormalizer(emit, clean = value => value) {
     if (message.type === 'user') {
       for (const block of blocks.filter(block => block.type === 'tool_result')) {
         const previous = tools.get(block.tool_use_id);
-        publish('item.upsert', { kind: previous?.kind || 'tool', status: block.is_error ? 'failed' : 'completed', content: { ...previous?.content, output: output(block.content) } }, { itemId: block.tool_use_id });
+        const interrupted = claudeToolInterrupted(message, block), agent = ['Agent', 'Task'].includes(previous?.content.name);
+        publish('item.upsert', { kind: previous?.kind || 'tool', status: interrupted ? 'interrupted' : block.is_error ? 'failed' : 'completed',
+          content: { ...previous?.content, output: interrupted || agent ? '' : output(block.content) } }, { itemId: block.tool_use_id });
         tools.delete(block.tool_use_id);
       }
       const text = claudeText(message);

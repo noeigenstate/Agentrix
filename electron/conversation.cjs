@@ -1,4 +1,4 @@
-const { claudeAction, claudeOwnRecord, codexActions, codexFailed, resolvePath } = require('./agent-actions.cjs');
+const { claudeAction, claudeOwnRecord, claudeToolInterrupted, codexActions, codexFailed, resolvePath } = require('./agent-actions.cjs');
 const { IMAGE_LIMIT } = require('./oversized-record.cjs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
@@ -272,7 +272,7 @@ function claudeConversation(log, record, cwd, { queueOnly = false } = {}) {
   if (record.type === 'user') {
     if (Array.isArray(content) && content.some(block => block.type === 'tool_result')) {
       if (record.isMeta || claudeOwnRecord(record)) return;
-      for (const block of content) if (block.type === 'tool_result') log.finish(String(block.tool_use_id || ''), block.is_error === true);
+      for (const block of content) if (block.type === 'tool_result') log.finish(String(block.tool_use_id || ''), block.is_error === true && !claudeToolInterrupted(record, block));
       return;
     }
     const original = promptText(content, record);
