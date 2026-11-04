@@ -18,7 +18,7 @@ test('local plan replays the Windows build followed by every desktop shard in ma
   const ordered = [...parsed.jobs.windows.steps, ...desktop.strategy.matrix.include.flatMap(({ shard }) =>
     desktop.steps.filter(step => !step.if || step.if === 'always()' || step.if === `matrix.shard == '${shard}'`))];
   assert.deepEqual(steps.map(step => step.name), ordered.map(step => step.name));
-  assert.equal(steps.length, 61);
+  assert.equal(steps.length, 62);
   assert.deepEqual(steps.map(step => step.number), Array.from({ length: steps.length }, (_, index) => index + 1));
   assert.equal(new Set(steps.map(step => step.key)).size, steps.length);
   const skipped = steps.filter(step => step.skip);
@@ -38,6 +38,11 @@ test('local plan replays the Windows build followed by every desktop shard in ma
     assert.equal(step.timeoutMinutes, job['timeout-minutes']);
   }
   assert.equal(steps.find(step => step.run === 'npm test').kind, 'unit');
+  const realCli = steps.find(step => step.name === 'Real Claude CLI contract (offline)');
+  assert.ok(realCli.number < steps.find(step => step.run === 'npm test').number);
+  assert.equal(realCli.env.AGENTRIX_REQUIRE_REAL_CLI, '1');
+  assert.match(realCli.run, /package-lock\.json/); assert.match(realCli.run, /claude\.exe/);
+  assert.match(realCli.run, /node --test tests\/claude-sdk-real-cli\.test\.cjs/);
   assert.equal(steps.filter(step => step.kind === 'gui').length, 23);
   assert.equal(steps.find(step => step.name === 'Build Windows installer').kind, 'command');
   assert.equal(steps.find(step => step.name === 'Create checksum and build notes').skip, null);

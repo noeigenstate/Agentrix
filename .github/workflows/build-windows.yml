@@ -142,6 +142,18 @@ jobs:
       - name: Install Codex CLI for offline startup checks
         run: npm install --global @openai/codex@0.163.0 --no-audit --no-fund
 
+      - name: Real Claude CLI contract (offline)
+        shell: bash
+        env:
+          AGENTRIX_REQUIRE_REAL_CLI: '1'
+        run: |
+          version=$(node -p "require('./package-lock.json').packages['node_modules/@anthropic-ai/claude-agent-sdk-win32-x64'].version")
+          npm install --ignore-scripts --no-save --prefix "$RUNNER_TEMP/claude-contract" --no-audit --no-fund "@anthropic-ai/claude-agent-sdk-win32-x64@$version"
+          export AGENTRIX_REAL_CLAUDE="$RUNNER_TEMP/claude-contract/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe"
+          test -f "$AGENTRIX_REAL_CLAUDE"
+          "$AGENTRIX_REAL_CLAUDE" --version
+          node --test tests/claude-sdk-real-cli.test.cjs
+
       - name: Run unit and integration tests
         env:
           AGENTRIX_LAB_TEST_PREPARE_HOST: '1'

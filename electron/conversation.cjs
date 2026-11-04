@@ -5,6 +5,7 @@ const { createHash } = require('node:crypto');
 const { PictureThumbnails, dataImage } = require('./features/files/picture-thumbnail.cjs');
 const pictureValues = require('./picture-values.json');
 const { messageText, promptText, promptKey, promptCommand } = require('./prompt-queue.cjs');
+const { clean, claudeText } = require('./conversation-record.cjs');
 
 // The conversation of a terminal's agent, for the reading view: what the user asked, what the agent
 // answered (Markdown), and the tools it called in between. It is read from the records each agent already
@@ -13,15 +14,6 @@ const { messageText, promptText, promptKey, promptCommand } = require('./prompt-
 //
 // An entry is { id, at, role: 'user' | 'assistant' | 'tool', text?, tool? }.
 const TEXT_LIMIT = 20000;
-// Wrappers the agents put around a prompt that are not what the user typed.
-const WRAPPERS = /<(system-reminder|environment_context|user_instructions|command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat|task-notification|user-prompt-submit-hook)\b[^>]*>[\s\S]*?<\/\1>/g;
-// Claude marks where a pasted image went ("[Image #2]"); the image itself is shown, so the mark goes.
-// Only the start of a huge record is cleaned: the wrapper pattern scans to the end for each unclosed tag, and what is
-// shown is cut to TEXT_LIMIT anyway.
-const CLEAN_LIMIT = 60000;
-// Claude Code wraps pasted text in <pasted_content id=…> tags: the text is what was said, the tags are not.
-const PASTED = /<\/?pasted_content\b[^>]*>\n?/g;
-const clean = text => String(text || '').slice(0, CLEAN_LIMIT).replace(WRAPPERS, '').replace(PASTED, '').replace(/\[Image #\d+\]\s?/g, '').trim();
 // Four small pictures at most; unavailable pixels leave a marker in the same position, never a silent omission.
 let thumbnails = new PictureThumbnails();
 function pictures(parts) {
@@ -98,9 +90,7 @@ function codexUserMessage(log, record, item, id, source) {
 // A picture Codex generated (its image_gen tool) and saved under generated_images. The reading view shows a small copy
 // made from the saved file (the main process sets how, see setThumbnailer), never the full image inline, and opens
 // the file itself on a click.
-const GENERATED = /[\\/]generated_images[\\/][^\\/]+[\\/][^\\/]+\.(?:png|jpe?g|webp)$/i;
-// Codex records the path on the system it runs on; either form of an absolute path is read the same way everywhere.
-const isGeneratedImage = file => typeof file === 'string' && !/^(?:[\\/]{2}|file:)/i.test(file) && (path.win32.isAbsolute(file) || path.posix.isAbsolute(file)) && GENERATED.test(file);
+const { isGeneratedImage } = require('./generated-image-path.cjs');
 // fromFile(path) and fromDataUrl(url) return a small data URL, or null to keep what there is.
 function setThumbnailer(fromFile, fromDataUrl = url => url) { thumbnails = new PictureThumbnails(fromFile, fromDataUrl); }
 function generatedImage(item, at) {
@@ -290,7 +280,7 @@ function claudeConversation(log, record, cwd, { queueOnly = false } = {}) {
       receivedPrompt(log, { id: `u:${base}`, at, original: messageText(content) }, { ignored: true });
       return;
     }
-    const text = promptCommand(original) || clean(original);
+    const text = claudeText(record) ?? '';
     const entry = withImages({ id: `u:${base}`, at, role: 'user', text: bounded(text), original }, content, log);
     // A conversation's first prompt, which Claude Code writes after the reply to it, goes before that reply.
     if (text || entry.images) receivedPrompt(log, entry, { inOrder: record.parentUuid === null, fromQueue: record.promptSource === 'queued', queueOnly });

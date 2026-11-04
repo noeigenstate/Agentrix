@@ -2,7 +2,7 @@
 
 Owns the host's Claude Agent SDK sessions, protected credentials, worker tool decisions and local API accounting.
 
-Known gap: Claude settings can replace `env.ANTHROPIC_API_KEY` while reporting the same source. The SDK does not expose the effective key, so these checks cannot prove that its bytes match the app's saved key.
+Owner sessions intentionally keep tool and hook environment inheritance; dispatch workers enable the CLI's subprocess scrub. This is the owner's current decision (A2), not an isolation guarantee. API routing is pinned in flag settings from host and user sources; repository env and helper settings cannot choose the destination. The saved key remains in the child environment, never flag settings or argv. Known gap: project settings can replace that key while reporting the same source; the SDK cannot prove its effective bytes.
 
 ## Owns
 - `electron/features/claude-sdk/**`
@@ -13,6 +13,8 @@ Known gap: Claude settings can replace `env.ANTHROPIC_API_KEY` while reporting t
 - `inspectClaudeExecutable` (`electron/features/claude-sdk/executable.cjs`) — whether the installed native Claude Code exists and meets the minimum version; main reads it to say what a new session takes
 
 ## May import
+- `electron/command-phrase.cjs`
+- `electron/conversation-record.cjs`
 - `electron/features/native-session/storage.cjs`
 - `electron/features/native-session/events.cjs`
 - `electron/boundaries.cjs`
@@ -20,8 +22,8 @@ Known gap: Claude settings can replace `env.ANTHROPIC_API_KEY` while reporting t
 
 ## Invariants
 - Owner queries stay open at idle; explicit sends renew spent caps at safe message boundaries — test: `tests/claude-sdk-budget.test.cjs` › "M1 each explicit idle turn renews its five-dollar cap without charging resumed history"
-- Workers explicitly isolate disk settings and failed policy hooks block execution — test: `tests/claude-sdk-runtime.test.cjs` › "a worker explicitly disables disk setting sources and blocks failed hooks"
-- API identity requires the env API source, rejecting competing `apiKeyHelper` and `ANTHROPIC_AUTH_TOKEN` token sources before accepting usage; a saved `claude.ai` login alone is allowed — test: `tests/claude-sdk-runtime.test.cjs` › "billing identity mismatch fails without trusting a subscription init"
+- Workers isolate disk settings and rely on blocking PreToolUse policy under bypassPermissions; owner questions still reach canUseTool — test: `tests/claude-sdk-real-cli.test.cjs` › "A7 product worker policy remains active on resume and a throwing hook blocks"; test: `tests/claude-sdk-real-cli.test.cjs` › "under bypass a question still reaches the owner through canUseTool"
+- API identity requires the env API source; routing overrides project transport and helper settings without disabling owner project settings — test: `tests/claude-sdk-runtime.test.cjs` › "billing identity mismatch fails without trusting a subscription init"; test: `tests/claude-sdk-real-cli.test.cjs` › "A1 project settings cannot send the saved key to a trap endpoint"
 - Stopping cancels pending approvals and preserves uncertain delivery — test: `tests/claude-sdk-runtime.test.cjs` › "stop rejects queued input and stale permission answers"
 - Credential status contains only a saved flag — test: `tests/claude-sdk-runtime.test.cjs` › "credential status returns only saved and ciphertext never contains the test key"
 - Cumulative usage is differenced and deduplicated across resume — test: `tests/claude-sdk-runtime.test.cjs` › "usage deltas persist across resume, deduplicate, and ignore zeroed failures"

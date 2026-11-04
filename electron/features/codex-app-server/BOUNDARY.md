@@ -9,6 +9,8 @@ Owns an independent stdio app-server for a native Codex session; normalizes its 
 - `createCodexRuntime` (`electron/features/codex-app-server/index.cjs`) — injected process launcher, executable resolver and clock; provides create(spec, emit) and limits(scope); a runtime provides start, resume, send, interrupt, answer, snapshot, close and read-only account reads.
 
 ## May import
+- `electron/command-phrase.cjs`
+- `electron/generated-image-path.cjs`
 - `src/shared/agent-events.ts`
 - `electron/features/agents/codex-account-usage.cjs`
 

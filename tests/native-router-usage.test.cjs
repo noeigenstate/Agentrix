@@ -120,7 +120,7 @@ test('real main assembly reports terminal-only Claude subscription usage without
   const usage = () => handlers.get('native:usage')();
   let value = await usage();
   assert.equal(context.nativeSessions.has('t'), false);
-  assert.equal(value.agents.claude.path, null); assert.equal(value.lastSwitch, null);
+  assert.equal(value.agents.claude.path, null); assert.equal(value.lastSwitch, undefined);
   assert.deepEqual(value.agents.claude.next, { path: 'terminal', reason: 'no_key' });
   assert.equal(value.agents.claude.connection.kind, 'subscription');
   assert.equal(value.agents.claude.limits.source, 'Claude'); assert.equal(value.agents.claude.limits.observedAtMs, at);

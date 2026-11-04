@@ -22,7 +22,7 @@ const { TASK_KINDS, taskKind, routingVerdict: strictRoutingVerdict } = require(p
 const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
 const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
-const RUNTIME_FILES = ['boundaries.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
+const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-path.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs',
   'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/team/inbox.cjs', 'features/dashboard/records-routing.cjs',
   'features/skills/session.cjs', 'features/skills/worker-proposals.cjs', 'features/agents/dispatch-control.cjs',

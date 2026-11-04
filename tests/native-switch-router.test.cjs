@@ -57,11 +57,11 @@ test('G1 a failed terminal switch keeps the API input usable without retrying on
 });
 test('G3/G12 startup has no switch record and a source exit warning reports a successful destination', async t => {
   const f = fixture(t); await f.router.start('t', { agent: 'claude' });
-  assert.equal(f.router.usage({}, 'p').lastSwitch, null);
+  assert.equal(f.router.usage({}, 'p').lastSwitch, undefined);
   f.created[0].close = () => { throw new Error('Synthetic old process exit timeout'); };
   f.config({ claudePath: 'terminal-only' }); await tick(); f.handoff(); await tick();
   const state = f.router.switchState('t'); assert.equal(state.current, 'terminal'); assert.equal(state.outcome, 'switched'); assert.match(state.reason, /已保留新会话/);
-  assert.equal(f.router.usage({}, 'another-project').lastSwitch, null);
+  assert.equal(f.router.usage({}, 'another-project').lastSwitch, undefined);
 });
 const until = async check => { for (let i = 0; i < 200; i++) { if (check()) return; await tick(); } throw new Error('switch did not settle'); };
 for (const agent of ['claude', 'codex']) test(`router restores ${agent} both ways using one provider id, carries receipts and never submits history`, async t => {

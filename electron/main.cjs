@@ -57,7 +57,7 @@ const claudeAccounts = new ClaudeAccountUsage({ changed: () => queueClaudeAccoun
   fetch: (url, options) => electronNet.fetch(url, options),
 }) });
 const { agentCommand } = require('./features/agents/agent-command.cjs');
-const { setThumbnailer, isGeneratedImage } = require('./conversation.cjs');
+const { setThumbnailer, isGeneratedImage, generatedImage } = require('./conversation.cjs');
 const { saveDialogOptions, saveTarget } = require('./image-save.cjs');
 const { registerVoiceIpc } = require('./features/voice/ipc.cjs');
 const { createIpcAdapter } = require('./shared/ipc.cjs');
@@ -1267,7 +1267,10 @@ function structuredEvent(id, event) {
     if (spec.agent === 'claude') s.claudeSessionId = event.providerSessionId;
     else s.reportedThreadId = event.providerSessionId;
   }
-  if (event.type === 'routing.updated') s.agentSettings = event.payload.observed;
+  if (event.type === 'routing.updated') {
+    const { observed, effective } = event.payload;
+    s.agentSettings = Object.fromEntries(['model', 'effort', 'fast'].map(key => [key, observed?.[key] ?? effective?.[key] ?? s.agentSettings?.[key] ?? null]));
+  }
   if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && event.payload.content.unsent !== true && event.payload.content.text) {
     const clientId = event.payload.content.clientMessageId || event.itemId;
     s.nativeMessages.set(clientId, event.payload.content.text);
@@ -1447,7 +1450,7 @@ async function initializeNativeSessions() {
     },
   });
   claudeRuntime.observeCli?.(await inspectClaudeExecutable());
-  const codexFactory = createCodexRuntime();
+  const codexFactory = createCodexRuntime({ renderImage: item => generatedImage(item, Date.now()) });
   const codex = { create(spec, emit) {
     const runtime = codexFactory.create(spec, emit), start = runtime.start, resume = runtime.resume, close = runtime.close;
     let accountBinding, accountWatch;
@@ -1766,7 +1769,7 @@ function registerUnavailableNative(handle) {
       todayUsdMicros: null, monthUsdMicros: null, estimated: true, apiRecords: false };
     return { ...summary, budgetUsd: null, switches: { waiting: 0 }, agents: { claude: { path: 'terminal', reason: 'native_unavailable',
         next: { path: 'terminal', reason: 'native_unavailable' }, limits: limits.claude, connection: connections.claude },
-        codex: { path: 'terminal', reason: 'native_unavailable', next: { path: 'terminal', reason: 'native_unavailable' }, limits: limits.codex, connection: connections.codex } }, lastSwitch: null };
+        codex: { path: 'terminal', reason: 'native_unavailable', next: { path: 'terminal', reason: 'native_unavailable' }, limits: limits.codex, connection: connections.codex } } };
   });
   for (const name of ['send', 'interrupt', 'stop', 'answer', 'settings-set', 'key-save', 'key-clear', 'key-status']) {
     handle(`native:${name}`, () => { throw new Error('原生会话暂不可用，已保留终端模式。'); });

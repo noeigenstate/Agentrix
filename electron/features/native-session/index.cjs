@@ -29,7 +29,7 @@ function createNativeSessions(options) {
         const usage = router.usage({}, projectId);
         for (const agent of ['claude', 'codex']) usage.agents[agent] = { path: null, reason: null, next: { path: null, reason: null }, limits: null,
           connection: { kind: 'none', source: null, observedAt: null } };
-        return { ...usage, lastSwitch: null, switches: { waiting: 0 } };
+        return { ...usage, switches: { waiting: 0 } };
       }
       const usage = router.usage(await options.usageInputs?.(projectId), projectId);
       const connections = await options.connections?.(projectId);

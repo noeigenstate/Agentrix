@@ -1,8 +1,10 @@
 const { randomUUID } = require('node:crypto');
 const { tokenUsage } = require('./account.cjs');
+const { commandPhrase } = require('../../command-phrase.cjs');
+const { isGeneratedImage } = require('../../generated-image-path.cjs');
 /** @typedef {import('../../../src/shared/agent-events').AgentEvent} AgentEvent */
 const KINDS = { userMessage: 'user-message', agentMessage: 'agent-message', reasoning: 'reasoning-summary', commandExecution: 'command',
-  fileChange: 'file-change', mcpToolCall: 'tool', dynamicToolCall: 'tool', plan: 'plan', webSearch: 'web' };
+  fileChange: 'file-change', mcpToolCall: 'tool', dynamicToolCall: 'tool', plan: 'plan', webSearch: 'web', imageGeneration: 'agent-message' };
 const bounded = value => typeof value === 'string' ? value.slice(0, 256 * 1024) : null;
 const ERRORS = {
   contextWindowExceeded: '输入超过上下文长度，本轮未能完成。', sessionBudgetExceeded: 'Codex 本轮预算已用完。',
@@ -24,22 +26,23 @@ function turnCompletion(turn, usage) {
     costUsdMicros: null, costEstimated: null, tokens: usage?.round || null };
 }
 
-function itemPayload(item, completed) {
+function itemPayload(item, completed, renderImage = () => null) {
   const kind = KINDS[item.type] || 'other';
   let content;
   if (item.type === 'agentMessage' || item.type === 'plan') content = { text: bounded(item.text), phase: item.phase ?? null };
   else if (item.type === 'userMessage') content = { text: bounded((item.content || []).filter(x => x.type === 'text').map(x => x.text).join('\n')), clientMessageId: item.clientId ?? null };
   else if (item.type === 'reasoning') content = { text: bounded((item.summary || []).join('\n')) };
-  else if (item.type === 'commandExecution') content = { command: bounded(item.command), cwd: item.cwd ?? null, output: bounded(item.aggregatedOutput), exitCode: item.exitCode ?? null, durationMs: item.durationMs ?? null };
+  else if (item.type === 'commandExecution') content = { command: bounded(item.command), phrase: commandPhrase(item.command).phrase, cwd: item.cwd ?? null, output: bounded(item.aggregatedOutput), exitCode: item.exitCode ?? null, durationMs: item.durationMs ?? null };
   else if (item.type === 'fileChange') content = { changes: (item.changes || []).slice(0, 100).map(x => ({ path: x.path, kind: x.kind, diff: bounded(x.diff) })) };
-  else if (kind === 'tool') content = { tool: item.tool, server: item.server ?? null, output: bounded(JSON.stringify(item.result ?? item.contentItems ?? null)) };
+  else if (kind === 'tool') content = { tool: item.tool, server: item.server ?? null, output: bounded((item.result?.content || item.contentItems || []).filter(block => block.type === 'text').map(block => block.text).join('\n') || (typeof item.result === 'string' ? item.result : '')) };
+  else if (item.type === 'imageGeneration' && completed && isGeneratedImage(item.savedPath)) content = { text: '', generated: { path: item.savedPath, prompt: bounded(item.revisedPrompt) || '' }, images: renderImage(item)?.images || [] };
   else content = { text: bounded(item.text), providerType: item.type };
   const status = { inProgress: 'in-progress', pending: 'pending', completed: 'completed', failed: 'failed', declined: 'failed', interrupted: 'interrupted' }[item.status]
     || (completed ? 'completed' : 'running');
   return { kind, status, content };
 }
 
-function createEvents(spec, emit, now) {
+function createEvents(spec, emit, now, renderImage) {
   let sequence = 0;
   const events = [], items = new Map(), itemEvents = new Map(), completed = new Set(), children = new Set();
   const binding = { connectionEpoch: randomUUID(), providerSessionId: null, turnId: null };
@@ -62,7 +65,7 @@ function createEvents(spec, emit, now) {
         if (item.tool === 'closeAgent' || ['completed', 'failed', 'shutdown', 'notFound'].includes(status)) children.delete(id);
         else if (['spawnAgent', 'sendInput', 'resumeAgent'].includes(item.tool)) children.add(id);
       }
-      const payload = itemPayload(item, method === 'item/completed'); items.set(item.id, payload);
+      const payload = itemPayload(item, method === 'item/completed', renderImage); items.set(item.id, payload);
       if (method === 'item/completed') completed.add(item.id);
       publish('item.upsert', payload, { itemId: item.id, turnId: params.turnId ?? binding.turnId });
     } else if (['item/agentMessage/delta', 'item/commandExecution/outputDelta', 'item/reasoning/summaryTextDelta', 'item/plan/delta'].includes(method)) {
@@ -87,7 +90,13 @@ function createEvents(spec, emit, now) {
     while (items.size > 400) { const id = items.keys().next().value; items.delete(id); completed.delete(id); itemEvents.delete(id); }
   }
   return { binding, publish, notification,
-    beginTurn() { baseline = cumulative; },
+    finishTurn() {
+      for (const [itemId, payload] of items) if (['command', 'tool', 'file-change'].includes(payload.kind) && ['running', 'in-progress', 'pending'].includes(payload.status)
+        && itemEvents.get(itemId)?.turnId === binding.turnId) {
+        const final = { ...payload, status: 'interrupted' }; items.set(itemId, final); completed.add(itemId); publish('item.upsert', final, { itemId });
+      }
+    },
+    beginTurn() { baseline = cumulative; for (let i = events.length - 1; i >= 0; i--) if (['plan.updated', 'turn.diff'].includes(events[i].type)) events.splice(i, 1); },
     activity: () => ({ known: true, count: children.size + [...items.values()].filter(item => ['command', 'tool'].includes(item.kind) && ['running', 'in-progress', 'pending'].includes(item.status)).length }),
     snapshot: () => ({ runtimeSessionId: spec.runtimeSessionId, lastSequence: sequence,
       events: [...events.filter(x => x.type !== 'item.upsert' && x.type !== 'item.delta'), ...[...items].map(([itemId, payload]) => ({ ...itemEvents.get(itemId), type: 'item.upsert', payload }))]

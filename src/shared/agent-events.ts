@@ -66,4 +66,4 @@ export type NativeAnswer = { decision: 'allow' | 'deny' } | { answers: Record<st
   | { switch: { changeId: number; requestId: string; action: 'wait' | 'now' } } | { handoff: NativeHandoff };
 export type NativeSnapshot = { runtimeSessionId: string; lastSequence: number; events: AgentEvent[]; state: SessionState; switchState?: SwitchState; handoff?: NativeHandoff };
 export type AgentPathState = { path: 'api' | 'native' | 'terminal' | null; reason: string | null; limits: LimitsPayload | null };
-export type NativeUsage = { month: string; todayUsdMicros: number | null; monthUsdMicros: number | null; estimated: true; budgetUsd: number | null; agents: Record<AgentProvider, AgentPathState>; switches: { waiting: number }; lastSwitch: null };
+export type NativeUsage = { month: string; todayUsdMicros: number | null; monthUsdMicros: number | null; estimated: true; budgetUsd: number | null; agents: Record<AgentProvider, AgentPathState>; switches: { waiting: number } };

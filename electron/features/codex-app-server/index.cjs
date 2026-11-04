@@ -26,14 +26,14 @@ function stopProcess(child) {
   });
 }
 
-function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, now = Date.now } = {}) {
+function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, now = Date.now, renderImage } = {}) {
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
     create(initialSpec, emit) {
       const spec = { ...initialSpec, runtimeSessionId: initialSpec.runtimeSessionId || randomUUID() };
       let currentUsage = null;
-      const events = createEvents(spec, event => { if (event.type === 'usage.updated') currentUsage = event.payload; emit(event); }, now), receipts = new Map(), finished = new Set();
+      const events = createEvents(spec, event => { if (event.type === 'usage.updated') currentUsage = event.payload; emit(event); }, now, renderImage), receipts = new Map(), finished = new Set();
       let rpc, child, requests, state = 'stopped', closed = false, sending = Promise.resolve(), origin = 'user', clientMessageId = null;
       let lockKey, active = false, threadResponse, accountGeneration = 0, limitsRead = null;
       let accountRead = null;
@@ -63,7 +63,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             const scope = spec.scopeId || spec.runtimeSessionId, limit = restrictedLimits(scopes.get(scope), outcome.terminalReason === 'usageLimitExceeded' ? 'spend_limit' : 'rate_limited', scope, now());
             scopes.set(scope, limit); events.publish('limits.updated', limit);
           }
-          events.publish('turn.completed', outcome);
+          events.finishTurn(); events.publish('turn.completed', outcome);
           setState('idle');
         } else if (method === 'serverRequest/resolved') requests.resolved(params.requestId);
         else if (method === 'account/rateLimits/updated') {

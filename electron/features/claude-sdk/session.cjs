@@ -151,9 +151,7 @@ function createClaudeSession(spec, emit, dependencies) {
         publish('turn.completed', outcome);
         run.interrupted = false;
         turnId = null; stream.turn(null);
-        if (interrupted) {
-          run.busy = false; releaseIdle(run); run.onStoppedResult?.(); unknownInput(); idle = !stopping; cancelQuery(run, 'interrupt'); break;
-        }
+        if (interrupted) unknownInput();
         if (budgetBlocked) {
           run.busy = false; releaseIdle(run); run.onStoppedResult?.(); unknownInput();
           idle = !stopping; cancelQuery(run, 'budget'); break;
@@ -297,7 +295,7 @@ function createClaudeSession(spec, emit, dependencies) {
     sent.set(clientMessageId, 'queued');
     if (!turnId) begin('user', clientMessageId);
     publish('input.receipt', { clientMessageId, status: 'queued' });
-    publish('item.upsert', { kind: 'user-message', status: 'completed', content: { text, clientMessageId } }, { itemId: clientMessageId });
+    publish('item.upsert', { kind: 'user-message', status: 'completed', content: { text, clientMessageId, ...(images.length ? { images } : {}) } }, { itemId: clientMessageId });
     active.queue.push({ type: 'user', uuid: clientMessageId, session_id: providerId || '', parent_tool_use_id: null, message: { role: 'user', content } });
     return { status: 'queued' };
   }
@@ -337,12 +335,12 @@ function createClaudeSession(spec, emit, dependencies) {
     async prepareResume({ allowFresh = false } = {}) {
       if (!started || closed || !providerId && !allowFresh) throw new Error('resume_unavailable');
       // Read the actual persisted chain, then initialize a real resumed CLI with an empty input queue.
-      const history = providerId ? await sdk.getSessionMessages?.(providerId, { dir: spec.cwd, limit: 1000 }) : [];
+      const history = providerId ? await sdk.getSessionMessages?.(providerId, { dir: spec.cwd }) : [];
       if (!history || !history.length && !allowFresh || history.some(message => message.session_id !== providerId)) throw new Error('resume_history_unavailable');
       if (!history.length) { providerId = null; stream.provider(null); }
       preparing ||= createQuery(true).finally(() => { preparing = null; });
       await preparing;
-      for (const message of history) normalize({ ...message, isReplay: true });
+      for (const message of history.slice(-1000)) normalize({ ...message, isReplay: true });
       return { providerSessionId: providerId };
     },
     connection: () => !active || closed || ['stopped', 'failed', 'disconnected'].includes(state)

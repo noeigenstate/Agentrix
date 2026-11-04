@@ -8,14 +8,13 @@ function createNativeUsage(agent) {
   };
   return {
     apply(event) {
-      if (event.replay && event.type === 'turn.started') return;
       const value = event.payload;
       if (event.type === 'turn.started') round = null;
       if (event.type === 'usage.updated') {
         total = tokens(value); round = tokens(value.round);
         context = count(value.contextTokens) !== null && count(value.contextWindow) > 0 ? { used: value.contextTokens, window: value.contextWindow } : null;
       }
-      if (event.type === 'routing.updated') model = value.observed.model;
+      if (event.type === 'routing.updated') model = value.observed?.model ?? value.effective?.model ?? model;
       if (event.type === 'limits.updated') {
         limits = Object.values(value.limitsById).flatMap(bucket => [bucket.primary, bucket.secondary]).filter(item => Number.isFinite(item?.usedPercent) && item.usedPercent >= 0 && item.usedPercent <= 100)
           .map(item => ({ minutes: item.windowDurationMins, percent: item.usedPercent, resetsAt: item.resetsAtMs }));

@@ -65,7 +65,7 @@ function usageMarkup(language = 'zh', terminal = {}, options = {}) {
   const { AgentSections } = loadAgentsFile('ApiUsage.tsx', language);
   const connection = kind => ({ kind, source: null, observedAt: null });
   const state = agent => ({ path: null, reason: null, next: { path: null, reason: null }, limits: options.limits?.[agent] ?? null, connection: connection(options[agent] ?? 'subscription') });
-  const usage = { month: '2030-05', apiRecords: true, todayUsdMicros: 100000, monthUsdMicros: 6400000, estimated: true, budgetUsd: null, lastSwitch: null, agents: { claude: state('claude'), codex: state('codex') }, ...options.usage };
+  const usage = { month: '2030-05', apiRecords: true, todayUsdMicros: 100000, monthUsdMicros: 6400000, estimated: true, budgetUsd: null, agents: { claude: state('claude'), codex: state('codex') }, ...options.usage };
   return renderToStaticMarkup(React.createElement(AgentSections, { usage, terminal: {
     id: 'placeholder', agent: 'claude', codexActive: true, prompts: [], agentSettings: { model: 'claude-opus-5-5', effort: 'xhigh', fast: false }, agentUsage: { provider: 'Anthropic', limits: [] }, ...terminal } }));
 }

@@ -32,7 +32,7 @@ export async function switchContracts(output, stages) {
   const home = path.join(output, 'switch-home'); await fs.mkdir(home, { recursive: true });
   const files = (await fs.readdir(path.join(root, 'tests'))).filter(name => /^native-switch-.*\.test\.cjs$/.test(name)
     || ['native-worker-finish.test.cjs', 'claude-sdk-switch.test.cjs', 'codex-app-server-sandbox.test.cjs',
-      'native-session-resume.test.cjs', 'agent-calls-liveness.test.cjs', 'usage-refresh.test.cjs'].includes(name));
+      'native-session-resume.test.cjs', 'agent-calls-liveness.test.cjs', 'usage-refresh.test.cjs', 'claude-sdk-rereview2.test.cjs'].includes(name));
   await stages.run('switch contracts: correlated resume, late rollback, versioned drafts, helper death and no notifications', async () => {
     const child = spawn(process.execPath, ['--test', ...files.map(name => path.join(root, 'tests', name))], {
       cwd: root, windowsHide: true, env: { ...desktopEnvironment(home), TEMP: home, TMP: home }, stdio: ['ignore', 'pipe', 'pipe'],

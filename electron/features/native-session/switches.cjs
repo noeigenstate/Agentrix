@@ -158,7 +158,6 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
     retained: id => { const entry = entries.get(id); return !!entry && (entry.failed === entry.state.changeId || entry.state.outcome === 'restored') && entry.state.phase === 'stable' && entry.state.current === 'api'; },
     handoff: id => entries.get(id)?.handoff || null,
     recovering: id => !!entries.get(id)?.recovery,
-    frozen: id => ['preparing', 'switching', 'rolling-back'].includes(entries.get(id)?.state.phase),
     waiting: () => [...entries.values()].filter(entry => entry.state.phase !== 'stable').length,
     input(id, runtimeSessionId) {
       const entry = entries.get(id);

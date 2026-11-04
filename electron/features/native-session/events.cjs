@@ -4,11 +4,18 @@ function createEventStream(spec, emit, now = Date.now) {
   const events = new Map(), epoch = randomUUID();
   const sizes = new Map(); let bytes = 0;
   function publish(type, payload, { itemId = null, replay = false, occurredAtMs = null } = {}) {
+    if (type === 'item.upsert' && payload.content?.images && Buffer.byteLength(JSON.stringify(payload)) > 1024 * 1024) {
+      const { images, ...content } = payload.content;
+      payload = { ...payload, content: { ...content, images: [], imagesOmitted: true } };
+    }
     const event = { schemaVersion: 1, eventId: randomUUID(), sequence: ++sequence, connectionEpoch: epoch,
       provider: spec.agent || 'claude', transport: spec.agent === 'codex' ? 'codex-app-server' : 'claude-sdk',
       projectId: spec.projectId, terminalId: spec.terminalId, runtimeSessionId: spec.runtimeSessionId,
       providerSessionId, runId: spec.runId || null, turnId, itemId, receivedAtMs: now(), occurredAtMs, replay, type, payload };
     if (type === 'session.state') state = payload.state;
+    if (type === 'turn.started' && !replay) {
+      for (const field of ['plan.updated', 'turn.diff']) { events.delete(field); bytes -= sizes.get(field) || 0; sizes.delete(field); }
+    }
     const key = type.startsWith('item.') ? `item:${itemId}` : type.startsWith('request.') ? `request:${payload.requestId}` : type === 'input.receipt' ? `input:${payload.clientMessageId}` : type;
     if (type === 'item.delta') {
       const previous = events.get(key);

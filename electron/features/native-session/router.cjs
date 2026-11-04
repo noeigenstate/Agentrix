@@ -131,10 +131,10 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
   }
   function carryHistory(source, target, inputs) {
     for (const event of source?.snapshot().events || []) {
-      if (!['item.upsert', 'input.receipt', 'usage.updated'].includes(event.type)) continue;
+      if (!['item.upsert', 'input.receipt', 'usage.updated', 'plan.updated', 'turn.diff'].includes(event.type)) continue;
       if (event.type === 'input.receipt') inputs?.set(event.payload.clientMessageId, event.payload.status);
       target.turn(event.turnId);
-      target.publish(event.type, event.payload, { itemId: event.itemId, replay: true, occurredAtMs: event.occurredAtMs });
+      target.publish(event.type, event.payload, { itemId: event.itemId, replay: true, occurredAtMs: event.occurredAtMs ?? event.receivedAtMs });
     }
     target.turn(null);
   }
@@ -276,7 +276,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         snapshot[agent].next = nextPath(agent, config, agent === 'claude' ? claude.apiState(config.monthlyBudgetUsd, projectId) : null, cli[agent]);
         snapshot[agent].limits ||= structuredClone(limits[agent] || null);
       }
-      return { ...claude.usage.summary(), budgetUsd: config.monthlyBudgetUsd, agents: snapshot, switches: { waiting: switches.waiting() }, lastSwitch: null };
+      return { ...claude.usage.summary(), budgetUsd: config.monthlyBudgetUsd, agents: snapshot, switches: { waiting: switches.waiting() } };
     },
     keyClear() {
       // Retain an in-memory rollback capability before deleting the saved key, even for a lazy idle query.
