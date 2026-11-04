@@ -2653,5 +2653,7 @@
   "新运行方式连接失败，正在恢复原会话。": "The new run mode lost its connection. Restoring the original session.",
   "新运行方式连接失败，已恢复原会话。": "The new run mode lost its connection. The original session has been restored.",
   "正在重试恢复原会话，草稿已保留。": "Retrying the original session. Your draft has been kept.",
-  "这次工具调用被钩子推迟，没有执行。": "A hook deferred this tool call, so it did not run."
+  "这次工具调用被钩子推迟，没有执行。": "A hook deferred this tool call, so it did not run.",
+  "已改用终端": "Switched to the terminal",
+  "这个选择已经过期，没有生效。": "This choice has expired and had no effect."
 }
