@@ -277,7 +277,7 @@ async function run(output, stages) {
     // Expanded: the activity pane shows the path and API usage card.
     await page.locator(`[data-project-id="${project.id}"] .panel-name`).click();
     await page.locator('.activity-api').waitFor({ timeout: 15000 });
-    assert.match(await page.locator('.activity-api').innerText(), /运行方式与 API 额度/); assert.match(await page.locator('.activity-api').innerText(), /最近切换/);
+    assert.match(await page.locator('.activity-api').innerText(), /运行方式与 API 额度/); assert.doesNotMatch(await page.locator('.activity-api').innerText(), /最近切换/, 'a switch that never happened has no row');
     await page.screenshot({ path: path.join(output, 'native-expanded.png') });
     checks.push('activity pane shows the usage card');
 
@@ -288,7 +288,7 @@ async function run(output, stages) {
     await settings.getByRole('heading', { name: '运行方式', exact: true }).waitFor();
     assert.equal(await settings.locator('input[type="password"]').count(), 1);
     assert.ok((await settings.locator('.select-trigger').count()) >= 2, 'Claude’s path and Codex’s view');
-    assert.match(await settings.locator('.runtime-key-row small[role="status"]').innerText(), /已保存|未保存/);
+    await waitFor(async () => /已保存|未保存/.test(await settings.locator('.runtime-key-row small[role="status"]').innerText()), 'the key status has been read');
     await settings.getByText('你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入这里的预算估算。', { exact: true }).waitFor();
     await page.screenshot({ path: path.join(output, 'native-settings.png') });
     checks.push('运行方式 settings page');
