@@ -88,7 +88,7 @@ export function AgentRuntimeSettings() {
     {testing && <p className="runtime-testing" role="status"><CircleNotch size={14} className="loading-spinner" aria-hidden="true" />{t('正在测试连接…')}</p>}
     {testError && <p className="form-error runtime-error" role="alert">{t('测试没有完成：{message}', { message: testError })}</p>}
     {test && <div className="runtime-test">
-      <ul aria-label={t('连接测试结果')}>{connectionLines(test).map(line => <li key={line.id} className={`is-${line.tone}`} title={line.title ?? undefined}>
+      <ul aria-label={t('连接测试结果')}>{connectionLines({ ...test, billing: test.billing ?? { status: 'unknown', source: null } }).map(line => <li key={line.id} className={`is-${line.tone}`} title={line.title ?? undefined}>
         <span className="runtime-test-mark" aria-hidden="true">{TONE_MARKS[line.tone]}</span><b>{line.label}</b><span>{line.text}{line.hint && <small>{line.hint}</small>}</span>
       </li>)}</ul>
       <small className="runtime-test-time">{t('检测于 {time}', { time: clockWords(test.checkedAt) })}</small>

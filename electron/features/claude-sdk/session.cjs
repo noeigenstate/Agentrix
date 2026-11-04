@@ -3,32 +3,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { createEventStream } = require('../native-session/events.cjs');
-const { apiEnvironment } = require('./credentials.cjs');
 const { createNormalizer } = require('./normalize.cjs');
 const { createRequests } = require('./requests.cjs');
 const { createPolicy } = require('./policy.cjs');
 const { billingIdentityError } = require('./identity.cjs');
+const { inputQueue, queryOptions, readBillingIdentity } = require('./query.cjs');
 
-function inputQueue(onTake) {
-  const values = [];
-  let wake, closed = false;
-  return {
-    push(value) {
-      if (closed) throw new Error('会话已停止。');
-      values.push(value); wake?.();
-    },
-    close() { closed = true; values.length = 0; wake?.(); },
-    async *[Symbol.asyncIterator]() {
-      while (!closed) {
-        if (!values.length) await new Promise(resolve => { wake = resolve; });
-        wake = null;
-        if (!closed && values.length) {
-          const value = values.shift(); onTake(value.uuid); yield value;
-        }
-      }
-    },
-  };
-}
 async function waitWithin(task, milliseconds) {
   let timer;
   try { await Promise.race([task, new Promise(resolve => { timer = setTimeout(resolve, milliseconds); })]); }
@@ -216,19 +196,8 @@ function createClaudeSession(spec, emit, dependencies) {
       remainingBudgetUsd: reservation.maxBudgetUsd ?? Infinity, busy: false, background: new Map() };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
-    const options = {
-      cwd: spec.cwd, model: spec.model || undefined, effort: spec.effort || 'high', pathToClaudeCodeExecutable: executable,
-      settings: { fastMode: spec.fast === true }, env: { ...apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
-        ...(configDirectory ? { CLAUDE_CONFIG_DIR: configDirectory } : {}) },
-      abortController: run.abort, permissionMode: 'default', includePartialMessages: true,
-      settingSources: spec.owner === 'dispatch' ? [] : ['user', 'project', 'local'],
-      systemPrompt: { type: 'preset', preset: 'claude_code', append: spec.context || '' },
-      ...(providerId ? { resume: providerId } : {}),
-      ...(reservation.maxBudgetUsd === undefined ? {} : { maxBudgetUsd: reservation.maxBudgetUsd }),
-      hooks: { PreToolUse: [{ onFailure: 'block', hooks: [async input => {
-        const decision = policy(input.tool_name, input.tool_input);
-        return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision.behavior, permissionDecisionReason: decision.reason } };
-      }] }] },
+    const options = queryOptions(spec, { key, executable, configDirectory, abort: run.abort,
+      providerSessionId: providerId, maxBudgetUsd: reservation.maxBudgetUsd, policy,
       canUseTool: async (name, input, context) => {
         if (closed || stopping || run.closing) return { behavior: 'deny', message: '会话已停止。' };
         if (name === 'AskUserQuestion') return requests.open(name, input, context);
@@ -236,26 +205,15 @@ function createClaudeSession(spec, emit, dependencies) {
         if (decision.behavior === 'defer' || decision.behavior === 'ask') return requests.open(name, input, context);
         return decision.behavior === 'allow' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: decision.reason };
       },
-    };
+    });
     try {
       if (configDirectory) fs.mkdirSync(configDirectory, { recursive: true, mode: 0o700 });
       run.query = sdk.query({ prompt: run.queue, options });
       opening = run;
       // The pinned SDK initializes its control channel without consuming a user prompt.
       // Check this account snapshot before allowing input; stream init remains an independent guard.
-      let timer, abort, initialization;
-      try {
-        initialization = await Promise.race([run.query.initializationResult(), new Promise((_, reject) => {
-          abort = () => reject(new Error('会话已停止。'));
-          run.abort.signal.addEventListener('abort', abort, { once: true });
-          if (run.abort.signal.aborted) return abort();
-          timer = setTimeout(() => reject(Object.assign(new Error('sdk_initialization_timeout'), { code: 'sdk_initialization_timeout' })), 30000);
-        })]);
-      } finally { clearTimeout(timer); if (abort) run.abort.signal.removeEventListener('abort', abort); }
+      await readBillingIdentity(run.query, { signal: run.abort.signal });
       if (closed || stopping || run.closing) throw new Error('会话已停止。');
-      if (initialization?.account?.apiKeySource !== 'ANTHROPIC_API_KEY') {
-        throw billingIdentityError(initialization?.account?.apiKeySource, { beforeInput: true });
-      }
     } catch (error) {
       cancelQuery(run, 'startup'); usage.release(reservation.id); secrets.delete(key);
       if (error.code === 'billing_identity_mismatch') {

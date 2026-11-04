@@ -2,7 +2,15 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
-const { createConnectionTest, listModels } = require('../electron/features/claude-sdk/connection.cjs');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { pathToFileURL } = require('node:url');
+const { createConnectionTest, listModels, probeBillingIdentity } = require('../electron/features/claude-sdk/connection.cjs');
+const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
+const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
+const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
+const { fixtureProcesses } = require('./fixtures/claude-sdk-processes.cjs');
 const key = 'sk-ant-api03-offline-connection-only';
 function http(statusCode, body = { data: [{ id: 'claude-test-model' }] }) {
   const calls = [];
@@ -55,3 +63,126 @@ test('concurrent clicks coalesce and the reported latency excludes CLI inspectio
   assert.equal(fake.calls.length, 1); assert.equal(inspections, 1); assert.deepEqual(first, second);
   assert.equal(first.key.latencyMs, 15);
 });
+
+function directory(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-billing-check-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root;
+}
+const safeStorage = { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value).reverse(), decryptString: value => Buffer.from(value).reverse().toString() };
+const specOf = root => ({ agent: 'claude', owner: 'gui', cwd: root, effort: 'high', fast: true,
+  env: { PATH: '', HOME: root, USERPROFILE: root, APPDATA: root, LOCALAPPDATA: root, CODEX_HOME: path.join(root, 'codex'), CLAUDE_CONFIG_DIR: path.join(root, 'owner-config') } });
+const cli = async () => ({ status: 'ok', version: '2.1.318', required: '2.1.317' });
+
+for (const [source, expected] of [['ANTHROPIC_API_KEY', 'ok'], ['apiKeyHelper', 'mismatch'], ['/login managed key', 'mismatch'], ['none', 'mismatch'], [null, 'unknown'], [key, 'unknown']]) {
+  test(`billing probe classifies ${expected} without queuing input or retaining private account fields (${source === key ? 'unexpected source' : source})`, async t => {
+    const root = directory(t), fake = fakeSdk({ preflightSource: source });
+    const query = fake.sdk.query;
+    fake.sdk.query = spec => ({ ...query(spec), initializationResult: async () => ({ account: { apiKeySource: source, email: key, organization: key, token: key } }) });
+    const result = await probeBillingIdentity({ key, spec: specOf(root), configDirectory: path.join(root, 'sdk-config'), loadSdk: async () => fake.sdk,
+      resolveExecutable: async () => 'synthetic-only' });
+    assert.deepEqual(result, { status: expected, source: expected === 'unknown' ? null : source });
+    assert.equal(fake.inputs.length, 0); assert.equal(fake.closes.length, 1);
+    assert.equal(fake.calls[0].options.abortController.signal.aborted, true);
+    assert.equal(JSON.stringify(result).includes(key), false);
+  });
+}
+
+test('a silent or failed SDK identity probe returns unknown and always closes its query', async t => {
+  const root = directory(t);
+  for (const silent of [true, false]) {
+    let closed = 0;
+    const result = await probeBillingIdentity({ key, spec: specOf(root), configDirectory: path.join(root, 'sdk-config'), timeoutMs: 10,
+      resolveExecutable: async () => 'synthetic-only', loadSdk: async () => ({ query: () => ({
+        initializationResult: () => silent ? new Promise(() => {}) : Promise.reject(new Error(key)), close: () => { closed++; },
+      }) }) });
+    assert.deepEqual(result, { status: 'unknown', source: null }); assert.equal(closed, 1);
+  }
+});
+
+test('connection tests use the saved key and new-session options without changing usage or active sessions', async t => {
+  const root = directory(t), fake = fakeSdk(), httpFake = http(200), spec = { ...specOf(root), context: 'Synthetic context', model: 'fake-selected' };
+  const factory = createClaudeRuntime({ directory: path.join(root, 'data'), safeStorage, loadSdk: async () => fake.sdk, inspectCli: cli,
+    request: httpFake.request, resolveExecutable: async () => 'synthetic-only', connectionSpec: () => spec });
+  t.after(() => factory.close()); factory.credentials.save(key);
+  const before = factory.usage.summary();
+  const [first, second] = await Promise.all([factory.testConnection({ monthlyBudgetUsd: 10 }), factory.testConnection({ monthlyBudgetUsd: 10 })]);
+  assert.deepEqual(first.billing, { status: 'ok', source: 'ANTHROPIC_API_KEY' }); assert.deepEqual(first, second);
+  assert.equal(fake.calls.length, 1); assert.equal(httpFake.calls.length, 1); assert.equal(fake.inputs.length, 0);
+  assert.deepEqual(factory.usage.summary(), before); assert.equal(fs.existsSync(path.join(root, 'data/usage.json')), false);
+  const events = [], session = factory.create({ ...spec, projectId: 'p', terminalId: 't', runtimeSessionId: 'r', monthlyBudgetUsd: 10 }, event => events.push(event));
+  await session.start(); await session.send({ clientMessageId: 'm', text: 'synthetic work' });
+  for (let n = 0; n < 100 && !events.some(event => event.type === 'turn.completed'); n++) await new Promise(resolve => setTimeout(resolve, 2));
+  const probe = fake.calls[0].options, actual = fake.calls[1].options;
+  for (const field of ['cwd', 'model', 'effort', 'pathToClaudeCodeExecutable', 'settings', 'env', 'permissionMode', 'includePartialMessages', 'settingSources', 'systemPrompt', 'maxBudgetUsd']) {
+    assert.deepEqual(probe[field], actual[field], field);
+  }
+  assert.equal(probe.hooks.PreToolUse[0].onFailure, actual.hooks.PreToolUse[0].onFailure);
+  assert.equal(probe.env.CLAUDE_CONFIG_DIR, path.join(root, 'data/sdk-config'));
+  assert.equal(spec.env.CLAUDE_CONFIG_DIR, path.join(root, 'owner-config'));
+  await session.close();
+});
+
+test('a missing key or unavailable CLI skips SDK launch and billing stays unknown', async () => {
+  for (const status of ['missing', 'too_old']) {
+    const check = createConnectionTest({ credentials: { read: () => key }, request: http(200).request,
+      inspectCli: async () => ({ status, version: null }), probeBilling: () => assert.fail('SDK must not launch') });
+    assert.deepEqual((await check()).billing, { status: 'unknown', source: null });
+  }
+  const check = createConnectionTest({ credentials: { read: () => null, status: () => ({ saved: false }) }, inspectCli: cli,
+    request: () => assert.fail('no HTTP without a key'), probeBilling: () => assert.fail('no SDK without a key') });
+  assert.deepEqual((await check()).billing, { status: 'unknown', source: null });
+});
+
+for (const mode of ['api-only', 'api-then-terminal']) test(`the real connection facade and a real session agree on billing mismatch under ${mode}`, async t => {
+  const root = directory(t), fake = fakeSdk({ preflightSource: 'apiKeyHelper' }), directoryPath = path.join(root, 'data');
+  const factory = createClaudeRuntime({ directory: directoryPath, safeStorage, inspectCli: cli, request: http(200).request,
+    loadSdk: async () => fake.sdk, resolveExecutable: async () => 'synthetic-only', connectionSpec: () => specOf(root) });
+  t.after(() => factory.close()); factory.credentials.save(key);
+  fs.writeFileSync(path.join(directoryPath, 'settings.json'), JSON.stringify({ claudePath: mode, codexView: 'native', monthlyBudgetUsd: 10 }));
+  const native = createNativeSessions({ directory: directoryPath, claude: factory });
+  const result = await native.testConnection();
+  assert.equal(result.key.status, 'ok'); assert.equal(result.cli.status, 'ok');
+  assert.deepEqual(result.billing, { status: 'mismatch', source: 'apiKeyHelper' });
+  assert.equal(result.path, mode === 'api-only' ? null : 'terminal');
+  const session = factory.create({ ...specOf(root), projectId: 'p', terminalId: 't', runtimeSessionId: 'r', monthlyBudgetUsd: 10 }, () => {});
+  await session.start();
+  await assert.rejects(session.send({ clientMessageId: 'm', text: 'must remain unsent' }), error => error.beforeInput === true && error.message === result.reason);
+  assert.equal(fake.inputs.length, 0); assert.equal(fake.closes.length, 2); await session.close();
+});
+
+let sdkModule = process.env.AGENTRIX_TEST_SDK_MODULE;
+try { sdkModule ||= require.resolve('@anthropic-ai/claude-agent-sdk'); } catch { }
+for (const [source, status] of [['ANTHROPIC_API_KEY', 'ok'], ['apiKeyHelper', 'mismatch'], [null, 'unknown']]) {
+  test(`real SDK connection check uses only initialize control with an offline CLI (${status})`, { skip: !sdkModule && 'SDK dependency is not installed', timeout: 15000 }, async t => {
+    const scope = fixtureProcesses(t, 'agx-connection-wire-'), root = scope.directory, children = [], calls = [];
+    const spec = specOf(root);
+    Object.assign(spec.env, { AGENTRIX_FAKE_OUTPUT: root, AGENTRIX_FAKE_API_SOURCE: source || '', AGENTRIX_FAKE_OMIT_BILLING: source ? '0' : '1',
+      HTTP_PROXY: 'http://127.0.0.1:1', HTTPS_PROXY: 'http://127.0.0.1:1',
+      ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}) });
+    const factory = createClaudeRuntime({ directory: path.join(root, 'data'), safeStorage, inspectCli: cli, request: http(200).request,
+      connectionSpec: () => spec, resolveExecutable: async () => process.execPath, loadSdk: async () => {
+        const sdk = await import(pathToFileURL(sdkModule).href);
+        return { query(input) {
+          calls.push(input);
+          return sdk.query({ ...input, options: { ...input.options, spawnClaudeCodeProcess: options => {
+            const child = scope.spawn(process.execPath, [path.join(__dirname, 'fixtures/claude-sdk-cli.cjs'), 'claude', ...options.args],
+              { cwd: options.cwd, env: options.env, signal: options.signal, stdio: ['pipe', 'pipe', 'pipe'] });
+            children.push(child); return child;
+          } } });
+        } };
+      } });
+    scope.defer(() => factory.close()); factory.credentials.save(key);
+    const result = await factory.testConnection();
+    assert.deepEqual(result.billing, { status, source });
+    for (const child of children) await scope.wait(new Promise(resolve => {
+      if (child.fixtureClosed) resolve(); else child.once('close', resolve);
+    }), 'connection probe exit');
+    const wire = fs.readFileSync(path.join(root, 'claude-wire.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(wire.filter(row => row.control).map(row => row.control), ['initialize']);
+    assert.equal(wire.some(row => row.user || row.rpc), false);
+    assert.equal(fs.existsSync(path.join(root, 'fake-costs.json')), false);
+    assert.equal(fs.existsSync(path.join(root, 'data/usage.json')), false);
+    assert.equal(calls.length, 1); assert.equal(calls[0].options.abortController.signal.aborted, true);
+    assert.equal(JSON.stringify(result).includes(key), false);
+  });
+}

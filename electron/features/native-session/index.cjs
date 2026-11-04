@@ -7,15 +7,16 @@ function createNativeSessions(options) {
   const settings = createSettings(path.join(options.directory, 'settings.json'));
   const router = createRouter({ ...options, settings });
   async function testConnection() {
-    const result = await options.claude.testConnection(), config = settings.get();
+    const result = await options.claude.testConnection(settings.get()), config = settings.get();
     const failures = { missing: 'no_key', invalid: 'invalid_key', forbidden: 'API 密钥没有模型列表权限。',
       rate_limited: 'rate_limited', unreachable: '无法连接 Anthropic API。', error: '无法完成 API 连接检查。' };
     const reason = result.key.status !== 'ok' ? failures[result.key.status]
       : result.cli.status === 'too_old' ? 'Claude Code 版本过低，请升级到 2.1.317 或更高'
-        : result.cli.status === 'missing' ? 'native_cli_required' : null;
+        : result.cli.status === 'missing' ? 'native_cli_required'
+          : result.billing?.status !== 'ok' ? result.reason || '无法确认 Claude Code 的计费来源。' : null;
     const selection = choosePath({ agent: 'claude', ...config,
       apiState: reason ? { reason } : options.claude.apiState(config.monthlyBudgetUsd) });
-    return { ...result, ...selection };
+    return { ...result, ...selection, reason: reason || selection.reason };
   }
   const facade = { ...router, testConnection,
     async usage() {

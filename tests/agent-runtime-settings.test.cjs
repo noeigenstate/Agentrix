@@ -17,12 +17,12 @@ const defaults = { claudePath: 'api-then-terminal', codexView: 'native', monthly
 const wordsStub = { clockWords: () => '09:00', connectionLines: test => test.lines };
 
 // The page with real hooks. The select is stood in by a component that keeps its props, so a test can read its value and choose an option.
-function page(bridge) {
+function page(bridge, words = wordsStub) {
   const usage = [];
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge ? { nativeSession: bridge } : {} } });
   const harness = hookHarness('src/features/settings/AgentRuntimeSettings.tsx', {
-    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './agent-runtime-settings.css': {}, './native-words': wordsStub, './native-store.ts': { usageChanged: () => usage.push('changed') },
+    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './agent-runtime-settings.css': {}, './native-words': words, './native-store.ts': { usageChanged: () => usage.push('changed') },
     './Select': { Select: props => React.createElement('select', { 'aria-label': props.label, value: props.value, disabled: props.disabled }) },
   });
   const render = () => harness.render('AgentRuntimeSettings').result, tree = () => elements(render());
@@ -151,6 +151,33 @@ test('测试连接 waits for a saved key and for the owner’s click, shows its 
     assert.equal((html.match(/runtime-test-mark/g) ?? []).length, 3, 'and a mark, so tone is not colour alone');
     assert.deepEqual(calls, [[]], 'the call carries nothing: the key stays in the main process'); assert.ok(!html.includes(SECRET));
   } finally { view.done(); }
+});
+
+for (const [billing, path, expectedText, expectedHint, tone] of [
+  [{ status: 'ok', source: 'ANTHROPIC_API_KEY' }, 'api', 'ANTHROPIC_API_KEY', null, 'ok'],
+  [{ status: 'mismatch', source: 'apiKeyHelper' }, 'terminal', 'apiKeyHelper', 'Claude Code 没有使用这个密钥，新会话将走终端。', 'bad'],
+  [{ status: 'mismatch', source: '/login managed key' }, null, '/login managed key', 'Claude Code 没有使用这个密钥，当前设置不允许启动新会话。', 'bad'],
+  [{ status: 'unknown', source: null }, 'terminal', '未知', '无法确认 Claude Code 的计费来源，请重试。', 'warn'],
+  [undefined, 'terminal', '未知', '无法确认 Claude Code 的计费来源，请重试。', 'warn'],
+  [{ status: 'ok', source: SECRET }, null, '未知', '无法确认 Claude Code 的计费来源，请重试。', 'warn'],
+]) test(`the settings page renders the real billing-source words and mark (${billing?.status ?? 'older host'}, ${tone}, ${path})`, async () => {
+  const wordsHarness = hookHarness('src/features/native-session/native-words.ts', { './i18n': { t: fill } });
+  const value = { checkedAt: 1, key: { status: 'ok', detail: null, latencyMs: 10 }, models: ['synthetic-model'],
+    cli: { status: 'ok', version: '2.1.318', required: '2.1.317' }, billing, path, reason: null };
+  const bridge = fake({ testConnection: async () => ({ ok: true, value }) }); bridge.state.saved = true;
+  const view = page(bridge, { clockWords: () => '09:00', connectionLines: test => wordsHarness.render('connectionLines', test).result });
+  try {
+    view.render(); await settle(); view.button('测试连接').props.onClick(); await settle();
+    const row = view.tree().find(node => node.type === 'li' && node.props.children.some(child => child?.type === 'b' && child.props.children === '计费来源'));
+    assert.ok(row); assert.equal(row.props.className, `is-${tone}`);
+    const html = view.html();
+    assert.ok(html.includes(`<b>计费来源</b><span>${expectedText}`));
+    if (expectedHint) assert.ok(html.includes(expectedHint));
+    assert.equal((html.match(/runtime-test-mark/g) || []).length, 5);
+    assert.equal(html.includes(SECRET), false);
+    assert.ok(html.indexOf('<b>Claude Code</b>') < html.indexOf('<b>计费来源</b>'));
+    assert.ok(html.indexOf('<b>计费来源</b>') < html.indexOf('<b>新会话将使用</b>'));
+  } finally { view.done(); wordsHarness.dispose(); }
 });
 
 test('a test that cannot finish says why, and a result goes stale when the key or the path changes', async () => {
