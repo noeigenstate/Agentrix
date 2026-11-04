@@ -406,8 +406,9 @@ test('without an agent the pane shows only its hint, no main model and no tasks;
   // The pane does not scroll as a whole (no scrollbar, no wheel): its two blocks share the height by content, each keeps a floor, and the main card's prompts and the agents' sections scroll under their own fixed titles.
   const pane = /\.activity-pane \{[^}]*\}/.exec(css)[0];
   assert.match(pane, /overflow: hidden/); assert.doesNotMatch(pane, /overflow-y: auto|scrollbar-width/);
-  assert.match(css, /\.activity-main \{ flex: 0 1 auto; min-height: 100px; \}/);
-  assert.match(css, /\.activity-api \{ flex: 0 1 auto; min-height: 112px; \}/);
+  assert.match(css, /\.activity-main \{ flex: 0 1 auto; min-height: 132px; \}/, 'the model block keeps its title, model rows and one full task row');
+  assert.match(css, /\.activity-main-tasks:has\(li\) \{ min-height: 32px; \}/, 'and its task keeps one full row');
+  assert.match(css, /\.activity-api \{ flex: 0 1 auto; min-height: 76px; \}/, 'the allowance block gives way and scrolls inside');
   assert.match(css, /\.activity-calls \{ flex: 0 1 auto; min-height: 0; \}/, 'the called models take what the left bar gives and their list scrolls');
   assert.doesNotMatch(css, /max-height/);
   const list = /\.activity-main-tasks, \.activity-call-groups, \.api-agents \{([^}]+)\}/.exec(css)[1];

@@ -7,6 +7,11 @@ import { nativeBridge, type NativeDraft, type NativeHandoffReceipt, type NativeP
 import { resolveSwitch, takeHandoff, useNativeEntries } from './native-store.ts';
 
 export type DraftOffer = { text: string; images: string[]; undelivered: NativePendingInput[] };
+// A card nobody offers a draft for (the raw terminal has no message box) hands over this one, so its switch is never left waiting for a draft.
+const NO_DRAFT: DraftOffer = { text: '', images: [], undelivered: [] };
+// Main takes only these pictures; one it would refuse stays in its box, so it cannot stop the whole draft.
+const TRANSFERABLE = /^data:image\/(png|jpeg|webp);base64,/;
+const carriable = (draft: DraftOffer): DraftOffer => ({ ...draft, images: draft.images.filter(image => TRANSFERABLE.test(image)), undelivered: draft.undelivered.map(message => message.images ? { ...message, images: message.images.filter(image => TRANSFERABLE.test(image)) } : message) });
 
 // What a view reads and calls. `offer` states the draft as it is now (call it when it changes); `incoming` is a draft waiting for this view,
 // `take` hands it over once; `locked` is true while main has the draft and the switch is still going.
@@ -22,26 +27,26 @@ export function useHandoff(terminalId: string, sessionId: string | null, switchS
   const changeId = state?.phase === 'preparing' ? state.changeId : null;
   // The offered draft is kept in a ref, so typing does not render the parent; each change of it is a new version (main says which it accepted),
   // and only while preparing does a change wake the sender below.
-  const offered = useRef<{ draft: DraftOffer; version: number } | null>(null), preparing = useRef(false), sent = useRef('');
+  const offered = useRef<{ draft: DraftOffer; version: number }>({ draft: NO_DRAFT, version: 0 }), preparing = useRef(false), sent = useRef('');
   const [accepted, setAccepted] = useState<number | null>(null), [edits, edited] = useState(0);
   preparing.current = changeId !== null;
   const offer = useCallback((draft: DraftOffer) => {
-    const known = offered.current;
-    if (known && JSON.stringify(known.draft) === JSON.stringify(draft)) return;
-    offered.current = { draft, version: (known?.version ?? 0) + 1 };
+    const known = offered.current, next = carriable(draft);
+    if (JSON.stringify(known.draft) === JSON.stringify(next)) return;
+    offered.current = { draft: next, version: known.version + 1 };
     if (preparing.current) edited(count => count + 1);
   }, []);
   // Sent once per version while preparing; one main did not accept is offered again with the next update of the switch.
   useEffect(() => {
     const bridge = nativeBridge(), current = offered.current;
-    if (changeId === null || !current || accepted === changeId || !bridge) return;
+    if (changeId === null || accepted === changeId || !bridge) return;
     const key = `${changeId}/${current.version}`;
     if (sent.current === key) return;
     sent.current = key;
-    void bridge.answer(terminalId, sessionId ?? terminalId, `handoff-${changeId}`, { handoff: { changeId, draft: { version: current.version, ...current.draft } } })
+    void bridge.answer(terminalId, sessionId ?? entry?.model.identity?.runtimeSessionId ?? terminalId, `handoff-${changeId}`, { handoff: { changeId, draft: { version: current.version, ...current.draft } } })
       .then(result => {
         const receipt = result.ok ? receiptOf(result.value) : null;
-        if (receipt?.accepted && receipt.changeId === changeId && receipt.version === offered.current?.version) setAccepted(changeId);
+        if (receipt?.accepted && receipt.changeId === changeId && receipt.version === offered.current.version) setAccepted(changeId);
         else if (!receipt?.accepted) sent.current = '';
       }).catch(() => { sent.current = ''; });
   }, [changeId, accepted, state, edits]);

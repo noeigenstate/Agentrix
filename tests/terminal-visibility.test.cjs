@@ -173,6 +173,8 @@ test('hidden and zero-sized terminals never resize; showing them again fits the 
 
 function elements(node) {
   if (!node || typeof node !== 'object') return [];
+  // A card's body is the function child of the component that holds its draft handoff.
+  if (typeof node.props?.children === 'function') return [node, ...elements(node.props.children({}))];
   return [node, ...React.Children.toArray(node.props?.children).flatMap(elements)];
 }
 

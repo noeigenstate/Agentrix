@@ -55,8 +55,8 @@ function ResultMenu({ items }: { items: { icon: ReactNode; label: string; run: (
   </>;
 }
 
-// Level 1, above the result: the round is done (or stopped), what it was, when it ended and how long it took.
-export function ResultStatus({ result, taskTitle, onShowTerminal, onError }: { result: LatestResult; taskTitle: string | undefined; onShowTerminal: () => void; onError: (message: string) => void }) {
+// Level 1, above the result: the round is done (or stopped), what it was, when it ended and how long it took. A session with no terminal gives no onShowTerminal and no way to it.
+export function ResultStatus({ result, taskTitle, onShowTerminal, onError }: { result: LatestResult; taskTitle: string | undefined; onShowTerminal?: () => void; onError: (message: string) => void }) {
   const failed = result.kind === 'failed', label = failed ? result.failure ? t('失败') : t('已中断') : t('已完成');
   const selected = markdownTitle(taskTitle ?? '');
   const title = selected && selected.toLowerCase() !== markdownTitle(result.request).toLowerCase() ? selected : t(FALLBACK_TITLES[result.kind]);
@@ -66,7 +66,7 @@ export function ResultStatus({ result, taskTitle, onShowTerminal, onError }: { r
     picture: [result.picture?.prompt && item(<CopySimple size={16} />, t('复制提示词'), copy(result.picture.prompt)), item(<FileText size={16} />, t('复制图片路径'), copy(result.picture?.path ?? ''))],
     code: [result.reply && item(<CopySimple size={16} />, t('复制回答'), copy(result.reply)), item(<FileText size={16} />, t('复制改动文件路径'), copy(result.written.join('\n')))],
     text: [item(<CopySimple size={16} />, t('复制回答'), copy(result.reply))],
-    failed: [result.failure && item(<CopySimple size={16} />, t('复制错误信息'), copy(result.failure)), item(<TerminalWindow size={16} />, t('在终端中查看'), onShowTerminal)],
+    failed: [result.failure && item(<CopySimple size={16} />, t('复制错误信息'), copy(result.failure)), onShowTerminal && item(<TerminalWindow size={16} />, t('在终端中查看'), onShowTerminal)],
   }[result.kind].flatMap(entry => entry ? [entry] : []);
   const Icon = failed ? XCircle : CheckCircle;
   return <div className={`result-status${failed ? ' is-failed' : ''}`} role="status" aria-label={label}>

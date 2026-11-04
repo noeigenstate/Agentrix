@@ -39,7 +39,7 @@ function makeLoader(overrides = {}) {
 // The heavy neighbours are stood in: Markdown by an element that says its text, the avatar and the width-fitting hook by plain ones.
 const fit = { index: 0 };   // which hint the width-fitting hook says fits; one past the list is "none does"
 const load = makeLoader({
-  '../reading/ReadingView': { Markdown: ({ text }) => React.createElement('div', { className: 'md' }, text) },
+  './Markdown': { Markdown: ({ text }) => React.createElement('div', { className: 'md' }, text) },
   '../../shared/UserAvatar': { UserAvatar: () => React.createElement('i', { className: 'avatar' }) },
   '../../shared/useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[fit.index] ?? '' },
   './ResetQuota': { ResetQuota: () => null },
@@ -138,9 +138,9 @@ test('words: receipts, routes, money and quota windows say what is known and "�
   const words = load('features/native-session/native-words.ts'), item = (kind, content = {}, extra = {}) => ({ id: 'i', kind, status: null, content, turnId: null, at: null, deltas: { text: '', output: '', reasoning: [], plan: '' }, ...extra });
   assert.deepEqual(['queued', 'delivered', 'consumed', 'rejected', 'unknown', 'mystery', null].map(words.receiptWord), ['已排队', '已送达', '已被读取', '未送达', '送达状态未知', null, null]);
   assert.deepEqual([null, undefined, 0, 5, 1_234_567].map(words.money), ['未知', '未知', '$0.00', '<$0.01', '$1.23'], 'unknown is not zero, and zero is not unknown');
-  assert.deepEqual(['budget_exhausted', 'native_cli_required', 'something_new', null].map(words.reasonWords), ['本月 API 预算已用完', '未找到原生 Claude Code，无法通过 API 运行', 'something_new', null], 'a code nobody mapped is shown as given');
-  assert.equal(words.runtimeWord({ provider: 'claude', transport: 'claude-sdk' }), 'Claude · API');
-  assert.equal(words.runtimeWord({ provider: 'codex', transport: 'codex-app-server' }), 'Codex · 原生');
+  assert.deepEqual(['budget_exhausted', 'native_cli_required', 'no_key', 'something_new', 'a.b-c', null, '输入框里有未发送的文字', 'process exited'].map(words.reasonWords),
+    ['本月 API 预算已用完', '未找到原生 Claude Code，无法通过 API 运行', '还没有保存 API key', null, null, null, '输入框里有未发送的文字', 'process exited'],
+    'a code we know is said in words, a code nobody mapped is not shown, and a sentence main wrote for the owner is shown as it is');
   assert.deepEqual(words.windowWords({ usedPercent: 40, windowDurationMins: 300, resetsAtMs: null }), { span: '5 小时', used: '40%', resets: '未知' });
   assert.deepEqual([words.windowWords(null), words.windowWords({ usedPercent: null, windowDurationMins: 10080, resetsAtMs: null }).used], [null, '未知']);
   assert.deepEqual(['in_progress', 'completed', 'failed', 'declined', null].map(status => words.itemState(item('command', {}, { status }))), ['running', 'done', 'failed', null, null]);
@@ -312,70 +312,129 @@ const richSession = ev => [
   ev('request.opened', { requestId: 'r1', kind: 'command', blocking: true, title: 'Run rm -rf build', preview: 'rm -rf build', actions: [], providerData: {} }),
 ];
 
+// The draft handoff hook is tested on its own below; the views get this stand-in of it.
+const handoffStub = () => ({ locked: false, incoming: null, offers: [], taken: 0, offer(draft) { this.offers.push(draft); }, take() { const draft = this.incoming; this.incoming = null; this.taken++; return draft; } });
+
 async function viewHtml(build, base = {}) {
   const ev = stream(base), events = build(ev);
   let html = '';
   await withBridge({ onEvent: () => () => {}, snapshot: async () => ({ ok: true, value: { runtimeSessionId: events[0].runtimeSessionId, lastSequence: events.length, events } }) }, async store => {
     store.ensureNativeSession('t1'); await settle();
-    html = renderToStaticMarkup(React.createElement(load('features/native-session/NativeSessionView.tsx').NativeSessionView, { terminalId: 't1' }));
+    html = renderToStaticMarkup(React.createElement(load('features/native-session/NativeSessionView.tsx').NativeSessionView, { terminalId: 't1', projectId: 'p1', handoff: handoffStub(), onError() {}, onOpenLink() {} }));
   });
   return html;
 }
 
-test('the view draws the conversation from events: your message with its receipt, words, thinking, a command and its output, files, plan, diff and the request waiting', async () => {
+test('events become the reading view’s entries: your message and pictures, the reply, steps with their output and state, the plan and the diff, and nothing made up', () => {
+  const { nativeEntries } = load('features/native-session/native-entries.ts'), { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
+  const model = applyEvents(emptyModel(), [
+    ...richSession(ev),
+    ev('item.upsert', { kind: 'tool', status: 'completed', content: { name: 'Read', input: '{"file_path":"/a/b.ts"}', output: 'file text' } }, { itemId: 't1' }),
+    ev('item.upsert', { kind: 'tool', status: 'failed', content: { tool: 'search', server: 'docs', arguments: { q: 1 }, output: 'nope' } }, { itemId: 't2' }),
+    ev('item.upsert', { kind: 'command', status: 'completed', content: { command: 'npm test', exitCode: 1, durationMs: 1500, output: 'boom' } }, { itemId: 'k2' }),
+    ev('item.upsert', { kind: 'file-change', status: 'completed', content: { name: 'Edit', input: '{"file_path":"src/b.ts"}' } }, { itemId: 'f2' }),
+  ]).model;
+  const entries = nativeEntries(model, { c1: ['data:image/png;base64,AAAA'] });
+  assert.deepEqual(entries.map(entry => [entry.role, entry.id]), [['user', 'u1'], ['tool', 'k1'], ['tool', 'f1'], ['assistant', 'm1'], ['tool', 't1'], ['tool', 't2'], ['tool', 'k2'], ['tool', 'f2'], ['tool', 'native:plan'], ['tool', 'native:diff']],
+    'a thinking summary is not part of the reading view’s conversation');
+  const by = id => entries.find(entry => entry.id === id);
+  assert.deepEqual([by('u1').text, by('u1').images], ['fix the test', ['data:image/png;base64,AAAA']]);
+  assert.equal(by('m1').text, 'Done: it passes now.');
+  assert.deepEqual([by('k1').tool.kind, by('k1').tool.target, by('k1').tool.done, by('k1').tool.failed, by('k1').tool.output], ['command', 'npm test', false, false, 'FAIL a.test.js'], 'a running command shows its output so far');
+  assert.deepEqual([by('f1').tool.kind, by('f1').tool.target, by('f1').tool.written, by('f1').tool.done, by('f1').tool.output], ['edit', 'src/a.ts', ['src/a.ts'], true, '-old\n+new']);
+  assert.deepEqual([by('t1').tool.kind, by('t1').tool.target, by('t1').tool.output], ['read', '/a/b.ts', '{"file_path":"/a/b.ts"}\n\nfile text'], 'a tool shows its input and its result');
+  assert.deepEqual([by('t2').tool.kind, by('t2').tool.target, by('t2').tool.failed, by('t2').tool.done], ['mcp', 'docs · search', true, true]);
+  assert.deepEqual([by('k2').tool.failed, by('k2').tool.detail], [true, '退出码 1 · 用时 1.5 秒'], 'a failed exit code fails the step; a folder nobody gave is not written');
+  assert.deepEqual([by('f2').tool.target, by('f2').tool.written], ['src/b.ts', ['src/b.ts']], 'Claude names its edited file only in the input');
+  assert.deepEqual([by('native:plan').tool.detail, by('native:plan').tool.output], ['1 / 2 步', '[x] Run tests\n[ ] Fix']);
+  assert.equal(by('native:diff').tool.output, '+added line\n-removed line');
+  const bare = nativeEntries(applyEvents(emptyModel(), [ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'hi' } }, { itemId: 'a1', occurredAtMs: null, receivedAtMs: 5 }), ev('item.upsert', { kind: 'agent-message', status: 'completed', content: {} }, { itemId: 'a2' })]).model);
+  assert.deepEqual(bare.map(entry => [entry.id, entry.at]), [['a1', 5]], 'an empty message is no entry');
+  const stopped = nativeEntries(applyEvents(emptyModel(), [ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'sleep 9' } }, { itemId: 'k' }), ev('session.state', { state: 'stopped', reason: 'user' })]).model);
+  assert.equal(stopped[0].tool.done, true, 'a step of a finished session does not run for ever');
+});
+
+test('what the owner sent and the conversation does not show is pending: sending, queued, or refused and lost; an echoed one is a message, and unknown delivery is never offered again', () => {
+  const { nativeEntries, nativePending } = load('features/native-session/native-entries.ts'), { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
+  const user = (id, text, content = {}) => ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text, clientMessageId: id, ...content } }, { itemId: id });
+  const receipt = (id, status) => ev('input.receipt', { clientMessageId: id, status });
+  const model = applyEvents(emptyModel(), [
+    user('c2', 'refused while switching', { unsent: true, images: ['data:image/png;base64,BBBB'] }), user('c3', 'held in the queue'), receipt('c3', 'queued'), user('c4', 'delivered'), receipt('c4', 'consumed'),
+    receipt('c6', 'rejected'), receipt('c7', 'unknown'), receipt('c8', 'delivered'),
+  ]).model;
+  const sent = [{ id: 'c4', text: 'delivered', at: 4 }, { id: 'c5', text: 'in flight', at: 5 }, { id: 'c6', text: 'turned away', at: 6 }, { id: 'c7', text: 'who knows', at: 7 }, { id: 'c8', text: 'read, not echoed', at: 8 }];
+  assert.deepEqual(nativeEntries(model).map(entry => entry.id), ['c4'], 'only an ordinary message is in the conversation');
+  const { prompts, queued, lost } = nativePending(model, sent);
+  const sending = Object.fromEntries(prompts.map(prompt => [prompt.id, prompt.sending]));
+  assert.deepEqual(sending, { c2: false, c3: false, c5: true, c6: false, c7: true, c8: false }, 'no receipt or an unknown one reads as sending: it is neither lost nor offered again');
+  assert.deepEqual([[...queued], [...lost].sort()], [['c3'], ['c2', 'c6']]);
+  assert.deepEqual(prompts.find(prompt => prompt.id === 'c2').images, ['data:image/png;base64,BBBB']);
+  assert.deepEqual(nativePending(model, sent, new Set(['c2', 'c5'])).prompts.map(prompt => prompt.id).sort(), ['c3', 'c6', 'c7', 'c8']);
+  assert.equal(nativePending(model, sent, new Set(['c2'])).lost.has('c2'), false, 'a dismissed card is gone with its mark');
+});
+
+test('the view is the reading view’s: its markup is the feed’s, the working line and the stop are the reading view’s, and nothing is native-only but the requests', async () => {
   const html = await viewHtml(richSession);
-  assert.match(html, /Claude · API/); assert.match(html, /工作中/);
-  assert.match(html, /<p>fix the test<\/p><small class="native-receipt">已被读取<\/small>/);
+  assert.match(html, /<div class="reading-view" data-agent="claude" data-native-session="rs1">/);
+  assert.match(html, /class="reading-step is-user/); assert.match(html, /<p class="is-folded">fix the test<\/p>/); assert.match(html, /class="reading-step is-agent is-claude/);
   assert.match(html, /<div class="md">Done: it passes now\.<\/div>/);
-  assert.equal(html.match(/思考摘要/g).length, 1, 'a thinking step with no summary shows nothing');
-  assert.match(html, /运行命令/); assert.match(html, /\$ npm test/); assert.match(html, /FAIL a\.test\.js/, 'a running command is open, with its output so far');
-  assert.match(html, /修改文件/); assert.match(html, /a\.ts/); assert.doesNotMatch(html, /\+new/, 'a finished step is folded until opened');
-  assert.match(html, /计划/); assert.match(html, /1 \/ 2 步/); assert.match(html, /Run tests/);
-  assert.match(html, /本轮改动/); assert.doesNotMatch(html, /added line/);
-  assert.match(html, /Run rm -rf build/); assert.match(html, /rm -rf build/); assert.match(html, />允许本次</); assert.match(html, />拒绝</);
-  assert.match(html, /native-stop/, 'Stop while it works'); assert.match(html, /正在工作…/);
-  assert.doesNotMatch(html, /<textarea[^>]*disabled/, 'and the message box stays usable');
+  assert.match(html, /class="reading-tools[^"]*is-running/); assert.match(html, /运行 1 条命令/);
+  const running = await viewHtml(ev => [ev('session.state', { state: 'running' }), ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'npm test' } }, { itemId: 'k1' }), ev('item.delta', { channel: 'output', text: 'FAIL a.test.js' }, { itemId: 'k1' })]);
+  assert.match(running, /<pre class="reading-tool-output">FAIL a\.test\.js<\/pre>/, 'the group at the end that still runs is open, with the output so far, as the reading view opens it');
+  assert.match(html, /运行 1 条命令 · 编辑 1 个文件/); assert.match(html, /<code class="reading-tools-file">[^>]*a\.ts/); assert.match(html, /调用 1 个工具/, 'the plan and the diff are steps of the last group');
+  assert.match(html, /reading-status is-working is-claude/); assert.match(html, /正在运行 npm test/); assert.match(html, /Esc 中断/);
+  assert.match(html, /title="中断（Esc）"/, 'the stop button is the reading view’s, in the composer'); assert.doesNotMatch(html, /<textarea[^>]*disabled/, 'and the message box stays usable');
+  assert.match(html, /<div class="native-tail">/); assert.match(html, /Run rm -rf build/); assert.match(html, />允许本次</); assert.match(html, />拒绝</);
+  assert.doesNotMatch(html, /native-head|native-state|native-runtime|native-stop|native-receipt|native-step|Claude · API|已被读取|会话已就绪|→/, 'no header, no receipt words, no native-only decoration');
+  assert.doesNotMatch(html, /思考摘要|Looking at the failing/, 'a thinking summary is not drawn');
   assert.doesNotMatch(html, /Codex/);
 });
 
-test('a finished session says why and offers a new conversation; a Codex session is named by its app-server; an idle one has no Stop', async () => {
+test('a finished session says why and offers a new conversation; a Codex session is the reading view’s Codex; an idle one has no stop and no line of its own before there is a reply', async () => {
   const ended = await viewHtml(ev => [ev('session.state', { state: 'failed', reason: 'native_cli_required' })]);
-  assert.match(ended, /未找到原生 Claude Code，无法通过 API 运行/); assert.match(ended, /开始新的对话/); assert.match(ended, /<textarea[^>]*disabled/); assert.doesNotMatch(ended, /native-stop/);
-  const codex = await viewHtml(ev => [ev('session.state', { state: 'idle', reason: null }), ev('turn.completed', { status: 'completed', error: null })], { provider: 'codex', transport: 'codex-app-server' });
-  assert.match(codex, /Codex · 原生/); assert.match(codex, /本轮已完成/); assert.match(codex, /空闲/); assert.doesNotMatch(codex, /native-stop/); assert.doesNotMatch(codex, /<textarea[^>]*disabled/);
+  assert.match(ended, /未找到原生 Claude Code，无法通过 API 运行/); assert.match(ended, /开始新的对话/); assert.match(ended, /<textarea[^>]*disabled/); assert.doesNotMatch(ended, /中断（Esc）/);
+  const round = (ev, completed) => [ev('session.state', { state: 'idle', reason: null }), ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'hi', clientMessageId: 'c1' } }, { itemId: 'u1' }),
+    ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'hello' } }, { itemId: 'a1' }), ev('turn.completed', completed)];
+  const codex = await viewHtml(ev => round(ev, { status: 'completed', error: null }), { provider: 'codex', transport: 'codex-app-server' });
+  assert.match(codex, /data-agent="codex"/); assert.match(codex, /<b class="reading-step-label">Codex<\/b>/); assert.match(codex, /class="result-status"/, 'a finished round has the reading view’s result row'); assert.doesNotMatch(codex, /中断（Esc）/);
+  assert.doesNotMatch(codex, /<textarea[^>]*disabled/); assert.doesNotMatch(codex, /本轮已完成|空闲|Codex · 原生/);
+  const failed = await viewHtml(ev => round(ev, { status: 'failed', error: 'max_turns reached' }));
+  assert.match(failed, /result-status is-failed/); assert.match(failed, /失败/, 'a turn that failed is not 已完成, whatever else the result says');
   const empty = await viewHtml(ev => [ev('session.state', { state: 'idle', reason: null })]);
-  assert.match(empty, /会话已就绪，说点什么吧/);
+  assert.doesNotMatch(empty, /会话已就绪|result-status|reading-step/, 'nothing yet: no line of its own');
 });
 
-// The session component with real hooks, the heavy neighbours stood in; `entry` is replaced by `show`.
-// `handoff` stands in for the draft handoff hook (tested on its own below) and `change` is the terminal's SwitchState.
+// The session component with real hooks, the heavy neighbours stood in. `show` replaces the model's events; `change` is the terminal's SwitchState.
 function sessionView(events, bridge, base = {}) {
-  const model = require('../src/features/native-session/native-model.ts'), ev = stream(base), dismissed = [];
-  const handoff = { locked: false, incoming: null, offers: [], taken: 0, offer(draft) { this.offers.push(draft); }, take() { const draft = this.incoming; this.incoming = null; this.taken++; return draft; } };
+  const model = require('../src/features/native-session/native-model.ts'), ev = stream(base), dismissed = [], handoff = handoffStub(), toBottom = [];
   let change = null;
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
   const build = list => ({ model: model.applyEvents(model.emptyModel(), list).model, dismissed: null, noteDismissed: false, handoff: null });
+  const parts = { AgentMark() {}, PendingPromptEntries() {}, QuoteChip() {}, quoteExcerpt: load('features/reading/message-quote.ts').quoteExcerpt, withQuote: load('features/reading/message-quote.ts').withQuote, ResultActions() {}, ResultStatus() {}, TimelineStep() {}, UserImages() {}, WorkingLine() {}, latestResult: load('features/reading/result-round.ts').latestResult, useStickToBottom: () => ({ stuck: true, unseen: 0, toBottom: () => toBottom.push(true), ready: true }) };
+  const feed = { ConversationDecorations: { Provider() {} }, ConversationFeed() {} };
   const harness = hookHarness('src/features/native-session/NativeSessionView.tsx', {
-    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './UserAvatar': { UserAvatar() {} }, './useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[0] },
-    './AgentBrandIcon.ts': { ClaudeLogo() {}, CodexLogo() {} }, './NativeItems': { NativeItemView() {}, NativeSummary() {} }, './NativeRequestCard': { NativeRequestCard() {} },
-    './native-store.ts': { dismissNative: id => dismissed.push(id), ensureNativeSession() {}, nativeShown: () => true, useNativeEntries: () => new Map(), resolveSwitch: terminal => terminal }, './native-session.css': {},
-    './draft-handoff.ts': { useHandoff: () => handoff }, './SwitchNotice': { asksChoice: state => state?.phase === 'awaiting-choice' && !!state.requestId, SwitchLine() {}, SwitchQuestion() {} },
-    './native-words': { itemState: () => null, messageText: item => item.content.text ?? '', reasonWords: reason => reason, receiptWord: status => status, routeWord: value => value, runtimeWord: () => 'Claude · API', sessionWord: state => state, turnWord: status => status },
+    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[0] },
+    './action-text': { actionText: tool => `${tool.kind}:${tool.target}` }, './ConversationFeed': feed, './feed-parts': parts,
+    './native-entries.ts': load('features/native-session/native-entries.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './native-session.css': {},
+    './native-store.ts': { dismissNative: id => dismissed.push(id), nativeShown: () => true, useNativeEntries: () => new Map(), resolveSwitch: terminal => terminal },
+    './SwitchNotice': { asksChoice: state => (state?.phase === 'awaiting-choice' || state?.phase === 'waiting-background') && !!state.requestId, SwitchLine() {}, SwitchQuestion() {} }, './native-words': words(),
   });
   let entry = build(events(ev));
-  const tree = () => harness.render('NativeSession', { terminalId: 't1', entry, autoFocus: false, switchState: change }).result;
+  const tree = () => harness.render('NativeSession', { terminalId: 't1', projectId: 'p1', entry, autoFocus: false, switchState: change, handoff, onError() {}, onOpenLink() {} }).result;
   const find = predicate => elements(tree()).find(predicate), box = () => find(node => node.type === 'textarea');
   return {
-    ev, find, box, tree, dismissed, handoff, show(list) { entry = build(list); }, switching(state) { change = state; },
+    ev, find, box, tree, dismissed, handoff, parts, toBottom, show(list) { entry = build(list); }, switching(state) { change = state; },
+    prompts: () => find(node => node.type === parts.PendingPromptEntries).props, decorations: () => find(node => node.props?.value?.frame).props.value, feed: () => find(node => node.type === feed.ConversationFeed).props,
     type: value => box().props.onChange({ target: { value } }),
     press: (init = {}) => { const prevented = []; box().props.onKeyDown({ key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, preventDefault: () => prevented.push(true), ...init }); return prevented.length; },
     done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; },
   };
 }
 const idle = ev => [ev('session.state', { state: 'idle', reason: null })];
+const stopButton = view => view.find(node => node.type === 'button' && node.props.title === '中断（Esc）');
 
-test('Enter sends the trimmed message at once, shows it as sent until the runtime echoes it, and Shift+Enter, IME and an empty box send nothing', async () => {
+test('Enter sends the trimmed message at once and shows it as sending until the runtime echoes it; Shift+Enter, IME and an empty box send nothing', async () => {
   const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
   try {
     view.press(); view.type('   '); view.press(); view.type('hello'); view.press({ shiftKey: true }); view.press({ nativeEvent: { isComposing: true } });
@@ -385,12 +444,13 @@ test('Enter sends the trimmed message at once, shows it as sent until the runtim
     assert.equal(sends.length, 1); const [terminal, session, id, text] = sends[0];
     assert.deepEqual([terminal, session, typeof id, text], ['t1', 'rs1', 'string', 'hello']);
     assert.equal(view.box().props.value, '', 'the box emptied');
-    const pending = view.find(node => node.props?.className === 'native-receipt');
-    assert.equal(pending.props.children, '发送中', 'until a receipt arrives it reads as being sent');
-    view.show([...idle(view.ev), view.ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'hello', clientMessageId: id } }, { itemId: 'u1' }), view.ev('input.receipt', { clientMessageId: id, status: 'queued' })]);
-    const texts = elements(view.tree()).filter(node => node.type === 'p').map(node => node.props.children);
-    assert.deepEqual(texts.filter(text => text === 'hello'), ['hello'], 'the echoed message is shown once, not also as pending');
-    assert.equal(view.find(node => node.props?.className === 'native-receipt').props.children, 'queued');
+    assert.deepEqual(view.prompts().prompts.map(prompt => [prompt.text, prompt.sending]), [['hello', true]], 'until a receipt arrives it reads as being sent, as the reading view’s pending message');
+    const echo = status => [...idle(view.ev), view.ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'hello', clientMessageId: id } }, { itemId: id }), view.ev('input.receipt', { clientMessageId: id, status })];
+    view.show(echo('consumed'));
+    assert.deepEqual(view.prompts().prompts, [], 'the echoed message is in the conversation, not also pending');
+    assert.deepEqual(view.feed().entries.map(entry => [entry.role, entry.text]), [['user', 'hello']]);
+    view.show(echo('queued'));
+    assert.deepEqual([view.prompts().prompts.length, view.prompts().queued(view.prompts().prompts[0]), view.feed().entries.length], [1, true, 0], 'held in the runtime’s queue it waits, as a queued message does in the reading view');
   } finally { view.done(); }
 });
 
@@ -399,20 +459,59 @@ test('a message the main process refuses comes back into the box with the reason
   try {
     view.type('please retry'); view.press(); await settle();
     assert.deepEqual([view.box().props.value, view.find(node => node.props?.role === 'alert').props.children], ['please retry', 'no such session']);
-    assert.equal(view.find(node => node.props?.className === 'native-receipt'), undefined, 'nothing is shown as sent');
+    assert.deepEqual(view.prompts().prompts, [], 'nothing is shown as sent');
     view.press(); view.type('something else'); await settle();
     assert.equal(view.box().props.value, 'something else');
   } finally { view.done(); }
 });
 
-test('Stop interrupts the turn while it works and is not offered when idle; a finished session takes no message and can be closed', async () => {
+test('a message sent while the switch freezes the input is shown as unsent, never as sent; sending it again is the owner’s click, and a refusal brings the card back', async () => {
+  const sends = [], answers = [{ ok: true, value: {} }, { ok: false, error: 'frozen' }];
+  const view = sessionView(idle, { send: async (...args) => { sends.push(args); return answers.shift(); } });
+  try {
+    view.type('while frozen'); view.press(); await settle();
+    const id = sends[0][2];
+    // Main took the call and refused the message: an unsent item with the same id, and no receipt of delivery.
+    view.show([...idle(view.ev), view.ev('item.upsert', { kind: 'user-message', status: 'interrupted', content: { text: 'while frozen', clientMessageId: id, unsent: true } }, { itemId: id })]);
+    const shown = view.prompts();
+    assert.deepEqual(shown.prompts.map(prompt => prompt.text), ['while frozen']); assert.equal(shown.undelivered(shown.prompts[0]), true, 'drawn as not delivered');
+    assert.equal(shown.queued(shown.prompts[0]), false); assert.deepEqual(view.feed().entries, [], 'and not as a message of the conversation');
+    view.tree(); assert.deepEqual(view.handoff.offers.at(-1).undelivered, [{ clientMessageId: id, text: 'while frozen', images: undefined }], 'a switch carries it as unsent');
+    shown.onResend(shown.prompts[0]); await settle();
+    assert.deepEqual([sends.length, sends[1][3], sends[1][2] === id], [2, 'while frozen', false], 'sent again as a new message, by the click');
+    assert.equal(view.prompts().prompts.some(prompt => prompt.id === id), true, 'the refused send brings the first card back');
+    view.prompts().onDiscard(view.prompts().prompts.find(prompt => prompt.id === id));
+    assert.equal(view.prompts().prompts.some(prompt => prompt.id === id), false, 'and the owner can drop it');
+  } finally { view.done(); }
+});
+
+test('a quoted message waits above the box and goes before the words of the next message only, as in the reading view; a refused send gives it back', async () => {
+  const sends = [], answers = [{ ok: false, error: 'busy' }, { ok: true, value: {} }];
+  const view = sessionView(idle, { send: async (...args) => { sends.push(args); return answers.shift(); } });
+  try {
+    const quote = () => view.find(node => node.type === view.parts.QuoteChip)?.props.quote;
+    assert.equal(view.decorations().quote.disabled, null);
+    const words = ['the plan', 'is this'].join('\n'), sent = ['> the plan', '> is this', '', 'ok'].join('\n');
+    view.decorations().quote.pick('Claude Code', words); view.tree();
+    assert.deepEqual(quote(), { who: 'Claude Code', excerpt: words });
+    view.type('ok'); view.press(); await settle();
+    assert.equal(sends[0][3], sent); assert.equal(quote().who, 'Claude Code', 'the refused send gives the quote back');
+    view.type('ok'); view.press(); await settle();
+    assert.equal(sends[1][3], sent); assert.equal(quote(), undefined, 'a quote goes with one message');
+  } finally { view.done(); }
+});
+
+test('Stop is the composer’s button while it works, Esc does the same, neither is offered when idle; a finished session takes no message and can be closed', async () => {
   const interrupts = [], bridge = { interrupt: async (...args) => { interrupts.push(args); return { ok: true, value: {} }; }, send: async () => assert.fail('nothing to send') };
   const working = sessionView(ev => [...idle(ev), ev('turn.started', { origin: 'user', clientMessageId: null })], bridge);
   try {
-    working.find(node => typeof node.props?.onStop === 'function').props.onStop(); await settle();
-    assert.deepEqual(interrupts, [['t1', 'rs1']]);
+    stopButton(working).props.onClick(); await settle();
+    working.box().props.onKeyDown({ key: 'Escape', preventDefault() {} }); await settle();
+    assert.deepEqual(interrupts, [['t1', 'rs1'], ['t1', 'rs1']]);
     working.show(idle(working.ev));
-    assert.equal(working.find(node => 'onStop' in (node.props ?? {})).props.onStop, null, 'idle: no Stop');
+    assert.equal(stopButton(working), undefined, 'idle: no Stop');
+    working.box().props.onKeyDown({ key: 'Escape', preventDefault() {} }); await settle();
+    assert.equal(interrupts.length, 2, 'and Esc interrupts nothing');
   } finally { working.done(); }
   const ended = sessionView(ev => [ev('session.state', { state: 'stopped', reason: 'user' })], bridge);
   try {
@@ -421,6 +520,22 @@ test('Stop interrupts the turn while it works and is not offered when idle; a fi
     ended.find(node => node.type === 'button' && node.props.children === '开始新的对话').props.onClick();
     assert.deepEqual(ended.dismissed, ['t1']);
   } finally { ended.done(); }
+});
+
+test('the working line says the step in hand, the result belongs to a round that has ended, and a waiting session says it waits', () => {
+  const user = ev => ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'go', clientMessageId: 'c1' } }, { itemId: 'u1' });
+  const view = sessionView(ev => [...idle(ev), ev('turn.started', { origin: 'user', clientMessageId: 'c1' }), user(ev), ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'npm test' } }, { itemId: 'k1' })], {});
+  try {
+    const working = view.decorations().status;
+    assert.equal(working.type, view.parts.WorkingLine); assert.deepEqual([working.props.agent, working.props.label], ['claude', '正在command:npm test']);
+    assert.equal(view.decorations().running, true); assert.equal(view.decorations().anchor, undefined, 'no result while it works');
+    view.show([...idle(view.ev), view.ev('turn.started', { origin: 'user', clientMessageId: 'c1' }), user(view.ev)]);
+    assert.equal(view.find(node => node.type === view.parts.WorkingLine).props.label, 'Claude Code 正在思考', 'no step: it is thinking, on a step of its own after your message');
+    view.show([...idle(view.ev), user(view.ev), view.ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'done' } }, { itemId: 'a1' }), view.ev('turn.completed', { status: 'completed', error: null })]);
+    assert.deepEqual([view.decorations().status, view.decorations().anchor, view.feed().live], [null, 'a1', false], 'the round ended: the result stands on its reply');
+    view.show([...idle(view.ev), view.ev('session.state', { state: 'waiting', reason: null })]);
+    assert.equal(view.find(node => node.props?.className === 'reading-status is-waiting').props.role, 'status');
+  } finally { view.done(); }
 });
 
 test('each pending request gets its card, for this session; a stopped session has none', () => {
@@ -490,14 +605,14 @@ test('questions are answered one by one with options, your own words or a secret
 });
 
 // ---- the grid cell ------------------------------------------------------------------------------------------------------------------
-function gridMarkup(terminals, { focused = false, native = [], moved = [] } = {}) {
+function gridMarkup(terminals, { focused = false, native = [], moved = [], handoffs = [] } = {}) {
   const marker = (name, props) => React.createElement('div', { className: name, 'data-terminal': props.terminalId ?? props.id, 'data-phase': props.switchState?.phase ?? '', 'data-active': String(props.terminalActive ?? '') });
   const load = makeLoader({
     '../agents/SubagentPane': { SubagentPane: () => null }, '../agents/subagent-splits.ts': { closeSplit() {}, splitsOf: () => [], useSplits: () => [] },
     './AgentLauncher': { AgentLauncher: props => marker('launcher-stub', props) }, './TerminalPane': { TerminalPane: props => marker('pane-stub', props) }, '../reading/ReadingView': { ReadingView: () => null },
     '../reading/reading-mode': { readingShown: () => false, setReading() {}, syncReading() {}, useTerminalChoice: () => [] }, '../workspace/useProjectReorder': { TERMINAL_SPLITS: {}, useReorder: () => ({}) },
     '../native-session/NativeSessionView': { NativeSessionView: props => marker('native-stub', props) }, '../native-session/NativePathNote': { NativePathNote: props => marker('note-stub', props) },
-    '../native-session/draft-handoff.ts': { useHandoff: () => ({}) },
+    '../native-session/draft-handoff.ts': { useHandoff: (id, session, state) => { handoffs.push([id, session, state?.phase ?? null]); return {}; } },
     '../native-session/native-store.ts': { useNativeEntries: () => new Map(native.map(id => [id, { shown: true }])), nativeShown: entry => !!entry?.shown, ensureNativeSession() {} },
   });
   return renderToStaticMarkup(React.createElement(load('features/terminal/ProjectTerminals.tsx').ProjectTerminals, { project: { id: 'p', name: 'P', kind: 'local', terminals }, focused, fontSize: 13, activeId: null, setActiveId() {}, onExpand() { throw new Error('expanded'); }, onAction: async () => {}, onError() {}, onOpenLink() {} }));
@@ -562,39 +677,39 @@ test('terminal fallback exposes unsent text for copying without submitting it or
 });
 
 // ---- the acceptance fixes -----------------------------------------------------------------------------------------------------------
-test('the plan, the diff and the requests stand on the agent’s own content edge, and a request grows in the conversation instead of scrolling inside its card', async () => {
+test('the requests and the switch question stand at the end of the timeline on the agent’s own content edge, and a request grows in the conversation instead of scrolling inside its card', async () => {
   const html = await viewHtml(richSession), content = html.slice(html.indexOf('reading-content'), html.indexOf('class="reading-composer"'));
-  assert.match(content, /<div class="native-summary">/); assert.match(content, /<div class="native-requests">/);
-  assert.ok(content.indexOf('native-summary') < content.indexOf('native-requests'), 'the request waits at the end of the conversation');
-  assert.doesNotMatch(html, /reading-choice-host/, 'no host below the conversation whose card would scroll inside it');
+  assert.match(content, /<div class="native-tail">/); assert.ok(content.indexOf('reading-step is-agent') < content.indexOf('native-tail'), 'the request waits at the end of the conversation');
+  assert.doesNotMatch(html, /reading-choice-host|native-summary|native-requests/, 'no host below the conversation whose card would scroll inside it');
   const css = fs.readFileSync(path.join(src, 'features/native-session/native-session.css'), 'utf8');
-  assert.match(css, /\.native-summary, \.native-requests \{[^}]*margin-left: var\(--reading-inset\);/, 'the same left edge as the reply text and the tool pills');
-  assert.match(css, /\.native-requests \.native-request \{ max-height: none; overflow: visible; \}/, 'the base card’s 45vh cap and scrollbar are off');
-  assert.doesNotMatch(await viewHtml(ev => [ev('session.state', { state: 'idle', reason: null })]), /native-summary|native-requests/, 'nothing to show, no empty wrapper');
+  assert.match(css, /\.native-tail \{[^}]*margin-left: var\(--reading-inset\);/, 'the same left edge as the reply text and the tool pills');
+  assert.match(css, /\.native-tail \.native-request \{ max-height: none; overflow: visible; \}/, 'the base card’s 45vh cap and scrollbar are off');
+  assert.doesNotMatch(await viewHtml(ev => [ev('session.state', { state: 'idle', reason: null })]), /native-tail/, 'nothing to show, no empty wrapper');
+});
+
+test('only what the reading view does not have stays in native-session.css', () => {
+  const css = fs.readFileSync(path.join(src, 'features/native-session/native-session.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const classes = new Set(css.match(/\.native-[a-z-]+/g));
+  assert.deepEqual([...classes].sort(), ['.native-ask', '.native-ended', '.native-error', '.native-path-note', '.native-path-summary', '.native-preview', '.native-request', '.native-switch', '.native-switch-question', '.native-switch-text', '.native-tail', '.native-unsent'].sort(),
+    'no header, step, receipt, diff or plan style of its own');
 });
 
 test('a new request pulls the view to it even when the owner had scrolled up; an ordinary step does not', () => {
   const view = sessionView(idle, {});
   try {
-    const log = () => view.find(node => node.props?.role === 'log'), pane = { scrollTop: 0, scrollHeight: 900 };
-    log().props.ref.current = pane;
+    view.tree(); assert.equal(view.toBottom.length, 0);
     view.show([...idle(view.ev), view.ev('item.delta', { channel: 'text', text: 'one' }, { itemId: 'a1' })]); view.tree();
-    assert.equal(pane.scrollTop, 900, 'at the end, new steps are followed');
-    log().props.onScroll({ currentTarget: { scrollHeight: 2000, scrollTop: 0, clientHeight: 300 } }); pane.scrollTop = 0;
-    view.show([...idle(view.ev), view.ev('item.delta', { channel: 'text', text: 'two' }, { itemId: 'a2' })]); view.tree();
-    assert.equal(pane.scrollTop, 0, 'scrolled up, an ordinary step leaves the view where it is');
+    assert.equal(view.toBottom.length, 0, 'an ordinary step is followed only by the reading view’s own stick-to-bottom');
     view.show([...idle(view.ev), view.ev('request.opened', { requestId: 'r1', kind: 'command', title: 'Run it' })]); view.tree();
-    assert.equal(pane.scrollTop, 900, 'a request waiting for the owner is brought into view');
+    assert.equal(view.toBottom.length, 1, 'a request waiting for the owner is brought into view');
   } finally { view.done(); }
 });
 
-test('a command’s folder reads as its last two parts on one line with the whole path as the tooltip', async () => {
+test('a command’s folder reads as its last two parts on one line with the whole path as the tooltip of the step’s line', async () => {
   const { shortPath } = words(), cwd = '/home/someone/work/very/long/path/to/the/project';
   assert.deepEqual([shortPath('/work'), shortPath('C:\\Users\\someone\\work\\very\\long\\path\\project\\sub'), shortPath(cwd)], ['/work', '…\\project\\sub', '…/the/project']);
   const html = await viewHtml(ev => [ev('session.state', { state: 'running', reason: null }), ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'npm test', cwd } }, { itemId: 'k' })]);
-  assert.match(html, new RegExp(`<small class="native-facts" title="${cwd}">…/the/project</small>`));
-  assert.doesNotMatch(html.replace(/ title="[^"]*"/g, ''), /\/home\/someone/, 'the folder’s head is not drawn');
-  assert.match(fs.readFileSync(path.join(src, 'features/native-session/native-session.css'), 'utf8'), /\.native-facts \{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; \}/);
+  assert.ok(html.includes('…/the/project')); assert.doesNotMatch(html.replace(/ title="[^"]*"/g, ''), /\/home\/someone/, 'the folder’s head is not drawn');
 });
 
 test('the message box always has a hint: the longest that fits, and the shortest when none does', async () => {
@@ -604,8 +719,8 @@ test('the message box always has a hint: the longest that fits, and the shortest
   } finally { fit.index = 0; }
 });
 
-test('Codex falling back to the terminal leaves its reason where the native view stood, in words', async () => {
-  const cases = [['codex_cli_required', '未找到 Codex 命令行，无法使用原生界面'], ['unsupported_codex_version', '这个 Codex 版本不支持原生界面']];
+test('Codex falling back to the terminal leaves its reason where the native view stood, in words; the owner’s own choice of the terminal gives no reason to tell', async () => {
+  const cases = [['codex_cli_required', '已改用终端 · 未找到 Codex 命令行，无法使用原生界面'], ['unsupported_codex_version', '已改用终端 · 这个 Codex 版本不支持原生界面'], ['some_new_code', '已改用终端'], [null, '已改用终端']];
   for (const [reason, words] of cases) {
     const ev = stream({ provider: 'codex', transport: 'codex-app-server' }), events = [ev('path.changed', { previous: null, selected: 'terminal', reason })];
     let html = '', shown = null;
@@ -615,7 +730,7 @@ test('Codex falling back to the terminal leaves its reason where the native view
       html = renderToStaticMarkup(React.createElement(load('features/native-session/NativePathNote.tsx').NativePathNote, { terminalId: 't1' }));
     });
     assert.equal(shown, false, 'the terminal’s own view takes the cell');
-    assert.ok(html.includes(`已改用终端 · ${words}`), reason);
+    assert.ok(html.includes(`<span>${words}</span>`), String(reason)); assert.doesNotMatch(html, /暂时不可用|some_new_code/, 'a reason nobody gave is not made up, and a code is not shown');
   }
 });
 
@@ -771,6 +886,20 @@ test('a connection test reads as four lines, each with a tone and a next step fo
   assert.doesNotMatch(JSON.stringify([lines, bad, odd]), /sk-ant/);
 });
 
+test('when main gives no usage (a read that failed or has not come back, a project it cannot answer for, no bridge) the current session’s context, bars and tokens stay, and the connection and the allowance read 未知', async () => {
+  const future = Date.now() + 3600_000, round = { input: 496000, cached: 476000, output: 5100 };
+  const session = { id: 't1', agent: 'claude', codexActive: true, sessionId: null, agentStartedAt: 1, agentUsage: { provider: null, limits: [{ minutes: 300, percent: 20, resetsAt: future }], limitsAt: Date.now(), limitsFrom: 'Claude Code', context: { used: 170000, window: 1000000 }, round, total: null } };
+  for (const bridge of [{ usage: async () => ({ ok: false, error: 'native sessions are local only' }) }, { usage: async () => new Promise(() => {}) }, null]) {
+    const html = await usageHtml(bridge, session), claude = usageSection(html, 'Claude'), codex = usageSection(html, 'Codex');
+    assert.match(claude, /上下文长度/); assert.match(claude, /aria-valuenow="17"/); assert.match(claude, /5 小时额度/); assert.match(claude, />本轮</, 'its context, bar and round are the session’s own');
+    assert.match(claude, /连接<\/dt><dd><span>未知<\/span>/); assert.doesNotMatch(codex, /上下文长度|>本轮</); assert.match(codex, /连接<\/dt><dd><span>未知<\/span>/);
+    assert.equal((html.match(/role="alert"/g) ?? []).length, bridge?.usage.toString().includes('local only') ? 1 : 0, 'an error is one line, not the whole block');
+  }
+  assert.match(await usageHtml({ usage: async () => ({ ok: false, error: 'locked' }) }), /role="alert">无法读取额度：locked/, 'a failed read says so');
+  assert.equal(await usageHtml(null), '', 'a window without the bridge and without a session shows no card');
+  assert.match(await usageHtml(null, { ...session, agentUsage: null }), /上下文长度/, 'a session that has not answered yet says its context comes with the first reply');
+});
+
 test('a failed read says so, a window without the bridge shows no card, and limits read as their provider gave them', async () => {
   assert.match(await usageHtml({ usage: async () => ({ ok: false, error: 'locked' }) }), /role="alert">无法读取额度：locked/);
   assert.equal(await usageHtml(null), '');
@@ -862,7 +991,7 @@ const asking = (patch = {}) => switchState({ phase: 'awaiting-choice', requestId
 test('the question card shows only while main asks, says what a switch ends, and sends the owner’s choice with the change and request it was asked for', async () => {
   const answers = [], view = noticeView({ answer: async (...args) => { answers.push(args); return { ok: true, value: {} }; } });
   try {
-    for (const state of [null, switchState(), asking({ requestId: null }), asking({ phase: 'waiting-background' }), asking({ phase: 'stable' })]) assert.deepEqual(view.question(state), [], JSON.stringify(state));
+    for (const state of [null, switchState(), asking({ requestId: null }), asking({ phase: 'waiting-background', requestId: null }), asking({ phase: 'stable' })]) assert.deepEqual(view.question(state), [], JSON.stringify(state));
     const nodes = view.question(asking());
     assert.equal(nodes.find(node => node.type === 'section').props.className, 'reading-choice native-request native-switch-question', 'the request card’s look');
     assert.equal(nodes.find(node => node.type === 'strong').props.children, '现在切到 终端？'); assert.equal(nodes.find(node => node.props?.className === 'native-switch-text').props.children, '切换会结束 2 个后台任务。');
@@ -875,6 +1004,9 @@ test('the question card shows only while main asks, says what a switch ends, and
     assert.equal(view.button(asking({ requestId: 'rq2' }), '现在切换').props.disabled, false, 'a new question is a new card');
     view.button(asking({ requestId: 'rq2' }), '现在切换').props.onClick(); await settle();
     assert.deepEqual(answers.at(-1), ['t1', 'rs1', 'rq2', { switch: { changeId: 3, requestId: 'rq2', action: 'now' } }]);
+    assert.deepEqual(view.question(asking({ phase: 'waiting-background' })).filter(node => node.type === 'button').map(node => node.props.children), ['现在切换'], 'while it waits for the tasks, the owner can still switch now');
+    view.button(asking({ phase: 'waiting-background', requestId: 'rq9' }), '现在切换').props.onClick(); await settle();
+    assert.deepEqual(answers.at(-1), ['t1', 'rs1', 'rq9', { switch: { changeId: 3, requestId: 'rq9', action: 'now' } }]);
     const bare = view.question(asking({ background: { count: 0, known: false } })).find(node => node.props?.className === 'native-switch-text').props.children;
     assert.match(bare, /还不知道/); assert.doesNotMatch(bare, /\d/, 'unknown background state is not “0 tasks”');
     view.button(asking({ requestId: 'rq3' }), '现在切换', null).props.onClick(); await settle();
@@ -893,17 +1025,29 @@ test('a refused answer opens the question again with the reason', async () => {
   try { thrown.button(asking(), '现在切换').props.onClick(); await settle(); assert.equal(thrown.question(asking()).find(node => node.props?.role === 'alert').props.children, 'ipc closed'); } finally { thrown.done(); }
 });
 
-test('the native view’s header carries the switch line, its question stands in the conversation, and neither is a request', () => {
+test('an answer main ignores as late ({accepted: false}) is not an answer taken: the card opens again and says so', async () => {
+  const view = noticeView({ answer: async () => ({ ok: true, value: { accepted: false } }) });
+  try {
+    view.button(asking(), '现在切换').props.onClick(); await settle();
+    assert.equal(view.question(asking()).find(node => node.props?.role === 'alert').props.children, '这个选择已经过期，没有生效。');
+    assert.equal(view.button(asking(), '现在切换').props.disabled, false);
+  } finally { view.done(); }
+});
+
+test('the switch line and the question stand at the end of the timeline, not in a header, and neither is a request', () => {
   const view = sessionView(idle, {});
   try {
+    assert.equal(elements(view.tree()).some(node => node.props?.className === 'native-tail'), false, 'nothing under way: nothing is added');
     view.switching(switchState({ phase: 'waiting-turn' }));
-    const nodes = elements(view.tree());
-    assert.equal(nodes.filter(node => node.props?.change?.phase === 'waiting-turn').length, 1, 'the header reads the state');
+    const nodes = elements(view.tree()), tail = nodes.find(node => node.props?.className === 'native-tail');
+    assert.ok(tail, 'a line under way has its place in the conversation'); assert.equal(elements(tail.props.children).filter(node => node.props?.state?.phase === 'waiting-turn').length, 2, 'the line and the question read the state');
     assert.equal(nodes.some(node => node.props?.request), false, 'the question is not a request');
-    assert.equal(nodes.some(node => node.props?.className === 'native-requests'), false, 'and nothing asks while main does not');
     view.switching(asking());
-    const box = elements(view.tree()).find(node => node.props?.className === 'native-requests');
-    assert.ok(box, 'the question has its place in the conversation'); assert.equal(elements(box.props.children).filter(node => node.props?.state?.phase === 'awaiting-choice').length, 1);
+    const asked = elements(view.tree()).find(node => node.props?.className === 'native-tail');
+    assert.ok(asked, 'the question has its place in the conversation'); assert.equal(elements(asked.props.children).filter(node => node.props?.state?.phase === 'awaiting-choice').length, 2);
+    view.switching(asking({ phase: 'waiting-background' }));
+    assert.equal(elements(view.tree()).some(node => node.props?.className === 'native-tail'), true, 'while it waits, the owner can still switch now');
+    assert.equal(view.decorations().status, null, 'a switch under way is no round in progress'); assert.equal(view.toBottom.length, 1, 'the question is brought into view once');
   } finally { view.done(); }
 });
 
@@ -911,12 +1055,13 @@ test('a draft carried into the native view lands in the empty box, beside typed 
   const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
   const texts = () => elements(view.tree()).filter(node => node.type === 'li').map(node => node.props.children[0]);
   const take = node => node.type === 'button' && node.props.children === '取回';
+  const attached = () => elements(view.tree()).find(node => node.type === view.parts.UserImages)?.props.images;
   try {
     view.handoff.incoming = { version: 1, text: 'half a thought', images: ['data:image/png;base64,AAAA'], undelivered: [{ clientMessageId: 'u1', text: 'refused earlier' }, { clientMessageId: 'u2', text: 'second', images: ['data:image/png;base64,BBBB'] }] };
     view.tree(); await settle(); view.tree();
     assert.equal(view.box().props.value, 'half a thought'); assert.deepEqual(texts(), ['refused earlier', 'second']);
     assert.equal(view.handoff.taken, 1, 'taken once'); assert.deepEqual(sends, [], 'arrival sends nothing');
-    assert.equal(elements(view.tree()).filter(node => node.type === 'img').length, 1, 'the picture waits with the next message');
+    assert.deepEqual(attached(), ['data:image/png;base64,AAAA'], 'the picture waits with the next message');
     assert.equal(elements(view.tree()).find(take).props.disabled, true, 'the box is not empty: nothing replaces it');
     view.type(''); view.tree();
     elements(view.tree()).find(take).props.onClick(); view.tree();
@@ -930,6 +1075,25 @@ test('a draft carried into the native view lands in the empty box, beside typed 
   } finally { view.done(); }
 });
 
+test('a draft that comes back to the box it left (a switch that failed) is shown once: in the box, its picture once, and a message that is still here as lost is not listed again', async () => {
+  const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
+  const texts = () => elements(view.tree()).filter(node => node.type === 'li').map(node => node.props.children[0]);
+  const attached = () => elements(view.tree()).find(node => node.type === view.parts.UserImages)?.props.images;
+  try {
+    view.type('half a thought'); view.tree();
+    view.type('refused'); view.press(); await settle();
+    const id = sends[0][2];
+    view.show([...idle(view.ev), view.ev('item.upsert', { kind: 'user-message', status: 'interrupted', content: { text: 'refused', clientMessageId: id, unsent: true } }, { itemId: id })]);
+    view.type('half a thought'); view.tree();
+    view.handoff.incoming = { version: 3, text: 'half a thought', images: ['data:image/png;base64,AAAA'], undelivered: [{ clientMessageId: id, text: 'refused' }, { clientMessageId: 'old', text: 'from before' }] };
+    view.tree(); await settle(); view.tree();
+    view.handoff.incoming = { version: 4, text: 'half a thought', images: ['data:image/png;base64,AAAA'], undelivered: [{ clientMessageId: 'old', text: 'from before' }] };
+    view.tree(); await settle(); view.tree();
+    assert.equal(view.box().props.value, 'half a thought'); assert.deepEqual(texts(), ['from before'], 'the words are in the box and in no list; the refused message is its card’s alone');
+    assert.deepEqual(attached(), ['data:image/png;base64,AAAA']);
+  } finally { view.done(); }
+});
+
 test('the native view offers its draft to a switch: the words, the pictures and only the messages main refused; and its input shuts only when main accepts', async () => {
   const view = sessionView(idle, { send: async () => ({ ok: true, value: {} }) });
   try {
@@ -937,12 +1101,25 @@ test('the native view offers its draft to a switch: the words, the pictures and 
     assert.deepEqual(view.handoff.offers.at(-1), { text: 'draft one', images: [], undelivered: [] });
     view.type('sent words'); view.tree(); view.press(); await settle(); view.tree();
     assert.deepEqual(view.handoff.offers.at(-1), { text: '', images: [], undelivered: [] }, 'a message in flight is not offered: it may arrive');
-    const sentId = elements(view.tree()).find(node => node.props?.className === 'native-receipt')?.props.children;
     assert.equal(view.box().props.disabled, false, 'until main accepts, the old input stays as it was');
     view.handoff.locked = true; view.tree();
     assert.equal(view.box().props.disabled, true); assert.equal(view.box().props.placeholder, '正在切换运行方式，稍后继续');
-    assert.ok(sentId);
   } finally { view.done(); }
+});
+
+test('a card nobody offers a draft for (the raw terminal) hands main an empty draft, so its switch is never left preparing; a picture main would refuse stays out of the draft instead of stopping it', async () => {
+  const answers = [], hook = handoffHook({ answer: async (...args) => { answers.push(args); return { ok: true, value: { changeId: 3, version: 0, accepted: true } }; } }, { state: switchState({ phase: 'preparing' }), identity: { runtimeSessionId: 'rs7' } });
+  try {
+    hook.render(); await settle();
+    assert.deepEqual(answers, [['t1', 'rs7', 'handoff-3', { handoff: { changeId: 3, draft: { version: 0, text: '', images: [], undelivered: [] } } }]], 'with no view, an empty draft; the session is the one the window knows');
+    assert.equal(hook.render().locked, true);
+  } finally { hook.done(); }
+  const seen = [], pictures = handoffHook({ answer: async (...args) => { seen.push(args[3]); return { ok: true, value: {} }; } }, { state: switchState({ phase: 'waiting-turn' }) });
+  try {
+    pictures.render().offer({ text: 'x', images: ['data:image/gif;base64,AAAA', 'data:image/png;base64,BBBB'], undelivered: [{ clientMessageId: 'u', text: 'y', images: ['data:image/gif;base64,AAAA'] }] });
+    pictures.set({ state: switchState({ phase: 'preparing' }) }); pictures.render(); await settle();
+    assert.deepEqual(seen.at(-1).handoff.draft, { version: 1, text: 'x', images: ['data:image/png;base64,BBBB'], undelivered: [{ clientMessageId: 'u', text: 'y', images: [] }] });
+  } finally { pictures.done(); }
 });
 
 function handoffHook(bridge, current) {
@@ -950,7 +1127,7 @@ function handoffHook(bridge, current) {
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
   const harness = hookHarness('src/features/native-session/draft-handoff.ts', {
     './native-bridge.ts': { nativeBridge: () => bridge },
-    './native-store.ts': { resolveSwitch: terminal => terminal, useNativeEntries: () => new Map([['t1', { handoff: current.incoming ? { changeId: 9, draft: current.incoming } : null }]]), takeHandoff: id => { taken.push(id); return current.incoming; } },
+    './native-store.ts': { resolveSwitch: terminal => terminal, useNativeEntries: () => new Map([['t1', { model: current.identity ? { identity: current.identity } : {}, handoff: current.incoming ? { changeId: 9, draft: current.incoming } : null }]]), takeHandoff: id => { taken.push(id); return current.incoming; } },
   });
   return { render: () => harness.render('useHandoff', 't1', null, current.state).result, taken, set(patch) { Object.assign(current, patch); }, done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; } };
 }
@@ -979,9 +1156,9 @@ test('the draft goes to main once per version when a switch prepares, only an ac
 
 test('a receipt for an older version shuts nothing, and a refused or throwing answer is offered again with the next update of the switch', async () => {
   const pending = [], offer = text => ({ text, images: [], undelivered: [] }), accepted = version => ({ ok: true, value: { changeId: 3, version, accepted: true } });
-  const hook = handoffHook({ answer: (...args) => new Promise(resolve => pending.push({ version: args[3].handoff.draft.version, resolve })) }, { state: switchState({ phase: 'preparing' }) });
+  const hook = handoffHook({ answer: (...args) => new Promise(resolve => pending.push({ version: args[3].handoff.draft.version, resolve })) }, { state: switchState({ phase: 'waiting-turn' }) });
   try {
-    const handoff = hook.render(); handoff.offer(offer('a')); hook.render(); handoff.offer(offer('ab')); hook.render();
+    const handoff = hook.render(); handoff.offer(offer('a')); hook.set({ state: switchState({ phase: 'preparing' }) }); hook.render(); handoff.offer(offer('ab')); hook.render();
     assert.deepEqual(pending.map(call => call.version), [1, 2]);
     pending[0].resolve(accepted(1)); await settle();
     assert.equal(hook.render().locked, false, 'version 1 was accepted but the draft is already at version 2');
@@ -1027,6 +1204,15 @@ test('a failed switch is told in the path note whichever transport the card is o
     assert.equal(text({ terminalActive: false, switchState: failed }), null);
     assert.equal(text({ terminalActive: false, switchState: switchState({ phase: 'preparing' }) }), null, 'a switch under way is not a failure');
   } finally { harness.dispose(); }
+});
+
+test('every card holds its draft handoff, whatever it shows: the raw terminal, the reading view and the native view alike, so a switch never waits for a view that is not there', () => {
+  const handoffs = [], state = switchState({ phase: 'preparing' });
+  gridMarkup([terminal('t1', { sessionId: 's1', codexActive: true, switchState: state, nativeRuntimeSessionId: 'rs1' }), terminal('t2'), terminal('t3', { switchState: state })], { focused: true, native: ['t3'], handoffs });
+  assert.deepEqual(handoffs.sort(), [['t1', 'rs1', 'preparing'], ['t2', null, null], ['t3', null, 'preparing']], 'one per card, with its own switch state');
+  const grid = fs.readFileSync(path.join(src, 'features/terminal/ProjectTerminals.tsx'), 'utf8');
+  assert.equal((grid.match(/useHandoff\(/g) ?? []).length, 1, 'one place holds it');
+  assert.doesNotMatch(fs.readFileSync(path.join(src, 'features/native-session/NativeSessionView.tsx'), 'utf8'), /useHandoff\(/, 'and the native view takes it from the card like the reading view');
 });
 
 test('the grid hands each card’s switch state to the note over it and to the native view, on both transports', () => {

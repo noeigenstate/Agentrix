@@ -577,7 +577,9 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     const words = arrived.text.trim() ? { clientMessageId: `draft-${Date.now()}`, text: arrived.text } : null;
     if (words && !draft.trim()) edit(arrived.text);
     setLeftImages(list => [...list, ...arrived.images, ...arrived.undelivered.flatMap(message => message.images ?? [])]);
-    setKept(list => [...list, ...(words && draft.trim() ? [words] : []), ...arrived.undelivered]);
+    // A draft that comes back to the view it left (a switch that failed) is already here: it is shown once, in the box.
+    const typed = draft.trim() !== '' && draft.trim() !== arrived.text.trim();
+    setKept(list => [...list, ...(words && typed ? [words] : []), ...arrived.undelivered.filter(message => !list.some(held => held.clientMessageId === message.clientMessageId) && !outbox.some(waiting => `waiting-${waiting.id}` === message.clientMessageId))]);
   }, [handoff?.incoming, inputBlocked]);
   const keys = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Escape' && dictationSend.cancel()) { event.preventDefault(); event.stopPropagation(); return; }

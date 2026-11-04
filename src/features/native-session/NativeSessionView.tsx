@@ -1,166 +1,168 @@
-// A session that runs without a terminal: the Claude Agent SDK on the API key, or Codex's app-server. Its view is drawn from the events the main
-// process publishes — no pty, no screen to read — in the reading view's look: your messages, the agent's words and steps, the requests it waits
-// on, and a message box that stays usable while it works (what you send is queued by the runtime, with its receipt shown).
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ArrowDown, PaperPlaneRight, Stop, X } from '@phosphor-icons/react';
+// A session that runs without a terminal: the Claude Agent SDK on the API key, or Codex's app-server. The events the main process publishes are the
+// data; the view is the reading view's own: the conversation is native-entries.ts's ConversationEntry[] drawn by ConversationFeed, with the same
+// scroll, working line, result card and message box. Only what a terminal session does not have is added at the end of the timeline: the requests
+// waiting on the owner and the question about a run-mode change.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { ArrowDown, Image as ImageIcon, PaperPlaneRight, Stop } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
-import { UserAvatar } from '../../shared/UserAvatar';
 import { fullHintProps, HIDDEN_NOTE, useFittingHint } from '../../shared/useFittingHint';
-import { ClaudeLogo, CodexLogo } from '../agents/AgentBrandIcon.ts';
-import { nativeBridge } from './native-bridge.ts';
-import { type NativePendingInput, type SwitchState } from './native-bridge.ts';
-import { useHandoff } from './draft-handoff.ts';
-import { canSend, groups, isOver, isWorking } from './native-model.ts';
+import { actionText } from '../agents/action-text';
+import { ConversationDecorations, ConversationFeed } from '../reading/ConversationFeed';
+import { AgentMark, latestResult, PendingPromptEntries, QuoteChip, quoteExcerpt, ResultActions, ResultStatus, TimelineStep, useStickToBottom, UserImages, withQuote, WorkingLine, type MessageQuote, type PendingPrompt } from '../reading/feed-parts';
+import { nativeBridge, type NativePendingInput, type SwitchState } from './native-bridge.ts';
+import type { Handoff } from './draft-handoff.ts';
+import { nativeEntries, nativePending, runningStep, type SentMessage } from './native-entries.ts';
+import { canSend, isOver, isWorking } from './native-model.ts';
 import { dismissNative, nativeShown, resolveSwitch, useNativeEntries, type NativeEntry } from './native-store.ts';
-import { NativeItemView, NativeSummary } from './NativeItems';
 import { NativeRequestCard } from './NativeRequestCard';
 import { asksChoice, SwitchLine, SwitchQuestion } from './SwitchNotice';
-import { itemState, messageText, reasonWords, receiptWord, routeWord, runtimeWord, sessionWord, turnWord } from './native-words';
+import { reasonWords, switchLine, turnFailed } from './native-words';
 import './native-session.css';
 
-// Within this many pixels of the end, the view follows the newest step.
-const FOLLOW_SLACK = 40;
 const hints = () => [t('给它发消息 · Enter 发送，Shift+Enter 换行'), t('给它发消息 · Enter 发送'), t('给它发消息'), t('发消息')];
 const failure = (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) });
+const NO_PICTURES: string[] = [];
 
-type Sent = { id: string; text: string };
-
-// One speaker's step on the reading view's rail (reading-flow.css): its node with the speaker's mark, then its name and what it said or did.
-function RailStep({ kind, agent, who, state, latest, mark, children }: {
-  kind: 'user' | 'agent'; agent?: 'claude' | 'codex'; who: string; state?: 'running' | 'failed' | null; latest: boolean; mark: ReactNode; children: ReactNode;
-}) {
-  return <div className={`reading-step is-${kind}${agent ? ` is-${agent}` : ''}${state ? ` is-${state}` : ''}${latest ? ' is-latest' : ''}`}>
-    <span className="reading-node" aria-hidden="true">{mark}</span>
-    <div className="reading-step-body"><div className="reading-step-head"><b className="reading-step-label">{who}</b></div>{children}</div>
-  </div>;
-}
-
-const TurnItem = ({ kind, children }: { kind: 'message' | 'tools'; children: ReactNode }) => <div className={`reading-turn-${kind}`}><div className="reading-turn-item-body">{children}</div></div>;
-
-function Header({ entry, change, onStop }: { entry: NativeEntry; change: SwitchState | null; onStop: (() => void) | null }) {
-  const { model } = entry, identity = model.identity!, Mark = identity.provider === 'claude' ? ClaudeLogo : CodexLogo;
-  const state = model.session?.state ?? null, why = isOver(model) ? reasonWords(model.session?.reason) : null;
-  const moved = model.path && `${routeWord(model.path.previous)} → ${routeWord(model.path.selected)}${model.path.reason ? ` · ${reasonWords(model.path.reason)}` : ''}`;
-  return <header className="native-head">
-    <span className="native-runtime"><Mark size={14} />{runtimeWord(identity)}</span>
-    <span className={`native-state is-${state ?? 'unknown'}`}>{sessionWord(state)}</span>
-    {(moved || why) && <small className="native-route" title={moved || why || undefined}>{moved || why}</small>}
-    <SwitchLine state={change} />
-    <span className="native-spacer" />
-    {onStop && <button type="button" className="button native-stop" onClick={onStop}><Stop size={13} weight="fill" />{t('停止')}</button>}
-  </header>;
-}
+type SessionProps = {
+  terminalId: string; projectId: string; entry: NativeEntry; autoFocus: boolean; switchState?: SwitchState | null; handoff: Handoff;
+  onError: (message: string) => void; onOpenLink: (target: string) => void;
+};
 
 // The view of a known session (exported for its tests); NativeSessionView below finds the terminal's session and shows this.
-export function NativeSession({ terminalId, entry, autoFocus, switchState = null }: { terminalId: string; entry: NativeEntry; autoFocus: boolean; switchState?: SwitchState | null }) {
-  const { model } = entry, identity = model.identity!, sessionId = identity.runtimeSessionId, state = resolveSwitch(switchState, entry), handoff = useHandoff(terminalId, sessionId, switchState);
-  const [text, setText] = useState(''), [sent, setSent] = useState<Sent[]>([]), [error, setError] = useState<string | null>(null);
+export function NativeSession({ terminalId, projectId, entry, autoFocus, switchState = null, handoff, onError, onOpenLink }: SessionProps) {
+  const { model } = entry, identity = model.identity!, kind = identity.provider, sessionId = identity.runtimeSessionId, change = resolveSwitch(switchState, entry);
+  const agent = kind === 'claude' ? 'Claude Code' : 'Codex';
+  const [text, setText] = useState(''), [sent, setSent] = useState<SentMessage[]>([]), [discarded, setDiscarded] = useState<ReadonlySet<string>>(new Set()), [error, setError] = useState<string | null>(null);
   // What a switch carries in: pictures that go with the next message, and messages the previous session never delivered. Neither is ever sent by itself.
   const [carried, setCarried] = useState<string[]>([]), [unsent, setUnsent] = useState<NativePendingInput[]>([]);
-  const box = useRef<HTMLTextAreaElement>(null), scroller = useRef<HTMLDivElement>(null), following = useRef(true), [behind, setBehind] = useState(false);
+  // One quoted message waits for the next message; the newest wins.
+  const [quote, setQuote] = useState<MessageQuote | null>(null);
+  const box = useRef<HTMLTextAreaElement>(null), scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null);
   const locked = handoff.locked, open = canSend(model) && !locked, over = isOver(model), working = !over && isWorking(model), waiting = model.session?.state === 'waiting';
-  const turns = groups(model), echoed = new Set(Object.values(model.items).map(item => item.content.clientMessageId));
-  const pending = sent.filter(item => !echoed.has(item.id));
-  const shownHints = open ? hints() : [locked ? t('正在切换运行方式，稍后继续') : t('会话已结束，不能再发消息')], hint = useFittingHint(box, shownHints) || shownHints.at(-1)!, hintId = `native-hint-${terminalId}`, fullHint = fullHintProps(shownHints, hint, hintId);
+  const entries = useMemo(() => nativeEntries(model, Object.fromEntries(sent.flatMap(message => message.images?.length ? [[message.id, message.images]] : []))), [model, sent]);
+  const pending = useMemo(() => nativePending(model, sent, discarded), [model, sent, discarded]);
+  const shownHints = open ? hints() : [locked ? t('正在切换运行方式，稍后继续') : t('会话已结束，不能再发消息')];
+  const hint = useFittingHint(box, shownHints) || shownHints.at(-1)!, hintId = `native-hint-${terminalId}`, fullHint = fullHintProps(shownHints, hint, hintId);
 
-  // New steps keep the end in view while the owner is at the end; scrolling up pauses that until they come back. A new request waits at the
-  // end of the conversation, so it pulls the view down to it.
-  const asked = model.requests.length + (asksChoice(state) ? 1 : 0), askedBefore = useRef(0);
-  useLayoutEffect(() => {
-    const node = scroller.current;
-    if (asked > askedBefore.current) following.current = true;
-    askedBefore.current = asked;
-    if (node && following.current) node.scrollTop = node.scrollHeight;
-  }, [model.lastSequence, pending.length, asked]);
+  // New steps keep the end in view while the owner is at the end; scrolling up pauses that until they come back. A new request waits at the end of the
+  // conversation, so it pulls the view down to it.
+  const { stuck, unseen, toBottom, ready } = useStickToBottom(scroller, content, entries, sessionId);
+  const asked = model.requests.length + (asksChoice(change) ? 1 : 0), askedBefore = useRef(0);
+  useLayoutEffect(() => { if (asked > askedBefore.current) toBottom(); askedBefore.current = asked; }, [asked]);
   useEffect(() => { if (autoFocus && open) box.current?.focus(); }, [autoFocus, sessionId]);
 
-  // The draft goes to main when a switch prepares: the words, the pictures, and the messages never delivered — those still waiting here, and
-  // those main refused (a rejected receipt means it never took them). One it has queued or read is its own and never offered again.
-  const undelivered = [...unsent, ...sent.filter(item => model.receipts[item.id] === 'rejected').map(item => ({ clientMessageId: item.id, text: item.text }))];
-  const offering = JSON.stringify([text, carried, undelivered]);
-  useEffect(() => { handoff.offer({ text, images: carried, undelivered }); }, [offering]);
-  // A draft that came with the session goes into the box, or beside what was already typed there.
+  // The draft goes to main when a switch prepares: the words, the pictures, and the messages never delivered: those carried in and those main refused.
+  // One it has queued or read is its own and never offered again.
+  const refused = pending.prompts.filter(prompt => pending.lost.has(prompt.id)).map(prompt => ({ clientMessageId: prompt.id, text: prompt.text, images: prompt.images }));
+  const offering = JSON.stringify([text, carried, unsent, refused]);
+  useEffect(() => { handoff.offer({ text, images: carried, undelivered: [...unsent, ...refused] }); }, [offering]);
+  // A draft that came with the session goes into the box, or beside what was already typed there. One that came back to the box it left (a switch
+  // that failed) is there already: it is shown once.
   useEffect(() => {
     const draft = handoff.incoming && handoff.take();
     if (!draft) return;
-    const typed = text.trim() !== '', words = draft.text.trim() ? { clientMessageId: crypto.randomUUID(), text: draft.text } : null;
+    const typed = text.trim(), words = draft.text.trim() ? { clientMessageId: crypto.randomUUID(), text: draft.text } : null;
     if (words && !typed) setText(draft.text);
-    setCarried(list => [...list, ...draft.images]); setUnsent(list => [...list, ...(words && typed ? [words] : []), ...draft.undelivered]);
+    setCarried(list => [...list, ...draft.images.filter(image => !list.includes(image))]);
+    setUnsent(list => [...list, ...(words && typed && typed !== draft.text.trim() ? [words] : []),
+      ...draft.undelivered.filter(message => !pending.lost.has(message.clientMessageId) && !list.some(held => held.clientMessageId === message.clientMessageId))]);
   }, [handoff.incoming]);
 
-  const send = async () => {
-    const value = text.trim(), bridge = nativeBridge(), id = crypto.randomUUID(), pictures = carried;
-    if (!value || !open || !bridge) return;
-    // The box empties at once and takes the words back if the main process refuses them, unless something new was typed meanwhile.
-    setText(''); setCarried([]); setError(null); setSent(list => [...list, { id, text: value }]);
+  // The message goes to the main process as it is; one it refuses is shown no more as sent.
+  const post = async (value: string, pictures: string[]) => {
+    const bridge = nativeBridge(), id = crypto.randomUUID();
+    if (!bridge) return false;
+    setError(null); setSent(list => [...list, { id, text: value, images: pictures.length ? pictures : undefined, at: Date.now() }]);
     const result = await bridge.send(terminalId, sessionId, id, value, pictures.length ? pictures : undefined).catch(failure);
-    if (result.ok) return;
-    setSent(list => list.filter(item => item.id !== id)); setText(current => current || value); setCarried(current => current.length ? current : pictures); setError(result.error);
+    if (!result.ok) { setSent(list => list.filter(message => message.id !== id)); setError(result.error); }
+    return result.ok;
+  };
+  // The box empties at once and takes the words back if the main process refuses them, unless something new was typed meanwhile.
+  const send = async () => {
+    const value = text.trim(), pictures = carried, quoted = quote;
+    if (!value || !open) return;
+    setText(''); setCarried([]); setQuote(null);
+    if (!await post(withQuote(quoted?.excerpt, value), pictures)) { setText(current => current || value); setCarried(current => current.length ? current : pictures); setQuote(current => current ?? quoted); }
+  };
+  // A message that was never delivered is sent again only by the owner's click; its card goes, and comes back if this one is refused too.
+  const discard = (prompt: PendingPrompt) => setDiscarded(list => new Set(list).add(prompt.id));
+  const resend = async (prompt: PendingPrompt) => {
+    if (!open) return;
+    discard(prompt);
+    if (!await post(prompt.text, prompt.images ?? NO_PICTURES)) setDiscarded(list => { const rest = new Set(list); rest.delete(prompt.id); return rest; });
   };
   const stop = async () => {
     const result = await nativeBridge()?.interrupt(terminalId, sessionId).catch(failure);
     if (result && !result.ok) setError(result.error);
   };
   const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') { if (working && open) { event.preventDefault(); void stop(); } return; }
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault(); void send();
   };
-  const status = waiting ? t('等你确认') : working ? t('正在工作…') : turnWord(model.turn.status);
   // An unsent message returns to the box by the owner's click, when the box is empty; nothing takes it from here.
-  const take = (item: NativePendingInput) => { setText(item.text); setCarried(list => [...list, ...item.images ?? []]); setUnsent(list => list.filter(entry => entry !== item)); };
-  const finished = model.error ?? (model.turn.error ? { message: model.turn.error, willRetry: false } : null);
+  const take = (item: NativePendingInput) => { setText(item.text); setCarried(list => [...list, ...item.images ?? []]); setUnsent(list => list.filter(held => held !== item)); };
 
-  return <div className="reading-view native-view" data-agent={identity.provider} data-native-session={sessionId}>
-    <Header entry={entry} change={state} onStop={working ? () => void stop() : null} />
+  // What the agent is doing, written at the end of the conversation the way the reading view writes it.
+  const step = runningStep(entries);
+  const status = waiting ? <div className="reading-status is-waiting" role="status">{t('等你确认')}</div>
+    : working ? <WorkingLine key={sessionId} agent={kind} label={step ? t('正在{step}', { step: actionText(step) }) : t('{agent} 正在思考', { agent })} /> : null;
+  // The latest round, once it has ended, gets its status above the result and its actions under it; a turn that failed says how.
+  const settled = !over && model.session?.state === 'idle' && !model.turn.running && !pending.prompts.length && !model.requests.length && !asksChoice(change);
+  const failed = model.turn.status === 'failed', why = (failed ? model.turn.error : null) ?? model.error?.message ?? null;
+  const result = useMemo(() => latestResult(entries, { idle: settled, interrupted: model.turn.status === 'interrupted', failure: failed ? why ?? turnFailed() : undefined }),
+    [entries, settled, model.turn.status, failed, why]);
+  // Only the owner's click on a message's 引用 gets here.
+  const quoteMessage = (who: string, words: string) => { const excerpt = quoteExcerpt(words); if (excerpt) { setQuote({ who, excerpt }); box.current?.focus(); } };
+  const continueWith = (prefill?: string) => { if (prefill && !text.trim()) setText(prefill); box.current?.focus(); };
+  const resultStatus = result && <ResultStatus result={result} taskTitle={undefined} onError={setError} />;
+  const resultActions = result && <ResultActions result={result} projectId={projectId} remote={false} canSend={open} onContinue={continueWith} onRetry={() => void post(result.request, NO_PICTURES)} onError={setError} />;
+  const last = entries.at(-1), statusInTurn = !!last && last.role !== 'user' && pending.prompts.every(prompt => pending.queued.has(prompt.id));
+  // An error the result card does not carry (the round is still going, or left nothing to show) is a line of its own.
+  const errorLine = !result && why ? why : null, retrying = !failed && model.error?.willRetry === true;
+  const afterFeed = <>
+    <PendingPromptEntries prompts={pending.prompts} queued={prompt => pending.queued.has(prompt.id)} undelivered={prompt => pending.lost.has(prompt.id)} onResend={prompt => void resend(prompt)} onDiscard={discard} />
+    {status && !statusInTurn && <TimelineStep at={pending.prompts.at(-1)?.at ?? last?.at} kind="agent" who={agent} state={working ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}
+    {(switchLine(change) || errorLine || model.requests.length > 0 || asksChoice(change)) && <div className="native-tail">
+      <SwitchLine state={change} />
+      {errorLine && <p className="form-error" role="alert">{errorLine}{retrying ? ` · ${t('正在重试')}` : ''}</p>}
+      {model.requests.map(request => <NativeRequestCard key={request.id} request={request} terminalId={terminalId} sessionId={sessionId} />)}
+      <SwitchQuestion terminalId={terminalId} sessionId={sessionId} state={change} />
+    </div>}
+  </>;
+
+  return <div className="reading-view" data-agent={kind} data-native-session={sessionId}>
     <div className="reading-scroll-area">
-      <div className="reading-scroll native-scroll" ref={scroller} role="log" aria-live="off" aria-label={t('{name} 的对话', { name: runtimeWord(identity) })}
-        onScroll={event => { const node = event.currentTarget, end = node.scrollHeight - node.scrollTop - node.clientHeight <= FOLLOW_SLACK; following.current = end; setBehind(!end); }}>
-        <div className="reading-content conversation-feed" data-agent={identity.provider}>
-          {turns.length === 0 && pending.length === 0 && <p className="reading-status"><span>{t('会话已就绪，说点什么吧')}</span></p>}
-          {turns.map((turn, index) => {
-            const latest = index >= turns.length - 2;
-            if (turn.kind === 'user') {
-              const sentId = turn.item.content.clientMessageId, receipt = typeof sentId === 'string' ? receiptWord(model.receipts[sentId]) : null;
-              return <RailStep key={turn.item.id} kind="user" who={t('你')} latest={latest} mark={<UserAvatar />}>
-                <div className="reading-user"><p>{messageText(turn.item)}</p>{receipt && <small className="native-receipt">{receipt}</small>}</div>
-              </RailStep>;
-            }
-            const marks = turn.items.map(itemState), mark = marks.includes('running') ? 'running' : marks.includes('failed') ? 'failed' : null;
-            return <RailStep key={turn.items[0].id} kind="agent" agent={identity.provider} who={identity.provider === 'claude' ? 'Claude' : 'Codex'} state={mark} latest={latest} mark={identity.provider === 'claude' ? <ClaudeLogo /> : <CodexLogo />}>
-              <div className="reading-turn">{turn.items.map(item => <TurnItem key={item.id} kind={item.kind === 'agent-message' ? 'message' : 'tools'}><NativeItemView item={item} /></TurnItem>)}</div>
-            </RailStep>;
-          })}
-          {pending.map(item => <RailStep key={item.id} kind="user" who={t('你')} latest mark={<UserAvatar />}>
-            <div className="reading-user"><p>{item.text}</p><small className="native-receipt">{receiptWord(model.receipts[item.id]) ?? t('发送中')}</small></div>
-          </RailStep>)}
-          <NativeSummary model={model} />
-          {status && <p className={`reading-status is-${identity.provider}${waiting ? ' is-waiting' : ''}`} role="status"><i className="reading-status-mark" aria-hidden="true" /><span>{status}</span></p>}
-          {finished?.message && <p className="form-error" role="alert">{finished.message}{finished.willRetry ? ` · ${t('正在重试')}` : ''}</p>}
-          {(model.requests.length > 0 || asksChoice(state)) && <div className="native-requests">
-            {model.requests.map(request => <NativeRequestCard key={request.id} request={request} terminalId={terminalId} sessionId={sessionId} />)}
-            <SwitchQuestion terminalId={terminalId} sessionId={sessionId} state={state} />
-          </div>}
-        </div>
+      <div className="reading-scroll" ref={scroller} tabIndex={0}>
+        <ConversationDecorations.Provider value={{ start: 0, status: statusInTurn ? status : null, running: working, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
+          quote: { disabled: open ? null : t('输入框暂时不可用，等它可用后再引用'), pick: quoteMessage },
+          frame: { ref: content, style: { visibility: entries.length && !ready ? 'hidden' : undefined }, before: null } }}>
+          <ConversationFeed entries={entries} agent={kind} projectId={projectId} live={!settled} onError={onError} onOpenLink={onOpenLink}>{afterFeed}</ConversationFeed>
+        </ConversationDecorations.Provider>
       </div>
-      {behind && <div className="reading-latest"><button type="button" className="icon-button reading-jump" title={t('回到最新')} aria-label={t('回到最新')} onClick={() => { following.current = true; setBehind(false); scroller.current?.scrollTo({ top: scroller.current.scrollHeight }); }}><ArrowDown size={16} /></button></div>}
+      {!stuck && <div className="reading-latest">
+        {unseen > 0 && <span className="reading-unseen" role="status">{t('{count} 条新消息', { count: unseen })}</span>}
+        <button type="button" className="icon-button reading-jump" title={t('跳到最新消息')} aria-label={t('跳到最新消息')} onClick={() => toBottom('smooth')}><ArrowDown size={18} /></button>
+      </div>}
     </div>
     {error && <p className="form-error native-error" role="alert">{error}</p>}
     {over && <div className="native-ended"><span>{reasonWords(model.session?.reason) ?? t('这个会话已经结束')}</span><button type="button" className="button secondary small" onClick={() => dismissNative(terminalId)}>{t('开始新的对话')}</button></div>}
-    {carried.length > 0 && <div className="reading-attachments" role="status">{t('已附加 {count} 张图片，随下一条消息发送', { count: carried.length })}
-      {carried.map((src, index) => <span key={index} className="native-carried"><img src={src} alt={t('附加的图片 {n}', { n: index + 1 })} />
-        <button type="button" className="icon-button" title={t('移除这张图片')} aria-label={t('移除这张图片')} disabled={locked} onClick={() => setCarried(list => list.filter((_, at) => at !== index))}><X size={12} weight="bold" /></button></span>)}</div>}
+    {carried.length > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: carried.length })}<UserImages images={carried} onRemove={index => setCarried(list => list.filter((_, at) => at !== index))} /></div>}
     {unsent.length > 0 && <div className="reading-outbox" role="status"><span>{t('未发送的消息')}</span><ol>{unsent.map(item => <li key={item.clientMessageId}>{item.text}
       <button type="button" className="text-button" disabled={!!text.trim() || locked} onClick={() => take(item)}>{t('取回')}</button></li>)}</ol></div>}
+    {quote && <QuoteChip quote={quote} onRemove={() => { setQuote(null); box.current?.focus(); }} />}
     <div className="reading-composer">
-      <textarea ref={box} rows={1} value={text} disabled={!open} aria-label={t('给 {name} 发消息', { name: runtimeWord(identity) })} placeholder={hint} {...fullHint}
+      <textarea ref={box} rows={1} value={text} disabled={!open} aria-label={t('给 {name} 发消息', { name: agent })} placeholder={hint} {...fullHint}
         onChange={event => setText(event.target.value)} onKeyDown={onKeyDown} />
       {fullHint['aria-describedby'] && <span id={hintId} style={HIDDEN_NOTE}>{shownHints[0]}</span>}
+      {working && <button type="button" className="icon-button" disabled={!open} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={() => void stop()}><Stop size={15} weight="fill" /></button>}
       <button type="button" className="icon-button reading-send" title={t('发送')} aria-label={t('发送')} disabled={!open || !text.trim()} onClick={() => void send()}><PaperPlaneRight size={15} weight="fill" /></button>
     </div>
   </div>;
 }
 
-export function NativeSessionView({ terminalId, autoFocus = false, switchState = null }: { terminalId: string; autoFocus?: boolean; switchState?: SwitchState | null }) {
+export function NativeSessionView({ terminalId, projectId, autoFocus = false, switchState = null, handoff, onError, onOpenLink }: Omit<SessionProps, 'entry'>) {
   const entry = useNativeEntries().get(terminalId);
-  return nativeShown(entry) ? <NativeSession key={entry.model.identity!.runtimeSessionId} terminalId={terminalId} entry={entry} autoFocus={autoFocus} switchState={switchState} /> : null;
+  return nativeShown(entry) ? <NativeSession key={entry.model.identity!.runtimeSessionId} terminalId={terminalId} projectId={projectId} entry={entry} autoFocus={autoFocus}
+    switchState={switchState} handoff={handoff} onError={onError} onOpenLink={onOpenLink} /> : null;
 }
