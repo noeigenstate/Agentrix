@@ -21,6 +21,7 @@ Owns provider-neutral session routing, validated renderer IPC, settings and work
 - A switch never replays a possibly executed message — test: `tests/native-router-runtime.test.cjs` › "fallback at a message boundary never replays the submitted text"
 - IPC accepts bound structured data and rejects renderer execution options — test: `tests/native-router-runtime.test.cjs` › "native IPC denies extra options and accepts only bound structured answers"
 - Replay snapshots replace deltas without new execution or notification — test: `tests/native-router-runtime.test.cjs` › "event snapshots replace deltas and replay without advancing sequence"
+- Usage computes new-session routing independently of running paths and falls back to held subscription observations without polling — test: `tests/native-router-usage.test.cjs` › "real main assembly reports terminal-only Claude subscription usage without a key or native session"
 
 ## Not ours
 - Provider processes and provider protocol parsing

@@ -55,10 +55,14 @@ test('main connections use init and account evidence and discard a late result a
 
 test('unavailable native usage still reports actual terminal connections', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'), handlers = new Map();
-  const context = { readNativeConnections: async () => ({ claude: { kind: 'subscription', source: 'terminal', observedAt: 1 }, codex: { kind: 'none', source: null, observedAt: null } }) };
+  const context = { claudeRuntime: { usage: { summary: () => ({ apiRecords: true, todayUsdMicros: 123, monthUsdMicros: 456, estimated: true }) } },
+    readNativeSubscriptionLimits: () => ({ claude: { source: 'fixture-subscription' } }),
+    readNativeConnections: async () => ({ claude: { kind: 'subscription', source: 'terminal', observedAt: 1 }, codex: { kind: 'none', source: null, observedAt: null } }) };
   vm.createContext(context); vm.runInContext(source.slice(source.indexOf('function registerUnavailableNative('), source.indexOf('function registerIpc()')), context);
   context.registerUnavailableNative((name, handler) => handlers.set(name, handler));
   const usage = await handlers.get('native:usage')();
   assert.equal(usage.agents.claude.connection.kind, 'subscription'); assert.equal(usage.agents.codex.connection.kind, 'none');
+  assert.equal(usage.apiRecords, true); assert.equal(usage.monthUsdMicros, 456);
+  assert.equal(usage.agents.claude.next.reason, 'native_unavailable'); assert.equal(usage.agents.claude.limits.source, 'fixture-subscription');
   assert.throws(() => handlers.get('native:test-connection')({}), /无效/);
 });

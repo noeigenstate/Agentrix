@@ -120,7 +120,7 @@ function createUsage({ file, now = Date.now }) {
     summary() {
       const unknown = [...data.unknownDays, ...pending(data).filter(value => value.uncertain).map(value => value.day)];
       const observed = Object.keys(data.sessions).length > 0;
-      return { month: monthOf(), todayUsdMicros: !observed || unknown.includes(utcDay(now())) ? null : data.days[utcDay(now())] || 0,
+      return { month: monthOf(), apiRecords: observed, todayUsdMicros: !observed || unknown.includes(utcDay(now())) ? null : data.days[utcDay(now())] || 0,
         monthUsdMicros: !observed || unknown.some(day => day?.startsWith(monthOf())) ? null : spent(), estimated: true };
     },
     baseline: id => data.sessions[id]?.cost ?? null,

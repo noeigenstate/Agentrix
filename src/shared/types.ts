@@ -157,7 +157,9 @@ export type ConnectionTest = {
   path: 'api' | 'terminal' | null; reason: string | null;
 };
 export type BillingConnection = { kind: 'api' | 'subscription' | 'none' | 'unknown'; source: string | null; observedAt: number | null };
-type ConnectedUsage = Omit<NativeUsage, 'agents'> & { agents: Record<'claude' | 'codex', NativeUsage['agents']['claude'] & { connection: BillingConnection }> };
+type ConnectedUsage = Omit<NativeUsage, 'agents'> & { apiRecords: boolean; agents: Record<'claude' | 'codex', NativeUsage['agents']['claude'] & {
+  connection: BillingConnection; next: { path: 'api' | 'native' | 'terminal' | null; reason: string | null };
+}> };
 type Bridge = {
   nativeSession: {
     start(terminalId: string, options: { agent: 'claude' | 'codex'; resume?: boolean }): Promise<Result<{ runtimeSessionId: string }>>;

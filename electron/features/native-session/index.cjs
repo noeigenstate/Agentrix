@@ -19,7 +19,7 @@ function createNativeSessions(options) {
   }
   const facade = { ...router, testConnection,
     async usage() {
-      const usage = router.usage();
+      const usage = router.usage(await options.usageInputs?.());
       const connections = await options.connections?.();
       for (const agent of ['claude', 'codex']) usage.agents[agent].connection = connections?.[agent] || { kind: 'none', source: null, observedAt: null };
       return usage;
