@@ -18,17 +18,18 @@ const wordsStub = { clockWords: () => '09:00', connectionLines: test => test.lin
 
 // The page with real hooks. The select is stood in by a component that keeps its props, so a test can read its value and choose an option.
 function page(bridge) {
+  const usage = [];
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge ? { nativeSession: bridge } : {} } });
   const harness = hookHarness('src/features/settings/AgentRuntimeSettings.tsx', {
-    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './agent-runtime-settings.css': {}, './native-words': wordsStub,
+    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './agent-runtime-settings.css': {}, './native-words': wordsStub, './native-store.ts': { usageChanged: () => usage.push('changed') },
     './Select': { Select: props => React.createElement('select', { 'aria-label': props.label, value: props.value, disabled: props.disabled }) },
   });
   const render = () => harness.render('AgentRuntimeSettings').result, tree = () => elements(render());
   const select = label => tree().find(node => node.props?.label === label), input = predicate => tree().find(node => node.type === 'input' && predicate(node.props));
   const button = label => tree().find(node => node.type === 'button' && node.props.children === label);
   return {
-    render, tree, select, button, html: () => renderToStaticMarkup(render()),
+    usage, render, tree, select, button, html: () => renderToStaticMarkup(render()),
     secret: () => input(props => props.type === 'password'), budget: () => input(props => props.inputMode === 'decimal'),
     status: () => tree().find(node => node.type === 'small' && node.props.role === 'status')?.props.children, alert: () => tree().find(node => node.props?.role === 'alert')?.props.children,
     done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; },
@@ -207,4 +208,33 @@ test('the page’s spacing values are on the scale and its buttons keep a 32px h
   for (const [, property, value] of css.matchAll(/\b((?:padding|margin|gap|column-gap|row-gap)(?:-\w+)?): ([^;}]+)[;}]/g))
     for (const size of value.match(/-?\d+(?:\.\d+)?px/g) ?? []) assert.ok(scale.has(Math.abs(parseFloat(size))), `${property}: ${size}`);
   assert.match(css, /\.runtime-key \.text-button \{ min-height: 32px;/);
+});
+
+test('every accepted change (key saved, key cleared, a setting, the budget) makes the usage card read again; a refused one does not', async () => {
+  const bridge = fake(), view = page(bridge);
+  try {
+    view.render(); await settle();
+    view.secret().props.onChange({ target: { value: SECRET } }); view.button('保存').props.onClick(); await settle();
+    assert.equal(view.usage.length, 1, 'a saved key');
+    view.button('清除').props.onClick(); await settle();
+    assert.equal(view.usage.length, 2, 'a cleared key');
+    view.select('Claude 的运行方式').props.onChange('api-only'); await settle();
+    assert.equal(view.usage.length, 3, 'Claude’s path');
+    view.select('Codex 的界面').props.onChange('terminal'); await settle();
+    assert.equal(view.usage.length, 4, 'Codex’s view');
+    view.budget().props.onChange({ target: { value: '25' } }); view.budget().props.onBlur(); await settle();
+    assert.equal(view.usage.length, 5, 'the budget');
+  } finally { view.done(); }
+  const refused = { ok: false, error: 'refused' };
+  const bad = fake({ keySave: async () => refused, keyClear: async () => refused, setSettings: async () => refused });
+  bad.state.saved = true;
+  const again = page(bad);
+  try {
+    again.render(); await settle();
+    again.secret().props.onChange({ target: { value: SECRET } }); again.button('保存').props.onClick(); await settle();
+    again.button('清除').props.onClick(); await settle();
+    again.select('Claude 的运行方式').props.onChange('api-only'); await settle();
+    again.budget().props.onChange({ target: { value: '25' } }); again.budget().props.onBlur(); await settle();
+    assert.deepEqual(again.usage, [], 'nothing was accepted, so nothing to read again');
+  } finally { again.done(); }
 });

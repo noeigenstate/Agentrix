@@ -6,6 +6,7 @@ import { CheckCircle, CircleNotch, CurrencyDollar, Key, PlugsConnected, Robot, T
 import { t } from '../../shared/i18n';
 import { Select } from '../../shared/Select';
 import { type ClaudePath, type CodexView, type ConnectionTest, type NativeSettings, nativeBridge } from '../native-session/native-bridge.ts';
+import { usageChanged } from '../native-session/native-store.ts';
 import { clockWords, connectionLines } from '../native-session/native-words';
 import './agent-runtime-settings.css';
 
@@ -48,7 +49,7 @@ export function AgentRuntimeSettings() {
     const result = await action().catch(failure);
     setBusy(false);
     // Any accepted change (the key, the path) makes an earlier test result stale.
-    if (result.ok) { setTest(null); done(); } else setError(result.error);
+    if (result.ok) { setTest(null); done(); usageChanged(); } else setError(result.error);
   };
   // Only the owner's click runs it, and the key never comes back in the answer.
   const runTest = async () => {
