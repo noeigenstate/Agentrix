@@ -2712,5 +2712,13 @@
   "无法读取 Claude 路由配置。": "Unable to read Claude routing settings.",
   "Claude 尚未登录或身份验证失败。": "Claude is not signed in or authentication failed.",
   "项目 Claude 配置不能覆盖应用保存的 API 密钥。": "Project Claude settings cannot override the API key saved by the app.",
-  "无效的消息。": "Invalid message."
+  "无效的消息。": "Invalid message.",
+  "中文模板": "English",
+  "项目 Claude 配置 {file} 不能覆盖应用保存的 API 密钥。请删除其中的 env.ANTHROPIC_API_KEY，或改用终端。": "Project Claude settings in {file} cannot override the API key saved by the app. Remove env.ANTHROPIC_API_KEY from that file, or use the terminal.",
+  "无法安全读取 Claude 路由配置 {file}。请缩小文件或改用终端。": "Unable to safely read Claude routing settings in {file}. Reduce the file size or use the terminal.",
+  "本轮 API 预算上限已用完。后台任务结束后才能继续，或先停止它们。": "This turn's API budget cap has been reached. Wait for background tasks to finish or stop them before continuing.",
+  "B13：stopTask(Agent) 自动请求": "CLI 在 host 收到自动 assistant 之前已可能发出 API 请求；本轮保留 query 并 interrupt 自动回合，不能倒推阻止已经发生的请求或费用。需研究 CLI 控制/通知抑制能力；不能把 Bash stop 的成功等同于 Agent 无额外请求。保留审查探针的已知行为，未声称修复。",
+  "中文": "English",
+  "CLAUDE_CODE_USE_BEDROCK / VERTEX / FOUNDRY / ANTHROPIC_AWS / MANTLE / GATEWAY；其它 CLAUDE_CODE_USE_*": "API runtime 强制 0；不允许项目选云提供方。flag 配置及真实混合配置验证。",
+  "模块边界": "All module boundaries hold；r12-a-boundaries-final.log；单测也通过"
 }
