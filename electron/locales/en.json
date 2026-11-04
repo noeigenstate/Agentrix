@@ -2655,5 +2655,11 @@
   "正在重试恢复原会话，草稿已保留。": "Retrying the original session. Your draft has been kept.",
   "这次工具调用被钩子推迟，没有执行。": "A hook deferred this tool call, so it did not run.",
   "已改用终端": "Switched to the terminal",
-  "这个选择已经过期，没有生效。": "This choice has expired and had no effect."
+  "这个选择已经过期，没有生效。": "This choice has expired and had no effect.",
+  "终端连接已断开。": "The terminal connection was lost.",
+  "未能接收输入草稿，已保留原输入界面，请重试切换。": "Could not receive the draft. The original input has been kept. Please try switching again.",
+  "原会话恢复失败，草稿已保留，请重新启动会话。": "Could not restore the original session. Your draft has been kept. Please restart the session.",
+  "API 路径已不可用，本轮结束后停止会话。": "The API path is no longer available. The session will stop after this turn.",
+  "API 路径已不可用，会话已停止；未发送的内容已保留。": "The API path is no longer available. The session has stopped; unsent input has been kept.",
+  "API 路径已不可用，会话已停止。": "The API path is no longer available. The session has stopped."
 }
