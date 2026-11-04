@@ -40,6 +40,14 @@ function claudePrompt(record) {
   return record?.type === 'user' && promptText(record.message?.content, record) !== null;
 }
 
+// SDK frames bind this enum to the tool id; persisted transcripts carry the equivalent denial kind.
+// Cancellation is not a tool failure, even when the tool_result is_error flag is set.
+function claudeToolInterrupted(record, block) {
+  const result = record.tool_use_result ?? record.toolUseResult;
+  return block.interrupted === true || result?.interrupted === true || record.toolDenialKind === 'user-rejected'
+    || Array.isArray(record.tool_result_meta) && record.tool_result_meta.some(meta => meta.id === block.tool_use_id && meta.non_execution_kind === 'user-rejected');
+}
+
 // mcp__server__tool, the name both agents give a tool that an MCP server provides.
 function mcpTool(name) {
   const match = /^mcp__(.+?)__(.+)$/.exec(name);
@@ -208,7 +216,7 @@ function claudeRecord(log, record, cwd) {
   const added = [];
   for (const block of content) {
     if (record.type === 'assistant' && block.type === 'tool_use') { const action = claudeAction(block, at, cwd || record.cwd); log.add(action); added.push(action); }
-    else if (record.type === 'user' && block.type === 'tool_result') log.finish(String(block.tool_use_id || ''), block.is_error === true);
+    else if (record.type === 'user' && block.type === 'tool_result') log.finish(String(block.tool_use_id || ''), block.is_error === true && !claudeToolInterrupted(record, block));
   }
   return added;
 }
@@ -265,4 +273,4 @@ async function skillDescription(name, cwd, file) {
   return '';
 }
 
-module.exports = { ActionLog, TranscriptTail, claudeAction, claudeRecord, claudeOwnRecord, claudePrompt, codexActions, codexRecord, codexFailed, commandPhrase, PHRASES, skillDescription, projectPath, resolvePath };
+module.exports = { ActionLog, TranscriptTail, claudeAction, claudeRecord, claudeOwnRecord, claudePrompt, claudeToolInterrupted, codexActions, codexRecord, codexFailed, commandPhrase, PHRASES, skillDescription, projectPath, resolvePath };

@@ -10,6 +10,45 @@ const { createEventStream } = require('../electron/features/native-session/event
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 function normalize() { const events = []; return { events, emit: createNormalizer((type, payload, extra) => events.push({ type, payload, ...extra })) }; }
 
+test('N1 structured cancellation is not failure, and ordinary tool errors keep their output', () => {
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const { ActionLog, claudeRecord } = require('../electron/agent-actions.cjs');
+  for (const [metadata, interrupted] of [
+    [{ tool_result_meta: [{ id: 'tool', non_execution_kind: 'user-rejected' }] }, true],
+    [{ toolDenialKind: 'user-rejected' }, true],
+    [{ tool_use_result: { interrupted: true } }, true],
+    [{ toolUseResult: { interrupted: true } }, true],
+    [{ tool_result_meta: [{ id: 'another-tool', non_execution_kind: 'user-rejected' }] }, false],
+    [{ tool_result_meta: [{ id: 'tool', non_execution_kind: 'permission-denied' }] }, false],
+    [{ tool_use_result: { interrupted: false } }, false],
+    [{}, false],
+  ]) {
+    const f = normalize(), log = new ConversationLog(), actions = new ActionLog();
+    const start = { type: 'assistant', uuid: 'start', message: { id: 'start', content: [{ type: 'tool_use', id: 'tool', name: 'Bash', input: { command: 'echo probe' } }] } };
+    // Deliberately resembles the CLI's cancellation text: prose alone never proves interruption.
+    const end = { type: 'user', uuid: 'end', ...metadata, message: { content: [{ type: 'tool_result', tool_use_id: 'tool', is_error: true, content: 'The user does not want this. REAL_TOOL_ERROR' }] } };
+    for (const record of [start, end]) { f.emit(record); claudeConversation(log, record); claudeRecord(actions, record); }
+    const item = f.events.at(-1).payload;
+    assert.equal(item.status, interrupted ? 'interrupted' : 'failed');
+    assert.equal(item.content.output, interrupted ? '' : end.message.content[0].content);
+    assert.equal(log.list[0].tool.failed, !interrupted); assert.equal(actions.list[0].failed, !interrupted);
+    f.emit({ type: 'result' }); assert.equal(f.events.at(-1).payload.status, item.status);
+  }
+});
+
+for (const name of ['Agent', 'Task']) test(`N2 ${name} results keep the description and type without child output`, () => {
+  for (const is_error of [false, true]) {
+    const f = normalize();
+    f.emit({ type: 'assistant', uuid: 'start', message: { id: 'start', content: [{ type: 'tool_use', id: 'tool', name,
+      input: { description: 'Review changes', subagent_type: 'general-purpose', prompt: 'CHILD_PROMPT' } }] } });
+    f.emit({ type: 'user', uuid: 'end', message: { content: [{ type: 'tool_result', tool_use_id: 'tool', is_error, content: 'CHILD_FINAL_OR_INTERNAL_METADATA' }] } });
+    const item = f.events.at(-1).payload;
+    assert.equal(item.status, is_error ? 'failed' : 'completed'); assert.equal(item.content.output, '');
+    assert.equal(item.content.name, name); assert.equal(JSON.parse(item.content.input).description, 'Review changes');
+    assert.equal(JSON.parse(item.content.input).subagent_type, 'general-purpose');
+  }
+});
+
 test('R6 real-shaped API errors are notices/results, never assistant prose; ordinary replies are preserved', () => {
   const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
   const { rateLimits } = require('../electron/features/claude-sdk/limits.cjs');
