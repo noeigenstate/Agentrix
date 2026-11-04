@@ -46,7 +46,7 @@ async function harness(t, respond) {
   server.listen(0, '127.0.0.1'); await once(server, 'listening'); t.after(() => server.close());
   env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${server.address().port}`;
   const sdk = await import(pathToFileURL(require.resolve('@anthropic-ai/claude-agent-sdk')).href);
-  return { stats, run: async (options, onMessage = () => {}) => {
+  return { stats, cwd, run: async (options, onMessage = () => {}) => {
     stats.requests = 0; const abort = new AbortController();
     try {
       for await (const message of sdk.query({ prompt: 'go', options: { cwd, env, model: 'claude-sonnet-4-5', pathToClaudeCodeExecutable: cli, permissionMode: 'default', settingSources: [], abortController: abort, ...options } })) {
@@ -76,4 +76,37 @@ test('a real reply with thinking before its text reaches the view whole', { skip
   const live = events.filter(event => event.type === 'item.delta' && event.payload.channel === 'text');
   assert.equal(live.map(event => event.payload.text).join(''), 'THE VISIBLE ANSWER'); assert.equal(live[0].itemId, answers[0].itemId, 'the snapshot replaces its own deltas');
   t.diagnostic(`assistant records for the message: ${records.length}`);
+});
+
+// The tool the model asks for first, then a closing answer that says whether the tool's result reported a refusal.
+const useTool = (name, input) => data => {
+  const sent = JSON.stringify(data.messages);
+  if (sent.includes('tool_result')) return [opening(data), ...textBlock(0, /tool_use_error|is_error":true/.test(sent) ? 'REFUSED' : 'DONE'), ...finish('end_turn')];
+  return [opening(data), { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `toolu_${randomUUID().replaceAll('-', '')}`, name, input: {} } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } }, { type: 'content_block_stop', index: 0 }, ...finish('tool_use')];
+};
+const bypass = { permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true };
+
+test('bypass runs a tool without asking', { skip, timeout: 120000 }, async t => {
+  const marker = path.join(os.tmpdir(), `agx-bypass-${randomUUID()}.txt`); t.after(() => fs.rmSync(marker, { force: true }));
+  let asked = 0;
+  const { run } = await harness(t, useTool('Write', { file_path: marker, content: 'written' }));
+  const result = await run({ ...bypass, canUseTool: async () => { asked++; return { behavior: 'deny', message: 'no' }; } });
+  assert.equal(asked, 0); assert.equal(fs.readFileSync(marker, 'utf8'), 'written'); assert.equal(result.result, 'DONE');
+});
+
+test('under bypass a PreToolUse deny still stops the tool, so the worker policy holds', { skip, timeout: 120000 }, async t => {
+  const marker = path.join(os.tmpdir(), `agx-bypass-${randomUUID()}.txt`); t.after(() => fs.rmSync(marker, { force: true }));
+  const { run } = await harness(t, useTool('Write', { file_path: marker, content: 'written' }));
+  const hooks = { PreToolUse: [{ hooks: [async () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'policy says no' } })] }] };
+  const result = await run({ ...bypass, hooks });
+  assert.equal(fs.existsSync(marker), false); assert.equal(result.result, 'REFUSED');
+});
+
+test('under bypass a question still reaches the owner through canUseTool', { skip, timeout: 120000 }, async t => {
+  const questions = [{ question: 'Which one?', header: 'Pick', multiSelect: false, options: [{ label: 'A', description: 'first' }, { label: 'B', description: 'second' }] }];
+  const asked = [];
+  const { run } = await harness(t, useTool('AskUserQuestion', { questions }));
+  const result = await run({ ...bypass, canUseTool: async (name, input) => { asked.push(name); return { behavior: 'allow', updatedInput: { ...input, answers: { 'Which one?': 'A' } } }; } });
+  assert.deepEqual(asked, ['AskUserQuestion']); assert.equal(result.result, 'DONE');
 });

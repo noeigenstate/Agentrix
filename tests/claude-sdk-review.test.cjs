@@ -93,6 +93,7 @@ test('M3 a smaller resumed cumulative value begins a new epoch and is charged on
 test('M1 owner hooks stay silent so normal permission rules decide, and show a card only when canUseTool is called', async t => {
   const { session, fake, events } = runtime(t); await session.start(); await session.send({ clientMessageId: randomUUID(), text: 'read' });
   const options = fake.calls[0].options;
+  assert.equal(options.permissionMode, 'bypassPermissions'); assert.equal(options.allowDangerouslySkipPermissions, true);
   for (const name of ['Read', 'Grep', 'Glob', 'TodoWrite', 'Bash']) {
     const result = await options.hooks.PreToolUse[0].hooks[0]({ tool_name: name, tool_input: {} });
     // A hook answering 'defer' makes the real CLI pause the tool and end the turn: tests/claude-sdk-real-cli.test.cjs.
