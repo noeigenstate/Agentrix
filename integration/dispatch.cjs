@@ -483,6 +483,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   let treeStop = Promise.resolve(), stoppingChild = null;
   let controlClient = null, activeRuntime = null, nativeTurn = null, settleNative, nativeFallback = null, nativeRunning = false;
   let bootstrap, controlOpening = false, controlAttemptAt = 0, ending = false;
+  let controlFailure = 'bootstrap/missing_environment', transportFallback = false;
   let nativeBilling = null;
   let boardWatch, scopeRestoreBlocked = false, scopeRestoreNote = '';
   const controlReceipts = new Map();
@@ -798,15 +799,23 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       if (controlOpening || ending) return;
       controlOpening = true; controlAttemptAt = Date.now();
       try {
-        if (env.AGENTRIX_BOOTSTRAP && fs.statSync(env.AGENTRIX_BOOTSTRAP).size <= 16384) bootstrap = JSON.parse(fs.readFileSync(env.AGENTRIX_BOOTSTRAP, 'utf8').replace(/^\uFEFF/, ''));
-        if (!bootstrap?.controlAddress) return;
+        if (!env.AGENTRIX_BOOTSTRAP) { controlFailure = 'bootstrap/missing_environment'; return; }
+        if (fs.statSync(env.AGENTRIX_BOOTSTRAP).size > 16384) { controlFailure = 'bootstrap/size_limit'; return; }
+        bootstrap = JSON.parse(fs.readFileSync(env.AGENTRIX_BOOTSTRAP, 'utf8').replace(/^\uFEFF/, ''));
+        if (!bootstrap?.controlAddress) { controlFailure = 'bootstrap/missing_address'; return; }
+        if (!bootstrap.controlCapability) { controlFailure = 'bootstrap/missing_capability'; return; }
+        if (!bootstrap.sessionKey) { controlFailure = 'bootstrap/missing_session_key'; return; }
         const client = await connectDispatchControl({ address: bootstrap.controlAddress, runId: id,
         projectId: bootstrap.projectId, sessionKey: bootstrap.sessionKey, capability: bootstrap.controlCapability,
         readOnly: !!options.readOnly || options.permission === 'plan', roundtable,
         onControl: async messageId => { await readInbox(); const status = controlReceipts.get(messageId) || inbox?.receipt(messageId) || 'queued'; return status === 'consumed' ? 'delivered' : status; },
         onEvent: event => acceptNative(event) });
-        if (ending) client.close(); else controlClient = client;
-      } catch { /* A reconnect only restores control; it never restarts a provider invocation. */ }
+        if (ending) client.close(); else { controlClient = client; controlFailure = null; }
+      } catch (error) {
+        // Never print exception messages: filesystem/socket errors contain the bootstrap path.
+        controlFailure = error.message === 'control_unavailable' ? `${error.stage}/${error.category}`
+          : `bootstrap/${error instanceof SyntaxError ? 'invalid_json' : ['ENOENT', 'EACCES', 'EPERM'].includes(error.code) ? error.code : 'read_failed'}`;
+      }
       finally { controlOpening = false; }
     }
     await openControl();
@@ -821,6 +830,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         for (const id of resumeControlIds) void recordReceipt(id, event.payload.status).catch(() => {});
       }
       else if (event.type === 'usage.updated' && !event.replay) output.nativeUsage(event.payload, !!(options.resume || resumeSession));
+      else if (event.type === 'error' && event.payload.code === 'billing_identity_mismatch') signal(`transport ${id} claude-sdk: ${event.payload.message}`);
       else if (event.type === 'item.upsert' && event.payload.kind === 'agent-message' && event.payload.status === 'completed') {
         const content = event.payload.content;
         if (typeof content?.text === 'string' && (!content.phase || content.phase === 'final_answer')) output.result = content.text;
@@ -905,9 +915,15 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
           } }).create(spec, acceptNative);
           if (options.resume) await rollout.prepare(options.resume);
           try { if (options.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
-          catch {
+          catch (error) {
             await activeRuntime.close(); activeRuntime = null; controlClient.close(); controlClient = null;
-            signal(`transport ${id} codex-exec fallback: native runtime unavailable before input`); continue;
+            transportFallback = true;
+            const stage = ['resolve_executable', 'spawn', 'initialize', 'capability_probe', 'thread_start', 'thread_resume'].includes(error.stage) ? error.stage : 'startup';
+            const category = error.category && /^(?:rpc_-\d+|request_failed|unexpected_success)$/.test(error.category) ? error.category
+              : Number.isInteger(error.code) ? `rpc_${error.code}`
+              : ['ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'codex_cli_required', 'rpc_timeout', 'process_failed', 'process_exited', 'disconnected',
+                'frame_limit', 'write_failed', 'invalid_response', 'invalid_json', 'invalid_frame', 'invalid_payload', 'truncated_frame', 'unsupported_codex_capabilities'].includes(error.code || error.message) ? error.code || error.message : 'runtime_failed';
+            signal(`transport ${id} codex-exec fallback: native runtime unavailable before input (${stage}/${category})`); continue;
           }
           child = { pid: activeRuntime.pid, exitCode: null };
           pollTimer = setInterval(() => { void rollout.read(); }, POLL_INTERVAL);
@@ -937,6 +953,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
           result = await Promise.race([completion, remote]);
           if (nativeFallback) {
             activeRuntime = null; nativeBilling = null; controlClient.close(); controlClient = null;
+            transportFallback = true;
             signal(`transport ${id} claude-cli fallback: ${String(nativeFallback).replace(/[\r\n]+/g, ' ')}`); continue;
           }
           if (!result) result = await completion;
@@ -972,7 +989,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         }
         break;
       }
-      if (!resumeSession) signal(`transport ${id} ${options.agent === 'codex' ? 'codex-exec' : 'claude-cli'} fallback: Agentrix control unavailable`);
+      if (!resumeSession && !transportFallback) signal(`transport ${id} ${options.agent === 'codex' ? 'codex-exec' : 'claude-cli'} fallback: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
       const command = resolveExecutable(options.agent, commandOf(effective), env);
       if (options.agent === 'codex' && effective.resume && !resumeSession) await rollout.prepare(effective.resume);
 

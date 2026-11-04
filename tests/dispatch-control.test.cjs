@@ -82,23 +82,32 @@ test('M9: SDK execution is limited to one request on its verified Claude run bin
   assert.equal(requests, 1);
 });
 
-for (const action of ['intervene', 'stop']) test(`helper delivers ${action} to a fake app-server before its turn ends`, { timeout: 15000 }, async t => {
+for (const action of ['intervene', 'stop', 'npm']) test(`helper delivers ${action} to a fake app-server before its turn ends`, { timeout: 15000, skip: action === 'npm' && process.platform !== 'win32' }, async t => {
   const lifetime = resources(t);
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-native-dispatch-'))), repo = path.join(root, 'repo'); fs.mkdirSync(repo);
   execFileSync('git', ['init', '-q'], { cwd: repo, windowsHide: true });
   const team = projectTeam(repo, true), bootstrap = path.join(root, 'bootstrap.json'), brief = path.join(root, 'brief.md'), out = path.join(root, 'answer.md');
   fs.writeFileSync(brief, 'Synthetic task');
+  const bin = path.join(root, 'bin');
+  if (action === 'npm') {
+    const entry = path.join(bin, 'node_modules/@openai/codex/bin/codex.js');
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.writeFileSync(path.join(bin, 'codex.cmd'), '@exit /b 99');
+    fs.writeFileSync(entry, `require(${JSON.stringify(path.join(__dirname, 'fixtures/codex-app-server.cjs'))});`);
+  }
   const control = createDispatchControl({ resolveRun: auth => auth.sessionKey === 'synthetic-key' && team.live().some(x => x.id === auth.runId)
     ? { runId: auth.runId, projectId: 'p', cwd: repo, worktree: repo, allow: [], readOnly: false, roundtable: false } : null });
   const { address } = await control.listen();
   lifetime.defer('close control', () => control.close());
-  fs.writeFileSync(bootstrap, JSON.stringify({ pipeName: address + '-unused', controlAddress: address, projectId: 'p', sessionKey: 'synthetic-key' }));
+  fs.writeFileSync(bootstrap, JSON.stringify({ pipeName: address + '-unused', controlAddress: address, controlCapability: 'synthetic-capability', projectId: 'p', sessionKey: 'synthetic-key' }));
   let stdout = '', finished = false;
   const result = run(['codex', '--role', 'exec', '--title', 'Synthetic native', '--model', 'synthetic-model', '--effort', 'high', '--fast',
     '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**', '--skip-meeting', 'Synthetic native fixture'], {
-    env: { PATH: '', CODEX_HOME: path.join(root, 'home'), AGENTRIX_BOOTSTRAP: bootstrap, SYNTHETIC_CODEX_MODE: 'worker' },
+    env: { PATH: action === 'npm' ? bin : '', CODEX_HOME: path.join(root, 'home'), CLAUDE_CONFIG_DIR: path.join(root, 'claude'),
+      AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_SDK_PARENT: '1', ANTHROPIC_API_KEY: 'synthetic-injected',
+      SYNTHETIC_CODEX_MODE: action === 'npm' ? 'normal' : 'worker' },
     stdout: { write: text => { stdout += text; } },
-    resolveExecutable: (_agent, args) => ({ file: process.execPath, args: [path.join(__dirname, 'fixtures/codex-app-server.cjs'), ...args] }),
+    ...(action === 'npm' ? {} : { resolveExecutable: (_agent, args) => ({ file: process.execPath, args: [path.join(__dirname, 'fixtures/codex-app-server.cjs'), ...args] }) }),
     launch: (file, args, options) => lifetime.child(spawn(file, args, options)),
   }).finally(() => { finished = true; });
   lifetime.defer('finish Codex helper', async () => {
@@ -108,6 +117,10 @@ for (const action of ['intervene', 'stop']) test(`helper delivers ${action} to a
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (let n = 0; !stdout.includes('[dispatch] started') && n < 400 && !finished; n++) await new Promise(resolve => setTimeout(resolve, 10));
   assert.match(stdout, /\[dispatch\] started/);
+  if (action === 'npm') {
+    assert.equal(await result, 0); assert.doesNotMatch(stdout, /fallback/);
+    assert.equal(fs.readFileSync(out, 'utf8'), 'final answer'); return;
+  }
   const id = /\[dispatch\] started ([\w-]+)/.exec(stdout)[1];
   const api = createInterventions({ resolve: () => ({ terminalId: 't', callId: `dispatch:${id}`, parentSessionId: 'planner', confirmed: true,
     route: 'dispatch', runId: id, title: 'Synthetic native', cwd: repo, projectPath: repo, local: true }),

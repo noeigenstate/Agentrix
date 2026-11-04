@@ -134,5 +134,8 @@ test('B3 SDK spawn forces credential scrubbing and all persisted app metadata om
   assert.equal(fake.calls[0].options.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
   fake.emit({ type: 'result', uuid: 'r', total_cost_usd: 0.1, modelUsage: {}, queued_turn_count: 0 });
   await until(() => session.snapshot().state === 'idle');
-  for (const file of fs.readdirSync(dir)) assert.ok(!fs.readFileSync(path.join(dir, file)).includes(Buffer.from(key)), file);
+  for (const file of fs.readdirSync(dir, { recursive: true })) {
+    const full = path.join(dir, file);
+    if (fs.statSync(full).isFile()) assert.ok(!fs.readFileSync(full).includes(Buffer.from(key)), file);
+  }
 });

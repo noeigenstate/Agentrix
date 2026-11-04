@@ -21,7 +21,7 @@ function createCredentials({ file, safeStorage, platform = process.platform }) {
 // Never mutate process.env. Remove alternative authentication and routing before selecting the key.
 function apiEnvironment(env, key, owner = 'dispatch') {
   const clean = { ...env };
-  for (const name of Object.keys(clean)) if (/^(ANTHROPIC_|CLAUDE_CODE_(OAUTH|USE_|API_KEY)|AGENTRIX_(SESSION|CONTROL|CAPABILITY|EVENT))/.test(name)) delete clean[name];
+  for (const name of Object.keys(clean)) if (/^(ANTHROPIC_|CLAUDE_CODE_(OAUTH|USE_|API_KEY|AUTH|SESSION_ACCESS_TOKEN)|CLAUDE_(OAUTH|AUTH|API_KEY)|AGENTRIX_(BOOTSTRAP|SESSION|CONTROL|CAPABILITY|EVENT))/i.test(name)) delete clean[name];
   clean.ANTHROPIC_API_KEY = key;
   clean.AGENTRIX_SDK_PARENT = '1';
   clean.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = owner === 'dispatch' ? '1' : '0';

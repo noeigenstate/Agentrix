@@ -8,7 +8,7 @@ function channel() {
       if (failure) throw failure;
     } };
 }
-function fakeSdk({ auto = true, source = 'ANTHROPIC_API_KEY', sessionId = randomUUID(), closeError = false,
+function fakeSdk({ auto = true, source = 'ANTHROPIC_API_KEY', preflightSource = 'ANTHROPIC_API_KEY', sessionId = randomUUID(), closeError = false,
   init = true, interruptResult = true, uniqueSessions = false } = {}) {
   let output = channel();
   const calls = [], inputs = [], closes = [], interrupts = [];
@@ -29,6 +29,7 @@ function fakeSdk({ auto = true, source = 'ANTHROPIC_API_KEY', sessionId = random
       }
     })().catch(() => {});
     return { [Symbol.asyncIterator]: () => current[Symbol.asyncIterator](),
+      async initializationResult() { return { account: { apiKeySource: preflightSource } }; },
       close() { closes.push(spec); closeError ? current.fail(Object.assign(new Error('fake abort'), { name: 'AbortError' })) : current.end(); },
       async interrupt() {
         interrupts.push(spec);

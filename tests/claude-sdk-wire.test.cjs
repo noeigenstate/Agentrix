@@ -34,7 +34,7 @@ test('B3 the real SDK launches a fake native CLI whose helper, hook, MCP and tra
       return { query(spec) {
         const query = sdk.query({ ...spec, options: { ...spec.options, stderr: text => stderr.push(text),
           spawnClaudeCodeProcess: scope.sdkSpawn.bind(scope) } });
-        return { close: () => query.close(), interrupt: () => query.interrupt(), async *[Symbol.asyncIterator]() {
+        return { initializationResult: () => query.initializationResult(), close: () => query.close(), interrupt: () => query.interrupt(), async *[Symbol.asyncIterator]() {
           try { yield* query; } catch (error) { wireFailure = error.message; throw error; }
         } };
       } };

@@ -43,7 +43,7 @@ function sdkFixture() {
         else if (done) return;
         else await new Promise(resolve => { wake = resolve; });
       }
-    }, close() { done = true; wake?.(); } };
+    }, async initializationResult() { return { account: { apiKeySource: 'ANTHROPIC_API_KEY' } }; }, close() { done = true; wake?.(); } };
   } };
   return { sdk, calls, inputs, sessionId, end() { done = true; wake?.(); }, abortErrors: () => abortErrors, fail() { error = new Error('Synthetic mid-run failure'); wake?.(); },
     finish(text = 'Synthetic answer', queuedTurns = 0) {

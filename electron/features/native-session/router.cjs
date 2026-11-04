@@ -19,6 +19,21 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     resolveSpec(id, record.spec.agent, false, true);
     return record;
   }
+  async function rejectAndSwitch(id, record, message, reason) {
+    record.inputs.set(message.clientMessageId, 'rejected');
+    record.stream.publish('item.upsert', { kind: 'user-message', status: 'interrupted', content: { text: message.text, clientMessageId: message.clientMessageId, unsent: true } }, { itemId: message.clientMessageId });
+    record.stream.publish('input.receipt', { clientMessageId: message.clientMessageId, status: 'rejected' });
+    record.switching ||= (async () => {
+      const providerSessionId = record.runtime.snapshot().events.findLast(event => event.providerSessionId)?.providerSessionId || record.spec.providerSessionId;
+      record.stream.publish('path.changed', { previous: 'api', selected: 'terminal', reason });
+      // Only positively identified history is resumed; the rejected input is never automatically replayed.
+      await record.runtime.close(); sessions.delete(id); if (record.lock) occupied.delete(record.lock);
+      await terminal({ ...record.spec, providerSessionId }, reason);
+      terminalStreams.set(id, record.stream); pathChanged('claude', 'terminal', reason); changed();
+    })();
+    await record.switching;
+    return { status: 'rejected', reason: 'path_changed' };
+  }
   async function start(id, { agent, resume = false }) {
     if (busy.has(id)) throw new Error('会话正在启动。');
     busy.add(id);
@@ -66,9 +81,10 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         if (record.lock) occupied.delete(record.lock);
         const reason = error.code || error.message;
         const codexUnavailable = agent === 'codex' && ['unsupported_codex_capabilities', 'unsupported_codex_version', 'codex_cli_required', 'rpc_timeout', 'process_failed', 'process_exited', 'disconnected', 'invalid_response', 'invalid_frame', 'invalid_json', 'ENOENT'].includes(reason);
-        if (codexUnavailable || agent === 'claude' && config.claudePath === 'api-then-terminal' && error.code === 'native_cli_required') {
+        if (codexUnavailable || agent === 'claude' && config.claudePath === 'api-then-terminal'
+          && (error.code === 'native_cli_required' || error.code === 'billing_identity_mismatch' && error.beforeInput === true)) {
           const notice = codexUnavailable ? (reason === 'codex_cli_required' || reason === 'ENOENT'
-            ? '未找到 Codex 原生运行器，已切换到终端。' : 'Codex 原生连接不可用，已切换到终端。') : reason;
+            ? '未找到 Codex 原生运行器，已切换到终端。' : 'Codex 原生连接不可用，已切换到终端。') : error.code === 'billing_identity_mismatch' ? error.message : reason;
           record.stream.publish('path.changed', { previous: agent === 'claude' ? 'api' : 'subscription', selected: 'terminal', reason: notice });
           await runtime.close(); sessions.delete(id); await terminal(spec, notice);
           terminalStreams.set(id, record.stream); pathChanged(agent, 'terminal', notice); changed();
@@ -88,19 +104,16 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       if (record.spec.agent === 'claude' && record.runtime.snapshot().state === 'idle') {
         const selection = choosePath({ agent: 'claude', ...config, apiState: claude.apiState(config.monthlyBudgetUsd) });
         if (selection.path === 'terminal') {
-          const snapshot = record.runtime.snapshot();
-          const providerSessionId = snapshot.events.findLast(event => event.providerSessionId)?.providerSessionId;
-          record.stream.publish('item.upsert', { kind: 'user-message', status: 'interrupted', content: { text: message.text, clientMessageId: message.clientMessageId, unsent: true } }, { itemId: message.clientMessageId });
-          record.stream.publish('input.receipt', { clientMessageId: message.clientMessageId, status: 'rejected' });
-          record.stream.publish('path.changed', { previous: 'api', selected: 'terminal', reason: selection.reason }); terminalStreams.set(id, record.stream);
-          // Resume only a positively identified session, and never automatically resend the pending message.
-          await record.runtime.close(); sessions.delete(id); if (record.lock) occupied.delete(record.lock);
-          await terminal({ ...record.spec, providerSessionId }, selection.reason); pathChanged('claude', 'terminal', selection.reason); changed();
-          return { status: 'rejected', reason: 'path_changed' };
+          return rejectAndSwitch(id, record, message, selection.reason);
         }
         if (!selection.path) throw new Error('Claude API 路径当前不可用。');
       }
-      return record.runtime.send(message);
+      try { return await record.runtime.send(message); }
+      catch (error) {
+        if (record.spec.agent !== 'claude' || config.claudePath !== 'api-then-terminal'
+          || error.code !== 'billing_identity_mismatch' || error.beforeInput !== true) throw error;
+        return rejectAndSwitch(id, record, message, error.message);
+      }
     },
     interrupt(id, runtimeSessionId) { return current(id, runtimeSessionId).runtime.interrupt(); },
     answer(id, runtimeSessionId, requestId, answer) { return current(id, runtimeSessionId).runtime.answer(requestId, answer); },
