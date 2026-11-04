@@ -2616,5 +2616,11 @@
   "未保存 API 密钥": "No API key saved",
   "未找到命令行": "CLI not found",
   "命令行版本过低": "CLI version too old",
-  "按设置": "As configured"
+  "按设置": "As configured",
+  "Claude API 计费身份不符（{detail}）。": "Claude API billing identity mismatch ({detail}).",
+  "计费来源": "Billing source",
+  "无法确认 Claude Code 的计费来源。": "Could not verify Claude Code's billing source.",
+  "Claude Code 没有使用这个密钥，新会话将走终端。": "Claude Code did not use this key. New sessions will use the terminal.",
+  "Claude Code 没有使用这个密钥，当前设置不允许启动新会话。": "Claude Code did not use this key. Current settings prevent new sessions from starting.",
+  "无法确认 Claude Code 的计费来源，请重试。": "Could not verify Claude Code's billing source. Try again."
 }
