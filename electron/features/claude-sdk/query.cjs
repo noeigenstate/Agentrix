@@ -33,6 +33,9 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, maxBudg
     ...(maxBudgetUsd === undefined ? {} : { maxBudgetUsd }),
     hooks: { PreToolUse: [{ onFailure: 'block', hooks: [async input => {
       const decision = policy(input.tool_name, input.tool_input);
+      // The policy's 'defer' means "not ours to decide". To the CLI a hook's 'defer' means "pause this tool and end the turn",
+      // so the owner's rules get their say by the hook answering nothing.
+      if (decision.behavior === 'defer') return {};
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision.behavior, permissionDecisionReason: decision.reason } };
     }] }] },
     canUseTool,

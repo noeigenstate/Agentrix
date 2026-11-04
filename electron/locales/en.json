@@ -2490,7 +2490,6 @@
   "已用 未知": "Used: unknown",
   "月预算已用 {percent}": "Monthly budget {percent} used",
   "{name} 额度": "{name} quota",
-  "最近切换": "Last switch",
   "还没有切换过": "No switch yet",
   "运行方式": "Run mode",
   "Claude 的 API key、原生界面与月预算": "Claude's API key, native view and monthly budget",
@@ -2653,5 +2652,6 @@
   "修好了 API 工作者结束时可能卡住、圆桌后的 Codex 工作者写不了文件、被结束的工作者一直显示运行中，以及模型别名被误报为不符。": "Fixed API workers that could hang at the end, Codex workers that could not write after a roundtable, ended workers that kept showing as running, and model aliases wrongly reported as a mismatch.",
   "新运行方式连接失败，正在恢复原会话。": "The new run mode lost its connection. Restoring the original session.",
   "新运行方式连接失败，已恢复原会话。": "The new run mode lost its connection. The original session has been restored.",
-  "正在重试恢复原会话，草稿已保留。": "Retrying the original session. Your draft has been kept."
+  "正在重试恢复原会话，草稿已保留。": "Retrying the original session. Your draft has been kept.",
+  "这次工具调用被钩子推迟，没有执行。": "A hook deferred this tool call, so it did not run."
 }

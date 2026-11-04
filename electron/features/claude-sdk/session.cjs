@@ -130,8 +130,10 @@ function createClaudeSession(spec, emit, dependencies) {
         if (entry.deltaUsdMicros > 0) onCost({ ...entry, spec: { ...spec, model: run.model || spec.model }, providerSessionId: providerId });
         requests.cancel();
         const budgetBlocked = message.subtype === 'error_max_budget_usd';
-        const status = run.interrupted || budgetBlocked ? 'interrupted' : message.is_error ? 'failed' : 'completed';
-        const error = budgetBlocked ? budgetNotice() : status === 'failed' ? 'Claude 执行失败。' : null;
+        // A hook of the owner's own may still pause a tool: the result then says success with nothing done, which is not a finished turn.
+        const deferred = !!message.deferred_tool_use;
+        const status = run.interrupted || budgetBlocked ? 'interrupted' : message.is_error || deferred ? 'failed' : 'completed';
+        const error = budgetBlocked ? budgetNotice() : deferred ? '这次工具调用被钩子推迟，没有执行。' : status === 'failed' ? 'Claude 执行失败。' : null;
         publish('turn.completed', { status, error });
         run.interrupted = false;
         turnId = null; stream.turn(null);

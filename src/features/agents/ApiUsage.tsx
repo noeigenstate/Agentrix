@@ -10,7 +10,7 @@ import type { AgentUsage, ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { type LimitsPayload, type NativeAgent, type NativeUsage, nativeBridge } from '../native-session/native-bridge.ts';
 import { useUsageRevision } from '../native-session/native-store.ts';
-import { clockWords, connectionWord, money, reasonWords, routeWord, windowWords } from '../native-session/native-words';
+import { clockWords, connectionWord, money, windowWords } from '../native-session/native-words';
 import { Metric, TokenMetric, exactCount, percentOf, resetTime, tokenCount } from './Metric';
 import { ResetQuota } from './ResetQuota';
 import './activity-pane.css';
@@ -128,7 +128,7 @@ function ApiMetrics({ agent, usage }: { agent: NativeAgent; usage: NativeUsage }
 function AgentSection({ agent, usage, terminal }: { agent: NativeAgent; usage: NativeUsage; terminal: ProjectTerminal }) {
   const state = usage.agents[agent], connection = connectionWord(agent, state?.connection), kind = state?.connection?.kind;
   // The session in view belongs to one agent; only it has a context length and a round.
-  const current = terminal.codexActive && terminal.agent === agent, tokens = terminal.agentUsage, lastSwitch = usage.lastSwitch;
+  const current = terminal.codexActive && terminal.agent === agent, tokens = terminal.agentUsage;
   const rows = [[t('本轮'), tokens?.round], [t('本次对话'), tokens?.total]] as const;
   // A session that reported plan windows of its own is on a plan even when main could not tell the connection (a terminal session): its bars show, and it is not 额度 未知.
   const plan = kind === 'subscription' || (kind !== 'api' && current && windowsFromScreen(tokens).length > 0), shown = plan || kind === 'api';
@@ -138,10 +138,6 @@ function AgentSection({ agent, usage, terminal }: { agent: NativeAgent; usage: N
     <dl className="api-usage">
       <Row label={t('连接')}><span title={connection.source ?? undefined}>{connection.text}</span></Row>
       {!shown && <Row label={t('额度')}><span>{t('未知')}</span></Row>}
-      {lastSwitch?.agent === agent && <Row label={t('最近切换')}>
-        <span>{[`${routeWord(lastSwitch.from)} → ${routeWord(lastSwitch.to)}`, clockWords(lastSwitch.at)].join(' · ')}</span>
-        {lastSwitch.reason && <small>{reasonWords(lastSwitch.reason)}</small>}
-      </Row>}
     </dl>
     {(current || shown) && <div className="activity-metrics">
       {current && <ContextMetric usage={tokens} />}

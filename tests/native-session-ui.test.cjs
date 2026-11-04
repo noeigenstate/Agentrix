@@ -655,7 +655,8 @@ test('the usage block groups Claude and Codex separately: only a connection row,
   assert.deepEqual(asked, ['p1'], 'the read is scoped to the project in view');
   assert.match(html, /<h3 class="activity-card-title">运行方式与额度<\/h3>/);
   assert.match(claude, /<h4[^>]*>Claude<\/h4>/); assert.match(codex, /<h4[^>]*>Codex<\/h4>/);
-  assert.deepEqual(labels(claude), ['连接', '最近切换']); assert.deepEqual(labels(codex), ['连接']);
+  assert.deepEqual(labels(claude), ['连接']); assert.deepEqual(labels(codex), ['连接']);
+  assert.doesNotMatch(html, /最近切换/, 'the owner asked for no last-switch row, even after a switch');
   assert.doesNotMatch(html, /新会话/, 'the new-session row is gone, and so is the route it showed');
   assert.ok(claude.includes('<dt>连接</dt><dd><span title="session init: ANTHROPIC_API_KEY">已连接 API</span></dd>'), 'the connection source stays in its tooltip');
   assert.ok(codex.includes('<dt>连接</dt><dd><span title="account/read: ChatGPT login">ChatGPT 订阅</span></dd>'));
@@ -668,10 +669,6 @@ test('the usage block groups Claude and Codex separately: only a connection row,
   assert.match(codex, /<span class="activity-metric-label">5 小时额度<\/span>[\s\S]*?aria-valuenow="40"[\s\S]*?<b[^>]*>40%<\/b><small>[^<]+ 重置<\/small>/);
   assert.match(codex, /<span class="activity-metric-label">每周额度<\/span>[\s\S]*?aria-valuenow="10"[\s\S]*?<b[^>]*>10%<\/b>/);
   assert.doesNotMatch(codex, /API 花费|月预算|最近切换/);
-  assert.match(claude, /API → 终端 · \d/); assert.match(claude, /本月 API 预算已用完/);
-  const switched = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ lastSwitch: { at: 1, agent: 'codex', from: 'native', to: 'terminal', reason: 'user' } }) }) });
-  assert.doesNotMatch(usageSection(switched, 'Claude'), /最近切换/);
-  assert.match(usageSection(switched, 'Codex'), /<dt>最近切换<\/dt>/);
 });
 
 test('the usage block says 未知 for what nobody gave and keeps a real zero as $0.00', async () => {

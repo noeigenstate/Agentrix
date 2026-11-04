@@ -90,12 +90,13 @@ test('M3 a smaller resumed cumulative value begins a new epoch and is charged on
   assert.equal(usage.record('s', result, { resume: true, reservationId: lease.id }).deltaUsdMicros, 0);
   assert.equal(usage.summary().monthUsdMicros, 5200000);
 });
-test('M1 owner hooks defer to normal permission rules and show a card only when canUseTool is called', async t => {
+test('M1 owner hooks stay silent so normal permission rules decide, and show a card only when canUseTool is called', async t => {
   const { session, fake, events } = runtime(t); await session.start(); await session.send({ clientMessageId: randomUUID(), text: 'read' });
   const options = fake.calls[0].options;
   for (const name of ['Read', 'Grep', 'Glob', 'TodoWrite', 'Bash']) {
     const result = await options.hooks.PreToolUse[0].hooks[0]({ tool_name: name, tool_input: {} });
-    assert.equal(result.hookSpecificOutput.permissionDecision, 'defer');
+    // A hook answering 'defer' makes the real CLI pause the tool and end the turn: tests/claude-sdk-real-cli-hook.test.cjs.
+    assert.deepEqual(result, {});
   }
   assert.equal(events.filter(event => event.type === 'request.opened').length, 0);
   const waiting = options.canUseTool('Bash', { command: 'needs confirmation' }, {});
