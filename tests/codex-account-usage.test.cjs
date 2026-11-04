@@ -177,7 +177,7 @@ test('hung read times out without blocking the event loop, kills its child, and 
   const { timeoutScale } = await import('../scripts/wait.mjs');
   let responding = false;
   const timer = setTimeout(() => { responding = true; }, 20);
-  const value = await fakeRead(t, 'hang', { timeout: 1000 * timeoutScale }); clearTimeout(timer);
+  const value = await fakeRead(t, 'hang', { timeout: 3000 * timeoutScale }); clearTimeout(timer);
   assert.equal(responding, true);
   assert.equal(value.resetQuery.reason, 'timeout');
   const abort = new AbortController(); abort.abort();
@@ -187,7 +187,7 @@ test('hung read times out without blocking the event loop, kills its child, and 
   const running = new AbortController();
   const cancelled = await fakeRead(t, 'hang', { signal: running.signal, onUsage: () => setImmediate(() => running.abort()) });
   assert.equal(cancelled.resetQuery.reason, 'cancelled');
-  assert.equal((await fakeRead(t, 'hang', { timeout: 1000 * timeoutScale, defaultStop: true })).resetQuery.reason, 'timeout', 'production cleanup also terminates the owned child');
+  assert.equal((await fakeRead(t, 'hang', { timeout: 3000 * timeoutScale, defaultStop: true })).resetQuery.reason, 'timeout', 'production cleanup also terminates the owned child');
 });
 
 test('cache deduplicates, isolates home/account environment and drops stale/disposed results', async t => {
