@@ -2,7 +2,7 @@
 // conversation it is having, followed live. The conversation is read-only; the owner's word for the agent goes through SubagentInput,
 // and what the owner sent shows under the conversation with the worker's delivery receipt.
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
-import { ArrowDown, Lock, X } from '@phosphor-icons/react';
+import { ArrowDown, X } from '@phosphor-icons/react';
 import type { AgentIntervention, SubagentFeed } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { modelName } from '../../shared/model-name';
@@ -26,15 +26,6 @@ function stateWord(feed: SubagentFeed, status: FeedState['status'], over: boolea
   if (status === 'gone') return t('不可用');
   if (feed.failure) return failureWord(feed.failure);
   return t(CALL_STATES[over ? 'done' : feed.state].word);
-}
-
-// The footer says what the view is doing, in one line.
-function footerText(status: FeedState['status'], error: string | null, following: boolean, unread: number, over: boolean) {
-  if (status === 'gone') return t('只读 · 记录已不在，分屏保留最后的内容');
-  if (status === 'error') return t('只读 · 读取失败：{message}，下次变化时重试', { message: error ?? '' });
-  if (over) return t('只读 · 已完成，分屏保留到你关闭');
-  if (following) return t('只读 · 自动跟随最新一步');
-  return unread ? t('只读 · 已暂停跟随，有 {count} 个新步骤', { count: unread }) : t('只读 · 已暂停跟随');
 }
 
 // The owner scrolled up: the view stops following and remembers the last entry it had shown, so it can count what came after.
@@ -101,13 +92,11 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
           <p>{item.text}</p><small>{receiptWord(delivered.has(item.id) ? 'delivered' : item.status)}</small>
         </div>)}
       </div>
-      {unread > 0 && <button type="button" className="subagent-jump button" onClick={follow}><ArrowDown size={16} />{t('{count} 个新步骤', { count: unread })}</button>}
+      {/* Scrolled up: the way back to the end, with how much came after. */}
+      {(unread > 0 || !following && !over) && <button type="button" className="subagent-jump button" onClick={follow}><ArrowDown size={16} />{unread > 0 ? t('{count} 个新步骤', { count: unread }) : t('回到最新')}</button>}
     </div>
+    {feed && status === 'error' && <p className="subagent-read-error" role="alert">{t('读取失败：{message}', { message: error ?? '' })}</p>}
     {direct ? <SubagentInput terminalId={terminalId} callId={callId} name={who} closed={over} onSent={item => setSent(items => [...items, item])} />
       : <div className="subagent-input"><p className="subagent-input-note">{t('会话内的子代理没有直达通道，只能通过主会话与它交流。')}</p></div>}
-    <footer className="subagent-foot">
-      <Lock size={14} aria-hidden="true" /><span>{footerText(status, error, following, unread, over)}</span><span className="subagent-space" />
-      {!following && !over && <button type="button" className="button" onClick={follow}>{t('回到最新')}</button>}
-    </footer>
   </section>;
 }

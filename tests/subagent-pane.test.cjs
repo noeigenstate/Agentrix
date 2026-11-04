@@ -208,25 +208,25 @@ test('the view names the task first, then the model, settings, state, speed and 
   assert.match(html, /<button type="button" class="icon-button" title="关闭分屏（Esc）" aria-label="关闭 Refactor the grid · GPT-6\.1-Sol 的分屏">/);
   assert.match(html, /<div class="subagent-body" tabindex="0" role="log" aria-live="off" aria-label="Refactor the grid · GPT-6\.1-Sol 的消息和工具步骤，只读">/);
   assert.match(html, /<div class="conversation-feed" data-agent="codex" data-live="true" data-entries="2" data-project="p1" data-link="function">/, 'the feed gets the agent, the project and the link handler');
-  assert.match(html, /只读 · 自动跟随最新一步/);
+  assert.doesNotMatch(html, /只读 · |subagent-foot/, 'no status line under the input');
   assert.equal(count(html, /<textarea/g), 1, 'the owner’s one text box, for the word to the agent');
   assert.match(paneMarkup(ok({ agent: 'Claude Code', rate: null })), /data-agent="claude"/);
   assert.doesNotMatch(paneMarkup(ok({ effort: null, fast: null })), /max · 快速/);
   assert.doesNotMatch(paneMarkup(ok({ rate: null })), /token\/s/, 'an unknown speed takes no room in the header: no dash, no unit');
   assert.match(html, /<div class="subagent-input-row reading-composer">/, "the input shares the reading composer");
-  assert.match(html, /title="停下"[\s\S]*class="icon-button reading-send"[\s\S]*<footer class="subagent-foot">/, "Stop precedes Send above the status line");
+  assert.match(html, /title="停下"[\s\S]*class="icon-button reading-send"/, "Stop precedes Send");
 }));
 
 test('a finished view stays until closed, shows the time it took, and a lost record says so without losing the content', () => zh(() => {
   const done = paneMarkup(ok({ state: 'done', startedAt: 1000, endedAt: 66_000 }));
-  assert.match(done, /subagent-state is-done">已完成</); assert.match(done, /<span class="subagent-elapsed" title="用时">1:05<\/span>/); assert.match(done, /只读 · 已完成，分屏保留到你关闭/);
+  assert.match(done, /subagent-state is-done">已完成</); assert.match(done, /<span class="subagent-elapsed" title="用时">1:05<\/span>/);
   assert.match(done, /data-live="false"/, 'a finished conversation is no longer live');
   assert.match(paneMarkup(ok({ state: 'done', failure: { reason: 'scope', exitCode: null }, endedAt: 5000 })), /subagent-state is-done">越界</);
   const gone = paneMarkup(ok({ endedAt: null }, 'gone'));
-  assert.match(gone, /subagent-state is-done">不可用</); assert.match(gone, /只读 · 记录已不在，分屏保留最后的内容/); assert.match(gone, /data-entries="2"/);
+  assert.match(gone, /subagent-state is-done">不可用</); assert.match(gone, /data-entries="2"/);
   assert.match(gone, /<span class="subagent-elapsed" title="用时">—<\/span>/, 'a lost record with no end time does not count on');
   const error = paneMarkup({ feed: feed(3), status: 'error', error: 'boom' });
-  assert.match(error, /只读 · 读取失败：boom，下次变化时重试/); assert.match(error, /data-live="false"/);
+  assert.match(error, /<p class="subagent-read-error" role="alert">读取失败：boom<\/p>/); assert.match(error, /data-live="false"/);
   const loading = paneMarkup({ feed: null, status: 'loading', error: null });
   assert.match(loading, /aria-label="子 agent 的输出，只读"/); assert.match(loading, /<p class="subagent-empty">正在读取…<\/p>/); assert.doesNotMatch(loading, /conversation-feed/);
   assert.match(paneMarkup({ feed: null, status: 'error', error: 'no bridge' }), /<p class="subagent-empty">读取失败：no bridge<\/p>/);
@@ -261,7 +261,6 @@ test('a finished Task subagent (reviewing, with an end time) takes no word, keep
   assert.match(html, /<textarea[^>]*disabled[^>]*placeholder="它已结束或不可用，不能再发消息"/); assert.doesNotMatch(html, /<button[^>]*>停下/);
   assert.match(html, /subagent-state is-done">已完成</, 'the header agrees with the footer: the end time decides, not the feed state'); assert.doesNotMatch(html, /审核中/);
   assert.match(html, /<span class="subagent-elapsed" title="用时">1:05<\/span>/, 'the clock stopped at the end');
-  assert.match(html, /只读 · 已完成，分屏保留到你关闭/);
   const reviewing = paneMarkup(ok({ state: 'reviewing', endedAt: null }));
   assert.doesNotMatch(reviewing, /<textarea[^>]*disabled/, 'a reviewer still at work can be told something'); assert.match(reviewing, /subagent-state is-reviewing">审核中</);
 }));
