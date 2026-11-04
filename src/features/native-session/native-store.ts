@@ -27,6 +27,8 @@ function publish(terminalId: string, entry: NativeEntry) {
 }
 
 function bump() { usageRevision += 1; listeners.forEach(listener => listener()); }
+// A change the main process already knows about (a key, a path, a budget): the usage card reads again without waiting for its timer.
+export const usageChanged = bump;
 
 function resync(terminalId: string) {
   if (resyncing.has(terminalId)) return;
