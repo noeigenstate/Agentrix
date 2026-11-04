@@ -2711,5 +2711,10 @@
   "在控制台核对": "Check in the console",
   "约 {amount}": "about {amount}",
   "约 {time} 恢复": "recovers about {time}",
-  "Claude 通过 API、Codex 通过 app-server 在应用自己的界面里运行，命令、改动和计划都直接显示，需要你回答的提问和策略要求的确认也在这里处理；也可以在设置里改回终端界面。": "Claude (through the API) and Codex (through app-server) run in the app's own view, with commands, changes and plans shown directly; questions for you and any approvals the policy requires are handled here too. Settings can switch back to the terminal view."
+  "Claude 通过 API、Codex 通过 app-server 在应用自己的界面里运行，命令、改动和计划都直接显示，需要你回答的提问和策略要求的确认也在这里处理；也可以在设置里改回终端界面。": "Claude (through the API) and Codex (through app-server) run in the app's own view, with commands, changes and plans shown directly; questions for you and any approvals the policy requires are handled here too. Settings can switch back to the terminal view.",
+  "图片已省略，文字仍然保留。": "Images were omitted; the text is preserved.",
+  "请看附上的图片。": "Please look at the attached pictures.",
+  "只能附加 PNG、JPEG 或 WebP 图片。": "Only PNG, JPEG or WebP pictures can be attached.",
+  "图片太大（超过 5 MB），请压缩后再附加。": "The picture is too large (over 5 MB). Please compress it first.",
+  "无法读取 Claude 路由配置。": "Unable to read Claude routing settings."
 }
