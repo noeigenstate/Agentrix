@@ -2609,5 +2609,12 @@
   "你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入这里的预算估算。": "Commands run in your own API session can read the key; any spending they incur is excluded from this budget estimate.",
   "本轮 API 预算上限已用完，请发送新消息继续。": "This turn has reached its API budget cap. Send a new message to continue.",
   "本次测试版新增": "New in this beta",
-  "1.3.26 的其他更新": "Also in 1.3.26"
+  "1.3.26 的其他更新": "Also in 1.3.26",
+  "连接": "Connection",
+  "新会话": "New session",
+  "还没有 API 用量记录": "No API usage records yet",
+  "未保存 API 密钥": "No API key saved",
+  "未找到命令行": "CLI not found",
+  "命令行版本过低": "CLI version too old",
+  "按设置": "As configured"
 }

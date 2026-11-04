@@ -8,6 +8,7 @@ Owns the host's Claude Agent SDK sessions, protected credentials, worker tool de
 ## Interface
 - `createClaudeRuntime` (`electron/features/claude-sdk/index.cjs`) — injected SDK session factory, credentials, usage and availability
 - `createSdkLoader` (`electron/features/claude-sdk/runtime.cjs`) — deferred ESM loading from development or unpacked production paths
+- `inspectClaudeExecutable` (`electron/features/claude-sdk/executable.cjs`) — whether the installed native Claude Code exists and meets the minimum version; main reads it to say what a new session takes
 
 ## May import
 - `electron/features/native-session/storage.cjs`
