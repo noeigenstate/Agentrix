@@ -2,9 +2,12 @@
 // Each note is a short title and one detail line, both with their English at the end of electron/locales/en.json.
 // group: "new" marks what this beta adds. Those notes come first; the list shows them under their own heading and the rest under "also in".
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "用量卡", text: "活动栏里 Claude 和 Codex 分开显示连接方式、新会话走哪条路和额度，保存密钥或改运行方式后马上更新。", group: 'new' },
-  { title: "计费检查", text: "测试连接会确认 Claude Code 报告的计费来源是 API 密钥；不是的话，新会话转到终端并说明原因，不再直接失败。", group: 'new' },
-  { title: "原生通道修复", text: "修好了 Codex 的原生连接和 Claude 走 API 时的启动失败。", group: 'new' },
+  { title: "运行方式立刻生效", text: "改运行方式或保存、清除密钥后，正在运行的会话也会切过去，不用重开，对话接着走：空闲的马上切，工作中的等本轮结束，有后台任务的先问你。", group: 'new' },
+  { title: "Agent 标签", text: "调用的模型挪到左栏，和文件、Git 并列，打开项目时默认显示。", group: 'new' },
+  { title: "活动栏不再整体滚动", text: "放不下时只有列表在内部滚动；上下文长度和额度放在一起，走 API 显示花费和预算，走订阅显示 5 小时和每周额度。", group: 'new' },
+  { title: "工作者修复", text: "修好了 API 工作者结束时可能卡住、圆桌后的 Codex 工作者写不了文件、被结束的工作者一直显示运行中，以及模型别名被误报为不符。", group: 'new' },
+  { title: "计费检查", text: "测试连接会确认 Claude Code 报告的计费来源是 API 密钥；不是的话，新会话转到终端并说明原因，不再直接失败。" },
+  { title: "原生通道修复", text: "修好了 Codex 的原生连接和 Claude 走 API 时的启动失败。" },
   { title: "原生界面", text: "Claude 通过 API、Codex 通过 app-server 在应用自己的界面里运行，命令、改动、计划和确认都直接显示；也可以在设置里改回终端界面。" },
   { title: "运行方式", text: "设置里可以保存 API 密钥、测试连接、设定月预算；Claude 默认走 API，额度用完自动转到订阅登录的终端，接着同一段对话。" },
   { title: "连接与额度", text: "活动栏显示 Claude、Codex 当前连接的是 API 还是订阅，以及 API 今日和本月的估算花费、预算和限流状态。" },
@@ -13,7 +16,7 @@ export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
   { title: "更新通道", text: "设置的「关于」页可以选择稳定版或测试版；切到测试版前需同意测试协议，随时可以切回稳定版，不会被降级。" },
   { title: "确认在终端", text: "终端界面里需要你确认或选择时，以及输入任何斜杠命令时，都会直接弹出终端；你正在输入时弹出的终端不会抢走焦点。" },
   { title: "数据看板", text: "改用彩色图表，各模型的用时、费用和通过率一眼可比，数据每分钟自动更新。" },
-  { title: "子代理分屏", text: "在活动栏点一个子代理，对话旁会显示它正在做什么，一次只显示一个，点另一个就替换；派发的工作者可以直接在这里收到你的提示。" },
+  { title: "子代理分屏", text: "在 Agent 标签点一个子代理，对话旁会显示它正在做什么，一次只显示一个，点另一个就替换；派发的工作者可以直接在这里收到你的提示。" },
   { title: "引用消息", text: "阅读视图里可以引用一条消息，带着它继续对话。" },
   { title: "系统技能", text: "始终以系统自带的为准：项目里同名的副本会被自动移到恢复文件夹；想扩展，请把技能命名为「系统技能名-标识」。" },
   { title: "技能即时更新", text: "技能改动后，正在运行的 Claude Code 会话在下一次压缩或清空对话时就会拿到新版本。" },

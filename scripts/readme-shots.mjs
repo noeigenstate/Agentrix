@@ -258,7 +258,7 @@ background:radial-gradient(circle at 20% 15%,#ff7ab6 0,transparent 42%),radial-g
     await waitFor(() => activity.locator('.activity-limit > b').allTextContents().then(values => values.join() === '23%,41%'), '5-hour and weekly limits from token_count');
     assert.deepEqual(await activity.locator('.activity-limit > .activity-metric-label').allTextContents(), ['5 小时额度', '每周额度']);
     assert.deepEqual(await activity.locator('.activity-tokens > .activity-metric-label').allTextContents(), ['本轮', '本次对话']);
-    assert.equal(await activity.locator('.activity-context [role="meter"]').getAttribute('aria-valuenow'), '33');
+    assert.equal(await activity.locator('.api-agent .activity-figure [role="meter"]').getAttribute('aria-valuenow'), '33');
     // Codex records currently expose no called-model group; only Claude transcripts feed AgentCalls.
     await activity.getByRole('button', { name: /重置额度/ }).waitFor();
     assert.ok(await activity.evaluate(node => {

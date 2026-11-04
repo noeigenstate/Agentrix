@@ -98,6 +98,7 @@ try {
   await page.evaluate(command => window.agentrix.writeTerminal('appearance', command), "[System.IO.File]::WriteAllText('" + marker + "','ok')\r");
   await waitFor(() => fs.access(path.join(output, 'after-font-change.done')).then(() => true, () => false), 'typing works after font and grid reflow');
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).click(); await page.locator('.file-preview').waitFor();
   assert.equal(await page.locator('.file-preview').evaluate(node => getComputedStyle(node).opacity), '1'); await page.getByRole('button', { name: '返回总览', exact: true }).click();
   await settings({ language: 'en' }); await openSettings(page, 'Settings');

@@ -199,6 +199,7 @@ try {
   }
   const remotePanel = page.locator(`[data-project-id="${remote.id}"]`);
   await remotePanel.getByRole('button', { name: '进入 远程测试项目', exact: true }).click();
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).click();
   await waitFor(async () => (await page.getByLabel('文件编辑器', { exact: true }).inputValue()).includes('REMOTE_TEXT_PREVIEW 中文'), 'remote text opens directly in the editor');
   await page.getByRole('treeitem', { name: '图片.png', exact: true }).click();

@@ -43,6 +43,15 @@ import { ConversationDecorations, ConversationFeed } from './ConversationFeed';
 export { Markdown } from './Markdown';
 export { groupSummary } from './ResultCard';
 
+// The draft's way across a run-mode switch, bound to this terminal by the grid (this view never reaches the bridge): `offer` states the draft as it
+// is now, `incoming` is a draft the previous session left for this one and `take` hands it over once, `locked` is main holding the draft while
+// the switch goes. Nothing in it is sent from here: undelivered messages come back as unsent for the owner to take, and pictures are only shown.
+type HandoffMessage = { clientMessageId: string; text: string; images?: string[] };
+export type ReadingHandoff = {
+  locked: boolean; offer(draft: { text: string; images: string[]; undelivered: HandoffMessage[] }): void;
+  incoming: object | null; take(): { text: string; images: string[]; undelivered: HandoffMessage[] } | null;
+};
+
 // Switching to the CLI unmounts the composer; sent messages still belong to that terminal.
 const history = new Map<string, string[]>();
 type WaitingMessage = { id: number; text: string; uncertain?: boolean };
@@ -61,7 +70,7 @@ const IMAGE_PLACEHOLDER = /\[Image #\d+\]/;
 // and its tool calls folded between them. The real terminal stays underneath; what is written here goes to
 // it, and the toggle in the card header switches back to it at any time. autoFocus: the card is expanded and
 // this is its terminal in use, so the message box takes the keyboard (never a small card's).
-export function ReadingView({ projectId, terminal, remote = false, autoFocus, active = true, onShowTerminal, onError, onOpenLink }: { projectId: string; terminal: ProjectTerminal; remote?: boolean; autoFocus: boolean; active?: boolean; onShowTerminal: () => void; onError: (message: string) => void; onOpenLink: (target: string) => void }) {
+export function ReadingView({ projectId, terminal, remote = false, autoFocus, active = true, handoff, onShowTerminal, onError, onOpenLink }: { projectId: string; terminal: ProjectTerminal; remote?: boolean; autoFocus: boolean; active?: boolean; handoff?: ReadingHandoff; onShowTerminal: () => void; onError: (message: string) => void; onOpenLink: (target: string) => void }) {
   const readingView = useRef<HTMLDivElement>(null);
   const kind = (terminal.agent ?? terminal.readingHistory?.agent) === 'claude' ? 'claude' : 'codex';
   const readingSession = terminal.sessionId;
@@ -151,7 +160,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   useLayoutEffect(() => { holdQuote(null); }, [conversation]);
   const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null), composer = useRef<HTMLDivElement>(null);
   const [terminalPopup, setTerminalPopup] = useState<{ command: string; focus?: boolean; automatic?: boolean } | null>(null);
-  const inputBlocked = preview || !live;
+  const inputBlocked = preview || !live || !!handoff?.locked;
   const deliveryBlocked = !state.canDeliver || terminalPopup !== null;
   const canWrite = useRef(state.canDeliver); canWrite.current = state.canDeliver;
   choiceVisible.current = hasChoice || terminalPopup !== null;
@@ -555,6 +564,21 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (index >= images.length) { serverPictures.current.splice(index - images.length, 1); setPictureTick(tick => tick + 1); return; }
     await native.remove(index);
   };
+  // What a switch carries: the draft's words, its pictures and the messages not yet written — the waiting ones (one whose delivery is
+  // unconfirmed may be in the CLI already, so it is not offered) and those that came unsent from an earlier switch; and what arrives with this
+  // session, kept apart from the box until the owner takes it.
+  const [kept, setKept] = useState<HandoffMessage[]>([]), [leftImages, setLeftImages] = useState<string[]>([]);
+  const unwritten = [...kept, ...outbox.filter(message => !message.uncertain).map(message => ({ clientMessageId: `waiting-${message.id}`, text: message.text }))];
+  const offering = JSON.stringify([draft, shownImages, unwritten]);
+  useEffect(() => { handoff?.offer({ text: draft, images: shownImages.filter(Boolean), undelivered: unwritten }); }, [offering, handoff?.offer]);
+  useEffect(() => {
+    const arrived = !inputBlocked && handoff?.incoming ? handoff.take() : null;
+    if (!arrived) return;
+    const words = arrived.text.trim() ? { clientMessageId: `draft-${Date.now()}`, text: arrived.text } : null;
+    if (words && !draft.trim()) edit(arrived.text);
+    setLeftImages(list => [...list, ...arrived.images, ...arrived.undelivered.flatMap(message => message.images ?? [])]);
+    setKept(list => [...list, ...(words && draft.trim() ? [words] : []), ...arrived.undelivered]);
+  }, [handoff?.incoming, inputBlocked]);
   const keys = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Escape' && dictationSend.cancel()) { event.preventDefault(); event.stopPropagation(); return; }
     if (inputBlocked) { event.preventDefault(); event.stopPropagation(); return; }
@@ -629,7 +653,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     </ConversationDecorations.Provider>;
   // The hint, longest first: the box shows the first that fits its width, so a narrow composer gets a short hint instead of a cut-off one.
   // The first is the full hint: when the box shows a shorter one (or none), it is the box's tooltip and accessible description.
-  const hints = preview ? [t('历史预览，等待会话输入就绪')] : !live ? [t('会话未启动或已退出')] : hasChoice ? [t('等终端处理完后发送')] : deliveryBlocked ? [t('等待终端输入就绪后发送')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.codexActive
+  const hints = handoff?.locked ? [t('正在切换运行方式，稍后继续')] : preview ? [t('历史预览，等待会话输入就绪')] : !live ? [t('会话未启动或已退出')] : hasChoice ? [t('等终端处理完后发送')] : deliveryBlocked ? [t('等待终端输入就绪后发送')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.codexActive
     ? [t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }), t('给 {agent} 发消息，/ 查看命令，@ 提及文件', { agent }), t('给 {agent} 发消息', { agent })]
     : [t('输入命令，Enter 发送'), t('输入命令')];
   const hint = useFittingHint(input, hints), hintId = `reading-hint-${terminal.id}`, fullHint = fullHintProps(hints, hint, hintId);
@@ -643,6 +667,9 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       {terminalPopup !== null && <ReadingTerminalPopup key={sendCounter.current} terminalId={terminal.id} sessionId={terminal.sessionId} command={terminalPopup.command} focus={terminalPopup.focus} onReady={readyPopup} onClose={closePopup} onError={onError} />}
     </div>
     {attachedCount > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: attachedCount })}<UserImages images={shownImages} numbers={imageNumbers} onRemove={index => void removeImage(index)} /></div>}
+    {leftImages.length > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('有 {count} 张图片没有带过来，请重新粘贴', { count: leftImages.length })}<UserImages images={leftImages} onRemove={index => setLeftImages(list => list.filter((_, at) => at !== index))} /></div>}
+    {kept.length > 0 && <div className="reading-outbox" role="status"><span>{t('未发送的消息')}</span><ol>{kept.map(message => <li key={message.clientMessageId}>{message.text}<button type="button" className="text-button" disabled={!!draft.trim() || inputBlocked}
+      onClick={() => { setKept(list => list.filter(item => item !== message)); edit(message.text); }}>{t('取回')}</button></li>)}</ol></div>}
     {quote && <QuoteChip quote={quote} onRemove={() => { holdQuote(null); input.current?.focus(); }} />}
     {outbox.length > 0 && <div className="reading-outbox" role="status"><span>{hasChoice ? t('等终端处理完后发送') : t('等待终端输入就绪后发送')}</span><ol>{outbox.map(message => <li key={message.id}>{message.text}{message.uncertain && <span>{sending.current ? t('发送中') : t('送达未确认，请在终端检查')}</span>}<button type="button" className="text-button" onClick={() => { if (draft || sending.current) return; saveOutbox(outbox.filter(item => item.id !== message.id)); edit(message.text); }} disabled={!!draft || sending.current}>{t('取回')}</button></li>)}</ol></div>}
     {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waitingTitle(screen)} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}

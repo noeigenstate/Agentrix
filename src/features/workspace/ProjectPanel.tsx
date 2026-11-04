@@ -120,7 +120,7 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
     </header>
     {imageOpen && <ProjectImageDialog project={project} index={index} onClose={() => setImageOpen(false)} />}
     <ProjectTerminals project={project} focused={focused} fontSize={fontSize} activeId={activeTerminalId} setActiveId={id => setActiveTerminal(project.id, id)} onExpand={() => onFocus(project.id)} onAction={onAction} onError={onError} onOpenLink={onOpenLink} />
-    {showActivity && <ActivityPane terminal={currentTerminal} />}
+    {showActivity && <ActivityPane terminal={currentTerminal} projectId={project.id} />}
     {project.error && <div className="panel-error"><Info size={13} /><span>{t(project.error)}</span></div>}
   </article>;
 }

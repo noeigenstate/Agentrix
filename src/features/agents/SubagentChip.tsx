@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
-import { CallsCard } from './ActivityPane';
+import { CallsCard } from './AgentCalls';
 import './subagent-chip.css';
 
 // The activity pane's way in when a narrow window hides the pane (CSS shows this only there): a chip in the project header that opens the very same list of called models

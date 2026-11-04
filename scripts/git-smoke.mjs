@@ -61,6 +61,7 @@ try {
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await page.evaluate(id => window.agentrix.writeTerminal(id, "Write-Output 'GIT_DRAFT_STAYS'"), project.id);
   const session = (await state()).projects[0].sessionId;
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   await page.getByRole('treeitem', { name: 'src', exact: true }).click();
   const appFile = page.getByRole('treeitem', { name: 'app.ts', exact: true });
   await waitFor(async () => (await appFile.getAttribute('data-git-tone')) === 'modified', 'file tree Git decorations');

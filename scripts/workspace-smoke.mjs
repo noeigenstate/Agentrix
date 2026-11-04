@@ -223,6 +223,7 @@ try {
   assert.equal((await projectState()).terminals[0].sessionId, shellSession);
   console.log('PASS: grid shows only live agents; shell DOM, session, xterm buffer and size survive hiding and refit on expansion');
   console.log('PASS: shell-only launcher, running-count expansion, safe agent allocation, plain-launch expansion, typed detection, agent exit and grid copy/navigation');
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   await page.getByRole('treeitem', { name: 'source.txt', exact: true }).waitFor();
   if (process.argv.includes('--slow-copy')) {
     assert.equal(await application.evaluate(() => globalThis.directoryPeakRequests), 1, 'automatic refresh must not overlap or discard a slow directory read');

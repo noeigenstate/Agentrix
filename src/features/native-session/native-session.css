@@ -55,3 +55,15 @@
 .native-unsent summary { cursor: pointer; min-height: 32px; }
 .native-unsent textarea { display: block; width: 100%; min-height: 64px; max-height: 160px; margin-bottom: 8px; resize: vertical; background: var(--bg-input); color: var(--text-1); border: 1px solid var(--border); border-radius: 8px; font: 400 14px/24px var(--font-ui); }
 .native-path-note > [role="alert"] { margin: 8px 12px; }
+
+/* A run-mode change on its way to the session: one line in the header, or in the path note over a terminal card; the question about background
+   tasks is a request card, flattened to a section of the note. */
+.native-switch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.native-path-note .native-switch { flex: 1; padding: 8px 12px 8px 0; color: var(--text-1); }
+.native-path-note .native-switch-question { margin: 0; border: 0; border-top: 1px solid var(--divider); border-radius: 0 0 12px 12px; box-shadow: none; }
+.native-switch-text { margin: 0 0 12px; color: var(--text-1); overflow-wrap: anywhere; }
+
+/* Pictures a switch carried over to the next message. */
+.native-carried { display: inline-flex; align-items: center; gap: 4px; }
+.native-carried img { max-width: 64px; max-height: 40px; border-radius: 4px; }
+.native-carried .icon-button { width: 24px; height: 24px; }

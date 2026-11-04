@@ -76,11 +76,13 @@ try {
   const sidebar = page.getByRole('complementary', { name: '项目侧边栏' });
   // The project is the sidebar title; files and Git share one switch, with no separate settings entry.
   assert.equal(await sidebar.getByRole('heading', { name: local.name, exact: true }).count(), 1);
-  assert.deepEqual(await sidebar.locator('.explorer-tabs button').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))), ['资源管理器', 'Git 历史']);
+  assert.deepEqual(await sidebar.locator('.explorer-tabs button').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))), ['Agent', '资源管理器', 'Git 历史']);
+  assert.equal(await sidebar.locator('.explorer-tabs button[aria-pressed="true"]').getAttribute('aria-label'), 'Agent', 'a project opens on its Agent tab');
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   assert.equal(await sidebar.getByRole('treeitem', { name: local.name, exact: true }).count(), 0, 'the project root is the title, not a tree row');
   await page.screenshot({ path: path.join(output, 'sidebar.png') });
-  await page.keyboard.press('Control+b'); await page.waitForSelector('.focus-sidebar.is-collapsed'); assert.equal(await sidebar.locator('.sidebar-toggle').count(), 0, 'a collapsed sidebar shows no collapse control, only its two panes');
-  assert.deepEqual(await sidebar.locator('.explorer-rail button').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))), ['资源管理器', 'Git 历史']);
+  await page.keyboard.press('Control+b'); await page.waitForSelector('.focus-sidebar.is-collapsed'); assert.equal(await sidebar.locator('.sidebar-toggle').count(), 0, 'a collapsed sidebar shows no collapse control, only its three tabs');
+  assert.deepEqual(await sidebar.locator('.explorer-rail button').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))), ['Agent', '资源管理器', 'Git 历史']);
   await page.screenshot({ path: path.join(output, 'sidebar-collapsed.png') });
   await page.keyboard.press('Control+b');
   await page.getByRole('treeitem', { name: 'unsupported.txt', exact: true }).click();
@@ -187,6 +189,7 @@ try {
   await page.getByRole('button', { name: '返回总览', exact: true }).click(); await settled(false);
   await second.getByRole('button', { name: `${remote.name} 的更多操作`, exact: true }).click();
   await page.getByRole('menuitem', { name: '打开项目目录', exact: true }).click(); await settled(true);
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).waitFor();
   await page.getByRole('button', { name: '返回总览', exact: true }).click(); await settled(false);
   for (const target of ['/srv/fixture/docs/nested', '/srv/fixture/docs-alias']) {
@@ -222,6 +225,7 @@ try {
     await page.keyboard.press('Escape'); await popup.waitFor({ state: 'detached' });
   }
   await second.getByRole('button', { name: `进入 ${remote.name}`, exact: true }).click(); await settled(true);
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).click();
   const editor = page.getByRole('textbox', { name: '文件编辑器', exact: true });
   await editor.fill('# 未保存草稿\n\n[查看文档目录](docs/nested/)\n');

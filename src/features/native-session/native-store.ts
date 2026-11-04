@@ -2,9 +2,9 @@
 // events that arrive meanwhile wait and are folded on top of it, repeats drop by sequence, and a gap or an unknown session or connection
 // epoch asks for one new snapshot. Entries outlive the view, so a card collapsed or remounted loses nothing.
 import { useSyncExternalStore } from 'react';
-import type { AgentEvent } from '../../shared/agent-events';
+import type { AgentEvent, NativeDraft, NativeHandoff, SwitchState } from '../../shared/agent-events';
 import { nativeBridge } from './native-bridge.ts';
-import { type NativeModel, applyEvents, emptyModel, fromSnapshot } from './native-model.ts';
+import { type NativeModel, applyEvents, emptyModel, fromSnapshot, isOver } from './native-model.ts';
 
 export type NativeEntry = {
   model: NativeModel;
@@ -12,14 +12,17 @@ export type NativeEntry = {
   dismissed: string | null;
   // The notice of a switch to the terminal, dismissed by the owner.
   noteDismissed: boolean;
+  // The draft the session this one replaced left for it (snapshot.handoff); taken once per change by `takeHandoff`.
+  handoff: NativeHandoff | null;
 };
 
 const RESYNC_DELAY = 250;
 // Events that mean the account's numbers may have changed, so the usage panel reads them again.
-const USAGE_EVENTS = new Set(['usage.updated', 'limits.updated', 'path.changed', 'turn.completed']);
+// A switch moving changes how many sessions Settings says are waiting.
+const USAGE_EVENTS = new Set(['usage.updated', 'limits.updated', 'path.changed', 'turn.completed', 'switch.updated']);
 
-let entries: ReadonlyMap<string, NativeEntry> = new Map(), usageRevision = 0, stopListening: (() => void) | null = null;
-const listeners = new Set<() => void>(), waiting = new Map<string, AgentEvent[]>(), loading = new Set<string>(), resyncing = new Set<string>();
+let entries: ReadonlyMap<string, NativeEntry> = new Map(), usageRevision = 0, stopListening: (() => void) | null = null, dismissedSwitches: ReadonlySet<string> = new Set();
+const listeners = new Set<() => void>(), waiting = new Map<string, AgentEvent[]>(), loading = new Set<string>(), resyncing = new Set<string>(), takenHandoffs = new Map<string, number>();
 
 function publish(terminalId: string, entry: NativeEntry) {
   entries = new Map(entries).set(terminalId, entry);
@@ -47,9 +50,12 @@ async function load(terminalId: string) {
   const base = result?.ok && result.value ? fromSnapshot(result.value) : known?.model ?? emptyModel();
   const { model, resync: again } = applyEvents(base, asked);
   const same = !!known && known.model.identity?.runtimeSessionId === model.identity?.runtimeSessionId;
-  publish(terminalId, { model, dismissed: known?.dismissed ?? null, noteDismissed: same && (known?.noteDismissed ?? false) });
+  publish(terminalId, { model, dismissed: known?.dismissed ?? null, noteDismissed: same && (known?.noteDismissed ?? false), handoff: newHandoff(terminalId, result?.ok ? result.value?.handoff : undefined) ?? known?.handoff ?? null });
   if (again) resync(terminalId);
 }
+
+// A snapshot's handoff, unless this terminal already took that change's.
+const newHandoff = (terminalId: string, handoff: NativeHandoff | undefined) => (handoff && takenHandoffs.get(terminalId) !== handoff.changeId ? handoff : null);
 
 function onEvent(event: AgentEvent) {
   const terminalId = event.terminalId, known = entries.get(terminalId);
@@ -61,7 +67,8 @@ function onEvent(event: AgentEvent) {
   }
   const { model, resync: again } = applyEvents(known.model, [event]);
   publish(terminalId, { ...known, model });
-  if (again) resync(terminalId);
+  // A change that has settled may have left a draft in the snapshot for this session to take.
+  if (again || (!event.replay && event.type === 'switch.updated' && event.payload.phase === 'stable')) resync(terminalId);
 }
 
 function listen() {
@@ -101,7 +108,7 @@ export const dismissNote = (terminalId: string) => keep(terminalId, entry => ({ 
 // A switch to the terminal the window itself decided on (no key saved): the same notice as one the main process reports.
 export function noteTerminalSwitch(terminalId: string, reason: string) {
   const model = { ...emptyModel(), path: { previous: 'api', selected: 'terminal', reason, at: Date.now() } };
-  publish(terminalId, { model, dismissed: null, noteDismissed: false });
+  publish(terminalId, { model, dismissed: null, noteDismissed: false, handoff: null });
 }
 
 // Whether the terminal's card shows the native view: a session exists, the owner has not closed its finished view, and it was not moved to
@@ -111,8 +118,39 @@ export const nativeShown = (entry: NativeEntry | undefined): entry is NativeEntr
 // The reason a session was moved to the terminal, while the owner has not dismissed the notice.
 export const terminalSwitch = (entry: NativeEntry | undefined) => (entry && !entry.noteDismissed && entry.model.path?.selected === 'terminal' ? entry.model.path : null);
 
+// ── The run-mode switch ──
+// Phases in the order a change goes through them: when two copies of one change differ, the later phase is the newer copy.
+const PHASES: SwitchState['phase'][] = ['waiting-turn', 'awaiting-choice', 'waiting-background', 'preparing', 'switching', 'rolling-back', 'stable'];
+
+// The one state a terminal's card shows. ProjectTerminal.switchState and the event stream's (switch.updated, snapshot.switchState) are the same
+// state from main, seen at different moments: the newer change wins and, inside one change, the later phase. A finished session has none.
+export function resolveSwitch(terminal: SwitchState | null | undefined, entry: NativeEntry | undefined): SwitchState | null {
+  const events = entry && !isOver(entry.model) ? entry.model.switchState : null;
+  if (!terminal || !events) return terminal ?? events;
+  if (terminal.changeId !== events.changeId) return terminal.changeId > events.changeId ? terminal : events;
+  return PHASES.indexOf(terminal.phase) > PHASES.indexOf(events.phase) ? terminal : events;
+}
+
+// A failed switch's note, closed by the owner for that change only: the next change's failure shows again.
+const noteKey = (terminalId: string, state: SwitchState) => `${terminalId}/${state.changeId}`;
+export const useSwitchNoteShown = (terminalId: string, state: SwitchState | null) => !useSyncExternalStore(subscribe, () => dismissedSwitches, () => dismissedSwitches).has(state ? noteKey(terminalId, state) : '');
+export function dismissSwitchNote(terminalId: string, state: SwitchState) {
+  dismissedSwitches = new Set(dismissedSwitches).add(noteKey(terminalId, state));
+  listeners.forEach(listener => listener());
+}
+
+// The draft the previous session left for this terminal's new one, once per change: it is gone from the entry when taken and a later snapshot
+// of the same change does not bring it back, so a remounted view never puts the same words back.
+export function takeHandoff(terminalId: string): NativeDraft | null {
+  const known = entries.get(terminalId), handoff = known?.handoff;
+  if (!known || !handoff) return null;
+  takenHandoffs.set(terminalId, handoff.changeId);
+  publish(terminalId, { ...known, handoff: null });
+  return handoff.draft;
+}
+
 // Tests: forget everything and stop listening.
 export function disposeNativeStore() {
   stopListening?.(); stopListening = null;
-  entries = new Map(); usageRevision = 0; waiting.clear(); loading.clear(); resyncing.clear(); listeners.clear();
+  entries = new Map(); usageRevision = 0; dismissedSwitches = new Set(); waiting.clear(); loading.clear(); resyncing.clear(); takenHandoffs.clear(); listeners.clear();
 }
