@@ -22,9 +22,13 @@ const receiptOf = (value: unknown): NativeHandoffReceipt | null => {
   return typeof found?.changeId === 'number' && typeof found.version === 'number' && typeof found.accepted === 'boolean' ? found as NativeHandoffReceipt : null;
 };
 
-export function useHandoff(terminalId: string, sessionId: string | null, switchState: SwitchState | null | undefined): Handoff {
+export function useHandoff(terminalId: string, sessionId: string | null, switchState: SwitchState | null | undefined, surface?: SwitchState['current'] | null): Handoff {
   const entry = useNativeEntries().get(terminalId), state = resolveSwitch(switchState, entry);
   const changeId = state?.phase === 'preparing' ? state.changeId : null;
+  // Events can arrive before the workspace broadcast changes its runtime id. Use the binding of this change,
+  // and retry when that binding catches up rather than waiting for another switch-state event.
+  const runtimeId = (entry?.model.switchState?.changeId === state?.changeId ? entry?.model.identity?.runtimeSessionId : null)
+    ?? sessionId ?? entry?.model.identity?.runtimeSessionId ?? terminalId;
   // The offered draft is kept in a ref, so typing does not render the parent; each change of it is a new version (main says which it accepted),
   // and only while preparing does a change wake the sender below.
   const offered = useRef<{ draft: DraftOffer; version: number }>({ draft: NO_DRAFT, version: 0 }), preparing = useRef(false), sent = useRef('');
@@ -40,16 +44,21 @@ export function useHandoff(terminalId: string, sessionId: string | null, switchS
   useEffect(() => {
     const bridge = nativeBridge(), current = offered.current;
     if (changeId === null || accepted === changeId || !bridge) return;
-    const key = `${changeId}/${current.version}`;
+    const key = `${runtimeId}/${changeId}/${current.version}`;
     if (sent.current === key) return;
     sent.current = key;
-    void bridge.answer(terminalId, sessionId ?? entry?.model.identity?.runtimeSessionId ?? terminalId, `handoff-${changeId}`, { handoff: { changeId, draft: { version: current.version, ...current.draft } } })
+    void bridge.answer(terminalId, runtimeId, `handoff-${changeId}`, { handoff: { changeId, draft: { version: current.version, ...current.draft } } })
       .then(result => {
+        if (sent.current !== key) return;
         const receipt = result.ok ? receiptOf(result.value) : null;
         if (receipt?.accepted && receipt.changeId === changeId && receipt.version === offered.current.version) setAccepted(changeId);
         else if (!receipt?.accepted) sent.current = '';
-      }).catch(() => { sent.current = ''; });
-  }, [changeId, accepted, state, edits]);
+      }).catch(() => { if (sent.current === key) sent.current = ''; });
+  }, [changeId, runtimeId, accepted, state, edits]);
   const locked = !!state && (state.phase === 'preparing' || state.phase === 'switching') && accepted === state.changeId;
-  return { locked, offer, incoming: entry?.handoff?.draft ?? null, take: () => takeHandoff(terminalId) };
+  // A snapshot can already contain the outgoing draft while its source is still mounted. Only the committed
+  // destination (or the original surface after failure) may take it. An older handoff can arrive during the next change.
+  const incoming = entry?.handoff && (!state || (surface == null || surface === state.current)
+    && (state.phase === 'stable' || entry.handoff.changeId < state.changeId)) ? entry.handoff.draft : null;
+  return { locked, offer, incoming, take: () => incoming ? takeHandoff(terminalId) : null };
 }

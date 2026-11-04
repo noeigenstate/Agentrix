@@ -76,6 +76,19 @@ const codex = (content, at = 2000, extra = {}, modern = true) => ({ type: 'event
   payload: modern ? { type: 'item_completed', item: { type: 'UserMessage', id: `u-${at}`, content: typeof content === 'string' ? [{ type: 'text', text: content }] : content, ...extra } }
     : { type: 'user_message', message: content, ...extra } });
 
+test('SDK owner input remains a human prompt after switching to terminal history; SDK injections do not', () => {
+  const source = { turnOrigin: 'sdk', promptSource: 'sdk', entrypoint: 'sdk-ts' };
+  const log = new ConversationLog();
+  const record = claude('Owner message sent through the SDK.', 2000, source);
+  assert.equal(claudePrompt(record), true);
+  claudeConversation(log, record);
+  assert.deepEqual(log.list.map(entry => [entry.role, entry.text]), [['user', record.message.content]]);
+  for (const [content, extra] of [...injected, ['SDK metadata', { is_meta: true }], ['Child message', { parent_tool_use_id: 'child' }]]) {
+    assert.equal(promptText(content, { ...source, ...extra }), null);
+  }
+  assert.equal(promptText('Unknown SDK source', { turnOrigin: 'sdk' }), null);
+});
+
 test('both agents ignore every injected kind before it can start a prompt or replace the task', () => {
   for (const [content, extra = {}] of injected) {
     const actions = new ActionLog(), conversation = new ConversationLog(), queue = new PromptQueue();

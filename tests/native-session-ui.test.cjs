@@ -1133,10 +1133,50 @@ function handoffHook(bridge, current) {
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
   const harness = hookHarness('src/features/native-session/draft-handoff.ts', {
     './native-bridge.ts': { nativeBridge: () => bridge },
-    './native-store.ts': { resolveSwitch: terminal => terminal, useNativeEntries: () => new Map([['t1', { model: current.identity ? { identity: current.identity } : {}, handoff: current.incoming ? { changeId: 9, draft: current.incoming } : null }]]), takeHandoff: id => { taken.push(id); return current.incoming; } },
+    './native-store.ts': { resolveSwitch: terminal => terminal, useNativeEntries: () => new Map([['t1', { model: { identity: current.identity, switchState: current.eventState }, handoff: current.incoming ? { changeId: current.incomingChange ?? 9, draft: current.incoming } : null }]]), takeHandoff: id => { taken.push(id); const draft = current.incoming; current.incoming = null; return draft; } },
   });
-  return { render: () => harness.render('useHandoff', 't1', null, current.state).result, taken, set(patch) { Object.assign(current, patch); }, done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; } };
+  return { render: () => harness.render('useHandoff', 't1', current.runtimeId ?? null, current.state, current.surface).result, taken, set(patch) { Object.assign(current, patch); }, done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; } };
 }
+
+test('R5 a preparing snapshot cannot give the outgoing draft back to its source; only the committed surface takes it once', () => {
+  const state = switchState({ current: 'terminal', target: 'api', phase: 'preparing' });
+  const draft = { version: 1, text: 'survive the fast switch', images: [], undelivered: [] };
+  const hook = handoffHook({ answer: async () => ({ ok: true, value: {} }) }, { state, surface: 'terminal', incoming: draft, incomingChange: state.changeId });
+  try {
+    assert.equal(hook.render().incoming, null); assert.equal(hook.render().take(), null); assert.equal(hook.taken.length, 0);
+    hook.set({ state: { ...state, current: 'api', phase: 'stable' } });
+    assert.equal(hook.render().incoming, null, 'workspace still draws the old surface');
+    hook.set({ surface: 'api' });
+    assert.deepEqual(hook.render().take(), draft); assert.equal(hook.render().take(), null); assert.equal(hook.taken.length, 1);
+  } finally { hook.done(); }
+});
+
+test('R7 a changed runtime binding retries handoff even with the same switch-state object', async () => {
+  const answers = [], state = switchState({ phase: 'preparing' });
+  const hook = handoffHook({ answer: async (...args) => {
+    answers.push(args); return { ok: true, value: { changeId: state.changeId, version: 0, accepted: args[1] === 'new' } };
+  } }, { state, runtimeId: 'old' });
+  try {
+    hook.render(); await settle(); assert.equal(hook.render().locked, false);
+    hook.set({ runtimeId: 'new' }); hook.render(); await settle();
+    assert.deepEqual(answers.map(args => args[1]), ['old', 'new']); assert.equal(hook.render().locked, true);
+  } finally { hook.done(); }
+  const seen = [], newer = handoffHook({ answer: async (...args) => { seen.push(args[1]); return { ok: true, value: {} }; } },
+    { state, runtimeId: 'old', identity: { runtimeSessionId: 'new' }, eventState: state });
+  try { newer.render(); await settle(); assert.deepEqual(seen, ['new'], 'the event binding for this change wins over an older workspace broadcast'); }
+  finally { newer.done(); }
+});
+
+test('R7 a late receipt for the previous change cannot unlock or replace the latest accepted handoff', async () => {
+  const pending = [], hook = handoffHook({ answer: (...args) => new Promise(resolve => pending.push({ args, resolve })) },
+    { state: switchState({ phase: 'preparing' }), runtimeId: 'old' });
+  try {
+    hook.render(); hook.set({ state: switchState({ changeId: 4, phase: 'preparing' }), runtimeId: 'new' }); hook.render();
+    const accept = index => pending[index].resolve({ ok: true, value: { changeId: index + 3, version: 0, accepted: true } });
+    accept(1); await settle(); assert.equal(hook.render().locked, true);
+    accept(0); await settle(); assert.equal(hook.render().locked, true, 'the latest receipt remains authoritative');
+  } finally { hook.done(); }
+});
 
 test('the draft goes to main once per version when a switch prepares, only an accepted receipt for the latest version shuts the input, and a failed switch opens it again', async () => {
   const answers = []; let receipt = { ok: true, value: { changeId: 3, version: 1, accepted: false } };

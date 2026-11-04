@@ -189,7 +189,7 @@ function publicState() {
       const opened = terminalIds(p);
       const terminals = shownTerminalIds(p).map(id => {
         const current = sessions.get(id), s = current?.switchPreviousHost || current;
-        const reading = !s?.error && !startupErrors.has(id) && (s?.codexActive || !s?.inputDirty && (restorePlans.has(id) || s?.agentStarting)) ? readingHistory.summary(id) : null;
+        const reading = !s?.nativeStructured && !s?.error && !startupErrors.has(id) && (s?.codexActive || !s?.inputDirty && (restorePlans.has(id) || s?.agentStarting)) ? readingHistory.summary(id) : null;
         return { id, title: t('终端 {n}', { n: opened.indexOf(id) + 1 }), shell: s?.shellKind || (p.kind === 'ssh' ? 'bash' : localShell().kind), sessionId: s?.nativeStructured ? null : s?.sessionId || null, status: s?.status || 'stopped', codexActive: s?.codexActive || false, agent: s?.codexActive ? s.agent || 'codex' : null,
           ...(reading ? { readingHistory: reading } : {}),
           agentStarting: !!s?.agentStarting && !s.codexActive && s.status !== 'exited' && !s.error,
@@ -863,7 +863,9 @@ function claudeActivity(project, s, event) {
   if (event.state === 'attention') { publishCliState(s, 'waiting', { ...evidence, message: event.message }); return; }
   if (event.state === 'progress') { publishCliState(s, 'working', { ...evidence, progress: true }); return; }
   if (event.state === 'session') {
-    if (publishCliState(s, event.sessionSource === 'compact' && s.cliState?.state === 'working' ? 'working' : 'idle', { ...evidence, bind: true })) followClaude(project, s, event);
+    if (publishCliState(s, event.sessionSource === 'compact' && s.cliState?.state === 'working' ? 'working' : 'idle', { ...evidence, bind: true })) {
+      s.claudeSessionSource = event.sessionSource; followClaude(project, s, event);
+    }
     return;
   }
   if (s.usage && project.kind !== 'ssh') void refreshClaudeAccounts();
@@ -1361,10 +1363,14 @@ function observeSwitchTerminal(session) {
   const tasks = new Set([...(work?.tasks?.values() || [])].map(task => task.id));
   for (const id of work?.services || []) tasks.add(id);
   for (const call of s.calls?.running?.() || []) tasks.add(call.id);
+  // A fresh CLI does not create its transcript until the first prompt. ENOENT here is an empty observation,
+  // whereas unreadable history, a resumed thread or a failed reader must still remain unknown.
+  const empty = s.agent === 'claude' && s.claudeSessionSource === 'startup' && s.claudeTranscript?.missing === true
+    && !s.claudeResumeId && !session.spec?.hasHistory && !s.activityInputAt;
   return { state: s.cliState?.sessionId === s.sessionId && s.cliState.state === 'idle' ? 'idle' : 'working',
     pending: !!s.nativeInputRequests?.size || s.promptQueue?.list().some(item => item.state === 'queued'),
     draftBlocked: !!(s.native ? s.draftSubmissions : s.submissions)?.hasText,
-    background: !work || work.uncertain || work.reading ? { known: false, count: null } : { known: true, count: tasks.size } };
+    background: !work || work.uncertain || work.reading && !empty ? { known: false, count: null } : { known: true, count: tasks.size } };
 }
 function retainAgentState(target, source) {
   target.plannerSessionId = source.plannerSessionId || source.sessionId;
@@ -1401,6 +1407,7 @@ async function prepareSwitchTerminal(spec, _handoff, currentChange, transition =
     Object.assign(spec, { sessionId: staged.sessionId, bootstrapFile: staged.bootstrapFile, env: staged.usageEnv || spec.env });
     const deadline = Date.now() + 15000;
     while (currentChange() && sessions.get(id) === staged && staged.status !== 'exited') {
+      if (staged.status === 'shell' && staged.ready && !staged.agentStarting && !launchPlans.has(id)) throw new Error('terminal_agent_exited');
       const provider = spec.agent === 'claude' ? staged.claudeSessionId : staged.reportedThreadId || staged.rootThreadId;
       const ready = spec.agent === 'codex' ? staged.nativeResumeReady?.threadId === spec.providerSessionId : staged.cliState?.state === 'idle';
       if (provider && (!spec.providerSessionId || provider === spec.providerSessionId) && ready) {
