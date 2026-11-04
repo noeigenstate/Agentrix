@@ -830,7 +830,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         for (const id of resumeControlIds) void recordReceipt(id, event.payload.status).catch(() => {});
       }
       else if (event.type === 'usage.updated' && !event.replay) output.nativeUsage(event.payload, !!(options.resume || resumeSession));
-      else if (event.type === 'error' && event.payload.code === 'billing_identity_mismatch') signal(`transport ${id} claude-sdk: ${event.payload.message}`);
+      else if (event.type === 'error' && (event.payload.code === 'billing_identity_mismatch' || event.payload.stage === 'startup'
+        && ['sdk_initialization_timeout', 'sdk_startup_failed', 'native_cli_required', 'native_cli_outdated'].includes(event.payload.code))) signal(`transport ${id} claude-sdk: ${event.payload.message}`);
       else if (event.type === 'item.upsert' && event.payload.kind === 'agent-message' && event.payload.status === 'completed') {
         const content = event.payload.content;
         if (typeof content?.text === 'string' && (!content.phase || content.phase === 'final_answer')) output.result = content.text;

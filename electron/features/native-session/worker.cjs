@@ -13,10 +13,12 @@ function registerClaudeWorker({ control, claude, settings, context = () => '', e
       cwd: run.cwd, worktree: run.worktree || run.cwd, allow: run.allow, readOnly: run.readOnly, roundtable: run.roundtable,
       model: payload.model, effort: payload.effort, fast: payload.fast, context: context(run), env: runtimeEnv,
       monthlyBudgetUsd: settings().monthlyBudgetUsd, providerSessionId: payload.resume || null };
-    const config = settings(), selection = choosePath({ agent: 'claude', ...config, apiState: claude.apiState(config.monthlyBudgetUsd) });
+    await claude.refreshAvailability?.();
+    const config = settings(), apiState = claude.apiState(config.monthlyBudgetUsd);
+    const selection = choosePath({ agent: 'claude', ...config, apiState });
     const pathEvent = reason => createEventStream(spec, event => stream.emit(event)).publish('path.changed', { previous: null, selected: 'terminal', reason });
     if (selection.path === 'terminal') { pathEvent(selection.reason); return; }
-    if (!selection.path) throw new Error('Claude API 路径当前不可用。');
+    if (!selection.path) throw new Error(apiState.reason || 'Claude API 路径当前不可用。');
     // Descendant helpers may remove only authentication supplied by this SDK parent.
     runtimeEnv.AGENTRIX_SDK_PARENT = '1';
     let finish, done = false, stopping = false, state = 'starting', outcome = 'failed';
@@ -25,7 +27,7 @@ function registerClaudeWorker({ control, claude, settings, context = () => '', e
     void completed.catch(() => {});
     const runtime = claude.create(spec, event => {
       // Do not end the helper before the safe startup fallback decision reaches it.
-      if (event.type === 'error' && event.payload.code === 'billing_identity_mismatch' && event.payload.stage === 'startup'
+      if (event.type === 'error' && event.payload.stage === 'startup'
         || identityFailure.length && event.type === 'session.state' && event.payload.state === 'failed') {
         identityFailure.push(event); return;
       }
@@ -59,9 +61,8 @@ function registerClaudeWorker({ control, claude, settings, context = () => '', e
         await runtime.send({ clientMessageId: randomUUID(), text: payload.prompt, images: payload.images });
       }
       catch (error) {
-        if (config.claudePath === 'api-then-terminal' && (error.code === 'native_cli_required'
-          || error.code === 'billing_identity_mismatch' && error.beforeInput === true)) {
-          pathEvent(error.code === 'billing_identity_mismatch' ? error.message : error.code); return;
+        if (settings().claudePath === 'api-then-terminal' && (error.code === 'native_cli_required' || error.beforeInput === true)) {
+          pathEvent(error.beforeInput ? error.message : error.code); return;
         }
         for (const event of identityFailure) stream.emit(event);
         throw error;
