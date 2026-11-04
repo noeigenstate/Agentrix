@@ -8,9 +8,6 @@ export const MAX_PICTURES = 4;
 const TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const MAX_BYTES = 5 * 1024 * 1024;
 
-// The message that carries only pictures: the runtime takes no message without words.
-export const picturesOnly = () => t('请看附上的图片。');
-
 // Reads the files that fit in `room` more pictures; the first thing wrong with any of them is the error, and the rest still attach.
 export async function readPictures(files: readonly File[], room: number): Promise<{ pictures: string[]; error: string | null }> {
   const pictures: string[] = [];

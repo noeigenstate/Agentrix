@@ -575,7 +575,7 @@ test('a picture pasted or dropped joins the next message, and pictures alone can
     assert.deepEqual([attached().length, error()], [4, '最多附加 4 张图片，请先移除一张。'], 'four pictures at most');
     view.press(); await settle(); view.tree();
     assert.equal(sends.length, 1, 'Enter with only pictures sends them');
-    assert.deepEqual([sends[0][3], sends[0][4].length], ['请看附上的图片。', 4], 'with the one line the runtime needs');
+    assert.deepEqual([sends[0][3], sends[0][4].length], ['', 4], 'pictures alone need no words');
     assert.equal(attached(), undefined, 'the pictures left with the message');
     view.type('look at this'); paste([item(file('image/png', 'F'))]); await settle(); view.tree(); view.press(); await settle();
     assert.deepEqual([sends[1][3], sends[1][4]], ['look at this', ['data:image/png;base64,F']], 'words and a picture go together');

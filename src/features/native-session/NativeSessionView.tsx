@@ -13,7 +13,7 @@ import { nativeBridge, type NativePendingInput, type SwitchState } from './nativ
 import type { Handoff } from './draft-handoff.ts';
 import { nativeEntries, nativePending, runningStep, type SentMessage } from './native-entries.ts';
 import { canSend, isOver, isWorking } from './native-model.ts';
-import { MAX_PICTURES, picturesOnly, readPictures } from './native-pictures.ts';
+import { MAX_PICTURES, readPictures } from './native-pictures.ts';
 import { dismissNative, nativeShown, resolveSwitch, useNativeEntries, type NativeEntry } from './native-store.ts';
 import { NativeRequestCard } from './NativeRequestCard';
 import { asksChoice, SwitchLine, SwitchQuestion } from './SwitchNotice';
@@ -85,7 +85,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     const value = text.trim(), pictures = carried, quoted = quote;
     if (!(value || pictures.length) || !open) return;
     setText(''); setCarried([]); setQuote(null);
-    if (!await post(withQuote(quoted?.excerpt, value || picturesOnly()), pictures)) { setText(current => current || value); setCarried(current => current.length ? current : pictures); setQuote(current => current ?? quoted); }
+    if (!await post(withQuote(quoted?.excerpt, value), pictures)) { setText(current => current || value); setCarried(current => current.length ? current : pictures); setQuote(current => current ?? quoted); }
   };
   // A picture pasted or dropped joins the ones that go with the next message; one the runtime would refuse is refused here, with the reason.
   const attach = async (files: File[]) => {
