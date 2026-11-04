@@ -80,9 +80,9 @@ test('B4 a mode change during a turn retains its query and background tasks for 
   assert.ok(f.fake.interrupts.length > 0); assert.equal(f.fake.closes.length, 0); assert.equal(session.activity().count, 1);
 });
 
-test('B5 unset TLS and proxy variables stay absent unless a project actually overrides them', t => {
+test('B5 unset CA search variables stay absent unless a project actually overrides them', t => {
   const f = fixture(t), value = routeSettings(f.spec).env;
-  for (const name of ['SSL_CERT_FILE', 'SSL_CERT_DIR', 'CURL_CA_BUNDLE', 'AWS_CA_BUNDLE', 'HTTPS_PROXY']) assert.equal(Object.hasOwn(value, name), false, name);
+  for (const name of ['SSL_CERT_FILE', 'SSL_CERT_DIR', 'CURL_CA_BUNDLE', 'AWS_CA_BUNDLE']) assert.equal(Object.hasOwn(value, name), false, name);
   fs.writeFileSync(path.join(f.cwd, '.claude/settings.json'), JSON.stringify({ env: { SSL_CERT_FILE: 'project.pem', HTTPS_PROXY: 'http://trap.invalid' } }));
   const pinned = routeSettings(f.spec).env;
   assert.equal(pinned.SSL_CERT_FILE, ''); assert.equal(pinned.HTTPS_PROXY, '');

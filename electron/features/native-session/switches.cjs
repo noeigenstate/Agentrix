@@ -100,7 +100,7 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
       update(entry, { current: state.target, phase: 'stable', reason: recovered ? '新运行方式连接失败，已恢复原会话。' : result?.reason || null, requestId: null,
         outcome: recovered ? 'restored' : 'switched' });
       if (entry.pendingFailure && !entry.inputStarted) { entry.pendingFailure = false; recover(entry); }
-    } catch {
+    } catch (error) {
       if (prepared) await prepared.cancel();
       entry.pendingSession = null;
       if (closed || entry.cancelled) return;
@@ -116,7 +116,7 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
         clearTimeout(entry.retry); entry.retry = setTimeout(() => kick(entry), retryMs * 2 ** (entry.retries - 1)); entry.retry.unref?.(); return;
       }
       entry.failed = version;
-      update(entry, { phase: 'stable', requestId: null, reason: '运行方式切换失败，已保留原会话。', outcome: 'failed' });
+      update(entry, { phase: 'stable', requestId: null, reason: error?.beforeInput === true ? error.message : '运行方式切换失败，已保留原会话。', outcome: 'failed' });
     }
   }
   function recover(entry) {
