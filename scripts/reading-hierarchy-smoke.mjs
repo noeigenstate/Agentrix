@@ -177,6 +177,7 @@ try {
   await card.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   await page.evaluate(() => window.agentrix.settings({ autoSave: true }));
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   await page.getByRole('treeitem', { name: 'slow-save.txt', exact: true }).click();
   const editor = page.getByRole('textbox', { name: '文件编辑器', exact: true });
   await editor.waitFor();

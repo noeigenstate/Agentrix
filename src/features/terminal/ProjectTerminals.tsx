@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type ComponentProps, type CSSProperties } from 'react';
 import { ArrowCounterClockwise, DotsSixVertical, Play, Terminal as TerminalIcon, X } from '@phosphor-icons/react';
 import { SubagentPane } from '../agents/SubagentPane';
 import { closeSplit, splitsOf, useSplits } from '../agents/subagent-splits.ts';
@@ -9,11 +9,17 @@ import { ReadingView } from '../reading/ReadingView';
 import { readingShown, setReading, syncReading, useTerminalChoice } from '../reading/reading-mode';
 import { NativePathNote } from '../native-session/NativePathNote';
 import { NativeSessionView } from '../native-session/NativeSessionView';
+import { useHandoff } from '../native-session/draft-handoff.ts';
 import { ensureNativeSession, nativeShown, useNativeEntries } from '../native-session/native-store.ts';
 import { TERMINAL_SPLITS, useReorder } from '../workspace/useProjectReorder';
 import type { Project, ProjectTerminal, Result } from '../../shared/types';
 import { t } from '../../shared/i18n';
 
+// The reading view of a terminal, with the draft handoff of a run-mode switch bound to its terminal (the view itself never reaches the bridge).
+function HandoffReading(props: Omit<ComponentProps<typeof ReadingView>, 'handoff'>) {
+  const { id, nativeRuntimeSessionId, switchState } = props.terminal, handoff = useHandoff(id, nativeRuntimeSessionId ?? null, switchState);
+  return <ReadingView {...props} handoff={handoff} />;
+}
 
 export function ProjectTerminals({ project, focused, fontSize, activeId, setActiveId, onExpand, onAction, onError, onOpenLink }: {
   project: Project; focused: boolean; fontSize: number; activeId: string | null; setActiveId: (id: string) => void; onExpand: () => void;
@@ -76,10 +82,11 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
           <button className="icon-button" title={t('关闭此终端')} aria-label={t('关闭 {name}', { name })} onClick={() => void onAction(window.agentrix.closeTerminal(terminal.id))}><X size={13} /></button>
         </div>}
         <div className="terminal-split-body" data-reading={reading || native || !!terminal.agentStarting}>
-          {reading && <ReadingView projectId={project.id} terminal={terminal} remote={project.kind === 'ssh'} autoFocus={focused && selected === terminal.id} active={selected === terminal.id} onShowTerminal={() => setReading(terminal.id, false)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />}
-          {terminal.sessionId && <NativePathNote terminalId={terminal.id} />}
+          {reading && <HandoffReading projectId={project.id} terminal={terminal} remote={project.kind === 'ssh'} autoFocus={focused && selected === terminal.id} active={selected === terminal.id} onShowTerminal={() => setReading(terminal.id, false)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />}
+          {/* A change of run mode on its way to a terminal card, and the note of a path that did not go as chosen; the native view draws its own line and question. */}
+          <NativePathNote terminalId={terminal.id} terminalActive={!!terminal.sessionId} switchState={terminal.switchState} sessionId={terminal.nativeRuntimeSessionId ?? null} />
           {terminal.sessionId ? <TerminalPane id={terminal.id} sessionId={terminal.sessionId} fontSize={fontSize} focused={focused && selected === terminal.id && !reading && !terminal.agentStarting} onError={onError} onOpenLink={(_id, target) => onOpenLink(project.id, target)} remote={project.kind === 'ssh'} />
-            : native ? <NativeSessionView terminalId={terminal.id} autoFocus={focused && selected === terminal.id} />
+            : native ? <NativeSessionView terminalId={terminal.id} autoFocus={focused && selected === terminal.id} switchState={terminal.switchState} />
             // A local project starts with the agent chosen here; an SSH project connects first, in its terminal.
             : reading ? null : project.kind !== 'ssh' ? <AgentLauncher terminalId={terminal.id} projectId={project.id} onAction={onAction} onOpenTerminal={openTerminal} />
             : sshEmpty(terminal.id)}

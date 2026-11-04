@@ -6,9 +6,9 @@
 //   turn.diff    diff                              plan.updated  explanation, steps[{ step|text|title, status }]
 //   request.opened  requestId, kind, blocking, title, preview, questions[{ id, header, question, options[{ label, description }], multiSelect, isSecret }]
 //   session.state  state, reason     turn.completed  status, error     input.receipt  clientMessageId, status     path.changed  previous, selected, reason
-//   error  code, message, willRetry
+//   error  code, message, willRetry     switch.updated  a SwitchState (the whole payload)
 // usage.updated, limits.updated and routing.updated are not part of the conversation: the usage panel asks the main process for the numbers (ApiUsage).
-import type { AgentEvent } from '../../shared/agent-events';
+import type { AgentEvent, SwitchState } from '../../shared/agent-events';
 
 export type Payload = Record<string, unknown>;
 export type NativeItem = {
@@ -26,11 +26,13 @@ export type NativeModel = {
   diff: string | null; plan: { explanation: string | null; steps: { text: string; status: string | null }[] } | null;
   path: { previous: string | null; selected: string; reason: string | null; at: number } | null;
   error: { code: string | null; message: string; willRetry: boolean } | null;
+  // The run-mode change this session is going through (contract addendum): one state for both transports, replaced whole by each event.
+  switchState: SwitchState | null;
 };
 
 export const emptyModel = (): NativeModel => ({
   identity: null, lastSequence: null, refused: [], session: null, turn: { running: false, status: null, error: null },
-  order: [], items: {}, requests: [], receipts: {}, diff: null, plan: null, path: null, error: null,
+  order: [], items: {}, requests: [], receipts: {}, diff: null, plan: null, path: null, error: null, switchState: null,
 });
 
 const SEND_STATES = new Set(['starting', 'idle', 'running', 'waiting']);
@@ -102,6 +104,7 @@ function handle(draft: NativeModel, event: AgentEvent) {
     case 'request.resolved': draft.requests = draft.requests.filter(request => request.id !== text(payload.requestId)); break;
     case 'input.receipt': { const id = text(payload.clientMessageId), status = text(payload.status); if (id && status) draft.receipts[id] = status; break; }
     case 'path.changed': draft.path = { previous: text(payload.previous), selected: text(payload.selected) ?? 'unknown', reason: text(payload.reason), at: event.receivedAtMs }; break;
+    case 'switch.updated': draft.switchState = event.payload; break;
     case 'error': draft.error = { code: text(payload.code), message: text(payload.message) ?? '', willRetry: payload.willRetry === true }; break;
   }
 }
@@ -127,9 +130,9 @@ export function applyEvents(model: NativeModel, events: AgentEvent[], strict = t
   return { model: draft, resync };
 }
 
-export function fromSnapshot(snapshot: { lastSequence: number; events: AgentEvent[] }): NativeModel {
+export function fromSnapshot(snapshot: { lastSequence: number; events: AgentEvent[]; switchState?: SwitchState }): NativeModel {
   const { model } = applyEvents(emptyModel(), snapshot.events, false);
-  return { ...model, lastSequence: Math.max(model.lastSequence ?? snapshot.lastSequence, snapshot.lastSequence) };
+  return { ...model, switchState: snapshot.switchState ?? model.switchState, lastSequence: Math.max(model.lastSequence ?? snapshot.lastSequence, snapshot.lastSequence) };
 }
 
 export const canSend = (model: NativeModel) => !!model.session && SEND_STATES.has(model.session.state);

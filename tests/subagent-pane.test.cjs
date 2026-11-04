@@ -411,35 +411,34 @@ test('the input is on while the agent runs and off in a finished view and in a l
   assert.deepEqual([paneMarkup(ok({})), paneMarkup(ok({ state: 'done', endedAt: 5000 })), paneMarkup(ok({}, 'gone'))].map(off), [0, 1, 1]);
 }));
 
-// ---- the activity pane's rows ---------------------------------------------------------------------------------------------------
+// ---- the called models' rows (the left bar's Agent tab) ---------------------------------------------------------------------------------------------------
 const call = items => ({ agent: 'Codex', provider: 'OpenAI', model: 'gpt-6.1-sol', effort: 'max', fast: true, preparing: 0, running: 1, reviewing: 0, tasks: [], rate: null, items });
 const item = (id, patch = {}) => ({ id, state: 'running', role: '执行', title: `Task ${id}`, startedAt: 1, endedAt: null, viewable: true, ...patch });
-const paneRows = (items, terminalId) => renderToStaticMarkup(React.createElement(load('features/agents/ActivityPane.tsx').ActivityPane, { terminal: {
-  id: terminalId, agent: 'claude', codexActive: true, prompts: [], agentSettings: { model: 'claude-opus-5-5', effort: 'high', fast: false }, agentUsage: { provider: 'Anthropic', limits: [], calls: [call(items)] } } }));
+const paneRows = (items, terminalId) => renderToStaticMarkup(React.createElement(load('features/agents/AgentCalls.tsx').CallsCard, { calls: [call(items)], terminalId }));
 
 test('a call whose record can be read is one button on the same row; one that cannot stays a plain row; the icons and states are unchanged', () => zh(() => {
   const html = paneRows([item('agent:a'), item('dispatch:b', { state: 'done', viewable: false }), item('dispatch:c', { failure: { reason: 'killed', exitCode: null } })], 't-rows');
-  assert.equal(count(html, /<button type="button" class="activity-call-open"/g), 2);
-  assert.match(html, /<li class="is-running" title="Task agent:a\n点击在旁边查看它在做什么"><button type="button" class="activity-call-open" aria-pressed="false" aria-label="执行 Task agent:a，运行中"><span class="activity-row-icon">/);
-  assert.match(html, /<li class="is-done" title="Task dispatch:b"><span class="activity-row-icon">/, 'not viewable: the plain row it always was, with no hint');
+  assert.equal(count(html, /<button type="button" class="activity-call-open activity-call-body"/g), 2);
+  assert.match(html, /<li class="activity-call-item is-running" title="Task agent:a\n点击在旁边查看它在做什么"><button type="button" class="activity-call-open activity-call-body" aria-pressed="false" aria-label="执行 Task agent:a，运行中"><span class="activity-row-icon">/);
+  assert.match(html, /<li class="activity-call-item is-done" title="Task dispatch:b"><div class="activity-call-body"><span class="activity-row-icon">/, 'not viewable: the plain row it always was, with no hint');
   assert.match(html, /aria-label="执行 Task dispatch:c，已停止"/, 'a failed call can be opened too, and says why in its state');
   assert.doesNotMatch(html, /data-icon="(Play|Split|Columns|ArrowSquare)/, 'no new icon');
-  assert.equal(count(html, /<span class="activity-row-end">运行中<\/span>/g), 1);
+  assert.equal(count(html, /<small class="activity-call-sub">执行 · 运行中<\/small>/g), 1, 'the second line: the role and the state');
 }));
 
 test('an open view makes its row pressed and the hint offers to close it; a click toggles that view and no other', () => zh(() => {
   const s = splits();
   s.openSplit('t-pressed', 'agent:a');
   const html = paneRows([item('agent:a'), item('agent:b')], 't-pressed');
-  assert.match(html, /title="Task agent:a\n点击关闭旁边的分屏"><button type="button" class="activity-call-open" aria-pressed="true"/);
-  assert.match(html, /title="Task agent:b\n点击在旁边查看它在做什么"><button type="button" class="activity-call-open" aria-pressed="false"/);
+  assert.match(html, /title="Task agent:a\n点击关闭旁边的分屏"><button type="button" class="activity-call-open activity-call-body" aria-pressed="true"/);
+  assert.match(html, /title="Task agent:b\n点击在旁边查看它在做什么"><button type="button" class="activity-call-open activity-call-body" aria-pressed="false"/);
   assert.equal(paneRows([item('agent:a')], 't-elsewhere').includes('aria-pressed="true"'), false, 'another terminal’s views are not this pane’s');
   s.closeSplit('t-pressed', 'agent:a');
   // A click is driven through the card itself, with the store read straight from its snapshot instead of a render.
   const clicker = makeLoader({ '../terminal/terminal-screen': screenStub, '../home/send-to-agent': sendStub, react: { ...React, useSyncExternalStore: (subscribe, snapshot) => snapshot() } });
   clicker('shared/i18n.ts').applyLanguage('zh');
-  const { CallsCard } = clicker('features/agents/ActivityPane.tsx'), store = clicker('features/agents/subagent-splits.ts');
-  const rows = () => elements(CallsCard({ calls: [call([item('agent:a'), item('agent:b'), item('dispatch:c', { viewable: false })])], terminalId: 't-click' })).filter(node => node.props.className === 'activity-call-open');
+  const { CallsCard } = clicker('features/agents/AgentCalls.tsx'), store = clicker('features/agents/subagent-splits.ts');
+  const rows = () => elements(CallsCard({ calls: [call([item('agent:a'), item('agent:b'), item('dispatch:c', { viewable: false })])], terminalId: 't-click' })).filter(node => node.props.className === 'activity-call-open activity-call-body');
   assert.equal(rows().length, 2);
   rows()[1].props.onClick();
   assert.deepEqual(store.getSplits().map(view => [view.terminalId, view.callId]), [['t-click', 'agent:b']]);
@@ -450,10 +449,10 @@ test('an open view makes its row pressed and the hint offers to close it; a clic
 
 // ---- the terminal grid ----------------------------------------------------------------------------------------------------------
 const terminal = id => ({ id, title: id, sessionId: `s-${id}`, status: 'running', codexActive: true, agent: 'claude', readingHistory: false });
-test('a viewable row is a plain row with one full-width button: the row has a single column, so the button never lands in the 16px icon column', () => {
+test('a viewable row is a plain block row with one full-width button: the row has no grid of its own, so the button never lands in the 16px icon column', () => {
   const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
-  assert.match(css, /\.activity-call-rows li:has\(> \.activity-call-open\) \{ grid-template-columns: minmax\(0, 1fr\); \}/);
-  assert.match(css, /\.activity-call-rows li > \.activity-call-open \{ display: grid; grid-template-columns: 16px minmax\(0, 1fr\) auto;/, 'the button carries the same 16 | text | state grid inside');
+  assert.match(css, /\.activity-call-rows li\.activity-call-item \{ display: block; height: auto; \}/, 'the row is a plain block, so the button fills it');
+  assert.match(css, /\.activity-call-rows li\.activity-call-item > \.activity-call-body \{ display: grid; grid-template-columns: 16px minmax\(0, 1fr\);/, 'the button (or the div of a plain call) carries the icon column and the two lines inside');
 });
 
 const gridMarkup = (terminals, focused) => renderToStaticMarkup(React.createElement(load('features/terminal/ProjectTerminals.tsx').ProjectTerminals, {
@@ -497,7 +496,7 @@ test('the grid is not rearranged by views of another terminal, and terminals of 
 }));
 
 // ---- the narrow window's way in -------------------------------------------------------------------------------------------------
-// CSS hides the activity pane below 1000px; the header of the expanded project then carries a chip that opens the pane's own rows in a popover.
+// CSS hides the activity pane below 1000px; the header of the expanded project then carries a chip that opens the called models' own rows (the left bar's Agent tab list) in a popover, for a window whose bar is collapsed.
 const chipTerminal = (id, items) => ({ id, agentUsage: { provider: 'Anthropic', limits: [], calls: [call(items)] } });
 const chipMarkup = (terminal, open) => {
   const chipLoader = makeLoader({ '../terminal/terminal-screen': screenStub, '../home/send-to-agent': sendStub,
@@ -506,21 +505,21 @@ const chipMarkup = (terminal, open) => {
   return renderToStaticMarkup(React.createElement(chipLoader('features/agents/SubagentChip.tsx').SubagentChip, { terminal }));
 };
 
-test("the narrow window's header chip: counts the called models, shows the running ones, lists the pane's own rows, and exists only for a viewable sub-agent", () => zh(() => {
+test("the narrow window's header chip: counts the called models, shows the running ones, lists the Agent tab's own rows, and exists only for a viewable sub-agent", () => zh(() => {
   const items = [item('agent:a'), item('agent:b', { state: 'done' }), item('dispatch:c', { viewable: false, state: 'preparing' })];
   const closed = chipMarkup(chipTerminal('t-chip', items), false);
   assert.match(closed, /^<div class="subagent-chip-anchor"><button type="button" class="button small subagent-chip" aria-expanded="false" aria-haspopup="dialog">子 agent 3<span class="subagent-chip-run" title="1 个运行中"><i aria-hidden="true"><\/i>1<\/span><\/button><\/div>$/);
   assert.equal(chipMarkup(chipTerminal('t-chip', [item('agent:b', { state: 'done' })]), false).includes('subagent-chip-run'), false, 'nothing running, no running count');
   assert.equal(chipMarkup(chipTerminal('t-chip', [item('dispatch:c', { viewable: false })]), false), '', 'no readable record, no chip');
   assert.equal(chipMarkup({ id: 't-chip', agentUsage: null }, false), '', 'no calls, no chip');
-  // Open: the same card the pane shows, row for row (the same buttons, so the same click and the same pressed state).
+  // Open: the same card the Agent tab shows, row for row (the same buttons, so the same click and the same pressed state).
   const open = chipMarkup(chipTerminal('t-chip', items), true), pane = paneRows(items, 't-chip');
   assert.match(open, /<div class="subagent-menu" role="dialog" aria-label="子 agent">/);
   assert.match(open, /aria-expanded="true"/);
-  const rows = html => html.match(/<li class="is-[^"]*"[^>]*>.*?<\/li>/gs);
+  const rows = html => html.match(/<li class="activity-call-item is-[^"]*"[^>]*>.*?<\/li>/gs);
   assert.equal(rows(open).length, 3, 'the three calls');
-  assert.deepEqual(rows(open), rows(pane), 'the same rows as the activity pane');
-  assert.equal(count(open, /<button type="button" class="activity-call-open"/g), 2);
+  assert.deepEqual(rows(open), rows(pane), 'the same rows as the Agent tab');
+  assert.equal(count(open, /<button type="button" class="activity-call-open activity-call-body"/g), 2);
 }));
 
 test('the chip opens on a click and closes on Escape (focus back on it, the key goes no further), on a press outside, on Tab out of it and on choosing a row', () => zh(() => {
@@ -542,7 +541,7 @@ test('the chip opens on a click and closes on Escape (focus back on it, the key 
   try {
     const chipLoader = makeLoader({ '../terminal/terminal-screen': screenStub, '../home/send-to-agent': sendStub, react: hooks });
     chipLoader('shared/i18n.ts').applyLanguage('zh');
-    const { SubagentChip } = chipLoader('features/agents/SubagentChip.tsx'), { CallsCard } = chipLoader('features/agents/ActivityPane.tsx');
+    const { SubagentChip } = chipLoader('features/agents/SubagentChip.tsx'), { CallsCard } = chipLoader('features/agents/AgentCalls.tsx');
     const terminal = chipTerminal('t-esc', [item('agent:a')]), popup = {}, elsewhere = {};
     // Slot 0 is the open state, 1 the anchor ref, 2 the chip ref: a mounted tree would fill the refs; here the anchor knows `popup` and the chip counts focus.
     const render = () => {
@@ -562,7 +561,7 @@ test('the chip opens on a click and closes on Escape (focus back on it, the key 
     chip().props.onClick();
     assert.ok(dialog(), 'a click opens it'); assert.equal(chip().props['aria-expanded'], true);
     assert.equal(dialog().props['aria-label'], '子 agent');
-    assert.equal(elements(dialog()).find(node => node.type === CallsCard).props.terminalId, 't-esc', 'the pane\'s card for this terminal');
+    assert.equal(elements(dialog()).find(node => node.type === CallsCard).props.terminalId, 't-esc', 'the Agent tab\'s card for this terminal');
 
     // Escape closes it, puts focus back on the chip and is swallowed in the capture phase, before the terminal sees it.
     const swallowed = [];
@@ -583,7 +582,7 @@ test('the chip opens on a click and closes on Escape (focus back on it, the key 
     anchor().props.onBlur({ relatedTarget: popup }); assert.ok(dialog());
     anchor().props.onBlur({ relatedTarget: elsewhere }); assert.equal(dialog(), undefined);
 
-    // Choosing a row closes it and hands focus back (the pane's row has already toggled its view); the popover's own space is no choice.
+    // Choosing a row closes it and hands focus back (the row has already toggled its view); the popover's own space is no choice.
     chip().props.onClick(); focused.length = 0;
     dialog().props.onClick({ target: { closest: () => null } }); assert.ok(dialog());
     dialog().props.onClick({ target: { closest: selector => selector === '.activity-call-open' ? {} : null } });
@@ -591,7 +590,7 @@ test('the chip opens on a click and closes on Escape (focus back on it, the key 
   } finally { if (previous) Object.defineProperty(globalThis, 'document', previous); else delete globalThis.document; }
 }));
 
-test("the chip's popover is the pane's card on the menu colour, and the chip itself opens no view, writes nothing and expands nothing", () => {
+test("the chip's popover is the Agent tab's card on the menu colour, and the chip itself opens no view, writes nothing and expands nothing", () => {
   const read = file => fs.readFileSync(path.join(src, file), 'utf8'), css = read('features/agents/subagent-chip.css');
   assert.match(css, /\.subagent-menu \{ --flow-line: var\(--divider\); --flow-ink: var\(--text-1\); --flow-muted: var\(--text-2\); --flow-faint: var\(--text-3\);/, 'the pane\'s ink levels');
   assert.match(css, /\.subagent-menu \{[^}]*background: var\(--bg-menu\);/);

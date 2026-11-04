@@ -85,7 +85,7 @@ try {
   await page.getByRole('button', { name: '进入 Parent task status', exact: true }).click();
   const pane = page.locator('.activity-pane'); await pane.waitFor();
   const overview = pane.locator('.activity-main-tasks'); await overview.waitFor();
-  assert.equal(await pane.locator('.activity-context .activity-figure').count(), 0, 'no context before Codex counts one');
+  assert.equal(await pane.locator('.api-agent .activity-figure').count(), 0, 'no context before Codex counts one');
   const tokens = (total, last, limits) => JSON.stringify({ type: 'event_msg', timestamp: new Date().toISOString(), payload: { type: 'token_count', info: { total_token_usage: total, last_token_usage: last, model_context_window: 828400 }, rate_limits: limits } }) + '\n';
   const used = (input, cached, output) => ({ input_tokens: input, cached_input_tokens: cached, output_tokens: output, reasoning_output_tokens: 0, total_tokens: input + output });
   const resets = Math.round(Date.now() / 1000) + 3 * 86400;
@@ -95,9 +95,9 @@ try {
   await waitFor(async () => (await text('.activity-main .activity-call-head p')).join() === 'GPT-6.1-Solhigh', 'the main model section names the model and its effort (the mark stands for the official service)');
   assert.deepEqual(await text('.activity-main .activity-call-settings'), ['high'], 'the main model head says how the model runs, with no separate note line');
   assert.equal(await pane.locator('.activity-main .activity-call-note').count(), 0);
-  await waitFor(async () => (await text('.activity-context .activity-metric > small')).join() === '共 828k tokens · 还可容纳 514k', 'the context shows how full the window is');
-  assert.deepEqual(await text('.activity-context .activity-metric-label'), ['上下文长度'], 'the context title is the label of its meter line');
-  assert.deepEqual(await text('.activity-context .activity-metric > b'), ['38%']);
+  await waitFor(async () => (await text('.api-agent .activity-figure > small')).join() === '共 828k tokens · 还可容纳 514k', 'the context shows how full the window is');
+  assert.deepEqual(await text('.api-agent .activity-figure > .activity-metric-label'), ['上下文长度'], 'the context title is the label of its meter line');
+  assert.deepEqual(await text('.api-agent .activity-figure > b'), ['38%']);
   assert.deepEqual(await text('.activity-limit > .activity-metric-label'), ['5 小时额度', '每周额度'], 'the plan windows are named by their length');
   assert.deepEqual(await text('.activity-limit > b'), ['34%', '92%']);
   assert.deepEqual(await pane.locator('.activity-limit').evaluateAll(nodes => nodes.map(node => node.classList.contains('is-warn'))), [false, true], 'only the window from 90% takes the warning colour');
@@ -118,8 +118,8 @@ try {
   await fs.appendFile(transcript, limitsOnly(Date.now(), 36));
   await waitFor(async () => (await text('.activity-limit > b')).join() === '36%,93%', 'fresh limits replace the expired window', 4000);
   console.log('PASS: open rollout pushes limits-only updates; older records lose; reset expiry waits for fresh data without completion notices');
-  assert.deepEqual(await text('.activity-usage .activity-tokens > .activity-metric-label'), ['本轮', '本次对话']);
-  assert.deepEqual(await text('.activity-usage .activity-tokens > small'), ['输入 320k · 缓存命中 91% · 输出 4.2k', '输入 320k · 缓存命中 91% · 输出 4.2k']);
+  assert.deepEqual(await text('.api-agent .activity-tokens[title] > .activity-metric-label'), ['本轮', '本次对话']);
+  assert.deepEqual(await text('.api-agent .activity-tokens[title] > small'), ['输入 320k · 缓存命中 91% · 输出 4.2k', '输入 320k · 缓存命中 91% · 输出 4.2k']);
   // The overview lists the prompts: the one being worked on, then one sent while it works. The card's size is fixed:
   // more prompts never move the main model card.
   // Measured once the panel has finished opening: while it flies in it is still scaled a little, every top a pixel off.
@@ -164,8 +164,8 @@ try {
   await page.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click(); await reading.waitFor();
   // Each count Codex writes updates the figures.
   await fs.appendFile(transcript, tokens(used(400000, 360000, 5000), used(80000, 70000, 800)));
-  await waitFor(async () => (await text('.activity-usage .activity-tokens > small')).join() === '输入 400k · 缓存命中 90% · 输出 5k,输入 400k · 缓存命中 90% · 输出 5k', 'a later count updates the tokens');
-  assert.deepEqual(await text('.activity-context .activity-metric > small'), ['共 828k tokens · 还可容纳 748k']);
+  await waitFor(async () => (await text('.api-agent .activity-tokens[title] > small')).join() === '输入 400k · 缓存命中 90% · 输出 5k,输入 400k · 缓存命中 90% · 输出 5k', 'a later count updates the tokens');
+  assert.deepEqual(await text('.api-agent .activity-figure > small'), ['共 828k tokens · 还可容纳 748k']);
   const overflow = await pane.evaluate(node => {
     const right = node.getBoundingClientRect().right + 1;
     return [...node.querySelectorAll('.activity-card, .activity-metric, .activity-call-rows li')].filter(item => item.getBoundingClientRect().right > right).map(item => item.className);

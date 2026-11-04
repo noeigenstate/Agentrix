@@ -92,6 +92,7 @@ try {
   assert.ok(boxes[0].x + boxes[0].width <= boxes[1].x + 2 || boxes[0].y + boxes[0].height <= boxes[1].y + 2);
   await page.screenshot({ path: path.join(output, 'split-terminals.png') });
 
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   await page.getByRole('treeitem', { name: 'src', exact: true }).click();
   await page.getByRole('treeitem', { name: 'main.txt', exact: true }).click({ button: 'right' });
   await page.getByRole('menuitem', { name: /^复制绝对路径/ }).click();
@@ -227,6 +228,7 @@ try {
   await waitFor(async () => (await remoteState()).terminals.length === 2 && (await remoteState()).terminals.every(item => item.shellReady), 'two independent SSH terminals');
   const remoteSecond = (await remoteState()).terminals[1].sessionId;
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   await page.getByRole('treeitem', { name: 'remote.txt', exact: true }).click({ button: 'right' });
   await page.getByRole('menuitem', { name: /^复制绝对路径/ }).click(); clipboardOwner = '/srv/fixture/remote.txt';
   assert.equal(await application.evaluate(({ clipboard }) => clipboard.readText()), clipboardOwner);

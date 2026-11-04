@@ -77,6 +77,7 @@ try {
   assert.ok((await page.evaluate(id => window.agentrix.attachTerminal(id), projects[0].id)).value.data.includes('PENDING_APPEARANCE_DRAFT'));
   await first.getByRole('button', { name: `进入 ${projects[0].name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   await page.getByRole('treeitem', { name: 'docs', exact: true }).click();
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).click();
   const editor = page.getByRole('textbox', { name: '文件编辑器', exact: true });
@@ -124,6 +125,7 @@ try {
   const remoteId = (await page.evaluate(() => window.agentrix.addSSHProject({ host: 'fixture', path: '/srv/fixture', name: '远程 Markdown' }))).value;
   await waitFor(async () => (await state()).projects.find(item => item.id === remoteId).shellReady, 'remote shell');
   await page.getByRole('button', { name: '进入 远程 Markdown', exact: true }).click();
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   await page.getByRole('treeitem', { name: 'docs', exact: true }).click(); await page.getByRole('treeitem', { name: 'README.md', exact: true }).click();
   await page.getByRole('button', { name: '预览', exact: true }).click();
   await waitFor(async () => markdown.getByAltText('项目图标').evaluate(image => image.complete && image.naturalWidth === 256), 'SSH Markdown image');

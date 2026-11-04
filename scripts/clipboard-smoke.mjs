@@ -45,6 +45,7 @@ try {
   });
   await page.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   for (const format of ['absolute', 'absolute', 'relative']) {
     await page.evaluate(({ id, filename }) => window.agentrix.copyEntries(id, [filename]), { id: project.id, filename });
     await ownClipboard();

@@ -8,8 +8,8 @@ const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 const { cliStateFor } = require('../src/features/agents/agent-screen-state.ts');
 
-function activity(terminal, frame) {
-  const filename = path.join(__dirname, '../src/features/agents/ActivityPane.tsx'), mod = new Module(filename, module);
+function compile(basename, frame) {
+  const filename = path.join(__dirname, '../src/features/agents', basename), mod = new Module(filename, module);
   mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
   const original = mod.require.bind(mod);
   const stubs = {
@@ -19,11 +19,13 @@ function activity(terminal, frame) {
     './AgentBrandIcon': require('../src/features/agents/AgentBrandIcon.ts'), './action-text': { actionText: () => 'step' },
     './ApiUsage': { ApiUsage: () => null }, './ResetCountdown': { ResetCountdown: () => null }, './reset-count': require('../src/features/agents/reset-count.ts'),
     './subagent-splits.ts': { useSplits: () => [], isSplitOpen: () => false, toggleSplit() {} },
+    get './AgentCalls'() { return compile('AgentCalls.tsx', frame); }, get './Metric'() { return compile('Metric.tsx', frame); },
   };
   mod.require = name => name.endsWith('.css') ? {} : name === '@phosphor-icons/react' ? new Proxy({}, { get: () => () => React.createElement('svg') }) : stubs[name] ?? original(name);
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
-  return renderToStaticMarkup(React.createElement(mod.exports.ActivityPane, { terminal }));
+  return mod.exports;
 }
+const activity = (terminal, frame) => renderToStaticMarkup(React.createElement(compile('ActivityPane.tsx', frame).ActivityPane, { terminal }));
 
 test('the activity monitor and reading view agree on host waiting, fresh input and fresh work', () => {
   const terminal = { id: 't', sessionId: 'pty', agent: 'claude', codexActive: true, codexActivity: 'working',

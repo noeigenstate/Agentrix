@@ -1,10 +1,13 @@
 # Boundary: Activity pane
 
-The pane beside an expanded project's terminal — the main model and its tasks, the models it called, context and usage — and the main-process readers that turn the agent's own records and account reads into that data.
+The pane beside an expanded project's terminal — the main model and its tasks, and each agent's run mode and allowance (connection, context, limits, spend, tokens) — the models the agent called, which the left bar's Agent tab lists, and the main-process readers that turn the agent's own records and account reads into that data.
 
 ## Owns
 - `src/features/agents/ActivityPane.tsx`
-- `src/features/agents/ApiUsage.tsx` (API spend, budget, limits and the active path per agent)
+- `src/features/agents/ApiUsage.tsx` (per agent: connection, context, limits, API spend and budget)
+- `src/features/agents/AgentCalls.tsx` (the called models' list and its rows, with the state words and the rate column)
+- `src/features/agents/Metric.tsx` (the one bar and the figures both blocks share)
+- `src/features/agents/ResetQuota.tsx` (the limit-reset row and its countdown)
 - `src/features/agents/ResetCountdown.tsx`
 - `src/features/agents/reset-count.ts`
 - `src/features/agents/action-text.ts`
@@ -20,7 +23,8 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 - `electron/reading-history*.cjs`
 
 ## Interface
-- `ActivityPane` (`src/features/agents/ActivityPane.tsx`) — the pane; rendered by the workspace's ProjectPanel from a `ProjectTerminal`; the file also exports CALL_STATES, elapsedClock, failureWord and rateValue, which the sub-agent view reuses, and its called-model rows open a sub-agent view
+- `ActivityPane` (`src/features/agents/ActivityPane.tsx`) — the pane: the main model and the allowance block, rendered by the workspace's ProjectPanel from a `ProjectTerminal` and the project id; the file also exports elapsedClock, which the sub-agent view reuses
+- `CallsCard` (`src/features/agents/AgentCalls.tsx`) — the called models as rows of two lines whose buttons open a sub-agent view; the left bar's Agent tab and the narrow window's popover list it; the file also exports CALL_STATES, failureWord and rateValue, which the sub-agent view reuses The app reaches it through `AgentSidebar.tsx` (a render prop beside it, owned by no boundary) so the files module need not know the agents module.
 - `useSplits` (`src/features/agents/subagent-splits.ts`) — the sub-agent views the owner opened beside a terminal (transient, one per terminal: opening another replaces it); the file also exports splitsOf and closeSplit
 - `actionText` (`src/features/agents/action-text.ts`) — the words for the agent's current step (with `stepVerb`), shared by the reading view and the decision inbox
 - `UsageMeter` (`electron/features/agents/agent-usage.cjs`) — per-session meter main.cjs feeds records to and publishes as `agentUsage` (with `claudeProvider`, `codexProvider`, `claudeAccount`, `claudeAccountFiles`)

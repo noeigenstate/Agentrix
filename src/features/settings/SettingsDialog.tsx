@@ -17,9 +17,9 @@ import { ProjectImagesSettings } from './ProjectImagesSettings';
 import { AboutSettings } from './AboutSettings';
 import { steps as ZOOM_STEPS } from '../../../electron/window-zoom.json';
 
-export function SettingsDialog({ settings, projects = [], desktopGlass, uiZoom, localShell, agents, onAgents, initialSection, updates, onCheckUpdate, onInstallUpdate, onDownloadPage, onGuide, close, update, quit }: {
+export function SettingsDialog({ settings, projects = [], projectId, desktopGlass, uiZoom, localShell, agents, onAgents, initialSection, updates, onCheckUpdate, onInstallUpdate, onDownloadPage, onGuide, close, update, quit }: {
   localShell: Workspace['localShell']; agents: AgentsState | null; onAgents: (state: AgentsState) => void; initialSection: string;
-  projects?: Project[]; desktopGlass?: Workspace['desktopGlass']; uiZoom?: Workspace['uiZoom']; settings: Settings; close: () => void; update: (patch: Partial<Settings>) => void; quit: () => void; onGuide: () => void;
+  projects?: Project[]; projectId?: string; desktopGlass?: Workspace['desktopGlass']; uiZoom?: Workspace['uiZoom']; settings: Settings; close: () => void; update: (patch: Partial<Settings>) => void; quit: () => void; onGuide: () => void;
   updates: AppUpdateState | null; onCheckUpdate: () => void; onInstallUpdate: () => void; onDownloadPage: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -97,7 +97,7 @@ export function SettingsDialog({ settings, projects = [], desktopGlass, uiZoom, 
       <section className="settings-section" id="settings-agents" aria-label={t('编码助手')} hidden={current.id !== 'agents'}>
       <AgentsSettings agents={agents} onChange={onAgents} />
       </section>
-      {current.id === 'runtime' && <section className="settings-section" id="settings-runtime" aria-label={t('运行方式')}><AgentRuntimeSettings /></section>}
+      {current.id === 'runtime' && <section className="settings-section" id="settings-runtime" aria-label={t('运行方式')}><AgentRuntimeSettings projectId={projectId} /></section>}
       {current.id === 'skills' && <section className="settings-section skills-section" id="settings-skills" aria-label={t('技能')}><SkillsSettings projects={projects} /></section>}
       {current.id === 'shortcuts' && <ShortcutSettings settings={settings} update={update} />}
       <section className="settings-section" id="settings-about" aria-label={t('更新与关于')} hidden={current.id !== 'about'}>

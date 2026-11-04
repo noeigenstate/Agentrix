@@ -214,6 +214,7 @@ try {
   assert.equal(await page.locator('.project-panel:visible').count(), projects.length);
   await page.locator(`[data-project-id="${projects[0].id}"] .panel-name`).click();
   await settled(true); await landed(projects[0].id);
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).click();
   await page.getByLabel('文件编辑器', { exact: true }).waitFor();
   await page.getByRole('button', { name: '返回总览', exact: true }).click();

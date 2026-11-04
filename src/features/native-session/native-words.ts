@@ -6,7 +6,7 @@
 // file changes `changes[{ path, kind, diff }]` or `path`, `kind`, `diff`; tools `name` or `tool`, `server`, `input` or `arguments`, `result` or
 // `output`. Quota windows are `{ usedPercent, windowDurationMins, resetsAtMs }` with `resetsAtMs` in milliseconds.
 import { t } from '../../shared/i18n';
-import type { AgentConnection, ConnectionTest, LimitWindow, NativeAgent, NextPath } from './native-bridge.ts';
+import type { AgentConnection, ConnectionTest, LimitWindow, NativeAgent, SwitchState } from './native-bridge.ts';
 import type { NativeItem, Payload } from './native-model.ts';
 
 const str = (value: unknown) => (typeof value === 'string' && value !== '' ? value : null);
@@ -75,15 +75,28 @@ export const reasonWords = (reason: string | null | undefined) => (!reason ? nul
 
 export const routeWord = (route: string | null | undefined) => (route === 'api' ? 'API' : route === 'terminal' ? t('终端') : route === 'native' ? t('原生') : route === 'subscription' ? t('订阅') : t('未知'));
 
-// A new session's route comes only from main's next-path decision, never the running session's path or connection.
-const NEXT_REASONS: Record<string, string> = {
-  no_key: '未保存 API 密钥', cli_missing: '未找到命令行', cli_too_old: '命令行版本过低', set_terminal: '按设置', set_api: '按设置',
-};
-export function nextPathWord(next: NextPath | null | undefined) {
-  const path = next?.path === 'api' ? t('API · 原生界面') : next?.path === 'native' ? t('原生界面') : routeWord(next?.path);
-  const reason = next?.reason ? (NEXT_REASONS[next.reason] ? t(NEXT_REASONS[next.reason]) : reasonWords(next.reason)) : null;
-  return reason ? `${path}（${reason}）` : path;
+// ── The run-mode switch ──
+// The header's line while a change is on its way to this session; null when the header has nothing to add (nothing under way, the owner's
+// question, which has its card, and a failure, which the path note tells). A reason main gives (an unsent draft in the CLI's own input) is the line.
+export function switchLine(state: SwitchState | null | undefined) {
+  const path = routeWord(state?.target);
+  switch (state?.phase) {
+    case 'waiting-turn': return reasonWords(state.reason) ?? t('本轮结束后切到 {path}', { path });
+    case 'waiting-background': return t('等后台任务结束后再切到 {path}', { path });
+    case 'preparing': case 'switching': return t('正在切到 {path}', { path });
+    default: return null;
+  }
 }
+
+// A switch that failed leaves the session where it was; the note says so with main's reason. null while nothing failed.
+export function switchFailure(state: SwitchState | null | undefined) {
+  if (!state || !(state.phase === 'rolling-back' || state.phase === 'stable' && state.reason)) return null;
+  return [t('没有切换成功，仍使用 {path}', { path: routeWord(state.current) }), reasonWords(state.reason)].filter(Boolean).join(' · ');
+}
+
+// What the owner is told before choosing: a switch ends background tasks. Unknown is not none, so no count is guessed.
+export const backgroundWords = (background: SwitchState['background']) => (background.known && typeof background.count === 'number'
+  ? t('切换会结束 {count} 个后台任务。', { count: background.count }) : t('切换会结束后台任务；现在还不知道有几个在运行。'));
 
 // "Claude · API" or "Codex · 原生": whose session this is and what it runs on.
 export function runtimeWord(identity: { provider: string; transport: string } | null) {

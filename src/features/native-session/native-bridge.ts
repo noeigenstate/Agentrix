@@ -2,14 +2,13 @@
 // and its preload wiring belong to the main side; this file is the consumer-side shape of it, so the rest of the module never reaches
 // into window. Every call returns a Result; a build or a test without the bridge reads as "no native sessions" (null).
 import type { ConnectionTest, Result } from '../../shared/types';
-import type { AgentEvent } from '../../shared/agent-events';
+import type { AgentEvent, NativeAnswer, NativeSnapshot } from '../../shared/agent-events';
+export type { NativeAnswer, NativeSnapshot, NativeDraft, NativeHandoff, NativeHandoffReceipt, NativePendingInput, SwitchState } from '../../shared/agent-events';
 
 export type NativeAgent = 'claude' | 'codex';
 export type ClaudePath = 'api-then-terminal' | 'api-only' | 'terminal-only';
 export type CodexView = 'native' | 'terminal';
 export type NativeSettings = { claudePath: ClaudePath; codexView: CodexView; monthlyBudgetUsd: number | null };
-export type NativeAnswer = { decision: 'allow' | 'deny' } | { answers: Record<string, string | string[]> };
-export type NativeSnapshot = { runtimeSessionId: string; lastSequence: number; events: AgentEvent[] };
 
 // One quota window (Codex's 5 hours or week, an API rate limit); a value the provider did not give is null, never 0.
 export type LimitWindow = { usedPercent: number | null; windowDurationMins: number | null; resetsAtMs: number | null };
@@ -30,6 +29,8 @@ export type { ConnectionTest };
 export type NativeUsage = {
   month: string; apiRecords: boolean; todayUsdMicros: number | null; monthUsdMicros: number | null; estimated: true; budgetUsd: number | null;
   agents: Record<NativeAgent, AgentPathState>;
+  // Owner sessions still on their way to a changed run mode, counted by main; absent from an older main.
+  switches?: { waiting: number } | null;
   lastSwitch: { at: number; agent: NativeAgent; from: string | null; to: string | null; reason: string | null } | null;
 };
 
@@ -46,9 +47,10 @@ export interface NativeBridge {
   keySave(key: string): Promise<Result<unknown>>;
   keyClear(): Promise<Result<unknown>>;
   keyStatus(): Promise<Result<{ saved: boolean }>>;
-  usage(): Promise<Result<NativeUsage>>;
+  // Both read the project's scope (a project-local token never decides another project's path).
+  usage(projectId?: string): Promise<Result<NativeUsage>>;
   // Runs only when the owner clicks the button; never on a timer.
-  testConnection(): Promise<Result<ConnectionTest>>;
+  testConnection(projectId?: string): Promise<Result<ConnectionTest>>;
 }
 
 // How a new agent session starts, from the settings and whether an API key is saved: the native view, today's terminal (with the reason when

@@ -17,15 +17,15 @@ const defaults = { claudePath: 'api-then-terminal', codexView: 'native', monthly
 const wordsStub = { clockWords: () => '09:00', connectionLines: test => test.lines };
 
 // The page with real hooks. The select is stood in by a component that keeps its props, so a test can read its value and choose an option.
-function page(bridge, words = wordsStub) {
+function page(bridge, words = wordsStub, props = {}) {
   const usage = [];
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge ? { nativeSession: bridge } : {} } });
   const harness = hookHarness('src/features/settings/AgentRuntimeSettings.tsx', {
-    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './agent-runtime-settings.css': {}, './native-words': words, './native-store.ts': { usageChanged: () => usage.push('changed') },
+    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './agent-runtime-settings.css': {}, './native-words': words, './native-store.ts': { usageChanged: () => usage.push('changed'), useUsageRevision: () => 0 },
     './Select': { Select: props => React.createElement('select', { 'aria-label': props.label, value: props.value, disabled: props.disabled }) },
   });
-  const render = () => harness.render('AgentRuntimeSettings').result, tree = () => elements(render());
+  const render = () => harness.render('AgentRuntimeSettings', props).result, tree = () => elements(render());
   const select = label => tree().find(node => node.props?.label === label), input = predicate => tree().find(node => node.type === 'input' && predicate(node.props));
   const button = label => tree().find(node => node.type === 'button' && node.props.children === label);
   return {
@@ -36,8 +36,8 @@ function page(bridge, words = wordsStub) {
   };
 }
 const fake = (patch = {}) => {
-  const calls = [], state = { settings: { ...defaults }, saved: false };
-  return { calls, state, getSettings: async () => ({ ok: true, value: state.settings }), keyStatus: async () => ({ ok: true, value: { saved: state.saved } }),
+  const calls = [], reads = [], state = { settings: { ...defaults }, saved: false, usageValue: { switches: { waiting: 0 } } };
+  return { calls, reads, state, usage: async projectId => { reads.push(projectId); return { ok: true, value: state.usageValue }; }, getSettings: async () => ({ ok: true, value: state.settings }), keyStatus: async () => ({ ok: true, value: { saved: state.saved } }),
     setSettings: async value => { calls.push(['set', value]); Object.assign(state.settings, value); return { ok: true, value: state.settings }; },
     keySave: async key => { calls.push(['save', key]); state.saved = true; return { ok: true, value: { saved: true } }; },
     keyClear: async () => { calls.push(['clear']); state.saved = false; return { ok: true, value: { saved: false } }; }, ...patch };
@@ -141,7 +141,7 @@ test('测试连接 waits for a saved key and for the owner’s click, shows its 
     assert.equal(view.secret().props.disabled, true); assert.equal(view.button('保存').props.disabled, true); assert.equal(view.button('清除').props.disabled, true);
     // The bridge call starts asynchronously; a disabled button cannot receive another browser click.
     await settle();
-    assert.deepEqual(calls, [[]], 'one owner click starts one test with no key in its arguments');
+    assert.deepEqual(calls, [[undefined]], 'one owner click starts one test whose only argument is the project in use (none here), never a key');
     assert.equal(view.button('测试连接').props.disabled, true, 'the test stays pending until the bridge answers');
     finish(answer(LINES)); await settle();
     const html = view.html();
@@ -149,7 +149,7 @@ test('测试连接 waits for a saved key and for the owner’s click, shows its 
     for (const text of ['<b>密钥</b><span>有效 · 182 ms</span>', '<b>Claude Code</b><span>版本过低<small>请升级 Claude Code。</small></span>', '<b>新会话将使用</b>', '检测于 09:00']) assert.ok(html.includes(text), text);
     assert.deepEqual(['is-ok', 'is-bad', 'is-warn'].map(tone => html.includes(`<li class="${tone}"`)), [true, true, true], 'each line has a tone class beside its mark');
     assert.equal((html.match(/runtime-test-mark/g) ?? []).length, 3, 'and a mark, so tone is not colour alone');
-    assert.deepEqual(calls, [[]], 'the call carries nothing: the key stays in the main process'); assert.ok(!html.includes(SECRET));
+    assert.deepEqual(calls, [[undefined]], 'the call carries no key (only the project in use, none here): the key stays in the main process'); assert.ok(!html.includes(SECRET));
   } finally { view.done(); }
 });
 
@@ -223,11 +223,13 @@ test('the budget parser: dollars above zero to the cent, empty is none, anything
 test('the key goes only to keySave and is never read back, logged or stored; the page is a section of the settings dialog', () => {
   const code = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8').replace(/\/\/.*$/gm, '');
   const settings = code('src/features/settings/AgentRuntimeSettings.tsx');
-  assert.deepEqual([...new Set([...settings.matchAll(/\bbridge\.(\w+)\(/g)].map(match => match[1]))].sort(), ['getSettings', 'keyClear', 'keySave', 'keyStatus', 'setSettings', 'testConnection']);
+  assert.deepEqual([...new Set([...settings.matchAll(/\bbridge\.(\w+)\(/g)].map(match => match[1]))].sort(), ['getSettings', 'keyClear', 'keySave', 'keyStatus', 'setSettings', 'testConnection', 'usage']);
   assert.doesNotMatch(settings, /console\.|localStorage|sessionStorage|keyGet|readKey/, 'no way to read the key back, no log, no storage');
   assert.match(settings, /type="password"/);
   const dialog = code('src/features/settings/SettingsDialog.tsx');
-  assert.match(dialog, /id: 'runtime', title: t\('运行方式'\)/); assert.match(dialog, /<AgentRuntimeSettings \/>/);
+  assert.match(dialog, /id: 'runtime', title: t\('运行方式'\)/); assert.match(dialog, /<AgentRuntimeSettings[ >]/);
+  // The project in view reaches the page, so the connection test and the usage numbers are read for its scope.
+  assert.match(dialog, /<AgentRuntimeSettings projectId=\{projectId\} \/>/); assert.match(code('src/App.tsx'), /<SettingsDialog [^>]*projectId=\{focus\?\.id\}/);
 });
 
 test('the page’s spacing values are on the scale and its buttons keep a 32px hit area', () => {
@@ -265,3 +267,28 @@ test('every accepted change (key saved, key cleared, a setting, the budget) make
     assert.deepEqual(again.usage, [], 'nothing was accepted, so nothing to read again');
   } finally { again.done(); }
 });
+
+test('the page says a change applies to running sessions, counts those waiting from main’s number only, and reads usage and the test for the current project', async () => {
+  const bridge = fake({ testConnection: async (...args) => { bridge.calls.push(['test', ...args]); return answer([]); } }), view = page(bridge, wordsStub, { projectId: 'p7' });
+  bridge.state.saved = true;
+  try {
+    view.render(); await settle();
+    assert.match(view.html(), /同时应用到正在运行的会话/);
+    assert.doesNotMatch(view.html(), /在等待切换/, 'no session waiting: the line is absent, not “0”');
+    assert.deepEqual(bridge.reads, ['p7'], 'usage is read for the project in use');
+    view.button('测试连接').props.onClick(); await settle();
+    assert.deepEqual(bridge.calls.find(call => call[0] === 'test'), ['test', 'p7'], 'so is the connection test');
+  } finally { view.done(); }
+  for (const [value, shown] of [[{ switches: { waiting: 3 } }, '有 3 个会话在等待切换'], [{ switches: { waiting: 0 } }, null], [{}, null], [{ switches: { waiting: '2' } }, null]]) {
+    const waiting = fake(); waiting.state.usageValue = value;
+    const again = page(waiting);
+    try {
+      again.render(); await settle();
+      const line = again.tree().find(node => node.props?.role === 'status' && node.type === 'p')?.props.children;
+      assert.equal(line ? elementsText(line) : null, shown, JSON.stringify(value));
+    } finally { again.done(); }
+  }
+  const failed = fake({ usage: async () => ({ ok: false, error: 'down' }) }), none = page(failed);
+  try { none.render(); await settle(); assert.doesNotMatch(none.html(), /在等待切换/, 'a failed read claims nothing'); } finally { none.done(); }
+});
+const elementsText = node => (Array.isArray(node) ? node.map(elementsText).join('') : React.isValidElement(node) ? elementsText(node.props.children) : typeof node === 'string' ? node : '');

@@ -329,6 +329,7 @@ try {
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen()), false, 'opening a red tile expands the project inside the window');
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[0].unread, 0);
+  await page.locator('.explorer-tabs').getByRole('button', { name: '资源管理器', exact: true }).click();
   await page.getByRole('treeitem', { name: 'src', exact: true }).waitFor();
   assert.equal(await page.locator('.focus-toolbar').count(), 0, 'old top toolbar removed');
   assert.equal(await page.locator('.focus-sidebar').getByRole('button', { name: '返回总览', exact: true }).count(), 1);

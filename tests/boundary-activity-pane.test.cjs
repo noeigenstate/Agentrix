@@ -8,14 +8,14 @@ const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 
 // Using a plan reset is costly and the owner decides it in Codex itself; completion belongs to the rounds, not to a button.
 test('the pane never acts on its own: one /usage after the countdown, read-only account calls, no completion or editor controls', () => {
-  const pane = read('src/features/agents/ActivityPane.tsx');
+  const pane = read('src/features/agents/ResetQuota.tsx');
   assert.equal(pane.match(/\bsendToAgent\(/g).length, 1, 'one place types into the agent');
   assert.equal(pane.match(/new CustomEvent\('agentrix:command'/g).length, 1, 'one command event');
   assert.match(pane, /const command = '\/usage';/, 'and what it types is /usage');
   assert.deepEqual(pane.match(/\brun\(\)/g), ['run()'], 'which only the countdown starts');
   assert.match(pane, /if \(count === 0\) \{[^}]*void run\(\);/, 'when it reaches zero');
   assert.doesNotMatch(pane, /window\.agentrix\b|\bipcRenderer\b/, 'the pane calls no main-process action');
-  for (const file of ['src/features/agents/ActivityPane.tsx', 'src/features/agents/ResetCountdown.tsx'])
+  for (const file of ['src/features/agents/ActivityPane.tsx', 'src/features/agents/ResetQuota.tsx', 'src/features/agents/ResetCountdown.tsx'])
     assert.doesNotMatch(read(file), /vs ?code|code\.cmd|openInEditor|markComplete|mark-complete|完成项目|标记完成/i, `${file} has no manual completion or editor launch control`);
   // Codex's stdio client sends only the handshake and the rate-limit read; Claude's usage is one GET.
   const codex = read('electron/features/agents/codex-account-usage.cjs');
@@ -30,8 +30,8 @@ test('the pane never acts on its own: one /usage after the countdown, read-only 
 test('a sub-agent view opens only on the owner’s click on a row, reads the sub-agent’s record and speaks to it through the main process only', () => {
   const walk = dir => fs.readdirSync(path.join(__dirname, '..', dir), { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(`${dir}/${entry.name}`) : [`${dir}/${entry.name}`]);
   const callers = walk('src').filter(file => /\.tsx?$/.test(file) && /\b(openSplit|toggleSplit)\(/.test(read(file)));
-  assert.deepEqual(callers, ['src/features/agents/ActivityPane.tsx', 'src/features/agents/subagent-splits.ts'], 'only the pane’s row and the store itself');
-  const pane = read('src/features/agents/ActivityPane.tsx');
+  assert.deepEqual(callers, ['src/features/agents/AgentCalls.tsx', 'src/features/agents/subagent-splits.ts'], 'only the list’s row and the store itself');
+  const pane = read('src/features/agents/AgentCalls.tsx');
   assert.equal(pane.match(/\btoggleSplit\(/g).length, 1);
   assert.match(pane, /onClick=\{\(\) => toggleSplit\(terminalId, item\.id\)\}/, 'and it is the row button’s click');
   assert.doesNotMatch(read('src/features/terminal/ProjectTerminals.tsx'), /\b(openSplit|toggleSplit)\(/, 'the grid shows the views, it never opens one');
@@ -49,6 +49,23 @@ test('the API usage card only reads the main process, and the parent relay can n
   const card = code('src/features/agents/ApiUsage.tsx');
   assert.deepEqual([...new Set([...card.matchAll(/\bbridge\.(\w+)\(/g)].map(match => match[1]))], ['usage'], 'its only bridge call is the usage read');
   assert.doesNotMatch(card, /sendToAgent|writeTerminal|setSettings|keySave|keyClear|\.answer\(|\.interrupt\(|\.send\(|\.start\(/, 'no write, no setting, no key, no answer');
-  assert.match(read('src/features/agents/ActivityPane.tsx'), /<ApiUsage \/>/, 'and the pane shows it');
+  assert.match(read('src/features/agents/ActivityPane.tsx'), /<ApiUsage terminal=\{terminal\} projectId=\{projectId\} \/>/, 'and the pane shows it');
   assert.equal(fs.existsSync(path.join(__dirname, '../src/features/agents/parent-relay.ts')), false);
+});
+
+// The left bar's Agent tab shows the called models without the files module knowing the agents module: the node and the running count come from the agents module and the app only passes them.
+test('the files module imports nothing from the agents module: the Agent tab gets its list as a node and a count from the app', () => {
+  const code = file => read(file).replace(/\/\/.*$/gm, '');
+  const walk = dir => fs.readdirSync(path.join(__dirname, '..', dir), { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(dir + '/' + entry.name) : [dir + '/' + entry.name]);
+  assert.deepEqual(walk('src/features/files').filter(file => /\.tsx?$/.test(file) && /from '\.\.\/agents\//.test(code(file))), [], 'no file of the files module reaches into agents');
+  const explorer = code('src/features/files/ProjectExplorer.tsx');
+  assert.match(explorer, /agentPanel: ReactNode; agentRunning: number;/, 'the tab takes a ready node and a count');
+  assert.match(explorer, /\{tab === 'agent' && !collapsed && <div className="explorer-agent">\{agentPanel\}<\/div>\}/);
+  assert.match(explorer, /const openTab = \(next: Tab\) => \{ window\.agentrix\.fileTreeFocus\(project\.id, false\); setTab\(next\);/, 'switching to any tab, Agent included, takes the file-tree focus away');
+  assert.match(explorer, /enabled=\{!collapsed && filesOpen\}/, 'a hidden tree does not load');
+  assert.match(explorer, /useState<Tab>\('agent'\)/, 'a project opens on Agent');
+  const app = code('src/App.tsx');
+  assert.match(app, /<AgentSidebar project=\{focus\}>\{agent => <ProjectExplorer key=\{focus\.id\} project=\{focus\} agentPanel=\{agent\.panel\} agentRunning=\{agent\.running\}/, 'the app hands the agents module’s node to the explorer');
+  const sidebar = code('src/features/agents/AgentSidebar.tsx');
+  assert.doesNotMatch(sidebar, /window\.agentrix|toggleSplit|openSplit|writeTerminal/, 'the bridge between the two modules only passes the list on');
 });

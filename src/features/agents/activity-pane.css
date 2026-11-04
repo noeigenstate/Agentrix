@@ -1,40 +1,35 @@
-/* The activity pane, a quiet status inspector on the pane colour, docked to the main area's right edge. Its groups (model route, models called, tasks, context, usage) have no card:
-   a title over its content, 20px between groups, 8px between a title and its content. One left edge and one right-hand number column run through all of them. Titles are 13px in the
-   secondary ink (the tasks lead at 14px in the primary ink); rows are 32px on a 16 | text | end grid, metrics an 88 | meter | 48 grid; text is 13px for a row's subject, 12px for the rest.
+/* The activity pane, a quiet status inspector on the pane colour, docked to the main area's right edge. Two blocks and nothing else: the main model (its task list) and 运行方式与额度
+   (per agent: connection, then its bars). Each block is a title over its content, 20px apart, 8px between a title and its content. The pane does not scroll as a whole: each block keeps its
+   title fixed and its content scrolls inside it, the blocks sharing the height in proportion to their content and each keeping a floor (the head and one row), so a short window never
+   squeezes one away. One left edge and one right-hand number column run through both. The model block's title is 13px in the secondary ink, the allowance block's 14px in the primary ink; rows are 32px on a 16 | text | end grid, metrics an 88 | meter | 48 grid
+   (28px inside an agent's section); text is 13px for a row's subject, 12px for the rest. The models the agent called are not here: they are the left bar's Agent tab and use the same rows, in two lines.
    The meters' tracks take the pane's own well fill and their fill is neutral grey; the warning colour appears only from 90%, and the spinner is the one other colour. */
-.activity-pane {
+.activity-pane, .activity-calls {
   --flow-line: var(--divider); --flow-inset: var(--bg-aside-well);
   --flow-ink: var(--text-1); --flow-muted: var(--text-2); --flow-faint: var(--text-3);
-  gap: 20px; padding: 16px; overscroll-behavior: contain;
-  /* The pane shows no scrollbar. Its lists scroll (below); only a window too short for the fixed groups scrolls it, by wheel, without a bar. */
-  overflow-y: auto; scrollbar-width: none;
 }
+.activity-pane { gap: 20px; padding: 16px; overscroll-behavior: contain; overflow: hidden; }
 .activity-card { flex: none; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-/* The context and the usage have no titles: their metrics read as one list, 8px apart like the blocks inside each. */
-.activity-gauges { flex: none; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-/* The route, context and usage keep their height. The models called and the tasks share what is left, each list scrolling under its own fixed title; a list never takes more than its content,
-   and shrinks in proportion to it down to the title and a row (two rows when it has them). */
-.activity-calls { flex: 0 1 auto; min-height: 60px; }
-.activity-calls:has(.activity-call-rows li:nth-child(2)) { min-height: 92px; }
-/* The main model keeps its head and one task row; the rows of its prompts scroll when there are more than fit. */
+/* The two blocks share the pane's height by their content and shrink alike, each keeping a floor; their own lists scroll under the fixed title. */
 .activity-main { flex: 0 1 auto; min-height: 100px; }
+.activity-api { flex: 0 1 auto; min-height: 112px; }
+/* The called models fill the left bar's Agent tab (and the narrow window's popover): the section takes what the bar gives and its list scrolls. */
+.activity-calls { flex: 0 1 auto; min-height: 0; }
 .activity-card-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
-:is(.activity-main, .activity-calls) .activity-card-title { font-size: 13px; color: var(--flow-muted); }
-.activity-calls > .activity-card-title { display: flex; align-items: baseline; gap: 8px; flex: none; }
-.activity-count { font-size: 12px; font-weight: 400; color: var(--flow-faint); font-variant-numeric: tabular-nums; }
+.activity-main .activity-card-title { font-size: 13px; color: var(--flow-muted); }
 .activity-note { margin: 0; font-size: 12px; line-height: 16px; color: var(--flow-faint); overflow-wrap: anywhere; }
 .activity-empty { margin: 0; font-size: 12px; line-height: 18px; color: var(--flow-muted); }
 
 /* Each task, and each called model and its calls, is a 32px row on a 16 | text | end grid, rows touching: the icon is the state (the spinner the only colour; a queued task an empty circle, a finished one its check),
    the subject is one line with an ellipsis, the time or state is quiet at the right. The hover fill reaches 8px past the text, into the group's own padding, so the left edge never moves. */
 .activity-call-rows { display: grid; margin: 0; padding: 0; list-style: none; }
-.activity-call-groups { gap: 8px; }
+.activity-call-groups { gap: 16px; }
 /* A scrolling list: 8px wider than its text on the left (the row hover reaches there) and a 6px scrollbar gutter on the right, so the text stays on the pane's edges whether or not it scrolls.
    A soft fade shows where more rows are hidden: at the top once scrolled, at the bottom until the end (scroll-driven, none while everything fits). */
 @property --fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
 @property --fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
 @keyframes activity-fade { 0% { --fade-top: 0px; --fade-bottom: 16px; } 4% { --fade-top: 16px; } 96% { --fade-bottom: 16px; } 100% { --fade-top: 16px; --fade-bottom: 0px; } }
-.activity-main-tasks, .activity-call-groups { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; display: grid; align-content: start; margin: 0 -14px 0 -8px; padding: 0 8px; list-style: none;
+.activity-main-tasks, .activity-call-groups, .api-agents { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; display: grid; align-content: start; margin: 0 -14px 0 -8px; padding: 0 8px; list-style: none;
   mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent); animation: activity-fade linear both; animation-timeline: scroll(self); }
 .activity-call-rows li { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; height: 32px; }
 .activity-call-rows li::before { content: ''; position: absolute; inset: 0 -8px; border-radius: 8px; }
@@ -47,7 +42,7 @@
 .activity-call-rows li :is(time, .activity-row-end) { font-size: 12px; line-height: 16px; color: var(--flow-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .activity-call-rows li:is(.is-running, .is-working) .activity-row-icon { color: var(--running); }
 .activity-call-rows li.is-reviewing .activity-row-icon { color: var(--flow-muted); }
-.activity-call-rows li.is-failed :is(.activity-row-icon, .activity-row-end) { color: var(--danger); }
+.activity-call-rows li.is-failed :is(.activity-row-icon, .activity-row-end, .activity-call-sub) { color: var(--danger); }
 .activity-call-rows li.is-done .activity-row-icon { color: var(--success); }
 
 
@@ -64,6 +59,10 @@
 .activity-call-settings::before { content: '·'; margin: 0 6px; }
 .activity-call-rows li .activity-rate { min-width: 80px; text-align: right; }
 .activity-call-rows li .activity-rate.is-live { color: var(--flow-ink); }
+/* In the called models' list (a narrow bar) the rate takes only the width of its figure, so the model's name keeps the room, and the settings give way well before it. */
+.activity-calls .activity-call-rows li.activity-call-head { grid-template-columns: 16px minmax(0, 1fr) auto; }
+.activity-calls .activity-call-rows li .activity-rate { min-width: 0; }
+.activity-calls .activity-call-head p > .activity-call-settings { flex: 0 8 auto; }
 /* A model that has not replied yet keeps its hint in the text column. */
 .activity-call-rows li.activity-call-note { height: 24px; }
 .activity-call-rows li.activity-call-note p { font-size: 12px; line-height: 16px; color: var(--flow-faint); }
@@ -79,13 +78,19 @@
 .activity-call-rows li.activity-call-more p { font-size: 12px; line-height: 16px; color: var(--flow-faint); }
 .activity-call-rows li.activity-call-more:hover::before { background: none; }
 .activity-call-rows li .activity-row-end { text-align: right; }
-/* A call whose record can be read is one button filling the row (the row's own single column, or the button would land in its 16px icon column) with the same 16 | text | state grid inside: no new icon and no new colour. Open = the selected fill and a 2px bar, so it reads in grey too. */
-.activity-call-rows li:has(> .activity-call-open) { grid-template-columns: minmax(0, 1fr); }
-.activity-call-rows li > .activity-call-open { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; width: 100%; height: 32px; margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+/* A call whose record can be read is one button filling the row (a plain call a div): its body holds the state icon and the two lines. Open = the selected fill and a 2px bar, so it reads in grey too. */
+.activity-call-rows li > .activity-call-open { margin: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .activity-call-open:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 8px; }
 .activity-call-rows li:has(> .activity-call-open[aria-pressed="true"])::before { background: var(--bg-selected); }
 .activity-call-open[aria-pressed="true"]::before { content: ''; position: absolute; top: 8px; bottom: 8px; left: -8px; width: 2px; background: var(--select-bar); }
-.activity-call-open[aria-pressed="true"] :is(.activity-call-role, .activity-row-end) { color: var(--flow-ink); }
+.activity-call-open[aria-pressed="true"] .activity-call-sub { color: var(--flow-ink); }
+/* A called model's call is two lines in the narrow bar: what it does (13px, the primary ink), then its role and state (12px, quiet), the state's icon level with the first line. */
+.activity-call-rows li.activity-call-item { display: block; height: auto; }
+.activity-call-rows li.activity-call-item > .activity-call-body { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 8px; align-items: start; width: 100%; height: auto; padding: 4px 0; }
+.activity-call-item .activity-row-icon { height: 20px; }
+.activity-call-text { display: grid; min-width: 0; }
+.activity-call-rows li.activity-call-item p { color: var(--flow-ink); }
+.activity-call-sub { overflow: hidden; font-size: 12px; line-height: 16px; color: var(--flow-faint); text-overflow: ellipsis; white-space: nowrap; }
 .activity-call-rows li:not(.activity-call-head) > .activity-call-open[aria-pressed="true"] p { color: var(--flow-ink); }
 
 /* A metric: label | meter | figure on one 32px line, its caption (a reset time, how much is left, the tokens in and out) under the meter; blocks 8px apart.
@@ -104,17 +109,18 @@
 .activity-metric.activity-tokens > small { grid-area: 1 / 2 / auto / -1; line-height: 20px; }
 .activity-metric.is-warn > b { color: var(--warning); }
 .activity-metric.is-warn .activity-meter i { background: var(--warning); }
-/* The path and API card (ApiUsage): a label and its lines per row, on the metrics' 88px label column. */
-.api-agents { display: grid; gap: 16px; }
+/* 运行方式与额度 (ApiUsage): one section per agent, 20px apart: its name, then 连接 (and 额度 未知 when there is nothing to measure) as rows on the metrics' 88px label column, then the bars:
+   the same Metric for the context, the quota windows and a set budget, 28px high and 4px apart; a value with no bar (spend, an unset budget, tokens) is a label and one quiet line. */
+.api-agents { gap: 20px; }
 .api-agent { display: grid; gap: 8px; min-width: 0; }
 .api-agent-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
-.api-usage { display: grid; gap: 8px; margin: 0; }
+.api-usage { display: grid; gap: 4px; margin: 0; }
 .api-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
 .api-row dt { overflow: hidden; font-size: 13px; line-height: 20px; color: var(--flow-muted); text-overflow: ellipsis; white-space: nowrap; }
 .api-row dd { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin: 0; font-size: 13px; line-height: 20px; color: var(--flow-ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .api-row dd small { font-size: 12px; line-height: 16px; color: var(--flow-faint); }
-.api-row .activity-meter { margin-top: 4px; }
-.api-row .activity-meter.is-warn i { background: var(--warning); }
+.api-agent .activity-metrics { gap: 4px; }
+.api-agent .activity-metric { grid-template-rows: 28px; }
 
 /* A limit reset: a 32px row on the task grid, its icon (or, counting down, the seconds), its label and, at the right, how many are left (or, counting down, the way out).
    With no reset to use it is the disabled grey. */

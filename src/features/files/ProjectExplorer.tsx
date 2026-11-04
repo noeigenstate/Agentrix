@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import {
   ArrowsInLineVertical, CaretLeft, ArrowClockwise,
   CaretDown, CaretRight, Folder,
-  DotsThree, Eye, EyeSlash, GitBranch, LinkSimple, SidebarSimple, SpinnerGap, FilePlus, FolderPlus, Clipboard,
+  DotsThree, Eye, EyeSlash, GitBranch, LinkSimple, Robot, SidebarSimple, SpinnerGap, FilePlus, FolderPlus, Clipboard,
 } from '@phosphor-icons/react';
 import type { DirectoryListing, FileEntry, Project } from '../../shared/types';
 import { fileIcon, folderIcon } from './file-icons';
@@ -131,8 +131,14 @@ function TreeNode(props: NodeProps) {
   </div>;
 }
 
-export function ProjectExplorer({ project, collapsed, hideNoise, expandedPaths, selectedFile, changeRevision, onCollapse, onHideNoiseChange, onExpandedChange, onSelectFile, onOpenChange, onReturn, onFilesRemoved, onPathRenamed }: {
-  project: Project; collapsed: boolean; hideNoise: boolean; expandedPaths: string[]; selectedFile: string | null;
+// The three contents of the bar; a project opens on Agent and keeps the last one chosen while it stays open.
+type Tab = 'agent' | 'files' | 'git';
+
+export function ProjectExplorer({ project, collapsed, agentPanel, agentRunning, hideNoise, expandedPaths, selectedFile, changeRevision, onCollapse, onHideNoiseChange, onExpandedChange, onSelectFile, onOpenChange, onReturn, onFilesRemoved, onPathRenamed }: {
+  project: Project; collapsed: boolean;
+  // The Agent tab's content (the models the current terminal called) arrives as a ready node, with how many of those calls are running; this module knows nothing of the agents behind it.
+  agentPanel: ReactNode; agentRunning: number;
+  hideNoise: boolean; expandedPaths: string[]; selectedFile: string | null;
   // Counts up when the changes view kept or reverted a hunk, so the status and tree are read again at once.
   changeRevision: number;
   onCollapse: () => void; onHideNoiseChange: (hide: boolean) => void; onExpandedChange: (paths: string[]) => void; onSelectFile: (path: string) => void; onOpenChange: (path: string, mode: GitOpenMode) => void;
@@ -141,7 +147,7 @@ export function ProjectExplorer({ project, collapsed, hideNoise, expandedPaths, 
 }) {
   const [revision, setRevision] = useState(0);
   const [moreOpen, setMoreOpen] = useState(false), more = useRef<HTMLDivElement>(null);
-  const [gitOpen, setGitOpen] = useState(false), [gitRevision, setGitRevision] = useState(0);
+  const [tab, setTab] = useState<Tab>('agent'), [gitRevision, setGitRevision] = useState(0);
   const git = useGitStatus(project.id, !collapsed, revision);
   const decorations = useMemo(() => gitDecorations(git.status), [git.status]);
   const location = project.kind === 'ssh' ? `${project.ssh?.host}:${project.path}` : project.path;
@@ -164,18 +170,20 @@ export function ProjectExplorer({ project, collapsed, hideNoise, expandedPaths, 
   }, [moreOpen]);
   const toggle = (folder: string) => { const next = new Set(expanded); if (next.has(folder)) next.delete(folder); else next.add(folder); onExpandedChange([...next]); };
 
-  const openGit = (open: boolean) => { window.agentrix.fileTreeFocus(project.id, false); setGitOpen(open); if (collapsed) onCollapse(); };
+  const openTab = (next: Tab) => { window.agentrix.fileTreeFocus(project.id, false); setTab(next); if (collapsed) onCollapse(); };
+  const filesOpen = tab === 'files', gitOpen = tab === 'git';
   const changes = git.status?.total || 0;
   return <aside className={`focus-sidebar ${collapsed ? 'is-collapsed' : ''}`} aria-label={t('项目侧边栏')}>
     <div className="explorer-navigation">
-      {/* Collapsed, the rail keeps only the two panes; the title bar's 工作台 and the overview shortcut still lead back. */}
+      {/* Collapsed, the rail keeps only the three tabs; the title bar's 工作台 and the overview shortcut still lead back. */}
       {!collapsed && <button className="explorer-back" onClick={onReturn} title={t('返回总览 · {key}', { key: shortcut('overview') })} aria-label={t('返回总览')}><CaretLeft size={14} weight="bold" /><span>{t('总览')}</span></button>}
-      {/* Collapsed, the rail offers the two panes themselves; each opens the sidebar again (as does the shortcut). */}
+      {/* Collapsed, the rail offers the three tabs themselves; each opens the sidebar again (as does the shortcut). */}
       {!collapsed && <button className="icon-button sidebar-toggle" onClick={onCollapse} title={t('收起目录栏 · {key}', { key: shortcut('explorer') })} aria-label={t('收起目录栏')} aria-expanded={!collapsed}><SidebarSimple size={17} /></button>}
     </div>
     {collapsed && <div className="explorer-rail">
-      <button className="icon-button" onClick={() => openGit(false)} title={t('文件')} aria-label={t('资源管理器')}><Folder size={18} /></button>
-      <button className="icon-button" onClick={() => openGit(true)} title={t('Git 历史与未提交更改')} aria-label={t('Git 历史')}><GitBranch size={18} />{!!changes && <span className="rail-dot" aria-hidden="true" />}</button>
+      <button className="icon-button" onClick={() => openTab('agent')} title={t('调用的模型')} aria-label="Agent"><Robot size={18} />{agentRunning > 0 && <span className="rail-dot" aria-hidden="true" />}</button>
+      <button className="icon-button" onClick={() => openTab('files')} title={t('文件')} aria-label={t('资源管理器')}><Folder size={18} /></button>
+      <button className="icon-button" onClick={() => openTab('git')} title={t('Git 历史与未提交更改')} aria-label={t('Git 历史')}><GitBranch size={18} />{!!changes && <span className="rail-dot" aria-hidden="true" />}</button>
     </div>}
     <div className="explorer-content" hidden={collapsed}>
       <header className="explorer-title" title={`${project.name}\n${location}`}>
@@ -184,10 +192,11 @@ export function ProjectExplorer({ project, collapsed, hideNoise, expandedPaths, 
       </header>
       <div className="explorer-bar">
         <div className="explorer-tabs" role="group" aria-label={t('侧边栏内容')}>
-          <button aria-label={t('资源管理器')} aria-pressed={!gitOpen} onClick={() => openGit(false)}>{t('文件')}</button>
-          <button aria-label={t('Git 历史')} title={t('Git 历史与未提交更改')} aria-pressed={gitOpen} onClick={() => openGit(true)}>Git{!!changes && <span className="explorer-tab-count">{changes > 999 ? '999+' : changes}</span>}</button>
+          <button aria-label="Agent" title={t('调用的模型')} aria-pressed={tab === 'agent'} onClick={() => openTab('agent')}>Agent{agentRunning > 0 && <span className="explorer-tab-count" title={t('{count} 个运行中', { count: agentRunning })}>{agentRunning > 999 ? '999+' : agentRunning}</span>}</button>
+          <button aria-label={t('资源管理器')} aria-pressed={filesOpen} onClick={() => openTab('files')}>{t('文件')}</button>
+          <button aria-label={t('Git 历史')} title={t('Git 历史与未提交更改')} aria-pressed={gitOpen} onClick={() => openTab('git')}>Git{!!changes && <span className="explorer-tab-count">{changes > 999 ? '999+' : changes}</span>}</button>
         </div>
-        {!gitOpen && <div className="explorer-tools" onPointerDown={() => window.agentrix.fileTreeFocus(project.id, false)}>
+        {filesOpen && <div className="explorer-tools" onPointerDown={() => window.agentrix.fileTreeFocus(project.id, false)}>
           <button className="icon-button" aria-label={t('新建文件')} title={t('新建文件')} onClick={() => files.openCreate('file')}><FilePlus size={15} /></button>
           <button className="icon-button" aria-label={t('刷新项目目录')} title={t('刷新项目目录')} onClick={() => setRevision(r => r + 1)}><ArrowClockwise size={15} /></button>
           <div className="explorer-more" ref={more}>
@@ -201,12 +210,13 @@ export function ProjectExplorer({ project, collapsed, hideNoise, expandedPaths, 
           </div>
         </div>}
       </div>
-      <div ref={files.tree} className="file-tree" hidden={gitOpen} role="tree" tabIndex={0} aria-multiselectable="true" aria-label={t('{name} 的文件目录', { name: project.name })} onKeyDownCapture={files.onKeyDown} onClick={files.onBackgroundClick} onContextMenu={files.onBackgroundContextMenu}
+      <div ref={files.tree} className="file-tree" hidden={!filesOpen} role="tree" tabIndex={0} aria-multiselectable="true" aria-label={t('{name} 的文件目录', { name: project.name })} onKeyDownCapture={files.onKeyDown} onClick={files.onBackgroundClick} onContextMenu={files.onBackgroundContextMenu}
         onFocusCapture={() => window.agentrix.fileTreeFocus(project.id, true)} onBlurCapture={event => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) window.agentrix.fileTreeFocus(project.id, false); }}>
-        <TreeNode projectId={project.id} entry={{ name: project.name, path: '', kind: 'directory' }} depth={-1} expanded={expanded} revision={revision} enabled={!collapsed && !gitOpen} selectedFile={selectedFile} hideNoise={hideNoise} onToggle={toggle} onSelect={onSelectFile} selected={files.selected} choose={files.choose} contextMenu={files.contextMenu} decorations={decorations} />
+        <TreeNode projectId={project.id} entry={{ name: project.name, path: '', kind: 'directory' }} depth={-1} expanded={expanded} revision={revision} enabled={!collapsed && filesOpen} selectedFile={selectedFile} hideNoise={hideNoise} onToggle={toggle} onSelect={onSelectFile} selected={files.selected} choose={files.choose} contextMenu={files.contextMenu} decorations={decorations} />
       </div>
+      {tab === 'agent' && !collapsed && <div className="explorer-agent">{agentPanel}</div>}
       {gitOpen && !collapsed && <GitPanel projectId={project.id} status={git.status} error={git.error} loading={git.loading} revision={gitRevision} onRefresh={() => { git.refresh(); setGitRevision(value => value + 1); }} onOpen={(path, mode) => mode === 'file' ? onSelectFile(path) : onOpenChange(path, mode)} />}
-      {!gitOpen && files.status}
+      {filesOpen && files.status}
     </div>
     {files.overlays}
   </aside>;
