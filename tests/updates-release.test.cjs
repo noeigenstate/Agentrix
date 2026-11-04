@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const yaml = require('js-yaml');
 const { spawnSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const { BETA_AGREEMENT_VERSION } = require('../electron/updates.cjs');
 
 test('main and renderer require the same beta agreement version', () => {
@@ -16,7 +17,9 @@ test('main and renderer require the same beta agreement version', () => {
 test('beta release versions are accepted by release notes and the workflow version guards', async () => {
   const { releaseNotes } = await import('../scripts/release-notes.mjs');
   const version = '1.3.27-beta.1';
-  assert.match(releaseNotes([{ title: 'Title', text: 'Text' }], { Title: 'Title', Text: 'Text' }, version), /^## Changes in 1\.3\.27-beta\.1/);
+  const notes = releaseNotes([{ title: 'Title', text: 'Text' }], { Title: 'Title', Text: 'Text' }, version);
+  assert.match(notes, /^\*\*Windows test build:\*\*/);
+  assert.match(notes, /^## Changes in 1\.3\.27-beta\.1$/m);
   const workflow = yaml.load(fs.readFileSync(path.join(__dirname, '../.github/workflows/build-windows.yml'), 'utf8'));
   const windows = workflow.jobs.windows.steps.find(step => step.name === 'Validate release version').run;
   const pattern = windows.match(/\$version -notmatch '([^']+)'/)[1];
@@ -42,20 +45,25 @@ test('the prerelease workflow requires and uploads the feed, installer and block
   assert(publish.includes('($installer + ".blockmap")'), 'published-release reruns also verify the blockmap');
 });
 
-function releaseBody(version) {
+function releaseBody(version, changes = `## Changes in ${version}`) {
   const workflow = yaml.load(fs.readFileSync(path.join(__dirname, '../.github/workflows/build-windows.yml'), 'utf8'));
   const verify = workflow.jobs.release.steps.find(step => step.name === 'Verify release assets and prepare notes').run;
-  const start = verify.indexOf('\n', verify.indexOf('assets=('));
-  const end = verify.indexOf('\nEOF', start);
-  assert(start >= 0 && end > start, 'the workflow includes the release body heredoc');
-  // Execute only the body setup and heredoc, without artifact reads, downloads or release commands.
-  const source = verify.slice(start, end + '\nEOF'.length), heredoc = 'cat > release-notes.md <<EOF';
-  assert.equal(source.split(heredoc).length, 2, 'the body redirect is replaced before executing the shell');
-  const script = source.replace(heredoc, 'cat <<EOF');
+  const bodies = [...verify.matchAll(/cat > release-notes\.md <<EOF\n[\s\S]*?\nEOF/g)];
+  assert.equal(bodies.length, 2, 'the workflow includes beta and stable release body heredocs');
+  const condition = verify.match(/^if \[\[ "\$RELEASE_VERSION" == \*-beta\.\* \]\]; then$/m)?.[0];
+  assert(condition, 'the workflow selects the Windows beta body by release version');
+  const stableSetup = verify.indexOf("release_notice=''");
+  assert(stableSetup >= 0 && stableSetup < bodies[1].index, 'the stable setup precedes its body');
+  // Execute the real branch condition, body setup and heredocs without artifact or release commands.
+  const source = [condition, bodies[0][0], 'else',
+    verify.slice(stableSetup, bodies[1].index + bodies[1][0].length), 'fi'].join('\n');
+  const heredoc = 'cat > release-notes.md <<EOF';
+  assert.equal(source.split(heredoc).length, 3, 'both body redirects are replaced before executing the shell');
+  const script = source.replaceAll(heredoc, 'cat <<EOF');
   const result = spawnSync(process.env.AGENTRIX_TEST_BASH || 'bash', ['-c', script], {
     encoding: 'utf8', windowsHide: true,
     env: { ...process.env, RELEASE_VERSION: version, RELEASE_INSTALLER: `Agentrix-Setup-${version}-x64.exe`, MAC_IMAGE: `Agentrix-${version}-mac-arm64.dmg`,
-      changes: `## Changes in ${version}`, GITHUB_SHA: 'a'.repeat(40), GH_REPO: 'owner/repository', BUILD_RUN_ID: '123' },
+      changes, GITHUB_SHA: 'a'.repeat(40), GH_REPO: 'owner/repository', BUILD_RUN_ID: '123' },
   });
   assert.equal(result.status, 0, result.error?.message || result.stderr);
   return result.stdout;
@@ -73,12 +81,16 @@ function macVersionFromCommand(body) {
   return { command, version: result.stdout };
 }
 
-test('beta release bodies identify a test build and their macOS command installs that beta', () => {
-  const version = '1.3.27-beta.1', body = releaseBody(version);
-  assert.match(body, /^\*\*Test build:\*\*.*unstable.*Stable.*Beta.*agreement/);
-  const install = macVersionFromCommand(body);
-  assert.match(install.command, /\| AGENTRIX_VERSION=1\.3\.27-beta\.1 bash$/);
-  assert.equal(install.version, version);
+test('beta release bodies identify a Windows test build and include only Windows installation instructions', async () => {
+  const { releaseNotes } = await import('../scripts/release-notes.mjs');
+  const version = '1.3.27-beta.1';
+  const changes = releaseNotes([{ title: 'Title', text: 'Text' }], { Title: 'Title', Text: 'Text' }, version);
+  const body = releaseBody(version, changes);
+  assert.match(body, /^\*\*Windows test build:\*\*.*Windows only.*unstable.*Beta.*agreement/);
+  assert.match(body, /^## Changes in 1\.3\.27-beta\.1$/m);
+  assert.match(body, /\*\*Windows:\*\* install \*\*Agentrix-Setup-1\.3\.27-beta\.1-x64\.exe\*\*/);
+  assert.match(body, /SHA-256 checksums are attached in \*\*SHA256SUMS\.txt\*\*/);
+  assert.doesNotMatch(body, /macOS|Linux|install-macos|AGENTRIX_VERSION=|curl -fsSL|chmod \+x|xattr/);
 });
 
 test('stable release bodies keep their original introduction and unpinned macOS command', () => {
@@ -88,4 +100,6 @@ test('stable release bodies keep their original introduction and unpinned macOS 
   const install = macVersionFromCommand(body);
   assert.equal(install.command, 'curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | bash');
   assert.equal(install.version, 'latest');
+  // Entire rendered body from c0ae0f5, before Windows-only betas, with this fixture's exact inputs.
+  assert.equal(createHash('sha256').update(body).digest('hex'), 'f0cbb80538db32bb8fb3e6e5b6d2dec31c1557871b2ba579b0683d85c13032c8');
 });
