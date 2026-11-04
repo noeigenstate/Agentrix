@@ -9,6 +9,24 @@ const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.c
 const { createEventStream } = require('../electron/features/native-session/events.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 function normalize() { const events = []; return { events, emit: createNormalizer((type, payload, extra) => events.push({ type, payload, ...extra })) }; }
+
+test('R6 real-shaped API errors are notices/results, never assistant prose; ordinary replies are preserved', () => {
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const { rateLimits } = require('../electron/features/claude-sdk/limits.cjs');
+  const f = normalize(), log = new ConversationLog();
+  for (const [index, error, text] of [[1, 'rate_limit', 'API Error: Request rejected (429) · enforced_spend_limit_reached'],
+    [2, 'unknown', 'API Error: 400 You have reached your specified API usage limits']]) {
+    const record = { type: 'assistant', uuid: `error-${index}`, isApiErrorMessage: true, error,
+      message: { id: `error-${index}`, model: '<synthetic>', content: [{ type: 'text', text }] } };
+    f.emit(record); f.emit({ ...record, isReplay: true }); claudeConversation(log, record);
+    assert.equal(rateLimits(record, null, 'scope', 1000).notice.message, 'API 用量已达上限。');
+  }
+  assert.deepEqual(f.events, []); assert.deepEqual(log.list, []);
+  const normal = { type: 'assistant', uuid: 'answer', message: { id: 'answer', content: [{ type: 'text', text: 'The API Error example uses 429 and enforced_spend_limit_reached.' }] } };
+  f.emit(normal); claudeConversation(log, normal);
+  assert.equal(f.events[0].payload.content.text, normal.message.content[0].text);
+  assert.equal(log.list[0].text, normal.message.content[0].text, 'text matching an error phrase is still a real answer');
+});
 test('A3 child prose and tools never enter the main feed, including replay and deltas', () => {
   const f = normalize();
   for (const message of [{ type: 'assistant', message: { id: 'child', content: [{ type: 'text', text: 'SUBAGENT' }, { type: 'tool_use', id: 'tool', name: 'Read', input: {} }] } },

@@ -174,6 +174,8 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         if (!prepareTerminal) throw new Error('terminal_preparation_unavailable');
         const prepared = await prepareTerminal(spec, handoff, currentChange, transition);
         return { session: prepared.session, cancel: prepared.cancel, async commit() {
+          if (transition.discardBackground) await old?.runtime.stopBackground?.();
+          if (!currentChange()) throw new Error('session_changed');
           await prepared.commit();
           sessions.delete(id); if (old?.lock) occupied.delete(old.lock);
           const stream = eventStream(spec);
@@ -225,6 +227,9 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       if (record.inputs.has(message.clientMessageId)) return { status: record.inputs.get(message.clientMessageId) };
       if (switches.state(id)?.phase && switches.state(id).phase !== 'stable') return unsent(record, message, 'switch_in_progress');
       if (record.spec.agent === 'claude') {
+        // Settings are current, while a running query keeps its existing reservation until a safe input boundary.
+        // The SDK's normal idle renewal then removes an old cap when the owner clears the monthly budget.
+        if (record.spec.owner !== 'dispatch') record.spec.monthlyBudgetUsd = settings.get().monthlyBudgetUsd;
         const selected = selection(record.spec, record.runtime, false, true);
         if (selected.path !== 'api') { reconcile(); return unsent(record, message, selected.reason || 'api_unavailable'); }
       }

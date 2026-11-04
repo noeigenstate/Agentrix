@@ -18,7 +18,8 @@ import { t } from '../../shared/i18n';
 // The draft handoff of a run-mode switch, bound to its terminal by the card whatever the card shows (the reading view, the native view or the raw terminal),
 // so a switch never waits for a view that is not there: a card without a message box hands over an empty draft. The views never reach the bridge.
 function WithHandoff({ terminal, children }: { terminal: ProjectTerminal; children: (handoff: Handoff) => ReactNode }) {
-  return <>{children(useHandoff(terminal.id, terminal.nativeRuntimeSessionId ?? null, terminal.switchState))}</>;
+  const surface = terminal.sessionId ? 'terminal' : terminal.nativeMode === 'claude-sdk' ? 'api' : terminal.nativeMode === 'codex-app-server' ? 'native' : null;
+  return <>{children(useHandoff(terminal.id, terminal.nativeRuntimeSessionId ?? null, terminal.switchState, surface))}</>;
 }
 
 export function ProjectTerminals({ project, focused, fontSize, activeId, setActiveId, onExpand, onAction, onError, onOpenLink }: {
@@ -71,7 +72,7 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
       const native = isNative(terminal);
       if (!focused && !terminal.sessionId && !terminal.readingHistory && !native) return null;
       const stopped = terminal.status === 'stopped' || terminal.status === 'exited';
-      const reading = readingShown(terminal, raw);
+      const reading = !native && readingShown(terminal, raw);
       const name = `${project.name} ${terminal.title}`;
       return <div key={terminal.id} className={`terminal-slot ${reorder.drag?.id === terminal.id ? 'drag-placeholder' : ''}`} data-terminal-slot={terminal.id} style={{ display: visibleIds.has(terminal.id) ? undefined : 'none' }}>
       <section className={`terminal-split ${selected === terminal.id ? 'is-active-terminal' : ''} ${reorder.drag?.id === terminal.id ? 'drag-source' : ''} ${reorder.drag?.targetId === terminal.id ? 'drop-target' : ''}`} data-terminal-id={terminal.id} data-session-id={terminal.sessionId || ''} data-codex-active={terminal.codexActive} aria-label={name} onPointerDownCapture={() => setActiveId(terminal.id)} onFocusCapture={() => setActiveId(terminal.id)}>

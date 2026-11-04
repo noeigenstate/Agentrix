@@ -65,6 +65,16 @@ test('I4: a wrong terminal resume identity restores the original native surface 
   await assert.rejects(f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => true), /session_changed/);
   assert.equal(f.sessions.get('t'), f.old); assert.equal(f.saves.length, 0); assert.equal(f.signals.length, 0);
 });
+
+test('a confirmed shell prompt after the launched CLI exits fails immediately instead of waiting for the resume timeout', async () => {
+  const f = fixture(), start = f.context.startTerminal;
+  f.context.startTerminal = (...args) => {
+    start(...args); f.context.launchPlans.clear();
+    Object.assign(f.sessions.get('t'), { ready: true, status: 'shell', agentStarting: false, codexActive: false, cliState: null });
+  };
+  await assert.rejects(f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => true), /terminal_agent_exited/);
+  assert.equal(f.sessions.get('t'), f.old); assert.equal(f.saves.length, 0);
+});
 test('terminal text blocks switching, but an arrow/history key alone is not proof of a draft', () => {
   const f = fixture();
   const host = { sessionId: 'pty', cliState: { sessionId: 'pty', state: 'idle' }, submissions: { hasText: true, history: false }, promptQueue: { list: () => [] } };
@@ -72,4 +82,21 @@ test('terminal text blocks switching, but an arrow/history key alone is not proo
   host.submissions = { hasText: false, history: true };
   assert.equal(f.context.observeSwitchTerminal({ identity: host }).draftBlocked, false);
   assert.equal(f.context.observeSwitchTerminal({ identity: host }).background.known, false);
+});
+
+test('a fresh idle Claude with no transcript has an empty observation; unavailable and resumed history remain unknown', () => {
+  const f = fixture();
+  const host = { agent: 'claude', sessionId: 'pty', cliState: { sessionId: 'pty', state: 'idle' },
+    claudeSessionSource: 'startup', claudeTranscript: { missing: true }, completionWork: { reading: true, tasks: new Map(), services: new Set() } };
+  const session = { identity: host, spec: { hasHistory: false } };
+  const background = () => JSON.parse(JSON.stringify(f.context.observeSwitchTerminal(session).background));
+  assert.deepEqual(background(), { known: true, count: 0 });
+  host.completionWork.tasks.set('job', { id: 'job' });
+  assert.deepEqual(background(), { known: true, count: 1 }, 'other observations are still counted');
+  for (const patch of [{ claudeResumeId: 'old' }, { activityInputAt: 1 }, { claudeTranscript: { missing: false } }]) {
+    Object.assign(host, patch); assert.equal(background().known, false);
+    delete host.claudeResumeId; delete host.activityInputAt; host.claudeTranscript = { missing: true };
+  }
+  host.claudeSessionSource = 'resume'; assert.equal(background().known, false); host.claudeSessionSource = 'startup';
+  host.completionWork.uncertain = true; assert.equal(background().known, false);
 });

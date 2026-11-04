@@ -13,7 +13,9 @@ class TranscriptTail {
     this.catchUpHistory = catchUpHistory; this.isCurrent = isCurrent;
   }
   async read(onRecord) {
-    let file; try { file = await fs.open(this.filename, 'r'); } catch { return false; }
+    let file;
+    try { file = await fs.open(this.filename, 'r'); this.missing = false; }
+    catch (error) { this.missing = error.code === 'ENOENT'; return false; }
     try {
       // NTFS file IDs can exceed Number's exact range; keep their identity as bigint.
       const stat = await file.stat({ bigint: true }), size = Number(stat.size);

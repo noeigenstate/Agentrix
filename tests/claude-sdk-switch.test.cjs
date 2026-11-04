@@ -33,6 +33,31 @@ test('SDK switch preparation initializes a real resumed query with zero input an
   assert.ok(f.events.filter(event => event.type === 'item.upsert').every(event => event.replay));
   assert.equal(f.events.some(event => event.type === 'turn.started' || event.type === 'input.receipt'), false);
 });
+
+test('R8 switching stops only this query task ids and waits for their stop receipts before closing', async t => {
+  const f = fixture(t), query = f.fake.sdk.query, stopped = [];
+  f.fake.sdk.query = options => ({ ...query(options), async stopTask(id) {
+    stopped.push(id);
+    setTimeout(() => f.fake.emit({ type: 'system', subtype: 'task_notification', task_id: id, run_id: 1, status: 'stopped' }), 10);
+  } });
+  await f.session.resume(); await f.session.prepareResume();
+  f.fake.emit({ type: 'system', subtype: 'task_started', task_id: 'owned-job', run_id: 1, is_backgrounded: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.session.activity().count, 1);
+  await f.session.stopBackground();
+  assert.deepEqual(stopped, ['owned-job']); assert.equal(f.session.activity().count, 0); assert.equal(f.fake.closes.length, 0);
+  assert.equal(f.fake.inputs.length, 0, 'stopping a task never sends a prompt or replays input');
+});
+
+test('R8 a refused task stop leaves the source query and its background observation intact', async t => {
+  const f = fixture(t), query = f.fake.sdk.query;
+  f.fake.sdk.query = options => ({ ...query(options), stopTask: async () => { throw new Error('offline stop refused'); } });
+  await f.session.resume(); await f.session.prepareResume();
+  f.fake.emit({ type: 'system', subtype: 'task_started', task_id: 'owned-job', run_id: 1, is_backgrounded: true });
+  await new Promise(resolve => setImmediate(resolve));
+  await assert.rejects(f.session.stopBackground(), /offline stop refused/);
+  assert.equal(f.session.activity().count, 1); assert.equal(f.fake.closes.length, 0);
+});
 test('missing SDK history cannot be accepted as a successful idle resume', async t => {
   const f = fixture(t, false); await f.session.resume();
   await assert.rejects(f.session.prepareResume(), /resume_history_unavailable/);

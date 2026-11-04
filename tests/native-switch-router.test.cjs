@@ -63,6 +63,22 @@ test('G3/G12 startup has no switch record and a source exit warning reports a su
   const state = f.router.switchState('t'); assert.equal(state.current, 'terminal'); assert.equal(state.outcome, 'switched'); assert.match(state.reason, /已保留新会话/);
   assert.equal(f.router.usage({}, 'another-project').lastSwitch, undefined);
 });
+
+test('R8 an unconfirmed background stop cancels the staged target and keeps the source; success stops tasks before commit', async t => {
+  const f = fixture(t); await f.router.start('t', { agent: 'claude' });
+  const source = f.created[0], stopped = [];
+  source.activity = () => ({ known: true, count: 1 });
+  source.stopBackground = async () => { throw new Error('stop refused'); };
+  const now = () => {
+    const snapshot = f.router.snapshot('t'), state = snapshot.switchState;
+    f.router.answer('t', snapshot.runtimeSessionId, state.requestId, { switch: { changeId: state.changeId, requestId: state.requestId, action: 'now' } });
+  };
+  f.config({ claudePath: 'terminal-only' }); await tick(); now(); await tick(); f.handoff(); await tick();
+  assert.equal(f.router.switchState('t').outcome, 'failed'); assert.equal(source.closed, false); assert.deepEqual(f.paths, []);
+  source.stopBackground = async () => { assert.deepEqual(f.paths, []); stopped.push('owned-task'); };
+  f.config({ claudePath: 'terminal-only' }); await tick(); now(); await tick(); f.handoff(); await tick();
+  assert.deepEqual(stopped, ['owned-task']); assert.deepEqual(f.paths, ['terminal']); assert.equal(source.closed, true);
+});
 const until = async check => { for (let i = 0; i < 200; i++) { if (check()) return; await tick(); } throw new Error('switch did not settle'); };
 for (const agent of ['claude', 'codex']) test(`router restores ${agent} both ways using one provider id, carries receipts and never submits history`, async t => {
   const f = fixture(t, agent); await f.router.start('t', { agent });

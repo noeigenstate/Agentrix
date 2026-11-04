@@ -323,7 +323,22 @@ function createClaudeSession(spec, emit, dependencies) {
     })();
     return closing;
   }
-  return { start, resume: start, send, close, answer: requests.answer, snapshot: stream.snapshot,
+  async function stopBackground() {
+    const run = active;
+    if (!run?.background.size) return;
+    // A process exit alone does not stop Bash jobs on Windows. Ask the process which owns these task ids
+    // to stop them and wait for its receipts before retiring that process. Dispatched workers are not in this set.
+    let timer;
+    try {
+      await Promise.race([Promise.all([...run.background.keys()].map(id => run.query.stopTask(id))), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('background_stop_unconfirmed')), 3000);
+      })]);
+      const deadline = Date.now() + 3000;
+      while (run.background.size && active === run && !run.closing && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+      if (run.background.size) throw new Error('background_stop_unconfirmed');
+    } finally { clearTimeout(timer); }
+  }
+  return { start, resume: start, send, close, stopBackground, answer: requests.answer, snapshot: stream.snapshot,
     hasAllowance: () => !!active?.reservation && active.remainingBudgetUsd > 0,
     checkpoint(restore) {
       let key; try { key = active?.key || credentials.read(); } catch { return null; }

@@ -27,9 +27,11 @@ const omitPath = text => text.endsWith('.') ? ' .' : ' ';
 
 // Both CLIs use the user role for bookkeeping too. Check provenance before cleaning away its identifying tags.
 function promptText(content, record = {}) {
-  if (record.isMeta || record.isSidechain || record.isCompactSummary || record.isVisibleInTranscriptOnly || record.queueTranscriptOnly
+  // SDK is the owner's input transport, not an automatic turn. All injection checks still apply.
+  const sdkInput = record.turnOrigin === 'sdk' && record.promptSource === 'sdk' && record.entrypoint === 'sdk-ts';
+  if (record.isMeta || record.is_meta || record.isSidechain || record.parent_tool_use_id || record.isCompactSummary || record.isVisibleInTranscriptOnly || record.queueTranscriptOnly
     || record.promptSource === 'system' || record.origin?.kind && record.origin.kind !== 'human'
-    || record.turnOrigin && record.turnOrigin !== 'human' || record.humanTurn === false
+    || record.turnOrigin && record.turnOrigin !== 'human' && !sdkInput || record.humanTurn === false
     || record.commandMode && record.commandMode !== 'prompt') return null;
   if (Array.isArray(content) && content.some(block => ['tool_result', 'tool_use', 'function_call_output'].includes(block?.type))) return null;
   const text = messageText(content);
