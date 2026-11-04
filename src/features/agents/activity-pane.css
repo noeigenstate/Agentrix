@@ -105,6 +105,9 @@
 .activity-metric.is-warn > b { color: var(--warning); }
 .activity-metric.is-warn .activity-meter i { background: var(--warning); }
 /* The path and API card (ApiUsage): a label and its lines per row, on the metrics' 88px label column. */
+.api-agents { display: grid; gap: 16px; }
+.api-agent { display: grid; gap: 8px; min-width: 0; }
+.api-agent-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
 .api-usage { display: grid; gap: 8px; margin: 0; }
 .api-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
 .api-row dt { overflow: hidden; font-size: 13px; line-height: 20px; color: var(--flow-muted); text-overflow: ellipsis; white-space: nowrap; }
