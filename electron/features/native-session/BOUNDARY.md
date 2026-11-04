@@ -12,6 +12,7 @@ Owns provider-neutral session routing, validated renderer IPC, settings and work
 - `createEventStream` (`electron/features/native-session/events.cjs`) — versioned event publication and replay snapshots
 - `registerClaudeWorker` (`electron/features/native-session/worker.cjs`) — authenticated helper run registration
 - `validEvent` (`electron/features/native-session/validate.cjs`) — bounded public event validation
+- `subscriptionLimits` (`electron/features/native-session/usage.cjs`) — the subscription limits main already holds as a limits payload, with nextPath for what a new session takes
 
 ## May import
 
