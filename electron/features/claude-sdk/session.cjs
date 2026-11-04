@@ -168,7 +168,10 @@ function createClaudeSession(spec, emit, dependencies) {
           if (run.background.size) { setState('idle'); continue; }
           idle = true; cancelQuery(run, 'path_changed'); break;
         }
-        if (!(message.queued_turn_count > 0)) {
+        // queued_turn_count can predate a late stdin write. A worker must answer
+        // every accepted input before its otherwise-idle query is retired.
+        const unread = spec.owner === 'dispatch' && [...sent.values()].some(status => ['queued', 'delivered'].includes(status));
+        if (!(message.queued_turn_count > 0) && !unread) {
           run.busy = false;
           releaseIdle(run);
           run.onStoppedResult?.();

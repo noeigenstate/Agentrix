@@ -35,7 +35,7 @@ function createInterventions({ resolve, pushControl, sendDirect, now = Date.now 
       if (pushControl) {
         try {
           const result = await pushControl(target.runId, { messageId: control.id, type: stopping ? 'stop' : 'intervene', ...(!stopping ? { text } : {}) });
-          if (['queued', 'delivered', 'rejected', 'unknown'].includes(result?.status)) receipt.status = result.status;
+          if (['queued', 'delivered', 'consumed', 'rejected', 'unknown'].includes(result?.status)) receipt.status = result.status;
           if (receipt.status === 'rejected' && typeof result.reason === 'string') receipt.reason = result.reason.slice(0, 300);
         } catch { receipt.status = 'unknown'; }
       }
@@ -48,6 +48,30 @@ function createInterventions({ resolve, pushControl, sendDirect, now = Date.now 
   return {
     interveneAgent: (terminalId, callId, text) => submit(terminalId, callId, text, false),
     stopAgent: (terminalId, callId) => submit(terminalId, callId, '', true),
+    async receipts(terminalId, callId) {
+      const target = await resolve(terminalId, callId);
+      if (!target || target.local !== true || target.route !== 'dispatch' || target.terminalId !== terminalId
+        || target.callId !== callId || !runId(target.runId) || callId !== `dispatch:${target.runId}`) return [];
+      const team = projectTeam(target.cwd), parent = projectTeam(target.projectPath);
+      if (!team || !parent || fs.realpathSync.native(team.directory) !== fs.realpathSync.native(parent.directory)) return [];
+      let fd;
+      try {
+        fd = fs.openSync(team.journal, 'r');
+        const size = fs.fstatSync(fd).size, start = Math.max(0, size - 1024 * 1024), bytes = Buffer.alloc(size - start);
+        fs.readSync(fd, bytes, 0, bytes.length, start);
+        const lines = bytes.toString('utf8').split(/\r?\n/), receipts = new Map();
+        if (start) lines.shift();
+        for (const line of lines) {
+          let entry; try { entry = JSON.parse(line); } catch { continue; }
+          if (entry.type !== 'control-receipt' || entry.id !== target.runId || !runId(entry.messageId)
+            || !['queued', 'delivered', 'consumed', 'rejected', 'unknown'].includes(entry.status)) continue;
+          receipts.set(entry.messageId, { id: entry.messageId, status: entry.status,
+            ...(['worker_ended_without_resume', 'worker_ended_before_read'].includes(entry.reason) ? { reason: entry.reason } : {}) });
+        }
+        return [...receipts.values()].slice(-2000);
+      } catch { return []; }
+      finally { if (fd !== undefined) fs.closeSync(fd); }
+    },
   };
 }
 

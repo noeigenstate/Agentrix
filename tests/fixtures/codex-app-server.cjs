@@ -36,7 +36,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     notify('turn/started', result);
     notify('item/agentMessage/delta', { turnId, itemId: 'message-' + turns, delta: 'partial 汉字' });
     if (mode === 'approval') send({ id: 91, method: 'item/commandExecution/requestApproval', params: { threadId, turnId, itemId: 'command', approvalId: 'a', command: 'echo example' } });
-    if (!['hold', 'approval', 'worker'].includes(mode)) setTimeout(() => {
+    if (mode === 'unread-worker' && params.input?.some(item => item.text?.includes('业主插话'))) setTimeout(() => {
+      notify('item/completed', { turnId, item: { type: 'userMessage', id: 'resumed-input', clientId: params.clientUserMessageId, content: params.input } });
+      notify('item/completed', { turnId, item: { type: 'agentMessage', id: 'resumed-answer', text: 'Correction handled', phase: 'final_answer' } });
+      notify('turn/completed', { turn: { id: turnId, status: 'completed' } });
+    }, 20);
+    if (!['hold', 'approval', 'worker', 'unread-worker'].includes(mode)) setTimeout(() => {
       if (mode === 'structured') notify('thread/tokenUsage/updated', { tokenUsage: { total: { inputTokens: 10, cachedInputTokens: 2, cacheWriteInputTokens: 0, outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 13 },
         last: { inputTokens: 10, cachedInputTokens: 2, cacheWriteInputTokens: 0, outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 13 }, modelContextWindow: 456789 } });
       notify('item/completed', { turnId, item: { type: 'agentMessage', id: 'message-' + turns, text: 'final answer', phase: 'final_answer' } });
@@ -49,7 +54,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (mode === 'race') return send({ id: request.id, error: { code: -32602, message: 'Turn ended' } });
     if (params.expectedTurnId !== turnId) return send({ id: request.id, error: { code: -32602, message: 'Turn ended' } });
     result = { turnId };
+    if (mode === 'unread-worker') setTimeout(() => {
+      notify('item/completed', { turnId, item: { type: 'agentMessage', id: 'old-answer', text: 'Old answer', phase: 'final_answer' } });
+      notify('turn/completed', { turn: { id: turnId, status: 'completed' } });
+    }, 20);
     if (mode === 'worker') setTimeout(() => {
+      notify('item/completed', { turnId, item: { type: 'userMessage', id: 'steered-input', clientId: params.clientUserMessageId, content: params.input } });
       notify('item/completed', { turnId, item: { type: 'agentMessage', id: 'message-1', text: params.input[0].text, phase: 'final_answer' } });
       notify('turn/completed', { turn: { id: turnId, status: 'completed' } });
     }, 20);

@@ -76,7 +76,7 @@ function stopChild(child) {
 function readCodexAccount({ env = process.env, cwd, codexHome, signal, timeout = 8000,
   executable, launch = spawn, stop = stopChild } = {}) {
   return new Promise(resolve => {
-    let child, timer, limitsReadAt, done = false, pending = '', bytes = 0, stage = 1;
+    let child, timer, limitsReadAt, connection, done = false, pending = '', bytes = 0, stage = 1;
     const finish = value => {
       if (done) return;
       done = true; clearTimeout(timer); signal?.removeEventListener('abort', abort);
@@ -85,7 +85,8 @@ function readCodexAccount({ env = process.env, cwd, codexHome, signal, timeout =
       stop(child);
       resolve(value);
     };
-    const fail = reason => finish({ resets: null, resetQuery: { state: 'error', reason } });
+    const fail = reason => finish({ resets: null, resetQuery: { state: 'error', reason },
+      connection: connection || { kind: 'unknown', active: false, source: 'codex-account-usage account/read', observedAt: null } });
     const abort = () => fail('cancelled');
     const write = value => { try { child.stdin.write(JSON.stringify(value) + '\n'); } catch { fail('query'); } };
     const read = data => {
@@ -102,16 +103,27 @@ function readCodexAccount({ env = process.env, cwd, codexHome, signal, timeout =
         // Notifications may be interleaved. Never answer a server request that
         // could ask for auth or an action; this connection only reads usage.
         if (message.id !== stage || message.method) continue;
-        if (message.error) { if (message.error.code === -32601) finish(unavailable('version')); else fail('query'); return; }
+        if (message.error) { if (message.error.code === -32601) finish({ ...unavailable('version'), ...(connection ? { connection } : {}) }); else fail('query'); return; }
         if (!Object.hasOwn(message, 'result')) continue;
         if (stage === 1) {
           stage = 2;
           write({ method: 'initialized' });
+          write({ id: 2, method: 'account/read', params: { refreshToken: false } });
+        } else if (stage === 2) {
+          const account = message.result?.account;
+          connection = { kind: account === null ? 'none' : account?.type === 'apiKey' ? 'api'
+            : ['chatgpt', 'chatgptAuthTokens'].includes(account?.type) ? 'subscription' : 'unknown',
+          active: false, source: 'codex-account-usage account/read', observedAt: Date.now() };
+          // API accounts have no subscription windows. An absent account is not logged in.
+          if (connection.kind === 'none' || connection.kind === 'api') {
+            finish({ ...unavailable('unsupported'), connection }); return;
+          }
+          stage = 3;
           // A reply delayed in transit must not supersede a rollout written after this read began.
           limitsReadAt = Date.now();
-          write({ id: 2, method: 'account/rateLimits/read', params: { excludeResetCreditDetails: true } });
+          write({ id: 3, method: 'account/rateLimits/read', params: { excludeResetCreditDetails: true } });
         } else {
-          try { finish(accountResult(message.result, limitsReadAt)); } catch { fail('query'); }
+          try { finish({ ...accountResult(message.result, limitsReadAt), connection }); } catch { fail('query'); }
         }
       }
     };
@@ -330,13 +342,14 @@ class CodexAccountUsage {
     if (scope.reason) { changed(unavailable(scope.reason)); return { dispose() {}, refresh() {}, output() {} }; }
     // A quick rebind must retain the old read and throttle, even after its last listener leaves.
     for (const [key, entry] of this.entries) if (!entry.listeners.size && !entry.checks.size && !entry.pending &&
-      Date.now() >= Math.max((entry.lastReadAt ?? entry.lastAttemptAt ?? 0) + 5000, entry.retryAt || 0)) this.entries.delete(key);
+      Date.now() >= Math.max((entry.lastReadAt ?? entry.lastAttemptAt ?? 0) + 5000, entry.retryAt || 0, entry.retainCache ? entry.nextReadAt || 0 : 0)) this.entries.delete(key);
     let entry = this.entries.get(scope.key);
     if (!entry) {
       entry = { options: { ...options, codexHome: scope.home, cwd: scope.cwd }, listeners: new Set(), checks: new Set(), failures: 0, generation: 0 };
       this.entries.set(scope.key, entry);
     }
     const listeners = projectCheck ? entry.checks : entry.listeners;
+    entry.retainCache ||= options.retainCache === true;
     listeners.add(changed);
     const fresh = entry.value && Date.now() < entry.nextReadAt;
     if (fresh) changed(entry.value);
@@ -366,7 +379,7 @@ class CodexAccountUsage {
         if (entry.listeners.size) return;
         clearTimeout(entry.timer); entry.timer = null; entry.queued = false;
         if (entry.checks.size) return;
-        entry.value = null;
+        if (!entry.retainCache) entry.value = null;
         if (entry.pending) { entry.invalidated = true; entry.abort?.abort(); }
       },
     };
@@ -411,7 +424,7 @@ class CodexAccountUsage {
       if (!entry.listeners.size && !entry.checks.size) return;
       if (invalidated) { this.refresh(entry, true); return; }
       // Older accounts can report limits without the optional reset-credit counter.
-      const failed = value.resetQuery.state !== 'ready' && !value.limits?.length;
+      const failed = value.resetQuery.state !== 'ready' && !value.limits?.length && !['api', 'none'].includes(value.connection?.kind);
       entry.failures = failed ? entry.failures + 1 : 0;
       const delay = failed ? Math.min(300000, this.interval * 2 ** Math.min(entry.failures, 4)) : this.interval;
       entry.retryAt = failed ? Date.now() + delay : 0;

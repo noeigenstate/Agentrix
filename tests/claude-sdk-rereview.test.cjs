@@ -51,11 +51,11 @@ test('N2 owner idle releases its lease without closing the query and accepts a b
 test('N2 dispatch idle still retires the query and resumes only for the next explicit send', async t => {
   const { fake, create, ledger } = setup(t), { session } = create('dispatch');
   await session.start(); await send(session); await until(() => fake.inputs.length === 1);
-  fake.emit(result(0.1)); await until(() => session.snapshot().state === 'idle');
+  fake.emit(result(0.1, { user_message_uuid: fake.inputs[0].uuid })); await until(() => session.snapshot().state === 'idle');
   assert.equal(fake.closes.length, 1); assert.deepEqual(ledger().reservations, {});
   await send(session); await until(() => fake.inputs.length === 2);
   assert.equal(fake.calls.length, 2); assert.equal(fake.calls[1].options.resume, fake.sessionId);
-  fake.emit(result(0.2)); await until(() => session.snapshot().state === 'idle');
+  fake.emit(result(0.2, { user_message_uuid: fake.inputs[1].uuid })); await until(() => session.snapshot().state === 'idle');
 });
 
 test('N2 an owner query reopens at a message boundary only when another session reduces its available cap', async t => {

@@ -14,7 +14,7 @@ const { projectTeam } = require('../team/team.cjs');
 
 const MAX_FRAME = 4 * 1024 * 1024;
 const validId = value => typeof value === 'string' && /^[\w-]{1,160}$/.test(value);
-const status = value => ['queued', 'delivered', 'rejected', 'unknown'].includes(value);
+const status = value => ['queued', 'delivered', 'consumed', 'rejected', 'unknown'].includes(value);
 
 function frames(socket, receive, disconnected) {
   const decoder = new StringDecoder('utf8');

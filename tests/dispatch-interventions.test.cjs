@@ -131,6 +131,9 @@ test('default send leaves the child running and joins ordered messages in same-s
     }
     assert.equal(f.team.entries().filter(entry => entry.type === 'end').length, 1);
     assert.equal(f.team.entries().filter(entry => entry.type === 'intervention').length, 3);
+    const receipts = await f.api.receipts('terminal', f.target.callId);
+    assert.equal(receipts.length, 3);
+    assert.ok(receipts.every(value => value.status === 'consumed'), 'only a successful confirmed reply consumes the queued stdin brief');
     assert.match(f.stdout(), /owner intervened 3/); assert.equal(f.team.live().length, 0);
     assert.equal(fs.readFileSync(f.out, 'utf8'), 'done 3');
   }

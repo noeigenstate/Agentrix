@@ -90,7 +90,8 @@ export type ConversationPage = { key: string; entries: ConversationEntry[]; befo
 // Full snapshots, newest 400 entries; omitted on the first entry means earlier steps were dropped.
 export type SubagentFeed = { id: string; agent: AgentCall['agent']; model: string; effort: string | null; fast: boolean | null;
   title: string; role: string; state: AgentCall['items'][number]['state']; failure?: AgentCall['items'][number]['failure'];
-  startedAt: number | null; endedAt: number | null; rate: TokenRate | null; entries: ConversationEntry[]; revision: number };
+  startedAt: number | null; endedAt: number | null; rate: TokenRate | null; entries: ConversationEntry[]; revision: number;
+  controlReceipts?: { id: string; status: AgentIntervention['status']; reason?: string }[] };
 export type SubagentFeedEvent = { terminalId: string; callId: string; revision: number };
 type GitDiffLine = { type: ' ' | '+' | '-' | '\\'; text: string };
 export type GitHunk = { header: string; oldStart: number; oldLines: number; newStart: number; newLines: number; lines: GitDiffLine[]; patch: string };
@@ -157,7 +158,7 @@ export type ConnectionTest = {
   billing: { status: 'ok' | 'mismatch' | 'unknown'; source: string | null };
   path: 'api' | 'terminal' | null; reason: string | null;
 };
-export type BillingConnection = { kind: 'api' | 'subscription' | 'none' | 'unknown'; source: string | null; observedAt: number | null };
+export type BillingConnection = { kind: 'api' | 'subscription' | 'none' | 'unknown'; active?: boolean; source: string | null; observedAt: number | null };
 type ConnectedUsage = Omit<NativeUsage, 'agents'> & { apiRecords: boolean; agents: Record<'claude' | 'codex', NativeUsage['agents']['claude'] & {
   connection: BillingConnection; next: { path: 'api' | 'native' | 'terminal' | null; reason: string | null };
 }> };

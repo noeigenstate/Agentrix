@@ -11,12 +11,13 @@ function registerAgentsIpc({ handle, agents, openExternal, getSession, findProje
   handle('agents:intervene', (terminalId, callId, text) => interventions.interveneAgent(terminalId, callId, text));
   handle('agents:stop', (terminalId, callId) => interventions.stopAgent(terminalId, callId));
   handle('agents:relay-result', (id, error) => relayResult(id, error));
-  handle('terminal:subagent-feed', (id, callId) => {
+  handle('terminal:subagent-feed', async (id, callId) => {
     if (typeof id !== 'string' || id.length > 160 || typeof callId !== 'string' || !/^(?:agent|dispatch):[\w-]{1,160}$/.test(callId)) throw new Error('无效的子代理对话请求。');
     const project = findProject(id), session = getSession(id);
     if (project.kind === 'ssh') throw new Error('unavailable');
     if (!session?.calls || session.terminalId !== id || session.projectId !== project.id) throw new Error('gone');
-    return session.calls.feed(callId);
+    const feed = await session.calls.feed(callId);
+    return { ...feed, controlReceipts: await interventions?.receipts?.(id, callId) || [] };
   });
   handle('terminal:conversationPage', (id, request) => {
     findProject(id);

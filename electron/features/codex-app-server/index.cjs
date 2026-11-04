@@ -53,6 +53,10 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       function notification(method, params) {
         if (closed) return;
         if (params.threadId && params.threadId !== events.binding.providerSessionId) return;
+        if (method === 'item/completed' && params.item?.type === 'userMessage') {
+          const id = params.item.clientId;
+          if (receipts.has(id)) inputReceipt(id, 'consumed');
+        }
         if (method === 'turn/started') started(params.turn);
         else if (method === 'turn/completed') {
           const turn = params.turn;
@@ -165,6 +169,12 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         }
         for (const item of history.reverse()) events.publish('item.upsert', item.payload, { itemId: item.itemId, turnId: item.turnId, replay: true });
       }
+      function inputReceipt(id, status) {
+        const entry = receipts.get(id);
+        if (entry?.status === 'consumed') return;
+        if (entry) entry.status = status;
+        events.publish('input.receipt', { clientMessageId: id, status });
+      }
       function send(input) {
         const imageValid = value => typeof value === 'string' && (spec.owner === 'dispatch' && path.isAbsolute(value) || /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value));
         if (!input || typeof input.clientMessageId !== 'string' || !/^[\w:.-]{1,160}$/.test(input.clientMessageId) || typeof input.text !== 'string' || !input.text.trim() && !input.images?.length || input.text.length > 1024 * 1024 || input.images && (!Array.isArray(input.images) || input.images.length > 8 || input.images.some(x => !imageValid(x)))) return Promise.reject(new Error('invalid_input'));
@@ -174,7 +184,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         const promise = sending.catch(() => {}).then(async () => {
           if (!rpc || closed || !['idle', 'running', 'waiting'].includes(state)) throw new Error('session_unavailable');
           const clientId = input.clientMessageId;
-          events.publish('input.receipt', { clientMessageId: clientId, status: 'queued' });
+          inputReceipt(clientId, 'queued');
           const userInput = [...(input.text.trim() ? [{ type: 'text', text: input.text, text_elements: [] }] : []), ...(input.images || []).map(value => value.startsWith('data:') ? { type: 'image', url: value } : { type: 'localImage', path: value })];
           const steering = active;
           try {
@@ -195,11 +205,11 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             }
             if (newTurn) started(result.turn);
             else if (result?.turnId !== events.binding.turnId) throw Object.assign(new Error('invalid_steer_response'), { uncertain: true });
-            events.publish('input.receipt', { clientMessageId: clientId, status: 'delivered' });
+            inputReceipt(clientId, 'delivered');
             return { clientMessageId: clientId, status: 'delivered' };
           } catch (error) {
             const status = error.uncertain ? 'unknown' : 'rejected';
-            events.publish('input.receipt', { clientMessageId: clientId, status });
+            inputReceipt(clientId, status);
             if (error.uncertain) setState('disconnected', 'input_delivery_unknown');
             return { clientMessageId: clientId, status };
           }

@@ -27,6 +27,10 @@ rl.on('line', line => {
   if (request.method === 'initialize') {
     process.stdout.write('{"id":1,"result":{}}\n'); return;
   }
+  if (request.method === 'account/read') {
+    if (request.params.refreshToken !== false) process.exit(91);
+    process.stdout.write(JSON.stringify({ id: request.id, result: { account: mode === 'signed-out' ? null : { type: mode === 'api' ? 'apiKey' : 'chatgpt', email: 'must-not-escape' } } }) + '\n'); return;
+  }
   if (request.method !== 'account/rateLimits/read') process.exit(90);
   if (mode === 'hang') return;
   if (mode === 'exit') process.exit(1);
@@ -34,10 +38,10 @@ rl.on('line', line => {
   if (mode === 'invalid') { process.stdout.write('not json\n'); return; }
   if (mode === 'null-message') { process.stdout.write('null\n'); return; }
   if (mode === 'error' || mode === 'old') {
-    process.stdout.write(JSON.stringify({ id: 2, error: { code: mode === 'old' ? -32601 : -32000, message: 'private diagnostic' } }) + '\n'); return;
+    process.stdout.write(JSON.stringify({ id: 3, error: { code: mode === 'old' ? -32601 : -32000, message: 'private diagnostic' } }) + '\n'); return;
   }
   process.stdout.write('{"method":"account/rateLimits/updated","params":{}}\n{"id":99,"result":{}}\n');
-  const response = JSON.stringify({ id: 2, result: { accountId: 'must-not-escape',
+  const response = JSON.stringify({ id: 3, result: { accountId: 'must-not-escape',
     rateLimits: mode === 'limits' ? { primary: { usedPercent: 80, windowDurationMins: 300 } } : {},
     rateLimitResetCredits: mode === 'null' || mode === 'limits' ? null : { availableCount: Number(mode), credits: null } } }) + '\n';
   process.stdout.write(response.slice(0, 17));
@@ -71,8 +75,10 @@ async function fakeRead(t, mode, extra = {}) {
   });
   if (exited) await exited;
   assert.equal(stops, extra.defaultStop ? 0 : 1, 'every outcome disposes its child exactly once');
-  assert.deepEqual(sent.map(value => value.method), ['initialize', 'initialized', 'account/rateLimits/read']);
-  assert.deepEqual(sent.at(-1).params, { excludeResetCreditDetails: true });
+  const subscription = !['api', 'signed-out'].includes(mode);
+  assert.deepEqual(sent.map(value => value.method), ['initialize', 'initialized', 'account/read', ...(subscription ? ['account/rateLimits/read'] : [])]);
+  assert.deepEqual(sent[2].params, { refreshToken: false });
+  if (subscription) assert.deepEqual(sent.at(-1).params, { excludeResetCreditDetails: true });
   assert.equal(sent[0].params.capabilities.explicitGatewayOauth, true);
   assert.doesNotMatch(JSON.stringify(result), /must-not-escape|private diagnostic/);
   return result;
@@ -83,6 +89,17 @@ test('official background protocol: count 0 and 2, split JSON, notifications, sa
     const value = await fakeRead(t, String(left));
     assert.deepEqual(value.resets, { left, total: null });
     assert.equal(value.resetQuery.state, 'ready');
+    assert.equal(value.connection.kind, 'subscription');
+    assert.equal(value.connection.active, false);
+  }
+});
+
+test('API and signed-out account reads never request subscription quotas or refresh credentials', async t => {
+  for (const [mode, kind] of [['api', 'api'], ['signed-out', 'none']]) {
+    const value = await fakeRead(t, mode);
+    assert.equal(value.connection.kind, kind);
+    assert.equal(value.connection.active, false);
+    assert.equal(value.limits, undefined);
   }
 });
 
@@ -448,10 +465,10 @@ test('project-open preflight proves the official default and never reads remote,
 
 function mainUsage(service, env = {}, shellPathReady = Promise.resolve()) {
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const functions = main.slice(main.indexOf('function checkProjectAccount('), main.indexOf('let claudeAccountTimer ='));
+  const functions = main.slice(main.indexOf('function startUsage('), main.indexOf('let claudeAccountTimer ='));
   const notes = main.slice(main.indexOf('function noteSettings('), main.indexOf('// A skill step names the skill;'));
   const sessions = new Map(), store = { projects: [] };
-  return { main, sessions, store, ...vm.runInNewContext(`${functions}\n${notes}\n({ checkProjectAccount, startUsage, stopUsageAccount, noteSettings })`, {
+  return { main, sessions, store, ...vm.runInNewContext(`${functions}\n${notes}\n({ startUsage, stopUsageAccount, noteSettings })`, {
     UsageMeter, codexAccounts: service, sessions, store, shellPathReady, quitting: false, process: { env },
     createTerminalEnvironment: require('../electron/terminal-env.cjs').createTerminalEnvironment,
     withoutAppImage: require('../electron/zsh-terminal.cjs').withoutAppImage,
@@ -471,13 +488,13 @@ test('main project-open handover shows loading or the cached answer immediately 
   const pending = [];
   const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
   t.after(() => service.dispose());
-  const { checkProjectAccount, startUsage, stopUsageAccount, noteSettings, sessions, store } = mainUsage(service, { CODEX_HOME: options.codexHome });
+  const { startUsage, stopUsageAccount, noteSettings, sessions, store } = mainUsage(service, { CODEX_HOME: options.codexHome });
   const project = { id: 'project', path: options.cwd, kind: 'local' };
   const s = { terminalId: 'test', codexActive: true, agent: 'codex', usageEnv: { CODEX_HOME: options.codexHome, AGENTRIX_BOOTSTRAP: 'different-copy' } };
   sessions.set(s.terminalId, s);
   const event = { codexHome: options.codexHome, accountLaunch: 'model-only-v1' };
   const meta = (provider, cwd = project.path) => ({ type: 'session_meta', payload: { model_provider: provider, cwd } });
-  store.projects.push(project); checkProjectAccount(project); checkProjectAccount(project); await flush();
+  store.projects.push(project); service.openProject(project.id, { cwd: project.path, env: { CODEX_HOME: options.codexHome } }); await flush();
   startUsage(project, s, event);
   assert.equal(s.usage.snapshot().resetQuery.state, 'loading');
   noteSettings(s, 'codex', meta('openai')); await flush(); assert.equal(pending.length, 1);
@@ -500,47 +517,12 @@ test('main project-open handover shows loading or the cached answer immediately 
   stopUsageAccount(s);
 });
 
-test('workspace add, recent reopen and startup restore use the project-open hook and removal cancels its check', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
-  const pending = [], handlers = new Map();
-  const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
-  t.after(() => service.dispose());
-  const { main, checkProjectAccount, store } = mainUsage(service, { CODEX_HOME: options.codexHome });
-  const project = { id: 'project', kind: 'local', path: options.cwd };
-  Object.assign(store, {
-    add() { if (!this.projects.length) this.projects.push(project); return { project }; },
-    remove() { this.projects = []; }, recentEntry: () => project,
-  });
-  const context = {
-    registerWorkspaceIpc: require('../electron/features/workspace/ipc.cjs').registerWorkspaceIpc,
-    handle: (name, fn) => handlers.set(name, fn), publicState: () => ({}),
-    dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [project.path] }) }, window: null, t: text => text,
-    store, checkProjectAccount, codexAccounts: service, fs, shellPathReady: Promise.resolve(), quitting: false,
-    projectImageAuto: { enqueue() {} }, restoreTerminals() {}, restorePlans: new Map(), startupErrors: new Map(), startTerminal() {},
-    getEditorFile: () => null, allowEditorClose: async () => true, confirmTerminalClose: async () => true,
-    disposeProjectTerminals() {}, findProject: () => project, previewResources: { closeProject() {} },
-    forgetBranch() {}, broadcast() {}, reorderTerminals() {}, updateStoreSettings() {},
-  };
-  // Run the real IPC wiring and startup loop without Electron, a terminal or an account.
-  vm.runInNewContext(main.slice(main.indexOf('  registerWorkspaceIpc({'), main.indexOf('  filesIpc =')), context);
-  await handlers.get('workspace:add')(); handlers.get('workspace:add-recent')(project.path);
-  await flush(); assert.equal(pending.length, 1);
-  pending[0].resolve(ready(2)); await flush();
-  await handlers.get('workspace:remove')(project.id);
-  const restore = startupChecks(main);
-  store.projects.push(project);
-  await vm.runInNewContext(`(async () => { ${restore} })()`, context);
-  await vm.runInNewContext(`(async () => { ${restore} })()`, context);
-  t.mock.timers.tick(4999); await flush(); assert.equal(pending.length, 1);
-  t.mock.timers.tick(1); await flush(); assert.equal(pending.length, 2);
-  await handlers.get('workspace:remove')(project.id);
-  assert.equal(pending[1].opts.signal.aborted, true);
-  pending[1].resolve(ready(9)); await flush();
-  assert.ok([...service.entries.values()].every(entry => entry.value == null), 'a removed project cannot retain a late answer');
-  project.restore = { cwd: path.join(project.path, 'restored-cwd') }; store.projects.push(project);
-  await vm.runInNewContext(`(async () => { ${restore} })()`, context); await flush();
-  assert.equal(pending.length, 3);
-  assert.equal(pending[2].opts.cwd, project.restore.cwd, 'restored projects check the cwd their terminal will use');
+test('opening and restoring background projects never starts account checks', () => {
+  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  assert.doesNotMatch(startupChecks(main), /openProject|checkProjectAccount/);
+  const wiring = main.slice(main.indexOf('  registerWorkspaceIpc({'), main.indexOf('  filesIpc ='));
+  assert.doesNotMatch(wiring, /openProject|checkProjectAccount/);
+  assert.match(wiring, /projectAccounts.close\(id\)/);
 });
 
 test('main lifecycle follows recorded provider, replaces sessions safely and never uses local queries for SSH/Claude', async t => {
@@ -679,39 +661,11 @@ function shellIntegration(platform) {
   return { ...integration, env, resolve, reject, changes: () => changes, loginCalls: () => loginCalls };
 }
 
-test('startup project checks follow restore and the settled login PATH, skip Claude and SSH, and use the updated fingerprint', async t => {
-  for (const platform of ['darwin', 'linux']) {
-    const shell = shellIntegration(platform), reads = [], order = [];
-    const service = new CodexAccountUsage({ scope: async () => null, read: async opts => { reads.push(opts); order.push('read'); return ready(2); } });
-    t.after(() => service.dispose());
-    const { main, checkProjectAccount, store } = mainUsage(service, shell.env, shell.ready);
-    const local = { id: 'codex', kind: 'local', path: options.cwd };
-    store.projects.push({ ...local, id: 'claude', restore: { agent: 'claude' } }, { ...local, id: 'ssh', kind: 'ssh' }, local);
-    const context = { store, checkProjectAccount, shellPathReady: shell.ready, quitting: false,
-      restoreTerminals() { order.push('restore'); }, restorePlans: new Map(), startupErrors: new Map(), startTerminal() {}, broadcast() {} };
-    const startup = vm.runInNewContext(`(async () => { ${startupChecks(main)} })()`, context);
-    assert.deepEqual(order, ['restore'], 'terminal restore must run immediately without waiting for the login PATH');
-    await startup; await flush();
-    assert.deepEqual(order, ['restore']); assert.equal(service.entries.size, 0, 'only account checks wait for the login PATH');
-    assert.equal(shell.startup, '/fake/zsh'); assert.equal(shell.loginCalls(), 1);
-    shell.resolve('/login/bin'); await flush();
-    assert.equal(shell.changes(), 1); assert.equal(reads.length, 1);
-    assert.equal(reads[0].env.PATH, '/login/bin:/system/bin');
-    assert.deepEqual(order, ['restore', 'read']);
-    assert.equal(usageScope({ ...options, env: shell.env }).key, usageScope({ ...options, env: reads[0].env }).key);
-  }
-});
-
-test('login PATH readiness settles on failure and Windows, and closing a waiting project prevents its check', async t => {
+test('login PATH readiness settles on failure and Windows without an account read', async () => {
   for (const platform of ['darwin', 'linux']) {
     const shell = shellIntegration(platform);
-    const service = new CodexAccountUsage({ scope: async () => null, read: () => assert.fail('a closed project must not query') });
-    t.after(() => service.dispose());
-    const { store, checkProjectAccount } = mainUsage(service, shell.env, shell.ready);
-    const project = { id: 'closed', path: options.cwd, kind: 'local' }; store.projects.push(project);
-    const check = checkProjectAccount(project); store.projects.length = 0;
-    shell.reject(new Error('offline fixture')); await shell.ready; await check;
-    assert.equal(shell.env.PATH, '/system/bin'); assert.equal(service.entries.size, 0);
+    shell.reject(new Error('offline fixture')); await shell.ready;
+    assert.equal(shell.env.PATH, '/system/bin');
   }
   const windows = shellIntegration('win32'); await windows.ready;
   assert.equal(windows.loginCalls(), 0); assert.equal(windows.startup, undefined);

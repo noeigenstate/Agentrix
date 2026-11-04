@@ -16,6 +16,7 @@ const { createNativeSession } = require('./features/terminal/native-session.cjs'
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
 const { createNativeSessions, createNativeUsage } = require('./features/native-session/index.cjs');
 const { subscriptionLimits } = require('./features/native-session/usage.cjs');
+const { createProjectAccounts } = require('./features/native-session/project-accounts.cjs');
 const { inspectClaudeExecutable } = require('./features/claude-sdk/executable.cjs');
 const { recoveryWarnings } = require('./features/native-session/storage.cjs');
 const { createClaudeRuntime } = require('./features/claude-sdk/index.cjs');
@@ -43,7 +44,7 @@ const { READING_NOTE } = require('./features/agents/reading-note.cjs');
 const { writeHandoff, startupNote } = require('./features/agents/handoff.cjs');
 const { remember, roundsOf } = require('./features/agents/project-memory.cjs');
 const { agentSettings } = require('./features/agents/agent-settings.cjs');
-const { UsageMeter, claudeProvider, codexProvider, claudeAccount, claudeAccountFiles } = require('./features/agents/agent-usage.cjs');
+const { UsageMeter, claudeProvider, codexProvider, claudeAccount, claudeAccountFiles, readClaudeAccountCache } = require('./features/agents/agent-usage.cjs');
 const { AgentCalls } = require('./features/agents/agent-calls.cjs');
 const { DashboardRecords, quotaScope } = require('./features/dashboard/records.cjs');
 const { createDashboard } = require('./features/dashboard/index.cjs');
@@ -51,6 +52,7 @@ const { createLab } = require('./features/lab/index.cjs');
 const { routingNote } = require('./features/dashboard/decisions.cjs');
 const { CodexAccountUsage, codexExecutable } = require('./features/agents/codex-account-usage.cjs');
 const codexAccounts = new CodexAccountUsage();
+const projectAccounts = createProjectAccounts({ codex: codexAccounts, readClaude: readClaudeAccountCache });
 const { ClaudeAccountUsage, readClaudeAccount } = require('./features/agents/claude-account-usage.cjs');
 const claudeAccounts = new ClaudeAccountUsage({ changed: () => queueClaudeAccounts(), read: options => readClaudeAccount({ ...options,
   routes: localClaudeMeters().map(s => ({ cwd: s.usageCwd, env: s.usageEnv || process.env })),
@@ -569,15 +571,6 @@ function dispatchedOnly(s) {
   return calls.length ? { provider: null, context: null, round: null, total: null, limits: [], calls } : null;
 }
 
-function checkProjectAccount(project) {
-  if (project.kind === 'ssh' || project.restore?.agent === 'claude') return;
-  return shellPathReady.then(() => {
-    if (quitting || !store.projects.includes(project)) return;
-    const env = createTerminalEnvironment(withoutAppImage(process.env), '');
-    return codexAccounts.openProject(project.id, { cwd: project.restore?.cwd || project.path, env });
-  });
-}
-
 function startUsage(project, s, event) {
   stopUsageAccount(s);
   s.usageCwd = event.cwd || project.path;
@@ -911,7 +904,7 @@ function onEvent(event) {
   if (!s || event.sessionKey !== s.sessionKey) return;
   const project = store.projects.find(p => p.id === s.projectId);
   if (!project) return;
-  if (['dispatch-start', 'dispatch-rate', 'dispatch-end'].includes(event.type)) {
+  if (['dispatch-start', 'dispatch-rate', 'dispatch-end', 'dispatch-receipt'].includes(event.type)) {
     if (require('./features/agents/dispatch-events.cjs').acceptDispatch(s, event, callsOf(s, project))) broadcast();
     return;
   }
@@ -1305,7 +1298,8 @@ async function readNativeConnections(projectId) {
   const result = {}, observed = new Map();
   for (const agent of ['claude', 'codex']) {
     const host = [...sessions.values()].reverse().find(s => (!projectId || s.projectId === projectId) && s.agent === agent && s.codexActive === true && s.status !== 'exited');
-    if (!host) { result[agent] = { kind: 'none', source: null, observedAt: null }; continue; }
+    if (!host) { result[agent] = projectAccounts.snapshot(projectId)?.[agent]?.connection || { kind: 'none', source: null, observedAt: null };
+      result[agent] = { ...result[agent], active: false }; continue; }
     observed.set(agent, host);
     if (host.nativeStructured) {
       if (agent === 'claude') result[agent] = claudeRuntime.connection(host.nativeRuntimeSessionId);
@@ -1321,24 +1315,34 @@ async function readNativeConnections(projectId) {
         source: 'codex-account-usage', observedAt: host.terminalAccount?.at || null };
     }
   }
-  for (const [agent, host] of observed) if (sessions.get(host.terminalId) !== host || !host.codexActive || host.status === 'exited') result[agent] = { kind: 'none', source: null, observedAt: null };
+  for (const agent of observed.keys()) result[agent] = { ...result[agent], active: true };
+  for (const [agent, host] of observed) if (sessions.get(host.terminalId) !== host || !host.codexActive || host.status === 'exited') result[agent] = { kind: 'none', active: false, source: null, observedAt: null };
   return result;
 }
 
-function readNativeSubscriptionLimits() {
+function readNativeSubscriptionLimits(projectId) {
   const latest = candidates => candidates.filter(Boolean).sort((a, b) => (b.observedAtMs ?? -Infinity) - (a.observedAtMs ?? -Infinity))[0] || null;
-  const claude = [subscriptionLimits(claudeAccounts.account, 'claude-account', 120000)];
+  const account = projectAccounts.snapshot(projectId);
+  const claude = [subscriptionLimits(account?.claude || (!projectId ? claudeAccounts.account : null), 'claude-account', 120000)];
   // Meters also hold the existing local-cache fallback. Reading them must never refresh an account.
-  for (const s of localClaudeMeters()) if (s.usage.limits.length) claude.push(subscriptionLimits({
+  for (const s of localClaudeMeters()) if ((!projectId || s.projectId === projectId) && s.usage.limits.length) claude.push(subscriptionLimits({
     limits: s.usage.limits, at: s.usage.limitsAt, source: s.usage.limitsFrom }, 'claude-account', 120000));
-  const codex = [...codexAccounts.entries].map(([key, entry]) => subscriptionLimits(entry.value, key, 2 * codexAccounts.interval));
+  const codex = projectId ? [subscriptionLimits(account?.codex, 'codex-account', 2 * codexAccounts.interval)]
+    : [...codexAccounts.entries].map(([key, entry]) => subscriptionLimits(entry.value, key, 2 * codexAccounts.interval));
   return { claude: latest(claude), codex: latest(codex) };
 }
 
-async function readNativeUsageInputs() {
+async function readNativeUsageInputs(projectId) {
+  if (projectId) await shellPathReady;
   const [claudeCli, codexFile] = await Promise.all([inspectClaudeExecutable(), codexExecutable()]);
   claudeRuntime?.observeCli?.(claudeCli);
-  return { cli: { claude: claudeCli, codex: { status: codexFile ? 'ok' : 'missing' } }, limits: readNativeSubscriptionLimits() };
+  const cli = { claude: claudeCli, codex: { status: codexFile ? 'ok' : 'missing' } };
+  const project = store.projects.find(project => project.id === projectId);
+  if (project && project.kind !== 'ssh') {
+    if (!quitting && store.projects.includes(project)) await projectAccounts.read(project, { cli,
+      env: createTerminalEnvironment(withoutAppImage(process.env), '') });
+  }
+  return { cli, limits: readNativeSubscriptionLimits(projectId) };
 }
 
 function localSwitchSessions() {
@@ -1804,11 +1808,11 @@ function registerIpc() {
   updatesIpc = registerUpdatesIpc({ handle, updateManager, updateSettings: patch => { updateStoreSettings(patch); broadcast(); }, openExternal: url => shell.openExternal(url), getWindow: () => window, dialog, t,
     allowEditorClose, liveTerminalCount, setQuitting: value => { quitting = value; } });
   registerWorkspaceIpc({ handle, publicState, dialog, getWindow: () => window, t, addProject: (folder, name) => {
-    const added = store.add(folder, name); checkProjectAccount(added.project); projectImageAuto.enqueue(added.project); return added;
+    const added = store.add(folder, name); projectImageAuto.enqueue(added.project); return added;
   }, getRecentProjects: () => store.recentProjects(), getRecentSSH: () => store.recentSSH(), forgetRecentSSH: (host, folder) => store.forgetSSH(host, folder), clearSSHHistory: () => store.clearSSHHistory(), existsSync: fs.existsSync,
     getRecentEntry: folder => store.recentEntry(folder), forgetRecent: folder => store.forget(folder), clearHistory: () => store.clearHistory(),
     getEditorFile, allowEditorClose, confirmTerminalClose, disposeProjectTerminals, findProject, closeProjectPreviews: id => previewResources.closeProject(id),
-    removeProject: id => { codexAccounts.closeProject(id); store.remove(id); },
+    removeProject: id => { projectAccounts.close(id); codexAccounts.closeProject(id); store.remove(id); },
     forgetBranch, broadcast, acknowledgeProject: id => store.acknowledge(id), reorderProjects: ids => store.reorderProjects(ids), reorderTerminals,
     setProjectImage: (id, image, mode) => {
       store.setProjectImage(id, image, mode);
@@ -1999,7 +2003,6 @@ if (!app.requestSingleInstanceLock()) {
       if (saved?.nativeTransport && nativeSessions) void nativeSessions.start(id, { agent: saved.agent || 'codex', resume: true }).catch(error => { startupErrors.set(id, error.message); broadcast(); });
       else startTerminal(id, ...args);
     }, broadcast, isQuitting: () => quitting });
-    for (const project of store.projects) void checkProjectAccount(project);
   }).catch(error => {
     dialog.showErrorBox(t('Agentrix 无法启动'), t(String(error?.stack || error)));
     app.exit(1);
@@ -2019,6 +2022,7 @@ app.on('before-quit', event => {
     quitting = true;
     nativeDrain = Promise.allSettled([nativeSessions?.close(), claudeRuntime?.close()]);
     updateManager?.dispose();
+    projectAccounts.close();
     codexAccounts.dispose();
     claudeAccounts.dispose();
     disposeClaudeAccounts();

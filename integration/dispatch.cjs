@@ -333,7 +333,7 @@ class WorkerOutput {
     if (this.agent === 'codex') {
       if (type === 'thread.started') this.sessionId = word(record.thread_id);
       if (type === 'turn.completed') {
-        this.failed = false; this.capacity = false;
+        this.failed = false; this.capacity = false; this.completed = true;
         const input = count(record.usage?.input_tokens), cached = count(record.usage?.cached_input_tokens);
         this.stdoutUsage = { inputTokens: input !== null && cached !== null && input >= cached ? input - cached : null,
           cachedTokens: cached, outputTokens: count(record.usage?.output_tokens) };
@@ -493,6 +493,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   let nativeBilling = null;
   let boardWatch, scopeRestoreBlocked = false, scopeRestoreNote = '';
   const controlReceipts = new Map();
+  const controlInputs = new Map(), retriedControls = new Set(), unreadControls = new Set();
   const deferredControlIds = [];
   let resumeControlIds = [], resumeInputId;
   let receiptTail = Promise.resolve();
@@ -501,16 +502,25 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     const previous = controlReceipts.get(messageId);
     if (previous === status || previous === 'consumed' || previous === 'delivered' && status === 'queued') return receiptTail;
     controlReceipts.set(messageId, status);
+    if (['queued', 'delivered'].includes(status)) unreadControls.add(messageId);
+    if (['consumed', 'rejected'].includes(status)) unreadControls.delete(messageId);
     signal(`intervention ${id} ${messageId} ${status}${reason ? `: ${reason}` : ''}`);
     receiptTail = receiptTail.catch(() => {}).then(() => team?.locked(() => {
       team.append({ type: 'control-receipt', id, messageId, status, ...(reason ? { reason } : {}), at: Date.now() });
       fs.appendFileSync(team.memory, `\n\n[dispatch] intervention ${id} ${messageId} ${status}${reason ? `: ${reason}` : ''}\n`);
-    }));
+    })).then(() => { send({ type: 'dispatch-receipt', id, messageId, status }); });
     return receiptTail;
   }
   async function rejectDeferredControls() {
-    for (const messageId of [...deferredControlIds, ...resumeControlIds]) {
-      if (controlReceipts.get(messageId) === 'queued') await recordReceipt(messageId, 'rejected', 'worker_ended_without_resume');
+    for (const messageId of controlInputs.keys()) {
+      if (['queued', 'delivered'].includes(controlReceipts.get(messageId))) await recordReceipt(messageId, 'rejected', 'worker_ended_without_resume');
+    }
+  }
+  function queueUnreadControls() {
+    for (const [messageId, text] of controlInputs) {
+      if (!unreadControls.has(messageId) || deferredControlIds.includes(messageId)) continue;
+      if (retriedControls.has(messageId)) { void recordReceipt(messageId, 'rejected', 'worker_ended_before_read'); continue; }
+      messages.push(text); deferredControlIds.push(messageId);
     }
   }
   const billing = () => nativeBilling ? { billingPath: nativeBilling, usageRecordId: `dispatch:${id}`, costCompleteness: output.reportedCostUsd === null ? 'unknown' : 'estimated' } : {};
@@ -631,7 +641,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (!inbox) return Promise.resolve();
     const task = inboxRead.then(async () => {
       let controls;
-      try { controls = await inbox.take(finish && !messages.length); }
+      const unread = unreadControls.size > 0;
+      try { controls = await inbox.take(finish && !messages.length && !unread); }
       catch (error) {
         // Polling failures must not interrupt the worker. Only an unreadable final empty check prevents closure.
         if (finish && !messages.length) throw error;
@@ -650,6 +661,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
           }
         } else {
           interventions++;
+          controlInputs.set(control.id, control.text);
           if (activeRuntime) {
             controlReceipts.set(control.id, null);
             let receipt;
@@ -814,7 +826,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         const client = await connectDispatchControl({ address: bootstrap.controlAddress, runId: id,
         projectId: bootstrap.projectId, sessionKey: bootstrap.sessionKey, capability: bootstrap.controlCapability,
         readOnly: !!options.readOnly || options.permission === 'plan', roundtable,
-        onControl: async messageId => { await readInbox(); const status = controlReceipts.get(messageId) || inbox?.receipt(messageId) || 'queued'; return status === 'consumed' ? 'delivered' : status; },
+        onControl: async messageId => { await readInbox(); return controlReceipts.get(messageId) || inbox?.receipt(messageId) || 'queued'; },
         onEvent: event => acceptNative(event) });
         if (ending) client.close(); else { controlClient = client; controlFailure = null; }
       } catch (error) {
@@ -866,6 +878,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       try { if (team) await team.locked(restore); else restore(); }
       catch (error) { signal(`scope restore failed: ${String(error.message).replace(/[\r\n]+/g, ' ')}`); }
       await rejectDeferredControls();
+      await receiptTail;
       const route = output.routing();
       let reason = 'exit';
       if (unconfirmed) reason = 'unconfirmed';
@@ -904,6 +917,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         if (noResume || killed || spawnError) break;
         completedUsage = usage(); output = nextOutput; rollout = nextRollout;
         resumeControlIds = deferredControlIds.splice(0); resumeInputId = null;
+        for (const id of resumeControlIds) retriedControls.add(id);
         segmentConfirmed = false; segmentStopped = false; exited = false;
         drained = new Promise(resolve => { drain = resolve; });
         brief = briefOf(options, Buffer.from(messages.splice(0).map(text => `业主插话：${text}`).join('\n\n') + '\n\n继续执行当前任务。'), team,
@@ -920,8 +934,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
           activeRuntime = createCodexRuntime({ resolveExecutable: async () => 'codex', spawnProcess: (_file, args, spawnOptions) => {
             const command = resolveExecutable('codex', args, env); return launch(command.file, command.args, spawnOptions);
           } }).create(spec, acceptNative);
-          if (options.resume) await rollout.prepare(options.resume);
-          try { if (options.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
+          if (effective.resume) await rollout.prepare(effective.resume);
+          try { if (effective.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
           catch (error) {
             await activeRuntime.close(); activeRuntime = null; controlClient.close(); controlClient = null;
             transportFallback = true;
@@ -982,6 +996,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         if (typeof output.result === 'string') fs.writeFileSync(options.out, output.result);
         const remoteResult = await activeRuntime.finished;
         if (remoteResult?.code) result = remoteResult;
+        if (result.code === 0 && !killed && !noResume && !segmentStopped) queueUnreadControls();
         await activeRuntime.close(); activeRuntime = null; child.exitCode = result.code; clearInterval(pollTimer);
         if (!started) failed('worker ended without execution evidence', 1);
         if (messages.length && result.code === 0 && !killed && !noResume && !spawnError && output.sessionId) {
@@ -1041,6 +1056,11 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       if (resumeSession && !segmentConfirmed) { spawnError ||= new Error('Resumed worker exited without a confirmed session'); result.code = result.code || 1; }
       if (resumeSession && spawnError) signal(`resume failed ${id}: ${String(spawnError.message).replace(/[\r\n]+/g, ' ')}`);
       if (options.agent === 'claude' && output.result !== null && output.result !== undefined) fs.writeFileSync(options.out, output.result);
+      // A confirmed successful CLI continuation has processed its stdin brief;
+      // launch confirmation alone is only delivery, never consumption.
+      if (result.code === 0 && segmentConfirmed && (output.completed || typeof output.result === 'string' && output.result.trim())) {
+        for (const id of resumeControlIds) await recordReceipt(id, 'consumed');
+      }
       await readInbox(!messages.length);
       if (!messages.length || killed || noResume || unconfirmed || spawnError) break;
       if (checking) {

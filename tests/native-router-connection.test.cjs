@@ -54,7 +54,7 @@ test('main connections use init and account evidence and discard a late result a
   const claude = { terminalId: 'c', agent: 'claude', codexActive: true, status: 'codex', nativeStructured: true, nativeRuntimeSessionId: 'r' };
   const codex = { terminalId: 'x', agent: 'codex', codexActive: true, status: 'codex', nativeStructured: true,
     nativeReadConnection: () => new Promise(resolve => { finish = resolve; }) };
-  const context = { sessions: new Map([['c', claude], ['x', codex]]), claudeRuntime: { connection: () => ({ kind: 'api', source: 'init', observedAt: 1 }) } };
+  const context = { projectAccounts: { snapshot: () => null }, sessions: new Map([['c', claude], ['x', codex]]), claudeRuntime: { connection: () => ({ kind: 'api', source: 'init', observedAt: 1 }) } };
   vm.createContext(context); vm.runInContext(source.slice(source.indexOf('async function readNativeConnections('), source.indexOf('async function initializeNativeSessions(')), context);
   const pending = context.readNativeConnections(); codex.codexActive = false; finish({ kind: 'subscription', source: 'account/read', observedAt: 2 });
   const result = await pending; assert.equal(result.claude.kind, 'api'); assert.equal(result.codex.kind, 'none');

@@ -29,11 +29,16 @@ export const desktopEnvironment = (home, inherited = process.env, platform = pro
 // Also runs before either desktop mode. This exercises the real coordinator/router and provider adapters with local
 // peers, including real main input/activation callbacks, handoff timeouts, policy retirement and N3/N5/N6.
 export async function switchContracts(output, stages) {
-  const home = path.join(output, 'switch-home'); await fs.mkdir(home, { recursive: true });
+  // Git-backed worker fixtures must fit Windows path limits even when the
+  // checkout and its .test-output live below a long dispatch scratch path.
+  const temporaryRoot = await fs.realpath(os.tmpdir());
+  const home = await fs.mkdtemp(path.join(temporaryRoot, 'agx-switch-'));
   const files = (await fs.readdir(path.join(root, 'tests'))).filter(name => /^native-switch-.*\.test\.cjs$/.test(name)
     || ['native-worker-finish.test.cjs', 'claude-sdk-switch.test.cjs', 'codex-app-server-sandbox.test.cjs',
       'native-session-resume.test.cjs', 'native-session-ui.test.cjs', 'prompt-source.test.cjs',
-      'agent-calls-liveness.test.cjs', 'usage-refresh.test.cjs', 'claude-sdk-rereview2.test.cjs', 'claude-sdk-review3.test.cjs', 'claude-sdk-review4.test.cjs'].includes(name));
+      'agent-calls-liveness.test.cjs', 'usage-refresh.test.cjs', 'claude-sdk-rereview2.test.cjs', 'claude-sdk-review3.test.cjs', 'claude-sdk-review4.test.cjs',
+      'native-project-accounts.test.cjs', 'native-router-usage.test.cjs', 'native-worker-claude.test.cjs',
+      'native-worker-codex-finish.test.cjs', 'dispatch-interventions.test.cjs', 'dispatch-events.test.cjs'].includes(name));
   await stages.run('switch contracts: correlated resume, late rollback, versioned drafts, helper death and no notifications', async () => {
     const child = spawn(process.execPath, ['--test', ...files.map(name => path.join(root, 'tests', name))], {
       cwd: root, windowsHide: true, env: { ...desktopEnvironment(home), TEMP: home, TMP: home }, stdio: ['ignore', 'pipe', 'pipe'],
@@ -48,7 +53,11 @@ export async function switchContracts(output, stages) {
       const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
       await fs.writeFile(path.join(output, 'switch-contracts.log'), log);
       assert.equal(code, 0, log.slice(-6000));
-    } finally { clearTimeout(timer); await fs.rm(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); }
+    } finally {
+      clearTimeout(timer);
+      assert.equal(path.dirname(home), temporaryRoot);
+      await fs.rm(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
   }, 30000);
 }
 

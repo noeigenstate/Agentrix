@@ -86,7 +86,12 @@ test('real main assembly reports terminal-only Claude subscription usage without
     at, source: 'Codex', limits: [{ minutes: 300, percent: 12, resetsAt: reset }], resets: { left: 2 }, resetQuery: { state: 'ready' },
   } }]]) }, { get: (target, key) => key in target ? target[key] : forbidden });
   let cli = 'ok', codexInstalled = true;
+  const focused = { claude: { ...claudeAccounts.account, connection: { kind: 'subscription', active: false } },
+    codex: { ...codexAccounts.entries.get('codex-scope').value, connection: { kind: 'subscription', active: false } } };
+  let focusedReads = 0;
   const context = { path, structuredClone, claudeAccounts, codexAccounts, sessions: new Map([['t', terminal]]),
+    projectAccounts: { snapshot: id => id === 'p' ? focused : null, read: async () => { focusedReads++; } },
+    shellPathReady: Promise.resolve(), createTerminalEnvironment: () => ({}), withoutAppImage: value => value, process: { env: {} },
     store: { projects: [{ id: 'p', kind: 'local' }], findTerminal: () => ({ project: { id: 'p', kind: 'local' }, record: { restore: {} } }) },
     randomUUID: require('node:crypto').randomUUID, queueMicrotask, wholeThread: require('../electron/terminal-title.cjs').wholeThread,
     app: { getPath: () => directory, isPackaged: false }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
@@ -117,7 +122,7 @@ test('real main assembly reports terminal-only Claude subscription usage without
   await context.initializeNativeSessions();
   t.after(() => context.nativeSessions.close());
   const handlers = new Map(); context.nativeSessions.register((name, handle) => handlers.set(name, handle));
-  const usage = () => handlers.get('native:usage')();
+  const usage = id => handlers.get('native:usage')(id);
   let value = await usage();
   assert.equal(context.nativeSessions.has('t'), false);
   assert.equal(value.agents.claude.path, null); assert.equal(value.lastSwitch, undefined);
@@ -154,6 +159,16 @@ test('real main assembly reports terminal-only Claude subscription usage without
   terminal.usage = { agent: 'claude', limits: [{ minutes: 300, percent: 33, resetsAt: reset }], limitsAt: at, limitsFrom: 'CodePulse' };
   value = await usage();
   assert.equal(value.agents.claude.limits.source, 'CodePulse'); assert.equal(value.agents.claude.limits.limitsById.subscription.primary.usedPercent, 33);
+  context.sessions.clear();
+  value = await usage('p');
+  assert.equal(focusedReads, 1);
+  for (const agent of ['claude', 'codex']) {
+    assert.equal(value.agents[agent].connection.kind, 'subscription');
+    assert.equal(value.agents[agent].connection.active, false);
+    assert.equal(value.agents[agent].path, null);
+    assert.equal(value.agents[agent].limits.state, 'ready');
+  }
+  assert.equal(value.agents.codex.limits.limitsById.subscription.primary.usedPercent, 12);
 });
 
 test('API records distinguish an empty ledger from zero spend and survive reload', t => {

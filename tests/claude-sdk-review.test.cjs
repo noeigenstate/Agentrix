@@ -156,7 +156,7 @@ test('B3 SDK spawn forces credential scrubbing and all persisted app metadata om
   const { session, fake, dir } = runtime(t, { owner: 'dispatch', allow: ['**'] }); await session.start(); await session.send({ clientMessageId: randomUUID(), text: 'work' });
   await until(() => fake.inputs.length === 1);
   assert.equal(fake.calls[0].options.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
-  fake.emit({ type: 'result', uuid: 'r', total_cost_usd: 0.1, modelUsage: {}, queued_turn_count: 0 });
+  fake.emit({ type: 'result', uuid: 'r', user_message_uuid: fake.inputs[0].uuid, total_cost_usd: 0.1, modelUsage: {}, queued_turn_count: 0 });
   await until(() => session.snapshot().state === 'idle');
   for (const file of fs.readdirSync(dir, { recursive: true })) {
     const full = path.join(dir, file);

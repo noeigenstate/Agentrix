@@ -271,7 +271,7 @@ test('main quit cleanup runs once and a late dashboard append cannot prevent the
   vm.runInNewContext('let quitting = false, quitCleaned = false, dashboardWindow = null;\n' + source.slice(source.indexOf("app.on('before-quit',"), source.indexOf("app.on('window-all-closed',")), {
     app: { on: (_, listener) => { handler = listener; }, quit: () => { quits++; notifyQuit(); } }, process: { platform: 'win32' }, dashboard: records, labWindow,
     clearTimeout, attentionTimer: null, voiceManager: null, fileOperations: null, skills: { close: () => cleanups++ },
-    updateManager: null, codexAccounts: { dispose() {} }, claudeAccounts: { dispose() {} }, disposeClaudeAccounts() {},
+    updateManager: null, projectAccounts: { close() {} }, codexAccounts: { dispose() {} }, claudeAccounts: { dispose() {} }, disposeClaudeAccounts() {},
     usageRolloverTimer: null, stateTimer: null, sessions: new Map(), sshAuth: null, eventServer: null, dispatchControl: null,
     nativeSessions: { close: () => { cleanups++; } }, claudeRuntime: null, tray: null, cleanupAskpass() {}, runtimeDir: null,
   });

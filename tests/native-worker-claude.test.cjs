@@ -46,13 +46,47 @@ function sdkFixture() {
     }, async initializationResult() { return { account: { apiKeySource: 'ANTHROPIC_API_KEY' } }; }, close() { done = true; wake?.(); } };
   } };
   return { sdk, calls, inputs, sessionId, end() { done = true; wake?.(); }, abortErrors: () => abortErrors, fail() { error = new Error('Synthetic mid-run failure'); wake?.(); },
-    finish(text = 'Synthetic answer', queuedTurns = 0) {
-      const input = inputs.at(-1);
+    finish(text = 'Synthetic answer', queuedTurns = 0, selected) {
+      const input = selected || inputs.at(-1);
       put({ type: 'assistant', uuid: randomUUID(), user_message_uuid: input.uuid, message: { id: randomUUID(), content: [{ type: 'text', text }] } });
-      put({ type: 'result', uuid: randomUUID(), user_message_uuid: input.uuid, user_message_uuids: [input.uuid], subtype: 'success', terminal_reason: 'completed',
+      put({ type: 'result', uuid: randomUUID(), user_message_uuid: input.uuid, user_message_uuids: (selected ? [input] : inputs).map(value => value.uuid), subtype: 'success', terminal_reason: 'completed',
         queued_turn_count: queuedTurns, total_cost_usd: ++count * 0.01, modelUsage: { synthetic: { inputTokens: count, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: count } } });
     } };
 }
+
+test('a zero queued count from the old result cannot retire an unread delivered correction', { timeout: 15000 }, async t => {
+  const f = await fixture(t);
+  const initial = f.sdk.inputs[0];
+  await f.api.interveneAgent('terminal', `dispatch:${f.id}`, 'Late correction');
+  await until(() => f.sdk.inputs.length === 2);
+  f.sdk.finish('Initial answer', 0, initial);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(f.finished(), false, 'a delivered correction still needs its own answer');
+  f.sdk.finish('Correction answer');
+  assert.equal(await f.result, 0);
+  assert.equal(fs.readFileSync(f.out, 'utf8'), 'Correction answer');
+});
+
+for (const consumed of [true, false]) test(`an unread delivered correction resumes once and final consumed=${consumed}`, { timeout: 15000 }, async t => {
+  const f = await fixture(t);
+  const initial = f.sdk.inputs[0];
+  const receipt = await f.api.interveneAgent('terminal', f.target.callId, 'Do not lose this correction');
+  await until(() => f.sdk.inputs.length === 2);
+  f.sdk.finish('Old result', 1, initial); f.sdk.end();
+  await until(() => f.sdk.inputs.length === 3);
+  assert.equal(f.sdk.calls[1].options.resume, f.sdk.sessionId);
+  assert.match(f.sdk.inputs[2].message.content, /Do not lose this correction/);
+  f.sdk.finish('Resumed result', consumed ? 0 : 1, consumed ? undefined : initial);
+  if (!consumed) f.sdk.end();
+  assert.equal(await f.result, 0);
+  assert.equal(f.sdk.calls.length, 2, 'one recovery at most for this message');
+  const final = f.team.entries().findLast(entry => entry.type === 'control-receipt' && entry.messageId === receipt.id);
+  assert.equal(final.status, consumed ? 'consumed' : 'rejected');
+  if (!consumed) assert.equal(final.reason, 'worker_ended_before_read');
+  const snapshot = await f.api.receipts('terminal', f.target.callId);
+  assert.equal(snapshot.find(value => value.id === receipt.id).status, final.status);
+  assert.doesNotMatch(JSON.stringify(snapshot), /Do not lose|planner/);
+});
 
 async function fixture(t, { late = false, lateStop = false, reopenFailure = false, disconnectAtFinish = false } = {}) {
   const lifetime = resources(t);

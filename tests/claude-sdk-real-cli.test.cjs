@@ -76,6 +76,39 @@ async function harness(t, respond) {
   } };
 }
 
+test('a finishing worker answers a late streamed intervention before control.finish retires it', { skip, timeout: 60000 }, async t => {
+  const correction = 'OWNER_LATE_CORRECTION_READ_ME';
+  let read = false;
+  const f = await harness(t, data => {
+    read ||= JSON.stringify(data.messages).includes(correction);
+    return [opening(data), ...textBlock(0, read ? 'CORRECTION ANSWER' : 'INITIAL ANSWER'), ...finish('end_turn')];
+  });
+  const runtime = require('../electron/features/claude-sdk/index.cjs').createClaudeRuntime({
+    directory: path.join(f.cwd, 'state'), loadSdk: async () => f.sdk, resolveExecutable: async () => cli,
+    safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() },
+  });
+  f.cleanup(() => runtime.close()); runtime.credentials.save('sk-ant-offline-worker-window-only');
+  let handler, control, sent = false, delivery;
+  const events = [];
+  require('../electron/features/native-session/worker.cjs').registerClaudeWorker({
+    control: { onRequest(_name, run) { handler = run; } }, claude: runtime,
+    settings: () => ({ claudePath: 'api-only', monthlyBudgetUsd: null }), env: () => f.env,
+  });
+  await handler({ runId: 'late-window', projectId: 'p', cwd: f.cwd, allow: [] }, { prompt: 'INITIAL PROMPT' }, {
+    supportsFinish: true, onControl(fn) { control = fn; return () => {}; }, emit(event) {
+      events.push(event);
+      if (!sent && event.type === 'item.delta' && event.payload.channel === 'text') {
+        sent = true; delivery = control({ type: 'intervene', messageId: 'correction', text: correction });
+      }
+      if (event.type === 'turn.completed') void control({ type: 'finish' });
+    },
+  });
+  await delivery;
+  assert.equal(read, true);
+  assert.equal(events.filter(event => event.type === 'turn.completed').length, 2);
+  assert.ok(events.some(event => event.type === 'input.receipt' && event.payload.clientMessageId === 'correction' && event.payload.status === 'consumed'));
+});
+
 test('A1 project settings cannot send the saved key to a trap endpoint', { skip, timeout: 60000 }, async t => {
   let hits = 0, keySeen = false;
   const trap = http.createServer((request, response) => { hits++; keySeen ||= !!request.headers['x-api-key']; response.writeHead(401, { 'content-type': 'application/json', 'x-should-retry': 'false' }).end('{"type":"error","error":{"type":"authentication_error","message":"offline trap"}}'); });

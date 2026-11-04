@@ -9,6 +9,8 @@ const optionalCount = value => value == null || Number.isSafeInteger(value) && v
 function validDispatch(event) {
   if (!event || !uuid(event.id) || Buffer.byteLength(JSON.stringify(event)) > 16384) return false;
   if (event.type === 'dispatch-rate') return totals(event) && event.activeMs > 0;
+  if (event.type === 'dispatch-receipt') return typeof event.messageId === 'string' && /^[\w-]{1,160}$/.test(event.messageId)
+    && ['queued', 'delivered', 'consumed', 'rejected', 'unknown'].includes(event.status);
   if (!routing(event)) return false;
   if (event.type === 'dispatch-start') return ['codex', 'claude'].includes(event.agent) && ['执行', '调查', '审查', '圆桌'].includes(event.role) &&
     line(event.title, 1024) && ['cwd', 'brief', 'out'].every(key => line(event[key], 4096)) &&

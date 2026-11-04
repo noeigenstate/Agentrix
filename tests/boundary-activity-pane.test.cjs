@@ -17,9 +17,10 @@ test('the pane never acts on its own: one /usage after the countdown, read-only 
   assert.doesNotMatch(pane, /window\.agentrix\b|\bipcRenderer\b/, 'the pane calls no main-process action');
   for (const file of ['src/features/agents/ActivityPane.tsx', 'src/features/agents/ResetQuota.tsx', 'src/features/agents/ResetCountdown.tsx'])
     assert.doesNotMatch(read(file), /vs ?code|code\.cmd|openInEditor|markComplete|mark-complete|完成项目|标记完成/i, `${file} has no manual completion or editor launch control`);
-  // Codex's stdio client sends only the handshake and the rate-limit read; Claude's usage is one GET.
+  // Codex only reads identity (without refresh) and limits; Claude's usage is one GET.
   const codex = read('electron/features/agents/codex-account-usage.cjs');
-  assert.deepEqual([...new Set([...codex.matchAll(/method: '([^']+)'/g)].map(match => match[1]))].sort(), ['account/rateLimits/read', 'initialize', 'initialized']);
+  assert.deepEqual([...new Set([...codex.matchAll(/method: '([^']+)'/g)].map(match => match[1]))].sort(), ['account/rateLimits/read', 'account/read', 'initialize', 'initialized']);
+  assert.match(codex, /method: 'account\/read', params: \{ refreshToken: false \}/);
   const claude = read('electron/features/agents/claude-account-usage.cjs');
   assert.deepEqual([...claude.matchAll(/\bfetch\(([^,]+), \{ method: '([A-Z]+)'/g)].map(match => match.slice(1)), [['USAGE_URL', 'GET']]);
   assert.doesNotMatch(claude, /writeFile|oauth\/token|refresh_token/, 'never renews or writes credentials');

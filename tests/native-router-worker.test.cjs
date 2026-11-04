@@ -25,7 +25,7 @@ test('SDK worker broker applies trusted run scopes and streams events without cr
   const { start, events, fake, run, dir } = setup(t, { auto: false }); const task = start();
   await until(() => fake.inputs.length === 1);
   assert.equal((await fake.calls[0].options.canUseTool('Bash', { command: 'python -m pytest' }, {})).behavior, 'allow');
-  fake.emit({ type: 'result', uuid: 'r', total_cost_usd: 0.1, modelUsage: {}, queued_turn_count: 0 }); await task;
+  fake.emit({ type: 'result', uuid: 'r', user_message_uuid: fake.inputs[0].uuid, total_cost_usd: 0.1, modelUsage: {}, queued_turn_count: 0 }); await task;
   assert.equal(fake.calls[0].options.cwd, run.cwd); assert.deepEqual(fake.calls[0].options.settingSources, []);
   assert.ok(events.some(event => event.type === 'turn.completed')); assert.ok(events.every(event => event.runId === run.runId));
   assert.ok(!JSON.stringify(events).includes('fake-worker-only-credential'));
@@ -53,8 +53,8 @@ test('SDK worker controls append during a live turn and drain queued work before
   await until(() => fake.inputs.length === 1);
   const id = randomUUID(); assert.equal(await control({ messageId: id, type: 'intervene', text: 'follow-up' }), 'queued');
   await until(() => fake.inputs.length === 2);
-  fake.emit({ type: 'result', uuid: 'r1', total_cost_usd: 0.1, modelUsage: {}, queued_turn_count: 1 });
+  fake.emit({ type: 'result', uuid: 'r1', user_message_uuid: fake.inputs[0].uuid, total_cost_usd: 0.1, modelUsage: {}, queued_turn_count: 1 });
   await new Promise(resolve => setImmediate(resolve)); assert.equal(ended, false);
-  fake.emit({ type: 'result', uuid: 'r2', total_cost_usd: 0.2, modelUsage: {}, queued_turn_count: 0 });
+  fake.emit({ type: 'result', uuid: 'r2', user_message_uuid: fake.inputs[1].uuid, total_cost_usd: 0.2, modelUsage: {}, queued_turn_count: 0 });
   await task; assert.equal(events.filter(event => event.type === 'turn.completed').length, 2);
 });

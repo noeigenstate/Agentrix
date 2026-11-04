@@ -126,8 +126,9 @@ for (const action of ['intervene', 'stop', 'npm']) test(`helper delivers ${actio
     route: 'dispatch', runId: id, title: 'Synthetic native', cwd: repo, projectPath: repo, local: true }),
     sendParentPrompt: () => assert.fail('planner paste'), pushControl: control.pushControl });
   const receipt = action === 'intervene' ? await api.interveneAgent('t', `dispatch:${id}`, 'Owner correction') : await api.stopAgent('t', `dispatch:${id}`);
-  assert.equal(receipt.status, 'delivered'); assert.equal(await result, action === 'intervene' ? 0 : 1);
+  assert.ok((action === 'intervene' ? ['delivered', 'consumed'] : ['delivered']).includes(receipt.status));
+  assert.equal(await result, action === 'intervene' ? 0 : 1);
   if (action === 'intervene') assert.equal(fs.readFileSync(out, 'utf8'), 'Owner correction');
-  assert.match(stdout, /intervention .* delivered/); assert.doesNotMatch(stdout, /fallback|resume failed/);
-  assert.match(fs.readFileSync(team.memory, 'utf8'), /\[dispatch\] intervention .* delivered/);
+  assert.match(stdout, /intervention .* (?:delivered|consumed)/); assert.doesNotMatch(stdout, /fallback|resume failed/);
+  assert.match(fs.readFileSync(team.memory, 'utf8'), /\[dispatch\] intervention .* (?:delivered|consumed)/);
 });

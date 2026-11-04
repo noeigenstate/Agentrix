@@ -85,6 +85,11 @@ class AgentCalls {
       return true;
     }
     if (!call?.dispatch || call.done || call.reviewed) return false;
+    if (event.type === 'dispatch-receipt') {
+      const entry = this.feeds.owned(call);
+      if (entry) { entry.dirty = true; this.feeds.update(call); }
+      return true;
+    }
     if (event.type === 'dispatch-rate') {
       if (call.rate && (event.outputTokens < call.rate.outputTokens || event.activeMs < call.rate.activeMs)) return false;
       call.rate = call.meter.totals(call.model, event.outputTokens, event.activeMs, this.now());

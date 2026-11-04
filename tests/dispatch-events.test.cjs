@@ -23,6 +23,18 @@ function session(t) {
   return { calls, send: event => { const changed = acceptDispatch(s, event, calls); if (changed) changes++; return changed; }, changes: () => changes };
 }
 
+test('authenticated receipt changes advance only their bound worker feed without transcript activity', t => {
+  const f = session(t), launch = start(); f.send(launch);
+  const receipt = { type: 'dispatch-receipt', id: launch.id, messageId: randomUUID(), status: 'consumed', projectId: 'terminal', sessionKey: 'test-key' };
+  const before = f.calls.feeds.entries.get(`dispatch:${launch.id}`).revision;
+  assert.equal(f.send({ ...receipt, sessionKey: 'other' }), false);
+  assert.equal(f.send({ ...receipt, id: randomUUID() }), false);
+  assert.equal(f.send({ ...receipt, status: 'invented' }), false);
+  assert.equal(f.send(receipt), true);
+  assert.ok(f.calls.feeds.entries.get(`dispatch:${launch.id}`).revision > before);
+  assert.equal(f.calls.snapshot()[0].running, 1);
+});
+
 test('authenticated dispatch events populate groups, replace live totals, show done and broadcast expiry', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = session(t), launch = start();

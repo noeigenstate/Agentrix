@@ -234,4 +234,22 @@ async function claudeAccount(file = claudeState(), pulse = codePulseFile(), dire
   return selectClaudeAccount(claudeAccountFrom(state), codePulseLimits(quota), direct);
 }
 
-module.exports = { UsageMeter, claudeWindow, claudeProvider, claudeProviderName, codexProvider, codexProviderName, claudeAccount, claudeAccountFrom, claudeAccountFiles, codePulseLimits, selectClaudeAccount };
+async function readClaudeAccountCache(env = process.env) {
+  const get = name => Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1];
+  const root = get('CLAUDE_CONFIG_DIR');
+  const file = root ? path.join(root, '.claude.json') : path.join(get('USERPROFILE') || get('HOME') || os.homedir(), '.claude.json');
+  let handle;
+  try {
+    handle = await fs.open(file, 'r');
+    if ((await handle.stat()).size > 16 * 1024 * 1024) throw new Error('cache_size');
+    const state = JSON.parse(await handle.readFile('utf8'));
+    // A quota cache alone does not identify how a CLI is signed in. Retain only
+    // the explicit subscription billing kind; never expose account identifiers.
+    const kind = state?.oauthAccount?.billingType === 'stripe_subscription' ? 'subscription' : 'unknown';
+    return { ...claudeAccountFrom(state), connection: { kind, active: false, source: 'Claude Code cache', observedAt: Date.now() } };
+  } catch {
+    return { connection: { kind: 'unknown', active: false, source: 'Claude Code cache', observedAt: null } };
+  } finally { await handle?.close(); }
+}
+
+module.exports = { UsageMeter, claudeWindow, claudeProvider, claudeProviderName, codexProvider, codexProviderName, claudeAccount, claudeAccountFrom, claudeAccountFiles, codePulseLimits, selectClaudeAccount, readClaudeAccountCache };
