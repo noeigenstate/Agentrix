@@ -2,14 +2,16 @@ const path = require('node:path');
 const { createCredentials } = require('./credentials.cjs');
 const { createSdkLoader } = require('./runtime.cjs');
 const { resolveClaudeExecutable, inspectClaudeExecutable } = require('./executable.cjs');
-const { createConnectionTest } = require('./connection.cjs');
+const { createConnectionTest, probeBillingIdentity } = require('./connection.cjs');
 const { createUsage } = require('./usage.cjs');
 const { createClaudeSession } = require('./session.cjs');
 const { readJson, writeJson } = require('../native-session/storage.cjs');
 function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader(), resolveExecutable = resolveClaudeExecutable,
-  now = Date.now, onCost, onSession, audit, request, inspectCli = inspectClaudeExecutable } = {}) {
+  now = Date.now, onCost, onSession, audit, request, inspectCli = inspectClaudeExecutable,
+  connectionSpec = () => ({ agent: 'claude', owner: 'gui', cwd: process.cwd(), effort: 'high', fast: true }) } = {}) {
   const credentials = createCredentials({ file: path.join(directory, 'credentials.json'), safeStorage });
   const usage = createUsage({ file: path.join(directory, 'usage.json'), now });
+  const configDirectory = path.join(directory, 'sdk-config');
   const sessions = new Set(), leases = new Map(); let unavailable = null;
   const provenanceFile = path.join(directory, 'sdk-session-configs.json');
   const isolatedIds = new Set(readJson(provenanceFile, [], { validate: value => Array.isArray(value) && value.every(id => typeof id === 'string' && id.length > 0 && id.length <= 160) }));
@@ -19,7 +21,9 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
     writeJson(path.join(directory, 'policy-audit.json'), next); decisions = next;
   });
   return {
-    credentials, usage, testConnection: createConnectionTest({ credentials, inspectCli, request, now }),
+    credentials, usage, testConnection: createConnectionTest({ credentials, inspectCli, request, now,
+      probeBilling: (key, config = {}) => probeBillingIdentity({ key, spec: connectionSpec(), configDirectory, loadSdk, resolveExecutable,
+        maxBudgetUsd: config.monthlyBudgetUsd == null ? undefined : Math.min(usage.available(config.monthlyBudgetUsd) / 1e6, 5) }) }),
     connection(id) { return [...sessions].find(session => session.snapshot().runtimeSessionId === id)?.connection() || { kind: 'none', source: null, observedAt: null }; },
     apiState(budget) {
       if (!credentials.status().saved) return { status: 'no_key' };
@@ -39,7 +43,7 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
       }
       const release = () => { if (leasedId && leases.get(leasedId) === owner) leases.delete(leasedId); };
       const session = createClaudeSession(spec, emit, { loadSdk, resolveExecutable, credentials, usage, now, onCost,
-        configDirectory: isolated ? path.join(directory, 'sdk-config') : null,
+        configDirectory: isolated ? configDirectory : null,
         onSession: id => {
           acquire(id);
           if (isolated && !isolatedIds.has(id)) { writeJson(provenanceFile, [...isolatedIds, id]); isolatedIds.add(id); }

@@ -15,7 +15,7 @@ for (const [mode, status, cli, expected] of [
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-conn-route-')); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify({ claudePath: mode, codexView: 'native', monthlyBudgetUsd: null }));
   let tests = 0; const handlers = new Map();
-  const native = createNativeSessions({ directory, claude: { testConnection: async () => { tests++; return { checkedAt: 1, key: { status, detail: null, latencyMs: 1 }, models: null, cli: { status: cli, version: null, required: '2.1.317' } }; },
+  const native = createNativeSessions({ directory, claude: { testConnection: async () => { tests++; return { checkedAt: 1, key: { status, detail: null, latencyMs: 1 }, models: null, cli: { status: cli, version: null, required: '2.1.317' }, billing: { status: 'ok', source: 'ANTHROPIC_API_KEY' } }; },
     apiState: () => ({ status: 'ready' }), usage: { summary: () => ({}) } },
     connections: async () => ({ claude: { kind: 'api', source: 'init', observedAt: 1 } }) });
   native.register((name, handler) => handlers.set(name, handler)); assert.equal(tests, 0);
@@ -23,6 +23,25 @@ for (const [mode, status, cli, expected] of [
   const result = await handlers.get('native:test-connection')(); assert.equal(result.path, expected); assert.equal(tests, 1);
   const usage = await native.usage(); assert.equal(usage.agents.claude.connection.kind, 'api'); assert.equal(usage.agents.codex.connection.kind, 'none');
 });
+
+for (const mode of ['api-only', 'api-then-terminal', 'terminal-only']) for (const billingStatus of ['ok', 'mismatch', 'unknown']) {
+  test(`connection routing follows billing ${billingStatus} under ${mode} even with a valid key and CLI`, async t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-conn-billing-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify({ claudePath: mode, codexView: 'native', monthlyBudgetUsd: 25 }));
+    const billing = { status: billingStatus, source: billingStatus === 'unknown' ? null : billingStatus === 'ok' ? 'ANTHROPIC_API_KEY' : 'apiKeyHelper' };
+    const reason = billingStatus === 'mismatch' ? 'Claude API 计费身份不符（apiKeySource=apiKeyHelper）。' : billingStatus === 'unknown' ? '无法确认 Claude Code 的计费来源。' : null;
+    let passedConfig;
+    const native = createNativeSessions({ directory, claude: { testConnection: async config => {
+      passedConfig = config; return { checkedAt: 1, key: { status: 'ok', detail: null, latencyMs: 1 }, models: ['synthetic'],
+        cli: { status: 'ok', version: '2.1.318', required: '2.1.317' }, billing, reason };
+    }, apiState: () => ({ status: 'ready' }) } });
+    const result = await native.testConnection();
+    assert.equal(result.path, mode === 'terminal-only' ? 'terminal' : billingStatus === 'ok' ? 'api' : mode === 'api-only' ? null : 'terminal');
+    assert.deepEqual(result.billing, billing); assert.equal(passedConfig.monthlyBudgetUsd, 25);
+    if (billingStatus !== 'ok' || mode !== 'terminal-only') assert.equal(result.reason, reason);
+  });
+}
 test('account/read sanitizes API and ChatGPT modes without retaining personal fields', () => {
   for (const [type, kind] of [['apiKey', 'api'], ['chatgpt', 'subscription'], ['unexpected', 'unknown']]) {
     const value = accountConnection({ account: { type, email: 'private-fixture', token: 'private-fixture' } }, 123);

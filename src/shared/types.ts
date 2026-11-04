@@ -154,6 +154,7 @@ export type ConnectionTest = {
   key: { status: 'ok' | 'missing' | 'invalid' | 'forbidden' | 'rate_limited' | 'unreachable' | 'error'; detail: string | null; latencyMs: number | null };
   models: string[] | null;
   cli: { status: 'ok' | 'missing' | 'too_old'; version: string | null; required: string };
+  billing: { status: 'ok' | 'mismatch' | 'unknown'; source: string | null };
   path: 'api' | 'terminal' | null; reason: string | null;
 };
 export type BillingConnection = { kind: 'api' | 'subscription' | 'none' | 'unknown'; source: string | null; observedAt: number | null };

@@ -123,7 +123,20 @@ const KEY_HINTS: Record<string, string> = {
   rate_limited: '请求太频繁，稍后再测试。', unreachable: '请检查网络或代理设置后重试。', error: '请稍后重试。',
 };
 const MODELS_SHOWN = 5;
-export type TestLine = { id: 'key' | 'models' | 'cli' | 'path'; tone: 'ok' | 'warn' | 'bad'; label: string; text: string; hint: string | null; title: string | null };
+export type TestLine = { id: 'key' | 'models' | 'cli' | 'billing' | 'path'; tone: 'ok' | 'warn' | 'bad'; label: string; text: string; hint: string | null; title: string | null };
+const BILLING_SOURCES = new Set(['ANTHROPIC_API_KEY', 'apiKeyHelper', '/login managed key', 'none', 'user', 'project', 'org', 'temporary', 'oauth']);
+
+function billingLine(test: ConnectionTest): TestLine {
+  const source = test.billing?.source, known = source && BILLING_SOURCES.has(source);
+  const ok = known && source === 'ANTHROPIC_API_KEY' && test.billing.status === 'ok';
+  const mismatch = known && source !== 'ANTHROPIC_API_KEY' && test.billing.status === 'mismatch';
+  return { id: 'billing', label: t('计费来源'), tone: ok ? 'ok' : mismatch ? 'bad' : 'warn',
+    text: ok || mismatch ? source : t('未知'), title: null,
+    hint: ok ? null : mismatch ? test.path === 'terminal'
+      ? t('Claude Code 没有使用这个密钥，新会话将走终端。')
+      : t('Claude Code 没有使用这个密钥，当前设置不允许启动新会话。')
+      : t('无法确认 Claude Code 的计费来源，请重试。') };
+}
 
 export function connectionLines(test: ConnectionTest): TestLine[] {
   const { key, models, cli } = test, keyTone = key.status === 'ok' ? 'ok' : key.status === 'rate_limited' ? 'warn' : 'bad';
@@ -139,6 +152,8 @@ export function connectionLines(test: ConnectionTest): TestLine[] {
     { id: 'key', tone: keyTone, label: t('密钥'), text: (KEY_WORDS[key.status] ? t(KEY_WORDS[key.status]) : t('检查出错')) + latency, hint: keyHint, title: key.detail },
     { id: 'models', tone: models?.length ? 'ok' : 'warn', label: t('可用模型'), text: modelText, hint: null, title: models?.join('\n') || null },
     { id: 'cli', tone: cli.status === 'ok' ? 'ok' : 'bad', label: 'Claude Code', text: cliText, hint: cli.status === 'missing' ? t('请安装 Claude Code（需要 ≥ {required}）。', { required }) : cli.status === 'too_old' ? t('请升级 Claude Code。') : null, title: null },
+    // Older callers without the new field retain their rows; the settings page renders absent billing as unknown.
+    ...(test.billing ? [billingLine(test)] : []),
     { id: 'path', tone: test.path ? 'ok' : 'warn', label: t('新会话将使用'), text: [pathText, reasonWords(test.reason)].filter(Boolean).join(' · '), hint: null, title: null },
   ];
 }
