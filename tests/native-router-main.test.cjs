@@ -60,6 +60,7 @@ test('late native shutdown events cannot recreate a disposed host session', () =
 test('M5 failed native initialization keeps terminal starts and safe settings available', async () => {
   const handlers = new Map(), starts = [], plans = new Map();
   const context = { randomUUID: () => 'fallback-runtime', launchPlans: plans, readNativeConnections: async () => ({}),
+    claudeRuntime: null, readNativeSubscriptionLimits: () => ({}),
     findProject: id => { assert.equal(id, 't'); return { kind: 'local' }; },
     store: { findTerminal: () => ({ record: { restore: { agent: 'claude', threadId: '11111111-1111-4111-8111-111111111111' } } }) },
     launchCommand: (agent, history) => ({ agent, history }), startTerminal: (...args) => starts.push(args), broadcast() {} };

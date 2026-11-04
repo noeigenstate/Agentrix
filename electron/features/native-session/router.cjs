@@ -2,6 +2,7 @@ const { randomUUID } = require('node:crypto');
 const { choosePath } = require('./routing.cjs');
 const { validEvent } = require('./validate.cjs');
 const { createEventStream } = require('./events.cjs');
+const { nextPath } = require('./usage.cjs');
 function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {} }) {
   const sessions = new Map(), terminalStreams = new Map(), busy = new Set(), occupied = new Set();
   const agents = { claude: { path: null, reason: null, limits: null }, codex: { path: null, reason: null, limits: null } };
@@ -113,7 +114,14 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       }
       current(id, record.spec.runtimeSessionId); return record.stream.snapshot();
     },
-    usage() { return { ...claude.usage.summary(), budgetUsd: settings.get().monthlyBudgetUsd, agents: structuredClone(agents), lastSwitch }; },
+    usage({ cli = {}, limits = {} } = {}) {
+      const config = settings.get(), snapshot = structuredClone(agents);
+      for (const agent of ['claude', 'codex']) {
+        snapshot[agent].next = nextPath(agent, config, agent === 'claude' ? claude.apiState(config.monthlyBudgetUsd) : null, cli[agent]);
+        snapshot[agent].limits ||= structuredClone(limits[agent] || null);
+      }
+      return { ...claude.usage.summary(), budgetUsd: config.monthlyBudgetUsd, agents: snapshot, lastSwitch };
+    },
     async keyClear() { await Promise.allSettled([...sessions.values()].filter(record => record.spec.agent === 'claude').map(record => record.runtime.close())); await claude.close?.(); return claude.credentials.clear(); },
     async forget(id) {
       const record = sessions.get(id); sessions.delete(id); terminalStreams.delete(id);

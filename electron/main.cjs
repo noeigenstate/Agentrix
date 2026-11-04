@@ -15,6 +15,8 @@ const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-g
 const { createNativeSession } = require('./features/terminal/native-session.cjs');
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
 const { createNativeSessions } = require('./features/native-session/index.cjs');
+const { subscriptionLimits } = require('./features/native-session/usage.cjs');
+const { inspectClaudeExecutable } = require('./features/claude-sdk/executable.cjs');
 const { recoveryWarnings } = require('./features/native-session/storage.cjs');
 const { createClaudeRuntime } = require('./features/claude-sdk/index.cjs');
 const { createSdkLoader } = require('./features/claude-sdk/runtime.cjs');
@@ -47,7 +49,7 @@ const { DashboardRecords, quotaScope } = require('./features/dashboard/records.c
 const { createDashboard } = require('./features/dashboard/index.cjs');
 const { createLab } = require('./features/lab/index.cjs');
 const { routingNote } = require('./features/dashboard/decisions.cjs');
-const { CodexAccountUsage } = require('./features/agents/codex-account-usage.cjs');
+const { CodexAccountUsage, codexExecutable } = require('./features/agents/codex-account-usage.cjs');
 const codexAccounts = new CodexAccountUsage();
 const { ClaudeAccountUsage, readClaudeAccount } = require('./features/agents/claude-account-usage.cjs');
 const claudeAccounts = new ClaudeAccountUsage({ changed: () => queueClaudeAccounts(), read: options => readClaudeAccount({ ...options,
@@ -1278,6 +1280,21 @@ async function readNativeConnections() {
   return result;
 }
 
+function readNativeSubscriptionLimits() {
+  const latest = candidates => candidates.filter(Boolean).sort((a, b) => (b.observedAtMs ?? -Infinity) - (a.observedAtMs ?? -Infinity))[0] || null;
+  const claude = [subscriptionLimits(claudeAccounts.account, 'claude-account', 120000)];
+  // Meters also hold the existing local-cache fallback. Reading them must never refresh an account.
+  for (const s of localClaudeMeters()) if (s.usage.limits.length) claude.push(subscriptionLimits({
+    limits: s.usage.limits, at: s.usage.limitsAt, source: s.usage.limitsFrom }, 'claude-account', 120000));
+  const codex = [...codexAccounts.entries].map(([key, entry]) => subscriptionLimits(entry.value, key, 2 * codexAccounts.interval));
+  return { claude: latest(claude), codex: latest(codex) };
+}
+
+async function readNativeUsageInputs() {
+  const [claudeCli, codexFile] = await Promise.all([inspectClaudeExecutable(), codexExecutable()]);
+  return { cli: { claude: claudeCli, codex: { status: codexFile ? 'ok' : 'missing' } }, limits: readNativeSubscriptionLimits() };
+}
+
 async function initializeNativeSessions() {
   // Load optional provider composition after app.ready; neither module starts a real account session here.
   const { createCodexRuntime } = await import('./features/codex-app-server/index.cjs');
@@ -1321,7 +1338,7 @@ async function initializeNativeSessions() {
     return runtime;
   } };
   nativeSessions = createNativeSessions({ directory, claude: claudeRuntime, codex, resolveSpec: nativeSpec,
-    connections: readNativeConnections,
+    connections: readNativeConnections, usageInputs: readNativeUsageInputs,
     emit: event => send('native:event', event), changed: (id, event) => { if (event) structuredEvent(id, event); else scheduleState(); },
     saveSession: (id, saved) => store.setRestore(id, { terminal: true, codex: true, agent: saved.agent, threadId: saved.providerSessionId,
       nativeTransport: saved.agent === 'claude' ? 'claude-sdk' : 'codex-app-server' }),
@@ -1587,10 +1604,12 @@ function registerUnavailableNative(handle) {
   handle('native:settings-get', () => ({ ...settings }));
   handle('native:snapshot', id => { findProject(id); return null; });
   handle('native:usage', async () => {
-    const connections = await readNativeConnections();
-    return { month: new Date().toISOString().slice(0, 7), todayUsdMicros: null, monthUsdMicros: null,
-      estimated: true, budgetUsd: null, agents: { claude: { path: 'terminal', reason: 'native_unavailable', limits: null, connection: connections.claude },
-        codex: { path: 'terminal', reason: 'native_unavailable', limits: null, connection: connections.codex } }, lastSwitch: null };
+    const connections = await readNativeConnections(), limits = readNativeSubscriptionLimits();
+    const summary = claudeRuntime?.usage.summary() || { month: new Date().toISOString().slice(0, 7),
+      todayUsdMicros: null, monthUsdMicros: null, estimated: true, apiRecords: false };
+    return { ...summary, budgetUsd: null, agents: { claude: { path: 'terminal', reason: 'native_unavailable',
+        next: { path: 'terminal', reason: 'native_unavailable' }, limits: limits.claude, connection: connections.claude },
+        codex: { path: 'terminal', reason: 'native_unavailable', next: { path: 'terminal', reason: 'native_unavailable' }, limits: limits.codex, connection: connections.codex } }, lastSwitch: null };
   });
   for (const name of ['send', 'interrupt', 'stop', 'answer', 'settings-set', 'key-save', 'key-clear', 'key-status']) {
     handle(`native:${name}`, () => { throw new Error('原生会话暂不可用，已保留终端模式。'); });
