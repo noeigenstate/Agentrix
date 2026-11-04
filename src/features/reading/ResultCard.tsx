@@ -13,9 +13,10 @@ import { markdownTitle } from './markdown-escape';
 
 const MENU_WIDTH = 224, MENU_GAP = 4, EDGE = 8;
 
-// How long the round took: "40 秒", "3 分 10 秒", "1 小时 5 分".
+// How long the round took: "40 秒", "3 分 10 秒", "1 小时 5 分". The duration its source measured wins over the times on the steps.
 function took(result: LatestResult) {
-  const { hours, minutes, seconds } = elapsed(result.startedAt, result.endedAt);
+  const measured = result.facts?.durationMs;
+  const { hours, minutes, seconds } = measured === undefined ? elapsed(result.startedAt, result.endedAt) : elapsed(0, measured);
   if (hours) return t('{hours} 小时 {minutes} 分', { hours, minutes });
   return minutes ? t('{minutes} 分 {seconds} 秒', { minutes, seconds }) : t('{seconds} 秒', { seconds });
 }
@@ -69,11 +70,14 @@ export function ResultStatus({ result, taskTitle, onShowTerminal, onError }: { r
     failed: [result.failure && item(<CopySimple size={16} />, t('复制错误信息'), copy(result.failure)), onShowTerminal && item(<TerminalWindow size={16} />, t('在终端中查看'), onShowTerminal)],
   }[result.kind].flatMap(entry => entry ? [entry] : []);
   const Icon = failed ? XCircle : CheckCircle;
+  // What the round's source said about its end: the spend and the tokens go beside the duration, and the sentence for a round that did not complete under the line.
+  const extra = [result.facts?.spend, result.facts?.tokens].filter(Boolean);
   return <div className={`result-status${failed ? ' is-failed' : ''}`} role="status" aria-label={label}>
     <Icon size={20} weight="fill" className="result-state" aria-hidden="true" />
     <div className="result-heading">
       <h3 className="result-title" title={failed ? `${title} · ${label}` : title}><span>{title}</span>{failed && <b>{` · ${label}`}</b>}</h3>
-      <p className="result-sub">{failed ? (result.failure ? t('{time} 失败', { time: stepTime(result.endedAt) }) : t('{time} 中断', { time: stepTime(result.endedAt) })) : t('{time} 完成', { time: stepTime(result.endedAt) })}<span className="result-took">{` · ${t('用时 {span}', { span: took(result) })}`}</span></p>
+      <p className="result-sub">{failed ? (result.failure ? t('{time} 失败', { time: stepTime(result.endedAt) }) : t('{time} 中断', { time: stepTime(result.endedAt) })) : t('{time} 完成', { time: stepTime(result.endedAt) })}<span className="result-took">{` · ${[t('用时 {span}', { span: took(result) }), ...extra].join(' · ')}`}</span></p>
+      {result.facts?.message && <p className="result-sub">{result.facts.message}</p>}
     </div>
     <ResultMenu items={items} />
   </div>;

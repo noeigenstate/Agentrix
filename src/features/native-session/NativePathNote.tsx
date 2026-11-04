@@ -1,12 +1,13 @@
 // The notice over a card about its session's path. While a run-mode change is on its way to a terminal card: the line saying where it goes
 // and when, and the question when switching would end background tasks (a native card draws both in its own view). Afterwards, when the path
-// did not go as chosen: Claude left the API for the terminal (the terminal's reading view takes the same cell and this says why), or a switch
-// failed and the session stayed on its old path. The owner dismisses the notes.
+// did not go as chosen: Claude left the API for the terminal (the terminal's reading view takes the same cell and this says why), a switch failed and the
+// session stayed on its old path, or a change ended with something to say (a restore, a stop, a warning from the old process). Which of these it is comes
+// from the outcome main gives, never from whether a reason is there. The owner dismisses the notes.
 import { Info, X } from '@phosphor-icons/react';
 import { useState } from 'react';
 import { t } from '../../shared/i18n';
 import { dismissNote, dismissSwitchNote, resolveSwitch, terminalSwitch, useNativeEntries, useSwitchNoteShown } from './native-store.ts';
-import { messageText, reasonWords, switchFailure, switchLine } from './native-words';
+import { messageText, reasonWords, switchLine, switchNote } from './native-words';
 import { copyNativeText, type SwitchState } from './native-bridge.ts';
 import { asksChoice, SwitchLine, SwitchQuestion } from './SwitchNotice';
 import './native-session.css';
@@ -17,10 +18,10 @@ const movedWords = (reason: string | null) => { const words = reasonWords(reason
 // terminalActive: the card shows the terminal, the only place the move to the terminal and a change in flight are told here. A failed switch is
 // told wherever the card is. sessionId: the card's native runtime session, when it has one (a terminal session has none).
 export function NativePathNote({ terminalId, terminalActive = true, switchState = null, sessionId = null }: { terminalId: string; terminalActive?: boolean; switchState?: SwitchState | null; sessionId?: string | null }) {
-  const entry = useNativeEntries().get(terminalId), state = resolveSwitch(switchState, entry), shown = useSwitchNoteShown(terminalId, state), failure = state && shown && switchFailure(state);
+  const entry = useNativeEntries().get(terminalId), state = resolveSwitch(switchState, entry), shown = useSwitchNoteShown(terminalId, state), told = state && shown && switchNote(state);
   const path = terminalActive ? terminalSwitch(entry) : null, moving = terminalActive ? state : null;
   const [error, setError] = useState<string | null>(null);
-  const note = state && failure ? { text: failure, dismiss: () => dismissSwitchNote(terminalId, state) }
+  const note = state && told ? { text: told, dismiss: () => dismissSwitchNote(terminalId, state) }
     : path ? { text: movedWords(path.reason), dismiss: () => dismissNote(terminalId) } : null;
   const line = switchLine(moving), asking = asksChoice(moving);
   if (!note && !line && !asking) return null;

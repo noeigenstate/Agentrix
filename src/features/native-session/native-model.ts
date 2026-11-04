@@ -5,10 +5,12 @@
 //   item.upsert  kind, status, content            item.delta  channel (text|output|reasoning-summary|plan), text, index
 //   turn.diff    diff                              plan.updated  explanation, steps[{ step|text|title, status }]
 //   request.opened  requestId, kind, blocking, title, preview, questions[{ id, header, question, options[{ label, description }], multiSelect, isSecret }]
-//   session.state  state, reason     turn.completed  status, error     input.receipt  clientMessageId, status     path.changed  previous, selected, reason
-//   error  code, message, willRetry     switch.updated  a SwitchState (the whole payload)
-// usage.updated, limits.updated and routing.updated are not part of the conversation: the usage panel asks the main process for the numbers (ApiUsage).
-import type { AgentEvent, SwitchState } from '../../shared/agent-events';
+//   session.state  state, reason     input.receipt  clientMessageId, status     path.changed  previous, selected, reason
+//   turn.completed  status, error, terminalReason, message, durationMs, costUsdMicros, costEstimated, tokens (how the provider says the turn ended)
+//   error  code, message, willRetry     switch.updated  a SwitchState (the whole payload)     limits.updated  providerStatus, notice { code, message, resetsAtMs }
+// usage.updated and routing.updated are not part of the conversation: the usage panel asks the main process for the numbers (ApiUsage). Of limits.updated only
+// the provider's own notice that a limit was reached is kept, to be said in the conversation.
+import type { AgentEvent, LimitsPayload, SwitchState, TokenCounts } from '../../shared/agent-events';
 
 export type Payload = Record<string, unknown>;
 export type NativeItem = {
@@ -16,23 +18,30 @@ export type NativeItem = {
   // Streamed pieces; a completed snapshot that carries its own text replaces them.
   deltas: { text: string; output: string; reasoning: string[]; plan: string };
 };
+// How a turn ended, as its provider said: the reason code, the sentence main wrote for it, and the facts the result gave (each null when it gave none).
+export type TurnEnd = {
+  reason: string | null; message: string | null; durationMs: number | null; costUsdMicros: number | null; costEstimated: boolean | null; tokens: TokenCounts | null;
+};
+export type LimitNotice = NonNullable<LimitsPayload['notice']>;
 export type NativeRequest = { id: string; kind: string; blocking: boolean; title: string; preview: string; questions: Payload[]; at: number };
 export type NativeModel = {
   identity: { runtimeSessionId: string; epoch: string; provider: 'claude' | 'codex'; transport: string } | null;
   lastSequence: number | null; refused: string[];
   session: { state: string; reason: string | null } | null;
-  turn: { running: boolean; status: string | null; error: string | null };
+  turn: { running: boolean; status: string | null; error: string | null; end: TurnEnd | null };
   order: string[]; items: Record<string, NativeItem>; requests: NativeRequest[]; receipts: Record<string, string>;
   diff: string | null; plan: { explanation: string | null; steps: { text: string; status: string | null }[] } | null;
   path: { previous: string | null; selected: string; reason: string | null; at: number } | null;
   error: { code: string | null; message: string; willRetry: boolean } | null;
+  // What the provider said about its allowance: whether it rejects, and the notice that a limit was reached (null while it says none).
+  limits: { providerStatus: string | null; notice: LimitNotice | null } | null;
   // The run-mode change this session is going through (contract addendum): one state for both transports, replaced whole by each event.
   switchState: SwitchState | null;
 };
 
 export const emptyModel = (): NativeModel => ({
-  identity: null, lastSequence: null, refused: [], session: null, turn: { running: false, status: null, error: null },
-  order: [], items: {}, requests: [], receipts: {}, diff: null, plan: null, path: null, error: null, switchState: null,
+  identity: null, lastSequence: null, refused: [], session: null, turn: { running: false, status: null, error: null, end: null },
+  order: [], items: {}, requests: [], receipts: {}, diff: null, plan: null, path: null, error: null, limits: null, switchState: null,
 });
 
 const SEND_STATES = new Set(['starting', 'idle', 'running', 'waiting']);
@@ -44,6 +53,17 @@ const text = (value: unknown) => (typeof value === 'string' ? value : null);
 const object = (value: unknown): Payload => (value && typeof value === 'object' && !Array.isArray(value) ? value as Payload : {});
 const objects = (value: unknown): Payload[] => (Array.isArray(value) ? value.filter(entry => entry && typeof entry === 'object') as Payload[] : []);
 const filled = (value: unknown) => typeof value === 'string' && value !== '';
+const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null);
+
+// A turn's counts as it gave them; a count it did not give is null, and a turn that gave none has no tokens.
+function tokensOf(value: unknown): TokenCounts | null {
+  const found = object(value), tokens = { input: count(found.input), cachedInput: count(found.cachedInput), cacheWrite: count(found.cacheWrite), output: count(found.output), reasoning: count(found.reasoning) };
+  return Object.values(tokens).some(entry => entry !== null) ? tokens : null;
+}
+const endOf = (payload: Payload): TurnEnd => ({
+  reason: text(payload.terminalReason), message: text(payload.message), durationMs: count(payload.durationMs), costUsdMicros: count(payload.costUsdMicros),
+  costEstimated: typeof payload.costEstimated === 'boolean' ? payload.costEstimated : null, tokens: tokensOf(payload.tokens),
+});
 
 function touch(draft: NativeModel, event: AgentEvent, kind: string): NativeItem | null {
   const id = event.itemId;
@@ -84,8 +104,8 @@ function handle(draft: NativeModel, event: AgentEvent) {
       if (OVER_STATES.has(state)) draft.requests = [];
       break;
     }
-    case 'turn.started': draft.turn = { running: true, status: null, error: null }; draft.error = null; break;
-    case 'turn.completed': draft.turn = { running: false, status: text(payload.status), error: text(payload.error) }; break;
+    case 'turn.started': draft.turn = { running: true, status: null, error: null, end: null }; draft.error = null; break;
+    case 'turn.completed': draft.turn = { running: false, status: text(payload.status), error: text(payload.error), end: endOf(payload) }; break;
     case 'item.upsert': upsert(draft, event, payload); break;
     case 'item.delta': delta(draft, event, payload); break;
     case 'turn.diff': draft.diff = text(payload.diff) ?? text(payload.text); break;
@@ -105,6 +125,11 @@ function handle(draft: NativeModel, event: AgentEvent) {
     case 'input.receipt': { const id = text(payload.clientMessageId), status = text(payload.status); if (id && status) draft.receipts[id] = status; break; }
     case 'path.changed': draft.path = { previous: text(payload.previous), selected: text(payload.selected) ?? 'unknown', reason: text(payload.reason), at: event.receivedAtMs }; break;
     case 'switch.updated': draft.switchState = event.payload; break;
+    case 'limits.updated': {
+      const notice = object(payload.notice), code = text(notice.code), message = text(notice.message);
+      draft.limits = { providerStatus: text(payload.providerStatus), notice: code && message ? { code: code as LimitNotice['code'], message, resetsAtMs: count(notice.resetsAtMs) } : null };
+      break;
+    }
     case 'error': draft.error = { code: text(payload.code), message: text(payload.message) ?? '', willRetry: payload.willRetry === true }; break;
   }
 }

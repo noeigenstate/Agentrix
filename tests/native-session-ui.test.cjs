@@ -129,7 +129,7 @@ test('reasoning summaries gather by segment, a diff and a plan are replaced by t
   assert.deepEqual(model.plan, { explanation: null, steps: [{ text: 'A', status: 'completed' }, { text: 'B', status: null }] });
   assert.deepEqual([model.path.selected, model.path.reason, model.error.willRetry, model.turn.running], ['terminal', 'budget_exhausted', true, true]);
   const ended = applyEvents(model, [ev('turn.completed', { status: 'interrupted', error: null })]).model;
-  assert.deepEqual([ended.turn, ended.error], [{ running: false, status: 'interrupted', error: null }, model.error]);
+  assert.deepEqual([ended.turn, ended.error], [{ running: false, status: 'interrupted', error: null, end: { reason: null, message: null, durationMs: null, costUsdMicros: null, costEstimated: null, tokens: null } }, model.error]);
   assert.equal(applyEvents(ended, [ev('turn.started', {})]).model.error, null, 'a new turn clears the last error');
 });
 
@@ -146,7 +146,7 @@ test('words: receipts, routes, money and quota windows say what is known and "�
   assert.deepEqual(['in_progress', 'completed', 'failed', 'declined', null].map(status => words.itemState(item('command', {}, { status }))), ['running', 'done', 'failed', null, null]);
   assert.deepEqual([words.messageText(item('agent-message', { text: 'final' }, { deltas: { text: 'streamed', output: '', reasoning: [], plan: '' } })), words.messageText(item('agent-message', { text: 'final' }))], ['streamed', 'final']);
   assert.deepEqual(words.commandOf(item('command', { command: ['npm', 'test'], exitCode: 1, durationMs: 1500, output: 'old' }, { deltas: { text: '', output: 'live', reasoning: [], plan: '' } })),
-    { command: 'npm test', cwd: null, exitCode: 1, durationMs: 1500, output: 'live' });
+    { command: 'npm test', phrase: null, cwd: null, exitCode: 1, durationMs: 1500, output: 'live' });
   assert.deepEqual(words.fileChanges(item('file-change', { path: 'a.ts', diff: '+x' })), [{ path: 'a.ts', kind: null, diff: '+x' }]);
 });
 
@@ -411,7 +411,7 @@ function sessionView(events, bridge, base = {}) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
   const build = list => ({ model: model.applyEvents(model.emptyModel(), list).model, dismissed: null, noteDismissed: false, handoff: null });
-  const parts = { AgentMark() {}, PendingPromptEntries() {}, QuoteChip() {}, quoteExcerpt: load('features/reading/message-quote.ts').quoteExcerpt, withQuote: load('features/reading/message-quote.ts').withQuote, ResultActions() {}, ResultStatus() {}, TimelineStep() {}, UserImages() {}, WorkingLine() {}, latestResult: load('features/reading/result-round.ts').latestResult, useStickToBottom: () => ({ stuck: true, unseen: 0, toBottom: () => toBottom.push(true), ready: true }) };
+  const parts = { AgentMark() {}, PendingPromptEntries() {}, QuoteChip() {}, quoteExcerpt: load('features/reading/message-quote.ts').quoteExcerpt, withQuote: load('features/reading/message-quote.ts').withQuote, ResultActions() {}, ResultChecks() {}, ResultStatus() {}, TimelineStep() {}, UserImages() {}, WorkingLine() {}, latestResult: load('features/reading/result-round.ts').latestResult, useStickToBottom: () => ({ stuck: true, unseen: 0, toBottom: () => toBottom.push(true), ready: true }) };
   const feed = { ConversationDecorations: { Provider() {} }, ConversationFeed() {} };
   const harness = hookHarness('src/features/native-session/NativeSessionView.tsx', {
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[0] },
@@ -923,10 +923,16 @@ test('switch words: the header says where a change goes and when, a failure says
   assert.deepEqual(['preparing', 'switching'].map(phase => line({ phase })), ['正在切到 终端', '正在切到 终端']);
   assert.deepEqual(['stable', 'awaiting-choice', 'rolling-back'].map(phase => line({ phase })), [null, null, null], 'nothing under way, the question has its card and a failure its note');
   assert.equal(words.switchLine(null), null);
-  const failure = patch => words.switchFailure(switchState({ phase: 'rolling-back', ...patch }));
+  const failure = patch => words.switchNote(switchState({ phase: 'rolling-back', ...patch }));
   assert.equal(failure(), '没有切换成功，仍使用 API'); assert.equal(failure({ reason: 'native_cli_required' }), '没有切换成功，仍使用 API · 未找到原生 Claude Code，无法通过 API 运行');
-  assert.equal(failure({ phase: 'stable', reason: '终端没有启动' }), '没有切换成功，仍使用 API · 终端没有启动', 'a settled change that left a reason failed');
-  assert.deepEqual([failure({ phase: 'stable' }), failure({ phase: 'waiting-turn', reason: '输入框里有未发送的文字' }), words.switchFailure(null)], [null, null, null]);
+  const settled = patch => words.switchNote(switchState({ phase: 'stable', ...patch }));
+  assert.equal(settled({ outcome: 'failed', reason: '终端没有启动' }), '没有切换成功，仍使用 API · 终端没有启动', 'only the outcome failed says the switch failed');
+  assert.equal(settled({ reason: '终端没有启动' }), null, 'a reason alone is not a failure: an ended change that gives no outcome says nothing');
+  assert.equal(settled({ outcome: 'switched', reason: '旧进程没有正常退出' }), '旧进程没有正常退出', 'switched with a reason is a switch that worked, told as the warning it is');
+  assert.deepEqual([settled({ outcome: 'switched' }), settled({ outcome: 'restored' }), settled({ outcome: 'stopped' })], [null, null, null], 'no reason, nothing to tell');
+  assert.deepEqual([settled({ outcome: 'restored', reason: '已恢复到原来的会话' }), settled({ outcome: 'stopped', reason: '会话已停止，没有切换' })], ['已恢复到原来的会话', '会话已停止，没有切换'], 'a restore or a stop says its reason, not that it failed');
+  assert.doesNotMatch(String(settled({ outcome: 'switched', reason: 'native_cli_required' })), /没有切换成功/);
+  assert.deepEqual([failure({ phase: 'waiting-turn', reason: '输入框里有未发送的文字' }), words.switchNote(switchState({ phase: 'waiting-turn', outcome: 'failed', reason: 'x' })), words.switchNote(null)], [null, null, null], 'a change still waiting is not an ended one');
   const background = (count, known) => words.backgroundWords({ count, known });
   assert.equal(background(2, true), '切换会结束 2 个后台任务。'); assert.equal(background(0, true), '切换会结束 0 个后台任务。', 'a real zero is a zero');
   for (const unknown of [background(null, false), background(3, false), background(null, true)]) { assert.match(unknown, /还不知道/); assert.doesNotMatch(unknown, /\d/, 'unknown is not a number'); }
@@ -1307,4 +1313,153 @@ test('a draft waits while the box cannot take it', t => {
   assert.equal(handoff.taken, 0, 'a shut box does not take it'); assert.equal(handoff.incoming.text, 'later');
   handoff.locked = false; h.render(); h.render();
   assert.equal(handoff.taken, 1);
+});
+
+// ---- the structured end of a turn, the provider's notice, command phrases ------------------------------------------------------------
+const mainWords = {
+  completed: '本轮已完成。', tool_deferred: '这次工具调用被钩子推迟，没有执行。', max_turns: '已达到本轮最大执行次数。', budget_exhausted: '本轮 API 预算上限已用完。',
+  api_error: 'API 请求失败，本轮未能完成。', owner: '本轮已中断。',
+};
+// One finished round of a session: your message, a reply (unless `reply` is false) and the turn.completed the provider sent.
+const endedRound = (completed, { reply = true, extra = [], provider = {} } = {}) => viewHtml(ev => [ev('session.state', { state: 'idle', reason: null }),
+  ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'go', clientMessageId: 'c1' } }, { itemId: 'u1' }), ...extra.map(make => make(ev)),
+  ...(reply ? [ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'here is the answer' } }, { itemId: 'a1' })] : []), ev('turn.completed', completed)], provider);
+const resultRow = html => (html.match(/<div class="result-status[^"]*"[\s\S]*?<\/p>(?:<p class="result-sub">[^<]*<\/p>)?/) ?? [''])[0];
+
+test('the model keeps how a turn ended as the provider gave it and the provider’s notice, and a field nobody gave stays null', () => {
+  const { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
+  const done = applyEvents(emptyModel(), [ev('turn.started', {}), ev('turn.completed', { status: 'completed', error: null, terminalReason: 'completed', message: '本轮已完成。', durationMs: 83000, costUsdMicros: 120000, costEstimated: true,
+    tokens: { input: 1200, cachedInput: 50000, cacheWrite: 800, output: 300, reasoning: null } })]).model;
+  assert.deepEqual(done.turn.end, { reason: 'completed', message: '本轮已完成。', durationMs: 83000, costUsdMicros: 120000, costEstimated: true, tokens: { input: 1200, cachedInput: 50000, cacheWrite: 800, output: 300, reasoning: null } });
+  const bare = applyEvents(emptyModel(), [ev('turn.completed', { status: 'failed', error: 'x', durationMs: -5, costUsdMicros: 'a', tokens: { input: null, output: undefined } })]).model;
+  assert.deepEqual(bare.turn.end, { reason: null, message: null, durationMs: null, costUsdMicros: null, costEstimated: null, tokens: null }, 'nothing is made up, and a count that is not a count is none');
+  const next = stream(), again = applyEvents(emptyModel(), [next('turn.completed', { status: 'completed', error: null, durationMs: 5 }), next('turn.started', {})]).model;
+  assert.equal(again.turn.end, null, 'a new turn forgets the last one’s end');
+  const text = '额度不足，需要充值后继续。服务未提供恢复时间。';
+  const limited = applyEvents(emptyModel(), [ev('limits.updated', { scopeId: 's', providerStatus: 'rejected', notice: { code: 'credits_required', message: text, resetsAtMs: null } })]).model;
+  assert.deepEqual(limited.limits, { providerStatus: 'rejected', notice: { code: 'credits_required', message: text, resetsAtMs: null } });
+  assert.equal(applyEvents(limited, [ev('limits.updated', { scopeId: 's', notice: null })]).model.limits.notice, null, 'a later update with no notice clears it');
+  assert.equal(applyEvents(emptyModel(), [ev('limits.updated', { scopeId: 's', notice: { code: 'rate_limited' } })]).model.limits.notice, null, 'a notice without words is none');
+});
+
+test('turn facts: the duration main measured, this turn’s spend as an estimate and its tokens, nothing for what was not given, and never a zero', () => {
+  const { turnFacts, noticeWords, sentence, clockWords } = words(), counts = patch => ({ input: null, cachedInput: null, cacheWrite: null, output: null, reasoning: null, ...patch });
+  const end = patch => ({ reason: 'completed', message: '本轮已完成。', durationMs: null, costUsdMicros: null, costEstimated: null, tokens: null, ...patch });
+  assert.deepEqual(turnFacts(end({ durationMs: 83000, costUsdMicros: 120000, costEstimated: true, tokens: counts({ input: 1200, cachedInput: 50000, cacheWrite: 800, output: 300 }) }), 'claude', true),
+    { durationMs: 83000, spend: '约 $0.12', tokens: '输入 52,000 · 输出 300' }, 'Claude’s input does not hold its cache: the cached and written parts are added; the completed message is not repeated');
+  assert.deepEqual(turnFacts(end({ durationMs: 5000, tokens: counts({ input: 1000, cachedInput: 400, output: 50, reasoning: 20 }) }), 'codex', true),
+    { durationMs: 5000, tokens: '输入 1,000 · 输出 50' }, 'Codex’s input holds its cache and reasoning is part of its output: neither is added again; Codex gives no spend');
+  assert.equal(turnFacts(end({ costUsdMicros: 5, costEstimated: true }), 'claude', true).spend, '约 <$0.01');
+  assert.equal(turnFacts(end({ costUsdMicros: 120000, costEstimated: false }), 'claude', true).spend, '$0.12', 'only an estimate is marked 约');
+  assert.equal(turnFacts(end({ durationMs: 0, costUsdMicros: 0, tokens: counts({ input: 0, output: 0 }) }), 'claude', true), undefined, 'a duration, spend or count that is zero is not written');
+  assert.equal(turnFacts(end(), 'codex', true), undefined); assert.equal(turnFacts(null, 'claude', false), undefined);
+  assert.deepEqual(turnFacts(end({ reason: 'tool_deferred', message: mainWords.tool_deferred }), 'claude', false), { message: mainWords.tool_deferred }, 'a turn that did not complete carries main’s sentence');
+  assert.deepEqual([sentence(null), sentence(''), sentence('API 请求失败，本轮未能完成。')], [null, null, 'API 请求失败，本轮未能完成。']);
+  const at = Date.UTC(2026, 10, 4, 12, 0), later = at + 3 * 3600_000, notice = patch => ({ code: 'rate_limited', message: 'API 请求受到限流。', resetsAtMs: null, ...patch });
+  assert.deepEqual(noticeWords(notice({ message: 'API 请求受到限流。服务未提供恢复时间。' }), at), { text: 'API 请求受到限流。', resets: null }, 'no recovery time given: none is written or guessed');
+  assert.deepEqual(noticeWords(notice({ resetsAtMs: later, message: 'API 额度不足，需要充值后继续。恢复时间：2026-11-04T15:00:00.000Z' }), at), { text: 'API 额度不足，需要充值后继续。', resets: `约 ${clockWords(later, at)} 恢复` }, 'the time comes from resetsAtMs in the owner’s clock, not as a machine date');
+  assert.equal(noticeWords(notice({ resetsAtMs: at - 1 }), at), null, 'a notice whose recovery has passed is over'); assert.equal(noticeWords(null), null);
+});
+
+test('the result row draws what the provider said: completed with duration, spend and tokens; deferred, over budget, stopped and API errors are never drawn as done', async () => {
+  const claudeDone = resultRow(await endedRound({ status: 'completed', error: null, terminalReason: 'completed', message: mainWords.completed, durationMs: 83000, costUsdMicros: 120000, costEstimated: true,
+    tokens: { input: 1200, cachedInput: 50000, cacheWrite: 800, output: 300, reasoning: null } }));
+  assert.match(claudeDone, /class="result-status" role="status" aria-label="已完成"/); assert.match(claudeDone, /<span class="result-took"> · 用时 1 分 23 秒 · 约 \$0\.12 · 输入 52,000 · 输出 300<\/span>/);
+  assert.doesNotMatch(claudeDone, /本轮已完成/, 'the completed message is not said again'); assert.doesNotMatch(claudeDone, /\{|undefined|null/);
+  const codexDone = resultRow(await endedRound({ status: 'completed', error: null, terminalReason: null, message: null, durationMs: 5000, costUsdMicros: null, costEstimated: null, tokens: { input: 1000, cachedInput: 400, cacheWrite: null, output: 50, reasoning: 20 } },
+    { provider: { provider: 'codex', transport: 'codex-app-server' } }));
+  assert.match(codexDone, /<span class="result-took"> · 用时 5 秒 · 输入 1,000 · 输出 50<\/span>/); assert.doesNotMatch(codexDone, /约|\$/, 'Codex has no spend');
+  const bare = resultRow(await endedRound({ status: 'completed', error: null }));
+  assert.match(bare, /aria-label="已完成"/); assert.doesNotMatch(bare, /约|\$|输入|输出/, 'a result with no facts writes none');
+  const cases = [['tool_deferred', 'interrupted', '已中断'], ['max_turns', 'interrupted', '已中断'], ['budget_exhausted', 'interrupted', '已中断'], ['owner', 'interrupted', '已中断'], ['api_error', 'failed', '失败']];
+  for (const [reason, status, label] of cases) {
+    const html = await endedRound({ status, error: mainWords[reason], terminalReason: reason === 'owner' ? null : reason, message: mainWords[reason], durationMs: 2000, costUsdMicros: null, costEstimated: true, tokens: null }), row = resultRow(html);
+    assert.match(row, new RegExp(`class="result-status is-failed" role="status" aria-label="${label}"`), reason); assert.doesNotMatch(row, /aria-label="已完成"|[0-9:]+ 完成/, `${reason} is never drawn as done`);
+    assert.match(row, new RegExp(`<p class="result-sub">${mainWords[reason]}</p>`), `${reason}: main’s sentence is the line under the row`); assert.match(row, /用时 2 秒/);
+  }
+  // A stopped round whose last step failed is still stopped; a round that failed says failed.
+  const stopped = resultRow(await endedRound({ status: 'interrupted', error: mainWords.owner, message: mainWords.owner }, { extra: [ev => ev('item.upsert', { kind: 'command', status: 'failed', content: { command: 'npm test', exitCode: 1 } }, { itemId: 'k1' })], reply: false }));
+  assert.match(stopped, /aria-label="已中断"/, 'the turn’s status decides, not its last step');
+  // No step or reply to stand on: the sentence is a line of its own (a quiet one for a stop, an alert for a failure), not a row.
+  const noneStopped = await endedRound({ status: 'interrupted', error: mainWords.max_turns, message: mainWords.max_turns }, { reply: false }), noneFailed = await endedRound({ status: 'failed', error: mainWords.api_error, message: mainWords.api_error }, { reply: false });
+  assert.match(noneStopped, /<p class="reading-status" role="status">已达到本轮最大执行次数。<\/p>/); assert.doesNotMatch(noneStopped, /form-error|result-status/);
+  assert.match(noneFailed, /<p class="form-error" role="alert">API 请求失败，本轮未能完成。<\/p>/);
+});
+
+test('the provider’s notice that a limit was reached is told in the conversation with its recovery time only when it gave one, and its error event is not told twice', async () => {
+  const when = Date.now() + 2 * 3600_000, line = '额度不足，需要充值后继续。';
+  const html = notice => viewHtml(ev => [ev('session.state', { state: 'idle', reason: null }), ev('limits.updated', { scopeId: 's', billingRoute: 'api', providerStatus: 'rejected', notice }),
+    ev('error', { code: 'credits_required', message: `${line}恢复时间：2026-11-04T15:00:00.000Z`, retryable: false, willRetry: false, stage: 'turn' })]);
+  const timed = await html({ code: 'credits_required', message: `${line}恢复时间：2026-11-04T15:00:00.000Z`, resetsAtMs: when });
+  assert.ok(timed.includes(`<p class="reading-status" role="status">${line} · 约 ${words().clockWords(when)} 恢复</p>`)); assert.doesNotMatch(timed, /2026-11-04T|form-error/, 'no machine date, and the same limit is not said twice');
+  const untimed = await html({ code: 'credits_required', message: `${line}服务未提供恢复时间。`, resetsAtMs: null });
+  assert.ok(untimed.includes(`<p class="reading-status" role="status">${line}</p>`)); assert.doesNotMatch(untimed, /恢复|服务未提供/, 'no time is guessed or written when the provider gave none');
+});
+
+test('a command’s phrase comes from main and the checks it names are listed under a round that wrote files; a Claude Bash command is read from its input', async () => {
+  const { nativeEntries } = load('features/native-session/native-entries.ts'), { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
+  const model = applyEvents(emptyModel(), [
+    ev('item.upsert', { kind: 'command', status: 'completed', content: { command: 'npm test', phrase: '运行测试', exitCode: 0 } }, { itemId: 'k1' }),
+    ev('item.upsert', { kind: 'command', status: 'failed', content: { name: 'Bash', input: '{"command":"npx tsc --noEmit"}', phrase: '检查类型', output: 'error TS1' } }, { itemId: 'k2' }),
+    ev('item.upsert', { kind: 'command', status: 'completed', content: { command: 'ls' } }, { itemId: 'k3' }),
+  ]).model, by = nativeEntries(model);
+  assert.deepEqual(by.map(entry => [entry.tool.target, entry.tool.phrase]), [['npm test', '运行测试'], ['npx tsc --noEmit', '检查类型'], ['ls', undefined]], 'no phrase from main, none made up here');
+  const html = await endedRound({ status: 'completed', error: null }, { extra: [
+    e => e('item.upsert', { kind: 'file-change', status: 'completed', content: { path: 'src/a.ts', diff: '+x' } }, { itemId: 'f1' }),
+    e => e('item.upsert', { kind: 'command', status: 'completed', content: { command: 'npm test', phrase: '运行测试', exitCode: 0 } }, { itemId: 'k1' }),
+    e => e('item.upsert', { kind: 'command', status: 'failed', content: { name: 'Bash', input: '{"command":"npx tsc"}', phrase: '检查类型' } }, { itemId: 'k2' })] });
+  assert.match(html, /<p class="result-list-head">验证<\/p>/); assert.match(html, /运行测试<small>[\s\S]*?npm test/); assert.match(html, /检查类型<small>[\s\S]*?npx tsc/);
+  assert.match(html, /<li class="is-failed">[\s\S]*?检查类型/, 'a check that failed is listed as failed');
+});
+
+test('the usage block tells the provider’s notice with its recovery time only if it gave one, and offers the console’s billing page for Claude’s API spend only', async () => {
+  const line = 'API 额度不足，需要充值后继续。', when = Date.now() + 2 * 3600_000;
+  const api = (claude, codex = {}) => { const value = usageOf({ lastSwitch: null }); Object.assign(value.agents.claude.limits, claude); Object.assign(value.agents.codex.limits, codex); return usageHtml({ usage: async () => ({ ok: true, value }) }); };
+  const untimed = usageSection(await api({ providerStatus: 'rejected', ordinaryUsageAllowed: false, notice: { code: 'credits_required', message: line + '服务未提供恢复时间。', resetsAtMs: null } }), 'Claude');
+  assert.ok(untimed.includes('<p class="activity-note" role="status">' + line + '</p>')); assert.doesNotMatch(untimed, /恢复|服务未提供/, 'no time is written when the provider gave none');
+  const timed = usageSection(await api({ providerStatus: 'rejected', notice: { code: 'rate_limited', message: 'API 请求受到限流。恢复时间：2026-11-04T15:00:00.000Z', resetsAtMs: when } }), 'Claude');
+  assert.ok(timed.includes('API 请求受到限流。 · 约 ' + words().clockWords(when) + ' 恢复')); assert.doesNotMatch(timed, /2026-11-04T/);
+  assert.doesNotMatch(usageSection(await api({ notice: null }), 'Claude'), /role="status"/, 'no notice, no line');
+  // A subscription that is rejected says so from the status; with the provider’s notice the notice speaks and the status line stays quiet.
+  const rejected = usageSection(await api({}, { providerStatus: 'rejected' }), 'Codex');
+  assert.match(rejected, /已限流，约 [^<]+ 恢复/);
+  const both = usageSection(await api({}, { providerStatus: 'rejected', notice: { code: 'rate_limited', message: 'API 请求受到限流。服务未提供恢复时间。', resetsAtMs: null } }), 'Codex');
+  assert.doesNotMatch(both, /已限流/); assert.match(both, /API 请求受到限流。/);
+  // The billing link: Claude on the API only, with the spend still marked as an estimate.
+  const html = await api({}), claude = usageSection(html, 'Claude');
+  assert.ok(claude.includes('<button type="button" class="text-button api-billing">在控制台核对</button>')); assert.ok(claude.includes('今日 $1.23 · 本月 $12.40 · 估算'));
+  assert.doesNotMatch(usageSection(html, 'Codex'), /在控制台核对/);
+  const subscription = usageOf({ lastSwitch: null }); subscription.agents.claude.connection = { kind: 'subscription', source: null, observedAt: 1 };
+  assert.doesNotMatch(await usageHtml({ usage: async () => ({ ok: true, value: subscription }) }), /在控制台核对/);
+  assert.doesNotMatch(await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ lastSwitch: null }) }) }, quietTerminal, ''), /在控制台核对/, 'without a project there is nothing to open a page through');
+});
+
+test('the billing link opens the console page through the project and shows a refusal', async () => {
+  const opened = [], previous = Object.getOwnPropertyDescriptor(globalThis, 'window'); let answer = { ok: true, value: { kind: 'external' } };
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { openLink: async (...args) => { opened.push(args); return answer; } } } });
+  const harness = hookHarness('src/features/agents/ApiUsage.tsx', { './i18n': { t: fill }, './native-store.ts': { useUsageRevision: () => 0 }, './native-words': words(), './Metric': load('features/agents/Metric.tsx'), './ResetQuota': { ResetQuota: () => null }, './activity-pane.css': {} });
+  try {
+    const button = () => elements(harness.render('BillingLink', { projectId: 'p1' }).result).find(node => node.type === 'button');
+    button().props.onClick(); await settle();
+    assert.deepEqual(opened, [['p1', 'https://platform.claude.com/settings/billing']]);
+    assert.equal(elements(harness.render('BillingLink', { projectId: 'p1' }).result).some(node => node.props?.role === 'alert'), false);
+    answer = { ok: false, error: '打不开这个链接' }; button().props.onClick(); await settle();
+    assert.equal(elements(harness.render('BillingLink', { projectId: 'p1' }).result).find(node => node.props?.role === 'alert').props.children, '打不开这个链接');
+  } finally { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; }
+});
+
+test('a switch that worked with a warning, one restored and one stopped tell their reason in the path note; only a failed one says it did not switch', () => {
+  const { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream(), store = load('features/native-session/native-store.ts');
+  const entry = { model: applyEvents(emptyModel(), [ev('session.state', { state: 'idle' })]).model, dismissed: null, noteDismissed: false, handoff: null };
+  const harness = hookHarness('src/features/native-session/NativePathNote.tsx', {
+    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './native-session.css': {}, './native-words': words(), './native-bridge.ts': { copyNativeText: async () => ({ ok: true }) }, './SwitchNotice': load('features/native-session/SwitchNotice.tsx'),
+    './native-store.ts': { useNativeEntries: () => new Map([['t1', entry]]), terminalSwitch: store.terminalSwitch, dismissNote() {}, resolveSwitch: store.resolveSwitch, useSwitchNoteShown: () => true, dismissSwitchNote() {} },
+  });
+  const text = patch => { const result = harness.render('NativePathNote', { terminalId: 't1', terminalActive: false, switchState: switchState({ phase: 'stable', ...patch }) }).result; return result && elements(result).find(node => node.type === 'span')?.props.children; };
+  try {
+    assert.equal(text({ outcome: 'failed', reason: '终端没有启动' }), '没有切换成功，仍使用 API · 终端没有启动');
+    assert.equal(text({ outcome: 'switched', reason: '旧进程没有正常退出' }), '旧进程没有正常退出'); assert.equal(text({ outcome: 'restored', reason: '已恢复到原来的会话' }), '已恢复到原来的会话');
+    assert.equal(text({ outcome: 'stopped', reason: '会话已停止，没有切换' }), '会话已停止，没有切换');
+    assert.equal(text({ outcome: 'switched' }), null); assert.equal(text({ reason: '终端没有启动' }), null, 'a reason without an outcome is not a failure');
+  } finally { harness.dispose(); }
 });

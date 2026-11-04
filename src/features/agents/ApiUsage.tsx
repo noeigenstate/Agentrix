@@ -2,6 +2,8 @@
 //   - the agent of the current session leads with its context length and ends with this round's (and this conversation's) tokens; the other agent has neither;
 //   - a subscription shows its 5-hour and weekly bars and where they come from (Codex also its limit resets), never API spend or a budget;
 //   - an API connection shows the API spend and the monthly budget (a bar when one is set), never the subscription windows;
+//   - Claude on the API also has a link to the console's billing page (the spend is an estimate; the console has the bill);
+//   - the provider's own notice that a limit was reached is said under the agent it belongs to, with when it recovers only if the provider said;
 //   - not connected, or not known, says "额度 未知".
 // Windows come from the main process; the current session's agent falls back to what its own screen and records gave when the main process has none.
 // Read-only: it only asks the main process (for the current project's scope). A value nobody gave is 未知, never 0. What the main process does not give (a read
@@ -11,7 +13,7 @@ import type { AgentUsage, ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { type LimitsPayload, type NativeAgent, type NativeUsage, nativeBridge } from '../native-session/native-bridge.ts';
 import { useUsageRevision } from '../native-session/native-store.ts';
-import { clockWords, connectionWord, money, windowWords } from '../native-session/native-words';
+import { clockWords, connectionWord, money, noticeWords, windowWords } from '../native-session/native-words';
 import { Metric, TokenMetric, exactCount, percentOf, resetTime, tokenCount } from './Metric';
 import { ResetQuota } from './ResetQuota';
 import './activity-pane.css';
@@ -22,9 +24,11 @@ const AGENTS = ['claude', 'codex'] as const;
 const NAMES: Record<NativeAgent, string> = { claude: 'Claude', codex: 'Codex' };
 
 const windowsOf = (limits: LimitsPayload) => Object.values(limits.limitsById ?? {}).flatMap(entry => [entry?.primary, entry?.secondary]);
-// That the provider says the limit is reached, with when it recovers; null when it does not say so.
+// That the provider says the limit is reached, with when it recovers; null when it does not say so. A notice of the provider's own (below) says it in
+// the provider's words, so this line is for a provider that gave only the status.
 function reachedLine(limits: LimitsPayload) {
-  if (limits.state !== 'rate_limited' && limits.ordinaryUsageAllowed !== false) return null;
+  if (limits.notice) return null;
+  if (limits.state !== 'rate_limited' && limits.ordinaryUsageAllowed !== false && limits.providerStatus !== 'rejected') return null;
   const resets = windowsOf(limits).flatMap(item => typeof item?.resetsAtMs === 'number' ? [item.resetsAtMs] : []);
   return resets.length ? t('已限流，约 {time} 恢复', { time: clockWords(Math.min(...resets)) }) : t('已限流，恢复时间未知');
 }
@@ -126,8 +130,19 @@ function ApiMetrics({ agent, usage }: { agent: NativeAgent; usage: NativeUsage }
   </>;
 }
 
-function AgentSection({ agent, usage, terminal }: { agent: NativeAgent; usage: NativeUsage | null; terminal: ProjectTerminal }) {
-  const state = usage?.agents[agent], connection = connectionWord(agent, state?.connection), kind = state?.connection?.kind;
+// Where the owner checks what the console actually billed; the spend above is an estimate. Opened the way every link is, through the project.
+const BILLING_URL = 'https://platform.claude.com/settings/billing';
+export function BillingLink({ projectId }: { projectId: string }) {
+  const [error, setError] = useState<string | null>(null);
+  const open = () => { setError(null); void window.agentrix.openLink(projectId, BILLING_URL).then(result => { if (!result.ok) setError(result.error); }).catch((failure: unknown) => setError(String(failure))); };
+  return <>
+    <button type="button" className="text-button api-billing" onClick={open}>{t('在控制台核对')}</button>
+    {error && <p className="activity-note" role="alert">{error}</p>}
+  </>;
+}
+
+function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgent; usage: NativeUsage | null; terminal: ProjectTerminal; projectId?: string }) {
+  const state = usage?.agents[agent], connection = connectionWord(agent, state?.connection), kind = state?.connection?.kind, notice = noticeWords(state?.limits?.notice);
   // The session in view belongs to one agent; only it has a context length and a round.
   const current = terminal.codexActive && terminal.agent === agent, tokens = terminal.agentUsage;
   const rows = [[t('本轮'), tokens?.round], [t('本次对话'), tokens?.total]] as const;
@@ -146,6 +161,8 @@ function AgentSection({ agent, usage, terminal }: { agent: NativeAgent; usage: N
       {kind === 'api' && usage && <ApiMetrics agent={agent} usage={usage} />}
       {current && rows.map(([label, counted]) => counted && <TokenMetric key={label} label={label} tokens={counted} />)}
     </div>}
+    {agent === 'claude' && kind === 'api' && usage?.apiRecords !== false && projectId && <BillingLink projectId={projectId} />}
+    {notice && <p className="activity-note" role="status">{[notice.text, notice.resets].filter(Boolean).join(' · ')}</p>}
     {source && <p className="activity-note">{source}</p>}
     {current && tokens?.context && !tokens.round && <p className="activity-note">{t('本轮从更早的记录开始，暂无法统计。')}</p>}
     {current && tokens?.context && !tokens.total && <p className="activity-note">{t('本次对话的总量在更早的记录里。')}</p>}
@@ -154,8 +171,8 @@ function AgentSection({ agent, usage, terminal }: { agent: NativeAgent; usage: N
 }
 
 // Both agents' sections, one under the other; the block's content, which scrolls under its fixed title.
-export const AgentSections = ({ usage, terminal }: { usage: NativeUsage | null; terminal: ProjectTerminal }) => <div className="api-agents">
-  {AGENTS.map(agent => <AgentSection key={agent} agent={agent} usage={usage} terminal={terminal} />)}
+export const AgentSections = ({ usage, terminal, projectId }: { usage: NativeUsage | null; terminal: ProjectTerminal; projectId?: string }) => <div className="api-agents">
+  {AGENTS.map(agent => <AgentSection key={agent} agent={agent} usage={usage} terminal={terminal} projectId={projectId} />)}
 </div>;
 
 export function ApiUsage({ terminal, projectId }: { terminal: ProjectTerminal; projectId?: string }) {
@@ -178,6 +195,6 @@ export function ApiUsage({ terminal, projectId }: { terminal: ProjectTerminal; p
   return <section className="activity-card activity-api" aria-label={label}>
     <h3 className="activity-card-title">{label}</h3>
     {error && !usage && <p className="activity-note" role="alert">{t('无法读取额度：{message}', { message: error })}</p>}
-    <AgentSections usage={usage} terminal={terminal} />
+    <AgentSections usage={usage} terminal={terminal} projectId={projectId} />
   </section>;
 }
