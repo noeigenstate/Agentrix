@@ -7,6 +7,7 @@ const send = message => process.stdout.write(JSON.stringify(message) + '\n');
 const notify = (method, params) => send({ method, params: { threadId, ...params } });
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const request = JSON.parse(line), params = request.params || {};
+  if (process.env.SYNTHETIC_CODEX_LOG) fs.appendFileSync(process.env.SYNTHETIC_CODEX_LOG, JSON.stringify(request) + '\n');
   if (!request.method) return;
   if (['thread/resume', 'turn/start', 'turn/steer', 'turn/interrupt'].includes(request.method) && !params.threadId) {
     return send({ id: request.id, error: { code: mode === 'missing-steer' && request.method === 'turn/steer' ? -32601 : -32600,
@@ -18,6 +19,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (mode === 'empty-thread' && request.method === 'thread/resume') return send({ id: request.id,
       error: { code: -32600, message: 'no rollout found for thread id ' + params.threadId } });
     threadId = params.threadId || threadId;
+    if (mode === 'resume-frame-limit') return send({ id: request.id, result: { thread: { id: threadId, turns: [] }, padding: 'x'.repeat(4 * 1024 * 1024) } });
+    if (mode.startsWith('long-') && request.method === 'thread/resume' && params.excludeTurns !== true) return send({ id: request.id, result: { thread: { id: threadId, turns: [] }, padding: 'x'.repeat(4 * 1024 * 1024) } });
     let sandbox = params.sandbox || 'workspace-write';
     if (mode === 'sandbox-persist') {
       sandbox = params.sandbox || (fs.existsSync(process.env.SYNTHETIC_POLICY_FILE) ? JSON.parse(fs.readFileSync(process.env.SYNTHETIC_POLICY_FILE)).sandbox : 'read-only');
@@ -54,7 +57,16 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     notify('turn/completed', { turn: { id: turnId, status: 'interrupted' } });
   } else if (request.method === 'account/rateLimits/read') result = { rateLimits: { limitId: 'codex', primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 100 } }, rateLimitResetCredits: { availableCount: 2 }, ordinaryUsageAllowed: true };
   else if (request.method === 'thread/read') result = { thread: { id: threadId, status: { type: 'idle' }, turns: [{ id: turnId, status: 'completed', items: [] }] } };
-  else if (request.method === 'thread/turns/list') result = { data: [{ id: 'history', status: 'completed', items: [] }], nextCursor: 'next-page', backwardsCursor: null };
+  else if (request.method === 'thread/turns/list') {
+    if (mode.startsWith('long-')) {
+      const total = mode === 'long-many' ? 1200 : mode === 'long-large' ? 60 : 2, offset = Number(params.cursor || 0);
+      const count = Math.min(params.limit, total - offset);
+      result = { data: Array.from({ length: count }, (_, i) => ({ id: 'history-' + (total - offset - i), status: 'completed',
+        items: params.itemsView === 'notLoaded' ? [] : [{ id: 'item-' + (total - offset - i), type: 'agentMessage',
+          text: (mode === 'long-huge' && offset + i === 0 ? 'x'.repeat(17 * 1024 * 1024) : mode === 'long-large' ? '汉'.repeat(200000) : 'small') + '-END' }] })),
+        nextCursor: offset + count < total ? String(offset + count) : null, backwardsCursor: null };
+    } else result = { data: [{ id: mode === 'race' ? turnId : 'history', status: 'completed', items: [] }], nextCursor: 'next-page', backwardsCursor: null };
+  }
   else if (request.method === 'account/usage/read') result = { tokenUsage: { totalTokens: 50 } };
   if (request.id !== undefined) send({ id: request.id, result });
 });

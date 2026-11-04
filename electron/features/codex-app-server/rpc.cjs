@@ -1,17 +1,17 @@
-const { StringDecoder } = require('node:string_decoder');
-
 const MAX_FRAME = 4 * 1024 * 1024;
+const MAX_HISTORY_FRAME = 16 * 1024 * 1024;
+const HISTORY_READS = new Set(['thread/turns/list', 'thread/items/list']);
 const keyOf = id => `${typeof id}:${id}`;
 
 // A write accepted by the stream is never retried, including after backpressure or timeout.
 function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onDisconnect = () => {}, timeout = 8000 } = {}) {
-  const decoder = new StringDecoder('utf8'), pending = new Map();
-  let buffer = '', counter = 0, closed = false, blocked = false, queue = [], queuedBytes = 0;
+  const pending = new Map();
+  let parts = [], bytes = 0, prefix = '', discarding = false, counter = 0, closed = false, blocked = false, queue = [], queuedBytes = 0;
   function fail(code = 'disconnected') {
     if (closed) return;
     closed = true;
     for (const task of pending.values()) { clearTimeout(task.timer); task.reject(Object.assign(new Error(code), { code, uncertain: task.sent })); }
-    pending.clear(); queue = []; queuedBytes = 0;
+    pending.clear(); queue = []; queuedBytes = 0; parts = []; bytes = 0; prefix = '';
     onDisconnect(code);
   }
   function flush() {
@@ -30,12 +30,33 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
     if (bytes > MAX_FRAME || queuedBytes + bytes > MAX_FRAME * 2) throw Object.assign(new Error('frame_limit'), { code: 'frame_limit' });
     queue.push({ line, task, key: keyOf(message.id) }); queuedBytes += bytes; flush();
   }
+  function historyResponse() {
+    // Our string request IDs lead real app-server response envelopes. Never discard an unbound frame.
+    const id = /^\s*\{\s*"id"\s*:\s*"(\d+)"\s*,\s*"result"\s*:/.exec(prefix)?.[1];
+    const task = id && pending.get(keyOf(id));
+    return task && HISTORY_READS.has(task.method) ? { id, task } : null;
+  }
   function read(chunk) {
-    buffer += decoder.write(chunk);
-    let end;
-    while (!closed && (end = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-      if (Buffer.byteLength(line) > MAX_FRAME) return fail('frame_limit');
+    if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk);
+    let offset = 0;
+    while (!closed && offset < chunk.length) {
+      const end = chunk.indexOf(10, offset), segment = chunk.subarray(offset, end < 0 ? chunk.length : end);
+      offset = end < 0 ? chunk.length : end + 1;
+      if (!discarding) {
+        if (prefix.length < 256) prefix += segment.subarray(0, 256 - prefix.length).toString('ascii');
+        const history = historyResponse(), limit = history ? MAX_HISTORY_FRAME : MAX_FRAME;
+        if (bytes + segment.length > limit) {
+          if (!history) return fail('frame_limit');
+          // History is optional, read-only data. Drain this one response without losing the live session.
+          pending.delete(keyOf(history.id)); clearTimeout(history.task.timer);
+          history.task.reject(Object.assign(new Error('history_frame_limit'), { code: 'history_frame_limit', uncertain: false }));
+          parts = []; bytes = 0; discarding = true;
+        } else { parts.push(segment); bytes += segment.length; }
+      }
+      if (end < 0) continue;
+      if (discarding) { discarding = false; prefix = ''; continue; }
+      // Decode and parse once per bounded frame; repeated string concatenation rescans long UTF-8 frames.
+      const line = Buffer.concat(parts, bytes).toString('utf8'); parts = []; bytes = 0; prefix = '';
       let message;
       try { message = JSON.parse(line); } catch { return fail('invalid_json'); }
       if (!message || typeof message !== 'object' || Array.isArray(message)) return fail('invalid_frame');
@@ -56,10 +77,9 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
         } else fail('invalid_frame');
       } catch { fail('invalid_payload'); }
     }
-    if (Buffer.byteLength(buffer) > MAX_FRAME) fail('frame_limit');
   }
   child.stdout.on('data', read);
-  child.stdout.on('end', () => fail(buffer.trim() ? 'truncated_frame' : 'disconnected'));
+  child.stdout.on('end', () => fail(bytes || discarding ? 'truncated_frame' : 'disconnected'));
   child.stdin.on('drain', () => { blocked = false; flush(); });
   child.stdin.on('error', () => fail('write_failed'));
   child.on('error', error => fail(['ENOENT', 'EACCES', 'EPERM', 'EINVAL'].includes(error.code) ? error.code : 'process_failed'));
@@ -69,7 +89,7 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
   return {
     request(method, params, deadline = timeout) {
       return new Promise((resolve, reject) => {
-        const id = String(++counter), key = keyOf(id), task = { resolve, reject, sent: false };
+        const id = String(++counter), key = keyOf(id), task = { resolve, reject, sent: false, method };
         task.timer = setTimeout(() => {
           pending.delete(key); reject(Object.assign(new Error('rpc_timeout'), { code: 'rpc_timeout', uncertain: task.sent }));
         }, deadline);
@@ -84,4 +104,4 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
   };
 }
 
-module.exports = { createRpc, MAX_FRAME };
+module.exports = { createRpc, MAX_FRAME, MAX_HISTORY_FRAME };

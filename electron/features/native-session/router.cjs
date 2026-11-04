@@ -105,7 +105,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       catch (error) {
         if (record.lock) occupied.delete(record.lock);
         const reason = error.code || error.message;
-        const codexUnavailable = agent === 'codex' && ['unsupported_codex_capabilities', 'unsupported_codex_version', 'codex_cli_required', 'rpc_timeout', 'process_failed', 'process_exited', 'disconnected', 'invalid_response', 'invalid_frame', 'invalid_json', 'ENOENT'].includes(reason);
+        const codexUnavailable = agent === 'codex' && ['unsupported_codex_capabilities', 'unsupported_codex_version', 'codex_cli_required', 'rpc_timeout', 'process_failed', 'process_exited', 'disconnected', 'invalid_response', 'invalid_frame', 'invalid_json', 'frame_limit', 'ENOENT'].includes(reason);
         if (codexUnavailable || agent === 'claude' && settings.get().claudePath === 'api-then-terminal'
           && (error.code === 'native_cli_required' || error.beforeInput === true)) {
           const notice = codexUnavailable ? (reason === 'codex_cli_required' || reason === 'ENOENT'

@@ -110,7 +110,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
                 : spec.owner === 'dispatch' ? { sandbox: 'workspace-write' } : {}),
             ...(spec.policy?.approvalPolicy ? { approvalPolicy: spec.policy.approvalPolicy } : {}), approvalsReviewer: 'user' };
           let result, resumed = resuming;
-          try { result = await rpc.request(resuming ? 'thread/resume' : 'thread/start', { ...options, ...(resuming ? { threadId } : {}) }); }
+          try { result = await rpc.request(resuming ? 'thread/resume' : 'thread/start', { ...options, ...(resuming ? { threadId, excludeTurns: true } : {}) }); }
           catch (error) {
             if (!resuming || !spec.allowFreshResume || !error.missingThread) throw error;
             occupied.delete(lockKey); lockKey = null; events.binding.providerSessionId = null; resumed = false;
@@ -123,7 +123,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           bind(result.thread.id); threadResponse = result;
           events.publish('routing.updated', { declared: { model: spec.model ?? null, effort: spec.effort ?? null, fast: spec.fast ?? null },
             effective: { model: result.model ?? null, effort: result.reasoningEffort ?? null, fast: result.serviceTier === 'fast' ? true : result.serviceTier === 'default' ? false : null }, observed: { model: null, effort: null, fast: null }, reason: null });
-          for (const turn of result.thread.turns || []) for (const item of turn.items || []) events.publish('item.upsert', itemPayload(item, true), { itemId: item.id, turnId: turn.id, replay: true });
+          // Dispatch needs the resumed model context, not a copy of its historical output.
+          if (resumed && spec.owner !== 'dispatch') await replayHistory();
           setState('idle');
           void readLimits().catch(() => {});
           return { providerSessionId: result.thread.id, runtimeSessionId: spec.runtimeSessionId, reason: compatibility.reason };
@@ -132,6 +133,36 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (error.code === -32601 || error.code === -32602) error.code = 'unsupported_codex_capabilities';
           await close(); setState('failed', typeof error.code === 'string' ? error.code : error.message); throw error;
         }
+      }
+      async function replayHistory() {
+        const history = [], cursors = new Set();
+        let cursor = null, limit = 50, bytes = 0, turns = 0;
+        while (history.length < 1000 && turns < 1000) {
+          let page;
+          try {
+            page = await rpc.request('thread/turns/list', { threadId: events.binding.providerSessionId, cursor, limit, sortDirection: 'desc', itemsView: 'full' });
+          } catch (error) {
+            if (error.code !== 'history_frame_limit') throw error;
+            if (limit > 1) { limit = Math.max(1, Math.floor(limit / 2)); continue; }
+            // A single enormous turn cannot fit the display budget. Advance using metadata, keeping the session usable.
+            page = await rpc.request('thread/turns/list', { threadId: events.binding.providerSessionId, cursor, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' });
+          }
+          if (!Array.isArray(page?.data)) throw new Error('invalid_history');
+          for (const turn of page.data) {
+            ++turns;
+            for (const item of [...(turn.items || [])].reverse()) {
+              const serialized = JSON.stringify({ payload: itemPayload(item, true, renderImage), itemId: item.id, turnId: turn.id });
+              const size = Buffer.byteLength(serialized) + 1024;
+              if (history.length >= 1000 || bytes + size > 4 * 1024 * 1024) { turns = 1000; break; }
+              // Detach bounded text slices from the large provider frame before retaining them.
+              history.push(JSON.parse(serialized)); bytes += size;
+            }
+            if (turns >= 1000) break;
+          }
+          if (!page.nextCursor || cursors.has(page.nextCursor)) break;
+          cursors.add(page.nextCursor); cursor = page.nextCursor;
+        }
+        for (const item of history.reverse()) events.publish('item.upsert', item.payload, { itemId: item.itemId, turnId: item.turnId, replay: true });
       }
       function send(input) {
         const imageValid = value => typeof value === 'string' && (spec.owner === 'dispatch' && path.isAbsolute(value) || /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value));
@@ -153,8 +184,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             try { result = steering ? await rpc.request('turn/steer', { ...base, expectedTurnId: events.binding.turnId }) : await startTurn(); }
             catch (error) {
               if (!steering || error.uncertain || error.code !== -32602) throw error;
-              const read = await rpc.request('thread/read', { threadId: events.binding.providerSessionId, includeTurns: true });
-              const previous = read?.thread?.turns?.find(turn => turn.id === events.binding.turnId);
+              const read = await rpc.request('thread/read', { threadId: events.binding.providerSessionId, includeTurns: false });
+              const page = await rpc.request('thread/turns/list', { threadId: events.binding.providerSessionId, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' });
+              const previous = page?.data?.find(turn => turn.id === events.binding.turnId);
               if (read?.thread?.id !== events.binding.providerSessionId || read.thread.status?.type !== 'idle' || !['completed', 'failed', 'interrupted'].includes(previous?.status)) throw error;
               // Only an explicit rejected steer plus an idle thread proves the input did not execute.
               notification('turn/completed', { turn: previous });
