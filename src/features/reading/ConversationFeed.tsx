@@ -73,9 +73,6 @@ function AssistantReply({ entry, agent, projectId, result = false, onError }: { 
       {!result && picture}<QuoteOf entry={entry} who={agent === 'claude' ? 'Claude Code' : 'Codex'} /></div>;
 }
 
-// What a step printed (a command's output, a diff, a tool's input and result), when its source keeps it; a transcript's steps carry none.
-const outputOf = (tool: object) => 'output' in tool && typeof tool.output === 'string' ? tool.output : '';
-
 function ToolGroup({ entries, live, projectId, onError }: { entries: ConversationEntry[]; live: boolean; projectId: string; onError: (message: string) => void }) {
   const running = entries.some(entry => !entry.tool?.done);
   const [open, setOpen] = useState(false);
@@ -98,7 +95,7 @@ function ToolGroup({ entries, live, projectId, onError }: { entries: Conversatio
       {shown ? <CaretUp size={13} weight="bold" className="reading-tools-caret" /> : <CaretDown size={13} weight="bold" className="reading-tools-caret" />}
     </button>
     {shown && <ul className="reading-tools-tree">{entries.map(entry => {
-      const tool = entry.tool!, output = outputOf(tool);
+      const tool = entry.tool!, output = tool.output || '';
       return <li key={entry.id} className={`${tool.done ? '' : 'is-running'} ${tool.failed ? 'is-failed' : ''} reading-tool-${tool.kind}`}>
         <StepState running={!tool.done} failed={tool.failed} filled />
         <b>{stepVerb(tool)}</b><code title={tool.target}><PathText text={tool.target} literal={tool.kind === 'read' || tool.kind === 'edit'} /></code>{tool.detail && <small title={tool.detail}><PathText text={tool.detail} /></small>}

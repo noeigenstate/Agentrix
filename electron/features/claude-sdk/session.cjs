@@ -5,6 +5,8 @@ const { createRequests } = require('./requests.cjs');
 const { createPolicy } = require('./policy.cjs');
 const { billingIdentityError, startupFailure } = require('./identity.cjs');
 const { inputQueue, queryOptions, readBillingIdentity } = require('./query.cjs');
+const { turnResult, tokensOf } = require('./result.cjs');
+const { rateLimits } = require('./limits.cjs');
 
 async function waitWithin(task, milliseconds) {
   let timer;
@@ -18,7 +20,7 @@ function createClaudeSession(spec, emit, dependencies) {
   const sent = new Map(), results = new Set();
   let active, opening, preparing, closing, sdk, executable, started = false, closed = false, stopping = false;
   let providerId = spec.providerSessionId || null, state = 'starting', turnId = null;
-  let apiObservedAt = null;
+  let apiObservedAt = null, limits = null;
   function clean(value) {
     let text = value;
     for (const key of secrets) text = text.replaceAll(key, '<secret>');
@@ -62,10 +64,14 @@ function createClaudeSession(spec, emit, dependencies) {
     for (const [id, status] of sent) if (!['consumed', 'rejected'].includes(status)) receipt(id, 'unknown');
   }
   function unavailable(message, generation) {
-    const reason = { rate_limit: 'rate_limited', billing_error: 'credits_exhausted', authentication_failed: 'invalid_key' }[message.error];
+    const observed = rateLimits(message, limits, spec.scopeId || spec.runtimeSessionId, now());
+    if (observed) { limits = observed; publish('limits.updated', limits); }
+    const reason = observed?.notice ? observed.notice.code === 'credits_required' ? 'credits_exhausted' : 'rate_limited'
+      : message.error === 'authentication_failed' ? 'invalid_key' : null;
     if (!reason) return;
     onFailure(reason, null, generation);
-    publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
+    if (observed) publish('error', { code: observed.notice.code, message: observed.notice.message, retryable: false, willRetry: false, stage: 'turn' });
+    else publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
       state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: reason });
   }
   function budgetNotice() {
@@ -79,7 +85,7 @@ function createClaudeSession(spec, emit, dependencies) {
   function observeBackground(run, message) {
     if (message.type !== 'system') return;
     if (message.subtype === 'background_tasks_changed') {
-      run.backgroundKnown = true; run.background = new Map(message.tasks.map(task => [task.task_id, task.run_id]));
+      run.background = new Map(message.tasks.map(task => [task.task_id, task.run_id]));
     } else if (['task_started', 'task_updated', 'task_notification'].includes(message.subtype)) {
       const previous = run.background.get(message.task_id);
       if (previous && (!message.run_id || message.run_id < previous)) return;
@@ -117,6 +123,9 @@ function createClaudeSession(spec, emit, dependencies) {
         if (message.user_message_uuid) receipt(message.user_message_uuid, 'consumed');
         for (const id of message.user_message_uuids || []) receipt(id, 'consumed');
         unavailable(message, run.generation);
+        if (message.type === 'assistant' && !message.parent_tool_use_id && message.message?.usage) {
+          run.lastUsage = tokensOf(message.message.usage); run.lastModel = message.message.model;
+        }
         if (message.type === 'assistant' && !turnId && !message.parent_tool_use_id) {
           if (!canContinue()) { cancelQuery(run, 'path_changed'); break; }
           reserve(run); run.busy = true; begin('automatic', message.user_message_uuid || null);
@@ -128,17 +137,23 @@ function createClaudeSession(spec, emit, dependencies) {
         if (resultId !== undefined) results.add(resultId);
         const entry = usage.record(providerId, message, { resume: !!run.resumeId, reservationId: run.reservation?.id });
         if (entry.deltaUsdMicros > 0) run.remainingBudgetUsd = Math.max(0, Math.round(run.remainingBudgetUsd * 1e6 - entry.deltaUsdMicros) / 1e6);
-        publish('usage.updated', entry.snapshot);
+        const lastUsage = run.lastUsage;
+        const contextTokens = lastUsage && [lastUsage.input, lastUsage.cachedInput, lastUsage.cacheWrite, lastUsage.output].every(value => value !== null)
+          ? lastUsage.input + lastUsage.cachedInput + lastUsage.cacheWrite + lastUsage.output : null;
+        const modelWindow = message.modelUsage?.[run.lastModel]?.contextWindow;
+        publish('usage.updated', { ...entry.snapshot, ...(Number.isSafeInteger(modelWindow) && modelWindow > 0 ? { contextWindow: modelWindow } : {}), contextTokens, round: tokensOf(message.usage) });
         if (entry.deltaUsdMicros > 0) onCost({ ...entry, spec: { ...spec, model: run.model || spec.model }, providerSessionId: providerId });
         requests.cancel();
-        const budgetBlocked = message.subtype === 'error_max_budget_usd';
-        // A hook of the owner's own may still pause a tool: the result then says success with nothing done, which is not a finished turn.
-        const deferred = !!message.deferred_tool_use;
-        const status = run.interrupted || budgetBlocked ? 'interrupted' : message.is_error || deferred ? 'failed' : 'completed';
-        const error = budgetBlocked ? budgetNotice() : deferred ? '这次工具调用被钩子推迟，没有执行。' : status === 'failed' ? 'Claude 执行失败。' : null;
-        publish('turn.completed', { status, error });
+        const budgetBlocked = message.terminal_reason === 'budget_exhausted' || message.subtype === 'error_max_budget_usd';
+        const interrupted = run.interrupted;
+        const outcome = turnResult(message, { interrupted, costUsdMicros: entry.deltaUsdMicros });
+        if (budgetBlocked) outcome.error = outcome.message = budgetNotice();
+        publish('turn.completed', outcome);
         run.interrupted = false;
         turnId = null; stream.turn(null);
+        if (interrupted) {
+          run.busy = false; releaseIdle(run); run.onStoppedResult?.(); unknownInput(); idle = !stopping; cancelQuery(run, 'interrupt'); break;
+        }
         if (budgetBlocked) {
           run.busy = false; releaseIdle(run); run.onStoppedResult?.(); unknownInput();
           idle = !stopping; cancelQuery(run, 'budget'); break;
@@ -158,9 +173,11 @@ function createClaudeSession(spec, emit, dependencies) {
       if (!run.closing) {
         usage.unverified(run.reservation?.id);
         if (!closed) {
-          if (error.code === 'budget_exhausted') {
+          if (run.interrupted || error.code === 'budget_exhausted') {
             if (!turnId) begin('automatic', null);
-            publish('turn.completed', { status: 'interrupted', error: budgetNotice() });
+            const outcome = turnResult({ terminal_reason: 'budget_exhausted' }, { interrupted: !!run.interrupted });
+            if (!run.interrupted) outcome.error = outcome.message = budgetNotice();
+            publish('turn.completed', outcome);
             turnId = null; stream.turn(null); idle = true;
             requests.cancel(); unknownInput();
           } else {
@@ -205,7 +222,7 @@ function createClaudeSession(spec, emit, dependencies) {
     const maxBudgetUsd = reservation?.maxBudgetUsd ?? (spec.monthlyBudgetUsd == null ? undefined : Math.min(usage.available(spec.monthlyBudgetUsd) / 1e6, 5));
     const run = { key, reservation, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
       generation: dependencies.availabilityGeneration?.(), keyVersion: dependencies.credentialVersion?.(),
-      remainingBudgetUsd: maxBudgetUsd ?? Infinity, busy: false, background: new Map(), backgroundKnown: !providerId };
+      remainingBudgetUsd: maxBudgetUsd ?? Infinity, busy: false, background: new Map() };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
     const options = queryOptions(spec, { key, executable, abort: run.abort,
@@ -316,7 +333,7 @@ function createClaudeSession(spec, emit, dependencies) {
         read: () => credentials.status().saved ? credentials.read() : key }) : null;
     },
     policyChanged() { if (!canContinue() && active && !active.busy) cancelQuery(active, 'path_changed'); },
-    activity: () => ({ known: active?.backgroundKnown === true || !active && !providerId, count: active?.backgroundKnown ? active.background.size : !providerId ? 0 : null }),
+    activity: () => ({ known: true, count: active?.background.size || 0 }),
     async prepareResume({ allowFresh = false } = {}) {
       if (!started || closed || !providerId && !allowFresh) throw new Error('resume_unavailable');
       // Read the actual persisted chain, then initialize a real resumed CLI with an empty input queue.

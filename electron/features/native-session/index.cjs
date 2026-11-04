@@ -6,7 +6,7 @@ const { choosePath } = require('./routing.cjs');
 function createNativeSessions(options) {
   const storedSettings = createSettings(path.join(options.directory, 'settings.json'));
   const settings = { ...storedSettings, set(patch) {
-    const result = storedSettings.set(patch); options.claude.resetAvailability?.(); router.reconcile(); return result;
+    const result = storedSettings.set(patch); options.claude.resetAvailability?.(); router.reconcile(true); return result;
   } };
   const router = createRouter({ ...options, settings });
   async function testConnection(projectId) {
@@ -39,4 +39,4 @@ function createNativeSessions(options) {
   };
   return { ...facade, getSettings: settings.get, register: handle => registerIpc({ handle, router: facade, settings, claude: options.claude }) };
 }
-module.exports = { createNativeSessions };
+module.exports = { createNativeSessions, createNativeUsage: require('./agent-usage.cjs').createNativeUsage };

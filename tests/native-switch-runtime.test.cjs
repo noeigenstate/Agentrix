@@ -198,6 +198,7 @@ test('I1: router freezes new input, preserves receipts, and never hands delivere
   config = { ...config, claudePath: 'terminal-only' }; router.reconcile(); await settle();
   assert.equal((await router.send('t', started.runtimeSessionId, { clientMessageId: 'delivered', text: 'already executed' })).status, 'delivered');
   assert.equal((await router.send('t', started.runtimeSessionId, { clientMessageId: 'fresh', text: 'keep me', images: ['data:image/png;base64,AA=='] })).status, 'rejected');
+  assert.ok(router.snapshot('t').events.some(event => event.type === 'input.receipt' && event.payload.clientMessageId === 'fresh' && event.payload.status === 'rejected'), 'G11 freezing also publishes the rejected receipt');
   const handoff = { changeId: router.switchState('t').changeId, draft: { ...draft(), undelivered: ['delivered', 'uncertain', 'fresh'].map(clientMessageId => ({ clientMessageId, text: clientMessageId })) } };
   assert.equal(router.answer('t', started.runtimeSessionId, 'handoff', { handoff }).accepted, true);
   assert.deepEqual(router.snapshot('t').handoff.draft.undelivered.map(input => input.clientMessageId), ['fresh']);

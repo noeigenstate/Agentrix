@@ -28,6 +28,15 @@ function fixture(t, mode = 'normal') {
   lifetime.defer('close runtime', () => runtime.close());
   return { events, factory, runtime, spec, calls };
 }
+for (const mode of ['structured', 'spend-limit']) test(`G8 real app-server adapter forwards ${mode} structured turn data`, async t => {
+  const f = fixture(t, mode); await f.runtime.start(); await f.runtime.send({ clientMessageId: 'structured-input', text: 'offline' });
+  await until(() => f.events.some(event => event.type === 'turn.completed'));
+  const result = f.events.find(event => event.type === 'turn.completed').payload;
+  assert.equal(result.costUsdMicros, null);
+  if (mode === 'structured') { assert.equal(result.durationMs, 123); assert.equal(result.tokens.input, 10); assert.equal(result.tokens.output, 3); }
+  else { assert.equal(result.status, 'failed'); assert.equal(result.terminalReason, 'usageLimitExceeded'); assert.match(result.message, /用量/);
+    assert.equal(f.events.find(event => event.type === 'limits.updated' && event.payload.notice)?.payload.notice.code, 'spend_limit'); assert.equal(JSON.stringify(f.events).includes('Never expose'), false); }
+});
 
 for (const allowFreshResume of [false, true]) test(`F14 a missing empty thread starts fresh only when the host proves no history (${allowFreshResume})`, async t => {
   const f = fixture(t, 'empty-thread');

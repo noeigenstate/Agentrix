@@ -75,7 +75,7 @@ export type GitCommit = { hash: string; parents: string[]; author: string; date:
 export type GitHistory = { commits: GitCommit[]; nextOffset: number | null };
 // One step an agent took (a tool call). The card shows the brief form; a review card reads the whole list for its checks.
 type AgentActionKind = 'edit' | 'command' | 'read' | 'search' | 'web' | 'skill' | 'mcp' | 'agent' | 'other';
-export type AgentActionBrief = { kind: AgentActionKind; tool: string; target: string; detail: string; done: boolean; phrase?: string; object?: string; written?: string[] };
+export type AgentActionBrief = { kind: AgentActionKind; tool: string; target: string; detail: string; done: boolean; output?: string; phrase?: string; object?: string; written?: string[] };
 export type MainAgentTurn = { state: Project['codexActivity']; updatedAt: number; background: { text: string; summary: string; count: number; at: number } | null };
 export type PendingPrompt = { id: string; text: string; summary: string; state: 'queued' | 'working'; at: number };
 export type AgentAction = AgentActionBrief & { id: string; at: number; description: string; failed: boolean; server?: string; files?: { path: string; change: 'add' | 'update' | 'delete' | 'write' }[] };

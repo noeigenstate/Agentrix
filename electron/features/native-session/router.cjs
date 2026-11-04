@@ -9,17 +9,15 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
   const agents = { claude: { path: null, reason: null, limits: null }, codex: { path: null, reason: null, limits: null } };
   const ended = new Set(['stopped', 'failed', 'disconnected']);
   const eventStream = spec => createEventStream(spec, event => { emit(event); changed(spec.terminalId, event); }, now);
-  let lastSwitch = null;
-  function selection(spec, runtime, allowBudget = false) {
-    const config = settings.get();
+  function selection(spec, runtime, allowBudget = false, retained = false) {
+    const config = { ...settings.get() };
+    if (retained && switches.retained(spec.terminalId)) config.claudePath = 'api-only';
     let apiState = claude.apiState(config.monthlyBudgetUsd, spec.projectId);
     if (apiState.status === 'budget_exhausted' && (allowBudget || runtime?.hasAllowance?.())) apiState = { status: 'ready' };
     return choosePath({ agent: spec.agent, ...config, apiState });
   }
   function pathChanged(agent, path, reason) {
-    const previous = agents[agent].path;
     agents[agent] = { ...agents[agent], path, reason };
-    if (previous !== path) lastSwitch = { at: now(), agent, from: previous, to: path, reason };
   }
   function current(id, runtimeSessionId) {
     const record = sessions.get(id);
@@ -46,7 +44,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       if (record.staged) { record.buffered.push(event); return; }
       forward(record, event);
     };
-    if (agent === 'claude') spec.mayContinue = () => selection(spec, record.runtime, true).path === 'api';
+    if (agent === 'claude') spec.mayContinue = () => selection(spec, record.runtime, true, true).path === 'api';
     record.runtime = restoreFactory ? restoreFactory(spec, receive) : (agent === 'claude' ? claude : codex).create(spec, receive);
     return record;
   }
@@ -146,7 +144,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     choose: session => session.record?.fallbackReason ? { path: 'terminal', reason: session.record.fallbackReason } : selection(session.spec, session.record?.runtime),
     observe: session => session.record?.fallbackReason ? { state: 'idle', background: { known: true, count: 0 } } : session.record ? { state: session.record.runtime.snapshot().state,
       pending: [...session.record.inputs.values()].some(status => status === 'queued'),
-      background: session.record.runtime.activity?.() || { known: false, count: null } } : observeTerminal(session),
+      background: session.record.runtime.activity?.() || { known: true, count: 0 } } : observeTerminal(session),
     publish: (session, state) => {
       let stream = session.record?.stream || terminalStreams.get(session.spec.terminalId);
       if (!stream || stream.runtimeSessionId !== session.spec.runtimeSessionId) { stream = eventStream(session.spec); terminalStreams.set(session.spec.terminalId, stream); }
@@ -214,19 +212,20 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       } };
     },
   });
-  let reconcileQueued = false;
-  function reconcile() {
+  let reconcileQueued = false, retryRequested = false;
+  function reconcile(retryFailed = false) {
+    retryRequested ||= retryFailed;
     if (reconcileQueued) return;
-    reconcileQueued = true; queueMicrotask(() => { reconcileQueued = false; switches.reconcile(); });
+    reconcileQueued = true; queueMicrotask(() => { reconcileQueued = false; const retry = retryRequested; retryRequested = false; switches.reconcile(retry); });
   }
-  const unsubscribeAvailability = claude.onAvailabilityChange?.(reconcile);
+  const unsubscribeAvailability = claude.onAvailabilityChange?.(() => reconcile());
   return { start,
     async send(id, runtimeSessionId, message) {
       const record = current(id, runtimeSessionId);
       if (record.inputs.has(message.clientMessageId)) return { status: record.inputs.get(message.clientMessageId) };
       if (switches.state(id)?.phase && switches.state(id).phase !== 'stable') return unsent(record, message, 'switch_in_progress');
       if (record.spec.agent === 'claude') {
-        const selected = selection(record.spec, record.runtime);
+        const selected = selection(record.spec, record.runtime, false, true);
         if (selected.path !== 'api') { reconcile(); return unsent(record, message, selected.reason || 'api_unavailable'); }
       }
       switches.input(id, runtimeSessionId);
@@ -277,16 +276,16 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         snapshot[agent].next = nextPath(agent, config, agent === 'claude' ? claude.apiState(config.monthlyBudgetUsd, projectId) : null, cli[agent]);
         snapshot[agent].limits ||= structuredClone(limits[agent] || null);
       }
-      return { ...claude.usage.summary(), budgetUsd: config.monthlyBudgetUsd, agents: snapshot, switches: { waiting: switches.waiting() }, lastSwitch };
+      return { ...claude.usage.summary(), budgetUsd: config.monthlyBudgetUsd, agents: snapshot, switches: { waiting: switches.waiting() }, lastSwitch: null };
     },
     keyClear() {
       // Retain an in-memory rollback capability before deleting the saved key, even for a lazy idle query.
       for (const record of sessions.values()) if (record.spec.agent === 'claude') { try { record.rollbackFactory ||= record.runtime.checkpoint?.(); } catch {} }
       const result = claude.credentials.clear();
       for (const record of sessions.values()) record.runtime.policyChanged?.();
-      reconcile(); return result;
+      reconcile(true); return result;
     },
-    keySave(key) { const result = claude.credentials.save(key); for (const record of sessions.values()) record.rollbackFactory = null; reconcile(); return result; },
+    keySave(key) { const result = claude.credentials.save(key); for (const record of sessions.values()) record.rollbackFactory = null; reconcile(true); return result; },
     reconcile, observe: id => switches.observe(id), input: (id, runtimeSessionId) => switches.input(id, runtimeSessionId),
     failed: (id, runtimeSessionId) => switches.failed(id, runtimeSessionId),
     switchState: id => switches.state(id),

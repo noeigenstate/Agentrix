@@ -19,17 +19,19 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
     if (closed || entry.cancelled || entry.state.changeId !== version || entry.handoff?.changeId === version) return;
     entry.failed = version;
     let reason = '未能接收输入草稿，已保留原输入界面，请重试切换。';
-    if (entry.recovery) {
+    const recovering = !!entry.recovery;
+    if (recovering) {
       reason = '原会话恢复失败，草稿已保留，请重新启动会话。';
       await retire(entry.session, reason); entry.recovery = null;
     }
-    if (entry.state.changeId === version) update(entry, { phase: 'stable', requestId: null, reason });
+    if (entry.state.changeId === version) update(entry, { phase: 'stable', requestId: null, reason, outcome: recovering ? 'stopped' : 'failed' });
   }
   function kick(entry) {
     if (entry.cancelled) return;
     if (closed || entry.task) { entry.again = true; return; }
     entry.task = Promise.resolve().then(() => advance(entry)).catch(() => {
-      update(entry, { phase: 'stable', requestId: null, reason: '运行方式切换失败，已保留原会话。' });
+      entry.failed = entry.state.changeId;
+      update(entry, { phase: 'stable', requestId: null, reason: '运行方式切换失败，已保留原会话。', outcome: 'failed' });
     }).finally(() => {
       entry.task = null;
       if (entry.again && !closed) { entry.again = false; kick(entry); }
@@ -44,7 +46,7 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
     if (entry.unavailable && entry.session.record) {
       if (activity.state !== 'idle') { update(entry, { phase: 'waiting-turn', requestId: null, reason: 'API 路径已不可用，本轮结束后停止会话。' }); return; }
       const result = await retire(entry.session, entry.unavailable); clearTimers(entry);
-      update(entry, { phase: 'stable', requestId: null, reason: result?.reason || 'API 路径已不可用，会话已停止。' }); remove(entry); return;
+      update(entry, { phase: 'stable', requestId: null, reason: result?.reason || 'API 路径已不可用，会话已停止。', outcome: 'stopped' }); remove(entry); return;
     }
     if (state.current === state.target) {
       if (state.phase !== 'stable') update(entry, { phase: 'stable', requestId: null, reason: null });
@@ -95,7 +97,8 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
       const recovered = !!entry.recovery;
       entry.previous = recovered || entry.inputStarted ? null : source;
       entry.recovery = null;
-      update(entry, { current: state.target, phase: 'stable', reason: recovered ? '新运行方式连接失败，已恢复原会话。' : result?.reason || null, requestId: null });
+      update(entry, { current: state.target, phase: 'stable', reason: recovered ? '新运行方式连接失败，已恢复原会话。' : result?.reason || null, requestId: null,
+        outcome: recovered ? 'restored' : 'switched' });
       if (entry.pendingFailure && !entry.inputStarted) { entry.pendingFailure = false; recover(entry); }
     } catch {
       if (prepared) await prepared.cancel();
@@ -107,22 +110,23 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
         if (entry.retries >= maxRetries) {
           await retire(entry.session, '原会话恢复失败，草稿已保留，请重新启动会话。');
           entry.failed = version; entry.recovery = null;
-          update(entry, { phase: 'stable', requestId: null, reason: '原会话恢复失败，草稿已保留，请重新启动会话。' }); return;
+          update(entry, { phase: 'stable', requestId: null, reason: '原会话恢复失败，草稿已保留，请重新启动会话。', outcome: 'stopped' }); return;
         }
         update(entry, { phase: 'rolling-back', requestId: null, reason: '正在重试恢复原会话，草稿已保留。' });
         clearTimeout(entry.retry); entry.retry = setTimeout(() => kick(entry), retryMs * 2 ** (entry.retries - 1)); entry.retry.unref?.(); return;
       }
       entry.failed = version;
-      update(entry, { phase: 'stable', requestId: null, reason: '运行方式切换失败，已保留原会话。' });
+      update(entry, { phase: 'stable', requestId: null, reason: '运行方式切换失败，已保留原会话。', outcome: 'failed' });
     }
   }
   function recover(entry) {
+    entry.rejectedTarget = entry.state.target;
     entry.recovery = entry.previous;
     entry.previous = null; entry.choice = 'now'; entry.handoff = null; entry.retries = 0;
     update(entry, { changeId: ++changeId, target: entry.recovery.path, phase: 'preparing', requestId: null, reason: '新运行方式连接失败，正在恢复原会话。' });
     kick(entry);
   }
-  function reconcile() {
+  function reconcile(retryFailed = false) {
     if (closed) return;
     const live = new Set();
     for (const session of list()) {
@@ -131,16 +135,17 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
       let entry = entries.get(id);
       if (entry && entry.session.identity !== session.identity && !entry.task) { clearTimers(entry); entries.delete(id); entry = null; }
       const target = entry?.recovery ? { path: entry.recovery.path } : choose(session);
+      if (entry?.state.outcome === 'restored' && !retryFailed && target.path === entry.rejectedTarget) { entry.session = session; continue; }
       if (!entry) {
         entry = { session, unavailable: target.path ? null : target.reason, state: { changeId: ++changeId, current: session.path, target: target.path || session.path, phase: 'stable',
           background: { known: false, count: null }, requestId: null, reason: target.path ? null : target.reason } };
         entries.set(id, entry);
       } else {
-        const retryFailed = entry.failed === entry.state.changeId && entry.state.phase === 'stable' && entry.state.current !== entry.state.target;
-        if (!retryFailed && entry.state.target === (target.path || session.path) && entry.unavailable === (target.path ? null : target.reason)) { entry.session = session; kick(entry); continue; }
+        const retry = retryFailed && entry.failed === entry.state.changeId && entry.state.phase === 'stable' && entry.state.current !== entry.state.target;
+        if (!retry && entry.state.target === (target.path || session.path) && entry.unavailable === (target.path ? null : target.reason)) { entry.session = session; kick(entry); continue; }
         clearTimers(entry); entry.unavailable = target.path ? null : target.reason;
         entry.choice = entry.recovery ? 'now' : null; entry.handoff = null; entry.session = session;
-        entry.state = { ...entry.state, changeId: ++changeId, target: target.path || entry.state.current, requestId: null, reason: target.path ? null : target.reason };
+        entry.state = { ...entry.state, changeId: ++changeId, target: target.path || entry.state.current, requestId: null, reason: target.path ? null : target.reason, outcome: undefined };
       }
       kick(entry);
     }
@@ -150,6 +155,7 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
     reconcile,
     observe(id) { const entry = entries.get(id); if (entry && entry.state.phase !== 'stable') kick(entry); },
     state: id => entries.get(id)?.state || null,
+    retained: id => { const entry = entries.get(id); return !!entry && (entry.failed === entry.state.changeId || entry.state.outcome === 'restored') && entry.state.phase === 'stable' && entry.state.current === 'api'; },
     handoff: id => entries.get(id)?.handoff || null,
     recovering: id => !!entries.get(id)?.recovery,
     frozen: id => ['preparing', 'switching', 'rolling-back'].includes(entries.get(id)?.state.phase),

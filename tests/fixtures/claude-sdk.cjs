@@ -27,7 +27,7 @@ function fakeSdk({ auto = true, source = 'ANTHROPIC_API_KEY', preflightSource = 
         }
         if (auto) {
           current.put({ type: 'assistant', uuid: randomUUID(), user_message_uuid: input.uuid, message: { id: randomUUID(), content: [{ type: 'text', text: 'fake answer' }] } });
-          current.put({ type: 'result', uuid: randomUUID(), user_message_uuid: input.uuid, user_message_uuids: [input.uuid], subtype: 'success', queued_turn_count: 0,
+          current.put({ type: 'result', uuid: randomUUID(), user_message_uuid: input.uuid, user_message_uuids: [input.uuid], subtype: 'success', terminal_reason: 'completed', queued_turn_count: 0,
             total_cost_usd: ++count * 0.1, modelUsage: { fake: { inputTokens: count * 10, cacheReadInputTokens: 2, cacheCreationInputTokens: 3, outputTokens: count * 4, contextWindow: 100 } } });
         }
       }

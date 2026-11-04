@@ -3,9 +3,9 @@ const { spawn, execFile } = require('node:child_process');
 const { randomUUID, createHash } = require('node:crypto');
 const { homedir } = require('node:os');
 const { createRpc } = require('./rpc.cjs');
-const { createEvents, itemPayload } = require('./events.cjs');
+const { createEvents, itemPayload, turnCompletion } = require('./events.cjs');
 const { createRequests } = require('./requests.cjs');
-const { mergeLimits, accountConnection } = require('./account.cjs');
+const { mergeLimits, accountConnection, restrictedLimits } = require('./account.cjs');
 const { assertCompatible, probeCapabilities } = require('./compatibility.cjs');
 const { codexExecutable } = require('../agents/codex-account-usage.cjs');
 const { workerEnvironment } = require('./environment.cjs');
@@ -32,7 +32,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
     limits: scope => scopes.get(scope) || null,
     create(initialSpec, emit) {
       const spec = { ...initialSpec, runtimeSessionId: initialSpec.runtimeSessionId || randomUUID() };
-      const events = createEvents(spec, emit, now), receipts = new Map(), finished = new Set();
+      let currentUsage = null;
+      const events = createEvents(spec, event => { if (event.type === 'usage.updated') currentUsage = event.payload; emit(event); }, now), receipts = new Map(), finished = new Set();
       let rpc, child, requests, state = 'stopped', closed = false, sending = Promise.resolve(), origin = 'user', clientMessageId = null;
       let lockKey, active = false, threadResponse, accountGeneration = 0, limitsRead = null;
       let accountRead = null;
@@ -46,7 +47,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       function started(turn) {
         if (!turn || typeof turn.id !== 'string') throw Object.assign(new Error('invalid_turn'), { uncertain: true });
         if (finished.has(turn.id) || active && events.binding.turnId === turn.id) return;
-        events.binding.turnId = turn.id; active = true;
+        events.binding.turnId = turn.id; active = true; currentUsage = null; events.beginTurn();
         events.publish('turn.started', { origin, clientMessageId }); setState('running');
       }
       function notification(method, params) {
@@ -57,7 +58,12 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           const turn = params.turn;
           if (!turn || typeof turn.id !== 'string' || finished.has(turn.id) || turn.id !== events.binding.turnId) return;
           finished.add(turn.id); active = false; requests.cancelAll();
-          events.publish('turn.completed', { status: ['completed', 'failed', 'interrupted'].includes(turn.status) ? turn.status : 'failed', error: turn.error ? 'Codex 本轮执行失败' : null });
+          const outcome = turnCompletion(turn, currentUsage);
+          if (['usageLimitExceeded', 'rateLimitExceeded'].includes(outcome.terminalReason)) {
+            const scope = spec.scopeId || spec.runtimeSessionId, limit = restrictedLimits(scopes.get(scope), outcome.terminalReason === 'usageLimitExceeded' ? 'spend_limit' : 'rate_limited', scope, now());
+            scopes.set(scope, limit); events.publish('limits.updated', limit);
+          }
+          events.publish('turn.completed', outcome);
           setState('idle');
         } else if (method === 'serverRequest/resolved') requests.resolved(params.requestId);
         else if (method === 'account/rateLimits/updated') {
@@ -203,7 +209,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       }
       return { start: override => open(false, override), resume: override => open(true, override), send, interrupt,
         answer: (id, answer) => requests.answer(id, answer), snapshot: () => ({ ...events.snapshot(), state, requests: requests?.snapshot() || [] }), close,
-        readLimits, readAccount,
+        readLimits, readAccount, activity: events.activity,
         readUsage: () => rpc.request('account/usage/read', {}),
         history: cursor => rpc.request('thread/turns/list', { threadId: events.binding.providerSessionId, cursor: cursor || null, limit: 50, sortDirection: 'desc', itemsView: 'full' }),
         get pid() { return child?.pid; }, get threadResponse() { return threadResponse; },

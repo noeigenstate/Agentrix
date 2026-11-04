@@ -6,6 +6,7 @@ export type SwitchState = {
   changeId: number; current: SwitchPath; target: SwitchPath;
   phase: 'stable' | 'waiting-turn' | 'awaiting-choice' | 'waiting-background' | 'preparing' | 'switching' | 'rolling-back';
   background: { count: number | null; known: boolean }; requestId: string | null; reason: string | null;
+  outcome?: 'switched' | 'failed' | 'restored' | 'stopped';
 };
 export type NativePendingInput = { clientMessageId: string; text: string; images?: string[] };
 export type NativeDraft = { version: number; text: string; images: string[]; undelivered: NativePendingInput[] };
@@ -14,13 +15,19 @@ export type NativeHandoffReceipt = { changeId: number; version: number; accepted
 export type AgentItemKind = 'user-message' | 'agent-message' | 'reasoning-summary' | 'command' | 'file-change' | 'tool' | 'plan' | 'web' | 'other';
 export type AgentItemStatus = 'in-progress' | 'running' | 'pending' | 'completed' | 'failed' | 'interrupted';
 export type RoutingValues = { model: string | null; effort: string | null; fast: boolean | null };
-export type UsagePayload = { input: number | null; cachedInput: number | null; cacheWrite: number | null; output: number | null; reasoning: number | null; contextWindow: number | null; costUsdMicros: number | null; costEstimated: boolean | null };
+export type TokenCounts = { input: number | null; cachedInput: number | null; cacheWrite: number | null; output: number | null; reasoning: number | null };
+export type UsagePayload = TokenCounts & { contextWindow: number | null; costUsdMicros: number | null; costEstimated: boolean | null; contextTokens?: number | null; round?: TokenCounts | null };
+export type TurnCompletion = { status: 'completed' | 'failed' | 'interrupted'; error: string | null;
+  terminalReason?: string | null; message?: string | null; durationMs?: number | null; apiDurationMs?: number | null;
+  costUsdMicros?: number | null; costEstimated?: boolean | null; tokens?: TokenCounts | null };
 export type LimitsPayload = {
   scopeId: string; billingRoute: 'api' | 'subscription' | 'unknown'; observedAtMs: number | null;
   state: 'ready' | 'stale' | 'loading' | 'unavailable' | 'error';
   limitsById: Record<string, { primary?: { usedPercent: number | null; windowDurationMins: number | null; resetsAtMs: number | null } | null; secondary?: { usedPercent: number | null; windowDurationMins: number | null; resetsAtMs: number | null } | null }>;
   resetCredits: { availableCount: number | null } | null;
   ordinaryUsageAllowed: boolean | null; source: string;
+  providerStatus?: 'allowed' | 'allowed_warning' | 'rejected';
+  notice?: { code: 'credits_required' | 'rate_limited' | 'spend_limit'; message: string; resetsAtMs: number | null } | null;
 };
 export type RequestQuestion = { id: string; question: string; header?: string; options?: { label: string; description?: string }[]; multiSelect?: boolean; isSecret?: boolean; allowFreeText?: boolean };
 export type RequestPayload = {
@@ -32,7 +39,7 @@ export type AgentEventPayloads = {
   'switch.updated': SwitchState;
   'session.state': { state: SessionState; reason: string | null };
   'turn.started': { origin: 'user' | 'automatic' | 'resume'; clientMessageId: string | null };
-  'turn.completed': { status: 'completed' | 'failed' | 'interrupted'; error: string | null };
+  'turn.completed': TurnCompletion;
   'item.upsert': { kind: AgentItemKind; status: AgentItemStatus; content: Record<string, unknown> };
   'item.delta': { channel: 'text' | 'output' | 'reasoning-summary' | 'plan'; text: string; index?: number };
   'turn.diff': { diff: string };
@@ -59,4 +66,4 @@ export type NativeAnswer = { decision: 'allow' | 'deny' } | { answers: Record<st
   | { switch: { changeId: number; requestId: string; action: 'wait' | 'now' } } | { handoff: NativeHandoff };
 export type NativeSnapshot = { runtimeSessionId: string; lastSequence: number; events: AgentEvent[]; state: SessionState; switchState?: SwitchState; handoff?: NativeHandoff };
 export type AgentPathState = { path: 'api' | 'native' | 'terminal' | null; reason: string | null; limits: LimitsPayload | null };
-export type NativeUsage = { month: string; todayUsdMicros: number | null; monthUsdMicros: number | null; estimated: true; budgetUsd: number | null; agents: Record<AgentProvider, AgentPathState>; switches: { waiting: number }; lastSwitch: { at: number; agent: AgentProvider; from: string | null; to: string; reason: string | null } | null };
+export type NativeUsage = { month: string; todayUsdMicros: number | null; monthUsdMicros: number | null; estimated: true; budgetUsd: number | null; agents: Record<AgentProvider, AgentPathState>; switches: { waiting: number }; lastSwitch: null };

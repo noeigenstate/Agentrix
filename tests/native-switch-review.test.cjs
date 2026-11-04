@@ -24,7 +24,7 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
   const host = { terminalId: 't', projectId: 'p', agent: 'claude', codexActive: true, sessionId: 'pty', status: 'codex',
     nativeRuntimeSessionId: 'r', nativeStructured: native, nativeSpec: {}, cliState: { sessionId: 'pty', state: 'idle' },
     submissions: new SubmissionTracker(), promptQueue: new PromptQueue(), completionWork: new CompletionWork(), approval: { invalidate() {} } };
-  const context = { sessions: new Map([['t', host]]), store: { findTerminal: () => ({ project, record: { restore: {} } }) },
+  const context = { createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage, sessions: new Map([['t', host]]), store: { findTerminal: () => ({ project, record: { restore: {} } }) },
     nativeSpecs: new Map(), randomUUID: require('node:crypto').randomUUID, wholeThread: value => !!value, launchPlans: new Map(), quitting: false,
     fs, process, clearTimeout, readingHistory: { close() {} }, stopUsageAccount() {}, endSkillSession() {}, skills: { endSession() {} }, syncDashboardLive() {}, report(error) { throw error; },
     InputGate, isTerminalResponse, nativeSessions: null, scheduleState() {}, broadcast() {}, setTimeout, applyActivity() {}, findProject: () => project,
@@ -78,8 +78,10 @@ test('F1 real InputGate launch/escape traffic does not invent a draft in main or
   f.host.gate.afterPrompt('claude --resume synthetic\r'); f.host.gate.release(); f.host.gate.input('\x1b'); f.host.gate.input('\x1b[C');
   assert.equal(f.context.observeSwitchTerminal({ identity: f.host }).draftBlocked, false);
   f.host.submissions.write('real draft'); assert.equal(f.context.observeSwitchTerminal({ identity: f.host }).draftBlocked, true);
+  f.host.completionWork.start('observed-job', Date.now()); assert.equal(f.context.observeSwitchTerminal({ identity: f.host }).background.count, 1);
+  f.host.completionWork.finish('observed-job'); assert.deepEqual(JSON.parse(JSON.stringify(f.context.observeSwitchTerminal({ identity: f.host }).background)), { known: true, count: 0 });
   f.host.submissions.write('\x15'); await f.settings({ claudePath: 'api-only' }); await tick();
-  assert.equal(f.facade.switchState('t').phase, 'awaiting-choice');
+  assert.equal(f.facade.switchState('t').phase, 'preparing', 'G5 an observed idle terminal without tasks switches directly');
 });
 
 test('F1 real main request observations keep native dialog keys separate from an actual draft', async t => {
@@ -161,7 +163,7 @@ test('F2 missing or rejected handoff times out through the real facade/router an
 });
 
 test('F3 main unknown background can wait and later switch now using the same request', async t => {
-  const f = await fixture(t); await f.settings({ claudePath: 'api-only' }); await tick();
+  const f = await fixture(t); f.host.completionWork.uncertain = true; await f.settings({ claudePath: 'api-only' }); await tick();
   const requestId = f.facade.switchState('t').requestId;
   assert.equal(f.answer('wait').accepted, true); await tick();
   assert.equal(f.facade.switchState('t').requestId, requestId); assert.equal(f.answer('now').accepted, true);

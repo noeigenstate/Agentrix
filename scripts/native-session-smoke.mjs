@@ -199,6 +199,11 @@ async function runtimeSmoke(output, stages) {
         const completed = await stage(`${agent} read completion`, () => page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId));
         assert.equal(completed.value.events.findLast(event => event.type === 'turn.completed').payload.status, 'completed', `${agent} turn must not hit a stale cumulative query cap`);
         if (text === 'first') {
+          const state = await stage(`${agent} read native terminal usage`, () => page.evaluate(() => window.agentrix.getState()));
+          const usage = state.value.projects[0].terminals.find(item => item.id === terminalId).agentUsage;
+          assert.deepEqual(usage.context, agent === 'claude' ? { used: 3, window: 100 } : { used: 13, window: 456789 });
+          assert.deepEqual(usage.round, agent === 'claude' ? { input: 1, cached: 0, output: 2 } : { input: 10, cached: 2, output: 3 });
+          checks.push(`${agent} structured usage reaches terminal.agentUsage with the reported context window and round tokens`);
           assert.equal((await stage(`${agent} stop before resume`, () => page.evaluate(p => window.agentrix.nativeSession.stop(p.terminalId, p.id), { terminalId, id }))).ok, true);
           const resumed = await stage(`${agent} resume`, () => page.evaluate(p => window.agentrix.nativeSession.start(p.terminalId, { agent: p.agent, resume: true }), { terminalId, agent }));
           assert.equal(resumed.ok, true, JSON.stringify(resumed)); id = resumed.value.runtimeSessionId;
@@ -230,6 +235,31 @@ async function runtimeSmoke(output, stages) {
         assert.equal(after.value.events.findLast(event => event.providerSessionId)?.providerSessionId, provider);
         assert.equal(after.value.events.some(event => event.type === 'turn.started' && !event.replay), false);
         checks.push('actual main SDK to PTY terminal to SDK, authenticated SessionStart, InputGate, activation and persisted history without a new turn');
+        await stage('G1 failed PTY switch retains a usable API host without retry on send', async () => {
+          const launches = async () => (await fs.readFile(path.join(runtime, 'claude-wire.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
+            .filter(row => row.spawn && !row.args.some(arg => arg === '--input-format' || arg.startsWith('--input-format='))).length;
+          const previousLaunches = await launches();
+          await fs.writeFile(path.join(runtime, 'exit-terminal'), 'owned offline failure');
+          await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'terminal-only' }));
+          await waitFor(async () => {
+            const value = (await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId)).value;
+            if (value?.switchState?.phase === 'preparing') await page.evaluate(p => window.agentrix.nativeSession.answer(p.terminalId, p.runtimeSessionId, `handoff-${p.changeId}`,
+              { handoff: { changeId: p.changeId, draft: { version: 1, text: '', images: [], undelivered: [] } } }), { terminalId, runtimeSessionId: value.runtimeSessionId, changeId: value.switchState.changeId });
+            return value?.switchState?.phase === 'stable' && value.switchState.outcome === 'failed';
+          }, 'failed terminal switched back to API', 20000);
+          const kept = (await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId)).value;
+          id = kept.runtimeSessionId; assert.equal(kept.switchState.current, 'api');
+          const messageId = randomUUID();
+          const receipt = await page.evaluate(p => window.agentrix.nativeSession.send(p.terminalId, p.id, p.messageId, 'AFTER_FAILED_SWITCH'), { terminalId, id, messageId });
+          assert.equal(receipt.ok, true); assert.notEqual(receipt.value.status, 'rejected');
+          await waitFor(async () => (await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId)).value.events.some(event => event.type === 'input.receipt' && event.payload.clientMessageId === messageId && event.payload.status === 'consumed'), 'retained API consumes the new message', 10000);
+          assert.equal(await launches(), previousLaunches + 1, 'sending cannot start a second failed terminal');
+          const host = (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals.find(item => item.id === terminalId);
+          assert.equal(host.nativeMode, 'claude-sdk'); assert.equal(host.status, 'codex');
+          await fs.unlink(path.join(runtime, 'exit-terminal'));
+          await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-only' }));
+        }, 30000);
+        checks.push('G1 actual main rolls back an immediately exiting PTY; the next input stays on API and starts no second TUI');
       }
       const hold = await stage(`${agent} send active turn to stop`, () => page.evaluate(p => window.agentrix.nativeSession.send(p.terminalId, p.id, p.messageId, 'HOLD'), { terminalId, id, messageId: randomUUID() }));
       assert.equal(hold.ok, true);
@@ -276,10 +306,10 @@ async function runtimeSmoke(output, stages) {
 }
 
 async function run(output, stages) {
-  const profile = path.join(output, 'profile'), project = { id: randomUUID(), name: '原生会话', path: path.join(output, 'project'), kind: 'local', restore: { terminal: false, codex: false } };
-  for (const dir of [profile, project.path]) await fs.mkdir(dir, { recursive: true });
+  const profile = path.join(output, 'profile'), home = path.join(output, 'ui-home'), project = { id: randomUUID(), name: '原生会话', path: path.join(output, 'project'), kind: 'local', restore: { terminal: false, codex: false } };
+  for (const dir of [profile, home, project.path]) await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, fontSize: 14 } }));
-  const env = { ...isolatedEnvironment(output), ...displayEnvironment(), AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+  const env = { ...isolatedEnvironment(home), ...displayEnvironment(), AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
   const errors = [], checks = [];
   let app;
   try {
@@ -289,7 +319,7 @@ async function run(output, stages) {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1600, 900));
     await page.waitForSelector('.project-panel');
     const terminalId = (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals[0].id;
-    const card = page.locator(`[data-terminal-id="${terminalId}"]`), view = card.locator('.native-view'), box = view.locator('textarea');
+    const card = page.locator(`[data-terminal-id="${terminalId}"]`), view = card.locator('.reading-view[data-native-session]'), box = view.locator('textarea');
 
     // The contract's event envelope (contract §1); one stream, sequence counting up.
     let sequence = 0;
@@ -306,10 +336,10 @@ async function run(output, stages) {
     const reply = event('item.delta', { channel: 'text', text: 'Done: it passes now.' }, { itemId: 'm1' });
     await emit([...opening, reply, event('request.opened', { requestId: 'r1', kind: 'command', blocking: true, title: 'Run rm -rf build', preview: 'rm -rf build', actions: [], providerData: {} })]);
     await view.waitFor({ timeout: 15000 });
-    assert.match(await view.locator('.native-runtime').innerText(), /Claude · API/);
     await waitFor(async () => (await view.locator('.reading-user p').allInnerTexts()).includes('fix the test'), 'your message is drawn');
     await waitFor(async () => (await view.locator('.reading-assistant').allInnerTexts()).some(text => text.includes('it passes now')), 'the agent’s words are drawn');
-    assert.match(await view.locator('.native-step-body').first().innerText(), /FAIL a\.test\.js/, 'a running command is open with its output');
+    await view.locator('.reading-tools-head').first().click();
+    assert.match(await view.locator('.reading-tool-output').first().innerText(), /FAIL a\.test\.js/, 'an opened tool group shows command output');
     const request = view.locator('.native-request');
     await request.getByRole('button', { name: '允许本次', exact: true }).waitFor(); await request.getByRole('button', { name: '拒绝', exact: true }).waitFor();
     assert.equal(await box.isEnabled(), true, 'the message box stays usable while the agent works');
@@ -329,7 +359,7 @@ async function run(output, stages) {
     await emit([{ ...reply, replay: true }, event('request.resolved', { requestId: 'r1', resolution: 'cancelled', reason: null }), event('turn.completed', { status: 'completed', error: null }), event('session.state', { state: 'idle', reason: null })]);
     await waitFor(async () => (await view.locator('.native-request').count()) === 0, 'the resolved request is gone');
     assert.equal(await view.locator('.reading-assistant').count(), assistantBefore, 'a replayed event adds nothing');
-    assert.equal(await view.locator('.native-stop').count(), 0, 'no Stop once idle');
+    assert.equal(await view.locator('button[title="中断（Esc）"]').count(), 0, 'no Stop once idle');
     checks.push('replay adds nothing; resolved request leaves; Stop only while working');
 
     // Expanded: the activity pane shows the path and API usage card.
@@ -359,6 +389,7 @@ async function run(output, stages) {
   } finally {
     await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ checks, errors }, null, 2));
     await closeSmokeApplication(app, stages);
+    for (const directory of [profile, home, project.path]) await fs.rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 }
 

@@ -8,8 +8,9 @@ function snapshotOf(result) {
   const models = Object.values(result.modelUsage || {});
   const sum = field => models.length && models.every(model => count(model[field]) !== null)
     ? count(models.reduce((total, model) => total + model[field], 0)) : null;
+  const windows = new Set(models.map(model => count(model.contextWindow)));
   return { input: sum('inputTokens'), cachedInput: sum('cacheReadInputTokens'), cacheWrite: sum('cacheCreationInputTokens'),
-    output: sum('outputTokens'), reasoning: null, contextWindow: count(models[0]?.contextWindow),
+    output: sum('outputTokens'), reasoning: null, contextWindow: windows.size === 1 ? [...windows][0] : null,
     costUsdMicros: micros(result.total_cost_usd), costEstimated: true };
 }
 function validUsage(value) {

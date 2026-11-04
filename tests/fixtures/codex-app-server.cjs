@@ -34,8 +34,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     notify('item/agentMessage/delta', { turnId, itemId: 'message-' + turns, delta: 'partial 汉字' });
     if (mode === 'approval') send({ id: 91, method: 'item/commandExecution/requestApproval', params: { threadId, turnId, itemId: 'command', approvalId: 'a', command: 'echo example' } });
     if (!['hold', 'approval', 'worker'].includes(mode)) setTimeout(() => {
+      if (mode === 'structured') notify('thread/tokenUsage/updated', { tokenUsage: { total: { inputTokens: 10, cachedInputTokens: 2, cacheWriteInputTokens: 0, outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 13 },
+        last: { inputTokens: 10, cachedInputTokens: 2, cacheWriteInputTokens: 0, outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 13 }, modelContextWindow: 456789 } });
       notify('item/completed', { turnId, item: { type: 'agentMessage', id: 'message-' + turns, text: 'final answer', phase: 'final_answer' } });
-      notify('turn/completed', { turn: { id: turnId, status: 'completed' } });
+      notify('turn/completed', { turn: { id: turnId, status: mode === 'spend-limit' ? 'failed' : 'completed', durationMs: mode === 'structured' ? 123 : null,
+        ...(mode === 'spend-limit' ? { error: { codexErrorInfo: 'usageLimitExceeded', message: 'Never expose this raw provider error' } } : {}) } });
     }, 60);
     return;
   } else if (request.method === 'turn/steer') {
