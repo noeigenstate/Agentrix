@@ -12,12 +12,18 @@ const { workerEnvironment } = require('./environment.cjs');
 
 const occupied = new Map();
 function stopProcess(child) {
-  if (!child || child.exitCode != null || child.signalCode != null) return;
-  if (process.platform === 'win32' && child.pid) {
-    execFile('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 2000 }, () => {});
-  } else {
-    try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
-  }
+  if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const closed = () => { clearTimeout(timer); resolve(); };
+    const timer = setTimeout(() => { child.removeListener('close', closed); reject(new Error('process_stop_timeout')); }, 3000);
+    child.once('close', closed);
+    if (process.platform === 'win32' && child.pid) {
+      execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'],
+        { windowsHide: true, timeout: 2000 }, error => { if (error && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+    } else {
+      try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+    }
+  });
 }
 
 function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, now = Date.now } = {}) {
@@ -93,11 +99,14 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (resuming) bind(threadId);
           const options = { cwd: spec.cwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
             config: { model_reasoning_effort: spec.effort || 'high' },
-            ...(spec.policy?.sandbox || spec.readOnly || spec.roundtable ? { sandbox: spec.policy?.sandbox || 'read-only' } : {}),
+            ...((spec.readOnly || spec.roundtable) ? { sandbox: 'read-only' }
+              : spec.policy?.sandbox ? { sandbox: spec.policy.sandbox }
+                : spec.owner === 'dispatch' ? { sandbox: 'workspace-write' } : {}),
             ...(spec.policy?.approvalPolicy ? { approvalPolicy: spec.policy.approvalPolicy } : {}), approvalsReviewer: 'user' };
           const result = await rpc.request(resuming ? 'thread/resume' : 'thread/start', { ...options, ...(resuming ? { threadId } : {}) });
           if (typeof result?.thread?.id !== 'string' || resuming && result.thread.id !== threadId || result.cwd && path.resolve(result.cwd) !== path.resolve(spec.cwd)) throw new Error('invalid_thread');
           if ((spec.readOnly || spec.roundtable) && result.sandbox?.type !== 'readOnly') throw new Error('sandbox_mismatch');
+          if (spec.owner === 'dispatch' && !spec.readOnly && !spec.roundtable && !spec.policy?.sandbox && result.sandbox?.type !== 'workspaceWrite') throw new Error('sandbox_mismatch');
           if (resuming && result.thread.status?.type === 'active') throw new Error('thread_in_use');
           bind(result.thread.id); threadResponse = result;
           events.publish('routing.updated', { declared: { model: spec.model ?? null, effort: spec.effort ?? null, fast: spec.fast ?? null },
@@ -161,7 +170,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         if (closed) return;
         closed = true; setState('stopping'); requests?.cancelAll();
         if (active && rpc) { try { await rpc.request('turn/interrupt', { threadId: events.binding.providerSessionId, turnId: events.binding.turnId }, 250); } catch {} }
-        rpc?.close(); stopProcess(child);
+        rpc?.close(); await stopProcess(child);
         if (lockKey && occupied.get(lockKey) === spec.runtimeSessionId) occupied.delete(lockKey);
         setState('stopped');
       }

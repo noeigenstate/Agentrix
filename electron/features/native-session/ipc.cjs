@@ -1,4 +1,4 @@
-const { exact, id, text, assert, validImages } = require('./validate.cjs');
+const { exact, id, text, assert, validImages, validSwitchAnswer, validHandoff } = require('./validate.cjs');
 function registerIpc({ handle, router, settings, claude }) {
   const binding = (terminalId, runtimeSessionId) => assert(id(terminalId) && id(runtimeSessionId));
   handle('native:start', (terminalId, options) => { assert(id(terminalId) && exact(options, ['agent', 'resume']) && ['claude', 'codex'].includes(options.agent) && (options.resume === undefined || typeof options.resume === 'boolean')); return router.start(terminalId, options); });
@@ -8,16 +8,18 @@ function registerIpc({ handle, router, settings, claude }) {
   handle('native:stop', (terminalId, runtimeSessionId) => { binding(terminalId, runtimeSessionId); return router.stop(terminalId, runtimeSessionId); });
   handle('native:answer', (terminalId, runtimeSessionId, requestId, answer) => {
     binding(terminalId, runtimeSessionId);
-    assert(id(requestId) && (exact(answer, ['decision']) && ['allow', 'deny'].includes(answer.decision) || exact(answer, ['answers']) && exact(answer.answers, Object.keys(answer.answers || {})) && JSON.stringify(answer).length <= 65536 && Object.values(answer.answers).every(value => typeof value === 'string' || Array.isArray(value) && value.every(part => typeof part === 'string'))));
+    assert(id(requestId) && (validSwitchAnswer(answer) || validHandoff(answer) || exact(answer, ['decision']) && ['allow', 'deny'].includes(answer.decision) || exact(answer, ['answers']) && exact(answer.answers, Object.keys(answer.answers || {})) && JSON.stringify(answer).length <= 65536 && Object.values(answer.answers).every(value => typeof value === 'string' || Array.isArray(value) && value.every(part => typeof part === 'string'))));
+    if (answer.switch) assert(requestId === answer.switch.requestId);
+    if (answer.handoff) assert(requestId === `handoff-${answer.handoff.changeId}`);
     return router.answer(terminalId, runtimeSessionId, requestId, answer);
   });
   handle('native:snapshot', terminalId => { assert(id(terminalId)); return router.snapshot(terminalId); });
   handle('native:settings-get', () => settings.get());
   handle('native:settings-set', patch => settings.set(patch));
-  handle('native:key-save', key => { const result = claude.credentials.save(key); claude.resetAvailability(); return result; });
+  handle('native:key-save', key => router.keySave(key));
   handle('native:key-clear', () => router.keyClear());
   handle('native:key-status', () => claude.credentials.status());
-  handle('native:usage', () => router.usage());
-  handle('native:test-connection', (...args) => { assert(args.length === 0); return router.testConnection(); });
+  handle('native:usage', projectId => { assert(projectId === undefined || id(projectId)); return router.usage(projectId); });
+  handle('native:test-connection', (...args) => { assert(args.length <= 1 && (args[0] === undefined || id(args[0]))); return router.testConnection(args[0]); });
 }
 module.exports = { registerIpc };

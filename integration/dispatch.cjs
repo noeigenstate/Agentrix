@@ -18,7 +18,7 @@ const { matches, snapshot, changedBetween, boundariesFor, repoFiles } = require(
 const { projectTeam, meetingRequest, recordFindings, minutesMarkdown, FINDINGS } = require(path.join(runtime, 'features/team/team.cjs'));
 const { RunInbox, runId, validText } = require(path.join(runtime, 'features/team/inbox.cjs'));
 const { minutesPage } = require(path.join(runtime, 'features/team/minutes-page.cjs'));
-const { TASK_KINDS, taskKind, routingVerdict } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
+const { TASK_KINDS, taskKind, routingVerdict: strictRoutingVerdict } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
 const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
 const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
@@ -119,7 +119,6 @@ function argumentsOf(argv) {
   if (agent === 'claude' && !['plan', 'acceptEdits'].includes(options.permission)) throw new Error('Expected --permission plan or acceptEdits');
   if (agent === 'codex' && options.permission) throw new Error('--permission is only for Claude');
   if (options.resume && !/^[\w-]{1,160}$/.test(options.resume)) throw new Error('Expected a session id for --resume');
-  if (options.resume && options.readOnly) throw new Error('A resumed Codex session keeps its own sandbox; --read-only applies to new sessions');
   if (options.meeting && options.readOnly) throw new Error('A roundtable session must later build; --meeting cannot use --read-only');
   if (options.meeting && options.skipMeeting) throw new Error('--meeting and --skip-meeting cannot be combined');
   if (options.meeting && options.role === '执行' && !options.allow.length) throw new Error('An execution roundtable requires --allow for the agreed scope');
@@ -133,14 +132,21 @@ function argumentsOf(argv) {
   return options;
 }
 
+function routingVerdict(actual, declared) {
+  const aliases = { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', haiku: 'claude-haiku-5-5' };
+  const full = aliases[declared?.model];
+  const model = actual.model?.replace(/\[(?:1m|fast)\]$/i, '').replace(/-\d{8}$/, '');
+  return strictRoutingVerdict(actual, full && model === full ? { ...declared, model: actual.model } : declared);
+}
 function commandOf(options) {
   if (options.agent === 'claude') return ['-p', ...(options.resume ? ['--resume', options.resume] : []), '--model', options.model,
     '--effort', options.effort, '--permission-mode', options.permission, '--output-format', 'stream-json', '--verbose'];
   const settings = ['-m', options.model, '-c', `model_reasoning_effort=${options.effort}`, ...(options.fast ? ['-c', 'service_tier="fast"'] : []), '--json'];
   const images = options.images.flatMap(file => ['-i', file]);
-  // `codex exec resume` keeps the session's own folder and sandbox: it takes no -C or -s, and runs from cwd.
-  if (options.resume) return ['exec', 'resume', options.resume, ...settings, '-o', options.out, ...images, '-'];
-  return ['exec', ...settings, '-C', options.cwd, '-o', options.out, ...images, ...(options.readOnly ? ['-s', 'read-only'] : []), '-'];
+  const sandbox = options.readOnly || options.meeting || ['审查', '调查'].includes(options.role) ? 'read-only' : 'workspace-write';
+  // resume takes no -s. Override the stored roundtable policy through its supported config option.
+  if (options.resume) return ['exec', 'resume', options.resume, ...settings, '-c', `sandbox_mode="${sandbox}"`, '-o', options.out, ...images, '-'];
+  return ['exec', ...settings, '-C', options.cwd, '-o', options.out, ...images, '-s', sandbox, '-'];
 }
 
 // What the worker reads before the brief: the task's shared ledger, the boundaries of the modules it may change, the
@@ -548,7 +554,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   let drained = new Promise(resolve => { drain = resolve; });
   const signal = line => stdout.write(`[dispatch] ${line}\n`);
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
-  const assignment = () => ({ type: 'dispatch-start', id, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
+  const assignment = () => ({ type: 'dispatch-start', id, helperPid: process.pid, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
     ...billing(),
     kind: taskKind(options, roundtable), meeting: admission?.meeting || options.meeting || null, skipMeeting: options.skipMeeting || null,
     cwd: options.cwd, brief: options.brief, out: options.out, sessionId: output.sessionId, startedAt: Date.now() });
@@ -906,7 +912,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       if (controlClient) {
         const spec = { owner: 'dispatch', projectId: bootstrap.projectId, terminalId: bootstrap.projectId, runtimeSessionId: id, runId: id,
           cwd: options.cwd, worktree: options.cwd, model: options.model, effort: options.effort, fast: options.fast,
-          readOnly: options.readOnly || options.permission === 'plan', roundtable, allow: options.allow, env: workerEnv,
+          readOnly: options.readOnly || options.permission === 'plan' || ['审查', '调查'].includes(options.role), roundtable, allow: options.allow, env: workerEnv,
           policy: { approvalPolicy: 'never' },
           providerSessionId: effective.resume || null };
         const completion = new Promise(resolve => { settleNative = resolve; });

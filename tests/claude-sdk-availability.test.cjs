@@ -47,14 +47,14 @@ for (const tokenSource of ['apiKeyHelper', 'ANTHROPIC_AUTH_TOKEN', 'claude.ai', 
   const unsafe = ['apiKeyHelper', 'ANTHROPIC_AUTH_TOKEN'].includes(tokenSource);
   if (unsafe) {
     await assert.rejects(session.send({ clientMessageId: 'm', text: 'unsent' }), error => error.beforeInput === true && error.message.includes(`tokenSource=${tokenSource}`));
-    assert.equal(f.fake.inputs.length, 0); assert.equal(f.factory.apiState(10).status, 'billing_identity_mismatch');
+    assert.equal(f.fake.inputs.length, 0); assert.equal(f.factory.apiState(10, 'p').status, 'billing_identity_mismatch');
     f.factory.resetAvailability();
   } else {
     await session.send({ clientMessageId: 'm', text: 'synthetic work' });
     for (let n = 0; n < 100 && !f.events.some(event => event.type === 'turn.completed'); n++) await new Promise(resolve => setTimeout(resolve, 2));
     assert.equal(f.fake.inputs.length, 1);
   }
-  const result = await f.native.testConnection();
+  const result = await f.native.testConnection('p');
   assert.equal(result.billing.status, unsafe ? 'mismatch' : 'ok'); assert.equal(result.billing.source, 'ANTHROPIC_API_KEY');
   assert.equal(result.path, unsafe ? 'terminal' : 'api');
   if (unsafe) assert.match(result.reason, new RegExp(`tokenSource=${tokenSource}`));
@@ -87,8 +87,8 @@ for (const reset of ['key_save', 'key_clear', 'settings', 'cli_version']) test(`
   const first = await f.native.start('t', { agent: 'claude' });
   await f.native.send('t', first.runtimeSessionId, { clientMessageId: 'm', text: 'unsent' });
   f.advance();
-  assert.equal(f.factory.apiState(10).status, 'billing_identity_mismatch');
-  assert.equal((await f.native.usage()).agents.claude.next.path, 'terminal');
+  assert.equal(f.factory.apiState(10, 'p').status, 'billing_identity_mismatch');
+  assert.equal((await f.native.usage('p')).agents.claude.next.path, 'terminal');
   await f.native.start('next', { agent: 'claude' });
   assert.equal(f.fake.calls.length, 1, 'a later session does not wait for and reject its first message again');
   const workerEvents = [], requests = new Map();
@@ -97,10 +97,10 @@ for (const reset of ['key_save', 'key_clear', 'settings', 'cli_version']) test(`
   assert.equal(workerEvents[0].payload.selected, 'terminal'); assert.equal(f.fake.calls.length, 1);
   if (reset === 'key_save') f.handlers.get('native:key-save')('sk-ant-api03-replacement-offline-only');
   else if (reset === 'key_clear') {
-    await f.handlers.get('native:key-clear')(); assert.equal(f.factory.apiState(10).status, 'no_key'); f.factory.credentials.save(key);
+    await f.handlers.get('native:key-clear')(); assert.equal(f.factory.apiState(10, 'p').status, 'no_key'); f.factory.credentials.save(key);
   } else if (reset === 'settings') f.handlers.get('native:settings-set')({ claudePath: 'api-only' });
   else { f.version('2.1.319'); await f.factory.refreshAvailability(); }
-  assert.equal(f.factory.apiState(10).status, 'ready');
+  assert.equal(f.factory.apiState(10, 'p').status, 'ready');
 });
 
 test('late session identity failures cannot rearm an old-key availability result', async t => {
@@ -112,13 +112,13 @@ test('late session identity failures cannot rearm an old-key availability result
   for (let n = 0; n < 100 && !resolve; n++) await new Promise(done => setTimeout(done, 1));
   f.factory.credentials.save('sk-ant-api03-newer-offline-key');
   resolve({ account: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'apiKeyHelper' } });
-  await assert.rejects(sending, /tokenSource=apiKeyHelper/); assert.equal(f.factory.apiState(10).status, 'ready');
+  await assert.rejects(sending, /tokenSource=apiKeyHelper/); assert.equal(f.factory.apiState(10, 'p').status, 'ready');
 });
 
 test('a connection result for the old saved key cannot rearm availability after a key change during HTTP validation', async t => {
   const f = fixture(t, { sdkOptions: { tokenSource: 'apiKeyHelper' } });
-  const checking = f.factory.testConnection(); f.factory.credentials.save('sk-ant-api03-newer-offline-key');
-  assert.equal((await checking).billing.status, 'mismatch'); assert.equal(f.factory.apiState(10).status, 'ready');
+  const checking = f.factory.testConnection({ projectId: 'p' }); f.factory.credentials.save('sk-ant-api03-newer-offline-key');
+  assert.equal((await checking).billing.status, 'mismatch'); assert.equal(f.factory.apiState(10, 'p').status, 'ready');
 });
 
 test('an SDK exception cannot expose raw text by naming a public billing error code', async t => {
@@ -131,15 +131,64 @@ test('an SDK exception cannot expose raw text by naming a public billing error c
 
 test('a cached identity denial closes a newly created runtime without starting another SDK query', async t => {
   const f = fixture(t, { sdkOptions: { tokenSource: 'apiKeyHelper' } });
-  await f.factory.testConnection();
+  await f.factory.testConnection({ projectId: 'p' });
   const session = f.factory.create(f.spec, () => {});
   await assert.rejects(session.start(), error => error.beforeInput === true && /tokenSource=apiKeyHelper/.test(error.message));
   assert.equal(session.snapshot().state, 'stopped'); assert.equal(f.fake.calls.length, 1); assert.equal(f.fake.inputs.length, 0);
 });
 
 test('rejected key and settings changes do not clear a cached billing mismatch', async t => {
-  const f = fixture(t, { sdkOptions: { tokenSource: 'apiKeyHelper' } }); await f.factory.testConnection();
+  const f = fixture(t, { sdkOptions: { tokenSource: 'apiKeyHelper' } }); await f.factory.testConnection({ projectId: 'p' });
   assert.throws(() => f.factory.credentials.save('invalid'));
   assert.throws(() => f.handlers.get('native:settings-set')({ monthlyBudgetUsd: -1 }));
-  assert.equal(f.factory.apiState(10).status, 'billing_identity_mismatch');
+  assert.equal(f.factory.apiState(10, 'p').status, 'billing_identity_mismatch');
+});
+
+test('N1/N2: a successful scoped connection probe clears only that project and subsequent usage follows it immediately', async t => {
+  const f = fixture(t, { sdkOptions: { tokenSource: 'apiKeyHelper' } });
+  await f.factory.testConnection({ projectId: 'p' }); await f.factory.testConnection({ projectId: 'other' });
+  assert.equal(f.factory.apiState(10, 'p').status, 'billing_identity_mismatch');
+  assert.equal(f.factory.apiState(10, 'other').status, 'billing_identity_mismatch');
+  assert.equal(f.factory.apiState(10, 'third').status, 'ready');
+  const query = f.fake.sdk.query;
+  f.fake.sdk.query = input => ({ ...query(input), initializationResult: async () => ({ account: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'none' } }) });
+  assert.equal((await f.native.testConnection('p')).billing.status, 'ok');
+  assert.equal((await f.native.usage('p')).agents.claude.next.path, 'api');
+  assert.equal((await f.native.usage('other')).agents.claude.next.path, 'terminal');
+  assert.equal(f.fake.inputs.length, 0, 'identity checks never submit user input');
+});
+
+test('N2: concurrent connection tests for different projects never share a pending identity result', async t => {
+  const f = fixture(t); let queries = 0;
+  const query = f.fake.sdk.query;
+  f.fake.sdk.query = input => { const current = ++queries; return { ...query(input), initializationResult: async () => ({ account: {
+    apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: current === 1 ? 'apiKeyHelper' : 'none',
+  } }) }; };
+  const [a, b] = await Promise.all([f.factory.testConnection({ projectId: 'p' }), f.factory.testConnection({ projectId: 'other' })]);
+  assert.equal(a.billing.status, 'mismatch'); assert.equal(b.billing.status, 'ok'); assert.equal(queries, 2);
+  assert.equal(f.factory.apiState(10, 'p').status, 'billing_identity_mismatch'); assert.equal(f.factory.apiState(10, 'other').status, 'ready');
+});
+
+test('N1: a late successful pre-check cannot erase a newer failure, while a fresh successful pre-check clears it', async t => {
+  const f = fixture(t, { sdkOptions: { uniqueSessions: true } }); const first = f.factory.create(f.spec, () => {}), second = f.factory.create({ ...f.spec, terminalId: 'second', runtimeSessionId: 'second' }, () => {});
+  await first.start(); await second.start();
+  let release, count = 0; const query = f.fake.sdk.query;
+  f.fake.sdk.query = input => {
+    const current = ++count;
+    return { ...query(input), initializationResult: () => current === 1 ? new Promise(resolve => { release = resolve; })
+      : Promise.resolve({ account: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: current === 2 ? 'apiKeyHelper' : 'none' } }) };
+  };
+  const pending = first.send({ clientMessageId: 'old', text: 'Synthetic input' });
+  for (let i = 0; i < 100 && !release; i++) await new Promise(resolve => setTimeout(resolve, 1));
+  await assert.rejects(second.send({ clientMessageId: 'denied', text: 'Unsent' }), /tokenSource=apiKeyHelper/);
+  release({ account: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'none' } }); await pending;
+  assert.equal(f.factory.apiState(10, 'p').status, 'billing_identity_mismatch');
+  const third = f.factory.create({ ...f.spec, terminalId: 'third', runtimeSessionId: 'third' }, () => {});
+  f.factory.resetAvailability(); await third.start();
+  // Keep this lazy session open while another, newer observation records the failure.
+  const original = f.fake.sdk.query;
+  f.fake.sdk.query = input => ({ ...original(input), initializationResult: async () => ({ account: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'apiKeyHelper' } }) });
+  await f.factory.testConnection({ projectId: 'p' }); f.fake.sdk.query = original;
+  await third.send({ clientMessageId: 'fresh', text: 'Fresh pre-check' });
+  assert.equal(f.factory.apiState(10, 'p').status, 'ready');
 });

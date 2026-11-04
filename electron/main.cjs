@@ -188,13 +188,13 @@ function publicState() {
     projects: store.projects.map(p => {
       const opened = terminalIds(p);
       const terminals = shownTerminalIds(p).map(id => {
-        const s = sessions.get(id);
+        const current = sessions.get(id), s = current?.switchPreviousHost || current;
         const reading = !s?.error && !startupErrors.has(id) && (s?.codexActive || !s?.inputDirty && (restorePlans.has(id) || s?.agentStarting)) ? readingHistory.summary(id) : null;
         return { id, title: t('终端 {n}', { n: opened.indexOf(id) + 1 }), shell: s?.shellKind || (p.kind === 'ssh' ? 'bash' : localShell().kind), sessionId: s?.nativeStructured ? null : s?.sessionId || null, status: s?.status || 'stopped', codexActive: s?.codexActive || false, agent: s?.codexActive ? s.agent || 'codex' : null,
           ...(reading ? { readingHistory: reading } : {}),
           agentStarting: !!s?.agentStarting && !s.codexActive && s.status !== 'exited' && !s.error,
           agentStartedAt: s?.codexActive ? s.activitySince : null,
-          nativeMode: s?.nativeMode || null, nativeRuntimeSessionId: s?.nativeRuntimeSessionId || null, nativePathReason: s?.nativePathReason || null,
+          nativeMode: s?.nativeMode || null, nativeRuntimeSessionId: s?.nativeRuntimeSessionId || null, nativePathReason: s?.nativePathReason || null, switchState: s?.switchState || null,
           // The model, effort and fast mode its records show, above the reading view's message box.
           agentSettings: s?.codexActive ? s.agentSettings || null : null,
           // The service its model is reached through, the context it fills and the tokens it took, for the activity pane.
@@ -522,17 +522,36 @@ function usageHistory(s, ready) {
 // The called models belong to the terminal session, so workers dispatched from a plain shell, or before the agent
 // restarts, stay visible; the agent's usage meter shares them while it runs.
 function callsOf(s, project) {
+  if (s.calls) return s.calls;
+  const helperPids = new WeakMap();
   return s.calls ||= new AgentCalls({ changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh',
+    dispatchAlive: call => {
+      if (project.kind === 'ssh') return null;
+      let pid = call.helperPid || helperPids.get(call);
+      if (!pid) {
+        try {
+          const team = require('./features/team/team.cjs').projectTeam(project.path);
+          if (!team || !/^[a-f\d-]{36}$/i.test(call.key)) return null;
+          const file = path.join(team.board, call.key + '.json');
+          if (fs.statSync(file).size > 65536) return null;
+          const entry = JSON.parse(fs.readFileSync(file, 'utf8'));
+          if (entry.id !== call.key || path.resolve(entry.cwd) !== path.resolve(call.cwd) || !Number.isSafeInteger(entry.pid) || entry.pid <= 0) return null;
+          pid = entry.pid; helperPids.set(call, pid);
+        } catch { return null; }
+      }
+      try { process.kill(pid, 0); return true; }
+      catch (error) { return error.code === 'ESRCH' ? false : error.code === 'EPERM' ? true : null; }
+    },
     codexHome: () => s.codexHome || s.usageEnv?.CODEX_HOME || path.join(os.homedir(), '.codex'),
     claudeHome: () => s.usageEnv?.CLAUDE_CONFIG_DIR || claudeConfigDir(),
-    feedChanged: event => { if (sessions.get(s.terminalId) === s) send('terminal:subagent-feed', { terminalId: s.terminalId, ...event }); } });
+    feedChanged: event => { if (sessions.get(s.terminalId)?.calls === s.calls) send('terminal:subagent-feed', { terminalId: s.terminalId, ...event }); } });
 }
 // An owner intervention's target, from the call the terminal's own tracker holds: never from the renderer. The planner
 // binding is the terminal session together with its CLI conversation, so a replaced conversation is never written to.
 function resolveIntervention(terminalId, callId) {
   const s = sessions.get(terminalId), project = store.findTerminal(terminalId)?.project, call = s?.calls?.byId(callId);
   if (!s?.sessionId || !project || !call) return null;
-  return { terminalId, callId, parentSessionId: `${s.sessionId}:${s.claudeSessionId || s.rootThreadId || s.reportedThreadId || ''}`,
+  return { terminalId, callId, parentSessionId: `${s.plannerSessionId || s.sessionId}:${s.claudeSessionId || s.rootThreadId || s.reportedThreadId || ''}`,
     confirmed: !call.unconfirmed, done: !!call.done, title: call.title, route: call.dispatch ? 'dispatch' : 'parent', projectPath: project.path,
     ...(call.dispatch ? { local: project.kind !== 'ssh', runId: callId.slice('dispatch:'.length), cwd: call.cwd } : {}) };
 }
@@ -757,6 +776,7 @@ function publishCliState(s, state, { at = Date.now(), threadId, turnId, requestI
   s.cliStateRevision = (s.cliStateRevision || 0) + 1;
   s.cliState = { sessionId: s.sessionId, revision: s.cliStateRevision,
     updatedAt: Date.now(), state, ...(message ? { message } : {}) };
+  s.observeNativeSwitch?.();
   broadcast();
   return true;
 }
@@ -1154,6 +1174,11 @@ function localShell(fresh = false) {
 function nativeSessionEvent(id, sessionId, message) {
   const s = sessions.get(id); if (!s || s.sessionId !== sessionId || !s.native || typeof message.method !== 'string') return;
   const project = findProject(id), at = Date.now(), p = message.params;
+  if (message.method === 'agentrix/threadResumed') {
+    if (!s.switchResumeThreadId || p?.threadId !== s.switchResumeThreadId) return;
+    s.nativeResumeReady = p; s.reportedThreadId = s.rootThreadId = p.threadId;
+    publishCliState(s, 'idle', { at, threadId: p.threadId, bind: true }); return;
+  }
   const thread = message.method === 'thread/started' ? p?.thread?.id : null;
   if (thread && s.completionWork?.find(thread)) return;
   if (thread && s.reportedThreadId && thread !== s.reportedThreadId) {
@@ -1206,6 +1231,11 @@ function nativeSpec(id, agent, resume, validateOnly = false) {
 
 function structuredEvent(id, event) {
   if (event.replay || quitting) return;
+  if (event.type === 'switch.updated') {
+    const host = sessions.get(id), s = host?.switchPreviousHost || host;
+    if (s) { s.switchState = event.payload; s.nativeRuntimeSessionId = event.runtimeSessionId; s.nativePathReason = event.payload.reason; }
+    scheduleState(); return;
+  }
   const spec = nativeSpecs.get(id), project = store.findTerminal(id)?.project;
   if (!spec || !project) return;
   let s = sessions.get(id);
@@ -1220,6 +1250,7 @@ function structuredEvent(id, event) {
       gate: { dispose() {}, write() { throw new Error('请使用原生会话输入框。'); } },
       promptQueue: new PromptQueue(() => scheduleState()), completionWork: new CompletionWork(),
       actions: new ActionLog(() => {}), conversation: new ConversationLog(() => {}) };
+    if (spec.switchHost) { retainAgentState(s, spec.switchHost); delete spec.switchHost; }
     sessions.set(id, s);
   }
   s.nativeRuntimeSessionId = event.runtimeSessionId;
@@ -1256,10 +1287,10 @@ function structuredEvent(id, event) {
   scheduleState();
 }
 
-async function readNativeConnections() {
+async function readNativeConnections(projectId) {
   const result = {}, observed = new Map();
   for (const agent of ['claude', 'codex']) {
-    const host = [...sessions.values()].reverse().find(s => s.agent === agent && s.codexActive === true && s.status !== 'exited');
+    const host = [...sessions.values()].reverse().find(s => (!projectId || s.projectId === projectId) && s.agent === agent && s.codexActive === true && s.status !== 'exited');
     if (!host) { result[agent] = { kind: 'none', source: null, observedAt: null }; continue; }
     observed.set(agent, host);
     if (host.nativeStructured) {
@@ -1296,6 +1327,81 @@ async function readNativeUsageInputs() {
   return { cli: { claude: claudeCli, codex: { status: codexFile ? 'ok' : 'missing' } }, limits: readNativeSubscriptionLimits() };
 }
 
+function localSwitchSessions() {
+  const result = [];
+  for (const [id, current] of sessions) {
+    const s = current.switchPreviousHost || current, project = store.findTerminal(id)?.project;
+    if (!project || project.kind === 'ssh' || !s.codexActive || s.nativeStructured || s.status === 'exited' || !['claude', 'codex'].includes(s.agent)) continue;
+    s.nativeRuntimeSessionId ||= randomUUID();
+    const providerSessionId = s.agent === 'claude' ? s.claudeSessionId || s.claudeResumeId
+      : [s.cliProviderId, s.rootThreadId, s.reportedThreadId].find(value => wholeThread(value || '')) || null;
+    result.push({ identity: s, path: 'terminal', spec: { owner: 'gui', agent: s.agent, kind: project.kind,
+      projectId: project.id, terminalId: id, runtimeSessionId: s.nativeRuntimeSessionId, providerSessionId,
+      sessionId: s.sessionId, sessionKey: s.sessionKey, controlCapability: s.controlCapability, bootstrapFile: s.bootstrapFile,
+      cwd: store.findTerminal(id)?.record.restore?.cwd || project.path, env: s.usageEnv, context: s.skillNote || '',
+      model: s.agentSettings?.model || null, effort: s.agentSettings?.effort || 'high', fast: s.agentSettings?.fast ?? true } });
+  }
+  return result;
+}
+function observeSwitchTerminal(session) {
+  const s = session.identity;
+  return { state: s.cliState?.sessionId === s.sessionId && s.cliState.state === 'idle' ? 'idle' : 'working',
+    pending: s.promptQueue?.list().some(item => item.state === 'queued'),
+    draftBlocked: !!s.switchDraftBlocked || !!s.submissions?.hasText || !!s.submissions?.history,
+    // Transcript completion deliberately excludes watchers; it cannot establish all live background processes.
+    background: { known: false, count: null } };
+}
+function retainAgentState(target, source) {
+  target.plannerSessionId = source.plannerSessionId || source.sessionId;
+  target.switchBootstrapFiles = [...new Set([...(source.switchBootstrapFiles || []), source.bootstrapFile].filter(file => file && file !== target.bootstrapFile))];
+  for (const key of ['sessionKey', 'controlCapability', 'calls', 'completionWork', 'promptQueue', 'lastCompletedAt', 'lastTask', 'lastTaskSummary', 'lastTaskTitle',
+    'activityInputAt', 'activityConfirmedInputAt', 'activityPromptAt', 'claudePromptEventId', 'nativeMessages', 'switchState']) {
+    if (source[key] !== undefined) target[key] = source[key];
+  }
+  target.completionWork.changed = () => {
+    if (sessions.get(target.terminalId) === target && target.codexActive && target.activitySnapshot) applyActivity(findProject(target.terminalId), target, target.activitySnapshot);
+  };
+  target.promptQueue.changed = expired => {
+    if (sessions.get(target.terminalId) !== target) return;
+    if (expired?.length) target.activityInputAt = Math.max(target.activityConfirmedInputAt || 0, ...target.promptQueue.items.map(item => item.at));
+    scheduleState();
+  };
+}
+async function prepareSwitchTerminal(spec, _handoff, currentChange) {
+  const id = spec.terminalId, old = sessions.get(id);
+  if (!old?.nativeStructured) throw new Error('session_changed');
+  sessions.delete(id);
+  if (spec.agent !== 'codex') launchPlans.set(id, { agent: spec.agent, command: launchCommand(spec.agent, spec.providerSessionId ? { id: spec.providerSessionId } : null), threadId: spec.providerSessionId });
+  let staged;
+  const cancel = () => {
+    if (sessions.get(id) === staged) disposeTerminal(id, { preserveSwitch: true });
+    launchPlans.delete(id);
+    if (store.findTerminal(id)) { sessions.set(id, old); nativeSpecs.set(id, old.nativeSpec); }
+    broadcast();
+  };
+  try {
+    startTerminal(id, spec.agent === 'codex' ? 'codex-native' : null, true, old, spec.providerSessionId); staged = sessions.get(id);
+    staged.nativeRuntimeSessionId = spec.runtimeSessionId;
+    Object.assign(spec, { sessionId: staged.sessionId, bootstrapFile: staged.bootstrapFile, env: staged.usageEnv || spec.env });
+    const deadline = Date.now() + 15000;
+    while (currentChange() && sessions.get(id) === staged && staged.status !== 'exited') {
+      const provider = spec.agent === 'claude' ? staged.claudeSessionId : staged.reportedThreadId || staged.rootThreadId;
+      const ready = spec.agent === 'codex' ? staged.nativeResumeReady?.threadId === spec.providerSessionId : staged.cliState?.state === 'idle';
+      if (provider && (!spec.providerSessionId || provider === spec.providerSessionId) && ready) {
+        spec.providerSessionId = provider; break;
+      }
+      if (Date.now() >= deadline) throw new Error('terminal_resume_timeout');
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    if (!currentChange() || sessions.get(id) !== staged || staged.status === 'exited') throw new Error('session_changed');
+    return { session: { identity: staged, path: 'terminal', spec }, cancel,
+      commit() {
+        store.setRestore(id, { terminal: true, codex: true, agent: spec.agent, threadId: spec.providerSessionId, nativeTransport: null });
+        retainAgentState(staged, old); delete staged.switchPreviousHost; staged.nativeRuntimeSessionId = spec.runtimeSessionId; broadcast();
+      } };
+  } catch (error) { cancel(); throw error; }
+}
+
 async function initializeNativeSessions() {
   // Load optional provider composition after app.ready; neither module starts a real account session here.
   const { createCodexRuntime } = await import('./features/codex-app-server/index.cjs');
@@ -1313,6 +1419,11 @@ async function initializeNativeSessions() {
   const directory = path.join(app.getPath('userData'), 'native-session');
   claudeRuntime = createClaudeRuntime({ directory, safeStorage: require('electron').safeStorage,
     loadSdk: createSdkLoader({ packaged: app.isPackaged }),
+    connectionSpec: projectId => {
+      const project = projectId && store.projects.find(project => project.id === projectId);
+      if (projectId && (!project || project.kind === 'ssh')) throw new Error('原生会话仅支持本地项目。');
+      return { agent: 'claude', owner: 'gui', projectId, cwd: project?.path || process.cwd(), effort: 'high', fast: true };
+    },
     onCost: entry => {
       if (entry.spec.owner === 'dispatch') return;
       const project = store.findTerminal(entry.spec.terminalId)?.project; if (!project) return;
@@ -1341,23 +1452,33 @@ async function initializeNativeSessions() {
   } };
   nativeSessions = createNativeSessions({ directory, claude: claudeRuntime, codex, resolveSpec: nativeSpec,
     connections: readNativeConnections, usageInputs: readNativeUsageInputs,
+    validateProject: projectId => { if (projectId && !store.projects.some(project => project.id === projectId && project.kind !== 'ssh')) throw new Error('原生会话仅支持本地项目。'); },
+    terminalSessions: localSwitchSessions, observeTerminal: observeSwitchTerminal, prepareTerminal: prepareSwitchTerminal,
+    activateNative: spec => {
+      const old = sessions.get(spec.terminalId);
+      if (!old || old.sessionId !== spec.sessionId || observeSwitchTerminal({ identity: old }).draftBlocked) throw new Error('session_changed');
+      if (spec.bootstrapFile && !fs.existsSync(spec.bootstrapFile)) fs.writeFileSync(spec.bootstrapFile, JSON.stringify({ projectId: spec.terminalId,
+        projectPath: spec.cwd, sessionKey: spec.sessionKey, controlAddress, controlCapability: spec.controlCapability,
+        pipeName: process.platform === 'win32' ? eventServer.name : eventServer.address }), { mode: 0o600 });
+      spec.switchHost = old; disposeTerminal(spec.terminalId, { preserveSwitch: true }); nativeSpecs.set(spec.terminalId, spec);
+    },
     emit: event => send('native:event', event), changed: (id, event) => { if (event) structuredEvent(id, event); else scheduleState(); },
     saveSession: (id, saved) => store.setRestore(id, { terminal: true, codex: true, agent: saved.agent, threadId: saved.providerSessionId,
       nativeTransport: saved.agent === 'claude' ? 'claude-sdk' : 'codex-app-server' }),
     terminal: async (spec, reason) => {
-      const current = sessions.get(spec.terminalId); if (current?.nativeStructured) disposeTerminal(spec.terminalId);
+      const current = sessions.get(spec.terminalId); if (current?.nativeStructured) disposeTerminal(spec.terminalId, { preserveNative: true });
       nativeSpecs.delete(spec.terminalId);
       if (spec.bootstrapFile) fs.rmSync(spec.bootstrapFile, { force: true });
       const history = spec.providerSessionId ? { id: spec.providerSessionId } : null;
       launchPlans.set(spec.terminalId, { agent: spec.agent, command: launchCommand(spec.agent, history), threadId: history?.id || null });
       store.setRestore(spec.terminalId, { nativeTransport: null });
       startTerminal(spec.terminalId, null, true);
-      const s = sessions.get(spec.terminalId); if (s) s.nativePathReason = reason;
+      const s = sessions.get(spec.terminalId); if (s) { s.nativePathReason = reason; s.nativeRuntimeSessionId = spec.runtimeSessionId; }
     } });
   registerClaudeWorker({ control: dispatchControl, claude: claudeRuntime, settings: nativeSessions.getSettings });
 }
 
-function startTerminal(id, nativeMode = null, agentStarting = false) {
+function startTerminal(id, nativeMode = null, agentStarting = false, transfer = null, resumeThreadId = null) {
   if (nativeMode !== null && nativeMode !== 'codex-native') throw new Error('Unsupported native session mode');
   const project = findProject(id);
   const old = sessions.get(id);
@@ -1366,8 +1487,8 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   if (!['win32', 'darwin', 'linux'].includes(process.platform)) throw new Error('此版本的终端集成面向 Windows 10/11、macOS 和 Linux。');
   if (project.kind !== 'ssh' && !fs.existsSync(project.path)) throw new Error('项目目录不存在，请重新添加。');
   const sessionId = randomUUID();
-  const sessionKey = randomUUID();
-  const controlCapability = randomUUID();
+  const sessionKey = transfer?.sessionKey || randomUUID();
+  const controlCapability = transfer?.controlCapability || randomUUID();
   const startPath = restorePlans.get(id)?.cwd || store.findTerminal(id)?.record.restore?.cwd || project.path;
   // Local terminals use the shell chosen in settings; SSH projects always run Bash on the server.
   const shell = project.kind === 'ssh' ? { kind: 'bash', file: null } : localShell(true), shellKind = shell.kind;
@@ -1401,7 +1522,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   const sshAskpassPath = project.kind === 'ssh' ? prepareAskpass() : undefined;
   if (nativeMode && project.kind === 'ssh') throw new Error('Native approval sessions are local only');
   const native = nativeMode ? createNativeSession({ binding: { provider: 'codex', projectId: project.id, terminalId: id, sessionId },
-    mode: nativeMode, cwd: startPath, env, pty, changed: scheduleState,
+    mode: nativeMode, cwd: startPath, env, pty, changed: scheduleState, resumeThreadId,
     event: message => nativeSessionEvent(id, sessionId, message),
   }) : null;
   if (native) {
@@ -1420,7 +1541,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     : shellKind === 'cmd' ? pty.spawn(cmdPath, ['/D', '/Q', '/K', path.join(integrationDir, 'bootstrap.cmd')], terminalOptions)
     : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions));
   const s = {
-    terminal, terminalId: id, projectId: project.id, sessionId, skillSessionId: nativeMode ? sessionId : null, sessionKey, controlCapability, bootstrapFile, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
+    switchPreviousHost: transfer, terminal, terminalId: id, projectId: project.id, sessionId, skillSessionId: nativeMode ? sessionId : null, sessionKey, controlCapability, bootstrapFile, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
     recordRun: (call, event) => dashboard.run(project, call, event),
     recordQuota: (provider, limits) => dashboard.quota(provider, limits, quotaScope(provider, project, s)),
     // Command Prompt reports its prompts through markers in its output instead of the event pipe.
@@ -1431,13 +1552,19 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
     codexActive: false, codexAvailable: null, seq: 0, chunks: [], bytes: 0, pending: '',
     flushTimer: null, error: null, submissions: new SubmissionTracker(),
     approval: new ApprovalGuard(sessionId), approvalRemote: project.kind === 'ssh',
-    native, nativeMode,
+    native, nativeMode, switchResumeThreadId: resumeThreadId,
+    observeNativeSwitch: () => { if (typeof nativeSessions !== 'undefined') nativeSessions?.observe?.(id); },
   };
   if (native) { s.status = 'codex'; s.codexActive = true; s.agent = 'codex'; s.activitySince = Date.now(); s.codexActivity = 'unknown'; }
   s.actions = new ActionLog(change => publishAction(s, change));
   s.gate = new InputGate(data => {
     if (sessions.get(id) !== s || s.status === 'exited') return;
     if (!isTerminalResponse(data)) s.approval.invalidate();
+    if (!isTerminalResponse(data)) {
+      s.switchDraftBlocked = !['\r', '\x03', '\x15'].includes(data);
+      if (typeof nativeSessions !== 'undefined') nativeSessions?.input?.(id, s.nativeRuntimeSessionId);
+      void Promise.resolve().then(() => s.observeNativeSwitch?.());
+    }
     terminal.write(data);
   }, { shellOwnsInput: () => !s.codexActive });
   const refreshCompletion = () => {
@@ -1537,6 +1664,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false) {
   });
   terminal.onExit(({ exitCode }) => {
     if (sessions.get(id) !== s) return;
+    if (typeof nativeSessions !== 'undefined' && nativeSessions?.failed?.(id, s.nativeRuntimeSessionId)) { s.ready = false; broadcast(); return; }
     flush();
     endSkillSession(s);
     skills.endSession(project.id, sessionId);
@@ -1569,24 +1697,26 @@ function cleanupTerminalFiles(s) {
     fs.rmSync(s.bootstrapFile, { force: true });
   }
   if (s.skillNoteFile) fs.rmSync(s.skillNoteFile, { force: true });
+  for (const file of s.switchBootstrapFiles || []) fs.rmSync(file, { force: true });
 }
 
-function disposeTerminal(id, { preserveNative = false } = {}) {
+function disposeTerminal(id, { preserveNative = false, preserveSwitch = false } = {}) {
   readingHistory.close(id);
   const s = sessions.get(id);
   if (!s) return;
   sessions.delete(id);
   nativeSpecs.delete(id);
-  if (s.nativeStructured && !preserveNative) void nativeSessions?.forget(id).catch(report);
-  s.calls?.dispose(); syncDashboardLive();
-  endSkillSession(s);
-  skills.endSession(s.projectId, s.sessionId);
+  if (s.nativeStructured && !preserveNative && !preserveSwitch) void nativeSessions?.forget(id).catch(report);
+  if (!preserveSwitch) {
+    s.calls?.dispose(); syncDashboardLive(); endSkillSession(s); skills.endSession(s.projectId, s.sessionId);
+  }
   stopUsageAccount(s);
   clearTimeout(s.flushTimer); clearTimeout(s.actionTimer); clearTimeout(s.conversationTimer);
   for (const timer of s.submissionPolls || []) clearTimeout(timer);
-  s.activityMonitor?.stop(); s.gate.dispose(); s.promptQueue.reset(); s.completionWork?.reset();
+  s.activityMonitor?.stop(); s.gate.dispose();
+  if (!preserveSwitch) { s.promptQueue.reset(); s.completionWork?.reset(); }
   try { if (!s.nativeStructured) s.terminal.kill(); } catch { }
-  cleanupTerminalFiles(s);
+  if (!preserveSwitch) cleanupTerminalFiles(s);
 }
 
 function registerUnavailableNative(handle) {
@@ -1605,11 +1735,11 @@ function registerUnavailableNative(handle) {
   handle('native:resume', (id, options) => start(id, { ...options, resume: true }));
   handle('native:settings-get', () => ({ ...settings }));
   handle('native:snapshot', id => { findProject(id); return null; });
-  handle('native:usage', async () => {
-    const connections = await readNativeConnections(), limits = readNativeSubscriptionLimits();
+  handle('native:usage', async projectId => {
+    const connections = await readNativeConnections(projectId), limits = readNativeSubscriptionLimits();
     const summary = claudeRuntime?.usage.summary() || { month: new Date().toISOString().slice(0, 7),
       todayUsdMicros: null, monthUsdMicros: null, estimated: true, apiRecords: false };
-    return { ...summary, budgetUsd: null, agents: { claude: { path: 'terminal', reason: 'native_unavailable',
+    return { ...summary, budgetUsd: null, switches: { waiting: 0 }, agents: { claude: { path: 'terminal', reason: 'native_unavailable',
         next: { path: 'terminal', reason: 'native_unavailable' }, limits: limits.claude, connection: connections.claude },
         codex: { path: 'terminal', reason: 'native_unavailable', next: { path: 'terminal', reason: 'native_unavailable' }, limits: limits.codex, connection: connections.codex } }, lastSwitch: null };
   });
@@ -1617,7 +1747,7 @@ function registerUnavailableNative(handle) {
     handle(`native:${name}`, () => { throw new Error('原生会话暂不可用，已保留终端模式。'); });
   }
   handle('native:test-connection', (...args) => {
-    if (args.length) throw new Error('无效的原生会话请求。');
+    if (args.length > 1 || args[0] !== undefined && (typeof args[0] !== 'string' || !/^[\w:.-]{1,160}$/.test(args[0]))) throw new Error('无效的原生会话请求。');
     throw new Error('原生会话暂不可用，已保留终端模式。');
   });
 }

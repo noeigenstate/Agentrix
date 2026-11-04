@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
@@ -25,6 +25,31 @@ export function displayEnvironment(inherited = process.env, platform = process.p
 }
 export const desktopEnvironment = (home, inherited = process.env, platform = process.platform) =>
   ({ ...isolatedEnvironment(home, inherited), ...displayEnvironment(inherited, platform) });
+
+// Also runs before either desktop mode. This exercises the real coordinator/router and provider adapters with local
+// peers, including correlated TUI resume, late rollback, versioned IPC drafts, background choices, notifications and N3/N5/N6.
+export async function switchContracts(output, stages) {
+  const home = path.join(output, 'switch-home'); await fs.mkdir(home, { recursive: true });
+  const files = (await fs.readdir(path.join(root, 'tests'))).filter(name => /^native-switch-.*\.test\.cjs$/.test(name)
+    || ['native-worker-finish.test.cjs', 'claude-sdk-switch.test.cjs', 'codex-app-server-sandbox.test.cjs',
+      'native-session-resume.test.cjs', 'agent-calls-liveness.test.cjs', 'usage-refresh.test.cjs'].includes(name));
+  await stages.run('switch contracts: correlated resume, late rollback, versioned drafts, helper death and no notifications', async () => {
+    const child = spawn(process.execPath, ['--test', ...files.map(name => path.join(root, 'tests', name))], {
+      cwd: root, windowsHide: true, env: { ...desktopEnvironment(home), TEMP: home, TMP: home }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let log = '';
+    child.stdout.on('data', data => { log += data; }); child.stderr.on('data', data => { log += data; });
+    const timer = setTimeout(() => {
+      if (process.platform === 'win32') spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 3000 });
+      else child.kill('SIGKILL');
+    }, 25000);
+    try {
+      const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+      await fs.writeFile(path.join(output, 'switch-contracts.log'), log);
+      assert.equal(code, 0, log.slice(-6000));
+    } finally { clearTimeout(timer); }
+  }, 30000);
+}
 
 export async function prepareProviders(directory) {
   const bin = path.join(directory, 'bin'), cli = path.join(directory, 'fake-cli.cjs');
@@ -124,7 +149,7 @@ async function runtimeSmoke(output, stages) {
       };
     }));
     await stage('check billing without input and cache competing token sources', async () => {
-      const testConnection = () => page.evaluate(() => window.agentrix.nativeSession.testConnection());
+      const testConnection = () => page.evaluate(id => window.agentrix.nativeSession.testConnection(id), projectId);
       const good = await testConnection();
       assert.equal(good.ok, true); assert.deepEqual(good.value.billing, { status: 'ok', source: 'ANTHROPIC_API_KEY' }, JSON.stringify(good.value));
       assert.equal(good.value.path, 'api');
@@ -132,11 +157,16 @@ async function runtimeSmoke(output, stages) {
       const blocked = await testConnection();
       assert.equal(blocked.value.billing.status, 'mismatch'); assert.equal(blocked.value.path, null);
       assert.match(blocked.value.reason, /tokenSource=apiKeyHelper/);
-      assert.equal((await page.evaluate(() => window.agentrix.nativeSession.usage())).value.agents.claude.next.path, null);
+      assert.equal((await page.evaluate(id => window.agentrix.nativeSession.usage(id), projectId)).value.agents.claude.next.path, null);
+      assert.equal((await page.evaluate(() => window.agentrix.nativeSession.usage())).value.agents.claude.next.path, 'api', 'one project cannot poison another scope');
+      await app.evaluate(() => { delete process.env.AGENTRIX_FAKE_TOKEN_SOURCE; });
+      assert.equal((await testConnection()).value.billing.status, 'ok');
+      assert.equal((await page.evaluate(id => window.agentrix.nativeSession.usage(id), projectId)).value.agents.claude.next.path, 'api', 'successful identity probe clears this project immediately');
+      await app.evaluate(() => { process.env.AGENTRIX_FAKE_TOKEN_SOURCE = 'apiKeyHelper'; });
       await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-then-terminal' }));
       const fallback = await testConnection();
       assert.equal(fallback.value.path, 'terminal');
-      assert.equal((await page.evaluate(() => window.agentrix.nativeSession.usage())).value.agents.claude.next.path, 'terminal');
+      assert.equal((await page.evaluate(id => window.agentrix.nativeSession.usage(id), projectId)).value.agents.claude.next.path, 'terminal');
       await app.evaluate(() => { delete process.env.AGENTRIX_FAKE_TOKEN_SOURCE; process.env.AGENTRIX_FAKE_INIT_FAILURE = '1'; });
       await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-only' }));
       const refused = await testConnection();
@@ -306,12 +336,25 @@ async function run(output, stages) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const stages = createSmokeStages();
+  let temporary;
   try {
-    const output = await stages.run('prepare output', () => testRun('native-session')); stages.output(output);
-    await stages.run('GUI lock and native suite', () => withGuiLock('native-session', () => process.argv.includes('--runtime') ? runtimeSmoke(output, stages) : run(output, stages)), 140000);
-    console.log('PASS: native session smoke. Evidence: ' + output);
+    const contractsOnly = process.argv.includes('--switch-contracts');
+    const output = await stages.run('prepare output', async () => {
+      if (!contractsOnly) return testRun('native-session');
+      temporary = path.join(root, '.notes/r12-probe-tmp', randomUUID()); await fs.mkdir(temporary, { recursive: true }); return temporary;
+    }); stages.output(output);
+    await switchContracts(output, stages);
+    if (!contractsOnly) await stages.run('GUI lock and native suite', () => withGuiLock('native-session', () => process.argv.includes('--runtime') ? runtimeSmoke(output, stages) : run(output, stages)), 140000);
+    if (contractsOnly) await fs.copyFile(path.join(output, 'switch-contracts.log'), path.join(root, '.notes/r12-switch-smoke.log'));
+    console.log('PASS: native session smoke. Evidence: ' + (contractsOnly ? path.join(root, '.notes/r12-switch-smoke.log') : output));
     process.exitCode = 0;
   } catch (error) { console.error('[native-smoke] FAIL ' + String(error.message).replace(/sk-ant-[\w-]+/g, '<offline-key>')); stages.force(); process.exitCode = 1; }
-  finally { stages.dispose(); }
+  finally {
+    stages.dispose();
+    if (temporary) {
+      assert.equal(path.dirname(path.resolve(temporary)), path.join(root, '.notes/r12-probe-tmp'));
+      await fs.rm(temporary, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  }
   process.exit(process.exitCode);
 }

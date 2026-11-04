@@ -133,11 +133,12 @@ test('Claude watches cache/statusline fixtures promptly and retains a slower fal
 });
 
 test('rollout limits publish during history without exposing partial conversation totals', t => {
+  const records = fs.readFileSync(path.join(fixtures, 'codex.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse(records.at(-1).timestamp) });
   const s = session('one', 'codex'); let publishes = 0;
   const api = runtime({ sessions: new Map([['one', s]]), scheduleState: () => ++publishes });
   t.after(() => api.close());
   api.usageHistory(s, false);
-  const records = fs.readFileSync(path.join(fixtures, 'codex.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   for (const record of records.slice(2)) api.noteSettings(s, 'codex', { ...record, payload: {
     ...record.payload, info: { total_token_usage: { input_tokens: 100, output_tokens: 10 } },
   } });

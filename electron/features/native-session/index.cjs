@@ -6,11 +6,12 @@ const { choosePath } = require('./routing.cjs');
 function createNativeSessions(options) {
   const storedSettings = createSettings(path.join(options.directory, 'settings.json'));
   const settings = { ...storedSettings, set(patch) {
-    const result = storedSettings.set(patch); options.claude.resetAvailability?.(); return result;
+    const result = storedSettings.set(patch); options.claude.resetAvailability?.(); router.reconcile(); return result;
   } };
   const router = createRouter({ ...options, settings });
-  async function testConnection() {
-    const result = await options.claude.testConnection(settings.get()), config = settings.get();
+  async function testConnection(projectId) {
+    options.validateProject?.(projectId);
+    const result = await options.claude.testConnection({ ...settings.get(), projectId }), config = settings.get();
     const failures = { missing: 'no_key', invalid: 'invalid_key', forbidden: 'API 密钥没有模型列表权限。',
       rate_limited: 'rate_limited', unreachable: '无法连接 Anthropic API。', error: '无法完成 API 连接检查。' };
     const reason = result.key.status !== 'ok' ? failures[result.key.status]
@@ -18,13 +19,15 @@ function createNativeSessions(options) {
         : result.cli.status === 'missing' ? 'native_cli_required'
           : result.billing?.status !== 'ok' ? result.reason || '无法确认 Claude Code 的计费来源。' : null;
     const selection = choosePath({ agent: 'claude', ...config,
-      apiState: reason ? { reason } : options.claude.apiState(config.monthlyBudgetUsd) });
+      apiState: reason ? { reason } : options.claude.apiState(config.monthlyBudgetUsd, projectId) });
+    router.reconcile();
     return { ...result, ...selection, reason: reason || selection.reason };
   }
   const facade = { ...router, testConnection,
-    async usage() {
-      const usage = router.usage(await options.usageInputs?.());
-      const connections = await options.connections?.();
+    async usage(projectId) {
+      options.validateProject?.(projectId);
+      const usage = router.usage(await options.usageInputs?.(projectId), projectId);
+      const connections = await options.connections?.(projectId);
       for (const agent of ['claude', 'codex']) usage.agents[agent].connection = connections?.[agent] || { kind: 'none', source: null, observedAt: null };
       return usage;
     },

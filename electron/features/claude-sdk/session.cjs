@@ -75,6 +75,19 @@ function createClaudeSession(spec, emit, dependencies) {
       state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: 'budget_exhausted' });
     return message;
   }
+  function observeBackground(run, message) {
+    if (message.type !== 'system') return;
+    if (message.subtype === 'background_tasks_changed') {
+      run.backgroundKnown = true; run.background = new Map(message.tasks.map(task => [task.task_id, task.run_id]));
+    } else if (['task_started', 'task_updated', 'task_notification'].includes(message.subtype)) {
+      const previous = run.background.get(message.task_id);
+      if (previous && (!message.run_id || message.run_id < previous)) return;
+      if (message.subtype === 'task_notification' || message.patch?.is_backgrounded === false
+        || ['completed', 'failed', 'stopped'].includes(message.patch?.status)) run.background.delete(message.task_id);
+      else if (message.subtype === 'task_started' && message.is_backgrounded !== false || message.patch?.is_backgrounded === true) run.background.set(message.task_id, message.run_id);
+    } else return;
+    setState(state);
+  }
   async function pump(run) {
     let idle = false;
     try {
@@ -92,18 +105,13 @@ function createClaudeSession(spec, emit, dependencies) {
             observed: { model: run.model, effort: null, fast: null }, reason: null,
           });
         }
+        observeBackground(run, message);
         if (!run.initialized) {
           if (['assistant', 'result'].includes(message.type)) throw billingIdentityError(null, { messageType: message.type });
           // Startup status/auth/rate-limit notices carry no execution or billing evidence.
           continue;
         }
         if (message.isReplay === true) { normalize(message); continue; }
-        if (message.type === 'system') {
-          if (message.subtype === 'background_tasks_changed') run.background = new Map(message.tasks.map(task => [task.task_id, task.run_id]));
-          if (message.subtype === 'task_started' && message.is_backgrounded !== false) run.background.set(message.task_id, message.run_id);
-          if (message.subtype === 'task_notification' && (!message.run_id || run.background.get(message.task_id) === message.run_id)) run.background.delete(message.task_id);
-          if (message.subtype === 'task_updated' && message.patch?.is_backgrounded === true) run.background.set(message.task_id, message.run_id);
-        }
         if (stopping && (message.type !== 'result' || message.parent_tool_use_id)) continue;
         if (message.user_message_uuid) receipt(message.user_message_uuid, 'consumed');
         for (const id of message.user_message_uuids || []) receipt(id, 'consumed');
@@ -184,18 +192,19 @@ function createClaudeSession(spec, emit, dependencies) {
       throw failure;
     }
   }
-  async function createQuery() {
+  async function createQuery(prepareOnly = false) {
     if (closed) throw new Error('会话已停止。');
     const key = credentials.read();
     if (!key) throw new Error('请先保存 API 密钥。');
-    const reservation = usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId });
+    const reservation = prepareOnly ? null : usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId });
+    const maxBudgetUsd = reservation?.maxBudgetUsd ?? (spec.monthlyBudgetUsd == null ? undefined : Math.min(usage.available(spec.monthlyBudgetUsd) / 1e6, 5));
     const run = { key, reservation, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
       generation: dependencies.availabilityGeneration?.(),
-      remainingBudgetUsd: reservation.maxBudgetUsd ?? Infinity, busy: false, background: new Map() };
+      remainingBudgetUsd: maxBudgetUsd ?? Infinity, busy: false, background: new Map(), backgroundKnown: !providerId };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
     const options = queryOptions(spec, { key, executable, abort: run.abort,
-      providerSessionId: providerId, maxBudgetUsd: reservation.maxBudgetUsd, policy,
+      providerSessionId: providerId, maxBudgetUsd, policy,
       canUseTool: async (name, input, context) => {
         if (closed || stopping || run.closing) return { behavior: 'deny', message: '会话已停止。' };
         if (name === 'AskUserQuestion') return requests.open(name, input, context);
@@ -210,9 +219,10 @@ function createClaudeSession(spec, emit, dependencies) {
       // The pinned SDK initializes its control channel without consuming a user prompt.
       // Check this account snapshot before allowing input; stream init remains an independent guard.
       await readBillingIdentity(run.query, { signal: run.abort.signal, timeoutMs: dependencies.initializationTimeoutMs });
+      dependencies.onIdentity?.(run.generation);
       if (closed || stopping || run.closing) throw new Error('会话已停止。');
     } catch (error) {
-      cancelQuery(run, 'startup'); usage.release(reservation.id); secrets.delete(key);
+      cancelQuery(run, 'startup'); if (reservation) usage.release(reservation.id); secrets.delete(key);
       if (stopping || closed) throw new Error('会话已停止。');
       const failure = startupFailure(error);
       onFailure(failure.code, failure, run.generation);
@@ -283,6 +293,21 @@ function createClaudeSession(spec, emit, dependencies) {
     return closing;
   }
   return { start, resume: start, send, close, answer: requests.answer, snapshot: stream.snapshot,
+    checkpoint(restore) {
+      const key = active?.key || credentials.read();
+      return key ? (spec, emit) => restore(spec, emit, { status: () => ({ saved: true }), read: () => key }) : null;
+    },
+    activity: () => ({ known: active?.backgroundKnown === true || !active && !providerId, count: active?.backgroundKnown ? active.background.size : !providerId ? 0 : null }),
+    async prepareResume() {
+      if (!providerId || !started || closed) throw new Error('resume_unavailable');
+      // Read the actual persisted chain, then initialize a real resumed CLI with an empty input queue.
+      const history = await sdk.getSessionMessages?.(providerId, { dir: spec.cwd, limit: 1000 });
+      if (!history?.length || history.some(message => message.session_id !== providerId)) throw new Error('resume_history_unavailable');
+      preparing ||= createQuery(true).finally(() => { preparing = null; });
+      await preparing;
+      for (const message of history) normalize({ ...message, isReplay: true });
+      return { providerSessionId: providerId };
+    },
     connection: () => !active || closed || ['stopped', 'failed', 'disconnected'].includes(state)
       ? { kind: 'none', source: null, observedAt: null }
       : { kind: active.initialized ? 'api' : 'unknown', source: active.initialized ? 'claude-sdk init: ANTHROPIC_API_KEY' : null,

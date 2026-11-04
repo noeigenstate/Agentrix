@@ -28,7 +28,7 @@ const codex = [
   { record: { type: 'turn.completed', usage: { output_tokens: 150, reasoning_output_tokens: 30 } } },
 ];
 
-async function fixture(t, lines = codex, { agent = 'codex', role = '执行', bootstrap = true, exitCode = 0, hold, timeout = 30000, extra = [], setup, isolated = false, environment = () => ({}) } = {}) {
+async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0, hold, timeout = 30000, extra = [], setup, isolated = false, environment = () => ({}) } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const directory = isolated ? path.join(root, 'worker') : root;
   if (isolated) {
@@ -51,7 +51,7 @@ async function fixture(t, lines = codex, { agent = 'codex', role = '执行', boo
 process.on('message', signal => process.emit(signal));
 run(process.argv.slice(2), {startTimeout:${timeout}, resolveExecutable:(_,args)=>({file:process.execPath,args:[${JSON.stringify(worker)},...args]})})
 .then(code=>{process.exitCode=code;process.disconnect?.();});`);
-  const args = [agent, '--role', role, '--title', 'Exact dispatch task', '--model', agent === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5', '--effort', agent === 'codex' ? 'max' : 'high',
+  const args = [agent, '--role', role, '--title', 'Exact dispatch task', '--model', declaredModel || (agent === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5'), '--effort', agent === 'codex' ? 'max' : 'high',
     '--cwd', directory, '--brief', brief, '--out', out, ...(agent === 'codex' ? ['--fast', '--image', 'first image.png', '--read-only'] : ['--permission', 'plan']),
     ...(extra.includes('--allow') ? ['--skip-meeting', 'Existing dispatch scope regression fixture'] : []), ...extra];
   const env = { ...process.env, CODEX_HOME: path.join(directory, 'codex'), DISPATCH_FIXTURE: input, DISPATCH_CAPTURE: capture };
@@ -138,6 +138,7 @@ test('Codex receives stdin/argv/cwd and reads its rollout for routing and final 
   assert.deepEqual(f.events.map(event => event.type), ['dispatch-start', 'dispatch-end']);
   assert.ok(f.events.every(event => event.sessionKey === 'secret-for-test' && event.projectId === 'project'));
   const [start, end] = f.events;
+  assert.equal(start.helperPid, f.child.pid, 'liveness follows the helper rather than its provider child');
   assert.equal(start.sessionId, session); assert.equal(start.title, 'Exact dispatch task'); assert.equal(start.declared, undefined);
   assert.equal(end.id, start.id); assert.equal(end.outputTokens, 150); assert.equal(end.activeMs, 4000);
   assert.equal(start.kind, null); assert.equal(start.meeting, null); assert.equal(start.skipMeeting, null);
@@ -221,6 +222,16 @@ test('an unreported model leaves routing unverified unless a reported value mism
   const mixedResult = await mixed.finished;
   assert.match(mixedResult.stdout, /model unreported effort high fast on · routing MISMATCH \(declared gpt-6\.1-sol max fast on\) \(model unverified\)/);
   assert.deepEqual(mixed.events[0].declared, { model: 'gpt-6.1-sol', effort: 'max', fast: true });
+});
+
+test('N4: an alias resolving to its full model does not trigger the lab routing alarm, but a different model does', async t => {
+  for (const [model, mismatch] of [['claude-sonnet-5-5', false], ['claude-sonnet-5-5-20261031', false], ['claude-opus-5-5', true], ['claude-sonnet-4-6', true]]) {
+    const f = await fixture(t, [{ record: { ...claude[0], model } }, { record: claude.at(-1) }], { agent: 'claude', declaredModel: 'sonnet' });
+    const result = await f.finished;
+    // This is the exact abort condition in electron/features/lab/dispatch.cjs.
+    assert.equal(/^\[dispatch\].*routing MISMATCH/m.test(result.stdout), mismatch, model);
+    assert.equal(f.events.find(event => event.type === 'dispatch-end').verdict, mismatch ? 'mismatch' : 'ok');
+  }
 });
 
 test('unreported Claude fields are unverified even alongside a reported mismatch', async t => {
@@ -496,14 +507,16 @@ const gitInit = async (directory, files) => {
 };
 const PROBE_FILES = '/brief.md\n/answer.md*\n/capture.json\n/fixture.json\n/runner.cjs\n/bootstrap.json\n/codex/\n';
 
-test('--allow, --ledger and --resume are parsed; a resumed Codex keeps its own sandbox', () => {
+test('N5: resumed execution explicitly uses workspace-write and resumed read-only work stays read-only', () => {
   const base = ['--role', 'exec', '--title', 'T', '--model', 'gpt-6.1-sol', '--effort', 'max', '--cwd', '.', '--brief', 'b.md', '--out', 'o.md'];
   const options = argumentsOf(['codex', ...base, '--allow', 'src/**', '--allow', './docs/*.md', '--ledger', 'ledger.md', '--resume', session]);
   assert.deepEqual(options.allow, ['src/**', 'docs/*.md']);
   assert.equal(options.ledger, path.resolve('ledger.md'));
   assert.deepEqual(commandOf(options).slice(0, 3), ['exec', 'resume', session]);
   assert.ok(!commandOf(options).includes('-C') && !commandOf(options).includes('-s'));
-  assert.throws(() => argumentsOf(['codex', ...base, '--resume', session, '--read-only']), /keeps its own sandbox/);
+  assert.ok(commandOf(options).includes('sandbox_mode="workspace-write"'));
+  assert.ok(commandOf(argumentsOf(['codex', ...base, '--resume', session, '--read-only'])).includes('sandbox_mode="read-only"'));
+  assert.ok(commandOf(argumentsOf(['codex', ...base, '--resume', session, '--meeting', 'r12', '--allow', 'src/**'])).includes('sandbox_mode="read-only"'));
   assert.throws(() => argumentsOf(['codex', ...base, '--resume', 'bad id']), /session id/);
   const claude = argumentsOf(['claude', ...base, '--permission', 'plan', '--resume', session]);
   assert.deepEqual(commandOf(claude).slice(0, 3), ['-p', '--resume', session]);

@@ -58,7 +58,7 @@ async function probeBillingIdentity({ key, spec, loadSdk, resolveExecutable, max
 }
 
 function createConnectionTest({ credentials, inspectCli, request, probeBilling = async () => ({ status: 'unknown', source: null }), availabilityGeneration = () => undefined, now = Date.now, timeoutMs = 5000 }) {
-  let pending;
+  const pending = new Map();
   async function check(config) {
     const checkedAt = now(), generation = availabilityGeneration();
     let key, observed = { status: 'error', models: null }, latencyMs = null;
@@ -86,6 +86,10 @@ function createConnectionTest({ credentials, inspectCli, request, probeBilling =
       billing, path: null, reason: billingReason || (billing.status === 'mismatch' ? billingIdentityError(billing.source).message
         : billing.status === 'unknown' ? '无法确认 Claude Code 的计费来源。' : null) };
   }
-  return config => pending ||= check(config).finally(() => { pending = null; });
+  return (config = {}) => {
+    const scope = config.projectId || '';
+    if (!pending.has(scope)) pending.set(scope, check(config).finally(() => pending.delete(scope)));
+    return pending.get(scope);
+  };
 }
 module.exports = { createConnectionTest, listModels, probeBillingIdentity };

@@ -1,6 +1,16 @@
 // Provider-neutral snapshots and live events. Unknown observations stay null.
 export type AgentProvider = 'claude' | 'codex';
 export type SessionState = 'starting' | 'idle' | 'running' | 'waiting' | 'stopping' | 'stopped' | 'disconnected' | 'failed';
+export type SwitchPath = 'api' | 'native' | 'terminal';
+export type SwitchState = {
+  changeId: number; current: SwitchPath; target: SwitchPath;
+  phase: 'stable' | 'waiting-turn' | 'awaiting-choice' | 'waiting-background' | 'preparing' | 'switching' | 'rolling-back';
+  background: { count: number | null; known: boolean }; requestId: string | null; reason: string | null;
+};
+export type NativePendingInput = { clientMessageId: string; text: string; images?: string[] };
+export type NativeDraft = { version: number; text: string; images: string[]; undelivered: NativePendingInput[] };
+export type NativeHandoff = { changeId: number; draft: NativeDraft };
+export type NativeHandoffReceipt = { changeId: number; version: number; accepted: boolean };
 export type AgentItemKind = 'user-message' | 'agent-message' | 'reasoning-summary' | 'command' | 'file-change' | 'tool' | 'plan' | 'web' | 'other';
 export type AgentItemStatus = 'in-progress' | 'running' | 'pending' | 'completed' | 'failed' | 'interrupted';
 export type RoutingValues = { model: string | null; effort: string | null; fast: boolean | null };
@@ -19,6 +29,7 @@ export type RequestPayload = {
   questions?: RequestQuestion[]; providerData: Record<string, unknown> | null;
 };
 export type AgentEventPayloads = {
+  'switch.updated': SwitchState;
   'session.state': { state: SessionState; reason: string | null };
   'turn.started': { origin: 'user' | 'automatic' | 'resume'; clientMessageId: string | null };
   'turn.completed': { status: 'completed' | 'failed' | 'interrupted'; error: string | null };
@@ -44,7 +55,8 @@ export type AgentEvent = { [K in AgentEventType]: {
   receivedAtMs: number; occurredAtMs: number | null; replay: boolean; type: K; payload: AgentEventPayloads[K];
 } }[AgentEventType];
 export type NativeSettings = { claudePath: 'api-then-terminal' | 'api-only' | 'terminal-only'; codexView: 'native' | 'terminal'; monthlyBudgetUsd: number | null };
-export type NativeAnswer = { decision: 'allow' | 'deny' } | { answers: Record<string, string | string[]> };
-export type NativeSnapshot = { runtimeSessionId: string; lastSequence: number; events: AgentEvent[]; state: SessionState };
+export type NativeAnswer = { decision: 'allow' | 'deny' } | { answers: Record<string, string | string[]> }
+  | { switch: { changeId: number; requestId: string; action: 'wait' | 'now' } } | { handoff: NativeHandoff };
+export type NativeSnapshot = { runtimeSessionId: string; lastSequence: number; events: AgentEvent[]; state: SessionState; switchState?: SwitchState; handoff?: NativeHandoff };
 export type AgentPathState = { path: 'api' | 'native' | 'terminal' | null; reason: string | null; limits: LimitsPayload | null };
-export type NativeUsage = { month: string; todayUsdMicros: number | null; monthUsdMicros: number | null; estimated: true; budgetUsd: number | null; agents: Record<AgentProvider, AgentPathState>; lastSwitch: { at: number; agent: AgentProvider; from: string | null; to: string; reason: string | null } | null };
+export type NativeUsage = { month: string; todayUsdMicros: number | null; monthUsdMicros: number | null; estimated: true; budgetUsd: number | null; agents: Record<AgentProvider, AgentPathState>; switches: { waiting: number }; lastSwitch: { at: number; agent: AgentProvider; from: string | null; to: string; reason: string | null } | null };

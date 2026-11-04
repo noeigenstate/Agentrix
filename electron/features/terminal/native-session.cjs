@@ -28,11 +28,13 @@ function resolveCli(provider, env = process.env, platform = process.platform, no
   throw new Error(`Native ${provider} launch requires an executable in PATH (or a standard npm installation). Use legacy terminal mode for custom wrappers.`);
 }
 
-function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {}, event = () => {}, launch = spawn, cli }) {
+function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {}, event = () => {}, launch = spawn, cli, resumeThreadId = null }) {
   if (mode !== 'codex-native' || binding.provider !== 'codex') throw new Error('Invalid native provider/mode binding');
+  if (resumeThreadId !== null && (typeof resumeThreadId !== 'string' || !/^[\w-]{1,160}$/.test(resumeThreadId))) throw new Error('Invalid resume thread');
   cli ??= resolveCli('codex', env);
   const events = new EventEmitter();
   let child, tui, server, socket, ended = false, connected = false;
+  const resumes = new Map(); let resumed = false;
   const cleanEnv = { ...env }; delete cleanEnv.ELECTRON_RUN_AS_NODE; delete cleanEnv.AGENTRIX_NATIVE_REMOTE_TOKEN;
   const cliEnv = cli.node ? { ...cleanEnv, ELECTRON_RUN_AS_NODE: '1' } : cleanEnv;
   const output = text => { if (!ended) events.emit('data', text); };
@@ -88,14 +90,29 @@ function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {},
             if (client.bufferedAmount > MAX_BYTES) { finish('native-websocket-backpressure'); return; }
             client.send(JSON.stringify(message), error => { if (error) finish('native-websocket-write-error'); });
           }
-          if (!ended) event(message);
+          if (!ended && !message.method && resumes.has(message.id)) {
+            resumes.delete(message.id);
+            if (message.error || message.result?.thread?.id !== resumeThreadId || message.result.thread.status?.type !== 'idle') return finish('native-resume-failed');
+            resumed = true;
+            event({ method: 'agentrix/threadResumed', params: { threadId: resumeThreadId, requestId: message.id } });
+          }
+          // This host-only acknowledgement can only originate from the correlated response above.
+          if (!ended && message.method !== 'agentrix/threadResumed') event(message);
         });
         client.on('message', (data, binary) => {
           try {
             if (binary) throw new Error();
             const message = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(data));
             if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error();
-            if (protocol.client(message) && !ended) write(message);
+            if (!protocol.client(message) || ended) return;
+            if (resumeThreadId && !resumed) {
+              if (['thread/start', 'turn/start', 'turn/steer'].includes(message.method)) return finish('native-resume-required');
+              if (message.method === 'thread/resume') {
+                if (message.params?.threadId !== resumeThreadId || resumes.size || !Object.hasOwn(message, 'id')) return finish('native-resume-conflict');
+                resumes.set(message.id, true);
+              }
+            }
+            write(message);
           } catch { finish('malformed-client-stream'); }
         });
         client.on('close', () => finish('native-disconnected')); client.on('error', () => finish('native-websocket-error'));
@@ -103,7 +120,7 @@ function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {},
       });
       const address = `ws://127.0.0.1:${server.address().port}`;
       const tokenEnv = 'AGENTRIX_NATIVE_REMOTE_TOKEN';
-      tui = pty.spawn(cli.file, [...cli.prefix, '--remote', address, '--remote-auth-token-env', tokenEnv], {
+      tui = pty.spawn(cli.file, [...cli.prefix, '--remote', address, '--remote-auth-token-env', tokenEnv, ...(resumeThreadId ? ['resume', resumeThreadId] : [])], {
         name: 'xterm-256color', cols: 90, rows: 22, cwd, env: { ...cliEnv, [tokenEnv]: token },
         ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {}),
       });

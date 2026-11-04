@@ -11,11 +11,17 @@ const text = value => typeof value === 'string' ? value : '';
 const short = value => text(value).replace(/\s+/g, ' ').trim().slice(0, 240);
 const enabled = value => value === true || value === 'true';
 const agentRoles = new Map(Object.entries({ Explore: '搜索', Plan: '规划', 'general-purpose': '通用', claude: '通用', none: '通用', fork: '分身' }));
+function helperAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error.code === 'ESRCH' ? false : error.code === 'EPERM' ? true : null; }
+}
 
 class AgentCalls {
-  constructor({ changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true, codexHome = null, claudeHome = null, now = Date.now, since = now() } = {}) {
+  constructor({ changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true, codexHome = null, claudeHome = null, now = Date.now, since = now(), dispatchAlive = call => helperAlive(call.helperPid) } = {}) {
     this.changed = changed; this.finished = finished; this.local = local; this.folder = null;
     this.now = now; this.since = since; this.claudeHome = claudeHome; this.finishedIds = new Set();
+    this.dispatchAlive = dispatchAlive;
     this.feeds = new SubagentFeeds({ changed: feedChanged, retired: () => this.changed(), local, codexHome, claudeHome, now,
       read: async call => { this.refresh(call.key); await this.work; } });
     this.reset();
@@ -72,7 +78,8 @@ class AgentCalls {
         kind: taskKind(event),
         meeting: event.meeting ?? null, skipMeeting: event.skipMeeting ?? null, unconfirmed: event.unconfirmed === true,
         role: event.role, title: event.title, task: short(event.title), sessionId: event.sessionId, cwd: event.cwd,
-        startedAt: time(event.startedAt), done: false, rate: null, meter: new TokenRates(event.agent) };
+        startedAt: time(event.startedAt), helperPid: Number.isSafeInteger(event.helperPid) && event.helperPid > 0 ? event.helperPid : null,
+        done: false, rate: null, meter: new TokenRates(event.agent) };
       this.calls.set(event.id, next); this.feeds.track(next); this.schedule();
       return true;
     }
@@ -268,7 +275,7 @@ class AgentCalls {
       }
     }).catch(() => {}).finally(() => { if (this.calls === calls) { this.work = null; this.schedule(); } });
   }
-  signature(call) { return JSON.stringify(call && [call.model, call.effort, call.fast, call.preparing, call.title, call.role, call.rate, call.viewable]); }
+  signature(call) { return JSON.stringify(call && [call.model, call.effort, call.fast, call.preparing, call.title, call.role, call.rate, call.viewable, call.done, call.failure]); }
   async readSubagent(call, filename, calls, meta) {
     filename = filename ? await containedFile(this.folder, filename, { exact: true }) : null;
     const home = rootValue(this.claudeHome);
@@ -303,7 +310,14 @@ class AgentCalls {
   async readModels(folder, ids, calls) {
     for (const id of ids) {
       const call = calls.get(id);
-      if (call?.dispatch) await this.feeds.readDispatch(call);
+      if (call?.dispatch) {
+        let alive;
+        if (!call.done) { try { alive = await this.dispatchAlive(call); } catch {} }
+        if (this.calls !== calls || calls.get(id) !== call) return;
+        if (alive === false && !call.done && !call.reviewed) this.dispatch({ type: 'dispatch-end', id, reason: 'killed', exitCode: null,
+          model: call.model, effort: call.effort, fast: call.fast, endedAt: this.now(), outputTokens: null, activeMs: null });
+        await this.feeds.readDispatch(call);
+      }
       if (this.calls !== calls) return;
     }
     ids = new Set([...ids].filter(id => calls.get(id)?.agent === 'Claude Code' && !calls.get(id).dispatch));

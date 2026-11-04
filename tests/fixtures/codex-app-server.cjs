@@ -1,4 +1,6 @@
 const readline = require('node:readline');
+const fs = require('node:fs');
+const path = require('node:path');
 const mode = process.env.SYNTHETIC_CODEX_MODE || 'normal';
 let threadId = 'synthetic-thread', turnId = 'turn-1', turns = 0;
 const send = message => process.stdout.write(JSON.stringify(message) + '\n');
@@ -14,9 +16,15 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   if (request.method === 'initialize') result = { userAgent: mode === 'unknown-version' ? 'codex/9.99.0' : 'codex/0.166.0' };
   else if (request.method === 'thread/start' || request.method === 'thread/resume') {
     threadId = params.threadId || threadId;
+    let sandbox = params.sandbox || 'workspace-write';
+    if (mode === 'sandbox-persist') {
+      sandbox = params.sandbox || (fs.existsSync(process.env.SYNTHETIC_POLICY_FILE) ? JSON.parse(fs.readFileSync(process.env.SYNTHETIC_POLICY_FILE)).sandbox : 'read-only');
+      fs.writeFileSync(process.env.SYNTHETIC_POLICY_FILE, JSON.stringify({ sandbox }));
+    }
     result = { thread: { id: threadId, turns: [] }, cwd: params.cwd, model: params.model, serviceTier: params.serviceTier,
-      reasoningEffort: params.config?.model_reasoning_effort, approvalPolicy: params.approvalPolicy || 'on-request', sandbox: { type: params.sandbox === 'read-only' ? 'readOnly' : 'workspaceWrite' } };
+      reasoningEffort: params.config?.model_reasoning_effort, approvalPolicy: params.approvalPolicy || 'on-request', sandbox: { type: sandbox === 'read-only' ? 'readOnly' : 'workspaceWrite' } };
   } else if (request.method === 'turn/start') {
+    if (mode === 'sandbox-persist' && JSON.parse(fs.readFileSync(process.env.SYNTHETIC_POLICY_FILE)).sandbox === 'workspace-write') fs.writeFileSync(path.join(process.cwd(), 'synthetic-write-proof.txt'), 'workspace-write');
     turnId = 'turn-' + ++turns;
     result = { turn: { id: turnId, status: 'inProgress', items: [] } };
     send({ id: request.id, result });

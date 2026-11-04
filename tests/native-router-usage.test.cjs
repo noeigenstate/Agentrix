@@ -87,12 +87,13 @@ test('real main assembly reports terminal-only Claude subscription usage without
   } }]]) }, { get: (target, key) => key in target ? target[key] : forbidden });
   let cli = 'ok', codexInstalled = true;
   const context = { path, structuredClone, claudeAccounts, codexAccounts, sessions: new Map([['t', terminal]]),
-    store: { projects: [{ id: 'p', kind: 'local' }] },
+    store: { projects: [{ id: 'p', kind: 'local' }], findTerminal: () => ({ project: { id: 'p', kind: 'local' }, record: { restore: {} } }) },
+    randomUUID: require('node:crypto').randomUUID, queueMicrotask, wholeThread: require('../electron/terminal-title.cjs').wholeThread,
     app: { getPath: () => directory, isPackaged: false }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
     createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: cli }),
     codexExecutable: async () => codexInstalled ? 'fixture-codex' : null,
-    nativeSpec: forbidden, send: forbidden, scheduleState: forbidden,
+    nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {},
     require: name => {
       if (name === 'electron') return { safeStorage };
       if (name === './features/team/team.cjs') return { projectTeam: forbidden };
@@ -108,6 +109,7 @@ test('real main assembly reports terminal-only Claude subscription usage without
   };
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   vm.createContext(context);
+  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function readNativeConnections(')), context);
   vm.runInContext(source.slice(source.indexOf('function localClaudeMeters('), source.indexOf('function disposeClaudeAccounts(')), context);
   // Execute the actual main composition and callbacks; substitute only dynamic module loading at the process boundary.
   vm.runInContext(source.slice(source.indexOf('async function readNativeConnections('), source.indexOf('function startTerminal('))
