@@ -117,7 +117,7 @@ test("typing, selecting or copying in a small card's terminal never expands the 
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }),
     './AgentLauncher': { AgentLauncher: () => null }, './TerminalPane': { TerminalPane: () => null },
     './NativeSessionView': { NativeSessionView: () => null }, './NativePathNote': { NativePathNote: () => null },
-    './native-store.ts': { useNativeEntries: () => new Map(), nativeShown: () => false, ensureNativeSession() {} },
+    './native-store.ts': { useNativeEntries: () => new Map(), nativeShown: () => false, ensureNativeSession() {} }, './draft-handoff.ts': { useHandoff: () => ({}) },
     './ReadingView': { ReadingView: () => null },
     './SubagentPane': { SubagentPane: () => null },
     './subagent-splits.ts': { closeSplit: noop, splitsOf: () => [], useSplits: () => [] },
@@ -128,7 +128,8 @@ test("typing, selecting or copying in a small card's terminal never expands the 
   const agent = { id: 'agent', title: 'agent', sessionId: 'session', status: 'running', codexActive: true };
   const tree = harness.render('ProjectTerminals', { project: { id: 'p', name: 'p', terminals: [agent] }, focused: false, fontSize: 14, activeId: null,
     setActiveId: id => selected.push(id), onExpand: () => expanded.push('expand'), onAction: noop, onError: noop, onOpenLink: noop }).result;
-  const nodes = elements(tree), split = nodes.find(node => node.props?.['data-terminal-id'] === 'agent');
+  // The card's body is drawn by the function child of the card that holds its draft handoff.
+  const top = elements(tree), nodes = [...top, ...top.filter(node => typeof node.props?.children === 'function').flatMap(node => elements(node.props.children({})))], split = nodes.find(node => node.props?.['data-terminal-id'] === 'agent');
   // Every pointer press and focus inside a split (typing, a drag selection, the copy menu) reaches it through these.
   split.props.onPointerDownCapture(); split.props.onFocusCapture();
   const pane = nodes.find(node => node.props?.sessionId === 'session' && node.props?.id === 'agent');

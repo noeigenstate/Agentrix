@@ -11,6 +11,9 @@ import { copyNativeText, type SwitchState } from './native-bridge.ts';
 import { asksChoice, SwitchLine, SwitchQuestion } from './SwitchNotice';
 import './native-session.css';
 
+// Why the session went to the terminal, when anything says so; the owner's own choice of the terminal has no reason to tell.
+const movedWords = (reason: string | null) => { const words = reasonWords(reason); return words ? t('已改用终端 · {reason}', { reason: words }) : t('已改用终端'); };
+
 // terminalActive: the card shows the terminal, the only place the move to the terminal and a change in flight are told here. A failed switch is
 // told wherever the card is. sessionId: the card's native runtime session, when it has one (a terminal session has none).
 export function NativePathNote({ terminalId, terminalActive = true, switchState = null, sessionId = null }: { terminalId: string; terminalActive?: boolean; switchState?: SwitchState | null; sessionId?: string | null }) {
@@ -18,7 +21,7 @@ export function NativePathNote({ terminalId, terminalActive = true, switchState 
   const path = terminalActive ? terminalSwitch(entry) : null, moving = terminalActive ? state : null;
   const [error, setError] = useState<string | null>(null);
   const note = state && failure ? { text: failure, dismiss: () => dismissSwitchNote(terminalId, state) }
-    : path ? { text: t('已改用终端 · {reason}', { reason: reasonWords(path.reason) ?? t('API 暂时不可用') }), dismiss: () => dismissNote(terminalId) } : null;
+    : path ? { text: movedWords(path.reason), dismiss: () => dismissNote(terminalId) } : null;
   const line = switchLine(moving), asking = asksChoice(moving);
   if (!note && !line && !asking) return null;
   const unsent = entry?.model.order.map(id => entry.model.items[id]).filter(item => item.kind === 'user-message' && item.content.unsent === true) ?? [];

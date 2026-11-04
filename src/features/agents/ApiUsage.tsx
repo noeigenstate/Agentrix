@@ -4,7 +4,8 @@
 //   - an API connection shows the API spend and the monthly budget (a bar when one is set), never the subscription windows;
 //   - not connected, or not known, says "额度 未知".
 // Windows come from the main process; the current session's agent falls back to what its own screen and records gave when the main process has none.
-// Read-only: it only asks the main process (for the current project's scope). A value nobody gave is 未知, never 0.
+// Read-only: it only asks the main process (for the current project's scope). A value nobody gave is 未知, never 0. What the main process does not give (a read
+// that has not come back, one that failed, a project it cannot answer for) leaves the connection and the allowance 未知; the current session's own context, bars and tokens stay.
 import { type ReactNode, useEffect, useState } from 'react';
 import type { AgentUsage, ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
@@ -125,8 +126,8 @@ function ApiMetrics({ agent, usage }: { agent: NativeAgent; usage: NativeUsage }
   </>;
 }
 
-function AgentSection({ agent, usage, terminal }: { agent: NativeAgent; usage: NativeUsage; terminal: ProjectTerminal }) {
-  const state = usage.agents[agent], connection = connectionWord(agent, state?.connection), kind = state?.connection?.kind;
+function AgentSection({ agent, usage, terminal }: { agent: NativeAgent; usage: NativeUsage | null; terminal: ProjectTerminal }) {
+  const state = usage?.agents[agent], connection = connectionWord(agent, state?.connection), kind = state?.connection?.kind;
   // The session in view belongs to one agent; only it has a context length and a round.
   const current = terminal.codexActive && terminal.agent === agent, tokens = terminal.agentUsage;
   const rows = [[t('本轮'), tokens?.round], [t('本次对话'), tokens?.total]] as const;
@@ -142,7 +143,7 @@ function AgentSection({ agent, usage, terminal }: { agent: NativeAgent; usage: N
     {(current || shown) && <div className="activity-metrics">
       {current && <ContextMetric usage={tokens} />}
       {plan && <QuotaMetrics limits={state?.limits} current={current} usage={tokens} />}
-      {kind === 'api' && <ApiMetrics agent={agent} usage={usage} />}
+      {kind === 'api' && usage && <ApiMetrics agent={agent} usage={usage} />}
       {current && rows.map(([label, counted]) => counted && <TokenMetric key={label} label={label} tokens={counted} />)}
     </div>}
     {source && <p className="activity-note">{source}</p>}
@@ -153,7 +154,7 @@ function AgentSection({ agent, usage, terminal }: { agent: NativeAgent; usage: N
 }
 
 // Both agents' sections, one under the other; the block's content, which scrolls under its fixed title.
-export const AgentSections = ({ usage, terminal }: { usage: NativeUsage; terminal: ProjectTerminal }) => <div className="api-agents">
+export const AgentSections = ({ usage, terminal }: { usage: NativeUsage | null; terminal: ProjectTerminal }) => <div className="api-agents">
   {AGENTS.map(agent => <AgentSection key={agent} agent={agent} usage={usage} terminal={terminal} />)}
 </div>;
 
@@ -171,11 +172,12 @@ export function ApiUsage({ terminal, projectId }: { terminal: ProjectTerminal; p
     const first = setTimeout(() => void read(), revision === 0 ? 0 : REVISION_DELAY_MS), again = setInterval(() => void read(), REFRESH_MS);
     return () => { active = false; clearTimeout(first); clearInterval(again); };
   }, [revision, projectId]);
-  if (!bridge || (!usage && !error)) return null;
+  // Without the bridge there is no one to ask; the card still tells a running session's context, bars and tokens.
+  if (!bridge && !terminal.codexActive) return null;
   const label = t('运行方式与额度');
-  if (!usage) return <section className="activity-card activity-api" aria-label={label}><p className="activity-note" role="alert">{t('无法读取额度：{message}', { message: error ?? '' })}</p></section>;
   return <section className="activity-card activity-api" aria-label={label}>
     <h3 className="activity-card-title">{label}</h3>
+    {error && !usage && <p className="activity-note" role="alert">{t('无法读取额度：{message}', { message: error })}</p>}
     <AgentSections usage={usage} terminal={terminal} />
   </section>;
 }

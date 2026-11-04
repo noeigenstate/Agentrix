@@ -1,8 +1,8 @@
 // How the model's items and states read: the text an item shows (tolerant of the shapes the two runtimes give — a field that is absent is
 // absent, never guessed) and the words for states, receipts, routes and money.
 //
-// The item content fields read here: messages, reasoning summaries and plans `text` (a string, or blocks with `text`; a reasoning summary
-// may also give `summary`); the owner's message `clientMessageId`; commands `command` (string or list), `cwd`, `exitCode`, `durationMs`, `output`;
+// The item content fields read here: messages and plans `text` (a string, or blocks with `text`);
+// the owner's message `clientMessageId` and `images`; commands `command` (string or list), `cwd`, `exitCode`, `durationMs`, `output`;
 // file changes `changes[{ path, kind, diff }]` or `path`, `kind`, `diff`; tools `name` or `tool`, `server`, `input` or `arguments`, `result` or
 // `output`. Quota windows are `{ usedPercent, windowDurationMins, resetsAtMs }` with `resetsAtMs` in milliseconds.
 import { t } from '../../shared/i18n';
@@ -16,7 +16,6 @@ const preview = (value: unknown) => (typeof value === 'string' ? value : value =
 
 // ── Items ──
 export const messageText = (item: NativeItem) => item.deltas.text || lines(item.content.text) || lines(item.content.content);
-export const reasoningText = (item: NativeItem) => item.deltas.reasoning.filter(Boolean).join('\n\n') || lines(item.content.text) || lines(item.content.summary);
 export const planText = (item: NativeItem) => item.deltas.plan || lines(item.content.text);
 
 export function commandOf(item: NativeItem) {
@@ -47,13 +46,8 @@ export function itemState(item: NativeItem): StepMark {
 }
 
 // ── States ──
-const SESSION_WORDS: Record<string, string> = {
-  starting: '正在启动', idle: '空闲', running: '工作中', waiting: '等你确认', stopping: '正在停止', stopped: '已结束', disconnected: '连接中断', failed: '出错了',
-};
-export const sessionWord = (state: string | null | undefined) => (state && SESSION_WORDS[state] ? t(SESSION_WORDS[state]) : t('状态未知'));
-
-const TURN_WORDS: Record<string, string> = { completed: '本轮已完成', failed: '本轮出错', interrupted: '本轮已中断' };
-export const turnWord = (status: string | null) => (status && TURN_WORDS[status] ? t(TURN_WORDS[status]) : null);
+// The word for a turn that failed with no message of its own.
+export const turnFailed = () => t('本轮出错');
 
 const RECEIPT_WORDS: Record<string, string> = { queued: '已排队', delivered: '已送达', consumed: '已被读取', rejected: '未送达', unknown: '送达状态未知' };
 export const receiptWord = (status: string | null | undefined) => (status && RECEIPT_WORDS[status] ? t(RECEIPT_WORDS[status]) : null);
@@ -71,7 +65,9 @@ export function shortPath(path: string, max = 32) {
   const separator = path.includes('\\') ? '\\' : '/', parts = path.split(/[\\/]+/).filter(Boolean);
   return `…${separator}${parts.slice(-2).join(separator)}`;
 }
-export const reasonWords = (reason: string | null | undefined) => (!reason ? null : REASON_WORDS[reason] ? t(REASON_WORDS[reason]) : reason);
+// A reason in words: a code we know says it; a sentence main wrote for the owner is shown as it is; a code we do not know is not shown, and neither is no reason.
+const CODE = /^[a-z][a-z0-9_.-]*$/i;
+export const reasonWords = (reason: string | null | undefined) => (!reason ? null : REASON_WORDS[reason] ? t(REASON_WORDS[reason]) : CODE.test(reason) ? null : reason);
 
 export const routeWord = (route: string | null | undefined) => (route === 'api' ? 'API' : route === 'terminal' ? t('终端') : route === 'native' ? t('原生') : route === 'subscription' ? t('订阅') : t('未知'));
 
@@ -97,12 +93,6 @@ export function switchFailure(state: SwitchState | null | undefined) {
 // What the owner is told before choosing: a switch ends background tasks. Unknown is not none, so no count is guessed.
 export const backgroundWords = (background: SwitchState['background']) => (background.known && typeof background.count === 'number'
   ? t('切换会结束 {count} 个后台任务。', { count: background.count }) : t('切换会结束后台任务；现在还不知道有几个在运行。'));
-
-// "Claude · API" or "Codex · 原生": whose session this is and what it runs on.
-export function runtimeWord(identity: { provider: string; transport: string } | null) {
-  if (!identity) return '';
-  return identity.provider === 'claude' ? 'Claude · API' : `Codex · ${t('原生')}`;
-}
 
 // ── Numbers ──
 // Money is estimated from tokens at public prices; an unknown amount is 未知, never $0.00.

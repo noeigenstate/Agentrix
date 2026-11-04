@@ -1,6 +1,6 @@
 /* The activity pane, a quiet status inspector on the pane colour, docked to the main area's right edge. Two blocks and nothing else: the main model (its task list) and 运行方式与额度
    (per agent: connection, then its bars). Each block is a title over its content, 20px apart, 8px between a title and its content. The pane does not scroll as a whole: each block keeps its
-   title fixed and its content scrolls inside it, the blocks sharing the height in proportion to their content and each keeping a floor (the head and one row), so a short window never
+   title fixed and its content scrolls inside it, the blocks sharing the height in proportion to their content and each keeping a floor (the head and one row; the model block's is its task row), so a short window never
    squeezes one away. One left edge and one right-hand number column run through both. The model block's title is 13px in the secondary ink, the allowance block's 14px in the primary ink; rows are 32px on a 16 | text | end grid, metrics an 88 | meter | 48 grid
    (28px inside an agent's section); text is 13px for a row's subject, 12px for the rest. The models the agent called are not here: they are the left bar's Agent tab and use the same rows, in two lines.
    The meters' tracks take the pane's own well fill and their fill is neutral grey; the warning colour appears only from 90%, and the spinner is the one other colour. */
@@ -11,8 +11,10 @@
 .activity-pane { gap: 20px; padding: 16px; overscroll-behavior: contain; overflow: hidden; }
 .activity-card { flex: none; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 /* The two blocks share the pane's height by their content and shrink alike, each keeping a floor; their own lists scroll under the fixed title. */
-.activity-main { flex: 0 1 auto; min-height: 100px; }
-.activity-api { flex: 0 1 auto; min-height: 112px; }
+/* The model block never gives up its task: its floor is its title, its model rows (up to 64px: two rows when no model is named yet) and one full 32px task row, so a short window
+   squeezes the allowance block instead, whose list scrolls inside. */
+.activity-main { flex: 0 1 auto; min-height: 132px; }
+.activity-api { flex: 0 1 auto; min-height: 76px; }
 /* The called models fill the left bar's Agent tab (and the narrow window's popover): the section takes what the bar gives and its list scrolls. */
 .activity-calls { flex: 0 1 auto; min-height: 0; }
 .activity-card-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
@@ -31,6 +33,7 @@
 @keyframes activity-fade { 0% { --fade-top: 0px; --fade-bottom: 16px; } 4% { --fade-top: 16px; } 96% { --fade-bottom: 16px; } 100% { --fade-top: 16px; --fade-bottom: 0px; } }
 .activity-main-tasks, .activity-call-groups, .api-agents { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; display: grid; align-content: start; margin: 0 -14px 0 -8px; padding: 0 8px; list-style: none;
   mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent); animation: activity-fade linear both; animation-timeline: scroll(self); }
+.activity-main-tasks:has(li) { min-height: 32px; }
 .activity-call-rows li { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; height: 32px; }
 .activity-call-rows li::before { content: ''; position: absolute; inset: 0 -8px; border-radius: 8px; }
 .activity-call-rows li:hover::before { background: var(--bg-hover); }

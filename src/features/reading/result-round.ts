@@ -43,7 +43,8 @@ export type LatestResult = {
 
 // The latest round, once it has ended: its kind and what it left. Null while the agent works or waits (nothing to hand
 // in yet), and for a round that left neither a reply, a picture nor files. Only this round carries the result card.
-export function latestResult(entries: readonly ConversationEntry[], { idle, interrupted }: { idle: boolean; interrupted: boolean }): LatestResult | null {
+// failure: how the round failed when the source says so (a native session's turn.completed), when no step of it did.
+export function latestResult(entries: readonly ConversationEntry[], { idle, interrupted, failure: reported = '' }: { idle: boolean; interrupted: boolean; failure?: string }): LatestResult | null {
   const start = startOf(entries);
   if (!idle || start < 0) return null;
   const round = entries.slice(start + 1), last = round.at(-1);
@@ -55,7 +56,7 @@ export function latestResult(entries: readonly ConversationEntry[], { idle, inte
     checks: tools.filter(entry => entry.tool!.kind === 'command' && entry.tool!.phrase && CHECKS.has(entry.tool!.phrase))
       .map(({ id, tool }) => ({ id, phrase: tool!.phrase!, target: tool!.target, done: tool!.done, failed: tool!.failed })),
   };
-  const failure = last.tool?.failed ? last.tool.target : '';
+  const failure = last.tool?.failed ? last.tool.target : reported;
   if (interrupted || failure) return { ...base, kind: 'failed', anchor: last.id, picture: null, failure };
   const drawn = lastWhere(round, entry => entry.generated && entry.images?.[0]);
   if (drawn) return { ...base, kind: 'picture', anchor: drawn.id, picture: drawn.generated!, failure: '' };
