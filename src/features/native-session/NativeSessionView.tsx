@@ -2,17 +2,18 @@
 // data; the view is the reading view's own: the conversation is native-entries.ts's ConversationEntry[] drawn by ConversationFeed, with the same
 // scroll, working line, result card and message box. Only what a terminal session does not have is added at the end of the timeline: the requests
 // waiting on the owner and the question about a run-mode change.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react';
 import { ArrowDown, Image as ImageIcon, PaperPlaneRight, Stop } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
 import { fullHintProps, HIDDEN_NOTE, useFittingHint } from '../../shared/useFittingHint';
 import { actionText } from '../agents/action-text';
 import { ConversationDecorations, ConversationFeed } from '../reading/ConversationFeed';
-import { AgentMark, latestResult, PendingPromptEntries, QuoteChip, quoteExcerpt, ResultActions, ResultChecks, ResultStatus, TimelineStep, useStickToBottom, UserImages, withQuote, WorkingLine, type MessageQuote, type PendingPrompt } from '../reading/feed-parts';
+import { AgentMark, latestResult, pastedPicture, PendingPromptEntries, QuoteChip, quoteExcerpt, ResultActions, ResultChecks, ResultStatus, TimelineStep, useStickToBottom, UserImages, withQuote, WorkingLine, type MessageQuote, type PendingPrompt } from '../reading/feed-parts';
 import { nativeBridge, type NativePendingInput, type SwitchState } from './native-bridge.ts';
 import type { Handoff } from './draft-handoff.ts';
 import { nativeEntries, nativePending, runningStep, type SentMessage } from './native-entries.ts';
 import { canSend, isOver, isWorking } from './native-model.ts';
+import { MAX_PICTURES, picturesOnly, readPictures } from './native-pictures.ts';
 import { dismissNative, nativeShown, resolveSwitch, useNativeEntries, type NativeEntry } from './native-store.ts';
 import { NativeRequestCard } from './NativeRequestCard';
 import { asksChoice, SwitchLine, SwitchQuestion } from './SwitchNotice';
@@ -37,6 +38,8 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const [carried, setCarried] = useState<string[]>([]), [unsent, setUnsent] = useState<NativePendingInput[]>([]);
   // One quoted message waits for the next message; the newest wins.
   const [quote, setQuote] = useState<MessageQuote | null>(null);
+  // A file is being dragged over the view (the box takes it as a picture).
+  const [dropping, setDropping] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null), scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null);
   const locked = handoff.locked, open = canSend(model) && !locked, over = isOver(model), working = !over && isWorking(model), waiting = model.session?.state === 'waiting';
   const entries = useMemo(() => nativeEntries(model, Object.fromEntries(sent.flatMap(message => message.images?.length ? [[message.id, message.images]] : []))), [model, sent]);
@@ -77,12 +80,30 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     if (!result.ok) { setSent(list => list.filter(message => message.id !== id)); setError(result.error); }
     return result.ok;
   };
-  // The box empties at once and takes the words back if the main process refuses them, unless something new was typed meanwhile.
+  // The box empties at once and takes the words back if the main process refuses them, unless something new was typed meanwhile. Pictures alone are a message too.
   const send = async () => {
     const value = text.trim(), pictures = carried, quoted = quote;
-    if (!value || !open) return;
+    if (!(value || pictures.length) || !open) return;
     setText(''); setCarried([]); setQuote(null);
-    if (!await post(withQuote(quoted?.excerpt, value), pictures)) { setText(current => current || value); setCarried(current => current.length ? current : pictures); setQuote(current => current ?? quoted); }
+    if (!await post(withQuote(quoted?.excerpt, value || picturesOnly()), pictures)) { setText(current => current || value); setCarried(current => current.length ? current : pictures); setQuote(current => current ?? quoted); }
+  };
+  // A picture pasted or dropped joins the ones that go with the next message; one the runtime would refuse is refused here, with the reason.
+  const attach = async (files: File[]) => {
+    const { pictures, error: problem } = await readPictures(files, MAX_PICTURES - carried.length);
+    setCarried(list => [...list, ...pictures.filter(picture => !list.includes(picture))].slice(0, MAX_PICTURES));
+    setError(problem);
+  };
+  const pasteImage = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const file = pastedPicture(event.clipboardData)?.getAsFile();
+    if (!file) return;
+    event.preventDefault(); void attach([file]);
+  };
+  const carriesFiles = (event: DragEvent) => event.dataTransfer.types.includes('Files');
+  const dragOver = (event: DragEvent) => { if (carriesFiles(event)) { event.preventDefault(); event.dataTransfer.dropEffect = open ? 'copy' : 'none'; setDropping(open); } };
+  const drop = (event: DragEvent) => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault(); setDropping(false);
+    if (open) void attach([...event.dataTransfer.files]);
   };
   // A message that was never delivered is sent again only by the owner's click; its card goes, and comes back if this one is refused too.
   const discard = (prompt: PendingPrompt) => setDiscarded(list => new Set(list).add(prompt.id));
@@ -143,7 +164,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     </div>}
   </>;
 
-  return <div className="reading-view" data-agent={kind} data-native-session={sessionId}>
+  return <div className={`reading-view${dropping ? ' is-dropping' : ''}`} data-agent={kind} data-native-session={sessionId} onDragOver={dragOver} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false); }} onDrop={drop}>
     <div className="reading-scroll-area">
       <div className="reading-scroll" ref={scroller} tabIndex={0}>
         <ConversationDecorations.Provider value={{ start: 0, status: statusInTurn ? status : null, running: working, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
@@ -165,10 +186,10 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     {quote && <QuoteChip quote={quote} onRemove={() => { setQuote(null); box.current?.focus(); }} />}
     <div className="reading-composer">
       <textarea ref={box} rows={1} value={text} disabled={!open} aria-label={t('给 {name} 发消息', { name: agent })} placeholder={hint} {...fullHint}
-        onChange={event => setText(event.target.value)} onKeyDown={onKeyDown} />
+        onChange={event => setText(event.target.value)} onKeyDown={onKeyDown} onPaste={pasteImage} />
       {fullHint['aria-describedby'] && <span id={hintId} style={HIDDEN_NOTE}>{shownHints[0]}</span>}
       {working && <button type="button" className="icon-button" disabled={!open} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={() => void stop()}><Stop size={15} weight="fill" /></button>}
-      <button type="button" className="icon-button reading-send" title={t('发送')} aria-label={t('发送')} disabled={!open || !text.trim()} onClick={() => void send()}><PaperPlaneRight size={15} weight="fill" /></button>
+      <button type="button" className="icon-button reading-send" title={t('发送')} aria-label={t('发送')} disabled={!open || !(text.trim() || carried.length)} onClick={() => void send()}><PaperPlaneRight size={15} weight="fill" /></button>
     </div>
   </div>;
 }

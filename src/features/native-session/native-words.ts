@@ -3,8 +3,8 @@
 //
 // The item content fields read here: messages and plans `text` (a string, or blocks with `text`);
 // the owner's message `clientMessageId` and `images`; commands `command` (string or list), `phrase` (main's few words for it), `cwd`, `exitCode`, `durationMs`, `output`;
-// file changes `changes[{ path, kind, diff }]` or `path`, `kind`, `diff`; tools `name` or `tool`, `server`, `input` or `arguments`, `result` or
-// `output`. Quota windows are `{ usedPercent, windowDurationMins, resetsAtMs }` with `resetsAtMs` in milliseconds.
+// file changes `changes[{ path, kind, diff }]` or `path`, `kind`, `diff`; tools `name` or `tool`, `server`, `path`, `output` (or `result`), and `input` or `arguments`
+// only to name a step by (never shown); an assistant picture `generated { path, prompt }` and `images`. Quota windows are `{ usedPercent, windowDurationMins, resetsAtMs }` with `resetsAtMs` in milliseconds.
 import { t } from '../../shared/i18n';
 import type { ResultFacts } from '../reading/feed-parts';
 import type { AgentConnection, ConnectionTest, LimitWindow, NativeAgent, SwitchState } from './native-bridge.ts';
@@ -13,11 +13,28 @@ import type { LimitNotice, NativeItem, Payload, TurnEnd } from './native-model.t
 const str = (value: unknown) => (typeof value === 'string' && value !== '' ? value : null);
 const list = (value: unknown): Payload[] => (Array.isArray(value) ? value.filter(entry => entry && typeof entry === 'object') as Payload[] : []);
 const lines = (value: unknown) => (Array.isArray(value) ? value.map(entry => typeof entry === 'string' ? entry : (str((entry as Payload | null)?.text) ?? '')).filter(Boolean).join('\n') : (str(value) ?? ''));
-const preview = (value: unknown) => (typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value, null, 2));
+// What a tool printed, as words: a text, or the text blocks of a list or of its `content`. Anything else (a picture, a structure) has no words here, and JSON is never made of it.
+const printed = (value: unknown): string => (typeof value === 'string' ? value : Array.isArray(value) ? value.map(printed).filter(Boolean).join('\n')
+  : value && typeof value === 'object' ? printed((value as Payload).text ?? (value as Payload).content) : '');
+// The fields a tool's input names: Claude gives the input as a JSON text (cut short when large, then it names none), Codex as an object.
+function inputFields(value: unknown): Payload {
+  try { const found = typeof value === 'string' ? JSON.parse(value) : value; return found && typeof found === 'object' && !Array.isArray(found) ? found as Payload : {}; } catch { return {}; }
+}
+export const fieldOf = (fields: Payload, ...names: string[]) => names.map(name => fields[name]).find((value): value is string => typeof value === 'string' && value !== '') ?? '';
 
 // ── Items ──
 export const messageText = (item: NativeItem) => item.deltas.text || lines(item.content.text) || lines(item.content.content);
 export const planText = (item: NativeItem) => item.deltas.plan || lines(item.content.text);
+// The pictures an item carries (the owner's, or one the agent drew), as data the view can show; undefined when it carries none.
+export function picturesOf(item: NativeItem) {
+  const found = Array.isArray(item.content.images) ? item.content.images.filter((image): image is string => typeof image === 'string' && image !== '') : [];
+  return found.length ? found : undefined;
+}
+// The picture the agent drew: its file and the prompt behind it; absent unless both are given as text.
+export function generatedOf(item: NativeItem) {
+  const { path, prompt } = (item.content.generated ?? {}) as Payload;
+  return str(path) ? { path: str(path)!, prompt: str(prompt) ?? '' } : null;
+}
 
 export function commandOf(item: NativeItem) {
   const { command, phrase, cwd, exitCode, durationMs, output } = item.content;
@@ -33,16 +50,18 @@ export function fileChanges(item: NativeItem) {
 }
 
 export function toolOf(item: NativeItem) {
-  const { name, tool, server, input, arguments: args, result, output } = item.content;
-  return { name: str(name) ?? str(tool) ?? t('工具'), server: str(server), input: preview(input ?? args), result: preview(result ?? output) };
+  const { name, tool, server, input, arguments: args, result, output, path } = item.content;
+  return { name: str(name) ?? str(tool) ?? t('工具'), server: str(server), fields: inputFields(input ?? args), path: str(path), result: printed(output) || printed(result) };
 }
 
-// The mark on a step: running turns, done ticks, failed crosses; a status the item does not give (or one we do not know) has no mark.
-export type StepMark = 'running' | 'done' | 'failed' | null;
-export function itemState(item: NativeItem): StepMark {
+// The mark on a step: running turns, done ticks, failed crosses; a status the item does not give (or one we do not know) has no mark. A step that was
+// cut off (the provider says interrupted), or that still runs when its turn is over (settled), is interrupted: it is never drawn as done.
+export type StepMark = 'running' | 'done' | 'failed' | 'interrupted' | null;
+export function itemState(item: NativeItem, settled = false): StepMark {
   const status = item.status?.toLowerCase() ?? '';
-  if (/^(running|in[_ -]?progress|started|pending|active)$/.test(status)) return 'running';
+  if (/^(running|in[_ -]?progress|started|pending|active)$/.test(status)) return settled ? 'interrupted' : 'running';
   if (/^(completed?|done|success|succeeded)$/.test(status)) return 'done';
+  if (/^(interrupted|cancell?ed|aborted)$/.test(status)) return 'interrupted';
   return /^(failed|error|errored)$/.test(status) ? 'failed' : null;
 }
 

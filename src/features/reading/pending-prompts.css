@@ -2,6 +2,7 @@
 .reading-pending > small { font-size: calc(11px * var(--reading-text)); color: var(--text-3); }
 
 /* Pictures sent with a message, as small thumbnails under its text. */
+.reading-user-note { display: block; margin-top: 6px; font-size: calc(11px * var(--reading-text)); color: var(--text-3); }
 .reading-user-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .reading-user-image { position: relative; display: block; }
 .reading-user-image-zoom { display: block; padding: 0; overflow: hidden; border: 1px solid var(--divider); border-radius: 8px; background: var(--bg-app); cursor: zoom-in; }

@@ -125,7 +125,7 @@
 .api-agent .activity-metrics { gap: 4px; }
 .api-agent .activity-metric { grid-template-rows: 28px; }
 /* The link to the console's billing page under the API spend: a quiet text button on the label column's left edge. */
-.api-agent .api-billing { justify-self: start; padding: 0; }
+.api-agent .api-billing { justify-self: start; min-height: 32px; padding: 0; }
 
 /* A limit reset: a 32px row on the task grid, its icon (or, counting down, the seconds), its label and, at the right, how many are left (or, counting down, the way out).
    With no reset to use it is the disabled grey. */

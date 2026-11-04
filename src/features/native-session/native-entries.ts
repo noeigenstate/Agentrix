@@ -3,61 +3,60 @@
 // event carried stays empty (no time is 0, no output is made up); a thinking summary is not part of the reading view's conversation.
 import type { AgentActionBrief, ConversationEntry } from '../../shared/types';
 import { t } from '../../shared/i18n';
-import type { PendingPrompt } from '../reading/feed-parts';
-import type { NativeItem, NativeModel } from './native-model.ts';
-import { commandOf, fileChanges, itemState, messageText, planText, shortPath, toolOf } from './native-words';
+import type { MessageEntry, PendingPrompt } from '../reading/feed-parts';
+import { isOver, type NativeItem, type NativeModel } from './native-model.ts';
+import { commandOf, fieldOf, fileChanges, generatedOf, itemState, messageText, picturesOf, planText, shortPath, toolOf, type StepMark } from './native-words';
 
-// The reading view's tool step, with what the step printed (a command's output, a diff, a tool's input and result) for the opened group to show.
+// The reading view's tool step, with what the step printed (a command's output, a diff, a tool's result) for the opened group to show.
 type Step = AgentActionBrief & { failed: boolean; output?: string };
 const DONE_STEP = /^(completed|done)$/i;
 const idOf = (item: NativeItem) => (typeof item.content.clientMessageId === 'string' && item.content.clientMessageId ? item.content.clientMessageId : item.id);
-const imagesOf = (item: NativeItem) => (Array.isArray(item.content.images) ? item.content.images.filter((image): image is string => typeof image === 'string' && image !== '') : undefined);
-
-// The fields a Claude tool's input names (it gives the input as a JSON text); anything that is not an object gives none.
-function fieldsOf(input: string): Record<string, unknown> {
-  try { const value: unknown = JSON.parse(input); return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; } catch { return {}; }
-}
-const field = (fields: Record<string, unknown>, ...names: string[]) => names.map(name => fields[name]).find((value): value is string => typeof value === 'string' && value !== '') ?? '';
 
 // By its name, what kind of step a tool is (Claude's tools by their names; Codex's tools carry a server).
 const KINDS: [RegExp, AgentActionBrief['kind']][] = [[/^Read$/, 'read'], [/^(Grep|Glob)$/, 'search'], [/^Web(Fetch|Search)$/, 'web'], [/^(Task|Agent)$/, 'agent'], [/^Skill$/, 'skill'], [/^mcp__/, 'mcp']];
 // The field a kind of step is named by.
 const TARGET_FIELDS: Partial<Record<AgentActionBrief['kind'], string[]>> = { read: ['file_path', 'path'], search: ['pattern', 'query'], web: ['url', 'query'], agent: ['description', 'subagent_type'], skill: ['skill'] };
 
-function toolStep(item: NativeItem, state: ReturnType<typeof itemState>): Step {
-  const { name, server, input, result } = toolOf(item);
+// A step that ended without a result is cut off, not done: it is drawn as stopped (the cross) and says so.
+const marks = (state: StepMark) => ({ done: state !== 'running', failed: state === 'failed' || state === 'interrupted' });
+
+function toolStep(item: NativeItem, state: StepMark): Step {
+  const { name, server, fields, path, result } = toolOf(item);
   const kind = server ? 'mcp' : KINDS.find(([pattern]) => pattern.test(name))?.[1] ?? 'other';
-  const target = server ? `${server} · ${name}` : field(fieldsOf(input), ...TARGET_FIELDS[kind] ?? []) || name;
-  return { kind, tool: name, target, detail: '', done: state !== 'running', failed: state === 'failed', output: [input, result].filter(Boolean).join('\n\n') };
+  const target = server ? `${server} · ${name}` : (kind === 'read' && path) || fieldOf(fields, ...TARGET_FIELDS[kind] ?? []) || name;
+  return { kind, tool: name, target, detail: '', ...marks(state), output: result };
 }
 
-function commandStep(item: NativeItem, state: ReturnType<typeof itemState>): Step {
-  // Claude names the command in the input of its Bash tool; Codex gives it as `command`. The phrase (运行测试, 检查类型…) is main's, from the same rules the
-  // terminal transcript uses (electron/agent-actions.cjs), so the result row's list of checks reads the same in both.
-  const { command: given, phrase, cwd, exitCode, durationMs, output } = commandOf(item), failed = !!exitCode || state === 'failed';
-  const command = given || field(fieldsOf(toolOf(item).input), 'command');
+function commandStep(item: NativeItem, state: StepMark): Step {
+  // The command and its phrase (运行测试, 检查类型…) are main's, from the same rules the terminal transcript uses (electron/command-phrase.cjs), so the result
+  // row's list of checks reads the same in both. A record that gives only the tool's input names the command there.
+  const { command: given, phrase, cwd, exitCode, durationMs, output } = commandOf(item), mark = marks(state);
   const facts = [cwd && shortPath(cwd), exitCode !== null && t('退出码 {code}', { code: exitCode }), durationMs !== null && t('用时 {seconds} 秒', { seconds: (durationMs / 1000).toFixed(1) })].filter(Boolean).join(' · ');
-  return { kind: 'command', tool: 'command', target: command, detail: facts, done: state !== 'running', failed, output, ...(phrase ? { phrase } : {}) };
+  return { kind: 'command', tool: 'command', target: given || fieldOf(toolOf(item).fields, 'command'), detail: facts, ...mark, failed: mark.failed || !!exitCode, output, ...(phrase ? { phrase } : {}) };
 }
 
-function fileStep(item: NativeItem, state: ReturnType<typeof itemState>): Step {
-  const changes = fileChanges(item), { input, result } = toolOf(item);
-  // A change Claude names only in the input of its Edit or Write.
-  const paths = changes.map(change => change.path).filter(Boolean), named = paths.length ? paths : [field(fieldsOf(input), 'file_path', 'path')].filter(Boolean);
+function fileStep(item: NativeItem, state: StepMark): Step {
+  const changes = fileChanges(item), { fields, result } = toolOf(item);
+  // A change named by its path, else (an older record) by the input of the Edit or Write.
+  const paths = changes.map(change => change.path).filter(Boolean), named = paths.length ? paths : [fieldOf(fields, 'file_path', 'path')].filter(Boolean);
   const diffs = changes.filter(change => change.diff).map(change => (changes.length > 1 && change.path ? `${change.path}\n${change.diff}` : change.diff));
-  return { kind: 'edit', tool: 'file-change', target: named.join('、'), detail: '', done: state !== 'running', failed: state === 'failed', written: named, output: (diffs.length ? diffs.join('\n\n') : input) || result };
+  return { kind: 'edit', tool: 'file-change', target: named.join('、'), detail: '', ...marks(state), written: named, output: diffs.length ? diffs.join('\n\n') : result };
 }
 
-function stepOf(item: NativeItem, over: boolean): Step | null {
-  const state = over && itemState(item) === 'running' ? null : itemState(item);
-  switch (item.kind) {
-    case 'command': return commandStep(item, state);
-    case 'file-change': return fileStep(item, state);
-    case 'tool': return toolStep(item, state);
-    case 'web': return { kind: 'web', tool: 'web', target: messageText(item), detail: '', done: state !== 'running', failed: state === 'failed' };
-    case 'other': return { kind: 'other', tool: String(item.content.providerType ?? 'other'), target: String(item.content.providerType ?? ''), detail: '', done: state !== 'running', failed: state === 'failed' };
-    default: return null;
-  }
+function stepOf(item: NativeItem, settled: boolean): Step | null {
+  const state = itemState(item, settled);
+  const step = ((): Step | null => {
+    switch (item.kind) {
+      case 'command': return commandStep(item, state);
+      case 'file-change': return fileStep(item, state);
+      // The question tool is asked as a card and answered there; a step for it would say the same thing twice.
+      case 'tool': return toolOf(item).name === 'AskUserQuestion' ? null : toolStep(item, state);
+      case 'web': return { kind: 'web', tool: 'web', target: messageText(item), detail: '', ...marks(state) };
+      case 'other': return { kind: 'other', tool: String(item.content.providerType ?? 'other'), target: String(item.content.providerType ?? ''), detail: '', ...marks(state) };
+      default: return null;
+    }
+  })();
+  return step && state === 'interrupted' ? { ...step, detail: [step.detail, t('已中断')].filter(Boolean).join(' · ') } : step;
 }
 
 // The messages not in the conversation yet: one the runtime refused (an item marked unsent, or a rejected receipt) or holds in its queue.
@@ -65,20 +64,23 @@ function stepOf(item: NativeItem, over: boolean): Step | null {
 const refused = (model: NativeModel, item: NativeItem) => item.content.unsent === true || model.receipts[idOf(item)] === 'rejected';
 const held = (model: NativeModel, item: NativeItem) => refused(model, item) || model.receipts[idOf(item)] === 'queued';
 
-// images: the pictures that went with a message the owner sent, by its id (the runtime's echo carries none).
+// images: the pictures that went with a message the owner sent, by its id (a record that carries none has them here).
 export function nativeEntries(model: NativeModel, images: Readonly<Record<string, string[]>> = {}): ConversationEntry[] {
-  const over = model.session?.state === 'stopped' || model.session?.state === 'failed' || model.session?.state === 'disconnected';
-  const entries: ConversationEntry[] = [];
+  // A step with no result once its turn is over (the session ended, or is idle with no turn running) is cut off, not running.
+  const settled = isOver(model) || model.session?.state === 'idle' && !model.turn.running;
+  const entries: MessageEntry[] = [];
   for (const id of model.order) {
     const item = model.items[id], at = item.at ?? 0;
+    if (item.content.discarded === true) continue;
     if (item.kind === 'user-message') {
-      const text = messageText(item), pictures = imagesOf(item) ?? images[idOf(item)];
-      if (!held(model, item) && (text || pictures?.length)) entries.push({ id: item.id, at, role: 'user', text, ...(pictures?.length ? { images: pictures } : {}) });
+      const text = messageText(item), pictures = picturesOf(item) ?? images[idOf(item)], omitted = item.content.imagesOmitted === true && !pictures;
+      if (!held(model, item) && (text || pictures || omitted)) entries.push({ id: item.id, at, role: 'user', text, ...(pictures ? { images: pictures } : {}), ...(omitted ? { imagesOmitted: true } : {}) });
     } else if (item.kind === 'agent-message' || item.kind === 'plan') {
-      const text = item.kind === 'plan' ? planText(item) : messageText(item);
-      if (text) entries.push({ id: item.id, at, role: 'assistant', text });
+      const text = item.kind === 'plan' ? planText(item) : messageText(item), generated = generatedOf(item), pictures = picturesOf(item);
+      // A drawn picture is drawn by the feed only with a picture to show; its words may be none.
+      if (text || generated && pictures) entries.push({ id: item.id, at, role: 'assistant', text, ...(generated && pictures ? { generated, images: pictures } : {}) });
     } else {
-      const tool = stepOf(item, over);
+      const tool = stepOf(item, settled);
       if (tool) entries.push({ id: item.id, at, role: 'tool', tool });
     }
   }
@@ -105,7 +107,7 @@ export function nativePending(model: NativeModel, sent: readonly SentMessage[], 
     const id = idOf(item);
     if (held(model, item)) {
       (refused(model, item) ? lost : queued).add(id);
-      add(id, { text: messageText(item), at: item.at ?? 0, sending: false, images: imagesOf(item) });
+      add(id, { text: messageText(item), at: item.at ?? 0, sending: false, images: picturesOf(item) });
     }
   }
   const known = new Set(users.map(idOf));

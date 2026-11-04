@@ -10,6 +10,7 @@ import { showPopup } from '../files/file-popup';
 import { t } from '../../shared/i18n';
 import { UserAvatar } from '../../shared/UserAvatar';
 import { Image as ImageIcon, X } from '@phosphor-icons/react';
+import type { ConversationEntry } from '../../shared/types';
 import './pending-prompts.css';
 
 // What the user wrote, folded to three lines when it runs longer (a pasted log, a long brief), with a button to read
@@ -33,10 +34,13 @@ export function UserText({ text }: { text: string }) {
 
 // A message's quote (the "> " lines it began with), words and pictures; the path of a picture pasted for an SSH project
 // shows as that picture. Only the words fold: the quote is bounded when it is made.
-export function UserMessage({ text, images }: { text: string; images?: readonly string[] }) {
+// imagesOmitted: the message had pictures the session's record could not keep; the words are all there is, and it says so.
+export type MessageEntry = ConversationEntry & { imagesOmitted?: boolean };
+export function UserMessage({ text, images, imagesOmitted = false }: { text: string; images?: readonly string[]; imagesOmitted?: boolean }) {
   const { quote, rest } = splitQuote(text), shown = withPictures(rest, images);
   return <>{quote && <blockquote className="reading-user-quote"><Markdown text={quote} /></blockquote>}
-    {shown.text && <UserText text={shown.text} />}{shown.images.length > 0 && <UserImages images={shown.images} />}</>;
+    {shown.text && <UserText text={shown.text} />}{shown.images.length > 0 && <UserImages images={shown.images} />}
+    {imagesOmitted && !shown.images.length && <small className="reading-user-note" role="note">{t('图片已省略，文字仍然保留。')}</small>}</>;
 }
 
 // A click shows the picture larger, in the popup over the conversation.
