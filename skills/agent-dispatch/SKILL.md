@@ -58,7 +58,7 @@ role in events). `--help` lists all six values. `--title`: one line, what the wo
   never repeat the owner's decisions by memory. In a git repository the findings also go to the project memory
   (below), so a worker on another module reads them without a ledger.
 - `--resume <session id>` (from the start line's `session`): continues that worker's conversation —
-  `codex exec resume <id> …` (keeps the session's own folder and sandbox, so no `--read-only`) or `claude -p --resume`.
+  `codex exec resume <id> …` (keeps the session's own folder; a build run is writable and a roundtable or `--read-only` run stays read-only) or `claude -p --resume`. Pass the whole session id: a shortened one starts a new session.
   Use it for a follow-up on the same work (a review finding, a failing test) instead of re-explaining in a new worker.
 
 A worker reads its surroundings: a ledger or answer lying in a sibling folder is context too. Keep unrelated tasks'
