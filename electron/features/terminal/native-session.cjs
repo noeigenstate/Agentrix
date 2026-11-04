@@ -125,6 +125,7 @@ function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {},
         ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {}),
       });
       tui.onData(output); tui.onExit(({ exitCode }) => finish(null, exitCode));
+      tui.on?.('error', () => finish('native-tui-stream-error'));
     } catch { finish('native-launch-failed'); }
   });
   return terminal;

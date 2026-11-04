@@ -103,8 +103,14 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
               : spec.policy?.sandbox ? { sandbox: spec.policy.sandbox }
                 : spec.owner === 'dispatch' ? { sandbox: 'workspace-write' } : {}),
             ...(spec.policy?.approvalPolicy ? { approvalPolicy: spec.policy.approvalPolicy } : {}), approvalsReviewer: 'user' };
-          const result = await rpc.request(resuming ? 'thread/resume' : 'thread/start', { ...options, ...(resuming ? { threadId } : {}) });
-          if (typeof result?.thread?.id !== 'string' || resuming && result.thread.id !== threadId || result.cwd && path.resolve(result.cwd) !== path.resolve(spec.cwd)) throw new Error('invalid_thread');
+          let result, resumed = resuming;
+          try { result = await rpc.request(resuming ? 'thread/resume' : 'thread/start', { ...options, ...(resuming ? { threadId } : {}) }); }
+          catch (error) {
+            if (!resuming || !spec.allowFreshResume || !error.missingThread) throw error;
+            occupied.delete(lockKey); lockKey = null; events.binding.providerSessionId = null; resumed = false;
+            result = await rpc.request('thread/start', options);
+          }
+          if (typeof result?.thread?.id !== 'string' || resumed && result.thread.id !== threadId || result.cwd && path.resolve(result.cwd) !== path.resolve(spec.cwd)) throw new Error('invalid_thread');
           if ((spec.readOnly || spec.roundtable) && result.sandbox?.type !== 'readOnly') throw new Error('sandbox_mismatch');
           if (spec.owner === 'dispatch' && !spec.readOnly && !spec.roundtable && !spec.policy?.sandbox && result.sandbox?.type !== 'workspaceWrite') throw new Error('sandbox_mismatch');
           if (resuming && result.thread.status?.type === 'active') throw new Error('thread_in_use');

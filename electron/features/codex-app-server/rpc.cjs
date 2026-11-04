@@ -49,7 +49,8 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
           pending.delete(key); clearTimeout(task.timer);
           if (message.error) task.reject(Object.assign(new Error('rpc_rejected'), { code: message.error.code, uncertain: false,
             // 0.166 reports parameter deserialization failures as Invalid Request. Keep only this static classification.
-            missingThreadId: message.error.code === -32600 && message.error.message === 'Invalid request: missing field `threadId`' }));
+            missingThreadId: message.error.code === -32600 && message.error.message === 'Invalid request: missing field `threadId`',
+            missingThread: message.error.code === -32600 && /^no rollout found for thread id [a-f\d-]{36}$/i.test(message.error.message) }));
           else if ('result' in message) task.resolve(message.result);
           else { task.reject(Object.assign(new Error('invalid_response'), { uncertain: task.sent })); fail('invalid_response'); }
         } else fail('invalid_frame');

@@ -11,6 +11,7 @@ const { registerClaudeWorker } = require('../electron/features/native-session/wo
 const { createDispatchControl } = require('../electron/features/agents/dispatch-control.cjs');
 const { run } = require('../integration/dispatch.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
+const { terminalPreparation, completeSwitch } = require('./fixtures/native-switch.cjs');
 
 const key = 'sk-ant-api03-offline-startup-never-real';
 const safeStorage = { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value).reverse(), decryptString: value => Buffer.from(value).reverse().toString() };
@@ -121,6 +122,7 @@ for (const type of ['assistant', 'result']) test(`${type} before stream init fai
 for (const claudePath of ['api-only', 'api-then-terminal']) test(`GUI identity mismatch obeys ${claudePath} before input`, async t => {
   const f = fixture(t, { preflightSource: 'apiKeyHelper' }), terminals = [], events = [];
   const router = createRouter({ claude: f.factory, settings: { get: () => ({ claudePath, monthlyBudgetUsd: null }) },
+    prepareTerminal: terminalPreparation(spec => terminals.push({ spec })),
     resolveSpec: () => f.spec, terminal: async (spec, reason) => terminals.push({ spec, reason }), emit: event => events.push(event) });
   t.after(() => router.close());
   const { runtimeSessionId } = await router.start('t', { agent: 'claude' });
@@ -128,6 +130,7 @@ for (const claudePath of ['api-only', 'api-then-terminal']) test(`GUI identity m
   if (claudePath === 'api-only') { await assert.rejects(send, /apiKeySource=apiKeyHelper/); assert.equal(terminals.length, 0); }
   else {
     assert.deepEqual(await send, { status: 'rejected', reason: 'path_changed' });
+    assert.equal(terminals.length, 0, 'fallback still waits for draft handoff'); await completeSwitch(router, 't');
     assert.equal(terminals.length, 1); assert.equal(JSON.stringify(terminals).includes('unsent work'), false);
     assert.match(events.findLast(event => event.type === 'path.changed').payload.reason, /apiKeySource=apiKeyHelper/);
     assert.equal(router.snapshot('t').events.findLast(event => event.type === 'path.changed').payload.selected, 'terminal');

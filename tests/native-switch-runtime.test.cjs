@@ -122,10 +122,41 @@ test('I8: quick changes collapse to the latest target and cancel an in-flight ob
   assert.equal(f.switches.state('t').current, 'api');
 });
 
+test('F9/F24 unchanged routing preserves a background choice; an obsolete failure never overwrites a newer success', async t => {
+  const f = fixture(t, { background: { known: false, count: null } }); f.switches.reconcile(); await settle();
+  f.answer('wait'); const waiting = structuredClone(f.switches.state('t'));
+  f.switches.reconcile(); await settle(); assert.deepEqual(f.switches.state('t'), waiting);
+  f.answer('now'); await settle();
+  let release; f.delay(new Promise(resolve => { release = resolve; })); f.handoff(); await settle();
+  f.target('terminal'); f.switches.reconcile(); f.fail(); release(); await settle();
+  assert.equal(f.switches.state('t').phase, 'stable'); assert.equal(f.switches.state('t').reason, null);
+});
+
+test('F10 permanent recovery failure stops after a bounded number of attempts and keeps the last draft', async t => {
+  let source = { identity: {}, path: 'terminal', spec: { owner: 'gui', agent: 'claude', terminalId: 't', runtimeSessionId: 'old' } }, attempts = 0, retired = 0;
+  const switches = createSwitches({ list: () => [source], choose: () => ({ path: 'api' }), retryMs: 1, maxRetries: 2,
+    observe: () => ({ state: 'idle', background: { known: true, count: 0 } }), publish() {}, retire() { retired++; },
+    async prepare(value, selected, _handoff, _current, restoring) {
+      if (restoring) { attempts++; throw new Error('Synthetic restore unavailable'); }
+      const session = { ...value, identity: {}, path: selected, spec: { ...value.spec, runtimeSessionId: 'new' } };
+      return { session, cancel() {}, commit() { source = session; } };
+    } });
+  t.after(() => switches.close()); switches.reconcile(); await settle();
+  switches.answer('t', 't', { handoff: { changeId: switches.state('t').changeId, draft: draft() } }); await settle();
+  switches.failed('t', 'new'); await settle();
+  switches.answer('t', 'new', { handoff: { changeId: switches.state('t').changeId, draft: draft(2) } });
+  const end = Date.now() + 1000;
+  while (switches.state('t').phase !== 'stable' && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(attempts, 2); assert.equal(retired, 1); assert.match(switches.state('t').reason, /重新启动/);
+  assert.equal(switches.handoff('t').draft.version, 2);
+  switches.observe('t'); await settle(); assert.equal(attempts, 2);
+});
+
 for (const background of [{ known: true, count: 2 }, { known: false, count: null }]) test(`background choice is required for ${JSON.stringify(background)} and stale answers are ignored`, async t => {
   const f = fixture(t, { background }); f.switches.reconcile(); await settle();
   assert.equal(f.switches.state('t').phase, 'awaiting-choice');
-  const old = f.switches.state('t'); f.switches.reconcile(); await settle();
+  const old = f.switches.state('t'); f.target('terminal'); f.switches.reconcile(); await settle();
+  f.target('api'); f.switches.reconcile(); await settle();
   assert.equal(f.switches.answer('t', 'old', { switch: { changeId: old.changeId, requestId: old.requestId, action: 'now' } }).accepted, false);
   assert.equal(f.answer('wait').accepted, true); await settle(); assert.equal(f.switches.state('t').phase, 'waiting-background');
   f.activity.background = { known: true, count: 0 }; f.switches.observe('t'); await settle();

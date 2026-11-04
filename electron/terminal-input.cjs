@@ -17,16 +17,18 @@ function isLocalCommand(text) {
 // it is empty when the line was recalled from history, whose text the terminal never sees.
 const TEXT_LIMIT = 4000;
 class SubmissionTracker {
-  constructor() { this.reset(); this.sent = []; }
+  constructor({ captureText = true } = {}) { this.captureText = captureText; this.reset(); this.sent = []; }
   reset() { this.clearLine(); this.pasting = false; this.escape = ''; this.mouseBytes = 0; }
   clearLine() { this.characters = 0; this.hasText = false; this.history = false; this.text = ''; }
   type(character) {
     if (character >= ' ') { this.characters++; this.hasText ||= /\S/.test(character); }
-    if (this.text.length < TEXT_LIMIT) this.text += character;
+    if (this.captureText && this.text.length < TEXT_LIMIT) this.text += character;
   }
   write(data) {
     let submitted = false;
     this.sent = [];
+    // Escape dismisses history recall; it cannot turn an unknown recalled line into a permanent draft.
+    if (data === '\x1b') this.history = false;
     // Escape pressed on its own (to interrupt, or to close a dialog) is a key, not the start of what is typed next:
     // only a sequence's own tail ([, ], P, O, or Enter for Alt+Enter) continues it.
     if (this.escape === '\x1b' && !/^[[\]PO\r]/.test(data)) this.escape = '';

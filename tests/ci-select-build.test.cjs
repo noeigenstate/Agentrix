@@ -1,8 +1,9 @@
-const { test } = require('node:test');
+const { test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+beforeEach(t => t.mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 10, 4) }));
 
 async function fixture(windowsOnly) {
   const core = await import('../scripts/ci-preflight-core.mjs');

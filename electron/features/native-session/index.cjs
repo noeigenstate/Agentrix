@@ -10,7 +10,7 @@ function createNativeSessions(options) {
   } };
   const router = createRouter({ ...options, settings });
   async function testConnection(projectId) {
-    options.validateProject?.(projectId);
+    if (options.validateProject?.(projectId)?.kind === 'ssh') projectId = undefined;
     const result = await options.claude.testConnection({ ...settings.get(), projectId }), config = settings.get();
     const failures = { missing: 'no_key', invalid: 'invalid_key', forbidden: 'API 密钥没有模型列表权限。',
       rate_limited: 'rate_limited', unreachable: '无法连接 Anthropic API。', error: '无法完成 API 连接检查。' };
@@ -25,7 +25,12 @@ function createNativeSessions(options) {
   }
   const facade = { ...router, testConnection,
     async usage(projectId) {
-      options.validateProject?.(projectId);
+      if (options.validateProject?.(projectId)?.kind === 'ssh') {
+        const usage = router.usage({}, projectId);
+        for (const agent of ['claude', 'codex']) usage.agents[agent] = { path: null, reason: null, next: { path: null, reason: null }, limits: null,
+          connection: { kind: 'none', source: null, observedAt: null } };
+        return { ...usage, lastSwitch: null, switches: { waiting: 0 } };
+      }
       const usage = router.usage(await options.usageInputs?.(projectId), projectId);
       const connections = await options.connections?.(projectId);
       for (const agent of ['claude', 'codex']) usage.agents[agent].connection = connections?.[agent] || { kind: 'none', source: null, observedAt: null };

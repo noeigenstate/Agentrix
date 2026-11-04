@@ -27,7 +27,7 @@ export const desktopEnvironment = (home, inherited = process.env, platform = pro
   ({ ...isolatedEnvironment(home, inherited), ...displayEnvironment(inherited, platform) });
 
 // Also runs before either desktop mode. This exercises the real coordinator/router and provider adapters with local
-// peers, including correlated TUI resume, late rollback, versioned IPC drafts, background choices, notifications and N3/N5/N6.
+// peers, including real main input/activation callbacks, handoff timeouts, policy retirement and N3/N5/N6.
 export async function switchContracts(output, stages) {
   const home = path.join(output, 'switch-home'); await fs.mkdir(home, { recursive: true });
   const files = (await fs.readdir(path.join(root, 'tests'))).filter(name => /^native-switch-.*\.test\.cjs$/.test(name)
@@ -47,7 +47,7 @@ export async function switchContracts(output, stages) {
       const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
       await fs.writeFile(path.join(output, 'switch-contracts.log'), log);
       assert.equal(code, 0, log.slice(-6000));
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); await fs.rm(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); }
   }, 30000);
 }
 
@@ -113,6 +113,7 @@ async function runtimeSmoke(output, stages) {
     }
     const executablePath = await stage('find application executable', executable);
     app = await stage('launch application', () => electron.launch({ executablePath, args: packaged ? [] : [root], cwd: root, env, timeout: 25000 }), 30000);
+    await fs.writeFile(path.join(output, 'owned-app-pid.json'), JSON.stringify({ pid: app.process().pid, isolatedProfile: profile }));
     stages.attach(app);
     const page = await stage('find main window', async () => { const page = await app.firstWindow(); await page.waitForSelector('.project-panel', { timeout: 20000 }); return page; }, 25000);
     await stage('locate SDK', async () => {
@@ -202,6 +203,33 @@ async function runtimeSmoke(output, stages) {
           const resumed = await stage(`${agent} resume`, () => page.evaluate(p => window.agentrix.nativeSession.start(p.terminalId, { agent: p.agent, resume: true }), { terminalId, agent }));
           assert.equal(resumed.ok, true, JSON.stringify(resumed)); id = resumed.value.runtimeSessionId;
         }
+      }
+      if (agent === 'claude') {
+        const before = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
+        const provider = before.value.events.findLast(event => event.providerSessionId)?.providerSessionId;
+        for (const [mode, expected] of [['terminal-only', 'terminal'], ['api-only', 'api']]) {
+          await stage(`switch actual main to ${expected}`, async () => {
+            assert.equal((await page.evaluate(mode => window.agentrix.nativeSession.setSettings({ claudePath: mode }), mode)).ok, true);
+            await waitFor(async () => {
+              const snapshot = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
+              const value = snapshot.value, state = value?.switchState;
+              if (state?.phase === 'stable' && state.current === expected) { id = value.runtimeSessionId; return true; }
+              if (['awaiting-choice', 'waiting-background'].includes(state?.phase)) {
+                await page.evaluate(p => window.agentrix.nativeSession.answer(p.terminalId, p.runtime, p.state.requestId,
+                  { switch: { changeId: p.state.changeId, requestId: p.state.requestId, action: 'now' } }), { terminalId, runtime: value.runtimeSessionId, state });
+              } else if (state?.phase === 'preparing') {
+                await page.evaluate(p => window.agentrix.nativeSession.answer(p.terminalId, p.runtime, `handoff-${p.state.changeId}`,
+                  { handoff: { changeId: p.state.changeId, draft: { version: p.version, text: '', images: [], undelivered: [] } } }),
+                { terminalId, runtime: value.runtimeSessionId, state, version: (value.handoff?.draft.version || 0) + 1 });
+              }
+              return false;
+            }, `actual main switched to ${expected}`, 25000);
+          }, 30000);
+        }
+        const after = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
+        assert.equal(after.value.events.findLast(event => event.providerSessionId)?.providerSessionId, provider);
+        assert.equal(after.value.events.some(event => event.type === 'turn.started' && !event.replay), false);
+        checks.push('actual main SDK to PTY terminal to SDK, authenticated SessionStart, InputGate, activation and persisted history without a new turn');
       }
       const hold = await stage(`${agent} send active turn to stop`, () => page.evaluate(p => window.agentrix.nativeSession.send(p.terminalId, p.id, p.messageId, 'HOLD'), { terminalId, id, messageId: randomUUID() }));
       assert.equal(hold.ok, true);
@@ -336,25 +364,18 @@ async function run(output, stages) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const stages = createSmokeStages();
-  let temporary;
   try {
     const contractsOnly = process.argv.includes('--switch-contracts');
     const output = await stages.run('prepare output', async () => {
-      if (!contractsOnly) return testRun('native-session');
-      temporary = path.join(root, '.notes/r12-probe-tmp', randomUUID()); await fs.mkdir(temporary, { recursive: true }); return temporary;
+      return testRun(contractsOnly ? 'native-session-contracts' : 'native-session');
     }); stages.output(output);
     await switchContracts(output, stages);
     if (!contractsOnly) await stages.run('GUI lock and native suite', () => withGuiLock('native-session', () => process.argv.includes('--runtime') ? runtimeSmoke(output, stages) : run(output, stages)), 140000);
-    if (contractsOnly) await fs.copyFile(path.join(output, 'switch-contracts.log'), path.join(root, '.notes/r12-switch-smoke.log'));
-    console.log('PASS: native session smoke. Evidence: ' + (contractsOnly ? path.join(root, '.notes/r12-switch-smoke.log') : output));
+    console.log('PASS: native session smoke. Evidence: ' + output);
     process.exitCode = 0;
   } catch (error) { console.error('[native-smoke] FAIL ' + String(error.message).replace(/sk-ant-[\w-]+/g, '<offline-key>')); stages.force(); process.exitCode = 1; }
   finally {
     stages.dispose();
-    if (temporary) {
-      assert.equal(path.dirname(path.resolve(temporary)), path.join(root, '.notes/r12-probe-tmp'));
-      await fs.rm(temporary, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-    }
   }
   process.exit(process.exitCode);
 }

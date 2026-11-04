@@ -56,12 +56,16 @@ function registerClaudeWorker({ control, claude, settings, context = () => '', e
       if (controlMessage.type === 'intervene') {
         if (['failed', 'stopped', 'stopping', 'disconnected'].includes(state)) return { status: 'rejected', reason: 'worker_ended' };
         const previous = { done, finishRequested };
+        const restore = () => {
+          done = previous.done; finishRequested = previous.finishRequested;
+          if (state === 'idle' && done && finishRequested) finish({ status: outcome });
+        };
         finishRequested = false; done = false;
         try {
           const result = await runtime.send({ clientMessageId: controlMessage.messageId, text: controlMessage.text });
-          if (result.status === 'rejected') { done = previous.done; finishRequested = previous.finishRequested; }
+          if (result.status === 'rejected') restore();
           return result.status;
-        } catch (error) { done = previous.done; finishRequested = previous.finishRequested; throw error; }
+        } catch (error) { restore(); throw error; }
       }
       return 'rejected';
     });

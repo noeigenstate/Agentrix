@@ -247,7 +247,7 @@ test('Decide Open terminal switches the source terminal after accepted navigatio
 test('queued ordinary input still invalidates observation epochs at InputGate release', () => {
   const { InputGate, isTerminalResponse } = require('../electron/terminal-input.cjs');
   const h = backend('codex'), s = h.s;
-  const context = vm.createContext({ s, id: 'aba', sessions: new Map([['aba', s]]), terminal: s.terminal, InputGate, isTerminalResponse });
+  const context = vm.createContext({ s, id: 'aba', sessions: new Map([['aba', s]]), terminal: s.terminal, InputGate, isTerminalResponse, nativeSessions: null });
   const start = main.indexOf('  s.gate = new InputGate(');
   vm.runInContext(main.slice(start, main.indexOf('  const refreshCompletion =', start)), context);
   s.gate.afterPrompt('queued-input'); const before = s.approval.stamp();

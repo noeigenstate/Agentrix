@@ -104,11 +104,16 @@ test('JSON framing rejects invalid UTF-8, incomplete and oversized frames withou
 
 test('manual native TUI keys never become inferred prompts or rearm completion', () => {
   const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs'), listeners = {}, writes = [];
-  const session = { native: {}, status: 'codex', codexActive: true, approval: { invalidate() {} }, gate: { input: data => writes.push(data) }, submissions: { write: () => assert.fail('native keys are not prompt records') } };
+  const { SubmissionTracker } = require('../electron/terminal-input.cjs');
+  const session = { native: {}, nativeInputRequests: new Set(['approval']), draftSubmissions: new SubmissionTracker({ captureText: false }),
+    status: 'codex', codexActive: true, approval: { invalidate() {} }, gate: { input: data => writes.push(data) }, submissions: { write: () => assert.fail('native keys are not prompt records') } };
   registerTerminalIpc({ handle() {}, listen: (name, run) => listeners[name] = run, getSession: () => session,
     getProjectById: () => assert.fail('TUI answers cannot acknowledge a round'), expectCompletion: assert.fail, pollAfterSubmission: assert.fail });
   for (const data of ['synthetic free-text answer', '\r', '1', '\x1b']) listeners['terminal:write']('fixture', data);
   assert.deepEqual(writes, ['synthetic free-text answer', '\r', '1', '\x1b']);
+  assert.equal(session.draftSubmissions.hasText, false); assert.equal(session.draftSubmissions.text, '');
+  session.nativeInputRequests.clear(); listeners['terminal:write']('fixture', 'actual draft');
+  assert.equal(session.draftSubmissions.hasText, true); assert.equal(session.draftSubmissions.text, '', 'the observer stores no raw native input');
 });
 
 }

@@ -9,7 +9,7 @@ const until = async check => { const end = Date.now() + 4000; while (!check()) {
 
 async function fixture(t) {
   const events = [], exits = [], requests = [], cli = { file: 'synthetic-only', prefix: [] };
-  let socket, args, output;
+  let socket, args, output, streamError;
   const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill() { this.emit('exit', 0); } });
   child.stdin.on('data', data => { for (const line of data.toString().trim().split('\n')) requests.push(JSON.parse(line)); });
   const terminal = createNativeSession({ binding: { provider: 'codex', sessionId: 'pty', terminalId: 't', projectId: 'p' }, mode: 'codex-native',
@@ -18,12 +18,12 @@ async function fixture(t) {
       assert.equal(file, cli.file); args = argv;
       socket = new WebSocket(argv[argv.indexOf('--remote') + 1], { headers: { Authorization: 'Bearer ' + options.env.AGENTRIX_NATIVE_REMOTE_TOKEN } });
       socket.on('error', () => {});
-      return { onData(fn) { output = fn; }, onExit() {}, kill() { socket.terminate(); }, resize() {}, write() {} };
+      return { onData(fn) { output = fn; }, onExit() {}, on(name, fn) { if (name === 'error') streamError = fn; }, kill() { socket.terminate(); }, resize() {}, write() {} };
     } } });
   terminal.onExit(value => exits.push(value));
   t.after(async () => { terminal.kill(); if (socket && socket.readyState !== WebSocket.CLOSED) await new Promise(resolve => socket.once('close', resolve)); });
   await until(() => socket?.readyState === WebSocket.OPEN);
-  return { terminal, events, exits, requests, args, socket, output: text => output(text),
+  return { terminal, events, exits, requests, args, socket, output: text => output(text), streamError: () => streamError(),
     server: message => child.stdout.write(JSON.stringify(message) + '\n'),
     resume: () => socket.send(JSON.stringify({ id: '17', method: 'thread/resume', params: { threadId: 'same-thread' } })) };
 }
@@ -41,6 +41,11 @@ test('Codex TUI resumes the requested thread and only the matching typed RPC res
   await until(() => f.events.some(event => event.method === 'agentrix/threadResumed'));
   assert.deepEqual(f.events.find(event => event.method === 'agentrix/threadResumed').params, { threadId: 'same-thread', requestId: '17' });
   assert.equal(f.exits.length, 0);
+});
+
+test('F16 a PTY pipe reset ends its own session once instead of throwing into the host', async t => {
+  const f = await fixture(t); assert.doesNotThrow(() => { f.streamError(); f.streamError(); });
+  assert.equal(f.exits.length, 1); assert.equal(f.terminal.error, 'native-tui-stream-error');
 });
 for (const response of [{ error: { code: -1, message: 'Synthetic failure' } }, { result: { thread: { id: 'another-thread', status: { type: 'idle' } } } },
   { result: { thread: { id: 'same-thread', status: { type: 'active' } } } }]) test(`a failed or wrong Codex resume cannot commit: ${JSON.stringify(response)}`, async t => {

@@ -10,12 +10,12 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
   now = Date.now, onCost, onSession, audit, request, inspectCli = inspectClaudeExecutable, initializationTimeoutMs,
   connectionSpec = () => ({ agent: 'claude', owner: 'gui', cwd: process.cwd(), effort: 'high', fast: true }) } = {}) {
   const sessions = new Set(), leases = new Map(), unavailable = new Map(), observations = new Map(), listeners = new Set();
-  let generation = 0, observation = 0, cliIdentity = null, refreshing;
+  let generation = 0, observation = 0, cliIdentity = null, refreshing, credentialVersion = 0;
   const notify = () => { for (const listener of listeners) listener(); };
   const resetAvailability = () => { unavailable.clear(); observations.clear(); generation++; notify(); };
   const availabilityGeneration = () => ({ generation, sequence: ++observation });
   const currentObservation = (scope, value) => value?.generation === generation && value.sequence >= (observations.get(scope) || 0);
-  const credentials = createCredentials({ file: path.join(directory, 'credentials.json'), safeStorage, onChange: resetAvailability });
+  const credentials = createCredentials({ file: path.join(directory, 'credentials.json'), safeStorage, onChange: () => { credentialVersion++; resetAvailability(); } });
   const usage = createUsage({ file: path.join(directory, 'usage.json'), now });
   function observeCli(value) {
     const identity = JSON.stringify([value.status, value.version || null, value.file || null]);
@@ -79,6 +79,8 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
       const release = () => { if (leasedId && leases.get(leasedId) === owner) leases.delete(leasedId); };
       const session = createClaudeSession(spec, emit, { loadSdk, resolveExecutable, credentials: rollbackCredentials || credentials, usage, now, onCost,
         availabilityGeneration, initializationTimeoutMs,
+        credentialVersion: () => credentialVersion,
+        canContinue: () => spec.owner === 'dispatch' || credentials.status().saved && spec.mayContinue?.() !== false,
         onFailure: (reason, error, observedGeneration) => onFailure(spec.projectId || '', reason, error, observedGeneration),
         onIdentity: observedGeneration => onIdentity(spec.projectId || '', observedGeneration),
         onSession: id => { acquire(id); onSession?.(spec, id); }, audit: decision => recordDecision({ runId: spec.runId || null, ...decision }) });

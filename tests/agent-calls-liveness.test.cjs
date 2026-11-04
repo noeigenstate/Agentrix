@@ -18,6 +18,8 @@ test('N6: a forcibly terminated helper without dispatch-end becomes interrupted 
   const closed = once(child, 'close'); t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await closed; });
   const f = tracker(t); f.calls.dispatch(start(child.pid)); await f.poll(); assert.equal(f.calls.running().length, 1);
   child.kill('SIGKILL'); await closed; await f.poll();
+  assert.equal(f.calls.running().length, 1, 'allow the final pipe packet to arrive before inferring a missing end');
+  await new Promise(resolve => setTimeout(resolve, 1050)); await f.poll();
   assert.equal(f.calls.running().length, 0); assert.equal(f.calls.snapshot()[0].items[0].failure.reason, 'killed'); assert.equal(f.ended.length, 1);
   await f.poll(); assert.equal(f.ended.length, 1);
   assert.equal(f.calls.dispatch({ type: 'dispatch-end', id: start().id, reason: 'exit', exitCode: 0, model: 'gpt-test', endedAt: Date.now() }), false);
@@ -31,7 +33,7 @@ test('N6: main caches a verified team-board PID, so later board cleanup does not
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   let alive = true, reads = 0;
   const s = { terminalId: 't', recordRun() {} }, project = { kind: 'local', path: '/synthetic' };
-  const context = { AgentCalls, path, os: { homedir: () => '/synthetic' }, sessions: new Map([['t', s]]), scheduleState() {}, send() {},
+  const context = { AgentCalls: class extends AgentCalls { static alive() { return alive; } }, path, os: { homedir: () => '/synthetic' }, sessions: new Map([['t', s]]), scheduleState() {}, send() {},
     require: () => ({ projectTeam: () => ({ board: '/synthetic/board' }) }),
     fs: { statSync: () => ({ size: 100 }), readFileSync() { reads++; return JSON.stringify({ id: start().id, pid: 123, cwd: '/synthetic' }); } },
     process: { kill() { if (!alive) throw Object.assign(new Error('gone'), { code: 'ESRCH' }); } },
@@ -40,5 +42,15 @@ test('N6: main caches a verified team-board PID, so later board cleanup does not
   const calls = context.callsOf(s, project); calls.feeds.readDispatch = async () => {}; t.after(() => calls.dispose());
   calls.dispatch(start()); calls.refresh(start().id); await calls.work;
   alive = false; calls.refresh(start().id); await calls.work;
+  await new Promise(resolve => setTimeout(resolve, 1050)); calls.refresh(start().id); await calls.work;
   assert.equal(reads, 1); assert.equal(calls.running().length, 0); assert.equal(calls.snapshot()[0].items[0].failure.reason, 'killed');
+});
+
+test('F20 a normal end arriving after the first dead-PID observation wins over inferred interruption', async t => {
+  let now = 100;
+  const f = tracker(t, { dispatchAlive: () => false, now: () => now }); f.calls.dispatch(start(123)); await f.poll();
+  assert.equal(f.calls.running().length, 1);
+  f.calls.dispatch({ type: 'dispatch-end', id: start().id, reason: 'exit', exitCode: 0, model: 'gpt-test', endedAt: now, outputTokens: null, activeMs: null });
+  now += 2000; await f.poll();
+  assert.equal(f.calls.snapshot()[0].items[0].failure, null); assert.equal(f.ended.length, 1);
 });

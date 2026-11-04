@@ -10,6 +10,7 @@ const { registerIpc } = require('../electron/features/native-session/ipc.cjs');
 const { createEventStream } = require('../electron/features/native-session/events.cjs');
 const { validEvent } = require('../electron/features/native-session/validate.cjs');
 const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
+const { terminalPreparation, completeSwitch } = require('./fixtures/native-switch.cjs');
 
 for (const setting of ['api-then-terminal', 'api-only', 'terminal-only']) test(`Claude routing obeys ${setting} for available and unavailable API`, () => {
   for (const status of ['ready', 'no_key', 'budget_exhausted', 'rate_limited', 'credits_exhausted', 'native_cli_required']) {
@@ -31,7 +32,8 @@ function fixture(config = {}) {
         snapshot() { return { ...stream.snapshot(), state }; }, async close() { state = 'stopped'; } };
       created.push({ spec, runtime }); return runtime;
     } };
-  const router = createRouter({ claude, codex: claude, settings, resolveSpec: (id, agent) => ({ projectId: 'p', terminalId: id, cwd: '/fake', agent }), terminal: async (...args) => terminals.push(args), emit() {} });
+  const router = createRouter({ claude, codex: claude, settings, resolveSpec: (id, agent) => ({ projectId: 'p', terminalId: id, cwd: '/fake', agent }),
+    prepareTerminal: terminalPreparation(spec => terminals.push([spec])), terminal: async (...args) => terminals.push(args), emit() {} });
   return { router, claude, terminals, created, settings, events };
 }
 test('native router owns session identity and rejects old runtime answers', async () => {
@@ -53,8 +55,9 @@ test('fallback at a message boundary never replays the submitted text', async ()
   const { router, claude, terminals, created } = fixture(); const first = await router.start('t', { agent: 'claude' });
   claude.apiState = () => ({ status: 'budget_exhausted' });
   const receipt = await router.send('t', first.runtimeSessionId, { clientMessageId: 'message', text: 'must not replay' });
-  assert.equal(receipt.status, 'rejected'); assert.equal(terminals.length, 1); assert.ok(!JSON.stringify(terminals).includes('must not replay'));
-  assert.equal(created[0].runtime.snapshot().state, 'stopped');
+  assert.equal(receipt.status, 'rejected'); assert.equal(terminals.length, 0); assert.ok(!JSON.stringify(terminals).includes('must not replay'));
+  assert.equal(created[0].runtime.snapshot().state, 'idle', 'the old path remains alive until handoff and readiness');
+  await completeSwitch(router, 't'); assert.equal(terminals.length, 1); assert.equal(created[0].runtime.snapshot().state, 'stopped');
   assert.ok(router.snapshot('t').events.some(event => event.type === 'item.upsert' && event.payload.content.unsent === true && event.payload.content.text === 'must not replay'));
 });
 test('an active runtime cannot be replaced by a concurrent start', async () => {
