@@ -46,17 +46,18 @@ async function sessionSummary(filename, id) {
     const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
     // Discard a truncated last line, including a partially read UTF-8 character.
     const complete = bytesRead < stat.size ? buffer.subarray(0, Math.max(0, buffer.lastIndexOf(10, bytesRead - 1) + 1)) : buffer.subarray(0, bytesRead);
-    let title = '', messages = 0;
+    let title = '', messages = 0, unownedSdk = false;
     for (const line of complete.toString('utf8').split('\n')) {
       try {
         const record = JSON.parse(line);
+        if (record.turnOrigin === 'sdk' && record.entrypoint !== 'agentrix-sdk') unownedSdk = true;
         if (record.type === 'user' || record.type === 'assistant') messages++;
         if (!title) title = promptTitle(record);
       } catch { /* malformed/partial JSONL is not a session title */ }
     }
     // Exact for small files; extrapolate the user+assistant record density for larger ones.
     if (stat.size > bytesRead && complete.length) messages = Math.round(messages * stat.size / complete.length);
-    return { id, updatedAt: stat.mtimeMs, title, messages };
+    return unownedSdk && !title ? null : { id, updatedAt: stat.mtimeMs, title, messages };
   } finally { await file.close(); }
 }
 
@@ -76,7 +77,7 @@ async function listClaudeSessions(cwd, currentId = null, home = claudeConfigDir(
   candidates.sort((a, b) => b.modified - a.modified || a.id.localeCompare(b.id));
   const result = [];
   for (const item of candidates.slice(0, 30)) {
-    try { result.push(await sessionSummary(item.filename, item.id)); }
+    try { const summary = await sessionSummary(item.filename, item.id); if (summary) result.push(summary); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   return result;

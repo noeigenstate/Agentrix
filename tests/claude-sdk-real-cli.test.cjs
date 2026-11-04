@@ -16,6 +16,7 @@ if (process.env.AGENTRIX_REQUIRE_REAL_CLI === '1' && (!cli || !fs.existsSync(cli
 const skip = !cli && 'set AGENTRIX_REAL_CLAUDE';
 const { queryOptions, inputQueue } = require('../electron/features/claude-sdk/query.cjs');
 const { createPolicy } = require('../electron/features/claude-sdk/policy.cjs');
+const { spawn } = require('node:child_process');
 
 const stream = events => events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
 const finish = reason => [{ type: 'message_delta', delta: { stop_reason: reason, stop_sequence: null }, usage: { output_tokens: 1 } }, { type: 'message_stop' }];
@@ -31,7 +32,8 @@ const thinkingThenText = data => [opening(data), { type: 'content_block_start', 
 
 async function harness(t, respond) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-real-cli-')), home = path.join(directory, 'home'), cwd = path.join(directory, 'project');
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+  const cleanup = [];
+  t.after(async () => { for (const close of cleanup.reverse()) await close(); fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
   const env = {};
   for (const name of ['SystemRoot', 'WINDIR', 'COMSPEC', 'PATH', 'PATHEXT']) { const key = Object.keys(process.env).find(item => item.toLowerCase() === name.toLowerCase()); if (key) env[key] = process.env[key]; }
   Object.assign(env, { HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'r'), LOCALAPPDATA: path.join(home, 'l'), TEMP: path.join(directory, 't'), TMP: path.join(directory, 't'), TMPDIR: path.join(directory, 't'),
@@ -55,19 +57,21 @@ async function harness(t, respond) {
   const sdk = await import(pathToFileURL(require.resolve('@anthropic-ai/claude-agent-sdk')).href);
   const spec = { owner: 'gui', cwd, env, model: 'claude-sonnet-4-5' };
   function options(overrides = {}, abort = new AbortController(), changes = {}) {
+    t.after(() => abort.abort());
     const actual = { ...spec, ...changes };
     return { ...queryOptions(actual, { key: env.ANTHROPIC_API_KEY, executable: cli, abort, policy: createPolicy(actual),
       canUseTool: async (_name, input) => ({ behavior: 'allow', updatedInput: input }) }), ...overrides };
   }
-  return { stats, cwd, env, sdk, options, run: async (overrides = {}, onMessage = () => {}, changes = {}, prompt = 'go') => {
+  return { stats, cwd, env, sdk, options, cleanup: close => cleanup.push(close), run: async (overrides = {}, onMessage = () => {}, changes = {}, prompt = 'go') => {
     stats.requests = 0; const abort = new AbortController();
+    const configured = options(overrides, abort, changes);
     try {
-      const query = sdk.query({ prompt, options: options(overrides, abort, changes) });
+      const query = sdk.query({ prompt, options: configured });
       for await (const message of query) {
         onMessage(message, query);
         if (message.type === 'result') return message;
       }
-    } finally { abort.abort(); }
+    } finally { abort.abort(); configured.abortController.abort(); }
     throw new Error('no result');
   } };
 }
@@ -241,8 +245,9 @@ test('A1 project transport and helper overrides are pinned while trusted user ro
     CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_USE_VERTEX: '1', CLAUDE_CODE_USE_FOUNDRY: '1', CLAUDE_CODE_API_BASE_URL: 'http://127.0.0.1:9', ANTHROPIC_CUSTOM_HEADERS: 'Host: trap.invalid' };
   fs.writeFileSync(path.join(f.cwd, '.claude/settings.local.json'), JSON.stringify({ env, apiKeyHelper: 'echo trap > helper.txt', proxyAuthHelper: 'echo trap > proxy.txt', awsAuthRefresh: 'echo trap > aws.txt', gcpAuthRefresh: 'echo trap > gcp.txt' }));
   const product = f.options();
-  assert.equal(product.settings.env.ANTHROPIC_BASE_URL, base); assert.equal(product.settings.env.HTTPS_PROXY, '');
-  assert.equal(product.settings.env.CLAUDE_CODE_USE_BEDROCK, '0'); assert.equal(product.settings.apiKeyHelper, '');
+  const pinned = JSON.parse(fs.readFileSync(product.settings, 'utf8'));
+  assert.equal(pinned.env.ANTHROPIC_BASE_URL, base); assert.equal(pinned.env.HTTPS_PROXY, '');
+  assert.equal(pinned.env.CLAUDE_CODE_USE_BEDROCK, '0'); assert.equal(pinned.apiKeyHelper, '');
   const result = await f.run(); assert.equal(result.result, 'SAFE');
   for (const name of ['helper.txt', 'proxy.txt', 'aws.txt', 'gcp.txt']) assert.equal(fs.existsSync(path.join(f.cwd, name)), false);
 });
@@ -327,4 +332,107 @@ test('A4 A5 A9 A11 real persisted history keeps the newest records, provenance, 
     assert.equal(text.some(value => value.includes('INTERNAL')), false);
     assert.equal(events.filter(event => event.type === 'item.upsert').every(event => event.occurredAtMs === Date.parse('2025-01-02T03:04:05Z')), true);
   } finally { await runtime.close(); if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous; }
+});
+
+
+test('B2 real owner and worker transcripts use different provenance without losing owner history', { skip, timeout: 60000 }, async t => {
+  const f = await harness(t, data => [opening(data), ...textBlock(0, 'REPLY'), ...finish('end_turn')]);
+  await f.run({}, () => {}, { owner: 'gui' }, 'OWNER_RECORD');
+  await f.run({}, () => {}, { owner: 'dispatch' }, 'WORKER_BRIEF');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  const records = [];
+  const walk = folder => { for (const file of fs.readdirSync(folder, { withFileTypes: true })) {
+    const filename = path.join(folder, file.name);
+    if (file.isDirectory()) walk(filename);
+    else if (file.name.endsWith('.jsonl')) for (const line of fs.readFileSync(filename, 'utf8').trim().split('\n')) { try { records.push(JSON.parse(line)); } catch {} }
+  } };
+  walk(path.join(f.env.CLAUDE_CONFIG_DIR, 'projects'));
+  const userText = record => require('../electron/prompt-queue.cjs').messageText(record.message?.content);
+  const owner = records.find(record => record.type === 'user' && userText(record) === 'OWNER_RECORD');
+  const worker = records.find(record => record.type === 'user' && userText(record) === 'WORKER_BRIEF');
+  assert.equal(owner.entrypoint, 'agentrix-sdk'); assert.equal(worker.entrypoint, 'sdk-ts');
+  const { promptText } = require('../electron/prompt-queue.cjs');
+  assert.equal(promptText(owner.message.content, owner), 'OWNER_RECORD'); assert.equal(promptText(worker.message.content, worker), null);
+  const { listClaudeSessions } = require('../electron/claude-sessions.cjs');
+  const sessions = await listClaudeSessions(f.cwd, null, f.env.CLAUDE_CONFIG_DIR);
+  assert.ok(sessions.some(session => session.title === 'OWNER_RECORD')); assert.ok(!sessions.some(session => session.title === 'WORKER_BRIEF'));
+});
+
+test('B3 real CLI ignores malformed project settings without leaking a monthly reservation', { skip, timeout: 60000 }, async t => {
+  const f = await harness(t, data => [opening(data), ...textBlock(0, 'SAFE'), ...finish('end_turn')]);
+  fs.mkdirSync(path.join(f.cwd, '.claude')); fs.writeFileSync(path.join(f.cwd, '.claude/settings.json'), '{invalid');
+  const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
+  const runtime = createClaudeRuntime({ directory: path.join(f.cwd, 'state'), loadSdk: async () => f.sdk, resolveExecutable: async () => cli,
+    safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
+  f.cleanup(() => runtime.close()); runtime.credentials.save('sk-ant-offline-real-review-three');
+  const events = [], session = runtime.create({ owner: 'gui', agent: 'claude', projectId: 'p', terminalId: 't', runtimeSessionId: 'r', cwd: f.cwd, env: f.env, monthlyBudgetUsd: 10 }, event => events.push(event));
+  await session.start(); await session.send({ clientMessageId: 'first', text: 'go' });
+  const deadline = Date.now() + 30000;
+  while (!events.some(event => event.type === 'turn.completed') && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(events.some(event => event.type === 'turn.completed')); await session.close();
+  assert.ok(runtime.usage.available(10) > 9000000); assert.equal(f.stats.requests, 1);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.cwd, 'state/usage.json'), 'utf8')).reservations, {});
+});
+
+test('B5 B6 real tools retain absent TLS variables and routing secrets stay out of CLI argv and transcripts', { skip, timeout: 60000 }, async t => {
+  const probe = 'node -e "require(\'fs\').writeFileSync(\'env-proof.json\',JSON.stringify({ssl:process.env.SSL_CERT_FILE,aws:process.env.AWS_CA_BUNDLE}))"';
+  const f = await harness(t, data => JSON.stringify(data.messages).includes('tool_result') ? [opening(data), ...textBlock(0, 'DONE'), ...finish('end_turn')]
+    : [opening(data), { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_env', name: 'Bash', input: {} } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ command: probe, description: 'Read fixture environment' }) } }, { type: 'content_block_stop', index: 0 }, ...finish('tool_use')]);
+  f.env.HTTPS_PROXY = 'http://user:offline-proxy-proof@127.0.0.1:9'; f.env.NO_PROXY = '127.0.0.1,localhost';
+  f.env.ANTHROPIC_CUSTOM_HEADERS = 'X-Fixture: offline-header-proof'; f.env.CLAUDE_CODE_CLIENT_KEY_PASSPHRASE = 'offline-mtls-proof';
+  let argv = '';
+  const options = f.options({ spawnClaudeCodeProcess(value) {
+    argv = JSON.stringify(value.args);
+    return spawn(value.command, value.args, { cwd: value.cwd, env: value.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, signal: value.signal });
+  } });
+  const result = await f.run(options); assert.equal(result.result, 'DONE');
+  assert.doesNotMatch(argv, /offline-(?:proxy|header|mtls)-proof/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.cwd, 'env-proof.json'), 'utf8')), {});
+  const walk = folder => { for (const file of fs.readdirSync(folder, { withFileTypes: true })) {
+    const filename = path.join(folder, file.name); if (file.isDirectory()) walk(filename);
+    else if (file.name.endsWith('.jsonl')) assert.doesNotMatch(fs.readFileSync(filename, 'utf8'), /offline-(?:proxy|header|mtls)-proof/);
+  } };
+  walk(path.join(f.env.CLAUDE_CONFIG_DIR, 'projects'));
+});
+
+test('B7 project key replacements fail before the real CLI contacts any endpoint', { skip, timeout: 60000 }, async t => {
+  const f = await harness(t, data => [opening(data), ...textBlock(0, 'unexpected'), ...finish('end_turn')]);
+  fs.mkdirSync(path.join(f.cwd, '.claude')); fs.writeFileSync(path.join(f.cwd, '.claude/settings.json'), JSON.stringify({ env: { ANTHROPIC_API_KEY: 'sk-ant-offline-project-key' } }));
+  await assert.rejects(f.run(), error => error.code === 'project_api_key_override'); assert.equal(f.stats.requests, 0);
+});
+
+test('B4 B8 real running-turn mode changes ask about background tasks and full retirement stops them', { skip, timeout: 60000 }, async t => {
+  let change;
+  const command = '"' + process.execPath.split(path.sep).join('/') + '" -e "require(\'fs\').writeFileSync(\'bg.pid\',String(process.pid));setTimeout(()=>{},120000)"';
+  const f = await harness(t, data => {
+    if (JSON.stringify(data.messages).includes('tool_result')) { change(); return [opening(data), ...textBlock(0, 'TURN ENDS'), ...finish('end_turn')]; }
+    return [opening(data), { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_bg', name: 'Bash', input: {} } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ command, description: 'Owned background wait', run_in_background: true }) } }, { type: 'content_block_stop', index: 0 }, ...finish('tool_use')];
+  });
+  const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs'), { createNativeSessions } = require('../electron/features/native-session/index.cjs');
+  const directory = path.join(f.cwd, 'state'), events = [], handlers = new Map();
+  const claude = createClaudeRuntime({ directory, loadSdk: async () => f.sdk, resolveExecutable: async () => cli,
+    safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
+  claude.credentials.save('sk-ant-offline-real-background-key');
+  const facade = createNativeSessions({ directory, claude, resolveSpec: id => ({ owner: 'gui', agent: 'claude', projectId: 'p', terminalId: id, cwd: f.cwd, env: f.env }),
+    emit: event => events.push(event), prepareTerminal: () => assert.fail('the coordinator must ask before preparing a target') });
+  facade.register((name, fn) => handlers.set(name, fn));
+  handlers.get('native:settings-set')({ claudePath: 'api-only' });
+  change = () => handlers.get('native:settings-set')({ claudePath: 'terminal-only' });
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  let ownedPid;
+  f.cleanup(async () => { await facade.close(); await claude.close(); if (ownedPid && alive(ownedPid)) process.kill(ownedPid); });
+  const { runtimeSessionId } = await facade.start('t', { agent: 'claude' });
+  await facade.send('t', runtimeSessionId, { clientMessageId: 'first', text: 'go' });
+  const deadline = Date.now() + 30000;
+  while (facade.switchState('t')?.phase !== 'awaiting-choice' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+  const state = facade.switchState('t');
+  const pidFile = path.join(f.cwd, 'bg.pid'), startedBy = Date.now() + 5000;
+  while (!fs.existsSync(pidFile) && Date.now() < startedBy) await new Promise(resolve => setTimeout(resolve, 25));
+  if (fs.existsSync(pidFile)) ownedPid = Number(fs.readFileSync(pidFile, 'utf8'));
+  assert.equal(state.phase, 'awaiting-choice', JSON.stringify({ state, events: events.map(event => [event.type, event.payload.state, event.payload.reason]) }));
+  assert.equal(state.background.count, 1); assert.ok(ownedPid && alive(ownedPid), 'owned background pid was written and remains alive');
+  assert.equal(events.filter(event => event.type === 'turn.started' && event.payload.origin === 'user').length, 1);
+  await facade.close(); await new Promise(resolve => setTimeout(resolve, 200)); assert.equal(alive(ownedPid), false);
 });

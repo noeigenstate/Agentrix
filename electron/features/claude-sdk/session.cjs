@@ -127,7 +127,12 @@ function createClaudeSession(spec, emit, dependencies) {
           run.lastUsage = tokensOf(message.message.usage); run.lastModel = message.message.model;
         }
         if (message.type === 'assistant' && !turnId && !message.parent_tool_use_id) {
-          if (!canContinue()) { cancelQuery(run, 'path_changed'); break; }
+          if (!canContinue()) {
+            if (!run.background.size) { cancelQuery(run, 'path_changed'); break; }
+            run.busy = true; run.interrupted = true; begin('automatic', message.user_message_uuid || null);
+            try { Promise.resolve(run.query.interrupt()).catch(() => {}); } catch { }
+            continue;
+          }
           reserve(run); run.busy = true; begin('automatic', message.user_message_uuid || null);
         }
         normalize(message);
@@ -154,14 +159,19 @@ function createClaudeSession(spec, emit, dependencies) {
         if (interrupted) unknownInput();
         if (budgetBlocked) {
           run.busy = false; releaseIdle(run); run.onStoppedResult?.(); unknownInput();
+          if (run.background.size) { setState('idle'); continue; }
           idle = !stopping; cancelQuery(run, 'budget'); break;
         }
-        if (!canContinue()) { run.busy = false; releaseIdle(run); unknownInput(); idle = true; cancelQuery(run, 'path_changed'); break; }
+        if (!canContinue()) {
+          run.busy = false; releaseIdle(run); unknownInput();
+          if (run.background.size) { setState('idle'); continue; }
+          idle = true; cancelQuery(run, 'path_changed'); break;
+        }
         if (!(message.queued_turn_count > 0)) {
           run.busy = false;
           releaseIdle(run);
           run.onStoppedResult?.();
-          if (spec.owner === 'dispatch' || stopping) { idle = !stopping; cancelQuery(run, stopping ? 'stop' : 'idle'); break; }
+          if (spec.owner === 'dispatch' || stopping && !run.background.size) { idle = !stopping; cancelQuery(run, stopping ? 'stop' : 'idle'); break; }
           setState('idle');
         }
       }
@@ -216,24 +226,28 @@ function createClaudeSession(spec, emit, dependencies) {
     if (closed) throw new Error('会话已停止。');
     const key = credentials.read();
     if (!key) throw new Error('请先保存 API 密钥。');
-    const reservation = prepareOnly ? null : usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId });
-    const maxBudgetUsd = reservation?.maxBudgetUsd ?? (spec.monthlyBudgetUsd == null ? undefined : Math.min(usage.available(spec.monthlyBudgetUsd) / 1e6, 5));
-    const run = { key, reservation, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
+    const maxBudgetUsd = spec.monthlyBudgetUsd == null ? undefined : Math.min(usage.available(spec.monthlyBudgetUsd) / 1e6, 5);
+    const run = { key, reservation: null, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
       generation: dependencies.availabilityGeneration?.(), keyVersion: dependencies.credentialVersion?.(),
       remainingBudgetUsd: maxBudgetUsd ?? Infinity, busy: false, background: new Map() };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
-    const options = queryOptions(spec, { key, executable, abort: run.abort,
-      providerSessionId: providerId, maxBudgetUsd, policy,
-      canUseTool: async (name, input, context) => {
-        if (closed || stopping || run.closing) return { behavior: 'deny', message: '会话已停止。' };
-        if (name === 'AskUserQuestion') return requests.open(name, input, context);
-        const decision = policy(name, input);
-        if (decision.behavior === 'defer' || decision.behavior === 'ask') return requests.open(name, input, context);
-        return decision.behavior === 'allow' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: decision.reason };
-      },
-    });
     try {
+      const options = queryOptions(spec, { key, executable, abort: run.abort,
+        providerSessionId: providerId, maxBudgetUsd, policy,
+        canUseTool: async (name, input, context) => {
+          if (closed || stopping || run.closing) return { behavior: 'deny', message: '会话已停止。' };
+          if (name === 'AskUserQuestion') return requests.open(name, input, context);
+          const decision = policy(name, input);
+          if (decision.behavior === 'defer' || decision.behavior === 'ask') return requests.open(name, input, context);
+          return decision.behavior === 'allow' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: decision.reason };
+        },
+      });
+      if (!prepareOnly) {
+        run.reservation = usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId });
+        options.maxBudgetUsd = run.reservation.maxBudgetUsd;
+        run.remainingBudgetUsd = options.maxBudgetUsd ?? Infinity;
+      }
       run.query = sdk.query({ prompt: run.queue, options });
       opening = run;
       // The pinned SDK initializes its control channel without consuming a user prompt.
@@ -242,10 +256,10 @@ function createClaudeSession(spec, emit, dependencies) {
       dependencies.onIdentity?.(run.generation);
       if (closed || stopping || run.closing) throw new Error('会话已停止。');
       if (!prepareOnly && !canContinue()) {
-        cancelQuery(run, 'path_changed'); if (reservation) usage.release(reservation.id); secrets.delete(key); return null;
+        cancelQuery(run, 'path_changed'); if (run.reservation) usage.release(run.reservation.id); secrets.delete(key); return null;
       }
     } catch (error) {
-      cancelQuery(run, 'startup'); if (reservation) usage.release(reservation.id); secrets.delete(key);
+      cancelQuery(run, 'startup'); if (run.reservation) usage.release(run.reservation.id); secrets.delete(key);
       if (stopping || closed) throw new Error('会话已停止。');
       const failure = startupFailure(error);
       onFailure(failure.code, failure, run.generation);
@@ -258,12 +272,13 @@ function createClaudeSession(spec, emit, dependencies) {
     return run;
   }
   async function send({ clientMessageId, text, images = [] }) {
+    if (typeof text !== 'string' || !text.trim() && !images.length) throw new Error('无效的消息。');
     if (closed || stopping || !started || ['failed', 'stopped'].includes(state)) throw new Error('会话已停止。');
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
     if (!canContinue()) return { status: 'rejected' };
     if (sent.size >= 2000) throw new Error('会话消息过多，请启动新会话。');
     if (/^\/clear(?:\s|$)/.test(text)) throw new Error('原生会话不支持此命令。');
-    const content = images.length ? [{ type: 'text', text }, ...images.map(image => {
+    const content = images.length ? [...(text.trim() ? [{ type: 'text', text }] : []), ...images.map(image => {
       const [, media_type, data] = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(image) || [];
       if (!data) throw new Error('无效的图片。');
       return { type: 'image', source: { type: 'base64', media_type, data } };
@@ -271,7 +286,7 @@ function createClaudeSession(spec, emit, dependencies) {
     if (active?.closing) await active.task;
     if (active && active.keyVersion !== dependencies.credentialVersion?.()) {
       if (active.busy) return { status: 'rejected' };
-      cancelQuery(active, 'credentials_changed'); await active.task;
+      await stopBackground(); cancelQuery(active, 'credentials_changed'); await active.task;
     }
     if (active && !active.busy && !active.background.size) {
       const availableUsd = usage.available(spec.monthlyBudgetUsd ?? null) / 1e6;
@@ -288,7 +303,7 @@ function createClaudeSession(spec, emit, dependencies) {
     if (closed || stopping) throw new Error('会话已停止。');
     if (!canContinue()) return { status: 'rejected' };
     // No input has been queued yet; a key replaced during initialization must initialize again before delivery.
-    if (active.keyVersion !== dependencies.credentialVersion?.()) { cancelQuery(active, 'credentials_changed'); await active.task; return send({ clientMessageId, text, images }); }
+    if (active.keyVersion !== dependencies.credentialVersion?.()) { await stopBackground(); cancelQuery(active, 'credentials_changed'); await active.task; return send({ clientMessageId, text, images }); }
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
     reserve(active);
     active.busy = true;
@@ -314,6 +329,8 @@ function createClaudeSession(spec, emit, dependencies) {
         try { Promise.resolve(run.query.interrupt?.()).catch(() => {}); } catch { }
         await waitWithin(result, 750); run.onStoppedResult = null;
       }
+      // Full retirement owns cleanup; ordinary Stop still preserves live background work.
+      try { await stopBackground(); } catch { }
       closed = true;
       if (run) cancelQuery(run, 'stop');
       try { if (run) finishReservation(run); } catch { }
@@ -327,7 +344,7 @@ function createClaudeSession(spec, emit, dependencies) {
     const run = active;
     if (!run?.background.size) return;
     // A process exit alone does not stop Bash jobs on Windows. Ask the process which owns these task ids
-    // to stop them and wait for its receipts before retiring that process. Dispatched workers are not in this set.
+    // to stop them and wait for its receipts before retiring that process. A helper launched by a background Bash is part of that task.
     let timer;
     try {
       await Promise.race([Promise.all([...run.background.keys()].map(id => run.query.stopTask(id))), new Promise((_, reject) => {
@@ -345,7 +362,7 @@ function createClaudeSession(spec, emit, dependencies) {
       return key ? (spec, emit) => restore(spec, emit, { status: credentials.status,
         read: () => credentials.status().saved ? credentials.read() : key }) : null;
     },
-    policyChanged() { if (!canContinue() && active && !active.busy) cancelQuery(active, 'path_changed'); },
+    policyChanged() { if (!canContinue() && active && !active.busy && !active.background.size) cancelQuery(active, 'path_changed'); },
     activity: () => ({ known: true, count: active?.background.size || 0 }),
     async prepareResume({ allowFresh = false } = {}) {
       if (!started || closed || !providerId && !allowFresh) throw new Error('resume_unavailable');

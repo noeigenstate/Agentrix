@@ -1,7 +1,7 @@
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exact = (value, keys) => object(value) && Object.keys(value).every(key => keys.includes(key));
 const id = value => typeof value === 'string' && /^[\w:.-]{1,160}$/.test(value);
-const text = (value, limit = 262144) => typeof value === 'string' && value.length > 0 && value.length <= limit && !value.includes('\0');
+const text = (value, limit = 262144, allowEmpty = false) => typeof value === 'string' && (allowEmpty || value.length > 0) && value.length <= limit && !value.includes('\0');
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const nullableCount = value => value === null || count(value);
 const eventTypes = new Set(['switch.updated', 'session.state', 'turn.started', 'turn.completed', 'item.upsert', 'item.delta', 'turn.diff', 'plan.updated', 'request.opened', 'request.resolved', 'input.receipt', 'usage.updated', 'limits.updated', 'routing.updated', 'path.changed', 'error']);
@@ -42,7 +42,7 @@ function validHandoff(answer) {
   const draft = answer.handoff.draft;
   return exact(draft, ['version', 'text', 'images', 'undelivered']) && count(draft.version) && (draft.text === '' || text(draft.text))
     && Array.isArray(draft.images) && validImages(draft.images) && Array.isArray(draft.undelivered) && draft.undelivered.length <= 100
-    && draft.undelivered.every(input => exact(input, ['clientMessageId', 'text', 'images']) && id(input.clientMessageId) && text(input.text) && validImages(input.images))
+    && draft.undelivered.every(input => exact(input, ['clientMessageId', 'text', 'images']) && id(input.clientMessageId) && text(input.text, 262144, !!input.images?.length) && validImages(input.images))
     && JSON.stringify(answer).length <= 12 * 1024 * 1024;
 }
 module.exports = { exact, id, text, assert, validImages, validEvent, validSwitchAnswer, validHandoff };

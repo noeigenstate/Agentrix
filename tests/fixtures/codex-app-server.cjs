@@ -59,11 +59,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   else if (request.method === 'thread/read') result = { thread: { id: threadId, status: { type: 'idle' }, turns: [{ id: turnId, status: 'completed', items: [] }] } };
   else if (request.method === 'thread/turns/list') {
     if (mode.startsWith('long-')) {
-      const total = mode === 'long-many' ? 1200 : mode === 'long-large' ? 60 : 2, offset = Number(params.cursor || 0);
+      const total = mode === 'long-many' ? 1200 : mode === 'long-large' ? 60 : mode === 'long-mixed' ? 600 : 2, offset = Number(params.cursor || 0);
       const count = Math.min(params.limit, total - offset);
       result = { data: Array.from({ length: count }, (_, i) => ({ id: 'history-' + (total - offset - i), status: 'completed',
         items: params.itemsView === 'notLoaded' ? [] : [{ id: 'item-' + (total - offset - i), type: 'agentMessage',
-          text: (mode === 'long-huge' && offset + i === 0 ? 'x'.repeat(17 * 1024 * 1024) : mode === 'long-large' ? '汉'.repeat(200000) : 'small') + '-END' }] })),
+          text: (['long-huge', 'long-mixed'].includes(mode) && offset + i === 0 ? 'x'.repeat(17 * 1024 * 1024) : mode === 'long-large' ? '汉'.repeat(200000) : 'small') + '-END' }] })),
         nextCursor: offset + count < total ? String(offset + count) : null, backwardsCursor: null };
     } else result = { data: [{ id: mode === 'race' ? turnId : 'history', status: 'completed', items: [] }], nextCursor: 'next-page', backwardsCursor: null };
   }

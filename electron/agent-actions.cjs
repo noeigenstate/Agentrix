@@ -31,7 +31,6 @@ const resolvePath = (cwd, file) => (cwd?.startsWith('/') || file.startsWith('/')
 // These records are Claude's own bookkeeping, not a prompt that starts another round.
 function claudeOwnRecord(record) {
   if (record?.isCompactSummary || record?.isVisibleInTranscriptOnly) return true;
-  if (record?.type === 'assistant' && (record.isApiErrorMessage === true || typeof record.error === 'string')) return true;
   if (record?.type !== 'user') return false;
   return ownMessage(messageText(record.message?.content));
 }

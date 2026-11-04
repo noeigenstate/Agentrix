@@ -3,7 +3,7 @@ function registerIpc({ handle, router, settings, claude }) {
   const binding = (terminalId, runtimeSessionId) => assert(id(terminalId) && id(runtimeSessionId));
   handle('native:start', (terminalId, options) => { assert(id(terminalId) && exact(options, ['agent', 'resume']) && ['claude', 'codex'].includes(options.agent) && (options.resume === undefined || typeof options.resume === 'boolean')); return router.start(terminalId, options); });
   handle('native:resume', (terminalId, options) => { assert(id(terminalId) && exact(options, ['agent']) && ['claude', 'codex'].includes(options.agent)); return router.start(terminalId, { ...options, resume: true }); });
-  handle('native:send', (terminalId, runtimeSessionId, clientMessageId, value, images) => { binding(terminalId, runtimeSessionId); assert(id(clientMessageId) && text(value) && validImages(images)); return router.send(terminalId, runtimeSessionId, { clientMessageId, text: value, images }); });
+  handle('native:send', (terminalId, runtimeSessionId, clientMessageId, value, images) => { binding(terminalId, runtimeSessionId); assert(id(clientMessageId) && text(value, 262144, !!images?.length) && validImages(images)); return router.send(terminalId, runtimeSessionId, { clientMessageId, text: value, images }); });
   handle('native:interrupt', (terminalId, runtimeSessionId) => { binding(terminalId, runtimeSessionId); return router.interrupt(terminalId, runtimeSessionId); });
   handle('native:stop', (terminalId, runtimeSessionId) => { binding(terminalId, runtimeSessionId); return router.stop(terminalId, runtimeSessionId); });
   handle('native:answer', (terminalId, runtimeSessionId, requestId, answer) => {

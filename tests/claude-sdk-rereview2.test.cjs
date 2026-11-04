@@ -21,11 +21,11 @@ test('R6 real-shaped API errors are notices/results, never assistant prose; ordi
     f.emit(record); f.emit({ ...record, isReplay: true }); claudeConversation(log, record);
     assert.equal(rateLimits(record, null, 'scope', 1000).notice.message, 'API 用量已达上限。');
   }
-  assert.deepEqual(f.events, []); assert.deepEqual(log.list, []);
+  assert.deepEqual(f.events, []); assert.deepEqual(log.list.map(entry => entry.text), ['API 用量已达上限。', 'API 用量已达上限。']);
   const normal = { type: 'assistant', uuid: 'answer', message: { id: 'answer', content: [{ type: 'text', text: 'The API Error example uses 429 and enforced_spend_limit_reached.' }] } };
   f.emit(normal); claudeConversation(log, normal);
   assert.equal(f.events[0].payload.content.text, normal.message.content[0].text);
-  assert.equal(log.list[0].text, normal.message.content[0].text, 'text matching an error phrase is still a real answer');
+  assert.equal(log.list.at(-1).text, normal.message.content[0].text, 'text matching an error phrase is still a real answer');
 });
 test('A3 child prose and tools never enter the main feed, including replay and deltas', () => {
   const f = normalize();

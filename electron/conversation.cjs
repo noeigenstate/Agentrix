@@ -5,7 +5,7 @@ const { createHash } = require('node:crypto');
 const { PictureThumbnails, dataImage } = require('./features/files/picture-thumbnail.cjs');
 const pictureValues = require('./picture-values.json');
 const { messageText, promptText, promptKey, promptCommand } = require('./prompt-queue.cjs');
-const { clean, claudeText } = require('./conversation-record.cjs');
+const { clean, claudeText, claudeApiError, apiErrorText } = require('./conversation-record.cjs');
 
 // The conversation of a terminal's agent, for the reading view: what the user asked, what the agent
 // answered (Markdown), and the tools it called in between. It is read from the records each agent already
@@ -287,6 +287,9 @@ function claudeConversation(log, record, cwd, { queueOnly = false } = {}) {
     return;
   }
   if (claudeOwnRecord(record) || record.type !== 'assistant' || !Array.isArray(content)) return;
+  if (claudeApiError(record)) {
+    log.put({ id: `a:${base}:0`, at, role: 'assistant', text: apiErrorText(record) }); return;
+  }
   const original = messageText(content);
   content.forEach((block, index) => {
     const text = block.type === 'text' ? clean(block.text) : '';

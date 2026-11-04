@@ -21,17 +21,21 @@ const ROUTE_ENV = [
 ];
 const routeName = name => ROUTE_ENV.includes(name.toUpperCase()) || /^(?:ANTHROPIC_|CLAUDE_CODE_USE_)|(?:BASE_URL|PROXY|ENDPOINT|CA_CERT|CA_BUNDLE|CERT_STORE|CLIENT_CERT|CLIENT_KEY|GATEWAY|TLS_)/i.test(name);
 const HELPERS = ['apiKeyHelper', 'proxyAuthHelper', 'awsAuthRefresh', 'awsCredentialExport', 'gcpAuthRefresh'];
-function settings(file) {
+function settings(file, project = false) {
   try {
     if (fs.statSync(file).size > 1048576) throw new Error('settings_too_large');
     const value = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  } catch (error) { if (error.code === 'ENOENT') return {}; throw new Error('无法读取 Claude 路由配置。'); }
+  } catch (error) {
+    if (project || error.code === 'ENOENT') return {};
+    throw Object.assign(new Error('无法读取 Claude 路由配置。'), { code: 'route_config_unreadable' });
+  }
 }
 function routeSettings(spec) {
   const cwd = path.resolve(spec.cwd || process.cwd()), root = path.resolve(spec.worktree || spec.projectRoot || cwd);
   const inherited = spec.env || process.env;
-  const config = inherited.CLAUDE_CONFIG_DIR || (inherited.HOME || inherited.USERPROFILE ? path.join(inherited.HOME || inherited.USERPROFILE, '.claude') : null);
+  const home = process.platform === 'win32' ? inherited.USERPROFILE || inherited.HOME : inherited.HOME || inherited.USERPROFILE;
+  const config = inherited.CLAUDE_CONFIG_DIR || (home ? path.join(home, '.claude') : null);
   let user = {};
   if (spec.owner !== 'dispatch' && config) {
     const file = path.join(config, 'settings.json');
@@ -41,12 +45,14 @@ function routeSettings(spec) {
     if (real && (relative.startsWith('..' + path.sep) || path.isAbsolute(relative))) user = settings(file);
   }
   const trusted = new Map(Object.entries({ ...inherited, ...(user.env || {}) }).map(([name, value]) => [name.toUpperCase(), value]));
-  const names = new Set(ROUTE_ENV);
-  for (const name of [...Object.keys(inherited), ...Object.keys(user.env || {})]) if (routeName(name)) names.add(name);
+  const names = new Set(ROUTE_ENV.filter(name => /^(?:ANTHROPIC_|CLAUDE_CODE_USE_)/.test(name)));
   // Cover mixed-case spellings and newly added transport variables from every project settings source.
   for (let folder = cwd; folder === root || folder.startsWith(root + path.sep); folder = path.dirname(folder)) {
     for (const filename of ['settings.json', 'settings.local.json']) {
-      const env = settings(path.join(folder, '.claude', filename)).env;
+      const env = settings(path.join(folder, '.claude', filename), true).env;
+      if (Object.keys(env || {}).some(name => name.toUpperCase() === 'ANTHROPIC_API_KEY')) {
+        throw Object.assign(new Error('项目 Claude 配置不能覆盖应用保存的 API 密钥。'), { code: 'project_api_key_override' });
+      }
       for (const name of Object.keys(env || {})) if (routeName(name)) names.add(name);
     }
     if (folder === root) break;
@@ -54,7 +60,7 @@ function routeSettings(spec) {
   const env = {};
   for (const name of names) {
     const canonical = name.toUpperCase();
-    // Settings become CLI arguments. The saved key must remain solely in the child environment.
+    // The saved key remains solely in the child environment, never in a settings file or CLI arguments.
     if (canonical === 'ANTHROPIC_API_KEY') continue;
     const value = canonical === 'ANTHROPIC_AUTH_TOKEN' ? ''
       : /^CLAUDE_CODE_USE_/i.test(name) ? '0' : trusted.get(canonical) ?? (canonical === 'ANTHROPIC_BASE_URL' ? 'https://api.anthropic.com' : '');

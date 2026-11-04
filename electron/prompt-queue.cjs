@@ -28,7 +28,7 @@ const omitPath = text => text.endsWith('.') ? ' .' : ' ';
 // Both CLIs use the user role for bookkeeping too. Check provenance before cleaning away its identifying tags.
 function promptText(content, record = {}) {
   // SDK is the owner's input transport, not an automatic turn. All injection checks still apply.
-  const sdkInput = record.turnOrigin === 'sdk' && record.promptSource === 'sdk' && record.entrypoint === 'sdk-ts';
+  const sdkInput = record.turnOrigin === 'sdk' && record.promptSource === 'sdk' && record.entrypoint === 'agentrix-sdk';
   if (record.isMeta || record.is_meta || record.isSidechain || record.parent_tool_use_id || record.isCompactSummary || record.isVisibleInTranscriptOnly || record.queueTranscriptOnly
     || record.promptSource === 'system' || record.origin?.kind && record.origin.kind !== 'human'
     || record.turnOrigin && record.turnOrigin !== 'human' && !sdkInput || record.humanTurn === false

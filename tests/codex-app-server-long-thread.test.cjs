@@ -49,6 +49,22 @@ test('dispatch resumes context without requesting or retaining history', async t
   assert.equal((await f.runtime.send({ clientMessageId: 'worker-new', text: 'Continue' })).status, 'delivered');
 });
 
+test('B9 a single huge turn does not leave the remaining six hundred short turns on one-item pages', async t => {
+  const f = runtimeFixture(t, 'long-mixed'); await f.runtime.resume();
+  const pages = f.calls().filter(call => call.method === 'thread/turns/list');
+  assert.equal(f.emitted.filter(event => event.type === 'item.upsert').length, 599);
+  assert.ok(pages.length < 60, `history requests: ${pages.length}`);
+  assert.equal(pages.at(-1).params.limit, 50);
+});
+
+test('image-only Codex input contains the image without an invented text prompt', async t => {
+  const f = runtimeFixture(t, 'long-many', 'dispatch'); await f.runtime.resume();
+  await f.runtime.send({ clientMessageId: 'picture', text: '', images: ['data:image/png;base64,AAAA'] });
+  const request = f.calls().find(call => call.method === 'turn/start' && call.params.input);
+  assert.deepEqual(request.params.input.map(item => item.type), ['image']);
+  await assert.rejects(f.runtime.send({ clientMessageId: 'empty', text: '', images: [] }), /invalid_input/);
+});
+
 function rpcFixture() {
   const child = new EventEmitter(), writes = [], notices = [], failures = [];
   child.stdout = new PassThrough(); child.stderr = new PassThrough();

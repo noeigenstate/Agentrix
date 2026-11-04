@@ -102,6 +102,8 @@ test('a silent or failed SDK identity probe returns unknown and always closes it
 
 test('connection tests use the saved key and new-session options without changing usage or active sessions', async t => {
   const root = directory(t), fake = fakeSdk(), httpFake = http(200), spec = { ...specOf(root), context: 'Synthetic context', model: 'fake-selected' };
+  const settings = [], query = fake.sdk.query;
+  fake.sdk.query = value => { settings.push(JSON.parse(fs.readFileSync(value.options.settings, 'utf8'))); return query(value); };
   const factory = createClaudeRuntime({ directory: path.join(root, 'data'), safeStorage, loadSdk: async () => fake.sdk, inspectCli: cli,
     request: httpFake.request, resolveExecutable: async () => 'synthetic-only', connectionSpec: () => spec });
   t.after(() => factory.close()); factory.credentials.save(key);
@@ -114,9 +116,10 @@ test('connection tests use the saved key and new-session options without changin
   await session.start(); await session.send({ clientMessageId: 'm', text: 'synthetic work' });
   for (let n = 0; n < 100 && !events.some(event => event.type === 'turn.completed'); n++) await new Promise(resolve => setTimeout(resolve, 2));
   const probe = fake.calls[0].options, actual = fake.calls[1].options;
-  for (const field of ['cwd', 'model', 'effort', 'pathToClaudeCodeExecutable', 'settings', 'env', 'permissionMode', 'includePartialMessages', 'settingSources', 'systemPrompt', 'maxBudgetUsd']) {
+  for (const field of ['cwd', 'model', 'effort', 'pathToClaudeCodeExecutable', 'env', 'permissionMode', 'includePartialMessages', 'settingSources', 'systemPrompt', 'maxBudgetUsd']) {
     assert.deepEqual(probe[field], actual[field], field);
   }
+  assert.deepEqual(settings[0], settings[1]); assert.equal(fs.existsSync(probe.settings), false, 'preflight settings are removed on close');
   assert.equal(probe.hooks.PreToolUse[0].onFailure, actual.hooks.PreToolUse[0].onFailure);
   assert.equal(probe.env.CLAUDE_CONFIG_DIR, spec.env.CLAUDE_CONFIG_DIR);
   assert.equal(spec.env.CLAUDE_CONFIG_DIR, path.join(root, 'owner-config'));

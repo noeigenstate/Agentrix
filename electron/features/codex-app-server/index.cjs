@@ -148,6 +148,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             page = await rpc.request('thread/turns/list', { threadId: events.binding.providerSessionId, cursor, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' });
           }
           if (!Array.isArray(page?.data)) throw new Error('invalid_history');
+          limit = Math.min(50, limit * 2);
           for (const turn of page.data) {
             ++turns;
             for (const item of [...(turn.items || [])].reverse()) {
@@ -166,7 +167,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       }
       function send(input) {
         const imageValid = value => typeof value === 'string' && (spec.owner === 'dispatch' && path.isAbsolute(value) || /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value));
-        if (!input || typeof input.clientMessageId !== 'string' || !/^[\w:.-]{1,160}$/.test(input.clientMessageId) || typeof input.text !== 'string' || !input.text.trim() || input.text.length > 1024 * 1024 || input.images && (!Array.isArray(input.images) || input.images.length > 8 || input.images.some(x => !imageValid(x)))) return Promise.reject(new Error('invalid_input'));
+        if (!input || typeof input.clientMessageId !== 'string' || !/^[\w:.-]{1,160}$/.test(input.clientMessageId) || typeof input.text !== 'string' || !input.text.trim() && !input.images?.length || input.text.length > 1024 * 1024 || input.images && (!Array.isArray(input.images) || input.images.length > 8 || input.images.some(x => !imageValid(x)))) return Promise.reject(new Error('invalid_input'));
         const fingerprint = createHash('sha256').update(JSON.stringify([input.text, input.images || []])).digest('hex'), prior = receipts.get(input.clientMessageId);
         if (prior) return prior.fingerprint === fingerprint ? prior.promise : Promise.reject(new Error('message_id_conflict'));
         if (receipts.size >= 2000) return Promise.reject(new Error('input_limit'));
@@ -174,7 +175,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (!rpc || closed || !['idle', 'running', 'waiting'].includes(state)) throw new Error('session_unavailable');
           const clientId = input.clientMessageId;
           events.publish('input.receipt', { clientMessageId: clientId, status: 'queued' });
-          const userInput = [{ type: 'text', text: input.text, text_elements: [] }, ...(input.images || []).map(value => value.startsWith('data:') ? { type: 'image', url: value } : { type: 'localImage', path: value })];
+          const userInput = [...(input.text.trim() ? [{ type: 'text', text: input.text, text_elements: [] }] : []), ...(input.images || []).map(value => value.startsWith('data:') ? { type: 'image', url: value } : { type: 'localImage', path: value })];
           const steering = active;
           try {
             clientMessageId = clientId; origin = 'user';

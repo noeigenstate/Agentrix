@@ -15,6 +15,9 @@ function billingIdentityError(source, { beforeInput = false, messageType, tokenS
 
 function startupFailure(error) {
   if (identityFailures.has(error)) return error;
+  if (['route_config_unreadable', 'project_api_key_override'].includes(error?.code)) {
+    return Object.assign(new Error(error.code === 'project_api_key_override' ? '项目 Claude 配置不能覆盖应用保存的 API 密钥。' : '无法读取 Claude 路由配置。'), { code: error.code, beforeInput: true });
+  }
   const timeout = error?.code === 'sdk_initialization_timeout';
   return Object.assign(new Error(timeout ? 'Claude API 初始化超时，尚未发送消息。' : 'Claude API 启动失败，尚未发送消息。'), {
     code: timeout ? 'sdk_initialization_timeout' : 'sdk_startup_failed', beforeInput: true,

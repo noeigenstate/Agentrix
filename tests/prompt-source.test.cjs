@@ -77,7 +77,7 @@ const codex = (content, at = 2000, extra = {}, modern = true) => ({ type: 'event
     : { type: 'user_message', message: content, ...extra } });
 
 test('SDK owner input remains a human prompt after switching to terminal history; SDK injections do not', () => {
-  const source = { turnOrigin: 'sdk', promptSource: 'sdk', entrypoint: 'sdk-ts' };
+  const source = { turnOrigin: 'sdk', promptSource: 'sdk', entrypoint: 'agentrix-sdk' };
   const log = new ConversationLog();
   const record = claude('Owner message sent through the SDK.', 2000, source);
   assert.equal(claudePrompt(record), true);

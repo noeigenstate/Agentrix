@@ -1,6 +1,21 @@
 const { apiEnvironment } = require('./credentials.cjs');
 const { billingIdentityError } = require('./identity.cjs');
 const { routeSettings } = require('./routing.cjs');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+function privateSettings(value, signal) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-claude-settings-'));
+  const file = path.join(directory, 'settings.json');
+  const remove = () => { try { fs.unlinkSync(file); } catch { } try { fs.rmdirSync(directory); } catch { } };
+  try {
+    fs.writeFileSync(file, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
+    signal.addEventListener('abort', remove, { once: true });
+    if (signal.aborted) remove();
+    return file;
+  } catch (error) { remove(); throw error; }
+}
 
 function inputQueue(onTake = () => {}) {
   const values = [];
@@ -26,7 +41,7 @@ function inputQueue(onTake = () => {}) {
 function queryOptions(spec, { key, executable, abort, providerSessionId, maxBudgetUsd, policy, canUseTool }) {
   return {
     cwd: spec.cwd, model: spec.model || undefined, effort: spec.effort || 'high', pathToClaudeCodeExecutable: executable,
-    settings: { fastMode: spec.fast === true, ...routeSettings(spec) }, env: apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
+    settings: privateSettings({ fastMode: spec.fast === true, ...routeSettings(spec) }, abort.signal), env: apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
     // The owner's choice: SDK sessions do not ask about each tool. A worker's limits are its PreToolUse policy, which still denies under
     // this mode, and questions still reach canUseTool: both proved against the real CLI in tests/claude-sdk-real-cli.test.cjs.
     abortController: abort, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true, includePartialMessages: true,

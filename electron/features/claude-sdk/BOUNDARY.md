@@ -2,7 +2,7 @@
 
 Owns the host's Claude Agent SDK sessions, protected credentials, worker tool decisions and local API accounting.
 
-Owner sessions intentionally keep tool and hook environment inheritance; dispatch workers enable the CLI's subprocess scrub. This is the owner's current decision (A2), not an isolation guarantee. API routing is pinned in flag settings from host and user sources; repository env and helper settings cannot choose the destination. The saved key remains in the child environment, never flag settings or argv. Known gap: project settings can replace that key while reporting the same source; the SDK cannot prove its effective bytes.
+Owner sessions currently keep tool and hook environment inheritance; dispatch workers enable the CLI's subprocess scrub. A2 is awaiting the owner's answer; the existing behavior is retained in the meantime, not an isolation guarantee. API routing is pinned in a private session settings file from host and user sources; repository env and helper settings cannot choose the destination. Routing secrets never enter argv. The saved key remains in the child environment, never the settings file or argv; project/local env overrides found at launch are refused. This does not attest effective key bytes against later config changes or active hooks. Project hooks still inherit it under the retained A2 behavior.
 
 ## Owns
 - `electron/features/claude-sdk/**`
