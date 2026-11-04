@@ -6,7 +6,7 @@
 // file changes `changes[{ path, kind, diff }]` or `path`, `kind`, `diff`; tools `name` or `tool`, `server`, `input` or `arguments`, `result` or
 // `output`. Quota windows are `{ usedPercent, windowDurationMins, resetsAtMs }` with `resetsAtMs` in milliseconds.
 import { t } from '../../shared/i18n';
-import type { AgentConnection, ConnectionTest, LimitWindow, NativeAgent } from './native-bridge.ts';
+import type { AgentConnection, ConnectionTest, LimitWindow, NativeAgent, NextPath } from './native-bridge.ts';
 import type { NativeItem, Payload } from './native-model.ts';
 
 const str = (value: unknown) => (typeof value === 'string' && value !== '' ? value : null);
@@ -74,6 +74,16 @@ export function shortPath(path: string, max = 32) {
 export const reasonWords = (reason: string | null | undefined) => (!reason ? null : REASON_WORDS[reason] ? t(REASON_WORDS[reason]) : reason);
 
 export const routeWord = (route: string | null | undefined) => (route === 'api' ? 'API' : route === 'terminal' ? t('终端') : route === 'native' ? t('原生') : route === 'subscription' ? t('订阅') : t('未知'));
+
+// A new session's route comes only from main's next-path decision, never the running session's path or connection.
+const NEXT_REASONS: Record<string, string> = {
+  no_key: '未保存 API 密钥', cli_missing: '未找到命令行', cli_too_old: '命令行版本过低', set_terminal: '按设置', set_api: '按设置',
+};
+export function nextPathWord(next: NextPath | null | undefined) {
+  const path = next?.path === 'api' ? t('API · 原生界面') : next?.path === 'native' ? t('原生界面') : routeWord(next?.path);
+  const reason = next?.reason ? (NEXT_REASONS[next.reason] ? t(NEXT_REASONS[next.reason]) : reasonWords(next.reason)) : null;
+  return reason ? `${path}（${reason}）` : path;
+}
 
 // "Claude · API" or "Codex · 原生": whose session this is and what it runs on.
 export function runtimeWord(identity: { provider: string; transport: string } | null) {

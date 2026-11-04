@@ -615,10 +615,10 @@ test('Codex falling back to the terminal leaves its reason where the native view
 // ---- the API usage card -------------------------------------------------------------------------------------------------------------
 const words = () => load('features/native-session/native-words.ts');
 const usageOf = (patch = {}) => ({
-  month: '2026-11', todayUsdMicros: 1_230_000, monthUsdMicros: 12_400_000, estimated: true, budgetUsd: 50, lastSwitch: { at: Date.UTC(2026, 10, 3, 9, 0), agent: 'claude', from: 'api', to: 'terminal', reason: 'budget_exhausted' },
+  month: '2026-11', apiRecords: true, todayUsdMicros: 1_230_000, monthUsdMicros: 12_400_000, estimated: true, budgetUsd: 50, lastSwitch: { at: Date.UTC(2026, 10, 3, 9, 0), agent: 'claude', from: 'api', to: 'terminal', reason: 'budget_exhausted' },
   agents: {
-    claude: { path: 'api', reason: null, connection: { kind: 'api', source: 'session init: ANTHROPIC_API_KEY', observedAt: 1 }, limits: { state: 'ready', limitsById: {}, ordinaryUsageAllowed: true } },
-    codex: { path: 'native', reason: null, connection: { kind: 'subscription', source: 'account/read: ChatGPT login', observedAt: 1 }, limits: { state: 'ready', ordinaryUsageAllowed: true, limitsById: { codex: { limitName: 'Codex', primary: { usedPercent: 40, windowDurationMins: 300, resetsAtMs: Date.UTC(2026, 10, 3, 12, 30) }, secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAtMs: null } } } } },
+    claude: { path: 'api', reason: null, next: { path: 'api', reason: null }, connection: { kind: 'api', source: 'session init: ANTHROPIC_API_KEY', observedAt: 1 }, limits: { state: 'ready', limitsById: {}, ordinaryUsageAllowed: true } },
+    codex: { path: 'native', reason: null, next: { path: 'native', reason: null }, connection: { kind: 'subscription', source: 'account/read: ChatGPT login', observedAt: 1 }, limits: { state: 'ready', ordinaryUsageAllowed: true, limitsById: { codex: { limitName: 'Codex', primary: { usedPercent: 40, windowDurationMins: 300, resetsAtMs: Date.UTC(2026, 10, 3, 12, 30) }, secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAtMs: null } } } } },
   }, ...patch,
 });
 
@@ -632,24 +632,77 @@ async function usageHtml(bridge) {
   } finally { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; }
 }
 
-test('the usage card shows each agent’s path, the API spend as an estimate, the budget share, limits with their recovery, and the last switch with its reason', async () => {
+const usageSection = (html, agent) => {
+  const section = html.match(new RegExp(`<section class="api-agent" aria-label="${agent}">([\\s\\S]*?)</section>`));
+  assert.ok(section, `${agent} has its own named section`);
+  return section[1];
+};
+
+test('the usage card groups Claude and Codex separately, with spend and budget only under Claude and the last switch under its agent', async () => {
   const html = await usageHtml({ usage: async () => ({ ok: true, value: usageOf() }) });
-  assert.ok(html.includes('<dt>Claude</dt><dd><span title="session init: ANTHROPIC_API_KEY">已连接 API</span><span>API · 原生界面</span></dd>'), 'the first line is what Claude is connected through, its source the tooltip');
-  assert.ok(html.includes('<dt>Codex</dt><dd><span title="account/read: ChatGPT login">ChatGPT 订阅</span><span>原生界面</span></dd>'));
-  assert.match(html, /今日 \$1\.23 · 本月 \$12\.40<\/span>/); assert.match(html, /估算，按公开价格计算/);
-  assert.match(html, /\$50\.00 · 已用 25%/); assert.match(html, /role="meter"[^>]*aria-valuenow="25"/);
-  assert.match(html, /5 小时 · 已用 40% · [^<]+ 重置/); assert.match(html, /7 天 · 已用 10% · 未知 重置/);
-  assert.match(html, /Claude · API → 终端 · \d/); assert.match(html, /本月 API 预算已用完/);
+  const claude = usageSection(html, 'Claude'), codex = usageSection(html, 'Codex');
+  const labels = section => [...section.matchAll(/<dt>([^<]+)<\/dt>/g)].map(match => match[1]);
+  assert.match(html, /<h3 class="activity-card-title">运行方式与 API 额度<\/h3>/);
+  assert.match(claude, /<h4[^>]*>Claude<\/h4>/); assert.match(codex, /<h4[^>]*>Codex<\/h4>/);
+  assert.deepEqual(labels(claude), ['连接', '新会话', '额度', 'API 花费', '月预算', '最近切换']);
+  assert.deepEqual(labels(codex), ['连接', '新会话', '额度']);
+  assert.ok(claude.includes('<dt>连接</dt><dd><span title="session init: ANTHROPIC_API_KEY">已连接 API</span></dd>'), 'the connection source stays in its tooltip');
+  assert.ok(codex.includes('<dt>连接</dt><dd><span title="account/read: ChatGPT login">ChatGPT 订阅</span></dd>'));
+  assert.match(claude, /<dt>新会话<\/dt><dd><span>API · 原生界面<\/span><\/dd>/);
+  assert.match(codex, /<dt>新会话<\/dt><dd><span>原生界面<\/span><\/dd>/);
+  assert.match(claude, /今日 \$1\.23 · 本月 \$12\.40<\/span>/); assert.match(claude, /估算，按公开价格计算/);
+  assert.match(claude, /\$50\.00 · 已用 25%/); assert.match(claude, /role="meter"[^>]*aria-valuenow="25"/);
+  assert.match(codex, /5 小时 · 已用 40% · [^<]+ 重置/); assert.match(codex, /7 天 · 已用 10% · 未知 重置/);
+  assert.match(claude, /API → 终端 · \d/); assert.match(claude, /本月 API 预算已用完/);
+  assert.doesNotMatch(codex, /API 花费|月预算|role="meter"|最近切换/);
+  const switched = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ lastSwitch: { at: 1, agent: 'codex', from: 'native', to: 'terminal', reason: 'user' } }) }) });
+  assert.doesNotMatch(usageSection(switched, 'Claude'), /最近切换/);
+  assert.match(usageSection(switched, 'Codex'), /<dt>最近切换<\/dt>/);
 });
 
 test('the usage card says 未知 for what nobody gave and keeps a real zero as $0.00', async () => {
   const html = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ todayUsdMicros: 0, monthUsdMicros: null, budgetUsd: null, lastSwitch: null, agents: {
-    claude: { path: null, reason: null, limits: null }, codex: { path: 'terminal', reason: null, limits: { state: 'rate_limited' } } } }) }) });
-  assert.match(html, /今日 \$0\.00 · 本月 未知<\/span>/); assert.ok(html.includes('<dt>Claude</dt><dd><span>未知</span><span>未知</span></dd>'), 'no connection reported and no path: unknown, twice'); assert.ok(html.includes('<dt>Codex</dt><dd><span>未知</span><span>终端</span></dd>'), 'a missing connection field is unknown, not none');
+    claude: { path: null, reason: null, next: { path: null, reason: null }, limits: null }, codex: { path: 'terminal', reason: null, limits: { state: 'rate_limited' } } } }) }) });
+  assert.match(html, /今日 \$0\.00 · 本月 未知<\/span>/);
+  for (const agent of ['Claude', 'Codex']) {
+    const section = usageSection(html, agent);
+    assert.match(section, /<dt>连接<\/dt><dd><span>未知<\/span><\/dd>/);
+    assert.match(section, /<dt>新会话<\/dt><dd><span>未知<\/span><\/dd>/, 'an absent next route is never guessed from a running path');
+  }
   assert.match(html, /<dt>月预算<\/dt><dd><span>未设置<\/span><\/dd>/); assert.doesNotMatch(html, /role="meter"/);
-  assert.match(html, /<dt>Claude 额度<\/dt><dd><span>未知<\/span><\/dd>/); assert.match(html, /已限流，恢复时间未知/); assert.match(html, /还没有切换过/);
+  assert.match(usageSection(html, 'Claude'), /<dt>额度<\/dt><dd><span>未知<\/span><\/dd>/); assert.match(html, /已限流，恢复时间未知/); assert.doesNotMatch(html, /最近切换|还没有切换过/);
   assert.match(await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ monthUsdMicros: null }) }) }), /\$50\.00 · 已用 未知/, 'a budget with no known spend has no share');
-  assert.match(await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ todayUsdMicros: null, monthUsdMicros: null }) }) }), /今日 未知 · 本月 未知<\/span>/, 'no ledger from the main process is shown as unknown, never as $0.00');
+  assert.match(await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ todayUsdMicros: null, monthUsdMicros: null }) }) }), /今日 未知 · 本月 未知<\/span>/, 'records with missing amounts stay unknown, never $0.00');
+});
+
+test('the usage card distinguishes no API records from records with unknown or zero spend', async () => {
+  const html = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ apiRecords: false, todayUsdMicros: null, monthUsdMicros: null, lastSwitch: null }) }) });
+  assert.match(usageSection(html, 'Claude'), /<dt>API 花费<\/dt><dd><span>还没有 API 用量记录<\/span><\/dd>/);
+  assert.doesNotMatch(html, /估算|今日|本月|role="meter"|最近切换/);
+  assert.doesNotMatch(usageSection(html, 'Codex'), /API 用量记录/);
+});
+
+test('new-session paths use next decisions and reasons independently of running connections, without a third path line', async () => {
+  const { nextPathWord } = words();
+  const cases = [
+    [{ path: 'terminal', reason: 'no_key' }, '终端（未保存 API 密钥）'],
+    [{ path: 'api', reason: null }, 'API · 原生界面'], [{ path: 'native', reason: null }, '原生界面'],
+    [{ path: 'terminal', reason: 'set_terminal' }, '终端（按设置）'], [{ path: 'api', reason: 'set_api' }, 'API · 原生界面（按设置）'],
+    [{ path: 'terminal', reason: 'budget_exhausted' }, '终端（本月 API 预算已用完）'],
+    [{ path: null, reason: 'cli_missing' }, '未知（未找到命令行）'], [{ path: null, reason: 'cli_too_old' }, '未知（命令行版本过低）'],
+    [{ path: 'terminal', reason: 'future_code' }, '终端（future_code）'], [undefined, '未知'],
+  ];
+  for (const [next, expected] of cases) assert.equal(nextPathWord(next), expected);
+  const usage = usageOf();
+  usage.agents.claude.next = { path: 'terminal', reason: 'no_key' };
+  usage.agents.codex = { ...usage.agents.codex, path: null, connection: { kind: 'none', source: null, observedAt: 1 } };
+  const html = await usageHtml({ usage: async () => ({ ok: true, value: usage }) });
+  const claude = usageSection(html, 'Claude'), codex = usageSection(html, 'Codex');
+  assert.match(claude, /<dt>连接<\/dt><dd><span[^>]*>已连接 API<\/span><\/dd>/);
+  assert.match(claude, /<dt>新会话<\/dt><dd><span>终端（未保存 API 密钥）<\/span><\/dd>/);
+  assert.doesNotMatch(claude, /API · 原生界面/, 'no extra line for the running path');
+  assert.match(codex, /<dt>连接<\/dt><dd><span>未连接<\/span><\/dd>/);
+  assert.match(codex, /<dt>新会话<\/dt><dd><span>原生界面<\/span><\/dd>/, 'the next route is known before any session runs');
 });
 
 test('the connection in use reads in words per agent: Claude API / subscription / not connected, Codex ChatGPT subscription / API, and unknown as 未知', async () => {
@@ -659,10 +712,10 @@ test('the connection in use reads in words per agent: Claude API / subscription 
   assert.deepEqual(kinds.map(kind => connectionWord('codex', c(kind)).text), ['API', 'ChatGPT 订阅', '未连接', '未知']);
   assert.deepEqual([connectionWord('claude', undefined), connectionWord('codex', null), connectionWord('claude', c('api', 'init'))], [{ text: '未知', source: null }, { text: '未知', source: null }, { text: '已连接 API', source: 'init' }]);
   const html = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ agents: {
-    claude: { path: 'terminal', reason: null, limits: null, connection: c('subscription', 'terminal: Claude Code login') },
-    codex: { path: 'terminal', reason: null, limits: null, connection: c('api', 'account/read: API key') } } }) }) });
-  assert.ok(html.includes('<dt>Claude</dt><dd><span title="terminal: Claude Code login">订阅（Claude Code 登录）</span><span>终端（订阅）</span></dd>'));
-  assert.ok(html.includes('<dt>Codex</dt><dd><span title="account/read: API key">API</span><span>终端</span></dd>'));
+    claude: { path: 'terminal', reason: null, next: { path: 'terminal', reason: 'set_terminal' }, limits: null, connection: c('subscription', 'terminal: Claude Code login') },
+    codex: { path: 'terminal', reason: null, next: { path: 'terminal', reason: 'set_terminal' }, limits: null, connection: c('api', 'account/read: API key') } } }) }) });
+  assert.ok(usageSection(html, 'Claude').includes('<dt>连接</dt><dd><span title="terminal: Claude Code login">订阅（Claude Code 登录）</span></dd>'));
+  assert.ok(usageSection(html, 'Codex').includes('<dt>连接</dt><dd><span title="account/read: API key">API</span></dd>'));
 });
 
 test('a connection test reads as four lines, each with a tone and a next step for what failed, and nothing in it can carry the key', () => {

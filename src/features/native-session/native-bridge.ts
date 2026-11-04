@@ -21,13 +21,14 @@ export type LimitsPayload = {
 // What an agent is connected through right now (contract addendum 2): the API key, the subscription login, nothing running, or not known.
 export type ConnectionKind = 'api' | 'subscription' | 'none' | 'unknown';
 export type AgentConnection = { kind: ConnectionKind; source: string | null; observedAt: number | null };
-export type AgentPathState = { path: 'api' | 'native' | 'terminal' | null; reason: string | null; limits: LimitsPayload | null; connection?: AgentConnection | null };
+export type NextPath = { path: 'api' | 'native' | 'terminal' | null; reason: string | null };
+export type AgentPathState = { path: 'api' | 'native' | 'terminal' | null; reason: string | null; next: NextPath; limits: LimitsPayload | null; connection?: AgentConnection | null };
 
 // The answer to the owner's click on 测试连接 (contract addendum 2); it never carries the key.
 export type KeyCheck = ConnectionTest['key']['status'];
 export type { ConnectionTest };
 export type NativeUsage = {
-  month: string; todayUsdMicros: number | null; monthUsdMicros: number | null; estimated: true; budgetUsd: number | null;
+  month: string; apiRecords: boolean; todayUsdMicros: number | null; monthUsdMicros: number | null; estimated: true; budgetUsd: number | null;
   agents: Record<NativeAgent, AgentPathState>;
   lastSwitch: { at: number; agent: NativeAgent; from: string | null; to: string | null; reason: string | null } | null;
 };
