@@ -47,7 +47,9 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
           const key = keyOf(message.id), task = pending.get(key);
           if (!task) continue;
           pending.delete(key); clearTimeout(task.timer);
-          if (message.error) task.reject(Object.assign(new Error('rpc_rejected'), { code: message.error.code, uncertain: false }));
+          if (message.error) task.reject(Object.assign(new Error('rpc_rejected'), { code: message.error.code, uncertain: false,
+            // 0.166 reports parameter deserialization failures as Invalid Request. Keep only this static classification.
+            missingThreadId: message.error.code === -32600 && message.error.message === 'Invalid request: missing field `threadId`' }));
           else if ('result' in message) task.resolve(message.result);
           else { task.reject(Object.assign(new Error('invalid_response'), { uncertain: task.sent })); fail('invalid_response'); }
         } else fail('invalid_frame');
@@ -59,7 +61,7 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
   child.stdout.on('end', () => fail(buffer.trim() ? 'truncated_frame' : 'disconnected'));
   child.stdin.on('drain', () => { blocked = false; flush(); });
   child.stdin.on('error', () => fail('write_failed'));
-  child.on('error', () => fail('process_failed'));
+  child.on('error', error => fail(['ENOENT', 'EACCES', 'EPERM', 'EINVAL'].includes(error.code) ? error.code : 'process_failed'));
   child.once('exit', () => fail('process_exited'));
   // Drain diagnostics without forwarding provider stderr or credentials to any consumer.
   child.stderr?.on('data', () => {});

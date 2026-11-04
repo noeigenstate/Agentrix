@@ -20,9 +20,15 @@ function registerClaudeWorker({ control, claude, settings, context = () => '', e
     // Descendant helpers may remove only authentication supplied by this SDK parent.
     runtimeEnv.AGENTRIX_SDK_PARENT = '1';
     let finish, done = false, stopping = false, state = 'starting', outcome = 'failed';
+    const identityFailure = [];
     const completed = new Promise(resolve => { finish = resolve; });
     void completed.catch(() => {});
     const runtime = claude.create(spec, event => {
+      // Do not end the helper before the safe startup fallback decision reaches it.
+      if (event.type === 'error' && event.payload.code === 'billing_identity_mismatch' && event.payload.stage === 'startup'
+        || identityFailure.length && event.type === 'session.state' && event.payload.state === 'failed') {
+        identityFailure.push(event); return;
+      }
       stream.emit(event);
       if (event.type === 'turn.completed') { done = true; outcome = event.payload.status; }
       if (event.type === 'session.state') {
@@ -48,12 +54,18 @@ function registerClaudeWorker({ control, claude, settings, context = () => '', e
       return 'rejected';
     });
     try {
-      try { await runtime[payload.resume ? 'resume' : 'start'](spec); }
+      try {
+        await runtime[payload.resume ? 'resume' : 'start'](spec);
+        await runtime.send({ clientMessageId: randomUUID(), text: payload.prompt, images: payload.images });
+      }
       catch (error) {
-        if (error.code === 'native_cli_required' && config.claudePath === 'api-then-terminal') { pathEvent(error.code); return; }
+        if (config.claudePath === 'api-then-terminal' && (error.code === 'native_cli_required'
+          || error.code === 'billing_identity_mismatch' && error.beforeInput === true)) {
+          pathEvent(error.code === 'billing_identity_mismatch' ? error.message : error.code); return;
+        }
+        for (const event of identityFailure) stream.emit(event);
         throw error;
       }
-      await runtime.send({ clientMessageId: randomUUID(), text: payload.prompt, images: payload.images });
       return await completed;
     } finally { unsubscribe?.(); await runtime.close(); }
   });

@@ -1,9 +1,13 @@
 const { randomUUID } = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
 const { createEventStream } = require('../native-session/events.cjs');
 const { apiEnvironment } = require('./credentials.cjs');
 const { createNormalizer } = require('./normalize.cjs');
 const { createRequests } = require('./requests.cjs');
 const { createPolicy } = require('./policy.cjs');
+const { billingIdentityError } = require('./identity.cjs');
 
 function inputQueue(onTake) {
   const values = [];
@@ -35,9 +39,11 @@ function createClaudeSession(spec, emit, dependencies) {
     onCost = () => {}, onFailure = () => {}, onSession = () => {} } = dependencies;
   const stream = createEventStream(spec, emit, now), secrets = new Set();
   const sent = new Map(), results = new Set();
-  let active, preparing, closing, sdk, executable, started = false, closed = false, stopping = false;
+  let active, opening, preparing, closing, sdk, executable, started = false, closed = false, stopping = false;
   let providerId = spec.providerSessionId || null, state = 'starting', turnId = null;
   let apiObservedAt = null;
+  const configDirectory = dependencies.configDirectory === null ? null
+    : dependencies.configDirectory || path.join(os.tmpdir(), `agx-sdk-config-${randomUUID()}`);
   function clean(value) {
     let text = value;
     for (const key of secrets) text = text.replaceAll(key, '<secret>');
@@ -100,7 +106,7 @@ function createClaudeSession(spec, emit, dependencies) {
       for await (const message of run.query) {
         if (closed || run.closing) break;
         if (message.type === 'system' && message.subtype === 'init' && !message.parent_tool_use_id) {
-          if (message.apiKeySource !== 'ANTHROPIC_API_KEY') throw Object.assign(new Error(), { code: 'billing_identity_mismatch' });
+          if (message.apiKeySource !== 'ANTHROPIC_API_KEY') throw billingIdentityError(message.apiKeySource);
           run.initialized = true; providerId = message.session_id; stream.provider(providerId);
           apiObservedAt = now();
           usage.bind?.(run.reservation?.id, providerId); onSession(providerId);
@@ -111,6 +117,11 @@ function createClaudeSession(spec, emit, dependencies) {
             observed: { model: run.model, effort: null, fast: null }, reason: null,
           });
         }
+        if (!run.initialized) {
+          if (['assistant', 'result'].includes(message.type)) throw billingIdentityError(null, { messageType: message.type });
+          // Startup status/auth/rate-limit notices carry no execution or billing evidence.
+          continue;
+        }
         if (message.isReplay === true) { normalize(message); continue; }
         if (message.type === 'system') {
           if (message.subtype === 'background_tasks_changed') run.background = new Map(message.tasks.map(task => [task.task_id, task.run_id]));
@@ -119,7 +130,6 @@ function createClaudeSession(spec, emit, dependencies) {
           if (message.subtype === 'task_updated' && message.patch?.is_backgrounded === true) run.background.set(message.task_id, message.run_id);
         }
         if (stopping && (message.type !== 'result' || message.parent_tool_use_id)) continue;
-        if (!run.initialized && message.type !== 'system') throw Object.assign(new Error(), { code: 'billing_identity_mismatch' });
         if (message.user_message_uuid) receipt(message.user_message_uuid, 'consumed');
         for (const id of message.user_message_uuids || []) receipt(id, 'consumed');
         unavailable(message);
@@ -168,7 +178,7 @@ function createClaudeSession(spec, emit, dependencies) {
           } else {
             const code = error.code === 'billing_identity_mismatch' ? error.code : 'sdk_failed';
             onFailure(code);
-            publish('error', { code, message: 'Claude API 会话无法继续。', retryable: false, willRetry: false, stage: 'runtime' });
+            publish('error', { code, message: code === 'billing_identity_mismatch' ? error.message : 'Claude API 会话无法继续。', retryable: false, willRetry: false, stage: 'runtime' });
             requests.cancel(); unknownInput(); setState('failed', code);
           }
         }
@@ -208,7 +218,8 @@ function createClaudeSession(spec, emit, dependencies) {
     run.queue = inputQueue(id => receipt(id, 'delivered'));
     const options = {
       cwd: spec.cwd, model: spec.model || undefined, effort: spec.effort || 'high', pathToClaudeCodeExecutable: executable,
-      settings: { fastMode: spec.fast === true }, env: apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
+      settings: { fastMode: spec.fast === true }, env: { ...apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
+        ...(configDirectory ? { CLAUDE_CONFIG_DIR: configDirectory } : {}) },
       abortController: run.abort, permissionMode: 'default', includePartialMessages: true,
       settingSources: spec.owner === 'dispatch' ? [] : ['user', 'project', 'local'],
       systemPrompt: { type: 'preset', preset: 'claude_code', append: spec.context || '' },
@@ -226,8 +237,33 @@ function createClaudeSession(spec, emit, dependencies) {
         return decision.behavior === 'allow' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: decision.reason };
       },
     };
-    try { run.query = sdk.query({ prompt: run.queue, options }); }
-    catch (error) { usage.release(reservation.id); secrets.delete(key); throw error; }
+    try {
+      if (configDirectory) fs.mkdirSync(configDirectory, { recursive: true, mode: 0o700 });
+      run.query = sdk.query({ prompt: run.queue, options });
+      opening = run;
+      // The pinned SDK initializes its control channel without consuming a user prompt.
+      // Check this account snapshot before allowing input; stream init remains an independent guard.
+      let timer, abort, initialization;
+      try {
+        initialization = await Promise.race([run.query.initializationResult(), new Promise((_, reject) => {
+          abort = () => reject(new Error('会话已停止。'));
+          run.abort.signal.addEventListener('abort', abort, { once: true });
+          if (run.abort.signal.aborted) return abort();
+          timer = setTimeout(() => reject(Object.assign(new Error('sdk_initialization_timeout'), { code: 'sdk_initialization_timeout' })), 30000);
+        })]);
+      } finally { clearTimeout(timer); if (abort) run.abort.signal.removeEventListener('abort', abort); }
+      if (closed || stopping || run.closing) throw new Error('会话已停止。');
+      if (initialization?.account?.apiKeySource !== 'ANTHROPIC_API_KEY') {
+        throw billingIdentityError(initialization?.account?.apiKeySource, { beforeInput: true });
+      }
+    } catch (error) {
+      cancelQuery(run, 'startup'); usage.release(reservation.id); secrets.delete(key);
+      if (error.code === 'billing_identity_mismatch') {
+        publish('error', { code: error.code, message: error.message, retryable: false, willRetry: false, stage: 'startup' });
+        setState('failed', error.code);
+      }
+      throw error;
+    } finally { if (opening === run) opening = null; }
     active = run; run.task = pump(run);
     void run.task.catch(() => { try { if (!closed) setState('failed', 'accounting_unavailable'); } catch { } });
     return run;
@@ -270,6 +306,7 @@ function createClaudeSession(spec, emit, dependencies) {
     if (closing) return closing;
     stopping = true;
     closing = (async () => {
+      if (opening) cancelQuery(opening, 'stop');
       if (preparing) await preparing.catch(() => {});
       const run = active;
       setState('stopping'); requests.cancel();
@@ -286,6 +323,7 @@ function createClaudeSession(spec, emit, dependencies) {
       for (const [id, status] of sent) if (status !== 'consumed') receipt(id, status === 'queued' ? 'rejected' : 'unknown');
       setState('stopped');
       if (run) await waitWithin(run.task.catch(() => {}), 1500);
+      if (configDirectory && !dependencies.configDirectory) fs.rmSync(configDirectory, { recursive: true, force: true });
     })();
     return closing;
   }

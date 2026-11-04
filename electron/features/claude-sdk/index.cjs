@@ -11,6 +11,8 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
   const credentials = createCredentials({ file: path.join(directory, 'credentials.json'), safeStorage });
   const usage = createUsage({ file: path.join(directory, 'usage.json'), now });
   const sessions = new Set(), leases = new Map(); let unavailable = null;
+  const provenanceFile = path.join(directory, 'sdk-session-configs.json');
+  const isolatedIds = new Set(readJson(provenanceFile, [], { validate: value => Array.isArray(value) && value.every(id => typeof id === 'string' && id.length > 0 && id.length <= 160) }));
   let decisions = readJson(path.join(directory, 'policy-audit.json'), [], { validate: value => Array.isArray(value) && value.length <= 1000 });
   const recordDecision = audit || (decision => {
     const next = [...decisions, { ...decision, at: now() }].slice(-1000);
@@ -28,13 +30,21 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
     resetAvailability() { unavailable = null; },
     create(spec, emit) {
       const owner = {}; let leasedId = null;
+      // Existing beta sessions must still resume from the directory where the CLI wrote them.
+      const isolated = !spec.providerSessionId || isolatedIds.has(spec.providerSessionId);
       function acquire(id) {
         if (!id) return;
         if (leases.has(id) && leases.get(id) !== owner) throw new Error('该会话正在其他终端运行。');
         leases.set(id, owner); leasedId = id;
       }
       const release = () => { if (leasedId && leases.get(leasedId) === owner) leases.delete(leasedId); };
-      const session = createClaudeSession(spec, emit, { loadSdk, resolveExecutable, credentials, usage, now, onCost, onSession: id => { acquire(id); onSession?.(spec, id); }, audit: decision => recordDecision({ runId: spec.runId || null, ...decision }),
+      const session = createClaudeSession(spec, emit, { loadSdk, resolveExecutable, credentials, usage, now, onCost,
+        configDirectory: isolated ? path.join(directory, 'sdk-config') : null,
+        onSession: id => {
+          acquire(id);
+          if (isolated && !isolatedIds.has(id)) { writeJson(provenanceFile, [...isolatedIds, id]); isolatedIds.add(id); }
+          onSession?.(spec, id);
+        }, audit: decision => recordDecision({ runId: spec.runId || null, ...decision }),
         onFailure(reason) { if (['rate_limited', 'credits_exhausted', 'invalid_key'].includes(reason)) unavailable = { reason, until: now() + 60000 }; } });
       let closing;
       const open = async () => {

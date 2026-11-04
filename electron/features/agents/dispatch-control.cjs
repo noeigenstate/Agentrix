@@ -146,8 +146,11 @@ function createDispatchControl({ resolveRun, now = Date.now }) {
 function connectDispatchControl({ address, runId, projectId, sessionKey, capability, readOnly = false, roundtable = false, onControl = async () => 'queued', onEvent = () => {}, timeout = 500 }) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(address), pending = new Map();
-    let registered = false, counter = 0, serial = Promise.resolve();
-    const timer = setTimeout(() => { socket.destroy(); reject(new Error('control_unavailable')); }, timeout);
+    let registered = false, connected = false, failure, counter = 0, serial = Promise.resolve();
+    const unavailable = category => Object.assign(new Error('control_unavailable'), {
+      stage: connected ? 'control_register' : 'control_connect', category });
+    socket.once('error', error => { failure = unavailable(['ENOENT', 'ECONNREFUSED', 'EACCES', 'EPERM'].includes(error.code) ? error.code : 'socket_error'); });
+    const timer = setTimeout(() => { failure = unavailable('timeout'); socket.destroy(); reject(failure); }, timeout);
     const send = frames(socket, value => {
       if (value.type === 'registered' && value.runId === runId) { registered = true; clearTimeout(timer); resolve(client); }
       else if (registered && value.type === 'control.push') {
@@ -165,7 +168,7 @@ function connectDispatchControl({ address, runId, projectId, sessionKey, capabil
       }
     }, () => {
       clearTimeout(timer);
-      if (!registered) reject(new Error('control_unavailable'));
+      if (!registered) reject(failure || unavailable('registration_closed'));
       for (const task of pending.values()) task.reject(Object.assign(new Error('control_disconnected'), { uncertain: true }));
       pending.clear();
     });
@@ -179,6 +182,7 @@ function connectDispatchControl({ address, runId, projectId, sessionKey, capabil
       }, close() { socket.destroy(); },
     };
     socket.once('connect', () => {
+      connected = true;
       try { send({ type: 'register', runId, projectId, sessionKey, capability, readOnly, roundtable, finishProtocol: 1 }); } catch { socket.destroy(); }
     });
   });

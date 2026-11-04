@@ -68,10 +68,12 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       async function open(resuming, override) {
         if (rpc || closed) throw new Error('session_already_started');
         Object.assign(spec, override || {}); setState('starting'); origin = resuming ? 'resume' : 'user';
+        let stage = 'resolve_executable';
         try {
           if (!path.isAbsolute(spec.cwd || '')) throw new Error('invalid_cwd');
           const env = workerEnvironment(spec.env || process.env), executable = await resolveExecutable(env);
           if (!executable) throw new Error('codex_cli_required');
+          stage = 'spawn';
           child = spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: spec.cwd, env, windowsHide: true,
             detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
           rpc = createRpc(child, { timeout: spec.rpcTimeoutMs || 8000, onNotification: notification,
@@ -80,10 +82,12 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
               requests?.cancelAll(); setState('disconnected', reason);
             } });
           requests = createRequests(rpc, events, setState);
+          stage = 'initialize';
           const init = await rpc.request('initialize', { clientInfo: { name: 'agentrix', version: '1.0.0' }, capabilities: { experimentalApi: true } });
           const compatibility = assertCompatible(init);
           rpc.notify('initialized');
-          await probeCapabilities(rpc);
+          stage = 'capability_probe'; await probeCapabilities(rpc);
+          stage = resuming ? 'thread_resume' : 'thread_start';
           const threadId = spec.providerSessionId || spec.threadId || spec.sessionId;
           if (resuming && !threadId) throw new Error('missing_thread');
           if (resuming) bind(threadId);
@@ -103,6 +107,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           void readLimits().catch(() => {});
           return { providerSessionId: result.thread.id, runtimeSessionId: spec.runtimeSessionId, reason: compatibility.reason };
         } catch (error) {
+          error.stage ||= stage;
           if (error.code === -32601 || error.code === -32602) error.code = 'unsupported_codex_capabilities';
           await close(); setState('failed', typeof error.code === 'string' ? error.code : error.message); throw error;
         }

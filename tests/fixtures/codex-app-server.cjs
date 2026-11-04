@@ -7,7 +7,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   const request = JSON.parse(line), params = request.params || {};
   if (!request.method) return;
   if (['thread/resume', 'turn/start', 'turn/steer', 'turn/interrupt'].includes(request.method) && !params.threadId) {
-    return send({ id: request.id, error: { code: mode === 'missing-steer' && request.method === 'turn/steer' ? -32601 : -32602, message: 'Synthetic capability probe' } });
+    return send({ id: request.id, error: { code: mode === 'missing-steer' && request.method === 'turn/steer' ? -32601 : -32600,
+      message: 'Invalid request: missing field `threadId`' } });
   }
   let result = {};
   if (request.method === 'initialize') result = { userAgent: mode === 'unknown-version' ? 'codex/9.99.0' : 'codex/0.166.0' };

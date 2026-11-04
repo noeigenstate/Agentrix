@@ -65,6 +65,7 @@ reader.on('line', line => {
       append({ control: message.request?.subtype });
       send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: {
         commands: [], models: [], agents: [], output_style: 'default', available_output_styles: ['default'],
+        account: { apiKeySource: 'ANTHROPIC_API_KEY' },
         hook_on_failure_supported: true, hooks_applied: true,
       } } });
     } else if (message.type === 'user') claudeUser(message);

@@ -20,8 +20,8 @@ test('N9: capability probes match the checked-in 0.166 protocol fixture and reje
   const calls = [];
   await probeCapabilities({ async request(method, params) {
     calls.push({ method, params });
-    await assert.rejects(rpc.request(method, params), error => error.code === -32602);
-    throw Object.assign(new Error('Missing required threadId'), { code: -32602 });
+    try { await rpc.request(method, params); }
+    catch (error) { assert.equal(error.code, -32600); assert.equal(error.missingThreadId, true); throw error; }
   } });
   assert.deepEqual(calls, methods0166.map(method => ({ method, params: {} })));
   assert.deepEqual(notifications, [], 'probes must not load a thread or start a turn');
@@ -35,4 +35,12 @@ for (const unsafeMethod of methods0166) test(`N9: a server defaulting missing id
     throw Object.assign(new Error('Missing identifier'), { code: -32602 });
   } }), /unsupported_codex_capabilities/);
   assert.equal(calls.at(-1), unsafeMethod, 'stop probing immediately after unsafe success');
+});
+
+test('0.166 probes retain support for Invalid Params while rejecting unrelated Invalid Request errors', async () => {
+  await probeCapabilities({ request: async () => { throw Object.assign(new Error('synthetic'), { code: -32602 }); } });
+  for (const code of [-32600, -32601, -32603]) {
+    await assert.rejects(probeCapabilities({ request: async () => { throw Object.assign(new Error('private path and key'), { code }); } }), error =>
+      error.stage === 'capability_probe' && error.category === `rpc_${code}` && !error.message.includes('private'));
+  }
 });
