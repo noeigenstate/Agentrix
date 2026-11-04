@@ -19,6 +19,10 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     resolveSpec(id, record.spec.agent, false, true);
     return record;
   }
+  function flushFailures(record) {
+    for (const event of record.failures || []) record.stream.publish(event.type, event.payload);
+    record.failures = [];
+  }
   async function rejectAndSwitch(id, record, message, reason) {
     record.inputs.set(message.clientMessageId, 'rejected');
     record.stream.publish('item.upsert', { kind: 'user-message', status: 'interrupted', content: { text: message.text, clientMessageId: message.clientMessageId, unsent: true } }, { itemId: message.clientMessageId });
@@ -26,6 +30,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     record.switching ||= (async () => {
       const providerSessionId = record.runtime.snapshot().events.findLast(event => event.providerSessionId)?.providerSessionId || record.spec.providerSessionId;
       record.stream.publish('path.changed', { previous: 'api', selected: 'terminal', reason });
+      terminalStreams.set(id, record.stream);
       // Only positively identified history is resumed; the rejected input is never automatically replayed.
       await record.runtime.close(); sessions.delete(id); if (record.lock) occupied.delete(record.lock);
       await terminal({ ...record.spec, providerSessionId }, reason);
@@ -44,8 +49,10 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       const previous = sessions.get(id);
       if (previous && !['stopped', 'failed', 'disconnected'].includes(previous.runtime.snapshot().state)) throw new Error('请先停止当前会话。');
       if (previous) { await previous.runtime.close(); if (previous.lock) occupied.delete(previous.lock); sessions.delete(id); }
-      const selection = choosePath({ agent, ...config, apiState: claude.apiState(config.monthlyBudgetUsd) });
-      if (!selection.path) throw new Error('Claude API 路径当前不可用。');
+      if (agent === 'claude') await claude.refreshAvailability?.();
+      const apiState = claude.apiState(config.monthlyBudgetUsd);
+      const selection = choosePath({ agent, ...config, apiState });
+      if (!selection.path) throw new Error(apiState.reason || 'Claude API 路径当前不可用。');
       if (selection.path === 'terminal') {
         const stream = createEventStream(spec, emit, now);
         stream.publish('path.changed', { previous: null, selected: 'terminal', reason: selection.reason }); terminalStreams.set(id, stream);
@@ -62,6 +69,10 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         if (!validEvent(event) || event.projectId !== spec.projectId || event.terminalId !== id || event.runtimeSessionId !== spec.runtimeSessionId ||
           record.epoch && event.connectionEpoch !== record.epoch || event.sequence <= (record.sequence || 0)) return;
         record.epoch = event.connectionEpoch; record.sequence = event.sequence;
+        if (agent === 'claude' && (event.type === 'error' && event.payload.stage === 'startup' && settings.get().claudePath === 'api-then-terminal'
+          || record.failures?.length && event.type === 'session.state' && event.payload.state === 'failed')) {
+          (record.failures ||= []).push(event); return;
+        }
         if (event.providerSessionId && !record.lock) {
           record.lock = `${agent}:${event.providerSessionId}`; occupied.add(record.lock);
         }
@@ -81,15 +92,17 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         if (record.lock) occupied.delete(record.lock);
         const reason = error.code || error.message;
         const codexUnavailable = agent === 'codex' && ['unsupported_codex_capabilities', 'unsupported_codex_version', 'codex_cli_required', 'rpc_timeout', 'process_failed', 'process_exited', 'disconnected', 'invalid_response', 'invalid_frame', 'invalid_json', 'ENOENT'].includes(reason);
-        if (codexUnavailable || agent === 'claude' && config.claudePath === 'api-then-terminal'
-          && (error.code === 'native_cli_required' || error.code === 'billing_identity_mismatch' && error.beforeInput === true)) {
+        if (codexUnavailable || agent === 'claude' && settings.get().claudePath === 'api-then-terminal'
+          && (error.code === 'native_cli_required' || error.beforeInput === true)) {
           const notice = codexUnavailable ? (reason === 'codex_cli_required' || reason === 'ENOENT'
-            ? '未找到 Codex 原生运行器，已切换到终端。' : 'Codex 原生连接不可用，已切换到终端。') : error.code === 'billing_identity_mismatch' ? error.message : reason;
+            ? '未找到 Codex 原生运行器，已切换到终端。' : 'Codex 原生连接不可用，已切换到终端。') : error.beforeInput ? error.message : reason;
           record.stream.publish('path.changed', { previous: agent === 'claude' ? 'api' : 'subscription', selected: 'terminal', reason: notice });
+          terminalStreams.set(id, record.stream);
           await runtime.close(); sessions.delete(id); await terminal(spec, notice);
           terminalStreams.set(id, record.stream); pathChanged(agent, 'terminal', notice); changed();
           return { runtimeSessionId: spec.runtimeSessionId };
         }
+        flushFailures(record);
         throw error;
       }
       const reason = startup?.reason || selection.reason;
@@ -102,16 +115,18 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       const record = current(id, runtimeSessionId), config = settings.get();
       if (record.inputs.has(message.clientMessageId)) return { status: record.inputs.get(message.clientMessageId) };
       if (record.spec.agent === 'claude' && record.runtime.snapshot().state === 'idle') {
-        const selection = choosePath({ agent: 'claude', ...config, apiState: claude.apiState(config.monthlyBudgetUsd) });
+        const apiState = claude.apiState(config.monthlyBudgetUsd);
+        const selection = choosePath({ agent: 'claude', ...config, apiState });
         if (selection.path === 'terminal') {
           return rejectAndSwitch(id, record, message, selection.reason);
         }
-        if (!selection.path) throw new Error('Claude API 路径当前不可用。');
+        if (!selection.path) throw new Error(apiState.reason || 'Claude API 路径当前不可用。');
       }
       try { return await record.runtime.send(message); }
       catch (error) {
-        if (record.spec.agent !== 'claude' || config.claudePath !== 'api-then-terminal'
-          || error.code !== 'billing_identity_mismatch' || error.beforeInput !== true) throw error;
+        if (record.spec.agent !== 'claude' || settings.get().claudePath !== 'api-then-terminal' || error.beforeInput !== true) {
+          flushFailures(record); throw error;
+        }
         return rejectAndSwitch(id, record, message, error.message);
       }
     },

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
 const { createRouter } = require('../electron/features/native-session/router.cjs');
 const { registerClaudeWorker } = require('../electron/features/native-session/worker.cjs');
@@ -19,7 +20,8 @@ function fixture(t, options = {}) {
   fs.mkdirSync(env.CLAUDE_CONFIG_DIR);
   const ownerFile = path.join(env.CLAUDE_CONFIG_DIR, '.claude.json');
   fs.writeFileSync(ownerFile, JSON.stringify({ primaryApiKey: 'synthetic-managed', customApiKeyResponses: { rejected: ['synthetic-rejected'] } }));
-  const factory = createClaudeRuntime({ directory: path.join(root, 'data'), safeStorage, loadSdk: async () => fake.sdk, resolveExecutable: async () => 'synthetic-only' });
+  const factory = createClaudeRuntime({ directory: path.join(root, 'data'), safeStorage, loadSdk: async () => fake.sdk, resolveExecutable: async () => 'synthetic-only',
+    inspectCli: async () => ({ status: 'ok', version: '2.1.318' }), initializationTimeoutMs: options.initializationTimeoutMs });
   factory.credentials.save(key);
   t.after(async () => { await factory.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const events = [], spec = { agent: 'claude', owner: 'gui', projectId: 'p', terminalId: 't', runtimeSessionId: 'r', cwd: root, env };
@@ -31,7 +33,7 @@ async function until(check) {
   assert.fail('offline startup did not settle');
 }
 
-test('SDK checks account identity with no input, isolates its config and releases rejected reservations', async t => {
+test('SDK checks account identity with no input, preserves inherited config and releases rejected reservations', async t => {
   const f = fixture(t, { preflightSource: '/login managed key' });
   const original = fs.readFileSync(f.ownerFile, 'utf8');
   await f.session.start();
@@ -39,7 +41,10 @@ test('SDK checks account identity with no input, isolates its config and release
     error.beforeInput === true && /apiKeySource=\/login managed key/.test(error.message));
   assert.equal(f.fake.inputs.length, 0); assert.equal(f.fake.closes.length, 1);
   assert.equal(f.factory.usage.available(10), 10000000);
-  assert.equal(f.fake.calls[0].options.env.CLAUDE_CONFIG_DIR, path.join(f.root, 'data/sdk-config'));
+  assert.equal(f.fake.calls[0].options.env.CLAUDE_CONFIG_DIR, f.env.CLAUDE_CONFIG_DIR);
+  assert.equal('configDirectory' in f.fake.calls[0].options, false);
+  assert.equal(fs.existsSync(path.join(f.root, 'data/sdk-config')), false);
+  assert.equal(fs.existsSync(path.join(f.root, 'data/sdk-session-configs.json')), false);
   assert.equal(f.env.CLAUDE_CONFIG_DIR, path.join(f.root, 'owner-config'));
   assert.equal(fs.readFileSync(f.ownerFile, 'utf8'), original);
   assert.equal(f.events.some(event => event.type === 'turn.started'), false);
@@ -65,7 +70,7 @@ test('identity diagnostics do not reflect unexpected source strings', async t =>
   assert.equal(JSON.stringify(f.events).includes(key), false);
 });
 
-test('legacy beta resumes retain their original config and still reject a different billing identity before input', async t => {
+test('resumed sessions retain their original config and still reject a different billing identity before input', async t => {
   const f = fixture(t, { preflightSource: 'apiKeyHelper' });
   const legacy = f.factory.create({ ...f.spec, providerSessionId: 'legacy-beta-session' }, () => {});
   await legacy.resume();
@@ -74,21 +79,29 @@ test('legacy beta resumes retain their original config and still reject a differ
   assert.equal(f.fake.inputs.length, 0);
 });
 
-test('new sessions keep their isolated config on resume after a host restart', async t => {
-  const f = fixture(t); await f.session.start(); await f.session.send({ clientMessageId: 'm', text: 'work' });
+test('new sessions with no config override keep default configuration on resume after a host restart', async t => {
+  const f = fixture(t); delete f.env.CLAUDE_CONFIG_DIR;
+  await f.session.start(); await f.session.send({ clientMessageId: 'm', text: 'work' });
   await until(() => f.events.some(event => event.type === 'turn.completed')); await f.factory.close();
   const next = createClaudeRuntime({ directory: path.join(f.root, 'data'), safeStorage, loadSdk: async () => f.fake.sdk, resolveExecutable: async () => 'synthetic-only' });
   t.after(() => next.close());
   const resumed = next.create({ ...f.spec, providerSessionId: f.fake.sessionId }, () => {});
   await resumed.resume(); await resumed.send({ clientMessageId: 'm2', text: 'continue' });
   assert.equal(f.fake.calls[1].options.env.CLAUDE_CONFIG_DIR, f.fake.calls[0].options.env.CLAUDE_CONFIG_DIR);
+  for (const call of f.fake.calls) {
+    assert.equal(Object.hasOwn(call.options, 'CLAUDE_CONFIG_DIR'), false);
+    assert.equal(Object.hasOwn(call.options.env, 'CLAUDE_CONFIG_DIR'), false);
+    assert.deepEqual(call.options.settingSources, ['user', 'project', 'local']);
+  }
   assert.equal(f.fake.calls[1].options.resume, f.fake.sessionId);
   await until(() => next.usage.summary().monthUsdMicros === 200000); await next.close();
 });
 
-test('startup notices wait for init without publishing unverified execution or allowance', async t => {
+test('real command_lifecycle queued and started precede init without failing billing identity', async t => {
   const f = fixture(t, { auto: false, init: false }); await f.session.start();
   await f.session.send({ clientMessageId: 'm', text: 'work' });
+  // Claude Code 2.1.318 streaming frames, recorded by the offline Opus probe.
+  for (const state of ['queued', 'started']) f.fake.emit({ type: 'command_lifecycle', command_uuid: 'm', state, uuid: randomUUID(), session_id: 's' });
   for (const type of ['rate_limit_event', 'auth_status', 'tool_progress', 'stream_event']) f.fake.emit({ type, error: 'rate_limit' });
   f.fake.emit({ type: 'system', subtype: 'status', status: 'starting' });
   f.fake.emit({ type: 'system', subtype: 'init', apiKeySource: 'ANTHROPIC_API_KEY', session_id: 's' });
@@ -122,8 +135,15 @@ for (const claudePath of ['api-only', 'api-then-terminal']) test(`GUI identity m
   assert.equal(f.fake.inputs.length, 0);
 });
 
-for (const claudePath of ['api-only', 'api-then-terminal']) test(`real helper identity mismatch obeys ${claudePath} with a fake SDK and CLI`, async t => {
-  const f = fixture(t, { preflightSource: '/login managed key' }), lifetime = resources(t);
+for (const failure of ['identity', 'timeout', 'query_refused']) for (const claudePath of ['api-only', 'api-then-terminal']) test(`real helper ${failure} obeys ${claudePath} with a fake SDK and CLI`, async t => {
+  const f = fixture(t, { preflightSource: failure === 'identity' ? '/login managed key' : 'ANTHROPIC_API_KEY', initializationTimeoutMs: 20 }), lifetime = resources(t);
+  if (failure !== 'identity') {
+    const query = f.fake.sdk.query;
+    f.fake.sdk.query = input => {
+      if (failure === 'query_refused') throw new Error(key);
+      return { ...query(input), initializationResult: () => new Promise(() => {}) };
+    };
+  }
   const control = createDispatchControl({ resolveRun: auth => auth.sessionKey === 'synthetic-session' && auth.capability === 'synthetic-capability'
     ? { runId: auth.runId, agent: 'claude', projectId: 'p', cwd: f.root, allow: [], readOnly: true } : null });
   const { address } = await control.listen(); lifetime.defer('close control', () => control.close());
@@ -136,10 +156,13 @@ for (const claudePath of ['api-only', 'api-then-terminal']) test(`real helper id
     '--permission', 'plan', '--cwd', f.root, '--brief', brief, '--out', out], {
     env: { ...f.env, AGENTRIX_BOOTSTRAP: bootstrap }, stdout: { write: value => { stdout += value; } },
     resolveExecutable: (_agent, args) => ({ file: process.execPath, args: [path.join(__dirname, 'fixtures/codex-app-server-env.cjs'), ...args] }),
-    launch: (file, args, options) => { launches++; return lifetime.child(spawn(file, args, options)); },
+    launch: (file, args, options) => {
+      launches++; assert.equal(options.env.CLAUDE_CONFIG_DIR, f.env.CLAUDE_CONFIG_DIR);
+      return lifetime.child(spawn(file, args, options));
+    },
   });
   assert.equal(f.fake.inputs.length, 0);
-  assert.match(stdout, /apiKeySource=\/login managed key/);
+  assert.match(stdout, failure === 'identity' ? /apiKeySource=\/login managed key/ : failure === 'timeout' ? /初始化超时，尚未发送消息/ : /启动失败，尚未发送消息/);
   assert.equal(stdout.includes(key), false);
   assert.equal(launches, claudePath === 'api-only' ? 0 : 1);
   assert.equal(code, claudePath === 'api-only' ? 1 : 0);

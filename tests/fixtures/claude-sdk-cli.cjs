@@ -24,7 +24,8 @@ let total = costs[sessionId] || 0, turns = 0, activeTurn;
 const baseline = total, budgetIndex = args.indexOf('--max-budget-usd');
 const budgetValue = args.find(arg => arg.startsWith('--max-budget-usd='))?.split('=')[1] ?? (budgetIndex < 0 ? undefined : args[budgetIndex + 1]);
 const budget = budgetValue === undefined ? Infinity : Number(budgetValue);
-append({ spawn: true, pid: process.pid, parentPid: process.ppid, node: process.execPath, args, scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1' });
+append({ spawn: true, pid: process.pid, parentPid: process.ppid, node: process.execPath, args, scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1',
+  configDir: process.env.CLAUDE_CONFIG_DIR || null, hasBootstrap: !!process.env.AGENTRIX_BOOTSTRAP });
 process.once('exit', code => append({ exit: true, pid: process.pid, code }));
 function toolEnvironment() {
   const env = { ...process.env };
@@ -39,10 +40,11 @@ function claudeUser(message) {
     if (child.status !== 0) throw new Error('fake tool failed');
     return { kind, ...JSON.parse(child.stdout) };
   });
-  append({ user: true, sessionId, childResults });
-  const transcript = path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', 'fake-session.jsonl');
+  append({ user: true, pid: process.pid, sessionId, childResults });
+  const transcript = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || process.env.USERPROFILE, '.claude'), 'projects', 'fake-session.jsonl');
   fs.mkdirSync(path.dirname(transcript), { recursive: true });
   fs.appendFileSync(transcript, JSON.stringify({ sessionId, childResults }) + '\n');
+  for (const state of ['queued', 'started']) send({ type: 'command_lifecycle', command_uuid: message.uuid, state, uuid: randomUUID(), session_id: sessionId });
   send({ type: 'system', subtype: 'init', session_id: sessionId, apiKeySource: 'ANTHROPIC_API_KEY', model: 'fake-claude',
     tools: ['Read'], mcp_servers: [], permissionMode: 'default', slash_commands: [], claude_code_version: '2.1.317', uuid: randomUUID() });
   const text = typeof message.message?.content === 'string' ? message.message.content : 'image';
@@ -63,9 +65,10 @@ reader.on('line', line => {
   if (mode === 'claude') {
     if (message.type === 'control_request') {
       append({ control: message.request?.subtype });
+      if (process.env.AGENTRIX_FAKE_INIT_FAILURE === '1') return process.exit(7);
       send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: {
         commands: [], models: [], agents: [], output_style: 'default', available_output_styles: ['default'],
-        account: process.env.AGENTRIX_FAKE_OMIT_BILLING === '1' ? {} : { apiKeySource: process.env.AGENTRIX_FAKE_API_SOURCE || 'ANTHROPIC_API_KEY' },
+        account: process.env.AGENTRIX_FAKE_OMIT_BILLING === '1' ? {} : { apiKeySource: process.env.AGENTRIX_FAKE_API_SOURCE || 'ANTHROPIC_API_KEY', tokenSource: process.env.AGENTRIX_FAKE_TOKEN_SOURCE || 'none' },
         hook_on_failure_supported: true, hooks_applied: true,
       } } });
     } else if (message.type === 'user') claudeUser(message);

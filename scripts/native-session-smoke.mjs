@@ -95,6 +95,9 @@ async function runtimeSmoke(output, stages) {
       const entry = packaged ? path.join(resources, 'app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs') : require.resolve('@anthropic-ai/claude-agent-sdk');
       await fs.access(entry); console.log(`[native-smoke] SDK entry=${entry} bytes=${(await fs.stat(entry)).size}`);
       await app.evaluate((_electron, bin) => { process.env.PATH = bin; }, bin);
+      if (process.env.NODE_PATH) await app.evaluate((_electron, modules) => {
+        process.env.NODE_PATH = modules; process.getBuiltinModule('module').Module._initPaths();
+      }, process.env.NODE_PATH);
     });
     const recovered = await stage('read recovered settings', () => page.evaluate(() => window.agentrix.nativeSession.getSettings()));
     assert.equal(recovered.value.claudePath, 'api-then-terminal');
@@ -106,6 +109,46 @@ async function runtimeSmoke(output, stages) {
     await stage('save isolated fake key and settings', async () => {
       assert.equal((await page.evaluate(key => window.agentrix.nativeSession.keySave(key), fakeKey)).ok, true);
       assert.equal((await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-only', codexView: 'native', monthlyBudgetUsd: 10 }))).ok, true);
+    });
+    await stage('stub model-list HTTP in this isolated application', () => app.evaluate(() => {
+      const https = process.getBuiltinModule('https');
+      const { EventEmitter } = process.getBuiltinModule('events'), { PassThrough } = process.getBuiltinModule('stream');
+      https.request = (url, _options, callback) => {
+        if (url !== 'https://api.anthropic.com/v1/models?limit=100') throw new Error('Unexpected offline connection request');
+        const req = new EventEmitter(); req.destroy = () => {};
+        req.end = () => queueMicrotask(() => {
+          const response = new PassThrough(); response.statusCode = 200; callback(response);
+          response.end('{"data":[{"id":"fake-claude"}]}');
+        });
+        return req;
+      };
+    }));
+    await stage('check billing without input and cache competing token sources', async () => {
+      const testConnection = () => page.evaluate(() => window.agentrix.nativeSession.testConnection());
+      const good = await testConnection();
+      assert.equal(good.ok, true); assert.deepEqual(good.value.billing, { status: 'ok', source: 'ANTHROPIC_API_KEY' }, JSON.stringify(good.value));
+      assert.equal(good.value.path, 'api');
+      await app.evaluate(() => { process.env.AGENTRIX_FAKE_TOKEN_SOURCE = 'apiKeyHelper'; });
+      const blocked = await testConnection();
+      assert.equal(blocked.value.billing.status, 'mismatch'); assert.equal(blocked.value.path, null);
+      assert.match(blocked.value.reason, /tokenSource=apiKeyHelper/);
+      assert.equal((await page.evaluate(() => window.agentrix.nativeSession.usage())).value.agents.claude.next.path, null);
+      await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-then-terminal' }));
+      const fallback = await testConnection();
+      assert.equal(fallback.value.path, 'terminal');
+      assert.equal((await page.evaluate(() => window.agentrix.nativeSession.usage())).value.agents.claude.next.path, 'terminal');
+      await app.evaluate(() => { delete process.env.AGENTRIX_FAKE_TOKEN_SOURCE; process.env.AGENTRIX_FAKE_INIT_FAILURE = '1'; });
+      await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-only' }));
+      const refused = await testConnection();
+      assert.equal(refused.value.billing.status, 'unknown'); assert.equal(refused.value.path, null);
+      assert.equal(refused.value.reason, 'Claude API 启动失败，尚未发送消息。');
+      await app.evaluate(() => { delete process.env.AGENTRIX_FAKE_INIT_FAILURE; });
+      await page.evaluate(key => window.agentrix.nativeSession.keySave(key), fakeKey);
+      assert.equal((await page.evaluate(() => window.agentrix.nativeSession.usage())).value.agents.claude.next.path, 'api');
+      const wire = (await fs.readFile(path.join(runtime, 'claude-wire.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+      assert.equal(wire.some(row => row.user), false);
+      assert.equal(await fs.access(path.join(runtime, 'fake-costs.json')).then(() => true, () => false), false);
+      checks.push('connection checks send no user turn; token sources and startup errors select a safe path; cached identity failures reset on key/settings changes');
     });
     const terminalId = (await stage('read terminal identity', () => page.evaluate(() => window.agentrix.getState()))).value.projects[0].terminals[0].id;
     for (const agent of ['claude', 'codex']) {
@@ -145,6 +188,12 @@ async function runtimeSmoke(output, stages) {
     assert.ok(claude.filter(row => row.spawn).every(row => !row.scrub));
     assert.ok(claude.some(row => row.childResults?.length === 3));
     assert.ok(claude.filter(row => row.childResults).every(row => row.childResults.every(child => child.keyPresent)));
+    const ownerPids = new Set(claude.filter(row => row.user).map(row => row.pid));
+    assert.ok(claude.filter(row => row.spawn).every(row => row.configDir === (env.CLAUDE_CONFIG_DIR || null)), 'SDK queries inherit the owner config without substituting a directory');
+    assert.ok(claude.filter(row => row.spawn && ownerPids.has(row.pid)).every(row => row.hasBootstrap), 'GUI planners retain the helper bootstrap');
+    assert.equal(await fs.access(path.join(profile, 'native-session/sdk-config')).then(() => true, () => false), false);
+    assert.equal(await fs.access(path.join(profile, 'native-session/sdk-session-configs.json')).then(() => true, () => false), false);
+    checks.push('GUI planners keep their bootstrap and config; streamed command_lifecycle frames before init do not fail startup');
     if (packaged) {
       const resources = await stage('verify SDK resources path', () => app.evaluate(() => process.resourcesPath));
       const entry = path.join(resources, 'app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs');

@@ -1,12 +1,9 @@
 const { randomUUID } = require('node:crypto');
-const fs = require('node:fs');
-const path = require('node:path');
-const os = require('node:os');
 const { createEventStream } = require('../native-session/events.cjs');
 const { createNormalizer } = require('./normalize.cjs');
 const { createRequests } = require('./requests.cjs');
 const { createPolicy } = require('./policy.cjs');
-const { billingIdentityError } = require('./identity.cjs');
+const { billingIdentityError, startupFailure } = require('./identity.cjs');
 const { inputQueue, queryOptions, readBillingIdentity } = require('./query.cjs');
 
 async function waitWithin(task, milliseconds) {
@@ -22,8 +19,6 @@ function createClaudeSession(spec, emit, dependencies) {
   let active, opening, preparing, closing, sdk, executable, started = false, closed = false, stopping = false;
   let providerId = spec.providerSessionId || null, state = 'starting', turnId = null;
   let apiObservedAt = null;
-  const configDirectory = dependencies.configDirectory === null ? null
-    : dependencies.configDirectory || path.join(os.tmpdir(), `agx-sdk-config-${randomUUID()}`);
   function clean(value) {
     let text = value;
     for (const key of secrets) text = text.replaceAll(key, '<secret>');
@@ -65,10 +60,10 @@ function createClaudeSession(spec, emit, dependencies) {
   function unknownInput() {
     for (const [id, status] of sent) if (!['consumed', 'rejected'].includes(status)) receipt(id, 'unknown');
   }
-  function unavailable(message) {
+  function unavailable(message, generation) {
     const reason = { rate_limit: 'rate_limited', billing_error: 'credits_exhausted', authentication_failed: 'invalid_key' }[message.error];
     if (!reason) return;
-    onFailure(reason);
+    onFailure(reason, null, generation);
     publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
       state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: reason });
   }
@@ -112,7 +107,7 @@ function createClaudeSession(spec, emit, dependencies) {
         if (stopping && (message.type !== 'result' || message.parent_tool_use_id)) continue;
         if (message.user_message_uuid) receipt(message.user_message_uuid, 'consumed');
         for (const id of message.user_message_uuids || []) receipt(id, 'consumed');
-        unavailable(message);
+        unavailable(message, run.generation);
         if (message.type === 'assistant' && !turnId && !message.parent_tool_use_id) {
           reserve(run); run.busy = true; begin('automatic', message.user_message_uuid || null);
         }
@@ -156,9 +151,9 @@ function createClaudeSession(spec, emit, dependencies) {
             turnId = null; stream.turn(null); idle = true;
             requests.cancel(); unknownInput();
           } else {
-            const code = error.code === 'billing_identity_mismatch' ? error.code : 'sdk_failed';
-            onFailure(code);
-            publish('error', { code, message: code === 'billing_identity_mismatch' ? error.message : 'Claude API 会话无法继续。', retryable: false, willRetry: false, stage: 'runtime' });
+            const failure = startupFailure(error), code = failure.code === 'billing_identity_mismatch' ? failure.code : 'sdk_failed';
+            onFailure(code, failure, run.generation);
+            publish('error', { code, message: code === 'billing_identity_mismatch' ? failure.message : 'Claude API 会话无法继续。', retryable: false, willRetry: false, stage: 'runtime' });
             requests.cancel(); unknownInput(); setState('failed', code);
           }
         }
@@ -180,11 +175,13 @@ function createClaudeSession(spec, emit, dependencies) {
       sdk = await loadSdk(); started = true; setState('idle');
       return { runtimeSessionId: spec.runtimeSessionId };
     } catch (error) {
-      setState('failed', error.code || 'sdk_failed');
+      if (stopping || closed) throw new Error('会话已停止。');
       const message = error.outdated ? 'Claude Code 版本过低，请升级到 2.1.317 或更高'
         : error.code === 'native_cli_required' ? '未找到原生 Claude Code，无法通过 API 运行' : 'Claude API 会话无法启动。';
-      if (error.outdated) publish('error', { code: 'native_cli_outdated', message, retryable: false, willRetry: false, stage: 'startup' });
-      throw Object.assign(new Error(message), { code: error.code || 'sdk_failed' });
+      const failure = error.code === 'native_cli_required' ? Object.assign(new Error(message), { code: error.code, beforeInput: true }) : startupFailure(error);
+      publish('error', { code: error.outdated ? 'native_cli_outdated' : failure.code, message: failure.message, retryable: false, willRetry: false, stage: 'startup' });
+      setState('failed', failure.code);
+      throw failure;
     }
   }
   async function createQuery() {
@@ -193,10 +190,11 @@ function createClaudeSession(spec, emit, dependencies) {
     if (!key) throw new Error('请先保存 API 密钥。');
     const reservation = usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId });
     const run = { key, reservation, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
+      generation: dependencies.availabilityGeneration?.(),
       remainingBudgetUsd: reservation.maxBudgetUsd ?? Infinity, busy: false, background: new Map() };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
-    const options = queryOptions(spec, { key, executable, configDirectory, abort: run.abort,
+    const options = queryOptions(spec, { key, executable, abort: run.abort,
       providerSessionId: providerId, maxBudgetUsd: reservation.maxBudgetUsd, policy,
       canUseTool: async (name, input, context) => {
         if (closed || stopping || run.closing) return { behavior: 'deny', message: '会话已停止。' };
@@ -207,20 +205,20 @@ function createClaudeSession(spec, emit, dependencies) {
       },
     });
     try {
-      if (configDirectory) fs.mkdirSync(configDirectory, { recursive: true, mode: 0o700 });
       run.query = sdk.query({ prompt: run.queue, options });
       opening = run;
       // The pinned SDK initializes its control channel without consuming a user prompt.
       // Check this account snapshot before allowing input; stream init remains an independent guard.
-      await readBillingIdentity(run.query, { signal: run.abort.signal });
+      await readBillingIdentity(run.query, { signal: run.abort.signal, timeoutMs: dependencies.initializationTimeoutMs });
       if (closed || stopping || run.closing) throw new Error('会话已停止。');
     } catch (error) {
       cancelQuery(run, 'startup'); usage.release(reservation.id); secrets.delete(key);
-      if (error.code === 'billing_identity_mismatch') {
-        publish('error', { code: error.code, message: error.message, retryable: false, willRetry: false, stage: 'startup' });
-        setState('failed', error.code);
-      }
-      throw error;
+      if (stopping || closed) throw new Error('会话已停止。');
+      const failure = startupFailure(error);
+      onFailure(failure.code, failure, run.generation);
+      publish('error', { code: failure.code, message: failure.message, retryable: false, willRetry: false, stage: 'startup' });
+      setState('failed', failure.code);
+      throw failure;
     } finally { if (opening === run) opening = null; }
     active = run; run.task = pump(run);
     void run.task.catch(() => { try { if (!closed) setState('failed', 'accounting_unavailable'); } catch { } });
@@ -281,7 +279,6 @@ function createClaudeSession(spec, emit, dependencies) {
       for (const [id, status] of sent) if (status !== 'consumed') receipt(id, status === 'queued' ? 'rejected' : 'unknown');
       setState('stopped');
       if (run) await waitWithin(run.task.catch(() => {}), 1500);
-      if (configDirectory && !dependencies.configDirectory) fs.rmSync(configDirectory, { recursive: true, force: true });
     })();
     return closing;
   }

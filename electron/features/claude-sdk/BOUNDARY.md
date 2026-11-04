@@ -2,6 +2,8 @@
 
 Owns the host's Claude Agent SDK sessions, protected credentials, worker tool decisions and local API accounting.
 
+Known gap: Claude settings can replace `env.ANTHROPIC_API_KEY` while reporting the same source. The SDK does not expose the effective key, so these checks cannot prove that its bytes match the app's saved key.
+
 ## Owns
 - `electron/features/claude-sdk/**`
 
@@ -18,7 +20,7 @@ Owns the host's Claude Agent SDK sessions, protected credentials, worker tool de
 ## Invariants
 - Owner queries stay open at idle; explicit sends renew spent caps at safe message boundaries — test: `tests/claude-sdk-budget.test.cjs` › "M1 each explicit idle turn renews its five-dollar cap without charging resumed history"
 - Workers explicitly isolate disk settings and failed policy hooks block execution — test: `tests/claude-sdk-runtime.test.cjs` › "a worker explicitly disables disk setting sources and blocks failed hooks"
-- API identity is verified before accepting usage — test: `tests/claude-sdk-runtime.test.cjs` › "billing identity mismatch fails without trusting a subscription init"
+- API identity requires the env API source, rejecting competing `apiKeyHelper` and `ANTHROPIC_AUTH_TOKEN` token sources before accepting usage; a saved `claude.ai` login alone is allowed — test: `tests/claude-sdk-runtime.test.cjs` › "billing identity mismatch fails without trusting a subscription init"
 - Stopping cancels pending approvals and preserves uncertain delivery — test: `tests/claude-sdk-runtime.test.cjs` › "stop rejects queued input and stale permission answers"
 - Credential status contains only a saved flag — test: `tests/claude-sdk-runtime.test.cjs` › "credential status returns only saved and ciphertext never contains the test key"
 - Cumulative usage is differenced and deduplicated across resume — test: `tests/claude-sdk-runtime.test.cjs` › "usage deltas persist across resume, deduplicate, and ignore zeroed failures"

@@ -1292,6 +1292,7 @@ function readNativeSubscriptionLimits() {
 
 async function readNativeUsageInputs() {
   const [claudeCli, codexFile] = await Promise.all([inspectClaudeExecutable(), codexExecutable()]);
+  claudeRuntime?.observeCli?.(claudeCli);
   return { cli: { claude: claudeCli, codex: { status: codexFile ? 'ok' : 'missing' } }, limits: readNativeSubscriptionLimits() };
 }
 
@@ -1320,6 +1321,7 @@ async function initializeNativeSessions() {
           billingPath: 'api', usageRecordId: entry.usageRecordId, costCompleteness: 'estimated', reason: 'exit', exitCode: 0 });
     },
   });
+  claudeRuntime.observeCli?.(await inspectClaudeExecutable());
   const codexFactory = createCodexRuntime();
   const codex = { create(spec, emit) {
     const runtime = codexFactory.create(spec, emit), start = runtime.start, resume = runtime.resume, close = runtime.close;

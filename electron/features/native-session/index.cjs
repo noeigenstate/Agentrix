@@ -4,7 +4,10 @@ const { createRouter } = require('./router.cjs');
 const { registerIpc } = require('./ipc.cjs');
 const { choosePath } = require('./routing.cjs');
 function createNativeSessions(options) {
-  const settings = createSettings(path.join(options.directory, 'settings.json'));
+  const storedSettings = createSettings(path.join(options.directory, 'settings.json'));
+  const settings = { ...storedSettings, set(patch) {
+    const result = storedSettings.set(patch); options.claude.resetAvailability?.(); return result;
+  } };
   const router = createRouter({ ...options, settings });
   async function testConnection() {
     const result = await options.claude.testConnection(settings.get()), config = settings.get();

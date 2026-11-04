@@ -1,7 +1,6 @@
 const https = require('node:https');
-const fs = require('node:fs');
 const { createPolicy } = require('./policy.cjs');
-const { billingSource, billingIdentityError } = require('./identity.cjs');
+const { billingSource, billingIdentityError, startupFailure } = require('./identity.cjs');
 const { inputQueue, queryOptions, readBillingIdentity } = require('./query.cjs');
 const required = '2.1.317';
 const details = { ok: 'API 密钥验证成功。', missing: '还没有保存 API key。', invalid: 'API 密钥无效。',
@@ -37,31 +36,31 @@ function listModels(key, { request = https.request, timeoutMs = 5000 } = {}) {
     } catch { finish({ status: 'unreachable', models: null }); }
   });
 }
-async function probeBillingIdentity({ key, spec, configDirectory, loadSdk, resolveExecutable, maxBudgetUsd, timeoutMs }) {
+async function probeBillingIdentity({ key, spec, loadSdk, resolveExecutable, maxBudgetUsd, timeoutMs }) {
   const prompt = inputQueue(), abort = new AbortController();
   let query;
   try {
     const executable = await resolveExecutable({ env: spec.env || process.env });
     if (!executable) return { status: 'unknown', source: null };
     const sdk = await loadSdk();
-    fs.mkdirSync(configDirectory, { recursive: true, mode: 0o700 });
-    query = sdk.query({ prompt, options: queryOptions(spec, { key, executable, configDirectory, abort, maxBudgetUsd,
+    query = sdk.query({ prompt, options: queryOptions(spec, { key, executable, abort, maxBudgetUsd,
       policy: createPolicy(spec), canUseTool: async () => ({ behavior: 'deny', message: 'Connection tests do not execute tools.' }) }) });
     // The queue is never populated: initialize is a control request, not an inference turn.
     return { status: 'ok', source: await readBillingIdentity(query, { signal: abort.signal, timeoutMs }) };
   } catch (error) {
-    const source = error.code === 'billing_identity_mismatch' ? billingSource(error.source) : null;
-    return { status: source ? 'mismatch' : 'unknown', source };
+    const failure = startupFailure(error);
+    return { status: failure.code === 'billing_identity_mismatch' ? 'mismatch' : 'unknown',
+      source: billingSource(failure.source), reason: failure.message };
   } finally {
     prompt.close(); abort.abort();
     try { query?.close(); } catch { }
   }
 }
 
-function createConnectionTest({ credentials, inspectCli, request, probeBilling = async () => ({ status: 'unknown', source: null }), now = Date.now, timeoutMs = 5000 }) {
+function createConnectionTest({ credentials, inspectCli, request, probeBilling = async () => ({ status: 'unknown', source: null }), availabilityGeneration = () => undefined, now = Date.now, timeoutMs = 5000 }) {
   let pending;
   async function check(config) {
-    const checkedAt = now();
+    const checkedAt = now(), generation = availabilityGeneration();
     let key, observed = { status: 'error', models: null }, latencyMs = null;
     try { key = credentials.read(); } catch { }
     if (key) {
@@ -75,17 +74,17 @@ function createConnectionTest({ credentials, inspectCli, request, probeBilling =
       cli = { status: ['ok', 'missing', 'too_old'].includes(value.status) ? value.status : 'missing',
         version: typeof value.version === 'string' && /^\d+\.\d+\.\d+$/.test(value.version) ? value.version : null, required };
     } catch { cli = { status: 'missing', version: null, required }; }
-    let billing = { status: 'unknown', source: null };
+    let billing = { status: 'unknown', source: null }, billingReason = null;
     if (key && cli.status === 'ok') {
       try {
-        const value = await probeBilling(key, config), source = billingSource(value.source);
-        if (source) billing = { status: source === 'ANTHROPIC_API_KEY' && value.status === 'ok' ? 'ok'
-          : source !== 'ANTHROPIC_API_KEY' && value.status === 'mismatch' ? 'mismatch' : 'unknown', source };
+        const value = await probeBilling(key, config, generation), source = billingSource(value.source);
+        billing = { status: value.status === 'mismatch' ? 'mismatch' : source === 'ANTHROPIC_API_KEY' && value.status === 'ok' ? 'ok' : 'unknown', source };
+        billingReason = value.reason || null;
       } catch { }
     }
     return { checkedAt, key: { status: observed.status, detail: details[observed.status], latencyMs }, models: observed.models, cli,
-      billing, path: null, reason: billing.status === 'mismatch' ? billingIdentityError(billing.source).message
-        : billing.status === 'unknown' ? '无法确认 Claude Code 的计费来源。' : null };
+      billing, path: null, reason: billingReason || (billing.status === 'mismatch' ? billingIdentityError(billing.source).message
+        : billing.status === 'unknown' ? '无法确认 Claude Code 的计费来源。' : null) };
   }
   return config => pending ||= check(config).finally(() => { pending = null; });
 }

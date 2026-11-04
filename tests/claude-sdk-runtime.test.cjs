@@ -105,6 +105,14 @@ test('GUI SDK authentication is marked for descendant helpers without scrubbing 
   assert.equal(env.ANTHROPIC_API_KEY, key);
   assert.equal(spec.env.AGENTRIX_SDK_PARENT, undefined);
 });
+
+test('GUI API environments keep the dispatch bootstrap while worker API environments strip it', () => {
+  const env = { PATH: 'synthetic', AGENTRIX_BOOTSTRAP: 'synthetic-bootstrap', AGENTRIX_CONTROL_CAPABILITY: 'synthetic-capability' };
+  assert.equal(apiEnvironment(env, key, 'gui').AGENTRIX_BOOTSTRAP, env.AGENTRIX_BOOTSTRAP);
+  assert.equal(apiEnvironment(env, key, 'dispatch').AGENTRIX_BOOTSTRAP, undefined);
+  assert.equal(apiEnvironment(env, key, 'gui').AGENTRIX_CONTROL_CAPABILITY, undefined);
+  assert.equal(env.AGENTRIX_BOOTSTRAP, 'synthetic-bootstrap');
+});
 test('usage deltas persist across resume, deduplicate, and ignore zeroed failures', t => {
   const file = path.join(directory(t), 'usage.json'); let usage = createUsage({ file, now: () => Date.UTC(2026, 10, 3) });
   const result = { uuid: 'first', total_cost_usd: 1, modelUsage: {} };

@@ -42,7 +42,7 @@ test('SDK worker broker does not fall back for api-only with missing native CLI'
 });
 test('SDK worker broker signals terminal fallback for a missing native CLI before task input', async t => {
   const { start, events, fake } = setup(t, { cli: false }); await start();
-  assert.equal(fake.calls.length, 0); assert.ok(events.some(event => event.type === 'path.changed' && event.payload.reason === 'native_cli_required'));
+  assert.equal(fake.calls.length, 0); assert.ok(events.some(event => event.type === 'path.changed' && /未找到原生 Claude Code/.test(event.payload.reason)));
 });
 test('SDK worker broker cannot accept renderer paths or SDK options', async t => {
   const { start, fake } = setup(t); await assert.rejects(start({ cwd: '/untrusted', env: {} })); assert.equal(fake.calls.length, 0);

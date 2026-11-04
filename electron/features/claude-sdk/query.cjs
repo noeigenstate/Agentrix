@@ -22,11 +22,10 @@ function inputQueue(onTake = () => {}) {
   };
 }
 
-function queryOptions(spec, { key, executable, configDirectory, abort, providerSessionId, maxBudgetUsd, policy, canUseTool }) {
+function queryOptions(spec, { key, executable, abort, providerSessionId, maxBudgetUsd, policy, canUseTool }) {
   return {
     cwd: spec.cwd, model: spec.model || undefined, effort: spec.effort || 'high', pathToClaudeCodeExecutable: executable,
-    settings: { fastMode: spec.fast === true }, env: { ...apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
-      ...(configDirectory ? { CLAUDE_CONFIG_DIR: configDirectory } : {}) },
+    settings: { fastMode: spec.fast === true }, env: apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
     abortController: abort, permissionMode: 'default', includePartialMessages: true,
     settingSources: spec.owner === 'dispatch' ? [] : ['user', 'project', 'local'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: spec.context || '' },
@@ -51,8 +50,10 @@ async function readBillingIdentity(query, { signal, timeoutMs = 30000 }) {
     })]);
   } finally { clearTimeout(timer); if (abort) signal.removeEventListener('abort', abort); }
   if (signal.aborted) throw new Error('会话已停止。');
-  const source = initialization?.account?.apiKeySource;
-  if (source !== 'ANTHROPIC_API_KEY') throw billingIdentityError(source, { beforeInput: true });
+  const source = initialization?.account?.apiKeySource, tokenSource = initialization?.account?.tokenSource;
+  if (source !== 'ANTHROPIC_API_KEY' || ['apiKeyHelper', 'ANTHROPIC_AUTH_TOKEN'].includes(tokenSource)) {
+    throw billingIdentityError(source, { beforeInput: true, tokenSource });
+  }
   return source;
 }
 

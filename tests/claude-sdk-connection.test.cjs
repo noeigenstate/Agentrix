@@ -73,14 +73,14 @@ const specOf = root => ({ agent: 'claude', owner: 'gui', cwd: root, effort: 'hig
   env: { PATH: '', HOME: root, USERPROFILE: root, APPDATA: root, LOCALAPPDATA: root, CODEX_HOME: path.join(root, 'codex'), CLAUDE_CONFIG_DIR: path.join(root, 'owner-config') } });
 const cli = async () => ({ status: 'ok', version: '2.1.318', required: '2.1.317' });
 
-for (const [source, expected] of [['ANTHROPIC_API_KEY', 'ok'], ['apiKeyHelper', 'mismatch'], ['/login managed key', 'mismatch'], ['none', 'mismatch'], [null, 'unknown'], [key, 'unknown']]) {
+for (const [source, expected] of [['ANTHROPIC_API_KEY', 'ok'], ['apiKeyHelper', 'mismatch'], ['/login managed key', 'mismatch'], ['none', 'mismatch'], [null, 'mismatch'], [key, 'mismatch']]) {
   test(`billing probe classifies ${expected} without queuing input or retaining private account fields (${source === key ? 'unexpected source' : source})`, async t => {
     const root = directory(t), fake = fakeSdk({ preflightSource: source });
     const query = fake.sdk.query;
     fake.sdk.query = spec => ({ ...query(spec), initializationResult: async () => ({ account: { apiKeySource: source, email: key, organization: key, token: key } }) });
-    const result = await probeBillingIdentity({ key, spec: specOf(root), configDirectory: path.join(root, 'sdk-config'), loadSdk: async () => fake.sdk,
+    const result = await probeBillingIdentity({ key, spec: specOf(root), loadSdk: async () => fake.sdk,
       resolveExecutable: async () => 'synthetic-only' });
-    assert.deepEqual(result, { status: expected, source: expected === 'unknown' ? null : source });
+    assert.equal(result.status, expected); assert.equal(result.source, source === key ? null : source);
     assert.equal(fake.inputs.length, 0); assert.equal(fake.closes.length, 1);
     assert.equal(fake.calls[0].options.abortController.signal.aborted, true);
     assert.equal(JSON.stringify(result).includes(key), false);
@@ -91,11 +91,12 @@ test('a silent or failed SDK identity probe returns unknown and always closes it
   const root = directory(t);
   for (const silent of [true, false]) {
     let closed = 0;
-    const result = await probeBillingIdentity({ key, spec: specOf(root), configDirectory: path.join(root, 'sdk-config'), timeoutMs: 10,
+    const result = await probeBillingIdentity({ key, spec: specOf(root), timeoutMs: 10,
       resolveExecutable: async () => 'synthetic-only', loadSdk: async () => ({ query: () => ({
         initializationResult: () => silent ? new Promise(() => {}) : Promise.reject(new Error(key)), close: () => { closed++; },
       }) }) });
-    assert.deepEqual(result, { status: 'unknown', source: null }); assert.equal(closed, 1);
+    assert.equal(result.status, 'unknown'); assert.equal(result.source, null); assert.equal(closed, 1);
+    assert.equal(result.reason.includes(key), false);
   }
 });
 
@@ -117,7 +118,7 @@ test('connection tests use the saved key and new-session options without changin
     assert.deepEqual(probe[field], actual[field], field);
   }
   assert.equal(probe.hooks.PreToolUse[0].onFailure, actual.hooks.PreToolUse[0].onFailure);
-  assert.equal(probe.env.CLAUDE_CONFIG_DIR, path.join(root, 'data/sdk-config'));
+  assert.equal(probe.env.CLAUDE_CONFIG_DIR, spec.env.CLAUDE_CONFIG_DIR);
   assert.equal(spec.env.CLAUDE_CONFIG_DIR, path.join(root, 'owner-config'));
   await session.close();
 });
@@ -144,6 +145,7 @@ for (const mode of ['api-only', 'api-then-terminal']) test(`the real connection 
   assert.equal(result.key.status, 'ok'); assert.equal(result.cli.status, 'ok');
   assert.deepEqual(result.billing, { status: 'mismatch', source: 'apiKeyHelper' });
   assert.equal(result.path, mode === 'api-only' ? null : 'terminal');
+  factory.resetAvailability();
   const session = factory.create({ ...specOf(root), projectId: 'p', terminalId: 't', runtimeSessionId: 'r', monthlyBudgetUsd: 10 }, () => {});
   await session.start();
   await assert.rejects(session.send({ clientMessageId: 'm', text: 'must remain unsent' }), error => error.beforeInput === true && error.message === result.reason);
@@ -152,7 +154,7 @@ for (const mode of ['api-only', 'api-then-terminal']) test(`the real connection 
 
 let sdkModule = process.env.AGENTRIX_TEST_SDK_MODULE;
 try { sdkModule ||= require.resolve('@anthropic-ai/claude-agent-sdk'); } catch { }
-for (const [source, status] of [['ANTHROPIC_API_KEY', 'ok'], ['apiKeyHelper', 'mismatch'], [null, 'unknown']]) {
+for (const [source, status] of [['ANTHROPIC_API_KEY', 'ok'], ['apiKeyHelper', 'mismatch'], [null, 'mismatch']]) {
   test(`real SDK connection check uses only initialize control with an offline CLI (${status})`, { skip: !sdkModule && 'SDK dependency is not installed', timeout: 15000 }, async t => {
     const scope = fixtureProcesses(t, 'agx-connection-wire-'), root = scope.directory, children = [], calls = [];
     const spec = specOf(root);
