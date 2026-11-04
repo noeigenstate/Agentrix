@@ -275,7 +275,7 @@ async function remote(options, workflow) {
     pushed = true;
     console.log(`Created ${branch} for HEAD ${sha}.`);
     const dispatch = await json(`/actions/workflows/${path.basename(workflowFile)}/dispatches`, {
-      method: 'POST', body: { ref: branch, return_run_details: true },
+      method: 'POST', body: { ref: branch, inputs: { full_matrix: true }, return_run_details: true },
     });
     const runId = dispatch.workflow_run_id;
     if (!Number.isSafeInteger(runId) || runId <= 0) throw new Error('Dispatch did not return an exact workflow run ID; refusing to guess a matching run.');

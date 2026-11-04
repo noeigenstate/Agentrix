@@ -10,7 +10,10 @@ export function releaseNotes(notes, english, version) {
   if (!VERSION.test(version ?? '')) throw new Error(`Invalid version: ${version}`);
   if (!notes.length) throw new Error('WHATS_NEW is empty.');
   const translate = text => english[text] || (() => { throw new Error(`No English for: ${text}`); })();
-  return [`## Changes in ${version}`, '', ...notes.map(({ title, text }) => `- **${translate(title)}** ${translate(text)}`)].join('\n');
+  const notice = version.includes('-beta.') ? [
+    '**Windows test build:** This prerelease is for Windows only and may be unstable. Choose Beta in Settings > About and accept the test agreement to receive test updates.', '',
+  ] : [];
+  return [...notice, `## Changes in ${version}`, '', ...notes.map(({ title, text }) => `- **${translate(title)}** ${translate(text)}`)].join('\n');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

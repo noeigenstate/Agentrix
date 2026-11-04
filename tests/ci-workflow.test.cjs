@@ -175,12 +175,15 @@ test('each shard uploads screenshots under a unique name and workspace retains t
   assert.match(screenshots.with.path, /focus-motion-\*\/\*\.png/);
 });
 
-function evaluate(expression, { ref = 'refs/tags/v1.3.24', event = 'push', dryRun = false, reused = false,
+function evaluate(expression, { ref = 'refs/tags/v1.3.24', event = 'push', dryRun = false, fullMatrix = false, reused = false,
   builds = {}, reuse = 'success', cancelled = false } = {}) {
   const needs = Object.fromEntries(['windows', 'windows-desktop', 'macos', 'linux', 'remote-linux'].map(id => [id, { result: builds[id] || 'success' }]));
-  needs.reuse = { result: reuse, outputs: { 'run-id': reused ? '1234' : '' } };
+  const windowsOnly = (ref.startsWith('refs/tags/v') && ref.includes('-beta.'))
+    || (event === 'workflow_dispatch' && ref === 'refs/heads/beta' && !fullMatrix);
+  needs.reuse = { result: reuse, outputs: { 'run-id': reused ? '1234' : '', 'windows-only': String(windowsOnly) } };
   return vm.runInNewContext(expression, {
-    github: { ref, event_name: event }, inputs: { release_dry_run: dryRun }, needs,
+    github: { ref, event_name: event }, inputs: { release_dry_run: dryRun, full_matrix: fullMatrix }, needs,
+    env: { WINDOWS_ONLY: String(windowsOnly) }, contains: (value, part) => value.includes(part),
     startsWith: (value, prefix) => value.startsWith(prefix), always: () => true, cancelled: () => cancelled,
   });
 }
@@ -227,6 +230,59 @@ test('dry runs cannot create, upload or edit a release, even when dispatched on 
   assert.throws(() => expectedRemoteJobs(parsed), /Every release mutation/);
 });
 
+test('beta tags and default beta dispatches run Windows only; full_matrix restores all platforms', async () => {
+  const { windowsBetaCondition } = await helpers;
+  const parsed = await workflow();
+  assert.deepEqual(parsed.on.push.branches, ['main']);
+  assert.deepEqual(parsed.on.push.tags, ['v*']);
+  assert.deepEqual(parsed.on.pull_request.branches, ['main']);
+  assert.deepEqual(parsed.on.workflow_dispatch.inputs.full_matrix, {
+    description: 'Run all platforms on beta before a stable release', type: 'boolean', default: false,
+  });
+  assert.equal(parsed.jobs.reuse.env.WINDOWS_ONLY, '${{ ' + windowsBetaCondition + ' }}');
+  assert.equal(parsed.jobs.reuse.outputs['windows-only'], '${{ steps.policy.outputs.windows-only }}');
+  const policy = parsed.jobs.reuse.steps.find(step => step.id === 'policy');
+  assert.equal(policy.run, 'echo "windows-only=$WINDOWS_ONLY" >> "$GITHUB_OUTPUT"');
+  const selection = parsed.jobs.reuse.steps.find(step => step.id === 'select');
+  const required = selection.env.REQUIRED_JOBS.replace(/^\$\{\{\s*|\s*\}\}$/g, '');
+  for (const [context, windowsOnly] of [
+    [{ ref: 'refs/tags/v8.2.7-beta.12' }, true],
+    [{ ref: 'refs/heads/beta', event: 'workflow_dispatch' }, true],
+    [{ ref: 'refs/heads/beta', event: 'workflow_dispatch', fullMatrix: true }, false],
+    [{ ref: 'refs/tags/v8.2.7' }, false],
+    [{ ref: 'refs/tags/v8.2.7-rc.1' }, false],
+    [{ ref: 'refs/heads/main' }, false],
+    [{ ref: 'refs/pull/1/merge', event: 'pull_request' }, false],
+    [{ ref: 'refs/heads/feature-beta.test', event: 'workflow_dispatch' }, false],
+  ]) {
+    assert.equal(evaluate(windowsBetaCondition, context), windowsOnly, JSON.stringify(context));
+    const jobs = JSON.parse(evaluate(required, context));
+    assert.equal(jobs.length, windowsOnly ? 5 : 9);
+    for (const id of ['windows', 'windows-desktop']) assert.equal(evaluate(parsed.jobs[id].if, context), true);
+    for (const id of ['macos', 'linux', 'remote-linux']) assert.equal(evaluate(parsed.jobs[id].if, context), !windowsOnly);
+    for (const id of ['windows', 'windows-desktop', 'macos', 'linux', 'remote-linux']) {
+      assert.equal(evaluate(parsed.jobs[id].if, { ...context, reused: true }), false);
+    }
+  }
+});
+
+test('beta release accepts skipped platforms but still requires both Windows jobs; stable and full_matrix require all platforms', async () => {
+  const parsed = await workflow();
+  const skipped = { macos: 'skipped', linux: 'skipped', 'remote-linux': 'skipped' };
+  const beta = { ref: 'refs/tags/v8.2.7-beta.12', builds: skipped };
+  assert.equal(evaluate(parsed.jobs.release.if, beta), true);
+  for (const id of ['windows', 'windows-desktop']) {
+    for (const result of ['failure', 'cancelled', 'skipped']) {
+      assert.equal(evaluate(parsed.jobs.release.if, { ...beta, builds: { ...skipped, [id]: result } }), false);
+    }
+  }
+  const dispatch = { ref: 'refs/heads/beta', event: 'workflow_dispatch', dryRun: true, builds: skipped };
+  assert.equal(evaluate(parsed.jobs.release.if, dispatch), true);
+  assert.equal(evaluate(parsed.jobs.release.if, { ...dispatch, fullMatrix: true }), false);
+  assert.equal(evaluate(parsed.jobs.release.if, { builds: skipped }), false);
+  assert.equal(evaluate(parsed.jobs.release.if, { ...beta, cancelled: true }), false);
+});
+
 test('reuse is queried only for main pushes, version tags and requested dry runs, with a full-build fallback', async () => {
   const { expectedRemoteJobs } = await helpers;
   const parsed = await workflow();
@@ -236,11 +292,13 @@ test('reuse is queried only for main pushes, version tags and requested dry runs
   assert.equal(evaluate(selection.if, { ref: 'refs/heads/ci/preflight-test', event: 'workflow_dispatch' }), false);
   assert.equal(evaluate(selection.if, { ref: 'refs/heads/ci/preflight-test', event: 'workflow_dispatch', dryRun: true }), true);
   assert.equal(evaluate(selection.if, { ref: 'refs/pull/1/merge', event: 'pull_request' }), false);
-  assert.deepEqual(JSON.parse(selection.env.REQUIRED_JOBS), expectedRemoteJobs(parsed).filter(job => job.name !== parsed.jobs.release.name).map(job => job.name));
+  const requiredJobs = selection.env.REQUIRED_JOBS.replace(/^\$\{\{\s*|\s*\}\}$/g, '');
+  assert.deepEqual(JSON.parse(evaluate(requiredJobs)), expectedRemoteJobs(parsed).filter(job => job.name !== parsed.jobs.release.name).map(job => job.name));
   assert.equal(parsed.jobs.reuse.permissions.actions, 'read');
   assert.equal(parsed.jobs.reuse.permissions.contents, 'read');
   for (const id of ['windows', 'windows-desktop', 'remote-linux', 'macos', 'linux']) {
-    assert.equal(parsed.jobs[id].if, "needs.reuse.outputs['run-id'] == ''");
+    assert.equal(parsed.jobs[id].if, "needs.reuse.outputs['run-id'] == ''" +
+      (['remote-linux', 'macos', 'linux'].includes(id) ? " && needs.reuse.outputs['windows-only'] != 'true'" : ''));
     assert.equal(evaluate(parsed.jobs[id].if), true);
     assert.equal(evaluate(parsed.jobs[id].if, { reused: true }), false);
   }
@@ -264,6 +322,7 @@ test('release downloads the four pinned artifact IDs in one step and verifies th
   const current = release.steps.find(step => step.id === 'artifacts');
   assert.equal(current.if, "needs.reuse.outputs['run-id'] == ''");
   assert.equal(current.run, 'node scripts/ci-select-build.mjs --current-run');
+  assert.equal(current.env.WINDOWS_ONLY, "${{ contains(steps.version.outputs.version, '-beta.') }}");
   assert.ok(release.steps.indexOf(current) < release.steps.indexOf(download));
   assert.equal(release.permissions.actions, 'read');
   const version = release.steps.find(step => step.id === 'version');
@@ -283,6 +342,72 @@ test('release downloads the four pinned artifact IDs in one step and verifies th
   assert.ok(Object.values(verify.env).every(value => !String(value).includes('needs.windows.outputs')));
   assert.equal(release.env.RELEASE_DRY_RUN, "${{ github.event_name == 'workflow_dispatch' && inputs.release_dry_run }}");
   assert.ok(release.steps.every(step => !Object.hasOwn(step.env || {}, 'RELEASE_DRY_RUN')));
+});
+
+test('the release shell verifies and lists Windows-only beta assets and keeps stable assets and installation instructions', async t => {
+  const bash = process.env.AGENTRIX_TEST_BASH || 'bash';
+  if (spawnSync(bash, ['--version'], { encoding: 'utf8' }).status !== 0) return t.skip('Bash is unavailable.');
+  const parsed = await workflow();
+  const verify = parsed.jobs.release.steps.find(step => step.name === 'Verify release assets and prepare notes');
+  const publish = parsed.jobs.release.steps.find(step => step.name === 'Publish verified release assets');
+  assert.match(publish.run, /flags=\(--prerelease --latest=false\)/);
+  const { createHash } = require('node:crypto');
+  for (const beta of [true, false]) {
+    await t.test(beta ? 'Windows beta' : 'full stable release', () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-release-assets-'));
+      t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+      const assets = path.join(directory, 'release-assets');
+      fs.mkdirSync(assets);
+      const version = beta ? '8.2.7-beta.12' : '8.2.7';
+      const installer = `Agentrix-Setup-${version}-x64.exe`;
+      const archive = `Agentrix-${version}-mac-arm64.zip`, image = `Agentrix-${version}-mac-arm64.dmg`;
+      const groups = {
+        'SHA256SUMS.txt': [installer, `${installer}.blockmap`, 'latest.yml'],
+        ...(!beta && {
+          'SHA256SUMS-mac.txt': [image, archive],
+          'SHA256SUMS-linux-x64.txt': [`Agentrix-${version}-linux-x86_64.AppImage`, `Agentrix-${version}-linux-x64.tar.xz`],
+          'SHA256SUMS-linux-arm64.txt': [`Agentrix-${version}-linux-arm64.AppImage`, `Agentrix-${version}-linux-arm64.tar.xz`],
+        }),
+      };
+      for (const [manifest, files] of Object.entries(groups)) {
+        for (const file of files) fs.writeFileSync(path.join(assets, file), file);
+        fs.writeFileSync(path.join(assets, manifest), files.map(file => `${createHash('sha256').update(file).digest('hex')}  ${file}\n`).join(''));
+      }
+      const sha = 'a'.repeat(40);
+      fs.writeFileSync(path.join(assets, 'BUILD-INFO.txt'), `Agentrix\r\nCommit: ${sha}\r\n`);
+      const run = () => spawnSync(bash, ['--noprofile', '--norc', '-c', verify.run.replace(
+        'node scripts/release-notes.mjs', 'node "$AGENTRIX_RELEASE_NOTES_SCRIPT"')], {
+        cwd: directory, encoding: 'utf8', timeout: 30000,
+        env: { ...process.env, RELEASE_VERSION: version, RELEASE_INSTALLER: installer, MAC_ARCHIVE: archive, MAC_IMAGE: image,
+          GITHUB_SHA: sha, GH_REPO: 'owner/Agentrix', BUILD_RUN_ID: '101', RELEASE_TAG: `v${version}`, RELEASE_DRY_RUN: 'true',
+          AGENTRIX_RELEASE_NOTES_SCRIPT: path.join(__dirname, '../scripts/release-notes.mjs') },
+      });
+      const result = run();
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const list = fs.readFileSync(path.join(assets, 'release-assets.txt'), 'utf8').trim().split(/\r?\n/);
+      assert.deepEqual(new Set(list), new Set([...Object.keys(groups), ...Object.values(groups).flat(), ...(!beta ? ['BUILD-INFO.txt'] : [])]));
+      const notes = fs.readFileSync(path.join(assets, 'release-notes.md'), 'utf8');
+      if (beta) {
+        assert.match(notes, /^\*\*Windows test build:\*\*/);
+        assert.match(notes, /\*\*Windows:\*\* install \*\*Agentrix-Setup-8\.2\.7-beta\.12-x64\.exe\*\*/);
+        assert.doesNotMatch(notes, /install-macos\.sh|\*\*macOS|\*\*Linux|chmod \+x|xattr -dr/);
+      } else {
+        assert.match(notes, /^The Windows x64 installer of Agentrix, a macOS edition for Apple silicon, and Linux editions for x64 and arm64\./);
+        assert.match(notes, /install-macos\.sh \| bash/);
+        assert.match(notes, /\*\*Linux \(x64 and arm64\):\*\*/);
+        assert.equal(list.length, 14);
+      }
+      // Every platform's manifest is actually checked, including Windows in the beta branch.
+      for (const files of Object.values(groups)) {
+        const file = path.join(assets, files[0]);
+        fs.writeFileSync(file, 'corrupt payload');
+        assert.notEqual(run().status, 0, files[0]);
+        fs.writeFileSync(file, files[0]);
+      }
+      fs.writeFileSync(path.join(assets, 'BUILD-INFO.txt'), `Commit: ${'b'.repeat(40)}\r\n`);
+      assert.notEqual(run().status, 0, 'Reject artifacts from a different commit.');
+    });
+  }
 });
 
 test('release commit verification accepts Windows CRLF build notes and rejects a different commit', { skip: process.platform === 'win32' }, async () => {

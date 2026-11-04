@@ -8,6 +8,10 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      full_matrix:
+        description: Run all platforms on beta before a stable release
+        type: boolean
+        default: false
       release_dry_run:
         description: Verify a release from tested artifacts without publishing
         type: boolean
@@ -31,7 +35,14 @@ jobs:
     outputs:
       run-id: ${{ steps.select.outputs.run-id }}
       artifact-ids: ${{ steps.select.outputs.artifact-ids }}
+      windows-only: ${{ steps.policy.outputs.windows-only }}
+    env:
+      WINDOWS_ONLY: ${{ (startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-beta.')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/beta' && !inputs.full_matrix) }}
     steps:
+      - name: Select platform policy
+        id: policy
+        shell: bash
+        run: echo "windows-only=$WINDOWS_ONLY" >> "$GITHUB_OUTPUT"
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,15 +57,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUIRED_JOBS: >-
-            ["Select tested build", "Linux SSH integration", "Windows x64 build",
+            ${{ env.WINDOWS_ONLY == 'true' && '["Select tested build", "Windows x64 build",
+            "Windows desktop interaction", "Windows desktop terminals", "Windows desktop reading"]' ||
+            '["Select tested build", "Linux SSH integration", "Windows x64 build",
             "Windows desktop interaction", "Windows desktop terminals", "Windows desktop reading",
-            "macOS Apple silicon build and desktop test", "Linux x64 build and desktop tests", "Linux arm64 build and desktop tests"]
+            "macOS Apple silicon build and desktop test", "Linux x64 build and desktop tests", "Linux arm64 build and desktop tests"]' }}
         shell: bash
         run: node scripts/ci-select-build.mjs
 
   remote-linux:
     needs: reuse
-    if: needs.reuse.outputs['run-id'] == ''
+    if: needs.reuse.outputs['run-id'] == '' && needs.reuse.outputs['windows-only'] != 'true'
     name: Linux SSH integration
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -393,7 +406,7 @@ jobs:
 
   macos:
     needs: reuse
-    if: needs.reuse.outputs['run-id'] == ''
+    if: needs.reuse.outputs['run-id'] == '' && needs.reuse.outputs['windows-only'] != 'true'
     name: macOS Apple silicon build and desktop test
     runs-on: macos-15
     timeout-minutes: 30
@@ -526,7 +539,7 @@ jobs:
 
   linux:
     needs: reuse
-    if: needs.reuse.outputs['run-id'] == ''
+    if: needs.reuse.outputs['run-id'] == '' && needs.reuse.outputs['windows-only'] != 'true'
     name: Linux ${{ matrix.arch }} build and desktop tests
     strategy:
       fail-fast: false
@@ -658,7 +671,7 @@ jobs:
     if: >-
       always() && !cancelled() && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_dry_run)) &&
       needs.reuse.result == 'success' && (needs.reuse.outputs['run-id'] != '' ||
-      (needs.windows.result == 'success' && needs['windows-desktop'].result == 'success' && needs.macos.result == 'success' && needs.linux.result == 'success' && needs['remote-linux'].result == 'success'))
+      (needs.windows.result == 'success' && needs['windows-desktop'].result == 'success' && (needs.reuse.outputs['windows-only'] == 'true' || (needs.macos.result == 'success' && needs.linux.result == 'success' && needs['remote-linux'].result == 'success'))))
     needs: [reuse, windows, windows-desktop, macos, linux, remote-linux]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -701,6 +714,7 @@ jobs:
         if: needs.reuse.outputs['run-id'] == ''
         env:
           GH_TOKEN: ${{ github.token }}
+          WINDOWS_ONLY: ${{ contains(steps.version.outputs.version, '-beta.') }}
         run: node scripts/ci-select-build.mjs --current-run
 
       - name: Download the tested release builds
@@ -729,10 +743,24 @@ jobs:
           test -f "$RELEASE_INSTALLER"
           test -f "$RELEASE_INSTALLER.blockmap"
           test -f latest.yml
-          test -f "$MAC_ARCHIVE"
-          test -f "$MAC_IMAGE"
           tr -d '\r' < BUILD-INFO.txt | grep -Fx "Commit: $GITHUB_SHA"
           sha256sum --check SHA256SUMS.txt
+          if [[ "$RELEASE_VERSION" == *-beta.* ]]; then
+          assets=("$RELEASE_INSTALLER" "$RELEASE_INSTALLER.blockmap" latest.yml SHA256SUMS.txt)
+          cat > release-notes.md <<EOF
+          $changes
+
+          **Windows:** install **$RELEASE_INSTALLER** to enable automatic update checks and background downloads.
+
+          Install Codex CLI on the target computer.
+
+          Commit: $GITHUB_SHA
+          Build: https://github.com/$GH_REPO/actions/runs/$BUILD_RUN_ID
+          SHA-256 checksums are attached in **SHA256SUMS.txt**.
+          EOF
+          else
+          test -f "$MAC_ARCHIVE"
+          test -f "$MAC_IMAGE"
           sha256sum --check SHA256SUMS-mac.txt
           linux=("Agentrix-$RELEASE_VERSION-linux-x86_64.AppImage" "Agentrix-$RELEASE_VERSION-linux-x64.tar.xz" "Agentrix-$RELEASE_VERSION-linux-arm64.AppImage" "Agentrix-$RELEASE_VERSION-linux-arm64.tar.xz")
           for file in "${linux[@]}"; do test -f "$file"; done
@@ -768,6 +796,7 @@ jobs:
           Build: https://github.com/$GH_REPO/actions/runs/$BUILD_RUN_ID
           SHA-256 checksums are attached in **SHA256SUMS.txt**.
           EOF
+          fi
 
           printf '%s\n' "${assets[@]}" > release-assets.txt
           if [[ "$RELEASE_DRY_RUN" == 'true' ]]; then

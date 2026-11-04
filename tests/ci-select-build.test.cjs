@@ -1,0 +1,86 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+async function fixture(windowsOnly) {
+  const core = await import('../scripts/ci-preflight-core.mjs');
+  const workflow = core.parseWorkflow(fs.readFileSync(path.join(__dirname, '../.github/workflows/build-windows.yml'), 'utf8'));
+  const expression = workflow.jobs.reuse.steps.find(step => step.id === 'select').env.REQUIRED_JOBS;
+  const requiredJobs = JSON.parse(vm.runInNewContext(expression.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), {
+    env: { WINDOWS_ONLY: String(windowsOnly) },
+  }));
+  const sha = 'a'.repeat(40), repository = 'owner/Agentrix';
+  const run = { id: 101, run_attempt: 1, workflow_id: 7, path: core.workflowFile, head_sha: sha,
+    repository: { full_name: repository }, head_repository: { full_name: repository },
+    status: 'completed', conclusion: 'success', event: 'workflow_dispatch' };
+  const jobs = core.expectedRemoteJobs(workflow, { windowsOnly }).map(job => ({ ...job, status: 'completed' }));
+  const artifacts = (windowsOnly ? core.installerArtifacts.slice(0, 1) : core.installerArtifacts).map((name, index) => ({
+    name, id: 1001 + index, expired: false, expires_at: '2099-01-01T00:00:00Z', size_in_bytes: 128,
+    workflow_run: { id: 101, head_sha: sha },
+  }));
+  const read = async endpoint => {
+    if (endpoint.includes('/workflows/')) return { total_count: 1, workflow_runs: [run] };
+    if (endpoint.includes('/jobs?')) return { total_count: jobs.length, jobs };
+    if (endpoint.includes('/artifacts?')) return { total_count: artifacts.length, artifacts };
+    if (endpoint.endsWith('/101')) return run;
+    if (endpoint.endsWith('/500')) return { ...run, id: 500 };
+    throw new Error(`Unexpected endpoint: ${endpoint}`);
+  };
+  return { core, run, jobs, artifacts, read, env: { GITHUB_REPOSITORY: repository, GITHUB_SHA: sha,
+    GITHUB_RUN_ID: '500', REQUIRED_JOBS: JSON.stringify(requiredJobs), WINDOWS_ONLY: String(windowsOnly) } };
+}
+
+test('beta selects only Windows artifacts from a green dispatch on the exact commit; stable cannot reuse it', async () => {
+  const { selectBuild } = await import('../scripts/ci-select-build.mjs');
+  const beta = await fixture(true);
+  assert.equal(JSON.parse(beta.env.REQUIRED_JOBS).length, 5);
+  assert.deepEqual(await selectBuild(beta), { runId: 101, artifactIds: [1001] });
+  const stable = await fixture(false);
+  assert.equal(JSON.parse(stable.env.REQUIRED_JOBS).length, 9);
+  assert.equal(await selectBuild({ read: beta.read, env: stable.env }), null);
+  // Even with all four artifacts present, skipped non-Windows tests disqualify a stable release.
+  beta.artifacts.push(...stable.artifacts.slice(1));
+  assert.equal(await selectBuild({ read: beta.read, env: stable.env }), null);
+  assert.deepEqual(await selectBuild(stable), { runId: 101, artifactIds: [1001, 1002, 1003, 1004] });
+  // A beta may reuse a full-matrix build, but publishes only its Windows artifact ID.
+  assert.deepEqual(await selectBuild({ read: stable.read, env: beta.env }), { runId: 101, artifactIds: [1001] });
+});
+
+test('beta rejects every unsuccessful Windows job and invalid Windows artifact using the shared validators', async () => {
+  const { selectBuild } = await import('../scripts/ci-select-build.mjs');
+  for (const name of JSON.parse((await fixture(true)).env.REQUIRED_JOBS)) {
+    for (const result of ['missing', 'duplicate', 'skipped', 'failure', 'cancelled']) {
+      const f = await fixture(true);
+      const index = f.jobs.findIndex(job => job.name === name);
+      if (result === 'missing') f.jobs.splice(index, 1);
+      else if (result === 'duplicate') f.jobs.push(f.jobs[index]);
+      else f.jobs[index].conclusion = result;
+      assert.equal(await selectBuild(f), null, `${name}: ${result}`);
+    }
+  }
+  for (const change of [null, { expired: true }, { size_in_bytes: 0 }, { expires_at: 'invalid' },
+    { workflow_run: { id: 102, head_sha: 'a'.repeat(40) } }, { id: 0 }]) {
+    const f = await fixture(true);
+    if (change) Object.assign(f.artifacts[0], change);
+    else f.artifacts.pop();
+    assert.equal(await selectBuild(f), null);
+  }
+  const f = await fixture(true);
+  f.run.head_sha = 'b'.repeat(40);
+  assert.equal(await selectBuild(f), null);
+});
+
+test('current-run beta selection requires only Windows; the default still requires all four artifacts', async () => {
+  const { selectBuild } = await import('../scripts/ci-select-build.mjs');
+  const f = await fixture(true);
+  for (const artifact of f.artifacts) artifact.workflow_run.id = 500;
+  assert.deepEqual(await selectBuild({ ...f, currentRun: true }), { runId: 500, artifactIds: [1001] });
+  await assert.rejects(selectBuild({ ...f, currentRun: true, env: { ...f.env, WINDOWS_ONLY: 'false' } }), /no complete/);
+  for (const names of [[], ['unknown'], ['Agentrix-windows-x64', 'Agentrix-windows-x64']]) {
+    await assert.rejects(f.core.findInstallerArtifactIds(f.read, {
+      repository: f.env.GITHUB_REPOSITORY, sha: f.env.GITHUB_SHA, runId: 500, artifactNames: names,
+    }), /Invalid installer artifact selection/);
+  }
+});
