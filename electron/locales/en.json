@@ -2597,7 +2597,6 @@
   "连接与额度": "Connection and quota",
   "插话直达": "Direct interventions",
   "实时状态": "Real-time state",
-  "Claude 通过 API、Codex 通过 app-server 在应用自己的界面里运行，命令、改动、计划和确认都直接显示；也可以在设置里改回终端界面。": "Claude (through the API) and Codex (through app-server) run in the app's own view, with commands, changes, plans and confirmations shown directly; Settings can switch back to the terminal view.",
   "设置里可以保存 API 密钥、测试连接、设定月预算；Claude 默认走 API，额度用完自动转到订阅登录的终端，接着同一段对话。": "Settings stores the API key, tests the connection and sets a monthly budget; Claude uses the API by default and moves to the terminal on your subscription when the quota runs out, continuing the same conversation.",
   "活动栏显示 Claude、Codex 当前连接的是 API 还是订阅，以及 API 今日和本月的估算花费、预算和限流状态。": "The activity pane shows whether Claude and Codex are connected through the API or a subscription, plus today's and this month's estimated API spend, the budget and rate limits.",
   "给子代理的话直接送到它那里（Claude 中途接收，Codex 在当前一步后接收），不再转给主会话，分屏里显示送达状态。": "A note to a sub-agent goes straight to it (Claude takes it mid-run, Codex after the current step), not through the main session, and its split shows the delivery state.",
@@ -2708,5 +2707,9 @@
   "Codex 请求受到限流。": "Codex requests are rate limited.",
   "服务未提供恢复时间。": "The service did not provide a reset time.",
   "恢复时间：{time}": "Resets at: {time}",
-  "项目已关闭。": "The project has been closed."
+  "项目已关闭。": "The project has been closed.",
+  "在控制台核对": "Check in the console",
+  "约 {amount}": "about {amount}",
+  "约 {time} 恢复": "recovers about {time}",
+  "Claude 通过 API、Codex 通过 app-server 在应用自己的界面里运行，命令、改动和计划都直接显示，需要你回答的提问和策略要求的确认也在这里处理；也可以在设置里改回终端界面。": "Claude (through the API) and Codex (through app-server) run in the app's own view, with commands, changes and plans shown directly; questions for you and any approvals the policy requires are handled here too. Settings can switch back to the terminal view."
 }

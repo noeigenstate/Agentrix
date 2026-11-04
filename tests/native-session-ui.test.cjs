@@ -1335,7 +1335,7 @@ test('the model keeps how a turn ended as the provider gave it and the provider�
   assert.deepEqual(bare.turn.end, { reason: null, message: null, durationMs: null, costUsdMicros: null, costEstimated: null, tokens: null }, 'nothing is made up, and a count that is not a count is none');
   const next = stream(), again = applyEvents(emptyModel(), [next('turn.completed', { status: 'completed', error: null, durationMs: 5 }), next('turn.started', {})]).model;
   assert.equal(again.turn.end, null, 'a new turn forgets the last one’s end');
-  const text = '额度不足，需要充值后继续。服务未提供恢复时间。';
+  const text = '额度不足，需要充值后继续。';
   const limited = applyEvents(emptyModel(), [ev('limits.updated', { scopeId: 's', providerStatus: 'rejected', notice: { code: 'credits_required', message: text, resetsAtMs: null } })]).model;
   assert.deepEqual(limited.limits, { providerStatus: 'rejected', notice: { code: 'credits_required', message: text, resetsAtMs: null } });
   assert.equal(applyEvents(limited, [ev('limits.updated', { scopeId: 's', notice: null })]).model.limits.notice, null, 'a later update with no notice clears it');
@@ -1356,8 +1356,8 @@ test('turn facts: the duration main measured, this turn’s spend as an estimate
   assert.deepEqual(turnFacts(end({ reason: 'tool_deferred', message: mainWords.tool_deferred }), 'claude', false), { message: mainWords.tool_deferred }, 'a turn that did not complete carries main’s sentence');
   assert.deepEqual([sentence(null), sentence(''), sentence('API 请求失败，本轮未能完成。')], [null, null, 'API 请求失败，本轮未能完成。']);
   const at = Date.UTC(2026, 10, 4, 12, 0), later = at + 3 * 3600_000, notice = patch => ({ code: 'rate_limited', message: 'API 请求受到限流。', resetsAtMs: null, ...patch });
-  assert.deepEqual(noticeWords(notice({ message: 'API 请求受到限流。服务未提供恢复时间。' }), at), { text: 'API 请求受到限流。', resets: null }, 'no recovery time given: none is written or guessed');
-  assert.deepEqual(noticeWords(notice({ resetsAtMs: later, message: 'API 额度不足，需要充值后继续。恢复时间：2026-11-04T15:00:00.000Z' }), at), { text: 'API 额度不足，需要充值后继续。', resets: `约 ${clockWords(later, at)} 恢复` }, 'the time comes from resetsAtMs in the owner’s clock, not as a machine date');
+  assert.deepEqual(noticeWords(notice({ message: 'API 请求受到限流。' }), at), { text: 'API 请求受到限流。', resets: null }, 'no recovery time given: none is written or guessed');
+  assert.deepEqual(noticeWords(notice({ resetsAtMs: later, message: 'API 额度不足，需要充值后继续。' }), at), { text: 'API 额度不足，需要充值后继续。', resets: `约 ${clockWords(later, at)} 恢复` }, 'the time comes from resetsAtMs in the owner’s clock, not as a machine date');
   assert.equal(noticeWords(notice({ resetsAtMs: at - 1 }), at), null, 'a notice whose recovery has passed is over'); assert.equal(noticeWords(null), null);
 });
 
@@ -1389,10 +1389,10 @@ test('the result row draws what the provider said: completed with duration, spen
 test('the provider’s notice that a limit was reached is told in the conversation with its recovery time only when it gave one, and its error event is not told twice', async () => {
   const when = Date.now() + 2 * 3600_000, line = '额度不足，需要充值后继续。';
   const html = notice => viewHtml(ev => [ev('session.state', { state: 'idle', reason: null }), ev('limits.updated', { scopeId: 's', billingRoute: 'api', providerStatus: 'rejected', notice }),
-    ev('error', { code: 'credits_required', message: `${line}恢复时间：2026-11-04T15:00:00.000Z`, retryable: false, willRetry: false, stage: 'turn' })]);
-  const timed = await html({ code: 'credits_required', message: `${line}恢复时间：2026-11-04T15:00:00.000Z`, resetsAtMs: when });
+    ev('error', { code: 'credits_required', message: `${line}`, retryable: false, willRetry: false, stage: 'turn' })]);
+  const timed = await html({ code: 'credits_required', message: `${line}`, resetsAtMs: when });
   assert.ok(timed.includes(`<p class="reading-status" role="status">${line} · 约 ${words().clockWords(when)} 恢复</p>`)); assert.doesNotMatch(timed, /2026-11-04T|form-error/, 'no machine date, and the same limit is not said twice');
-  const untimed = await html({ code: 'credits_required', message: `${line}服务未提供恢复时间。`, resetsAtMs: null });
+  const untimed = await html({ code: 'credits_required', message: `${line}`, resetsAtMs: null });
   assert.ok(untimed.includes(`<p class="reading-status" role="status">${line}</p>`)); assert.doesNotMatch(untimed, /恢复|服务未提供/, 'no time is guessed or written when the provider gave none');
 });
 
@@ -1415,15 +1415,15 @@ test('a command’s phrase comes from main and the checks it names are listed un
 test('the usage block tells the provider’s notice with its recovery time only if it gave one, and offers the console’s billing page for Claude’s API spend only', async () => {
   const line = 'API 额度不足，需要充值后继续。', when = Date.now() + 2 * 3600_000;
   const api = (claude, codex = {}) => { const value = usageOf({ lastSwitch: null }); Object.assign(value.agents.claude.limits, claude); Object.assign(value.agents.codex.limits, codex); return usageHtml({ usage: async () => ({ ok: true, value }) }); };
-  const untimed = usageSection(await api({ providerStatus: 'rejected', ordinaryUsageAllowed: false, notice: { code: 'credits_required', message: line + '服务未提供恢复时间。', resetsAtMs: null } }), 'Claude');
+  const untimed = usageSection(await api({ providerStatus: 'rejected', ordinaryUsageAllowed: false, notice: { code: 'credits_required', message: line + '', resetsAtMs: null } }), 'Claude');
   assert.ok(untimed.includes('<p class="activity-note" role="status">' + line + '</p>')); assert.doesNotMatch(untimed, /恢复|服务未提供/, 'no time is written when the provider gave none');
-  const timed = usageSection(await api({ providerStatus: 'rejected', notice: { code: 'rate_limited', message: 'API 请求受到限流。恢复时间：2026-11-04T15:00:00.000Z', resetsAtMs: when } }), 'Claude');
+  const timed = usageSection(await api({ providerStatus: 'rejected', notice: { code: 'rate_limited', message: 'API 请求受到限流。', resetsAtMs: when } }), 'Claude');
   assert.ok(timed.includes('API 请求受到限流。 · 约 ' + words().clockWords(when) + ' 恢复')); assert.doesNotMatch(timed, /2026-11-04T/);
   assert.doesNotMatch(usageSection(await api({ notice: null }), 'Claude'), /role="status"/, 'no notice, no line');
   // A subscription that is rejected says so from the status; with the provider’s notice the notice speaks and the status line stays quiet.
   const rejected = usageSection(await api({}, { providerStatus: 'rejected' }), 'Codex');
   assert.match(rejected, /已限流，约 [^<]+ 恢复/);
-  const both = usageSection(await api({}, { providerStatus: 'rejected', notice: { code: 'rate_limited', message: 'API 请求受到限流。服务未提供恢复时间。', resetsAtMs: null } }), 'Codex');
+  const both = usageSection(await api({}, { providerStatus: 'rejected', notice: { code: 'rate_limited', message: 'API 请求受到限流。', resetsAtMs: null } }), 'Codex');
   assert.doesNotMatch(both, /已限流/); assert.match(both, /API 请求受到限流。/);
   // The billing link: Claude on the API only, with the spend still marked as an estimate.
   const html = await api({}), claude = usageSection(html, 'Claude');

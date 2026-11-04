@@ -7,6 +7,7 @@ function remember(collection, key, value) {
 }
 const blockKey = (id, block) => `${block.type}|${block.id ?? block.tool_use_id ?? `${id}|${block.text ?? block.thinking ?? ''}`}`;
 
+const { commandPhrase } = require('../../agent-actions.cjs');
 function createNormalizer(emit, clean = value => value) {
   const completed = new Set();
   const positions = new Map();
@@ -43,7 +44,7 @@ function createNormalizer(emit, clean = value => value) {
       remember(positions, id, position + 1); remember(completed, itemId);
       if (block.type === 'text' || block.type === 'thinking') publish('item.upsert', { kind: block.type === 'thinking' ? 'reasoning-summary' : message.type === 'user' ? 'user-message' : 'agent-message', status: 'completed', content: { text: preview(block.text || block.thinking || '') } }, { itemId });
       if (block.type === 'tool_use') {
-        const payload = { kind: block.name === 'Bash' ? 'command' : /Edit|Write/.test(block.name) ? 'file-change' : 'tool', status: 'in-progress', content: { name: block.name, input: preview(block.input) } };
+        const payload = { kind: block.name === 'Bash' ? 'command' : /Edit|Write/.test(block.name) ? 'file-change' : 'tool', status: 'in-progress', content: { name: block.name, input: preview(block.input), ...(block.name === 'Bash' && typeof block.input?.command === 'string' ? { phrase: commandPhrase(block.input.command).phrase ?? null } : {}) } };
         tools.set(block.id, payload);
         if (tools.size > 1000) tools.delete(tools.keys().next().value);
         publish('item.upsert', payload, { itemId: block.id });

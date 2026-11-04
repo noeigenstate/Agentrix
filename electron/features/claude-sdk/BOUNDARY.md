@@ -16,6 +16,7 @@ Known gap: Claude settings can replace `env.ANTHROPIC_API_KEY` while reporting t
 - `electron/features/native-session/storage.cjs`
 - `electron/features/native-session/events.cjs`
 - `electron/boundaries.cjs`
+- `electron/agent-actions.cjs` (the one rule for naming a command: running tests, checking types)
 
 ## Invariants
 - Owner queries stay open at idle; explicit sends renew spent caps at safe message boundaries — test: `tests/claude-sdk-budget.test.cjs` › "M1 each explicit idle turn renews its five-dollar cap without charging resumed history"

@@ -124,10 +124,9 @@ export function turnFacts(end: TurnEnd | null | undefined, provider: NativeAgent
 // ── The provider's notice that a limit was reached ──
 // The sentence main wrote, without the recovery time it appends (the time is told from resetsAtMs in the window's own clock, or not at all), and when the
 // provider says it recovers. A notice whose recovery time has passed is over.
-const RECOVERY = /(?:服务未提供恢复时间。|恢复时间：\S+)$/;
 export function noticeWords(notice: LimitNotice | null | undefined, now = Date.now()) {
   if (!notice || typeof notice.resetsAtMs === 'number' && notice.resetsAtMs <= now) return null;
-  return { text: t(notice.message.replace(RECOVERY, '')), resets: typeof notice.resetsAtMs === 'number' ? t('约 {time} 恢复', { time: clockWords(notice.resetsAtMs, now) }) : null };
+  return { text: t(notice.message), resets: typeof notice.resetsAtMs === 'number' ? t('约 {time} 恢复', { time: clockWords(notice.resetsAtMs, now) }) : null };
 }
 
 // What the owner is told before choosing: a switch ends background tasks. Unknown is not none, so no count is guessed.

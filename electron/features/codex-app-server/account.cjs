@@ -7,7 +7,7 @@ function restrictedLimits(previous, code, scopeId, now) {
   const line = code === 'credits_required' ? 'Codex 额度不足，需要补充额度后继续。' : code === 'spend_limit' ? 'Codex 用量已达上限。' : 'Codex 请求受到限流。';
   return { scopeId, billingRoute: previous?.billingRoute || 'unknown', observedAtMs: now, state: 'unavailable', limitsById: previous?.limitsById || {},
     resetCredits: previous?.resetCredits || null, ordinaryUsageAllowed: false, source: 'codex-app-server', providerStatus: 'rejected',
-    notice: { code, resetsAtMs: reset, message: `${line}${reset === null ? '服务未提供恢复时间。' : `恢复时间：${new Date(reset).toISOString()}`}` } };
+    notice: { code, resetsAtMs: reset, message: line } };
 }
 
 function mergeLimits(previous, update, scopeId, now = Date.now()) {
