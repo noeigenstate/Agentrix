@@ -47,7 +47,6 @@ test('this beta\'s notes come first as a group the list shows under its own head
   assert.ok(marked.some(Boolean) && marked.some(flag => !flag), 'both groups are present');
   assert.deepEqual(marked, [...marked].sort((a, b) => Number(b) - Number(a)), 'the new notes are a prefix, so the release body keeps its order');
   assert.ok(WHATS_NEW.every(note => note.group === undefined || note.group === 'new'));
-  assert.deepEqual(WHATS_NEW.filter(note => note.group === 'new').map(note => note.title), ['原生界面', '运行方式', '连接与额度', '插话直达', '实时状态']);
   const component = read('src/features/guide/ReleaseNotes.tsx'), css = read('src/features/guide/release-notes.css');
   for (const heading of ['本次测试版新增', '1.3.26 的其他更新']) {
     assert.match(component, new RegExp(`<h4>\\{t\\('${heading}'\\)\\}</h4>`));

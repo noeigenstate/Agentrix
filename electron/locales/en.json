@@ -2622,5 +2622,11 @@
   "无法确认 Claude Code 的计费来源。": "Could not verify Claude Code's billing source.",
   "Claude Code 没有使用这个密钥，新会话将走终端。": "Claude Code did not use this key. New sessions will use the terminal.",
   "Claude Code 没有使用这个密钥，当前设置不允许启动新会话。": "Claude Code did not use this key. Current settings prevent new sessions from starting.",
-  "无法确认 Claude Code 的计费来源，请重试。": "Could not verify Claude Code's billing source. Try again."
+  "无法确认 Claude Code 的计费来源，请重试。": "Could not verify Claude Code's billing source. Try again.",
+  "用量卡": "Usage card",
+  "活动栏里 Claude 和 Codex 分开显示连接方式、新会话走哪条路和额度，保存密钥或改运行方式后马上更新。": "The activity pane shows Claude and Codex separately: the connection, the path a new session takes and the quota, updated right after you save a key or change the run mode.",
+  "计费检查": "Billing check",
+  "测试连接会确认 Claude Code 实际用的是不是你的密钥；不是的话，新会话转到终端并说明原因，不再直接失败。": "The connection test confirms Claude Code really uses your key; if not, new sessions move to the terminal and say why, instead of failing.",
+  "原生通道修复": "Native path fixes",
+  "修好了 Codex 的原生连接和 Claude 走 API 时的启动失败。": "Fixed Codex's native connection and a startup failure when Claude runs through the API."
 }
