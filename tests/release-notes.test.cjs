@@ -78,6 +78,22 @@ test('the release body refuses a missing translation, an empty list and a malfor
   for (const version of [undefined, '', '1.3', 'v1.3.24', '1.3.24 ', '1.3.24\n- x']) assert.throws(() => releaseNotes(notes, english, version), /Invalid version/);
 });
 
+test('beta notes identify a Windows test build without adding other platform installation instructions', async () => {
+  const { releaseNotes } = await load();
+  const notes = [{ title: '甲', text: '一句话' }], english = { 甲: 'Alpha', 一句话: 'Does a thing.' };
+  const beta = releaseNotes(notes, english, '8.2.7-beta.12');
+  assert.match(beta, /^\*\*Windows test build:\*\* This prerelease is for Windows only/);
+  assert.match(beta, /Choose Beta in Settings > About/);
+  assert.match(beta, /## Changes in 8\.2\.7-beta\.12\n\n- \*\*Alpha\*\* Does a thing\.$/);
+  assert.doesNotMatch(beta, /macOS|Linux|install-macos/);
+  for (const version of ['8.2.7', '8.2.7-rc.1']) {
+    assert.equal(releaseNotes(notes, english, version), `## Changes in ${version}\n\n- **Alpha** Does a thing.`);
+  }
+  const result = run('--version', '8.2.7-beta.12');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^\*\*Windows test build:\*\*/);
+});
+
 test('the script prints the real English notes for the version and fails on bad arguments', () => {
   const result = run('--version', '1.3.24');
   assert.equal(result.status, 0, result.stderr);

@@ -2,14 +2,15 @@ import { appendFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findInstallerArtifactIds, findReusableRun } from './ci-preflight-core.mjs';
+import { findInstallerArtifactIds, findReusableRun, installerArtifacts } from './ci-preflight-core.mjs';
 
 const readGitHub = endpoint => JSON.parse(execFileSync('gh', ['api', endpoint], {
   encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000, maxBuffer: 8 * 1024 * 1024,
 }));
 
 export async function selectBuild({ currentRun = false, read = readGitHub, env = process.env } = {}) {
-  const options = { repository: env.GITHUB_REPOSITORY, sha: env.GITHUB_SHA, runId: Number(env.GITHUB_RUN_ID) };
+  const options = { repository: env.GITHUB_REPOSITORY, sha: env.GITHUB_SHA, runId: Number(env.GITHUB_RUN_ID),
+    artifactNames: env.WINDOWS_ONLY === 'true' ? [installerArtifacts[0]] : installerArtifacts };
   if (currentRun) {
     const artifactIds = await findInstallerArtifactIds(read, options);
     if (!artifactIds) throw new Error('The current run has no complete, unexpired installer artifacts.');

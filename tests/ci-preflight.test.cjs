@@ -240,6 +240,23 @@ test('exact dispatch verification rejects stale runs, other commits, refs, event
   }
 });
 
+test('Windows-only expectations explicitly skip foreign jobs while remote preflight requests the full matrix', async () => {
+  const { expectedRemoteJobs, assessRemoteJobs } = await helpers;
+  const parsed = await workflow();
+  const full = expectedRemoteJobs(parsed);
+  const windows = expectedRemoteJobs(parsed, { windowsOnly: true });
+  assert.equal(full.filter(job => job.conclusion === 'success').length, 9);
+  assert.deepEqual(windows.filter(job => job.conclusion === 'success').map(job => job.name), [
+    'Select tested build', 'Windows x64 build', 'Windows desktop interaction', 'Windows desktop terminals', 'Windows desktop reading',
+  ]);
+  const jobs = windows.map(job => ({ ...job, status: 'completed' }));
+  assert.equal(assessRemoteJobs(jobs, windows, 'success').success, true);
+  assert.equal(assessRemoteJobs(jobs, full, 'success').success, false);
+  const cli = fs.readFileSync(path.join(__dirname, '../scripts/ci-preflight.mjs'), 'utf8');
+  assert.match(cli, /body: \{ ref: branch, inputs: \{ full_matrix: true \}, return_run_details: true \}/);
+  assert.match(cli, /const expected = expectedRemoteJobs\(workflow\)/);
+});
+
 test('polling bounds each request by the remaining deadline and retains 30-second intervals', async () => {
   const { pollWorkflowRun } = await helpers;
   let clock = 0;

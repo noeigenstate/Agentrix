@@ -11,19 +11,20 @@ Every release goes out as a beta first. The owner's rule: at most one branch, a 
 agrees does it become the stable release.
 
 - **One branch: `beta`.** Create it from `main` when it does not exist (`git switch -c beta main`). Release work lives
-  there. Never create a `ci/preflight-*` branch and never run `ci-preflight remote` for a beta: the tag run is the full
-  matrix.
+  there. Never create a `ci/preflight-*` branch or run `ci-preflight remote` for a beta.
+  Beta dispatches default to Windows only; `full_matrix=true` explicitly enables all platforms.
 - **Beta version `X.Y.Z-beta.N`** (N starts at 1 and rises for each further beta of the same X.Y.Z):
   `npm version X.Y.Z-beta.N --no-git-tag-version`. Write the update notes (step 3) now. Leave the versions in
   `docs/usage.md` (step 2) alone until the stable bump.
 - **Check, commit, tag, push.** Local checks (step 4), commit (step 6), then `git tag vX.Y.Z-beta.N` on `beta` and push
-  the branch and the tag. A push to the `beta` branch triggers nothing; the tag matches `v*`. The tag run is the full
-  matrix (it builds and tests everything unless a successful run of this exact commit can be reused, step 7) and
-  publishes a GitHub **prerelease** (`--prerelease --latest=false`) with the installer, its `.blockmap` and `latest.yml`.
+  the branch and the tag. A push to the `beta` branch triggers nothing; the tag matches `v*`. Beta tags run only Windows
+  and its three desktop shards, skipping macOS, Linux and Linux SSH. They publish only the Windows installer,
+  its `.blockmap`, `latest.yml` and Windows checksums as a GitHub **prerelease** (`--prerelease --latest=false`).
   Installed Windows copies on the beta channel (Settings › About › 更新通道) receive it; stable-channel copies do not.
   A failed job is step 9; a code defect needs a new commit and the next beta number, keeping the old tag.
-- **Nothing merges to `main` and no stable tag exists until the owner approves the beta.** Report the prerelease and
-  wait; do not bump, merge or tag stable on your own judgment.
+- **Before requesting stable approval:** dispatch the workflow on `beta` with `full_matrix=true`, fix all failures and
+  obtain a green full-platform run. Then report the beta and that result to the owner. Nothing merges to `main` and no
+  stable tag exists until the owner approves. Stable releases always require the full matrix.
 - **After the owner approves:** on `beta`, `npm version X.Y.Z --no-git-tag-version`, replace the `docs/usage.md`
   versions (step 2), finish the notes, commit `Release X.Y.Z: …`; then `git switch main`, `git merge --ff-only beta`,
   `git tag vX.Y.Z`, push `main` first and wait until its run is green; only then push the tag. Pushed back to back,
@@ -58,9 +59,9 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
    For a follow-up changing only test fixtures, docs and version metadata after a recorded full pass, verify that
    `electron/`, `src/`, `integration/`, `assets/` and dependency definitions are unchanged. Reuse the unaffected local
    desktop results; rerun the changed unit/fixture tests and their packaged desktop cases in the failing environment.
-   Rebuild and verify the new version's artifacts. The entire CI matrix must still pass before publication: in the beta
-   flow the tag run is that pass; outside it, a green `remote` preflight on the release commit is. The tag's release is
-   published from its builds (step 7).
+   Rebuild and verify the new version's artifacts. Before publication the required matrix must pass: Windows for beta
+   tags, all platforms for stable releases. Full-platform validation on `beta` precedes the stable approval request.
+   The tag's release is published from its tested builds (step 7).
 5. **Look at the pictures.** `test:workspace` saves `guide-whats-new.png` and `guide-shortcuts.png` in its
    `.test-output/workspace-*` folder: check the notes fit and read well before committing.
 6. **Commit.** Stage everything except local-only files (`.claude/`, personal product drafts under `docs/`), scan
@@ -70,20 +71,22 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
    The stable release: `git tag vX.Y.Z` on `main` after the fast-forward, push `main`, wait for its run to go green, then push the tag. Pushes of `main` and of
    tags first run the "Select tested build" job, which looks
    for a successful run of this workflow on exactly this commit (the stable `main` push's own run, or outside the beta
-   flow the `remote` preflight's dispatch run; every build and
-   test job really run, installer artifacts not expired). If it finds one, the build and test jobs are skipped; only
+   flow the `remote` preflight's dispatch run; every required job really run, installer artifacts not expired).
+   Beta reuse needs five successful jobs and the Windows artifact; stable reuse needs all nine jobs and all four
+   platform artifacts. A Windows-only run cannot satisfy stable reuse. If it finds one, build and test jobs are skipped; only
    the tag's run adds the "Publish GitHub Release" job, which downloads that run's installers, checks their sha256
    sums and the version, and publishes exactly the tested files in about 1–2 minutes (as a prerelease for a beta tag).
-   If no such run exists (the first beta tag of a commit, a failed or expired run) the run builds and tests
-   everything, ~14 minutes.
+   If no such run exists, the run builds and tests the required platforms: Windows for beta, all platforms for stable.
    The release page's "## Changes in X.Y.Z" list is printed from `WHATS_NEW` by `node scripts/release-notes.mjs
    --version X.Y.Z` (the English of each note); it fails if a note has no English.
 8. **CI.** Query the runs for the full commit SHA (`/actions/runs?head_sha=<full sha>`; a short SHA returns
    nothing). Read the token from `git credential fill` inside the script and never print it. The jobs: Windows x64
    (build, then the "Windows desktop interaction / terminals / reading" shards that run the packaged desktop suites in
    parallel against the uploaded `win-unpacked`), Linux x64, Linux arm64, macOS Apple silicon, and Linux SSH integration (the real-ssh check of the
-   remote worker). Wait for the tag's run (and, for the stable release, the `main` run), then confirm the release lists its
-   assets: for a beta, the installer, its `.blockmap` and `latest.yml`, marked as a prerelease. Outside the beta flow, to
+   remote worker). Beta runs skip the non-Windows jobs unless a beta branch dispatch sets `full_matrix=true`.
+   Wait for the tag's run (and, for stable, the `main` run), then confirm the release lists its
+   assets: for a beta, only the Windows installer, its `.blockmap`, `latest.yml` and checksums, marked as a prerelease.
+   The beta release body names it as a Windows test build and omits macOS/Linux installation instructions. Outside the beta flow, to
    rehearse the release without
    publishing, dispatch the workflow on the release commit with `release_dry_run=true`: it runs the reuse check, the
    download, the sha256 and version checks and the notes, prints what it would publish and creates or edits nothing.
@@ -179,7 +182,7 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
 30. **Wrapper changes on a Windows machine.** The Bash/zsh wrapper tests (`linux-integration`, `zsh-integration`) and the
    real SSH worker test (`ssh-connection` with the native worker) run only on Linux and macOS, so `npm test` here skips them.
    After any change to `integration/*.bash`, `integration/*.zsh` or `remote-worker.py`, get a full CI run before
-   integrating further (in the beta flow, tag the next beta; outside it, `ci-preflight remote`), and read the failed jobs' logs (`/actions/jobs/<id>/logs`) for the `✖` lines. Python's
+   integrating further (on `beta`, dispatch with `full_matrix=true`; outside it, `ci-preflight remote`), and read the failed jobs' logs (`/actions/jobs/<id>/logs`) for the `✖` lines. Python's
    `os.makedirs(path, mode)` applies `mode` only to the last folder: create a private tree one folder at a time.
 31. **Aliased temp paths break path checks on CI only.** Runners give temp folders under aliases: macOS `TMPDIR` lives in
    `/var/folders`, a link to `/private/var`; Windows `TEMP` is an 8.3 short path (`C:\Users\RUNNER~1\…`) and the checkout is on

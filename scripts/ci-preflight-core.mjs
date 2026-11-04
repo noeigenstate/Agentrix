@@ -160,16 +160,17 @@ export function pushArguments(sha, branch, remove = false) {
 
 const tagCondition = "startsWith(github.ref, 'refs/tags/v')";
 const dryRunCondition = "(github.event_name == 'workflow_dispatch' && inputs.release_dry_run)";
+export const windowsBetaCondition = "(startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-beta.')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/beta' && !inputs.full_matrix)";
 export const releaseMutationCondition = `${tagCondition} && !${dryRunCondition}`;
 export const releaseJobCondition = [
   `always() && !cancelled() && (${tagCondition} || ${dryRunCondition}) &&`,
   "needs.reuse.result == 'success' && (needs.reuse.outputs['run-id'] != '' ||",
-  "(needs.windows.result == 'success' && needs['windows-desktop'].result == 'success' && needs.macos.result == 'success' && needs.linux.result == 'success' && needs['remote-linux'].result == 'success'))",
+  "(needs.windows.result == 'success' && needs['windows-desktop'].result == 'success' && (needs.reuse.outputs['windows-only'] == 'true' || (needs.macos.result == 'success' && needs.linux.result == 'success' && needs['remote-linux'].result == 'success'))))",
 ].join(' ');
 
 const condition = value => typeof value === 'string' ? value.replace(/^\$\{\{\s*|\s*\}\}$/g, '').replace(/\s+/g, ' ').trim() : '';
 
-export function expectedRemoteJobs(workflow) {
+export function expectedRemoteJobs(workflow, { windowsOnly = false } = {}) {
   for (const id of ['reuse', 'windows', 'windows-desktop', 'macos', 'linux', 'remote-linux', 'release']) {
     if (!workflow.jobs[id]) throw new Error(`Required workflow job is missing: ${id}`);
   }
@@ -193,7 +194,7 @@ export function expectedRemoteJobs(workflow) {
         return String(entry[key]);
       });
       if (name.includes('${{')) throw new Error(`Unsupported job name expression in ${id}.`);
-      expected.push({ name, conclusion: id === 'release' ? 'skipped' : 'success' });
+      expected.push({ name, conclusion: id === 'release' || (windowsOnly && ['macos', 'linux', 'remote-linux'].includes(id)) ? 'skipped' : 'success' });
     }
   }
   if (new Set(expected.map(job => job.name)).size !== expected.length) throw new Error('Workflow job names must be unique for remote verification.');
@@ -215,12 +216,14 @@ async function listWorkflowResults(read, endpoint, key) {
   }
 }
 
-export async function findInstallerArtifactIds(read, { repository, sha, runId, now = Date.now }) {
+export async function findInstallerArtifactIds(read, { repository, sha, runId, artifactNames = installerArtifacts, now = Date.now }) {
+  if (!Array.isArray(artifactNames) || !artifactNames.length || new Set(artifactNames).size !== artifactNames.length
+    || artifactNames.some(name => !installerArtifacts.includes(name))) throw new Error('Invalid installer artifact selection.');
   const artifacts = await listWorkflowResults(read, `/repos/${repository}/actions/runs/${runId}/artifacts`, 'artifacts');
   // Leave enough time for a release to download and verify the selected immutable artifacts.
   const expiresAfter = now() + 60 * 60_000;
   const ids = [];
-  for (const name of installerArtifacts) {
+  for (const name of artifactNames) {
     const matches = artifacts.filter(artifact => artifact.name === name);
     if (matches.length !== 1) return null;
     const artifact = matches[0];
@@ -229,11 +232,11 @@ export async function findInstallerArtifactIds(read, { repository, sha, runId, n
       || artifact.workflow_run?.id !== runId || artifact.workflow_run?.head_sha !== sha) return null;
     ids.push(artifact.id);
   }
-  return new Set(ids).size === installerArtifacts.length ? ids : null;
+  return new Set(ids).size === artifactNames.length ? ids : null;
 }
 
 // Only real build/test runs qualify. A green run that merely reused another run's artifacts is not evidence itself.
-export async function findReusableRun(read, { repository, sha, runId, requiredJobs, now = Date.now }) {
+export async function findReusableRun(read, { repository, sha, runId, requiredJobs, artifactNames = installerArtifacts, now = Date.now }) {
   if (!Array.isArray(requiredJobs) || !requiredJobs.length || new Set(requiredJobs).size !== requiredJobs.length) {
     throw new Error('Reuse requires a nonempty, unique list of build/test jobs.');
   }
@@ -255,7 +258,7 @@ export async function findReusableRun(read, { repository, sha, runId, requiredJo
       const matches = jobs.filter(job => job.name === name);
       return matches.length === 1 && matches[0].status === 'completed' && matches[0].conclusion === 'success';
     })) continue;
-    const artifactIds = await findInstallerArtifactIds(read, { repository, sha, runId: run.id, now });
+    const artifactIds = await findInstallerArtifactIds(read, { repository, sha, runId: run.id, artifactNames, now });
     if (!artifactIds) continue;
     // A rerun can have started while the jobs/artifacts were being inspected.
     const checked = await read(`${root}/actions/runs/${run.id}`);
