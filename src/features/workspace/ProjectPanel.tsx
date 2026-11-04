@@ -24,7 +24,8 @@ function statusText(project: Project) {
   if (project.status === 'codex') return project.codexActivity === 'complete' ? t('本轮已完成') : project.codexActivity === 'interrupted' ? t('已中断') : t('{agent} 会话中', { agent: agentName(project.agent) });
   if (project.status === 'shell') return t('终端就绪');
   if (project.status === 'starting') return project.kind === 'ssh' ? t('正在连接 SSH') : t('正在启动');
-  if (project.status === 'exited') return project.kind === 'ssh' ? t('SSH 终端已退出') : t('终端已退出');
+  // A session with no terminal (the API) that ended is no exited terminal.
+  if (project.status === 'exited') return project.terminals.some(terminal => terminal.nativeMode) ? t('这个会话已经结束') : project.kind === 'ssh' ? t('SSH 终端已退出') : t('终端已退出');
   return t('尚未启动');
 }
 

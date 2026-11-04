@@ -8,7 +8,7 @@ import { showPopup } from '../files/file-popup';
 import { Markdown } from './Markdown';
 import { PathText } from './PathText';
 import { useReadingPaths } from './useReadingPaths';
-import { UserMessage } from './PendingPromptEntries';
+import { UserMessage, type MessageEntry } from './PendingPromptEntries';
 import { QuoteAction } from './ReadingQuote';
 import { AgentMark, AgentTurnItem, stepTime, TimelineStep } from './Timeline';
 import { groupSummary, ImageProgress, StepState } from './ResultCard';
@@ -137,7 +137,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, onErro
         if (turn.kind === 'user') {
           return <TimelineStep key={turn.entry.id} at={turn.entry.at} kind="user" who={t('你')} latest={index === latestUser} mark={<UserAvatar />}>
             <div data-reading-entry={turn.entry.id} className={`reading-user${turn.entry.answer ? ' is-answer' : ''}`}>
-              {turn.entry.answer && <span className="reading-user-label">{t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} /><QuoteOf entry={turn.entry} who={t('你')} /></div>
+              {turn.entry.answer && <span className="reading-user-label">{t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} imagesOmitted={(turn.entry as MessageEntry).imagesOmitted} /><QuoteOf entry={turn.entry} who={t('你')} /></div>
           </TimelineStep>;
         }
         const liveStatus = index === turns.length - 1 ? decorations?.status : null;

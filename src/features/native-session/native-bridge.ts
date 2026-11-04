@@ -33,7 +33,6 @@ export type NativeUsage = {
   agents: Record<NativeAgent, AgentPathState>;
   // Owner sessions still on their way to a changed run mode, counted by main; absent from an older main.
   switches?: { waiting: number } | null;
-  lastSwitch: { at: number; agent: NativeAgent; from: string | null; to: string | null; reason: string | null } | null;
 };
 
 export interface NativeBridge {

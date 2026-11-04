@@ -37,3 +37,6 @@
 .native-path-note .native-switch { flex: 1; padding: 8px 12px 8px 0; color: var(--text-1); }
 .native-path-note .native-switch-question { margin: 0; border: 0; border-top: 1px solid var(--divider); border-radius: 0 0 12px 12px; box-shadow: none; }
 .native-switch-text { margin: 0 0 12px; color: var(--text-1); overflow-wrap: anywhere; }
+
+/* A file dragged over the view: the box says it takes it. */
+.reading-view[data-native-session].is-dropping .reading-composer { border-color: var(--focus-ring); }

@@ -1,16 +1,19 @@
 # Boundary: Sub-agent view
 
 A sub-agent's split beside a terminal's conversation: who it is, its state, speed and time, its conversation followed live (read-only), and the owner's word for it —
-a message composer with Send and Stop that go through the main process, with delivery receipts from the worker.
+a message composer with Send and Stop that go through the main process, with delivery receipts from the worker. It also hands the left bar the called models of the current terminal
+as a ready node and a running count (`AgentSidebar`), so the files module never imports the agents module.
 
 ## Owns
 - `src/features/agents/SubagentPane.tsx`
 - `src/features/agents/SubagentInput.tsx` and `subagent-input.css`
 - `src/features/agents/SubagentChip.tsx` and `subagent-chip.css`
+- `src/features/agents/AgentSidebar.tsx`
 
 ## Interface
 - `SubagentPane` (`src/features/agents/SubagentPane.tsx`) — one view of one sub-agent call; the terminal grid renders one per open view
 - `SubagentChip` (`src/features/agents/SubagentChip.tsx`) — the header chip and popover that list the called models where a narrow window hides the activity pane (and the left bar is collapsed); the project header renders it
+- `AgentSidebar` (`src/features/agents/AgentSidebar.tsx`) — the called models of the terminal in use as a ready node, and how many are running, for the left bar's Agent tab; the app renders it around the files module
 
 ## May import
 - `src/shared/**`
@@ -20,6 +23,8 @@ a message composer with Send and Stop that go through the main process, with del
 - `src/features/agents/subagent-splits.ts`
 - `src/features/native-session/native-words.ts` (delivery receipt words)
 - `src/features/reading/ConversationFeed.tsx`
+- `src/features/terminal/active-terminal.ts`
+- `src/features/terminal/terminal-visibility.ts`
 
 ## Invariants
 - SubagentPane and SubagentInput never write terminal input, the clipboard or the screen; the owner's word leaves only through `interveneAgent` and `stopAgent` and delivery is direct to the worker — no planner input is touched — test: `tests/boundary-activity-pane.test.cjs` › "a sub-agent view opens only on the owner’s click on a row, reads the sub-agent’s record and speaks to it through the main process only"

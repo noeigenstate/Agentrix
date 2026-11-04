@@ -2,7 +2,7 @@
 // model, and a replayed or repeated event changes nothing. Nothing is invented — a field the events do not carry stays null.
 //
 // The payload fields read here (the contract fixes the envelope and the event types, not these; native-words.ts reads the item content):
-//   item.upsert  kind, status, content            item.delta  channel (text|output|reasoning-summary|plan), text, index
+//   item.upsert  kind, status, content (content.discarded: a stream a newer message replaced)     item.delta  channel (text|output|plan; a reasoning summary is no part of the model), text
 //   turn.diff    diff                              plan.updated  explanation, steps[{ step|text|title, status }]
 //   request.opened  requestId, kind, blocking, title, preview, questions[{ id, header, question, options[{ label, description }], multiSelect, isSecret }]
 //   session.state  state, reason     input.receipt  clientMessageId, status     path.changed  previous, selected, reason
@@ -16,7 +16,7 @@ export type Payload = Record<string, unknown>;
 export type NativeItem = {
   id: string; kind: string; status: string | null; content: Payload; turnId: string | null; at: number | null;
   // Streamed pieces; a completed snapshot that carries its own text replaces them.
-  deltas: { text: string; output: string; reasoning: string[]; plan: string };
+  deltas: { text: string; output: string; plan: string };
 };
 // How a turn ended, as its provider said: the reason code, the sentence main wrote for it, and the facts the result gave (each null when it gave none).
 export type TurnEnd = {
@@ -47,7 +47,7 @@ export const emptyModel = (): NativeModel => ({
 const SEND_STATES = new Set(['starting', 'idle', 'running', 'waiting']);
 const OVER_STATES = new Set(['stopped', 'failed', 'disconnected']);
 // The card a channel's first delta creates when the item itself was not announced.
-const DELTA_KIND: Record<string, string> = { text: 'agent-message', output: 'command', 'reasoning-summary': 'reasoning-summary', plan: 'plan' };
+const DELTA_KIND: Record<string, string> = { text: 'agent-message', output: 'command', plan: 'plan' };
 
 const text = (value: unknown) => (typeof value === 'string' ? value : null);
 const object = (value: unknown): Payload => (value && typeof value === 'object' && !Array.isArray(value) ? value as Payload : {});
@@ -70,29 +70,28 @@ function touch(draft: NativeModel, event: AgentEvent, kind: string): NativeItem 
   if (!id) return null;
   const known = draft.items[id];
   if (!known) draft.order.push(id);
-  return known ?? { id, kind, status: null, content: {}, turnId: event.turnId, at: event.occurredAtMs ?? event.receivedAtMs, deltas: { text: '', output: '', reasoning: [], plan: '' } };
+  return known ?? { id, kind, status: null, content: {}, turnId: event.turnId, at: event.occurredAtMs ?? event.receivedAtMs, deltas: { text: '', output: '', plan: '' } };
 }
 
 function upsert(draft: NativeModel, event: AgentEvent, payload: Payload) {
   const base = touch(draft, event, text(payload.kind) ?? 'other');
   if (!base) return;
-  const content = object(payload.content), deltas = { ...base.deltas, reasoning: [...base.deltas.reasoning] };
-  if (filled(content.text)) Object.assign(deltas, { text: '', reasoning: [], plan: '' });
-  if (filled(content.output)) deltas.output = '';
-  draft.items[base.id] = { ...base, kind: text(payload.kind) ?? base.kind, status: text(payload.status) ?? base.status, content: { ...base.content, ...content }, deltas };
+  const content = object(payload.content), deltas = { ...base.deltas };
+  // A stream a newer message replaced is dropped whole, with the pieces already heard; a completed snapshot that carries its text replaces them.
+  if (content.discarded === true || filled(content.text)) Object.assign(deltas, { text: '', plan: '' });
+  if (content.discarded === true || filled(content.output)) deltas.output = '';
+  // The time the record itself gives (a replayed item's own) is the item's; an item first heard as a delta had only the time it was heard.
+  const merged = { ...base.content, ...content };
+  if (filled(content.text) && content.discarded !== true) delete merged.discarded;
+  draft.items[base.id] = { ...base, kind: text(payload.kind) ?? base.kind, status: text(payload.status) ?? base.status, at: event.occurredAtMs ?? base.at, content: merged, deltas };
 }
 
 function delta(draft: NativeModel, event: AgentEvent, payload: Payload) {
   const channel = text(payload.channel) ?? 'text', piece = text(payload.text) ?? '';
+  if (channel === 'reasoning-summary') return;
   const base = touch(draft, event, DELTA_KIND[channel] ?? 'other');
-  if (!base) return;
-  const deltas = { ...base.deltas, reasoning: [...base.deltas.reasoning] };
-  if (channel === 'reasoning-summary') {
-    const index = typeof payload.index === 'number' && payload.index >= 0 ? payload.index : 0;
-    while (deltas.reasoning.length <= index) deltas.reasoning.push('');
-    deltas.reasoning[index] += piece;
-  } else if (channel === 'output' || channel === 'plan' || channel === 'text') deltas[channel] += piece;
-  draft.items[base.id] = { ...base, deltas };
+  if (!base || base.content.discarded === true) return;
+  if (channel === 'output' || channel === 'plan' || channel === 'text') draft.items[base.id] = { ...base, deltas: { ...base.deltas, [channel]: base.deltas[channel] + piece } };
 }
 
 function handle(draft: NativeModel, event: AgentEvent) {
@@ -104,7 +103,8 @@ function handle(draft: NativeModel, event: AgentEvent) {
       if (OVER_STATES.has(state)) draft.requests = [];
       break;
     }
-    case 'turn.started': draft.turn = { running: true, status: null, error: null, end: null }; draft.error = null; break;
+    // A new turn starts with no plan and no diff: the last turn's are not this one's.
+    case 'turn.started': draft.turn = { running: true, status: null, error: null, end: null }; draft.error = null; draft.plan = null; draft.diff = null; break;
     case 'turn.completed': draft.turn = { running: false, status: text(payload.status), error: text(payload.error), end: endOf(payload) }; break;
     case 'item.upsert': upsert(draft, event, payload); break;
     case 'item.delta': delta(draft, event, payload); break;
@@ -123,7 +123,7 @@ function handle(draft: NativeModel, event: AgentEvent) {
     }
     case 'request.resolved': draft.requests = draft.requests.filter(request => request.id !== text(payload.requestId)); break;
     case 'input.receipt': { const id = text(payload.clientMessageId), status = text(payload.status); if (id && status) draft.receipts[id] = status; break; }
-    case 'path.changed': draft.path = { previous: text(payload.previous), selected: text(payload.selected) ?? 'unknown', reason: text(payload.reason), at: event.receivedAtMs }; break;
+    case 'path.changed': draft.path = { previous: text(payload.previous), selected: text(payload.selected) ?? 'unknown', reason: text(payload.reason), at: event.occurredAtMs ?? event.receivedAtMs }; break;
     case 'switch.updated': draft.switchState = event.payload; break;
     case 'limits.updated': {
       const notice = object(payload.notice), code = text(notice.code), message = text(notice.message);
@@ -163,16 +163,3 @@ export function fromSnapshot(snapshot: { lastSequence: number; events: AgentEven
 export const canSend = (model: NativeModel) => !!model.session && SEND_STATES.has(model.session.state);
 export const isOver = (model: NativeModel) => !!model.session && OVER_STATES.has(model.session.state);
 export const isWorking = (model: NativeModel) => model.turn.running || model.session?.state === 'running' || model.session?.state === 'stopping';
-
-// The timeline: your messages and the agent's runs of everything else between them.
-export type Group = { kind: 'user'; item: NativeItem } | { kind: 'agent'; items: NativeItem[] };
-export function groups(model: NativeModel): Group[] {
-  const result: Group[] = [];
-  for (const id of model.order) {
-    const item = model.items[id];
-    if (item.kind === 'user-message') result.push({ kind: 'user', item });
-    else if (result.at(-1)?.kind === 'agent') (result.at(-1) as { items: NativeItem[] }).items.push(item);
-    else result.push({ kind: 'agent', items: [item] });
-  }
-  return result;
-}

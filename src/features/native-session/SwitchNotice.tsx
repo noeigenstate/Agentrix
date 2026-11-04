@@ -17,15 +17,16 @@ export function SwitchLine({ state }: { state: SwitchState | null }) {
 export const asksChoice = (state: SwitchState | null): state is SwitchState & { requestId: string } => (state?.phase === 'awaiting-choice' || state?.phase === 'waiting-background') && !!state.requestId;
 
 // The question card, only while main asks (while it waits, only the choice to switch now is left). It looks like a request card but is no request: a terminal session has no request list. An answer
-// shuts the card until main moves the switch on; a refused one opens it again with the reason. A late answer is ignored by main.
+// shuts the card until main moves the switch on (the phase changes: waiting for the tasks to end opens the choice to switch at once); a refused one opens it again with the reason. A late answer is ignored by main.
 export function SwitchQuestion({ terminalId, sessionId, state }: { terminalId: string; sessionId: string | null; state: SwitchState | null }) {
   const [answeredFor, setAnsweredFor] = useState<string | null>(null), [error, setError] = useState<string | null>(null);
   if (!asksChoice(state)) return null;
-  const { changeId, requestId } = state, busy = answeredFor === requestId;
+  // The answer shuts only the question as it was asked: the same request in another phase (after 等它们结束) is a new question.
+  const { changeId, requestId } = state, asked = `${requestId}/${state.phase}`, busy = answeredFor === asked;
   const answer = async (action: 'wait' | 'now') => {
     const bridge = nativeBridge();
     if (busy || !bridge) return;
-    setAnsweredFor(requestId); setError(null);
+    setAnsweredFor(asked); setError(null);
     // A terminal session has no runtime session id; main finds it by the terminal.
     const result = await bridge.answer(terminalId, sessionId ?? terminalId, requestId, { switch: { changeId, requestId, action } })
       .catch((failure: unknown) => ({ ok: false as const, error: failure instanceof Error ? failure.message : String(failure) }));

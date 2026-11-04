@@ -64,7 +64,7 @@ function stream(base = {}) {
 
 // ---- the model ----------------------------------------------------------------------------------------------------------------------
 test('events fold into one conversation: deltas stream, a completed snapshot replaces them, repeats change nothing, and what no event says stays null', () => {
-  const { applyEvents, emptyModel, groups } = load('features/native-session/native-model.ts'), ev = stream();
+  const { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
   const events = [
     ev('session.state', { state: 'running', reason: null }),
     ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'hi', clientMessageId: 'c1' } }, { itemId: 'u1' }),
@@ -76,7 +76,6 @@ test('events fold into one conversation: deltas stream, a completed snapshot rep
   const done = applyEvents(streamed, [ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'Hello there' } }, { itemId: 'a1' })]).model;
   assert.deepEqual([done.items.a1.deltas.text, done.items.a1.content.text, done.order], ['', 'Hello there', ['u1', 'a1']], 'the completed snapshot replaces the streamed pieces');
   assert.deepEqual(applyEvents(done, events).model, done, 'events heard again change nothing');
-  assert.deepEqual(groups(done).map(group => group.kind), ['user', 'agent']);
   const bare = applyEvents(emptyModel(), [ev('session.state', { state: 'idle' })]).model;
   assert.deepEqual([bare.path, bare.diff, bare.plan, bare.error, bare.session.reason], [null, null, null, null, null], 'nothing is invented');
 });
@@ -113,29 +112,39 @@ test('requests wait for the owner until they are resolved, an ended session has 
   assert.deepEqual([over.requests, canSend(model), canSend(over), isOver(over)], [[], true, false, true]);
 });
 
-test('reasoning summaries gather by segment, a diff and a plan are replaced by the next, and a turn ends with its own status', () => {
+test('a reasoning summary is no part of the model, a diff and a plan are replaced by the next and cleared by a new turn, and a turn ends with its own status', () => {
   const { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
   const model = applyEvents(emptyModel(), [
     ev('turn.started', { origin: 'user', clientMessageId: 'c1' }),
-    ev('item.delta', { channel: 'reasoning-summary', text: 'first ', index: 0 }, { itemId: 'th' }), ev('item.delta', { channel: 'reasoning-summary', text: 'second', index: 1 }, { itemId: 'th' }),
-    ev('item.delta', { channel: 'reasoning-summary', text: 'part', index: 0 }, { itemId: 'th' }),
+    ev('item.delta', { channel: 'reasoning-summary', text: 'first ', index: 0 }, { itemId: 'th' }),
     ev('turn.diff', { diff: '+one' }), ev('turn.diff', { diff: '+one\n+two' }),
     ev('plan.updated', { explanation: 'x', steps: [{ step: 'A', status: 'pending' }] }), ev('plan.updated', { explanation: null, steps: [{ step: 'A', status: 'completed' }, { step: 'B', status: null }] }),
     ev('path.changed', { previous: 'api', selected: 'terminal', reason: 'budget_exhausted' }),
     ev('error', { code: 'rate', message: 'Too many requests', retryable: true, willRetry: true, stage: 'turn' }),
   ]).model;
-  assert.deepEqual(model.items.th.deltas.reasoning, ['first part', 'second']);
+  assert.deepEqual([model.items.th, model.order], [undefined, []], 'a thinking summary is kept nowhere: the conversation does not show it');
   assert.equal(model.diff, '+one\n+two');
   assert.deepEqual(model.plan, { explanation: null, steps: [{ text: 'A', status: 'completed' }, { text: 'B', status: null }] });
   assert.deepEqual([model.path.selected, model.path.reason, model.error.willRetry, model.turn.running], ['terminal', 'budget_exhausted', true, true]);
   const ended = applyEvents(model, [ev('turn.completed', { status: 'interrupted', error: null })]).model;
   assert.deepEqual([ended.turn, ended.error], [{ running: false, status: 'interrupted', error: null, end: { reason: null, message: null, durationMs: null, costUsdMicros: null, costEstimated: null, tokens: null } }, model.error]);
-  assert.equal(applyEvents(ended, [ev('turn.started', {})]).model.error, null, 'a new turn clears the last error');
+  assert.deepEqual([ended.diff === model.diff, ended.plan === model.plan], [true, true], 'the end of a turn keeps its diff and plan to read');
+  const next = applyEvents(ended, [ev('turn.started', {})]).model;
+  assert.deepEqual([next.error, next.diff, next.plan], [null, null, null], 'a new turn clears the last error, diff and plan');
+});
+
+test('a stream a newer message replaced is discarded whole: the half answer already heard goes, a late piece is dropped, and no entry is drawn for it', () => {
+  const { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), { nativeEntries } = load('features/native-session/native-entries.ts'), ev = stream();
+  const heard = applyEvents(emptyModel(), [ev('item.delta', { channel: 'text', text: 'half an ans', index: 0 }, { itemId: 'old:0' }), ev('item.delta', { channel: 'text', text: 'The whole', index: 0 }, { itemId: 'new:0' })]).model;
+  assert.deepEqual(nativeEntries(heard).map(entry => entry.text), ['half an ans', 'The whole']);
+  const dropped = applyEvents(heard, [ev('item.upsert', { kind: 'agent-message', status: 'interrupted', content: { text: '', discarded: true } }, { itemId: 'old:0' }), ev('item.delta', { channel: 'text', text: 'late', index: 0 }, { itemId: 'old:0' })]).model;
+  assert.deepEqual(nativeEntries(dropped).map(entry => entry.text), ['The whole'], 'the discarded item is hidden and its late piece does not bring it back');
+  assert.equal(dropped.items['old:0'].deltas.text, '');
 });
 
 // ---- the words ----------------------------------------------------------------------------------------------------------------------
 test('words: receipts, routes, money and quota windows say what is known and "未知" for what is not', () => {
-  const words = load('features/native-session/native-words.ts'), item = (kind, content = {}, extra = {}) => ({ id: 'i', kind, status: null, content, turnId: null, at: null, deltas: { text: '', output: '', reasoning: [], plan: '' }, ...extra });
+  const words = load('features/native-session/native-words.ts'), item = (kind, content = {}, extra = {}) => ({ id: 'i', kind, status: null, content, turnId: null, at: null, deltas: { text: '', output: '', plan: '' }, ...extra });
   assert.deepEqual(['queued', 'delivered', 'consumed', 'rejected', 'unknown', 'mystery', null].map(words.receiptWord), ['已排队', '已送达', '已被读取', '未送达', '送达状态未知', null, null]);
   assert.deepEqual([null, undefined, 0, 5, 1_234_567].map(words.money), ['未知', '未知', '$0.00', '<$0.01', '$1.23'], 'unknown is not zero, and zero is not unknown');
   assert.deepEqual(['budget_exhausted', 'native_cli_required', 'no_key', 'something_new', 'a.b-c', null, '输入框里有未发送的文字', 'process exited'].map(words.reasonWords),
@@ -144,8 +153,8 @@ test('words: receipts, routes, money and quota windows say what is known and "�
   assert.deepEqual(words.windowWords({ usedPercent: 40, windowDurationMins: 300, resetsAtMs: null }), { span: '5 小时', used: '40%', resets: '未知' });
   assert.deepEqual([words.windowWords(null), words.windowWords({ usedPercent: null, windowDurationMins: 10080, resetsAtMs: null }).used], [null, '未知']);
   assert.deepEqual(['in_progress', 'completed', 'failed', 'declined', null].map(status => words.itemState(item('command', {}, { status }))), ['running', 'done', 'failed', null, null]);
-  assert.deepEqual([words.messageText(item('agent-message', { text: 'final' }, { deltas: { text: 'streamed', output: '', reasoning: [], plan: '' } })), words.messageText(item('agent-message', { text: 'final' }))], ['streamed', 'final']);
-  assert.deepEqual(words.commandOf(item('command', { command: ['npm', 'test'], exitCode: 1, durationMs: 1500, output: 'old' }, { deltas: { text: '', output: 'live', reasoning: [], plan: '' } })),
+  assert.deepEqual([words.messageText(item('agent-message', { text: 'final' }, { deltas: { text: 'streamed', output: '', plan: '' } })), words.messageText(item('agent-message', { text: 'final' }))], ['streamed', 'final']);
+  assert.deepEqual(words.commandOf(item('command', { command: ['npm', 'test'], exitCode: 1, durationMs: 1500, output: 'old' }, { deltas: { text: '', output: 'live', plan: '' } })),
     { command: 'npm test', phrase: null, cwd: null, exitCode: 1, durationMs: 1500, output: 'live' });
   assert.deepEqual(words.fileChanges(item('file-change', { path: 'a.ts', diff: '+x' })), [{ path: 'a.ts', kind: null, diff: '+x' }]);
 });
@@ -342,7 +351,7 @@ test('events become the reading view’s entries: your message and pictures, the
   assert.equal(by('m1').text, 'Done: it passes now.');
   assert.deepEqual([by('k1').tool.kind, by('k1').tool.target, by('k1').tool.done, by('k1').tool.failed, by('k1').tool.output], ['command', 'npm test', false, false, 'FAIL a.test.js'], 'a running command shows its output so far');
   assert.deepEqual([by('f1').tool.kind, by('f1').tool.target, by('f1').tool.written, by('f1').tool.done, by('f1').tool.output], ['edit', 'src/a.ts', ['src/a.ts'], true, '-old\n+new']);
-  assert.deepEqual([by('t1').tool.kind, by('t1').tool.target, by('t1').tool.output], ['read', '/a/b.ts', '{"file_path":"/a/b.ts"}\n\nfile text'], 'a tool shows its input and its result');
+  assert.deepEqual([by('t1').tool.kind, by('t1').tool.target, by('t1').tool.output], ['read', '/a/b.ts', 'file text'], 'a tool shows its result, never its input as JSON');
   assert.deepEqual([by('t2').tool.kind, by('t2').tool.target, by('t2').tool.failed, by('t2').tool.done], ['mcp', 'docs · search', true, true]);
   assert.deepEqual([by('k2').tool.failed, by('k2').tool.detail], [true, '退出码 1 · 用时 1.5 秒'], 'a failed exit code fails the step; a folder nobody gave is not written');
   assert.deepEqual([by('f2').tool.target, by('f2').tool.written], ['src/b.ts', ['src/b.ts']], 'Claude names its edited file only in the input');
@@ -351,7 +360,88 @@ test('events become the reading view’s entries: your message and pictures, the
   const bare = nativeEntries(applyEvents(emptyModel(), [ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'hi' } }, { itemId: 'a1', occurredAtMs: null, receivedAtMs: 5 }), ev('item.upsert', { kind: 'agent-message', status: 'completed', content: {} }, { itemId: 'a2' })]).model);
   assert.deepEqual(bare.map(entry => [entry.id, entry.at]), [['a1', 5]], 'an empty message is no entry');
   const stopped = nativeEntries(applyEvents(emptyModel(), [ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'sleep 9' } }, { itemId: 'k' }), ev('session.state', { state: 'stopped', reason: 'user' })]).model);
-  assert.equal(stopped[0].tool.done, true, 'a step of a finished session does not run for ever');
+  assert.deepEqual([stopped[0].tool.done, stopped[0].tool.failed], [true, true], 'a step of a finished session does not run for ever, and is not drawn as done');
+});
+
+test('tool steps read the structured fields first: the output, path, command and phrase, and a change’s diff; JSON and pictures are never shown, and TodoWrite is no file change', () => {
+  const { nativeEntries } = load('features/native-session/native-entries.ts'), { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
+  const upsert = (itemId, kind, content, status = 'completed') => ev('item.upsert', { kind, status, content }, { itemId });
+  const big = '{"file_path":"' + 'x'.repeat(70000);
+  const model = applyEvents(emptyModel(), [
+    upsert('r', 'tool', { name: 'Read', path: '/a/b.ts', input: big, output: 'one\ntwo' }),
+    upsert('g', 'tool', { name: 'Agent', input: '{"description":"find the bug","subagent_type":"x"}', output: [{ type: 'text', text: 'found it' }, { type: 'image', source: { data: 'QUJD' } }] }),
+    upsert('m', 'tool', { name: 'lookup', server: 'docs', arguments: { q: 1 }, result: { content: [{ type: 'text', text: 'three hits' }], structuredContent: { hits: 3 } } }),
+    upsert('i', 'tool', { name: 'Screenshot', output: '[Image result]' }),
+    upsert('t', 'tool', { name: 'TodoWrite', input: '{"todos":[]}', output: 'Todos have been modified' }),
+    upsert('w', 'file-change', { name: 'Write', path: 'src/big.ts', input: big, changes: [{ path: 'src/big.ts', kind: 'write', diff: 'line 1\nline 2' }], output: 'File created' }),
+    upsert('e', 'file-change', { name: 'Edit', path: 'src/a.ts', changes: [{ path: 'src/a.ts', kind: 'edit', diff: 'old\n->\nnew' }] }),
+    upsert('b', 'command', { name: 'Bash', command: 'npm test', phrase: '运行测试', input: big, output: 'ok' }),
+  ]).model;
+  const entries = nativeEntries(model), by = id => entries.find(entry => entry.id === id).tool;
+  assert.deepEqual([by('r').kind, by('r').target, by('r').output], ['read', '/a/b.ts', 'one\ntwo'], 'the path is its own field, not read out of a cut-off JSON input');
+  assert.deepEqual([by('g').kind, by('g').target, by('g').output], ['agent', 'find the bug', 'found it'], 'blocks give their text; a picture block gives nothing');
+  assert.deepEqual([by('m').target, by('m').output], ['docs · lookup', 'three hits']);
+  assert.equal(by('i').output, '[Image result]');
+  for (const id of ['r', 'g', 'm', 'i', 't', 'w', 'e', 'b']) assert.doesNotMatch(by(id).output ?? '', /[{]["\s]|base64|QUJD/, `${id} shows no JSON or picture data`);
+  assert.deepEqual([by('t').kind, by('t').written, by('t').output], ['other', undefined, 'Todos have been modified'], 'TodoWrite is a tool, not a change to a file');
+  assert.deepEqual([by('w').kind, by('w').target, by('w').written, by('w').output], ['edit', 'src/big.ts', ['src/big.ts'], 'line 1\nline 2'], 'a large Write keeps its path and shows its content as the diff');
+  assert.deepEqual([by('e').target, by('e').output], ['src/a.ts', 'old\n->\nnew']);
+  assert.deepEqual([by('b').target, by('b').phrase, by('b').output], ['npm test', '运行测试', 'ok']);
+});
+
+test('a step with no result once its turn is over is interrupted, never running and never done: on an idle session, a stopped one, or by its own status', () => {
+  const { nativeEntries, runningStep } = load('features/native-session/native-entries.ts'), { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
+  const steps = [
+    ev('session.state', { state: 'running' }),
+    ev('turn.started', { origin: 'user', clientMessageId: 'c' }),
+    ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'sleep 9' } }, { itemId: 'k' }),
+    ev('item.upsert', { kind: 'tool', status: 'completed', content: { name: 'Read', path: '/a' } }, { itemId: 'r' }),
+    ev('item.upsert', { kind: 'tool', status: 'interrupted', content: { name: 'Glob' } }, { itemId: 'q' }),
+  ];
+  const marks = model => Object.fromEntries(nativeEntries(model).map(entry => [entry.id, [entry.tool.done, entry.tool.failed, entry.tool.detail]]));
+  const running = applyEvents(emptyModel(), steps).model;
+  assert.deepEqual(marks(running), { k: [false, false, ''], r: [true, false, ''], q: [true, true, '已中断'] }, 'while the turn runs a step runs; a step the provider interrupted is a cross');
+  assert.equal(runningStep(nativeEntries(running)).target, 'sleep 9');
+  const idleButTurn = applyEvents(running, [ev('session.state', { state: 'idle' })]).model;
+  assert.deepEqual([idleButTurn.session.state, marks(idleButTurn).k[0]], ['idle', false], 'an idle state while a turn still runs does not end its steps');
+  const idle = applyEvents(idleButTurn, [ev('turn.completed', { status: 'interrupted', error: null })]).model;
+  const stopped = applyEvents(idle, [ev('session.state', { state: 'stopped', reason: 'user' })]).model;
+  for (const [name, over] of [['idle', idle], ['stopped', stopped]]) {
+    assert.deepEqual(marks(over), { k: [true, true, '已中断'], r: [true, false, ''], q: [true, true, '已中断'] }, name);
+    assert.equal(runningStep(nativeEntries(over)), null, 'nothing is shown running once the turn is over');
+  }
+});
+
+test('a drawn picture, the owner’s pictures and the note for omitted ones become entries of the reading view, and every item shows the time its record gives', () => {
+  const { nativeEntries } = load('features/native-session/native-entries.ts'), { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
+  const model = applyEvents(emptyModel(), [
+    ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'look', clientMessageId: 'u1', images: ['data:image/png;base64,AAAA'] } }, { itemId: 'u1', occurredAtMs: 111 }),
+    ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'and this one', clientMessageId: 'u2', images: [], imagesOmitted: true } }, { itemId: 'u2', occurredAtMs: 222 }),
+    ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: '', clientMessageId: 'u3', images: [], imagesOmitted: true } }, { itemId: 'u3', occurredAtMs: null, receivedAtMs: 333 }),
+    ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: '', generated: { path: '/p/generated_images/a.png', prompt: 'a red fox' }, images: ['data:image/jpeg;base64,BBBB'] } }, { itemId: 'g1', occurredAtMs: 444 }),
+    ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: '', generated: { path: '/p/generated_images/b.png', prompt: 'no thumbnail' }, images: [] } }, { itemId: 'g2' }),
+  ]).model;
+  const entries = nativeEntries(model, { u2: ['data:image/png;base64,CCCC'] }), by = id => entries.find(entry => entry.id === id);
+  assert.deepEqual(entries.map(entry => [entry.id, entry.at]), [['u1', 111], ['u2', 222], ['u3', 333], ['g1', 444]], 'the record’s own time, the time heard when it gave none; a drawing with no picture to show is no entry');
+  assert.deepEqual([by('u1').images, by('u1').imagesOmitted], [['data:image/png;base64,AAAA'], undefined]);
+  assert.deepEqual([by('u2').images, by('u2').imagesOmitted], [['data:image/png;base64,CCCC'], undefined], 'the pictures this window still holds are shown, and then nothing was omitted');
+  assert.deepEqual([by('u3').text, by('u3').images, by('u3').imagesOmitted], ['', undefined, true], 'omitted pictures leave the note, even with no words');
+  assert.deepEqual([by('g1').role, by('g1').generated, by('g1').images], ['assistant', { path: '/p/generated_images/a.png', prompt: 'a red fox' }, ['data:image/jpeg;base64,BBBB']]);
+  const replayed = applyEvents(emptyModel(), [ev('item.delta', { channel: 'text', text: 'Hel' }, { itemId: 'a', occurredAtMs: null, receivedAtMs: 900 }), ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'Hello' } }, { itemId: 'a', occurredAtMs: 500 })]).model;
+  assert.equal(replayed.items.a.at, 500, 'a replayed record’s own time replaces the time it was first heard');
+});
+
+test('Codex: a command reads its phrase from main, and the plan and diff of an earlier turn are gone when a new one starts', () => {
+  const { nativeEntries } = load('features/native-session/native-entries.ts'), { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream({ provider: 'codex', transport: 'codex-app-server' });
+  const first = applyEvents(emptyModel(), [
+    ev('turn.started', { origin: 'user', clientMessageId: 'c1' }),
+    ev('item.upsert', { kind: 'command', status: 'completed', content: { command: ['npm', 'test'], phrase: '运行测试', exitCode: 0 } }, { itemId: 'k' }),
+    ev('plan.updated', { explanation: null, steps: [{ step: 'A', status: 'completed' }] }), ev('turn.diff', { diff: '+x' }), ev('session.state', { state: 'idle' }),
+  ]).model;
+  assert.deepEqual(nativeEntries(first).map(entry => entry.id), ['k', 'native:plan', 'native:diff']);
+  assert.equal(nativeEntries(first)[0].tool.phrase, '运行测试');
+  const second = applyEvents(first, [ev('turn.started', { origin: 'user', clientMessageId: 'c2' })]).model;
+  assert.deepEqual(nativeEntries(second).map(entry => entry.id), ['k'], 'the second turn does not end with the first one’s plan and changes');
 });
 
 test('what the owner sent and the conversation does not show is pending: sending, queued, or refused and lost; an echoed one is a message, and unknown delivery is never offered again', () => {
@@ -411,12 +501,12 @@ function sessionView(events, bridge, base = {}) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
   const build = list => ({ model: model.applyEvents(model.emptyModel(), list).model, dismissed: null, noteDismissed: false, handoff: null });
-  const parts = { AgentMark() {}, PendingPromptEntries() {}, QuoteChip() {}, quoteExcerpt: load('features/reading/message-quote.ts').quoteExcerpt, withQuote: load('features/reading/message-quote.ts').withQuote, ResultActions() {}, ResultChecks() {}, ResultStatus() {}, TimelineStep() {}, UserImages() {}, WorkingLine() {}, latestResult: load('features/reading/result-round.ts').latestResult, useStickToBottom: () => ({ stuck: true, unseen: 0, toBottom: () => toBottom.push(true), ready: true }) };
+  const parts = { AgentMark() {}, PendingPromptEntries() {}, QuoteChip() {}, quoteExcerpt: load('features/reading/message-quote.ts').quoteExcerpt, withQuote: load('features/reading/message-quote.ts').withQuote, ResultActions() {}, ResultChecks() {}, ResultStatus() {}, TimelineStep() {}, UserImages() {}, WorkingLine() {}, pastedPicture: load('features/reading/image-input.ts').pastedPicture, latestResult: load('features/reading/result-round.ts').latestResult, useStickToBottom: () => ({ stuck: true, unseen: 0, toBottom: () => toBottom.push(true), ready: true }) };
   const feed = { ConversationDecorations: { Provider() {} }, ConversationFeed() {} };
   const harness = hookHarness('src/features/native-session/NativeSessionView.tsx', {
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[0] },
     './action-text': { actionText: tool => `${tool.kind}:${tool.target}` }, './ConversationFeed': feed, './feed-parts': parts,
-    './native-entries.ts': load('features/native-session/native-entries.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './native-session.css': {},
+    './native-entries.ts': load('features/native-session/native-entries.ts'), './native-pictures.ts': load('features/native-session/native-pictures.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './native-session.css': {},
     './native-store.ts': { dismissNative: id => dismissed.push(id), nativeShown: () => true, useNativeEntries: () => new Map(), resolveSwitch: terminal => terminal },
     './SwitchNotice': { asksChoice: state => (state?.phase === 'awaiting-choice' || state?.phase === 'waiting-background') && !!state.requestId, SwitchLine() {}, SwitchQuestion() {} }, './native-words': words(),
   });
@@ -451,6 +541,54 @@ test('Enter sends the trimmed message at once and shows it as sending until the 
     assert.deepEqual(view.feed().entries.map(entry => [entry.role, entry.text]), [['user', 'hello']]);
     view.show(echo('queued'));
     assert.deepEqual([view.prompts().prompts.length, view.prompts().queued(view.prompts().prompts[0]), view.feed().entries.length], [1, true, 0], 'held in the runtime’s queue it waits, as a queued message does in the reading view');
+  } finally { view.done(); }
+});
+
+test('a picture pasted or dropped joins the next message, and pictures alone can be sent; what the runtime would refuse is refused first, with the reason', async () => {
+  const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
+  const reader = globalThis.FileReader;
+  globalThis.FileReader = class { readAsDataURL(file) { setImmediate(() => { this.result = `data:${file.type};base64,${file.body}`; this.onload(); }); } };
+  const file = (type, body = 'AAAA', size = 4) => ({ type, body, size });
+  const attached = () => elements(view.tree()).find(node => node.type === view.parts.UserImages)?.props.images;
+  const sendButton = () => elements(view.tree()).find(node => node.type === 'button' && /reading-send/.test(node.props.className ?? ''));
+  const paste = (items, text = '') => { const prevented = []; view.box().props.onPaste({ clipboardData: { getData: () => text, items }, preventDefault: () => prevented.push(true) }); return prevented.length; };
+  const item = (picture, type = picture.type) => ({ kind: 'file', type, getAsFile: () => picture });
+  const root = () => elements(view.tree()).find(node => node.props?.['data-native-session']).props;
+  const drop = (files, types = ['Files']) => { const prevented = [], dataTransfer = { types, files }; root().onDrop({ dataTransfer, preventDefault: () => prevented.push(true) }); return prevented.length; };
+  const error = () => elements(view.tree()).find(node => node.props?.role === 'alert')?.props.children;
+  try {
+    assert.equal(sendButton().props.disabled, true, 'nothing to send yet');
+    assert.equal(paste([item(file('image/png'))], 'copied words'), 0, 'a paste with words is the box’s own');
+    assert.equal(paste([{ kind: 'string', type: 'text/plain' }]), 0);
+    assert.equal(paste([item(file('image/png', 'AAAA'))]), 1, 'a pasted picture is taken from the box');
+    await settle(); view.tree();
+    assert.deepEqual(attached(), ['data:image/png;base64,AAAA']);
+    assert.equal(sendButton().props.disabled, false, 'a picture alone can be sent');
+    paste([item(file('image/gif'))]); await settle();
+    assert.deepEqual([attached().length, error()], [1, '只能附加 PNG、JPEG 或 WebP 图片。'], 'a format the runtime refuses is refused before it is attached');
+    paste([item(file('image/webp', 'W', 6 * 1024 * 1024))]); await settle();
+    assert.deepEqual([attached().length, error()], [1, '图片太大（超过 5 MB），请压缩后再附加。']);
+    assert.equal(drop([file('image/jpeg', 'BBBB')]), 1, 'the drop is taken so the window does not open the file'); await settle(); view.tree();
+    assert.deepEqual([attached(), error()], [['data:image/png;base64,AAAA', 'data:image/jpeg;base64,BBBB'], undefined], 'a drop adds to the pictures and clears the earlier error');
+    assert.equal(drop([], ['text/plain']), 0, 'a drag that carries no file is left alone');
+    drop([file('image/png', 'C'), file('image/png', 'D'), file('image/png', 'E')]); await settle(); view.tree();
+    assert.deepEqual([attached().length, error()], [4, '最多附加 4 张图片，请先移除一张。'], 'four pictures at most');
+    view.press(); await settle(); view.tree();
+    assert.equal(sends.length, 1, 'Enter with only pictures sends them');
+    assert.deepEqual([sends[0][3], sends[0][4].length], ['请看附上的图片。', 4], 'with the one line the runtime needs');
+    assert.equal(attached(), undefined, 'the pictures left with the message');
+    view.type('look at this'); paste([item(file('image/png', 'F'))]); await settle(); view.tree(); view.press(); await settle();
+    assert.deepEqual([sends[1][3], sends[1][4]], ['look at this', ['data:image/png;base64,F']], 'words and a picture go together');
+  } finally { globalThis.FileReader = reader; view.done(); }
+});
+
+test('while the box is shut a drop is taken and nothing is attached', async () => {
+  const view = sessionView(ended => [...idle(ended), ended('session.state', { state: 'stopped', reason: 'user' })], {});
+  try {
+    const prevented = [];
+    elements(view.tree()).find(node => node.props?.['data-native-session']).props.onDrop({ dataTransfer: { types: ['Files'], files: [{ type: 'image/png', size: 1 }] }, preventDefault: () => prevented.push(true) });
+    await settle();
+    assert.deepEqual([prevented.length, elements(view.tree()).some(node => node.type === view.parts.UserImages)], [1, false]);
   } finally { view.done(); }
 });
 
@@ -576,6 +714,18 @@ test('a request is allowed once or denied by the owner’s click only, shut whil
     assert.equal(again.tree().find(node => node.props?.role === 'alert').props.children, 'already answered');
     assert.equal(again.button('拒绝').props.disabled, false, 'and it can be answered again');
   } finally { again.done(); }
+});
+
+test('a question card says it has a question and shows only the question and its options: never the tool’s name or its raw input; the tool has no step of its own', () => {
+  const questions = [{ id: 'q1', question: 'Which database?', options: [{ label: 'SQLite' }] }];
+  const view = cardView(request({ id: 'r3', kind: 'question', title: 'AskUserQuestion', preview: '{"questions":[{"question":"Which database?"}]}', questions }), {});
+  try {
+    assert.equal(view.tree().find(node => node.type === 'strong').props.children, '它有问题要问你');
+    assert.equal(view.tree().some(node => node.type === 'pre'), false, 'no raw input under the question');
+  } finally { view.done(); }
+  const { nativeEntries } = load('features/native-session/native-entries.ts'), { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
+  const model = applyEvents(emptyModel(), [ev('item.upsert', { kind: 'tool', status: 'completed', content: { name: 'AskUserQuestion', input: '{"questions":[]}' } }, { itemId: 'q' }), ev('item.upsert', { kind: 'tool', status: 'completed', content: { name: 'Read', path: '/a' } }, { itemId: 'r' })]).model;
+  assert.deepEqual(nativeEntries(model).map(entry => entry.id), ['r']);
 });
 
 test('questions are answered one by one with options, your own words or a secret, and the answer goes only once every question has one', async () => {
@@ -1007,6 +1157,7 @@ test('the question card shows only while main asks, says what a switch ends, and
     assert.deepEqual(answers, [['t1', 'rs1', 'rq1', { switch: { changeId: 3, requestId: 'rq1', action: 'wait' } }]]);
     assert.equal(view.button(asking(), '现在切换').props.disabled, true, 'shut while the answer is with main'); view.button(asking(), '现在切换').props.onClick(); await settle();
     assert.equal(answers.length, 1, 'one answer per question');
+    assert.equal(view.button(asking({ phase: 'waiting-background' }), '现在切换').props.disabled, false, 'after 等它们结束 the same request in the waiting phase can still switch now');
     assert.equal(view.button(asking({ requestId: 'rq2' }), '现在切换').props.disabled, false, 'a new question is a new card');
     view.button(asking({ requestId: 'rq2' }), '现在切换').props.onClick(); await settle();
     assert.deepEqual(answers.at(-1), ['t1', 'rs1', 'rq2', { switch: { changeId: 3, requestId: 'rq2', action: 'now' } }]);

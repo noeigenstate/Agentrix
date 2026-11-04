@@ -76,10 +76,11 @@ export function NativeRequestCard({ request, terminalId, sessionId }: { request:
     const result = await bridge.answer(terminalId, sessionId, request.id, value).catch((failure: unknown) => ({ ok: false as const, error: failure instanceof Error ? failure.message : String(failure) }));
     if (!result.ok) { setError(result.error); setBusy(false); }
   };
-  const asking = request.questions.length > 0, title = request.title || t(KIND_WORDS[request.kind] ?? '它在等你的回答');
+  // A question has its own words and its options; the tool's name and its raw input are no part of it.
+  const asking = request.questions.length > 0, title = asking ? t(KIND_WORDS.question) : request.title || t(KIND_WORDS[request.kind] ?? '它在等你的回答');
   return <section className={`reading-choice native-request${asking ? ' is-question' : ''}`} role="group" aria-label={title} aria-busy={busy}>
     <div className="reading-choice-head"><strong>{title}</strong></div>
-    {request.preview && <pre className="reading-choice-context native-preview">{request.preview}</pre>}
+    {request.preview && !asking && <pre className="reading-choice-context native-preview">{request.preview}</pre>}
     {asking
       ? <QuestionForm request={request} drafts={drafts} onDraft={(key, draft) => setDrafts(current => ({ ...current, [key]: draft }))} busy={busy} onAnswer={value => void answer(value)} />
       : <div className="reading-question-actions">
