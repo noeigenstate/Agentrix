@@ -37,6 +37,9 @@ function compileFile(filename, language) {
     if (name === './action-text') return loadAgentsFile('action-text.ts', language);
     if (name === '../native-session/native-bridge.ts') return { nativeBridge: () => null };
     if (name === '../native-session/native-store.ts') return { useUsageRevision: () => 0 };
+    if (name === '../native-session/native-billing-link.ts') return loadFeatureFile('native-session/native-billing-link.ts', language);
+    if (name === './native-bridge.ts') return { openProjectLink: () => Promise.resolve({ ok: true }) };
+    if (name === './native-words') return loadFeatureFile('native-session/native-words.ts', language);
     if (name === '../native-session/native-words') return loadFeatureFile('native-session/native-words.ts', language);
     if (name === 'react-dom') return { createPortal: children => children };
     if (name === '@phosphor-icons/react') return new Proxy({}, { get: (_, icon) => ({ className }) => React.createElement('svg', { className, 'data-icon': icon }) });

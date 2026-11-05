@@ -2,7 +2,7 @@
 // quota is used up; Codex in its app-server view or the terminal — and the monthly API budget. The key is write-only here: it is sent to the
 // main process, the field is emptied, and only "saved or not" ever comes back.
 import { useEffect, useState } from 'react';
-import { CheckCircle, CircleNotch, CurrencyDollar, Key, PlugsConnected, Robot, Terminal as TerminalIcon, Info, WarningCircle, XCircle } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, CheckCircle, CircleNotch, CurrencyDollar, Key, PlugsConnected, Robot, Terminal as TerminalIcon, Info, WarningCircle, XCircle } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
 import { Select } from '../../shared/Select';
 import { type ClaudePath, type CodexView, type ConnectionTest, type NativeSettings, type NativeUsage, nativeBridge } from '../native-session/native-bridge.ts';
@@ -71,6 +71,13 @@ export function AgentRuntimeSettings({ projectId }: { projectId?: string }) {
     if (result.ok) setTest(result.value); else setTestError(result.error);
   };
   const change = (patch: Partial<NativeSettings>) => run(() => bridge.setSettings(patch), () => setSettings(current => current && { ...current, ...patch }));
+  // Whether a reset is used when the limit is reached is only read when it happens: saving it is not a change of path, so no test result goes stale and nothing is reconciled.
+  const setAutoReset = async (codexAutoReset: boolean) => {
+    setBusy(true); setError(null);
+    const result = await Promise.resolve().then(() => bridge.setSettings({ codexAutoReset })).catch(failure);
+    setBusy(false);
+    if (result.ok) setSettings(current => current && { ...current, codexAutoReset }); else setError(result.error);
+  };
   const refreshKey = async () => { const status = await bridge.keyStatus().catch(failure); if (status.ok) setSaved(status.value.saved); else setError(status.error); };
   const saveKey = () => {
     const secret = key;
@@ -111,6 +118,8 @@ export function AgentRuntimeSettings({ projectId }: { projectId?: string }) {
       <Select label={t('Claude 的运行方式')} className="runtime-select" value={settings?.claudePath ?? 'api-then-terminal'} disabled={!settings || busy} options={CLAUDE_PATHS()} onChange={value => void change({ claudePath: value as ClaudePath })} /></label>
     <label className="setting-row"><span><TerminalIcon size={19} /><span><b>{t('Codex 的界面')}</b><small>{t('原生：Codex 的 app-server，在应用自己的界面里；终端：Codex 命令行')}</small></span></span>
       <Select label={t('Codex 的界面')} value={settings?.codexView ?? 'native'} disabled={!settings || busy} options={CODEX_VIEWS()} onChange={value => void change({ codexView: value as CodexView })} /></label>
+    <label className="setting-row"><span><ArrowCounterClockwise size={19} /><span><b>{t('额度用完时自动使用重置次数')}</b><small>{t('到达上限时自动用掉 1 次重置，用掉不能撤销')}</small></span></span>
+      <input type="checkbox" aria-label={t('额度用完时自动使用重置次数')} checked={settings?.codexAutoReset ?? true} disabled={!settings || busy} onChange={event => void setAutoReset(event.target.checked)} /></label>
     <div className="setting-row"><span><CurrencyDollar size={19} /><span><b>{t('API 月预算（美元）')}</b><small>{t('按 UTC 自然月累计的估算；用完后 Claude 按上面的选择处理。留空表示不限')}</small></span></span>
       <span className="runtime-budget">
         <input type="text" inputMode="decimal" autoComplete="off" aria-label={t('API 月预算（美元）')} placeholder={t('不限')} value={budget} disabled={!settings || busy}

@@ -161,6 +161,14 @@ export function noticeWords(notice: LimitNotice | null | undefined, now = Date.n
   return { text: t(notice.message), resets: typeof notice.resetsAtMs === 'number' ? t('约 {time} 恢复', { time: clockWords(notice.resetsAtMs, now) }) : null };
 }
 
+// The one address the notice may send the owner to: the console's billing page. A notice naming any other address gets no button.
+export const BILLING_URL = 'https://platform.claude.com/settings/billing';
+export const consoleCheck = (notice: LimitNotice | null | undefined) => notice?.action === 'check-console' && notice.url === BILLING_URL;
+// Whether the notice's sentence is already in the conversation: in the turn's error line or in the agent's own reply to the last message (as the provider wrote it
+// or translated). The sentence is said once; the notice then only adds when it recovers and the console button.
+export const noticeTold = (notice: LimitNotice | null | undefined, lines: readonly (string | null | undefined)[]) =>
+  !!notice && lines.some(line => !!line && (line.trim() === notice.message || line.trim() === t(notice.message)));
+
 // What the owner is told before choosing: a switch ends background tasks. Unknown is not none, so no count is guessed.
 export const backgroundWords = (background: SwitchState['background']) => (background.known && typeof background.count === 'number'
   ? t('切换会结束 {count} 个后台任务。', { count: background.count }) : t('切换会结束后台任务；现在还不知道有几个在运行。'));

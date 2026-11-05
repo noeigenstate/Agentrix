@@ -8,7 +8,7 @@ export type { NativeAnswer, NativeSnapshot, NativeDraft, NativeHandoff, NativeHa
 export type NativeAgent = 'claude' | 'codex';
 export type ClaudePath = 'api-then-terminal' | 'api-only' | 'terminal-only';
 export type CodexView = 'native' | 'terminal';
-export type NativeSettings = { claudePath: ClaudePath; codexView: CodexView; monthlyBudgetUsd: number | null };
+export type NativeSettings = { claudePath: ClaudePath; codexView: CodexView; monthlyBudgetUsd: number | null; codexAutoReset: boolean };
 
 // One quota window (Codex's 5 hours or week, an API rate limit); a value the provider did not give is null, never 0.
 export type LimitWindow = { usedPercent: number | null; windowDurationMins: number | null; resetsAtMs: number | null };
@@ -69,6 +69,9 @@ export function launchRoute(agent: NativeAgent, settings: NativeSettings | null,
 
 // The one place that reads the bridge off window (Bridge's own type is the main side's).
 export const nativeBridge = (): NativeBridge | null => (typeof window === 'undefined' ? null : (window.agentrix as unknown as { nativeSession?: NativeBridge } | undefined)?.nativeSession ?? null);
+
+// Opens a page through the project, the way every link is opened (the caller only passes an address it trusts).
+export const openProjectLink = (projectId: string, url: string) => window.agentrix.openLink(projectId, url);
 
 // Copying recovered input never submits it to either runtime.
 export const copyNativeText = (text: string) => window.agentrix.copy(text);

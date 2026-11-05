@@ -126,8 +126,10 @@ function handle(draft: NativeModel, event: AgentEvent) {
     case 'path.changed': draft.path = { previous: text(payload.previous), selected: text(payload.selected) ?? 'unknown', reason: text(payload.reason), at: event.occurredAtMs ?? event.receivedAtMs }; break;
     case 'switch.updated': draft.switchState = event.payload; break;
     case 'limits.updated': {
-      const notice = object(payload.notice), code = text(notice.code), message = text(notice.message);
-      draft.limits = { providerStatus: text(payload.providerStatus), notice: code && message ? { code: code as LimitNotice['code'], message, resetsAtMs: count(notice.resetsAtMs) } : null };
+      const notice = object(payload.notice), code = text(notice.code), message = text(notice.message), url = text(notice.url);
+      // The console action and its address are kept as given; the view opens only the one fixed address (native-words.ts consoleCheck).
+      draft.limits = { providerStatus: text(payload.providerStatus), notice: code && message ? { code: code as LimitNotice['code'], message, resetsAtMs: count(notice.resetsAtMs),
+        ...(notice.action === 'check-console' ? { action: 'check-console' as const } : {}), ...(url ? { url } : {}) } : null };
       break;
     }
     case 'error': draft.error = { code: text(payload.code), message: text(payload.message) ?? '', willRetry: payload.willRetry === true }; break;

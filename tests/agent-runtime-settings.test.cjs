@@ -232,6 +232,24 @@ test('the key goes only to keySave and is never read back, logged or stored; the
   assert.match(dialog, /<AgentRuntimeSettings projectId=\{projectId\} \/>/); assert.match(code('src/App.tsx'), /<SettingsDialog [^>]*projectId=\{focus\?\.id\}/);
 });
 
+test('Codex’s automatic reset is a switch that is on by default, saves alone without a path change or a stale test, and a refusal leaves it as it was', async () => {
+  const bridge = fake(), view = page(bridge), reset = () => view.tree().find(node => node.type === 'input' && node.props.type === 'checkbox');
+  try {
+    view.render(); await settle();
+    assert.equal(reset().props.checked, true, 'a setting main did not give is the default: on');
+    assert.match(view.html(), /额度用完时自动使用重置次数[\s\S]*到达上限时自动用掉 1 次重置，用掉不能撤销/);
+    reset().props.onChange({ target: { checked: false } }); await settle();
+    assert.deepEqual(bridge.calls, [['set', { codexAutoReset: false }]], 'only this field is sent');
+    assert.equal(reset().props.checked, false); assert.deepEqual(view.usage, [], 'it is not a path change: the usage card is not asked to read again');
+    bridge.setSettings = async () => ({ ok: false, error: 'disk full' });
+    reset().props.onChange({ target: { checked: true } }); await settle();
+    assert.equal(reset().props.checked, false); assert.equal(view.alert(), 'disk full');
+  } finally { view.done(); }
+  const stored = fake(); stored.state.settings.codexAutoReset = false;
+  const again = page(stored);
+  try { again.render(); await settle(); assert.equal(again.tree().find(node => node.type === 'input' && node.props.type === 'checkbox').props.checked, false, 'the saved choice is shown'); } finally { again.done(); }
+});
+
 test('the page’s spacing values are on the scale and its buttons keep a 32px hit area', () => {
   const css = fs.readFileSync(path.join(__dirname, '../src/features/settings/agent-runtime-settings.css'), 'utf8'), scale = new Set([0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64]);
   for (const [, property, value] of css.matchAll(/\b((?:padding|margin|gap|column-gap|row-gap)(?:-\w+)?): ([^;}]+)[;}]/g))

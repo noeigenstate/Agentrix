@@ -514,7 +514,7 @@ function sessionView(events, bridge, base = {}) {
   const harness = hookHarness('src/features/native-session/NativeSessionView.tsx', {
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[0] },
     './action-text': { actionText: tool => `${tool.kind}:${tool.target}` }, './ConversationFeed': feed, './feed-parts': parts,
-    './native-entries.ts': load('features/native-session/native-entries.ts'), './native-pictures.ts': load('features/native-session/native-pictures.ts'), './native-bridge.ts': load('features/native-session/native-bridge.ts'), './mention-tokens': load('features/reading/mention-tokens.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './native-session.css': {},
+    './native-entries.ts': load('features/native-session/native-entries.ts'), './native-pictures.ts': load('features/native-session/native-pictures.ts'), './native-bridge.ts': load('features/native-session/native-bridge.ts'), './mention-tokens': load('features/reading/mention-tokens.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './native-billing-link.ts': load('features/native-session/native-billing-link.ts'), './native-session.css': {},
     './native-store.ts': { dismissNative: id => dismissed.push(id), nativeShown: () => true, useNativeEntries: () => new Map(), resolveSwitch: terminal => terminal },
     './SwitchNotice': { asksChoice: state => (state?.phase === 'awaiting-choice' || state?.phase === 'waiting-background') && !!state.requestId, SwitchLine() {}, SwitchQuestion() {} }, './native-words': words(),
   });
@@ -1079,7 +1079,7 @@ const quietTerminal = { id: 't1', agent: 'claude', codexActive: false, sessionId
 async function usageHtml(bridge, terminal = quietTerminal, projectId = 'p1') {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge ? { nativeSession: bridge } : {} } });
-  const harness = hookHarness('src/features/agents/ApiUsage.tsx', { './i18n': { t: fill }, './native-store.ts': { useUsageRevision: () => 0 }, './native-words': words(), './Metric': load('features/agents/Metric.tsx'), './ResetQuota': { ResetQuota: () => null }, './activity-pane.css': {} });
+  const harness = hookHarness('src/features/agents/ApiUsage.tsx', { './i18n': { t: fill }, './native-store.ts': { useUsageRevision: () => 0 }, './native-words': words(), './Metric': load('features/agents/Metric.tsx'), './ResetQuota': { ResetQuota: () => null }, './native-billing-link.ts': load('features/native-session/native-billing-link.ts'), './activity-pane.css': {} });
   try {
     harness.render('ApiUsage', { terminal, projectId }); await sleep(30);
     return renderToStaticMarkup(harness.render('ApiUsage', { terminal, projectId }).result);
@@ -1728,6 +1728,8 @@ test('the model keeps how a turn ended as the provider gave it and the provider�
   const text = '额度不足，需要充值后继续。';
   const limited = applyEvents(emptyModel(), [ev('limits.updated', { scopeId: 's', providerStatus: 'rejected', notice: { code: 'credits_required', message: text, resetsAtMs: null } })]).model;
   assert.deepEqual(limited.limits, { providerStatus: 'rejected', notice: { code: 'credits_required', message: text, resetsAtMs: null } });
+  const consoleNotice = applyEvents(emptyModel(), [stream()('limits.updated', { scopeId: 's', notice: { code: 'credits_required', message: text, resetsAtMs: null, action: 'check-console', url: 'https://platform.claude.com/settings/billing' } })]).model;
+  assert.deepEqual(consoleNotice.limits.notice, { code: 'credits_required', message: text, resetsAtMs: null, action: 'check-console', url: 'https://platform.claude.com/settings/billing' }, 'the console action and its address are kept as given');
   assert.equal(applyEvents(limited, [ev('limits.updated', { scopeId: 's', notice: null })]).model.limits.notice, null, 'a later update with no notice clears it');
   assert.equal(applyEvents(emptyModel(), [ev('limits.updated', { scopeId: 's', notice: { code: 'rate_limited' } })]).model.limits.notice, null, 'a notice without words is none');
 });
@@ -1786,6 +1788,47 @@ test('the provider’s notice that a limit was reached is told in the conversati
   assert.ok(untimed.includes(`<p class="reading-status" role="status">${line}</p>`)); assert.doesNotMatch(untimed, /恢复|服务未提供/, 'no time is guessed or written when the provider gave none');
 });
 
+test('the console button is for the one fixed billing address only, and a notice’s sentence already in the conversation is not said again', () => {
+  const { consoleCheck, noticeTold } = words(), url = 'https://platform.claude.com/settings/billing', line = '服务端拒绝了这次请求：余额不足。';
+  const notice = patch => ({ code: 'credits_required', message: line, resetsAtMs: null, action: 'check-console', url, ...patch });
+  assert.deepEqual([consoleCheck(notice()), consoleCheck(notice({ url: 'https://example.com/settings/billing' })), consoleCheck(notice({ url: 'https://platform.claude.com/settings/billing/' })),
+    consoleCheck(notice({ url: undefined })), consoleCheck(notice({ action: undefined })), consoleCheck(notice({ action: 'open' })), consoleCheck(null), consoleCheck(undefined)], [true, false, false, false, false, false, false, false]);
+  assert.deepEqual([noticeTold(notice(), [null, line]), noticeTold(notice(), [`${line}\n`]), noticeTold(notice(), [null, undefined, '别的话']), noticeTold(notice(), []), noticeTold(null, [line])], [true, true, false, false, false]);
+});
+
+test('a balance rejection’s notice has one 在控制台核对 button for the fixed address, and its sentence appears once however many places carry it', async () => {
+  const url = 'https://platform.claude.com/settings/billing', line = '服务端拒绝了这次请求：余额不足。', when = Date.now() + 2 * 3600_000, count = (html, part) => html.split(part).length - 1;
+  const notice = patch => ({ code: 'credits_required', message: line, resetsAtMs: null, action: 'check-console', url, ...patch });
+  const limits = value => ev => [ev('session.state', { state: 'idle', reason: null }), ev('limits.updated', { scopeId: 's', billingRoute: 'api', providerStatus: 'rejected', notice: value }),
+    ev('error', { code: 'credits_required', message: line, retryable: false, willRetry: false, stage: 'turn' })];
+  const trusted = await viewHtml(limits(notice()));
+  assert.equal(count(trusted, '>在控制台核对</button>'), 1); assert.equal(count(trusted, line), 1, 'the error event and the notice are one sentence');
+  assert.match(trusted, /<button type="button" class="text-button api-billing">在控制台核对<\/button>/);
+  for (const other of [notice({ url: 'https://platform.claude.com.evil.example/settings/billing' }), notice({ url: undefined }), notice({ action: undefined }), notice({ code: 'rate_limited', action: undefined, url: undefined })])
+    assert.doesNotMatch(await viewHtml(limits(other)), /在控制台核对/, 'any other address or action has no button');
+  // The agent's own reply carries the sentence (the record's text), and the failed result card carries it too: the notice then adds only the time and the button.
+  const user = ev => ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'go' } }, { itemId: 'u1' });
+  const replied = await viewHtml(ev => [ev('session.state', { state: 'idle', reason: null }), user(ev), ev('turn.started', {}),
+    ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: line } }, { itemId: 'a1' }),
+    ev('limits.updated', { scopeId: 's', billingRoute: 'api', providerStatus: 'rejected', notice: notice({ resetsAtMs: when }) })]);
+  assert.equal(count(replied, line), 1, 'the reply and the notice are one sentence'); assert.equal(count(replied, '>在控制台核对</button>'), 1);
+  assert.ok(replied.includes(`<p class="reading-status" role="status">约 ${words().clockWords(when)} 恢复</p>`), 'when it recovers is still told');
+  const failed = await viewHtml(ev => [ev('session.state', { state: 'idle', reason: null }), user(ev), ev('turn.started', {}),
+    ev('limits.updated', { scopeId: 's', billingRoute: 'api', providerStatus: 'rejected', notice: notice() }),
+    ev('turn.completed', { status: 'failed', error: line, terminalReason: 'api_error', message: line })]);
+  assert.equal(count(failed, line), 1, 'the result card and the notice are one sentence'); assert.equal(count(failed, '>在控制台核对</button>'), 1);
+  assert.doesNotMatch(trusted + replied + failed, /check-console|credits_required|billing_error/, 'no machine code is shown');
+});
+
+test('a Codex reset the app used is an ordinary reply in words: no JSON, no outcome code, no card of its own', async () => {
+  const { nativeEntries } = load('features/native-session/native-entries.ts'), { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
+  const text = '额度已用完，已自动使用 1 次重置，还剩 2 次。', resetCredit = { status: 'consumed', outcome: 'reset', remaining: 2, confirmed: true };
+  const model = applyEvents(emptyModel(), [ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text, resetCredit } }, { itemId: 'r1' })]).model;
+  assert.deepEqual(nativeEntries(model).map(entry => [entry.role, entry.text]), [['assistant', text]]);
+  const html = await viewHtml(e => [e('session.state', { state: 'idle', reason: null }), e('item.upsert', { kind: 'agent-message', status: 'completed', content: { text, resetCredit: { ...resetCredit, remaining: null } } }, { itemId: 'r1' })], { provider: 'codex', transport: 'codex-app-server' });
+  assert.ok(html.includes(text)); assert.doesNotMatch(html, /resetCredit|nothingToReset|noCredit|alreadyRedeemed|consumed|"remaining"|\{"|\bnull\b|undefined/, 'no JSON and no machine code');
+});
+
 test('a command’s phrase comes from main and the checks it names are listed under a round that wrote files; a Claude Bash command is read from its input', async () => {
   const { nativeEntries } = load('features/native-session/native-entries.ts'), { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
   const model = applyEvents(emptyModel(), [
@@ -1824,10 +1867,29 @@ test('the usage block tells the provider’s notice with its recovery time only 
   assert.doesNotMatch(await usageHtml({ usage: async () => ({ ok: true, value: usageOf({  }) }) }, quietTerminal, ''), /在控制台核对/, 'without a project there is nothing to open a page through');
 });
 
+test('a balance rejection brings the console button next to its notice in the usage block, once, for the fixed address only', async () => {
+  const url = 'https://platform.claude.com/settings/billing', line = '服务端拒绝了这次请求：余额不足。', count = (html, part) => html.split(part).length - 1;
+  const api = claude => { const value = usageOf({}); Object.assign(value.agents.claude.limits, claude); return usageHtml({ usage: async () => ({ ok: true, value }) }); };
+  const notice = patch => ({ code: 'credits_required', message: line, resetsAtMs: null, action: 'check-console', url, ...patch });
+  const withBoth = usageSection(await api({ providerStatus: 'rejected', ordinaryUsageAllowed: false, notice: notice() }), 'Claude');
+  assert.equal(count(withBoth, '>在控制台核对</button>'), 1, 'the spend row’s button and the notice’s are one button');
+  assert.ok(withBoth.indexOf(line) < withBoth.indexOf('在控制台核对'), 'it stands beside the notice that says why'); assert.equal(count(withBoth, line), 1);
+  const noSpend = usageOf({ apiRecords: false }); noSpend.agents.claude.limits.notice = notice();
+  const alone = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: noSpend }) }), 'Claude');
+  assert.equal(count(alone, '>在控制台核对</button>'), 1, 'a notice without API records still has the button');
+  for (const other of [notice({ url: 'https://example.com/billing' }), notice({ url: undefined }), notice({ action: undefined })]) {
+    const section = usageSection(await api({ providerStatus: 'rejected', notice: other }), 'Claude');
+    assert.equal(count(section, '>在控制台核对</button>'), 1, 'only the spend row’s button remains'); assert.ok(section.indexOf('在控制台核对') < section.indexOf(line));
+  }
+  const none = usageOf({ apiRecords: false }); none.agents.claude.limits.notice = notice({ url: 'https://example.com/billing' });
+  assert.doesNotMatch(usageSection(await usageHtml({ usage: async () => ({ ok: true, value: none }) }), 'Claude'), /在控制台核对/, 'an unknown address has no button at all');
+  assert.doesNotMatch(withBoth + alone, /check-console|credits_required/, 'no machine code is shown');
+});
+
 test('the billing link opens the console page through the project and shows a refusal', async () => {
   const opened = [], previous = Object.getOwnPropertyDescriptor(globalThis, 'window'); let answer = { ok: true, value: { kind: 'external' } };
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { openLink: async (...args) => { opened.push(args); return answer; } } } });
-  const harness = hookHarness('src/features/agents/ApiUsage.tsx', { './i18n': { t: fill }, './native-store.ts': { useUsageRevision: () => 0 }, './native-words': words(), './Metric': load('features/agents/Metric.tsx'), './ResetQuota': { ResetQuota: () => null }, './activity-pane.css': {} });
+  const harness = hookHarness('src/features/native-session/native-billing-link.ts', { './i18n': { t: fill }, './native-words': words(), './native-bridge.ts': load('features/native-session/native-bridge.ts') });
   try {
     const button = () => elements(harness.render('BillingLink', { projectId: 'p1' }).result).find(node => node.type === 'button');
     button().props.onClick(); await settle();

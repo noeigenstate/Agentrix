@@ -15,10 +15,11 @@ import { nativeEntries, nativePending, runningStep, sentTexts, type SentMessage 
 import { canSend, isOver, isWorking } from './native-model.ts';
 import { MAX_PICTURES, readPictures } from './native-pictures.ts';
 import { dismissNative, nativeShown, resolveSwitch, useNativeEntries, type NativeEntry } from './native-store.ts';
+import { BillingLink } from './native-billing-link.ts';
 import { NativeRequestCard } from './NativeRequestCard';
 import { useNativeCommands } from './useNativeCommands.ts';
 import { asksChoice, SwitchLine, SwitchQuestion } from './SwitchNotice';
-import { noticeWords, reasonWords, sentence, switchLine, turnFacts, turnFailed } from './native-words';
+import { consoleCheck, noticeTold, noticeWords, reasonWords, sentence, switchLine, turnFacts, turnFailed } from './native-words';
 import './native-session.css';
 
 const hints = () => [t('给它发消息 · Enter 发送，Shift+Enter 换行'), t('给它发消息 · Enter 发送'), t('给它发消息'), t('发消息')];
@@ -170,13 +171,19 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   // A turn that was stopped is told in a quiet line; one that failed, or an error while it runs, is an alert. The provider's notice that a limit was reached
   // comes with when it recovers, only if the provider says when.
   const errorLine = !result && why ? why : null, retrying = !failed && model.error?.willRetry === true, notice = noticeWords(model.limits?.notice);
+  // The notice's sentence is said once: when the turn's own line, the result card or the agent's reply to the last message already says it, the notice adds only when
+  // it recovers and the console button.
+  const lastUser = entries.map(entry => entry.role).lastIndexOf('user'), replies = entries.slice(lastUser + 1).flatMap(entry => entry.role === 'assistant' ? [entry.text] : []);
+  const noticeText = notice && !noticeTold(model.limits?.notice, [why, ...replies]) ? notice.text : null, noticeLine = notice ? [noticeText, notice.resets].filter(Boolean).join(' · ') : '';
+  const checkNotice = !!notice && consoleCheck(model.limits?.notice);
   const afterFeed = <>
     <PendingPromptEntries prompts={pending.prompts} queued={prompt => pending.queued.has(prompt.id)} undelivered={prompt => pending.lost.has(prompt.id)} onResend={prompt => void resend(prompt)} onDiscard={discard} />
     {status && !statusInTurn && <TimelineStep at={pending.prompts.at(-1)?.at ?? last?.at} kind="agent" who={agent} state={working ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}
-    {(switchLine(change) || errorLine || notice || model.requests.length > 0 || asksChoice(change)) && <div className="native-tail">
+    {(switchLine(change) || errorLine || noticeLine || checkNotice || model.requests.length > 0 || asksChoice(change)) && <div className="native-tail">
       <SwitchLine state={change} />
       {errorLine && (stopped ? <p className="reading-status" role="status">{errorLine}</p> : <p className="form-error" role="alert">{errorLine}{retrying ? ` · ${t('正在重试')}` : ''}</p>)}
-      {notice && <p className="reading-status" role="status">{[notice.text, notice.resets].filter(Boolean).join(' · ')}</p>}
+      {noticeLine && <p className="reading-status" role="status">{noticeLine}</p>}
+      {checkNotice && <BillingLink projectId={projectId} />}
       {model.requests.map(request => <NativeRequestCard key={request.id} request={request} terminalId={terminalId} sessionId={sessionId} />)}
       <SwitchQuestion terminalId={terminalId} sessionId={sessionId} state={change} />
     </div>}

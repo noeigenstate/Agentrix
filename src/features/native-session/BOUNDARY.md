@@ -14,6 +14,7 @@ The events' envelope and types are contract §1 (`src/shared/agent-events.ts`). 
 - `useNativeEntries` (`src/features/native-session/native-store.ts`) — every terminal's session as the window knows it; the file also exports `ensureNativeSession`, `refreshNativeSession`, `nativeShown`, `terminalSwitch`, `dismissNative`, `dismissNote`, `noteTerminalSwitch` and `useUsageRevision`
 - `launchRoute` (`src/features/native-session/native-bridge.ts`) — whether a new Claude or Codex session starts native, in the terminal or not at all, from the settings and whether a key is saved; the file also exports `nativeBridge`, the one reader of `window.agentrix.nativeSession`, and the bridge's types
 - `receiptWord` (`src/features/native-session/native-words.ts`) — how receipts, states, routes, money and quota windows read; the file also exports `money`, `clockWords`, `windowWords`, `reasonWords` and `routeWord`
+- `BillingLink` (`src/features/native-session/native-billing-link.ts`) — the text button that opens the console's billing page (one fixed address) for a balance rejection's notice and the usage block's spend row
 
 ## May import
 - `src/shared/**`

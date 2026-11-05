@@ -2,7 +2,7 @@
 //   - the agent of the current session leads with its context length and ends with this round's (and this conversation's) tokens; the other agent has neither;
 //   - a subscription shows its 5-hour and weekly bars and where they come from (Codex also its limit resets), never API spend or a budget;
 //   - an API connection shows the API spend and the monthly budget (a bar when one is set), never the subscription windows;
-//   - Claude on the API also has a link to the console's billing page (the spend is an estimate; the console has the bill);
+//   - Claude on the API also has a link to the console's billing page (the spend is an estimate; the console has the bill); a balance rejection brings the same button next to its notice, never two;
 //   - the provider's own notice that a limit was reached is said under the agent it belongs to, with when it recovers only if the provider said;
 //   - not connected, or not known, says "额度 未知";
 //   - an account that is signed in while the agent has no session (the connection's `active` is false) says so in the connection row; its bars or spend show as for any plan or API,
@@ -15,7 +15,8 @@ import type { AgentUsage, ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { type LimitsPayload, type NativeAgent, type NativeUsage, nativeBridge } from '../native-session/native-bridge.ts';
 import { useUsageRevision } from '../native-session/native-store.ts';
-import { clockWords, connectionWord, money, noticeWords, windowWords } from '../native-session/native-words';
+import { BillingLink } from '../native-session/native-billing-link.ts';
+import { clockWords, connectionWord, consoleCheck, money, noticeWords, windowWords } from '../native-session/native-words';
 import { Metric, TokenMetric, exactCount, percentOf, resetTime, tokenCount } from './Metric';
 import { ResetQuota } from './ResetQuota';
 import './activity-pane.css';
@@ -132,17 +133,6 @@ function ApiMetrics({ agent, usage }: { agent: NativeAgent; usage: NativeUsage }
   </>;
 }
 
-// Where the owner checks what the console actually billed; the spend above is an estimate. Opened the way every link is, through the project.
-const BILLING_URL = 'https://platform.claude.com/settings/billing';
-export function BillingLink({ projectId }: { projectId: string }) {
-  const [error, setError] = useState<string | null>(null);
-  const open = () => { setError(null); void window.agentrix.openLink(projectId, BILLING_URL).then(result => { if (!result.ok) setError(result.error); }).catch((failure: unknown) => setError(String(failure))); };
-  return <>
-    <button type="button" className="text-button api-billing" onClick={open}>{t('在控制台核对')}</button>
-    {error && <p className="activity-note" role="alert">{error}</p>}
-  </>;
-}
-
 function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgent; usage: NativeUsage | null; terminal: ProjectTerminal; projectId?: string }) {
   const state = usage?.agents[agent], connection = connectionWord(agent, state?.connection), kind = state?.connection?.kind, notice = noticeWords(state?.limits?.notice);
   // The session in view belongs to one agent; only it has a context length and a round.
@@ -150,6 +140,8 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
   const rows = [[t('本轮'), tokens?.round], [t('本次对话'), tokens?.total]] as const;
   // A session that reported plan windows of its own is on a plan even when main could not tell the connection (a terminal session): its bars show, and it is not 额度 未知.
   const plan = kind === 'subscription' || (kind !== 'api' && current && windowsFromScreen(tokens).length > 0), shown = plan || kind === 'api';
+  // The console button is the owner's way to check a rejection for balance, next to the notice that says it; the one the spend row has is not shown twice.
+  const billing = agent === 'claude' && kind === 'api' && usage?.apiRecords !== false && !!projectId, checkNotice = !!notice && !!projectId && consoleCheck(state?.limits?.notice);
   const source = plan ? quotaSource(agent, state?.limits, current, tokens) : null;
   return <section className="api-agent" aria-label={NAMES[agent]}>
     <h4 className="api-agent-title">{NAMES[agent]}</h4>
@@ -163,8 +155,9 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
       {kind === 'api' && usage && <ApiMetrics agent={agent} usage={usage} />}
       {current && rows.map(([label, counted]) => counted && <TokenMetric key={label} label={label} tokens={counted} />)}
     </div>}
-    {agent === 'claude' && kind === 'api' && usage?.apiRecords !== false && projectId && <BillingLink projectId={projectId} />}
+    {billing && !checkNotice && <BillingLink projectId={projectId} />}
     {notice && <p className="activity-note" role="status">{[notice.text, notice.resets].filter(Boolean).join(' · ')}</p>}
+    {notice && checkNotice && <BillingLink projectId={projectId} />}
     {source && <p className="activity-note">{source}</p>}
     {current && tokens?.context && !tokens.round && <p className="activity-note">{t('本轮从更早的记录开始，暂无法统计。')}</p>}
     {current && tokens?.context && !tokens.total && <p className="activity-note">{t('本次对话的总量在更早的记录里。')}</p>}

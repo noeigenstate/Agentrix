@@ -5,6 +5,7 @@
    text and the tool pills start --reading-inset in from the rail). A request is never scrolled inside: it grows in the conversation. */
 .native-tail { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin-left: var(--reading-inset); }
 .native-tail .native-request { max-height: none; overflow: visible; }
+.native-tail .api-billing { align-self: flex-start; min-height: 32px; padding: 0; }
 
 /* A request waiting on you: the command or diff in question, kept short. */
 .native-preview { max-height: 160px; }
