@@ -38,7 +38,8 @@ export async function switchContracts(output, stages) {
       'native-session-resume.test.cjs', 'native-session-ui.test.cjs', 'prompt-source.test.cjs',
       'agent-calls-liveness.test.cjs', 'usage-refresh.test.cjs', 'claude-sdk-rereview2.test.cjs', 'claude-sdk-review3.test.cjs', 'claude-sdk-review4.test.cjs',
       'native-project-accounts.test.cjs', 'native-router-usage.test.cjs', 'native-worker-claude.test.cjs',
-      'native-worker-codex-finish.test.cjs', 'dispatch-interventions.test.cjs', 'dispatch-events.test.cjs'].includes(name));
+      'native-worker-codex-finish.test.cjs', 'dispatch-interventions.test.cjs', 'dispatch-events.test.cjs',
+      'native-commands.test.cjs', 'native-commands-codex.test.cjs'].includes(name));
   await stages.run('switch contracts: correlated resume, late rollback, versioned drafts, helper death and no notifications', async () => {
     const child = spawn(process.execPath, ['--test', ...files.map(name => path.join(root, 'tests', name))], {
       cwd: root, windowsHide: true, env: { ...desktopEnvironment(home), TEMP: home, TMP: home }, stdio: ['ignore', 'pipe', 'pipe'],

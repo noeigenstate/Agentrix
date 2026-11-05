@@ -1480,6 +1480,14 @@ async function initializeNativeSessions() {
     return runtime;
   } };
   nativeSessions = createNativeSessions({ directory, claude: claudeRuntime, codex, resolveSpec: nativeSpec,
+    readCommands: spec => {
+      const env = spec.env || process.env;
+      const value = name => Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1];
+      return listAgentCommands({ agent: spec.agent, projectPath: spec.cwd,
+        home: value('USERPROFILE') || value('HOME') || require('node:os').homedir(),
+        claudeHome: value('CLAUDE_CONFIG_DIR'), codexHome: value('CODEX_HOME') })
+        .then(rows => rows.map(row => ({ ...row, description: t(row.description) })));
+    },
     connections: readNativeConnections, usageInputs: readNativeUsageInputs,
     validateProject: projectId => { const project = projectId && store.projects.find(project => project.id === projectId); if (projectId && !project) throw new Error('项目已关闭。'); return project || null; },
     terminalSessions: localSwitchSessions, observeTerminal: observeSwitchTerminal, prepareTerminal: prepareSwitchTerminal,
@@ -1783,7 +1791,7 @@ function registerUnavailableNative(handle) {
         next: { path: 'terminal', reason: 'native_unavailable' }, limits: limits.claude, connection: connections.claude },
         codex: { path: 'terminal', reason: 'native_unavailable', next: { path: 'terminal', reason: 'native_unavailable' }, limits: limits.codex, connection: connections.codex } } };
   });
-  for (const name of ['send', 'interrupt', 'stop', 'answer', 'settings-set', 'key-save', 'key-clear', 'key-status']) {
+  for (const name of ['send', 'interrupt', 'stop', 'answer', 'commands', 'settings-set', 'key-save', 'key-clear', 'key-status']) {
     handle(`native:${name}`, () => { throw new Error('原生会话暂不可用，已保留终端模式。'); });
   }
   handle('native:test-connection', (...args) => {

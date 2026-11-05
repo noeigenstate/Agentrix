@@ -19,11 +19,22 @@ function createNormalizer(emit, clean = value => value) {
       kind: block.type === 'thinking' ? 'reasoning-summary' : 'agent-message', status: 'interrupted', content: { text: '', discarded: true },
     }, { itemId: `${message.id}:${index}` });
   }
-  return message => {
+  return (message, { live = false } = {}) => {
     // Task lifecycle records are counted by the session before normalization. Child content has its own feed.
     if (message.parent_tool_use_id || message.isSidechain) return;
     const timestamp = Date.parse(message.timestamp), occurredAtMs = Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : null;
     const publish = (type, payload, extra) => emit(type, payload, { occurredAtMs, ...extra, replay: message.isReplay === true });
+    const local = message.type === 'system' && message.subtype === 'local_command_output' ? message.content
+      : message.type === 'user' && typeof message.message?.content === 'string'
+        ? /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>\s*$/.exec(message.message.content)?.[1] : null;
+    // Historical machine records still follow the reading view's provenance
+    // rules. Only the live command's feedback is added to the current feed.
+    if ((live || !message.isReplay) && typeof local === 'string' && local.trim() && message.uuid) {
+      if (records.has(message.uuid)) return;
+      remember(records, message.uuid, true);
+      publish('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: output(local) } }, { itemId: `local-command:${message.uuid}` });
+      return;
+    }
     if (message.type === 'result') {
       for (const [itemId, payload] of tools) publish('item.upsert', { ...payload, status: 'interrupted' }, { itemId });
       tools.clear(); return;

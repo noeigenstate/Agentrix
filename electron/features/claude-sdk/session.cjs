@@ -7,6 +7,7 @@ const { billingIdentityError, startupFailure } = require('./identity.cjs');
 const { inputQueue, queryOptions, readBillingIdentity } = require('./query.cjs');
 const { turnResult, tokensOf } = require('./result.cjs');
 const { rateLimits } = require('./limits.cjs');
+const { claudeCommands } = require('./commands.cjs');
 
 async function waitWithin(task, milliseconds) {
   let timer;
@@ -101,6 +102,12 @@ function createClaudeSession(spec, emit, dependencies) {
     try {
       for await (const message of run.query) {
         if (closed || run.closing) break;
+        if (message.type === 'system' && !message.parent_tool_use_id) {
+          if (message.subtype === 'init') {
+            run.slashCommands = Array.isArray(message.slash_commands) ? message.slash_commands : null;
+            run.terminalCommands = Array.isArray(message.terminal_slash_commands) ? message.terminal_slash_commands : null;
+          } else if (message.subtype === 'commands_changed' && Array.isArray(message.commands)) run.commands = message.commands;
+        }
         if (message.type === 'system' && message.subtype === 'init' && !message.parent_tool_use_id) {
           if (message.apiKeySource !== 'ANTHROPIC_API_KEY') throw billingIdentityError(message.apiKeySource);
           run.initialized = true; providerId = message.session_id; stream.provider(providerId);
@@ -119,7 +126,7 @@ function createClaudeSession(spec, emit, dependencies) {
           // Startup status/auth/rate-limit notices carry no execution or billing evidence.
           continue;
         }
-        if (message.isReplay === true) { normalize(message); continue; }
+        if (message.isReplay === true) { normalize(message, { live: true }); continue; }
         if (stopping && (message.type !== 'result' || message.parent_tool_use_id)) continue;
         if (message.user_message_uuid) receipt(message.user_message_uuid, 'consumed');
         for (const id of message.user_message_uuids || []) receipt(id, 'consumed');
@@ -136,7 +143,7 @@ function createClaudeSession(spec, emit, dependencies) {
           }
           reserve(run); run.busy = true; begin('automatic', message.user_message_uuid || null);
         }
-        normalize(message);
+        normalize(message, { live: true });
         if (message.type !== 'result' || message.parent_tool_use_id) continue;
         const resultId = message.uuid || message.result_index;
         if (resultId !== undefined && results.has(resultId)) continue;
@@ -282,7 +289,7 @@ function createClaudeSession(spec, emit, dependencies) {
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
     if (!canContinue()) return { status: 'rejected' };
     if (sent.size >= 2000) throw new Error('会话消息过多，请启动新会话。');
-    if (/^\/clear(?:\s|$)/.test(text)) throw new Error('原生会话不支持此命令。');
+    if (/^\/(?:clear|reset|new)(?:\s|$)/.test(text)) throw new Error('原生会话不支持此命令。');
     const content = images.length ? [...(text.trim() ? [{ type: 'text', text }] : []), ...images.map(image => {
       const [, media_type, data] = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(image) || [];
       if (!data) throw new Error('无效的图片。');
@@ -365,6 +372,21 @@ function createClaudeSession(spec, emit, dependencies) {
     } finally { clearTimeout(timer); }
   }
   return { start, resume: start, send, close, stopBackground, answer: requests.answer, snapshot: stream.snapshot,
+    async commands(fallback = []) {
+      if (closed) return [];
+      const run = active;
+      if (!run || run.closing) return claudeCommands(null, fallback);
+      let rows;
+      try { rows = await run.query.supportedCommands?.(); } catch { }
+      if (active !== run || run.closing) return claudeCommands(null, fallback);
+      let current = run.commands ?? rows ?? run.slashCommands?.map(name => ({ name }));
+      if (!run.commands && Array.isArray(current) && run.slashCommands) {
+        const names = new Set(run.slashCommands.map(name => String(name).replace(/^\//, '')));
+        current = current.filter(row => row && names.has(String(row.name).replace(/^\//, '')));
+      }
+      return claudeCommands(Array.isArray(current) ? current : null, fallback, run.terminalCommands)
+        .map(row => ({ ...row, description: clean(row.description) }));
+    },
     hasAllowance: () => !!active?.reservation && active.remainingBudgetUsd > 0,
     checkpoint(restore) {
       let key; try { key = active?.key || credentials.read(); } catch { return null; }

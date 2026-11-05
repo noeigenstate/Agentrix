@@ -109,6 +109,82 @@ test('a finishing worker answers a late streamed intervention before control.fin
   assert.ok(events.some(event => event.type === 'input.receipt' && event.payload.clientMessageId === 'correction' && event.payload.status === 'consumed'));
 });
 
+for (const [command, expected, marker] of [
+  ['/compact', /Compacted/, null], ['/context', /Context Usage/, null],
+  ['/offline-command ARG', /NATIVE SLASH ANSWER/, 'CUSTOM_COMMAND_MARKER ARG'],
+  ['/offline-skill', /NATIVE SLASH ANSWER/, 'SKILL_COMMAND_MARKER'],
+  ['/model', /Current model/, null], ['/model claude-haiku-4-5', /model/i, null],
+]) test(`native slash ${command} has real CLI feedback and a lazy command list`, { skip, timeout: 60000 }, async t => {
+  const bodies = [];
+  const f = await harness(t, data => { bodies.push(data); return [opening(data), ...textBlock(0, 'NATIVE SLASH ANSWER'), ...finish('end_turn')]; });
+  fs.mkdirSync(path.join(f.cwd, '.claude/commands'), { recursive: true });
+  fs.mkdirSync(path.join(f.cwd, '.claude/skills/offline-skill'), { recursive: true });
+  fs.writeFileSync(path.join(f.cwd, '.claude/commands/offline-command.md'), '---\ndescription: Offline command\n---\nCUSTOM_COMMAND_MARKER $ARGUMENTS');
+  fs.writeFileSync(path.join(f.cwd, '.claude/skills/offline-skill/SKILL.md'), '---\nname: offline-skill\ndescription: Offline skill\n---\nSKILL_COMMAND_MARKER');
+  f.env.AGENTRIX_DATA_DIR = path.join(f.cwd, 'profile');
+  let queries = 0;
+  const runtime = require('../electron/features/claude-sdk/index.cjs').createClaudeRuntime({ directory: path.join(f.cwd, 'state'),
+    loadSdk: async () => ({ ...f.sdk, query: options => { queries++; return f.sdk.query(options); } }), resolveExecutable: async () => cli,
+    safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() },
+  });
+  f.cleanup(() => runtime.close()); runtime.credentials.save('sk-ant-offline-native-slash-fixture');
+  const events = [], session = runtime.create({ owner: 'gui', cwd: f.cwd, env: f.env, runtimeSessionId: randomUUID(), model: 'claude-sonnet-4-5',
+    ...(command.startsWith('/model ') ? { monthlyBudgetUsd: 10 } : {}) }, event => events.push(event));
+  await session.start();
+  const fallback = await require('../electron/agent-commands.cjs').listAgentCommands({ agent: 'claude', projectPath: f.cwd, home: f.env.HOME, claudeHome: f.env.CLAUDE_CONFIG_DIR });
+  const lazy = await session.commands(fallback);
+  assert.ok(lazy.some(row => row.name === '/offline-command'));
+  assert.equal(queries, 0); assert.equal(bodies.length, 0);
+  const wait = async count => {
+    for (let n = 0; n < 500; n++) {
+      if (events.filter(event => event.type === 'turn.completed').length >= count && events.at(-1)?.payload.state === 'idle') return;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.fail('real slash command did not finish');
+  };
+  await session.send({ clientMessageId: 'warmup', text: 'Warm up' }); await wait(1);
+  const listed = await session.commands(fallback);
+  assert.equal(listed.some(row => row.name === command.split(' ')[0]), !command.startsWith('/model'));
+  assert.ok(!listed.some(row => ['/clear', '/reset', '/new', '/model', '/effort', '/fast', '/doctor', '/color', '/focus', '/reload-plugins'].includes(row.name)));
+  const start = events.length, previousRequests = bodies.length;
+  await session.send({ clientMessageId: 'slash-command', text: command }); await wait(2);
+  const visible = events.slice(start).filter(event => event.type === 'item.upsert' && event.payload.kind === 'agent-message').map(event => event.payload.content.text).join('\n');
+  assert.match(visible, expected);
+  assert.doesNotMatch(visible, /local-command-stdout|system-reminder/);
+  if (marker) assert.ok(JSON.stringify(bodies.slice(previousRequests)).includes(marker));
+  if (['/context', '/model'].includes(command)) assert.equal(bodies.length, previousRequests);
+  if (command.startsWith('/model ')) {
+    await session.send({ clientMessageId: 'check-model', text: 'Check the chosen model' }); await wait(3);
+    await session.send({ clientMessageId: 'check-renewed-model', text: 'Check after cap renewal' }); await wait(4);
+    assert.match(bodies.at(-1).model, /sonnet/, 'the host model wins at renewal; this command must stay out of the menu');
+  }
+  await assert.rejects(session.send({ clientMessageId: 'clear-command', text: '/clear' }), /不支持/);
+});
+
+test('real SDK commands_changed replaces supportedCommands after a mid-session skill reload', { skip, timeout: 60000 }, async t => {
+  const f = await harness(t, data => [opening(data), ...textBlock(0, 'WARMUP'), ...finish('end_turn')]);
+  const queue = inputQueue(), options = f.options(), query = f.sdk.query({ prompt: queue, options }), messages = [], visible = [];
+  const normalize = createNormalizer((type, payload) => { if (type === 'item.upsert') visible.push(payload); });
+  const task = (async () => { for await (const message of query) { messages.push(message); normalize(message); } })().catch(error => {
+    if (!options.abortController.signal.aborted) throw error;
+  });
+  const wait = async predicate => {
+    for (let n = 0; n < 500 && !predicate(); n++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(predicate(), 'real SDK command reload did not settle');
+  };
+  const say = text => queue.push({ type: 'user', uuid: randomUUID(), session_id: '', parent_tool_use_id: null, message: { role: 'user', content: text } });
+  try {
+    await query.supportedCommands(); say('Warm up'); await wait(() => messages.some(message => message.type === 'result'));
+    fs.mkdirSync(path.join(f.cwd, '.claude/skills/late-skill'), { recursive: true });
+    fs.writeFileSync(path.join(f.cwd, '.claude/skills/late-skill/SKILL.md'), '---\nname: late-skill\ndescription: Late skill\n---\nLATE_SKILL');
+    say('/reload-skills');
+    await wait(() => messages.filter(message => message.type === 'result').length === 2);
+    assert.ok(messages.some(message => message.type === 'system' && message.subtype === 'commands_changed' && message.commands.some(row => row.name === 'late-skill')));
+    assert.ok((await query.supportedCommands()).some(row => row.name === 'late-skill'));
+    assert.ok(visible.some(row => /reload|skill/i.test(row.content?.text || '')), 'reload has visible CLI feedback');
+  } finally { queue.close(); options.abortController.abort(); query.close(); await task; }
+});
+
 test('A1 project settings cannot send the saved key to a trap endpoint', { skip, timeout: 60000 }, async t => {
   let hits = 0, keySeen = false;
   const trap = http.createServer((request, response) => { hits++; keySeen ||= !!request.headers['x-api-key']; response.writeHead(401, { 'content-type': 'application/json', 'x-should-retry': 'false' }).end('{"type":"error","error":{"type":"authentication_error","message":"offline trap"}}'); });

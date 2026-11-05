@@ -7,6 +7,7 @@ Owns an independent stdio app-server for a native Codex session; normalizes its 
 
 ## Interface
 - `createCodexRuntime` (`electron/features/codex-app-server/index.cjs`) — injected process launcher, executable resolver and clock; provides create(spec, emit) and limits(scope); a runtime provides start, resume, send, interrupt, answer, snapshot, close and read-only account reads.
+- `commands` (`electron/features/codex-app-server/index.cjs`) — cached enabled skills from `skills/list` for its own cwd; selected slash skills become structured skill input using the host-held path, never a renderer-supplied path
 
 ## May import
 - `electron/command-phrase.cjs`
@@ -15,6 +16,7 @@ Owns an independent stdio app-server for a native Codex session; normalizes its 
 - `electron/features/agents/codex-account-usage.cjs`
 
 ## Invariants
+- An optional missing skills RPC leaves the session usable and lists no terminal commands; skill changes invalidate the bounded catalog — test: `tests/native-commands-codex.test.cjs` › "an unavailable optional skills RPC returns no terminal commands and leaves the connection usable".
 - Input written before a disconnect receives unknown and is never automatically submitted again — duplicate execution changes the workspace twice — test: `tests/codex-app-server-runtime.test.cjs` › "steer written before process loss becomes unknown, and duplicates never restart it".
 - Busy messages steer the active turn with an expected turn identity; a message ID cannot name different input — owner corrections must reach one turn once — test: `tests/codex-app-server-runtime.test.cjs` › "busy input steers the same turn, duplicate IDs are idempotent and conflicts fail".
 - Request tickets wait for an explicit answer, are consumed once and expire with the session — closing or stale UI never approves a command — test: `tests/codex-app-server-runtime.test.cjs` › "request tickets wait, are consumed once, and closing cancels them without auto allow".

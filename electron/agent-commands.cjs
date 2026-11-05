@@ -73,7 +73,7 @@ async function* commandFiles(directory, depth = Infinity) {
   }
 }
 
-async function listAgentCommands({ agent, projectPath, home = os.homedir() }) {
+async function listAgentCommands({ agent, projectPath, home = os.homedir(), claudeHome = path.join(home, '.claude'), codexHome = path.join(home, '.codex') }) {
   const builtin = BUILTINS[agent] || BUILTINS.claude;
   const groups = { builtin: Object.entries(builtin).flatMap(([view, commands]) => commands.map(([name, description]) => ({ name: '/' + name, description, source: 'builtin', view }))), project: [], user: [], skill: [] };
   let reads = 0;
@@ -97,12 +97,12 @@ async function listAgentCommands({ agent, projectPath, home = os.homedir() }) {
   }
   // SSH and missing projects must never expose this machine's user commands.
   if (projectPath) {
-    if (agent === 'codex') await scan(path.join(home, '.codex', 'prompts'), 'user', 'prompt', 0);
+    if (agent === 'codex') await scan(path.join(codexHome, 'prompts'), 'user', 'prompt', 0);
     else {
       await scan(path.join(projectPath, '.claude', 'commands'), 'project', 'command', Infinity);
-      await scan(path.join(home, '.claude', 'commands'), 'user', 'command', Infinity);
+      await scan(path.join(claudeHome, 'commands'), 'user', 'command', Infinity);
       await scan(path.join(projectPath, '.claude', 'skills'), 'skill', 'skill', 1);
-      await scan(path.join(home, '.claude', 'skills'), 'skill', 'skill', 1);
+      await scan(path.join(claudeHome, 'skills'), 'skill', 'skill', 1);
     }
   }
   const seen = new Set();

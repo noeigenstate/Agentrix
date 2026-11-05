@@ -170,6 +170,7 @@ type Bridge = {
     stop(terminalId: string, runtimeSessionId: string): Promise<Result<unknown>>;
     answer(terminalId: string, runtimeSessionId: string, requestId: string, answer: NativeAnswer): Promise<Result<unknown>>;
     snapshot(terminalId: string): Promise<Result<NativeSnapshot | null>>;
+    commands(terminalId: string, runtimeSessionId: string): Promise<Result<AgentCommand[]>>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
     getSettings(): Promise<Result<NativeSettings>>;
     setSettings(patch: Partial<NativeSettings>): Promise<Result<NativeSettings>>;
