@@ -495,7 +495,7 @@ test('a finished session says why and offers a new conversation; a Codex session
 
 // The session component with real hooks, the heavy neighbours stood in. `show` replaces the model's events; `change` is the terminal's SwitchState.
 function sessionView(events, bridge, base = {}) {
-  const model = require('../src/features/native-session/native-model.ts'), ev = stream(base), dismissed = [], handoff = handoffStub(), toBottom = [];
+  const model = require('../src/features/native-session/native-model.ts'), ev = stream(base), dismissed = [], refreshed = [], handoff = handoffStub(), toBottom = [];
   let change = null;
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
@@ -514,14 +514,18 @@ function sessionView(events, bridge, base = {}) {
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[0] },
     './action-text': { actionText: tool => `${tool.kind}:${tool.target}` }, './ConversationFeed': feed, './feed-parts': parts,
     './native-entries.ts': load('features/native-session/native-entries.ts'), './native-pictures.ts': load('features/native-session/native-pictures.ts'), './native-bridge.ts': load('features/native-session/native-bridge.ts'), './mention-tokens': load('features/reading/mention-tokens.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './native-billing-link.ts': load('features/native-session/native-billing-link.ts'), './native-session.css': {},
-    './native-store.ts': { dismissNative: id => dismissed.push(id), nativeShown: () => true, useNativeEntries: () => new Map(), resolveSwitch: terminal => terminal },
+    './native-store.ts': { dismissNative: id => dismissed.push(id), refreshNativeSession: id => refreshed.push(id), nativeShown: () => true, useNativeEntries: () => new Map(), resolveSwitch: terminal => terminal },
+    './native-composer.ts': load('features/native-session/native-composer.ts'),
+    './native-notices.ts': load('features/native-session/native-notices.ts'),
+    // The hook of the Claude commands runs on the same hooks as the view (the harness is made just below).
+    './useComposerActions.ts': { get useComposerActions() { return harness.load('src/features/native-session/useComposerActions.ts').useComposerActions; } },
     './SwitchNotice': { asksChoice: state => (state?.phase === 'awaiting-choice' || state?.phase === 'waiting-background') && !!state.requestId, SwitchLine() {}, SwitchQuestion() {} }, './native-words': words(),
   });
   let entry = build(events(ev));
   const tree = () => harness.render('NativeSession', { terminalId: 't1', projectId: 'p1', entry, autoFocus: false, switchState: change, handoff, onError() {}, onOpenLink() {} }).result;
   const find = predicate => elements(tree()).find(predicate), box = () => find(node => node.type === 'textarea');
   return {
-    ev, find, box, tree, dismissed, handoff, parts, toBottom, show(list) { entry = build(list); }, switching(state) { change = state; },
+    ev, find, box, tree, dismissed, refreshed, handoff, parts, toBottom, show(list) { entry = build(list); }, switching(state) { change = state; },
     prompts: () => find(node => node.type === parts.PendingPromptEntries).props, decorations: () => find(node => node.props?.value?.frame).props.value, feed: () => find(node => node.type === feed.ConversationFeed).props,
     type: value => box().props.onChange({ target: { value } }),
     press: (init = {}) => { const prevented = []; box().props.onKeyDown({ key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, preventDefault: () => prevented.push(true), ...init }); return prevented.length; },
@@ -1915,4 +1919,135 @@ test('a switch that worked with a warning, one restored and one stopped tell the
     assert.equal(text({ outcome: 'stopped', reason: '会话已停止，没有切换' }), '会话已停止，没有切换');
     assert.equal(text({ outcome: 'switched' }), null); assert.equal(text({ reason: '终端没有启动' }), null, 'a reason without an outcome is not a failure');
   } finally { harness.dispose(); }
+});
+
+// ---- the Claude commands of the box (round r13) ---------------------------------------------------------------------------------------
+const CODEX = { provider: 'codex', transport: 'codex-app-server' };
+const alertOf = view => view.find(node => node.props?.role === 'alert')?.props.children;
+const statuses = view => elements(view.tree()).filter(node => node.props?.role === 'status' && node.props.className === 'reading-status').map(node => node.props.children);
+const ok = value => async () => ({ ok: true, value });
+
+test('a compaction and a dropped result are lines of the conversation, and the compaction under way is told on the working line', async () => {
+  const { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), { nativeEntries } = load('features/native-session/native-entries.ts'), { tokenWords, sizeWords } = load('features/native-session/native-notices.ts'), ev = stream();
+  assert.deepEqual([180000, 21000, 20000, 10000, 8600, 0].map(tokenWords), ['18 万', '2.1 万', '2 万', '1 万', '8600', '0'], 'ten thousand on in 万 with one decimal, ".0" dropped; below it the number');
+  assert.deepEqual([4404019, 73400320, 0].map(sizeWords), ['4.2', '70.0', '0.0']);
+  const model = applyEvents(emptyModel(), [ev('session.state', { state: 'running', reason: null }), ev('turn.started', { origin: 'user', clientMessageId: null }), ev('context.compacting', { active: true })]).model;
+  assert.equal(model.compacting, true);
+  // Events of the sequence that follows the model's.
+  const next = (type, payload, extra) => ev(type, payload, { sequence: 4, ...extra });
+  const lines = events => nativeEntries(applyEvents(model, events).model).map(entry => [entry.id, entry.role, entry.text, entry.tool]);
+  assert.deepEqual(lines([next('context.compacted', { trigger: 'auto', preTokens: 180000, postTokens: 20000 })]), [['notice:4', 'assistant', '上下文已压缩（自动）· 18 万 → 2 万 token', undefined]], 'a plain line of text, no step');
+  assert.deepEqual(lines([next('context.compacted', { trigger: 'manual', preTokens: 180000, postTokens: null })]), [['notice:4', 'assistant', '上下文已压缩（手动）', undefined]], 'a count no event gave is not written, and no number alone');
+  assert.deepEqual(lines([next('item.dropped', { reason: 'too_large', bytes: 73400320 })]), [['notice:4', 'assistant', '有一条结果太大（70.0 MB），未显示，任务继续', undefined]]);
+  assert.equal(lines([next('item.dropped', { reason: 'too_large' })])[0][2], '有一条结果太大，未显示，任务继续');
+  for (const end of [next('context.compacting', { active: false }), next('context.compacted', { trigger: 'auto', preTokens: null, postTokens: null }), next('turn.completed', { status: 'completed' }), next('session.state', { state: 'stopped', reason: 'user' })])
+    assert.equal(applyEvents(model, [end]).model.compacting, false, end.type);
+  assert.equal(applyEvents(emptyModel(), [stream()('context.compacting', { active: true }, { replay: true })]).model.compacting, false, 'a replayed compaction is over');
+  const first = stream(), history = applyEvents(emptyModel(), [first('context.compacted', { trigger: 'auto', preTokens: 1, postTokens: 1 }, { replay: true })]).model;
+  assert.deepEqual(nativeEntries(history).map(entry => entry.id), ['notice:1'], 'the line stays in the history');
+  assert.deepEqual(applyEvents(history, [first('context.compacted', { trigger: 'auto', preTokens: 1, postTokens: 1 }, { sequence: 1 })]).model, history, 'heard again it changes nothing');
+  // The line is a block of its own beside the replies and the tools (the feed merges tool steps only), and the round's result is the one it would have without it.
+  const { conversationBlocks } = await import('../electron/conversation-blocks.mjs'), tail = stream();
+  const round = list => nativeEntries(applyEvents(emptyModel(), [...list, tail('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'second' } }, { itemId: 'a2' })]).model);
+  assert.deepEqual(conversationBlocks(round([tail('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'first' } }, { itemId: 'a1' }), tail('context.compacted', { trigger: 'auto', preTokens: null, postTokens: null })])).map(block => block.map(entry => entry.id)), [['a1'], ['notice:2'], ['a2']]);
+  const resultOf = list => sessionView(make => [...idle(make), userMessage(make, 'c1', 'hi'), ...list(make), make('turn.completed', { status: 'completed' })], {});
+  const anchor = list => { const done = resultOf(list); try { return done.decorations().anchor; } finally { done.done(); } };
+  const answer = make => make('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'done' } }, { itemId: 'a1' }), compacted = make => make('context.compacted', { trigger: 'auto', preTokens: 5, postTokens: 1 });
+  assert.deepEqual([anchor(make => [answer(make)]), anchor(make => [answer(make), compacted(make)]), anchor(make => [compacted(make), answer(make)])], ['a1', 'a1', 'a1'], 'a line after the answer, or before it, does not become the round’s answer');
+  assert.deepEqual([anchor(make => []), anchor(make => [compacted(make)])], [undefined, undefined], 'a round with only the line (a /compact) has no result of its own');
+  const view = sessionView(make => [make('session.state', { state: 'running', reason: null }), make('context.compacting', { active: true })], {});
+  try {
+    assert.equal(elements(view.tree()).find(node => node.type === view.parts.WorkingLine).props.label, '正在压缩上下文…');
+    view.show([view.ev('session.state', { state: 'running', reason: null })]);
+    assert.notEqual(elements(view.tree()).find(node => node.type === view.parts.WorkingLine).props.label, '正在压缩上下文…');
+  } finally { view.done(); }
+});
+
+test('/clear, /new and /reset begin a new conversation, the box shut meanwhile; a refusal keeps the old one and brings the words back', async () => {
+  for (const command of ['/clear', '/new', '/reset']) {
+    const calls = [], view = sessionView(idle, { newConversation: async (...args) => { calls.push(args); return { ok: true, value: { runtimeSessionId: 'rs2' } }; }, send: async () => { throw new Error('sent as a message'); } });
+    try {
+      view.type(command); view.press(); view.tree(); assert.equal(view.box().props.disabled, true, 'shut while the new conversation starts');
+      await settle();
+      assert.deepEqual([calls, view.refreshed, view.box().props.value, view.box().props.disabled], [[['t1', 'rs1']], ['t1'], '', true], `${command}: the card is asked for the new session, which replaces this view`);
+      assert.deepEqual(view.prompts().prompts, [], 'nothing was sent as a message');
+    } finally { view.done(); }
+  }
+  const sends = [], view = sessionView(idle, { newConversation: async () => ({ ok: false, error: 'busy' }), send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
+  try {
+    view.type('/clear'); view.press(); await settle();
+    assert.deepEqual([view.box().props.value, view.box().props.disabled, alertOf(view), view.refreshed], ['/clear', false, 'busy', []], 'the old conversation stays and the words come back');
+    view.type('/clear now'); view.press(); await settle(); assert.deepEqual(sends.map(send => send[3]), ['/clear now'], 'with words after it, it is a message');
+  } finally { view.done(); }
+  const old = sessionView(idle, { send: async () => ({ ok: true, value: {} }) });
+  try { old.type('/new'); old.press(); await settle(); assert.deepEqual([old.box().props.value, alertOf(old)], ['/new', '当前版本还不支持这个命令'], 'a main without the call refuses'); } finally { old.done(); }
+  const sent = [], codex = sessionView(idle, { newConversation: ok({ runtimeSessionId: 'x' }), send: async (...args) => { sent.push(args); return { ok: true, value: {} }; } }, CODEX);
+  try { codex.type('/clear'); codex.press(); await settle(); assert.deepEqual(sent.map(send => send[3]), ['/clear'], 'a Codex session has none of these commands: it is a message'); } finally { codex.done(); }
+});
+
+test('/model, /effort and /fast set with an argument and open a menu without one: the current value is marked, ↑↓ Enter and Esc work, a refusal brings the words back', async () => {
+  const MODELS = [{ value: 'opus', displayName: 'Opus', description: 'Most capable', efforts: ['low', 'high', 'max'] }, { value: 'sonnet', displayName: 'sonnet', description: 'Balanced', efforts: ['low', 'high'] }];
+  const patches = []; let now = { model: 'sonnet', effort: 'high', fast: false }, refuse = null;
+  const bridge = { runOptions: async (...args) => { patches.push(args[2]); return refuse ?? { ok: true, value: (now = { ...now, ...args[2] }) }; }, models: ok(MODELS), send: async () => { throw new Error('sent as a message'); }, commands: ok([{ name: '/model', description: 'Model', source: 'builtin', view: 'reading' }]) };
+  const view = sessionView(idle, bridge);
+  const enter = async () => { keyIn(view, 'Enter'); await settle(); view.tree(); };
+  const marked = () => options(view).map(node => [elements(node).find(child => child.type === 'code').props.children, elements(node).some(child => child.type === 'small' && child.props.children === '当前')]);
+  try {
+    await typeIn(view, '/model opus'); await enter();
+    assert.deepEqual([patches, view.box().props.value, statuses(view)], [[{ model: 'opus' }], '', ['模型已设为 opus']], 'with an argument it is set at once and told');
+    await typeIn(view, '/model default'); await enter();
+    assert.deepEqual([patches.at(-1), statuses(view)], [{ model: null }, ['模型已恢复默认']], '"default" is the default model: null, not a name');
+    await typeIn(view, '/effort max'); await enter(); assert.deepEqual([patches.at(-1), statuses(view)], [{ effort: 'max' }, ['思考强度已设为 max']]);
+    await typeIn(view, '/fast on'); await enter(); assert.deepEqual([patches.at(-1), statuses(view)], [{ fast: true }, ['快速模式已开启']]);
+    patches.length = 0; await typeIn(view, '/fast maybe'); await enter();
+    assert.deepEqual([patches, view.box().props.value, alertOf(view)], [[], '/fast maybe', '用法：/fast on 或 /fast off'], 'a value /fast does not take sets nothing and keeps the words');
+    now = { model: 'sonnet', effort: 'high', fast: false };
+    await typeIn(view, '/model'); assert.ok(listbox(view), 'the command list is open'); await enter();
+    assert.deepEqual([patches, view.box().props.value, marked()], [[{}], '', [['opus', false], ['sonnet', true]]], 'no argument: the current values are asked for (an empty patch) and the models listed, the current one marked');
+    assert.equal(options(view).findIndex(node => node.props['aria-selected']), 1, 'the current one is chosen first');
+    assert.equal(keyIn(view, 'ArrowUp'), 1); keyIn(view, 'Escape'); view.tree(); assert.deepEqual([listbox(view), patches.length], [undefined, 1], 'Esc closes the menu and sets nothing');
+    await typeIn(view, '/model'); await enter(); await enter(); await settle();
+    assert.deepEqual([patches.at(-1), listbox(view), statuses(view)], [{ model: 'sonnet' }, undefined, ['模型已设为 sonnet']], 'Enter chooses the line');
+    await typeIn(view, '/effort'); await enter();
+    assert.deepEqual(marked(), [['low', false], ['high', true]], 'the efforts of the model that runs');
+    now = { ...now, model: null }; view.type('x'); await typeIn(view, '/effort'); await enter();
+    assert.deepEqual(marked().map(line => line[0]), ['low', 'high', 'max'], 'a model not known: the efforts of every model');
+    keyIn(view, 'ArrowDown'); await enter(); assert.deepEqual(patches.at(-1), { effort: 'max' }, 'the current one is chosen first and ↓ goes on from it');
+    now = { model: 'sonnet', effort: 'high', fast: false }; await typeIn(view, '/fast'); await enter();
+    assert.deepEqual(marked(), [['on', false], ['off', true]], '/fast is on or off');
+    options(view)[0].props.onClick(); await settle(); assert.deepEqual([patches.at(-1), listbox(view)], [{ fast: true }, undefined], 'a click chooses too');
+    await typeIn(view, '/fast'); await enter(); view.type('a'); assert.equal(listbox(view), undefined, 'typing leaves the menu');
+    refuse = { ok: false, error: 'not now' }; await typeIn(view, '/model opus'); await enter();
+    assert.deepEqual([view.box().props.value, alertOf(view)], ['/model opus', 'not now'], 'a refusal brings the words back with the reason');
+    await typeIn(view, '/fast'); await enter(); assert.deepEqual([view.box().props.value, listbox(view)], ['/fast', undefined], 'and no menu opens');
+  } finally { view.done(); }
+  const nothing = sessionView(idle, { runOptions: ok({ model: null, effort: null, fast: false }), send: async () => ({ ok: true, value: {} }) });
+  try { nothing.type('/model'); nothing.press(); await settle(); assert.deepEqual([nothing.box().props.value, alertOf(nothing)], ['/model', '当前版本还不支持这个命令'], 'a main without the model list refuses'); } finally { nothing.done(); }
+  const sent = [], codex = sessionView(idle, { runOptions: ok({}), send: async (...args) => { sent.push(args); return { ok: true, value: {} }; } }, CODEX);
+  try { codex.type('/model'); codex.press(); await settle(); assert.deepEqual(sent.map(send => send[3]), ['/model'], 'a Codex session sends it as a message'); } finally { codex.done(); }
+});
+
+test('a line that starts with ! is a shell command: noted over the box, sent as the command without the !, kept in the history, and never a message', async () => {
+  const shells = [], sends = []; let answer = { ok: true, value: { exitCode: 0 } };
+  const view = sessionView(idle, { shell: async (...args) => { shells.push(args); return answer; }, send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
+  const noted = () => elements(view.tree()).some(node => node.type === 'code' && node.props.children === '!');
+  try {
+    assert.equal(noted(), false); view.type('ls'); assert.equal(noted(), false);
+    view.type('!  ls -la '); assert.equal(noted(), true, 'the box says what the line will do');
+    view.press(); await settle();
+    assert.deepEqual([shells.length, shells[0].slice(0, 2), typeof shells[0][2], shells[0][3], sends, view.box().props.value], [1, ['t1', 'rs1'], 'string', 'ls -la', [], ''], 'the command is trimmed and has no "!"');
+    assert.equal(noted(), false);
+    view.type('!'); view.press(); view.type('!   '); view.press(); await settle();
+    assert.deepEqual([shells.length, sends, view.box().props.value], [1, [], '!   '], 'a "!" alone does nothing');
+    answer = { ok: false, error: 'the agent is working' }; view.type('!make'); view.press(); await settle();
+    assert.deepEqual([view.box().props.value, alertOf(view), sends], ['!make', 'the agent is working', []], 'a refusal brings the words back with main’s reason');
+    view.show([...idle(view.ev), view.ev('item.upsert', { kind: 'command', status: 'completed', content: { command: 'ls -la', exitCode: 0, output: 'a' } }, { itemId: 'shell:c1' }), userMessage(view.ev, 'm1', 'hello')]);
+    view.type(''); keyIn(view, 'ArrowUp'); await settle(); assert.equal(view.box().props.value, 'hello');
+    keyIn(view, 'ArrowUp', { currentTarget: caretAt(0) }); assert.equal(view.box().props.value, '!ls -la', 'the line is in the history with its "!"');
+  } finally { view.done(); }
+  const sent = [], codex = sessionView(idle, { shell: ok({ exitCode: 0 }), send: async (...args) => { sent.push(args); return { ok: true, value: {} }; } }, CODEX);
+  try {
+    codex.type('!ls'); assert.equal(elements(codex.tree()).some(node => node.type === 'code' && node.props.children === '!'), false, 'a Codex session has no such line');
+    codex.press(); await settle(); assert.deepEqual(sent.map(send => send[3]), ['!ls']);
+  } finally { codex.done(); }
 });

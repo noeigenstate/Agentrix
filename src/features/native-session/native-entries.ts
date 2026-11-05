@@ -5,6 +5,7 @@ import type { AgentActionBrief, ConversationEntry } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { splitQuote, type MessageEntry, type PendingPrompt } from '../reading/feed-parts';
 import { isOver, type NativeItem, type NativeModel } from './native-model.ts';
+import { noticeText } from './native-notices.ts';
 import { commandOf, fieldOf, fileChanges, generatedOf, itemState, messageText, picturesOf, planText, shortPath, toolOf, type StepMark } from './native-words';
 
 // The reading view's tool step, with what the step printed (a command's output, a diff, a tool's result) for the opened group to show.
@@ -70,7 +71,7 @@ export function nativeEntries(model: NativeModel, images: Readonly<Record<string
   const settled = isOver(model) || model.session?.state === 'idle' && !model.turn.running;
   const entries: MessageEntry[] = [];
   for (const id of model.order) {
-    const item = model.items[id], at = item.at ?? 0;
+    const item = model.items[id], at = item.at ?? 0, line = noticeText(item);
     if (item.content.discarded === true) continue;
     if (item.kind === 'user-message') {
       const text = messageText(item), pictures = picturesOf(item) ?? images[idOf(item)], omitted = item.content.imagesOmitted === true && !pictures;
@@ -79,6 +80,8 @@ export function nativeEntries(model: NativeModel, images: Readonly<Record<string
       const text = item.kind === 'plan' ? planText(item) : messageText(item), generated = generatedOf(item), pictures = picturesOf(item);
       // A drawn picture is drawn by the feed only with a picture to show; its words may be none.
       if (text || generated && pictures) entries.push({ id: item.id, at, role: 'assistant', text, ...(generated && pictures ? { generated, images: pictures } : {}) });
+    } else if (line) {
+      entries.push({ id: item.id, at, role: 'assistant', text: line });
     } else {
       const tool = stepOf(item, settled);
       if (tool) entries.push({ id: item.id, at, role: 'tool', tool });
@@ -126,8 +129,10 @@ export function nativePending(model: NativeModel, sent: readonly SentMessage[], 
 export const runningStep = (entries: readonly ConversationEntry[]) => entries.filter(entry => entry.tool && !entry.tool.done).at(-1)?.tool ?? null;
 
 // What the owner has sent in this conversation, oldest first, for ↑ in the message box: the messages of the conversation (the history replayed after a
-// run-mode switch included) and those not echoed yet, each without the quote it carried, as the reading view keeps what was typed. The last 50.
+// run-mode switch included), the "!" lines among them, and those not echoed yet, each without the quote it carried, as the reading view keeps what was typed. The last 50.
 export const SENT_KEPT = 50;
+// What the owner typed for an entry: a message, or the command of a "!" line (its card is the item shell:<id> main publishes), written with its "!" as it was typed.
+const said = (entry: ConversationEntry) => entry.role === 'user' ? entry.text ?? '' : entry.role === 'tool' && entry.id.startsWith('shell:') && entry.tool?.target ? `!${entry.tool.target}` : '';
 export const sentTexts = (entries: readonly ConversationEntry[], pending: readonly PendingPrompt[]): string[] =>
-  [...entries.filter(entry => entry.role === 'user').map(entry => entry.text ?? ''), ...pending.map(prompt => prompt.text)]
+  [...entries.map(said), ...pending.map(prompt => prompt.text)]
     .map(text => splitQuote(text).rest.trim()).filter(Boolean).slice(-SENT_KEPT);

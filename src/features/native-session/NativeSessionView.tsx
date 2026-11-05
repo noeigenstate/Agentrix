@@ -12,11 +12,14 @@ import { AgentMark, commandList, composerAria, isCommandDraft, latestResult, Men
 import { nativeBridge, type NativePendingInput, type SwitchState } from './native-bridge.ts';
 import type { Handoff } from './draft-handoff.ts';
 import { nativeEntries, nativePending, runningStep, sentTexts, type SentMessage } from './native-entries.ts';
+import { composerAction, type ListLine } from './native-composer.ts';
+import { isNotice } from './native-notices.ts';
 import { canSend, isOver, isWorking } from './native-model.ts';
 import { MAX_PICTURES, readPictures } from './native-pictures.ts';
 import { dismissNative, nativeShown, resolveSwitch, useNativeEntries, type NativeEntry } from './native-store.ts';
 import { BillingLink } from './native-billing-link.ts';
 import { NativeRequestCard } from './NativeRequestCard';
+import { useComposerActions } from './useComposerActions.ts';
 import { useNativeCommands } from './useNativeCommands.ts';
 import { asksChoice, SwitchLine, SwitchQuestion } from './SwitchNotice';
 import { consoleCheck, noticeTold, noticeWords, reasonWords, sentence, switchLine, turnFacts, turnFailed } from './native-words';
@@ -34,7 +37,7 @@ type SessionProps = {
 // The view of a known session (exported for its tests); NativeSessionView below finds the terminal's session and shows this.
 export function NativeSession({ terminalId, projectId, entry, autoFocus, switchState = null, handoff, onError, onOpenLink }: SessionProps) {
   const { model } = entry, identity = model.identity!, kind = identity.provider, sessionId = identity.runtimeSessionId, change = resolveSwitch(switchState, entry);
-  const agent = kind === 'claude' ? 'Claude Code' : 'Codex';
+  const claude = kind === 'claude', agent = claude ? 'Claude Code' : 'Codex';
   const [text, setText] = useState(''), [sent, setSent] = useState<SentMessage[]>([]), [discarded, setDiscarded] = useState<ReadonlySet<string>>(new Set()), [error, setError] = useState<string | null>(null);
   // What a switch carries in: pictures that go with the next message, and messages the previous session never delivered. Neither is ever sent by itself.
   const [carried, setCarried] = useState<string[]>([]), [unsent, setUnsent] = useState<NativePendingInput[]>([]);
@@ -43,10 +46,12 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   // A file is being dragged over the view (the box takes it as a picture).
   const [dropping, setDropping] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null), scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null);
-  const locked = handoff.locked, open = canSend(model) && !locked, over = isOver(model), working = !over && isWorking(model), waiting = model.session?.state === 'waiting';
+  // The commands only a Claude session has (/clear /new /reset /model /effort /fast and "!"); a new conversation shuts the box until the card shows it.
+  const actions = useComposerActions({ terminalId, sessionId, clear: () => edit(''), restore: words => setText(current => current || words), onError: setError });
+  const locked = handoff.locked, open = canSend(model) && !locked && !actions.renewing, over = isOver(model), working = !over && (isWorking(model) || model.compacting), waiting = model.session?.state === 'waiting';
   const entries = useMemo(() => nativeEntries(model, Object.fromEntries(sent.flatMap(message => message.images?.length ? [[message.id, message.images]] : []))), [model, sent]);
   const pending = useMemo(() => nativePending(model, sent, discarded), [model, sent, discarded]);
-  const shownHints = open ? hints() : [locked ? t('正在切换运行方式，稍后继续') : t('会话已结束，不能再发消息')];
+  const shownHints = open ? hints() : [locked ? t('正在切换运行方式，稍后继续') : actions.renewing ? t('正在开始新的对话') : t('会话已结束，不能再发消息')];
   const hint = useFittingHint(box, shownHints) || shownHints.at(-1)!, hintId = `native-hint-${terminalId}`, fullHint = fullHintProps(shownHints, hint, hintId);
 
   // The box's helpers, the reading view's own: ↑↓ through what was sent (the replayed history included), the "/" list of the commands the session runs without
@@ -55,10 +60,10 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const sentRef = useRef<string[]>([]);
   sentRef.current = useMemo(() => sentTexts(entries, pending.prompts), [entries, pending]);
   const recall = useComposerHistory({ messages: () => sentRef.current, draft: text, setDraft: setText, input: box });
-  const commands = useNativeCommands(terminalId, sessionId, open && text.startsWith('/'), model.session?.state);
-  const palette = useCommandPalette({ id: terminalId, commands, draft: text, blocked: !open, recalled: recall.recalled, showEmpty: false,
-    complete: command => { edit(`${command.name} `); box.current?.focus(); }, send: () => void send() });
-  const edit = (value: string) => { setText(value); palette.dismiss(false); recall.forget(); };
+  const commands: readonly ListLine[] = useNativeCommands(terminalId, sessionId, open && text.startsWith('/'), model.session?.state);
+  const palette = useCommandPalette({ id: terminalId, commands, draft: text, blocked: !open, recalled: recall.recalled, showEmpty: false, menu: actions.menu, note: claude && open && text.startsWith('!') ? { name: '!', description: t('运行命令，输出会进入对话'), source: 'builtin' } : null,
+    complete: command => { if (actions.menu) { actions.choose(command.name); return; } edit(`${command.name} `); box.current?.focus(); }, send: () => void send(), close: actions.close });
+  const edit = (value: string) => { setText(value); palette.dismiss(false); recall.forget(); actions.forget(); };
   const mentions = useMentions({ projectId, draft: text, input: box, disabled: !open || isCommandDraft(text), edit, onError: setError });
 
   // New steps keep the end in view while the owner is at the end; scrolling up pauses that until they come back. A new request waits at the end of the
@@ -98,6 +103,8 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const send = async () => {
     const value = text.trim(), pictures = carried, quoted = quote;
     if (!(value || pictures.length) || !open) return;
+    const action = claude ? composerAction(value) : null;
+    if (action) { void actions.run(action, value); return; }
     edit(''); setCarried([]); setQuote(null);
     if (!await post(withQuote(quoted?.excerpt, value), pictures)) { setText(current => current || value); setCarried(current => current.length ? current : pictures); setQuote(current => current ?? quoted); }
   };
@@ -146,7 +153,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   // What the agent is doing, written at the end of the conversation the way the reading view writes it.
   const step = runningStep(entries);
   const status = waiting ? <div className="reading-status is-waiting" role="status">{t('等你确认')}</div>
-    : working ? <WorkingLine key={sessionId} agent={kind} label={step ? t('正在{step}', { step: actionText(step) }) : t('{agent} 正在思考', { agent })} /> : null;
+    : working ? <WorkingLine key={sessionId} agent={kind} label={model.compacting ? t('正在压缩上下文…') : step ? t('正在{step}', { step: actionText(step) }) : t('{agent} 正在思考', { agent })} /> : null;
   // The latest round, once it has ended, gets its status above the result and its actions under it; a turn that failed says how.
   const settled = !over && model.session?.state === 'idle' && !model.turn.running && !pending.prompts.length && !model.requests.length && !asksChoice(change);
   // How the turn ended is the provider's own: its status draws the row (a turn that did not complete is never drawn as done) and the sentence main wrote for
@@ -156,7 +163,8 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const noticed = model.limits?.notice?.code !== undefined && model.limits.notice.code === model.error?.code;
   const why = ended ?? (noticed ? null : sentence(model.error?.message));
   const facts = useMemo(() => turnFacts(end, kind, turnStatus === 'completed'), [end, kind, turnStatus]);
-  const result = useMemo(() => latestResult(entries, { idle: settled, interrupted: stopped, stopped, failure: failed ? why ?? turnFailed() : undefined, facts }),
+  // The lines of a compaction or a dropped result are no reply and no step of the round: its result is the one it would have without them.
+  const result = useMemo(() => latestResult(entries.filter(entry => !isNotice(entry)), { idle: settled, interrupted: stopped, stopped, failure: failed ? why ?? turnFailed() : undefined, facts }),
     [entries, settled, stopped, failed, why, facts]);
   // Only the owner's click on a message's 引用 gets here.
   const quoteMessage = (who: string, words: string) => { const excerpt = quoteExcerpt(words); if (excerpt) { setQuote({ who, excerpt }); box.current?.focus(); } };
@@ -179,10 +187,11 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const afterFeed = <>
     <PendingPromptEntries prompts={pending.prompts} queued={prompt => pending.queued.has(prompt.id)} undelivered={prompt => pending.lost.has(prompt.id)} onResend={prompt => void resend(prompt)} onDiscard={discard} />
     {status && !statusInTurn && <TimelineStep at={pending.prompts.at(-1)?.at ?? last?.at} kind="agent" who={agent} state={working ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}
-    {(switchLine(change) || errorLine || noticeLine || checkNotice || model.requests.length > 0 || asksChoice(change)) && <div className="native-tail">
+    {(switchLine(change) || errorLine || noticeLine || actions.told || checkNotice || model.requests.length > 0 || asksChoice(change)) && <div className="native-tail">
       <SwitchLine state={change} />
       {errorLine && (stopped ? <p className="reading-status" role="status">{errorLine}</p> : <p className="form-error" role="alert">{errorLine}{retrying ? ` · ${t('正在重试')}` : ''}</p>)}
       {noticeLine && <p className="reading-status" role="status">{noticeLine}</p>}
+      {actions.told && <p className="reading-status" role="status">{actions.told}</p>}
       {checkNotice && <BillingLink projectId={projectId} />}
       {model.requests.map(request => <NativeRequestCard key={request.id} request={request} terminalId={terminalId} sessionId={sessionId} />)}
       <SwitchQuestion terminalId={terminalId} sessionId={sessionId} state={change} />
