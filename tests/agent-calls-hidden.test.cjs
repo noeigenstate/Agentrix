@@ -48,7 +48,7 @@ function card(calls, terminalId) {
   };
 }
 
-test('a hidden call is not listed unless its view is open; a model with no call left has no head; the "+N" counts what is listed; no call at all shows the empty line', () => {
+test('a hidden call is listed only while its view is open; a model with no call left has no head; the +N counts what is listed; no call at all shows the empty line', () => {
   const store = files('features/agents/subagent-splits.ts'), terminalId = 't-hidden';
   const many = Array.from({ length: 6 }, (_, index) => item(`dispatch:m${index}`, index < 2 ? { hidden: true } : {}));
   const calls = [call('gpt-6.1-sol', [item('a'), item('b', { hidden: true }), item('c', { hidden: false })]), call('claude-opus-5-5', [item('d', { hidden: true })]), call('claude-sonnet-5-5', many)];

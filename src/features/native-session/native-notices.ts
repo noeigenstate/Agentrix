@@ -2,12 +2,15 @@
 // makes them items (kind context-compacted / item-dropped, id notice:<sequence>); each is drawn as a plain line of text, as a local command's output is, so it
 // is seen without opening anything. They are no reply of the agent: the round's result is read without them (`isNotice`). A number no event carried is not written.
 import type { ConversationEntry } from '../../shared/types';
-import { t } from '../../shared/i18n';
+import { currentLanguage, t } from '../../shared/i18n';
 import type { NativeItem } from './native-model.ts';
 
 const number = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
-// 18 万, 2.1 万 from ten thousand on (one decimal, ".0" dropped); the plain number below it.
-export const tokenWords = (count: number) => (count >= 10000 ? t('{count} 万', { count: String(Number((count / 10000).toFixed(1))) }) : String(count));
+// From ten thousand on, in the unit the language counts by (one decimal, ".0" dropped): 18 万 and 2.1 万, or 180k and 21k; the plain number below it.
+export function tokenWords(count: number) {
+  if (count < 10000) return String(count);
+  return currentLanguage() === 'en' ? `${Number((count / 1000).toFixed(1))}k` : `${Number((count / 10000).toFixed(1))} 万`;
+}
 // Megabytes (1024 × 1024 bytes) with one decimal.
 export const sizeWords = (bytes: number) => (bytes / 1048576).toFixed(1);
 
