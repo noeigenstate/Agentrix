@@ -44,18 +44,13 @@ for (const scenario of ['native', 'no_environment', 'missing_address', 'invalid_
         args[0] === 'app-server' ? 'codex-app-server.cjs' : 'dispatch-worker.cjs'), ...args] }),
       launch: (file, args, options) => { launches++; return lifetime.child(spawn(file, args, options)); },
     });
-    const appServerOnly = ['native', 'missing_capability', 'missing_session_key', 'rejected_registration', 'dead_address'].includes(scenario);
-    assert.equal(code, appServerOnly ? 1 : 0, stdout);
-    const transport = stdout.split('\n').filter(line => line.includes(appServerOnly ? 'failed to start' : ' fallback:'));
-    assert.equal(transport.length, 1, 'report the first cause, not a second control failure caused by cleanup');
-    const reason = { native: 'capability_probe/rpc_-32601', no_environment: 'bootstrap/missing_environment',
-      missing_address: 'bootstrap/missing_address', invalid_json: 'bootstrap/invalid_json', missing_file: 'bootstrap/ENOENT',
-      missing_capability: 'bootstrap/missing_capability', missing_session_key: 'bootstrap/missing_session_key',
-      rejected_registration: 'control_register/registration_closed', dead_address: 'control_connect/' }[scenario];
-    assert.ok(transport[0].includes(reason), transport[0]);
+    assert.equal(code, 1, stdout);
+    const transport = stdout.split('\n').filter(line => line.includes('failed to start'));
+    assert.equal(transport.length, 1, 'one startup failure regardless of control availability');
+    assert.ok(transport[0].includes('capability_probe/rpc_-32601'), transport[0]);
     assert.equal(transport[0].includes(root), false); assert.equal(transport[0].includes('synthetic-private-key'), false);
-    assert.equal(launches, appServerOnly && scenario !== 'native' ? 0 : 1);
-    if (appServerOnly) assert.doesNotMatch(stdout, /codex-exec fallback/);
+    assert.equal(launches, 1); assert.doesNotMatch(stdout, /fallback/);
+
   });
 }
 

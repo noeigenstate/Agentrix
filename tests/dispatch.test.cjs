@@ -83,8 +83,7 @@ async function until(predicate, timeout = 5000) {
 test('helper constructs exact Codex/Claude argv and rejects incomplete or ambiguous options', () => {
   const base = ['--role', '审查', '--title', 'Inspect the parser', '--model', 'test-model', '--effort', 'high', '--cwd', os.tmpdir(), '--brief', 'brief.md', '--out', 'out.md'];
   const options = argumentsOf(['codex', ...base, '--fast', '--image', 'a.png', '--image', 'b.png', '--read-only']);
-  assert.deepEqual(commandOf(options), ['exec', '-m', 'test-model', '-c', 'model_reasoning_effort=high', '-c', 'service_tier="fast"', '--json', '-C', options.cwd,
-    '-o', options.out, '-i', path.join(options.cwd, 'a.png'), '-i', path.join(options.cwd, 'b.png'), '-s', 'read-only', '-']);
+  assert.deepEqual(commandOf(options), ['app-server', '--listen', 'stdio://']);
   assert.deepEqual(commandOf(argumentsOf(['claude', ...base, '--permission', 'acceptEdits'])),
     ['-p', '--model', 'test-model', '--effort', 'high', '--permission-mode', 'acceptEdits', '--output-format', 'stream-json', '--verbose']);
   for (const [alias, expected] of [['exec', '执行'], ['investigate', '调查'], ['review', '审查'], ['执行', '执行'], ['调查', '调查'], ['审查', '审查']]) {
@@ -131,10 +130,9 @@ test('Codex receives stdin/argv/cwd and reads its rollout for routing and final 
   const f = await fixture(t), result = await f.finished;
   assert.equal(result.code, 0); assert.equal(result.stderr, '');
   const signals = result.stdout.trim().split('\n');
-  assert.equal(signals.length, 3);
-  assert.match(signals[0], /codex-exec fallback: Agentrix control unavailable/);
-  assert.match(signals[1], /\[dispatch\] started [\w-]+ codex model gpt-6\.1-sol effort max fast on · routing ok · pid \d+ session /);
-  assert.match(signals[2], /38 token\/s \(150 output tokens in 4 s\) · exit 0 reason exit · out /);
+  assert.equal(signals.length, 2);
+  assert.match(signals[0], /\[dispatch\] started [\w-]+ codex model gpt-6\.1-sol effort max fast on · routing ok · pid \d+ session /);
+  assert.match(signals[1], /38 token\/s \(150 output tokens in 4 s\) · exit 0 reason exit · out /);
   assert.deepEqual(f.events.map(event => event.type), ['dispatch-start', 'dispatch-end']);
   assert.ok(f.events.every(event => event.sessionKey === 'secret-for-test' && event.projectId === 'project'));
   const [start, end] = f.events;
@@ -147,7 +145,11 @@ test('Codex receives stdin/argv/cwd and reads its rollout for routing and final 
   assert.equal(capture.cwd, f.directory); assert.match(capture.brief, /Unicode: 执行/);
   assert.deepEqual(capture.args, commandOf(argumentsOf(f.args)));
   const log = await fs.readFile(f.out + '.log', 'utf8');
-  assert.equal(log, codex.filter(entry => entry.record).map(entry => JSON.stringify(entry.record) + '\n').join(''));
+  assert.ok(log.split('\n').filter(Boolean).map(JSON.parse).some(event => event.type === 'turn.completed'));
+  const policy = capture.requests.find(request => request.method === 'thread/start').params;
+  assert.equal(policy.sandbox, 'read-only'); assert.equal(policy.serviceTier, 'fast');
+  assert.equal(policy.config.model_reasoning_effort, 'max');
+  assert.equal(capture.requests.find(request => request.method === 'turn/start' && request.params.threadId).params.input.at(-1).type, 'localImage');
   assert.ok(!log.includes('[dispatch]'));
   assert.equal(await fs.readFile(path.join(f.directory, 'codex/config.toml'), 'utf8'), 'service_tier = "flex"\n');
   assert.equal(await fs.readFile(path.join(f.directory, `codex/sessions/2026/01/01/rollout-fixture-${session}.jsonl`), 'utf8'),
@@ -318,12 +320,12 @@ test('rollout discovery binds the exact exec session and follows delayed and inc
   assert.equal(await fs.readFile(filename, 'utf8'), prefix + partial + '\n');
 });
 
-test('capacity and structured errors keep the worker exit status and reason', async t => {
+test('Codex app-server structured failures retain capacity/error reasons and fail the helper', async t => {
   for (const [message, exitCode, reason] of [['model at capacity', 7, 'capacity'], ['provider failed', 9, 'error']]) {
     const f = await fixture(t, [...codex.slice(0, 5), { record: { type: 'turn.failed', error: { message } } }], { exitCode });
     const result = await f.finished;
-    assert.equal(result.code, exitCode); assert.equal(f.events.at(-1).reason, reason);
-    assert.match(result.stdout, new RegExp(`exit ${exitCode} reason ${reason}`));
+    assert.equal(result.code, 1); assert.equal(f.events.at(-1).reason, reason);
+    assert.match(result.stdout, new RegExp(`exit 1 reason ${reason}`));
   }
 });
 
@@ -334,7 +336,7 @@ test('no session, timeout and spawn failure print failed-start once and end unco
     assert.equal(result.stdout.split('[dispatch] failed to start').length, 2);
     assert.ok(!result.stdout.includes('[dispatch] started'));
     assert.deepEqual(f.events.map(event => event.type), ['dispatch-start', 'dispatch-end']);
-    assert.equal(f.events[0].unconfirmed, true); assert.equal(f.events[0].sessionId, null);
+    assert.equal(f.events[0].unconfirmed, true); assert.equal(f.events[0].sessionId, session);
     assert.deepEqual([f.events[0].model, f.events[0].effort, f.events[0].fast], ['unreported', null, null]);
     assert.deepEqual(f.events[0].declared, { model: 'gpt-6.1-sol', effort: 'max', fast: true });
     assert.equal(f.events[1].verdict, 'unverified');
@@ -367,7 +369,7 @@ test('a worker that exits right after its records is confirmed from them; withou
   }
   // A session file without its turn context proves no start, however quickly or cleanly the worker ends.
   const f = await fixture(t, [codex[0], { rollout: rollout[0] }], { hold: 0 }), result = await f.finished;
-  assert.notEqual(result.code, 0); assert.match(result.stdout, /failed to start \S+: worker exited without a confirmed session/);
+  assert.notEqual(result.code, 0); assert.match(result.stdout, /failed to start \S+: native_input_unknown/);
   assert.equal(f.events[0].unconfirmed, true); assert.equal(f.events[1].reason, 'unconfirmed');
 });
 
@@ -404,7 +406,7 @@ test("a session file in today's folder is found on the next read, without waitin
 test('exit or timeout emits the unconfirmed pair before still-open stdout closes', async t => {
   const { run } = require('../integration/dispatch.cjs');
   const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
-  const f = await fixture(t); await f.finished;
+  const f = await fixture(t, claude.map(record => ({ record })), { agent: 'claude' }); await f.finished;
   for (const cause of ['exit', 'timeout']) {
     f.events.length = 0;
     const child = new EventEmitter();
@@ -512,11 +514,11 @@ test('N5: resumed execution explicitly uses workspace-write and resumed read-onl
   const options = argumentsOf(['codex', ...base, '--allow', 'src/**', '--allow', './docs/*.md', '--ledger', 'ledger.md', '--resume', session]);
   assert.deepEqual(options.allow, ['src/**', 'docs/*.md']);
   assert.equal(options.ledger, path.resolve('ledger.md'));
-  assert.deepEqual(commandOf(options).slice(0, 3), ['exec', 'resume', session]);
+  assert.deepEqual(commandOf(options), ['app-server', '--listen', 'stdio://']);
   assert.ok(!commandOf(options).includes('-C') && !commandOf(options).includes('-s'));
-  assert.ok(commandOf(options).includes('sandbox_mode="workspace-write"'));
-  assert.ok(commandOf(argumentsOf(['codex', ...base, '--resume', session, '--read-only'])).includes('sandbox_mode="read-only"'));
-  assert.ok(commandOf(argumentsOf(['codex', ...base, '--resume', session, '--meeting', 'r12', '--allow', 'src/**'])).includes('sandbox_mode="read-only"'));
+  assert.equal(options.readOnly, false);
+  assert.equal(argumentsOf(['codex', ...base, '--resume', session, '--read-only']).readOnly, true);
+  assert.equal(argumentsOf(['codex', ...base, '--resume', session, '--meeting', 'r12', '--allow', 'src/**']).meeting, 'r12');
   assert.throws(() => argumentsOf(['codex', ...base, '--resume', 'bad id']), /session id/);
   const claude = argumentsOf(['claude', ...base, '--permission', 'plan', '--resume', session]);
   assert.deepEqual(commandOf(claude).slice(0, 3), ['-p', '--resume', session]);
@@ -572,7 +574,7 @@ test('dispatch restores unapproved skill edits and reports proposal counts on su
       setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'skills/sample/SKILL.md': 'Pre-run contents.' }),
     });
     const result = await f.finished;
-    assert.equal(result.code, exitCode);
+    assert.equal(result.code, exitCode === 0 ? 0 : 1);
     assert.match(result.stdout, /1 skill proposals restored and awaiting the lead/);
     assert.equal(f.events.at(-1).skillProposals, 1);
     assert.equal(f.events.at(-1).skillChangesLeftLive, 0);

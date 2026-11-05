@@ -73,7 +73,7 @@ test('remote query errors and account skips expose neither diagnostics nor fabri
 function connection() {
   const messages = [];
   const remote = Object.assign(Object.create(RemoteConnection.prototype), { ready: Promise.resolve(), pending: new Map(), nextId: 0, closed: false,
-    send: message => messages.push(message) });
+    events: new (require('node:events').EventEmitter)(), send: message => messages.push(message) });
   return { remote, messages };
 }
 

@@ -60,6 +60,15 @@ function pendingMeetings(history) {
 function projectTeam(cwd, create = false) {
   let common;
   try { common = path.resolve(cwd, git(cwd, ['rev-parse', '--git-common-dir']).trim()); } catch { return null; }
+  // Test fixtures may sit inside this checkout. A missed Git ceiling must never
+  // turn their synthetic runs into records in the owner's shared team directory.
+  if (process.env.NODE_TEST_CONTEXT || process.env.DISPATCH_FIXTURE) {
+    try {
+      const source = path.resolve(__dirname, '../../..');
+      const protectedCommon = path.resolve(source, git(source, ['rev-parse', '--git-common-dir']).trim());
+      if (fs.realpathSync.native(common) === fs.realpathSync.native(protectedCommon)) return null;
+    } catch { }
+  }
   const directory = path.join(common, 'agentrix');
   if (!create && !fs.existsSync(directory)) return null;
   if (create) {

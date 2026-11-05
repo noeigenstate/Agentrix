@@ -113,7 +113,7 @@ class RemoteConnection {
       if (seconds > 60) this.fail(new Error('SSH 连接超时。请确认主机可连接，且远端已安装 Python 3 和 Bash。'));
     }, 1000);
     this.connectTimer.unref?.();
-    this.link.open({ channel: this.channel, op: 'open', path: project.path, codingPath, projectId: project.id, token: sessionKey, cols: 90, rows: 24, readingNote, skills,
+    this.link.open({ channel: this.channel, op: 'open', path: project.path, codingPath, projectId: project.id, token: sessionKey, cols: 90, rows: 24, readingNote, skills, native: options.native === true,
       dispatchHelper: fs.readFileSync(path.join(options.integrationDir, 'dispatch.cjs'), 'utf8'),
       dispatchModules: require(path.join(options.integrationDir, 'dispatch.cjs')).runtimeFiles() });
   }
@@ -123,6 +123,8 @@ class RemoteConnection {
   receive(message) {
     if (this.closed) return;
     switch (message.type) {
+      case 'codex-data': case 'codex-exit':
+        this.events.emit('codex-process', message); return;
       case 'ready':
         if (typeof message.info?.root !== 'string' || !message.info.root.startsWith('/')) { this.fail(new Error('远程目录无效。')); return; }
         clearInterval(this.connectTimer);
@@ -187,6 +189,7 @@ class RemoteConnection {
   close(error = new Error('SSH 连接已关闭。')) {
     if (this.closed) return;
     this.closed = true; this.connected = false;
+    this.emitExit(255);
     clearInterval(this.connectTimer); this.rejectReady(error);
     for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(error); }
     this.pending.clear();

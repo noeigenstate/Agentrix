@@ -10,6 +10,7 @@ test('real app-server consumes a late steer before completing the worker turn', 
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => /^(SystemRoot|WINDIR|COMSPEC|PATH|PATHEXT)$/i.test(name)));
   for (const name of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'CODEX_HOME']) { env[name] = path.join(directory, name); fs.mkdirSync(env[name]); }
   env.STANDIN_API_KEY = 'offline-key'; env.CI = '1';
+  env.GIT_CEILING_DIRECTORIES = directory;
   const bodies = [], events = [];
   const server = http.createServer((request, response) => {
     let body = ''; request.on('data', chunk => { body += chunk; }); request.on('end', () => {

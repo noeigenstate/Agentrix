@@ -17,6 +17,7 @@ test('real app-server resumes the same thread through a response above 4 MiB', {
   const server = http.createServer((_request, response) => response.writeHead(400).end('offline only'));
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   env.OFFLINE_KEY = 'offline-only';
+  env.GIT_CEILING_DIRECTORIES = root;
   fs.writeFileSync(path.join(env.CODEX_HOME, 'config.toml'), `model = "fixture-model"\nmodel_provider = "local"\n[model_providers.local]\nname = "Local"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nenv_key = "OFFLINE_KEY"\n`);
   let stage = 'initialize';
   const open = async () => {

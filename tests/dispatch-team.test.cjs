@@ -350,11 +350,15 @@ test('execution requires a confirmed resumed session and the same scope set', as
   const captured = await json(confirm.capture);
   assert.match(captured.brief, /# Roundtable before work[\s\S]*minutes record your task as you restated it, including the planner's corrections[\s\S]*shared interfaces match those of the other workers[\s\S]*## Roundtable confirmation\nStatus: confirmed/);
   assert.match(captured.brief, /Use Status: open only for a misreading that is still uncorrected, followed by bullet lines naming it/);
-  assert.deepEqual(captured.args.slice(0, 3), ['exec', 'resume', session]); assert.ok(!captured.args.includes('-s'));
+  assert.deepEqual(captured.args, ['app-server', '--listen', 'stdio://']);
+  const resumed = captured.requests.find(request => request.method === 'thread/resume' && request.params.threadId);
+  assert.equal(resumed.params.threadId, session); assert.equal(resumed.params.sandbox, 'read-only');
   const differs = await start(f, { resume: session, allow: ['src/a.js'] });
   assert.match((await output(differs)).stdout, /scope differs from the one agreed/); assert.equal(exists(differs.capture), false);
   const build = await start(f, { resume: session, session, allow: ['src/b.js', 'src/a.js', 'src/a.js'], answer: 'Built.' });
   assert.equal((await output(build)).code, 0);
+  const buildRequest = (await json(build.capture)).requests.find(request => request.method === 'thread/resume' && request.params.threadId);
+  assert.equal(buildRequest.params.sandbox, 'workspace-write');
   assert.deepEqual(team.entries().at(-1).meeting, 'r1'); assert.equal(team.entries().at(-1).type, 'end');
   await until(() => f.events.some(event => event.role === '圆桌'));
   assert.deepEqual(team.live(), []);

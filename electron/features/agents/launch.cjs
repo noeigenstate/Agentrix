@@ -26,7 +26,7 @@ async function folderHistory(folder, { claude = listClaudeSessions, codex = late
 // What is typed at the new terminal's first prompt.
 function launchCommand(agent, history) {
   if (agent === 'claude') return history ? `claude --resume ${history.id}\r` : 'claude\r';
-  return history ? `codex resume ${history.id}\r` : 'codex\r';
+  throw new Error('Codex 必须通过 app-server 启动。');
 }
 
 module.exports = { folderHistory, latestCodexSession, launchCommand };

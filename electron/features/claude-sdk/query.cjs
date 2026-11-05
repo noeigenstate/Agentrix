@@ -7,7 +7,8 @@ const path = require('node:path');
 
 // These instructions describe host capabilities proved by the paired real-CLI tests.
 // Keep the CLI's own preset and entrypoint; do not replace its system prompt.
-const NATIVE_CONTEXT = "You are Claude Code, Anthropic's official CLI for Claude.\n"
+const IDENTITY_CONTEXT = "You are Claude Code, Anthropic's official CLI for Claude.";
+const NATIVE_CONTEXT = IDENTITY_CONTEXT + '\n'
   + 'If you need the user to run a shell command themselves, suggest they type `! <command>` in the prompt; its output becomes context in this conversation.\n'
   + 'The fork subagent runs in the background, so you can keep chatting with the user while it works.';
 
@@ -47,12 +48,12 @@ function inputQueue(onTake = () => {}) {
 function queryOptions(spec, { key, executable, abort, providerSessionId, maxBudgetUsd, policy, canUseTool }) {
   return {
     cwd: spec.cwd, model: spec.model || undefined, effort: spec.effort || 'high', pathToClaudeCodeExecutable: executable,
-    settings: privateSettings({ fastMode: spec.fast === true, ...routeSettings(spec) }, abort.signal), env: apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
+    settings: privateSettings({ fastMode: false, ...routeSettings(spec) }, abort.signal), env: apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
     // The owner's choice: SDK sessions do not ask about each tool. A worker's limits are its PreToolUse policy, which still denies under
     // this mode, and questions still reach canUseTool: both proved against the real CLI in tests/claude-sdk-real-cli.test.cjs.
     abortController: abort, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true, includePartialMessages: true,
     settingSources: ['user', 'project', 'local'],
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [NATIVE_CONTEXT, spec.context].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [spec.owner === 'gui' ? NATIVE_CONTEXT : IDENTITY_CONTEXT, spec.context].filter(Boolean).join('\n\n') },
     ...(providerSessionId ? { resume: providerSessionId } : {}),
     ...(maxBudgetUsd === undefined ? {} : { maxBudgetUsd }),
     hooks: { PreToolUse: [{ onFailure: 'block', hooks: [async input => {
@@ -84,4 +85,4 @@ async function readBillingIdentity(query, { signal, timeoutMs = 30000 }) {
   return source;
 }
 
-module.exports = { inputQueue, queryOptions, readBillingIdentity, NATIVE_CONTEXT };
+module.exports = { inputQueue, queryOptions, readBillingIdentity, NATIVE_CONTEXT, IDENTITY_CONTEXT };

@@ -142,12 +142,7 @@ function routingVerdict(actual, declared) {
 function commandOf(options) {
   if (options.agent === 'claude') return ['-p', ...(options.resume ? ['--resume', options.resume] : []), '--model', options.model,
     '--effort', options.effort, '--permission-mode', options.permission, '--output-format', 'stream-json', '--verbose'];
-  const settings = ['-m', options.model, '-c', `model_reasoning_effort=${options.effort}`, ...(options.fast ? ['-c', 'service_tier="fast"'] : []), '--json'];
-  const images = options.images.flatMap(file => ['-i', file]);
-  const sandbox = options.readOnly || options.meeting || ['审查', '调查'].includes(options.role) ? 'read-only' : 'workspace-write';
-  // resume takes no -s. Override the stored roundtable policy through its supported config option.
-  if (options.resume) return ['exec', 'resume', options.resume, ...settings, '-c', `sandbox_mode="${sandbox}"`, '-o', options.out, ...images, '-'];
-  return ['exec', ...settings, '-C', options.cwd, '-o', options.out, ...images, '-s', sandbox, '-'];
+  return ['app-server', '--listen', 'stdio://'];
 }
 
 // What the worker reads before the brief: the task's shared ledger, the boundaries of the modules it may change, the
@@ -618,7 +613,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const stop = (kind, requested = true) => {
     if (requested) killed = true;
     if (activeRuntime) {
-      treeStop = Promise.resolve(activeRuntime.interrupt()).catch(() => {}).then(() => activeRuntime.close()).finally(() => settleNative?.({ code: 1, killedBy: kind }));
+      const runtime = activeRuntime;
+      treeStop = Promise.resolve(runtime.interrupt()).catch(() => {}).then(() => runtime.close()).finally(() => {
+        nativeRunning = false; settleNative?.({ code: 1, killedBy: kind });
+      });
       return;
     }
     if (exited || !child?.pid || child.exitCode !== null) return;
@@ -670,6 +668,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
             catch (error) { receipt = { status: error.message === 'control_unavailable' ? 'rejected' : 'unknown', reason: error.message }; }
             if (receipt?.status === 'rejected' && ['worker_ended', 'control_unavailable'].includes(receipt.reason)) {
               messages.push(control.text); deferredControlIds.push(control.id); receipt.status = 'queued';
+              signal(`intervened ${id}: ${JSON.stringify(control.text).slice(1, -1)}`);
             }
             await recordReceipt(control.id, receipt?.status);
           } else {
@@ -841,7 +840,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     function acceptNative(event) {
       if (event.providerSessionId) output.sessionId = event.providerSessionId;
       if (event.type === 'turn.started') {
-        nativeTurn = event.turnId; nativeRunning = true; output.confirmed = true; confirm();
+        nativeTurn = event.turnId; nativeRunning = true; output.confirmed = true;
+        if (options.agent === 'codex') void rollout.read().then(() => confirm()); else confirm();
         if (resumeControlIds.length) resumeInputId = event.payload.clientMessageId;
       } else if (event.type === 'routing.updated' && event.payload.observed) output.settings(event.payload.observed);
       else if (event.type === 'input.receipt' && controlReceipts.has(event.payload.clientMessageId)) void recordReceipt(event.payload.clientMessageId, event.payload.status).catch(() => {});
@@ -855,6 +855,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         const content = event.payload.content;
         if (typeof content?.text === 'string' && (!content.phase || content.phase === 'final_answer')) output.result = content.text;
       } else if (event.type === 'turn.completed' && event.turnId === nativeTurn) {
+        output.failed ||= event.payload.status === 'failed';
+        output.capacity ||= ['serverOverloaded', 'policyCapacityUnavailable', 'flexUnavailable'].includes(event.payload.terminalReason);
         nativeRunning = false;
         settleNative?.({ code: event.payload.status === 'completed' ? 0 : 1, killedBy: event.payload.status === 'interrupted' ? 'SIGTERM' : null });
       } else if (event.type === 'session.state' && ['disconnected', 'failed'].includes(event.payload.state)) {
@@ -863,7 +865,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       } else if (event.type === 'path.changed' && event.payload.selected === 'terminal' && !nativeTurn) {
         nativeFallback = event.payload.reason || 'terminal_selected';
       }
-      if (event.providerSessionId && output.confirmed) confirm();
+      if (event.providerSessionId && output.confirmed && options.agent !== 'codex') confirm();
       log.write(JSON.stringify(event) + '\n');
     }
     finalize = async result => {
@@ -924,8 +926,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         brief = briefOf(options, Buffer.from(messages.splice(0).map(text => `业主插话：${text}`).join('\n\n') + '\n\n继续执行当前任务。'), team,
           { id, phase: admission?.phase, repo, before: checking ? before : undefined });
       }
-      if (controlClient) {
-        const spec = { owner: 'dispatch', projectId: bootstrap.projectId, terminalId: bootstrap.projectId, runtimeSessionId: id, runId: id,
+      if (controlClient || options.agent === 'codex') {
+        if (killed) throw new Error('Dispatch interrupted before launch');
+        const spec = { owner: 'dispatch', projectId: bootstrap?.projectId || id, terminalId: bootstrap?.projectId || id, runtimeSessionId: id, runId: id,
           cwd: options.cwd, worktree: options.cwd, model: options.model, effort: options.effort, fast: options.fast,
           readOnly: options.readOnly || options.permission === 'plan' || ['审查', '调查'].includes(options.role), roundtable, allow: options.allow, env: workerEnv,
           policy: { approvalPolicy: 'never' },
@@ -938,12 +941,12 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
           if (effective.resume) await rollout.prepare(effective.resume);
           try { if (effective.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
           catch (error) {
-            await activeRuntime.close(); activeRuntime = null; controlClient.close(); controlClient = null;
+            await activeRuntime.close(); activeRuntime = null; controlClient?.close(); controlClient = null;
             const stage = ['resolve_executable', 'spawn', 'initialize', 'capability_probe', 'thread_start', 'thread_resume'].includes(error.stage) ? error.stage : 'startup';
             const category = error.category && /^(?:rpc_-\d+|request_failed|unexpected_success)$/.test(error.category) ? error.category
               : Number.isInteger(error.code) ? `rpc_${error.code}`
               : ['ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'codex_cli_required', 'rpc_timeout', 'process_failed', 'process_exited', 'disconnected',
-                'frame_limit', 'write_failed', 'invalid_response', 'invalid_json', 'invalid_frame', 'invalid_payload', 'truncated_frame', 'unsupported_codex_capabilities', 'unsupported_codex_version'].includes(error.code || error.message) ? error.code || error.message : 'runtime_failed';
+                'frame_limit', 'write_failed', 'invalid_response', 'invalid_json', 'invalid_frame', 'invalid_payload', 'truncated_frame', 'sandbox_mismatch', 'invalid_thread', 'thread_in_use', 'unsupported_codex_capabilities', 'unsupported_codex_version'].includes(error.code || error.message) ? error.code || error.message : 'runtime_failed';
             throw new Error(`Codex app-server startup failed (${stage}/${category})`);
           }
           child = { pid: activeRuntime.pid, exitCode: null };
@@ -973,7 +976,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
           });
           result = await Promise.race([completion, remote]);
           if (nativeFallback) {
-            activeRuntime = null; nativeBilling = null; controlClient.close(); controlClient = null;
+            activeRuntime = null; nativeBilling = null; controlClient?.close(); controlClient = null;
             transportFallback = true;
             signal(`transport ${id} claude-cli fallback: ${String(nativeFallback).replace(/[\r\n]+/g, ' ')}`); continue;
           }
@@ -996,23 +999,22 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         if (typeof output.result === 'string') fs.writeFileSync(options.out, output.result);
         const remoteResult = await activeRuntime.finished;
         if (remoteResult?.code) result = remoteResult;
-        if (result.code === 0 && !killed && !noResume && !segmentStopped) queueUnreadControls();
+        if ((result.code === 0 || segmentStopped) && !killed && !noResume) queueUnreadControls();
         await activeRuntime.close(); activeRuntime = null; child.exitCode = result.code; clearInterval(pollTimer);
         if (!started) failed('worker ended without execution evidence', 1);
-        if (messages.length && result.code === 0 && !killed && !noResume && !spawnError && output.sessionId) {
+        if (messages.length && (result.code === 0 || segmentStopped) && !killed && !noResume && !spawnError && output.sessionId) {
           const { changed, outOfScope } = inspectScope();
           if (checking && (changed === null || outOfScope.length)) break;
-          resumeSession = output.sessionId; controlClient.close(); controlClient = null;
+          resumeSession = output.sessionId; controlClient?.close(); controlClient = null;
           // The rejected correction is known not to have executed; resume only that input, on the same billing path.
           await new Promise(resolve => setTimeout(resolve, 20)); await openControl();
-          if (!controlClient) throw new Error('native_resume_control_unavailable');
+          if (!controlClient && options.agent !== 'codex') throw new Error('native_resume_control_unavailable');
           signal(`resuming ${id}: native worker ended before correction`);
           continue;
         }
         break;
       }
-      if (options.agent === 'codex' && bootstrap?.controlAddress) throw new Error(`Codex app-server control unavailable (${controlFailure || 'control/disconnected'})`);
-      if (!resumeSession && !transportFallback) signal(`transport ${id} ${options.agent === 'codex' ? 'codex-exec' : 'claude-cli'} fallback: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
+      if (!resumeSession && !transportFallback) signal(`transport ${id} claude-cli fallback: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
       const command = resolveExecutable(options.agent, commandOf(effective), env);
       if (options.agent === 'codex' && effective.resume && !resumeSession) await rollout.prepare(effective.resume);
 
@@ -1076,8 +1078,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   } catch (error) {
     if (finalize && child) {
       spawnError ||= error;
+      signal(`runtime failed ${id}: ${String(error.message).replace(/[\r\n]+/g, ' ')}`);
       try { stop('SIGTERM', false); await treeStop; await activeRuntime?.finished; } catch {}
-      if (!started) failed('worker ended without execution evidence', 1);
+      if (!started) failed(error.message, 1);
       try { return await finalize({ code: 1, killedBy: killed || segmentStopped ? 'SIGTERM' : null }); }
       catch (failure) { signal(`finalization failed: ${String(failure.message).replace(/[\r\n]+/g, ' ')}`); }
     }

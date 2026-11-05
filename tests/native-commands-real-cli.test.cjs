@@ -13,6 +13,7 @@ test('real Codex lists skills without a turn and sends a chosen slash skill as s
 }, async () => {
   const temporaryRoot = os.tmpdir(), root = fs.mkdtempSync(path.join(temporaryRoot, 'agx-real-skills-')), cwd = path.join(root, 'project');
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => /^(SystemRoot|WINDIR|COMSPEC|PATH|PATHEXT)$/i.test(name)));
+  env.GIT_CEILING_DIRECTORIES = root;
   for (const name of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'CODEX_HOME', 'AGENTRIX_DATA_DIR']) {
     env[name] = path.join(root, name); fs.mkdirSync(env[name]);
   }

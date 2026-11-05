@@ -196,7 +196,7 @@ for (const trigger of ['always', 'first-open']) test(`${trigger} live Claude ses
   const disabled = sessionContext({ session_id: 'first-cli', source: 'compact' }, first).hookSpecificOutput.additionalContext;
   assert.doesNotMatch(disabled, /Updated live instructions/);
   const metadata = JSON.parse(fs.readFileSync(`${readDelivery(first).manifest}.json`, 'utf8'));
-  assert.match(path.basename(metadata.current), /^[a-f0-9]{64}-[a-f0-9]{32}\.md$/);
+  assert.match(path.basename(metadata.current), /^[a-f0-9]{32}-[a-f0-9]{32}\.md$/);
   assert.ok(metadata.current.length < 260);
 });
 

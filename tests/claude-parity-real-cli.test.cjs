@@ -44,12 +44,31 @@ test('real streaming input shell handling is observed rather than guessed', { sk
   assert.doesNotMatch(context, /<bash-stdout>OFFLINE_SHELL_PARITY/);
 });
 
+test('real worker context differs from GUI only by the admitted owner capability append', { skip, timeout: 60000 }, async t => {
+  const requests = [];
+  const f = await harness(t, data => { requests.push(data); return [opening(data), ...textBlock(0, 'ACK'), ...finish('end_turn')]; });
+  await f.run({}, () => {}, { owner: 'dispatch' });
+  await f.run({}, () => {}, { owner: 'gui' });
+  require('./fixtures/claude-parity.cjs').compareSystem(requests[0].system, requests[1].system, { sdkOwner: 'dispatch', tuiOwner: 'gui' });
+});
+
+test('real CLI refuses SDK fast mode and the native setter cannot claim it enabled', { skip, timeout: 60000 }, async t => {
+  const messages = [];
+  const f = await harness(t, data => [opening(data), ...textBlock(0, 'ACK'), ...finish('end_turn')]);
+  await f.run({}, message => messages.push(message), {}, '/fast on');
+  assert.match(JSON.stringify(messages), /Fast mode is not available in the Agent SDK/);
+  const session = product(t, f, () => {}); await session.start();
+  await assert.rejects(session.runOptions({ fast: true }), /Claude Agent SDK 目前不支持快速模式/);
+  assert.equal((await session.runOptions({})).fast, false);
+});
+
 test('worker policy deny dominates loaded project allow hooks and permissions', { skip, timeout: 60000 }, async t => {
-  const f = await harness(t, data => JSON.stringify(data.messages).includes('tool_result')
+  const requests = [];
+  const f = await harness(t, data => { requests.push(data); return JSON.stringify(data.messages).includes('tool_result')
     ? [opening(data), ...textBlock(0, 'FINISHED'), ...finish('end_turn')]
     : [opening(data), { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_policy', name: 'Write', input: {} } },
       { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ file_path: 'denied.txt', content: 'not allowed' }) } },
-      { type: 'content_block_stop', index: 0 }, ...finish('tool_use')]);
+      { type: 'content_block_stop', index: 0 }, ...finish('tool_use')]; });
   fs.mkdirSync(path.join(f.cwd, '.claude'), { recursive: true });
   const hook = `node -e "require('fs').writeFileSync('hook-ran.txt',JSON.stringify({key:!!process.env.ANTHROPIC_API_KEY,token:!!process.env.ANTHROPIC_AUTH_TOKEN}));process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'allow'}}))"`;
   fs.writeFileSync(path.join(f.cwd, '.claude/settings.json'), JSON.stringify({ permissions: { allow: ['Write'] },
@@ -58,6 +77,9 @@ test('worker policy deny dominates loaded project allow hooks and permissions', 
   assert.equal(fs.existsSync(path.join(f.cwd, 'denied.txt')), false, 'project allow must not override host deny');
   assert.equal(fs.existsSync(path.join(f.cwd, 'hook-ran.txt')), true, 'project settings really loaded');
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.cwd, 'hook-ran.txt'), 'utf8')), { key: false, token: false }, 'worker hooks cannot inherit the saved key');
+  const system = requests[0].system.map(block => block.text).join('\n');
+  assert.ok(system.includes("You are Claude Code, Anthropic's official CLI for Claude."));
+  assert.doesNotMatch(system, /suggest they type `! <command>`|The fork subagent runs in the background, so you can keep chatting/);
 });
 
 test('real host shell keeps keys out, preserves CLI context wrappers and renews acknowledged options', { skip, timeout: 60000 }, async t => {
@@ -66,6 +88,8 @@ test('real host shell keeps keys out, preserves CLI context wrappers and renews 
   const session = product(t, f, event => events.push(event)); await session.start();
   assert.equal((await session.runOptions({})).model, null);
   assert.equal(requests.length, 0);
+  await assert.rejects(session.runOptions({ fast: true }), /Claude Agent SDK 目前不支持快速模式/);
+  assert.equal((await session.runOptions({})).fast, false);
   const command = 'printf "SHELL_SAFE:%s:%s:%s" "${ANTHROPIC_API_KEY-unset}" "${ANTHROPIC_AUTH_TOKEN-unset}" "${OPENAI_API_KEY-unset}"';
   assert.deepEqual(await session.shell('shell-proof', command), { exitCode: 0 });
   assert.deepEqual(await session.shell('shell-proof', command), { exitCode: 0 });
@@ -98,6 +122,13 @@ test('real host shell keeps keys out, preserves CLI context wrappers and renews 
   assert.match(requests.at(-1).model, /opus/);
   assert.equal(requests.at(-1).output_config?.effort, 'low');
   assert.doesNotMatch(JSON.stringify(requests.at(-1).messages.at(-1)), /SHELL_SAFE/);
+  const models = await session.models();
+  assert.ok(models.some(model => model.value === options.model), 'catalog values use the same resolved id as the observed model');
+  const defaults = await session.runOptions({ model: null });
+  assert.notEqual(defaults.model, options.model);
+  await session.send({ clientMessageId: 'default-owner', text: 'DEFAULT_AGAIN' });
+  await until(() => session.snapshot().state === 'idle' && requests.length > 2);
+  assert.equal(requests.at(-1).model, defaults.model);
 });
 
 test('automatic compaction records real CLI thresholds and decision evidence offline', { skip, timeout: 60000 }, async t => {

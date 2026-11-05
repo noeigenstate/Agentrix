@@ -29,6 +29,9 @@ export const desktopEnvironment = (home, inherited = process.env, platform = pro
 // Also runs before either desktop mode. This exercises the real coordinator/router and provider adapters with local
 // peers, including real main input/activation callbacks, handoff timeouts, policy retirement and N3/N5/N6.
 export async function switchContracts(output, stages) {
+  // A10 adds SSH transport, standalone helper startup and retired-path guards.
+  // Keep a bounded process deadline with five seconds for diagnostics/cleanup.
+  const timeout = 45000;
   // Git-backed worker fixtures must fit Windows path limits even when the
   // checkout and its .test-output live below a long dispatch scratch path.
   const temporaryRoot = await fs.realpath(os.tmpdir());
@@ -41,7 +44,8 @@ export async function switchContracts(output, stages) {
       'native-worker-codex-finish.test.cjs', 'dispatch-interventions.test.cjs', 'dispatch-events.test.cjs',
       'native-commands.test.cjs', 'native-commands-codex.test.cjs', 'claude-sdk-provenance.test.cjs', 'native-api-quota.test.cjs',
       'codex-auto-reset.test.cjs', 'codex-auto-reset-runtime.test.cjs', 'codex-auto-reset-main.test.cjs',
-      'native-large-frames.test.cjs', 'native-parity-backend.test.cjs', 'agent-calls.test.cjs'].includes(name));
+      'native-large-frames.test.cjs', 'native-parity-backend.test.cjs', 'agent-calls.test.cjs',
+      'ssh-codex.test.cjs', 'codex-app-server-only.test.cjs', 'dispatch-startup.test.cjs'].includes(name));
   await stages.run('switch contracts: Claude handoffs, Codex app-server only, drafts, rollback and no duplicate notifications', async () => {
     const child = spawn(process.execPath, ['--test', ...files.map(name => path.join(root, 'tests', name))], {
       cwd: root, windowsHide: true, env: { ...desktopEnvironment(home), TEMP: home, TMP: home, GIT_CEILING_DIRECTORIES: home }, stdio: ['ignore', 'pipe', 'pipe'],
@@ -51,7 +55,7 @@ export async function switchContracts(output, stages) {
     const timer = setTimeout(() => {
       if (process.platform === 'win32') spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 3000 });
       else child.kill('SIGKILL');
-    }, 25000);
+    }, timeout);
     try {
       const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
       await fs.writeFile(path.join(output, 'switch-contracts.log'), log);
@@ -61,7 +65,7 @@ export async function switchContracts(output, stages) {
       assert.equal(path.dirname(home), temporaryRoot);
       await fs.rm(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
-  }, 30000);
+  }, timeout + 5000);
 }
 
 export async function prepareProviders(directory) {

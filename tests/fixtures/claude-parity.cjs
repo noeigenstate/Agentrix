@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
-const { NATIVE_CONTEXT } = require('../../electron/features/claude-sdk/query.cjs');
+const { NATIVE_CONTEXT, IDENTITY_CONTEXT } = require('../../electron/features/claude-sdk/query.cjs');
 
 // CLI 2.1.318, paired requests from one offline server. Pin BOTH bytes at each
 // transport-dependent leaf: a new change in a known field must also fail.
@@ -26,15 +26,18 @@ function compareTools(sdk, tui) {
   for (const tool of sdk) compare(tool, tui.find(row => row.name === tool.name), tool.name);
   assert.deepEqual(differences, [], 'new tool/schema differences need a real paired investigation');
 }
-function compareSystem(sdk, tui) {
-  const normalize = blocks => blocks.map((block, index) => {
+function compareSystem(sdk, tui, { sdkOwner = 'gui', tuiOwner = null } = {}) {
+  const append = owner => owner === 'gui' ? NATIVE_CONTEXT : owner === 'dispatch' ? IDENTITY_CONTEXT : null;
+  const normalize = (blocks, owner) => blocks.map((block, index) => {
     let text = block.text;
     if (index === 0) {
       assert.match(text, /^x-anthropic-billing-header: cc_version=2\.1\.318\.[a-f\d]+; cc_entrypoint=(?:sdk-ts|cli);$/);
       text = 'BILLING_HEADER'; // CLI-generated entrypoint and prompt fingerprint, never an agent instruction.
     } else {
+      // Only the exact owner-specific append is admitted. Workers have no
+      // interactive owner shell or concurrent user chat; GUI capabilities do.
+      if (append(owner)) text = text.replace('\n\n' + append(owner), '');
       text = text.replace("You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.", "You are Claude Code, Anthropic's official CLI for Claude.")
-        .replace('\n\n' + NATIVE_CONTEXT, '') // Only our exact, real-tested capability append.
         .replace('If you need the user to run a shell command themselves (e.g., an interactive login like `gcloud auth login`), suggest they type `! <command>` in the prompt — the `!` prefix runs the command in this session so its output lands directly in the conversation.\n - ', '')
         .replace(', runs in the background,', '')
         .replace(' — so you can keep chatting with the user while it works', '');
@@ -42,6 +45,6 @@ function compareSystem(sdk, tui) {
     return { ...block, text };
   });
   // Hashes keep a failure readable and prevent printing the entire preset into CI logs.
-  assert.equal(hash(normalize(sdk)), hash(normalize(tui)), 'unexpected system-prompt difference');
+  assert.equal(hash(normalize(sdk, sdkOwner)), hash(normalize(tui, tuiOwner)), 'unexpected system-prompt difference');
 }
 module.exports = { compareTools, compareSystem };

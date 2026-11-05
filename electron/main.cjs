@@ -92,7 +92,7 @@ const { getSSHInfo } = require('./ssh-config.cjs');
 const { SSHAuthServer } = require('./ssh-auth.cjs');
 const { RemoteConnection } = require('./remote-connection.cjs');
 const { watchRemoteClaudeAccount } = require('./features/ssh/claude-account.cjs');
-const { resumeCommand, claudeResumeCommand } = require('./session-restore.cjs');
+const { claudeResumeCommand } = require('./session-restore.cjs');
 const { CodexActivityReader, monitorActivity } = require('./codex-activity.cjs');
 const { TerminalTitleTracker, wholeThread } = require('./terminal-title.cjs');
 const { FileOperations } = require('./file-operations.cjs');
@@ -1158,26 +1158,9 @@ async function resumeAfterPrompt(project, session) {
       broadcast();
       return;
     }
-    if (project.kind !== 'ssh') {
-      if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
-      await nativeSessions.start(session.terminalId, { agent: 'codex', resume: !!restore?.threadId });
-      return;
-    }
-    if (!session.codexAvailable) return;
-    const info = await session.terminal.request('resume-info', { threadId: restore?.threadId });
-    // Legacy versions did not record which process owned a conversation. Open
-    // that history, but do not submit work to a possibly still-running session.
-    const remembered = info || (restore?.threadId ? { id: restore.threadId, state: 'unknown' } : null);
-    const command = project.terminals?.length && !restore?.threadId ? 'codex\r' : resumeCommand(remembered && !plan.codex ? { ...remembered, state: 'unknown' } : remembered, plan.codex);
-    if (command && sessions.get(session.terminalId) === session && session.ready && !session.inputDirty && !session.codexActive) {
-      // Opening completed history is not new input. Only the automatic
-      // continuation of interrupted work may produce another completion alert.
-      store.expectCompletion(project.id, info?.state === 'interrupted' && plan.codex);
-      session.ready = false;
-      // The prompt has not been drawn yet; a remote shell asks no question to wait for.
-      if (project.kind === 'ssh') session.gate.input(command); else session.gate.afterPrompt(command);
-      broadcast();
-    }
+    if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
+    await nativeSessions.start(session.terminalId, { agent: 'codex', resume: !!restore?.threadId });
+
   } catch (error) { session.error = `恢复会话失败：${error.message}`; broadcast(); }
   finally {
     if (sessions.get(session.terminalId) === session && session.ready) { session.agentStarting = false; readingHistory.close(session.terminalId); broadcast(); }
@@ -1186,9 +1169,10 @@ async function resumeAfterPrompt(project, session) {
 
 function remoteFor(id) {
   const project = findProject(id);
-  const session = sessions.get(id)?.terminal.connected ? sessions.get(id) : [...sessions.values()].find(item => item.projectId === project.id && item.terminal.connected);
-  if (project.kind !== 'ssh' || !session || session.terminal.closed) throw new Error('请先启动终端，连接 SSH 服务器。');
-  return session.terminal;
+  const channel = session => session.remoteConnection || session.terminal;
+  const session = channel(sessions.get(id) || {})?.connected ? sessions.get(id) : [...sessions.values()].find(item => item.projectId === project.id && channel(item)?.connected);
+  if (project.kind !== 'ssh' || !session || channel(session).closed) throw new Error('请先启动终端，连接 SSH 服务器。');
+  return channel(session);
 }
 
 // New local terminals use the chosen shell: Bash by default on macOS, the login shell's kind on Linux,
@@ -1206,13 +1190,19 @@ function localShell(fresh = false) {
 
 function nativeSpec(id, agent, resume, validateOnly = false) {
   const project = findProject(id), old = sessions.get(id);
-  if (project.kind === 'ssh') throw new Error('原生会话仅支持本地项目。');
+  if (project.kind === 'ssh' && agent !== 'codex') throw new Error('SSH 原生会话目前仅支持 Codex。');
   if (validateOnly) return;
   if (old?.nativeStructured && old.status !== 'exited') return old.nativeSpec;
   if (old?.codexActive && old.status !== 'exited') throw new Error('请先停止当前会话。');
   if (old) disposeTerminal(id, { preserveNative: !!old.nativeStructured });
   const saved = store.findTerminal(id).record.restore;
   const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
+  if (project.kind === 'ssh') {
+    const spec = { agent, owner: 'gui', kind: 'ssh', projectId: project.id, terminalId: id,
+      sessionId, sessionKey, cwd: resume ? saved?.cwd || project.path : project.path, env: {}, model: null, effort: 'high', fast: true,
+      providerSessionId: resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null };
+    nativeSpecs.set(id, spec); return spec;
+  }
   const bootstrapFile = path.join(runtimeDir, `${sessionId}.json`);
   fs.writeFileSync(bootstrapFile, JSON.stringify({ projectId: id, projectPath: project.path, sessionKey,
     controlAddress, controlCapability, pipeName: process.platform === 'win32' ? eventServer.name : eventServer.address }), { mode: 0o600 });
@@ -1469,7 +1459,22 @@ async function initializeNativeSessions() {
     },
   });
   claudeRuntime.observeCli?.(await inspectClaudeExecutable());
-  const codexFactory = createCodexRuntime({ renderImage: generatedPreview, translate: t,
+  const codexFactory = createCodexRuntime({ renderImage: (item, spec) => spec.kind === 'ssh' ? null : generatedPreview(item, spec), translate: t,
+    launchRemote: async spec => {
+      const project = findProject(spec.terminalId);
+      const delivery = skills.delivery(project, true, spec.sessionId, { agent: 'codex', started: true });
+      const remote = new RemoteConnection({ ...project, id: spec.terminalId }, { integrationDir, auth: sshAuth,
+        sessionKey: spec.sessionKey, onEvent, codingPath: spec.cwd, askpassPath: prepareAskpass(), native: true,
+        skills: delivery.bundle, readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}',
+          path.posix.join(project.path, 'skills'), delivery, '{AGENTRIX_DISPATCH}') });
+      spec.remoteConnection = remote;
+      const host = sessions.get(spec.terminalId); if (host) host.remoteConnection = remote;
+      try {
+        const info = await remote.ready;
+        return { cwd: info.cwd || info.root, context: info.context,
+          child: require('./features/ssh/codex-process.cjs').createRemoteCodexProcess(remote) };
+      } catch (error) { remote.close(); throw error; }
+    },
     resetAtLimit: (spec, evidence) => codexAccounts.resetAtLimit({ ...spec, remote: spec.kind === 'ssh', accountLaunch: 'project-open-v1' },
       { ...evidence, enabled: nativeSessions?.getSettings().codexAutoReset === true,
         current: () => evidence.current() && nativeSessions?.getSettings().codexAutoReset === true }) });
@@ -1479,6 +1484,11 @@ async function initializeNativeSessions() {
     const attach = async (open, value) => {
       const result = await open(value);
       const options = { cwd: spec.cwd, env: spec.env, projectId: spec.projectId };
+      if (spec.kind === 'ssh') {
+        const host = sessions.get(spec.terminalId);
+        if (host) host.nativeReadConnection = () => runtime.readAccount();
+        return result;
+      }
       accountBinding = codexAccounts.attachRuntime?.(options, runtime);
       accountWatch = codexAccounts.watch(options, () => scheduleState());
       const host = sessions.get(spec.terminalId);
@@ -1486,7 +1496,7 @@ async function initializeNativeSessions() {
       return result;
     };
     runtime.start = value => attach(start, value); runtime.resume = value => attach(resume, value);
-    runtime.close = async () => { accountWatch?.dispose(); accountBinding?.dispose(); await close(); };
+    runtime.close = async () => { accountWatch?.dispose(); accountBinding?.dispose(); try { await close(); } finally { spec.remoteConnection?.close(); } };
     return runtime;
   } };
   nativeSessions = createNativeSessions({ directory, claude: claudeRuntime, codex, resolveSpec: nativeSpec,
@@ -1538,8 +1548,8 @@ async function initializeNativeSessions() {
 
 function restoreTerminal(id, ...args) {
   const found = store.findTerminal(id), saved = found?.record.restore;
-  const localCodex = found?.project.kind !== 'ssh' && (saved?.agent || 'codex') === 'codex' && (saved?.codex || saved?.nativeTransport);
-  if (localCodex || found?.project.kind !== 'ssh' && saved?.nativeTransport && nativeSessions) {
+  const localCodex = (saved?.agent || 'codex') === 'codex' && (saved?.codex || saved?.nativeTransport);
+  if (localCodex || saved?.nativeTransport && nativeSessions) {
     restorePlans.delete(id);
     if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
     void nativeSessions.start(id, { agent: saved.agent || 'codex', resume: !!saved.threadId }).catch(error => {
@@ -1790,8 +1800,8 @@ function registerUnavailableNative(handle) {
     if (!options || typeof options !== 'object' || Object.keys(options).some(key => !['agent', 'resume'].includes(key)) ||
       !['claude', 'codex'].includes(options.agent) || options.resume !== undefined && typeof options.resume !== 'boolean') throw new Error('无效的原生会话请求。');
     const project = findProject(id), saved = store.findTerminal(id).record.restore;
-    if (project.kind === 'ssh') throw new Error('原生会话仅支持本地项目。');
     if (options.agent === 'codex') throw new Error('Codex app-server 连接失败，请重试。');
+    if (project.kind === 'ssh') throw new Error('SSH 原生会话目前仅支持 Codex。');
     const history = options.resume && saved?.agent === options.agent && /^[a-f\d-]{36}$/i.test(saved.threadId || '') ? { id: saved.threadId } : null;
     launchPlans.set(id, { agent: options.agent, command: launchCommand(options.agent, history), threadId: history?.id || null });
     startTerminal(id, null, true); broadcast();
@@ -1890,12 +1900,13 @@ function registerIpc() {
   handle('agent:launch', async (id, agent, mode) => {
     const project = findProject(id);
     if (!['claude', 'codex'].includes(agent)) throw new Error('无效的助手。');
-    if (project.kind === 'ssh') throw new Error('SSH 项目请先启动终端，再在终端里运行助手。');
+    if (project.kind === 'ssh' && agent !== 'codex') throw new Error('SSH 原生会话目前仅支持 Codex。');
     if (!['new', 'continue'].includes(mode)) throw new Error('Unsupported agent session mode');
     if (agent === 'codex') {
       if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
       launchPlans.delete(id); restorePlans.delete(id);
-      const history = mode === 'continue' ? (await folderHistory(folderOf(id))).codex : null;
+      const saved = store.findTerminal(id).record.restore;
+      const history = mode === 'continue' ? (project.kind === 'ssh' ? saved?.threadId ? { id: saved.threadId } : null : (await folderHistory(folderOf(id))).codex) : null;
       if (history) store.setRestore(id, { agent: 'codex', threadId: history.id });
       await nativeSessions.start(id, { agent, resume: !!history }); broadcast(); return true;
     }

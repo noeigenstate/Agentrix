@@ -9,7 +9,7 @@ const { SubmissionTracker } = require('../electron/terminal-input.cjs');
 const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs');
 const { ConversationLog, claudeConversation, codexConversation } = require('../electron/conversation.cjs');
 const { PromptQueue, promptText } = require('../electron/prompt-queue.cjs');
-const { resumeCommand, claudeResumeCommand } = require('../electron/session-restore.cjs');
+const { claudeResumeCommand } = require('../electron/session-restore.cjs');
 const { isLocalAgentCommand } = require('../electron/agent-commands.cjs');
 const { CompletionWork, LOST_WORK_TIMEOUT } = require('../electron/completion-work.cjs');
 const { CodexActivityReader, monitorActivity } = require('../electron/codex-activity.cjs');
@@ -39,7 +39,7 @@ async function harness(t, kind = 'local', agent = 'codex') {
     notifyCompletion: () => alerts++, broadcast() {}, publishConversation() {}, refreshClaudeAccounts() {}, describeActions() {}, nativeSkillActions() {},
     memoryFolder: () => directory, memoryDir: () => directory, roundsOf: () => [], remember: async () => {},
     setTimeout: () => ({ unref() {} }), scrubProjectSkills: async () => {},
-    followClaude() {}, followClaudeSession: async () => {}, resumeCommand, claudeResumeCommand,
+    followClaude() {}, followClaudeSession: async () => {}, claudeResumeCommand,
     startSkillSession() {}, endSkillSession() {},
     restorePlans: new Map(), Date: class extends Date { static now() { return now; } },
   });
@@ -1022,28 +1022,24 @@ test('restore preserves plan/readiness/input safeguards and the recorded newest-
   assert.deepEqual(writes, ['claude --continue\r']);
 });
 
-test('local and remote Codex restoration retain routing, interrupted continuation and in-flight input guards', async t => {
+test('local and remote Codex restoration uses app-server without terminal writes or synthetic continuation prompts', async t => {
   const id = '00000000-0000-4000-8000-000000000002';
-  for (const kind of ['ssh']) for (const state of ['complete', 'interrupted']) {
-    const h = await harness(t, kind), writes = [], requests = [];
-    h.store.setRestore(h.s.terminalId, { agent: 'codex', threadId: id });
-    const info = { id, state };
-    h.context.recentSession = async () => info;
+  for (const kind of ['local', 'ssh']) for (const state of ['complete', 'interrupted']) {
+    const h = await harness(t, kind), starts = [];
+    h.store.setRestore(h.s.terminalId, { agent: 'codex', threadId: id, interrupted: state === 'interrupted' });
+    h.context.nativeSessions = { start: async (...args) => starts.push(args) };
     Object.assign(h.s, { ready: true, codexActive: false, codexAvailable: true,
-      gate: { input: text => writes.push(['input', text]), afterPrompt: text => writes.push(['afterPrompt', text]) },
-      terminal: { request: async (op, args) => { requests.push([op, args.threadId]); return info; } } });
+      gate: { input: () => assert.fail('no Codex terminal write'), afterPrompt: () => assert.fail('no Codex terminal write') },
+      terminal: { request: () => assert.fail('no legacy resume-info or local history lookup') } });
     h.context.restorePlans.set(h.s.terminalId, { codex: true });
     await h.context.resumeAfterPrompt(h.project, h.s);
-    assert.deepEqual(writes, [[kind === 'ssh' ? 'input' : 'afterPrompt', `codex resume ${id}${state === 'interrupted' ? ' "继续"' : ''}\r`]]);
-    assert.deepEqual(requests, kind === 'ssh' ? [['resume-info', id]] : []);
-    assert.equal(h.project.completionArmed, state === 'interrupted');
-    h.s.codexActive = true; h.apply('complete', 'codex-restored', 3000);
-    assert.equal(h.alerts(), state === 'interrupted' ? 1 : 0);
+    assert.equal(starts.length, 1); assert.equal(starts[0][0], h.s.terminalId);
+    assert.equal(starts[0][1].agent, 'codex'); assert.equal(starts[0][1].resume, true);
+    assert.equal(h.project.completionArmed, false, 'restoring history does not submit a prompt');
   }
   const h = await harness(t, 'ssh');
-  Object.assign(h.s, { ready: true, codexActive: false, codexAvailable: true,
-    gate: { input: () => assert.fail('typed input must cancel in-flight restore') },
-    terminal: { request: async () => { h.s.inputDirty = true; return { id, state: 'interrupted' }; } } });
+  h.context.nativeSessions = { start: () => assert.fail('dirty shell cancels restore') };
+  Object.assign(h.s, { ready: true, codexActive: false, inputDirty: true });
   h.context.restorePlans.set(h.s.terminalId, { codex: true });
   await h.context.resumeAfterPrompt(h.project, h.s);
   assert.equal(h.project.completionArmed, false);

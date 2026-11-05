@@ -3,7 +3,7 @@ const path = require('node:path');
 
 const MAX_AGE = 30 * 24 * 60 * 60 * 1000;
 const HASH = /^[a-f0-9]{32}(?:[a-f0-9]{32})?$/;
-const SNAPSHOT = /^[a-f0-9]{64}-[a-f0-9]{32}(?:[a-f0-9]{32})?\.md(?:\.json)?$/;
+const SNAPSHOT = /^[a-f0-9]{32}(?:[a-f0-9]{32})?-[a-f0-9]{32}(?:[a-f0-9]{32})?\.md(?:\.json)?$/;
 
 function pruneDeliveryFiles(folder, live, report, now = Date.now()) {
   const cutoff = now - MAX_AGE;

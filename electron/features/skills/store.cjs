@@ -95,11 +95,11 @@ class SkillsStore {
 
   pruneProjects() {
     const projects = new Set(this.getProjects().map(project => project.id));
-    const retained = new Set([...projects].map(safeId)), folder = path.join(this.dataDir, 'skill-delivery');
+    const retained = new Set([...projects].flatMap(id => [safeId(id), safeId(id).slice(0, 32)])), folder = path.join(this.dataDir, 'skill-delivery');
     if (!this.deliveryProjects || retained.size !== this.deliveryProjects.size || [...retained].some(id => !this.deliveryProjects.has(id))) {
       try {
         for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
-          const match = /^([a-f0-9]{64})-(?:claude|codex|preview|[a-f0-9]{32}|[a-f0-9]{64})\.md(?:\.json)?$/.exec(entry.name);
+          const match = /^([a-f0-9]{32}|[a-f0-9]{64})-(?:claude|codex|preview|[a-f0-9]{32}|[a-f0-9]{64})\.md(?:\.json)?$/.exec(entry.name);
           if (entry.isFile() && match && !retained.has(match[1])) fs.rmSync(path.join(folder, entry.name), { force: true });
         }
         this.deliveryProjects = retained;
@@ -380,7 +380,7 @@ class SkillsStore {
       return { ...info, ...(remote ? { path: remotePath(this.entries.get(info.id)) } : {}) };
     });
     const manifest = remote ? '{AGENTRIX_SKILLS}/instructions.md' : path.join(this.dataDir, 'skill-delivery',
-      `${safeId(project.id)}-${agent === 'claude' || agent === 'codex' ? agent : 'preview'}.md`);
+      `${safeId(project.id).slice(0, 32)}-${agent === 'claude' || agent === 'codex' ? agent : 'preview'}.md`);
     return { skills, remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
       pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)), manifest, routingNote };
   }
@@ -415,9 +415,9 @@ class SkillsStore {
       delivery.fingerprint = digest(JSON.stringify([instructions, skills.filter(skill => skill.enabled).map(skill => [skill.id, this.entries.get(skill.id)?.text])]));
       // Hooks need the launch's first-run details even if another session has already rewritten the current manifest.
       // Like receipts, the launch hash keeps 128 bits so PowerShell 5.1 can read snapshots under a long profile path.
-      delivery.sessionManifest = path.join(path.dirname(manifest), `${safeId(project.id)}-${safeId(JSON.stringify([sessionId, agent, delivery.fingerprint])).slice(0, 32)}.md`);
+      delivery.sessionManifest = path.join(path.dirname(manifest), `${safeId(project.id).slice(0, 32)}-${safeId(JSON.stringify([sessionId, agent, delivery.fingerprint])).slice(0, 32)}.md`);
       try {
-        const current = agent === 'claude' && sessionId ? path.join(path.dirname(manifest), `${safeId(project.id)}-${digest(JSON.stringify([sessionId, agent, 'current'])).slice(0, 32)}.md`) : null;
+        const current = agent === 'claude' && sessionId ? path.join(path.dirname(manifest), `${safeId(project.id).slice(0, 32)}-${digest(JSON.stringify([sessionId, agent, 'current'])).slice(0, 32)}.md`) : null;
         writeFile(delivery.sessionManifest, instructions);
         writeFile(`${delivery.sessionManifest}.json`, JSON.stringify({ fingerprint: delivery.fingerprint, projectRoot: project.path, roots: [this.builtinDir, this.globalFolder], builtinRoot: this.builtinDir, builtinNames: this.builtinNames(), current }));
         if (sessionId) {

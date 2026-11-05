@@ -8,9 +8,9 @@ const { folderHistory, latestCodexSession, launchCommand } = require('../electro
 
 test('a new project starts each agent fresh, or resumes the conversation found for its folder', () => {
   assert.equal(launchCommand('claude', null), 'claude\r');
-  assert.equal(launchCommand('codex', null), 'codex\r');
+  assert.throws(() => launchCommand('codex', null), /app-server/);
   assert.equal(launchCommand('claude', { id: '0b7c2b4e-5f0a-4d43-9a43-8f1f2f8f0c11', at: 1 }), 'claude --resume 0b7c2b4e-5f0a-4d43-9a43-8f1f2f8f0c11\r');
-  assert.equal(launchCommand('codex', { id: '01a12122-af65-73b0-88ef-19fd79292360', at: 1 }), 'codex resume 01a12122-af65-73b0-88ef-19fd79292360\r');
+  assert.throws(() => launchCommand('codex', { id: '01a12122-af65-73b0-88ef-19fd79292360', at: 1 }), /app-server/);
 });
 
 test("the latest Codex conversation is this folder's own, never another project's newer one", async () => {
@@ -61,7 +61,7 @@ test('agent:launch refuses the removed native mode without starting or replacing
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'), handlers = {}, starts = [], deleted = [];
   const context = vm.createContext({ handle: (name, run) => handlers[name] = run, findProject: () => ({ kind: 'local' }), sessions: new Map(),
     launchPlans: { delete: id => deleted.push(id) }, restorePlans: { delete: id => deleted.push(id) }, startTerminal: () => assert.fail('no Codex TUI'),
-    nativeSessions: { start: async (...args) => starts.push(args) }, broadcast() {} });
+    store: { findTerminal: () => ({ record: {} }) }, nativeSessions: { start: async (...args) => starts.push(args) }, broadcast() {} });
   const start = main.indexOf("  handle('agent:launch'");
   vm.runInContext(main.slice(start, main.indexOf('  registerNativeIpc(', start)), context);
   for (const agent of ['claude', 'codex']) await assert.rejects(handlers['agent:launch']('fixture', agent, 'native'), /Unsupported agent session mode/);

@@ -20,7 +20,7 @@ test('legacy codexView is ignored without rewriting preferences; later saves omi
   assert.equal(fs.readFileSync(file, 'utf8'), retiredOnly); assert.equal(fs.readdirSync(directory).length, 1);
 });
 
-test('startup restores a legacy local Codex terminal using its thread while SSH and normal shells stay terminals', async () => {
+test('startup restores a legacy local and SSH Codex using its thread while normal shells stay terminals', async () => {
   for (const kind of ['local', 'ssh']) for (const agent of ['codex', 'claude']) for (const active of [true, false]) {
     const calls = [], saved = { agent, codex: active, threadId: 'same-thread', cwd: '/synthetic/subfolder' };
     const context = { store: { findTerminal: () => ({ project: { kind }, record: { restore: saved } }) },
@@ -28,7 +28,7 @@ test('startup restores a legacy local Codex terminal using its thread while SSH 
       nativeSessions: { start: async (id, options) => calls.push(['app-server', id, options]) } };
     vm.createContext(context); vm.runInContext(main.slice(main.indexOf('function restoreTerminal('), main.indexOf('function startTerminal(')), context);
     context.restoreTerminal('t'); await new Promise(resolve => setImmediate(resolve));
-    if (kind === 'local' && agent === 'codex' && active) {
+    if (agent === 'codex' && active) {
       assert.equal(calls[0][0], 'app-server'); assert.equal(calls[0][2].resume, true); assert.equal(context.restorePlans.size, 0);
     } else assert.equal(calls[0][0], 'terminal');
   }
@@ -39,17 +39,19 @@ test('startup restores a legacy local Codex terminal using its thread while SSH 
   context.restoreTerminal('claude'); assert.equal(shell, true, 'an unavailable native composition keeps Claude terminal recovery');
 });
 
-test('the launcher sends every local Codex mode to app-server and keeps SSH refusal', async () => {
+test('the launcher sends every local and SSH Codex mode to app-server', async () => {
   const handlers = new Map(), calls = [], saved = {};
   let kind = 'local';
   const context = { handle: (name, value) => handlers.set(name, value), findProject: () => ({ kind }), launchPlans: new Map(), restorePlans: new Map(),
     nativeSessions: { start: async (id, options) => calls.push([id, options]) }, folderOf: () => '/synthetic', folderHistory: async () => ({ codex: { id: 'same-thread' } }),
-    store: { setRestore: (_id, value) => Object.assign(saved, value) }, broadcast() {}, startTerminal: () => assert.fail('no local Codex TUI') };
+    store: { findTerminal: () => ({ record: { restore: saved } }), setRestore: (_id, value) => Object.assign(saved, value) }, broadcast() {}, startTerminal: () => assert.fail('no local Codex TUI') };
   vm.createContext(context); vm.runInContext(main.slice(main.indexOf("  handle('agent:launch',"), main.indexOf('  registerNativeIpc({ handle });')), context);
   for (const mode of ['new', 'continue']) await handlers.get('agent:launch')('t', 'codex', mode);
   assert.equal(calls.length, 2); assert.equal(calls[1][1].resume, true); assert.equal(saved.threadId, 'same-thread');
   await assert.rejects(handlers.get('agent:launch')('t', 'codex', 'native'), /Unsupported agent session mode/);
-  kind = 'ssh'; await assert.rejects(handlers.get('agent:launch')('t', 'codex', 'new'), /SSH/);
+  kind = 'ssh'; await handlers.get('agent:launch')('t', 'codex', 'new');
+  assert.equal(calls.at(-1)[1].agent, 'codex');
+  await assert.rejects(handlers.get('agent:launch')('t', 'claude', 'new'), /SSH/);
 });
 
 for (const [code, words] of [['codex_cli_required', '未找到 Codex'], ['unsupported_codex_version', '版本过低'], ['rpc_timeout', '连接失败']]) {

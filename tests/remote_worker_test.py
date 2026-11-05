@@ -32,6 +32,57 @@ GIT_TOO_OLD = _git_too_old()
 
 
 class RemoteFilesTest(unittest.TestCase):
+    def test_codex_process_uses_app_server_and_channel_scoped_bounded_bytes(self):
+        events, commands = [], []
+        self.worker.emit = events.append
+        self.worker.agent_env = dict(os.environ, GIT_CEILING_DIRECTORIES=self.temp.name)
+        original = subprocess.Popen
+        def launch(argv, **options):
+            commands.append(argv)
+            return original([sys.executable, "-u", "-c", "import sys; data=sys.stdin.buffer.readline();sys.stdout.buffer.write(data);sys.stdout.buffer.flush()"], **options)
+        with mock.patch.object(remote.shutil, "which", return_value="/fake/codex"), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
+            self.worker.codex_open("native-1")
+            self.worker.codex_input("native-1", base64.b64encode(b"bound\n").decode("ascii"))
+            for _ in range(100):
+                if any(event["type"] == "codex-exit" for event in events): break
+                time.sleep(0.01)
+        self.assertEqual(commands, [["/fake/codex", "app-server", "--listen", "stdio://"]])
+        data = [event for event in events if event["type"] == "codex-data"]
+        self.assertEqual(b"".join(base64.b64decode(event["data"]) for event in data), b"bound\n")
+        self.assertTrue(all(event["processId"] == "native-1" for event in events))
+        with self.assertRaises(ValueError): self.worker.codex_input("native-1", base64.b64encode(b"x" * 32769))
+        with self.assertRaises(ValueError): self.worker.codex_open("../bad")
+
+    def test_native_context_preserves_quotes_and_multiline_without_a_terminal(self):
+        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
+        with mock.patch.object(self.worker, "install_skills", side_effect=lambda note: note), mock.patch.object(self.worker, "handoff_path", return_value="/tmp/offline.md"):
+            self.assertEqual(self.worker.startup_note('Quoted "context"\nnext', native=True), 'Quoted "context"\nnext')
+            self.assertEqual(self.worker.startup_note('Quoted "context"\nnext'), '')
+
+    def test_remote_close_can_reap_a_codex_that_stopped_reading_stdin(self):
+        self.worker.agent_env = dict(os.environ, GIT_CEILING_DIRECTORIES=self.temp.name)
+        original, children = subprocess.Popen, []
+        def launch(argv, **options):
+            child = original([sys.executable, "-c", "import time;time.sleep(60)"], **options)
+            children.append(child)
+            return child
+        def fill():
+            try:
+                for _ in range(20): self.worker.codex_input("blocked", base64.b64encode(b"x" * 32768))
+            except (OSError, ValueError): pass
+        with mock.patch.object(remote.shutil, "which", return_value="/fake/codex"), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
+            self.worker.codex_open("blocked")
+        writer = threading.Thread(target=fill, daemon=True)
+        closer = threading.Thread(target=lambda: self.worker.codex_close("blocked"), daemon=True)
+        try:
+            writer.start(); time.sleep(0.05); self.assertTrue(writer.is_alive())
+            closer.start(); closer.join(2)
+            self.assertFalse(closer.is_alive(), "a blocked input write must not hold the process registry lock")
+        finally:
+            if children[0].poll() is None: children[0].kill()
+            children[0].wait(); writer.join(2); closer.join(2)
+        self.assertFalse(writer.is_alive())
+
     def test_dispatch_events_use_the_same_authenticated_envelope_over_ssh(self):
         events = []
         self.worker.emit = events.append

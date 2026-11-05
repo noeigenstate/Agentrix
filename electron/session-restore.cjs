@@ -43,12 +43,6 @@ async function recentSession(projectPath, codexHome = process.env.CODEX_HOME || 
   return null;
 }
 
-function resumeCommand(info, allowFresh) {
-  if (!info) return allowFresh ? 'codex resume --last\r' : null;
-  if (!/^[a-f\d-]{36}$/i.test(info.id)) throw new Error('无效的 Codex 会话。');
-  return `codex resume ${info.id}${info.state === 'interrupted' ? ' "继续"' : ''}\r`;
-}
-
 // Claude Code reopens its own conversation. Its hooks record the session and whether the last turn was
 // left unfinished; that turn gets the same "继续". Without a recorded session, continue the newest one here.
 function claudeResumeCommand(restore) {
@@ -57,4 +51,4 @@ function claudeResumeCommand(restore) {
   return `claude --resume ${restore.threadId}${restore.interrupted ? ' "继续"' : ''}\r`;
 }
 
-module.exports = { recentSession, resumeCommand, claudeResumeCommand, records, interactiveSession };
+module.exports = { recentSession, claudeResumeCommand, records, interactiveSession };

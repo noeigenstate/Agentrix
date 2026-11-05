@@ -191,15 +191,18 @@ test('startup notes deliver always/auto/disabled and every optimization permissi
   store.setOptions('user:fixed', { autoOptimize: false });
   const delivery = store.delivery(projects[0]);
   const note = startupNote('Reading note.', 'C:\\handoff\\one.md', path.join(projects[0].path, 'skills'), delivery);
+  const delivered = note.includes('Before the first task of this launch, read and follow') ? fs.readFileSync(delivery.sessionManifest, 'utf8') : note;
+  assert.ok(note.length <= MAX_NOTE);
+  if (delivered !== note) assert.ok(note.includes(delivery.sessionManifest.replace(/\\/g, '/')));
   const normalPath = value => value.replace(/\\/g, '/');
-  assert.ok(note.includes(`Before any task, read and follow ${normalPath(store.entry('user:always').path)}; this is its first run in this project.`));
-  assert.ok(note.includes('automatic: A tested procedure. ('));
-  assert.ok(!note.includes('/skills/disabled/SKILL.md'));
-  assert.ok(note.includes('do not use these: disabled-project'));
-  assert.ok(note.includes(`${normalPath(store.entry('user:fixed').path)}: must not change it`));
-  assert.ok(note.includes(`${normalPath(store.entry('user:automatic').path)}: may update it in place`));
-  assert.ok(note.includes(`${normalPath(dataDir)}/skill-pending/confirm/SKILL.md`));
-  assert.ok(note.includes('Claude Code installed; Codex missing'));
+  assert.ok(delivered.includes(`Before any task, read and follow ${normalPath(store.entry('user:always').path)}; this is its first run in this project.`));
+  assert.ok(delivered.includes('automatic: A tested procedure. ('));
+  assert.ok(!delivered.includes('/skills/disabled/SKILL.md'));
+  assert.ok(delivered.includes('do not use these: disabled-project'));
+  assert.ok(delivered.includes(`${normalPath(store.entry('user:fixed').path)}: must not change it`));
+  assert.ok(delivered.includes(`${normalPath(store.entry('user:automatic').path)}: may update it in place`));
+  assert.ok(delivered.includes(`${normalPath(dataDir)}/skill-pending/confirm/SKILL.md`));
+  assert.ok(delivered.includes('Claude Code installed; Codex missing'));
   assert.ok(!/["\\\r\n]/.test(note));
 });
 

@@ -16,7 +16,7 @@ function fixture(t) {
   const query = fake.sdk.query;
   fake.sdk.query = spec => {
     let model = spec.options.model || 'fake-model';
-    return { ...query(spec), supportedModels: async () => [{ value: 'fake-model', displayName: 'Fixture', description: 'Offline', supportedEffortLevels: ['low', 'high'] }],
+    return { ...query(spec), supportedModels: async () => [{ value: 'alias', resolvedModel: 'fake-model', displayName: 'Fixture', description: 'Offline', supportedEffortLevels: ['low', 'high'] }],
       setModel: async value => { model = value || 'fake-model'; }, applyFlagSettings: async () => {}, getContextUsage: async () => ({ model }) };
   };
   const runtime = createClaudeRuntime({ directory: path.join(root, 'state'), loadSdk: async () => fake.sdk, resolveExecutable: async () => 'synthetic-only',
@@ -32,11 +32,17 @@ test('run options read is lazy; acknowledged choices survive budget renewal', as
   assert.deepEqual((await session.models())[0].efforts, ['low', 'high']);
   await session.send({ clientMessageId: 'one', text: 'first' }); await tick();
   assert.equal((await session.runOptions({})).model, 'fake-model');
-  await session.runOptions({ model: 'fake-next', effort: 'low', fast: true });
+  assert.equal((await session.models())[0].value, 'fake-model');
+  await assert.rejects(session.runOptions({ fast: true }), /Claude Agent SDK 目前不支持快速模式/);
+  assert.equal((await session.runOptions({})).fast, false);
+  await session.runOptions({ model: 'fake-next', effort: 'low', fast: false });
   await session.send({ clientMessageId: 'two', text: 'second' }); await tick();
   assert.equal(f.fake.calls.at(-1).options.model, 'fake-next'); assert.equal(f.fake.calls.at(-1).options.effort, 'low');
-  assert.equal(JSON.parse(fs.readFileSync(f.fake.calls.at(-1).options.settings)).fastMode, true);
+  assert.equal(JSON.parse(fs.readFileSync(f.fake.calls.at(-1).options.settings)).fastMode, false);
   assert.equal(f.fake.calls.at(-1).options.resume, f.fake.inputs[0].session_id || session.snapshot().events.find(event => event.providerSessionId)?.providerSessionId);
+  assert.equal((await session.runOptions({ model: null })).model, 'fake-model');
+  await session.send({ clientMessageId: 'default', text: 'default model' }); await tick();
+  assert.equal(f.fake.calls.at(-1).options.model, undefined);
 });
 
 test('rapid option updates serialize and a following send sees the last acknowledged choice', async t => {
@@ -59,6 +65,9 @@ test('new conversation migrates binding before old close and never resumes the p
   await native.send('terminal', first.runtimeSessionId, { clientMessageId: 'one', text: 'first' }); await tick();
   const oldProvider = native.snapshot('terminal').events.find(event => event.providerSessionId).providerSessionId, before = events.length;
   const next = await native.newConversation('terminal', first.runtimeSessionId);
+  const ready = native.snapshot('terminal');
+  assert.equal(ready.runtimeSessionId, next.runtimeSessionId);
+  assert.equal(ready.events.findLast(event => event.type === 'session.state').payload.state, 'idle');
   assert.notEqual(next.runtimeSessionId, first.runtimeSessionId); assert.equal(migration[0].providerSessionId, null);
   assert.ok(!events.slice(before).some(event => event.payload.state === 'stopped'));
   assert.throws(() => native.interrupt('terminal', first.runtimeSessionId));

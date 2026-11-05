@@ -19,6 +19,7 @@ test('real app-server starts and resumes the same thread despite legacy terminal
     env[name] = path.join(root, name); fs.mkdirSync(env[name]);
   }
   env.STANDIN_API_KEY = 'offline-key'; env.CI = '1';
+  env.GIT_CEILING_DIRECTORIES = root;
   env.AGENTRIX_BOOTSTRAP = path.join(cwd, 'bootstrap.json'); fs.writeFileSync(env.AGENTRIX_BOOTSTRAP, '{}');
   const requests = [], launches = [], events = [], sessions = [];
   const server = http.createServer((request, response) => {
@@ -31,7 +32,7 @@ test('real app-server starts and resumes the same thread despite legacy terminal
     });
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
-  fs.writeFileSync(path.join(env.CODEX_HOME, 'config.toml'), `model = "gpt-6.1-sol"\nmodel_provider = "local"\n[model_providers.local]\nname = "Local"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nenv_key = "STANDIN_API_KEY"\n`);
+  fs.writeFileSync(path.join(env.CODEX_HOME, 'config.toml'), `model = "gpt-6.1-sol"\nmodel_provider = "local"\n[model_providers.local]\nname = "Local"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nenv_key = "STANDIN_API_KEY"\n[windows]\nsandbox = "unelevated"\n`);
   const codex = createCodexRuntime({ resolveExecutable: async () => process.env.AGENTRIX_REAL_CODEX,
     spawnProcess: (file, args, options) => { assert.equal(options.env.AGENTRIX_BOOTSTRAP, env.AGENTRIX_BOOTSTRAP); launches.push(args); return spawn(file, args, options); } });
   let threadId;
@@ -43,6 +44,24 @@ test('real app-server starts and resumes the same thread despite legacy terminal
     for (let n = 0; n < 600 && !events.some(event => event.type === 'turn.completed'); n++) await new Promise(resolve => setTimeout(resolve, 20));
     assert.ok(events.some(event => event.type === 'item.upsert' && event.payload.content?.text === 'OFFLINE CODEX ONLY'));
     await direct.close();
+    // External helpers and the Lab have no GUI control socket. Both fresh and
+    // resumed invocations must use the same real app-server transport.
+    const { run } = require('../integration/dispatch.cjs');
+    const brief = path.join(root, 'helper-brief.md'); fs.writeFileSync(brief, 'OFFLINE_HELPER');
+    const helperEnv = { ...env }; delete helperEnv.AGENTRIX_BOOTSTRAP;
+    const helperLaunches = [];
+    for (const resume of [[], ['--resume', threadId]]) {
+      const out = path.join(root, resume.length ? 'resumed.md' : 'fresh.md'); let stdout = '';
+      const code = await run(['codex', '--role', 'exec', '--title', 'Offline helper', '--model', 'gpt-6.1-sol',
+        '--effort', 'high', '--cwd', cwd, '--brief', brief, '--out', out, ...resume], {
+        env: helperEnv, stdout: { write: value => { stdout += value; } },
+        resolveExecutable: (_agent, args) => { helperLaunches.push(args); return { file: process.env.AGENTRIX_REAL_CODEX, args }; },
+      });
+      assert.equal(code, 0, stdout); assert.equal(fs.readFileSync(out, 'utf8'), 'OFFLINE CODEX ONLY');
+      if (resume.length) assert.ok(stdout.includes('session ' + threadId));
+      assert.doesNotMatch(stdout, /fallback/);
+    }
+    assert.equal(helperLaunches.length, 2); assert.ok(helperLaunches.every(args => args[0] === 'app-server'));
     const directory = path.join(root, 'native'); fs.mkdirSync(directory);
     const settingsFile = path.join(directory, 'settings.json');
     fs.writeFileSync(settingsFile, JSON.stringify({ claudePath: 'terminal-only', codexView: 'terminal', monthlyBudgetUsd: null, codexAutoReset: false }));

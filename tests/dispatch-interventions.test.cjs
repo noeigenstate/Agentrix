@@ -22,11 +22,26 @@ const fs = require('node:fs'), path = require('node:path'), {spawn} = require('n
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 (async () => {
   const fixture = JSON.parse(fs.readFileSync(process.env.OWNER_FIXTURE, 'utf8'));
-  let brief = ''; for await (const chunk of process.stdin) brief += chunk;
+  let brief = '', turnRequest, threadRequest;
+  const rpc = message => process.stdout.write(JSON.stringify(message) + '\\n');
+  if (fixture.agent === 'codex') {
+    brief = await new Promise(resolve => require('node:readline').createInterface({input:process.stdin}).on('line', line => {
+      const request=JSON.parse(line), p=request.params||{};
+      if (request.id === undefined) return;
+      if (['thread/resume','turn/start','turn/steer','turn/interrupt'].includes(request.method) && !p.threadId) return rpc({id:request.id,error:{code:-32600,message:'Invalid request: missing field \`threadId\`'}});
+      if (request.method === 'turn/start') {turnRequest=request; resolve(p.input.map(x=>x.text||'').join('\\n'));return;}
+      if (request.method === 'turn/steer') return rpc({id:request.id,error:{code:-32602,message:'Turn ended'}});
+      if (request.method === 'turn/interrupt') rpc({method:'turn/completed',params:{threadId:fixture.session,turn:{id:'fixture-turn',status:'interrupted'}}});
+      let result={};
+      if(request.method==='initialize')result={userAgent:'codex/0.166.0'};
+      if(['thread/start','thread/resume'].includes(request.method)){threadRequest=request;result={thread:{id:fixture.badSession&&fs.existsSync(path.join(fixture.root,'count'))?fixture.otherSession:p.threadId||fixture.session,turns:[]},cwd:process.cwd(),sandbox:{type:p.sandbox==='read-only'?'readOnly':'workspaceWrite'}};}
+      rpc({id:request.id,result});
+    }));
+  } else for await (const chunk of process.stdin) brief += chunk;
   const countFile = path.join(fixture.root, 'count');
   const round = (fs.existsSync(countFile) ? Number(fs.readFileSync(countFile, 'utf8')) : 0) + 1;
   fs.writeFileSync(countFile, String(round));
-  fs.appendFileSync(path.join(fixture.root, 'captures'), JSON.stringify({ round, args: process.argv.slice(2), brief, pid: process.pid }) + '\\n');
+  fs.appendFileSync(path.join(fixture.root, 'captures'), JSON.stringify({ round, args: process.argv.slice(2), brief, pid: process.pid, threadRequest }) + '\\n');
   const id = round > 1 && fixture.badSession ? fixture.otherSession : fixture.session;
   if (fixture.agent === 'codex') {
     const directory = path.join(process.env.CODEX_HOME, 'sessions/2026/01/01'); fs.mkdirSync(directory, {recursive:true});
@@ -39,7 +54,8 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
       for (const usage of [payload.info?.total_token_usage, payload.thread_token_usage]) if (usage) usage.output_tokens += (round - 1) * 150;
     }
     fs.appendFileSync(path.join(directory, 'rollout-fixture-' + id + '.jsonl'), records.filter(record => round === 1 || record.type !== 'session_meta').map(record => JSON.stringify(record) + '\\n').join(''));
-    process.stdout.write(JSON.stringify({type:'thread.started',thread_id:id}) + '\\n');
+    rpc({id:turnRequest.id,result:{turn:{id:'fixture-turn',status:'inProgress'}}});
+    rpc({method:'turn/started',params:{threadId:id,turn:{id:'fixture-turn'}}});
   } else process.stdout.write(JSON.stringify({type:'system',subtype:'init',session_id:id,model:'claude-sonnet-5-5',effort:'high',fast_mode:false}) + '\\n');
   const claudeResult = () => process.stdout.write(JSON.stringify({type:'result',subtype:'success',session_id:id,result:'done '+round,usage:{input_tokens:5,cache_creation_input_tokens:2,cache_read_input_tokens:3,output_tokens:10},...(fixture.untimedRound === round ? {} : {duration_api_ms:1000}),total_cost_usd:0.01}) + '\\n');
   if (fixture.agent === 'claude' && fixture.untimedRound === round) claudeResult();
@@ -50,7 +66,11 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   for (const end = Date.now() + 15000; !fs.existsSync(path.join(fixture.root, 'release-' + round)) && Date.now() < end;) await pause(20);
   if (round === 1 && fixture.outsideScope) fs.writeFileSync('outside.txt', 'Synthetic unauthorized change');
   if (fixture.agent === 'claude') { if (fixture.untimedRound !== round) claudeResult(); }
-  else { fs.writeFileSync(process.argv[process.argv.indexOf('-o') + 1], 'done '+round); process.stdout.write(JSON.stringify({type:'turn.completed',usage:{output_tokens:150}})+'\\n'); }
+  else {
+    rpc({method:'item/completed',params:{threadId:id,turnId:'fixture-turn',item:{id:'input',type:'userMessage',clientId:turnRequest.params.clientUserMessageId,content:turnRequest.params.input}}});
+    rpc({method:'item/completed',params:{threadId:id,turnId:'fixture-turn',item:{id:'answer',type:'agentMessage',text:'done '+round,phase:'final_answer'}}});
+    rpc({method:'turn/completed',params:{threadId:id,turn:{id:'fixture-turn',status:'completed'}}});
+  }
 })().catch(error => {process.stderr.write(String(error));process.exitCode=1;});
 `;
 
@@ -109,9 +129,9 @@ test('default send leaves the child running and joins ordered messages in same-s
     const resumed = f.captures()[1];
     assert.match(resumed.brief, /业主插话：First change\.[\s\S]*业主插话：第二条\nKeep the scope\.[\s\S]*继续执行当前任务。/);
     assert.match(resumed.brief, /src\/\*\*/);
-    assert.deepEqual(resumed.args.slice(0, 3), agent === 'codex' ? ['exec', 'resume', f.session] : ['-p', '--resume', f.session]);
-    assert.ok(resumed.args.includes(agent === 'codex' ? 'model_reasoning_effort=max' : 'plan'));
-    if (agent === 'codex') { assert.ok(!resumed.args.includes('-s')); assert.ok(resumed.args.includes('service_tier="fast"')); }
+    assert.deepEqual(resumed.args.slice(0, 3), agent === 'codex' ? ['app-server', '--listen', 'stdio://'] : ['-p', '--resume', f.session]);
+    if (agent === 'claude') assert.ok(resumed.args.includes('plan'));
+    if (agent === 'codex') { assert.equal(resumed.threadRequest.params.threadId, f.session); assert.equal(resumed.threadRequest.params.serviceTier, 'fast'); assert.equal(resumed.threadRequest.params.config.model_reasoning_effort, 'max'); }
     await f.api.interveneAgent('terminal', f.target.callId, 'During the resumed run.');
     assert.equal(f.children[1].exitCode, null);
     f.release(2); await until(() => f.captures().length === 3); f.release(3);
@@ -220,9 +240,9 @@ test('scope violations stop queued continuation and a resumed session mismatch f
   assert.equal(scoped.captures().length, 1); assert.match(scoped.stdout(), /OUT OF SCOPE: outside.txt/);
   const mismatch = await fixture(t, { badSession: true });
   await mismatch.api.interveneAgent('terminal', mismatch.target.callId, 'Continue the same session.');
-  mismatch.release(1); await until(() => mismatch.captures().length === 2);
+  mismatch.release(1);
   assert.notEqual(await mismatch.result, 0); assert.match(mismatch.stdout(), /reason error/);
-  assert.match(mismatch.stdout(), /resume failed .*different session/);
+  assert.match(mismatch.stdout(), /thread_resume/); assert.equal(mismatch.captures().length, 1, 'a mismatched resume fails before input');
   assert.equal(mismatch.team.entries().filter(entry => entry.type === 'end').length, 1);
   assert.equal(mismatch.team.entries().find(entry => entry.type === 'end').session, mismatch.session);
 });

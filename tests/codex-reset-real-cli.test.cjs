@@ -13,6 +13,7 @@ test('real Codex 0.166 validates reset params and rejects an isolated profile be
 }, async t => {
   const temporary = os.tmpdir(), root = fs.mkdtempSync(path.join(temporary, 'agx-reset-real-'));
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => /^(SystemRoot|WINDIR|PATH|PATHEXT|COMSPEC)$/i.test(name)));
+  env.GIT_CEILING_DIRECTORIES = root;
   for (const name of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'CODEX_HOME', 'TEMP', 'TMP', 'AGENTRIX_DATA_DIR']) {
     env[name] = path.join(root, name); fs.mkdirSync(env[name]);
   }

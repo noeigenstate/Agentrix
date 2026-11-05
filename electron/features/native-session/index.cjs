@@ -29,8 +29,11 @@ function createNativeSessions(options) {
     async usage(projectId) {
       if (options.validateProject?.(projectId)?.kind === 'ssh') {
         const usage = router.usage({}, projectId);
-        for (const agent of ['claude', 'codex']) usage.agents[agent] = { path: null, reason: null, next: { path: null, reason: null }, limits: null,
+        usage.agents.claude = { path: null, reason: null, next: { path: null, reason: null }, limits: null,
           connection: { kind: 'none', active: false, source: null, observedAt: null } };
+        const connections = await options.connections?.(projectId);
+        usage.agents.codex.next = { path: 'native', reason: null };
+        usage.agents.codex.connection = connections?.codex || { kind: 'none', active: false, source: null, observedAt: null };
         return { ...usage, switches: { waiting: 0 } };
       }
       const usage = router.usage(await options.usageInputs?.(projectId), projectId);

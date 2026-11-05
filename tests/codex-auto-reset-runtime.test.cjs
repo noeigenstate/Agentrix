@@ -35,6 +35,9 @@ for (const [mode, expected, confirmed = true] of [['reset-unread', 2], ['reset-m
 for (const options of [{ owner: 'dispatch' }, { owner: 'gui', kind: 'ssh' }]) test(`reset never runs for ${JSON.stringify(options)}`, async t => {
   const lifetime = resources(t); let resets = 0;
   const runtime = createCodexRuntime({ resolveExecutable: async () => 'fake-only',
+    launchRemote: async spec => ({ cwd: spec.cwd, child: lifetime.child(spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], {
+      env: spec.env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+    })) }),
     spawnProcess: (_file, _args, options) => lifetime.child(spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], options)),
     resetAtLimit: async () => { resets++; return { status: 'redeemed', confirmed: true }; },
   }).create({ ...options, cwd: os.tmpdir(), env: { PATH: '', CODEX_HOME: path.join(os.tmpdir(), 'fake-unused'), SYNTHETIC_CODEX_MODE: 'reset-unread' } }, () => {});

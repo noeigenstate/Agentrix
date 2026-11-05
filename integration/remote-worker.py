@@ -830,6 +830,7 @@ class Worker:
         self.activity_reader = None
         self.claude_reader = None
         self.activity_lock = threading.Lock()
+        self.codex_processes = {}
         # Its channel opens in a thread of its own (main): a shutdown that arrives meanwhile waits for the shell.
         self.lock = threading.RLock()
 
@@ -842,6 +843,60 @@ class Worker:
             # The lifecycle snapshot (None while history is still being read), with the conversation's records.
             snapshot = self.activity_reader.read()
             return {"snapshot": snapshot, **self.activity_reader.take()}
+
+    def codex_open(self, process_id):
+        if not isinstance(process_id, str) or not re.fullmatch(r"[\w-]{1,160}", process_id): raise ValueError("无效的远程进程标识。")
+        with self.lock:
+            if self.stopping or process_id in self.codex_processes: raise ValueError("远程进程已关闭或已经启动。")
+            if len(self.codex_processes) >= 8: raise ValueError("远程 Codex 进程数量已达上限。")
+            executable = shutil.which("codex")
+            if not executable: raise ValueError("远端未找到 Codex 程序。")
+            child = subprocess.Popen([executable, "app-server", "--listen", "stdio://"], cwd=self.coding_root,
+                env=dict(self.agent_env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                start_new_session=os.name == "posix")
+            self.codex_processes[process_id] = child
+        def pump(stream, name):
+            try:
+                while True:
+                    data = os.read(stream.fileno(), 32768)
+                    if not data: break
+                    self.emit({"type": "codex-data", "processId": process_id, "stream": name, "data": base64.b64encode(data).decode("ascii")})
+            except (OSError, ValueError): pass
+        threads = [threading.Thread(target=pump, args=(stream, name), daemon=True) for stream, name in ((child.stdout, "stdout"), (child.stderr, "stderr"))]
+        for thread in threads: thread.start()
+        def wait():
+            code = child.wait()
+            for thread in threads: thread.join(timeout=2)
+            for stream in (child.stdin, child.stdout, child.stderr): stream.close()
+            with self.lock: self.codex_processes.pop(process_id, None)
+            self.emit({"type": "codex-exit", "processId": process_id, "code": code})
+        threading.Thread(target=wait, daemon=True).start()
+        return {"started": True}
+
+    def codex_input(self, process_id, encoded):
+        data = base64.b64decode(encoded, validate=True)
+        if len(data) > 32768: raise ValueError("远程输入块过大。")
+        with self.lock: child = self.codex_processes.get(process_id)
+        if not child or child.poll() is not None: raise ValueError("远程 Codex 已结束。")
+        # A stopped reader can block this pipe. Never hold the worker lock:
+        # codex_close must still be able to kill it and unblock this write.
+        child.stdin.write(data); child.stdin.flush()
+        return {}
+
+    def codex_eof(self, process_id):
+        with self.lock: child = self.codex_processes.get(process_id)
+        if child: child.stdin.close()
+        return {}
+
+    def codex_close(self, process_id):
+        with self.lock: child = self.codex_processes.get(process_id)
+        if child and child.poll() is None:
+            if os.name == "posix":
+                try: os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError: pass
+            else: child.kill()
+            child.wait(timeout=3)
+        return {}
 
     def claude_status(self, path, since):
         if not isinstance(path, str) or not os.path.isabs(path) or len(path) > 4096 or "\0" in path: raise ValueError("Invalid Claude transcript path.")
@@ -1261,12 +1316,12 @@ class Worker:
                     except OSError: pass
                 self.skill_leases.clear()
 
-    def startup_note(self, reading_note):
+    def startup_note(self, reading_note, native=False):
         # Expand every placeholder before applying the shell's existing limit; long notes must not kill a channel.
         note = self.install_skills(reading_note).replace("{AGENTRIX_HANDOFF}", self.handoff_path())
         if "{AGENTRIX_DISPATCH_NOTE}" in note:
             note = note.replace("{AGENTRIX_DISPATCH_NOTE}", self.install_dispatch())
-        return note[:8000] if not set('"\\\n\r') & set(note) else ""
+        return note[:8000] if native or not set('"\\\n\r') & set(note) else ""
 
     def install_dispatch(self):
         if self.dispatch_note is not None: return self.dispatch_note
@@ -1306,18 +1361,10 @@ class Worker:
             return self.skill_paths
         finally: self.skill_note_ready.set()
 
-    def start_terminal(self, cols, rows, reading_note=""):
-        with self.lock:
-            if not self.stopping: self.spawn_terminal(cols, rows, reading_note)
-
-    def spawn_terminal(self, cols, rows, reading_note):
-        if os.name != "posix": raise ValueError("SSH 远端目前需要 Linux、Python 3 和 Bash。")
-        import pty
-        bash = shutil.which("bash")
-        if not bash: raise ValueError("远端没有找到 Bash。")
+    def agent_environment(self, reading_note, native=False):
         self.temp = tempfile.mkdtemp(prefix="agentrix-")
         self.skill_state_dir = os.path.join(os.path.expanduser("~"), ".local", "state", "agentrix", "ssh-skills")
-        reading_note = self.startup_note(reading_note)
+        reading_note = self.startup_note(reading_note, native=native)
         with open(os.path.join(self.temp, "skill-key.txt"), encoding="utf-8") as source: current_key = source.read()
         prune_skill_state(self.skill_state_dir, current_key)
         with open(os.path.join(self.temp, "skill-note.txt"), "w", encoding="utf-8") as output: output.write(reading_note)
@@ -1343,13 +1390,26 @@ class Worker:
         env["AGENTRIX_SKILL_STATE_DIR"] = os.path.join(self.skill_state_dir, "delivered")
         for key in ("NO_COLOR", "NODE_DISABLE_COLORS"): env.pop(key, None)
         if env.get("FORCE_COLOR") == "0": env.pop("FORCE_COLOR", None)
+        self.agent_env, self.agent_context = env, reading_note
+        threading.Thread(target=self.events_loop, daemon=True).start()
+        return env, rc_file
+
+    def start_terminal(self, cols, rows, reading_note=""):
+        with self.lock:
+            if not self.stopping: self.spawn_terminal(cols, rows, reading_note)
+
+    def spawn_terminal(self, cols, rows, reading_note):
+        if os.name != "posix": raise ValueError("SSH 远端目前需要 Linux、Python 3 和 Bash。")
+        import pty
+        bash = shutil.which("bash")
+        if not bash: raise ValueError("远端没有找到 Bash。")
+        env, rc_file = self.agent_environment(reading_note)
         child, master = pty.fork()
         if child == 0:
             os.chdir(self.coding_root)
             os.execve(bash, [bash, "--noprofile", "--rcfile", rc_file, "-i"], env)
         self.child, self.master = child, master
         self.resize(cols, rows)
-        threading.Thread(target=self.events_loop, daemon=True).start()
         threading.Thread(target=self.terminal_loop, daemon=True).start()
 
     def events_loop(self):
@@ -1433,6 +1493,7 @@ class Worker:
         with self.lock:
             if self.stopping: return
             self.stopping = True
+        for process_id in list(self.codex_processes): self.codex_close(process_id)
         for identity in list(self.uploads): self.cancel_upload(identity)
         if self.master is not None:
             try: os.close(self.master)
@@ -1459,7 +1520,9 @@ class Channel:
         try:
             info = worker.initialize(config)
             # The shell starts before "ready", so the size and keys sent after it find the terminal there.
-            worker.start_terminal(config.get("cols", 90), config.get("rows", 24), config.get("readingNote", ""))
+            if config.get("native") is True: worker.agent_environment(config.get("readingNote", ""), native=True)
+            else: worker.start_terminal(config.get("cols", 90), config.get("rows", 24), config.get("readingNote", ""))
+            info.update(cwd=worker.coding_root, context=getattr(worker, "agent_context", ""))
             info["skills"] = worker.skill_paths
             worker.emit({"type": "ready", "info": info})
         except Exception as error:
@@ -1476,7 +1539,11 @@ class Channel:
         worker, identity = self.worker, message.get("id")
         try:
             op = message["op"]
-            if op == "directory": value = worker.directory(message.get("path", ""), message.get("offset", 0))
+            if op == "codex-open": value = worker.codex_open(message.get("processId"))
+            elif op == "codex-input": value = worker.codex_input(message.get("processId"), message.get("data"))
+            elif op == "codex-eof": value = worker.codex_eof(message.get("processId"))
+            elif op == "codex-close": value = worker.codex_close(message.get("processId"))
+            elif op == "directory": value = worker.directory(message.get("path", ""), message.get("offset", 0))
             elif op == "git": value = worker.git(message.get("action"), message.get("value"))
             elif op == "stat": value = worker.metadata(message["path"])
             elif op == "read": value = worker.read(message["path"], message["offset"], message["length"])

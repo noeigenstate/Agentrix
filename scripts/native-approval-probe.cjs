@@ -4,7 +4,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const { createStandin } = require('./native-approval-model.cjs');
-const { createNativeSession, resolveCli } = require('../electron/features/terminal/native-session.cjs');
+const { createNativeSession, resolveCli } = require('../scripts/codex-terminal-probe.cjs');
 
 function isolatedEnvironment(home, inherited = process.env) {
   const env = {};

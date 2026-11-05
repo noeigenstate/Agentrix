@@ -16,6 +16,7 @@ async function waitWithin(task, milliseconds) {
   finally { clearTimeout(timer); }
 }
 function createClaudeSession(spec, emit, dependencies) {
+  spec.fast = false;
   const { loadSdk, resolveExecutable, credentials, usage, now = Date.now, audit,
     onCost = () => {}, onFailure = () => {}, onSession = () => {} } = dependencies;
   const stream = createEventStream(spec, emit, now), secrets = new Set();
@@ -122,7 +123,7 @@ function createClaudeSession(spec, emit, dependencies) {
           run.initialized = true; providerId = message.session_id; stream.provider(providerId);
           apiObservedAt = now();
           usage.bind?.(run.reservation?.id, providerId); onSession(providerId);
-          run.model = message.model || null;
+          run.model = run.resetModel || message.model || null;
           observedModel = run.model;
           publish('routing.updated', {
             declared: { model: spec.model || null, effort: spec.effort || null, fast: spec.fast ?? null },
@@ -295,6 +296,13 @@ function createClaudeSession(spec, emit, dependencies) {
       // The pinned SDK initializes its control channel without consuming a user prompt.
       // Check this account snapshot before allowing input; stream init remains an independent guard.
       await readBillingIdentity(run.query, { signal: run.abort.signal, timeoutMs: dependencies.initializationTimeoutMs });
+      // A resumed transcript retains its last explicit model. Reapply an
+      // acknowledged default reset before the renewed query accepts any input.
+      if (spec.model === null && providerId && run.query.setModel) {
+        await run.query.setModel(undefined);
+        const context = await run.query.getContextUsage();
+        run.resetModel = typeof context.model === 'string' ? context.model : null;
+      }
       dependencies.onIdentity?.(run.generation);
       if (closed || stopping || run.closing) throw new Error('会话已停止。');
       if (!prepareOnly && !canContinue()) {
@@ -422,11 +430,14 @@ function createClaudeSession(spec, emit, dependencies) {
   async function models() {
     const run = await optionsQuery();
     try {
-      return (await run.query.supportedModels()).map(row => ({ value: clean(String(row.value)), displayName: clean(String(row.displayName)),
+      const rows = (await run.query.supportedModels()).map(row => ({ value: clean(String(row.resolvedModel || row.value)), displayName: clean(String(row.displayName)),
         description: clean(String(row.description || '')), efforts: row.supportedEffortLevels || [] }));
+      if (observedModel && !rows.some(row => row.value === observedModel)) rows.push({ value: observedModel, displayName: observedModel, description: '', efforts: [] });
+      return [...new Map(rows.map(row => [row.value, row])).values()];
     } catch (error) { error.message = clean(error.message); throw error; }
   }
   async function runOptions(patch) {
+    if (patch.fast === true) throw new Error('Claude Agent SDK 目前不支持快速模式');
     if (!Object.keys(patch).length) {
       if (changingOptions) { try { await changingOptions; } catch {} }
       return optionsSnapshot();

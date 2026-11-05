@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
-const { recentSession, resumeCommand, claudeResumeCommand } = require('../electron/session-restore.cjs');
+const { recentSession, claudeResumeCommand } = require('../electron/session-restore.cjs');
 
 async function setup(t) {
   const prefix = path.join(os.tmpdir(), 'agentrix-resume-');
@@ -35,7 +35,6 @@ test('resume chooses the newest interactive session for the correct working dire
   const result = await recentSession(project, folder);
   assert.equal(result.id, latest.id);
   assert.equal(result.state, 'interrupted');
-  assert.equal(resumeCommand(result, true), `codex resume ${latest.id} "继续"\r`);
 });
 
 test('completed and unknown sessions are resumed without submitting a fresh instruction', async t => {
@@ -43,10 +42,6 @@ test('completed and unknown sessions are resumed without submitting a fresh inst
   await rollout(folder, project, [event('task_started'), event('task_complete')]);
   const result = await recentSession(project, folder);
   assert.equal(result.state, 'complete');
-  assert.equal(resumeCommand(result, true), `codex resume ${result.id}\r`);
-  assert.equal(resumeCommand({ id: result.id, state: 'unknown' }, true), `codex resume ${result.id}\r`);
-  assert.equal(resumeCommand(null, false), null);
-  assert.equal(resumeCommand(null, true), 'codex resume --last\r');
 });
 
 test('large transcript messages and a truncated final line do not hide a completed turn', async t => {
@@ -56,11 +51,10 @@ test('large transcript messages and a truncated final line do not hide a complet
   assert.equal((await recentSession(project, folder)).state, 'complete');
 });
 
-test('a crash after a task starts is continued, but unsafe session identifiers are rejected', async t => {
+test('a crash after a task starts retains its interrupted state for app-server restore', async t => {
   const { folder, project } = await setup(t);
   await rollout(folder, project, [event('task_started'), event('agent_reasoning')]);
   assert.equal((await recentSession(project, folder)).state, 'interrupted');
-  assert.throws(() => resumeCommand({ id: 'bad; command', state: 'interrupted' }, true));
 });
 
 test('Claude Code resumes its recorded conversation and continues only an unfinished turn', () => {

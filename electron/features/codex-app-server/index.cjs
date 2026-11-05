@@ -17,7 +17,8 @@ function stopProcess(child) {
     const closed = () => { clearTimeout(timer); resolve(); };
     const timer = setTimeout(() => { child.removeListener('close', closed); reject(new Error('process_stop_timeout')); }, 3000);
     child.once('close', closed);
-    if (process.platform === 'win32' && child.pid) {
+    if (child.remote) child.kill('SIGKILL');
+    else if (process.platform === 'win32' && child.pid) {
       execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'],
         { windowsHide: true, timeout: 2000 }, error => { if (error && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
     } else {
@@ -26,7 +27,7 @@ function stopProcess(child) {
   });
 }
 
-function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, now = Date.now, renderImage, resetAtLimit, translate = value => value } = {}) {
+function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, renderImage, resetAtLimit, translate = value => value } = {}) {
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
@@ -47,7 +48,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       };
       function bind(threadId) {
         const home = spec.codexHome || spec.env?.CODEX_HOME || path.join(spec.env?.HOME || spec.env?.USERPROFILE || homedir(), '.codex');
-        const key = `${path.resolve(home)}:${threadId}`;
+        const key = spec.kind === 'ssh' ? `ssh:${child?.remoteScope || spec.projectId}:${threadId}` : `${path.resolve(home)}:${threadId}`;
         if (occupied.has(key) && occupied.get(key) !== spec.runtimeSessionId) throw new Error('thread_in_use');
         occupied.set(key, spec.runtimeSessionId); lockKey = key; events.binding.providerSessionId = threadId;
       }
@@ -142,15 +143,22 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         Object.assign(spec, override || {}); setState('starting'); origin = resuming ? 'resume' : 'user';
         let stage = 'resolve_executable';
         try {
+          if (spec.kind === 'ssh') {
+            stage = 'ssh_connect';
+            if (!launchRemote) throw new Error('remote_transport_required');
+            const remote = await launchRemote(spec);
+            spec.cwd = remote.cwd; spec.env = {}; spec.context = remote.context || '';
+            child = remote.child;
+          }
           if (!path.isAbsolute(spec.cwd || '')) throw new Error('invalid_cwd');
           const source = spec.env || process.env, env = workerEnvironment(source);
           // The GUI planner's helpers must reach their authenticated project control channel.
           // Dispatched workers still strip the bootstrap and cannot inherit the planner capability.
           if (spec.owner === 'gui' && typeof source.AGENTRIX_BOOTSTRAP === 'string') env.AGENTRIX_BOOTSTRAP = source.AGENTRIX_BOOTSTRAP;
-          const executable = await resolveExecutable(env);
+          const executable = child ? 'codex' : await resolveExecutable(env);
           if (!executable) throw new Error('codex_cli_required');
           stage = 'spawn';
-          child = spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: spec.cwd, env, windowsHide: true,
+          child ||= spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: spec.cwd, env, windowsHide: true,
             detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
           rpc = createRpc(child, { timeout: spec.rpcTimeoutMs || 8000, onNotification: notification,
             onDropped: bytes => events.publish('item.dropped', { reason: 'too_large', bytes }),
@@ -169,7 +177,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (resuming && !threadId) throw new Error('missing_thread');
           if (resuming) bind(threadId);
           const options = { cwd: spec.cwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
-            config: { model_reasoning_effort: spec.effort || 'high' },
+            config: { model_reasoning_effort: spec.effort || 'high', ...(spec.kind === 'ssh' && spec.context ? { developer_instructions: spec.context } : {}) },
             ...((spec.readOnly || spec.roundtable) ? { sandbox: 'read-only' }
               : spec.policy?.sandbox ? { sandbox: spec.policy.sandbox }
                 : spec.owner === 'dispatch' ? { sandbox: 'workspace-write' } : {}),
@@ -279,7 +287,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             const status = error.uncertain ? 'unknown' : 'rejected';
             inputReceipt(clientId, status);
             if (error.uncertain) setState('disconnected', 'input_delivery_unknown');
-            return { clientMessageId: clientId, status };
+            return { clientMessageId: clientId, status, ...(!error.uncertain && error.code === -32602 ? { reason: 'worker_ended' } : {}) };
           }
         });
         receipts.set(input.clientMessageId, { fingerprint, promise }); sending = promise; return promise;
@@ -293,9 +301,13 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         if (closed) return;
         closed = true; setState('stopping'); requests?.cancelAll();
         if (active && rpc) { try { await rpc.request('turn/interrupt', { threadId: events.binding.providerSessionId, turnId: events.binding.turnId }, 250); } catch {} }
-        rpc?.close(); await stopProcess(child);
-        if (lockKey && occupied.get(lockKey) === spec.runtimeSessionId) occupied.delete(lockKey);
-        setState('stopped');
+        rpc?.close();
+        try { await stopProcess(child); }
+        finally {
+          child?.dispose?.();
+          if (lockKey && occupied.get(lockKey) === spec.runtimeSessionId) occupied.delete(lockKey);
+          setState('stopped');
+        }
       }
       function readLimits() {
         if (limitsRead) return limitsRead;
