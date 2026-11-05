@@ -3,7 +3,7 @@ import { t } from '../../shared/i18n';
 import type { Result } from '../../shared/types';
 import { nativeBridge } from './native-bridge.ts';
 import { effortChoices, fastChoices, modelChoices, optionPatch, optionTold, type Choice, type ComposerAction, type ComposerOption } from './native-composer.ts';
-import { refreshNativeSession } from './native-store.ts';
+import { nativeItem, refreshNativeSession } from './native-store.ts';
 
 // A call the main process answers, or does not (an older main, a Codex session) or fails on: the last two read as a refusal with the reason.
 function ask<T>(call: Promise<Result<T>> | undefined): Promise<Result<T>> {
@@ -47,8 +47,11 @@ export function useComposerActions({ terminalId, sessionId, clear, restore, onEr
     if (action.kind === 'shell') {
       if (!action.command) return;
       clear();
-      const result = await ask(nativeBridge()?.shell?.(terminalId, sessionId, crypto.randomUUID(), action.command));
-      if (!result.ok) fail(words, result.error);
+      const id = crypto.randomUUID(), result = await ask(nativeBridge()?.shell?.(terminalId, sessionId, id, action.command));
+      // A refusal before the command ran gives the words back; one after it ran (its card has an exit code or output) must not, or Enter would run it again.
+      if (result.ok) return;
+      const card = nativeItem(terminalId, `shell:${id}`)?.content;
+      if (card && (card.exitCode != null || card.output)) onError(result.error); else fail(words, result.error);
       return;
     }
     const { option, value } = action;

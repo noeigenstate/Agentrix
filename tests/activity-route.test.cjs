@@ -9,6 +9,8 @@ const { renderToStaticMarkup } = require('react-dom/server');
 const en = require('../electron/locales/en.json');
 
 // A component of a feature folder compiled with its imports stubbed (the language, the icons, the portal), for static rendering.
+// The terminals' native sessions as the conversation knows them: by terminal, the turn status (the pane reads it to tell a failed round from an interrupted one).
+const nativeTurns = new Map();
 const loadedFiles = new Map();
 function loadFeatureFile(relative, language = 'zh') {
   const key = `${relative}:${language}`;
@@ -36,7 +38,7 @@ function compileFile(filename, language) {
     if (name === './ResetCountdown') return loadAgentsFile('ResetCountdown.tsx', language);
     if (name === './action-text') return loadAgentsFile('action-text.ts', language);
     if (name === '../native-session/native-bridge.ts') return { nativeBridge: () => null };
-    if (name === '../native-session/native-store.ts') return { useUsageRevision: () => 0 };
+    if (name === '../native-session/native-store.ts') return { useUsageRevision: () => 0, useNativeEntries: () => nativeTurns };
     if (name === '../native-session/native-billing-link.ts') return loadFeatureFile('native-session/native-billing-link.ts', language);
     if (name === './native-bridge.ts') return { openProjectLink: () => Promise.resolve({ ok: true }) };
     if (name === './native-words') return loadFeatureFile('native-session/native-words.ts', language);
@@ -714,4 +716,19 @@ test('the main card tells a round that ended unknown quietly: no check, not comp
   assert.match(unknown, /本轮已结束，完成状态未知。/); assert.doesNotMatch(unknown, /本轮已完成|已中断|is-done|data-icon="CheckCircle"/);
   assert.match(complete, /本轮已完成/); assert.doesNotMatch(complete, /完成状态未知/);
   assert.doesNotMatch(main(activityMarkup([], 'zh', { codexActive: true })), /完成状态未知/, 'a session that has not ended a round says nothing of one');
+});
+
+test('the main card says 失败 for a round that failed (a /compact that compacted nothing), as the conversation’s card does, and 已中断 for a real interruption', () => {
+  const main = html => /<section class="activity-card activity-main"[\s\S]*?<\/section>/.exec(html)[0];
+  const ended = { codexActive: true, id: 't-ended', mainTurn: { state: 'interrupted', updatedAt: Date.now(), background: null } };
+  const turn = status => { nativeTurns.clear(); nativeTurns.set('t-ended', { model: { turn: { status } } }); };
+  try {
+    turn('failed');
+    const failed = main(activityMarkup([], 'zh', ended));
+    assert.match(failed, /失败/); assert.doesNotMatch(failed, /已中断/);
+    turn('interrupted'); assert.match(main(activityMarkup([], 'zh', ended)), /已中断/);
+    nativeTurns.clear();
+    const bare = main(activityMarkup([], 'zh', ended));
+    assert.match(bare, /已中断/); assert.doesNotMatch(bare, /失败/);
+  } finally { nativeTurns.clear(); }
 });

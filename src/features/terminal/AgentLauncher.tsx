@@ -99,6 +99,8 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
     if (chosen === 'new') return t('开始新的对话');
     if (!history) return t('正在查找开发记录…');
     const last = history[agent];
+    // An SSH project is not asked until the click: it may have a conversation this window does not know of.
+    if (remote && !last) return t('接着上次的对话');
     return last ? t('接着上次的对话 · {time}', { time: relativeTime(last.at, Date.now()) }) : t('没有它的开发记录，将重新开始');
   };
   // Where a click would run the agent, said beside the choice when it is not the terminal it always was.
@@ -112,7 +114,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
     <p className="agent-launcher-title">{t('选择助手，开始开发')}</p>
     <div className="agent-launcher-mode" role="radiogroup" aria-label={t('开发方式')}>
       <button type="button" role="radio" aria-checked={chosen === 'new'} onClick={() => setMode('new')}>{t('开始新开发')}</button>
-      <button type="button" role="radio" aria-checked={chosen === 'continue'} disabled={!known} title={history && !known ? t('这个文件夹还没有开发记录') : undefined} onClick={() => setMode('continue')}>{t('继承开发历史')}</button>
+      <button type="button" role="radio" aria-checked={chosen === 'continue'} disabled={!known && !remote} title={history && !known && !remote ? t('这个文件夹还没有开发记录') : undefined} onClick={() => setMode('continue')}>{t('继承开发历史')}</button>
     </div>
     <div className="agent-launcher-agents">{AGENTS.filter(({ agent }) => !remote || agent === 'codex').map(({ agent, name, mark }) => <button type="button" key={agent} className={`agent-launcher-agent is-${agent}${missing(agent) ? ' is-missing' : ''}`} disabled={!!starting || (runsHere(agent) && !!agents?.installing)} onClick={() => void start(agent)}>
       <span className="agent-launcher-mark" aria-hidden="true" data-audit-ignore>{starting === agent || (runsHere(agent) && agents?.installing === agent) ? <CircleNotch size={16} className="loading-spinner" /> : mark}</span>
