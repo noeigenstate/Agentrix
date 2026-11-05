@@ -1878,16 +1878,14 @@ function registerIpc() {
     const project = findProject(id);
     if (!['claude', 'codex'].includes(agent)) throw new Error('无效的助手。');
     if (project.kind === 'ssh') throw new Error('SSH 项目请先启动终端，再在终端里运行助手。');
-    if (mode === 'native' && agent !== 'codex') throw new Error('Native mode is only available for Codex');
+    if (!['new', 'continue'].includes(mode)) throw new Error('Unsupported agent session mode');
     if (agent === 'codex') {
-      if (!['native', 'new', 'continue'].includes(mode)) throw new Error('Unsupported agent session mode');
       if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
       launchPlans.delete(id); restorePlans.delete(id);
       const history = mode === 'continue' ? (await folderHistory(folderOf(id))).codex : null;
       if (history) store.setRestore(id, { agent: 'codex', threadId: history.id });
       await nativeSessions.start(id, { agent, resume: !!history }); broadcast(); return true;
     }
-    if (!['new', 'continue'].includes(mode)) throw new Error('Unsupported agent session mode');
     const history = mode === 'continue' ? (await folderHistory(folderOf(id)))[agent] : null;
     launchPlans.set(id, { agent, command: launchCommand(agent, history), threadId: history?.id || null });
     startTerminal(id, null, true); broadcast(); return true;

@@ -178,7 +178,7 @@ function elements(node) {
   return [node, ...React.Children.toArray(node.props?.children).flatMap(elements)];
 }
 
-test('launcher reserves a dedicated native Codex terminal without starting, writing to or restarting a shell; Claude has no native mode', async t => {
+test('launcher reserves a dedicated Codex terminal slot without starting, writing to or restarting a shell', async t => {
   const previous = globalThis.window;
   t.after(() => { if (previous) globalThis.window = previous; else delete globalThis.window; });
   for (const agent of ['codex']) await t.test(agent, async () => {
@@ -194,14 +194,12 @@ test('launcher reserves a dedicated native Codex terminal without starting, writ
       agentLaunch: async (...args) => { calls.push(['launch', ...args]); return { ok: true, value: true }; },
     } };
     const { AgentLauncher } = loadUI('terminal/AgentLauncher.tsx', { react: {
-      useState: initial => [[null, 'native', null, { codex: { installed: true }, claude: { installed: true } }][stateIndex++] ?? initial, () => {}], useEffect() {},
+      useState: initial => [[null, 'new', null, { codex: { installed: true }, claude: { installed: true } }][stateIndex++] ?? initial, () => {}], useEffect() {},
     } });
     const tree = AgentLauncher({ terminalId: 'busy-shell', projectId: 'p', onAction: async promise => { const result = await promise; assert.equal(result.ok, true); return result.value; }, onOpenTerminal() {} });
-    assert.ok(elements(tree).some(node => node.props?.role === 'radio' && node.props['aria-checked'] && node.props.children === 'Codex 原生终端'));
-    assert.equal(elements(tree).some(node => node.props?.className === 'agent-launcher-agent is-claude'), false, 'Claude has no native mode');
     elements(tree).find(node => node.props?.className === `agent-launcher-agent is-${agent}`).props.onClick();
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(calls, [['add', 'p', false], ['launch', 'new', agent, 'native']]);
+    assert.deepEqual(calls, [['add', 'p', false], ['launch', 'new', agent, 'new']]);
     assert.deepEqual(terminals.slice(0, 2), before, 'the running shell and unrelated earlier spare remain untouched');
   });
 });

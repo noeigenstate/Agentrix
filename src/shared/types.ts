@@ -269,7 +269,7 @@ type Bridge = {
   clipboardImage(terminalId: string): Promise<Result<string | null>>;
   fileCard(id: string, file: string): Promise<Result<FileCard>>;
   agentHistory(id: string): Promise<Result<{ claude: { id: string; at: number } | null; codex: { id: string; at: number } | null }>>;
-  agentLaunch(id: string, agent: 'claude' | 'codex', mode: 'new' | 'continue' | 'native'): Promise<Result<boolean>>;
+  agentLaunch(id: string, agent: 'claude' | 'codex', mode: 'new' | 'continue'): Promise<Result<boolean>>;
   listSkills(): Promise<Result<SkillInfo[]>>;
   readSkill(id: string): Promise<Result<SkillDetail>>;
   // Creates a user skill (id null) or saves a new version of one; built-in skills cannot be saved.

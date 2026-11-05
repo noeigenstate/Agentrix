@@ -1,11 +1,11 @@
 // 运行方式: how Claude and Codex run — Claude on the Anthropic API key in the app's own view, falling back to the terminal when the API's
-// quota is used up; Codex in its app-server view or the terminal — and the monthly API budget. The key is write-only here: it is sent to the
+// quota is used up; Codex always on app-server, with nothing to choose — and the monthly API budget. The key is write-only here: it is sent to the
 // main process, the field is emptied, and only "saved or not" ever comes back.
 import { useEffect, useState } from 'react';
-import { ArrowCounterClockwise, CheckCircle, CircleNotch, CurrencyDollar, Key, PlugsConnected, Robot, Terminal as TerminalIcon, Info, WarningCircle, XCircle } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, CheckCircle, CircleNotch, CurrencyDollar, Key, PlugsConnected, Robot, Info, WarningCircle, XCircle } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
 import { Select } from '../../shared/Select';
-import { type ClaudePath, type CodexView, type ConnectionTest, type NativeSettings, type NativeUsage, nativeBridge } from '../native-session/native-bridge.ts';
+import { type ClaudePath, type ConnectionTest, type NativeSettings, type NativeUsage, nativeBridge } from '../native-session/native-bridge.ts';
 import { usageChanged, useUsageRevision } from '../native-session/native-store.ts';
 import { clockWords, connectionLines } from '../native-session/native-words';
 import './agent-runtime-settings.css';
@@ -13,7 +13,6 @@ import './agent-runtime-settings.css';
 const CLAUDE_PATHS = (): { value: ClaudePath; label: string }[] => [
   { value: 'api-then-terminal', label: t('API，额度用完转终端（默认）') }, { value: 'api-only', label: t('只用 API') }, { value: 'terminal-only', label: t('只用终端（订阅）') },
 ];
-const CODEX_VIEWS = (): { value: CodexView; label: string }[] => [{ value: 'native', label: t('原生界面（默认）') }, { value: 'terminal', label: t('终端') }];
 // A mark per tone, so a line reads without its colour.
 const TONE_MARKS = { ok: <CheckCircle size={16} weight="fill" />, warn: <WarningCircle size={16} weight="fill" />, bad: <XCircle size={16} weight="fill" /> };
 const failure = (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) });
@@ -116,8 +115,6 @@ export function AgentRuntimeSettings({ projectId }: { projectId?: string }) {
     </div>}
     <label className="setting-row"><span><Robot size={19} /><span><b>{t('Claude 的运行方式')}</b><small>{t('API：应用里的原生界面，按量计费；订阅：Claude Code 终端')}</small></span></span>
       <Select label={t('Claude 的运行方式')} className="runtime-select" value={settings?.claudePath ?? 'api-then-terminal'} disabled={!settings || busy} options={CLAUDE_PATHS()} onChange={value => void change({ claudePath: value as ClaudePath })} /></label>
-    <label className="setting-row"><span><TerminalIcon size={19} /><span><b>{t('Codex 的界面')}</b><small>{t('原生：Codex 的 app-server，在应用自己的界面里；终端：Codex 命令行')}</small></span></span>
-      <Select label={t('Codex 的界面')} value={settings?.codexView ?? 'native'} disabled={!settings || busy} options={CODEX_VIEWS()} onChange={value => void change({ codexView: value as CodexView })} /></label>
     <label className="setting-row"><span><ArrowCounterClockwise size={19} /><span><b>{t('额度用完时自动使用重置次数')}</b><small>{t('到达上限时自动用掉 1 次重置，用掉不能撤销')}</small></span></span>
       <input type="checkbox" aria-label={t('额度用完时自动使用重置次数')} checked={settings?.codexAutoReset ?? false} disabled={!settings || busy} onChange={event => void setAutoReset(event.target.checked)} /></label>
     <div className="setting-row"><span><CurrencyDollar size={19} /><span><b>{t('API 月预算（美元）')}</b><small>{t('按 UTC 自然月累计的估算；用完后 Claude 按上面的选择处理。留空表示不限')}</small></span></span>

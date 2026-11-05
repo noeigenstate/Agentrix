@@ -12,7 +12,7 @@ const SECRET = 'sk-ant-made-up-for-this-test';
 const fill = (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
 const elements = node => Array.isArray(node) ? node.flatMap(elements) : React.isValidElement(node) ? [node, ...elements(node.props.children)] : [];
 const settle = async () => { for (let round = 0; round < 6; round++) await new Promise(resolve => setImmediate(resolve)); };
-const defaults = { claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: null };
+const defaults = { claudePath: 'api-then-terminal', monthlyBudgetUsd: null };
 // The words of a connection test have their own tests (native-session-ui.test.cjs); here a result carries the lines it should show.
 const wordsStub = { clockWords: () => '09:00', connectionLines: test => test.lines };
 
@@ -52,7 +52,7 @@ test('the page shows the saved settings, whether a key is saved, and the three C
     assert.equal(view.select('Claude 的运行方式').props.value, 'api-then-terminal');
     assert.deepEqual(view.select('Claude 的运行方式').props.options.map(option => option.value), ['api-then-terminal', 'api-only', 'terminal-only']);
     assert.match(view.select('Claude 的运行方式').props.options[0].label, /默认/, 'API, then the terminal when the quota is used up, is the default');
-    assert.deepEqual([view.select('Codex 的界面').props.value, view.select('Codex 的界面').props.options.map(option => option.value)], ['native', ['native', 'terminal']]);
+    assert.doesNotMatch(view.html(), /Codex 的界面/, 'Codex has only app-server, so there is nothing to choose');
     assert.equal(view.budget().props.value, '50');
     assert.equal(view.select('Claude 的运行方式').props.className, 'runtime-select', 'its trigger is wide enough for “（默认）”');
     const css = fs.readFileSync(path.join(__dirname, '../src/features/settings/agent-runtime-settings.css'), 'utf8');
@@ -96,9 +96,8 @@ test('Claude’s path and Codex’s view are changed one at a time; a refused ch
   try {
     view.render(); await settle();
     view.select('Claude 的运行方式').props.onChange('api-only'); await settle();
-    view.select('Codex 的界面').props.onChange('terminal'); await settle();
-    assert.deepEqual(bridge.calls, [['set', { claudePath: 'api-only' }], ['set', { codexView: 'terminal' }]]);
-    assert.deepEqual([view.select('Claude 的运行方式').props.value, view.select('Codex 的界面').props.value], ['api-only', 'terminal']);
+    assert.deepEqual(bridge.calls, [['set', { claudePath: 'api-only' }]]);
+    assert.equal(view.select('Claude 的运行方式').props.value, 'api-only');
     bridge.setSettings = async () => ({ ok: false, error: 'disk full' });
     view.select('Claude 的运行方式').props.onChange('terminal-only'); await settle();
     assert.equal(view.select('Claude 的运行方式').props.value, 'api-only'); assert.equal(view.alert(), 'disk full');
@@ -267,10 +266,8 @@ test('every accepted change (key saved, key cleared, a setting, the budget) make
     assert.equal(view.usage.length, 2, 'a cleared key');
     view.select('Claude 的运行方式').props.onChange('api-only'); await settle();
     assert.equal(view.usage.length, 3, 'Claude’s path');
-    view.select('Codex 的界面').props.onChange('terminal'); await settle();
-    assert.equal(view.usage.length, 4, 'Codex’s view');
     view.budget().props.onChange({ target: { value: '25' } }); view.budget().props.onBlur(); await settle();
-    assert.equal(view.usage.length, 5, 'the budget');
+    assert.equal(view.usage.length, 4, 'the budget');
   } finally { view.done(); }
   const refused = { ok: false, error: 'refused' };
   const bad = fake({ keySave: async () => refused, keyClear: async () => refused, setSettings: async () => refused });

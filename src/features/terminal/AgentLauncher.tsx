@@ -21,7 +21,7 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
   onOpenTerminal: (id: string) => void; runningCount?: number; onExpand?: () => void;
 }) {
   const [history, setHistory] = useState<History | null>(null);
-  const [mode, setMode] = useState<'new' | 'continue' | 'native' | null>(null);
+  const [mode, setMode] = useState<'new' | 'continue' | null>(null);
   const [starting, setStarting] = useState<Agent | 'terminal' | null>(null);
   const [agents, setAgents] = useState<AgentsState | null>(null);
   const [runtime, setRuntime] = useState<{ settings: NativeSettings; keySaved: boolean | null } | null>(null);
@@ -57,8 +57,7 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
     if (!terminal.sessionId || terminal.status === 'exited') return terminalId;
     return onAction(window.agentrix.addTerminal(projectId, false));
   };
-  // The route the settings give this agent; the Codex native-terminal mode is its own thing and never goes through them.
-  const routeOf = (agent: Agent) => chosen === 'native' ? launchRoute(agent, null, null) : launchRoute(agent, runtime?.settings ?? null, runtime?.keySaved ?? null);
+  const routeOf = (agent: Agent) => launchRoute(agent, runtime?.settings ?? null, runtime?.keySaved ?? null);
   const launch = async (id: string, agent: Agent) => {
     const route = routeOf(agent), bridge = nativeBridge();
     if (route.how === 'native' && bridge) {
@@ -90,7 +89,6 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
     setStarting(null);
   };
   const note = (agent: Agent) => {
-    if (chosen === 'native') return t('在终端中处理所有确认和问题');
     if (agents?.installing === agent) return t('正在安装…');
     if (missing(agent)) return agents!.npm ? t('未安装 · 点击一键安装') : t('未安装 · 需要先安装 Node.js');
     if (chosen === 'new') return t('开始新的对话');
@@ -100,7 +98,7 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
   };
   // Where a click would run the agent, said beside the choice when it is not the terminal it always was.
   const routeNote = (agent: Agent) => {
-    if (missing(agent) || chosen === 'native') return null;
+    if (missing(agent)) return null;
     const route = routeOf(agent);
     if (route.how === 'native') return agent === 'claude' ? t('API · 原生界面') : t('原生界面');
     return route.how === 'blocked' ? t('需先保存 API key') : route.reason ? t('没有 API key，改用终端') : null;
@@ -108,11 +106,10 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
   return <div className="agent-launcher"><div className="agent-launcher-body">
     <p className="agent-launcher-title">{t('选择助手，开始开发')}</p>
     <div className="agent-launcher-mode" role="radiogroup" aria-label={t('开发方式')}>
-      <button type="button" role="radio" aria-checked={chosen === 'native'} onClick={() => setMode('native')}>{t('Codex 原生终端')}</button>
       <button type="button" role="radio" aria-checked={chosen === 'new'} onClick={() => setMode('new')}>{t('开始新开发')}</button>
       <button type="button" role="radio" aria-checked={chosen === 'continue'} disabled={!known} title={history && !known ? t('这个文件夹还没有开发记录') : undefined} onClick={() => setMode('continue')}>{t('继承开发历史')}</button>
     </div>
-    <div className="agent-launcher-agents">{AGENTS.filter(({ agent }) => chosen !== 'native' || agent === 'codex').map(({ agent, name, mark }) => <button type="button" key={agent} className={`agent-launcher-agent is-${agent}${missing(agent) ? ' is-missing' : ''}`} disabled={!!starting || !!agents?.installing} onClick={() => void start(agent)}>
+    <div className="agent-launcher-agents">{AGENTS.map(({ agent, name, mark }) => <button type="button" key={agent} className={`agent-launcher-agent is-${agent}${missing(agent) ? ' is-missing' : ''}`} disabled={!!starting || !!agents?.installing} onClick={() => void start(agent)}>
       <span className="agent-launcher-mark" aria-hidden="true" data-audit-ignore>{starting === agent || agents?.installing === agent ? <CircleNotch size={16} className="loading-spinner" /> : mark}</span>
       <b>{name}</b><small>{[note(agent), routeNote(agent)].filter(Boolean).join(' · ')}</small>
     </button>)}</div>

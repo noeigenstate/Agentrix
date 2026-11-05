@@ -8,7 +8,7 @@ export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
   { title: "工作者修复", text: "修好了 API 工作者结束时可能卡住、圆桌后的 Codex 工作者写不了文件、被结束的工作者一直显示运行中，以及模型别名被误报为不符。", group: 'new' },
   { title: "计费检查", text: "测试连接会确认 Claude Code 报告的计费来源是 API 密钥；不是的话，新会话转到终端并说明原因，不再直接失败。" },
   { title: "原生通道修复", text: "修好了 Codex 的原生连接和 Claude 走 API 时的启动失败。" },
-  { title: "原生界面", text: "Claude 通过 API、Codex 通过 app-server 在应用自己的界面里运行，命令、改动和计划都直接显示，需要你回答的提问和策略要求的确认也在这里处理；也可以在设置里改回终端界面。" },
+  { title: "原生界面", text: "Claude 通过 API、Codex 通过 app-server 在应用自己的界面里运行，命令、改动和计划都直接显示，需要你回答的提问和策略要求的确认也在这里处理；Claude 也可以在设置里改回终端界面。" },
   { title: "运行方式", text: "设置里可以保存 API 密钥、测试连接、设定月预算；Claude 默认走 API，额度用完自动转到订阅登录的终端，接着同一段对话。" },
   { title: "连接与额度", text: "活动栏显示 Claude、Codex 当前连接的是 API 还是订阅，以及 API 今日和本月的估算花费、预算和限流状态。" },
   { title: "插话直达", text: "给子代理的话直接送到它那里（Claude 中途接收，Codex 在当前一步后接收），不再转给主会话，分屏里显示送达状态。" },

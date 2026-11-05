@@ -238,13 +238,13 @@ test('a replayed event never counts as news for the usage panel; a live one does
 
 // ---- how a session starts -----------------------------------------------------------------------------------------------------------
 test('the launch route follows the settings: native by default, the terminal when chosen, the reason when a missing key is why, and nothing for API-only without a key', () => {
-  const { launchRoute } = load('features/native-session/native-bridge.ts'), set = (claudePath, codexView = 'native') => ({ claudePath, codexView, monthlyBudgetUsd: null });
+  const { launchRoute } = load('features/native-session/native-bridge.ts'), set = claudePath => ({ claudePath, monthlyBudgetUsd: null });
   const native = { how: 'native' }, terminal = (reason = null) => ({ how: 'terminal', reason });
-  assert.deepEqual([launchRoute('claude', null, null), launchRoute('codex', null, true)], [terminal(), terminal()], 'settings not read or no bridge: today’s terminal');
+  assert.deepEqual([launchRoute('claude', null, null), launchRoute('codex', null, true)], [terminal(), native], 'settings not read: Claude waits on the terminal, Codex has only app-server');
   assert.deepEqual([launchRoute('claude', set('api-then-terminal'), true), launchRoute('claude', set('api-then-terminal'), null), launchRoute('claude', set('api-only'), true)], [native, native, native]);
   assert.deepEqual([launchRoute('claude', set('terminal-only'), true), launchRoute('claude', set('terminal-only'), false)], [terminal(), terminal()]);
   assert.deepEqual([launchRoute('claude', set('api-then-terminal'), false), launchRoute('claude', set('api-only'), false)], [terminal('no_key'), { how: 'blocked', reason: 'no_key' }]);
-  assert.deepEqual([launchRoute('codex', set('terminal-only', 'native'), false), launchRoute('codex', set('api-only', 'terminal'), true)], [native, terminal()], 'Codex follows its own view setting and needs no key');
+  assert.deepEqual([launchRoute('codex', set('terminal-only'), false), launchRoute('codex', set('api-only'), true)], [native, native], 'Codex is always on app-server and needs no key');
 });
 
 // A stand-in for the main process on `window.agentrix`, for the launcher.
@@ -273,14 +273,13 @@ function launcher(runtime, calls) {
 }
 
 test('the launcher starts a native session or a terminal by the settings, says where the click goes, and a missing key never starts a hidden terminal', async () => {
-  const set = (claudePath, codexView = 'native') => ({ claudePath, codexView, monthlyBudgetUsd: null });
+  const set = claudePath => ({ claudePath, monthlyBudgetUsd: null });
   const cases = [
     ['claude', { settings: set('api-then-terminal'), saved: true }, [['start', 't1', { agent: 'claude', resume: false }], ['refresh', 't1']], '开始新的对话 · API · 原生界面'],
     ['claude', { settings: set('terminal-only'), saved: true }, [['launch', 't1', 'claude', 'new']], '开始新的对话'],
     ['claude', { settings: set('api-then-terminal'), saved: false }, [['launch', 't1', 'claude', 'new'], ['note', 't1', 'no_key']], '开始新的对话 · 没有 API key，改用终端'],
     ['claude', { settings: set('api-only'), saved: false }, [], '开始新的对话 · 需先保存 API key'],
-    ['codex', { settings: set('api-then-terminal', 'native'), saved: false }, [['start', 't1', { agent: 'codex', resume: false }], ['refresh', 't1']], '开始新的对话 · 原生界面'],
-    ['codex', { settings: set('api-then-terminal', 'terminal'), saved: true }, [['launch', 't1', 'codex', 'new']], '开始新的对话'],
+    ['codex', { settings: set('api-then-terminal'), saved: false }, [['start', 't1', { agent: 'codex', resume: false }], ['refresh', 't1']], '开始新的对话 · 原生界面'],
   ];
   for (const [agent, runtime, expected, note] of cases) {
     const calls = [], view = launcher(runtime, calls);
@@ -294,13 +293,13 @@ test('the launcher starts a native session or a terminal by the settings, says w
   }
 });
 
-test('the Codex native-terminal mode keeps its own meaning whatever the native settings say', async () => {
-  const calls = [], view = launcher({ settings: { claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: null }, saved: true }, calls);
+test('the launcher offers no terminal mode for Codex, and Codex starts natively whatever the settings say', async () => {
+  const calls = [], view = launcher({ settings: { claudePath: 'api-then-terminal', monthlyBudgetUsd: null }, saved: true }, calls);
   try {
     view.render(); await settle();
-    elements(view.render()).find(node => node.props.role === 'radio' && /原生终端/.test(String(node.props.children))).props.onClick();
+    assert.deepEqual(elements(view.render()).filter(node => node.props.role === 'radio').map(node => node.props.children), ['开始新开发', '继承开发历史']);
     view.button('codex').props.onClick(); await settle();
-    assert.deepEqual(calls, [['launch', 't1', 'codex', 'native']], 'the app-server proxy mode launches the terminal, never a native session');
+    assert.deepEqual(calls, [['start', 't1', { agent: 'codex', resume: false }], ['refresh', 't1']]);
   } finally { view.done(); }
 });
 
