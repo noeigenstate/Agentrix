@@ -39,11 +39,16 @@ test('SDK requests retain the default CLI entrypoint even with an inherited owne
   }
 });
 
-test('a real billing rejection reports server evidence without budget loss, retry or path failure', { skip, timeout: 60000 }, async t => {
+test('a real billing rejection preserves budget and offers only the proved unexecuted input for terminal fallback', { skip, timeout: 60000 }, async t => {
   let requests = 0;
   const f = await harness(t, data => ++requests === 1 ? [opening(data), ...textBlock(0, 'PAID REPLY'), ...finish('end_turn')]
     : { status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: 'Credit balance is too low' } } });
-  const runtime = require('../electron/features/claude-sdk/index.cjs').createClaudeRuntime({ directory: path.join(f.cwd, 'state'), loadSdk: async () => f.sdk, resolveExecutable: async () => cli,
+  const observed = [];
+  const runtime = require('../electron/features/claude-sdk/index.cjs').createClaudeRuntime({ directory: path.join(f.cwd, 'state'), loadSdk: async () => ({ ...f.sdk, query(options) {
+    const query = f.sdk.query(options), iterate = query[Symbol.asyncIterator].bind(query);
+    query[Symbol.asyncIterator] = async function* () { for await (const message of { [Symbol.asyncIterator]: iterate }) { observed.push(message); yield message; } };
+    return query;
+  } }), resolveExecutable: async () => cli,
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   f.cleanup(() => runtime.close()); runtime.credentials.save('sk-ant-offline-billing-fixture');
   const events = [], session = runtime.create({ owner: 'gui', cwd: f.cwd, env: f.env, runtimeSessionId: randomUUID(), monthlyBudgetUsd: 10, model: 'claude-sonnet-4-5' }, event => events.push(event));
@@ -55,7 +60,8 @@ test('a real billing rejection reports server evidence without budget loss, retr
   const before = runtime.usage.available(10), spend = runtime.usage.summary().monthUsdMicros;
   await session.send({ clientMessageId: 'rejected', text: 'Another message' }); await wait(2);
   assert.equal(requests, 2); assert.equal(runtime.usage.available(10), before); assert.equal(runtime.usage.summary().monthUsdMicros, spend);
-  assert.equal(runtime.apiState(10).status, 'ready');
+  assert.equal(runtime.apiState(10).status, 'credits_exhausted');
+  assert.deepEqual(session.fallbackInput(), { input: { clientMessageId: 'rejected', text: 'Another message', images: [] }, safe: true }, JSON.stringify(observed.filter(message => ['assistant', 'result'].includes(message.type))));
   const notice = events.findLast(event => event.type === 'limits.updated').payload.notice;
   assert.equal(notice.code, 'credits_required'); assert.equal(notice.action, 'check-console'); assert.match(notice.message, /服务端拒绝/);
   assert.ok(!events.some(event => event.type === 'error' && event.payload.code === 'sdk_failed'));

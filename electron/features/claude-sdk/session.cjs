@@ -21,7 +21,7 @@ function createClaudeSession(spec, emit, dependencies) {
   const sent = new Map(), results = new Set();
   let active, opening, preparing, closing, sdk, executable, started = false, closed = false, stopping = false;
   let providerId = spec.providerSessionId || null, state = 'starting', turnId = null;
-  let apiObservedAt = null, limits = null;
+  let apiObservedAt = null, limits = null, fallbackInput = null, resultCost = 0;
   function clean(value) {
     let text = value;
     for (const key of secrets) text = text.replaceAll(key, '<secret>');
@@ -64,15 +64,18 @@ function createClaudeSession(spec, emit, dependencies) {
   function unknownInput() {
     for (const [id, status] of sent) if (!['consumed', 'rejected'].includes(status)) receipt(id, 'unknown');
   }
-  function unavailable(message, generation) {
+  function unavailable(message, run) {
     const observed = rateLimits(message, limits, spec.scopeId || spec.runtimeSessionId, now());
+    const quota = ['credits_required', 'spend_limit'].includes(observed?.notice?.code);
+    if (quota && spec.quotaFallback?.()) observed.notice = { code: observed.notice.code, resetsAtMs: observed.notice.resetsAtMs,
+      message: 'API 额度已用完，本轮结束后将转到 Claude Code 终端。' };
     if (observed) { limits = observed; publish('limits.updated', limits); }
-    const reason = observed?.notice ? observed.notice.code === 'credits_required' ? 'credits_exhausted' : 'rate_limited'
+    if (quota) run.quotaRejected = true;
+    const reason = observed?.notice ? quota && !(spec.owner === 'dispatch' && observed.notice.code === 'spend_limit') ? 'credits_exhausted' : 'rate_limited'
       : message.error === 'authentication_failed' ? 'invalid_key' : null;
     if (!reason) return;
-    // A billing rejection is server evidence about this request, not proof that
-    // another billing path should take over or that the owner's budget is spent.
-    if (reason !== 'credits_exhausted') onFailure(reason, null, generation);
+    // Owner fallback follows quota evidence only. Workers retain their previous routing.
+    if (spec.owner === 'dispatch' ? reason !== 'credits_exhausted' : reason !== 'rate_limited') onFailure(reason, null, run.generation);
     if (observed) publish('error', { code: observed.notice.code, message: observed.notice.message, retryable: false, willRetry: false, stage: 'turn' });
     else publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
       state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: reason });
@@ -132,7 +135,10 @@ function createClaudeSession(spec, emit, dependencies) {
         if (stopping && (message.type !== 'result' || message.parent_tool_use_id)) continue;
         if (message.user_message_uuid) receipt(message.user_message_uuid, 'consumed');
         for (const id of message.user_message_uuids || []) receipt(id, 'consumed');
-        unavailable(message, run.generation);
+        unavailable(message, run);
+        if (message.type === 'assistant' && message.message?.model !== '<synthetic>'
+          || message.type === 'stream_event' || message.type === 'user' && Array.isArray(message.message?.content) && message.message.content.some(block => block.type === 'tool_result')) run.executed = true;
+        if (message.type === 'assistant' && !message.parent_tool_use_id && message.message?.model === '<synthetic>') run.synthetic = true;
         if (message.error === 'billing_error' && message.message?.model === '<synthetic>') run.billingRejected = true;
         if (message.type === 'assistant' && !message.parent_tool_use_id && message.message?.usage) {
           run.lastUsage = tokensOf(message.message.usage); run.lastModel = message.message.model;
@@ -151,9 +157,21 @@ function createClaudeSession(spec, emit, dependencies) {
         const resultId = message.uuid || message.result_index;
         if (resultId !== undefined && results.has(resultId)) continue;
         if (resultId !== undefined) results.add(resultId);
-        const rejected = run.billingRejected && message.is_error === true && message.total_cost_usd === 0
+        const refusal = spec.owner === 'dispatch' ? run.billingRejected && message.total_cost_usd === 0
+          : run.quotaRejected && run.synthetic && !run.executed && message.total_cost_usd === resultCost;
+        const rejected = refusal && message.is_error === true && message.usage
           && Object.values(tokensOf(message.usage)).every(value => value === null || value === 0);
+        if (run.quotaRejected && spec.owner !== 'dispatch') {
+          const inputs = run.turnInputs || [];
+          // A CLI consumption receipt proves stdin delivery, not model execution. Only the final
+          // synthetic refusal plus explicit zero usage can override that receipt for this one input.
+          fallbackInput = inputs.length ? { input: inputs[0], ...(inputs.length > 1 ? { remaining: inputs.slice(1) } : {}),
+            safe: !!(inputs.length === 1 && rejected && sent.get(inputs[0].clientMessageId) === 'consumed'
+            && message.usage?.input_tokens === 0 && message.usage?.output_tokens === 0 && !run.interrupted) } : null;
+        }
+        if (spec.owner !== 'dispatch' && !message.is_error && !run.quotaRejected && Object.values(tokensOf(message.usage) || {}).some(value => value > 0)) dependencies.onSuccess?.(run.generation);
         const entry = usage.record(providerId, message, { resume: !!run.resumeId, reservationId: run.reservation?.id, rejected });
+        resultCost = message.total_cost_usd;
         run.billingRejected = false;
         if (entry.deltaUsdMicros > 0) run.remainingBudgetUsd = Math.max(0, Math.round(run.remainingBudgetUsd * 1e6 - entry.deltaUsdMicros) / 1e6);
         const lastUsage = run.lastUsage;
@@ -168,6 +186,7 @@ function createClaudeSession(spec, emit, dependencies) {
         const outcome = turnResult(message, { interrupted, costUsdMicros: entry.deltaUsdMicros });
         if (budgetBlocked) outcome.error = outcome.message = budgetNotice();
         publish('turn.completed', outcome);
+        run.turnInputs = []; run.executed = false; run.synthetic = false; run.quotaRejected = false;
         run.interrupted = false;
         turnId = null; stream.turn(null);
         if (interrupted) unknownInput();
@@ -328,7 +347,12 @@ function createClaudeSession(spec, emit, dependencies) {
       if (error.code === 'budget_exhausted' && active.background.size) error.message = budgetNotice();
       throw error;
     }
+    // Settings invalidate failures while owner queries stay open at idle. An explicit
+    // new turn observes the new generation without letting an old in-flight failure rearm it.
+    if (!active.busy) active.generation = dependencies.availabilityGeneration?.();
     active.busy = true;
+    (active.turnInputs ||= []).push({ clientMessageId, text, images });
+    fallbackInput = null;
     sent.set(clientMessageId, 'queued');
     if (!turnId) begin('user', clientMessageId);
     publish('input.receipt', { clientMessageId, status: 'queued' });
@@ -378,6 +402,7 @@ function createClaudeSession(spec, emit, dependencies) {
     } finally { clearTimeout(timer); }
   }
   return { start, resume: start, send, close, stopBackground, answer: requests.answer, snapshot: stream.snapshot,
+    fallbackInput: () => fallbackInput && structuredClone(fallbackInput),
     async commands(fallback = []) {
       if (closed) return [];
       const run = active;

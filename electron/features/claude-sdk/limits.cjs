@@ -7,7 +7,7 @@ function rateLimits(message, previous, scopeId, now) {
     || message.type === 'result' && (message.is_error === true || message.subtype?.startsWith('error_'));
   if (!info && !failed) return null;
   const text = [message.result, ...(Array.isArray(message.errors) ? message.errors : []), ...(Array.isArray(message.message?.content) ? message.message.content.map(block => block.text) : [])].filter(value => typeof value === 'string').join('\n');
-  const spend = /enforced_spend_limit_reached|You have reached your specified API usage limits/i.test(text);
+  const spend = info?.errorCode === 'enforced_spend_limit_reached' || /enforced_spend_limit_reached|You have reached your specified API usage limits/i.test(text);
   const code = info?.errorCode === 'credits_required' || message.error === 'billing_error' ? 'credits_required'
     : spend ? 'spend_limit' : info?.status === 'rejected' || message.error === 'rate_limit' ? 'rate_limited' : null;
   if (!info && !code) return null;

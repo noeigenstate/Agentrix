@@ -12,12 +12,13 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
   function selection(spec, runtime, allowBudget = false, retained = false) {
     const config = { ...settings.get() };
     if (retained && switches.retained(spec.terminalId)) config.claudePath = 'api-only';
-    let apiState = claude.apiState(config.monthlyBudgetUsd, spec.projectId);
+    let apiState = claude.apiState(config.monthlyBudgetUsd, spec.projectId, spec.apiTrial, spec.owner);
+    if (spec.agent === 'claude' && config.claudePath === 'api-only' && apiState.status === 'credits_exhausted') return { path: 'api', reason: 'credits_exhausted' };
     if (apiState.status === 'budget_exhausted' && (allowBudget || runtime?.hasAllowance?.())) apiState = { status: 'ready' };
     return choosePath({ agent: spec.agent, ...config, apiState });
   }
   function pathChanged(agent, path, reason) {
-    agents[agent] = { ...agents[agent], path, reason };
+    agents[agent] = { ...agents[agent], path, reason, ...(agent === 'claude' && path === 'terminal' ? { limits: null } : {}) };
   }
   function current(id, runtimeSessionId) {
     const record = sessions.get(id);
@@ -44,7 +45,10 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       if (record.staged) { record.buffered.push(event); return; }
       forward(record, event);
     };
-    if (agent === 'claude') spec.mayContinue = () => selection(spec, record.runtime, true, true).path === 'api';
+    if (agent === 'claude') {
+      spec.mayContinue = () => selection(spec, record.runtime, true, true).path === 'api';
+      spec.quotaFallback = () => spec.owner !== 'dispatch' && settings.get().claudePath === 'api-then-terminal';
+    }
     record.runtime = restoreFactory ? restoreFactory(spec, receive) : (agent === 'claude' ? claude : codex).create(spec, receive);
     return record;
   }
@@ -70,6 +74,10 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     if (event.type === 'limits.updated') agents[agent].limits = event.payload;
     if (event.type === 'limits.updated' || event.type === 'usage.updated') reconcile();
     if (event.type === 'input.receipt') record.inputs.set(event.payload.clientMessageId, event.payload.status);
+    // A proved empty rejected turn continues on the terminal. It must not announce an
+    // interrupted round before the same owner input has reached its destination.
+    if (event.type === 'turn.completed' && agent === 'claude' && spec.owner !== 'dispatch'
+      && settings.get().claudePath === 'api-then-terminal' && record.runtime.fallbackInput?.()?.safe) { record.quotaCompletion = event; return; }
     record.stream.provider(event.providerSessionId); record.stream.turn(event.turnId);
     record.stream.publish(event.type, event.payload, { itemId: event.itemId, replay: event.replay, occurredAtMs: event.occurredAtMs });
     switches.observe(id);
@@ -86,7 +94,8 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       switches.forget(id);
       if (previous) { await previous.runtime.close(); if (previous.lock) occupied.delete(previous.lock); sessions.delete(id); }
       if (agent === 'claude') await claude.refreshAvailability?.();
-      const apiState = claude.apiState(config.monthlyBudgetUsd, spec.projectId);
+      if (agent === 'claude' && spec.owner !== 'dispatch' && spec.kind !== 'ssh' && config.claudePath === 'api-then-terminal') spec.apiTrial = claude.claimApiRetry?.(spec.projectId);
+      const apiState = claude.apiState(config.monthlyBudgetUsd, spec.projectId, spec.apiTrial, spec.owner);
       const selection = choosePath({ agent, ...config, apiState });
       if (!selection.path) throw new Error(apiState.reason || 'Claude API 路径当前不可用。');
       if (selection.path === 'terminal') {
@@ -149,6 +158,10 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       let stream = session.record?.stream || terminalStreams.get(session.spec.terminalId);
       if (!stream || stream.runtimeSessionId !== session.spec.runtimeSessionId) { stream = eventStream(session.spec); terminalStreams.set(session.spec.terminalId, stream); }
       stream.publish('switch.updated', state);
+      if (state.outcome === 'failed' && session.record?.quotaCompletion) {
+        const event = session.record.quotaCompletion; session.record.quotaCompletion = null;
+        stream.publish(event.type, event.payload);
+      }
     },
     async retire(session, reason) {
       const message = reason === '原会话恢复失败，草稿已保留，请重新启动会话。' ? reason : 'API 路径已不可用，会话已停止；未发送的内容已保留。';
@@ -181,12 +194,37 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
           const stream = eventStream(spec);
           stream.provider(spec.providerSessionId); terminalStreams.set(id, stream);
           carryHistory(previousStream, stream);
+          let reason = old?.fallbackReason || null;
+          if (spec.agent === 'claude' && settings.get().claudePath === 'api-then-terminal'
+            && claude.apiState(settings.get().monthlyBudgetUsd, spec.projectId).status === 'credits_exhausted') {
+            reason = 'API 额度已用完，已转到 Claude Code 终端。';
+            const refused = old?.runtime.fallbackInput?.();
+            if (refused && !old.fallbackTaken) {
+              old.fallbackTaken = true;
+              const draft = handoff.draft;
+              let status = 'rejected';
+              if (refused.safe && !draft.text && !draft.images.length && !draft.undelivered.length && !refused.input.images?.length) {
+                try { status = (await prepared.send?.(refused.input))?.status || 'rejected'; }
+                catch { status = 'unknown'; }
+                if (status !== 'rejected') switches.input(id, spec.runtimeSessionId);
+              }
+              if (status !== 'delivered') {
+                const returned = [refused.input, ...(refused.remaining || [])];
+                if (!draft.text && !draft.images.length && !draft.undelivered.length && returned.length === 1 && !refused.input.images?.length) draft.text = refused.input.text;
+                else for (const input of returned) {
+                  if (!draft.undelivered.some(kept => kept.clientMessageId === input.clientMessageId)) draft.undelivered.push(input);
+                }
+                reason += ' 未自动发送的消息已保留，请检查终端输入框后继续。';
+              }
+            }
+          }
           stream.publish('session.state', { state: 'idle', reason: null });
-          stream.publish('path.changed', { previous: session.path === 'native' ? 'subscription' : session.path, selected: 'terminal', reason: old?.fallbackReason || null });
-          pathChanged(spec.agent, 'terminal', old?.fallbackReason || null); changed();
+          stream.publish('path.changed', { previous: session.path === 'native' ? 'subscription' : session.path, selected: 'terminal', reason });
+          pathChanged(spec.agent, 'terminal', reason); changed();
           // The destination is ready. A failed retirement must not destroy it and resurrect a closed source.
           try { await old?.runtime.close(); }
           catch { return { reason: '旧会话未能完全退出，已保留新会话。' }; }
+          return { reason };
         } };
       }
       const record = makeRecord(spec, true, restoring?.restoreFactory);

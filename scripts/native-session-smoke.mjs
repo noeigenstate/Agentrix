@@ -39,7 +39,7 @@ export async function switchContracts(output, stages) {
       'agent-calls-liveness.test.cjs', 'usage-refresh.test.cjs', 'claude-sdk-rereview2.test.cjs', 'claude-sdk-review3.test.cjs', 'claude-sdk-review4.test.cjs',
       'native-project-accounts.test.cjs', 'native-router-usage.test.cjs', 'native-worker-claude.test.cjs',
       'native-worker-codex-finish.test.cjs', 'dispatch-interventions.test.cjs', 'dispatch-events.test.cjs',
-      'native-commands.test.cjs', 'native-commands-codex.test.cjs', 'claude-sdk-provenance.test.cjs',
+      'native-commands.test.cjs', 'native-commands-codex.test.cjs', 'claude-sdk-provenance.test.cjs', 'native-api-quota.test.cjs',
       'codex-auto-reset.test.cjs', 'codex-auto-reset-runtime.test.cjs', 'codex-auto-reset-main.test.cjs'].includes(name));
   await stages.run('switch contracts: correlated resume, late rollback, versioned drafts, helper death and no notifications', async () => {
     const child = spawn(process.execPath, ['--test', ...files.map(name => path.join(root, 'tests', name))], {

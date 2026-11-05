@@ -98,6 +98,7 @@ function registerTerminalIpc({ handle, listen, findProject, getSession, hasSessi
     send('terminal:paste', { id, sessionId, text, lineBreak });
   });
   listen('terminal:focus', (id, focused) => { if (hasSession(id) && focused) { setActiveTerminal(id); setActiveFileTree(null); } else if (getActiveTerminal() === id) setActiveTerminal(null); });
+  return { write: writeTerminal };
 }
 
 module.exports = { registerTerminalIpc };

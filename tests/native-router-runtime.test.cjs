@@ -36,6 +36,13 @@ function fixture(config = {}) {
     prepareTerminal: terminalPreparation(spec => terminals.push([spec])), terminal: async (...args) => terminals.push(args), emit() {} });
   return { router, claude, terminals, created, settings, events };
 }
+test('an owner Claude quota refusal under API-only cannot move a running Codex off app-server', async t => {
+  const { router, claude } = fixture({ claudePath: 'api-only' }); t.after(() => router.close());
+  claude.apiState = () => ({ status: 'credits_exhausted' });
+  await router.start('t', { agent: 'codex' }); router.reconcile();
+  await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(router.switchState('t').current, 'native'); assert.equal(router.switchState('t').target, 'native');
+});
 test('native router owns session identity and rejects old runtime answers', async () => {
   const { router, created } = fixture(); const first = await router.start('t', { agent: 'codex' });
   await router.stop('t', first.runtimeSessionId); const second = await router.start('t', { agent: 'codex' });

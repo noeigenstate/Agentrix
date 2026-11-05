@@ -66,6 +66,25 @@ test('I4: a wrong terminal resume identity restores the original native surface 
   assert.equal(f.sessions.get('t'), f.old); assert.equal(f.saves.length, 0); assert.equal(f.signals.length, 0);
 });
 
+test('quota handoff uses tracked paste and Enter once; CLI drafts and concurrent edits never get cleared or submitted', async () => {
+  for (const draft of [false, true, 'concurrent']) {
+    const f = fixture(), writes = [];
+    const { SubmissionTracker } = require('../electron/terminal-input.cjs');
+    f.context.terminalInput = { write(_id, data) { writes.push(data); f.sessions.get('t').submissions.write(data); } };
+    const prepared = await f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => true);
+    const tracker = f.sessions.get('t').submissions = new SubmissionTracker();
+    if (draft === true) tracker.write('Owner CLI draft');
+    prepared.commit();
+    const sending = prepared.send({ text: 'Rejected input' });
+    if (draft === 'concurrent') tracker.write(' new owner text');
+    const result = await sending;
+    assert.equal(result.status, draft === false ? 'delivered' : draft === true ? 'rejected' : 'unknown');
+    assert.equal(writes.filter(data => data === '\r').length, draft === false ? 1 : 0);
+    assert.ok(writes.every(data => !data.includes('\x15')), 'no Ctrl+U on any path');
+    if (draft === true) assert.equal(tracker.text, 'Owner CLI draft');
+  }
+});
+
 test('a confirmed shell prompt after the launched CLI exits fails immediately instead of waiting for the resume timeout', async () => {
   const f = fixture(), start = f.context.startTerminal;
   f.context.startTerminal = (...args) => {

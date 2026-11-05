@@ -10,7 +10,7 @@ resolution, title tracking, and the native (structured) Codex and Claude session
 - `electron/zsh-terminal.cjs`
 
 ## Interface
-- `registerTerminalIpc` (`electron/features/terminal/ipc.cjs`) — the terminal:* IPC handlers main.cjs registers, with every session dependency injected
+- `registerTerminalIpc` (`electron/features/terminal/ipc.cjs`) — the terminal:* IPC handlers main.cjs registers, with every session dependency injected; returns the same tracked write path for main's admitted quota fallback (never clears an existing input)
 - `registerNativeIpc` (`electron/features/terminal/native-ipc.cjs`) — the native approval, question-answer and managed-prompt IPC handlers
 - `ApprovalGuard` (`electron/features/terminal/approval-guard.cjs`) — a session's observation epochs; the file also exports approvalStamp
 - `createNativeSession` (`electron/features/terminal/native-session.cjs`) — a native Codex or Claude SDK session; the file also exports resolveCli for the probe script

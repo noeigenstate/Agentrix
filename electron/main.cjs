@@ -169,7 +169,7 @@ const capturePage = require('./features/files/capture-page.cjs').createPageCaptu
 const fileCard = createFileCards({ previews: previewResources, capture: capturePage, shrink: pictureOf, shrinkBytes: bytes => small(nativeImage.createFromBuffer(bytes)) });
 let stateTimer;
 let runtimeDir;
-let nativeSessions, claudeRuntime, dispatchControl, controlAddress;
+let nativeSessions, claudeRuntime, dispatchControl, controlAddress, terminalInput;
 const nativeSpecs = new Map();
 const { prepareAskpass, cleanupAskpass } = createSshRuntime({ fs, execFileSync, tempDirectory: () => app.getPath('temp'), integrationDir });
 let zshStartup;
@@ -1447,6 +1447,19 @@ async function prepareSwitchTerminal(spec, _handoff, currentChange, transition =
     }
     if (!currentChange() || sessions.get(id) !== staged || staged.status === 'exited') throw new Error('session_changed');
     return { session: { identity: staged, path: 'terminal', spec }, cancel,
+      async send(input) {
+        const tracker = staged.submissions;
+        if (!terminalInput || spec.agent !== 'claude' || sessions.get(id) !== staged || !currentChange()
+          || staged.cliState?.state !== 'idle' || !tracker || tracker.hasText || tracker.history || tracker.pasting
+          || !input.text || input.text.length > 4000 || /^[!/]/.test(input.text) || /[\x00-\x08\x0b-\x1f\x7f]/.test(input.text)) return { status: 'rejected' };
+        // Reuse the tracked terminal input path. Never clear or overwrite a CLI draft.
+        terminalInput.write(id, `\x1b[200~${input.text}\x1b[201~`);
+        await new Promise(resolve => setTimeout(resolve, 400));
+        if (sessions.get(id) !== staged || !currentChange() || staged.cliState?.state !== 'idle' || tracker.history
+          || tracker.text !== input.text) return { status: 'unknown' };
+        terminalInput.write(id, '\r');
+        return { status: 'delivered' };
+      },
       commit() {
         store.setRestore(id, { terminal: true, codex: true, agent: spec.agent, threadId: spec.providerSessionId, nativeTransport: null });
         retainAgentState(staged, old); delete staged.switchPreviousHost; staged.nativeRuntimeSessionId = spec.runtimeSessionId; broadcast();
@@ -1913,7 +1926,7 @@ function registerIpc() {
     startTerminal(id, null, true); broadcast(); return true;
   });
   registerNativeIpc({ handle });
-  registerTerminalIpc({ handle, listen, findProject, getSession: id => sessions.get(id), hasSession: id => sessions.has(id), startTerminal,
+  terminalInput = registerTerminalIpc({ handle, listen, findProject, getSession: id => sessions.get(id), hasSession: id => sessions.has(id), startTerminal,
     addTerminal: id => store.addTerminal(id), removeTerminal: id => { store.removeTerminal(id); fs.promises.rm(handoffFile(id), { force: true }).catch(() => {}); }, confirmTerminalClose, forgetRestorePlan: id => restorePlans.delete(id),
     disposeTerminal, clearStartupError: id => startupErrors.delete(id), broadcast, getProjectById: id => store.projects.find(p => p.id === id),
     acknowledgeProject: id => store.acknowledge(id), expectCompletion: id => store.expectCompletion(id), scheduleState, applyActivity, pollAfterSubmission, send,
