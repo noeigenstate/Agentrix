@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { clipboardSuites } from './gui-suites.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -13,6 +14,7 @@ export function parseWorkflow(source) {
 
 const slug = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 const isNpmTest = run => /^\s*npm test\s*$/m.test(run || '');
+const clipboardCommands = new Set([...clipboardSuites, 'sessions']);
 
 function skipReason(step) {
   if (step.uses) {
@@ -26,6 +28,11 @@ function skipReason(step) {
   if (/^\s*npm ci\b/m.test(step.run || '')) return 'Use installed locked dependencies; no npm ci.';
   if (/\bnpm\s+(?:install|i)\s+[^\r\n]*(?:--global|-g)(?=\s|$)/.test(step.run || '')) return 'Use installed CLIs; no global installation.';
   if (typeof step.run !== 'string' || !step.run.trim()) throw new Error(`Missing run command in ${step.name}.`);
+  const suites = [...step.run.matchAll(/\bnpm(?:\.cmd)?\s+run\s+test:([\w-]+)(?=\s|$)/g),
+    ...step.run.matchAll(/\bnode(?:\.exe)?\s+["']?scripts[\\/]([\w-]+)-smoke\.mjs\b/g)];
+  if (suites.some(([, name]) => clipboardCommands.has(name))) {
+    return 'Local preflight skips system clipboard tests; run them in remote GitHub Actions.';
+  }
   return null;
 }
 
@@ -109,6 +116,7 @@ export function stepEnvironment(base, step, locations, sha) {
   // no short names, and its paths compared against long ones would fail here for a reason CI never meets).
   const temp = step.key?.startsWith('remote-linux/') ? {} : { TEMP: locations.temp, TMP: locations.temp, RUNNER_TEMP: locations.temp };
   const values = {
+    // Clipboard steps already carry a skip reason. Keep CI for the remaining workflow assertions.
     ...step.env, CI: 'true', AGENTRIX_TEST_TIMEOUT_SCALE: step.env?.AGENTRIX_TEST_TIMEOUT_SCALE ?? '2', ...temp,
     AGENTRIX_DATA_DIR: locations.profile, CODEX_HOME: locations.codex, CLAUDE_CONFIG_DIR: locations.claude,
     GITHUB_SHA: sha, GITHUB_REF: 'refs/heads/ci/local-preflight', GITHUB_REF_NAME: 'ci/local-preflight', GITHUB_REF_TYPE: 'branch',

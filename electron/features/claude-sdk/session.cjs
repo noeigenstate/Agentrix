@@ -201,7 +201,7 @@ function createClaudeSession(spec, emit, dependencies) {
         const interrupted = run.interrupted;
         const outcome = turnResult(message, { interrupted, costUsdMicros: entry.deltaUsdMicros, compacted: context?.compacted });
         if (budgetBlocked) outcome.error = outcome.message = budgetNotice();
-        if (!run.modelReplied && (message.is_error === true || outcome.status === 'failed')) {
+        if (!run.interrupted && !run.modelReplied && (message.is_error === true || outcome.status === 'failed')) {
           for (const id of run.shellInputs || []) shells.get(id)?.reject(null, { completedTurn: true,
             switching: spec.quotaFallback?.() && (run.quotaRejected || budgetBlocked) });
         }

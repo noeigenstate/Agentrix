@@ -19,11 +19,12 @@ async function terminalResume(f, providerId, beforePrompt) {
   child.send({ type: 'start', cli: process.env.AGENTRIX_REAL_CLAUDE, cwd: f.cwd, env, args: ['--resume', providerId], capture: false });
   await ready; beforePrompt(); child.send({ type: 'input', text: 'AFTER_SHELL_FAILURE' });
 }
-for (const mode of ['credit-400', 'server-500', 'generic-400', 'budget', 'success']) {
+for (const mode of ['credit-400', 'server-500', 'generic-400', 'budget', 'success', 'owner-stop']) {
   test(`shell delivery real CLI ${mode} preserves output and reports only unanswered failures`, { skip, timeout: 45000 }, async t => {
     const bodies = [], raw = [], events = []; let healthy = false;
     const f = await harness(t, data => {
       bodies.push(data);
+      if (mode === 'owner-stop') return { events: [opening(data)], hold: true };
       if (healthy || mode === 'success') return [opening(data), ...textBlock(0, 'SHELL_REPLY'), ...finish('end_turn')];
       if (mode === 'budget') return [opening(data), ...finish('end_turn')];
       return { status: mode === 'server-500' ? 500 : 400, body: { type: 'error', error: {
@@ -59,6 +60,11 @@ for (const mode of ['credit-400', 'server-500', 'generic-400', 'budget', 'succes
       healthy = false; events.length = 0; raw.length = 0;
     }
     await session.shell('shell-input', 'echo SHELL_RUN >> shell-count.txt; echo SHELL_DELIVERY_OUTPUT');
+    if (mode === 'owner-stop') {
+      for (let n = 0; n < 500 && !bodies.length; n++) await pause(20);
+      assert.ok(bodies.length, 'the CLI accepted the model request before the owner stopped it');
+      await session.interrupt();
+    }
     for (let n = 0; n < 1000 && !events.some(event => event.type === 'turn.completed'); n++) await pause(20);
     const result = raw.findLast(message => message.type === 'result'); assert.ok(result, 'the real CLI produced its final result');
     t.diagnostic(JSON.stringify({ mode, subtype: result.subtype, is_error: result.is_error, terminal_reason: result.terminal_reason, stop_reason: result.stop_reason }));
@@ -66,7 +72,10 @@ for (const mode of ['credit-400', 'server-500', 'generic-400', 'budget', 'succes
     assert.equal(card.payload.status, 'completed'); assert.equal(card.payload.content.exitCode, 0);
     assert.match(card.payload.content.output, /SHELL_DELIVERY_OUTPUT/);
     const notices = events.filter(event => event.type === 'error' && event.payload.code === 'shell_context_rejected');
-    if (mode === 'success') { assert.notEqual(card.payload.content.modelDelivery, 'rejected'); assert.equal(notices.length, 0); }
+    if (mode === 'success' || mode === 'owner-stop') {
+      assert.notEqual(card.payload.content.modelDelivery, 'rejected'); assert.equal(notices.length, 0);
+      if (mode === 'owner-stop') assert.equal(events.find(event => event.type === 'turn.completed').payload.status, 'interrupted');
+    }
     else {
       assert.equal(card.payload.content.modelDelivery, 'rejected'); assert.equal(notices.length, 1);
       assert.match(notices[0].payload.message, /命令已执行，但输出未发送给模型/);

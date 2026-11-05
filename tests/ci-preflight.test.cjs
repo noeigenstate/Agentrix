@@ -10,6 +10,31 @@ const sha = 'a'.repeat(40);
 const branch = `ci/preflight-${sha.slice(0, 12)}`;
 const workflow = async () => (await helpers).parseWorkflow(source);
 
+test('local selection skips clipboard steps with a reason and retains subsequent work', async () => {
+  const { localPlan, selectSteps } = await helpers;
+  const steps = localPlan(await workflow());
+  for (const name of ['sessions', 'workspace', 'editor-terminals', 'clipboard', 'composer', 'gpu-terminal']) {
+    const step = steps.find(step => step.run.includes('npm run test:' + name + ' '));
+    assert.ok(step, name); assert.match(step.skip || '', /system clipboard.*GitHub Actions/, name);
+    assert.equal(selectSteps(steps, { only: step.key })[0].skip, step.skip);
+    const following = selectSteps(steps, { from: step.key });
+    assert.ok(following.slice(1).some(row => !row.skip), name + ': later steps remain selected');
+  }
+  assert.equal(steps.find(step => step.name === 'Create checksum and build notes').skip, null);
+  assert.equal(steps.find(step => step.run === 'npm test').skip, null);
+});
+
+test('local selection recognizes direct guarded scripts without masking unrelated commands', async () => {
+  const { localPlan } = await helpers;
+  const parsed = await workflow();
+  const commands = ['node scripts/session-smoke.mjs', 'node scripts/retry.mjs node scripts/gpu-terminal-smoke.mjs --packaged',
+    'npm.cmd run test:clipboard -- --packaged', 'node --test tests/clipboard-writes.test.cjs', 'npm run test:reading -- --packaged'];
+  parsed.jobs.windows.steps = commands.map((run, index) => ({ name: 'Command ' + index, run }));
+  const steps = localPlan(parsed).slice(0, commands.length);
+  for (const row of steps.slice(0, 3)) assert.match(row.skip || '', /system clipboard/);
+  for (const row of steps.slice(3)) assert.equal(row.skip, null);
+});
+
 test('local plan replays the Windows build followed by every desktop shard in matrix order', async () => {
   const { localPlan } = await helpers;
   const parsed = await workflow();
