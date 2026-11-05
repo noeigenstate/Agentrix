@@ -2,6 +2,8 @@
 
 Owns the host's Claude Agent SDK sessions, protected credentials, worker tool decisions and local API accounting.
 
+Owner and worker entrypoints remain the CLI default. Ownership is host-observed session identity, persisted locally for owners and read from the team journal for workers; the old agentrix-sdk transcript marker remains readable, while unclassified old sdk-ts prompts stay excluded.
+
 Owner sessions currently keep tool and hook environment inheritance; dispatch workers enable the CLI's subprocess scrub. A2 is awaiting the owner's answer; the existing behavior is retained in the meantime, not an isolation guarantee. API routing is pinned in a private session settings file from host and user sources; repository env and helper settings cannot choose the destination. Routing secrets never enter argv. The saved key remains in the child environment, never the settings file or argv; project/local env overrides found at launch are refused. This does not attest effective key bytes against later config changes or active hooks. Project hooks still inherit it under the retained A2 behavior.
 
 ## Owns
@@ -16,6 +18,7 @@ Owner sessions currently keep tool and hook environment inheritance; dispatch wo
 ## May import
 - `electron/command-phrase.cjs`
 - `electron/conversation-record.cjs`
+- `electron/prompt-queue.cjs`
 - `electron/features/native-session/storage.cjs`
 - `electron/features/native-session/events.cjs`
 - `electron/boundaries.cjs`

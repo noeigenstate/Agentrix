@@ -32,9 +32,22 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (mode === 'skill-catalog') notify('skills/changed', {});
     if (mode === 'sandbox-persist' && JSON.parse(fs.readFileSync(process.env.SYNTHETIC_POLICY_FILE)).sandbox === 'workspace-write') fs.writeFileSync(path.join(process.cwd(), 'synthetic-write-proof.txt'), 'workspace-write');
     turnId = 'turn-' + ++turns;
+    if (mode === 'reset-retry-disconnect' && turns === 2) return process.exit(1);
     result = { turn: { id: turnId, status: 'inProgress', items: [] } };
     send({ id: request.id, result });
     notify('turn/started', result);
+    if (mode.startsWith('reset-') && (turns === 1 || mode === 'reset-repeat')) {
+      const items = [];
+      if (mode.startsWith('reset-notification')) notify('account/rateLimits/updated', { rateLimits: { rateLimitReachedType: 'rate_limit_reached' } });
+      if (mode === 'reset-consumed') notify('item/completed', { turnId, item: { type: 'userMessage', id: 'consumed', clientId: params.clientUserMessageId, content: params.input } });
+      if (mode === 'reset-mid') {
+        items.push({ type: 'agentMessage', id: 'already-worked', text: 'Work started' });
+        notify('item/agentMessage/delta', { turnId, itemId: 'already-worked', delta: 'Work started' });
+      }
+      setTimeout(() => notify('turn/completed', { turn: { id: turnId, status: 'failed',
+        ...(mode === 'reset-unknown' ? {} : { items }), error: { codexErrorInfo: 'usageLimitExceeded' } } }), 10);
+      return;
+    }
     notify('item/agentMessage/delta', { turnId, itemId: 'message-' + turns, delta: 'partial 汉字' });
     if (mode === 'approval') send({ id: 91, method: 'item/commandExecution/requestApproval', params: { threadId, turnId, itemId: 'command', approvalId: 'a', command: 'echo example' } });
     if (mode === 'unread-worker' && params.input?.some(item => item.text?.includes('业主插话'))) setTimeout(() => {

@@ -98,7 +98,7 @@ test('real main assembly reports terminal-only Claude subscription usage without
     createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: cli }),
     codexExecutable: async () => codexInstalled ? 'fixture-codex' : null,
-    nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {},
+    nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
     require: name => {
       if (name === 'electron') return { safeStorage };
       if (name === './features/team/team.cjs') return { projectTeam: forbidden };

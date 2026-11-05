@@ -1,7 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const { messageText, promptText } = require('./prompt-queue.cjs');
+const { messageText, promptText, rememberClaudeSource, claudeSessionSource } = require('./prompt-queue.cjs');
 const { containedFile } = require('./session-files.cjs');
 
 const SESSION_ID = /^[\w-]{1,100}$/;
@@ -50,7 +50,7 @@ async function sessionSummary(filename, id) {
     for (const line of complete.toString('utf8').split('\n')) {
       try {
         const record = JSON.parse(line);
-        if (record.turnOrigin === 'sdk' && record.entrypoint !== 'agentrix-sdk') unownedSdk = true;
+        if (record.turnOrigin === 'sdk' && record.entrypoint !== 'agentrix-sdk' && claudeSessionSource(record) !== 'gui') unownedSdk = true;
         if (record.type === 'user' || record.type === 'assistant') messages++;
         if (!title) title = promptTitle(record);
       } catch { /* malformed/partial JSONL is not a session title */ }
@@ -62,6 +62,10 @@ async function sessionSummary(filename, id) {
 }
 
 async function listClaudeSessions(cwd, currentId = null, home = claudeConfigDir()) {
+  // Team records are the authority for workers across restarts and worktrees.
+  // Read the journal only; live() also prunes the board and is not a read API.
+  const team = require('./features/team/team.cjs').projectTeam(cwd);
+  for (const entry of team?.entries() || []) if (entry.agent === 'claude' && entry.session) rememberClaudeSource(entry.session, 'dispatch');
   const folder = projectFolder(cwd, home);
   let entries;
   try { entries = await fs.readdir(folder, { withFileTypes: true }); }
@@ -69,7 +73,7 @@ async function listClaudeSessions(cwd, currentId = null, home = claudeConfigDir(
   const candidates = [];
   for (const entry of entries) {
     const id = entry.name.replace(/\.jsonl$/, '');
-    if (!entry.isFile() || !entry.name.endsWith('.jsonl') || !SESSION_ID.test(id) || id === currentId) continue;
+    if (!entry.isFile() || !entry.name.endsWith('.jsonl') || !SESSION_ID.test(id) || id === currentId || claudeSessionSource({ sessionId: id }) === 'dispatch') continue;
     const filename = path.join(folder, entry.name);
     try { candidates.push({ id, filename, modified: (await fs.stat(filename)).mtimeMs }); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }

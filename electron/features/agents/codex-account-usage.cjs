@@ -2,10 +2,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn, execFile } = require('node:child_process');
-const { createHmac, randomBytes } = require('node:crypto');
+const { createHmac, randomBytes, randomUUID } = require('node:crypto');
 
 // Codex 0.163's generated GetAccountRateLimitsResponse/Params contract. This is an
-// owned stdio client, never the person's PTY. No threads, turns, login or reset RPCs.
+// owned stdio clients, never the person's PTY. Polls only read; the separate
+// consumeCodexResetCredit path is admitted only after an owner hits a limit.
 const MAX_OUTPUT = 256 * 1024;
 const unavailable = reason => ({ resets: null, resetQuery: { state: 'unavailable', reason } });
 const fingerprintKey = randomBytes(32);
@@ -35,8 +36,81 @@ function accountResult(result, at = Date.now()) {
     .filter(value => value && Number.isFinite(value.usedPercent))
     .map(value => ({ minutes: value.windowDurationMins ?? null, percent: value.usedPercent,
       resetsAt: Number.isFinite(value.resetsAt) ? value.resetsAt * 1000 : null }));
-  if (left == null) return { ...unavailable('unsupported'), ...(limits.length ? { limits, at, source: 'Codex' } : {}) };
-  return { resets: { left, total: null }, limits, at, source: 'Codex', resetQuery: { state: 'ready', at } };
+  const evidence = { atLimit: usageAtLimit(result), ordinaryUsageAllowed: typeof result?.ordinaryUsageAllowed === 'boolean' ? result.ordinaryUsageAllowed : null };
+  if (left == null) return { ...unavailable('unsupported'), ...(limits.length ? { limits, at, source: 'Codex' } : {}), ...evidence };
+  return { resets: { left, total: null }, limits, at, source: 'Codex', resetQuery: { state: 'ready', at }, ...evidence };
+}
+
+function usageAtLimit(value) {
+  if (value?.ordinaryUsageAllowed === true) return false;
+  const buckets = Object.values(Object.keys(value?.rateLimitsByLimitId || {}).length ? value.rateLimitsByLimitId : value?.rateLimits ? { codex: value.rateLimits } : {});
+  return buckets.some(bucket => ['rate_limit_reached', 'workspace_owner_usage_limit_reached', 'workspace_member_usage_limit_reached'].includes(bucket?.rateLimitReachedType)
+    || value?.ordinaryUsageAllowed === false && [bucket?.primary, bucket?.secondary].some(window => window?.usedPercent >= 100));
+}
+function limitPeriod(value) {
+  const buckets = Object.values(value?.rateLimitsByLimitId || {});
+  if (value?.rateLimits) buckets.push(value.rateLimits);
+  return JSON.stringify(buckets.map(bucket => [bucket?.limitId || 'codex', bucket?.primary?.resetsAt ?? null, bucket?.secondary?.resetsAt ?? null]).sort());
+}
+
+function resetCreditMessage(result, translate = value => value) {
+  if (result.status === 'redeemed') {
+    const text = result.remaining === null || result.remaining === undefined
+      ? translate('额度已用完，已自动使用 1 次重置，剩余次数未知。')
+      : translate('额度已用完，已自动使用 1 次重置，还剩 {n} 次。', { n: result.remaining });
+    return text + (result.confirmed ? '' : translate('服务端仍未确认额度恢复；不会再次消耗，请核对额度后继续。'));
+  }
+  if (result.status === 'uncertain') return translate('已尝试自动重置，但未能确认结果；不会再次消耗，请核对额度后继续。');
+  if (result.status === 'declined') return translate('服务端未应用自动重置，请核对额度后继续。');
+  return null;
+}
+
+// One explicit action, with no login, refresh, thread, turn or transport retry.
+// claim() serializes accounts across project/cwd scopes before any consume RPC.
+async function consumeCodexResetCredit({ env = process.env, cwd, codexHome, executable, launch = spawn,
+  stop = stopChild, claim, current = () => true, timeout = 8000, scopeCheck = accountConfigScope, rpcFactory, signal } = {}) {
+  if (!cwd || !codexHome || !claim || !rpcFactory || !current() || await scopeCheck({ env, cwd, codexHome })) return { status: 'ineligible' };
+  const file = executable || await codexExecutable(env);
+  if (!file || !current()) return { status: 'unavailable' };
+  let child, rpc, attempted = false, outcome = null, idempotencyKey;
+  const abort = () => { rpc?.close(); stop(child); };
+  if (signal?.aborted) return { status: 'ineligible' };
+  signal?.addEventListener('abort', abort, { once: true });
+  try {
+    child = launch(file, ['app-server', '--listen', 'stdio://'], { cwd, env: { ...env, CODEX_HOME: codexHome }, windowsHide: true,
+      shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+    rpc = rpcFactory(child, { timeout, onNotification() {}, onRequest() {}, onDisconnect() {} });
+    child.stderr?.on('data', () => {});
+    await rpc.request('initialize', { clientInfo: { name: 'agentrix_usage', title: 'Agentrix usage', version: '1' },
+      capabilities: { experimentalApi: true, requestAttestation: false, explicitGatewayOauth: true } });
+    rpc.notify('initialized');
+    const account = await rpc.request('account/read', { refreshToken: false });
+    if (!['chatgpt', 'chatgptAuthTokens'].includes(account?.account?.type)) return { status: 'ineligible' };
+    const before = await rpc.request('account/rateLimits/read', { excludeResetCreditDetails: false });
+    const count = before?.rateLimitResetCredits?.availableCount;
+    if (!current() || !usageAtLimit(before) || !Number.isSafeInteger(count) || count <= 0) return { status: 'unavailable' };
+    // Without a backend account identity, two homes cannot be proved distinct.
+    if (typeof before.accountId !== 'string' || !before.accountId) return { status: 'unavailable' };
+    idempotencyKey = claim(before.accountId, before);
+    if (!idempotencyKey) return { status: 'cooldown' };
+    const rows = before.rateLimitResetCredits.credits;
+    const selected = (Array.isArray(rows) ? rows : []).filter(row => row?.status === 'available' && typeof row.id === 'string'
+      && (row.expiresAt === null || Number.isSafeInteger(row.expiresAt) && row.expiresAt * 1000 > Date.now()))
+      .sort((a, b) => (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity))[0];
+    if (!current()) return { status: 'ineligible' };
+    attempted = true;
+    const response = await rpc.request('account/rateLimitResetCredit/consume', { idempotencyKey, ...(selected ? { creditId: selected.id } : {}) });
+    outcome = response?.outcome;
+    if (!['reset', 'nothingToReset', 'noCredit', 'alreadyRedeemed'].includes(outcome)) throw new Error('invalid-reset-response');
+    const after = await rpc.request('account/rateLimits/read', { excludeResetCreditDetails: true });
+    const remaining = after?.rateLimitResetCredits?.availableCount;
+    return { status: outcome === 'reset' || outcome === 'alreadyRedeemed' ? 'redeemed' : 'declined', outcome, idempotencyKey,
+      confirmed: after.accountId === before.accountId && after.ordinaryUsageAllowed === true,
+      remaining: after.accountId === before.accountId && Number.isSafeInteger(remaining) && remaining >= 0 ? remaining : null,
+      limits: after.accountId === before.accountId ? after : null };
+  } catch {
+    return { status: ['reset', 'alreadyRedeemed'].includes(outcome) ? 'redeemed' : attempted ? 'uncertain' : 'unavailable', outcome, idempotencyKey };
+  } finally { signal?.removeEventListener('abort', abort); rpc?.close(); stop(child); }
 }
 
 // Use a native executable, avoiding a shell and unowned npm shim descendants.
@@ -278,8 +352,54 @@ class CodexAccountUsage {
   #projectRunning = false;
   #disposed = false;
 
-  constructor({ read = readCodexAccount, scope = accountConfigScope, interval = 30000 } = {}) {
+  constructor({ read = readCodexAccount, scope = accountConfigScope, interval = 30000, consume = consumeCodexResetCredit, audit = () => {}, now = Date.now, resetStorage, resetClient } = {}) {
     this.read = read; this.scope = scope; this.interval = interval; this.entries = new Map(); this.runtimes = new Map();
+    this.consume = consume; this.audit = audit; this.now = now; this.resetStorage = resetStorage; this.resetClient = resetClient; this.resetPending = new Map(); this.resetAborts = new Set();
+  }
+  claimReset(accountId, limits) {
+    const saved = this.resetStorage?.read() || this.resetState;
+    const state = saved && /^[\da-f]{64}$/.test(saved.salt) && saved.attempts && typeof saved.attempts === 'object'
+      ? saved : { salt: randomBytes(32).toString('hex'), attempts: {} };
+    const key = createHmac('sha256', state.salt).update(accountId).digest('hex'), previous = state.attempts[key];
+    const period = limitPeriod(limits);
+    if (previous && (this.now() < previous.until || this.now() < previous.keepUntil && (previous.frozen || previous.period === period))) return null;
+    state.attempts = Object.fromEntries(Object.entries(state.attempts).filter(([, value]) => value?.keepUntil > this.now()).slice(-499));
+    const times = [limits?.rateLimits, ...Object.values(limits?.rateLimitsByLimitId || {})].flatMap(bucket => [bucket?.primary?.resetsAt, bucket?.secondary?.resetsAt])
+      .filter(time => Number.isSafeInteger(time) && time * 1000 > this.now()).map(time => time * 1000);
+    const attempt = { key: randomUUID(), period, frozen: true, until: this.now() + 30 * 60000, keepUntil: Math.max(this.now() + 30 * 60000, ...times, times.length ? 0 : this.now() + 86400000) };
+    state.attempts[key] = attempt;
+    // Persist before sending: a crash or app restart must not spend a second credit.
+    this.resetStorage?.write(state); this.resetState = state;
+    return attempt.key;
+  }
+  async resetAtLimit(options, { enabled = true, atLimit = false, current = () => true } = {}) {
+    if (!enabled || !atLimit || options.owner !== 'gui' || options.remote || !current() || this.#disposed) return { status: 'ineligible' };
+    const scope = this.scopeFor(options);
+    if (scope.reason || await this.scope({ ...options, codexHome: scope.home, cwd: scope.cwd })) return { status: 'ineligible' };
+    if (this.resetPending.has(scope.key)) return this.resetPending.get(scope.key);
+    const abort = new AbortController(); this.resetAborts.add(abort);
+    const task = this.consume({ ...this.resetClient, ...options, cwd: scope.cwd, codexHome: scope.home, signal: abort.signal, current: () => !this.#disposed && current(),
+      claim: (accountId, limits) => this.claimReset(accountId, limits),
+    }).catch(() => ({ status: 'unavailable' })).then(result => {
+      // IDs, paths and backend bodies never enter the local audit or UI.
+      if (result.idempotencyKey) {
+        try {
+          const state = this.resetStorage?.read() || this.resetState;
+          const attempt = Object.values(state?.attempts || {}).find(value => value.key === result.idempotencyKey);
+          if (attempt) { attempt.frozen = !result.confirmed; this.resetStorage?.write(state); this.resetState = state; }
+          this.audit({ at: this.now(), status: result.status, outcome: result.outcome || null, remaining: result.remaining ?? null, idempotencyKey: result.idempotencyKey });
+        } catch { result.auditFailed = true; }
+      }
+      if (result.limits) {
+        const value = accountResult(result.limits, this.now());
+        for (const [key, entry] of this.entries) if (key === scope.key) {
+          entry.value = value; entry.nextReadAt = this.now() + this.interval;
+          for (const changed of [...entry.listeners, ...entry.checks]) changed(value);
+        }
+      }
+      return result;
+    }).finally(() => { this.resetPending.delete(scope.key); this.resetAborts.delete(abort); });
+    this.resetPending.set(scope.key, task); return task;
   }
   // The verified scope is the same one used by the terminal reader. Attaching a transport never broadens it.
   attachRuntime(options, runtime) {
@@ -436,6 +556,7 @@ class CodexAccountUsage {
   }
   dispose() {
     this.#disposed = true;
+    for (const abort of this.resetAborts) abort.abort(); this.resetAborts.clear();
     for (const project of this.#projects.values()) project.finish(null);
     this.#projects.clear(); this.#projectQueue.length = 0;
     for (const entry of this.entries.values()) { entry.listeners.clear(); entry.checks.clear(); ++entry.generation; clearTimeout(entry.timer); entry.abort?.abort(); }
@@ -443,4 +564,4 @@ class CodexAccountUsage {
   }
 }
 
-module.exports = { CodexAccountUsage, readCodexAccount, accountResult, usageScope, codexExecutable, configScope, accountConfigScope, scopePathKey };
+module.exports = { CodexAccountUsage, readCodexAccount, consumeCodexResetCredit, usageAtLimit, resetCreditMessage, accountResult, usageScope, codexExecutable, configScope, accountConfigScope, scopePathKey };

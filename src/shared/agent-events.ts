@@ -27,7 +27,7 @@ export type LimitsPayload = {
   resetCredits: { availableCount: number | null } | null;
   ordinaryUsageAllowed: boolean | null; source: string;
   providerStatus?: 'allowed' | 'allowed_warning' | 'rejected';
-  notice?: { code: 'credits_required' | 'rate_limited' | 'spend_limit'; message: string; resetsAtMs: number | null } | null;
+  notice?: { code: 'credits_required' | 'rate_limited' | 'spend_limit'; message: string; resetsAtMs: number | null; action?: 'check-console'; url?: string } | null;
 };
 export type RequestQuestion = { id: string; question: string; header?: string; options?: { label: string; description?: string }[]; multiSelect?: boolean; isSecret?: boolean; allowFreeText?: boolean };
 export type RequestPayload = {
@@ -61,7 +61,7 @@ export type AgentEvent = { [K in AgentEventType]: {
   runId: string | null; turnId: string | null; itemId: string | null;
   receivedAtMs: number; occurredAtMs: number | null; replay: boolean; type: K; payload: AgentEventPayloads[K];
 } }[AgentEventType];
-export type NativeSettings = { claudePath: 'api-then-terminal' | 'api-only' | 'terminal-only'; codexView: 'native' | 'terminal'; monthlyBudgetUsd: number | null };
+export type NativeSettings = { claudePath: 'api-then-terminal' | 'api-only' | 'terminal-only'; codexView: 'native' | 'terminal'; monthlyBudgetUsd: number | null; codexAutoReset: boolean };
 export type NativeAnswer = { decision: 'allow' | 'deny' } | { answers: Record<string, string | string[]> }
   | { switch: { changeId: number; requestId: string; action: 'wait' | 'now' } } | { handoff: NativeHandoff };
 export type NativeSnapshot = { runtimeSessionId: string; lastSequence: number; events: AgentEvent[]; state: SessionState; switchState?: SwitchState; handoff?: NativeHandoff };

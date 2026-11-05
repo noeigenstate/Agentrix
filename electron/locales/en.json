@@ -2725,5 +2725,16 @@
   "订阅（未开会话）": "Subscription (no session)",
   "ChatGPT 订阅（未开会话）": "ChatGPT subscription (no session)",
   "工作者已结束，消息未能继续处理。": "The worker ended before this message could be processed.",
-  "工作者结束前未能读取消息，恢复一次后仍未处理。": "The worker ended before reading this message, including one recovery attempt."
+  "工作者结束前未能读取消息，恢复一次后仍未处理。": "The worker ended before reading this message, including one recovery attempt.",
+  "服务端拒绝了这次请求：余额不足。如果你确认有余额，请核对这个 key 所属的组织。": "The server rejected this request for insufficient balance. If you believe funds are available, check the organization associated with this key.",
+  "在控制台核对": "Check in Console",
+  "额度已用完，已自动使用 1 次重置，剩余次数未知。": "The usage limit was reached. One reset was used automatically; the remaining count is unknown.",
+  "额度已用完，已自动使用 1 次重置，还剩 {n} 次。": "The usage limit was reached. One reset was used automatically; {n} resets remain.",
+  "服务端仍未确认额度恢复；不会再次消耗，请核对额度后继续。": "The server has not confirmed recovery. No further reset will be used; check your limits before continuing.",
+  "已尝试自动重置，但未能确认结果；不会再次消耗，请核对额度后继续。": "An automatic reset was attempted, but its result could not be confirmed. No further reset will be used; check your limits before continuing.",
+  "服务端未应用自动重置，请核对额度后继续。": "The server did not apply the automatic reset. Check your limits before continuing.",
+  "正在继续本条消息。": "Continuing this message.",
+  "现在可以继续发送消息。": "You can now send another message.",
+  "自动重置后未能继续本条消息，请核对会话后继续。": "This message could not continue after the automatic reset. Check the conversation before continuing.",
+  "自动重置的日志未能保存。": "The automatic reset log could not be saved."
 }

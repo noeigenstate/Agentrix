@@ -25,7 +25,6 @@ function apiEnvironment(env, key, owner = 'dispatch') {
     || owner === 'dispatch' && /^AGENTRIX_BOOTSTRAP$/i.test(name)) delete clean[name];
   clean.ANTHROPIC_API_KEY = key;
   for (const name of Object.keys(clean)) if (name.toUpperCase() === 'CLAUDE_CODE_ENTRYPOINT') delete clean[name];
-  if (owner !== 'dispatch') clean.CLAUDE_CODE_ENTRYPOINT = 'agentrix-sdk';
   clean.AGENTRIX_SDK_PARENT = '1';
   clean.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = owner === 'dispatch' ? '1' : '0';
   return clean;

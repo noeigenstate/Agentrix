@@ -6,6 +6,7 @@ const { createConnectionTest, probeBillingIdentity } = require('./connection.cjs
 const { createUsage } = require('./usage.cjs');
 const { createClaudeSession } = require('./session.cjs');
 const { readJson, writeJson } = require('../native-session/storage.cjs');
+const { rememberClaudeSource } = require('../../prompt-queue.cjs');
 function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader(), resolveExecutable = resolveClaudeExecutable,
   now = Date.now, onCost, onSession, audit, request, inspectCli = inspectClaudeExecutable, initializationTimeoutMs,
   connectionSpec = () => ({ agent: 'claude', owner: 'gui', cwd: process.cwd(), effort: 'high', fast: true }) } = {}) {
@@ -17,6 +18,10 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
   const currentObservation = (scope, value) => value?.generation === generation && value.sequence >= (observations.get(scope) || 0);
   const credentials = createCredentials({ file: path.join(directory, 'credentials.json'), safeStorage, onChange: () => { credentialVersion++; resetAvailability(); } });
   const usage = createUsage({ file: path.join(directory, 'usage.json'), now });
+  const ownerFile = path.join(directory, 'owner-sessions.json');
+  const owners = readJson(ownerFile, []);
+  const ownerSessions = new Map((Array.isArray(owners) ? owners.slice(-10000) : []).filter(row => row && typeof row.id === 'string' && /^[\w-]{1,100}$/.test(row.id) && typeof row.cwd === 'string').map(row => [row.id, row.cwd]));
+  for (const [id, cwd] of ownerSessions) rememberClaudeSource(id, 'gui', cwd);
   function observeCli(value) {
     const identity = JSON.stringify([value.status, value.version || null, value.file || null]);
     if (cliIdentity !== null && cliIdentity !== identity) resetAvailability();
@@ -70,6 +75,14 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
     },
     resetAvailability,
     create(spec, emit, rollbackCredentials = null) {
+      const remember = id => {
+        rememberClaudeSource(id, spec.owner === 'dispatch' ? 'dispatch' : 'gui', spec.cwd);
+        if (spec.owner === 'dispatch' || !id || !spec.cwd || ownerSessions.get(id) === spec.cwd) return;
+        ownerSessions.set(id, spec.cwd);
+        if (ownerSessions.size > 10000) ownerSessions.delete(ownerSessions.keys().next().value);
+        writeJson(ownerFile, [...ownerSessions].map(([id, cwd]) => ({ id, cwd })));
+      };
+      if (spec.providerSessionId) remember(spec.providerSessionId);
       const owner = {}; let leasedId = null;
       function acquire(id) {
         if (!id) return;
@@ -83,7 +96,7 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
         canContinue: () => spec.owner === 'dispatch' || credentials.status().saved && spec.mayContinue?.() !== false,
         onFailure: (reason, error, observedGeneration) => onFailure(spec.projectId || '', reason, error, observedGeneration),
         onIdentity: observedGeneration => onIdentity(spec.projectId || '', observedGeneration),
-        onSession: id => { acquire(id); onSession?.(spec, id); }, audit: decision => recordDecision({ runId: spec.runId || null, ...decision }) });
+        onSession: id => { acquire(id); remember(id); onSession?.(spec, id); }, audit: decision => recordDecision({ runId: spec.runId || null, ...decision }) });
       let closing;
       const open = async () => {
         acquire(spec.providerSessionId);

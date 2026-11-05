@@ -26,6 +26,40 @@ const toolThenDone = data => JSON.stringify(data.messages).includes('tool_result
   ? [opening(data), ...textBlock(0, 'DONE'), ...finish('end_turn')]
   : [opening(data), { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `toolu_${randomUUID().replaceAll('-', '')}`, name: 'Bash', input: {} } },
     { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ command: 'echo probe', description: 'probe' }) } }, { type: 'content_block_stop', index: 0 }, ...finish('tool_use')];
+
+test('SDK requests retain the default CLI entrypoint even with an inherited owner marker', { skip, timeout: 60000 }, async t => {
+  const requests = [], f = await harness(t, data => { requests.push(data); return [opening(data), ...textBlock(0, 'DEFAULT ENTRYPOINT'), ...finish('end_turn')]; });
+  f.env.CLAUDE_CODE_ENTRYPOINT = 'agentrix-sdk';
+  for (const owner of ['gui', 'dispatch']) await f.run({}, () => {}, { owner });
+  assert.equal(requests.length, 2);
+  for (const body of requests) {
+    const header = body.system.find(block => block.text?.includes('cc_entrypoint='))?.text || '';
+    assert.match(header, /cc_entrypoint=sdk-ts/);
+    assert.doesNotMatch(header, /agentrix-sdk/);
+  }
+});
+
+test('a real billing rejection reports server evidence without budget loss, retry or path failure', { skip, timeout: 60000 }, async t => {
+  let requests = 0;
+  const f = await harness(t, data => ++requests === 1 ? [opening(data), ...textBlock(0, 'PAID REPLY'), ...finish('end_turn')]
+    : { status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: 'Credit balance is too low' } } });
+  const runtime = require('../electron/features/claude-sdk/index.cjs').createClaudeRuntime({ directory: path.join(f.cwd, 'state'), loadSdk: async () => f.sdk, resolveExecutable: async () => cli,
+    safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
+  f.cleanup(() => runtime.close()); runtime.credentials.save('sk-ant-offline-billing-fixture');
+  const events = [], session = runtime.create({ owner: 'gui', cwd: f.cwd, env: f.env, runtimeSessionId: randomUUID(), monthlyBudgetUsd: 10, model: 'claude-sonnet-4-5' }, event => events.push(event));
+  const wait = async count => { for (let i = 0; i < 500; i++) {
+    if (events.filter(event => event.type === 'turn.completed').length === count && session.snapshot().state === 'idle') return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  } assert.fail('billing result did not settle'); };
+  await session.start(); await session.send({ clientMessageId: 'paid', text: 'Hello' }); await wait(1);
+  const before = runtime.usage.available(10), spend = runtime.usage.summary().monthUsdMicros;
+  await session.send({ clientMessageId: 'rejected', text: 'Another message' }); await wait(2);
+  assert.equal(requests, 2); assert.equal(runtime.usage.available(10), before); assert.equal(runtime.usage.summary().monthUsdMicros, spend);
+  assert.equal(runtime.apiState(10).status, 'ready');
+  const notice = events.findLast(event => event.type === 'limits.updated').payload.notice;
+  assert.equal(notice.code, 'credits_required'); assert.equal(notice.action, 'check-console'); assert.match(notice.message, /服务端拒绝/);
+  assert.ok(!events.some(event => event.type === 'error' && event.payload.code === 'sdk_failed'));
+});
 const thinkingThenText = data => [opening(data), { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
   { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'considering' } }, { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'c2ln' } }, { type: 'content_block_stop', index: 0 },
   ...textBlock(1, 'THE VISIBLE ANSWER'), ...finish('end_turn')];
@@ -68,6 +102,7 @@ async function harness(t, respond) {
     try {
       const query = sdk.query({ prompt, options: configured });
       for await (const message of query) {
+        if (message.type === 'system' && message.subtype === 'init') require('../electron/prompt-queue.cjs').rememberClaudeSource(message.session_id, changes.owner || 'gui');
         onMessage(message, query);
         if (message.type === 'result') return message;
       }
@@ -520,7 +555,9 @@ test('B2 real owner and worker transcripts use different provenance without losi
   const userText = record => require('../electron/prompt-queue.cjs').messageText(record.message?.content);
   const owner = records.find(record => record.type === 'user' && userText(record) === 'OWNER_RECORD');
   const worker = records.find(record => record.type === 'user' && userText(record) === 'WORKER_BRIEF');
-  assert.equal(owner.entrypoint, 'agentrix-sdk'); assert.equal(worker.entrypoint, 'sdk-ts');
+  assert.equal(owner.entrypoint, 'sdk-ts'); assert.equal(worker.entrypoint, 'sdk-ts');
+  const { rememberClaudeSource } = require('../electron/prompt-queue.cjs');
+  rememberClaudeSource(owner.sessionId, 'gui', f.cwd); rememberClaudeSource(worker.sessionId, 'dispatch', f.cwd);
   const { promptText } = require('../electron/prompt-queue.cjs');
   assert.equal(promptText(owner.message.content, owner), 'OWNER_RECORD'); assert.equal(promptText(worker.message.content, worker), null);
   const { listClaudeSessions } = require('../electron/claude-sessions.cjs');

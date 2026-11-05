@@ -70,7 +70,9 @@ function createClaudeSession(spec, emit, dependencies) {
     const reason = observed?.notice ? observed.notice.code === 'credits_required' ? 'credits_exhausted' : 'rate_limited'
       : message.error === 'authentication_failed' ? 'invalid_key' : null;
     if (!reason) return;
-    onFailure(reason, null, generation);
+    // A billing rejection is server evidence about this request, not proof that
+    // another billing path should take over or that the owner's budget is spent.
+    if (reason !== 'credits_exhausted') onFailure(reason, null, generation);
     if (observed) publish('error', { code: observed.notice.code, message: observed.notice.message, retryable: false, willRetry: false, stage: 'turn' });
     else publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
       state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: reason });
@@ -131,6 +133,7 @@ function createClaudeSession(spec, emit, dependencies) {
         if (message.user_message_uuid) receipt(message.user_message_uuid, 'consumed');
         for (const id of message.user_message_uuids || []) receipt(id, 'consumed');
         unavailable(message, run.generation);
+        if (message.error === 'billing_error' && message.message?.model === '<synthetic>') run.billingRejected = true;
         if (message.type === 'assistant' && !message.parent_tool_use_id && message.message?.usage) {
           run.lastUsage = tokensOf(message.message.usage); run.lastModel = message.message.model;
         }
@@ -148,7 +151,10 @@ function createClaudeSession(spec, emit, dependencies) {
         const resultId = message.uuid || message.result_index;
         if (resultId !== undefined && results.has(resultId)) continue;
         if (resultId !== undefined) results.add(resultId);
-        const entry = usage.record(providerId, message, { resume: !!run.resumeId, reservationId: run.reservation?.id });
+        const rejected = run.billingRejected && message.is_error === true && message.total_cost_usd === 0
+          && Object.values(tokensOf(message.usage)).every(value => value === null || value === 0);
+        const entry = usage.record(providerId, message, { resume: !!run.resumeId, reservationId: run.reservation?.id, rejected });
+        run.billingRejected = false;
         if (entry.deltaUsdMicros > 0) run.remainingBudgetUsd = Math.max(0, Math.round(run.remainingBudgetUsd * 1e6 - entry.deltaUsdMicros) / 1e6);
         const lastUsage = run.lastUsage;
         const contextTokens = lastUsage && [lastUsage.input, lastUsage.cachedInput, lastUsage.cacheWrite, lastUsage.output].every(value => value !== null)

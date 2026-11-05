@@ -73,7 +73,8 @@ test('G7 SDK rate events preserve reset evidence and reject credits without expo
   f.fake.emit({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', errorCode: 'credits_required', resetsAt: reset } }); await tick();
   const rejected = f.events.filter(event => event.type === 'limits.updated').at(-1).payload;
   assert.equal(rejected.ordinaryUsageAllowed, false); assert.equal(rejected.notice.code, 'credits_required'); assert.equal(rejected.notice.resetsAtMs, reset * 1000);
-  assert.match(rejected.notice.message, /充值/); assert.equal(f.meter.snapshot().limits[0].percent, 80);
+  assert.match(rejected.notice.message, /服务端拒绝/); assert.match(rejected.notice.message, /所属的组织/);
+  assert.equal(rejected.notice.action, 'check-console'); assert.equal(f.meter.snapshot().limits[0].percent, 80);
 });
 test('G8 Codex structured tokens and in-flight commands use observations, never fixed windows or guessed dollars', () => {
   const meter = createNativeUsage('codex'), events = createEvents({ projectId: 'p', terminalId: 't', runtimeSessionId: 'r' }, event => meter.apply(event), Date.now);

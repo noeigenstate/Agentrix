@@ -5,7 +5,7 @@ function createTerminalEnvironment(source, bootstrapFile) {
   for (const key of Object.keys(env)) {
     const name = key.toUpperCase();
     if (['NO_COLOR', 'NODE_DISABLE_COLORS', 'TERM', 'COLORTERM', 'CLICOLOR', 'TERM_PROGRAM',
-      'AGENTRIX_BOOTSTRAP', 'ELECTRON_RUN_AS_NODE', 'AGENTRIX_DATA_DIR', 'AGENTRIX_DEV_URL'].includes(name)
+      'AGENTRIX_BOOTSTRAP', 'ELECTRON_RUN_AS_NODE', 'AGENTRIX_DATA_DIR', 'AGENTRIX_DEV_URL', 'CLAUDE_CODE_ENTRYPOINT'].includes(name)
       || (name === 'FORCE_COLOR' && ['0', 'false', ''].includes(String(env[key]).toLowerCase()))) {
       delete env[key];
     }

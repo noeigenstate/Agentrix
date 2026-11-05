@@ -18,7 +18,7 @@ const { createNativeSessions, createNativeUsage } = require('./features/native-s
 const { subscriptionLimits } = require('./features/native-session/usage.cjs');
 const { createProjectAccounts } = require('./features/native-session/project-accounts.cjs');
 const { inspectClaudeExecutable } = require('./features/claude-sdk/executable.cjs');
-const { recoveryWarnings } = require('./features/native-session/storage.cjs');
+const { recoveryWarnings, readJson: readNativeJson, writeJson: writeNativeJson } = require('./features/native-session/storage.cjs');
 const { createClaudeRuntime } = require('./features/claude-sdk/index.cjs');
 const { createSdkLoader } = require('./features/claude-sdk/runtime.cjs');
 const { registerClaudeWorker } = require('./features/native-session/worker.cjs');
@@ -50,8 +50,16 @@ const { DashboardRecords, quotaScope } = require('./features/dashboard/records.c
 const { createDashboard } = require('./features/dashboard/index.cjs');
 const { createLab } = require('./features/lab/index.cjs');
 const { routingNote } = require('./features/dashboard/decisions.cjs');
-const { CodexAccountUsage, codexExecutable } = require('./features/agents/codex-account-usage.cjs');
-const codexAccounts = new CodexAccountUsage();
+const { CodexAccountUsage, codexExecutable, resetCreditMessage } = require('./features/agents/codex-account-usage.cjs');
+const { createRpc: createResetRpc } = require('./features/codex-app-server/rpc.cjs');
+const codexAccounts = new CodexAccountUsage({ resetClient: { rpcFactory: createResetRpc }, resetStorage: {
+  read: () => readNativeJson(path.join(app.getPath('userData'), 'codex-reset-attempts.json'), null),
+  write: value => writeNativeJson(path.join(app.getPath('userData'), 'codex-reset-attempts.json'), value),
+}, audit: event => {
+  const file = path.join(app.getPath('userData'), 'codex-reset-events.json');
+  const previous = readNativeJson(file, []);
+  writeNativeJson(file, [...(Array.isArray(previous) ? previous : []), event].slice(-500));
+} });
 const projectAccounts = createProjectAccounts({ codex: codexAccounts, readClaude: readClaudeAccountCache });
 const { ClaudeAccountUsage, readClaudeAccount } = require('./features/agents/claude-account-usage.cjs');
 const claudeAccounts = new ClaudeAccountUsage({ changed: () => queueClaudeAccounts(), read: options => readClaudeAccount({ ...options,
@@ -75,7 +83,7 @@ const { WorkspaceStore } = require('./state.cjs');
 const { createEventServer } = require('./events.cjs');
 const { ProjectGit } = require('./project-git.cjs');
 const { acceptShellEvent, SubmissionTracker, PromptMarkers, InputGate, isTerminalResponse } = require('./terminal-input.cjs');
-const { PromptQueue, promptText, promptSummary: summarizeTask } = require('./prompt-queue.cjs');
+const { PromptQueue, promptText, promptSummary: summarizeTask, rememberClaudeSource } = require('./prompt-queue.cjs');
 const { CompletionWork } = require('./completion-work.cjs');
 const { createTerminalEnvironment } = require('./terminal-env.cjs');
 const { adoptSystemProxy } = require('./system-proxy.cjs');
@@ -590,6 +598,7 @@ function startUsage(project, s, event) {
         if (s.usage === usage && s.codexActive && sessions.get(s.terminalId) === s) {
           s.terminalAccount = account;
           usage.codexAccount(account); s.recordQuota?.('codex', usage.limits); scheduleState(); scheduleUsageRollover();
+          if (account.atLimit && !s.nativeStructured) void resetTerminalCodex(project, s, options);
         }
       });
     };
@@ -604,6 +613,18 @@ function startUsage(project, s, event) {
     void claudeProvider(event.cwd || project.path, claudeConfigDir()).then(provider => named(() => { usage.provider = provider; })).catch(() => {});
     void refreshClaudeAccounts();
   } else void codexProvider(event.codexHome || s.codexHome).then(names => named(() => { usage.names = names; })).catch(() => {});
+}
+async function resetTerminalCodex(project, s, options) {
+  const usage = s.usage;
+  const current = () => sessions.get(s.terminalId) === s && s.agent === 'codex' && s.usage === usage && s.codexActive && nativeSessions?.getSettings().codexAutoReset === true;
+  if (project.kind === 'ssh' || !current()) return;
+  try {
+    const result = await codexAccounts.resetAtLimit({ ...options, owner: 'gui' }, { enabled: true, atLimit: true, current });
+    if (!current()) return;
+    const text = resetCreditMessage(result, t); if (!text) return;
+    s.conversation.put({ id: randomUUID(), at: Date.now(), role: 'assistant', text: text + (result.auditFailed ? t('自动重置的日志未能保存。') : '') + (result.confirmed ? t('现在可以继续发送消息。') : '') });
+    scheduleState();
+  } catch (error) { report(error); }
 }
 function bindRemoteClaudeAccount(s) {
   const usage = s.usage;
@@ -905,7 +926,10 @@ function onEvent(event) {
   const project = store.projects.find(p => p.id === s.projectId);
   if (!project) return;
   if (['dispatch-start', 'dispatch-rate', 'dispatch-end', 'dispatch-receipt'].includes(event.type)) {
-    if (require('./features/agents/dispatch-events.cjs').acceptDispatch(s, event, callsOf(s, project))) broadcast();
+    if (require('./features/agents/dispatch-events.cjs').acceptDispatch(s, event, callsOf(s, project))) {
+      if (event.type === 'dispatch-start' && event.agent === 'claude' && event.unconfirmed !== true) rememberClaudeSource(event.sessionId, 'dispatch');
+      broadcast();
+    }
     return;
   }
   if (event.type === 'agent-activity') { claudeActivity(project, s, event); return; }
@@ -1462,7 +1486,10 @@ async function initializeNativeSessions() {
     },
   });
   claudeRuntime.observeCli?.(await inspectClaudeExecutable());
-  const codexFactory = createCodexRuntime({ renderImage: item => generatedImage(item, Date.now()) });
+  const codexFactory = createCodexRuntime({ renderImage: item => generatedImage(item, Date.now()), translate: t,
+    resetAtLimit: (spec, evidence) => codexAccounts.resetAtLimit({ ...spec, remote: spec.kind === 'ssh', accountLaunch: 'project-open-v1' },
+      { ...evidence, enabled: nativeSessions?.getSettings().codexAutoReset === true,
+        current: () => evidence.current() && nativeSessions?.getSettings().codexAutoReset === true }) });
   const codex = { create(spec, emit) {
     const runtime = codexFactory.create(spec, emit), start = runtime.start, resume = runtime.resume, close = runtime.close;
     let accountBinding, accountWatch;

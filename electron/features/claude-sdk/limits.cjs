@@ -1,4 +1,5 @@
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+const { BILLING_REJECTION } = require('../../conversation-record.cjs');
 const seconds = value => count(value) !== null ? count(value * 1000) : null;
 function rateLimits(message, previous, scopeId, now) {
   const info = message.type === 'rate_limit_event' ? message.rate_limit_info : null;
@@ -15,8 +16,8 @@ function rateLimits(message, previous, scopeId, now) {
   if (info?.rateLimitType) buckets[info.rateLimitType] = { primary: {
     usedPercent: Number.isFinite(info.utilization) && info.utilization >= 0 && info.utilization <= 1 ? info.utilization * 100 : null,
     windowDurationMins: info.rateLimitType === 'five_hour' ? 300 : info.rateLimitType.startsWith('seven_day') ? 10080 : null, resetsAtMs: seconds(info.resetsAt) } };
-  const line = code === 'credits_required' ? 'API 额度不足，需要充值后继续。' : code === 'spend_limit' ? 'API 用量已达上限。' : 'API 请求受到限流。';
-  const notice = code ? { code, resetsAtMs: reset, message: line } : null;
+  const line = code === 'credits_required' ? BILLING_REJECTION : code === 'spend_limit' ? 'API 用量已达上限。' : 'API 请求受到限流。';
+  const notice = code ? { code, resetsAtMs: reset, message: line, ...(code === 'credits_required' ? { action: 'check-console', url: 'https://platform.claude.com/settings/billing' } : {}) } : null;
   return { scopeId, billingRoute: 'api', observedAtMs: now, state: code ? 'unavailable' : 'ready', limitsById: buckets,
     resetCredits: null, ordinaryUsageAllowed: code ? false : info?.status === 'allowed' || info?.status === 'allowed_warning' ? true : null,
     source: 'claude-sdk', ...(info && ['allowed', 'allowed_warning', 'rejected'].includes(info.status) ? { providerStatus: info.status } : {}), notice };

@@ -6,7 +6,9 @@ const { choosePath } = require('./routing.cjs');
 function createNativeSessions(options) {
   const storedSettings = createSettings(path.join(options.directory, 'settings.json'));
   const settings = { ...storedSettings, set(patch) {
-    const result = storedSettings.set(patch); options.claude.resetAvailability?.(); router.reconcile(true); return result;
+    const result = storedSettings.set(patch);
+    if (Object.keys(patch).some(key => key !== 'codexAutoReset')) { options.claude.resetAvailability?.(); router.reconcile(true); }
+    return result;
   } };
   const router = createRouter({ ...options, settings });
   async function testConnection(projectId) {

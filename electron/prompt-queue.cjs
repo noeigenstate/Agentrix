@@ -9,6 +9,13 @@
 // An item keeps the original text for its hover and a sentence computed when it arrives.
 // Slash commands, shell mode and memory notes are not prompts.
 const NOT_A_PROMPT = /^[/!#]/;
+// Main records session identities locally. This remains pure in-memory state:
+// no CLI flags, prompt matching, filesystem access or process launch here.
+const claudeSources = new Map();
+function rememberClaudeSource(id, owner) {
+  if (typeof id === 'string' && /^[\w-]{1,100}$/.test(id) && ['gui', 'dispatch'].includes(owner)) claudeSources.set(id, owner);
+}
+const claudeSessionSource = record => claudeSources.get(record.sessionId || record.session_id) || null;
 const FOLLOW_UP = /^(继续|接着|继续吧|继续执行|好的?|可以|行|嗯|是的?|对|go on|continue|keep going|ok(ay)?|yes|y|proceed)[。.!！\s]*$/i;
 const clean = text => String(text || '').replace(/\s+/g, ' ').trim();
 
@@ -28,9 +35,10 @@ const omitPath = text => text.endsWith('.') ? ' .' : ' ';
 // Both CLIs use the user role for bookkeeping too. Check provenance before cleaning away its identifying tags.
 function promptText(content, record = {}) {
   // SDK is the owner's input transport, not an automatic turn. All injection checks still apply.
-  const sdkInput = record.turnOrigin === 'sdk' && record.promptSource === 'sdk' && record.entrypoint === 'agentrix-sdk';
-  if (record.isMeta || record.is_meta || record.isSidechain || record.parent_tool_use_id || record.isCompactSummary || record.isVisibleInTranscriptOnly || record.queueTranscriptOnly
-    || record.promptSource === 'system' || record.origin?.kind && record.origin.kind !== 'human'
+  const source = claudeSessionSource(record);
+  const sdkInput = record.turnOrigin === 'sdk' && record.promptSource === 'sdk' && (source === 'gui' || record.entrypoint === 'agentrix-sdk');
+  if (source === 'dispatch' || record.isMeta || record.is_meta || record.isSidechain || record.parent_tool_use_id || record.isCompactSummary || record.isVisibleInTranscriptOnly || record.queueTranscriptOnly
+    || record.promptSource === 'system' || record.promptSource === 'sdk' && !sdkInput || record.origin?.kind && record.origin.kind !== 'human'
     || record.turnOrigin && record.turnOrigin !== 'human' && !sdkInput || record.humanTurn === false
     || record.commandMode && record.commandMode !== 'prompt') return null;
   if (Array.isArray(content) && content.some(block => ['tool_result', 'tool_use', 'function_call_output'].includes(block?.type))) return null;
@@ -197,4 +205,4 @@ class PromptQueue {
   }
 }
 
-module.exports = { PromptQueue, messageText, ownMessage, promptText, promptKey, promptCommand, promptSummary };
+module.exports = { PromptQueue, messageText, ownMessage, promptText, promptKey, promptCommand, promptSummary, rememberClaudeSource, claudeSessionSource };

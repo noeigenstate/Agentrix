@@ -7,7 +7,7 @@ const { createEvents, itemPayload, turnCompletion } = require('./events.cjs');
 const { createRequests } = require('./requests.cjs');
 const { mergeLimits, accountConnection, restrictedLimits } = require('./account.cjs');
 const { assertCompatible, probeCapabilities } = require('./compatibility.cjs');
-const { codexExecutable, scopePathKey } = require('../agents/codex-account-usage.cjs');
+const { codexExecutable, scopePathKey, usageAtLimit, resetCreditMessage } = require('../agents/codex-account-usage.cjs');
 const { workerEnvironment } = require('./environment.cjs');
 
 const occupied = new Map();
@@ -26,7 +26,7 @@ function stopProcess(child) {
   });
 }
 
-function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, now = Date.now, renderImage } = {}) {
+function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, now = Date.now, renderImage, resetAtLimit, translate = value => value } = {}) {
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
@@ -38,6 +38,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       let lockKey, active = false, threadResponse, accountGeneration = 0, limitsRead = null;
       let skills = null, skillsRead = null, skillsGeneration = 0, skillsExpireAt = 0;
       let accountRead = null;
+      let executionSeen = false, resetting = null, resetRetry = null, lastReset = null;
       const setState = (value, reason = null) => { state = value; events.publish('session.state', { state, reason }); };
       function bind(threadId) {
         const home = spec.codexHome || spec.env?.CODEX_HOME || path.join(spec.env?.HOME || spec.env?.USERPROFILE || homedir(), '.codex');
@@ -48,12 +49,14 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       function started(turn) {
         if (!turn || typeof turn.id !== 'string') throw Object.assign(new Error('invalid_turn'), { uncertain: true });
         if (finished.has(turn.id) || active && events.binding.turnId === turn.id) return;
-        events.binding.turnId = turn.id; active = true; currentUsage = null; events.beginTurn();
+        events.binding.turnId = turn.id; active = true; currentUsage = null; executionSeen = false; events.beginTurn();
         events.publish('turn.started', { origin, clientMessageId }); setState('running');
       }
       function notification(method, params) {
         if (closed) return;
         if (params.threadId && params.threadId !== events.binding.providerSessionId) return;
+        if (active && (method.startsWith('item/') && params.item?.type !== 'userMessage'
+          || ['thread/tokenUsage/updated', 'turn/plan/updated', 'turn/diff/updated'].includes(method))) executionSeen = true;
         if (method === 'skills/changed') { ++skillsGeneration; skills = null; skillsRead = null; }
         if (method === 'item/completed' && params.item?.type === 'userMessage') {
           const id = params.item.clientId;
@@ -71,10 +74,17 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           }
           events.finishTurn(); events.publish('turn.completed', outcome);
           setState('idle');
+          if (outcome.terminalReason === 'usageLimitExceeded') {
+            const entry = receipts.get(clientMessageId);
+            const safe = !executionSeen && !currentUsage && Array.isArray(turn.items) && turn.items.length === 0 && entry
+              && ['queued', 'delivered'].includes(entry.status) && !entry.retried;
+            if (!entry?.retried) void resetLimit(safe ? entry : null, turn.id);
+          }
         } else if (method === 'serverRequest/resolved') requests.resolved(params.requestId);
         else if (method === 'account/rateLimits/updated') {
           const scope = spec.scopeId || spec.runtimeSessionId, value = mergeLimits(scopes.get(scope), params, scope, now());
           scopes.set(scope, value); events.publish('limits.updated', value);
+          if (usageAtLimit(params)) void resetLimit(null, events.binding.turnId);
         } else if (method === 'account/updated') {
           ++accountGeneration;
           accountRead = null;
@@ -82,6 +92,42 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           scopes.delete(spec.scopeId || spec.runtimeSessionId);
           events.publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'unknown', observedAtMs: now(), state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: 'codex-app-server' });
         } else events.notification(method, params);
+      }
+      async function resetLimit(entry, failedTurnId) {
+        if (spec.owner !== 'gui' || spec.kind === 'ssh' || spec.remote || !resetAtLimit || closed) return;
+        if (entry) resetRetry = { entry, turnId: failedTurnId };
+        if (resetting) return;
+        const reused = lastReset?.turnId === failedTurnId && lastReset.result.confirmed;
+        if (reused && !entry) return;
+        const generation = accountGeneration;
+        const task = Promise.resolve().then(() => reused ? lastReset.result : resetAtLimit(spec, { atLimit: true, current: () => !closed && accountGeneration === generation })).then(async result => {
+          if (closed || generation !== accountGeneration) return;
+          const candidate = resetRetry; resetRetry = null;
+          const retryTurnId = candidate?.turnId ?? failedTurnId;
+          entry = candidate?.entry;
+          lastReset = { turnId: retryTurnId, result };
+          if (result.limits) {
+            const scope = spec.scopeId || spec.runtimeSessionId, value = mergeLimits(scopes.get(scope), result.limits, scope, now());
+            scopes.set(scope, value); events.publish('limits.updated', value);
+          }
+          let message = resetCreditMessage(result, translate);
+          if (!message) return;
+          if (result.auditFailed) message += translate('自动重置的日志未能保存。');
+          const retry = result.confirmed && entry && !entry.retried && ['queued', 'delivered'].includes(entry.status)
+            && events.binding.turnId === retryTurnId && !active && state === 'idle';
+          if (result.confirmed) message += translate(retry ? '正在继续本条消息。' : '现在可以继续发送消息。');
+          if (!reused || retry) events.publish('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: reused ? translate('正在继续本条消息。') : message,
+            resetCredit: { status: result.status, outcome: result.outcome || null, remaining: result.remaining ?? null, confirmed: !!result.confirmed } } }, { itemId: randomUUID() });
+          if (!retry) return;
+          entry.retried = true; clientMessageId = entry.id; origin = 'user';
+          const response = await rpc.request('turn/start', { threadId: events.binding.providerSessionId, clientUserMessageId: entry.id, input: entry.input,
+            effort: spec.effort ?? null, serviceTier: spec.fast === true ? 'fast' : spec.fast === false ? 'default' : null });
+          started(response.turn); inputReceipt(entry.id, 'delivered');
+        }).catch(error => {
+          if (entry?.retried) inputReceipt(entry.id, error.uncertain ? 'unknown' : 'rejected');
+          if (!closed) events.publish('error', { code: 'reset_continue_failed', message: translate('自动重置后未能继续本条消息，请核对会话后继续。'), retryable: false, willRetry: false, stage: 'turn' });
+        }).finally(() => { if (resetting === task) resetting = null; });
+        resetting = task; await task;
       }
       async function open(resuming, override) {
         if (rpc || closed) throw new Error('session_already_started');
@@ -196,6 +242,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
               if (skill) userInput.push({ type: 'skill', name: command[1], path: skill.path });
             }
             const steering = active;
+            const entry = receipts.get(clientId); entry.id = clientId; entry.input = userInput;
             clientMessageId = clientId; origin = 'user';
             const base = { threadId: events.binding.providerSessionId, clientUserMessageId: clientId, input: userInput };
             const startTurn = () => rpc.request('turn/start', { ...base, effort: spec.effort ?? null, serviceTier: spec.fast === true ? 'fast' : spec.fast === false ? 'default' : null });

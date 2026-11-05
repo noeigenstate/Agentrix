@@ -37,13 +37,13 @@ test('B1 terminal error records show a reason while SDK errors remain out of ass
   assert.deepEqual(emitted, []);
 });
 
-test('B2 only the explicit owner entrypoint makes SDK input a human prompt', () => {
+test('B2 historical owner markers remain readable without changing the CLI entrypoint', () => {
   const source = { turnOrigin: 'sdk', promptSource: 'sdk' };
   assert.equal(promptText('owner words', { ...source, entrypoint: 'agentrix-sdk' }), 'owner words');
   assert.equal(promptText('worker brief', { ...source, entrypoint: 'sdk-ts' }), null);
   assert.equal(promptText('ambiguous old SDK words', source), null);
   const env = { CLAUDE_CODE_ENTRYPOINT: 'agentrix-sdk' };
-  assert.equal(apiEnvironment(env, 'fake', 'gui').CLAUDE_CODE_ENTRYPOINT, 'agentrix-sdk');
+  assert.equal(apiEnvironment(env, 'fake', 'gui').CLAUDE_CODE_ENTRYPOINT, undefined);
   assert.notEqual(apiEnvironment(env, 'fake', 'dispatch').CLAUDE_CODE_ENTRYPOINT, 'agentrix-sdk');
 });
 

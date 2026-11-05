@@ -6,7 +6,8 @@ const path = require('node:path');
 
 const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 
-// Using a plan reset is costly and the owner decides it in Codex itself; completion belongs to the rounds, not to a button.
+// The pane only observes. Owner-authorized automatic resets are admitted by a
+// separate main-process action, never by rendering a quota bar.
 test('the pane never acts on its own: one /usage after the countdown, read-only account calls, no completion or editor controls', () => {
   const pane = read('src/features/agents/ResetQuota.tsx');
   assert.equal(pane.match(/\bsendToAgent\(/g).length, 1, 'one place types into the agent');
@@ -18,9 +19,13 @@ test('the pane never acts on its own: one /usage after the countdown, read-only 
   for (const file of ['src/features/agents/ActivityPane.tsx', 'src/features/agents/ResetQuota.tsx', 'src/features/agents/ResetCountdown.tsx'])
     assert.doesNotMatch(read(file), /vs ?code|code\.cmd|openInEditor|markComplete|mark-complete|完成项目|标记完成/i, `${file} has no manual completion or editor launch control`);
   // Codex only reads identity (without refresh) and limits; Claude's usage is one GET.
-  const codex = read('electron/features/agents/codex-account-usage.cjs');
+  const source = read('electron/features/agents/codex-account-usage.cjs');
+  const codex = source.slice(source.indexOf('function readCodexAccount('), source.indexOf('// Scope only to'));
   assert.deepEqual([...new Set([...codex.matchAll(/method: '([^']+)'/g)].map(match => match[1]))].sort(), ['account/rateLimits/read', 'account/read', 'initialize', 'initialized']);
   assert.match(codex, /method: 'account\/read', params: \{ refreshToken: false \}/);
+  assert.doesNotMatch(codex, /rateLimitResetCredit\/consume/);
+  const action = source.slice(source.indexOf('async function consumeCodexResetCredit('), source.indexOf('// Use a native executable'));
+  assert.equal((action.match(/rpc\.request\('account\/rateLimitResetCredit\/consume'/g) || []).length, 1);
   const claude = read('electron/features/agents/claude-account-usage.cjs');
   assert.deepEqual([...claude.matchAll(/\bfetch\(([^,]+), \{ method: '([A-Z]+)'/g)].map(match => match.slice(1)), [['USAGE_URL', 'GET']]);
   assert.doesNotMatch(claude, /writeFile|oauth\/token|refresh_token/, 'never renews or writes credentials');

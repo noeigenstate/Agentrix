@@ -2,6 +2,11 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createTerminalEnvironment } = require('../electron/terminal-env.cjs');
 
+test('a terminal drops inherited SDK entrypoints in every letter case', () => {
+  const env = createTerminalEnvironment({ CLAUDE_CODE_ENTRYPOINT: 'agentrix-sdk', claude_code_entrypoint: 'agentrix-sdk' }, 'fake-bootstrap');
+  assert.equal(Object.keys(env).some(name => name.toUpperCase() === 'CLAUDE_CODE_ENTRYPOINT'), false);
+});
+
 test('PTYs advertise color support even when launched by a monochrome host', () => {
   const source = Object.freeze({ NO_COLOR: '1', NODE_DISABLE_COLORS: '1', TERM: 'dumb', COLORTERM: '', CLICOLOR: '0', FORCE_COLOR: '0', PATH: 'existing-path' });
   const env = createTerminalEnvironment(source, 'session.json');

@@ -75,9 +75,13 @@ function createUsage({ file, now = Date.now }) {
       if (started && lease.uncertain) next.estimates[id] = lease;
       delete next.reservations[id]; commit(next);
     },
-    record(sessionId, result, { replay = false, resume = false, reservationId } = {}) {
+    record(sessionId, result, { replay = false, resume = false, reservationId, rejected = false } = {}) {
       const snapshot = snapshotOf(result);
       if (replay || !sessionId) return { snapshot, deltaUsdMicros: null };
+      if (rejected) {
+        this.release(reservationId);
+        return { snapshot: { ...snapshot, costUsdMicros: data.sessions[sessionId]?.cost ?? null }, deltaUsdMicros: 0 };
+      }
       if (snapshot.costUsdMicros === null) {
         this.unverified(reservationId);
         return { snapshot, deltaUsdMicros: null };
