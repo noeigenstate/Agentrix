@@ -22,6 +22,12 @@ Run offline. Nothing reaches an account.
 
 Standing checks: `AGENTRIX_REAL_CLAUDE=<path to claude> node --test tests/claude-sdk-real-cli*.test.cjs`. Drive the product's own `queryOptions`, policy and normalizer, not a copy of their options.
 
+## Compare with the real terminal
+The native view changes the display, never what the agent can do. `tests/claude-parity-real-cli.test.cjs` runs the SDK path and the real terminal through one stub and fails on a new difference. Add a behaviour there before calling it equal. A stub that never triggers a behaviour on either path, such as automatic compaction, proves nothing about it: say so.
+
+## GUI checks
+Name the suites you want. Never ask anyone to run every GUI smoke: `session`, `workspace`, `editor-terminals`, `clipboard`, `composer` and `gpu-terminal` write the system clipboard and run only on GitHub Actions. Run GUI checks one at a time, with nothing else loading the machine. Unit tests stay green while these break, so run them after any change to launching or restoring a session.
+
 ## What it cannot prove
 A stub says nothing about the real service accepting a request, or about real long sessions. Say so in the report, and have those checked on a real account.
 
