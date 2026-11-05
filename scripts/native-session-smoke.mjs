@@ -44,7 +44,7 @@ export async function switchContracts(output, stages) {
       'native-worker-codex-finish.test.cjs', 'dispatch-interventions.test.cjs', 'dispatch-events.test.cjs',
       'native-commands.test.cjs', 'native-commands-codex.test.cjs', 'claude-sdk-provenance.test.cjs', 'native-api-quota.test.cjs',
       'codex-auto-reset.test.cjs', 'codex-auto-reset-runtime.test.cjs', 'codex-auto-reset-main.test.cjs',
-      'native-large-frames.test.cjs', 'native-parity-backend.test.cjs', 'native-parity-review.test.cjs', 'native-ui-backend.test.cjs', 'native-shell.test.cjs', 'session-restore.test.cjs', 'agent-calls.test.cjs',
+      'r13-history.test.cjs', 'r13-review2.test.cjs', 'native-large-frames.test.cjs', 'native-parity-backend.test.cjs', 'native-parity-review.test.cjs', 'native-ui-backend.test.cjs', 'native-shell.test.cjs', 'session-restore.test.cjs', 'agent-calls.test.cjs',
       'ssh-codex.test.cjs', 'codex-app-server-only.test.cjs', 'dispatch-startup.test.cjs'].includes(name));
   await stages.run('switch contracts: Claude handoffs, Codex app-server only, drafts, rollback and no duplicate notifications', async () => {
     const child = spawn(process.execPath, ['--test', ...files.map(name => path.join(root, 'tests', name))], {
@@ -224,6 +224,8 @@ async function runtimeSmoke(output, stages) {
           assert.equal((await stage(`${agent} stop before resume`, () => page.evaluate(p => window.agentrix.nativeSession.stop(p.terminalId, p.id), { terminalId, id }))).ok, true);
           const resumed = await stage(`${agent} resume`, () => page.evaluate(p => window.agentrix.nativeSession.start(p.terminalId, { agent: p.agent, resume: true }), { terminalId, agent }));
           assert.equal(resumed.ok, true, JSON.stringify(resumed)); id = resumed.value.runtimeSessionId;
+          const afterResume = (await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId)).value;
+          assert.equal(afterResume.events.findLast(event => event.providerSessionId)?.providerSessionId, completed.value.events.findLast(event => event.providerSessionId)?.providerSessionId, 'resume keeps the exact provider thread');
         }
       }
       if (agent === 'claude') {

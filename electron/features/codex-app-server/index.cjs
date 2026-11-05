@@ -38,11 +38,44 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
+    async history(spec, { signal } = {}) {
+      const abort = new AbortController(); let child, rpc;
+      const cancel = () => { abort.abort(); rpc?.close(); };
+      const check = () => { if (abort.signal.aborted) throw new Error('session_closed'); };
+      signal?.addEventListener('abort', cancel, { once: true }); if (signal?.aborted) cancel();
+      try {
+        check();
+        const remote = spec.kind === 'ssh' ? await launchRemote(spec, { signal: abort.signal, readOnly: true }) : null;
+        const cwd = remote?.cwd || spec.cwd;
+        if (remote) child = remote.child;
+        else {
+          const env = workerEnvironment(spec.env || process.env), file = await resolveExecutable(env);
+          check();
+          if (!file) throw new Error('codex_cli_required');
+          child = spawnProcess(file, ['app-server', '--listen', 'stdio://'], { cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+        }
+        check(); rpc = createRpc(child);
+        assertCompatible(await rpc.request('initialize', { clientInfo: { name: 'agentrix-history', version: '1.0.0' }, capabilities: { experimentalApi: true } }));
+        rpc.notify('initialized');
+        const page = await rpc.request('thread/list', { cwd, limit: 100, sortKey: 'updated_at', sortDirection: 'desc', archived: false, sourceKinds: ['cli', 'appServer'] });
+        if (!Array.isArray(page.data)) throw new Error('invalid_history');
+        let thread = page.data.find(thread => thread.id === spec.providerSessionId) || page.data[0];
+        if (spec.providerSessionId && thread?.id !== spec.providerSessionId) {
+          try { thread = (await rpc.request('thread/read', { threadId: spec.providerSessionId, includeTurns: false })).thread; }
+          catch (error) { if (!error.missingThread) throw error; }
+        }
+        if (!thread || typeof thread.id !== 'string' || thread.cwd !== cwd) return null;
+        return { id: thread.id, title: String(thread.name || thread.preview || '').slice(0, 200), updatedAt: Number.isSafeInteger(thread.updatedAt) ? thread.updatedAt * 1000 : null };
+      } finally {
+        signal?.removeEventListener('abort', cancel); rpc?.close();
+        try { await stopProcess(child); } finally { child?.dispose?.(); abort.abort(); }
+      }
+    },
     create(initialSpec, emit) {
       const spec = { ...initialSpec, runtimeSessionId: initialSpec.runtimeSessionId || randomUUID() };
       const render = item => renderImage?.(item, spec);
       let currentUsage = null;
-      const events = createEvents(spec, event => { if (event.type === 'usage.updated') currentUsage = event.payload; emit(event); }, now, render), receipts = new Map(), finished = new Set();
+      const events = createEvents(spec, event => { if (event.type === 'usage.updated') currentUsage = event.payload; emit(event); }, now, render, translate), receipts = new Map(), finished = new Set();
       let rpc, child, requests, state = 'stopped', closed = false, sending = Promise.resolve(), origin = 'user', clientMessageId = null;
       let lockKey, active = false, threadResponse, accountGeneration = 0, limitsRead = null;
       let skills = null, skillsRead = null, skillsGeneration = 0, skillsExpireAt = 0;
@@ -258,7 +291,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           for (const turn of page.data) {
             ++turns;
             for (const item of [...(turn.items || [])].reverse()) {
-              const serialized = JSON.stringify({ payload: itemPayload(item, true, render), itemId: item.id, turnId: turn.id });
+              const serialized = JSON.stringify({ payload: itemPayload(item, true, render, translate), itemId: item.id, turnId: turn.id });
               const size = Buffer.byteLength(serialized) + 1024;
               if (history.length >= 1000 || bytes + size > 4 * 1024 * 1024) { turns = 1000; break; }
               // Detach bounded text slices from the large provider frame before retaining them.
@@ -392,6 +425,11 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       return { start: override => open(false, override), resume: override => open(true, override), send, interrupt,
         answer: (id, answer) => requests.answer(id, answer), snapshot: () => ({ ...events.snapshot(), state, requests: requests?.snapshot() || [] }), close,
         readLimits, readAccount, commands, activity: events.activity,
+        async canContinueInterrupted() {
+          if (closed || active || state !== 'idle') return false;
+          const page = await rpc.request('thread/turns/list', { threadId: events.binding.providerSessionId, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' });
+          return !closed && !active && state === 'idle' && Array.isArray(page.data) && ['inProgress', 'interrupted'].includes(page.data[0]?.status);
+        },
         readUsage: () => rpc.request('account/usage/read', {}),
         history: cursor => rpc.request('thread/turns/list', { threadId: events.binding.providerSessionId, cursor: cursor || null, limit: 50, sortDirection: 'desc', itemsView: 'full' }),
         get pid() { return child?.pid; }, get threadResponse() { return threadResponse; },

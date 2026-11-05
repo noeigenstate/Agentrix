@@ -1,3 +1,4 @@
+import { guiCodexEnvironment } from './gui-codex-env.mjs';
 // Command Prompt terminals: the shell chosen in settings starts, reports its prompt and directory,
 // runs codex through the same wrapper as PowerShell, and restores an interrupted session with "继续".
 import { testRun } from './test-output.mjs';
@@ -27,8 +28,8 @@ await fs.writeFile(path.join(codexHome, 'sessions', `rollout-${sessionId}.jsonl`
   { type: 'event_msg', payload: { type: 'task_started' } },
 ].map(value => JSON.stringify(value)).join('\n') + '\n');
 // These checks read the terminal's rows as HTML, so the compatible (DOM) renderer draws them; gpu-terminal-smoke covers the GPU one.
-await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ ...project, restore: { terminal: true, codex: true, cwd: project.path, threadId: sessionId } }], settings: { terminalRenderer: 'dom', shell: 'cmd', restoreSessions: true, notifications: false, sound: false, announce: false, closeToTray: false } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, AGENTRIX_TEST_RESTORE: '1', CODEX_HOME: codexHome };
+await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ ...project, restore: { terminal: true, codex: true, cwd: project.path, threadId: sessionId, interrupted: true } }], settings: { terminalRenderer: 'dom', shell: 'cmd', restoreSessions: true, notifications: false, sound: false, announce: false, closeToTray: false } }));
+const env = { ...process.env, ...guiCodexEnvironment(), AGENTRIX_DATA_DIR: dataDir, AGENTRIX_TEST_RESTORE: '1', CODEX_HOME: codexHome };
 const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path'); env[pathKey] = bin + path.delimiter + env[pathKey];
 delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const packaged = process.argv.includes('--packaged');
@@ -40,15 +41,23 @@ try {
   page = await application.firstWindow();
   await page.waitForSelector('.project-panel');
   await waitFor(receipt, 'the interrupted session is resumed through Command Prompt', 60000);
-  // Then what the reading view can show (electron/features/agents/reading-note.cjs), before the user's own arguments.
-  assert.deepEqual([(await receipt()).args[4], /^developer_instructions="You run inside Agentrix[^"]*"$/.test((await receipt()).args[5])], ['-c', true], 'cmd gives Codex the reading view note');
-  assert.deepEqual((await receipt()).args.slice(6), ['resume', sessionId, '继续'], 'cmd passes the resume arguments, Chinese included, through the codex wrapper');
+  await waitFor(async () => (await receipt())?.continued, 'app-server continuation');
+  assert.deepEqual((await receipt()).args, ['app-server', '--listen', 'stdio://']);
+  assert.equal((await receipt()).threadId, sessionId);
+  assert.match((await receipt()).developerInstructions, /^You run inside Agentrix/);
   assert.equal((await terminal()).shell, 'cmd');
   await waitFor(async () => (await terminal()).codexActive, 'the wrapper reports Codex as started');
   const panel = page.locator(`[data-project-id="${project.id}"]`);
-  const { id: terminalId, sessionId: shellSession } = await terminal();
+  const { id: terminalId } = await terminal(); let shellSession;
   const shell = panel.locator(`[data-terminal-slot="${terminalId}"]`);
   await page.screenshot({ path: path.join(output, 'cmd-codex.png') });
+  const snapshot = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
+  await page.evaluate(p => window.agentrix.nativeSession.stop(p.id, p.runtime), { id: terminalId, runtime: snapshot.value.runtimeSessionId });
+  await page.evaluate(id => window.agentrix.restartTerminal(id), terminalId);
+  await waitFor(async () => (await terminal()).shellReady, 'cmd ready for manual Codex');
+  shellSession = (await terminal()).sessionId;
+  await page.evaluate(id => window.agentrix.writeTerminal(id, 'codex\r'), terminalId);
+  await waitFor(async () => (await receipt())?.args[0] !== 'app-server' && (await terminal()).codexActive, 'manual Codex started');
   // Leaving Codex returns to the cmd prompt, which reports itself through its invisible marker.
   await page.evaluate(id => window.agentrix.writeTerminal(id, '\x03'), terminalId);
   await waitFor(async () => { const state = await terminal(); return !state.codexActive && state.shellReady; }, 'back at the cmd prompt after Codex exits');

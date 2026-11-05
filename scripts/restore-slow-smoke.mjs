@@ -1,3 +1,4 @@
+import { guiCodexEnvironment } from './gui-codex-env.mjs';
 // Restore mixed agent sessions while the window answers PowerShell's cursor-position query late.
 import { testRun } from './test-output.mjs';
 import fs from 'node:fs/promises';
@@ -75,7 +76,7 @@ async function runScenario(label, delay) {
     version: 2, projects,
     settings: { terminalRenderer: 'dom', autoSave: false, notifications: false, sound: false, closeToTray: false, restoreSessions: true },
   }));
-  const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, AGENTRIX_TEST_RESTORE: '1', CODEX_HOME: codexHome };
+  const env = { ...process.env, ...guiCodexEnvironment(), AGENTRIX_DATA_DIR: dataDir, AGENTRIX_TEST_RESTORE: '1', CODEX_HOME: codexHome };
   const originalPath = Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '';
   for (const key of Object.keys(env)) if (key.toLowerCase() === 'path') delete env[key];
   env.Path = bin + path.delimiter + originalPath;
@@ -114,7 +115,11 @@ async function runScenario(label, delay) {
         assert.deepEqual([result.args[2], /^You run inside Agentrix/.test(result.args[3])], ['--append-system-prompt', true], `${label}: ${project.name} is told what the reading view shows`);
         assert.deepEqual(result.args.slice(4), ['--resume', project.sessionId, '继续'], `${label}: ${project.name} resumes intact`);
       } else {
-        assert.deepEqual(result.args.slice(-3), ['resume', project.sessionId, '继续'], `${label}: ${project.name} resumes intact`);
+        await waitFor(async () => (await receipt(project))?.continued, 'app-server continuation');
+        const rpc = await receipt(project);
+        assert.deepEqual(rpc.args, ['app-server', '--listen', 'stdio://']);
+        assert.equal(rpc.threadId, project.sessionId);
+        assert.equal(rpc.continued, true);
       }
     }
     console.log(`PASS: ${label}: six Claude Code and two Codex sessions restored with intact arguments (cursor answers +${delay} ms)`);

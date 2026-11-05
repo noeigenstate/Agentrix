@@ -14,6 +14,7 @@
   "main": "electron/main.cjs",
   "desktopName": "agentrix.desktop",
   "scripts": {
+    "test:windows-gui": "node scripts/windows-gui-smoke.mjs",
     "postinstall": "node scripts/claude-sdk-pack.cjs --clean",
     "start": "node scripts/build-mac-titlebar.cjs --optional && node scripts/start.mjs",
     "dev": "node scripts/build-mac-titlebar.cjs --optional && node scripts/start.mjs --dev",

@@ -66,7 +66,7 @@ async function removeFolders(directory, entries) {
 }
 
 // Async; root is a repository root, overridable for tests. Locked old runs may remain.
-export async function testRun(name, { keep = 3, root = repoRoot } = {}) {
+export async function testRun(name, { keep = 3, root = process.env.AGENTRIX_TEST_OUTPUT_ROOT || repoRoot } = {}) {
   validateKeep(keep);
   if (typeof name !== 'string' || !name || name === '.' || name === '..' || /[\\/\0:]/.test(name)) {
     throw new TypeError('name must be a single folder name');

@@ -20,7 +20,7 @@ test('real app-server starts and resumes the same thread despite legacy terminal
   env.STANDIN_API_KEY = 'offline-key'; env.CI = '1';
   env.GIT_CEILING_DIRECTORIES = root;
   env.AGENTRIX_BOOTSTRAP = path.join(cwd, 'bootstrap.json'); fs.writeFileSync(env.AGENTRIX_BOOTSTRAP, '{}');
-  const requests = [], launches = [], events = [], sessions = [];
+  const requests = [], launches = [], events = [], sessions = []; let hold = false;
   const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
   const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
   const { deadline } = require('./fixtures/codex-app-server-lifecycle.cjs');
@@ -34,6 +34,7 @@ test('real app-server starts and resumes the same thread despite legacy terminal
     let body = ''; request.on('data', chunk => { body += chunk; }); request.on('end', () => {
       requests.push(body); const id = 'resp_' + requests.length;
       const data = JSON.parse(body);
+      if (hold) { response.writeHead(200, { 'content-type': 'text/event-stream' }); response.write('event: response.created\ndata: '+JSON.stringify({type:'response.created',response:{id}})+'\n\n'); return; }
       const proof = body.includes('REVIEW_WRITE_PROOF') && !data.input?.some(item => ['function_call_output', 'custom_tool_call_output'].includes(item.type));
       const catalog = data.tools || data.input?.find(item => item.type === 'additional_tools')?.tools || [];
       const tools = catalog.flatMap(tool => tool.type === 'namespace' ? tool.tools.map(value => ({ ...value, namespace: tool.name })) : [tool]);
@@ -56,8 +57,8 @@ test('real app-server starts and resumes the same thread despite legacy terminal
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   fs.writeFileSync(path.join(env.CODEX_HOME, 'config.toml'), `model = "gpt-6.1-sol"\nmodel_provider = "local"\n[model_providers.local]\nname = "Local"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nenv_key = "STANDIN_API_KEY"\n[windows]\nsandbox = "unelevated"\n`);
   const codex = createCodexRuntime({ resolveExecutable: async () => process.env.AGENTRIX_REAL_CODEX,
-    spawnProcess: (file, args, options) => { assert.equal(options.env.AGENTRIX_BOOTSTRAP, env.AGENTRIX_BOOTSTRAP); launches.push(args); return launch(file, args, options); } });
-  let threadId;
+    spawnProcess: (file, args, options) => { assert.equal(options.env.AGENTRIX_BOOTSTRAP, historyLookup ? undefined : env.AGENTRIX_BOOTSTRAP); launches.push(args); return launch(file, args, options); } });
+  let threadId, historyLookup = false;
   const spec = id => ({ owner: 'gui', projectId: 'p', terminalId: id, cwd, env, context: 'REVIEW_LOCAL_DEVELOPER_INSTRUCTIONS', model: 'gpt-6.1-sol', providerSessionId: threadId });
   try {
     const direct = codex.create(spec('initial'), event => events.push(event)); sessions.push(direct);
@@ -67,6 +68,23 @@ test('real app-server starts and resumes the same thread despite legacy terminal
     assert.ok(events.some(event => event.type === 'item.upsert' && event.payload.content?.text === 'OFFLINE CODEX ONLY'));
     assert.match(requests.at(-1), /REVIEW_LOCAL_DEVELOPER_INSTRUCTIONS/);
     await direct.close();
+    const beforeHistory = requests.length;
+    historyLookup = true;
+    assert.equal((await codex.history(spec('history'))).id, threadId, 'real thread/list finds the same thread');
+    historyLookup = false;
+    assert.equal(requests.length, beforeHistory, 'history lookup never sends a model request');
+    const unfinished = codex.create(spec('interrupted'), () => {}); sessions.push(unfinished);
+    await unfinished.resume(); assert.equal(await unfinished.canContinueInterrupted(), false);
+    hold = true; const beforeInterrupt = requests.length;
+    await unfinished.send({ clientMessageId: 'interrupt-proof', text: 'INTERRUPT_PROOF' });
+    for (let n = 0; n < 500 && requests.length === beforeInterrupt; n++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(requests.length > beforeInterrupt); await unfinished.interrupt();
+    for (let n = 0; n < 500 && unfinished.snapshot().state !== 'idle'; n++) await new Promise(resolve => setTimeout(resolve, 20));
+    await unfinished.close(); hold = false;
+    const interrupted = codex.create(spec('verified-interruption'), () => {}); sessions.push(interrupted);
+    await interrupted.resume(); assert.equal(await interrupted.canContinueInterrupted(), true, 'real resumed last turn reports interruption');
+    await interrupted.close();
+
     if (process.platform === 'win32') {
       const config = path.join(env.CODEX_HOME, 'config.toml');
       const blankWindows = fs.readFileSync(config, 'utf8').replace('[windows]\nsandbox = "unelevated"\n', '');

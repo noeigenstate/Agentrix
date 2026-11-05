@@ -13,7 +13,7 @@ function shellExecutable(env) {
 }
 
 function runShell({ cwd, env, command, signal, output, timeout = 120000 }) {
-  const safe = Object.fromEntries(Object.entries(env).filter(([key]) => !/^(?:ANTHROPIC_|OPENAI_|CLAUDE_CODE_(?:OAUTH|API_KEY|AUTH|SESSION_ACCESS_TOKEN)|CLAUDE_(?:OAUTH|API_KEY|AUTH)|CODEX_(?:API_KEY|AUTH|ACCESS_TOKEN)|AWS_|AZURE_|GOOGLE_APPLICATION_CREDENTIALS$)|(?:^|_)(?:API_KEY|API_TOKEN|AUTH_TOKEN|ACCESS_TOKEN|SECRET_ACCESS_KEY)$/i.test(key)));
+  const safe = Object.fromEntries(Object.entries(env).filter(([key]) => !/^(?:ANTHROPIC_|OPENAI_|CLAUDE_CODE_(?:OAUTH|API_KEY|AUTH|SESSION_ACCESS_TOKEN)|CLAUDE_(?:OAUTH|API_KEY|AUTH)|CODEX_(?:API_KEY|AUTH|ACCESS_TOKEN)|AWS_(?:ACCESS_KEY_ID$|ACCESS_KEY$|SECRET_ACCESS_KEY$|SESSION_TOKEN$|SECURITY_TOKEN$|WEB_IDENTITY_TOKEN_FILE$|CONTAINER_AUTHORIZATION_TOKEN(?:_FILE)?$|BEARER_TOKEN_BEDROCK$)|AZURE_|GOOGLE_APPLICATION_CREDENTIALS$)|(?:^|_)(?:API_KEY|API_TOKEN|AUTH_TOKEN|ACCESS_TOKEN|SECRET_ACCESS_KEY)$/i.test(key)));
   return new Promise((resolve, reject) => {
     // Keep the parent alive while background jobs own the pipes. Cancellation can then
     // reap its whole Windows tree even after the submitted command itself has returned.
@@ -29,7 +29,7 @@ function runShell({ cwd, env, command, signal, output, timeout = 120000 }) {
     };
     const result = code => {
       if (settled) return;
-      settled = true; clearTimeout(drain); clearInterval(poll);
+      settled = true; clearTimeout(timer); clearTimeout(drain); clearInterval(poll);
       resolve({ exitCode: stopped ? null : code, stdout, stderr, closed });
     };
     const stop = () => {
@@ -69,7 +69,7 @@ function runShell({ cwd, env, command, signal, output, timeout = 120000 }) {
       let code; try { code = fs.readFileSync(receipt, 'utf8'); } catch { return; }
       if (!/^-?\d+$/.test(code) || drain) return;
       // Finite commands usually close immediately. Services return after a bounded drain,
-      // while the owned parent remains cancellable until timeout or session close.
+      // while the owned parent remains cancellable until session close.
       drain = setTimeout(() => result(Number(code)), 100);
     }, 20); poll.unref?.();
     child.once('error', error => { cleanup(); reject(error); });

@@ -87,6 +87,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   ] : [] }] };
   else if (request.method === 'account/rateLimits/read') result = { rateLimits: { limitId: 'codex', primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 100 } }, rateLimitResetCredits: { availableCount: 2 }, ordinaryUsageAllowed: true };
   else if (request.method === 'thread/read') result = { thread: { id: threadId, status: { type: 'idle' }, turns: [{ id: turnId, status: 'completed', items: [] }] } };
+  else if (request.method === 'thread/list') result = { data: [{ id: threadId, cwd: params.cwd, preview: 'Remote history', updatedAt: 1000 }], nextCursor: null };
   else if (request.method === 'thread/turns/list') {
     if (mode.startsWith('long-')) {
       const total = mode === 'long-many' ? 1200 : mode === 'long-large' ? 60 : mode === 'long-mixed' ? 600 : 2, offset = Number(params.cursor || 0);

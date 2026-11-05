@@ -89,7 +89,7 @@ const originalDesktopSteps = [
     "run": "node scripts/retry.mjs npm run test:dashboard -- --packaged"
   },
   {
-    "name": "Verify the real native question card at the minimum window, its validation and jump link",
+    "name": "Verify app-server question cards at the minimum window and exact validated answers",
     "run": "node scripts/retry.mjs npm run test:native-question -- --packaged"
   },
   {

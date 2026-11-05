@@ -90,7 +90,7 @@ try {
   assert.equal(await page.getByRole('button', { name: /VS Code|标记开发完成/ }).count(), 0);
   await page.screenshot({ path: path.join(output, 'unsupported.png') });
   await page.getByRole('button', { name: '返回总览', exact: true }).click(); await settled(false);
-  await second.getByRole('button', { name: '启动终端', exact: true }).click();
+  await second.getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await state()).projects.find(project => project.id === remote.id).shellReady, 'real SSH transport ready');
   const sessionId = (await state()).projects.find(project => project.id === remote.id).sessionId;
   await app.evaluate(() => {

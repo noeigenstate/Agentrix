@@ -781,6 +781,7 @@ class CodexActivityReader:
 def resolve_codex(env):
     # SSH's command shell does not load the login/interactive PATH used by nvm and volta.
     result = subprocess.run(["/bin/bash", "-lic", "type -P codex"], env=dict(env),
+        stdin=subprocess.DEVNULL, start_new_session=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
     for line in reversed(result.stdout.splitlines()):
         file = line.strip()

@@ -177,6 +177,16 @@ function imageMetadata(_key, value) {
   return value;
 }
 
+function stripImageResults(value) {
+  const pending = [value];
+  while (pending.length) {
+    const item = pending.pop();
+    if (!item || typeof item !== 'object') continue;
+    imageMetadata('', item);
+    for (const key of Object.keys(item)) if (item[key] && typeof item[key] === 'object') pending.push(item[key]);
+  }
+}
+
 function jsonFrames(receive, dropped, invalid, limit = MAX_FRAME) {
   let parts = [], bytes = 0, envelope = null, generation = 0;
   const read = chunk => {
@@ -198,19 +208,11 @@ function jsonFrames(receive, dropped, invalid, limit = MAX_FRAME) {
       parts = []; bytes = 0; envelope = null;
       if (metadata) { dropped(metadata, size); continue; }
       let value;
-      try { const text = line.toString('utf8');
-        // Image frames alone pay the reviver cost; ordinary history uses the native parser.
-        let image = /"(?:type|kind)"\s*:\s*"(?:imageGeneration|image_gen\.generation)"/.test(text);
-        if (!image && text.includes('\\u')) {
-          const candidates = text.matchAll(/("(?:[^"\\]|\\.)*")\s*:\s*("(?:[^"\\]|\\.)*")/g);
-          for (const match of candidates) {
-            const key = JSON.parse(match[1]);
-            if (key !== 'type' && key !== 'kind') continue;
-            const type = JSON.parse(match[2]);
-            if (type === 'imageGeneration' || type === 'image_gen.generation') { image = true; break; }
-          }
-        }
-        value = image ? JSON.parse(text, imageMetadata) : JSON.parse(text); } catch { invalid('invalid_json'); return; }
+      const text = line.toString('utf8');
+      try { value = JSON.parse(text); } catch { invalid('invalid_json'); return; }
+      // Literal searches have no backtracking stack. Escaped keys/types are decoded
+      // by the native parser before the iterative walk, separate from JSON errors.
+      if (text.includes('\\u') || text.includes('imageGeneration') || text.includes('image_gen.generation')) stripImageResults(value);
       receive(value);
     }
   };

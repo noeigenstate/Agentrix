@@ -4,12 +4,23 @@ const { validEvent } = require('./validate.cjs');
 const { createEventStream } = require('./events.cjs');
 const { nextPath } = require('./usage.cjs');
 const { createSwitches } = require('./switches.cjs');
-function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {}, readCommands = async () => [], terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {}, retireTerminal = () => {}, switchOptions = {} }) {
+function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {}, readHistory = async () => null, readCommands = async () => [], terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {}, retireTerminal = () => {}, switchOptions = {} }) {
   const sessions = new Map(), terminalStreams = new Map(), busy = new Set(), occupied = new Set();
   const agents = { claude: { path: null, reason: null, limits: null }, codex: { path: null, reason: null, limits: null } };
-  const projectLimits = new Map();
+  const projectLimits = new Map(), historyReads = new Map();
+  let closed = false;
   const ended = new Set(['stopped', 'failed', 'disconnected']);
   const eventStream = spec => createEventStream(spec, event => { emit(event); changed(spec.terminalId, event); }, now);
+  function history(id) {
+    if (closed) return Promise.reject(new Error('session_closed'));
+    if (historyReads.has(id)) return historyReads.get(id).task;
+    const entry = { abort: new AbortController() };
+    entry.task = Promise.resolve().then(() => {
+      if (entry.abort.signal.aborted) throw new Error('session_closed');
+      return readHistory(id, { signal: entry.abort.signal });
+    }).finally(() => { if (historyReads.get(id) === entry) historyReads.delete(id); });
+    historyReads.set(id, entry); return entry.task;
+  }
   function selection(spec, runtime, allowBudget = false, retained = false) {
     const config = { ...settings.get() };
     if (retained && switches.retained(spec.terminalId)) config.claudePath = 'api-only';
@@ -59,6 +70,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     if (!validEvent(event) || event.projectId !== spec.projectId || event.terminalId !== id || event.runtimeSessionId !== spec.runtimeSessionId ||
       record.epoch && event.connectionEpoch !== record.epoch || event.sequence <= (record.sequence || 0)) return;
     record.epoch = event.connectionEpoch; record.sequence = event.sequence;
+    if (['turn.started', 'turn.completed'].includes(event.type)) record.turnRevision = (record.turnRevision || 0) + 1;
     if (!record.retiring && event.type === 'session.state' && ended.has(event.payload.state)
       && switches.failed(id, spec.runtimeSessionId)) return;
     if (agent === 'claude' && (event.type === 'error' && event.payload.stage === 'startup' && settings.get().claudePath === 'api-then-terminal'
@@ -93,6 +105,11 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     try {
       const config = settings.get(), resolved = resolveSpec(id, agent, resume);
       const spec = { ...resolved, agent, runtimeSessionId: randomUUID(), monthlyBudgetUsd: config.monthlyBudgetUsd };
+      if (resume && !spec.providerSessionId) {
+        spec.providerSessionId = (await history(id))?.[agent]?.id || null;
+        resolveSpec(id, agent, false, true);
+        if (!spec.providerSessionId) resume = false;
+      }
       terminalStreams.delete(id);
       const previous = sessions.get(id);
       if (previous && !ended.has(previous.runtime.snapshot().state)) throw new Error('请先停止当前会话。');
@@ -275,6 +292,18 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
   }
   const unsubscribeAvailability = claude.onAvailabilityChange?.(() => reconcile());
   return { start,
+    history,
+    async continueInterrupted(id, runtimeSessionId, beforeSend) {
+      const record = current(id, runtimeSessionId), revision = record.turnRevision;
+      if (record.spec.agent !== 'codex' || record.continued || record.ownerInput || !record.runtime.canContinueInterrupted) return;
+      const unfinished = await record.runtime.canContinueInterrupted();
+      if (current(id, runtimeSessionId) !== record || record.turnRevision !== revision || record.continued || record.ownerInput || !unfinished) return;
+      record.continued = true;
+      beforeSend();
+      const receipt = await record.runtime.send({ clientMessageId: randomUUID(), text: '继续', images: [] });
+      if (!['queued', 'delivered', 'consumed'].includes(receipt.status)) throw new Error('恢复后的继续消息未确认投递，请查看会话状态。');
+      return receipt;
+    },
     async runOptions(id, runtimeSessionId, patch) {
       const record = current(id, runtimeSessionId);
       if (record.spec.agent !== 'claude' || !record.runtime.runOptions) throw new Error('此会话不支持运行选项。');
@@ -330,6 +359,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     },
     async send(id, runtimeSessionId, message) {
       const record = current(id, runtimeSessionId);
+      record.ownerInput = true;
       if (busy.has(id)) throw new Error('会话正在切换，请稍后重试。');
       if (record.inputs.has(message.clientMessageId)) return { status: record.inputs.get(message.clientMessageId) };
       if (switches.state(id)?.phase && switches.state(id).phase !== 'stable') return unsent(record, message, 'switch_in_progress');
@@ -403,11 +433,19 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     failed: (id, runtimeSessionId) => switches.failed(id, runtimeSessionId),
     switchState: id => switches.state(id),
     async forget(id) {
+      const pending = historyReads.get(id); pending?.abort.abort(); historyReads.delete(id);
       switches.forget(id);
       const record = sessions.get(id); sessions.delete(id); terminalStreams.delete(id);
       if (record) { await record.runtime.close(); if (record.lock) occupied.delete(record.lock); }
+      if (pending) await pending.task.catch(() => {});
     },
-    async close() { unsubscribeAvailability?.(); await switches.close(); await Promise.allSettled([...sessions.values()].map(record => record.runtime.close())); sessions.clear(); terminalStreams.clear(); occupied.clear(); },
+    async close() {
+      closed = true; unsubscribeAvailability?.();
+      const reads = [...historyReads.values()]; for (const entry of reads) entry.abort.abort();
+      await switches.close();
+      await Promise.allSettled([...sessions.values()].map(record => record.runtime.close()).concat(reads.map(entry => entry.task)));
+      sessions.clear(); terminalStreams.clear(); occupied.clear();
+    },
     has: id => sessions.has(id),
   };
 }

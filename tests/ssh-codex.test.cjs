@@ -111,3 +111,43 @@ test('missing remote Codex preserves a typed actionable startup failure', async 
     .create({ kind: 'ssh', owner: 'gui', cwd: '/remote' }, () => {});
   await assert.rejects(runtime.start(), { code: 'codex_cli_required' }); await runtime.close();
 });
+
+
+test('N10 SSH thread history uses its remote byte channel and closes the lookup without account or model requests', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-ssh-history-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+  const f = transport(t, root), forbidden = () => assert.fail('remote history consulted local executables'); let options;
+  const factory = createCodexRuntime({ resolveExecutable: forbidden, spawnProcess: forbidden, launchRemote: async (_spec, config) => {
+    options = config; return { cwd: root, child: createRemoteCodexProcess(f.connection) };
+  } });
+  const found = await factory.history({ kind: 'ssh', cwd: '/srv/project', projectId: 'remote' });
+  assert.equal(found.id, 'synthetic-thread'); assert.equal(options.readOnly, true); assert.equal(f.connection.closed, true);
+  const messages = f.calls.filter(([op]) => op === 'codex-input').flatMap(([, p]) => Buffer.from(p.data, 'base64').toString().trim().split('\n').map(JSON.parse));
+  assert.ok(messages.some(message => message.method === 'thread/list'));
+  assert.ok(!messages.some(message => /account|turn\/start/.test(message.method)));
+});
+
+
+test('N10 history lookup preserves the actionable missing-remote-Codex reason', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const start = source.indexOf('    readHistory: '), end = source.indexOf('    readCommands:', start);
+  const expression = source.slice(start, end).trim().replace(/^readHistory: /, '').replace(/,$/, '');
+  const project = { kind: 'ssh', id: 'remote', path: '/srv' };
+  const lookup = vm.runInNewContext('(' + expression + ')', { findProject: () => project,
+    store: { findTerminal: () => ({ record: { restore: {} } }) }, randomUUID: () => 'fixture', t: value => value,
+    codexFactory: { history: async () => { throw Object.assign(new Error('codex_cli_required'), { code: 'codex_cli_required' }); } } });
+  await assert.rejects(lookup('terminal'), error => error.code === 'codex_cli_required' && /远端未找到 Codex/.test(error.message));
+});
+
+
+test('N10 aborting a history lookup before SSH connects reaps the late channel', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-history-abort-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+  const f = transport(t, root), abort = new AbortController(); let release, linked;
+  const factory = createCodexRuntime({ launchRemote: async (_spec, options) => { linked = options.signal; return new Promise(resolve => { release = resolve; }); } });
+  const pending = factory.history({ kind: 'ssh', cwd: '/srv/project' }, { signal: abort.signal }).then(value => ({ value }), error => ({ error }));
+  abort.abort(); const canceledBeforeReady = linked.aborted;
+  release({ cwd: root, child: createRemoteCodexProcess(f.connection) }); const result = await pending;
+  assert.equal(canceledBeforeReady, true); assert.ok(result.error); assert.equal(f.connection.closed, true);
+  assert.ok(!f.calls.some(([op]) => op === 'codex-input'), 'canceled lookup sends no initialize or thread/list');
+});

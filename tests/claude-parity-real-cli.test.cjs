@@ -33,7 +33,7 @@ async function terminal(t, f, args = [], capture = false) {
   child.on('message', message => { if (message.type === 'data') output = (output + message.data).slice(-65536); });
   child.send({ type: 'start', cli: process.env.AGENTRIX_REAL_CLAUDE, cwd: f.cwd, env, args, capture });
   await new Promise(resolve => { const ready = message => { if (message.type === 'ready') { child.off('message', ready); resolve(); } }; child.on('message', ready); });
-  return Object.assign((text, paste = false) => child.send({ type: 'input', text, paste }), { output: () => output });
+  return Object.assign((text, paste = false) => child.send({ type: 'input', text, paste }), { output: () => output, key: text => child.send({ type: 'key', text }) });
 }
 
 test('real streaming input shell handling is observed rather than guessed', { skip, timeout: 60000 }, async t => {
@@ -307,6 +307,12 @@ test('S1 S2 real terminal and native shell have the same immediate independent r
       fs.readFileSync(path.join(folder, name), 'utf8').trim().split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }));
   };
   await until(() => terminalRecords().some(record => record.type === 'assistant' && JSON.stringify(record.message?.content).includes('FLOW_ACK')));
+  // The real request's two blocks are the record body handed to the product parser.
+  const shellRecord = { type: 'user', message: expected };
+  assert.equal(require('../electron/prompt-queue.cjs').promptText(shellRecord.message.content, shellRecord), null);
+  const shellLog = new (require('../electron/conversation.cjs').ConversationLog)();
+  require('../electron/conversation.cjs').claudeConversation(shellLog, shellRecord, f.cwd);
+  assert.equal(shellLog.snapshot().some(item => item.role === 'user'), false);
   const terminalCompactStart = bodies.length;
   input('/compact');
   try { await until(() => terminalRecords().some(record => record.type === 'system' && record.subtype === 'compact_boundary' && record.compactMetadata?.trigger === 'manual')); }
@@ -318,6 +324,15 @@ test('S1 S2 real terminal and native shell have the same immediate independent r
   await session.shell('flow', 'printf REVIEW_FLOW');
   await until(() => session.snapshot().state === 'idle' && bodies.length > before);
   const native = bodies.slice(before).find(body => body.tools?.length);
+  await until(() => terminalRecords().some(record => record.type === 'user' && Array.isArray(record.message?.content)
+    && record.message.content.some(block => block.text?.startsWith('<bash-input>'))));
+  for (const record of terminalRecords().filter(record => record.type === 'user' && Array.isArray(record.message?.content)
+    && record.message.content.some(block => block.text?.startsWith('<bash-input>')))) {
+    assert.equal(require('../electron/prompt-queue.cjs').promptText(record.message.content, record), null, 'real SDK transcript never becomes an owner bubble');
+    const log = new (require('../electron/conversation.cjs').ConversationLog)();
+    require('../electron/conversation.cjs').claudeConversation(log, record, f.cwd);
+    assert.equal(log.snapshot().some(item => item.role === 'user'), false);
+  }
   const bash = message => message.content.filter(block => block.text?.startsWith('<bash-input>') || block.text?.startsWith('<bash-stdout>'))
     .map(block => ({ ...block, text: process.platform === 'win32'
       ? block.text.replace('\nShell cwd was reset to ' + f.cwd, '') : block.text }));
@@ -381,4 +396,20 @@ test('S5 real CLI user key precedence is observed and product refuses that billi
   const count = f.stats.keys.length;
   await assert.rejects(f.run(), /用户设置不能覆盖应用保存的 API 密钥/);
   assert.equal(f.stats.keys.length, count, 'conflict rejected before network input');
+});
+
+
+test('N7 real terminal and native background processes survive a later model interrupt', { skip, timeout: 60000 }, async t => {
+  const bodies = [], f = await harness(t, data => { bodies.push(data); return { events: [opening(data), ...textBlock(0, 'WAITING')], hold: true }; });
+  const input = await terminal(t, f, [], true);
+  input('!(sleep 7; printf alive > tui-background-proof) & echo TUI_BACKGROUND');
+  await until(() => bodies.some(body => body.tools?.length && JSON.stringify(body.messages).includes('TUI_BACKGROUND')));
+  input.key('\x1b');
+  const events = [], session = product(t, f, event => events.push(event)); await session.start();
+  await session.shell('background', '(sleep 7; printf alive > native-background-proof) & echo NATIVE_BACKGROUND');
+  await until(() => bodies.some(body => body.tools?.length && JSON.stringify(body.messages).includes('NATIVE_BACKGROUND')));
+  await session.interrupt();
+  await until(() => fs.existsSync(path.join(f.cwd, 'tui-background-proof')) && fs.existsSync(path.join(f.cwd, 'native-background-proof')));
+  for (const name of ['tui', 'native']) assert.equal(fs.readFileSync(path.join(f.cwd, name + '-background-proof'), 'utf8'), 'alive');
+  t.diagnostic('real terminal Escape and native interrupt both retain the already-returned background job');
 });

@@ -31,7 +31,7 @@ test('D3 D5 real CLI local command results and identities drive completion and v
       is_error: message.is_error, model: message.message?.model })) }));
   for (const [i, command] of commands.entries()) {
     const result = rounds[i].find(message => message.type === 'result');
-    assert.equal(turnResult(result).status, 'completed', `${command} successful result completes`);
+    assert.equal(turnResult(result, { compacted: rounds[i].some(message => message.type === 'system' && message.subtype === 'compact_boundary') }).status, 'completed', `${command} successful result completes`);
     const visible = [], normalize = createNormalizer((type, payload) => { if (type === 'item.upsert' && payload.kind === 'agent-message') visible.push(payload.content.text); });
     for (const message of rounds[i]) normalize(message, { live: true });
     if (command === '/compact' || command.startsWith('/model ')) assert.deepEqual(visible, [], 'UI already reports this local command');

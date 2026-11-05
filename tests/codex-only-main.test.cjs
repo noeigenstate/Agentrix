@@ -43,7 +43,7 @@ test('the launcher sends every local and SSH Codex mode to app-server', async ()
   const handlers = new Map(), calls = [], saved = {};
   let kind = 'local';
   const context = { handle: (name, value) => handlers.set(name, value), findProject: () => ({ kind }), launchPlans: new Map(), restorePlans: new Map(),
-    nativeSessions: { start: async (id, options) => calls.push([id, options]) }, folderOf: () => '/synthetic', folderHistory: async () => ({ codex: { id: 'same-thread' } }),
+    nativeSessions: { start: async (id, options) => calls.push([id, options]), history: async () => ({ codex: { id: 'same-thread' } }) }, folderOf: () => '/synthetic', folderHistory: async () => ({ codex: { id: 'same-thread' } }),
     store: { findTerminal: () => ({ record: { restore: saved } }), setRestore: (_id, value) => Object.assign(saved, value) }, broadcast() {}, startTerminal: () => assert.fail('no local Codex TUI') };
   vm.createContext(context); vm.runInContext(main.slice(main.indexOf("  handle('agent:launch',"), main.indexOf('  registerNativeIpc({ handle });')), context);
   for (const mode of ['new', 'continue']) await handlers.get('agent:launch')('t', 'codex', mode);
@@ -51,6 +51,9 @@ test('the launcher sends every local and SSH Codex mode to app-server', async ()
   await assert.rejects(handlers.get('agent:launch')('t', 'codex', 'native'), /Unsupported agent session mode/);
   kind = 'ssh'; await handlers.get('agent:launch')('t', 'codex', 'new');
   assert.equal(calls.at(-1)[1].agent, 'codex');
+  delete saved.threadId; context.folderHistory = () => assert.fail('SSH must not read local history');
+  await handlers.get('agent:launch')('t', 'codex', 'continue');
+  assert.equal(calls.at(-1)[1].resume, true); assert.equal(saved.threadId, 'same-thread');
   await assert.rejects(handlers.get('agent:launch')('t', 'claude', 'new'), /SSH/);
 });
 

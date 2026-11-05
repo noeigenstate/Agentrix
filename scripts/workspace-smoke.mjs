@@ -1,3 +1,4 @@
+import { guiCodexEnvironment } from './gui-codex-env.mjs';
 import { testRun } from './test-output.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -48,7 +49,8 @@ if (assets) {
   for (const file of sensevoice.files) await fs.copyFile(path.join(assets, file.name), path.join(dataDir, 'voice', sensevoice.directory, file.name));
 }
 const packaged = process.argv.includes('--packaged');
-const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, AGENTRIX_TEST_GUIDE: '1', CODEX_HOME: codexHome, CLAUDE_CONFIG_DIR: claudeHome }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+await fs.copyFile(path.join(bin, 'codex.exe'), path.join(bin, 'claude.exe'));
+const env = { ...process.env, ...guiCodexEnvironment(), AGENTRIX_DATA_DIR: dataDir, AGENTRIX_TEST_GUIDE: '1', CODEX_HOME: codexHome, CLAUDE_CONFIG_DIR: claudeHome }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path'); env[pathKey] = bin + path.delimiter + env[pathKey];
 let application, page;
 async function filesFinished() { await waitFor(async () => { const result = await page.evaluate(() => window.agentrix.getFileProgress()); return result.ok && result.value === null; }, 'all files in the paste operation finish'); }
@@ -165,7 +167,17 @@ try {
   assert.equal((await projectState()).terminals[0].sessionId, shellSession, 'plain-launch reuses the existing shell and expands');
   assert.equal((await projectState()).terminals.length, 1);
   await grid();
+  // Product Codex launch uses the native protocol; terminal interactions below use an explicitly typed command.
   await panel.getByRole('button', { name: /^Codex/ }).click();
+  await waitFor(async () => (await projectState()).terminals.some(item => item.nativeMode === 'codex-app-server' && item.codexActive), 'launcher starts Codex through app-server');
+  const nativeTerminal = (await projectState()).terminals.find(item => item.nativeMode === 'codex-app-server');
+  await waitFor(async () => (await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), nativeTerminal.id)).value?.state === 'idle', 'native Codex is ready');
+  const nativeSnapshot = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), nativeTerminal.id);
+  assert.equal(nativeSnapshot.ok, true); assert.ok(nativeSnapshot.value.events.some(event => event.type === 'session.state' && event.payload.state === 'idle'));
+  await page.evaluate(p => window.agentrix.nativeSession.stop(p.id, p.runtime), { id: nativeTerminal.id, runtime: nativeSnapshot.value.runtimeSessionId });
+  await page.evaluate(id => window.agentrix.closeTerminal(id), nativeTerminal.id);
+  await waitFor(async () => (await projectState()).terminals.length === 1, 'native test terminal closed without restarting the shell');
+  await panel.getByRole('button', { name: /^Claude/ }).click();
   await waitFor(async () => (await projectState()).terminals.some(terminal => terminal.codexActive), 'launcher starts the fixture agent in a new dedicated terminal');
   const agentId = (await projectState()).terminals.find(terminal => terminal.codexActive).id;
   const agent = panel.locator(`[data-terminal-id="${agentId}"]`);

@@ -89,9 +89,9 @@ test('S10 stopping during SSH connection disposes the late child without initial
 test('S14 shell removes provider key and OAuth names in every letter case', async t => {
   const root = directory(t), abort = new AbortController();
   const result = await require('../electron/features/claude-sdk/shell.cjs').runShell({ cwd: root, env: { ...process.env,
-    CODEX_API_KEY: 'private', CLAUDE_CODE_OAUTH_TOKEN: 'private', AWS_SECRET_ACCESS_KEY: 'private' }, signal: abort.signal,
-    command: 'printf "%s:%s:%s" "${CODEX_API_KEY-unset}" "${CLAUDE_CODE_OAUTH_TOKEN-unset}" "${AWS_SECRET_ACCESS_KEY-unset}"', output() {} });
-  assert.equal(result.stdout, 'unset:unset:unset');
+    CODEX_API_KEY: 'private', CLAUDE_CODE_OAUTH_TOKEN: 'private', AWS_SECRET_ACCESS_KEY: 'private', AWS_REGION: 'offline-region', AWS_PROFILE: 'offline-profile' }, signal: abort.signal,
+    command: 'printf "%s:%s:%s:%s:%s" "${CODEX_API_KEY-unset}" "${CLAUDE_CODE_OAUTH_TOKEN-unset}" "${AWS_SECRET_ACCESS_KEY-unset}" "${AWS_REGION-unset}" "${AWS_PROFILE-unset}"', output() {} });
+  assert.equal(result.stdout, 'unset:unset:unset:offline-region:offline-profile');
 });
 test('S3 shell background descendants cannot hold timeout and cancellation hostage', async t => {
   const root = directory(t), abort = new AbortController();
@@ -161,11 +161,11 @@ test('S8 escaped image property names cannot retain pixels', () => {
   read(Buffer.from('{"kind":"image_gen.\\u0067eneration","result":"pixels"}\n'));
   assert.deepEqual(messages.map(value => Object.hasOwn(value, 'result')), [false, false]);
 });
-test('S3 cancellation and timeout stop real background writes before closing the shell job', { timeout: 10000 }, async t => {
+test('S3 cancellation stops background writes and timeout stops foreground writes before closing', { timeout: 10000 }, async t => {
   for (const mode of ['abort', 'timeout']) {
     const root = directory(t), abort = new AbortController();
     const result = await require('../electron/features/claude-sdk/shell.cjs').runShell({ cwd: root, env: { ...process.env, GIT_CEILING_DIRECTORIES: root },
-      command: 'while true; do printf x >> heartbeat; sleep 0.05; done & echo started', signal: abort.signal, timeout: mode === 'timeout' ? 1500 : 5000, output() {} });
+      command: 'while true; do printf x >> heartbeat; sleep 0.05; done' + (mode === 'abort' ? ' & echo started' : ''), signal: abort.signal, timeout: mode === 'timeout' ? 1500 : 5000, output() {} });
     if (mode === 'abort') abort.abort();
     await result.closed;
     const heartbeat = path.join(root, 'heartbeat'), before = fs.readFileSync(heartbeat, 'utf8');

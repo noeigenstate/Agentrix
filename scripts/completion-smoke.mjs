@@ -1,3 +1,4 @@
+import { guiCodexEnvironment } from './gui-codex-env.mjs';
 import { testRun } from './test-output.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -28,7 +29,7 @@ const fixture = path.join(output, 'completion-codex.cs');
 await fs.writeFile(fixture, completionFixtureSource(await fs.readFile(path.join(root, 'tests/fixtures/restore-codex.cs'), 'utf8')));
 await exec(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'), ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'codex.exe')}`, fixture], { windowsHide: true });
 await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', terminalRenderer: 'dom', notifications: true, restoreSessions: false, closeToTray: false } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: home }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+const env = { ...process.env, ...guiCodexEnvironment(), AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: home }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path'); env[pathKey] = bin + path.delimiter + env[pathKey];
 const packaged = process.argv.includes('--packaged');
 let application, page, bootstrap;

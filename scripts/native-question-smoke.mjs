@@ -14,110 +14,91 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), r
 const { isolatedEnvironment } = require('./native-approval-probe.cjs');
 const { minWidth, minHeight } = require('../electron/window-zoom.json');
 const packaged = process.argv.includes('--packaged');
-const idle = ['\u203a Ask Codex to do anything', '', 'gpt-6.1-sol \u00b7 high \u00b7 100% context left'];
-const rows = (await fs.readFile(path.join(root, 'tests/fixtures/questions/codex-question.txt'), 'utf8')).split(/\r?\n/);
 function standin(trigger, answered) {
   return `
 const fs = require('node:fs'), readline = require('node:readline');
-let phase = 'loading', failure;
-process.on('uncaughtException', error => { failure = { name: error.name, code: error.code }; process.exit(1); });
-process.on('exit', code => fs.writeFileSync(${JSON.stringify(answered)} + (process.argv.includes('app-server') ? '.server' : '.tui'), JSON.stringify({ phase, code, failure })));
+if (process.argv.includes('--version')) { console.log(process.argv[2] === 'claude' ? '2.1.318 (Claude Code)' : 'codex-cli 0.166.0'); process.exit(0); }
 const send = message => process.stdout.write(JSON.stringify(message) + '\\n');
-const draw = rows => process.stdout.write('\\x1b[2J\\x1b[H' + rows.join('\\r\\n'));
-if (process.argv.includes('app-server')) {
-  let asked = false;
-  readline.createInterface({ input: process.stdin }).on('line', line => {
-    const message = JSON.parse(line);
-    if (message.method === 'initialize') { send({ id: message.id, result: { userAgent: 'synthetic-TUI' } }); send({ method: 'thread/started', params: { thread: { id: 'fixture-thread' } } }); }
-    if (!message.method && message.id === 'fixture-question') {
-      fs.writeFileSync(${JSON.stringify(answered)}, JSON.stringify(message.result));
-      send({ method: 'serverRequest/resolved', params: { requestId: message.id, threadId: 'fixture-thread' } });
-    }
-  });
-  setInterval(() => {
-    if (asked || !fs.existsSync(${JSON.stringify(trigger)})) return; asked = true;
-    send({ id: 'fixture-question', method: 'item/tool/requestUserInput', params: { threadId: 'fixture-thread', turnId: 'fixture-turn', itemId: 'fixture-item', questions: [{ id: 'q', header: 'Fixture', question: 'Choose one', options: [{ label: 'One', description: 'First' }, { label: 'Two', description: 'Second' }] }] } });
-  }, 50);
-} else {
-  const { WebSocket } = require(${JSON.stringify(require.resolve('ws'))});
-  const args = process.argv, address = args[args.indexOf('--remote') + 1], name = args[args.indexOf('--remote-auth-token-env') + 1];
-  phase = 'connecting';
-  const socket = new WebSocket(address, { headers: { Authorization: 'Bearer ' + process.env[name] } }); let held = null;
-  socket.on('error', error => { phase = 'websocket-error'; failure = { name: error.name, code: error.code, status: error.message.match(/response: (\d+)/)?.[1] }; process.exit(1); }); socket.on('close', () => process.exit(0));
-  socket.on('open', () => socket.send(JSON.stringify({ id: 'initialize', method: 'initialize', params: {} })));
-  socket.on('message', bytes => {
-    const message = JSON.parse(bytes);
-    if (message.id === 'initialize') draw(${JSON.stringify(idle)});
-    if (message.method === 'item/tool/requestUserInput') { held = message.id; draw(${JSON.stringify(rows)}); }
-    if (message.method === 'serverRequest/resolved') { held = null; draw(${JSON.stringify(idle)}); }
-  });
-  process.stdin.setRawMode?.(true); process.stdin.resume();
-  process.stdin.on('data', bytes => {
-    if (held && bytes.includes(13)) socket.send(JSON.stringify({ id: held, result: { answers: { q: { answers: ['One'] } } } }));
-  });
-}
+const threadId = 'fixture-thread', turnId = 'fixture-turn'; let asked = false;
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const message = JSON.parse(line); let result = {};
+  if (!message.method && message.id === 'fixture-question') {
+    fs.writeFileSync(${JSON.stringify(answered)}, JSON.stringify(message.result));
+    send({ method: 'serverRequest/resolved', params: { requestId: message.id, threadId } });
+    send({ method: 'turn/completed', params: { threadId, turn: { id: turnId, status: 'completed' } } }); return;
+  }
+  if (!message.method) return;
+  if (message.method === 'initialize') result = { userAgent: 'codex/0.166.0' };
+  if (['thread/resume','turn/start','turn/steer','turn/interrupt'].includes(message.method) && !message.params?.threadId) return send({ id: message.id, error: { code: -32600, message: 'Invalid request: missing field '+String.fromCharCode(96)+'threadId'+String.fromCharCode(96) } });
+  if (['thread/start','thread/resume'].includes(message.method)) result = { thread: { id: threadId, turns: [] }, cwd: process.cwd(), sandbox: { type: 'workspaceWrite' } };
+  if (message.method === 'skills/list') result = { data: [] };
+  if (message.method === 'thread/turns/list') result = { data: [] };
+  if (message.id !== undefined) send({ id: message.id, result });
+});
+process.stdin.on('end', () => process.exit(0));
+setInterval(() => {
+  if (asked || !fs.existsSync(${JSON.stringify(trigger)})) return; asked = true;
+  send({ method: 'turn/started', params: { threadId, turn: { id: turnId, status: 'inProgress' } } });
+  send({ id: 'fixture-question', method: 'item/tool/requestUserInput', params: { threadId, turnId, itemId: 'fixture-item', questions: [
+    { id: 'q', header: 'Fixture', question: 'Choose one', options: [{ label: 'One', description: 'First' }, { label: 'Two', description: 'Second' }] },
+    { id: 'q2', header: 'Details', question: 'Explain your choice', options: [] }
+  ] } });
+}, 50);
 `;
 }
 async function run(theme, output) {
   // Keep executable and profile paths below Windows' command-line loader limits in a deep worker worktree.
   const runtime = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-tui-'));
   const dir = path.join(output, theme), profile = path.join(runtime, 'profile'), project = path.join(runtime, 'project'), bin = path.join(runtime, 'fakebin');
-  const trigger = path.join(runtime, 'ask'), answered = path.join(runtime, 'answered.json'), cli = path.join(bin, 'node_modules/@openai/codex/bin');
+  const trigger = path.join(runtime, 'ask'), answered = path.join(runtime, 'answered.json');
+  const { prepareProviders } = await import('./native-session-smoke.mjs');
+  const providers = await prepareProviders(runtime);
   await fs.mkdir(dir, { recursive: true });
-  for (const folder of [profile, project, cli]) await fs.mkdir(folder, { recursive: true });
-  await fs.writeFile(path.join(cli, 'codex.js'), standin(trigger, answered));
+  for (const folder of [profile, project]) await fs.mkdir(folder, { recursive: true });
+  await fs.writeFile(providers.cli, standin(trigger, answered));
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [{ id: 'questions', name: 'Native TUI fixture', path: project, restore: { terminal: false, codex: false } }],
     settings: { language: 'en', theme, terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false } }));
-  const env = { ...isolatedEnvironment(runtime), AGENTRIX_DATA_DIR: profile, CODEX_HOME: path.join(runtime, 'codex-home'), CLAUDE_CONFIG_DIR: path.join(runtime, 'claude-home') };
+  const env = { ...isolatedEnvironment(runtime), GIT_CEILING_DIRECTORIES: runtime, AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_FAKE_CLI: providers.cli, AGENTRIX_DATA_DIR: profile, CODEX_HOME: path.join(runtime, 'codex-home'), CLAUDE_CONFIG_DIR: path.join(runtime, 'claude-home') };
   for (const key of ['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']) if (process.env[key]) env[key] = process.env[key];
   const searchPath = Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '';
   for (const key of Object.keys(env)) if (key.toLowerCase() === 'path') delete env[key];
-  env[process.platform === 'win32' ? 'Path' : 'PATH'] = bin + path.delimiter + searchPath;
+  env[process.platform === 'win32' ? 'Path' : 'PATH'] = providers.bin + path.delimiter + searchPath;
   delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
   const errors = [], checks = []; let app;
+  const { createSmokeStages, closeSmokeApplication } = require('../tests/fixtures/claude-sdk-smoke.cjs');
+  const stages = createSmokeStages({ totalMs: 90000 });
   try {
     app = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'), args: packaged ? [] : [root], cwd: root, env });
+    stages.attach(app);
     const page = await app.firstWindow(); page.on('pageerror', error => errors.push(error.message));
-    await app.evaluate((_electron, { runtime, ptyPath, nodePath }) => {
-      const pty = process.mainModule.require(ptyPath), spawn = pty.spawn;
-      globalThis.nativeProbeLaunch = null;
-      pty.spawn = (file, args, options) => {
-        globalThis.nativeProbeLaunch = { file: nodePath, requestedFile: file, script: args[0], remote: args.includes('--remote') };
-        if (!args[0]?.startsWith(runtime)) throw new Error('The fixture PATH did not select the injected CLI');
-        // The injected peer is JavaScript; use the test runner's Node for its physical TUI.
-        return spawn(nodePath, args, options);
-      };
-    }, { runtime, ptyPath: require.resolve('node-pty'), nodePath: process.execPath });
     const workbench = page.getByRole('button', { name: 'Workbench', exact: true });
     if (await workbench.isVisible()) await workbench.click();
     await app.evaluate(({ BrowserWindow }, [width, height]) => BrowserWindow.getAllWindows()[0].setContentSize(width, height), [minWidth, minHeight]);
-    const launched = await page.evaluate(() => window.agentrix.agentLaunch('questions', 'codex', 'native')); assert.equal(launched.ok, true, JSON.stringify(launched));
+    const launched = await page.evaluate(() => window.agentrix.agentLaunch('questions', 'codex', 'new')); assert.equal(launched.ok, true, JSON.stringify(launched));
     const card = page.locator('[data-project-id="questions"]');
     await card.locator('.panel-name').click();
     const composer = page.locator('.reading-composer textarea');
-    await waitFor(async () => {
-      const state = await page.evaluate(() => window.agentrix.getState());
-      if (state.ok && state.value.projects[0]?.terminals[0]?.status === 'exited') throw new Error('Synthetic TUI exited before input');
-      return composer.evaluateAll(nodes => nodes.length === 1 && !nodes[0].disabled);
-    }, 'the synthetic Codex TUI draws its idle input');
-    await composer.fill('keep this draft'); await fs.writeFile(trigger, 'ask');
-    const popup = page.locator('.reading-terminal-popup'); await popup.waitFor({ timeout: 15000 });
-    await waitFor(() => popup.locator('.xterm-rows').innerText().then(text => text.includes('Question 1/2')), 'the actual xterm shows the provider question');
-    assert.equal(await composer.isDisabled(), false, 'the composer keeps accepting text behind a dialog'); assert.equal(await composer.inputValue(), 'keep this draft');
-    assert.equal(await popup.evaluate(node => !!document.activeElement?.closest('.xterm')), false, 'automatic opening never took typing focus');
-    assert.equal(await page.locator('.native-question, .reading-choice-option, .reading-question-option').count(), 0);
-    await page.keyboard.press('Enter'); await page.waitForTimeout(150);
-    assert.equal(await fs.stat(answered).then(() => true, () => false), false, 'a composer Enter did not answer');
-    await page.screenshot({ path: path.join(dir, 'popup-no-focus.png') }); checks.push('popup visible without focus, the composer queues its text, no host answer');
-    await popup.locator('.xterm-screen').click(); await page.keyboard.press('Enter');
-    await waitFor(() => fs.stat(answered).then(() => true, () => false), 'the owner clicked the TUI and answered there');
-    assert.deepEqual(JSON.parse(await fs.readFile(answered, 'utf8')), { answers: { q: { answers: ['One'] } } });
-    await waitFor(() => popup.locator('.xterm-rows').innerText().then(text => text.includes('Ask Codex to do anything')), 'TUI returned to input');
-    // Once the TUI is back at its input the popup may close by itself; close it only while it is still there.
-    await waitFor(async () => !(await popup.count()) || await popup.getByRole('button', { name: 'Close', exact: true }).click({ timeout: 1000 }).then(() => true, () => false), 'the question popup closed');
-    // The text queued behind the question goes out once the TUI is back at its input (the owner's always-accept rule).
-    await waitFor(async () => await composer.isEnabled() && await composer.inputValue() === '', 'the queued message left the box after the dialog');
-    checks.push('explicit TUI click + Enter resolves the exact provider request; the queued message is sent afterwards');
+    await composer.waitFor(); await composer.fill('keep this draft');
+    await fs.writeFile(trigger, 'ask');
+    const question = page.locator('.native-request.is-question'); await question.waitFor();
+    const submit = question.locator('.reading-question-actions .primary');
+    assert.equal(await submit.isDisabled(), true, 'both answers are required');
+    assert.equal(await composer.inputValue(), 'keep this draft');
+    assert.equal(await fs.stat(answered).then(() => true, () => false), false, 'opening a question never answers');
+    await question.getByRole('radio', { name: /One/ }).click();
+    assert.equal(await submit.isDisabled(), true, 'one answer cannot bypass validation');
+    await question.getByRole('textbox', { name: 'Explain your choice', exact: true }).fill('Because it fits');
+    assert.equal(await submit.isEnabled(), true);
+    const rect = await question.boundingBox(), viewport = page.viewportSize() || await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    assert.ok(rect.x >= 0 && rect.x + rect.width <= viewport.width + 1, 'question fits the minimum window width');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.screenshot({ path: path.join(dir, 'question-validated.png') });
+    checks.push('actual app-server request; minimum window; draft retained; validation requires every answer');
+    await submit.click();
+    await waitFor(() => fs.stat(answered).then(() => true, () => false), 'exact request answered');
+    assert.deepEqual(JSON.parse(await fs.readFile(answered, 'utf8')), { answers: { q: { answers: ['One'] }, q2: { answers: ['Because it fits'] } } });
+    await question.waitFor({ state: 'detached' });
+    checks.push('explicit submission resolves only the bound provider request');
     await page.screenshot({ path: path.join(dir, 'returned-to-input.png') }); assert.deepEqual(errors, []);
   } catch (error) {
     if (app) {
@@ -126,15 +107,29 @@ async function run(theme, output) {
       const state = await page.evaluate(() => window.agentrix.getState()).catch(() => null);
       const terminal = state?.ok && state.value.projects[0]?.terminals[0];
       const rows = (await page.locator('.xterm-rows').allTextContents()).map(text => text.replace(/[a-f0-9]{64}/gi, '[redacted]'));
-      const launch = await app.evaluate(() => globalThis.nativeProbeLaunch);
+      const launch = 'app-server';
       await fs.writeFile(path.join(dir, 'failure.json'), JSON.stringify({ error: error.message, terminal: terminal && { status: terminal.status, active: terminal.codexActive, error: terminal.error }, launch, rows, errors }, null, 2));
     }
     throw error;
   } finally {
     await fs.writeFile(path.join(dir, 'results.json'), JSON.stringify({ theme, checks, errors }, null, 2));
-    if (app) await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]);
+    try {
+      if (app) {
+        const page = await app.firstWindow();
+        await page.evaluate(async () => {
+          const state = await window.agentrix.getState();
+          for (const terminal of state.value.projects[0].terminals) {
+            const snapshot = await window.agentrix.nativeSession.snapshot(terminal.id);
+            if (snapshot.ok && snapshot.value) await window.agentrix.nativeSession.stop(terminal.id, snapshot.value.runtimeSessionId);
+          }
+        });
+      }
+      await closeSmokeApplication(app, stages);
+    } finally { stages.dispose(); }
   }
 }
 const output = await testRun('native-question');
 await withGuiLock('native-question', async () => { for (const theme of ['mono', 'light']) await run(theme, output); });
-console.log('PASS: native requests answered only in the TUI, both themes. Evidence: ' + output);
+console.log('PASS: app-server questions validate and submit exact answers, both themes. Evidence: ' + output);
+
+process.exit(0);

@@ -58,7 +58,7 @@ test('D6 oversized command results settle neutrally without changing true interr
 
 test('D3 local success requires CLI identity and explicit success, and never overrides an interruption or error', () => {
   const local = { local_command: 'compact', subtype: 'success', is_error: false, stop_reason: null };
-  assert.equal(turnResult(local).status, 'completed');
+  assert.equal(turnResult(local, { compacted: true }).status, 'completed');
   for (const terminal_reason of ['aborted_streaming', 'stop_hook_prevented', 'max_turns']) assert.equal(turnResult({ ...local, terminal_reason }).status, 'interrupted');
   assert.equal(turnResult(local, { interrupted: true }).status, 'interrupted');
   assert.equal(turnResult({ ...local, is_error: true }).status, 'failed');
@@ -70,6 +70,7 @@ test('D5 command metadata suppresses mutations without matching text or hiding r
   const visible = [], normalize = createNormalizer((type, payload) => { if (type === 'item.upsert') visible.push(payload.content.text); });
   const assistant = (id, command, args, text) => normalize({ type: 'assistant', uuid: id, local_command_run: { command, args }, message: { id, content: [{ type: 'text', text }] } });
   assistant('a', 'model', 'sonnet', '任意语言的模型设置回执');
+  normalize({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual' } });
   assistant('b', 'compact', '', '任意语言的压缩回执');
   assistant('c', 'model', '', 'Current model');
   assistant('d', 'context', '', 'Context usage');

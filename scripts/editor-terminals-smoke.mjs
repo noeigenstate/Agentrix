@@ -1,3 +1,4 @@
+import { guiCodexEnvironment } from './gui-codex-env.mjs';
 import { testRun } from './test-output.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -25,7 +26,7 @@ await fs.writeFile(path.join(project.path, 'page.html'), '<h1>Original page</h1>
 // These checks read the terminal's rows as HTML, so the compatible (DOM) renderer draws them; gpu-terminal-smoke covers the GPU one.
 await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', terminalRenderer: 'dom', autoSave: false, notifications: false, restoreSessions: true, closeToTray: false } }));
 await exec(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'), ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'codex.exe')}`, path.join(root, 'tests/fixtures/multi-codex.cs')], { windowsHide: true });
-const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, AGENTRIX_TEST_RESTORE: '1', AGENTRIX_TEST_SSH_CONFIG: ssh.configFile, CODEX_HOME: codexHome };
+const env = { ...process.env, ...guiCodexEnvironment(), AGENTRIX_DATA_DIR: dataDir, AGENTRIX_TEST_RESTORE: '1', AGENTRIX_TEST_SSH_CONFIG: ssh.configFile, CODEX_HOME: codexHome };
 delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path'); env[pathKey] = bin + path.delimiter + env[pathKey];
 const packaged = process.argv.includes('--packaged');
@@ -211,7 +212,7 @@ try {
   await launch();
   await waitFor(async () => (await state()).terminals.length === 2 && (await state()).terminals.every(item => item.codexActive), 'both terminals restored');
   for (const thread of threads) {
-    await waitFor(async () => { const receipt = JSON.parse(await fs.readFile(path.join(codexHome, 'sessions', `${thread}-receipt.json`), 'utf8')); return receipt.args.includes('resume') && receipt.args.includes(thread); }, 'exact conversation resumed');
+    await waitFor(async () => { const receipt = JSON.parse(await fs.readFile(path.join(codexHome, 'sessions', `${thread}-receipt.json`), 'utf8')); return receipt.protocol === 'app-server' && receipt.threadId === thread; }, 'exact conversation resumed');
   }
   const secondSession = (await state()).terminals[1].sessionId;
   // A split's close button shows in its corner while the pointer is over it.

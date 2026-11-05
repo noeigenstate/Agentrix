@@ -98,7 +98,7 @@ reader.on('line', line => {
     return;
   }
   const params = message.params || {};
-  append({ rpc: message.method, pid: process.pid });
+  append({ rpc: message.method, threadId: params.threadId, pid: process.pid });
   if (['thread/resume', 'turn/start', 'turn/steer', 'turn/interrupt'].includes(message.method)
       && !params.threadId) {
     send({ id: message.id, error: { code: -32602, message: 'Missing required threadId' } });
@@ -110,7 +110,8 @@ reader.on('line', line => {
     sessionId = params.threadId || sessionId;
     result = { thread: { id: sessionId, turns: [] }, cwd: params.cwd, model: params.model, reasoningEffort: 'high',
       serviceTier: params.serviceTier, sandbox: { type: 'workspaceWrite' } };
-  } else if (message.method === 'turn/start') {
+  } else if (message.method === 'thread/turns/list') result = { data: [], nextCursor: null, backwardsCursor: null };
+  else if (message.method === 'turn/start') {
     activeTurn = `turn-${++turns}`; result = { turn: { id: activeTurn, status: 'inProgress', items: [] } };
     send({ id: message.id, result });
     send({ method: 'turn/started', params: { threadId: sessionId, turn: result.turn } });

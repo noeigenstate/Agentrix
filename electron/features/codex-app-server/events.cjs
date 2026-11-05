@@ -26,7 +26,7 @@ function turnCompletion(turn, usage) {
     costUsdMicros: null, costEstimated: null, tokens: usage?.round || null };
 }
 
-function itemPayload(item, completed, renderImage = () => null) {
+function itemPayload(item, completed, renderImage = () => null, translate = value => value) {
   const kind = KINDS[item.type] || 'other';
   let content;
   if (item.type === 'agentMessage' || item.type === 'plan') content = { text: bounded(item.text), phase: item.phase ?? null };
@@ -37,7 +37,7 @@ function itemPayload(item, completed, renderImage = () => null) {
   else if (kind === 'tool') content = { tool: item.tool, server: item.server ?? null, output: bounded((item.result?.content || item.contentItems || []).filter(block => block.type === 'text').map(block => block.text).join('\n') || (typeof item.result === 'string' ? item.result : '')) };
   else if (item.type === 'imageGeneration' && completed && isGeneratedImage(item.savedPath)) {
     const images = renderImage(item)?.images || [];
-    content = { text: images.length ? '' : '图片已保存，请在运行 Codex 的主机查看。',
+    content = { text: images.length ? '' : translate('图片已保存，请在运行 Codex 的主机查看。'),
       generated: { path: item.savedPath, prompt: bounded(item.revisedPrompt) || '' }, images };
   }
   else content = { text: bounded(item.text), providerType: item.type };
@@ -46,7 +46,7 @@ function itemPayload(item, completed, renderImage = () => null) {
   return { kind, status, content };
 }
 
-function createEvents(spec, emit, now, renderImage) {
+function createEvents(spec, emit, now, renderImage, translate) {
   let sequence = 0, dropped = false;
   const events = [], items = new Map(), itemEvents = new Map(), completed = new Set(), children = new Set();
   const binding = { connectionEpoch: randomUUID(), providerSessionId: null, turnId: null };
@@ -81,7 +81,7 @@ function createEvents(spec, emit, now, renderImage) {
         if (item.tool === 'closeAgent' || ['completed', 'failed', 'shutdown', 'notFound'].includes(status)) children.delete(id);
         else if (['spawnAgent', 'sendInput', 'resumeAgent'].includes(item.tool)) children.add(id);
       }
-      const payload = itemPayload(item, method === 'item/completed', renderImage); items.set(item.id, payload);
+      const payload = itemPayload(item, method === 'item/completed', renderImage, translate); items.set(item.id, payload);
       if (method === 'item/completed') completed.add(item.id);
       publish('item.upsert', payload, { itemId: item.id, turnId: params.turnId ?? binding.turnId });
     } else if (['item/agentMessage/delta', 'item/commandExecution/outputDelta', 'item/reasoning/summaryTextDelta', 'item/plan/delta'].includes(method)) {

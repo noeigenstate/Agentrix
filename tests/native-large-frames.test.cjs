@@ -13,6 +13,17 @@ function fixture() {
   return { child, rpc, notices, drops, disconnected };
 }
 
+test('N1 a 10 MiB ANSI command result passes the real RPC parser and the next frame stays readable', () => {
+  const f = fixture();
+  try {
+    f.child.stdout.write(JSON.stringify({ method: 'item/completed', params: { item: { id: 'ansi', type: 'commandExecution', status: 'completed',
+      aggregatedOutput: '\x1b[32m' + 'x'.repeat(10 * 1024 * 1024) } } }) + '\n{"method":"alive","params":{}}\n');
+    assert.deepEqual(f.disconnected, []);
+    assert.equal(f.notices[0][1].item.aggregatedOutput.length, 10 * 1024 * 1024 + 5);
+    assert.equal(f.notices.at(-1)[0], 'alive');
+  } finally { f.rpc.close(); }
+});
+
 test('5 MiB generated image drops pixels before callbacks and snapshots without disconnect', () => {
   const f = fixture();
   try {

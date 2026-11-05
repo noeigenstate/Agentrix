@@ -58,6 +58,8 @@ class RemoteFilesTest(unittest.TestCase):
         with mock.patch.object(remote.subprocess, "run", return_value=mock.Mock(stdout="startup noise\n" + executable + "\n")) as run:
             self.assertEqual(remote.resolve_codex(dict(os.environ, GIT_CEILING_DIRECTORIES=self.temp.name)), executable)
             self.assertEqual(run.call_args.args[0], ["/bin/bash", "-lic", "type -P codex"])
+            self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+            self.assertTrue(run.call_args.kwargs["start_new_session"])
         with mock.patch.object(remote.subprocess, "run", return_value=mock.Mock(stdout="")):
             with self.assertRaisesRegex(ValueError, "type -P codex") as failure: remote.resolve_codex({})
             self.assertEqual(failure.exception.code, "codex_cli_required")

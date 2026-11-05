@@ -1,3 +1,4 @@
+import { guiCodexEnvironment } from './gui-codex-env.mjs';
 import { testRun } from './test-output.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -30,7 +31,7 @@ for (const [index, name] of ['中断的项目', '已结束这一轮', '主动关
   const directory = path.join(output, name);
   await fs.mkdir(directory);
   const id = randomUUID(); const sessionId = randomUUID();
-  projects.push({ id, name, path: directory, kind: 'local', unread: index === 0 ? 1 : 0, seenEvents: [], restore: { terminal: index !== 2 && index !== 3, codex: index !== 3, cwd: directory }, sessionId });
+  projects.push({ id, name, path: directory, kind: 'local', unread: index === 0 ? 1 : 0, seenEvents: [], restore: { terminal: index !== 2 && index !== 3, codex: index !== 3, cwd: directory, threadId: sessionId, interrupted: index === 0 }, sessionId });
   await fs.writeFile(path.join(codexHome, 'sessions', `rollout-${sessionId}.jsonl`), [
     { type: 'session_meta', payload: { id: sessionId, cwd: directory, source: 'cli' } },
     { type: 'event_msg', payload: { type: 'task_started' } },
@@ -51,7 +52,7 @@ await fs.writeFile(path.join(fixture.project, 'README.md'), 'REMOTE_TEXT_PREVIEW
 await fs.copyFile(path.join(root, 'assets/icon.png'), path.join(fixture.project, '图片.png'));
 await fs.writeFile(path.join(fixture.project, 'page.html'), '<h1>REMOTE_HTML_READY</h1><img src="./图片.png">');
 await fs.copyFile(path.join(root, 'tests/fixtures/preview.webm'), path.join(fixture.project, 'preview.webm'));
-const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, AGENTRIX_TEST_RESTORE: '1', AGENTRIX_TEST_SSH_CONFIG: fixture.configFile, CODEX_HOME: codexHome };
+const env = { ...process.env, ...guiCodexEnvironment(), AGENTRIX_DATA_DIR: dataDir, AGENTRIX_TEST_RESTORE: '1', AGENTRIX_TEST_SSH_CONFIG: fixture.configFile, CODEX_HOME: codexHome };
 const originalPath = Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '';
 for (const key of Object.keys(env)) if (key.toLowerCase() === 'path') delete env[key];
 env.Path = bin + path.delimiter + originalPath;
@@ -74,12 +75,14 @@ async function launch() {
 async function receipt(project) { try { return JSON.parse(await fs.readFile(path.join(project.path, 'resume-receipt.json'), 'utf8')); } catch { return null; } }
 async function verifyResume() {
   await waitFor(async () => (await receipt(projects[0])) && (await receipt(projects[1])), 'restored Codex processes');
-  assert.deepEqual((await receipt(projects[0])).args.slice(2, 4), ['-c', 'tui.terminal_title=["session-id"]']);
-  // Then what the reading view can show (electron/features/agents/reading-note.cjs), before the user's own arguments.
-  assert.equal((await receipt(projects[0])).args[4], '-c');
-  assert.match((await receipt(projects[0])).args[5], /^developer_instructions="You run inside Agentrix[^"]*"$/);
-  assert.deepEqual((await receipt(projects[0])).args.slice(6), ['resume', projects[0].sessionId, '继续']);
-  assert.deepEqual((await receipt(projects[1])).args.slice(6), ['resume', projects[1].sessionId]);
+  await waitFor(async () => (await receipt(projects[0]))?.continued, 'unfinished app-server continuation');
+  for (const project of projects.slice(0, 2)) {
+    const rpc = await receipt(project);
+    assert.deepEqual(rpc.args, ['app-server', '--listen', 'stdio://']);
+    assert.equal(rpc.threadId, project.sessionId);
+    assert.match(rpc.developerInstructions, /^You run inside Agentrix/);
+    assert.equal(rpc.continued, project === projects[0]);
+  }
   assert.equal(await receipt(projects[2]), null);
   assert.equal(await receipt(projects[3]), null);
   // Claude Code resumes its own session through the wrapper (hooks passed with --settings first).
@@ -124,6 +127,14 @@ try {
   for (const project of [...projects.slice(0, 2), ...claudeProjects]) await fs.unlink(path.join(project.path, 'resume-receipt.json'));
   await launch(); await verifyResume();
   console.log('PASS: real application restart retains and restores coding state');
+  // Explicit owner input keeps the ordinary terminal path.
+  const native = (await page.evaluate(() => window.agentrix.getState())).value.projects[0];
+  const snapshot = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), native.id);
+  await page.evaluate(p => window.agentrix.nativeSession.stop(p.id, p.runtime), { id: native.id, runtime: snapshot.value.runtimeSessionId });
+  await page.evaluate(id => window.agentrix.restartTerminal(id), projects[0].id);
+  await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].shellReady, 'manual shell ready');
+  await page.evaluate(id => window.agentrix.writeTerminal(id, 'codex\r'), projects[0].id);
+  await waitFor(async () => (await receipt(projects[0]))?.args[0] !== 'app-server', 'manually typed Codex');
   const panel = page.locator(`[data-project-id="${projects[0].id}"]`);
   // A running agent's conversation shows as a document by default; the title-bar switch shows the terminal itself.
   await panel.locator('.reading-view').waitFor();

@@ -1,3 +1,4 @@
+import { guiCodexEnvironment } from './gui-codex-env.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -24,7 +25,7 @@ await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ versio
   language: 'zh', terminalRenderer: renderer, focusAnimation: 'smooth', restoreSessions: false,
   closeToTray: false, notifications: false, sound: false, announce: false,
 } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: home, CLAUDE_CONFIG_DIR: claudeHome };
+const env = { ...process.env, ...guiCodexEnvironment(), AGENTRIX_DATA_DIR: profile, CODEX_HOME: home, CLAUDE_CONFIG_DIR: claudeHome };
 delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 if (process.argv.includes('--startup')) {
   const bin = path.join(output, 'bin'); await fs.mkdir(bin);

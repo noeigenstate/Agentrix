@@ -124,7 +124,7 @@ if (bash) assert.ok(fs.existsSync(bash), 'AGENTRIX_TEST_BASH must name an instal
 for (const kind of ['bash', 'zsh']) {
   const shell = (kind === 'bash' && bash) || (process.platform === 'win32' ? kind === 'bash' && 'C:/Program Files/Git/bin/bash.exe' : `/bin/${kind}`);
   test(`${kind} wrapper proves alias and user flags together, emits only scope, and preserves forwarding`,
-    { skip: !shell || !fs.existsSync(shell), timeout: 60000 * timeoutScale }, async t => {
+    { skip: !shell || !fs.existsSync(shell), timeout: ((cases.length + 1) * 7000 + 5000) * timeoutScale }, async t => {
       const { root, home } = fixture(t), probe = path.join(root, 'probe.sh');
       // LF copy makes the same Bash source executable by Git Bash on a CRLF checkout.
       const copy = path.join(root, `integration.${kind}`);

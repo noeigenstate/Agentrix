@@ -1158,16 +1158,7 @@ async function resumeAfterPrompt(project, session) {
       broadcast();
       return;
     }
-    if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
-    if (!plan.codex || !restore?.threadId || project.kind !== 'ssh' && !session.codexAvailable) return;
-    const opened = await nativeSessions.start(session.terminalId, { agent: 'codex', resume: true });
-    if (restore.interrupted && !session.inputDirty) {
-      const receipt = await nativeSessions.send(session.terminalId, opened.runtimeSessionId,
-        { clientMessageId: randomUUID(), text: '继续', images: [] });
-      // turn.started owns arming. A fast completed response can precede this
-      // receipt; arming here would reopen an already completed round.
-      if (!['queued', 'delivered', 'consumed'].includes(receipt.status)) throw new Error('恢复后的继续消息未确认投递，请查看会话状态。');
-    }
+    // Codex restoration belongs to restoreTerminal, before a shell is created.
 
   } catch (error) { session.error = `恢复会话失败：${error.message}`; broadcast(); }
   finally {
@@ -1270,12 +1261,16 @@ function structuredEvent(id, event) {
     if (text) s.promptQueue.start(text, event.receivedAtMs, event.payload.clientMessageId);
   }
   if (event.type === 'turn.started') {
+    if (spec.agent === 'codex') store.setRestore(id, { interrupted: true });
     if (event.payload.origin === 'user') { s.completionWork.begin(event.receivedAtMs); store.expectCompletion(project.id); }
     s.activityInputAt = event.receivedAtMs;
     applyActivity(project, s, { threadId: event.providerSessionId || event.runtimeSessionId, turnId: event.turnId, state: 'working', updatedAt: event.receivedAtMs });
   }
-  if (event.type === 'turn.completed') applyActivity(project, s, { threadId: event.providerSessionId || event.runtimeSessionId, turnId: event.turnId,
-    state: event.payload.status === 'completed' ? 'complete' : event.payload.status === 'unknown' ? 'unknown' : 'interrupted', ended: true, updatedAt: event.receivedAtMs });
+  if (event.type === 'turn.completed') {
+    if (spec.agent === 'codex') store.setRestore(id, { interrupted: ['interrupted', 'unknown'].includes(event.payload.status) });
+    applyActivity(project, s, { threadId: event.providerSessionId || event.runtimeSessionId, turnId: event.turnId,
+      state: event.payload.status === 'completed' ? 'complete' : event.payload.status === 'unknown' ? 'unknown' : 'interrupted', ended: true, updatedAt: event.receivedAtMs });
+  }
   if (event.type === 'session.state') {
     s.nativeState = event.payload.state;
     if (['stopped', 'failed', 'disconnected'].includes(event.payload.state)) {
@@ -1468,17 +1463,17 @@ async function initializeNativeSessions() {
   });
   claudeRuntime.observeCli?.(await inspectClaudeExecutable());
   const codexFactory = createCodexRuntime({ renderImage: (item, spec) => spec.kind === 'ssh' ? null : generatedPreview(item, spec), translate: t,
-    launchRemote: async (spec, { signal }) => {
+    launchRemote: async (spec, { signal, readOnly = false }) => {
       const project = findProject(spec.terminalId);
-      const delivery = skills.delivery(project, true, spec.sessionId, { agent: 'codex', started: true });
+      const delivery = readOnly ? null : skills.delivery(project, true, spec.sessionId, { agent: 'codex', started: true });
       const remote = new RemoteConnection({ ...project, id: spec.terminalId }, { integrationDir, auth: sshAuth,
         sessionKey: spec.sessionKey, onEvent, codingPath: spec.cwd, askpassPath: prepareAskpass(), native: true,
-        skills: delivery.bundle, readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}',
+        skills: delivery?.bundle, readingNote: readOnly ? '' : startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}',
           path.posix.join(project.path, 'skills'), delivery, '{AGENTRIX_DISPATCH}') });
       const cancel = () => remote.close();
       signal.addEventListener('abort', cancel, { once: true });
       if (signal.aborted) cancel();
-      const host = sessions.get(spec.terminalId); if (host) host.remoteConnection = remote;
+      const host = sessions.get(spec.terminalId); if (host && !readOnly) host.remoteConnection = remote;
       try {
         const info = await remote.ready;
         if (signal.aborted) throw new Error('session_closed');
@@ -1512,6 +1507,18 @@ async function initializeNativeSessions() {
     return runtime;
   } };
   nativeSessions = createNativeSessions({ directory, claude: claudeRuntime, codex, resolveSpec: nativeSpec,
+    readHistory: async (id, { signal } = {}) => {
+      const project = findProject(id);
+      if (project.kind !== 'ssh') return folderHistory(folderOf(id));
+      const saved = store.findTerminal(id).record.restore;
+      const history = await codexFactory.history({ kind: 'ssh', owner: 'gui', projectId: project.id, terminalId: id,
+        cwd: saved?.cwd || project.path, sessionId: randomUUID(), sessionKey: randomUUID(), providerSessionId: saved?.threadId || null }, { signal }).catch(error => {
+        if (error.code === 'codex_cli_required') throw Object.assign(new Error(t('远端未找到 Codex 程序。请在远端登录 shell 中安装 Codex，并确认 type -P codex 能找到它。')), { code: error.code });
+        throw error;
+      });
+      if (findProject(id) !== project) throw new Error('项目已变化，请重试。');
+      return { claude: null, codex: history };
+    },
     readCommands: spec => {
       const env = spec.env || process.env;
       const value = name => Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1];
@@ -1564,10 +1571,15 @@ function restoreTerminal(id, ...args) {
   if (localCodex || saved?.nativeTransport && nativeSessions) {
     restorePlans.delete(id);
     if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
-    void nativeSessions.start(id, { agent: saved.agent || 'codex', resume: !!saved.threadId }).catch(error => {
+    const interrupted = saved.interrupted === true;
+    return nativeSessions.start(id, { agent: saved.agent || 'codex', resume: !!saved.threadId }).then(async opened => {
+      if ((saved.agent || 'codex') === 'codex' && saved.threadId && interrupted) {
+        await nativeSessions.continueInterrupted(id, opened.runtimeSessionId, () => store.setRestore(id, { interrupted: false }));
+      }
+      return opened;
+    }).catch(error => {
       startupErrors.set(id, error.message); broadcast();
     });
-    return;
   }
   startTerminal(id, ...args);
 }
@@ -1790,10 +1802,10 @@ function cleanupTerminalFiles(s) {
 function disposeTerminal(id, { preserveNative = false, preserveSwitch = false } = {}) {
   readingHistory.close(id);
   const s = sessions.get(id);
-  if (!s) return;
   sessions.delete(id);
   nativeSpecs.delete(id);
   if (!preserveNative && !preserveSwitch) void nativeSessions?.forget(id).catch(report);
+  if (!s) return;
   if (!preserveSwitch) {
     s.calls?.dispose(); syncDashboardLive(); endSkillSession(s); skills.endSession(s.projectId, s.sessionId);
   }
@@ -1908,7 +1920,7 @@ function registerIpc() {
     }
     return true;
   });
-  handle('agent:history', id => findProject(id).kind === 'ssh' ? { claude: null, codex: null } : folderHistory(folderOf(id)));
+  handle('agent:history', id => nativeSessions.history(id));
   handle('agent:launch', async (id, agent, mode) => {
     const project = findProject(id);
     if (!['claude', 'codex'].includes(agent)) throw new Error('无效的助手。');
@@ -1918,7 +1930,7 @@ function registerIpc() {
       if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
       launchPlans.delete(id); restorePlans.delete(id);
       const saved = store.findTerminal(id).record.restore;
-      const history = mode === 'continue' ? (project.kind === 'ssh' ? saved?.threadId ? { id: saved.threadId } : null : (await folderHistory(folderOf(id))).codex) : null;
+      const history = mode === 'continue' ? saved?.threadId ? { id: saved.threadId } : (await nativeSessions.history(id)).codex : null;
       if (history) store.setRestore(id, { agent: 'codex', threadId: history.id });
       await nativeSessions.start(id, { agent, resume: !!history }); broadcast(); return true;
     }

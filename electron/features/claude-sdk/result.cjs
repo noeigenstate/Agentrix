@@ -1,6 +1,7 @@
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const reasons = {
   completed: ['completed', '本轮已完成。'],
+  compact_failed: ['failed', '上下文未压缩，请查看命令反馈。'],
   blocking_limit: ['interrupted', '本轮因服务用量限制而停止。'],
   rapid_refill_breaker: ['interrupted', '请求过于频繁，本轮已停止。'],
   prompt_too_long: ['failed', '输入超过上下文长度，本轮未能完成。'],
@@ -25,11 +26,12 @@ function tokensOf(usage) {
   return { input: count(usage.input_tokens), cachedInput: count(usage.cache_read_input_tokens), cacheWrite: count(usage.cache_creation_input_tokens),
     output: count(usage.output_tokens), reasoning: null };
 }
-function turnResult(result, { interrupted = false, costUsdMicros = null } = {}) {
-  const reason = Object.hasOwn(reasons, result.terminal_reason) ? result.terminal_reason
+function turnResult(result, { interrupted = false, costUsdMicros = null, compacted = false } = {}) {
+  let reason = Object.hasOwn(reasons, result.terminal_reason) ? result.terminal_reason
     : result.terminal_reason ? 'unknown' : result.deferred_tool_use ? 'tool_deferred'
       : ({ error_max_budget_usd: 'budget_exhausted', error_max_turns: 'max_turns', error_max_structured_output_retries: 'structured_output_retry_exhausted' }[result.subtype]
         || (result.subtype === 'success' && result.is_error === false && typeof result.local_command === 'string' && result.local_command ? 'completed' : null));
+  if (reason === 'completed' && result.local_command === 'compact' && !compacted) reason = 'compact_failed';
   let [status, message] = reasons[reason] || ['unknown', '本轮已结束，完成状态未知。'];
   if (interrupted) { status = 'interrupted'; message = '本轮已中断。'; }
   else if (result.is_error && (status === 'completed' || !reason || reason === 'unknown')) { status = 'failed'; message = 'Claude 执行失败。'; }

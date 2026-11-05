@@ -9,7 +9,7 @@ function remember(map, key, value) {
 const textOf = block => block.text ?? block.thinking ?? '';
 function createNormalizer(emit, clean = value => value) {
   const records = new Map(), messages = new Map(), tools = new Map();
-  let current;
+  let current, compacted = false;
   const preview = value => clean(String(value ?? '')).slice(0, PREVIEW);
   const output = value => preview(conversationClean(typeof value === 'string' ? value : Array.isArray(value)
     ? value.map(block => block.type === 'text' ? block.text : block.type === 'image' ? '[Image result]' : '').filter(Boolean).join('\n')
@@ -24,7 +24,7 @@ function createNormalizer(emit, clean = value => value) {
     if (message.parent_tool_use_id || message.isSidechain) return;
     // CLI command identity, never its translated output. The GUI already acknowledges these mutations.
     const command = message.local_command_run;
-    if (message.type === 'assistant' && (command?.command === 'compact' || command?.command === 'model' && typeof command.args === 'string' && command.args.trim())) return;
+    if (message.type === 'assistant' && (command?.command === 'compact' && compacted || command?.command === 'model' && typeof command.args === 'string' && command.args.trim())) return;
     const timestamp = Date.parse(message.timestamp), occurredAtMs = Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : null;
     const publish = (type, payload, extra) => emit(type, payload, { occurredAtMs, ...extra, replay: message.isReplay === true });
     if (message.type === 'system' && message.subtype === 'status') {
@@ -32,6 +32,7 @@ function createNormalizer(emit, clean = value => value) {
       return;
     }
     if (message.type === 'system' && message.subtype === 'compact_boundary') {
+      if (!message.isReplay) compacted = true;
       const meta = message.compact_metadata || {};
       publish('context.compacting', { active: false });
       publish('context.compacted', { trigger: meta.trigger === 'manual' ? 'manual' : 'auto',
@@ -55,7 +56,7 @@ function createNormalizer(emit, clean = value => value) {
     if (message.type === 'result') {
       publish('context.compacting', { active: false });
       for (const [itemId, payload] of tools) publish('item.upsert', { ...payload, status: 'interrupted' }, { itemId });
-      tools.clear(); return;
+      tools.clear(); const context = { compacted }; compacted = false; return context;
     }
     if (message.type === 'stream_event') {
       const event = message.event;

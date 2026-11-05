@@ -1,1342 +1,594 @@
 [
   {
-    "text": "/^mcp__(.+?)__(.+)$/.exec(name)",
-    "id": "electron/agent-actions.cjs:24f17ad3b2972b9512bc32f1"
-  },
-  {
-    "text": "new RegExp(`(?:\\\\b${key}|\"${key}\"|'${key}')\\\\s*:\\\\s*${LITERAL}`).exec(input)",
-    "id": "electron/agent-actions.cjs:7382ead0ecd4273078ab15d6"
-  },
-  {
-    "text": "new RegExp(`^\\\\s*${LITERAL}`).exec(input)",
-    "id": "electron/agent-actions.cjs:e09a6e052c490388288b1b0d"
-  },
-  {
-    "text": "/^\\uFEFF?---\\s*\\r?\\n([\\s\\S]*?)\\r?\\n---[^\\S\\r\\n]*(?:\\r?\\n|$)/.exec(text)",
-    "id": "electron/agent-commands.cjs:c4454ff059a8a37e2eaeb4d3"
-  },
-  {
-    "text": "/^(name|description):\\s*(.*)$/.exec(lines[i])",
-    "id": "electron/agent-commands.cjs:13b70b1f2ca8bd2490b9305a"
-  },
-  {
-    "text": "/^\\/([\\w:-]+)(?:\\s|$)/.exec(String(text || '').trim())",
-    "id": "electron/agent-commands.cjs:e0cc2025589d1172a65a6119"
-  },
-  {
     "text": "this.launch('cmd.exe', ['/d', '/s', '/c', `npm install -g ${AGENT_PACKAGES[agent]}`], { env: this.env, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] })",
-    "id": "electron/agents.cjs:d947b9c278f45d1f36494c68"
+    "id": "electron/agents.cjs:8d6f8edf481004ee9b036f8c"
   },
   {
     "text": "this.launch('npm', ['install', '-g', AGENT_PACKAGES[agent]], { env: this.env, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] })",
-    "id": "electron/agents.cjs:6755b6e79f2e86082f9ca6a5"
+    "id": "electron/agents.cjs:b9f29cb0a9a068554373ec2d"
   },
   {
     "text": "execFile('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }, stop)",
-    "id": "electron/agents.cjs:265760e755de928307a35056"
-  },
-  {
-    "text": "/^data:([^;,]+)?(;base64)?,(.*)$/s.exec(src)",
-    "id": "electron/app/images.cjs:9d357b97093a81abcdf08296"
+    "id": "electron/agents.cjs:deafbd7807ab5930efafd70d"
   },
   {
     "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/ie4uinit.exe'), ['-show'], { windowsHide: true, timeout: 5000 }, () => {})",
-    "id": "electron/app/platform-startup.cjs:bdce88e7e03cbc05ce93b9f9"
+    "id": "electron/app/platform-startup.cjs:49ddd8fb24835a8236eeaec1"
   },
   {
     "text": "execFileSync('git', args, { cwd, encoding: 'buffer', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024, windowsHide: true })",
-    "id": "electron/boundaries.cjs:3ee74669a421969fc3f43c85"
-  },
-  {
-    "text": "write()",
-    "id": "electron/clipboard-writes.cjs:a035685d09c4437d6f6ed38d"
-  },
-  {
-    "text": "SCRIPT.exec(text)",
-    "id": "electron/command-phrase.cjs:7b416228ba651a669ac3ba2d"
-  },
-  {
-    "text": "/^\\s*(?:&\\s*)?[\"']?([^\\s\"']+)/.exec(text)",
-    "id": "electron/command-phrase.cjs:50ce2c889a8f4209916616e1"
-  },
-  {
-    "text": "new RegExp(`<${name}>\\\\s*([^<]+?)\\\\s*</${name}>`).exec(notice)",
-    "id": "electron/completion-work.cjs:967aa585223b1265fe8395da"
-  },
-  {
-    "text": "/^Sender:\\s*(\\S+)/m.exec(text)",
-    "id": "electron/completion-work.cjs:402e46230e7a34a283cd5238"
-  },
-  {
-    "text": "QUESTION_REPLY.exec(String(text || ''))",
-    "id": "electron/conversation.cjs:c2d5df9a0c933e57fd544057"
+    "id": "electron/boundaries.cjs:2b6717ccfd671609ac733286"
   },
   {
     "text": "run(powershell, ['-NoProfile', '-NonInteractive', '-File', helper, value], { windowsHide: true, timeout: 8000, maxBuffer: 16384 })",
-    "id": "electron/desktop-glass.cjs:885ab05aceaac5c4905fdebe"
-  },
-  {
-    "text": "/<tool-use-id>\\s*([^<]+?)\\s*<\\/tool-use-id>/.exec(notification)",
-    "id": "electron/features/agents/agent-calls.cjs:f12c0211aecabe14967704f0"
-  },
-  {
-    "text": "/<task-id>\\s*([^<]+?)\\s*<\\/task-id>/.exec(notification)",
-    "id": "electron/features/agents/agent-calls.cjs:ab97bbfc5600192f0857ed93"
-  },
-  {
-    "text": "/<status>\\s*(completed|failed|killed)\\s*<\\/status>/.exec(notification)",
-    "id": "electron/features/agents/agent-calls.cjs:735540201704f0221ea63fce"
-  },
-  {
-    "text": "/<local-command-stdout>([\\s\\S]*?)<\\/local-command-stdout>/.exec(words)",
-    "id": "electron/features/agents/agent-settings.cjs:38c4062d8fa12f6d1d8fb268"
-  },
-  {
-    "text": "/^\\s*Set model to\\s+`?([^`\\n(]+?)`?(?:\\s+\\(|\\s+and\\b|\\s*$)/im.exec(output)",
-    "id": "electron/features/agents/agent-settings.cjs:3cb694f832a158ed47a5efe2"
-  },
-  {
-    "text": "/^\\s*Set effort level to\\s+([a-z]+)\\b/im.exec(output)",
-    "id": "electron/features/agents/agent-settings.cjs:264f05b7ffcb880e8e933379"
-  },
-  {
-    "text": "/\\bfast mode\\b[^\\n.]*?\\b(on|enabled|off|disabled)\\b/i.exec(output)",
-    "id": "electron/features/agents/agent-settings.cjs:efafe0cd421f7e16c6563083"
-  },
-  {
-    "text": "new RegExp(`^\\\\s*\\\\[model_providers\\\\.(?:${id.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}|\"${id.replace(/[.*+?^${}()|[\\]\\\\\"]/g, '\\\\$&')}\")\\\\]\\\\s*$`, 'm').exec(config)",
-    "id": "electron/features/agents/agent-usage.cjs:b50d7e6c2fc82fe2cc54b649"
-  },
-  {
-    "text": "/^\\s*base_url\\s*=\\s*[\"']([^\"']+)[\"']/m.exec(section)",
-    "id": "electron/features/agents/agent-usage.cjs:917e0fcb51bb545e4ad608b8"
+    "id": "electron/desktop-glass.cjs:6013ca9de11ec4856ca2f2a7"
   },
   {
     "text": "launch(file, ['app-server', '--listen', 'stdio://'], { cwd, env: { ...env, CODEX_HOME: codexHome }, windowsHide: true,\r\n      shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
-    "id": "electron/features/agents/codex-account-usage.cjs:68803466472ab6e88be5a795"
+    "id": "electron/features/agents/codex-account-usage.cjs:7c067127cabbb32d99602cbb"
   },
   {
     "text": "execFile('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 2000 }, () => {\r\n      try { if (child.exitCode == null) child.kill('SIGKILL'); } catch { }\r\n    })",
-    "id": "electron/features/agents/codex-account-usage.cjs:fbee5e9447f55cbcbb7f247d"
-  },
-  {
-    "text": "child.stdin.write(JSON.stringify(value) + '\\n')",
-    "id": "electron/features/agents/codex-account-usage.cjs:1b34dfaf2f2bca5127ce436f"
-  },
-  {
-    "text": "write({ method: 'initialized' })",
-    "id": "electron/features/agents/codex-account-usage.cjs:4cc0d50e7aadf601cb4b1f74"
-  },
-  {
-    "text": "write({ id: 2, method: 'account/read', params: { refreshToken: false } })",
-    "id": "electron/features/agents/codex-account-usage.cjs:d71b0de32bec3bae6fd5224c"
-  },
-  {
-    "text": "write({ id: 3, method: 'account/rateLimits/read', params: { excludeResetCreditDetails: true } })",
-    "id": "electron/features/agents/codex-account-usage.cjs:8635ba7f90c14f21c276a75e"
+    "id": "electron/features/agents/codex-account-usage.cjs:0605990eb5d7ef5f9e45b74a"
   },
   {
     "text": "launch(file, ['app-server', '--listen', 'stdio://'], {\r\n          cwd, env: { ...env, CODEX_HOME: codexHome || env.CODEX_HOME || path.join(os.homedir(), '.codex') },\r\n          windowsHide: true, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],\r\n        })",
-    "id": "electron/features/agents/codex-account-usage.cjs:fe2326a64f7b72c006bef1e0"
-  },
-  {
-    "text": "write({ id: 1, method: 'initialize', params: {\r\n          clientInfo: { name: 'agentrix_usage', title: 'Agentrix usage', version: '1' },\r\n          capabilities: { experimentalApi: true, requestAttestation: false, explicitGatewayOauth: true },\r\n        } })",
-    "id": "electron/features/agents/codex-account-usage.cjs:4c2a2628a3eaec7d35046782"
-  },
-  {
-    "text": "this.resetStorage?.write(state)",
-    "id": "electron/features/agents/codex-account-usage.cjs:90c029a19dddfc1525b44609"
-  },
-  {
-    "text": "this.resetStorage?.write(state)",
-    "id": "electron/features/agents/codex-account-usage.cjs:47c0a4014720de202334e82f"
-  },
-  {
-    "text": "/Usage reset\\.\\s+You have \\d+\\b[^.]*?\\bleft\\.?/i.exec(tail)",
-    "id": "electron/features/agents/codex-account-usage.cjs:e1435529c3419bdcc6b6f84d"
-  },
-  {
-    "text": "socket.write(line)",
-    "id": "electron/features/agents/dispatch-control.cjs:33288ba87c51e04719920f57"
+    "id": "electron/features/agents/codex-account-usage.cjs:88e087e71550c1efedf0cb78"
   },
   {
     "text": "resolveExecutable({ env: spec.env || process.env })",
-    "id": "electron/features/claude-sdk/connection.cjs:c8041e6fd22d0826b3c1c176"
-  },
-  {
-    "text": "/\\b(\\d+)\\.(\\d+)\\.(\\d+)\\b/.exec(version)",
-    "id": "electron/features/claude-sdk/executable.cjs:f1eb83571ccf5464e7f4edd9"
-  },
-  {
-    "text": "/\\b\\d+\\.\\d+\\.\\d+\\b/.exec(version)",
-    "id": "electron/features/claude-sdk/executable.cjs:a08803f9ee986134c7be7f2b"
-  },
-  {
-    "text": "/^<local-command-stdout>([\\s\\S]*)<\\/local-command-stdout>\\s*$/.exec(message.message.content)",
-    "id": "electron/features/claude-sdk/normalize.cjs:2256c6cd712e3f41b91bda43"
+    "id": "electron/features/claude-sdk/connection.cjs:c9cafb77d8c43bbce1f12637"
   },
   {
     "text": "resolveExecutable({ env: spec.env || process.env })",
-    "id": "electron/features/claude-sdk/session.cjs:7dc9e1665ed7ac476e3b25c9"
-  },
-  {
-    "text": "/^data:(image\\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(image)",
-    "id": "electron/features/claude-sdk/session.cjs:7cb7f2f70f879601a965deb5"
+    "id": "electron/features/claude-sdk/session.cjs:c9cafb77d8c43bbce1f12637"
   },
   {
     "text": "execFileSync('git', ['--exec-path'], { env, windowsHide: true, encoding: 'utf8' })",
-    "id": "electron/features/claude-sdk/shell.cjs:474cf2aa1cc557a31e538923"
+    "id": "electron/features/claude-sdk/shell.cjs:b6748e3be2e7a4318abe7f0a"
   },
   {
     "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'],\r\n          { windowsHide: true, timeout: 5000 }, error => { if (error) child.kill('SIGKILL'); done(); })",
-    "id": "electron/features/claude-sdk/shell.cjs:7621a7e81661b53b9dca5e3f"
+    "id": "electron/features/claude-sdk/shell.cjs:e3353df177c982aba01391d1"
   },
   {
     "text": "spawn(shellExecutable(safe), ['-c', command + '\\n__agentrix_exit=$?\\nprintf \"%s\" \"$__agentrix_exit\" > ' + quoted + '\\nwait\\nexit \"$__agentrix_exit\"'],\r\n        { cwd, env: safe, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] })",
-    "id": "electron/features/claude-sdk/shell.cjs:af932d14b951fcec825e8d33"
-  },
-  {
-    "text": "/\\b(\\d+)\\.(\\d+)\\.(\\d+)\\b/.exec(init.userAgent)",
-    "id": "electron/features/codex-app-server/compatibility.cjs:93b304e6960347d1cd3eebfb"
+    "id": "electron/features/claude-sdk/shell.cjs:2d7dadcf31593105fd0dee50"
   },
   {
     "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'],\r\n        { windowsHide: true, timeout: 2000 }, error => { if (error && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); })",
-    "id": "electron/features/codex-app-server/index.cjs:f0ad99c98152f64c7a5bd428"
+    "id": "electron/features/codex-app-server/index.cjs:99516e16cf4a76574364f0ca"
   },
   {
     "text": "resolveExecutable(env)",
-    "id": "electron/features/codex-app-server/index.cjs:ce84e51bad40def1f21c92a1"
+    "id": "electron/features/codex-app-server/index.cjs:3a908719d731205401b693b4"
+  },
+  {
+    "text": "spawnProcess(file, ['app-server', '--listen', 'stdio://'], { cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
+    "id": "electron/features/codex-app-server/index.cjs:74b6934bfd7d22001795421f"
   },
   {
     "text": "spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: spec.cwd, env, windowsHide: true,\r\n              detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
-    "id": "electron/features/codex-app-server/index.cjs:cd8efcc2da7290250a6e5210"
-  },
-  {
-    "text": "/^\\/([\\w][\\w:.-]{0,159})(?:\\s|$)/.exec(input.text.trim())",
-    "id": "electron/features/codex-app-server/index.cjs:ff79bf54baf3b0fefe8d1bc4"
-  },
-  {
-    "text": "child.stdin.write(entry.line)",
-    "id": "electron/features/codex-app-server/rpc.cjs:1c6e65b5d49d80ce6b1153df"
-  },
-  {
-    "text": "write({ id: envelope.id, error: { code: -32600, message: 'Frame too large' } })",
-    "id": "electron/features/codex-app-server/rpc.cjs:48f8031d470abe769441289a"
-  },
-  {
-    "text": "write({ id, method, params }, task)",
-    "id": "electron/features/codex-app-server/rpc.cjs:c058cf1c89aa88c85398c1b3"
-  },
-  {
-    "text": "write({ method, params })",
-    "id": "electron/features/codex-app-server/rpc.cjs:d60fda9cc9ec1a45c8566129"
-  },
-  {
-    "text": "write({ id, result })",
-    "id": "electron/features/codex-app-server/rpc.cjs:a297afa361e976156b68072a"
-  },
-  {
-    "text": "write({ id, error: { code, message: 'Unsupported request' } })",
-    "id": "electron/features/codex-app-server/rpc.cjs:9fa02b16333402f67f1b3dbe"
+    "id": "electron/features/codex-app-server/index.cjs:b972cddd8d12347d8f7d8d7b"
   },
   {
     "text": "execFile('git', ['-C', project.path, ...args], { windowsHide: true, timeout: 3000 }, (error, stdout) => done(error ? '' : stdout.trim()))",
-    "id": "electron/features/git/runtime.cjs:ddeb2187954f74bb894427f9"
-  },
-  {
-    "text": "socket.write(JSON.stringify({\r\n  capability: config.capability, args: process.argv.slice(2), cwd: process.cwd(),\r\n}) + '\\n')",
-    "id": "electron/features/lab/client.cjs:eb3c55a87c661126812c9354"
-  },
-  {
-    "text": "process.stdout.write(message.output)",
-    "id": "electron/features/lab/client.cjs:e03b4514a242670e34b438fd"
-  },
-  {
-    "text": "/^\\[dispatch\\] ended [\\w-]+ (?:codex|claude) model (\\S+)/.exec(line)",
-    "id": "electron/features/lab/dispatch.cjs:ff23a24c9d9718f553e19750"
+    "id": "electron/features/git/runtime.cjs:7d0a9d27c0840eae80b50ca0"
   },
   {
     "text": "spawn(file, args, { ...options, env, detached: false })",
-    "id": "electron/features/lab/executor.cjs:ef44d41bc3a95e235d84d1ff"
+    "id": "electron/features/lab/executor.cjs:accd3ae28936d1ee46d9d7ad"
   },
   {
     "text": "memoryModules(modules).run(config.args, {\r\n    env: process.env, launch: (file, args, options) => launch(file, args, options, true),\r\n  })",
-    "id": "electron/features/lab/executor.cjs:e9a2cb3d128a361354a6e250"
+    "id": "electron/features/lab/executor.cjs:be69ee10568f04fe079f71d2"
   },
   {
     "text": "launch(file, args, options, true)",
-    "id": "electron/features/lab/executor.cjs:09a0408bdc144a1597ebf412"
+    "id": "electron/features/lab/executor.cjs:75eb2158c5f8b4c19511c234"
   },
   {
     "text": "launch(config.command.file, config.command.args, {\r\n    cwd: config.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'],\r\n  })",
-    "id": "electron/features/lab/executor.cjs:dce7ecc6f21d55d79e565270"
-  },
-  {
-    "text": "/^\\s*\\x60{3}(?:json)?\\s*\\n([\\s\\S]*?)\\n\\x60{3}\\s*$/.exec(answer)",
-    "id": "electron/features/lab/grading.cjs:c1c5337d4f7dcd946916ae32"
-  },
-  {
-    "text": "/^(\\d+|-)\\t(\\d+|-)\\t([\\s\\S]+)$/.exec(row)",
-    "id": "electron/features/lab/history.cjs:17a68c1fe65ba8df82f33140"
+    "id": "electron/features/lab/executor.cjs:63fb36cd265994321b560259"
   },
   {
     "text": "spawn('/usr/bin/sandbox-exec', [\r\n  '-p', config.profile, process.execPath, '--disable-sigusr1', config.executor,\r\n], { cwd: config.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] })",
-    "id": "electron/features/lab/host.cjs:bc6e848892afe880856a0127"
-  },
-  {
-    "text": "/^\\s*(\\d+)/.exec(line)",
-    "id": "electron/features/lab/process.cjs:3ced396710d907e14ae0d51c"
-  },
-  {
-    "text": "/^\\s*(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(\\S+)\\s*$/.exec(line)",
-    "id": "electron/features/lab/process.cjs:59fb3d01b21538c1114c8040"
+    "id": "electron/features/lab/host.cjs:332b1becc77a6729a75f6534"
   },
   {
     "text": "spawn(file, args, {\r\n      cwd, env, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe', ...(ipc ? ['ipc'] : [])],\r\n      windowsHide: true, windowsVerbatimArguments, detached: ipc && process.platform !== 'win32',\r\n    })",
-    "id": "electron/features/lab/process.cjs:adb7f84b67a92e49879fba21"
-  },
-  {
-    "text": "output.write(chunk)",
-    "id": "electron/features/lab/process.cjs:b81bcbc99f411d5aade5531d"
+    "id": "electron/features/lab/process.cjs:9c56e50e9222810ea431a733"
   },
   {
     "text": "source.context.tools.docker.exec(workspace.container.id, request.argv,\r\n        { stdin: request.stdin, timeoutMs: request.timeoutMs })",
-    "id": "electron/features/lab/runner.cjs:5dae9a7fe53bfd4cc093fe9f"
+    "id": "electron/features/lab/runner.cjs:6e211413270991f2c8ab54f3"
   },
   {
     "text": "childProcess.spawn(file, args, launchOptions)",
-    "id": "electron/features/lab/sandbox-win32-executor.cjs:6f3bdb52dc73498d87846bbb"
+    "id": "electron/features/lab/sandbox-win32-executor.cjs:4b6b9db31fd25f4864f8b7f9"
   },
   {
     "text": "childProcess.spawn(file, args, { ...launchOptions, stdio })",
-    "id": "electron/features/lab/sandbox-win32-executor.cjs:82a5bfaa83fee34ee4eb0309"
-  },
-  {
-    "text": "/^\\\\\\\\\\.\\\\pipe\\\\LOCAL\\\\(agentrix-lab-[a-zA-Z0-9-]{1,128})$/.exec(address)",
-    "id": "electron/features/lab/sandbox-win32-host.cjs:fc8f22ebdcd81e4c434bce25"
-  },
-  {
-    "text": "process.stderr.write('[lab-win32] host ' + message + '\\n')",
-    "id": "electron/features/lab/sandbox-win32-host.cjs:a82e279cf50a6deb3493767b"
+    "id": "electron/features/lab/sandbox-win32-executor.cjs:f2ad64c60ecf9c6217d04a65"
   },
   {
     "text": "execFileSync(config.windows.executable, ['pipe-namespace', config.windows.runId, config.windows.job],\r\n        { windowsHide: true, timeout: 5000, maxBuffer: 4096, encoding: 'utf8' })",
-    "id": "electron/features/lab/sandbox-win32-host.cjs:525b559b2962dcef019d9830"
+    "id": "electron/features/lab/sandbox-win32-host.cjs:1bfa3d0258deb027403ce574"
   },
   {
     "text": "spawn(config.windows.executable, ['run'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })",
-    "id": "electron/features/lab/sandbox-win32-host.cjs:181454d4d156493923546c39"
-  },
-  {
-    "text": "process.stderr.write(tail.slice(0, end))",
-    "id": "electron/features/lab/sandbox-win32-host.cjs:7f9b05e5a93c988d5e30530a"
-  },
-  {
-    "text": "process.stderr.write(tail)",
-    "id": "electron/features/lab/sandbox-win32-host.cjs:00226fada0d8ce8d335343c3"
-  },
-  {
-    "text": "child.stdin.write(frame, 'utf8', () => trace('frame written'))",
-    "id": "electron/features/lab/sandbox-win32-host.cjs:b7d28cd401dbaedb2d143a7c"
+    "id": "electron/features/lab/sandbox-win32-host.cjs:f0bf83a8b34ab0b7f8237128"
   },
   {
     "text": "exec(executable, args, {\r\n      windowsHide: true, timeout: args[0] === 'clean' ? 0 : 10000, maxBuffer: 1024 * 1024,\r\n      ...(diagnostics ? { env: { ...process.env, AGENTRIX_LAB_DIAGNOSTICS: '1' } } : {}), ...options,\r\n    })",
-    "id": "electron/features/lab/sandbox-win32.cjs:b78e40eb6e920edd4cc9f7a3"
+    "id": "electron/features/lab/sandbox-win32.cjs:6faa63487ebe5760402e274f"
   },
   {
     "text": "exec(compiler, ['/nologo', '/optimize+', '/target:exe', '/reference:System.Web.Extensions.dll', '/out:' + output, input], {\r\n        windowsHide: true, timeout: 30000, maxBuffer: 65536,\r\n        env: { SystemRoot: process.env.SystemRoot || 'C:\\\\Windows', TEMP: root, TMP: root },\r\n      })",
-    "id": "electron/features/lab/sandbox-win32.cjs:83759b5e2d0b2d796e9cdcf9"
+    "id": "electron/features/lab/sandbox-win32.cjs:0af5e1687aca6b56639c3c7c"
   },
   {
     "text": "exec(call.file, call.args, call.options)",
-    "id": "electron/features/lab/sandbox-win32.cjs:2634f53366d6c679984729a2"
+    "id": "electron/features/lab/sandbox-win32.cjs:badfcd99e9e1e9861dfb5811"
   },
   {
     "text": "resolveExecutable(command.file, env)",
-    "id": "electron/features/lab/sandbox-win32.cjs:474fd40548680a1f2a108be8"
+    "id": "electron/features/lab/sandbox-win32.cjs:5322bf4cd1269ae97a32bd7a"
   },
   {
     "text": "resolveExecutable(name, env)",
-    "id": "electron/features/lab/sandbox-win32.cjs:b24b560ece1815e82cc825d8"
-  },
-  {
-    "text": "/const RUNTIME_FILES = (\\[[\\s\\S]*?\\]);/.exec(source)",
-    "id": "electron/features/lab/session.cjs:b52e2df499932f362d39c5e9"
+    "id": "electron/features/lab/sandbox-win32.cjs:1d21906143a54f2f6eacb749"
   },
   {
     "text": "this.launch(args, {\r\n            cwd: await fs.realpath(request.cwd), signal: requestControl.signal, onLine: line => {\r\n              if (!socket.destroyed) socket.write(JSON.stringify({ output: line + '\\n' }) + '\\n');\r\n            },\r\n          })",
-    "id": "electron/features/lab/session.cjs:25e03b24a1910214e86b7fbf"
-  },
-  {
-    "text": "socket.write(JSON.stringify({ output: line + '\\n' }) + '\\n')",
-    "id": "electron/features/lab/session.cjs:90ae768c4efbac8b30f7c86e"
+    "id": "electron/features/lab/session.cjs:a575eb834c073a5fb47a8d14"
   },
   {
     "text": "backend.resolveExecutable(executable.file, env)",
-    "id": "electron/features/lab/session.cjs:606643c184f3722d07ddf515"
+    "id": "electron/features/lab/session.cjs:b65afab70924c94e3cc63f4d"
   },
   {
     "text": "this.launch(args, options)",
-    "id": "electron/features/lab/session.cjs:2b8ad9403689769bf48e2be5"
+    "id": "electron/features/lab/session.cjs:017142ed0cfb5a29cc2426ff"
   },
   {
     "text": "this.launch([], { ...options, network, command: { file, args } })",
-    "id": "electron/features/lab/session.cjs:6747d83fa05ce2b76bc2c5a7"
+    "id": "electron/features/lab/session.cjs:f1e8c738644977d02c92990c"
   },
   {
     "text": "spawn(file, args, { env, cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })",
-    "id": "electron/features/lab/sources/tools.cjs:ff820c536955e06693e56133"
-  },
-  {
-    "text": "handle.write(chunk)",
-    "id": "electron/features/lab/sources/tools.cjs:0a3336b17a6ac744b6dbbe20"
+    "id": "electron/features/lab/sources/tools.cjs:c7318f80bda2f34ee25ab24b"
   },
   {
     "text": "run(['init', '--bare', ...(commit.length === 64 ? ['--object-format=sha256'] : []), target])",
-    "id": "electron/features/lab/sources/tools.cjs:4e3c56926739150c20da1531"
+    "id": "electron/features/lab/sources/tools.cjs:f686293271af22132d4cf948"
   },
   {
     "text": "run(['-C', target, 'rev-parse', '--is-bare-repository'])",
-    "id": "electron/features/lab/sources/tools.cjs:bb22497610d12ecf3be39a73"
+    "id": "electron/features/lab/sources/tools.cjs:f563bd2c9e0518ad43fb6e83"
   },
   {
     "text": "run(['-C', target, 'fetch', '--no-tags', '--depth=1', '--force', String(url), commit])",
-    "id": "electron/features/lab/sources/tools.cjs:6623a165953335882adea448"
+    "id": "electron/features/lab/sources/tools.cjs:2e443a7ea77b665d30426b97"
   },
   {
     "text": "run(['-C', target, 'rev-parse', '--verify', commit + '^{commit}'])",
-    "id": "electron/features/lab/sources/tools.cjs:267648504fd1ee17a6f270c1"
+    "id": "electron/features/lab/sources/tools.cjs:042b4fd8c0e753f69e080906"
   },
   {
     "text": "['exec', '-i', id, ...argv]",
-    "id": "electron/features/lab/sources/tools.cjs:08c664734619f30ab97f9e81"
-  },
-  {
-    "text": "socket.write(JSON.stringify({ ok: authenticated }) + '\\n')",
-    "id": "electron/features/lab/usage.cjs:853bce57c89f17368f4f463a"
+    "id": "electron/features/lab/sources/tools.cjs:3d1ebc19a0815dcb1c29346c"
   },
   {
     "text": "ctx.tools.docker.exec(id, argv, { timeoutMs: timeout(ctx) })",
-    "id": "electron/features/lab-aa/container.cjs:50f7ce8cb3f50759cf433ec5"
-  },
-  {
-    "text": "process.stderr.write('Lab container command failed.\\n')",
-    "id": "electron/features/lab-aa/wrappers.cjs:9fba0d728bd3c164b334b416"
-  },
-  {
-    "text": "socket.write(JSON.stringify({\r\n      capability: config.capability, argv: process.argv.slice(2), stdin: Buffer.concat(chunks).toString('utf8'), timeoutMs: 120000,\r\n    }) + '\\n')",
-    "id": "electron/features/lab-aa/wrappers.cjs:dd642c1625aa1e1af2f4a106"
-  },
-  {
-    "text": "process.stdout.write(reply.stdout)",
-    "id": "electron/features/lab-aa/wrappers.cjs:d70bb04e06ec0f4becfbe2f8"
-  },
-  {
-    "text": "process.stderr.write(reply.stderr)",
-    "id": "electron/features/lab-aa/wrappers.cjs:ba23a411af2d153447950119"
-  },
-  {
-    "text": "/^diff --git a\\/(\\S+) b\\/(\\S+)$/.exec(line)",
-    "id": "electron/features/lab-oss/data.cjs:915ac552883f313c40574e06"
-  },
-  {
-    "text": "/^\\s*\\[([^\\]]+)\\]\\s*(?:[#;].*)?$/.exec(line)",
-    "id": "electron/features/lab-oss/integrity.cjs:b1b9e4c2ad3cdaddea4a3014"
+    "id": "electron/features/lab-aa/container.cjs:26ab6bd89a8b508b03ea74de"
   },
   {
     "text": "switches.input(id, spec.runtimeSessionId)",
-    "id": "electron/features/native-session/router.cjs:9bf630f275d12ca989184fcf"
+    "id": "electron/features/native-session/router.cjs:572a53d7d245cf850a9981a4"
   },
   {
     "text": "switches.input(id, runtimeSessionId)",
-    "id": "electron/features/native-session/router.cjs:3f7ee8f348876ba32db29768"
-  },
-  {
-    "text": "switches.input(id, runtimeSessionId)",
-    "id": "electron/features/native-session/router.cjs:0f2202e4202e6e12601c861c"
-  },
-  {
-    "text": "new RegExp(`^${key}: (\\\\S(?:.*\\\\S)?)$`).exec(lines[index])",
-    "id": "electron/features/skills/builtin-format.cjs:050e99112dfc70e8e2acad3c"
-  },
-  {
-    "text": "/^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)",
-    "id": "electron/features/skills/builtin-format.cjs:d1b140cbc97e430e34ef4b20"
-  },
-  {
-    "text": "/^\\uFEFF?---\\r?\\n([\\s\\S]*?)\\r?\\n---(?:\\r?\\n|$)/.exec(text)",
-    "id": "electron/features/skills/front-matter.cjs:99edb6725836c2a570617f56"
-  },
-  {
-    "text": "MARKER.exec(note || '')",
-    "id": "electron/features/skills/session.cjs:469e980a12de4a51b3cf90ff"
-  },
-  {
-    "text": "/^([a-f0-9]{32}|[a-f0-9]{64})-(?:claude|codex|preview|[a-f0-9]{32}|[a-f0-9]{64})\\.md(?:\\.json)?$/.exec(entry.name)",
-    "id": "electron/features/skills/store.cjs:935d5efc62df53f872335054"
+    "id": "electron/features/native-session/router.cjs:5117c4e0d6425a550c8cc649"
   },
   {
     "text": "execFileSync('git', ['rev-parse', '--git-common-dir'],\r\n      { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })",
-    "id": "electron/features/skills/worker-proposals.cjs:214b190a96bd7f1ee1ddd562"
+    "id": "electron/features/skills/worker-proposals.cjs:79438176dda822c97079af8e"
   },
   {
     "text": "execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })",
-    "id": "electron/features/skills/worker-proposals.cjs:aa1ab31fdc701279c0e605b3"
-  },
-  {
-    "text": "(message.stream === 'stderr' ? child.stderr : child.stdout).write(Buffer.from(message.data, 'base64'))",
-    "id": "electron/features/ssh/codex-process.cjs:b85ace23884adbc4bdb60d12"
+    "id": "electron/features/skills/worker-proposals.cjs:2b9c6f710d0d32d63f38f180"
   },
   {
     "text": "execFileSync(helper, ['--short-path', helper], { encoding: 'utf8', windowsHide: true, timeout: 5000 })",
-    "id": "electron/features/ssh/runtime.cjs:e508659656865877ff4b28a0"
+    "id": "electron/features/ssh/runtime.cjs:79bbec512d97c859e141b177"
   },
   {
     "text": "execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, maxBuffer: 64 * 1024 * 1024 })",
-    "id": "electron/features/team/team.cjs:490c1f545ce018e75b75c62b"
-  },
-  {
-    "text": "/^- (Goal|Files|Provides|Uses|Done when|Questions and risks):[ \\t]*(.*)$/.exec(line)",
-    "id": "electron/features/team/team.cjs:81e95dfd766ccab1f09836f5"
-  },
-  {
-    "text": "write(key)",
-    "id": "electron/features/terminal/approval-guard.cjs:654212a839a6537a6593ad80"
+    "id": "electron/features/team/team.cjs:51c7551f037343e4bd6a903b"
   },
   {
     "text": "s.gate.input(data)",
-    "id": "electron/features/terminal/ipc.cjs:8c3eb5323838c97a55ee638f"
-  },
-  {
-    "text": "s.draftSubmissions?.write(data)",
-    "id": "electron/features/terminal/ipc.cjs:405d5eb4b236cb04771852d2"
-  },
-  {
-    "text": "s.submissions.write(data)",
-    "id": "electron/features/terminal/ipc.cjs:54db71ef144588743b616d31"
-  },
-  {
-    "text": "/^( *)([\\w]+):\\s*(.*?)\\s*$/.exec(line)",
-    "id": "electron/features/workspace/project-icon-sources.cjs:ea6d5c2609aafa5369dc2b7a"
-  },
-  {
-    "text": "/^(?:\"([^\"]*)\"|'([^']*)'|([^#]*?))\\s*(?:#.*)?$/.exec(raw)",
-    "id": "electron/features/workspace/project-icon-sources.cjs:62255dab917cb2d1f2bb2196"
+    "id": "electron/features/terminal/ipc.cjs:6f6cb011c8493d7a7e324bee"
   },
   {
     "text": "execFile('/usr/bin/osascript', ['-l', 'JavaScript', '-e', MAC_SCRIPT, action, ...(action === 'copy' ? paths : [])], { timeout: 10000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' }, (error, output) => {\r\n      if (error) { reject(new Error(error.killed ? '剪贴板暂时不可用，请重试。' : '无法访问文件剪贴板。')); return; }\r\n      try { resolve(JSON.parse(output)); } catch { reject(new Error('文件剪贴板返回了无效数据。')); }\r\n    })",
-    "id": "electron/file-clipboard.cjs:878ebbd99ab4c9646bf6a233"
+    "id": "electron/file-clipboard.cjs:5b1e3fabde82e80c1ddea827"
   },
   {
     "text": "execFile(file, args, { timeout, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 }, (error, output) => resolve(error ? error.code === 'ENOENT' ? null : '' : output))",
-    "id": "electron/file-clipboard.cjs:e3a621beeb7baaf87686b8f0"
-  },
-  {
-    "text": "clipboard.write([new ClipboardItem({\r\n    [rawFormat('x-special/gnome-copied-files')]: ['copy', ...uris].join('\\n'),\r\n    [rawFormat('text/uri-list')]: uris.map(uri => uri + '\\r\\n').join(''),\r\n    'text/plain': paths.join('\\n'),\r\n  })])",
-    "id": "electron/file-clipboard.cjs:461e52be4317f79095aa0883"
+    "id": "electron/file-clipboard.cjs:0c8d9d80fcc7e5fe0dcd8bfd"
   },
   {
     "text": "spawn(path.join(integrationDir, 'file-clipboard.exe'), [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })",
-    "id": "electron/file-clipboard.cjs:664b9291de037c1d085ecf22"
+    "id": "electron/file-clipboard.cjs:7e1f853fae1477457f300c1b"
   },
   {
     "text": "this.run(project, '正在删除文件…', async (update, check) => {\r\n      const deleted = [];\r\n      for (const relative of chosen) {\r\n        check(); update(`正在删除：${path.posix.basename(relative)}`);\r\n        if (project.kind === 'ssh') await this.remote(project.id).request('remove', { path: relative });\r\n        else await this.trash(await entryPath(project, relative));\r\n        deleted.push(relative);\r\n      }\r\n      return { deleted };\r\n    })",
-    "id": "electron/file-operations.cjs:c19efe4e79062da4e74886a7"
+    "id": "electron/file-operations.cjs:47d3951deb606658cc58b61b"
   },
   {
     "text": "this.run(project, '正在复制文件…', async (update, check) => {\r\n      const revision = this.clipboardWrites.reserve();\r\n      const files = [];\r\n      let destination;\r\n      try {\r\n        if (project.kind !== 'ssh') {\r\n          for (const relative of chosen) files.push(await entryPath(project, relative, true));\r\n        } else {\r\n          await fs.mkdir(this.cacheRoot, { recursive: true });\r\n          destination = await fs.mkdtemp(path.join(this.cacheRoot, 'clipboard-'));\r\n          const connection = this.remote(project.id); await connection.ready;\r\n          for (const relative of chosen) {\r\n            check();\r\n            // Each selection keeps its basename for paste, even when another selection has the same name.\r\n            const staging = path.join(destination, String(files.length));\r\n            await fs.mkdir(staging);\r\n            const filename = path.join(staging, cleanName(path.posix.basename(relative || connection.info.root)));\r\n            await this.download(connection, relative, filename, update, check);\r\n            files.push(filename);\r\n          }\r\n        }\r\n        if (!await this.clipboardWrites.commit(revision, () => { check(); return this.clipboard('copy', files); })) return { count: 0, superseded: true };\r\n        // Committed FileDrop paths must remain available to the eventual paste.\r\n        destination = null;\r\n        return { count: files.length };\r\n      } finally {\r\n        if (destination && path.dirname(path.resolve(destination)) === path.resolve(this.cacheRoot)) await fs.rm(destination, { recursive: true, force: true });\r\n      }\r\n    })",
-    "id": "electron/file-operations.cjs:955ea4f0f6cc6006fbf29904"
+    "id": "electron/file-operations.cjs:5c92fc9b21c7d781583abafc"
   },
   {
     "text": "this.run(project, '正在粘贴文件…', async (update, check) => {\r\n      const pasted = [];\r\n      for (const source of sources) {\r\n        check(); if (typeof source !== 'string' || !path.isAbsolute(source)) throw new Error('无效的剪贴板文件。');\r\n        const name = cleanName(path.basename(source)); update(`正在粘贴：${name}`);\r\n        if (project.kind === 'ssh') {\r\n          pasted.push(await this.upload(this.remote(project.id), source, directory, name, update, check));\r\n          continue;\r\n        }\r\n        const parent = await directoryPath(project, directory);\r\n        const info = await fs.lstat(source);\r\n        if (info.isDirectory() && inside(await fs.realpath(source), parent)) throw new Error('不能把文件夹复制到它自身内部。');\r\n        const targetName = await unusedName(parent, name);\r\n        const staging = path.join(parent, `.agentrix-copy-${randomUUID()}`);\r\n        try {\r\n          await fs.cp(source, staging, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true, filter: () => { check(); return true; } });\r\n          check();\r\n          const target = path.join(parent, targetName);\r\n          try { await fs.lstat(target); throw new Error('目标文件已存在，请重试。'); } catch (error) { if (error.code !== 'ENOENT') throw error; }\r\n          await this.move(staging, target);\r\n          pasted.push(path.posix.join(directory, targetName));\r\n        } finally { if (path.dirname(path.resolve(staging)) === parent) await fs.rm(staging, { recursive: true, force: true }); }\r\n      }\r\n      return { pasted };\r\n    })",
-    "id": "electron/file-operations.cjs:13a8e15d4942173b28b23b63"
-  },
-  {
-    "text": "/^\\{(\\w+)\\}$/.exec(part)",
-    "id": "electron/i18n.cjs:0b8ff0dbe6966d18b5fa3304"
-  },
-  {
-    "text": "regex.exec(text)",
-    "id": "electron/i18n.cjs:ac74ae3d050e80ba63b3ba8f"
+    "id": "electron/file-operations.cjs:58cb494be6109fd8cc26b44e"
   },
   {
     "text": "session.gate.afterPrompt(plan.command)",
-    "id": "electron/main.cjs:d5d748af503f734de69d08cd"
+    "id": "electron/main.cjs:28c8f91ea04265f555e74efd"
   },
   {
     "text": "session.gate.input(command)",
-    "id": "electron/main.cjs:623fb218ff944c2f02fd531b"
+    "id": "electron/main.cjs:d9a1ddfa06be800854b7d0ec"
   },
   {
     "text": "session.gate.afterPrompt(command)",
-    "id": "electron/main.cjs:8a9e25c5d7b225fe0a045f88"
+    "id": "electron/main.cjs:9bfef8aa623497e7ed76da79"
   },
   {
     "text": "dashboard.run(project, call, value)",
-    "id": "electron/main.cjs:720e075a02dede359f7803f8"
-  },
-  {
-    "text": "terminalInput.write(id, `\\x1b[200~${input.text}\\x1b[201~`)",
-    "id": "electron/main.cjs:24e59f1fa08db8a7879e87ef"
-  },
-  {
-    "text": "terminalInput.write(id, '\\r')",
-    "id": "electron/main.cjs:bf236118472f4dece9676bd5"
+    "id": "electron/main.cjs:2cbf10f21f096f5b8a7cbb9d"
   },
   {
     "text": "dashboard.run(project, { source: 'native', sourceAgent: 'claude', title: 'Claude API', startedAt: Date.now(), model: entry.spec.model },\r\n        { id: entry.usageRecordId, source: 'native', model: entry.spec.model, endedAt: Date.now(), reportedCostUsd: entry.deltaUsdMicros / 1e6,\r\n          billingPath: 'api', usageRecordId: entry.usageRecordId, costCompleteness: 'estimated', reason: 'exit', exitCode: 0 })",
-    "id": "electron/main.cjs:a9ef49edae9c713174ae470d"
+    "id": "electron/main.cjs:02134a465c95da7fd0bff75e"
   },
   {
     "text": "pty.spawn(shell.file, ['-l', '-i'], terminalOptions)",
-    "id": "electron/main.cjs:0d732cd39a79c2da73a54cc8"
+    "id": "electron/main.cjs:b2ef7735f6dbc5dc15dd1972"
   },
   {
     "text": "pty.spawn(shell.file, bashArguments(integrationDir), terminalOptions)",
-    "id": "electron/main.cjs:d45cd8d03d30b3212afcd0e2"
+    "id": "electron/main.cjs:8428bfd7d1e1861aaa8fadf2"
   },
   {
     "text": "pty.spawn(cmdPath, ['/D', '/Q', '/K', path.join(integrationDir, 'bootstrap.cmd')], terminalOptions)",
-    "id": "electron/main.cjs:b708b46ba4397b05877da629"
+    "id": "electron/main.cjs:71f6e26da6c492a1f0791119"
   },
   {
     "text": "pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions)",
-    "id": "electron/main.cjs:5360ff28ec4bca945a0582cc"
+    "id": "electron/main.cjs:108edd6512e3f1376c984485"
   },
   {
     "text": "dashboard.run(project, call, event)",
-    "id": "electron/main.cjs:9bbf26262ec168a5cd6b4127"
+    "id": "electron/main.cjs:6d42791440486f3b169d64b6"
   },
   {
     "text": "nativeSessions?.input?.(id, s.nativeRuntimeSessionId)",
-    "id": "electron/main.cjs:25fc14f7690a1a8bf9dae20a"
+    "id": "electron/main.cjs:3f963bd8924025f45736c7f1"
   },
   {
     "text": "terminal.write(data)",
-    "id": "electron/main.cjs:13f35e475705f9022881eead"
-  },
-  {
-    "text": "s.prompts.write(data)",
-    "id": "electron/main.cjs:4d5790f595d25c0ced942daf"
-  },
-  {
-    "text": "s.titles.write(data)",
-    "id": "electron/main.cjs:5655ef9923b9508d7e7caf98"
-  },
-  {
-    "text": "this.keys.exec(text)",
-    "id": "electron/oversized-record.cjs:c66665f848ef42ef8b988751"
-  },
-  {
-    "text": "new RegExp(`\"${name}\":\"((?:[^\"\\\\\\\\]|\\\\\\\\.)*)\"`).exec(text)",
-    "id": "electron/oversized-record.cjs:2d30fbd9b772477a0c83b56f"
-  },
-  {
-    "text": "/^bytes=(\\d*)-(\\d*)$/.exec(range)",
-    "id": "electron/preview-resources.cjs:ed9e52844822c5f66ac0cf0c"
+    "id": "electron/main.cjs:05d4a2a0572a6c65bc4cf5df"
   },
   {
     "text": "exec('git', ['rev-parse', '--is-inside-work-tree'], options)",
-    "id": "electron/project-files.cjs:4818f7a521a5e7ed5cc7eb70"
+    "id": "electron/project-files.cjs:b49dc234f368723f60f7e6a1"
   },
   {
     "text": "exec('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], options)",
-    "id": "electron/project-files.cjs:934e027a73057da375ad6c97"
+    "id": "electron/project-files.cjs:243508590a95a9417f91c259"
   },
   {
     "text": "exec('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-c', 'log.showSignature=false', '-c', 'color.ui=false', '-c', 'i18n.logOutputEncoding=UTF-8', '-C', directory, ...args], { env: gitEnvironment(), windowsHide: true, encoding: 'utf8', timeout: 8000, maxBuffer: MAX_OUTPUT })",
-    "id": "electron/project-git.cjs:a2a17e0288f3d025d806dd62"
+    "id": "electron/project-git.cjs:e95c054240a57754acfc490d"
   },
   {
     "text": "run(['rev-parse', '--show-prefix'])",
-    "id": "electron/project-git.cjs:4bfeae8dfdb40c6c1aab9b52"
+    "id": "electron/project-git.cjs:d5857cb9b7fe7695b969d03e"
   },
   {
     "text": "run(['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=all', '--ignore-submodules=none', '--', '.'])",
-    "id": "electron/project-git.cjs:e7818ca924b38c27cc82bc91"
+    "id": "electron/project-git.cjs:314e14988639f7d09bca62b0"
   },
   {
     "text": "run(['rev-parse', '--show-toplevel'])",
-    "id": "electron/project-git.cjs:9048d36204eec9ce3e0c0cf6"
+    "id": "electron/project-git.cjs:31cc85c2f891319cd69c287c"
   },
   {
     "text": "run(['-C', top, 'diff', '--no-index', ...options, '--', '/dev/null', prefix + value.path], { exitCodes: [1] })",
-    "id": "electron/project-git.cjs:a66d90a0158f65e5dc31c8c6"
+    "id": "electron/project-git.cjs:461d43bc68cf7243959241d6"
   },
   {
     "text": "run(['diff', ...(value.staged ? ['--cached'] : []), ...options, '--', value.path])",
-    "id": "electron/project-git.cjs:b95f252c61692a17f5006460"
+    "id": "electron/project-git.cjs:f8047940165f0a5895606b93"
   },
   {
     "text": "run(['apply', ...(value.reverse ? ['-R'] : []), ...(value.cached ? ['--cached'] : []), '--whitespace=nowarn', '-'], { input: value.patch })",
-    "id": "electron/project-git.cjs:af97fe396643de6c8ac932de"
+    "id": "electron/project-git.cjs:ba938fe9dcd210c4d0c1f9ff"
   },
   {
     "text": "run(['log', '--topo-order', '-z', `--format=${FORMAT}`, `--max-count=${PAGE_SIZE + 1}`, `--skip=${value}`, ...(prefix ? ['--full-history', '--', '.'] : ['--'])])",
-    "id": "electron/project-git.cjs:da6e90d5d0b24156d33e4b90"
+    "id": "electron/project-git.cjs:b239136ef07d4df8c1b3e313"
   },
   {
     "text": "run(['show', '-s', '--format=%P', `${value}^{commit}`, '--'])",
-    "id": "electron/project-git.cjs:41e7974f537100a9a0729422"
+    "id": "electron/project-git.cjs:780e401ed8c7d880ddbb2360"
   },
   {
     "text": "run(args)",
-    "id": "electron/project-git.cjs:9e0df64e65e8249a106fdaf5"
-  },
-  {
-    "text": "/^# branch\\.ab \\+(\\d+) -(\\d+)$/.exec(line)",
-    "id": "electron/project-git.cjs:167c644c0815f6be5a7e75a8"
-  },
-  {
-    "text": "/^@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@/.exec(line)",
-    "id": "electron/project-git.cjs:43fdb9f8e43d9d15a45b1e1e"
-  },
-  {
-    "text": "SVG_URL.exec(input)",
-    "id": "electron/project-svg.cjs:64ed3189ff713a74005dd10e"
-  },
-  {
-    "text": "/^<\\?xml\\s+version\\s*=\\s*(['\"])1\\.[01]\\1(?:\\s+encoding\\s*=\\s*(['\"])UTF-8\\2)?(?:\\s+standalone\\s*=\\s*(['\"])(?:yes|no)\\3)?\\s*\\?>/i.exec(text.slice(at))",
-    "id": "electron/project-svg.cjs:60204413bdbc8db94e0a3ec0"
-  },
-  {
-    "text": "tag.exec(text)",
-    "id": "electron/project-svg.cjs:38df2a3f2295f1184122f8f4"
-  },
-  {
-    "text": "/^\\s*<command-name>\\s*(\\/[^<\\s]+)\\s*<\\/command-name>/.exec(text)",
-    "id": "electron/prompt-queue.cjs:2c94e1e2d28e3877fdbfd232"
-  },
-  {
-    "text": "/^\\s*(\\/[\\w:-]+)(?=\\s|$)/.exec(text)",
-    "id": "electron/prompt-queue.cjs:e1071bcd83f2fe08649ddc48"
-  },
-  {
-    "text": "/^[ \\t]*(?:[-*>#]+[ \\t]*)?(?:\\*\\*)?(?:问题|优化)(?:\\*\\*)?[：:][ \\t]*([^\\r\\n]+)/m.exec(block)",
-    "id": "electron/prompt-queue.cjs:36e8b67e2a0a3e146cd94262"
-  },
-  {
-    "text": "/\"sessionId\"\\s*:\\s*\"([\\w-]+)\"/.exec(header.subarray(0, bytesRead).toString('utf8'))",
-    "id": "electron/reading-history.cjs:7b57a54f1332cf02d0527260"
+    "id": "electron/project-git.cjs:f9a198900512e62c28d05f97"
   },
   {
     "text": "spawn(sshPath || readSSHSettings().sshPath, sshArguments(ssh), { env, cwd: os.homedir(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })",
-    "id": "electron/remote-connection.cjs:fe1d59c74083b3e6999c2cd5"
-  },
-  {
-    "text": "this.decoder.write(data)",
-    "id": "electron/remote-connection.cjs:3281a791acbdf3e2c5038791"
-  },
-  {
-    "text": "this.errorDecoder.write(data)",
-    "id": "electron/remote-connection.cjs:d24ee8870b9e38a6b5f0ad09"
-  },
-  {
-    "text": "this.child.stdin.write(zlib.deflateSync(fs.readFileSync(path.join(integrationDir, 'remote-worker.py'))).toString('base64') + '\\n')",
-    "id": "electron/remote-connection.cjs:a4f2a3f1c70e8ecacd853bfe"
-  },
-  {
-    "text": "this.child.stdin.write(JSON.stringify({ channel: message.channel, ...message }) + '\\n')",
-    "id": "electron/remote-connection.cjs:0f5dd96ddc50654e099b5718"
-  },
-  {
-    "text": "this.terminalDecoder.write(Buffer.from(message.data, 'base64'))",
-    "id": "electron/remote-connection.cjs:785e9d2b5bdb7d41ce5341c6"
-  },
-  {
-    "text": "/^\\s*(Host|Include)\\s*(?:=\\s*|\\s+)(.*?)\\s*$/i.exec(line)",
-    "id": "electron/ssh-config.cjs:add1e567436cb38a8180a59e"
-  },
-  {
-    "text": "this.write(forwarded)",
-    "id": "electron/terminal-input.cjs:35cf6c736921d2bbaf1e45fb"
-  },
-  {
-    "text": "this.write(data)",
-    "id": "electron/terminal-input.cjs:90152c336443cb996e5199c1"
-  },
-  {
-    "text": "this.write(data)",
-    "id": "electron/terminal-input.cjs:be71267bafcf4991c9191bd9"
-  },
-  {
-    "text": "pattern.exec(this.buffer)",
-    "id": "electron/terminal-title.cjs:6c1cb59a7bfcb99097774a31"
-  },
-  {
-    "text": "/^([a-f\\d]{8}-[a-f\\d-]{8,27})(?:\\.\\.\\.|…)$/i.exec(value)",
-    "id": "electron/terminal-title.cjs:5e1aa4c625b1dffc76f58df7"
+    "id": "electron/remote-connection.cjs:aebf35767b3bb0341fb0248b"
   },
   {
     "text": "run(['query', key, '/f', value, '/d', '/e', '/c'])",
-    "id": "electron/windows-integration.cjs:f5cb6e7388b8276e7b66b315"
+    "id": "electron/windows-integration.cjs:7b266a04bd576a8bef60ddcb"
   },
   {
     "text": "run(['add', key, '/v', name, '/t', 'REG_SZ', '/d', value, '/f'])",
-    "id": "electron/windows-integration.cjs:1f602348288a5e952bf65491"
+    "id": "electron/windows-integration.cjs:5fcfe5b37114af710b593755"
   },
   {
     "text": "run(shell, ['-ilc', `echo ${marker}; /usr/bin/printenv PATH; echo ${marker}`], { env, timeout, encoding: 'utf8', maxBuffer: 1024 * 1024 }, (_error, stdout) => {\r\n        const value = String(stdout || '').split(marker)[1]?.trim();\r\n        resolve(value && !value.includes('\\n') ? value : null);\r\n      })",
-    "id": "electron/zsh-terminal.cjs:cf2d03e6eee13570aaf2cf94"
-  },
-  {
-    "text": "process.stdout.write(JSON.stringify(context) + '\\n')",
-    "id": "integration/agent-event.cjs:5485498b5c2cc892806d8f9c"
-  },
-  {
-    "text": "/^(--model|--config)=(.*)$|^(-m|-c)=?(.+)$/.exec(word)",
-    "id": "integration/codex-account-scope.cjs:83e9909e31d361c823f623b2"
-  },
-  {
-    "text": "process.stdout.write(value, () => process.exit(0))",
-    "id": "integration/codex-account-scope.cjs:b23d39818bc1b74691d4a82c"
+    "id": "electron/zsh-terminal.cjs:a5f63b7f6f661138fe716243"
   },
   {
     "text": "['exec', '执行']",
-    "id": "integration/dispatch.cjs:ac80ef86e58eabfb509dd84c"
-  },
-  {
-    "text": "stdout.write(`[dispatch] stop queued ${options.id}\\n`)",
-    "id": "integration/dispatch.cjs:c0bf253b10eef5de89b5c561"
-  },
-  {
-    "text": "stdout.write(`[dispatch] ${error.message.replace(/[\\r\\n]+/g, ' ')}\\n`)",
-    "id": "integration/dispatch.cjs:29cb75a563523e319263e899"
-  },
-  {
-    "text": "/^(model|reasoning effort|service tier|speed|session id):\\s*(.+)$/i.exec(clean)",
-    "id": "integration/dispatch.cjs:c64fb25a3b0ce6d0d08e1615"
-  },
-  {
-    "text": "log.write(chunk)",
-    "id": "integration/dispatch.cjs:f278551e885d0426b9f0134e"
-  },
-  {
-    "text": "decoder.write(chunk)",
-    "id": "integration/dispatch.cjs:9ce2e886af5268e2e097028b"
-  },
-  {
-    "text": "stdout.write(USAGE)",
-    "id": "integration/dispatch.cjs:0d1f1f398278425d0dbcbc1c"
-  },
-  {
-    "text": "stdout.write(`[dispatch] ${line}\\n`)",
-    "id": "integration/dispatch.cjs:ce57e644dcecc06e6b0b20d4"
+    "id": "integration/dispatch.cjs:7eeedc98678a9064e3c1cd6f"
   },
   {
     "text": "spawn('taskkill.exe', ['/pid', String(victim.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true })",
-    "id": "integration/dispatch.cjs:e4813967cb07ca0259188406"
+    "id": "integration/dispatch.cjs:53d0f87c7ad1d1759cf0cb2c"
   },
   {
     "text": "execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: options.cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })",
-    "id": "integration/dispatch.cjs:799edc0dcb5b1a776a3507a9"
+    "id": "integration/dispatch.cjs:809a5f4d46de138266f8fee1"
   },
   {
     "text": "execFileSync('git', ['show', `${before.head}:${file.split(path.sep).join('/')}`], { cwd: before.root, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024, windowsHide: true })",
-    "id": "integration/dispatch.cjs:399bc743943a8e5ae1447c15"
-  },
-  {
-    "text": "log.write(JSON.stringify(event) + '\\n')",
-    "id": "integration/dispatch.cjs:c54b223897becd92555c1ea1"
+    "id": "integration/dispatch.cjs:32d4f444116a1f80f605c410"
   },
   {
     "text": "resolveExecutable('codex', commandOf(effective), env)",
-    "id": "integration/dispatch.cjs:1b7073ff57f25f74298c0335"
+    "id": "integration/dispatch.cjs:9931d853bb0be1203def4336"
   },
   {
     "text": "launch(command.file, command.args, spawnOptions)",
-    "id": "integration/dispatch.cjs:f6e86474d2b3ffcdca0d8dec"
+    "id": "integration/dispatch.cjs:27e157b394c93d77890e1b77"
   },
   {
     "text": "resolveExecutable(options.agent, commandOf(effective), env)",
-    "id": "integration/dispatch.cjs:8c73618b429d87061998912d"
+    "id": "integration/dispatch.cjs:6f624c43b334bb3894e0654b"
   },
   {
     "text": "launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,\r\n        detached: process.platform !== 'win32' })",
-    "id": "integration/dispatch.cjs:94314b06f96e4e32d0730b46"
+    "id": "integration/dispatch.cjs:103c8de2b784c8dbc9d0e2a0"
   },
   {
     "text": "run(process.argv.slice(2))",
-    "id": "integration/dispatch.cjs:4b72f173a6a074b540ef762d"
+    "id": "integration/dispatch.cjs:0c6d7608de831ab448c261b4"
   },
   {
-    "text": "subprocess.run([\"/bin/bash\", \"-lic\", \"type -P codex\"], env=dict(env),\n        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)",
-    "id": "integration/remote-worker.py:8e09391a2830aa9e28274885"
-  },
-  {
-    "text": "child.stdin.write(data)",
-    "id": "integration/remote-worker.py:df13c7572a01925df8e5542d"
-  },
-  {
-    "text": "upload[\"file\"].write(chunk)",
-    "id": "integration/remote-worker.py:faff5fecce73df6c42b2a75b"
-  },
-  {
-    "text": "target.write(data)",
-    "id": "integration/remote-worker.py:6861184e0038411662d5c281"
+    "text": "subprocess.run([\"/bin/bash\", \"-lic\", \"type -P codex\"], env=dict(env),\n        stdin=subprocess.DEVNULL, start_new_session=True,\n        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)",
+    "id": "integration/remote-worker.py:33bbb560fbcc96da8f3a8a46"
   },
   {
     "text": "subprocess.Popen([executable, \"app-server\", \"--listen\", \"stdio://\"], cwd=self.coding_root,\n                env=dict(self.agent_env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,\n                start_new_session=os.name == \"posix\")",
-    "id": "integration/remote-worker.py:302756e206fc41731e8d3946"
+    "id": "integration/remote-worker.py:48e12babdf759288674b676d"
   },
   {
     "text": "subprocess.run([\"git\", \"rev-parse\", \"--abbrev-ref\", \"HEAD\"], cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=3)",
-    "id": "integration/remote-worker.py:cf4ea431676dc939fb033361"
-  },
-  {
-    "text": "output.write(text[:256 * 1024])",
-    "id": "integration/remote-worker.py:042928483d45914e8a695b26"
-  },
-  {
-    "text": "output.write(source)",
-    "id": "integration/remote-worker.py:56b8fef709e908d715b6da6d"
-  },
-  {
-    "text": "output.write(reading_note)",
-    "id": "integration/remote-worker.py:0dc4da17d6e2fe318fea1e9c"
+    "id": "integration/remote-worker.py:535446cea9d2ef67c9a8179f"
   },
   {
     "text": "os.execve(bash, [bash, \"--noprofile\", \"--rcfile\", rc_file, \"-i\"], env)",
-    "id": "integration/remote-worker.py:c34cb9583c2b596ad9b22322"
-  },
-  {
-    "text": "sys.stdout.write(PREFIX + json.dumps(message, ensure_ascii=True, separators=(\",\", \":\")) + \"\\n\")",
-    "id": "integration/remote-worker.py:91edbfb883a2f55f1008103e"
+    "id": "integration/remote-worker.py:ec4020a5671fe40f524bebf1"
   },
   {
     "text": "run([\"rev-parse\", \"--show-prefix\"])",
-    "id": "integration/remote-worker.py:b6ab95537e65faca3ac0cdaf"
+    "id": "integration/remote-worker.py:0ffd99554a3570d0501903fe"
   },
   {
     "text": "run([\"status\", \"--porcelain=v2\", \"-z\", \"--branch\", \"--untracked-files=all\", \"--ignore-submodules=none\", \"--\", \".\"])",
-    "id": "integration/remote-worker.py:9700fdbadf15a98129456ea9"
-  },
-  {
-    "text": "output.write(key)",
-    "id": "integration/remote-worker.py:65a16670d1be519fafa7821a"
-  },
-  {
-    "text": "output.write(text)",
-    "id": "integration/remote-worker.py:ba7cfdde5292558b742cef76"
-  },
-  {
-    "text": "target.write(content)",
-    "id": "integration/remote-worker.py:b3b41a0f3e1c454ff11558e4"
+    "id": "integration/remote-worker.py:1c8c19774153fab812b2a649"
   },
   {
     "text": "os.write(self.master, data)",
-    "id": "integration/remote-worker.py:257c4730918db03cf1ab8270"
+    "id": "integration/remote-worker.py:e54a172c0b01d5f04e09187c"
   },
   {
     "text": "subprocess.run([\"git\", \"--version\"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=3)",
-    "id": "integration/remote-worker.py:6600bc4d086928ca80ad93fd"
+    "id": "integration/remote-worker.py:f043177357047895a1f763f1"
   },
   {
     "text": "subprocess.run([\"git\", \"--no-pager\", \"-c\", \"core.fsmonitor=false\", \"-c\", \"log.showSignature=false\", \"-c\", \"color.ui=false\", \"-c\", \"i18n.logOutputEncoding=UTF-8\"] + args, cwd=cwd or self.root, stdout=output, stderr=error, env=env, timeout=8, input=None if text is None else text.encode(\"utf-8\"))",
-    "id": "integration/remote-worker.py:88ea173d509300dfc7267677"
-  },
-  {
-    "text": "destination.write(content.encode(preview[\"page\"][\"encoding\"]))",
-    "id": "integration/remote-worker.py:9534ce74cb9901f5a29f4592"
+    "id": "integration/remote-worker.py:764e42e4ee28665444865f24"
   },
   {
     "text": "run([\"log\", \"--topo-order\", \"-z\", \"--format=%H%x00%P%x00%an%x00%aI%x00%D%x00%s\", \"--max-count=41\", \"--skip=\" + str(value)] + ([\"--full-history\", \"--\", \".\"] if prefix else [\"--\"]))",
-    "id": "integration/remote-worker.py:76c1df4033f1e9ed028bc8da"
+    "id": "integration/remote-worker.py:e582e617be539a1cafd7db9d"
   },
   {
     "text": "run([\"diff\", \"--no-index\"] + options + [\"--\", \"/dev/null\", prefix + value[\"path\"]], ok=(0, 1), cwd=top)",
-    "id": "integration/remote-worker.py:7c3b95e92b9cda5035124ce6"
+    "id": "integration/remote-worker.py:67ee551538aeb706de0313dd"
   },
   {
     "text": "run([\"diff\"] + ([\"--cached\"] if value.get(\"staged\") is True else []) + options + [\"--\", value[\"path\"]])",
-    "id": "integration/remote-worker.py:9d2c911dce7ea687111ea45e"
+    "id": "integration/remote-worker.py:4c15d8a7427361ae6c49df76"
   },
   {
     "text": "run([\"apply\"] + ([\"-R\"] if value.get(\"reverse\") is True else []) + ([\"--cached\"] if value.get(\"cached\") is True else []) + [\"--whitespace=nowarn\", \"-\"], text=value[\"patch\"])",
-    "id": "integration/remote-worker.py:c49867fe274e21a267029678"
+    "id": "integration/remote-worker.py:3b6a0c5530573e09132f007d"
   },
   {
     "text": "run(args)",
-    "id": "integration/remote-worker.py:938c2a289189bfd82c2ed715"
-  },
-  {
-    "text": "destination.write(chunk)",
-    "id": "integration/remote-worker.py:e6775a3d0f2a73a6583f6012"
+    "id": "integration/remote-worker.py:a9ab0d59a8ea75c3aace919b"
   },
   {
     "text": "run([\"rev-parse\", \"--show-toplevel\"])",
-    "id": "integration/remote-worker.py:77b5a80c1a6e7b0eb988e888"
+    "id": "integration/remote-worker.py:5d3bb49f8ed5ddd2eb98d4f4"
   },
   {
     "text": "run([\"show\", \"-s\", \"--format=%P\", value + \"^{commit}\", \"--\"])",
-    "id": "integration/remote-worker.py:17e1ff7e34e7e8875f1beb81"
-  },
-  {
-    "text": "process.stdout.write(result.response + '\\n')",
-    "id": "integration/ssh-askpass.cjs:7f72e729111476506230210a"
-  },
-  {
-    "text": "option.exec(rows[selected])",
-    "id": "src/features/agents/agent-question.ts:8c407ed1a7ff9225e2f91fb8"
-  },
-  {
-    "text": "option.exec(rows[index])",
-    "id": "src/features/agents/agent-question.ts:ae4fd8e38efe48f834cfc280"
-  },
-  {
-    "text": "tabLabel.exec(tab)",
-    "id": "src/features/agents/agent-question.ts:61961df43d2be610ed134234"
-  },
-  {
-    "text": "option.exec(rows[index])",
-    "id": "src/features/agents/agent-question.ts:c578c0aeb103416e4fc3abd9"
-  },
-  {
-    "text": "option.exec(row)",
-    "id": "src/features/agents/agent-question.ts:d2ec5eed21357b4d3d314197"
-  },
-  {
-    "text": "/^([❯>]?)\\s*Submit$/.exec(text)",
-    "id": "src/features/agents/agent-question.ts:8a76cf37eec39e99627a626e"
-  },
-  {
-    "text": "/^\\[([ ✔√✓×xX])\\]\\s*(.*)$/.exec(draft.label)",
-    "id": "src/features/agents/agent-question.ts:89e2e9c948884e0c74050a0d"
-  },
-  {
-    "text": "/Question (\\d+)\\/(\\d+)/.exec(rows[head])",
-    "id": "src/features/agents/agent-question.ts:de773b2af4dad3f7a7b34682"
-  },
-  {
-    "text": "option.exec(row)",
-    "id": "src/features/agents/agent-question.ts:4338545fb9d823939e96f728"
-  },
-  {
-    "text": "/^›\\s?(.*)$/.exec(text)",
-    "id": "src/features/agents/agent-question.ts:66ae04e2513f998b2af1cfa0"
-  },
-  {
-    "text": "/^\\s*!(?:\\s+(.*))?$/.exec(row.replace(/\\r$/, ''))",
-    "id": "src/features/agents/agent-screen-input.ts:8e686599fec879ece1a236a6"
-  },
-  {
-    "text": "(agent === 'claude' ? /^\\s*❯(?:\\s+(.*))?$/ : /^\\s*›(?:\\s+(.*))?$/).exec(row.replace(/\\r$/, ''))",
-    "id": "src/features/agents/agent-screen-input.ts:4a5ff8874f8cd96d75eb43a2"
-  },
-  {
-    "text": "/^(\\s*)([❯›>↓↑]?\\s*)(\\d+)\\.\\s+(.+)$/.exec(row)",
-    "id": "src/features/agents/agent-screen.ts:5da45a57cda2aec62285f4c6"
-  },
-  {
-    "text": "/^[⏺●]\\s+(.+?)\\s+·/.exec(text)",
-    "id": "src/features/agents/agent-screen.ts:97074692820154d8a3301c21"
-  },
-  {
-    "text": "effortRow.exec(text)",
-    "id": "src/features/agents/agent-screen.ts:fe8a433a6e0d72886057b434"
-  },
-  {
-    "text": "/^[⏸⏵⏺]+\\s+(.+?)(?:\\s+·|\\s+\\(|$)/.exec(text)",
-    "id": "src/features/agents/agent-screen.ts:a1ddc829d56fd12232c240b5"
-  },
-  {
-    "text": "effortRow.exec(row)",
-    "id": "src/features/agents/agent-screen.ts:f5ee6d39fd4002ba18a35a75"
-  },
-  {
-    "text": "/^(.+?)\\s+·\\s+([^·]+?)(?:\\s+·\\s+(.+))?$/.exec(footer[0] ?? '')",
-    "id": "src/features/agents/agent-screen.ts:ecf27c2944fee64912d1d66c"
-  },
-  {
-    "text": "/^(.*?)\\s+(none|minimal|low|medium|high|xhigh|max|ultra|default)(\\s+fast)?$/.exec(model[1])",
-    "id": "src/features/agents/agent-screen.ts:3a52104349ba8fad97009485"
-  },
-  {
-    "text": "(agent === 'claude' ? /Claude Code v([^\\s]+)/ : />_ OpenAI Codex \\(v([^\\s)]+)\\)/).exec(rows[index])",
-    "id": "src/features/agents/agent-screen.ts:96266ac0bc8e225ea240cab2"
-  },
-  {
-    "text": "/^(.+?) with (\\S+) effort(?:\\s+·\\s+(.+))?$/.exec(clean(rows[index + 1] ?? '') ?? '')",
-    "id": "src/features/agents/agent-screen.ts:5283aabbb6eb3f2f2c51c12e"
-  },
-  {
-    "text": "bareCursor.exec(rows[cursor])",
-    "id": "src/features/agents/agent-screen.ts:b5d3318f413f1203b4ef4ffb"
-  },
-  {
-    "text": "bareLabel.exec(rows[index] ?? '')",
-    "id": "src/features/agents/agent-screen.ts:83067fe9820885df60f99d8a"
-  },
-  {
-    "text": "/\\s+\\(([a-z]|esc)\\)$/.exec(option[field])",
-    "id": "src/features/agents/agent-screen.ts:089cf3b4e1c8097dc37fa759"
-  },
-  {
-    "text": "sessionRow.exec(row)",
-    "id": "src/features/agents/agent-screen.ts:c079ee2bc46b905e9e063924"
-  },
-  {
-    "text": "/^\\s*─+\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*·\\s*\\d+%\\s*─*$/.exec(row)",
-    "id": "src/features/agents/agent-screen.ts:2fbc18472ef45ecffc862fed"
+    "id": "integration/remote-worker.py:aa2c218bedf4974df02806d5"
   },
   {
     "text": "run()",
-    "id": "src/features/agents/ResetQuota.tsx:9d7a69ecd88fc554947e4b15"
+    "id": "src/features/agents/ResetQuota.tsx:5c24355bd061257885bd20db"
   },
   {
     "text": "sendToAgent(terminal.id, terminal.sessionId, 'codex', command)",
-    "id": "src/features/agents/ResetQuota.tsx:25914165aaf8605a9141a330"
-  },
-  {
-    "text": "/https?:\\/\\/\\S+$/.exec(trimmed)",
-    "id": "src/features/agents/sign-in-screen.ts:8fd36b327c433681c47c9178"
+    "id": "src/features/agents/ResetQuota.tsx:3f7e1aa4367a37c480556014"
   },
   {
     "text": "run(window.agentrix.interveneAgent(terminalId, callId, value), sent => {\r\n      received(sent);\r\n      if (sent.status === 'rejected') return;\r\n      setText(current => current.trim() === value ? '' : current); onSent(sent);\r\n    })",
-    "id": "src/features/agents/SubagentInput.tsx:28b79fe8b27f8c009ad104f9"
+    "id": "src/features/agents/SubagentInput.tsx:debaaa685309da5d25f81619"
   },
   {
     "text": "run(window.agentrix.stopAgent(terminalId, callId), received)",
-    "id": "src/features/agents/SubagentInput.tsx:1912c6bafd8bdeb847018e31"
-  },
-  {
-    "text": "CLAUDE.exec(model)",
-    "id": "src/features/dashboard/format.ts:c5bb8a70960c9f4f80cc79f2"
-  },
-  {
-    "text": "GPT.exec(model)",
-    "id": "src/features/dashboard/format.ts:8fc8b0c9c583c5dad4704389"
-  },
-  {
-    "text": "ALIAS.exec(model)",
-    "id": "src/features/dashboard/format.ts:1c0a7acffbdc659f7bf9ac6d"
-  },
-  {
-    "text": "CLAUDE.exec(model)",
-    "id": "src/features/dashboard/format.ts:37bef8869f4b8ae93c3579f1"
+    "id": "src/features/agents/SubagentInput.tsx:9d7f4475067877d886e282dc"
   },
   {
     "text": "run(item, item.state === 'open' ? 'adopted' : 'open')",
-    "id": "src/features/dashboard/Suggestions.tsx:e11504bea82d464bdcbf960c"
+    "id": "src/features/dashboard/Suggestions.tsx:14a3f1ce4f8c3a98d22fb02d"
   },
   {
     "text": "run(item, 'dismissed')",
-    "id": "src/features/dashboard/Suggestions.tsx:b248d88c7491513245f31e7c"
-  },
-  {
-    "text": "/^[ \\t]*/.exec(line)",
-    "id": "src/features/files/editor-commands.ts:5bbc4b9d094b3ac6f68d92a2"
-  },
-  {
-    "text": "/^[ \\t]*/.exec(line)",
-    "id": "src/features/files/editor-commands.ts:5a4e30da385e69aca844592f"
-  },
-  {
-    "text": "/^ */.exec(line.text)",
-    "id": "src/features/files/editor-commands.ts:b18f8276c9a6126285fca231"
+    "id": "src/features/dashboard/Suggestions.tsx:882e29626aaf230efd62c28f"
   },
   {
     "text": "run(async () => { const result = await unwrap(window.agentrix.copyEntries(project.id, paths)); if (!result.superseded) setMessage(t('已复制 {count} 项，可粘贴到其他位置', { count: result.count })); })",
-    "id": "src/features/files/ExplorerFileActions.tsx:8603777ce93f69d69774aaf1"
+    "id": "src/features/files/ExplorerFileActions.tsx:ecd51cdd6dfe079848538613"
   },
   {
     "text": "run(async () => {\r\n    const result = await unwrap(window.agentrix.copyPaths(project.id, paths, format));\r\n    if (!result.superseded) setMessage(format === 'absolute' ? t('已复制绝对路径') : t('已复制相对路径'));\r\n  }, false)",
-    "id": "src/features/files/ExplorerFileActions.tsx:f8428c05409a518676244dbd"
+    "id": "src/features/files/ExplorerFileActions.tsx:e5e6b149b2618a2b8dcacf9a"
   },
   {
     "text": "run(async () => { await unwrap(window.agentrix.revealEntry(project.id, path)); }, false)",
-    "id": "src/features/files/ExplorerFileActions.tsx:46284d3014a6d1764aa41a1c"
+    "id": "src/features/files/ExplorerFileActions.tsx:73a9793f0c36b5414b32bc18"
   },
   {
     "text": "run(async () => {\r\n    const result = await unwrap(window.agentrix.pasteEntries(project.id, directory));\r\n    setSelected(result.pasted); anchor.current = result.pasted[0] || directory;\r\n    changed(directory); setMessage(t('已粘贴 {count} 项到{place}', { count: result.pasted.length, place: directory || t('项目根目录') }));\r\n  })",
-    "id": "src/features/files/ExplorerFileActions.tsx:41fdeda7c273b86656e2120c"
+    "id": "src/features/files/ExplorerFileActions.tsx:1b86fcf9c66f4506ed2b5c6f"
   },
   {
     "text": "run(async () => { const result = await unwrap(window.agentrix.deleteEntries(project.id, paths)); removed(result.deleted); setSelected([]); })",
-    "id": "src/features/files/ExplorerFileActions.tsx:0ad4e65ea26a6b3160d90c70"
+    "id": "src/features/files/ExplorerFileActions.tsx:e55b68e6f530cb618da7f0eb"
   },
   {
     "text": "window.agentrix.writeTerminal(terminal.id, `${agent}\\r`)",
-    "id": "src/features/home/DecisionHome.tsx:4880a4852939232d3de747e4"
+    "id": "src/features/home/DecisionHome.tsx:cfb483636562fa7f8bdaa3d8"
   },
   {
     "text": "sendToAgent(terminal.id, sessionId, kind, goal)",
-    "id": "src/features/home/DecisionHome.tsx:2eb3058d7f57d7cad7344db2"
-  },
-  {
-    "text": "START.exec(line)",
-    "id": "src/features/home/delivery.ts:0bf0262147e72e41aca0f294"
-  },
-  {
-    "text": "write(projectId, { task: history.task || task, notes: [...history.notes, { at: Date.now(), text }].slice(-20) })",
-    "id": "src/features/home/review-history.ts:45636ee5d039fd6b18bef30c"
-  },
-  {
-    "text": "write(projectId, { notes: [] })",
-    "id": "src/features/home/review-history.ts:4f899cc77fa6c553205cd9fb"
+    "id": "src/features/home/DecisionHome.tsx:b8913d2d72d453e45d6e93fb"
   },
   {
     "text": "sendToAgent(decision.terminalId, decision.sessionId, decision.agent, text)",
-    "id": "src/features/home/ReviewCard.tsx:76a6db1590f0b0bd93851720"
+    "id": "src/features/home/ReviewCard.tsx:14a4d98bcbc6ee9b1e8eff45"
   },
   {
     "text": "window.agentrix.writeTerminal(terminalId, '\\x15')",
-    "id": "src/features/home/send-to-agent.ts:b9463da21b8af92e7ced41bd"
+    "id": "src/features/home/send-to-agent.ts:7dadf1631b36c230bf1f58b8"
   },
   {
     "text": "window.agentrix.writeTerminal(terminalId, '\\r')",
-    "id": "src/features/home/send-to-agent.ts:df8f34cfc0d0402ad9d5f2de"
-  },
-  {
-    "text": "OPTION.exec(words)",
-    "id": "src/features/native-session/native-composer.ts:f9a299b3c52ff00f2b304c4d"
+    "id": "src/features/home/send-to-agent.ts:e97624ad5976bbffb9b93291"
   },
   {
     "text": "actions.run(action, value)",
-    "id": "src/features/native-session/NativeSessionView.tsx:27a545054fb68242dc63c581"
-  },
-  {
-    "text": "this.rules.inline.link.exec(token.raw)",
-    "id": "src/features/reading/markdown-escape.ts:86a6b1994533b1bab6469aff"
-  },
-  {
-    "text": "/(?:^|\\s)@(?:\"([^\"\\r\\n]*)|([^\\s\"]*))$/.exec(before)",
-    "id": "src/features/reading/mention-tokens.ts:2ad2dd75361a92e8e06f1599"
-  },
-  {
-    "text": "write('\\x15')",
-    "id": "src/features/reading/reading-command.ts:8f9d7f46b8746c721ec9505e"
-  },
-  {
-    "text": "write(text)",
-    "id": "src/features/reading/reading-command.ts:20c0bfdb3c15dc4827dfd4dd"
-  },
-  {
-    "text": "write('\\r')",
-    "id": "src/features/reading/reading-command.ts:a0329fa55f0992225a7e3091"
-  },
-  {
-    "text": "write(text)",
-    "id": "src/features/reading/ReadingSignIn.tsx:72163cba1a45403bb49d1072"
-  },
-  {
-    "text": "write('\\r')",
-    "id": "src/features/reading/ReadingSignIn.tsx:20a1d10eb37dcc6827919a87"
-  },
-  {
-    "text": "write('\\x1b')",
-    "id": "src/features/reading/ReadingSignIn.tsx:e7c32e9a5caf299d33704f74"
-  },
-  {
-    "text": "write('\\r')",
-    "id": "src/features/reading/ReadingSignIn.tsx:8f6596d862ac5ee310bca946"
-  },
-  {
-    "text": "write('\\x1b')",
-    "id": "src/features/reading/ReadingSignIn.tsx:34b4b0381f3995b2620e0267"
+    "id": "src/features/native-session/NativeSessionView.tsx:236d3a92ec09e344578129d8"
   },
   {
     "text": "window.agentrix.writeTerminal(terminal.id, '\\x1b')",
-    "id": "src/features/reading/ReadingView.tsx:967e4d723800d74cc02ff3b4"
+    "id": "src/features/reading/ReadingView.tsx:ca741eacdbbf1b21d8843c29"
   },
   {
     "text": "window.agentrix.writeTerminal(terminal.id, value)",
-    "id": "src/features/reading/ReadingView.tsx:4a691707af2ca85183a20af1"
+    "id": "src/features/reading/ReadingView.tsx:2d9b7b9ed2dd2748ada7121a"
   },
   {
     "text": "window.agentrix.writeTerminal(terminal.id, '\\r')",
-    "id": "src/features/reading/ReadingView.tsx:55ccac7084d53dd77cda9deb"
-  },
-  {
-    "text": "window.agentrix.writeTerminal(terminal.id, '\\r')",
-    "id": "src/features/reading/ReadingView.tsx:625c762243f85014cb038983"
+    "id": "src/features/reading/ReadingView.tsx:81dbc1794ce4071708a2609a"
   },
   {
     "text": "window.agentrix.writeTerminal(terminal.id, '\\x1b[Z')",
-    "id": "src/features/reading/ReadingView.tsx:cb1f975df06c55c7149087a0"
+    "id": "src/features/reading/ReadingView.tsx:243d0d5e8722d8e305151508"
   },
   {
     "text": "item.run()",
-    "id": "src/features/reading/ResultCard.tsx:1ab6afa6c934e745a90ba23f"
+    "id": "src/features/reading/ResultCard.tsx:d752574e26551d6ab3c89f0b"
   },
   {
     "text": "window.agentrix.writeTerminal(terminalId, '\\x15')",
-    "id": "src/features/reading/useNativePictures.ts:8f6ea5ae288e0a5bb3af7e8b"
+    "id": "src/features/reading/useNativePictures.ts:7dadf1631b36c230bf1f58b8"
   },
   {
     "text": "window.agentrix.writeTerminal(terminalId, agent === 'claude' && isWindows ? '\\x1bv' : '\\x16')",
-    "id": "src/features/reading/useNativePictures.ts:b1b1086b57380feae8d92ca0"
+    "id": "src/features/reading/useNativePictures.ts:f8c363f5158cf8248f0cf099"
   },
   {
     "text": "window.agentrix.writeTerminal(terminalId, removal.keys)",
-    "id": "src/features/reading/useNativePictures.ts:2de08f7f77aca22b61941bdb"
+    "id": "src/features/reading/useNativePictures.ts:c13df2d9c1978783d3bcebf8"
   },
   {
     "text": "run(() => bridge.setSettings(patch), () => setSettings(current => current && { ...current, ...patch }))",
-    "id": "src/features/settings/AgentRuntimeSettings.tsx:e65da4328cc0c307e9054894"
+    "id": "src/features/settings/AgentRuntimeSettings.tsx:19a2625c94dea6e086bdf25c"
   },
   {
     "text": "run(() => bridge.keySave(secret), () => void refreshKey())",
-    "id": "src/features/settings/AgentRuntimeSettings.tsx:7753d863481851c4c00cb4b6"
+    "id": "src/features/settings/AgentRuntimeSettings.tsx:c7ee23fffa3935ac065c5170"
   },
   {
     "text": "run(() => bridge.keyClear(), () => void refreshKey())",
-    "id": "src/features/settings/AgentRuntimeSettings.tsx:a1235e2d3eaf2d0170f6fcb3"
+    "id": "src/features/settings/AgentRuntimeSettings.tsx:5a1ee8ae53a834a55f100eb6"
   },
   {
     "text": "launch(id, what)",
-    "id": "src/features/terminal/AgentLauncher.tsx:c486b34350023cfa4708a438"
+    "id": "src/features/terminal/AgentLauncher.tsx:bd8744828cefec3360d570db"
   },
   {
     "text": "entry.terminal.write(data, () => {\r\n    if (entries.get(id) !== entry) return;\r\n    entry.pending--;\r\n    if (serial === entry.writes && approval && approval.sessionId === entry.sessionId) entry.approval = { ...approval };\r\n    snapshot(entry);\r\n  })",
-    "id": "src/features/terminal/terminal-screen.ts:a60ffc84caa135b661dc9fff"
+    "id": "src/features/terminal/terminal-screen.ts:d655f6d1543ed1f1247c9499"
   },
   {
     "text": "terminal.input(terminalColorReply(slot), false)",
-    "id": "src/features/terminal/terminal-styling.ts:9082547aa266111787f57cad"
+    "id": "src/features/terminal/terminal-styling.ts:a4db80edeb5215f0bfefdf8a"
   },
   {
     "text": "window.agentrix.writeTerminal(id, data)",
-    "id": "src/features/terminal/TerminalPane.tsx:95ca407210b026b3cbdb33e1"
+    "id": "src/features/terminal/TerminalPane.tsx:263a433100e6fd6dfa6b7029"
   },
   {
     "text": "terminal.input(packet.text.replace(/\\r\\n?|\\n/g, packet.lineBreak), true)",
-    "id": "src/features/terminal/TerminalPane.tsx:b0534f0944d1382e6740e738"
+    "id": "src/features/terminal/TerminalPane.tsx:599103a518f98d8d2bb38b11"
   },
   {
     "text": "window.agentrix.writeTerminal(id, remote || !isWindows ? '\\x1b[13;2u' : '\\x1b[13;28;13;1;16;1_\\x1b[13;28;13;0;16;1_')",
-    "id": "src/features/terminal/TerminalPane.tsx:7cfb385449d1db7a88ad448a"
+    "id": "src/features/terminal/TerminalPane.tsx:082928cc8af66dd9ef98be20"
   },
   {
     "text": "run()",
-    "id": "src/features/titlebar/AppMenu.tsx:5622655acfc3ddb1a4ba4b05"
-  },
-  {
-    "text": "/(\\d*\\.?\\d+)px/.exec(rule.style.getPropertyValue('outline'))",
-    "id": "src/features/titlebar/native-style.tsx:43c9ea862b040df214d755e2"
+    "id": "src/features/titlebar/AppMenu.tsx:5c24355bd061257885bd20db"
   },
   {
     "text": "window.agentrix.writeTerminal(current.id, '\\r')",
-    "id": "src/features/voice/voice-input.ts:8a5959bc3555443b273b7108"
-  },
-  {
-    "text": "/^\\{(\\w+)\\}$/.exec(part)",
-    "id": "src/shared/i18n.ts:0b8ff0dbe6966d18b5fa3304"
-  },
-  {
-    "text": "regex.exec(text)",
-    "id": "src/shared/i18n.ts:bf7b66c7d0bf9a47b9a51cbc"
-  },
-  {
-    "text": "productAtStart.exec(source)",
-    "id": "src/shared/markdown-emphasis.ts:5b7b3d59dc904763403bc15b"
-  },
-  {
-    "text": "/^\\*+/.exec(source)",
-    "id": "src/shared/markdown-emphasis.ts:c15f82b9dd73b7a4a8790c21"
-  },
-  {
-    "text": "/^claude-(opus|sonnet|haiku|fable)-(\\d+)(?:-(\\d{1,2}))?(?:-\\d{8})?(?:\\[\\w+\\])?$/i.exec(model)",
-    "id": "src/shared/model-name.ts:8fe88261b207f21cdda2369b"
+    "id": "src/features/voice/voice-input.ts:bab99e42e605b391e4ea93fb"
   }
 ]

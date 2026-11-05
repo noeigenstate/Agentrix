@@ -27,8 +27,8 @@ function createClaudeSession(spec, emit, dependencies) {
   let changingOptions = null;
   let shellAbort = null, defaultModelReset = false;
   const shellControllers = new Set();
-  async function stopShells() {
-    const jobs = [...shellControllers];
+  async function stopShells(foregroundOnly = false) {
+    const jobs = [...shellControllers].filter(job => !foregroundOnly || !job.returned);
     for (const job of jobs) job.abort.abort();
     await Promise.allSettled(jobs.map(async job => { try { await job.task; } finally { await job.closed; } }));
     for (const job of jobs) shellControllers.delete(job);
@@ -165,7 +165,7 @@ function createClaudeSession(spec, emit, dependencies) {
           }
           reserve(run); run.busy = true; begin('automatic', message.user_message_uuid || null);
         }
-        normalize(message, { live: true });
+        const context = normalize(message, { live: true });
         if (message.type !== 'result' || message.parent_tool_use_id) continue;
         const resultId = message.uuid || message.result_index;
         if (resultId !== undefined && results.has(resultId)) continue;
@@ -196,7 +196,7 @@ function createClaudeSession(spec, emit, dependencies) {
         requests.cancel();
         const budgetBlocked = message.terminal_reason === 'budget_exhausted' || message.subtype === 'error_max_budget_usd';
         const interrupted = run.interrupted;
-        const outcome = turnResult(message, { interrupted, costUsdMicros: entry.deltaUsdMicros });
+        const outcome = turnResult(message, { interrupted, costUsdMicros: entry.deltaUsdMicros, compacted: context?.compacted });
         if (budgetBlocked) outcome.error = outcome.message = budgetNotice();
         publish('turn.completed', outcome);
         run.turnInputs = []; run.executed = false; run.synthetic = false; run.quotaRejected = false;
@@ -483,20 +483,34 @@ function createClaudeSession(spec, emit, dependencies) {
     shellAbort = new AbortController();
     const job = { abort: shellAbort }; shellControllers.add(job);
     const itemId = `shell:${clientMessageId}`, abort = shellAbort;
-    const card = (status, output = '', exitCode = null) => publish('item.upsert', { kind: 'command', status,
-      content: { command, cwd: spec.cwd, output, exitCode } }, { itemId });
+    let savedOutput = '', savedExitCode = null;
+    const card = (status, output = savedOutput, exitCode = savedExitCode, extra = {}) => {
+      savedOutput = output; savedExitCode = exitCode;
+      publish('item.upsert', { kind: 'command', status, content: { command, cwd: spec.cwd, output, exitCode, ...extra } }, { itemId });
+    };
+    const notSent = '命令已执行，但输出未发送给模型。请检查 API 和预算后重试。';
+    const rejected = error => {
+      card(savedExitCode === 0 ? 'completed' : 'failed', savedOutput, savedExitCode, { modelDelivery: 'rejected' });
+      publish('error', { code: 'shell_context_rejected', message: notSent, retryable: false, willRetry: false, stage: 'input' });
+      const detail = typeof error?.message === 'string' ? clean(error.message) : '';
+      return new Error(notSent + (detail && detail !== notSent ? '\n' + detail : ''));
+    };
     card('running'); setState('running');
     const task = runShell({ cwd: spec.cwd, env: spec.env || process.env, command, signal: abort.signal,
       output: ({ stdout, stderr }) => card('running', stdout + stderr) }).then(async result => {
       job.closed = result.closed;
+      job.returned = true;
       void result.closed.then(() => shellControllers.delete(job));
       card(result.exitCode === 0 ? 'completed' : result.exitCode === null ? 'interrupted' : 'failed', result.stdout + result.stderr, result.exitCode);
-      if (!abort.signal.aborted && result.exitCode !== null) await send({ clientMessageId, text: '!' + command }, [
+      if (!abort.signal.aborted && result.exitCode !== null) {
+        const delivery = await send({ clientMessageId, text: '!' + command }, [
         { type: 'text', text: `<bash-input>${command}</bash-input>\n` },
         { type: 'text', text: `<bash-stdout>${result.stdout || (!result.stderr ? '(Bash completed with no output)' : '')}</bash-stdout><bash-stderr>${result.stderr}</bash-stderr>` },
-      ]);
+        ]);
+        if (delivery.status === 'rejected') throw new Error(notSent);
+      }
       return { exitCode: result.exitCode };
-    }).catch(error => { card('failed'); throw error; }).finally(() => {
+    }).catch(error => { if (job.returned) throw rejected(error); card('failed'); throw error; }).finally(() => {
       if (shellAbort === abort) shellAbort = null;
       if (!closed && !stopping && !active?.busy) setState('idle');
     });
@@ -545,7 +559,7 @@ function createClaudeSession(spec, emit, dependencies) {
       : { kind: active.initialized ? 'api' : 'unknown', source: active.initialized ? 'claude-sdk init: ANTHROPIC_API_KEY' : null,
         observedAt: active.initialized ? apiObservedAt : null },
     async interrupt() {
-      await stopShells();
+      await stopShells(true);
       requests.cancel();
       if (active && !active.closing) { active.interrupted = true; await active.query.interrupt?.(); }
     },

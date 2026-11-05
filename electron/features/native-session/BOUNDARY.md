@@ -14,6 +14,7 @@ Owns provider-neutral session routing, validated renderer IPC, settings and work
 - `validEvent` (`electron/features/native-session/validate.cjs`) — bounded public event validation
 - `subscriptionLimits` (`electron/features/native-session/usage.cjs`) — the subscription limits main already holds as a limits payload, with nextPath for what a new session takes
 - `createProjectAccounts` (`electron/features/native-session/project-accounts.cjs`) — focused pane account reads, cached by the existing account service; no session or background project launch
+- `history` (`electron/features/native-session/router.cjs`) — coalesced read-only folder history; forgetting a terminal or closing the router aborts its pending lookup, including an SSH connection still being established.
 - `native:commands` (`electron/features/native-session/ipc.cjs`) — sender-guarded `Result<AgentCommand[]>` bound to terminalId and runtimeSessionId; the router checks the host binding before and after asynchronous provider reads
 
 ## May import

@@ -1082,30 +1082,19 @@ test('restore preserves plan/readiness/input safeguards and the recorded newest-
   assert.deepEqual(writes, ['claude --continue\r']);
 });
 
-test('local and remote Codex restoration uses app-server and continues only an interrupted turn', async t => {
-  const id = '00000000-0000-4000-8000-000000000002';
-  for (const kind of ['local', 'ssh']) for (const state of ['complete', 'interrupted']) {
+test('local and remote Codex restoreTerminal routes continuation without a shell', async t => {
+  for (const kind of ['local', 'ssh']) for (const interrupted of [true, false]) {
     const h = await harness(t, kind), starts = [], sent = [];
-    h.store.setRestore(h.s.terminalId, { agent: 'codex', threadId: id, interrupted: state === 'interrupted' });
+    h.store.setRestore(h.s.terminalId, { agent: 'codex', threadId: '00000000-0000-4000-8000-000000000002', codex: true, interrupted });
     h.context.nativeSessions = { start: async (...args) => { starts.push(args); return { runtimeSessionId: 'restored' }; },
-      send: async (...args) => { sent.push(args); h.store.expectCompletion(h.project.id); return { status: 'delivered' }; } };
-    Object.assign(h.s, { ready: true, codexActive: false, codexAvailable: true,
-      gate: { input: () => assert.fail('no Codex terminal write'), afterPrompt: () => assert.fail('no Codex terminal write') },
-      terminal: { request: () => assert.fail('no legacy resume-info or local history lookup') } });
-    h.context.restorePlans.set(h.s.terminalId, { codex: true });
-    await h.context.resumeAfterPrompt(h.project, h.s);
+      async continueInterrupted(id, runtime, beforeSend) { beforeSend(); sent.push([id, runtime]); h.store.expectCompletion(h.project.id); } };
+    h.context.startupErrors = new Map();
+    await h.context.restoreTerminal(h.s.terminalId);
     assert.equal(starts.length, 1); assert.equal(starts[0][0], h.s.terminalId);
     assert.equal(starts[0][1].agent, 'codex'); assert.equal(starts[0][1].resume, true);
-    assert.equal(h.project.completionArmed, state === 'interrupted');
-    assert.equal(sent.length, state === 'interrupted' ? 1 : 0);
-    if (sent.length) assert.equal(sent[0][2].text, '继续');
+    assert.equal(h.project.completionArmed, interrupted); assert.equal(sent.length, interrupted ? 1 : 0);
+    if (interrupted) assert.notEqual(h.store.findTerminal(h.s.terminalId).record.restore.interrupted, true);
   }
-  const h = await harness(t, 'ssh');
-  h.context.nativeSessions = { start: () => assert.fail('dirty shell cancels restore') };
-  Object.assign(h.s, { ready: true, codexActive: false, inputDirty: true });
-  h.context.restorePlans.set(h.s.terminalId, { codex: true });
-  await h.context.resumeAfterPrompt(h.project, h.s);
-  assert.equal(h.project.completionArmed, false);
 });
 
 test('the local-only Claude session follower rejects SSH before accessing any local transcript', async t => {
