@@ -80,7 +80,7 @@ test('R8 an unconfirmed background stop cancels the staged target and keeps the 
   assert.deepEqual(stopped, ['owned-task']); assert.deepEqual(f.paths, ['terminal']); assert.equal(source.closed, true);
 });
 const until = async check => { for (let i = 0; i < 200; i++) { if (check()) return; await tick(); } throw new Error('switch did not settle'); };
-for (const agent of ['claude', 'codex']) test(`router restores ${agent} both ways using one provider id, carries receipts and never submits history`, async t => {
+for (const agent of ['claude']) test(`router restores ${agent} both ways using one provider id, carries receipts and never submits history`, async t => {
   const f = fixture(t, agent); await f.router.start('t', { agent });
   f.created[0].stream.publish('input.receipt', { clientMessageId: 'executed', status: 'consumed' });
   f.created[0].stream.publish('input.receipt', { clientMessageId: 'uncertain', status: 'unknown' });
@@ -124,11 +124,11 @@ test('a late native disconnect before the first input automatically restores its
   assert.equal(f.events.some(event => event.type === 'turn.started'), false);
 });
 test('a terminal dying before input restores the previous native path and keeps the acknowledged draft', async t => {
-  const f = fixture(t, 'codex'); await f.router.start('t', { agent: 'codex' });
-  f.config({ codexView: 'terminal' }); await tick(); f.handoff(); await until(() => f.router.switchState('t').phase === 'stable');
+  const f = fixture(t); await f.router.start('t', { agent: 'claude' });
+  f.config({ claudePath: 'terminal-only' }); await tick(); f.handoff(); await until(() => f.router.switchState('t').phase === 'stable');
   assert.equal(f.router.failed('t', f.router.snapshot('t').runtimeSessionId), true); f.handoff();
   await until(() => f.router.switchState('t').phase === 'stable');
-  assert.equal(f.router.switchState('t').current, 'native'); assert.equal(f.created.at(-1).spec.providerSessionId, 'same-conversation');
+  assert.equal(f.router.switchState('t').current, 'api'); assert.equal(f.created.at(-1).spec.providerSessionId, 'same-conversation');
   assert.deepEqual(f.router.snapshot('t').handoff.draft, empty);
 });
 test('once new input may have executed, a disconnect cannot trigger an automatic replay or transport rollback', async t => {

@@ -135,7 +135,11 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         let stage = 'resolve_executable';
         try {
           if (!path.isAbsolute(spec.cwd || '')) throw new Error('invalid_cwd');
-          const env = workerEnvironment(spec.env || process.env), executable = await resolveExecutable(env);
+          const source = spec.env || process.env, env = workerEnvironment(source);
+          // The GUI planner's helpers must reach their authenticated project control channel.
+          // Dispatched workers still strip the bootstrap and cannot inherit the planner capability.
+          if (spec.owner === 'gui' && typeof source.AGENTRIX_BOOTSTRAP === 'string') env.AGENTRIX_BOOTSTRAP = source.AGENTRIX_BOOTSTRAP;
+          const executable = await resolveExecutable(env);
           if (!executable) throw new Error('codex_cli_required');
           stage = 'spawn';
           child = spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: spec.cwd, env, windowsHide: true,

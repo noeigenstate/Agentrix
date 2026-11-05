@@ -35,13 +35,13 @@ export async function switchContracts(output, stages) {
   const home = await fs.mkdtemp(path.join(temporaryRoot, 'agx-switch-'));
   const files = (await fs.readdir(path.join(root, 'tests'))).filter(name => /^native-switch-.*\.test\.cjs$/.test(name)
     || ['native-worker-finish.test.cjs', 'claude-sdk-switch.test.cjs', 'codex-app-server-sandbox.test.cjs',
-      'native-session-resume.test.cjs', 'native-session-ui.test.cjs', 'prompt-source.test.cjs',
+      'native-session-ui.test.cjs', 'prompt-source.test.cjs', 'codex-only-main.test.cjs', 'native-codex-path.test.cjs',
       'agent-calls-liveness.test.cjs', 'usage-refresh.test.cjs', 'claude-sdk-rereview2.test.cjs', 'claude-sdk-review3.test.cjs', 'claude-sdk-review4.test.cjs',
       'native-project-accounts.test.cjs', 'native-router-usage.test.cjs', 'native-worker-claude.test.cjs',
       'native-worker-codex-finish.test.cjs', 'dispatch-interventions.test.cjs', 'dispatch-events.test.cjs',
       'native-commands.test.cjs', 'native-commands-codex.test.cjs', 'claude-sdk-provenance.test.cjs', 'native-api-quota.test.cjs',
       'codex-auto-reset.test.cjs', 'codex-auto-reset-runtime.test.cjs', 'codex-auto-reset-main.test.cjs'].includes(name));
-  await stages.run('switch contracts: correlated resume, late rollback, versioned drafts, helper death and no notifications', async () => {
+  await stages.run('switch contracts: Claude handoffs, Codex app-server only, drafts, rollback and no duplicate notifications', async () => {
     const child = spawn(process.execPath, ['--test', ...files.map(name => path.join(root, 'tests', name))], {
       cwd: root, windowsHide: true, env: { ...desktopEnvironment(home), TEMP: home, TMP: home }, stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -146,7 +146,7 @@ async function runtimeSmoke(output, stages) {
     const fakeKey = 'sk-ant-api03-packaged-offline-only-not-a-real-key';
     await stage('save isolated fake key and settings', async () => {
       assert.equal((await page.evaluate(key => window.agentrix.nativeSession.keySave(key), fakeKey)).ok, true);
-      assert.equal((await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-only', codexView: 'native', monthlyBudgetUsd: 10 }))).ok, true);
+      assert.equal((await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-only', monthlyBudgetUsd: 10 }))).ok, true);
     });
     await stage('stub model-list HTTP in this isolated application', () => app.evaluate(() => {
       const https = process.getBuiltinModule('https');

@@ -2,7 +2,7 @@
 
 The main-process side of a project terminal: its IPC (start, attach, write, paste, resize, close), the input
 classification that tells a typed prompt from keys and protocol replies, the shell environment and start-up files, link
-resolution, title tracking, and the native (structured) Codex and Claude sessions with their approval and question channels.
+resolution, title tracking, and the compatibility proxy used by standalone terminal-protocol probes. Local owner Codex sessions use app-server and are never launched as a TUI here.
 
 ## Owns
 - `electron/features/terminal/**`
@@ -13,7 +13,7 @@ resolution, title tracking, and the native (structured) Codex and Claude session
 - `registerTerminalIpc` (`electron/features/terminal/ipc.cjs`) — the terminal:* IPC handlers main.cjs registers, with every session dependency injected; returns the same tracked write path for main's admitted quota fallback (never clears an existing input)
 - `registerNativeIpc` (`electron/features/terminal/native-ipc.cjs`) — the native approval, question-answer and managed-prompt IPC handlers
 - `ApprovalGuard` (`electron/features/terminal/approval-guard.cjs`) — a session's observation epochs; the file also exports approvalStamp
-- `createNativeSession` (`electron/features/terminal/native-session.cjs`) — a native Codex or Claude SDK session; the file also exports resolveCli for the probe script
+- `createNativeSession` (`electron/features/terminal/native-session.cjs`) — standalone Codex terminal-protocol probe proxy, outside the local owner launcher; the file also exports resolveCli for the probe script
 - `createTerminalEnvironment` (`electron/terminal-env.cjs`) — the environment a PTY starts with
 - `SubmissionTracker` (`electron/terminal-input.cjs`) — which writes submit a prompt; the file also exports isTerminalResponse, isLocalCommand and acceptShellEvent
 - `InputGate` (`electron/terminal-input.cjs`) — holds keys while PowerShell asks for the cursor; the file also exports PromptMarkers

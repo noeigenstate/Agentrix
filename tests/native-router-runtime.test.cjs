@@ -19,7 +19,7 @@ for (const setting of ['api-then-terminal', 'api-only', 'terminal-only']) test(`
   }
 });
 test('Codex native is default and terminal remains an explicit choice', () => {
-  assert.equal(choosePath({ agent: 'codex' }).path, 'native'); assert.equal(choosePath({ agent: 'codex', codexView: 'terminal' }).path, 'terminal');
+  assert.equal(choosePath({ agent: 'codex' }).path, 'native'); assert.equal(choosePath({ agent: 'codex', codexView: 'terminal' }).path, 'native');
 });
 function fixture(config = {}) {
   const events = [], terminals = [], created = [], settings = { get: () => ({ claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: null, ...config }) };
@@ -41,7 +41,7 @@ test('an owner Claude quota refusal under API-only cannot move a running Codex o
   claude.apiState = () => ({ status: 'credits_exhausted' });
   await router.start('t', { agent: 'codex' }); router.reconcile();
   await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve));
-  assert.equal(router.switchState('t').current, 'native'); assert.equal(router.switchState('t').target, 'native');
+  assert.equal(router.switchState('t'), null);
 });
 test('native router owns session identity and rejects old runtime answers', async () => {
   const { router, created } = fixture(); const first = await router.start('t', { agent: 'codex' });

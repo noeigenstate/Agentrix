@@ -26,8 +26,8 @@ for (const [agent, config, status, cli, expected] of [
   ['claude', {}, 'credits_exhausted', 'ok', ['terminal', 'credits_exhausted']],
   ['claude', {}, 'invalid_key', 'ok', ['terminal', 'invalid_key']],
   ['codex', {}, null, 'ok', ['native', null]],
-  ['codex', {}, null, 'missing', ['terminal', 'cli_missing']],
-  ['codex', { codexView: 'terminal' }, null, 'missing', ['terminal', 'set_terminal']],
+  ['codex', {}, null, 'missing', [null, 'cli_missing']],
+  ['codex', { codexView: 'terminal' }, null, 'missing', [null, 'cli_missing']],
 ]) test(`next path: ${agent} ${JSON.stringify(config)} ${status} CLI ${cli}`, () => {
   assert.deepEqual(nextPath(agent, config, { status }, { status: cli }), { path: expected[0], reason: expected[1] });
 });
@@ -148,9 +148,10 @@ test('real main assembly reports terminal-only Claude subscription usage without
   cli = 'missing'; assert.equal((await usage()).agents.claude.next.reason, 'cli_missing');
   codexInstalled = false; assert.equal((await usage()).agents.codex.next.reason, 'cli_missing');
   cli = 'ok';
-  handlers.get('native:settings-set')({ claudePath: 'terminal-only', codexView: 'terminal' });
+  handlers.get('native:settings-set')({ claudePath: 'terminal-only' });
   value = await usage();
-  assert.equal(value.agents.claude.next.reason, 'set_terminal'); assert.equal(value.agents.codex.next.reason, 'set_terminal');
+  assert.equal(value.agents.claude.next.reason, 'set_terminal'); assert.equal(value.agents.codex.next.path, null);
+  assert.equal(value.agents.codex.next.reason, 'cli_missing');
   claudeAccounts.account.limits[0].percent = 30;
   assert.equal((await usage()).agents.claude.limits.limitsById.subscription.primary.usedPercent, 30, 'reads use the latest held observation');
   claudeAccounts.account = null; codexAccounts.entries.clear();

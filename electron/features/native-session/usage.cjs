@@ -2,8 +2,7 @@ const { choosePath } = require('./routing.cjs');
 
 function nextPath(agent, config, apiState, cli) {
   if (agent === 'codex') {
-    if (config.codexView === 'terminal') return { path: 'terminal', reason: 'set_terminal' };
-    return cli?.status === 'missing' ? { path: 'terminal', reason: 'cli_missing' } : choosePath({ agent, ...config });
+    return ['missing', 'too_old'].includes(cli?.status) ? { path: null, reason: cli.status === 'missing' ? 'cli_missing' : 'cli_too_old' } : choosePath({ agent });
   }
   if (config.claudePath === 'terminal-only') return { path: 'terminal', reason: 'set_terminal' };
   const selection = choosePath({ agent, ...config, apiState });

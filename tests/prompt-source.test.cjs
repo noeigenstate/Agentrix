@@ -34,7 +34,7 @@ function activityHarness(mode = 'codex') {
   vm.runInContext(main.slice(start, main.indexOf('\n  sessions.set(id, s);', start)), context);
   vm.runInContext(main.slice(main.indexOf('function publishCliState('), main.indexOf('function onEvent(')), context);
   vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('// The agent chosen on a new project')), context);
-  vm.runInContext(main.slice(main.indexOf('function nativeSessionEvent('), main.indexOf('function startTerminal(')), context);
+  vm.runInContext(main.slice(main.indexOf('function nativeSpec('), main.indexOf('function startTerminal(')), context);
   const listeners = {};
   registerTerminalIpc({ handle() {}, listen: (name, fn) => { listeners[name] = fn; }, getSession: id => sessions.get(id), getProjectById: () => project,
     acknowledgeProject: id => store.acknowledge(id), expectCompletion: id => store.expectCompletion(id), scheduleState() {}, pollAfterSubmission() {},
@@ -364,11 +364,10 @@ test('main keeps the short lastTask and long card task across bare follow-ups in
 
 test('native input and Claude hooks retain explicit machine provenance before creating tasks or arming completion', () => {
   const reset = require('./fixtures/claude-usage-reset.json').records[0].content;
-  for (const mode of ['claude', 'codex-native']) {
+  for (const mode of ['claude']) {
     const h = activityHarness(mode), { s, project, context } = h;
     for (const [text, flags] of [[reset, {}], ['Neutral automatic continuation.', { isMeta: true }], ['Neutral automatic continuation.', { origin: { kind: 'auto-continuation' }, promptSource: 'system' }]]) {
-      if (mode === 'codex-native') context.nativeSessionEvent(s.terminalId, s.sessionId, { method: 'item/completed', params: { item: { type: 'userMessage', id: `machine-${text.length}`, content: [{ type: 'text', text }], ...flags } } });
-      else context.claudeActivity(project, s, { state: 'working', sessionId: 'session', eventId: `session:machine-${text.length}`, prompt: text, ...flags });
+      context.claudeActivity(project, s, { state: 'working', sessionId: 'session', eventId: `session:machine-${text.length}`, prompt: text, ...flags });
     }
     assert.deepEqual(s.conversation.list, []);
     assert.deepEqual(s.promptQueue.list(), []);

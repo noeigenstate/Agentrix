@@ -32,3 +32,18 @@ test('N5: a read-only meeting resumes writable for dispatch execution; owner and
   assert.equal(owner.threadResponse.sandbox.type, 'readOnly', 'owner resume does not override its stored read-only policy');
   await owner.close();
 });
+
+test('a GUI Codex planner retains only its bootstrap for authenticated dispatch; workers strip it', async t => {
+  const lifetime = resources(t), received = [];
+  const factory = createCodexRuntime({ resolveExecutable: async () => 'synthetic-only', spawnProcess: (_file, _args, options) => {
+    received.push(options.env);
+    return lifetime.child(spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], options));
+  } });
+  for (const owner of ['gui', 'dispatch']) {
+    const runtime = factory.create({ owner, projectId: 'p', terminalId: owner, cwd: os.tmpdir(), env: { PATH: '',
+      AGENTRIX_BOOTSTRAP: '/synthetic/project-bootstrap', AGENTRIX_SESSION_KEY: 'synthetic-private', AGENTRIX_CONTROL: 'synthetic-private' } }, () => {});
+    lifetime.defer('close runtime', () => runtime.close()); await runtime.start(); await runtime.close();
+    assert.equal(received.at(-1).AGENTRIX_BOOTSTRAP, owner === 'gui' ? '/synthetic/project-bootstrap' : undefined);
+    assert.equal(received.at(-1).AGENTRIX_SESSION_KEY, undefined); assert.equal(received.at(-1).AGENTRIX_CONTROL, undefined);
+  }
+});

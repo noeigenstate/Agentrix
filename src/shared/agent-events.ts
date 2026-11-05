@@ -61,7 +61,7 @@ export type AgentEvent = { [K in AgentEventType]: {
   runId: string | null; turnId: string | null; itemId: string | null;
   receivedAtMs: number; occurredAtMs: number | null; replay: boolean; type: K; payload: AgentEventPayloads[K];
 } }[AgentEventType];
-export type NativeSettings = { claudePath: 'api-then-terminal' | 'api-only' | 'terminal-only'; codexView: 'native' | 'terminal'; monthlyBudgetUsd: number | null; codexAutoReset: boolean };
+export type NativeSettings = { claudePath: 'api-then-terminal' | 'api-only' | 'terminal-only'; monthlyBudgetUsd: number | null; codexAutoReset: boolean };
 export type NativeAnswer = { decision: 'allow' | 'deny' } | { answers: Record<string, string | string[]> }
   | { switch: { changeId: number; requestId: string; action: 'wait' | 'now' } } | { handoff: NativeHandoff };
 export type NativeSnapshot = { runtimeSessionId: string; lastSequence: number; events: AgentEvent[]; state: SessionState; switchState?: SwitchState; handoff?: NativeHandoff };

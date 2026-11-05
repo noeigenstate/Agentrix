@@ -145,7 +145,7 @@ for (const file of ['settings.json', 'usage.json', 'policy-audit.json']) test(`N
   fs.writeFileSync(path.join(dir, file), '{broken');
   const factory = createClaudeRuntime({ directory: dir, safeStorage, loadSdk: async () => ({}), resolveExecutable: async () => null });
   const settings = createSettings(path.join(dir, 'settings.json'));
-  assert.deepEqual(settings.get(), { ...(file === 'settings.json' ? { claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: null } : original), codexAutoReset: false });
+  assert.deepEqual(settings.get(), { ...(file === 'settings.json' ? { claudePath: 'api-then-terminal', monthlyBudgetUsd: null } : { claudePath: original.claudePath, monthlyBudgetUsd: original.monthlyBudgetUsd }), codexAutoReset: false });
   if (file !== 'settings.json') assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'))), original);
   assert.ok(fs.readdirSync(dir).some(name => name.startsWith(file + '.') && name.endsWith('.corrupt')));
   const warnings = recoveryWarnings(dir, true);

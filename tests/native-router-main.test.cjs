@@ -82,7 +82,8 @@ test('M5 failed native initialization keeps terminal starts and safe settings av
   vm.runInContext(source.slice(source.indexOf('function registerUnavailableNative('), source.indexOf('function registerIpc(')), context);
   context.registerUnavailableNative((name, handler) => handlers.set(name, handler));
   assert.equal(handlers.get('native:settings-get')().claudePath, 'terminal-only');
-  assert.equal((await handlers.get('native:usage')()).agents.codex.path, 'terminal');
+  assert.equal((await handlers.get('native:usage')()).agents.codex.path, null);
+  assert.throws(() => handlers.get('native:start')('t', { agent: 'codex' }), /Codex app-server/);
   assert.equal(handlers.get('native:start')('t', { agent: 'claude', resume: true }).runtimeSessionId, 'fallback-runtime');
   assert.equal(plans.get('t').threadId, '11111111-1111-4111-8111-111111111111');
   assert.equal(starts.length, 1);

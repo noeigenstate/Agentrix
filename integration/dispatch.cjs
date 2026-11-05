@@ -938,13 +938,12 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
           try { if (effective.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
           catch (error) {
             await activeRuntime.close(); activeRuntime = null; controlClient.close(); controlClient = null;
-            transportFallback = true;
             const stage = ['resolve_executable', 'spawn', 'initialize', 'capability_probe', 'thread_start', 'thread_resume'].includes(error.stage) ? error.stage : 'startup';
             const category = error.category && /^(?:rpc_-\d+|request_failed|unexpected_success)$/.test(error.category) ? error.category
               : Number.isInteger(error.code) ? `rpc_${error.code}`
               : ['ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'codex_cli_required', 'rpc_timeout', 'process_failed', 'process_exited', 'disconnected',
-                'frame_limit', 'write_failed', 'invalid_response', 'invalid_json', 'invalid_frame', 'invalid_payload', 'truncated_frame', 'unsupported_codex_capabilities'].includes(error.code || error.message) ? error.code || error.message : 'runtime_failed';
-            signal(`transport ${id} codex-exec fallback: native runtime unavailable before input (${stage}/${category})`); continue;
+                'frame_limit', 'write_failed', 'invalid_response', 'invalid_json', 'invalid_frame', 'invalid_payload', 'truncated_frame', 'unsupported_codex_capabilities', 'unsupported_codex_version'].includes(error.code || error.message) ? error.code || error.message : 'runtime_failed';
+            throw new Error(`Codex app-server startup failed (${stage}/${category})`);
           }
           child = { pid: activeRuntime.pid, exitCode: null };
           pollTimer = setInterval(() => { void rollout.read(); }, POLL_INTERVAL);
@@ -1011,6 +1010,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         }
         break;
       }
+      if (options.agent === 'codex' && bootstrap?.controlAddress) throw new Error(`Codex app-server control unavailable (${controlFailure || 'control/disconnected'})`);
       if (!resumeSession && !transportFallback) signal(`transport ${id} ${options.agent === 'codex' ? 'codex-exec' : 'claude-cli'} fallback: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
       const command = resolveExecutable(options.agent, commandOf(effective), env);
       if (options.agent === 'codex' && effective.resume && !resumeSession) await rollout.prepare(effective.resume);

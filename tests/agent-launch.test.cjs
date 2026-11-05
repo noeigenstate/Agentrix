@@ -60,13 +60,14 @@ test('public state reserves the reading surface during agent startup and release
 test('agent:launch refuses native Claude without starting or replacing a session, and keeps native Codex', async () => {
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'), handlers = {}, starts = [], deleted = [];
   const context = vm.createContext({ handle: (name, run) => handlers[name] = run, findProject: () => ({ kind: 'local' }), sessions: new Map(),
-    launchPlans: { delete: id => deleted.push(id) }, restorePlans: { delete: id => deleted.push(id) }, startTerminal: (...args) => starts.push(args), broadcast() {} });
+    launchPlans: { delete: id => deleted.push(id) }, restorePlans: { delete: id => deleted.push(id) }, startTerminal: () => assert.fail('no Codex TUI'),
+    nativeSessions: { start: async (...args) => starts.push(args) }, broadcast() {} });
   const start = main.indexOf("  handle('agent:launch'");
   vm.runInContext(main.slice(start, main.indexOf('  registerNativeIpc(', start)), context);
   await assert.rejects(handlers['agent:launch']('fixture', 'claude', 'native'), /only available for Codex/);
   assert.deepEqual(starts, []); assert.deepEqual(deleted, []);
   assert.equal(await handlers['agent:launch']('fixture', 'codex', 'native'), true);
-  assert.deepEqual(starts, [['fixture', 'codex-native']]);
+  assert.equal(starts.length, 1); assert.equal(starts[0][0], 'fixture'); assert.equal(starts[0][1].agent, 'codex');
 });
 
 test('the native launcher offers Codex alone and has no managed Claude action', t => {

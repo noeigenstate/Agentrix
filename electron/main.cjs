@@ -12,7 +12,6 @@ const { createCloseGuards, restoreTerminals } = require('./app/terminal-lifecycl
 const { registerClipboardIpc } = require('./shared/clipboard-ipc.cjs');
 const { registerTerminalIpc } = require('./features/terminal/ipc.cjs');
 const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-guard.cjs');
-const { createNativeSession } = require('./features/terminal/native-session.cjs');
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
 const { createNativeSessions, createNativeUsage } = require('./features/native-session/index.cjs');
 const { subscriptionLimits } = require('./features/native-session/usage.cjs');
@@ -37,7 +36,6 @@ const { registerAgentsIpc } = require('./features/agents/ipc.cjs');
 const { createInterventions } = require('./features/agents/interventions.cjs');
 const { registerSkillsIpc } = require('./features/skills/ipc.cjs');
 const { SkillsStore } = require('./features/skills/store.cjs');
-const { nativeSkillActions } = require('./features/skills/native-actions.cjs');
 const { writeFileAtomic } = require('./atomic-write.cjs');
 const { folderHistory, launchCommand } = require('./features/agents/launch.cjs');
 const { READING_NOTE } = require('./features/agents/reading-note.cjs');
@@ -94,7 +92,7 @@ const { getSSHInfo } = require('./ssh-config.cjs');
 const { SSHAuthServer } = require('./ssh-auth.cjs');
 const { RemoteConnection } = require('./remote-connection.cjs');
 const { watchRemoteClaudeAccount } = require('./features/ssh/claude-account.cjs');
-const { recentSession, resumeCommand, claudeResumeCommand } = require('./session-restore.cjs');
+const { resumeCommand, claudeResumeCommand } = require('./session-restore.cjs');
 const { CodexActivityReader, monitorActivity } = require('./codex-activity.cjs');
 const { TerminalTitleTracker, wholeThread } = require('./terminal-title.cjs');
 const { FileOperations } = require('./file-operations.cjs');
@@ -1151,8 +1149,13 @@ async function resumeAfterPrompt(project, session) {
       broadcast();
       return;
     }
+    if (project.kind !== 'ssh') {
+      if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
+      await nativeSessions.start(session.terminalId, { agent: 'codex', resume: !!restore?.threadId });
+      return;
+    }
     if (!session.codexAvailable) return;
-    const info = project.kind === 'ssh' ? await session.terminal.request('resume-info', { threadId: restore?.threadId }) : await recentSession(restore?.cwd || project.path, session.codexHome, restore?.threadId);
+    const info = await session.terminal.request('resume-info', { threadId: restore?.threadId });
     // Legacy versions did not record which process owned a conversation. Open
     // that history, but do not submit work to a possibly still-running session.
     const remembered = info || (restore?.threadId ? { id: restore.threadId, state: 'unknown' } : null);
@@ -1192,47 +1195,6 @@ function localShell(fresh = false) {
   return localShells;
 }
 
-function nativeSessionEvent(id, sessionId, message) {
-  const s = sessions.get(id); if (!s || s.sessionId !== sessionId || !s.native || typeof message.method !== 'string') return;
-  const project = findProject(id), at = Date.now(), p = message.params;
-  if (message.method === 'agentrix/threadResumed') {
-    if (!s.switchResumeThreadId || p?.threadId !== s.switchResumeThreadId) return;
-    s.nativeResumeReady = p; s.reportedThreadId = s.rootThreadId = p.threadId;
-    publishCliState(s, 'idle', { at, threadId: p.threadId, bind: true }); return;
-  }
-  if (Object.hasOwn(message, 'id')) {
-    (s.nativeInputRequests ||= new Set()).add(JSON.stringify(message.id));
-  } else if (message.method === 'serverRequest/resolved') {
-    s.nativeInputRequests?.delete(JSON.stringify(p.requestId));
-  }
-  const thread = message.method === 'thread/started' ? p?.thread?.id : null;
-  if (thread && s.completionWork?.find(thread)) return;
-  if (thread && s.reportedThreadId && thread !== s.reportedThreadId) {
-    if (s.completionWork?.reset()) store.expectCompletion(project.id, false);
-    s.promptQueue.reset(); s.activitySnapshot = s.activityRawSnapshot = null; s.codexActivity = 'unknown';
-  }
-  s.completionWork?.native(message, s.agent, at, s.reportedThreadId);
-  if (s.reportedThreadId && p?.threadId && p.threadId !== s.reportedThreadId) return;
-  describeActions(s, project.path, nativeSkillActions(s.actions, message, project.path, at));
-  const add = (role, text, entryId, provenance = message) => {
-    if (typeof text !== 'string' || !text) return;
-    // Native user-item replays must retain the original prompt's input watermark.
-    if (role === 'user' && (promptText(text, provenance) === null || entryId && s.conversation.list.some(entry => entry.id === entryId))) return;
-    s.conversation.put({ id: entryId || randomUUID(), at, role, text: text.slice(0, 20000), original: text });
-  };
-  if (message.method === 'thread/started' && p?.thread?.id) s.reportedThreadId = p.thread.id;
-  if (message.method === 'item/completed' && p?.item) {
-    const item = p.item;
-    if (item.type === 'agentMessage') add('assistant', item.text, item.id);
-    if (item.type === 'userMessage') add('user', item.content?.filter(part => part.type === 'text').map(part => part.text).join('\n'), item.id, { ...message, ...p, ...item });
-  }
-  if (['turn/started', 'turn/completed', 'turn/interrupted'].includes(message.method) && p?.threadId && p?.turn?.id) {
-    // Advance the stale-snapshot guard for the parent, without arming idle or child turns.
-    if (message.method === 'turn/started') s.activityInputAt = s.activityConfirmedInputAt = at;
-    applyActivity(project, s, { threadId: p.threadId, turnId: p.turn.id, state: message.method === 'turn/started' ? 'working' : message.method === 'turn/interrupted' || p.turn.status === 'interrupted' || p.turn.status === 'failed' ? 'interrupted' : 'complete', updatedAt: at });
-  }
-}
-
 function nativeSpec(id, agent, resume, validateOnly = false) {
   const project = findProject(id), old = sessions.get(id);
   if (project.kind === 'ssh') throw new Error('原生会话仅支持本地项目。');
@@ -1248,7 +1210,7 @@ function nativeSpec(id, agent, resume, validateOnly = false) {
   const env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile);
   const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
     skills.delivery(project, false, sessionId, { agent, started: true }), path.join(integrationDir, 'dispatch.cjs'));
-  const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd: project.path, env, context,
+  const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd: resume ? saved?.cwd || project.path : project.path, env, context,
     sessionId, sessionKey, bootstrapFile, controlCapability, model: null, effort: 'high', fast: true,
     providerSessionId: resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null };
   if (spec.providerSessionId && [...sessions.values()].some(s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId))) throw new Error('该会话正在其他终端运行。');
@@ -1373,10 +1335,9 @@ function localSwitchSessions() {
   const result = [];
   for (const [id, current] of sessions) {
     const s = current.switchPreviousHost || current, project = store.findTerminal(id)?.project;
-    if (!project || project.kind === 'ssh' || !s.codexActive || s.nativeStructured || s.status === 'exited' || !['claude', 'codex'].includes(s.agent)) continue;
+    if (!project || project.kind === 'ssh' || !s.codexActive || s.nativeStructured || s.status === 'exited' || s.agent !== 'claude') continue;
     s.nativeRuntimeSessionId ||= randomUUID();
-    const providerSessionId = s.agent === 'claude' ? s.claudeSessionId || s.claudeResumeId
-      : [s.cliProviderId, s.rootThreadId, s.reportedThreadId].find(value => wholeThread(value || '')) || null;
+    const providerSessionId = s.claudeSessionId || s.claudeResumeId || null;
     result.push({ identity: s, path: 'terminal', spec: { owner: 'gui', agent: s.agent, kind: project.kind,
       projectId: project.id, terminalId: id, runtimeSessionId: s.nativeRuntimeSessionId, providerSessionId,
       sessionId: s.sessionId, sessionKey: s.sessionKey, controlCapability: s.controlCapability, bootstrapFile: s.bootstrapFile,
@@ -1398,7 +1359,7 @@ function observeSwitchTerminal(session) {
     && !s.claudeResumeId && !session.spec?.hasHistory && !s.activityInputAt;
   return { state: s.cliState?.sessionId === s.sessionId && s.cliState.state === 'idle' ? 'idle' : 'working',
     pending: !!s.nativeInputRequests?.size || s.promptQueue?.list().some(item => item.state === 'queued'),
-    draftBlocked: !!(s.native ? s.draftSubmissions : s.submissions)?.hasText,
+    draftBlocked: !!s.submissions?.hasText,
     background: !work || work.uncertain || work.reading && !empty ? { known: false, count: null } : { known: true, count: tasks.size } };
 }
 function retainAgentState(target, source) {
@@ -1419,9 +1380,9 @@ function retainAgentState(target, source) {
 }
 async function prepareSwitchTerminal(spec, _handoff, currentChange, transition = {}) {
   const id = spec.terminalId, old = sessions.get(id);
-  if (!old?.nativeStructured) throw new Error('session_changed');
+  if (!old?.nativeStructured || spec.agent !== 'claude') throw new Error('session_changed');
   sessions.delete(id);
-  if (spec.agent !== 'codex') launchPlans.set(id, { agent: spec.agent, command: launchCommand(spec.agent, spec.providerSessionId ? { id: spec.providerSessionId } : null), threadId: spec.providerSessionId });
+  launchPlans.set(id, { agent: spec.agent, command: launchCommand(spec.agent, spec.providerSessionId ? { id: spec.providerSessionId } : null), threadId: spec.providerSessionId });
   let staged;
   const cancel = () => {
     const owned = staged && sessions.get(id) === staged;
@@ -1431,14 +1392,14 @@ async function prepareSwitchTerminal(spec, _handoff, currentChange, transition =
     broadcast();
   };
   try {
-    startTerminal(id, spec.agent === 'codex' ? 'codex-native' : null, true, old, spec.providerSessionId); staged = sessions.get(id);
+    startTerminal(id, null, true, old); staged = sessions.get(id);
     staged.nativeRuntimeSessionId = spec.runtimeSessionId;
     Object.assign(spec, { sessionId: staged.sessionId, bootstrapFile: staged.bootstrapFile, env: staged.usageEnv || spec.env });
     const deadline = Date.now() + 15000;
     while (currentChange() && sessions.get(id) === staged && staged.status !== 'exited') {
       if (staged.status === 'shell' && staged.ready && !staged.agentStarting && !launchPlans.has(id)) throw new Error('terminal_agent_exited');
-      const provider = spec.agent === 'claude' ? staged.claudeSessionId : staged.reportedThreadId || staged.rootThreadId;
-      const ready = spec.agent === 'codex' ? staged.nativeResumeReady?.threadId === spec.providerSessionId : staged.cliState?.state === 'idle';
+      const provider = staged.claudeSessionId;
+      const ready = staged.cliState?.state === 'idle';
       if (provider && (!spec.providerSessionId || provider === spec.providerSessionId) && ready) {
         spec.providerSessionId = provider; break;
       }
@@ -1562,8 +1523,22 @@ async function initializeNativeSessions() {
   registerClaudeWorker({ control: dispatchControl, claude: claudeRuntime, settings: nativeSessions.getSettings });
 }
 
-function startTerminal(id, nativeMode = null, agentStarting = false, transfer = null, resumeThreadId = null) {
-  if (nativeMode !== null && nativeMode !== 'codex-native') throw new Error('Unsupported native session mode');
+function restoreTerminal(id, ...args) {
+  const found = store.findTerminal(id), saved = found?.record.restore;
+  const localCodex = found?.project.kind !== 'ssh' && (saved?.agent || 'codex') === 'codex' && (saved?.codex || saved?.nativeTransport);
+  if (localCodex || found?.project.kind !== 'ssh' && saved?.nativeTransport && nativeSessions) {
+    restorePlans.delete(id);
+    if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
+    void nativeSessions.start(id, { agent: saved.agent || 'codex', resume: !!saved.threadId }).catch(error => {
+      startupErrors.set(id, error.message); broadcast();
+    });
+    return;
+  }
+  startTerminal(id, ...args);
+}
+
+function startTerminal(id, nativeMode = null, agentStarting = false, transfer = null) {
+  if (nativeMode !== null) throw new Error('Unsupported native session mode');
   const project = findProject(id);
   const old = sessions.get(id);
   if (old && old.status !== 'exited') return;
@@ -1604,42 +1579,31 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
     locale: process.platform === 'darwin' ? terminalLocale(app.getPreferredSystemLanguages()) : 'C.UTF-8' };
   if (local) env = shellKind === 'zsh' ? zshEnvironment(env, integration) : shellEnvironment(env, integration);
   const sshAskpassPath = project.kind === 'ssh' ? prepareAskpass() : undefined;
-  if (nativeMode && project.kind === 'ssh') throw new Error('Native approval sessions are local only');
-  const native = nativeMode ? createNativeSession({ binding: { provider: 'codex', projectId: project.id, terminalId: id, sessionId },
-    mode: nativeMode, cwd: startPath, env, pty, changed: scheduleState, resumeThreadId,
-    event: message => nativeSessionEvent(id, sessionId, message),
-  }) : null;
-  if (native) {
-    env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
-      skills.delivery(project, false, sessionId, { agent: 'codex', started: true }), path.join(integrationDir, 'dispatch.cjs'));
-    writeFileAtomic(skillNoteFile, env.AGENTRIX_READING_NOTE);
-  }
   const terminalOptions = { name: 'xterm-256color', cols: 90, rows: 22, cwd: startPath, env,
     ...(!['zsh', 'bash'].includes(shellKind) ? { useConpty: true, useConptyDll: true } : {}) };
   const remoteSkills = project.kind === 'ssh' ? skills.delivery(project, true, sessionId) : null;
-  const terminal = native || (project.kind === 'ssh' ? new RemoteConnection({ ...project, id }, { integrationDir, auth: sshAuth, sessionKey, onEvent, codingPath: startPath, askpassPath: sshAskpassPath,
+  const terminal = project.kind === 'ssh' ? new RemoteConnection({ ...project, id }, { integrationDir, auth: sshAuth, sessionKey, onEvent, codingPath: startPath, askpassPath: sshAskpassPath,
     readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', path.posix.join(project.path, 'skills'), remoteSkills, '{AGENTRIX_DISPATCH}'), skills: remoteSkills.bundle,
     onReady: info => { remoteBranch(project.id, info.branch); },
   }) : shellKind === 'zsh' ? pty.spawn(shell.file, ['-l', '-i'], terminalOptions)
     : shellKind === 'bash' ? pty.spawn(shell.file, bashArguments(integrationDir), terminalOptions)
     : shellKind === 'cmd' ? pty.spawn(cmdPath, ['/D', '/Q', '/K', path.join(integrationDir, 'bootstrap.cmd')], terminalOptions)
-    : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions));
+    : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions);
   const s = {
-    switchPreviousHost: transfer, terminal, terminalId: id, projectId: project.id, sessionId, skillSessionId: nativeMode ? sessionId : null, sessionKey, controlCapability, bootstrapFile, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
+    switchPreviousHost: transfer, terminal, terminalId: id, projectId: project.id, sessionId, skillSessionId: null, sessionKey, controlCapability, bootstrapFile, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
     recordRun: (call, event) => dashboard.run(project, call, event),
     recordQuota: (provider, limits) => dashboard.quota(provider, limits, quotaScope(provider, project, s)),
     // Command Prompt reports its prompts through markers in its output instead of the event pipe.
     usageEnv: project.kind === 'ssh' ? null : { ...env },
-    prompts: !native && shellKind === 'cmd' ? new PromptMarkers() : null,
+    prompts: shellKind === 'cmd' ? new PromptMarkers() : null,
     tools: shellKind === 'cmd' ? { codex: onPath('codex', env), claude: onPath('claude', env) } : null,
     titles: new TerminalTitleTracker(), reportedThreadId: null,
     codexActive: false, codexAvailable: null, seq: 0, chunks: [], bytes: 0, pending: '',
-    flushTimer: null, error: null, submissions: new SubmissionTracker(), draftSubmissions: native ? new SubmissionTracker({ captureText: false }) : null,
+    flushTimer: null, error: null, submissions: new SubmissionTracker(), draftSubmissions: null,
     approval: new ApprovalGuard(sessionId), approvalRemote: project.kind === 'ssh',
-    native, nativeMode, switchResumeThreadId: resumeThreadId,
+    native: null, nativeMode: null,
     observeNativeSwitch: () => nativeSessions?.observe?.(id),
   };
-  if (native) { s.status = 'codex'; s.codexActive = true; s.agent = 'codex'; s.activitySince = Date.now(); s.codexActivity = 'unknown'; }
   s.actions = new ActionLog(change => publishAction(s, change));
   s.gate = new InputGate(data => {
     if (sessions.get(id) !== s || s.status === 'exited') return;
@@ -1685,7 +1649,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
       const localCommand = isLocalAgentCommand(s.agent, entry.text);
       if (at >= (s.activitySince || 0) - 1000) {
         const inputAt = s.promptQueue.start(entry.original ?? entry.text, at, entry.id, localCommand);
-        if (inputAt !== undefined && !s.native) {
+        if (inputAt !== undefined) {
           s.activityConfirmedInputAt = Math.max(s.activityConfirmedInputAt || 0, inputAt);
           s.activityInputAt = Math.max(s.activityInputAt || 0, s.activityConfirmedInputAt);
         }
@@ -1808,12 +1772,13 @@ function disposeTerminal(id, { preserveNative = false, preserveSwitch = false } 
 }
 
 function registerUnavailableNative(handle) {
-  const settings = { claudePath: 'terminal-only', codexView: 'terminal', monthlyBudgetUsd: null };
+  const settings = { claudePath: 'terminal-only', monthlyBudgetUsd: null, codexAutoReset: false };
   function start(id, options) {
     if (!options || typeof options !== 'object' || Object.keys(options).some(key => !['agent', 'resume'].includes(key)) ||
       !['claude', 'codex'].includes(options.agent) || options.resume !== undefined && typeof options.resume !== 'boolean') throw new Error('无效的原生会话请求。');
     const project = findProject(id), saved = store.findTerminal(id).record.restore;
     if (project.kind === 'ssh') throw new Error('原生会话仅支持本地项目。');
+    if (options.agent === 'codex') throw new Error('Codex app-server 连接失败，请重试。');
     const history = options.resume && saved?.agent === options.agent && /^[a-f\d-]{36}$/i.test(saved.threadId || '') ? { id: saved.threadId } : null;
     launchPlans.set(id, { agent: options.agent, command: launchCommand(options.agent, history), threadId: history?.id || null });
     startTerminal(id, null, true); broadcast();
@@ -1829,7 +1794,7 @@ function registerUnavailableNative(handle) {
       todayUsdMicros: null, monthUsdMicros: null, estimated: true, apiRecords: false };
     return { ...summary, budgetUsd: null, switches: { waiting: 0 }, agents: { claude: { path: 'terminal', reason: 'native_unavailable',
         next: { path: 'terminal', reason: 'native_unavailable' }, limits: limits.claude, connection: connections.claude },
-        codex: { path: 'terminal', reason: 'native_unavailable', next: { path: 'terminal', reason: 'native_unavailable' }, limits: limits.codex, connection: connections.codex } } };
+        codex: { path: null, reason: 'native_unavailable', next: { path: null, reason: 'native_unavailable' }, limits: limits.codex, connection: connections.codex } } };
   });
   for (const name of ['send', 'interrupt', 'stop', 'answer', 'commands', 'settings-set', 'key-save', 'key-clear', 'key-status']) {
     handle(`native:${name}`, () => { throw new Error('原生会话暂不可用，已保留终端模式。'); });
@@ -1913,12 +1878,14 @@ function registerIpc() {
     const project = findProject(id);
     if (!['claude', 'codex'].includes(agent)) throw new Error('无效的助手。');
     if (project.kind === 'ssh') throw new Error('SSH 项目请先启动终端，再在终端里运行助手。');
-    if (mode === 'native') {
-      if (agent !== 'codex') throw new Error('Native mode is only available for Codex');
-      const current = sessions.get(id);
-      if (current && current.status !== 'exited') throw new Error('Start a native session in a new or stopped terminal');
+    if (mode === 'native' && agent !== 'codex') throw new Error('Native mode is only available for Codex');
+    if (agent === 'codex') {
+      if (!['native', 'new', 'continue'].includes(mode)) throw new Error('Unsupported agent session mode');
+      if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
       launchPlans.delete(id); restorePlans.delete(id);
-      startTerminal(id, 'codex-native'); broadcast(); return true;
+      const history = mode === 'continue' ? (await folderHistory(folderOf(id))).codex : null;
+      if (history) store.setRestore(id, { agent: 'codex', threadId: history.id });
+      await nativeSessions.start(id, { agent, resume: !!history }); broadcast(); return true;
     }
     if (!['new', 'continue'].includes(mode)) throw new Error('Unsupported agent session mode');
     const history = mode === 'continue' ? (await folderHistory(folderOf(id)))[agent] : null;
@@ -2046,11 +2013,7 @@ if (!app.requestSingleInstanceLock()) {
     for (const project of store.projects) projectImageAuto.enqueue(project);
     updateIndicators();
     if (!process.env.AGENTRIX_DATA_DIR) updateManager.start();
-    restoreTerminals({ store, restorePlans, startupErrors, startTerminal: (id, ...args) => {
-      const saved = store.findTerminal(id)?.record.restore;
-      if (saved?.nativeTransport && nativeSessions) void nativeSessions.start(id, { agent: saved.agent || 'codex', resume: true }).catch(error => { startupErrors.set(id, error.message); broadcast(); });
-      else startTerminal(id, ...args);
-    }, broadcast, isQuitting: () => quitting });
+    restoreTerminals({ store, restorePlans, startupErrors, startTerminal: restoreTerminal, broadcast, isQuitting: () => quitting });
   }).catch(error => {
     dialog.showErrorBox(t('Agentrix 无法启动'), t(String(error?.stack || error)));
     app.exit(1);

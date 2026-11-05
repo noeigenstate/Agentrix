@@ -21,32 +21,22 @@ function fixture(t, mode, existingTerminal) {
   lifetime.defer('close router', () => router.close());
   return { router, source, events, fallback, activated, live: () => live };
 }
-async function until(check) {
-  for (let i = 0; i < 500; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 10)); }
-  throw new Error('long-thread switch did not settle');
-}
-for (const mode of ['long-large', 'resume-frame-limit']) test(`I4 Codex terminal switch ${mode} preserves a working path, draft and unsent input`, async t => {
-  const f = fixture(t, mode, true); f.router.reconcile();
-  await until(() => f.router.switchState('t')?.phase === 'preparing');
-  const draft = { version: 1, text: 'Retained draft', images: [], undelivered: [{ clientMessageId: 'not-yet-sent', text: 'Retained unsent input' }] };
-  assert.equal(f.router.answer('t', 'old-terminal', 'handoff', { handoff: { changeId: f.router.switchState('t').changeId, draft } }).accepted, true);
-  await until(() => f.router.switchState('t')?.phase === 'stable');
-  const state = f.router.switchState('t');
+for (const mode of ['long-large', 'resume-frame-limit']) test(`Codex resume ${mode} stays on app-server or fails without a terminal`, async t => {
+  const f = fixture(t, mode, false);
   if (mode === 'long-large') {
-    assert.equal(state.current, 'native'); assert.equal(f.activated.length, 1); assert.equal(f.activated[0].providerSessionId, 'same-thread');
-    assert.deepEqual(f.router.snapshot('t').handoff.draft, draft);
+    await f.router.start('t', { agent: 'codex', resume: true });
+    assert.equal(f.router.snapshot('t').state, 'idle');
     assert.ok(Buffer.byteLength(JSON.stringify(f.router.snapshot('t'))) < 4 * 1024 * 1024);
+    assert.ok(f.router.snapshot('t').events.some(event => event.providerSessionId === 'same-thread'));
   } else {
-    assert.equal(state.current, 'terminal'); assert.match(state.reason, /已保留原会话/); assert.equal(state.outcome, 'failed');
-    assert.equal(f.live()[0], f.source); assert.equal(f.activated.length, 0);
+    await assert.rejects(f.router.start('t', { agent: 'codex', resume: true }), /app-server/);
+    assert.equal(f.router.snapshot('t').state, 'failed');
   }
-  assert.equal(f.events.some(e => e.type === 'turn.started' || e.type === 'turn.completed' || e.type === 'input.receipt'), false);
-  f.router.observe('t'); await new Promise(resolve => setTimeout(resolve, 30)); assert.equal(f.activated.length, mode === 'long-large' ? 1 : 0);
+  assert.equal(f.fallback.length, 0); assert.equal(f.router.switchState('t'), null);
+  assert.equal(f.events.some(event => event.type === 'turn.started' || event.type === 'input.receipt'), false);
 });
-test('ordinary Codex resume falls back to the same terminal thread on a non-history frame limit', async t => {
-  const f = fixture(t, 'resume-frame-limit', false); await f.router.start('t', { agent: 'codex', resume: true });
-  assert.equal(f.fallback.length, 1); assert.equal(f.fallback[0].spec.providerSessionId, 'same-thread');
-  assert.equal(f.fallback[0].reason, 'Codex 原生连接不可用，已切换到终端。');
-  assert.equal(f.router.has('t'), false);
-  assert.equal(f.events.some(e => e.type === 'turn.started' || e.type === 'input.receipt'), false);
+test('a manually running Codex terminal is outside the switch coordinator', async t => {
+  const f = fixture(t, 'long-large', true); f.router.reconcile();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.router.switchState('t'), null); assert.equal(f.activated.length, 0); assert.equal(f.live()[0], f.source);
 });

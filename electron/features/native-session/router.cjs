@@ -114,11 +114,17 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       catch (error) {
         if (record.lock) occupied.delete(record.lock);
         const reason = error.code || error.message;
-        const codexUnavailable = agent === 'codex' && ['unsupported_codex_capabilities', 'unsupported_codex_version', 'codex_cli_required', 'rpc_timeout', 'process_failed', 'process_exited', 'disconnected', 'invalid_response', 'invalid_frame', 'invalid_json', 'frame_limit', 'ENOENT'].includes(reason);
-        if (codexUnavailable || agent === 'claude' && settings.get().claudePath === 'api-then-terminal'
+        if (agent === 'codex') {
+          try { await runtime.close(); } catch { }
+          const message = ['codex_cli_required', 'ENOENT'].includes(reason) ? '未找到 Codex 程序，请在设置中安装。'
+            : reason === 'unsupported_codex_version' ? 'Codex 版本过低，请升级后重试。' : 'Codex app-server 连接失败，请重试。';
+          record.stream.publish('error', { code: typeof error.code === 'string' ? error.code : 'codex_start_failed', message, retryable: true, willRetry: false, stage: 'startup' });
+          record.stream.publish('session.state', { state: 'failed', reason: message });
+          throw Object.assign(new Error(message), { code: error.code || 'codex_start_failed' });
+        }
+        if (agent === 'claude' && settings.get().claudePath === 'api-then-terminal'
           && (error.code === 'native_cli_required' || error.beforeInput === true)) {
-          const notice = codexUnavailable ? (reason === 'codex_cli_required' || reason === 'ENOENT'
-            ? '未找到 Codex 原生运行器，已切换到终端。' : 'Codex 原生连接不可用，已切换到终端。') : error.beforeInput ? error.message : reason;
+          const notice = error.beforeInput ? error.message : reason;
           record.stream.publish('path.changed', { previous: agent === 'claude' ? 'api' : 'subscription', selected: 'terminal', reason: notice });
           terminalStreams.set(id, record.stream);
           await runtime.close(); sessions.delete(id); await terminal(spec, notice);

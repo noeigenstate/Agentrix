@@ -21,7 +21,7 @@ test('macOS defaults to system Bash and only an explicit zsh choice selects the 
 
 test('main caches macOS and Linux shell discovery until the choice changes or a terminal starts', () => {
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const source = main.slice(main.indexOf('let localShells = null;'), main.indexOf('\nfunction nativeSessionEvent('));
+  const source = main.slice(main.indexOf('let localShells = null;'), main.indexOf('\nfunction nativeSpec('));
   for (const platform of ['darwin', 'linux']) {
     const settings = { shell: 'bash' }, calls = [];
     const choose = choice => { calls.push(choice); return { kind: choice, file: `/bin/${choice}`, zsh: true }; };

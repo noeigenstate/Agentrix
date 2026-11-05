@@ -46,7 +46,7 @@ async function harness(t, kind = 'local', agent = 'codex') {
   vm.runInContext(main.slice(main.indexOf('function publishCliState('), main.indexOf('function onEvent(')), context);
   Object.assign(context, { findProject: () => project, scheduleState() {}, randomUUID: require('node:crypto').randomUUID,
     s, project, id: s.terminalId, PromptQueue, CompletionWork, queueMicrotask });
-  vm.runInContext(main.slice(main.indexOf('function nativeSessionEvent('), main.indexOf('function startTerminal(')), context);
+  vm.runInContext(main.slice(main.indexOf('function nativeSpec('), main.indexOf('function startTerminal(')), context);
   const setup = main.indexOf('  const refreshCompletion = () => {');
   vm.runInContext(main.slice(setup, main.indexOf('  // A prompt the agent', setup)), context);
   s.completionWork.now = s.promptQueue.now = () => now;
@@ -846,67 +846,9 @@ test('a lost background task times out to interrupted without unread, success no
   assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
 });
 
-test('native Codex real prompts arm once, notify once, and reject older complete snapshots', async t => {
-  for (const agent of ['codex']) {
-    const h = await harness(t, 'local', agent), { s } = h;
-    Object.assign(s, { native: {}, nativeMode: agent === 'claude' ? 'claude-sdk' : 'codex-native', sessionId: 'generation', nativeMessages: [], reportedThreadId: 'parent' });
-    const event = (message, at) => { h.now(at); h.context.nativeSessionEvent(s.terminalId, s.sessionId, message); };
-    const prompt = (id, at) => {
-      if (agent === 'claude') event({ type: 'managed-prompt', text: `Work on ${id}` }, at);
-      else {
-        // The app-server's received user item also covers recalled prompts invisible to the key tracker.
-        event({ method: 'turn/started', params: { threadId: 'parent', turn: { id } } }, at);
-        assert.equal(s.activityInputAt, at);
-        event({ method: 'item/completed', params: { threadId: 'parent', item: { type: 'userMessage', id: `input-${id}`, content: [{ type: 'text', text: `Work on ${id}` }] } } }, at + 10);
-      }
-    };
-    const end = (id, at) => event(agent === 'claude' ? { type: 'result', uuid: id }
-      : { method: 'turn/completed', params: { threadId: 'parent', turn: { id, status: 'completed' } } }, at);
-    prompt('first', 2000);
-    assert.equal(h.armings(), 1); assert.equal(h.project.completionArmed, true);
-    end('first', 2100); end('first', 2110);
-    assert.equal(h.alerts(), 1); assert.equal(h.project.unread, 1);
-    h.store.acknowledge(h.project.id);
-    prompt('second', 2200);
-    const snapshot = s.activitySnapshot;
-    h.apply('complete', 'stale-first', 2150);
-    assert.equal(s.activitySnapshot, snapshot); assert.equal(s.codexActivity, 'working');
-    assert.equal(h.alerts(), 1); assert.equal(h.project.completionArmed, true); assert.equal(h.armings(), 2);
-    if (agent === 'codex') {
-      s.completionWork.start('child', 2220);
-      event({ method: 'turn/started', params: { threadId: 'child', turn: { id: 'child-turn' } } }, 2230);
-      event({ method: 'turn/completed', params: { threadId: 'child', turn: { id: 'child-turn', status: 'completed' } } }, 2240);
-      assert.equal(s.activityInputAt, 2200, 'child events cannot advance the parent watermark');
-    }
-    end('second', 2300);
-    assert.equal(h.alerts(), 2); assert.equal(h.project.unread, 1); assert.equal(h.armings(), 2);
-    h.store.acknowledge(h.project.id);
-    if (agent === 'codex') {
-      event({ method: 'item/completed', params: { threadId: 'parent', item: { type: 'userMessage', id: 'input-second', content: [{ type: 'text', text: 'Work on second' }] } } }, 2400);
-      s.completionWork.start('callback-child', 2410);
-      event({ method: 'turn/started', params: { threadId: 'callback-child', turn: { id: 'child-idle' } } }, 2420);
-      event({ method: 'turn/completed', params: { threadId: 'callback-child', turn: { id: 'child-idle', status: 'completed' } } }, 2430);
-      assert.equal(h.project.completionArmed, false, 'child callbacks after acknowledgment cannot arm an alert');
-      event({ method: 'turn/started', params: { threadId: 'parent', turn: { id: 'idle' } } }, 2450);
-    }
-    end('background', 2500);
-    assert.equal(h.armings(), 2); assert.equal(h.alerts(), 2); assert.equal(h.project.unread, 0);
-  }
-});
 
-test('native Codex command executions alone cannot defer an ended parent or trigger the fallback', async t => {
-  const h = await harness(t), { s } = h;
-  Object.assign(s, { native: {}, nativeMode: 'codex-native', sessionId: 'generation', reportedThreadId: 'parent' });
-  h.write('Run the check\r'); h.user('Run the check');
-  const event = message => h.context.nativeSessionEvent(s.terminalId, s.sessionId, message);
-  h.now(2050); event({ method: 'turn/started', params: { threadId: 'parent', turn: { id: 'turn' } } });
-  h.now(2070); event({ method: 'item/started', params: { threadId: 'parent', item: { type: 'commandExecution', id: 'shell', status: 'inProgress', command: 'node' } } });
-  h.now(2100); event({ method: 'turn/completed', params: { threadId: 'parent', turn: { id: 'turn', status: 'completed' } } });
-  assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 1); assert.equal(s.completionWork.timer, null);
-  h.store.acknowledge(h.project.id);
-  h.now(2070 + 2 * LOST_WORK_TIMEOUT); h.apply('complete', 'turn', 2100);
-  assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 1); assert.equal(h.project.unread, 0);
-});
+
+
 
 for (const kind of ['local', 'ssh']) test(`${kind} project waits for children while its Main card is interrupted; callbacks stay disarmed`, async t => {
   const h = await harness(t, kind), { s } = h;
@@ -934,72 +876,13 @@ test('an interrupted main round with no pending work interrupts the project', as
   assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 0);
 });
 
-test('actual Codex native handlers wait for children but not leftover command items and keep idle turns disarmed', async t => {
-  const h = await harness(t), { s } = h;
-  Object.assign(s, { native: {}, nativeMode: 'codex-native', sessionId: 'generation' });
-  const event = (method, params, at) => { h.now(at); h.context.nativeSessionEvent(s.terminalId, s.sessionId, { method, params }); };
-  h.write('Finish all native work\r'); h.user('Finish all native work');
-  event('thread/started', { thread: { id: 'parent' } }, 2020);
-  event('turn/started', { threadId: 'parent', turn: { id: 'turn' } }, 2040);
-  const child = { type: 'collabAgentToolCall', id: 'spawn', tool: 'spawnAgent', receiverThreadIds: ['child'], agentsStates: { child: { status: 'running' } } };
-  event('item/started', { item: child }, 2050); event('item/completed', { item: child }, 2060);
-  event('item/started', { item: { type: 'commandExecution', id: 'command', status: 'inProgress' } }, 2070);
-  event('turn/completed', { threadId: 'parent', turn: { id: 'turn', status: 'completed' } }, 2100);
-  assert.equal(s.codexActivity, 'working'); assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
-  event('item/completed', { item: { ...child, id: 'wait', tool: 'wait', agentsStates: { child: { status: 'completed' } } } }, 2200);
-  assert.equal(s.codexActivity, 'working');
-  assert.equal(s.codexActivity, 'working', 'the parent still owes the child-result review');
-  event('turn/completed', { threadId: 'parent', turn: { id: 'review', status: 'completed' } }, 2350);
-  assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 1);
-  h.store.acknowledge(h.project.id);
-  event('turn/started', { threadId: 'parent', turn: { id: 'idle' } }, 2400);
-  event('turn/completed', { threadId: 'parent', turn: { id: 'idle', status: 'completed' } }, 2500);
-  assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 1); assert.equal(h.project.completionArmed, false);
-});
 
-test('native child turn completions cannot overwrite or finish the interactive parent turn', async t => {
-  const h = await harness(t), { s } = h;
-  Object.assign(s, { native: {}, nativeMode: 'codex-native', sessionId: 'generation', reportedThreadId: 'parent' });
-  const event = (method, threadId, turn, at) => { h.now(at); h.context.nativeSessionEvent(s.terminalId, s.sessionId, { method, params: { threadId, turn } }); };
-  h.write('Parent and child work\r'); h.user('Parent and child work');
-  event('turn/started', 'parent', { id: 'parent-turn' }, 2050);
-  s.completionWork.start('child', 2060);
-  event('turn/completed', 'child', { id: 'child-turn', status: 'completed' }, 2100);
-  assert.equal(s.rootThreadId, 'parent'); assert.equal(s.codexActivity, 'working'); assert.equal(h.alerts(), 0);
-  assert.equal(s.completionWork.tasks.size, 0);
-  event('turn/completed', 'parent', { id: 'parent-turn', status: 'completed' }, 2200);
-  assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 1);
-});
 
-test('native interruption without a repeated status field cancels completion, including while child work remains', async t => {
-  for (const child of [false, true]) {
-    const h = await harness(t), { s } = h;
-    Object.assign(s, { native: {}, nativeMode: 'codex-native', sessionId: 'generation', reportedThreadId: 'parent' });
-    h.write('Native work\r'); h.user('Native work');
-    if (child) s.completionWork.start('child', 2050);
-    h.context.nativeSessionEvent(s.terminalId, s.sessionId, { method: 'turn/interrupted', params: { threadId: 'parent', turn: { id: 'turn' } } });
-    assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 0);
-    s.completionWork.finish('child'); h.apply('complete', 'late', 2200);
-    assert.equal(h.project.unread, 0); assert.equal(h.alerts(), 0);
-  }
-});
 
-test('native clear/resume to a different Codex session retires old tasks and cannot announce restored history', async t => {
-  for (const agent of ['codex']) {
-    const h = await harness(t, 'local', agent), { s } = h;
-    Object.assign(s, { native: {}, nativeMode: agent === 'claude' ? 'claude-sdk' : 'codex-native', sessionId: 'generation', nativeMessages: [],
-      claudeSessionId: 'old', reportedThreadId: 'old' });
-    h.write('Old work\r'); h.user('Old work'); s.completionWork.start('old-child', 2050); h.apply('complete', 'old-turn', 2100);
-    const event = message => h.context.nativeSessionEvent(s.terminalId, s.sessionId, message);
-    if (agent === 'claude') event({ type: 'system', subtype: 'init', session_id: 'new' });
-    else event({ method: 'thread/started', params: { thread: { id: 'new' } } });
-    assert.equal(s.completionWork.tasks.size, 0); assert.equal(s.activitySnapshot, null); assert.equal(h.project.completionArmed, false);
-    h.now(2200);
-    if (agent === 'claude') event({ type: 'result', session_id: 'new', uuid: 'restored' });
-    else event({ method: 'turn/completed', params: { threadId: 'new', turn: { id: 'restored', status: 'completed' } } });
-    assert.equal(h.alerts(), 0); assert.equal(h.project.unread, 0);
-  }
-});
+
+
+
+
 
 test('native process exit cancels its pending work and alert without waiting for the fallback', async t => {
   const h = await harness(t, 'local', 'claude'), { s, context } = h;
@@ -1141,7 +1024,7 @@ test('restore preserves plan/readiness/input safeguards and the recorded newest-
 
 test('local and remote Codex restoration retain routing, interrupted continuation and in-flight input guards', async t => {
   const id = '00000000-0000-4000-8000-000000000002';
-  for (const kind of ['local', 'ssh']) for (const state of ['complete', 'interrupted']) {
+  for (const kind of ['ssh']) for (const state of ['complete', 'interrupted']) {
     const h = await harness(t, kind), writes = [], requests = [];
     h.store.setRestore(h.s.terminalId, { agent: 'codex', threadId: id });
     const info = { id, state };

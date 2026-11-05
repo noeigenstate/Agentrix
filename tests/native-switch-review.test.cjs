@@ -84,25 +84,7 @@ test('F1 real InputGate launch/escape traffic does not invent a draft in main or
   assert.equal(f.facade.switchState('t').phase, 'preparing', 'G5 an observed idle terminal without tasks switches directly');
 });
 
-test('F1 real main request observations keep native dialog keys separate from an actual draft', async t => {
-  const f = await fixture(t); f.host.native = {}; f.host.agent = 'codex'; f.host.draftSubmissions = new SubmissionTracker({ captureText: false });
-  f.host.actions = new ActionLog(() => {});
-  Object.assign(f.context, { nativeSkillActions: () => [], describeActions() {} });
-  vm.runInContext(main.slice(main.indexOf('function nativeSessionEvent('), main.indexOf('function nativeSpec(')), f.context);
-  const listeners = {};
-  require('../electron/features/terminal/ipc.cjs').registerTerminalIpc({ handle() {}, listen: (name, fn) => { listeners[name] = fn; },
-    getSession: () => f.host, getProjectById: assert.fail, expectCompletion: assert.fail });
-  f.context.nativeSessionEvent('t', 'pty', { id: 17, method: 'item/commandExecution/requestApproval', params: { threadId: 'same' } });
-  listeners['terminal:write']('t', '1'); assert.equal(f.context.observeSwitchTerminal({ identity: f.host }).draftBlocked, false);
-  f.context.nativeSessionEvent('t', 'pty', { method: 'serverRequest/resolved', params: { requestId: 17 } });
-  listeners['terminal:write']('t', '\x1b[D'); assert.equal(f.context.observeSwitchTerminal({ identity: f.host }).draftBlocked, false);
-  listeners['terminal:write']('t', 'new text'); assert.equal(f.context.observeSwitchTerminal({ identity: f.host }).draftBlocked, true);
-  assert.equal(f.host.draftSubmissions.text, '');
-  f.context.nativeSessionEvent('t', 'pty', { id: 18, method: 'item/commandExecution/requestApproval', params: { threadId: 'same' } });
-  listeners['terminal:write']('t', '\r');
-  f.context.nativeSessionEvent('t', 'pty', { method: 'serverRequest/resolved', params: { requestId: 18 } });
-  assert.equal(f.context.observeSwitchTerminal({ identity: f.host }).draftBlocked, true, 'a dialog cannot erase the draft waiting behind it');
-});
+
 
 test('F7/F8 main keeps the replacement terminal identity and closes waiting switch records', async t => {
   const f = await fixture(t); await f.settings({ claudePath: 'api-only' }); await tick();

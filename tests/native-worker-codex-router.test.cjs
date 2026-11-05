@@ -25,10 +25,11 @@ test('M11: an unknown Codex version with the required methods remains native wit
   assert.match(f.events.findLast(event => event.type === 'path.changed').payload.reason, /Codex 版本未经验证/);
 });
 
-for (const mode of ['missing-steer', 'absent']) test(`M11: ${mode} falls back before input and retains the reason after terminal disposal`, async t => {
-  const f = fixture(t, mode); await f.router.start('t', { agent: 'codex' });
-  assert.equal(f.terminals.length, 1); assert.equal(f.router.usage().agents.codex.path, 'terminal');
-  const event = f.router.snapshot('t').events.findLast(event => event.type === 'path.changed');
-  assert.equal(event.payload.selected, 'terminal'); assert.equal(event.payload.reason, mode === 'absent' ? '未找到 Codex 原生运行器，已切换到终端。' : 'Codex 原生连接不可用，已切换到终端。');
+for (const mode of ['missing-steer', 'absent']) test(`M11: ${mode} fails before input with a readable reason and no terminal`, async t => {
+  const f = fixture(t, mode); await assert.rejects(f.router.start('t', { agent: 'codex' }), mode === 'absent' ? /未找到 Codex/ : /app-server/);
+  assert.equal(f.terminals.length, 0); assert.equal(f.router.snapshot('t').state, 'failed'); assert.equal(f.router.switchState('t'), null);
+  const event = f.router.snapshot('t').events.findLast(event => event.type === 'error');
+  assert.equal(event.payload.retryable, true); assert.match(event.payload.message, mode === 'absent' ? /未找到 Codex/ : /连接失败/);
+  assert.equal(f.events.some(event => event.type === 'path.changed' && event.payload.selected === 'terminal'), false);
   assert.equal(f.events.some(event => event.type === 'turn.started'), false);
 });

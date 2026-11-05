@@ -130,7 +130,7 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
     if (closed) return;
     const live = new Set();
     for (const session of list()) {
-      if (session.spec.owner === 'dispatch' || session.spec.kind === 'ssh' || !['claude', 'codex'].includes(session.spec.agent)) continue;
+      if (session.spec.owner === 'dispatch' || session.spec.kind === 'ssh' || session.spec.agent !== 'claude') continue;
       const id = session.spec.terminalId; live.add(id);
       let entry = entries.get(id);
       if (entry && entry.session.identity !== session.identity && !entry.task) { clearTimers(entry); entries.delete(id); entry = null; }
