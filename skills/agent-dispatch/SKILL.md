@@ -22,7 +22,7 @@ node "<helper>" minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues 
 node "<helper>" consolidate --cwd <dir> --meeting <id> --summary <file.md>
 ```
 
-The helper builds the real command itself (`codex exec -m … -c model_reasoning_effort=… -c service_tier="fast" --json -C … -o <out> -` /
+Inside Agentrix a Codex worker runs on `codex app-server` by default; `codex exec` is only the fallback when app-server cannot start before any input, or outside Agentrix, and the helper prints a `transport … codex-exec fallback` line saying why. The helper builds the real command itself (`codex exec -m … -c model_reasoning_effort=… -c service_tier="fast" --json -C … -o <out> -` /
 `claude -p --model … --effort … --permission-mode … --output-format stream-json --verbose`; the helper reads these streams itself and
 sends only the token rate while the worker runs), feeds the
 brief on stdin, so what is declared is what runs. It exits with the worker's exit code and writes a log next to `--out`
