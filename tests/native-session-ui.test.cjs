@@ -248,16 +248,18 @@ test('the launch route follows the settings: native by default, the terminal whe
 });
 
 // A stand-in for the main process on `window.agentrix`, for the launcher.
-function launcher(runtime, calls) {
+// `kind`: the project's kind; `codexHere`: whether this computer has Codex installed; `startError`: what a start is refused with. `errors`: what the card shows of a refusal.
+function launcher(runtime, calls, { kind = 'local', codexHere = true, startError = null } = {}) {
   const bridge = {
     getSettings: async () => ({ ok: true, value: runtime.settings }), keyStatus: async () => ({ ok: true, value: { saved: runtime.saved } }),
-    start: async (...args) => { calls.push(['start', ...args]); return { ok: true, value: { runtimeSessionId: 'rs1' } }; },
+    start: async (...args) => { calls.push(['start', ...args]); return startError ? { ok: false, error: startError } : { ok: true, value: { runtimeSessionId: 'rs1' } }; },
   };
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: {
-    getAgents: async () => ({ ok: true, value: { npm: true, installing: null, error: null, codex: { installed: true }, claude: { installed: true } } }), onAgents: () => () => {},
+    getAgents: async () => ({ ok: true, value: { npm: true, installing: null, error: null, codex: { installed: codexHere }, claude: { installed: true } } }), onAgents: () => () => {},
+    installAgent: async agent => { calls.push(['install', agent]); return { ok: true, value: null }; }, openNode: async () => { calls.push(['node']); return { ok: true, value: null }; },
     agentHistory: async () => ({ ok: true, value: { claude: null, codex: null } }),
-    getState: async () => ({ ok: true, value: { projects: [{ id: 'p', terminals: [{ id: 't1', sessionId: null, status: 'stopped' }] }] } }),
+    getState: async () => ({ ok: true, value: { projects: [{ id: 'p', kind, terminals: [{ id: 't1', sessionId: null, status: 'stopped' }] }] } }),
     agentLaunch: async (...args) => { calls.push(['launch', ...args]); return { ok: true, value: true }; }, nativeSession: bridge,
   } } });
   const bridgeModule = require('../src/features/native-session/native-bridge.ts');
@@ -265,11 +267,11 @@ function launcher(runtime, calls) {
     '@phosphor-icons/react': { CircleNotch() {}, Terminal() {} }, './AgentBrandIcon.ts': { ClaudeLogo() {}, CodexLogo() {} }, './time': { relativeTime: () => '' }, './i18n': { t: fill }, './agent-launcher.css': {},
     './native-store.ts': { noteTerminalSwitch: (...args) => calls.push(['note', ...args]), refreshNativeSession: id => calls.push(['refresh', id]) }, './native-bridge.ts': bridgeModule,
   });
-  const props = { terminalId: 't1', projectId: 'p', onAction: async promise => { const result = await promise; return result.ok ? result.value : undefined; }, onOpenTerminal() {} };
+  const errors = [], props = { terminalId: 't1', projectId: 'p', onAction: async promise => { const result = await promise; if (!result.ok) errors.push(result.error); return result.ok ? result.value : undefined; }, onOpenTerminal() {} };
   const render = () => harness.render('AgentLauncher', props).result;
   const button = agent => elements(render()).find(node => node.type === 'button' && node.props.className?.startsWith(`agent-launcher-agent is-${agent}`));
   const note = agent => elements(button(agent)).find(node => node.type === 'small').props.children;
-  return { render, button, note, text: () => renderToStaticMarkup(render()), done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; } };
+  return { render, button, note, errors, text: () => renderToStaticMarkup(render()), done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; } };
 }
 
 test('the launcher starts a native session or a terminal by the settings, says where the click goes, and a missing key never starts a hidden terminal', async () => {
@@ -291,6 +293,29 @@ test('the launcher starts a native session or a terminal by the settings, says w
       if (!expected.length) assert.match(view.text(), /只用 API 运行，但还没有保存 API key/, 'and it says why nothing started');
     } finally { view.done(); }
   }
+});
+
+test('Codex of an SSH project starts at once whether or not this computer has Codex: no 未安装, no install, no Node.js; a local project and Claude are unchanged', async () => {
+  const runtime = { settings: { claudePath: 'api-then-terminal', monthlyBudgetUsd: null }, saved: true };
+  const calls = [], remote = launcher(runtime, calls, { kind: 'ssh', codexHere: false });
+  try {
+    remote.render(); await settle();
+    assert.equal(remote.note('codex'), '开始新的对话 · 原生界面', 'no "not installed" for a computer that is not the one it runs on');
+    remote.button('codex').props.onClick(); await settle();
+    assert.deepEqual(calls, [['start', 't1', { agent: 'codex', resume: false }], ['refresh', 't1']], 'the session starts through the bridge, with no install and no Node.js');
+  } finally { remote.done(); }
+  const refused = [], failing = launcher(runtime, refused, { kind: 'ssh', codexHere: false, startError: '远端未找到 Codex 程序。' });
+  try {
+    failing.render(); await settle(); failing.button('codex').props.onClick(); await settle();
+    assert.deepEqual([refused, failing.errors], [[['start', 't1', { agent: 'codex', resume: false }]], ['远端未找到 Codex 程序。']], 'what main says about the other computer is what the click shows, and nothing is installed');
+  } finally { failing.done(); }
+  const local = launcher(runtime, [], { kind: 'local', codexHere: false });
+  try { local.render(); await settle(); assert.match(local.note('codex'), /未安装/, 'a local project still offers the install'); assert.equal(local.note('claude'), '开始新的对话 · API · 原生界面'); } finally { local.done(); }
+  const claudeCalls = [], claude = launcher({ ...runtime, settings: { claudePath: 'terminal-only', monthlyBudgetUsd: null } }, claudeCalls, { kind: 'ssh', codexHere: false });
+  try {
+    claude.render(); await settle(); claude.button('claude').props.onClick(); await settle();
+    assert.deepEqual(claudeCalls, [['launch', 't1', 'claude', 'new']], 'Claude on an SSH project takes the terminal path as before');
+  } finally { claude.done(); }
 });
 
 test('the launcher offers no terminal mode for Codex, and Codex starts natively whatever the settings say', async () => {

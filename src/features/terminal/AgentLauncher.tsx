@@ -14,7 +14,7 @@ const AGENTS: { agent: Agent; name: string; mark: ReactNode }[] = [{ agent: 'cla
 
 // A project with no agent on the card: pick the agent to work with, fresh or continuing this folder's latest conversation
 // with it. An agent not installed yet is installed by the same click (Node.js first, when even npm is missing), then
-// started. A plain terminal (for other CLIs) stays one click away. By the settings (运行方式) the agent starts as a native session
+// started; Codex of an SSH project is not installed here and starts at once (the other computer says if it has none). A plain terminal (for other CLIs) stays one click away. By the settings (运行方式) the agent starts as a native session
 // (Claude on the API key, Codex on its app-server) or, as before, in a terminal.
 export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal, runningCount = 0, onExpand }: {
   terminalId: string; projectId: string; onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>;
@@ -26,6 +26,13 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
   const [agents, setAgents] = useState<AgentsState | null>(null);
   const [runtime, setRuntime] = useState<{ settings: NativeSettings; keySaved: boolean | null } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // A project on another computer (SSH). Its Codex runs there, on that computer's app-server: whether this computer has Codex is none of its business.
+  const [remote, setRemote] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void window.agentrix.getState?.()?.then(result => { if (active && result.ok) setRemote(result.value.projects.find(project => project.id === projectId)?.kind === 'ssh'); });
+    return () => { active = false; };
+  }, [projectId]);
   useEffect(() => {
     const bridge = nativeBridge();
     if (!bridge) return;
@@ -39,7 +46,8 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
     const off = window.agentrix.onAgents(state => { if (active) setAgents(state); });
     return () => { active = false; off(); };
   }, []);
-  const missing = (agent: Agent) => !!agents && !agents[agent].installed;
+  const runsHere = (agent: Agent) => !(remote && agent === 'codex');
+  const missing = (agent: Agent) => runsHere(agent) && !!agents && !agents[agent].installed;
   useEffect(() => {
     let active = true;
     void window.agentrix.agentHistory(terminalId).then(result => {
@@ -81,7 +89,7 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
     else {
       const installed = missing(what) ? await onAction(window.agentrix.installAgent(what)) : agents;
       if (installed) setAgents(installed);
-      if (installed?.[what].installed) {
+      if (!runsHere(what) || installed?.[what].installed) {
         const id = await prepareAgentTerminal();
         if (id) await launch(id, what);
       }
@@ -89,7 +97,7 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
     setStarting(null);
   };
   const note = (agent: Agent) => {
-    if (agents?.installing === agent) return t('正在安装…');
+    if (runsHere(agent) && agents?.installing === agent) return t('正在安装…');
     if (missing(agent)) return agents!.npm ? t('未安装 · 点击一键安装') : t('未安装 · 需要先安装 Node.js');
     if (chosen === 'new') return t('开始新的对话');
     if (!history) return t('正在查找开发记录…');
