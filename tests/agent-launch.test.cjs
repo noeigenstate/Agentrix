@@ -57,20 +57,20 @@ test('public state reserves the reading surface during agent startup and release
   session.status = 'shell'; session.agentStarting = false; assert.equal(terminal().agentStarting, false, 'a plain shell stays visible');
 });
 
-test('agent:launch refuses native Claude without starting or replacing a session, and keeps native Codex', async () => {
+test('agent:launch refuses the removed native mode without starting or replacing a session, and sends Codex to app-server', async () => {
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'), handlers = {}, starts = [], deleted = [];
   const context = vm.createContext({ handle: (name, run) => handlers[name] = run, findProject: () => ({ kind: 'local' }), sessions: new Map(),
     launchPlans: { delete: id => deleted.push(id) }, restorePlans: { delete: id => deleted.push(id) }, startTerminal: () => assert.fail('no Codex TUI'),
     nativeSessions: { start: async (...args) => starts.push(args) }, broadcast() {} });
   const start = main.indexOf("  handle('agent:launch'");
   vm.runInContext(main.slice(start, main.indexOf('  registerNativeIpc(', start)), context);
-  await assert.rejects(handlers['agent:launch']('fixture', 'claude', 'native'), /only available for Codex/);
+  for (const agent of ['claude', 'codex']) await assert.rejects(handlers['agent:launch']('fixture', agent, 'native'), /Unsupported agent session mode/);
   assert.deepEqual(starts, []); assert.deepEqual(deleted, []);
-  assert.equal(await handlers['agent:launch']('fixture', 'codex', 'native'), true);
+  assert.equal(await handlers['agent:launch']('fixture', 'codex', 'new'), true);
   assert.equal(starts.length, 1); assert.equal(starts[0][0], 'fixture'); assert.equal(starts[0][1].agent, 'codex');
 });
 
-test('the native launcher offers Codex alone and has no managed Claude action', t => {
+test('the launcher offers both agents and the two start modes, with no terminal mode or managed Claude action', t => {
   const { hookHarness } = require('./helpers/hook-harness.cjs'), React = require('react');
   const previous = global.window; global.window = { agentrix: { getAgents: async () => ({ ok: true, value: { codex: { installed: true }, claude: { installed: true } } }), onAgents: () => () => {}, agentHistory: async () => ({ ok: true, value: { claude: null, codex: null } }) } };
   t.after(() => { global.window = previous; });
@@ -79,8 +79,8 @@ test('the native launcher offers Codex alone and has no managed Claude action', 
   const props = { terminalId: 'fixture', projectId: 'fixture', onAction: async () => {}, onOpenTerminal() {} };
   const nodes = node => Array.isArray(node) ? node.flatMap(nodes) : React.isValidElement(node) ? [node, ...nodes(node.props.children)] : [];
   const first = ui.render('AgentLauncher', props).result;
-  nodes(first).find(node => node.props.role === 'radio').props.onClick();
-  const native = ui.render('AgentLauncher', props).result, buttons = nodes(native).filter(node => node.type === 'button' && node.props.className?.startsWith('agent-launcher-agent '));
-  assert.equal(buttons.length, 1); assert.ok(buttons[0].props.className.includes('is-codex'));
-  assert.equal(nodes(native).some(node => typeof node.props.children === 'string' && /SDK/.test(node.props.children)), false); ui.dispose();
+  const buttons = nodes(first).filter(node => node.type === 'button' && node.props.className?.startsWith('agent-launcher-agent '));
+  assert.deepEqual(nodes(first).filter(node => node.props.role === 'radio').map(node => node.props.children), ['开始新开发', '继承开发历史']);
+  assert.equal(buttons.length, 2);
+  assert.equal(nodes(first).some(node => typeof node.props.children === 'string' && /SDK/.test(node.props.children)), false); ui.dispose();
 });

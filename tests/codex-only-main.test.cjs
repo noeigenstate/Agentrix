@@ -46,8 +46,9 @@ test('the launcher sends every local Codex mode to app-server and keeps SSH refu
     nativeSessions: { start: async (id, options) => calls.push([id, options]) }, folderOf: () => '/synthetic', folderHistory: async () => ({ codex: { id: 'same-thread' } }),
     store: { setRestore: (_id, value) => Object.assign(saved, value) }, broadcast() {}, startTerminal: () => assert.fail('no local Codex TUI') };
   vm.createContext(context); vm.runInContext(main.slice(main.indexOf("  handle('agent:launch',"), main.indexOf('  registerNativeIpc({ handle });')), context);
-  for (const mode of ['new', 'native', 'continue']) await handlers.get('agent:launch')('t', 'codex', mode);
-  assert.equal(calls.length, 3); assert.equal(calls[2][1].resume, true); assert.equal(saved.threadId, 'same-thread');
+  for (const mode of ['new', 'continue']) await handlers.get('agent:launch')('t', 'codex', mode);
+  assert.equal(calls.length, 2); assert.equal(calls[1][1].resume, true); assert.equal(saved.threadId, 'same-thread');
+  await assert.rejects(handlers.get('agent:launch')('t', 'codex', 'native'), /Unsupported agent session mode/);
   kind = 'ssh'; await assert.rejects(handlers.get('agent:launch')('t', 'codex', 'new'), /SSH/);
 });
 

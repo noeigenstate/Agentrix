@@ -974,6 +974,7 @@
   "项目卡片上多一个“直连 Codex”：不经过终端，阅读视图通过 Codex 的协议直接对话，回答逐字出现，确认和提问在卡片里作答": "Adds \"Codex direct\" to project cards: the reading view talks to Codex over its protocol without a terminal, answers appear word by word, and approvals and questions are answered in a card",
   "未送达：助手没有收到这条消息": "Not delivered: the agent did not receive this message",
   "重新发送": "Send again",
+  "在终端中处理所有确认和问题": "Handle all confirmations and questions in the terminal",
   "选择助手，开始开发": "Pick an agent and start",
   "开发方式": "How to start",
   "开始新开发": "Start fresh",
