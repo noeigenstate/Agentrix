@@ -192,14 +192,9 @@ const CONNECTION_WORDS: Record<NativeAgent, Record<string, string>> = {
   claude: { api: '已连接 API', subscription: '订阅（Claude Code 登录）', none: '未连接' },
   codex: { api: 'API', subscription: 'ChatGPT 订阅', none: '未连接' },
 };
-// `active: false` is an account that is signed in while this agent has no session; only an API or a subscription can be signed in (none and unknown never are).
-const IDLE_CONNECTION_WORDS: Record<NativeAgent, Record<string, string>> = {
-  claude: { api: 'API（未开会话）', subscription: '订阅（未开会话）' },
-  codex: { api: 'API（未开会话）', subscription: 'ChatGPT 订阅（未开会话）' },
-};
+// `active: false` is an account that is signed in while this agent has no main session. A sub-agent may still be running on it, so the row names the plan and says nothing about sessions; only 已连接 waits for a session to back it.
 export function connectionWord(agent: NativeAgent, connection: (AgentConnection) | null | undefined) {
-  const words = connection?.active === false ? { ...CONNECTION_WORDS[agent], ...IDLE_CONNECTION_WORDS[agent] } : CONNECTION_WORDS[agent];
-  const word = connection ? words[connection.kind] : undefined;
+  const word = connection?.active === false && connection.kind === 'api' ? 'API' : connection ? CONNECTION_WORDS[agent][connection.kind] : undefined;
   return { text: word ? t(word) : t('未知'), source: connection?.source || null };
 }
 

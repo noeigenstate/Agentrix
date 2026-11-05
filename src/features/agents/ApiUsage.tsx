@@ -5,7 +5,7 @@
 //   - Claude on the API also has a link to the console's billing page (the spend is an estimate; the console has the bill); a balance rejection brings the same button next to its notice, never two;
 //   - the provider's own notice that a limit was reached is said under the agent it belongs to, with when it recovers only if the provider said;
 //   - not connected, or not known, says "额度 未知";
-//   - an account that is signed in while the agent has no session (the connection's `active` is false) says so in the connection row; its bars or spend show as for any plan or API,
+//   - an account that is signed in while the agent has no main session (the connection's `active` is false) still names its plan; its bars or spend show as for any plan or API,
 //     and since no session is running it has no context length and no round or conversation tokens (only the session in view has them).
 // Windows come from the main process; the current session's agent falls back to what its own screen and records gave when the main process has none.
 // Read-only: it only asks the main process (for the current project's scope). A value nobody gave is 未知, never 0. What the main process does not give (a read

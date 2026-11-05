@@ -1196,18 +1196,19 @@ test('the connection in use reads in words per agent: Claude API / subscription 
   assert.ok(usageSection(html, 'Codex').includes('<dt>连接</dt><dd><span title="account/read: API key">API</span></dd>'));
 });
 
-test('an account signed in while the agent has no session says so; none and unknown never read as signed in; the bars and spend stay, the context and tokens are not made up', async () => {
+test('an account signed in while the agent has no main session names its plan and never claims 已连接; none and unknown never read as signed in; the bars and spend stay, the context and tokens are not made up', async () => {
   const { connectionWord } = words(), c = (kind, active) => ({ kind, source: 'src', observedAt: 1, ...(active === undefined ? {} : { active }) });
   const kinds = ['api', 'subscription', 'none', 'unknown'];
-  assert.deepEqual(kinds.map(kind => connectionWord('claude', c(kind, false)).text), ['API（未开会话）', '订阅（未开会话）', '未连接', '未知']);
-  assert.deepEqual(kinds.map(kind => connectionWord('codex', c(kind, false)).text), ['API（未开会话）', 'ChatGPT 订阅（未开会话）', '未连接', '未知']);
+  assert.deepEqual(kinds.map(kind => connectionWord('claude', c(kind, false)).text), ['API', '订阅（Claude Code 登录）', '未连接', '未知']);
+  assert.deepEqual(kinds.map(kind => connectionWord('codex', c(kind, false)).text), ['API', 'ChatGPT 订阅', '未连接', '未知']);
   assert.deepEqual(kinds.map(kind => connectionWord('claude', c(kind, true)).text), ['已连接 API', '订阅（Claude Code 登录）', '未连接', '未知'], 'an active connection reads as before');
   assert.deepEqual(kinds.map(kind => connectionWord('codex', c(kind)).text), ['API', 'ChatGPT 订阅', '未连接', '未知'], 'a field that is missing (older data) reads as before');
   const base = usageOf(), idle = usageOf({ agents: {
     claude: { ...base.agents.claude, connection: c('api', false) },
     codex: { ...base.agents.codex, connection: c('subscription', false), limits: { ...base.agents.codex.limits, observedAtMs: Date.now() - 60_000 } } } });
   const html = await usageHtml({ usage: async () => ({ ok: true, value: idle }) }), claude = usageSection(html, 'Claude'), codex = usageSection(html, 'Codex');
-  assert.match(claude, /<dd><span[^>]*>API（未开会话）<\/span><\/dd>/); assert.match(codex, /<dd><span[^>]*>ChatGPT 订阅（未开会话）<\/span><\/dd>/);
+  assert.match(claude, /<dd><span[^>]*>API<\/span><\/dd>/); assert.match(codex, /<dd><span[^>]*>ChatGPT 订阅<\/span><\/dd>/);
+  assert.doesNotMatch(html, /未开会话/, 'a sub-agent may be running on this account, so no session is not something the pane can say');
   assert.match(codex, /5 小时额度[\s\S]*?aria-valuenow="40"/); assert.match(codex, /每周额度/); assert.match(codex, /额度来自 Codex/);
   assert.match(claude, /月预算/); assert.match(claude, /API 花费/);
   assert.doesNotMatch(html, /上下文长度|本轮|本次对话|<dt>额度<\/dt>/, 'no session: no context, no round, no empty row');
