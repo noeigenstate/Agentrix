@@ -178,11 +178,11 @@ function imageMetadata(_key, value) {
 }
 
 function jsonFrames(receive, dropped, invalid, limit = MAX_FRAME) {
-  let parts = [], bytes = 0, envelope = null;
+  let parts = [], bytes = 0, envelope = null, generation = 0;
   const read = chunk => {
     if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk);
-    let offset = 0;
-    while (offset < chunk.length) {
+    let offset = 0, epoch = generation;
+    while (offset < chunk.length && epoch === generation) {
       const end = chunk.indexOf(10, offset), segment = chunk.subarray(offset, end < 0 ? chunk.length : end);
       offset = end < 0 ? chunk.length : end + 1;
       bytes += segment.length;
@@ -198,12 +198,24 @@ function jsonFrames(receive, dropped, invalid, limit = MAX_FRAME) {
       parts = []; bytes = 0; envelope = null;
       if (metadata) { dropped(metadata, size); continue; }
       let value;
-      try { value = JSON.parse(line.toString('utf8'), imageMetadata); } catch { invalid('invalid_json'); return; }
+      try { const text = line.toString('utf8');
+        // Image frames alone pay the reviver cost; ordinary history uses the native parser.
+        let image = /"(?:type|kind)"\s*:\s*"(?:imageGeneration|image_gen\.generation)"/.test(text);
+        if (!image && text.includes('\\u')) {
+          const candidates = text.matchAll(/("(?:[^"\\]|\\.)*")\s*:\s*("(?:[^"\\]|\\.)*")/g);
+          for (const match of candidates) {
+            const key = JSON.parse(match[1]);
+            if (key !== 'type' && key !== 'kind') continue;
+            const type = JSON.parse(match[2]);
+            if (type === 'imageGeneration' || type === 'image_gen.generation') { image = true; break; }
+          }
+        }
+        value = image ? JSON.parse(text, imageMetadata) : JSON.parse(text); } catch { invalid('invalid_json'); return; }
       receive(value);
     }
   };
   read.end = () => { if (bytes) invalid('truncated_frame'); read.clear(); };
-  read.clear = () => { parts = []; bytes = 0; envelope = null; };
+  read.clear = () => { ++generation; parts = []; bytes = 0; envelope = null; };
   return read;
 }
 

@@ -22,6 +22,4 @@ function resolveCli(provider, env = process.env, platform = process.platform, no
   throw new Error(`Native ${provider} launch requires an executable in PATH (or a standard npm installation). Configure a supported executable.`);
 }
 
-function createNativeSession() { throw new Error('Codex 终端入口已停用，请使用 app-server。'); }
-
-module.exports = { createNativeSession, resolveCli };
+module.exports = { resolveCli };

@@ -1,3 +1,4 @@
+require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -129,8 +130,10 @@ test('dispatch emits kind and provider token and cost totals for the ledger', as
 test('Codex receives stdin/argv/cwd and reads its rollout for routing and final rate', async t => {
   const f = await fixture(t), result = await f.finished;
   assert.equal(result.code, 0); assert.equal(result.stderr, '');
-  const signals = result.stdout.trim().split('\n');
-  assert.equal(signals.length, 2);
+  const diagnostics = result.stdout.trim().split('\n');
+  assert.equal(diagnostics.length, 3);
+  assert.match(diagnostics[0], /app-server: Agentrix control unavailable \(bootstrap\/missing_address\)/);
+  const signals = diagnostics.slice(1); assert.equal(signals.length, 2);
   assert.match(signals[0], /\[dispatch\] started [\w-]+ codex model gpt-6\.1-sol effort max fast on · routing ok · pid \d+ session /);
   assert.match(signals[1], /38 token\/s \(150 output tokens in 4 s\) · exit 0 reason exit · out /);
   assert.deepEqual(f.events.map(event => event.type), ['dispatch-start', 'dispatch-end']);

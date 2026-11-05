@@ -485,7 +485,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   let treeStop = Promise.resolve(), stoppingChild = null;
   let controlClient = null, activeRuntime = null, nativeTurn = null, settleNative, nativeFallback = null, nativeRunning = false;
   let bootstrap, controlOpening = false, controlAttemptAt = 0, ending = false;
-  let controlFailure = 'bootstrap/missing_environment', transportFallback = false;
+  let controlFailure = 'bootstrap/missing_environment', transportFallback = false, lastControlFailure;
   let nativeBilling = null;
   let boardWatch, scopeRestoreBlocked = false, scopeRestoreNote = '';
   const controlReceipts = new Map();
@@ -834,7 +834,13 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         controlFailure = error.message === 'control_unavailable' ? `${error.stage}/${error.category}`
           : `bootstrap/${error instanceof SyntaxError ? 'invalid_json' : ['ENOENT', 'EACCES', 'EPERM'].includes(error.code) ? error.code : 'read_failed'}`;
       }
-      finally { controlOpening = false; }
+      finally {
+        controlOpening = false;
+        if (options.agent === 'codex' && !controlClient && lastControlFailure !== controlFailure) {
+          lastControlFailure = controlFailure;
+          signal(`transport ${id} app-server: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
+        } else if (controlClient) lastControlFailure = null;
+      }
     }
     await openControl();
     function acceptNative(event) {
@@ -906,7 +912,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       if (!endSent) send({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured, verdict: routingVerdict(output, declared()),
         ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
         ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
-      await new Promise(resolve => log.end(resolve));
+      await new Promise((resolve, reject) => {
+        if (log.closed) return resolve();
+        log.once('close', resolve); log.once('error', reject); log.end();
+      });
       return exitCode;
     };
     let result;
@@ -935,8 +944,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
           providerSessionId: effective.resume || null };
         const completion = new Promise(resolve => { settleNative = resolve; });
         if (options.agent === 'codex') {
-          activeRuntime = createCodexRuntime({ resolveExecutable: async () => 'codex', spawnProcess: (_file, args, spawnOptions) => {
-            const command = resolveExecutable('codex', args, env); return launch(command.file, command.args, spawnOptions);
+          activeRuntime = createCodexRuntime({ resolveExecutable: async () => 'codex', spawnProcess: (_file, _args, spawnOptions) => {
+            const command = resolveExecutable('codex', commandOf(effective), env); return launch(command.file, command.args, spawnOptions);
           } }).create(spec, acceptNative);
           if (effective.resume) await rollout.prepare(effective.resume);
           try { if (effective.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
@@ -947,7 +956,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
               : Number.isInteger(error.code) ? `rpc_${error.code}`
               : ['ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'codex_cli_required', 'rpc_timeout', 'process_failed', 'process_exited', 'disconnected',
                 'frame_limit', 'write_failed', 'invalid_response', 'invalid_json', 'invalid_frame', 'invalid_payload', 'truncated_frame', 'sandbox_mismatch', 'invalid_thread', 'thread_in_use', 'unsupported_codex_capabilities', 'unsupported_codex_version'].includes(error.code || error.message) ? error.code || error.message : 'runtime_failed';
-            throw new Error(`Codex app-server startup failed (${stage}/${category})`);
+            throw new Error(`Codex app-server startup failed (${stage}/${category})${category === 'sandbox_mismatch' ? error.requestedSandbox === 'read-only'
+              ? '：Codex 未应用只读沙箱，已停止启动。请检查 Codex 沙箱配置后重试。'
+              : '：请在 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"，然后重试。' : ''}`);
           }
           child = { pid: activeRuntime.pid, exitCode: null };
           pollTimer = setInterval(() => { void rollout.read(); }, POLL_INTERVAL);
@@ -1016,7 +1027,6 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       }
       if (!resumeSession && !transportFallback) signal(`transport ${id} claude-cli fallback: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
       const command = resolveExecutable(options.agent, commandOf(effective), env);
-      if (options.agent === 'codex' && effective.resume && !resumeSession) await rollout.prepare(effective.resume);
 
       if (killed) throw new Error('Dispatch interrupted before launch');
       child = launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
@@ -1028,8 +1038,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         else failed('session not reported within 30 s');
         stop('SIGTERM', false);
       }, startTimeout);
-      if (options.agent === 'codex') pollTimer = setInterval(() => { void rollout.read(); }, POLL_INTERVAL);
-      const segmentOutput = output, segmentRollout = rollout, segmentDrain = drained;
+      const segmentOutput = output, segmentDrain = drained;
       child.once('exit', code => {
         exited = true; clearTimeout(startTimer); clearInterval(pollTimer);
         if (segmentConfirmed) return;
@@ -1037,7 +1046,6 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         // without waiting for pipes a leftover child process may hold open.
         void Promise.race([segmentDrain, new Promise(resolve => setTimeout(resolve, EXIT_SETTLE))]).then(async () => {
           if (output !== segmentOutput || segmentConfirmed || unconfirmed) return;
-          if (options.agent === 'codex') { await segmentRollout.pending; await segmentRollout.read(); }
           if (output !== segmentOutput) return;
           confirm(true);
           if (!started) failed(output.capacity ? 'at capacity' : 'worker exited without a confirmed session', code === 0 ? 1 : code);
@@ -1052,7 +1060,6 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       });
       flushOutput();
       clearInterval(pollTimer);
-      if (options.agent === 'codex') { await rollout.pending; await rollout.read(); }
       confirm(true); drain();
       clearTimeout(startTimer); await treeStop;
       if (!started) failed(spawnError?.message || (output.capacity ? 'at capacity' : 'worker exited without a confirmed session'), result.code === 0 ? 1 : result.code);

@@ -98,7 +98,7 @@ async function requireIsolation(options = {}) {
       const state = await hostState(options);
       diagnostics?.feed(`[lab-win32] host ready=${Number(state.ready)} elevated=${Number(state.elevated)}\n`);
       return state;
-    }, prompt: options.prompt !== false && !process.env.NODE_TEST_CONTEXT,
+    }, prompt: options.prompt !== false && !process.env.AGENTRIX_LAB_ISOLATED_HOST,
     prepare: () => prepare(false), elevate: () => prepare(true),
   });
 }

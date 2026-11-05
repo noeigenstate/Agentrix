@@ -19,9 +19,12 @@ function createNormalizer(emit, clean = value => value) {
       kind: block.type === 'thinking' ? 'reasoning-summary' : 'agent-message', status: 'interrupted', content: { text: '', discarded: true },
     }, { itemId: `${message.id}:${index}` });
   }
-  return (message, { live = false } = {}) => {
+  return message => {
     // Task lifecycle records are counted by the session before normalization. Child content has its own feed.
     if (message.parent_tool_use_id || message.isSidechain) return;
+    // CLI command identity, never its translated output. The GUI already acknowledges these mutations.
+    const command = message.local_command_run;
+    if (message.type === 'assistant' && (command?.command === 'compact' || command?.command === 'model' && typeof command.args === 'string' && command.args.trim())) return;
     const timestamp = Date.parse(message.timestamp), occurredAtMs = Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : null;
     const publish = (type, payload, extra) => emit(type, payload, { occurredAtMs, ...extra, replay: message.isReplay === true });
     if (message.type === 'system' && message.subtype === 'status') {
@@ -41,7 +44,9 @@ function createNormalizer(emit, clean = value => value) {
         ? /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>\s*$/.exec(message.message.content)?.[1] : null;
     // Historical machine records still follow the reading view's provenance
     // rules. Only the live command's feedback is added to the current feed.
-    if ((live || !message.isReplay) && typeof local === 'string' && local.trim() && message.uuid) {
+    // Replayed user stdout is a transcript machine record, including setModel's unlabelled receipt.
+    // Actual read-only command feedback arrives as a labelled live assistant/system message.
+    if (!message.isReplay && typeof local === 'string' && local.trim() && message.uuid) {
       if (records.has(message.uuid)) return;
       remember(records, message.uuid, true);
       publish('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: output(local) } }, { itemId: `local-command:${message.uuid}` });

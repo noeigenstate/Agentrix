@@ -519,31 +519,6 @@ def history_records(root, codex_home, claude_home, per_agent=4, budget=1200 * 10
         take("claude", filename, os.path.basename(filename)[:-6], compact_claude_record)
     return found
 
-def recent_session(root, codex_home, thread_id=None):
-    for modified, filename in sorted(rollout_files(codex_home), reverse=True):
-        try:
-            meta = first_record(filename)
-            payload = meta.get("payload", {})
-            source = payload.get("source", "cli")
-            if meta.get("type") != "session_meta" or source not in ("cli", "vscode") or os.path.realpath(payload.get("cwd", "")) != root: continue
-            identity = payload.get("id", "")
-            if not re.fullmatch(r"[a-fA-F0-9-]{36}", identity): continue
-            if thread_id and identity != thread_id: continue
-            state = "unknown"
-            for record in json_records(filename, history_window=True):
-                item = record.get("payload", {})
-                if record.get("type") == "event_msg":
-                    event = item.get("type")
-                    if event in ("task_started", "turn_started", "user_message"): state = "interrupted"
-                    elif event in ("task_complete", "turn_completed"): state = "complete"
-                    elif event in ("turn_aborted", "turn_interrupted"): state = "interrupted"
-                elif record.get("type") == "response_item" and item.get("type") == "message":
-                    if item.get("role") == "user": state = "interrupted"
-                    elif item.get("role") == "assistant" and item.get("phase") == "final": state = "complete"
-            return {"id": identity, "state": state, "modifiedAt": int(modified * 1000)}
-        except (OSError, ValueError, TypeError): continue
-    return None
-
 CONVERSATION_EVENTS = ("item_completed", "user_message", "agent_message", "task_started", "turn_started", "task_complete", "turn_completed", "turn_aborted", "turn_interrupted")
 TOOL_CALLS = ("custom_tool_call", "function_call", "local_shell_call")
 TOOL_OUTPUTS = ("custom_tool_call_output", "function_call_output", "local_shell_call_output")
@@ -803,6 +778,18 @@ class CodexActivityReader:
             read_transcript(self, source, size, self.record)
             return dict(self.snapshot) if self.offset >= size else None
 
+def resolve_codex(env):
+    # SSH's command shell does not load the login/interactive PATH used by nvm and volta.
+    result = subprocess.run(["/bin/bash", "-lic", "type -P codex"], env=dict(env),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
+    for line in reversed(result.stdout.splitlines()):
+        file = line.strip()
+        if os.path.isabs(file) and os.path.isfile(file) and os.access(file, os.X_OK): return file
+    error = ValueError("远端未找到 Codex 程序。请在远端登录 shell 中安装 Codex，并确认 type -P codex 能找到它。")
+    error.code = "codex_cli_required"
+    raise error
+
+
 class Worker:
     def __init__(self, emit, accounts=None):
         self.emit = emit
@@ -848,9 +835,10 @@ class Worker:
         if not isinstance(process_id, str) or not re.fullmatch(r"[\w-]{1,160}", process_id): raise ValueError("无效的远程进程标识。")
         with self.lock:
             if self.stopping or process_id in self.codex_processes: raise ValueError("远程进程已关闭或已经启动。")
-            if len(self.codex_processes) >= 8: raise ValueError("远程 Codex 进程数量已达上限。")
-            executable = shutil.which("codex")
-            if not executable: raise ValueError("远端未找到 Codex 程序。")
+            if self.codex_processes: raise ValueError("远程 Codex 进程数量已达上限。")
+        executable = resolve_codex(self.agent_env)
+        with self.lock:
+            if self.stopping or process_id in self.codex_processes: raise ValueError("远程进程已关闭或已经启动。")
             child = subprocess.Popen([executable, "app-server", "--listen", "stdio://"], cwd=self.coding_root,
                 env=dict(self.agent_env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 start_new_session=os.name == "posix")
@@ -1550,7 +1538,6 @@ class Channel:
             elif op == "document": value = worker.document(message.get("path"), message.get("length", 8192))
             elif op == "preview": value = worker.preview(message["path"], message.get("page", 0))
             elif op == "save-file": value = worker.save_file(message["path"], message.get("page", 0), message.get("revision"), message["data"])
-            elif op == "resume-info": value = recent_session(worker.coding_root, worker.codex_home, message.get("threadId"))
             elif op == "codex-status": value = worker.codex_status(message.get("since"), message.get("threadId"))
             elif op == "claude-status": value = worker.claude_status(message.get("path"), message.get("since"))
             elif op == "claude-account": value = worker.claude_account()
@@ -1567,7 +1554,9 @@ class Channel:
             elif op == "upload-cancel": value = worker.cancel_upload(message["transfer"])
             else: raise ValueError("不支持的远程请求。")
             worker.emit({"type": "response", "id": identity, "ok": True, "value": value})
-        except Exception as error: worker.emit({"type": "response", "id": identity, "ok": False, "error": str(error)[:1000]})
+        except Exception as error:
+            worker.emit({"type": "response", "id": identity, "ok": False, "error": str(error)[:1000],
+                **({"code": "codex_cli_required"} if getattr(error, "code", None) == "codex_cli_required" else {})})
 
     def close(self):
         self.worker.stop()

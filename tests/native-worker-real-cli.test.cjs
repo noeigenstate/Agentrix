@@ -35,5 +35,5 @@ test('real app-server consumes a late steer before completing the worker turn', 
     assert.equal(bodies.some(body => body.includes(correction)), true);
     assert.ok(events.some(event => event.type === 'input.receipt' && event.payload.clientMessageId === 'correction' && event.payload.status === 'consumed'));
     assert.ok(events.some(event => event.type === 'item.upsert' && event.payload.content?.text === 'CORRECTION ANSWER'));
-  } finally { await runtime.close(); server.closeAllConnections(); server.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+  } finally { await runtime.close(); server.closeAllConnections(); server.close(); await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }); }
 });

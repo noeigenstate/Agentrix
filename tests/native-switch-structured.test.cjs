@@ -46,7 +46,7 @@ test('G6 terminal_reason controls the outcome even when subtype is success, and 
   }
   for (const reason of ['api_error', 'prompt_too_long', 'image_error', 'turn_setup_failed']) assert.equal(turnResult({ subtype: 'success', terminal_reason: reason }).status, 'failed', reason);
   for (const reason of Object.keys(reasons)) assert.match(turnResult({ terminal_reason: reason }).message, /。$/);
-  const absent = turnResult({ subtype: 'success' }); assert.equal(absent.status, 'interrupted');
+  const absent = turnResult({ subtype: 'success' }); assert.equal(absent.status, 'unknown'); assert.equal(absent.error, null);
   for (const field of ['durationMs', 'apiDurationMs', 'costUsdMicros', 'tokens']) assert.equal(absent[field], null);
 });
 test('G2/G6 production SDK result pipeline separates cumulative usage from round/context/cost and replays no billing', async t => {

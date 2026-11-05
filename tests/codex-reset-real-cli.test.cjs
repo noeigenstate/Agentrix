@@ -51,6 +51,6 @@ test('real Codex 0.166 validates reset params and rejects an isolated profile be
   } finally {
     rpc.close(); if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await closed;
     server.closeAllConnections(); server.close();
-    assert.equal(path.dirname(root), temporary); fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    assert.equal(path.dirname(root), temporary); await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 });

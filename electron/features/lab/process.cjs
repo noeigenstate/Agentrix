@@ -22,7 +22,7 @@ const WINDOWS_DIAGNOSTIC_EVENTS = new Set([
 
 // CI diagnostics contain fixed stage names and numeric counters, never argv, environment or worker output.
 function windowsDiagnostics() {
-  if (process.platform !== 'win32' || !process.env?.NODE_TEST_CONTEXT || process.env.AGENTRIX_LAB_TEST_PREPARE_HOST !== '1') return null;
+  if (process.platform !== 'win32' || !process.env?.AGENTRIX_LAB_ISOLATED_HOST || process.env.AGENTRIX_LAB_TEST_PREPARE_HOST !== '1') return null;
   let tail = '', emitted = 0, relayEmitted = 0;
   const recent = [], recentRelays = [];
   return {

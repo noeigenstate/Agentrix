@@ -1,0 +1,1 @@
+process.env.AGENTRIX_LAB_ISOLATED_HOST = '1';

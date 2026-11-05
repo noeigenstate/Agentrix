@@ -1,3 +1,4 @@
+require('./fixtures/team-isolation.cjs');
 // Guards for integration/BOUNDARY.md (Dispatch) that no behaviour test covers.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');

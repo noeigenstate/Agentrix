@@ -92,10 +92,10 @@ test('a finishing worker answers a late streamed intervention before control.fin
 });
 
 for (const [command, expected, marker] of [
-  ['/compact', /Compacted/, null], ['/context', /Context Usage/, null],
+  ['/compact', null, null], ['/context', /Context Usage/, null],
   ['/offline-command ARG', /NATIVE SLASH ANSWER/, 'CUSTOM_COMMAND_MARKER ARG'],
   ['/offline-skill', /NATIVE SLASH ANSWER/, 'SKILL_COMMAND_MARKER'],
-  ['/model', /Current model/, null], ['/model claude-haiku-4-5', /model/i, null],
+  ['/model', /Current model/, null], ['/model claude-haiku-4-5', null, null],
 ]) test(`native slash ${command} has real CLI feedback and a lazy command list`, { skip, timeout: 60000 }, async t => {
   const bodies = [];
   const f = await harness(t, data => { bodies.push(data); return [opening(data), ...textBlock(0, 'NATIVE SLASH ANSWER'), ...finish('end_turn')]; });
@@ -131,7 +131,8 @@ for (const [command, expected, marker] of [
   const start = events.length, previousRequests = bodies.length;
   await session.send({ clientMessageId: 'slash-command', text: command }); await wait(2);
   const visible = events.slice(start).filter(event => event.type === 'item.upsert' && event.payload.kind === 'agent-message').map(event => event.payload.content.text).join('\n');
-  assert.match(visible, expected);
+  if (expected) assert.match(visible, expected);
+  else assert.equal(visible, '', 'GUI mutations use their native acknowledgements instead of CLI local stdout');
   assert.doesNotMatch(visible, /local-command-stdout|system-reminder/);
   if (marker) assert.ok(JSON.stringify(bodies.slice(previousRequests)).includes(marker));
   if (['/context', '/model'].includes(command)) assert.equal(bodies.length, previousRequests);
@@ -452,10 +453,17 @@ test('A3 real child records stay out of the main normalized conversation', { ski
     const sent = JSON.stringify(data.messages);
     if (sent.includes('tool_result')) return [opening(data), ...textBlock(0, 'MAIN DONE'), ...finish('end_turn')];
     if (sent.includes('SUBTASK')) return [opening(data), ...textBlock(0, 'SUBAGENT ANSWER'), ...finish('end_turn')];
-    return [opening(data), ...textBlock(0, 'MAIN BEFORE'), ...useTool('Agent', { description: 'sub', prompt: 'SUBTASK', subagent_type: 'general-purpose' })(data).slice(1)];
+    // An unspecified Agent can auto-background and finish the parent first. This
+    // scenario deliberately exercises foreground child record streaming; async fork is checked separately.
+    return [opening(data), ...textBlock(0, 'MAIN BEFORE'), ...useTool('Agent', { description: 'sub', prompt: 'SUBTASK', subagent_type: 'general-purpose', run_in_background: false })(data).slice(1)];
   });
-  const events = [], normalize = createNormalizer((type, payload) => events.push({ type, payload })); let child = false;
-  await f.run({}, message => { child ||= !!message.parent_tool_use_id; normalize(message); });
+  const events = [], observed = [], normalize = createNormalizer((type, payload) => events.push({ type, payload })); let child = false;
+  await f.run({}, message => {
+    child ||= !!message.parent_tool_use_id; normalize(message);
+    observed.push({ type: message.type, subtype: message.subtype, child: !!message.parent_tool_use_id,
+      content: message.message?.content, result: message.result });
+  });
+  if (!child) t.diagnostic(JSON.stringify(observed).replace(/sk-ant-[\w-]+/g, '<fake-key>'));
   assert.equal(child, true); assert.equal(JSON.stringify(events).includes('SUBAGENT ANSWER'), false);
   assert.ok(events.some(event => event.payload.content?.text === 'MAIN DONE'));
 });

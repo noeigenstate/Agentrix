@@ -35,7 +35,11 @@ function itemPayload(item, completed, renderImage = () => null) {
   else if (item.type === 'commandExecution') content = { command: bounded(item.command), phrase: commandPhrase(item.command).phrase, cwd: item.cwd ?? null, output: bounded(item.aggregatedOutput), exitCode: item.exitCode ?? null, durationMs: item.durationMs ?? null };
   else if (item.type === 'fileChange') content = { changes: (item.changes || []).slice(0, 100).map(x => ({ path: x.path, kind: x.kind, diff: bounded(x.diff) })) };
   else if (kind === 'tool') content = { tool: item.tool, server: item.server ?? null, output: bounded((item.result?.content || item.contentItems || []).filter(block => block.type === 'text').map(block => block.text).join('\n') || (typeof item.result === 'string' ? item.result : '')) };
-  else if (item.type === 'imageGeneration' && completed && isGeneratedImage(item.savedPath)) content = { text: '', generated: { path: item.savedPath, prompt: bounded(item.revisedPrompt) || '' }, images: renderImage(item)?.images || [] };
+  else if (item.type === 'imageGeneration' && completed && isGeneratedImage(item.savedPath)) {
+    const images = renderImage(item)?.images || [];
+    content = { text: images.length ? '' : '图片已保存，请在运行 Codex 的主机查看。',
+      generated: { path: item.savedPath, prompt: bounded(item.revisedPrompt) || '' }, images };
+  }
   else content = { text: bounded(item.text), providerType: item.type };
   const status = { inProgress: 'in-progress', pending: 'pending', completed: 'completed', failed: 'failed', declined: 'failed', interrupted: 'interrupted' }[item.status]
     || (completed ? 'completed' : 'running');
@@ -43,11 +47,12 @@ function itemPayload(item, completed, renderImage = () => null) {
 }
 
 function createEvents(spec, emit, now, renderImage) {
-  let sequence = 0;
+  let sequence = 0, dropped = false;
   const events = [], items = new Map(), itemEvents = new Map(), completed = new Set(), children = new Set();
   const binding = { connectionEpoch: randomUUID(), providerSessionId: null, turnId: null };
   let cumulative = spec.providerSessionId ? null : { input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0 }, baseline = cumulative;
   function publish(type, payload, extra = {}) {
+    if (type === 'item.dropped') dropped = true;
     const event = { schemaVersion: 1, eventId: randomUUID(), sequence: ++sequence, ...binding, provider: 'codex', transport: 'codex-app-server',
       projectId: spec.projectId, terminalId: spec.terminalId, runtimeSessionId: spec.runtimeSessionId, runId: spec.runId ?? null,
       itemId: null, receivedAtMs: now(), occurredAtMs: null, replay: false, type, payload, ...extra };
@@ -101,14 +106,17 @@ function createEvents(spec, emit, now, renderImage) {
     while (items.size > 400) { const id = items.keys().next().value; items.delete(id); completed.delete(id); itemEvents.delete(id); }
   }
   return { binding, publish, notification,
-    finishTurn() {
+    finishTurn(status = 'interrupted') {
       publish('context.compacting', { active: false });
       for (const [itemId, payload] of items) if (['command', 'tool', 'file-change'].includes(payload.kind) && ['running', 'in-progress', 'pending'].includes(payload.status)
         && itemEvents.get(itemId)?.turnId === binding.turnId) {
-        const final = { ...payload, status: 'interrupted' }; items.set(itemId, final); completed.add(itemId); publish('item.upsert', final, { itemId });
+        // The drained frame has no trustworthy nested item identity. Missing tool results
+        // stay unknown even if the turn failed elsewhere; actual interruption retains its meaning.
+        const final = { ...payload, status: dropped && status !== 'interrupted' ? 'unknown' : 'interrupted' };
+        items.set(itemId, final); completed.add(itemId); publish('item.upsert', final, { itemId });
       }
     },
-    beginTurn() { baseline = cumulative; for (let i = events.length - 1; i >= 0; i--) if (['plan.updated', 'turn.diff'].includes(events[i].type)) events.splice(i, 1); },
+    beginTurn() { dropped = false; baseline = cumulative; for (let i = events.length - 1; i >= 0; i--) if (['plan.updated', 'turn.diff'].includes(events[i].type)) events.splice(i, 1); },
     activity: () => ({ known: true, count: children.size + [...items.values()].filter(item => ['command', 'tool'].includes(item.kind) && ['running', 'in-progress', 'pending'].includes(item.status)).length }),
     snapshot: () => ({ runtimeSessionId: spec.runtimeSessionId, lastSequence: sequence,
       events: [...events.filter(x => x.type !== 'item.upsert' && x.type !== 'item.delta'), ...[...items].map(([itemId, payload]) => ({ ...itemEvents.get(itemId), type: 'item.upsert', payload }))]

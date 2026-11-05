@@ -5,7 +5,7 @@ const { spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
-const { createRpc, MAX_FRAME, MAX_HISTORY_FRAME } = require('../electron/features/codex-app-server/rpc.cjs');
+const { createRpc, MAX_FRAME } = require('../electron/features/codex-app-server/rpc.cjs');
 const { createEventStream } = require('../electron/features/native-session/events.cjs');
 
 function runtimeFixture(t, mode, owner = 'gui') {
@@ -76,7 +76,7 @@ test('history frames have a finite larger byte budget; UTF-8 is decoded once acr
   try {
     const history = f.rpc.request('thread/turns/list', {});
     const text = '汉🙂'.repeat(700000), frame = Buffer.from(JSON.stringify({ id: '1', result: { text } }) + '\n');
-    assert.ok(frame.length > 4 * 1024 * 1024 && frame.length < MAX_HISTORY_FRAME);
+    assert.ok(frame.length > 4 * 1024 * 1024 && frame.length < MAX_FRAME);
     for (let offset = 0; offset < frame.length; offset += 65533) f.child.stdout.write(frame.subarray(offset, offset + 65533));
     assert.equal((await history).text, text); assert.deepEqual(f.failures, []);
   } finally { f.rpc.close(); }

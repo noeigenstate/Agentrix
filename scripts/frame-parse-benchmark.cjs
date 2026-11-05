@@ -1,16 +1,27 @@
-// Isolated process: measure the synchronous work done for one legal 64 MiB frame.
+// Isolated process: legal worst-shape frames, including many small history objects.
 const { performance } = require('node:perf_hooks');
 const { jsonFrames, MAX_FRAME } = require('../electron/oversized-record.cjs');
-const frameBytes = Number(process.argv[2] || 64) * 1024 * 1024;
-if (!Number.isSafeInteger(frameBytes) || frameBytes < 1024 * 1024 || frameBytes > MAX_FRAME) throw new RangeError('Use 1 to 64 MiB');
-const results = [];
-for (let sample = 0; sample < 5; sample++) {
-  const prefix = '{"method":"item/completed","params":{"item":{"type":"imageGeneration","result":"';
-  const suffix = '","savedPath":"/project/generated_images/run/image.png"}}}';
-  const frame = Buffer.from(prefix + 'x'.repeat(frameBytes - Buffer.byteLength(prefix + suffix)) + suffix + '\n');
-  let seen = false;
-  const read = jsonFrames(message => { seen = !Object.hasOwn(message.params.item, 'result'); }, () => { throw Error('unexpected drop'); }, code => { throw Error(code); });
-  const began = performance.now(); read(frame); results.push(performance.now() - began);
-  if (!seen) throw Error('pixels retained');
+const bytes = Number(process.argv[2] || 64) * 1024 * 1024;
+if (!Number.isSafeInteger(bytes) || bytes < 1024 * 1024 || bytes > MAX_FRAME) throw new RangeError('Use 1 to 64 MiB');
+function frame(kind) {
+  const unit = JSON.stringify({ id: 'item', type: 'agentMessage', text: 'x'.repeat(150) }) + ',';
+  const image = kind === 'small-image' ? '"image":{"type":"imageGeneration","result":"pixels"},' : '';
+  const prefix = kind === 'long-image' ? '{"item":{"type":"imageGeneration","result":"' : '{' + image + '"items":[';
+  const suffix = kind === 'long-image' ? '"}}' : '{"padding":"' + '"}]}';
+  const middle = kind === 'long-image' ? '' : unit.repeat(Math.floor((bytes - prefix.length - suffix.length) / unit.length));
+  const before = kind === 'long-image' ? prefix : prefix + middle + '{"padding":"';
+  const after = kind === 'long-image' ? suffix : '"}]}';
+  return Buffer.from(before + 'x'.repeat(bytes - Buffer.byteLength(before + after)) + after + '\n');
 }
-console.log(JSON.stringify({ bytes: frameBytes, synchronousMs: results, maxMs: Math.max(...results) }, null, 2));
+const results = [];
+for (const kind of ['long-image', 'small', 'small-image']) {
+  const value = frame(kind), times = [];
+  for (let n = 0; n < 3; n++) {
+    const read = jsonFrames(message => {
+      if (message.item?.result || message.image?.result) throw new Error('pixels retained');
+    }, () => { throw new Error('unexpected drop'); }, code => { throw new Error(code); });
+    const start = performance.now(); read(value); times.push(performance.now() - start);
+  }
+  results.push({ kind, bytes: value.length - 1, synchronousMs: times, maxMs: Math.max(...times) });
+}
+console.log(JSON.stringify(results, null, 2));

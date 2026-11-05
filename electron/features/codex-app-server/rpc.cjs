@@ -1,5 +1,4 @@
 const { MAX_FRAME, jsonFrames } = require('../../oversized-record.cjs');
-const MAX_HISTORY_FRAME = MAX_FRAME;
 const HISTORY_READS = new Set(['thread/turns/list', 'thread/items/list']);
 const keyOf = id => `${typeof id}:${id}`;
 
@@ -56,17 +55,17 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
       pending.delete(keyOf(envelope.id)); clearTimeout(task.timer);
       const history = HISTORY_READS.has(task.method);
       task.reject(Object.assign(new Error(history ? 'history_frame_limit' : 'frame_limit'),
-        { code: history ? 'history_frame_limit' : 'frame_limit', uncertain: history ? false : task.sent }));
+        { code: history ? 'history_frame_limit' : 'frame_limit', bytes, uncertain: history ? false : task.sent }));
     } else if (envelope.id !== undefined && typeof envelope.method === 'string') {
       try { write({ id: envelope.id, error: { code: -32600, message: 'Frame too large' } }); } catch {}
     }
-    onDropped(bytes);
+    if (!task || !HISTORY_READS.has(task.method)) onDropped(bytes);
   }, fail);
   child.stdout.on('data', read);
   child.stdout.on('end', () => { read.end(); fail('disconnected'); });
   child.stdin.on('drain', () => { blocked = false; flush(); });
-  child.stdin.on('error', () => fail('write_failed'));
-  child.on('error', error => fail(['ENOENT', 'EACCES', 'EPERM', 'EINVAL'].includes(error.code) ? error.code : 'process_failed'));
+  child.stdin.on('error', error => fail(error.code === 'codex_cli_required' ? error.code : 'write_failed'));
+  child.on('error', error => fail(['ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'codex_cli_required'].includes(error.code) ? error.code : 'process_failed'));
   child.once('exit', () => fail('process_exited'));
   // Drain diagnostics without forwarding provider stderr or credentials to any consumer.
   child.stderr?.on('data', () => {});
@@ -88,4 +87,4 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
   };
 }
 
-module.exports = { createRpc, MAX_FRAME, MAX_HISTORY_FRAME };
+module.exports = { createRpc, MAX_FRAME };

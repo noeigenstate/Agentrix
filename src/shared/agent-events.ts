@@ -13,11 +13,11 @@ export type NativeDraft = { version: number; text: string; images: string[]; und
 export type NativeHandoff = { changeId: number; draft: NativeDraft };
 export type NativeHandoffReceipt = { changeId: number; version: number; accepted: boolean };
 export type AgentItemKind = 'user-message' | 'agent-message' | 'reasoning-summary' | 'command' | 'file-change' | 'tool' | 'plan' | 'web' | 'other';
-export type AgentItemStatus = 'in-progress' | 'running' | 'pending' | 'completed' | 'failed' | 'interrupted';
+export type AgentItemStatus = 'in-progress' | 'running' | 'pending' | 'completed' | 'failed' | 'interrupted' | 'unknown';
 export type RoutingValues = { model: string | null; effort: string | null; fast: boolean | null };
 export type TokenCounts = { input: number | null; cachedInput: number | null; cacheWrite: number | null; output: number | null; reasoning: number | null };
 export type UsagePayload = TokenCounts & { contextWindow: number | null; costUsdMicros: number | null; costEstimated: boolean | null; contextTokens?: number | null; round?: TokenCounts | null };
-export type TurnCompletion = { status: 'completed' | 'failed' | 'interrupted'; error: string | null;
+export type TurnCompletion = { status: 'completed' | 'failed' | 'interrupted' | 'unknown'; error: string | null;
   terminalReason?: string | null; message?: string | null; durationMs?: number | null; apiDurationMs?: number | null;
   costUsdMicros?: number | null; costEstimated?: boolean | null; tokens?: TokenCounts | null };
 export type LimitsPayload = {

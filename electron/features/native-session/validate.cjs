@@ -25,7 +25,7 @@ function validEvent(event) {
     && (value.round == null || ['input', 'cachedInput', 'cacheWrite', 'output', 'reasoning'].every(key => nullableCount(value.round[key])));
   if (event.type === 'session.state') return ['starting', 'idle', 'running', 'waiting', 'stopping', 'stopped', 'disconnected', 'failed'].includes(value.state);
   if (event.type === 'turn.started') return ['user', 'automatic', 'resume'].includes(value.origin) && (value.clientMessageId === null || id(value.clientMessageId));
-  if (event.type === 'turn.completed') return ['completed', 'failed', 'interrupted'].includes(value.status)
+  if (event.type === 'turn.completed') return ['completed', 'failed', 'interrupted', 'unknown'].includes(value.status)
     && ['durationMs', 'apiDurationMs', 'costUsdMicros'].every(key => value[key] === undefined || nullableCount(value[key]))
     && (value.terminalReason == null || text(value.terminalReason, 160)) && (value.message == null || text(value.message, 2000))
     && (value.tokens == null || ['input', 'cachedInput', 'cacheWrite', 'output', 'reasoning'].every(key => nullableCount(value.tokens[key])));

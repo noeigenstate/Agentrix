@@ -24,8 +24,10 @@ function frames(socket, receive, disconnected) {
   };
   socket.on('drain', () => { blocked = false; flush(); });
   const read = jsonFrames(value => {
-    if (!value || value.v !== 1) return socket.destroy();
+    if (socket.destroyed) { read.clear(); return; }
+    if (!value || value.v !== 1) { socket.destroy(); read.clear(); return; }
     try { receive(value); } catch { socket.destroy(); }
+    if (socket.destroyed) read.clear();
   }, (envelope, bytes) => {
     if (envelope.type === 'result') receive({ v: 1, type: 'result', requestId: envelope.requestId, ok: false, error: 'control_frame_limit' });
     else if (envelope.type === 'request') {

@@ -106,7 +106,7 @@ try {$helper.WaitForExit();exit $helper.ExitCode} finally {$helper.Dispose()}
   } };
 }
 
-function createHostPreparation({ testing = Boolean(process.env.NODE_TEST_CONTEXT),
+function createHostPreparation({ testing = Boolean(process.env.AGENTRIX_LAB_ISOLATED_HOST),
   consent = process.env.AGENTRIX_LAB_TEST_PREPARE_HOST === '1' } = {}) {
   let attempt;
   return async function ensureHostReady({ verify, prepare, elevate, prompt = true }) {

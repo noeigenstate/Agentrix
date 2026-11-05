@@ -7,6 +7,7 @@ const { createSwitches } = require('./switches.cjs');
 function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {}, readCommands = async () => [], terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {}, retireTerminal = () => {}, switchOptions = {} }) {
   const sessions = new Map(), terminalStreams = new Map(), busy = new Set(), occupied = new Set();
   const agents = { claude: { path: null, reason: null, limits: null }, codex: { path: null, reason: null, limits: null } };
+  const projectLimits = new Map();
   const ended = new Set(['stopped', 'failed', 'disconnected']);
   const eventStream = spec => createEventStream(spec, event => { emit(event); changed(spec.terminalId, event); }, now);
   function selection(spec, runtime, allowBudget = false, retained = false) {
@@ -71,7 +72,11 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       record.persisted = true;
       saveSession(id, { agent, providerSessionId: event.providerSessionId });
     }
-    if (event.type === 'limits.updated') agents[agent].limits = event.payload;
+    if (event.type === 'limits.updated') {
+      const limits = projectLimits.get(spec.projectId) || {};
+      limits[agent] = event.payload; projectLimits.set(spec.projectId, limits);
+      if (spec.kind !== 'ssh') agents[agent].limits = event.payload;
+    }
     if (event.type === 'limits.updated' || event.type === 'usage.updated') reconcile();
     if (event.type === 'input.receipt') record.inputs.set(event.payload.clientMessageId, event.payload.status);
     // A proved empty rejected turn continues on the terminal. It must not announce an
@@ -116,7 +121,11 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         const reason = error.code || error.message;
         if (agent === 'codex') {
           try { await runtime.close(); } catch { }
-          const message = ['codex_cli_required', 'ENOENT'].includes(reason) ? '未找到 Codex 程序，请在设置中安装。'
+          const message = reason === 'sandbox_mismatch' && error.requestedSandbox === 'read-only' ? 'Codex 未应用只读沙箱，已停止启动。请检查 Codex 沙箱配置后重试。'
+            : reason === 'sandbox_mismatch' ? 'Codex 返回只读沙箱。请在 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"，然后重试。'
+            : ['codex_cli_required', 'ENOENT'].includes(reason) ? spec.kind === 'ssh'
+              ? '远端未找到 Codex 程序。请在远端登录 shell 中安装 Codex，并确认 type -P codex 能找到它。'
+              : '未找到 Codex 程序，请在设置中安装。'
             : reason === 'unsupported_codex_version' ? 'Codex 版本过低，请升级后重试。' : 'Codex app-server 连接失败，请重试。';
           record.stream.publish('error', { code: typeof error.code === 'string' ? error.code : 'codex_start_failed', message, retryable: true, willRetry: false, stage: 'startup' });
           record.stream.publish('session.state', { state: 'failed', reason: message });
@@ -372,6 +381,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       const config = settings.get(), snapshot = structuredClone(agents);
       for (const agent of ['claude', 'codex']) {
         if (projectId) {
+          snapshot[agent].limits = structuredClone(projectLimits.get(projectId)?.[agent] || null);
           const running = localSessions().findLast(session => session.spec.projectId === projectId && session.spec.agent === agent);
           snapshot[agent].path = running?.path || null;
           snapshot[agent].reason = running?.record?.stream.snapshot().events.findLast(event => event.type === 'path.changed')?.payload.reason || null;

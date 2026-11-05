@@ -102,3 +102,12 @@ test('SSH usage holds remote native limits without consulting local usage inputs
   const usage = await facade.usage('remote'); assert.equal(usage.agents.claude.path, null);
   assert.equal(usage.agents.codex.next.path, 'native'); assert.equal(usage.agents.codex.connection.source, 'remote app-server');
 });
+
+test('missing remote Codex preserves a typed actionable startup failure', async () => {
+  const connection = { events: new (require('node:events').EventEmitter)(), close() {}, request: async () => {
+    throw Object.assign(new Error('远端未找到 Codex 程序。'), { code: 'codex_cli_required' });
+  } };
+  const runtime = createCodexRuntime({ launchRemote: async () => ({ cwd: process.cwd(), child: createRemoteCodexProcess(connection) }) })
+    .create({ kind: 'ssh', owner: 'gui', cwd: '/remote' }, () => {});
+  await assert.rejects(runtime.start(), { code: 'codex_cli_required' }); await runtime.close();
+});

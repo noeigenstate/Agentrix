@@ -1,3 +1,4 @@
+require('./fixtures/team-isolation.cjs');
 const { test, resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -50,6 +51,18 @@ for (const scenario of ['native', 'no_environment', 'missing_address', 'invalid_
     assert.ok(transport[0].includes('capability_probe/rpc_-32601'), transport[0]);
     assert.equal(transport[0].includes(root), false); assert.equal(transport[0].includes('synthetic-private-key'), false);
     assert.equal(launches, 1); assert.doesNotMatch(stdout, /fallback/);
+    const diagnostics = stdout.split('\n').filter(line => line.includes('Agentrix control unavailable'));
+    if (scenario === 'native') assert.equal(diagnostics.length, 0);
+    else {
+      assert.equal(diagnostics.length, 1, 'one safe diagnostic per control failure');
+      const reasons = { no_environment: /bootstrap\/missing_environment/, missing_address: /bootstrap\/missing_address/,
+        invalid_json: /bootstrap\/invalid_json/, missing_file: /bootstrap\/ENOENT/,
+        missing_capability: /bootstrap\/missing_capability/, missing_session_key: /bootstrap\/missing_session_key/,
+        rejected_registration: /control_register\/(?:registration_closed|timeout)/, dead_address: /control_connect\/(?:ENOENT|ECONNREFUSED)/ };
+      assert.match(diagnostics[0], reasons[scenario]);
+      assert.ok(!diagnostics[0].includes(root)); assert.ok(!diagnostics[0].includes('synthetic-private-key'));
+    }
+
 
   });
 }

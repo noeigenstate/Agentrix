@@ -12,11 +12,18 @@ const { workerEnvironment } = require('./environment.cjs');
 
 const occupied = new Map();
 function stopProcess(child) {
-  if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve();
+  if (!child) return Promise.resolve();
+  // A CLI metadata child can inherit stdout after the app-server itself exits.
+  // Release our pipe ends on proved local exit; a pipe holder is not a live server.
+  const release = () => { if (!child.remote) for (const pipe of [child.stdin, child.stdout, child.stderr]) pipe?.destroy?.(); };
+  if (child.exitCode != null || child.signalCode != null) { release(); return Promise.resolve(); }
   return new Promise((resolve, reject) => {
-    const closed = () => { clearTimeout(timer); resolve(); };
-    const timer = setTimeout(() => { child.removeListener('close', closed); reject(new Error('process_stop_timeout')); }, 3000);
+    const remove = () => { clearTimeout(timer); child.removeListener('close', closed); child.removeListener('exit', exited); };
+    const closed = () => { remove(); resolve(); };
+    const exited = () => { release(); closed(); };
+    const timer = setTimeout(() => { remove(); reject(new Error('process_stop_timeout')); }, 3000);
     child.once('close', closed);
+    if (!child.remote) child.once('exit', exited);
     if (child.remote) child.kill('SIGKILL');
     else if (process.platform === 'win32' && child.pid) {
       execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'],
@@ -27,7 +34,7 @@ function stopProcess(child) {
   });
 }
 
-function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, renderImage, resetAtLimit, translate = value => value } = {}) {
+function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, renderImage, resetAtLimit, translate = value => value, platform = process.platform } = {}) {
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
@@ -40,6 +47,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       let lockKey, active = false, threadResponse, accountGeneration = 0, limitsRead = null;
       let skills = null, skillsRead = null, skillsGeneration = 0, skillsExpireAt = 0;
       let accountRead = null;
+      const connectionAbort = new AbortController();
+      const assertOpen = () => { if (closed) throw Object.assign(new Error('session_closed'), { code: 'closed' }); };
       let executionSeen = false, resetting = null, resetRetry = null, lastReset = null;
       const setState = (value, reason = null) => {
         state = value;
@@ -81,7 +90,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             const scope = spec.scopeId || spec.runtimeSessionId, limit = restrictedLimits(scopes.get(scope), outcome.terminalReason === 'usageLimitExceeded' ? 'spend_limit' : 'rate_limited', scope, now());
             scopes.set(scope, limit); events.publish('limits.updated', limit);
           }
-          events.finishTurn(); events.publish('turn.completed', outcome);
+          events.finishTurn(outcome.status); events.publish('turn.completed', outcome);
           setState('idle');
           if (outcome.terminalReason === 'usageLimitExceeded') {
             const entry = receipts.get(clientMessageId);
@@ -146,9 +155,10 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (spec.kind === 'ssh') {
             stage = 'ssh_connect';
             if (!launchRemote) throw new Error('remote_transport_required');
-            const remote = await launchRemote(spec);
+            const remote = await launchRemote(spec, { signal: connectionAbort.signal });
             spec.cwd = remote.cwd; spec.env = {}; spec.context = remote.context || '';
             child = remote.child;
+            if (closed) { try { await stopProcess(child); } finally { child.dispose?.(); child = null; } assertOpen(); }
           }
           if (!path.isAbsolute(spec.cwd || '')) throw new Error('invalid_cwd');
           const source = spec.env || process.env, env = workerEnvironment(source);
@@ -156,28 +166,36 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           // Dispatched workers still strip the bootstrap and cannot inherit the planner capability.
           if (spec.owner === 'gui' && typeof source.AGENTRIX_BOOTSTRAP === 'string') env.AGENTRIX_BOOTSTRAP = source.AGENTRIX_BOOTSTRAP;
           const executable = child ? 'codex' : await resolveExecutable(env);
+          assertOpen();
           if (!executable) throw new Error('codex_cli_required');
           stage = 'spawn';
-          child ||= spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: spec.cwd, env, windowsHide: true,
-            detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
-          rpc = createRpc(child, { timeout: spec.rpcTimeoutMs || 8000, onNotification: notification,
-            onDropped: bytes => events.publish('item.dropped', { reason: 'too_large', bytes }),
-            onRequest: message => requests.open(message), onDisconnect: reason => {
-              if (closed) return;
-              requests?.cancelAll(); setState('disconnected', reason);
-            } });
-          requests = createRequests(rpc, events, setState);
-          stage = 'initialize';
-          const init = await rpc.request('initialize', { clientInfo: { name: 'agentrix', version: '1.0.0' }, capabilities: { experimentalApi: true } });
-          const compatibility = assertCompatible(init);
-          rpc.notify('initialized');
-          stage = 'capability_probe'; await probeCapabilities(rpc);
+          let compatibility, reconnecting = false;
+          const connect = async () => {
+            child ||= spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: spec.cwd, env, windowsHide: true,
+              detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+            rpc = createRpc(child, { timeout: spec.rpcTimeoutMs || 8000, onNotification: notification,
+              onDropped: bytes => events.publish('item.dropped', { reason: 'too_large', bytes }),
+              onRequest: message => requests.open(message), onDisconnect: reason => {
+                if (closed || reconnecting) return;
+                requests?.cancelAll(); setState('disconnected', reason);
+              } });
+            requests = createRequests(rpc, events, setState);
+            stage = 'initialize';
+            const init = await rpc.request('initialize', { clientInfo: { name: 'agentrix', version: '1.0.0' }, capabilities: { experimentalApi: true } });
+            assertOpen();
+            compatibility = assertCompatible(init);
+            rpc.notify('initialized');
+            stage = 'capability_probe'; await probeCapabilities(rpc);
+            assertOpen();
+          };
+          await connect();
+          assertOpen();
           stage = resuming ? 'thread_resume' : 'thread_start';
           const threadId = spec.providerSessionId || spec.threadId || spec.sessionId;
           if (resuming && !threadId) throw new Error('missing_thread');
           if (resuming) bind(threadId);
           const options = { cwd: spec.cwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
-            config: { model_reasoning_effort: spec.effort || 'high', ...(spec.kind === 'ssh' && spec.context ? { developer_instructions: spec.context } : {}) },
+            config: { model_reasoning_effort: spec.effort || 'high', ...(spec.context ? { developer_instructions: spec.context } : {}) },
             ...((spec.readOnly || spec.roundtable) ? { sandbox: 'read-only' }
               : spec.policy?.sandbox ? { sandbox: spec.policy.sandbox }
                 : spec.owner === 'dispatch' ? { sandbox: 'workspace-write' } : {}),
@@ -189,15 +207,29 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             occupied.delete(lockKey); lockKey = null; events.binding.providerSessionId = null; resumed = false;
             result = await rpc.request('thread/start', options);
           }
+          assertOpen();
+          if (platform === 'win32' && spec.kind !== 'ssh' && spec.owner === 'dispatch' && options.sandbox === 'workspace-write' && result.sandbox?.type === 'readOnly') {
+            // A per-request override cannot elevate or alter the owner's configuration.
+            // A resumed thread is cached in its process. Retire the first read-only
+            // runtime before retrying the same thread so the request override is applied.
+            if (resumed) {
+              reconnecting = true; rpc.close(); await stopProcess(child); child.dispose?.(); child = null; reconnecting = false;
+              assertOpen(); await connect(); stage = 'thread_resume';
+            }
+            result = await rpc.request(resumed ? 'thread/resume' : 'thread/start', { ...options,
+              ...(resumed ? { threadId, excludeTurns: true } : {}), config: { ...options.config, 'windows.sandbox': 'unelevated' } });
+            assertOpen();
+          }
           if (typeof result?.thread?.id !== 'string' || resumed && result.thread.id !== threadId || result.cwd && path.resolve(result.cwd) !== path.resolve(spec.cwd)) throw new Error('invalid_thread');
-          if ((spec.readOnly || spec.roundtable) && result.sandbox?.type !== 'readOnly') throw new Error('sandbox_mismatch');
-          if (spec.owner === 'dispatch' && !spec.readOnly && !spec.roundtable && !spec.policy?.sandbox && result.sandbox?.type !== 'workspaceWrite') throw new Error('sandbox_mismatch');
+          if (options.sandbox === 'read-only' && result.sandbox?.type !== 'readOnly') throw Object.assign(new Error('Codex 未应用只读沙箱，已停止启动。请检查 Codex 沙箱配置后重试。'), { code: 'sandbox_mismatch', requestedSandbox: 'read-only' });
+          if (spec.owner === 'dispatch' && options.sandbox === 'workspace-write' && result.sandbox?.type !== 'workspaceWrite') throw Object.assign(new Error('Codex 返回只读沙箱。请在 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"，然后重试。'), { code: 'sandbox_mismatch' });
           if (resuming && result.thread.status?.type === 'active') throw new Error('thread_in_use');
           bind(result.thread.id); threadResponse = result;
           events.publish('routing.updated', { declared: { model: spec.model ?? null, effort: spec.effort ?? null, fast: spec.fast ?? null },
             effective: { model: result.model ?? null, effort: result.reasoningEffort ?? null, fast: result.serviceTier === 'fast' ? true : result.serviceTier === 'default' ? false : null }, observed: { model: null, effort: null, fast: null }, reason: null });
           // Dispatch needs the resumed model context, not a copy of its historical output.
           if (resumed && spec.owner !== 'dispatch') await replayHistory();
+          assertOpen();
           setState('idle');
           void readLimits().catch(() => {});
           return { providerSessionId: result.thread.id, runtimeSessionId: spec.runtimeSessionId, reason: compatibility.reason };
@@ -219,6 +251,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             if (limit > 1) { limit = Math.max(1, Math.floor(limit / 2)); continue; }
             // A single enormous turn cannot fit the display budget. Advance using metadata, keeping the session usable.
             page = await rpc.request('thread/turns/list', { threadId: events.binding.providerSessionId, cursor, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' });
+            events.publish('item.dropped', { reason: 'too_large', bytes: error.bytes });
           }
           if (!Array.isArray(page?.data)) throw new Error('invalid_history');
           limit = Math.min(50, limit * 2);
@@ -299,7 +332,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       }
       async function close() {
         if (closed) return;
-        closed = true; setState('stopping'); requests?.cancelAll();
+        closed = true; connectionAbort.abort(); setState('stopping'); requests?.cancelAll();
         if (active && rpc) { try { await rpc.request('turn/interrupt', { threadId: events.binding.providerSessionId, turnId: events.binding.turnId }, 250); } catch {} }
         rpc?.close();
         try { await stopProcess(child); }

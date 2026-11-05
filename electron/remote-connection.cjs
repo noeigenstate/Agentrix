@@ -148,7 +148,8 @@ class RemoteConnection {
         const request = this.pending.get(message.id);
         if (!request) return;
         if (message.ok === true) request.resolve(message.value);
-        else request.reject(new Error(String(message.error || '远程请求失败。')));
+        else request.reject(Object.assign(new Error(String(message.error || '远程请求失败。')),
+          message.code === 'codex_cli_required' ? { code: message.code } : {}));
       }
     }
   }

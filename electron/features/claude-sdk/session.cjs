@@ -25,7 +25,14 @@ function createClaudeSession(spec, emit, dependencies) {
   let providerId = spec.providerSessionId || null, state = 'starting', turnId = null;
   let apiObservedAt = null, limits = null, fallbackInput = null, resultCost = 0, observedModel = null;
   let changingOptions = null;
-  let shellAbort = null, shellContext = '';
+  let shellAbort = null, defaultModelReset = false;
+  const shellControllers = new Set();
+  async function stopShells() {
+    const jobs = [...shellControllers];
+    for (const job of jobs) job.abort.abort();
+    await Promise.allSettled(jobs.map(async job => { try { await job.task; } finally { await job.closed; } }));
+    for (const job of jobs) shellControllers.delete(job);
+  }
   const shells = new Map();
   function clean(value) {
     let text = value;
@@ -298,7 +305,7 @@ function createClaudeSession(spec, emit, dependencies) {
       await readBillingIdentity(run.query, { signal: run.abort.signal, timeoutMs: dependencies.initializationTimeoutMs });
       // A resumed transcript retains its last explicit model. Reapply an
       // acknowledged default reset before the renewed query accepts any input.
-      if (spec.model === null && providerId && run.query.setModel) {
+      if (defaultModelReset && providerId && run.query.setModel) {
         await run.query.setModel(undefined);
         const context = await run.query.getContextUsage();
         run.resetModel = typeof context.model === 'string' ? context.model : null;
@@ -322,8 +329,8 @@ function createClaudeSession(spec, emit, dependencies) {
     void run.task.catch(() => { try { if (!closed) setState('failed', 'accounting_unavailable'); } catch { } });
     return run;
   }
-  async function send({ clientMessageId, text, images = [] }) {
-    if (shellAbort) throw new Error('命令仍在运行，请等待结束。');
+  async function send({ clientMessageId, text, images = [] }, shellContent) {
+    if (shellAbort && !shellContent) throw new Error('命令仍在运行，请等待结束。');
     if (changingOptions) await changingOptions;
     if (typeof text !== 'string' || !text.trim() && !images.length) throw new Error('无效的消息。');
     if (closed || stopping || !started || ['failed', 'stopped'].includes(state)) throw new Error('会话已停止。');
@@ -356,7 +363,7 @@ function createClaudeSession(spec, emit, dependencies) {
     if (closed || stopping) throw new Error('会话已停止。');
     if (!canContinue()) return { status: 'rejected' };
     // No input has been queued yet; a key replaced during initialization must initialize again before delivery.
-    if (active.keyVersion !== dependencies.credentialVersion?.()) { await stopBackground(); cancelQuery(active, 'credentials_changed'); await active.task; return send({ clientMessageId, text, images }); }
+    if (active.keyVersion !== dependencies.credentialVersion?.()) { await stopBackground(); cancelQuery(active, 'credentials_changed'); await active.task; return send({ clientMessageId, text, images }, shellContent); }
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
     try { reserve(active); }
     catch (error) {
@@ -369,20 +376,20 @@ function createClaudeSession(spec, emit, dependencies) {
     active.busy = true;
     (active.turnInputs ||= []).push({ clientMessageId, text, images });
     fallbackInput = null;
+    if (shellContent) active.executed = true;
     sent.set(clientMessageId, 'queued');
     if (!turnId) begin('user', clientMessageId);
     publish('input.receipt', { clientMessageId, status: 'queued' });
-    publish('item.upsert', { kind: 'user-message', status: 'completed', content: { text, clientMessageId, ...(images.length ? { images } : {}) } }, { itemId: clientMessageId });
-    if (shellContext) content = [...(typeof content === 'string' ? [{ type: 'text', text: content }] : content), { type: 'text', text: shellContext }];
+    if (!shellContent) publish('item.upsert', { kind: 'user-message', status: 'completed', content: { text, clientMessageId, ...(images.length ? { images } : {}) } }, { itemId: clientMessageId });
+    if (shellContent) content = shellContent;
     active.queue.push({ type: 'user', uuid: clientMessageId, session_id: providerId || '', parent_tool_use_id: null, message: { role: 'user', content } });
-    shellContext = '';
     return { status: 'queued' };
   }
   function close() {
-    shellAbort?.abort();
     if (closing) return closing;
     stopping = true;
     closing = (async () => {
+      await stopShells();
       if (opening) cancelQuery(opening, 'stop');
       if (preparing) await preparing.catch(() => {});
       const run = active;
@@ -447,7 +454,7 @@ function createClaudeSession(spec, emit, dependencies) {
       if (previous) { try { await previous; } catch {} }
       const run = await optionsQuery();
       // Keep acknowledged changes on spec so budget renewal resumes with the same choices.
-      if (Object.hasOwn(patch, 'model')) { await run.query.setModel(patch.model || undefined); spec.model = patch.model; }
+      if (Object.hasOwn(patch, 'model')) { await run.query.setModel(patch.model || undefined); spec.model = patch.model; defaultModelReset = patch.model === null; }
       const flags = {};
       if (Object.hasOwn(patch, 'effort')) flags.effortLevel = patch.effort;
       if (Object.hasOwn(patch, 'fast')) flags.fastMode = patch.fast;
@@ -474,21 +481,26 @@ function createClaudeSession(spec, emit, dependencies) {
     if (state !== 'idle' || shellAbort || closed || changingOptions || preparing) throw new Error('当前正在工作，请等待空闲后再运行命令。');
     if (shells.size >= 2000) throw new Error('会话消息过多，请启动新会话。');
     shellAbort = new AbortController();
+    const job = { abort: shellAbort }; shellControllers.add(job);
     const itemId = `shell:${clientMessageId}`, abort = shellAbort;
     const card = (status, output = '', exitCode = null) => publish('item.upsert', { kind: 'command', status,
       content: { command, cwd: spec.cwd, output, exitCode } }, { itemId });
     card('running'); setState('running');
     const task = runShell({ cwd: spec.cwd, env: spec.env || process.env, command, signal: abort.signal,
-      output: ({ stdout, stderr }) => card('running', stdout + stderr) }).then(result => {
+      output: ({ stdout, stderr }) => card('running', stdout + stderr) }).then(async result => {
+      job.closed = result.closed;
+      void result.closed.then(() => shellControllers.delete(job));
       card(result.exitCode === 0 ? 'completed' : result.exitCode === null ? 'interrupted' : 'failed', result.stdout + result.stderr, result.exitCode);
-      const context = `<bash-input>${command}</bash-input>\n<bash-stdout>${result.stdout}</bash-stdout><bash-stderr>${result.stderr}</bash-stderr>\n`;
-      // Retain whole wrappers even when a long command replaces older shell context.
-      shellContext = shellContext.length + context.length > 60000 ? context : shellContext + context;
+      if (!abort.signal.aborted && result.exitCode !== null) await send({ clientMessageId, text: '!' + command }, [
+        { type: 'text', text: `<bash-input>${command}</bash-input>\n` },
+        { type: 'text', text: `<bash-stdout>${result.stdout || (!result.stderr ? '(Bash completed with no output)' : '')}</bash-stdout><bash-stderr>${result.stderr}</bash-stderr>` },
+      ]);
       return { exitCode: result.exitCode };
     }).catch(error => { card('failed'); throw error; }).finally(() => {
       if (shellAbort === abort) shellAbort = null;
-      if (!closed && !stopping) setState('idle');
+      if (!closed && !stopping && !active?.busy) setState('idle');
     });
+    job.task = task;
     shells.set(clientMessageId, { command, task }); return task;
   }
   return { start, resume: start, send, close, stopBackground, answer: requests.answer, snapshot: stream.snapshot,
@@ -533,6 +545,7 @@ function createClaudeSession(spec, emit, dependencies) {
       : { kind: active.initialized ? 'api' : 'unknown', source: active.initialized ? 'claude-sdk init: ANTHROPIC_API_KEY' : null,
         observedAt: active.initialized ? apiObservedAt : null },
     async interrupt() {
+      await stopShells();
       requests.cancel();
       if (active && !active.closing) { active.interrupted = true; await active.query.interrupt?.(); }
     },

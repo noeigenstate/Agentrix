@@ -387,6 +387,20 @@ test('events become the reading view’s entries: your message and pictures, the
   assert.deepEqual([stopped[0].tool.done, stopped[0].tool.failed], [true, true], 'a step of a finished session does not run for ever, and is not drawn as done');
 });
 
+test('D6 an unknown command result is settled without a failed count, while a real interruption remains failed', () => {
+  const { nativeEntries } = load('features/native-session/native-entries.ts'), { applyEvents, emptyModel } = load('features/native-session/native-model.ts');
+  for (const status of ['unknown', 'interrupted']) {
+    const ev = stream(), model = applyEvents(emptyModel(), [
+      ev('item.upsert', { kind: 'command', status, content: { command: 'echo result', exitCode: null } }, { itemId: 'command' }),
+      ev('turn.completed', { status: status === 'unknown' ? 'completed' : 'interrupted', error: null }),
+      ev('session.state', { state: 'idle' }),
+    ]).model;
+    const step = nativeEntries(model)[0].tool;
+    assert.equal(step.done, true); assert.equal(step.failed, status === 'interrupted');
+    assert.equal(step.detail.includes('已中断'), status === 'interrupted');
+  }
+});
+
 test('tool steps read the structured fields first: the output, path, command and phrase, and a change’s diff; JSON and pictures are never shown, and TodoWrite is no file change', () => {
   const { nativeEntries } = load('features/native-session/native-entries.ts'), { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
   const upsert = (itemId, kind, content, status = 'completed') => ev('item.upsert', { kind, status, content }, { itemId });

@@ -1,3 +1,4 @@
+require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
@@ -52,7 +53,7 @@ test('authenticated dispatch events populate groups, replace live totals, show d
   f.calls.apply(stop(6000));
   assert.equal(f.calls.snapshot()[0].items[0].state, 'done', 'Stop cannot shorten the three-second success display');
   t.mock.timers.tick(2999); assert.equal(f.calls.snapshot().length, 1);
-  t.mock.timers.tick(1); assert.equal(f.calls.snapshot()[0].items[0].hidden, true); assert.equal(f.changes(), 4);
+  t.mock.timers.tick(1); assert.deepEqual(f.calls.snapshot(), []); assert.equal(f.changes(), 4);
   assert.equal(f.send(launch), false); assert.equal(f.send(end(launch.id)), false); assert.equal(f.send(rate(launch.id)), false);
 });
 
@@ -185,7 +186,7 @@ test('transcript re-reads preserve dispatched workers and their expiry; the next
   const launch = start(); meter.calls.dispatch(launch); meter.calls.dispatch(end(launch.id));
   meter.reset(true); meter.calls.setFolder('/new-subagent-folder');
   assert.equal(meter.snapshot().calls[0].items[0].state, 'done');
-  t.mock.timers.tick(3000); assert.equal(meter.snapshot().calls[0].items[0].hidden, true);
+  t.mock.timers.tick(3000); assert.deepEqual(meter.snapshot().calls, []);
   const failed = start(); meter.calls.dispatch(failed); meter.calls.dispatch(end(failed.id, { reason: 'capacity', exitCode: 1 }));
   meter.reset(true);
   meter.apply({ type: 'event_msg', timestamp: new Date(10000).toISOString(), payload: { type: 'user_message', message: 'Review that failure.' } });

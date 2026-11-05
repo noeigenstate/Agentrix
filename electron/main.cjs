@@ -548,7 +548,7 @@ function callsOf(s, project) {
     dispatchAlive: call => {
       if (project.kind === 'ssh') return null;
       let pid = call.helperPid || helperPids.get(call);
-      if (!pid) {
+      if (!pid || call.done) {
         try {
           const team = require('./features/team/team.cjs').projectTeam(project.path);
           if (!team || !/^[a-f\d-]{36}$/i.test(call.key)) return null;
@@ -557,7 +557,7 @@ function callsOf(s, project) {
           const entry = JSON.parse(fs.readFileSync(file, 'utf8'));
           if (entry.id !== call.key || path.resolve(entry.cwd) !== path.resolve(call.cwd) || !Number.isSafeInteger(entry.pid) || entry.pid <= 0) return null;
           pid = entry.pid; helperPids.set(call, pid);
-        } catch { return null; }
+        } catch (error) { return call.done && error.code === 'ENOENT' ? false : null; }
       }
       return AgentCalls.alive(pid);
     },
@@ -817,11 +817,11 @@ function applyActivity(project, s, snapshot) {
   if (snapshot.updatedAt >= (s.activityRawSnapshot?.updatedAt || 0)) s.activityRawSnapshot = snapshot;
   // Neither a polled result from before new input nor a result from before newer attention can end this interaction.
   if (snapshot.updatedAt < Math.max(s.activityInputAt || 0, s.cliStateMeta?.at || 0)) return;
-  if (['working', 'complete', 'interrupted'].includes(snapshot.state)) publishCliState(s, snapshot.state === 'working' ? 'working' : 'idle',
+  if (snapshot.ended || ['working', 'complete', 'interrupted'].includes(snapshot.state)) publishCliState(s, snapshot.state === 'working' ? 'working' : 'idle',
     { at: snapshot.updatedAt, threadId: snapshot.threadId, turnId: s.agent === 'codex' ? snapshot.turnId : undefined,
       eventId: `record:${snapshot.threadId}:${snapshot.turnId}:${snapshot.state}:${snapshot.updatedAt}` });
   if (s.completionWork?.reading) { s.codexActivity = 'working'; scheduleState(); return; }
-  if (['complete', 'interrupted'].includes(snapshot.state)) {
+  if (snapshot.ended || ['complete', 'interrupted'].includes(snapshot.state)) {
     s.completionWork?.end(snapshot.updatedAt);
     s.promptQueue.finish?.(snapshot.updatedAt);
   }
@@ -829,7 +829,7 @@ function applyActivity(project, s, snapshot) {
   const queued = s.promptQueue.list?.().some(item => item.state === 'queued') || !!s.conversation?.queue?.length;
   const state = s.completionWork?.state(snapshot, { queued })
     || (queued && snapshot.state === 'complete' ? 'working' : snapshot.state);
-  if (snapshot.state === 'interrupted' || state === 'interrupted') store.expectCompletion(project.id, false);
+  if (snapshot.ended && snapshot.state === 'unknown' || snapshot.state === 'interrupted' || state === 'interrupted') store.expectCompletion(project.id, false);
   snapshot = { ...snapshot, state };
   s.rootThreadId = snapshot.threadId;
   s.approval?.context('activity', [snapshot.threadId, snapshot.turnId, snapshot.state]);
@@ -1127,11 +1127,11 @@ function launchAfterPrompt(project, session) {
   const plan = launchPlans.get(session.terminalId);
   if (!plan || !session.ready || session.inputDirty || session.codexActive) return;
   launchPlans.delete(session.terminalId);
-  if (!(plan.agent === 'claude' ? session.claudeAvailable : session.codexAvailable)) {
-    session.error = t('没有找到 {agent}，请在设置 › 编码助手中安装。', { agent: plan.agent === 'claude' ? 'Claude Code' : 'Codex' }); broadcast(); return;
+  if (!session.claudeAvailable) {
+    session.error = t('没有找到 {agent}，请在设置 › 编码助手中安装。', { agent: 'Claude Code' }); broadcast(); return;
   }
   session.ready = false;
-  if (plan.agent === 'claude' && plan.threadId) { session.claudeResumeId = plan.threadId; void followClaudeSession(project, session, plan.threadId); }
+  if (plan.threadId) { session.claudeResumeId = plan.threadId; void followClaudeSession(project, session, plan.threadId); }
   session.gate.afterPrompt(plan.command);
   broadcast();
 }
@@ -1159,7 +1159,15 @@ async function resumeAfterPrompt(project, session) {
       return;
     }
     if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
-    await nativeSessions.start(session.terminalId, { agent: 'codex', resume: !!restore?.threadId });
+    if (!plan.codex || !restore?.threadId || project.kind !== 'ssh' && !session.codexAvailable) return;
+    const opened = await nativeSessions.start(session.terminalId, { agent: 'codex', resume: true });
+    if (restore.interrupted && !session.inputDirty) {
+      const receipt = await nativeSessions.send(session.terminalId, opened.runtimeSessionId,
+        { clientMessageId: randomUUID(), text: '继续', images: [] });
+      // turn.started owns arming. A fast completed response can precede this
+      // receipt; arming here would reopen an already completed round.
+      if (!['queued', 'delivered', 'consumed'].includes(receipt.status)) throw new Error('恢复后的继续消息未确认投递，请查看会话状态。');
+    }
 
   } catch (error) { session.error = `恢复会话失败：${error.message}`; broadcast(); }
   finally {
@@ -1267,7 +1275,7 @@ function structuredEvent(id, event) {
     applyActivity(project, s, { threadId: event.providerSessionId || event.runtimeSessionId, turnId: event.turnId, state: 'working', updatedAt: event.receivedAtMs });
   }
   if (event.type === 'turn.completed') applyActivity(project, s, { threadId: event.providerSessionId || event.runtimeSessionId, turnId: event.turnId,
-    state: event.payload.status === 'completed' ? 'complete' : 'interrupted', updatedAt: event.receivedAtMs });
+    state: event.payload.status === 'completed' ? 'complete' : event.payload.status === 'unknown' ? 'unknown' : 'interrupted', ended: true, updatedAt: event.receivedAtMs });
   if (event.type === 'session.state') {
     s.nativeState = event.payload.state;
     if (['stopped', 'failed', 'disconnected'].includes(event.payload.state)) {
@@ -1460,20 +1468,24 @@ async function initializeNativeSessions() {
   });
   claudeRuntime.observeCli?.(await inspectClaudeExecutable());
   const codexFactory = createCodexRuntime({ renderImage: (item, spec) => spec.kind === 'ssh' ? null : generatedPreview(item, spec), translate: t,
-    launchRemote: async spec => {
+    launchRemote: async (spec, { signal }) => {
       const project = findProject(spec.terminalId);
       const delivery = skills.delivery(project, true, spec.sessionId, { agent: 'codex', started: true });
       const remote = new RemoteConnection({ ...project, id: spec.terminalId }, { integrationDir, auth: sshAuth,
         sessionKey: spec.sessionKey, onEvent, codingPath: spec.cwd, askpassPath: prepareAskpass(), native: true,
         skills: delivery.bundle, readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}',
           path.posix.join(project.path, 'skills'), delivery, '{AGENTRIX_DISPATCH}') });
-      spec.remoteConnection = remote;
+      const cancel = () => remote.close();
+      signal.addEventListener('abort', cancel, { once: true });
+      if (signal.aborted) cancel();
       const host = sessions.get(spec.terminalId); if (host) host.remoteConnection = remote;
       try {
         const info = await remote.ready;
+        if (signal.aborted) throw new Error('session_closed');
         return { cwd: info.cwd || info.root, context: info.context,
           child: require('./features/ssh/codex-process.cjs').createRemoteCodexProcess(remote) };
       } catch (error) { remote.close(); throw error; }
+      finally { signal.removeEventListener('abort', cancel); }
     },
     resetAtLimit: (spec, evidence) => codexAccounts.resetAtLimit({ ...spec, remote: spec.kind === 'ssh', accountLaunch: 'project-open-v1' },
       { ...evidence, enabled: nativeSessions?.getSettings().codexAutoReset === true,
@@ -1496,7 +1508,7 @@ async function initializeNativeSessions() {
       return result;
     };
     runtime.start = value => attach(start, value); runtime.resume = value => attach(resume, value);
-    runtime.close = async () => { accountWatch?.dispose(); accountBinding?.dispose(); try { await close(); } finally { spec.remoteConnection?.close(); } };
+    runtime.close = async () => { accountWatch?.dispose(); accountBinding?.dispose(); await close(); };
     return runtime;
   } };
   nativeSessions = createNativeSessions({ directory, claude: claudeRuntime, codex, resolveSpec: nativeSpec,

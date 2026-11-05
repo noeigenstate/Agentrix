@@ -55,7 +55,9 @@ function routeSettings(spec) {
     // A user-config junction into the repository is still project-controlled.
     let real; try { real = fs.realpathSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const relative = real && path.relative(root, real);
-    if (real && (relative.startsWith('..' + path.sep) || path.isAbsolute(relative))) user = settings(file) || {};
+    const loaded = real ? settings(file) || {} : {};
+    if (Object.keys(loaded.env || {}).some(name => name.toUpperCase() === 'ANTHROPIC_API_KEY')) throw routeFailure('user_api_key_override', file);
+    if (real && (relative.startsWith('..' + path.sep) || path.isAbsolute(relative))) user = loaded;
   }
   const trusted = new Map(Object.entries({ ...inherited, ...(user.env || {}) }).map(([name, value]) => [name.toUpperCase(), value]));
   const names = new Set(ROUTE_ENV.filter(name => !conditionalRoute(name)));

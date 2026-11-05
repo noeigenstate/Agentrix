@@ -4,10 +4,10 @@ const { spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { randomBytes, timingSafeEqual } = require('node:crypto');
 const { WebSocketServer } = require('ws');
-const { JsonLines, CodexProtocol, writeJson, MAX_BYTES } = require('../electron/features/terminal/native-protocol.cjs');
+const { JsonLines, CodexProtocol, writeJson, MAX_BYTES } = require('./codex-protocol.cjs');
 
 // Explicit standalone terminal probes only; the product refuses Codex TUI launches.
-const { resolveCli } = require('../electron/features/terminal/native-session.cjs');
+const { resolveCli } = require('./codex-cli-resolution.cjs');
 
 function createNativeSession({ binding, mode, cwd, env, pty, changed = () => {}, event = () => {}, launch = spawn, cli }) {
   if (mode !== 'codex-native' || binding.provider !== 'codex') throw new Error('Invalid native provider/mode binding');

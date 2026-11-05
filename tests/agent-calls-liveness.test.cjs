@@ -54,3 +54,17 @@ test('F20 a normal end arriving after the first dead-PID observation wins over i
   now += 2000; await f.poll();
   assert.equal(f.calls.snapshot()[0].items[0].failure, null); assert.equal(f.ended.length, 1);
 });
+
+test('an ended helper with a reused live PID retires when its run board is gone', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const source = require('node:fs').readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const s = { terminalId: 't', projectId: 'p' }, project = { id: 'p', path: '/synthetic' };
+  const context = { AgentCalls: class extends AgentCalls { static alive() { return true; } }, path, os: { homedir: () => '/synthetic' },
+    sessions: new Map([['t', s]]), scheduleState() {}, send() {}, require: () => ({ projectTeam: () => ({ board: '/gone' }) }),
+    fs: { statSync() { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } } };
+  vm.createContext(context); vm.runInContext(source.slice(source.indexOf('function callsOf('), source.indexOf('function resolveIntervention(')), context);
+  const calls = context.callsOf(s, project); calls.feeds.readDispatch = async () => {}; t.after(() => calls.dispose());
+  const launch = start(123); calls.dispatch(launch);
+  calls.dispatch({ type: 'dispatch-end', id: launch.id, reason: 'exit', exitCode: 0, model: 'gpt-test', outputTokens: null, activeMs: null });
+  t.mock.timers.tick(3000); assert.deepEqual(calls.snapshot(), []);
+});

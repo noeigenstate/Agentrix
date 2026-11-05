@@ -1,3 +1,4 @@
+require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -73,6 +74,65 @@ async function harness(t, kind = 'local', agent = 'codex') {
 }
 
 const stamp = at => new Date(at).toISOString();
+
+test('D3 an explicit neutral end releases the round without claiming completion or notifying, and idle stays quiet', async t => {
+  const h = await harness(t, 'local', 'claude');
+  h.s.completionWork.begin(2000); h.store.expectCompletion(h.project.id);
+  h.context.applyActivity(h.project, h.s, { threadId: 'thread', turnId: 'neutral', state: 'unknown', ended: true, updatedAt: 2100 });
+  assert.equal(h.s.completionWork.reviewAt, 0); assert.equal(h.s.cliState.state, 'idle');
+  assert.equal(h.s.codexActivity, 'unknown'); assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 0);
+  h.apply('unknown', 'neutral', 2200);
+  assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 0);
+});
+
+test('D1 D3 D5 real CLI shell then compact completes and notifies once through the product main process', {
+  skip: !process.env.AGENTRIX_REAL_CLAUDE && 'set AGENTRIX_REAL_CLAUDE', timeout: 60000,
+}, async t => {
+  const real = require('./fixtures/claude-real.cjs'), bodies = [];
+  const f = await real.harness(t, data => { bodies.push(data); return [real.opening(data), ...real.textBlock(0, 'UI BACKEND ACK'), ...real.finish('end_turn')]; });
+  const h = await harness(t, 'local', 'claude'), events = [], runtimeId = require('node:crypto').randomUUID();
+  Object.assign(h.s, { nativeStructured: true, nativeRuntimeSessionId: runtimeId, nativeMessages: new Map() });
+  Object.assign(h.context, { nativeSpecs: new Map([[h.s.terminalId, { agent: 'claude' }]]), quitting: false,
+    createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage });
+  const runtime = require('../electron/features/claude-sdk/index.cjs').createClaudeRuntime({ directory: path.join(f.cwd, 'state'),
+    loadSdk: async () => f.sdk, resolveExecutable: async () => process.env.AGENTRIX_REAL_CLAUDE,
+    safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
+  f.cleanup(() => runtime.close()); runtime.credentials.save('sk-ant-offline-ui-backend-fixture');
+  const session = runtime.create({ owner: 'gui', cwd: f.cwd, env: f.env, runtimeSessionId: runtimeId, agent: 'claude' }, event => {
+    events.push(event); h.now(event.receivedAtMs); h.context.structuredEvent(h.s.terminalId, event);
+  });
+  const wait = async count => {
+    for (let index = 0; index < 500; index++) {
+      if (events.filter(event => event.type === 'turn.completed').length === count && session.snapshot().state === 'idle') return;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.fail('real product turn did not finish');
+  };
+  await session.start(); await session.send({ clientMessageId: 'warmup', text: 'Warmup' }); await wait(1);
+  assert.equal(h.alerts(), 1); h.store.acknowledge(h.project.id);
+  const beforeModel = events.length;
+  await session.runOptions({ model: 'claude-sonnet-4-5' });
+  await session.shell('bang', 'echo UI_BACKEND_BANG'); await wait(2);
+  assert.ok(!events.slice(beforeModel).some(event => event.type === 'item.upsert' && event.itemId?.startsWith('local-command:')),
+    'control model receipt is only an unlabelled transcript replay, never a live conversation reply');
+  assert.equal(h.alerts(), 2); h.store.acknowledge(h.project.id);
+  const start = events.length, requestStart = bodies.length;
+  await session.send({ clientMessageId: 'compact-after-bang', text: '/compact' }); await wait(3);
+  const compact = events.slice(start);
+  assert.ok(compact.some(event => event.type === 'context.compacted' && event.payload.trigger === 'manual'));
+  assert.equal(compact.find(event => event.type === 'turn.completed').payload.status, 'completed');
+  assert.ok(!compact.some(event => event.type === 'item.upsert' && event.payload.kind === 'agent-message'), 'compact has its own context notice');
+  assert.ok(!bodies.slice(requestStart).some(body => JSON.stringify(body.messages.at(-1)).includes('/compact')));
+  assert.equal(h.s.codexActivity, 'complete'); assert.equal(h.s.nativeState, 'idle');
+  assert.equal(h.alerts(), 3); assert.equal(h.project.completionArmed, false); h.store.acknowledge(h.project.id);
+  const arms = h.armings();
+  for (let index = 0; index < 5; index++) h.context.structuredEvent(h.s.terminalId, { ...events.at(-1), type: 'session.state', payload: { state: 'idle' } });
+  assert.equal(h.alerts(), 3); assert.equal(h.armings(), arms); assert.equal(h.project.unread, 0);
+  const contextStart = events.length;
+  await session.send({ clientMessageId: 'context-after-compact', text: '/context' }); await wait(4);
+  assert.ok(events.slice(contextStart).some(event => event.type === 'item.upsert' && event.payload.kind === 'agent-message'));
+  assert.equal(h.alerts(), 4);
+});
 
 test('a second Codex launch in the same PTY cannot bind its new input to the previous provider', async t => {
   const h = await harness(t, 'ssh'), { s, context, project } = h;
@@ -1022,12 +1082,13 @@ test('restore preserves plan/readiness/input safeguards and the recorded newest-
   assert.deepEqual(writes, ['claude --continue\r']);
 });
 
-test('local and remote Codex restoration uses app-server without terminal writes or synthetic continuation prompts', async t => {
+test('local and remote Codex restoration uses app-server and continues only an interrupted turn', async t => {
   const id = '00000000-0000-4000-8000-000000000002';
   for (const kind of ['local', 'ssh']) for (const state of ['complete', 'interrupted']) {
-    const h = await harness(t, kind), starts = [];
+    const h = await harness(t, kind), starts = [], sent = [];
     h.store.setRestore(h.s.terminalId, { agent: 'codex', threadId: id, interrupted: state === 'interrupted' });
-    h.context.nativeSessions = { start: async (...args) => starts.push(args) };
+    h.context.nativeSessions = { start: async (...args) => { starts.push(args); return { runtimeSessionId: 'restored' }; },
+      send: async (...args) => { sent.push(args); h.store.expectCompletion(h.project.id); return { status: 'delivered' }; } };
     Object.assign(h.s, { ready: true, codexActive: false, codexAvailable: true,
       gate: { input: () => assert.fail('no Codex terminal write'), afterPrompt: () => assert.fail('no Codex terminal write') },
       terminal: { request: () => assert.fail('no legacy resume-info or local history lookup') } });
@@ -1035,7 +1096,9 @@ test('local and remote Codex restoration uses app-server without terminal writes
     await h.context.resumeAfterPrompt(h.project, h.s);
     assert.equal(starts.length, 1); assert.equal(starts[0][0], h.s.terminalId);
     assert.equal(starts[0][1].agent, 'codex'); assert.equal(starts[0][1].resume, true);
-    assert.equal(h.project.completionArmed, false, 'restoring history does not submit a prompt');
+    assert.equal(h.project.completionArmed, state === 'interrupted');
+    assert.equal(sent.length, state === 'interrupted' ? 1 : 0);
+    if (sent.length) assert.equal(sent[0][2].text, '继续');
   }
   const h = await harness(t, 'ssh');
   h.context.nativeSessions = { start: () => assert.fail('dirty shell cancels restore') };

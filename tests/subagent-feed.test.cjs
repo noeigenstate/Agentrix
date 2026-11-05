@@ -310,7 +310,8 @@ test('successful dispatch rows hide after three seconds while their final snapsh
   await rollout(f, sessionId, {}, [{ type: 'event_msg', timestamp: iso(1), payload: { type: 'agent_message', message: 'Final synthetic answer.' } }]);
   await f.calls.feed('dispatch:finished'); endDispatch(f, 'finished'); await f.calls.work;
   const final = await f.calls.feed('dispatch:finished'); assert.equal(final.state, 'done');
-  t.mock.timers.tick(3000); assert.equal(f.calls.snapshot()[0].items[0].hidden, true);
+  t.mock.timers.tick(3000); assert.deepEqual(f.calls.snapshot(), []);
+  assert.equal(f.calls.byId('dispatch:finished').hidden, true);
   assert.deepEqual(await f.calls.feed('dispatch:finished'), final);
   t.mock.timers.tick(FINAL_TTL - 3001); assert.deepEqual(await f.calls.feed('dispatch:finished'), final);
   t.mock.timers.tick(1); await assert.rejects(f.calls.feed('dispatch:finished'), /^Error: gone$/);

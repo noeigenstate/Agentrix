@@ -60,14 +60,15 @@ function pendingMeetings(history) {
 function projectTeam(cwd, create = false) {
   let common;
   try { common = path.resolve(cwd, git(cwd, ['rev-parse', '--git-common-dir']).trim()); } catch { return null; }
-  // Test fixtures may sit inside this checkout. A missed Git ceiling must never
-  // turn their synthetic runs into records in the owner's shared team directory.
-  if (process.env.NODE_TEST_CONTEXT || process.env.DISPATCH_FIXTURE) {
-    try {
-      const source = path.resolve(__dirname, '../../..');
-      const protectedCommon = path.resolve(source, git(source, ['rev-parse', '--git-common-dir']).trim());
-      if (fs.realpathSync.native(common) === fs.realpathSync.native(protectedCommon)) return null;
-    } catch { }
+  // Hosts may confine shared journal writes to explicitly admitted Git directories.
+  const roots = process.env.AGENTRIX_TEAM_WRITE_ROOTS;
+  if (roots) {
+    const real = fs.realpathSync.native(common);
+    if (!roots.split(path.delimiter).filter(Boolean).some(root => {
+      let admitted; try { admitted = fs.realpathSync.native(root); } catch { return false; }
+      const relative = path.relative(admitted, real);
+      return !relative || relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
+    })) return null;
   }
   const directory = path.join(common, 'agentrix');
   if (!create && !fs.existsSync(directory)) return null;

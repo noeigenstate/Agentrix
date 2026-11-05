@@ -4,7 +4,9 @@ const identityFailures = new WeakSet();
 const routeFailures = new WeakSet();
 
 function routeFailure(code, file) {
-  const message = code === 'project_api_key_override'
+  const message = code === 'user_api_key_override'
+    ? 'Claude 用户设置不能覆盖应用保存的 API 密钥。请删除用户 settings.json 中的 env.ANTHROPIC_API_KEY，或改用终端。'
+    : code === 'project_api_key_override'
     ? `项目 Claude 配置 ${file} 不能覆盖应用保存的 API 密钥。请删除其中的 env.ANTHROPIC_API_KEY，或改用终端。`
     : `无法安全读取 Claude 路由配置 ${file}。请缩小文件或改用终端。`;
   const error = Object.assign(new Error(message), { code, beforeInput: true });
@@ -24,8 +26,8 @@ function billingIdentityError(source, { beforeInput = false, messageType, tokenS
 
 function startupFailure(error) {
   if (identityFailures.has(error) || routeFailures.has(error)) return error;
-  if (['route_config_unreadable', 'project_api_key_override'].includes(error?.code)) {
-    return Object.assign(new Error(error.code === 'project_api_key_override' ? '项目 Claude 配置不能覆盖应用保存的 API 密钥。' : '无法读取 Claude 路由配置。'), { code: error.code, beforeInput: true });
+  if (['route_config_unreadable', 'project_api_key_override', 'user_api_key_override'].includes(error?.code)) {
+    return Object.assign(new Error(error.code.endsWith('api_key_override') ? '项目 Claude 配置不能覆盖应用保存的 API 密钥。' : '无法读取 Claude 路由配置。'), { code: error.code, beforeInput: true });
   }
   const timeout = error?.code === 'sdk_initialization_timeout';
   return Object.assign(new Error(timeout ? 'Claude API 初始化超时，尚未发送消息。' : 'Claude API 启动失败，尚未发送消息。'), {

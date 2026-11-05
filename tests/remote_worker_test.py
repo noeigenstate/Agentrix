@@ -40,7 +40,7 @@ class RemoteFilesTest(unittest.TestCase):
         def launch(argv, **options):
             commands.append(argv)
             return original([sys.executable, "-u", "-c", "import sys; data=sys.stdin.buffer.readline();sys.stdout.buffer.write(data);sys.stdout.buffer.flush()"], **options)
-        with mock.patch.object(remote.shutil, "which", return_value="/fake/codex"), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
+        with mock.patch.object(remote, "resolve_codex", return_value="/fake/codex"), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
             self.worker.codex_open("native-1")
             self.worker.codex_input("native-1", base64.b64encode(b"bound\n").decode("ascii"))
             for _ in range(100):
@@ -52,6 +52,34 @@ class RemoteFilesTest(unittest.TestCase):
         self.assertTrue(all(event["processId"] == "native-1" for event in events))
         with self.assertRaises(ValueError): self.worker.codex_input("native-1", base64.b64encode(b"x" * 32769))
         with self.assertRaises(ValueError): self.worker.codex_open("../bad")
+
+    def test_codex_resolution_uses_login_shell_and_preserves_missing_reason(self):
+        executable = str(Path(sys.executable).resolve())
+        with mock.patch.object(remote.subprocess, "run", return_value=mock.Mock(stdout="startup noise\n" + executable + "\n")) as run:
+            self.assertEqual(remote.resolve_codex(dict(os.environ, GIT_CEILING_DIRECTORIES=self.temp.name)), executable)
+            self.assertEqual(run.call_args.args[0], ["/bin/bash", "-lic", "type -P codex"])
+        with mock.patch.object(remote.subprocess, "run", return_value=mock.Mock(stdout="")):
+            with self.assertRaisesRegex(ValueError, "type -P codex") as failure: remote.resolve_codex({})
+            self.assertEqual(failure.exception.code, "codex_cli_required")
+
+    def test_stopping_during_remote_lookup_never_spawns_codex(self):
+        entered, released = threading.Event(), threading.Event()
+        failures = []
+        def resolve(_env):
+            entered.set()
+            released.wait(2)
+            return "/fake/codex"
+        def open():
+            try: self.worker.codex_open("late")
+            except ValueError as error: failures.append(str(error))
+        self.worker.agent_env = dict(os.environ, GIT_CEILING_DIRECTORIES=self.temp.name)
+        with mock.patch.object(remote, "resolve_codex", side_effect=resolve), mock.patch.object(remote.subprocess, "Popen") as launch:
+            thread = threading.Thread(target=open)
+            thread.start(); self.assertTrue(entered.wait(1))
+            with self.worker.lock: self.worker.stopping = True
+            released.set(); thread.join(2)
+            launch.assert_not_called()
+        self.assertEqual(len(failures), 1)
 
     def test_native_context_preserves_quotes_and_multiline_without_a_terminal(self):
         self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
@@ -70,7 +98,7 @@ class RemoteFilesTest(unittest.TestCase):
             try:
                 for _ in range(20): self.worker.codex_input("blocked", base64.b64encode(b"x" * 32768))
             except (OSError, ValueError): pass
-        with mock.patch.object(remote.shutil, "which", return_value="/fake/codex"), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
+        with mock.patch.object(remote, "resolve_codex", return_value="/fake/codex"), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
             self.worker.codex_open("blocked")
         writer = threading.Thread(target=fill, daemon=True)
         closer = threading.Thread(target=lambda: self.worker.codex_close("blocked"), daemon=True)
@@ -814,7 +842,6 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
         self.assertEqual(reader.read()["state"], "unknown")
         self.assertFalse(reader.history_pending)
         self.assertEqual(seen, [{"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "excluded"}}])
-        self.assertEqual(remote.recent_session(str(self.root), str(home), identity)["id"], identity)
         before = reader.offset
         with filename.open("ab") as output:
             output.write(event("task_started", "live") + line({"padding": "x" * (remote.LIVE_READ_LIMIT + 1000)}) + event("task_complete", "live"))
@@ -899,24 +926,6 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
             outside.write_text("private", encoding="utf-8")
             (self.root / "escape").symlink_to(outside)
             with self.assertRaises(ValueError): self.worker.preview("escape", 0)
-
-    def test_recovery_only_reads_the_matching_interactive_session(self):
-        home = Path(self.temp.name) / "codex"
-        sessions = home / "sessions"
-        sessions.mkdir(parents=True)
-        identity = str(uuid.uuid4())
-        records = [
-            {"type": "session_meta", "payload": {"id": identity, "cwd": str(self.root), "source": "cli"}},
-            {"type": "event_msg", "payload": {"type": "task_started"}},
-            {"type": "event_msg", "payload": {"type": "turn_aborted"}},
-        ]
-        filename = sessions / "rollout-test.jsonl"
-        filename.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
-        result = remote.recent_session(os.path.realpath(self.root), str(home))
-        self.assertEqual(result["id"], identity)
-        self.assertEqual(result["state"], "interrupted")
-        with filename.open("a", encoding="utf-8") as output: output.write('\n{"type":"event_msg","payload":{"type":"task_complete"}}\n')
-        self.assertEqual(remote.recent_session(os.path.realpath(self.root), str(home))["state"], "complete")
 
     @unittest.skipUnless(hasattr(os, "getuid"), "the remote side runs on Linux and macOS")
     def test_pasted_picture_lands_in_a_private_temporary_folder_by_absolute_path(self):

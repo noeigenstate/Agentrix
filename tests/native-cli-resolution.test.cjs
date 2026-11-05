@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { resolveCli } = require('../electron/features/terminal/native-session.cjs');
+const { resolveCli } = require('../scripts/codex-cli-resolution.cjs');
 
 test('Windows npm Codex uses its Node console, never the packaged Electron executable', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-native-resolution-'));

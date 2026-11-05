@@ -11,17 +11,17 @@ async function until(check) {
   assert.fail('the isolated CLI did not reach the expected state');
 }
 
-function product(t, f, emit) {
+function product(t, f, emit, changes = {}) {
   const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
   const runtime = createClaudeRuntime({ directory: path.join(f.cwd, 'runtime-state'), loadSdk: async () => f.sdk,
     resolveExecutable: async () => process.env.AGENTRIX_REAL_CLAUDE,
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   runtime.credentials.save(f.env.ANTHROPIC_API_KEY);
   f.cleanup(() => runtime.close());
-  return runtime.create({ owner: 'gui', cwd: f.cwd, env: f.env, runtimeSessionId: 'real-parity', model: 'claude-sonnet-4-5', monthlyBudgetUsd: 10 }, emit);
+  return runtime.create({ owner: 'gui', cwd: f.cwd, env: f.env, runtimeSessionId: 'real-parity', model: 'claude-sonnet-4-5', monthlyBudgetUsd: 10, ...changes }, emit);
 }
 
-async function terminal(t, f, args = []) {
+async function terminal(t, f, args = [], capture = false) {
   const env = { ...f.env }; delete env.CI;
   fs.writeFileSync(path.join(env.CLAUDE_CONFIG_DIR, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true,
     lastOnboardingVersion: '2.1.318', theme: 'dark', customApiKeyResponses: { approved: [env.ANTHROPIC_API_KEY.slice(-20)], rejected: [] },
@@ -29,9 +29,11 @@ async function terminal(t, f, args = []) {
   const child = fork(path.join(__dirname, 'fixtures/claude-terminal-peer.cjs'), [], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
   child.stderr.resume(); const ended = once(child, 'exit');
   f.cleanup(async () => { if (child.exitCode === null && child.signalCode === null) child.send({ type: 'stop' }); await ended; });
-  child.send({ type: 'start', cli: process.env.AGENTRIX_REAL_CLAUDE, cwd: f.cwd, env, args });
-  await once(child, 'message');
-  return (text, paste = false) => child.send({ type: 'input', text, paste });
+  let output = '';
+  child.on('message', message => { if (message.type === 'data') output = (output + message.data).slice(-65536); });
+  child.send({ type: 'start', cli: process.env.AGENTRIX_REAL_CLAUDE, cwd: f.cwd, env, args, capture });
+  await new Promise(resolve => { const ready = message => { if (message.type === 'ready') { child.off('message', ready); resolve(); } }; child.on('message', ready); });
+  return Object.assign((text, paste = false) => child.send({ type: 'input', text, paste }), { output: () => output });
 }
 
 test('real streaming input shell handling is observed rather than guessed', { skip, timeout: 60000 }, async t => {
@@ -95,11 +97,12 @@ test('real host shell keeps keys out, preserves CLI context wrappers and renews 
   assert.deepEqual(await session.shell('shell-proof', command), { exitCode: 0 });
   const shell = events.findLast(event => event.itemId === 'shell:shell-proof');
   assert.equal(shell.payload.kind, 'command'); assert.equal(shell.payload.content.output, 'SHELL_SAFE:unset:unset:unset');
-  assert.equal(events.some(event => event.type === 'turn.started'), false);
+  await until(() => session.snapshot().state === 'idle' && requests.length > 0);
+  assert.equal(events.filter(event => event.type === 'turn.started' && event.payload.origin === 'user').length, 1);
   const catalog = await session.commands(['clear', 'reset', 'new', 'model', 'effort', 'fast'].map(name => ({ name, builtin: true, view: 'reading' })));
   for (const name of ['clear', 'reset', 'new', 'model', 'effort', 'fast']) assert.ok(catalog.some(row => row.name === '/' + name), name);
   await session.send({ clientMessageId: 'shell-owner', text: 'AFTER_SHELL' });
-  await until(() => session.snapshot().state === 'idle' && requests.length > 0);
+  await until(() => session.snapshot().state === 'idle' && requests.length > 1);
   assert.match(JSON.stringify(requests[0].messages), /<bash-stdout>SHELL_SAFE:unset:unset:unset<\/bash-stdout>/);
   const { promptText, rememberClaudeSource } = require('../electron/prompt-queue.cjs');
   await sleep(300);
@@ -118,7 +121,7 @@ test('real host shell keeps keys out, preserves CLI context wrappers and renews 
   const options = await session.runOptions({ model: 'claude-opus-4-6', effort: 'low', fast: false });
   assert.match(options.model, /opus/); assert.equal(options.effort, 'low');
   await session.send({ clientMessageId: 'renewed-owner', text: 'RENEWED' });
-  await until(() => session.snapshot().state === 'idle' && requests.length > 1);
+  await until(() => session.snapshot().state === 'idle' && requests.length > 2);
   assert.match(requests.at(-1).model, /opus/);
   assert.equal(requests.at(-1).output_config?.effort, 'low');
   assert.doesNotMatch(JSON.stringify(requests.at(-1).messages.at(-1)), /SHELL_SAFE/);
@@ -127,7 +130,7 @@ test('real host shell keeps keys out, preserves CLI context wrappers and renews 
   const defaults = await session.runOptions({ model: null });
   assert.notEqual(defaults.model, options.model);
   await session.send({ clientMessageId: 'default-owner', text: 'DEFAULT_AGAIN' });
-  await until(() => session.snapshot().state === 'idle' && requests.length > 2);
+  await until(() => session.snapshot().state === 'idle' && requests.length > 3);
   assert.equal(requests.at(-1).model, defaults.model);
 });
 
@@ -287,4 +290,95 @@ test('real terminal shell context and SDK request parity have an exact differenc
   assert.match(terminalMessages, /<bash-input>printf SHELL_CONTEXT_PARITY<\/bash-input>/);
   assert.match(terminalMessages, /<bash-stdout>SHELL_CONTEXT_PARITY<\/bash-stdout>/);
   assert.match(terminalMessages, /<bash-stderr>[\s\S]*<\/bash-stderr>/);
+});
+
+test('S1 S2 real terminal and native shell have the same immediate independent request flow', { skip, timeout: 70000 }, async t => {
+  const bodies = [], f = await harness(t, data => { bodies.push(data); return [opening(data), ...textBlock(0, 'FLOW_ACK'), ...finish('end_turn')]; });
+  const input = await terminal(t, f, [], true);
+  input('!printf REVIEW_FLOW');
+  await until(() => bodies.some(body => body.tools?.length && JSON.stringify(body.messages).includes('REVIEW_FLOW')));
+  const tui = bodies.find(body => body.tools?.length && JSON.stringify(body.messages).includes('REVIEW_FLOW'));
+  const shellMessage = body => body.messages.find(message => message.role === 'user' && Array.isArray(message.content)
+    && message.content.some(block => block.text?.startsWith('<bash-input>')));
+  const expected = shellMessage(tui); assert.ok(expected, 'terminal shell request arrived before any next prompt');
+  const terminalRecords = () => {
+    const folder = path.join(f.env.CLAUDE_CONFIG_DIR, 'projects');
+    return fs.readdirSync(folder, { recursive: true }).filter(name => String(name).endsWith('.jsonl')).flatMap(name =>
+      fs.readFileSync(path.join(folder, name), 'utf8').trim().split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }));
+  };
+  await until(() => terminalRecords().some(record => record.type === 'assistant' && JSON.stringify(record.message?.content).includes('FLOW_ACK')));
+  const terminalCompactStart = bodies.length;
+  input('/compact');
+  try { await until(() => terminalRecords().some(record => record.type === 'system' && record.subtype === 'compact_boundary' && record.compactMetadata?.trigger === 'manual')); }
+  catch (error) { t.diagnostic(JSON.stringify({ screen: input.output(), records: terminalRecords().map(record => ({ type: record.type, subtype: record.subtype, compactMetadata: record.compactMetadata })) })); throw error; }
+  assert.ok(!bodies.slice(terminalCompactStart).some(body => JSON.stringify(body.messages.at(-1)).includes('/compact')),
+    'the terminal also compacts immediately after its independent shell round');
+  const before = bodies.length, events = [];
+  const session = product(t, f, event => events.push(event)); await session.start();
+  await session.shell('flow', 'printf REVIEW_FLOW');
+  await until(() => session.snapshot().state === 'idle' && bodies.length > before);
+  const native = bodies.slice(before).find(body => body.tools?.length);
+  const bash = message => message.content.filter(block => block.text?.startsWith('<bash-input>') || block.text?.startsWith('<bash-stdout>'))
+    .map(block => ({ ...block, text: process.platform === 'win32'
+      ? block.text.replace('\nShell cwd was reset to ' + f.cwd, '') : block.text }));
+  // Exact whitelist: the terminal's Windows cwd bookkeeping line. No model input,
+  // tool output, ordering, or user text is removed by this normalization.
+  assert.deepEqual(bash(shellMessage(native)), bash(expected), 'same two adjacent blocks in a standalone shell round');
+  for (const message of [expected, shellMessage(native)]) {
+    const at = message.content.findIndex(block => block.text?.startsWith('<bash-input>'));
+    assert.equal(message.content[at + 1].text.startsWith('<bash-stdout>'), true);
+    assert.ok(message.content.filter((_, i) => i !== at && i !== at + 1).every(block => block.text?.startsWith('<system-reminder>')),
+      'only CLI-generated system reminders may share the independent shell message');
+  }
+  const prior = bodies.length;
+  await session.send({ clientMessageId: 'context', text: '/context' }); await sleep(1000);
+  assert.equal(bodies.length, prior, 'local slash command still executes locally after shell');
+  await session.send({ clientMessageId: 'compact', text: '/compact' });
+  await until(() => session.snapshot().state === 'idle');
+  assert.ok(events.some(event => event.type === 'context.compacted' && event.payload.trigger === 'manual'));
+  assert.equal(events.findLast(event => event.type === 'turn.completed').payload.status, 'completed');
+  assert.ok(!bodies.slice(prior).some(body => body.messages.at(-1)?.content?.some?.(block => block.text === '/compact')),
+    'compact is never sent as literal user text');
+  assert.ok(events.filter(event => event.type === 'turn.started' && event.payload.origin === 'user').length >= 1);
+});
+
+test('B4 real project hook may rewrite a model-allowed input outside the worker scope', { skip, timeout: 60000 }, async t => {
+  let outside;
+  const f = await harness(t, data => JSON.stringify(data.messages).includes('tool_result')
+    ? [opening(data), ...textBlock(0, 'DONE'), ...finish('end_turn')]
+    : [opening(data), { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_trusted_hook', name: 'Write', input: {} } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ file_path: path.join(f.cwd, 'allowed.txt'), content: 'TRUSTED_HOOK' }) } },
+      { type: 'content_block_stop', index: 0 }, ...finish('tool_use')]);
+  outside = path.join(path.dirname(f.cwd), 'hook-written.txt');
+  const hookFile = path.join(f.cwd, 'hook.cjs');
+  fs.writeFileSync(hookFile, 'process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",updatedInput:{file_path:' + JSON.stringify(outside) + ',content:"TRUSTED_HOOK"}}}));');
+  fs.mkdirSync(path.join(f.cwd, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.cwd, '.claude/settings.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write',
+    hooks: [{ type: 'command', command: 'node hook.cjs' }] }] } }));
+  await f.run({}, () => {}, { owner: 'dispatch', allow: ['allowed.txt'] });
+  assert.equal(fs.existsSync(path.join(f.cwd, 'allowed.txt')), false);
+  assert.equal(fs.readFileSync(outside, 'utf8'), 'TRUSTED_HOOK');
+});
+
+test('S4 real normal resume preserves the transcript model', { skip, timeout: 60000 }, async t => {
+  const bodies = [], f = await harness(t, data => { bodies.push(data); return [opening(data), ...textBlock(0, 'MODEL_ACK'), ...finish('end_turn')]; });
+  const first = await f.run({ model: 'claude-opus-4-6' });
+  const session = product(t, f, () => {}, { model: null, providerSessionId: first.session_id });
+  await session.resume(); await session.send({ clientMessageId: 'resumed-model', text: 'RESUMED_MODEL' });
+  await until(() => session.snapshot().state === 'idle' && bodies.length > 1);
+  assert.equal(bodies.at(-1).model, bodies[0].model);
+});
+
+test('S5 real CLI user key precedence is observed and product refuses that billing conflict', { skip, timeout: 60000 }, async t => {
+  const f = await harness(t, data => [opening(data), ...textBlock(0, 'KEY_ACK'), ...finish('end_turn')]);
+  const abort = new AbortController(), options = f.options({}, abort);
+  fs.writeFileSync(path.join(f.env.CLAUDE_CONFIG_DIR, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_API_KEY: 'sk-ant-offline-conflicting-not-a-real-key' } }));
+  try {
+    const query = f.sdk.query({ prompt: 'Observe fixture key precedence', options });
+    for await (const message of query) if (message.type === 'result') break;
+  } finally { abort.abort(); }
+  assert.equal(f.stats.keys.at(-1), 'sk-ant-offline-conflicting-not-a-real-key');
+  const count = f.stats.keys.length;
+  await assert.rejects(f.run(), /用户设置不能覆盖应用保存的 API 密钥/);
+  assert.equal(f.stats.keys.length, count, 'conflict rejected before network input');
 });

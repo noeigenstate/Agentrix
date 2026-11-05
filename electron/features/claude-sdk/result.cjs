@@ -28,11 +28,12 @@ function tokensOf(usage) {
 function turnResult(result, { interrupted = false, costUsdMicros = null } = {}) {
   const reason = Object.hasOwn(reasons, result.terminal_reason) ? result.terminal_reason
     : result.terminal_reason ? 'unknown' : result.deferred_tool_use ? 'tool_deferred'
-      : ({ error_max_budget_usd: 'budget_exhausted', error_max_turns: 'max_turns', error_max_structured_output_retries: 'structured_output_retry_exhausted' }[result.subtype] || null);
-  let [status, message] = reasons[reason] || ['interrupted', '本轮已结束，未提供可识别的结束原因。'];
+      : ({ error_max_budget_usd: 'budget_exhausted', error_max_turns: 'max_turns', error_max_structured_output_retries: 'structured_output_retry_exhausted' }[result.subtype]
+        || (result.subtype === 'success' && result.is_error === false && typeof result.local_command === 'string' && result.local_command ? 'completed' : null));
+  let [status, message] = reasons[reason] || ['unknown', '本轮已结束，完成状态未知。'];
   if (interrupted) { status = 'interrupted'; message = '本轮已中断。'; }
   else if (result.is_error && (status === 'completed' || !reason || reason === 'unknown')) { status = 'failed'; message = 'Claude 执行失败。'; }
-  return { status, error: status === 'completed' ? null : message, terminalReason: reason, message,
+  return { status, error: ['completed', 'unknown'].includes(status) ? null : message, terminalReason: reason, message,
     durationMs: count(result.duration_ms), apiDurationMs: count(result.duration_api_ms), costUsdMicros: count(costUsdMicros), costEstimated: true,
     tokens: tokensOf(result.usage) };
 }

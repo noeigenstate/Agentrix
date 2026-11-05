@@ -51,6 +51,6 @@ test('real Codex lists skills without a turn and sends a chosen slash skill as s
     await runtime.close(); server.closeAllConnections(); server.close();
     await new Promise(resolve => setTimeout(resolve, 500));
     assert.equal(path.dirname(root), temporaryRoot);
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   }
 });

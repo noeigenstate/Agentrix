@@ -82,7 +82,7 @@ test('local slash output renders once as assistant text without becoming an owne
   normalize({ type: 'system', subtype: 'local_command_output', uuid: 'system-result', content: 'LOCAL OUTPUT' });
   normalize({ ...compact, uuid: 'history-machine', isReplay: true });
   normalize({ ...compact, uuid: 'live-sdk-replay', isReplay: true }, { live: true });
-  assert.deepEqual(events.map(event => [event.payload.kind, event.payload.content.text]), [['agent-message', 'Compacted'], ['agent-message', 'LOCAL OUTPUT'], ['agent-message', 'Compacted']]);
+  assert.deepEqual(events.map(event => [event.payload.kind, event.payload.content.text]), [['agent-message', 'Compacted'], ['agent-message', 'LOCAL OUTPUT']]);
 });
 
 test('a command reply resolved after its project closes is rejected before reaching the renderer', async () => {

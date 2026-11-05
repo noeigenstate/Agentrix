@@ -1,3 +1,4 @@
+require('./fixtures/lab-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');

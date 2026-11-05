@@ -1,3 +1,4 @@
+require('./fixtures/team-isolation.cjs');
 const { test, resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

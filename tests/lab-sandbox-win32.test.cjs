@@ -1,3 +1,5 @@
+require('./fixtures/lab-isolation.cjs');
+require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -863,7 +865,7 @@ test('Windows namespace relays reject forged addresses and broad or foreign name
 test('Windows diagnostics are opt-in, bounded and accept only fixed events with numeric counters', async () => {
   const printed = [];
   const { windowsDiagnostics } = await loadModule('process.cjs', {}, {
-    process: { platform: 'win32', env: { NODE_TEST_CONTEXT: 'child-v8', AGENTRIX_LAB_TEST_PREPARE_HOST: '1' } },
+    process: { platform: 'win32', env: { AGENTRIX_LAB_ISOLATED_HOST: 'child-v8', AGENTRIX_LAB_TEST_PREPARE_HOST: '1' } },
     console: { error: line => printed.push(line) },
   });
   const trace = windowsDiagnostics();
@@ -888,7 +890,7 @@ test('Windows diagnostics are opt-in, bounded and accept only fixed events with 
   const before = printed.length;
   for (let i = 0; i < 300; i++) trace.feed(relay + '\n');
   assert.equal(printed.length - before, 255, 'relay events have a separate bounded budget');
-  for (const env of [{ NODE_TEST_CONTEXT: 'child-v8' }, { AGENTRIX_LAB_TEST_PREPARE_HOST: '1' }]) {
+  for (const env of [{ AGENTRIX_LAB_ISOLATED_HOST: 'child-v8' }, { AGENTRIX_LAB_TEST_PREPARE_HOST: '1' }]) {
     const disabled = await loadModule('process.cjs', {}, { process: { platform: 'win32', env } });
     assert.equal(disabled.windowsDiagnostics(), null);
   }

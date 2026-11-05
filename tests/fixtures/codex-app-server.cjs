@@ -22,6 +22,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (mode === 'resume-frame-limit') return send({ id: request.id, result: { thread: { id: threadId, turns: [] }, padding: 'x'.repeat(4 * 1024 * 1024) } });
     if (mode.startsWith('long-') && request.method === 'thread/resume' && params.excludeTurns !== true) return send({ id: request.id, result: { thread: { id: threadId, turns: [] }, padding: 'x'.repeat(4 * 1024 * 1024) } });
     let sandbox = params.sandbox || 'workspace-write';
+    if (mode === 'windows-sandbox' && params.config?.['windows.sandbox'] !== 'unelevated') sandbox = 'read-only';
     if (mode === 'sandbox-persist') {
       sandbox = params.sandbox || (fs.existsSync(process.env.SYNTHETIC_POLICY_FILE) ? JSON.parse(fs.readFileSync(process.env.SYNTHETIC_POLICY_FILE)).sandbox : 'read-only');
       fs.writeFileSync(process.env.SYNTHETIC_POLICY_FILE, JSON.stringify({ sandbox }));

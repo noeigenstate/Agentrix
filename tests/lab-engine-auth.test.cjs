@@ -1,3 +1,5 @@
+require('./fixtures/lab-isolation.cjs');
+require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');

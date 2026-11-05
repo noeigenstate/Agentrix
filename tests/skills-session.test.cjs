@@ -1,3 +1,4 @@
+require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -11,10 +12,7 @@ const { digest, deliveryMarker, readDelivery, sessionContext } = require('../ele
 const receiptFixture = require('./fixtures/skill-receipts/lifecycle.json');
 
 async function fixture(t, routingNote = () => '') {
-  // The hook uses Windows PowerShell 5.1: even its metadata filename must fit
-  // MAX_PATH beneath a deeply nested worker checkout. Keep this profile short.
-  const temporary = path.join(__dirname, '../.notes/r13-' + require('node:crypto').randomBytes(3).toString('base64url'));
-  fs.mkdirSync(path.dirname(temporary), { recursive: true }); fs.mkdirSync(temporary);
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-skills-'));
   const root = fs.realpathSync.native(temporary);
   const project = { id: 'project', path: path.join(root, 'project'), name: 'Isolated' };
   fs.mkdirSync(project.path);

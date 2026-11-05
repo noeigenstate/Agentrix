@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { fixture, until } = require('./native-approvals.test.cjs');
-const { CodexProtocol } = require('../electron/features/terminal/native-protocol.cjs');
+const { CodexProtocol } = require('../scripts/codex-protocol.cjs');
 
 for (const [method, params, result] of [
   ['item/tool/requestUserInput', { threadId: 'thread', turnId: 'turn', itemId: 'item', questions: [{ id: 'q', question: 'Pick one', options: [{ label: 'One' }, { label: 'Two' }] }] }, { answers: { q: { answers: ['Two'] } } }],
