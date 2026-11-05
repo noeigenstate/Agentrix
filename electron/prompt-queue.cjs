@@ -42,7 +42,11 @@ function promptText(content, record = {}) {
     || record.turnOrigin && record.turnOrigin !== 'human' && !sdkInput || record.humanTurn === false
     || record.commandMode && record.commandMode !== 'prompt') return null;
   if (Array.isArray(content) && content.some(block => ['tool_result', 'tool_use', 'function_call_output'].includes(block?.type))) return null;
-  const text = messageText(content);
+  // Host shell results accompany a streamed owner prompt as separate text blocks.
+  // Keep them as model context, never as the owner's prompt, title or completion input.
+  const ownerContent = sdkInput && Array.isArray(content) ? content.filter(block => !(block.type === 'text'
+    && /^(?:<bash-input>[\s\S]*?<\/bash-input>\n<bash-stdout>[\s\S]*?<\/bash-stdout><bash-stderr>[\s\S]*?<\/bash-stderr>\n)+$/.test(block.text))) : content;
+  const text = messageText(ownerContent);
   if (MACHINE.test(text) || ownMessage(text)) return null;
   if (text.trim()) return text;
   if (!Array.isArray(content)) return null;

@@ -60,6 +60,17 @@ function createEvents(spec, emit, now, renderImage) {
     if (method === 'item/started' || method === 'item/completed') {
       const item = params.item;
       if (!item || typeof item.id !== 'string' || completed.has(item.id)) return;
+      if (item.type === 'contextCompaction') {
+        const done = method === 'item/completed';
+        publish('context.compacting', { active: !done });
+        if (done) {
+          completed.add(item.id);
+          publish('context.compacted', { trigger: item.trigger === 'manual' ? 'manual' : 'auto',
+            preTokens: Number.isSafeInteger(item.preTokens) && item.preTokens >= 0 ? item.preTokens : null,
+            postTokens: Number.isSafeInteger(item.postTokens) && item.postTokens >= 0 ? item.postTokens : null });
+        }
+        return;
+      }
       if (item.type === 'collabAgentToolCall') for (const id of item.receiverThreadIds || []) {
         const status = item.agentsStates?.[id]?.status;
         if (item.tool === 'closeAgent' || ['completed', 'failed', 'shutdown', 'notFound'].includes(status)) children.delete(id);
@@ -86,11 +97,12 @@ function createEvents(spec, emit, now, renderImage) {
     else if (method === 'turn/plan/updated') publish('plan.updated', { explanation: bounded(params.explanation), steps: (params.plan || []).map(x => ({ step: x.step, status: x.status === 'inProgress' ? 'in-progress' : x.status })) });
     else if (method === 'thread/tokenUsage/updated') { const usage = tokenUsage(params.tokenUsage, baseline); cumulative = usage; publish('usage.updated', usage); }
     else if (method === 'model/rerouted') publish('routing.updated', { declared: { model: null, effort: null, fast: null }, effective: { model: params.toModel ?? null, effort: null, fast: null }, observed: { model: null, effort: null, fast: null }, reason: params.reason ?? null });
-    else if (method === 'error') publish('error', { code: 'provider_error', message: 'Codex 报告了错误', retryable: !!params.willRetry, willRetry: !!params.willRetry, stage: 'turn' });
+    else if (method === 'error') { publish('context.compacting', { active: false }); publish('error', { code: 'provider_error', message: 'Codex 报告了错误', retryable: !!params.willRetry, willRetry: !!params.willRetry, stage: 'turn' }); }
     while (items.size > 400) { const id = items.keys().next().value; items.delete(id); completed.delete(id); itemEvents.delete(id); }
   }
   return { binding, publish, notification,
     finishTurn() {
+      publish('context.compacting', { active: false });
       for (const [itemId, payload] of items) if (['command', 'tool', 'file-change'].includes(payload.kind) && ['running', 'in-progress', 'pending'].includes(payload.status)
         && itemEvents.get(itemId)?.turnId === binding.turnId) {
         const final = { ...payload, status: 'interrupted' }; items.set(itemId, final); completed.add(itemId); publish('item.upsert', final, { itemId });

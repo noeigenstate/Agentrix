@@ -71,7 +71,7 @@ test('Claude Task feeds reuse the parent parser in a separate log, update increm
   assert.deepEqual(first.entries, log.snapshot());
   assert.ok(first.entries.some(entry => entry.role === 'tool' && entry.tool.done));
   assert.deepEqual(f.calls.snapshot()[0].items[0], { id: 'agent:worker', state: 'running', title: 'Synthetic task worker', role: '通用',
-    startedAt: BASE, endedAt: null, viewable: true });
+    startedAt: BASE, endedAt: null, viewable: true, hidden: false });
   await fs.appendFile(filename, lines([{ type: 'assistant', uuid: 'later', timestamp: iso(5), isSidechain: true,
     message: { model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'Later synthetic step.' }] } }]));
   const next = await f.calls.feed('agent:worker');
@@ -304,13 +304,13 @@ test('folder changes retire removed Task feeds with a newer revision while prese
   assert.ok(!f.events.some(event => event.callId === kept.id && event.revision > kept.revision));
 });
 
-test('successful dispatch rows disappear after three seconds while their final snapshots expire at thirty minutes', async t => {
+test('successful dispatch rows hide after three seconds while their final snapshots expire at thirty minutes', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: BASE });
   const f = await fixture(t), sessionId = dispatch(f, 'finished');
   await rollout(f, sessionId, {}, [{ type: 'event_msg', timestamp: iso(1), payload: { type: 'agent_message', message: 'Final synthetic answer.' } }]);
   await f.calls.feed('dispatch:finished'); endDispatch(f, 'finished'); await f.calls.work;
   const final = await f.calls.feed('dispatch:finished'); assert.equal(final.state, 'done');
-  t.mock.timers.tick(3000); assert.deepEqual(f.calls.snapshot(), []);
+  t.mock.timers.tick(3000); assert.equal(f.calls.snapshot()[0].items[0].hidden, true);
   assert.deepEqual(await f.calls.feed('dispatch:finished'), final);
   t.mock.timers.tick(FINAL_TTL - 3001); assert.deepEqual(await f.calls.feed('dispatch:finished'), final);
   t.mock.timers.tick(1); await assert.rejects(f.calls.feed('dispatch:finished'), /^Error: gone$/);

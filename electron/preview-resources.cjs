@@ -41,10 +41,13 @@ function allowsHiddenPath(session, relativePath) {
 class PreviewResources {
   constructor({ remote, getProjects = () => [] } = {}) { this.sessions = new Map(); this.remote = remote; this.getProjects = getProjects; }
 
-  open(project, filePath, kind, mimeType) {
+  open(project, filePath, kind, mimeType, native = false) {
     const previewId = randomBytes(24).toString('hex');
-    this.sessions.set(previewId, { project, filePath, kind, mimeType });
-    if (this.sessions.size > 32) this.sessions.delete(this.sessions.keys().next().value);
+    this.sessions.set(previewId, { project, filePath, kind, mimeType, native });
+    // Native conversation images live as long as the bounded event history,
+    // independently of the 32 transient file previews the owner opens.
+    const peers = [...this.sessions].filter(([, session]) => session.native === native);
+    if (peers.length > (native ? 2000 : 32)) this.sessions.delete(peers[0][0]);
     const encoded = filePath.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/');
     return { previewId, url: `project-preview://${previewId}/${encoded}` };
   }

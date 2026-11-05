@@ -9,7 +9,7 @@ const LIMITS = { Owns: [1, Infinity], Interface: [0, 12], 'May import': [0, 12],
 const SOURCE = /\.(?:[cm]?js|tsx?)$/;
 // Generated or vendored anywhere; repository-level folders that hold no app code only at the root.
 const SKIP = new Set(['node_modules', 'dist', 'release', '.git', '.test-output', '.claude']);
-const SKIP_AT_ROOT = new Set(['tests', 'scripts', 'docs', 'assets', 'resources', 'skills']);
+const SKIP_AT_ROOT = new Set(['tests', 'scripts', 'docs', 'assets', 'resources', 'skills', '.notes']);
 const EXCEPTION = /\bexcept\b|\bunless\b|例外|除非/i;
 
 // One glob syntax for BOUNDARY.md and the dispatch helper's --allow.

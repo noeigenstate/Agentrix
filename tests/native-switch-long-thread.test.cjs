@@ -21,17 +21,12 @@ function fixture(t, mode, existingTerminal) {
   lifetime.defer('close router', () => router.close());
   return { router, source, events, fallback, activated, live: () => live };
 }
-for (const mode of ['long-large', 'resume-frame-limit']) test(`Codex resume ${mode} stays on app-server or fails without a terminal`, async t => {
+for (const mode of ['long-large', 'resume-frame-limit']) test(`Codex resume ${mode} restores the same app-server thread without a terminal`, async t => {
   const f = fixture(t, mode, false);
-  if (mode === 'long-large') {
-    await f.router.start('t', { agent: 'codex', resume: true });
-    assert.equal(f.router.snapshot('t').state, 'idle');
-    assert.ok(Buffer.byteLength(JSON.stringify(f.router.snapshot('t'))) < 4 * 1024 * 1024);
-    assert.ok(f.router.snapshot('t').events.some(event => event.providerSessionId === 'same-thread'));
-  } else {
-    await assert.rejects(f.router.start('t', { agent: 'codex', resume: true }), /app-server/);
-    assert.equal(f.router.snapshot('t').state, 'failed');
-  }
+  await f.router.start('t', { agent: 'codex', resume: true });
+  assert.equal(f.router.snapshot('t').state, 'idle');
+  assert.ok(Buffer.byteLength(JSON.stringify(f.router.snapshot('t'))) < 4 * 1024 * 1024);
+  assert.ok(f.router.snapshot('t').events.some(event => event.providerSessionId === 'same-thread'));
   assert.equal(f.fallback.length, 0); assert.equal(f.router.switchState('t'), null);
   assert.equal(f.events.some(event => event.type === 'turn.started' || event.type === 'input.receipt'), false);
 });

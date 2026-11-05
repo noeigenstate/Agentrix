@@ -15,6 +15,19 @@ function registerIpc({ handle, router, settings, claude }) {
   });
   handle('native:snapshot', terminalId => { assert(id(terminalId)); return router.snapshot(terminalId); });
   handle('native:commands', (...args) => { assert(args.length === 2); binding(...args); return router.commands(...args); });
+  handle('native:run-options', (terminalId, runtimeSessionId, patch) => {
+    binding(terminalId, runtimeSessionId);
+    assert(exact(patch, ['model', 'effort', 'fast']) && (patch.model === undefined || patch.model === null || text(patch.model, 160))
+      && (patch.effort === undefined || patch.effort === null || ['low', 'medium', 'high', 'xhigh', 'max'].includes(patch.effort))
+      && (patch.fast === undefined || typeof patch.fast === 'boolean'));
+    return router.runOptions(terminalId, runtimeSessionId, patch);
+  });
+  handle('native:models', (terminalId, runtimeSessionId) => { binding(terminalId, runtimeSessionId); return router.models(terminalId, runtimeSessionId); });
+  handle('native:new-conversation', (terminalId, runtimeSessionId) => { binding(terminalId, runtimeSessionId); return router.newConversation(terminalId, runtimeSessionId); });
+  handle('native:shell', (terminalId, runtimeSessionId, clientMessageId, command) => {
+    binding(terminalId, runtimeSessionId); assert(id(clientMessageId) && text(command, 262144) && command === command.trim());
+    return router.shell(terminalId, runtimeSessionId, clientMessageId, command);
+  });
   handle('native:settings-get', () => settings.get());
   handle('native:settings-set', patch => settings.set(patch));
   handle('native:key-save', key => router.keySave(key));

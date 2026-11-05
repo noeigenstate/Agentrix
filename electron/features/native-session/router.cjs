@@ -266,6 +266,52 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
   }
   const unsubscribeAvailability = claude.onAvailabilityChange?.(() => reconcile());
   return { start,
+    async runOptions(id, runtimeSessionId, patch) {
+      const record = current(id, runtimeSessionId);
+      if (record.spec.agent !== 'claude' || !record.runtime.runOptions) throw new Error('此会话不支持运行选项。');
+      const result = await record.runtime.runOptions(patch);
+      current(id, runtimeSessionId); return result;
+    },
+    async models(id, runtimeSessionId) {
+      const record = current(id, runtimeSessionId);
+      if (record.spec.agent !== 'claude' || !record.runtime.models) throw new Error('此会话不支持模型菜单。');
+      const result = await record.runtime.models();
+      current(id, runtimeSessionId); return result;
+    },
+    async shell(id, runtimeSessionId, clientMessageId, command) {
+      const record = current(id, runtimeSessionId);
+      if (record.spec.agent !== 'claude' || !record.runtime.shell) throw new Error('此会话不支持运行命令。');
+      const result = await record.runtime.shell(clientMessageId, command);
+      current(id, runtimeSessionId); return result;
+    },
+    async newConversation(id, runtimeSessionId) {
+      const previous = current(id, runtimeSessionId);
+      if (previous.spec.agent !== 'claude') throw new Error('此会话不支持新对话。');
+      if (busy.has(id) || previous.runtime.snapshot().state !== 'idle' || previous.runtime.activity?.().count > 0) throw new Error('请等待当前任务结束后再开始新对话。');
+      busy.add(id);
+      let next;
+      try {
+        const options = await previous.runtime.runOptions({});
+        current(id, runtimeSessionId);
+        const spec = { ...previous.spec, ...options, model: options.model || previous.spec.model, runtimeSessionId: randomUUID(), providerSessionId: null, threadId: null };
+        next = makeRecord(spec, true);
+        await next.runtime.start();
+        current(id, runtimeSessionId);
+        await activateNative(spec, null, { newConversation: true });
+        sessions.set(id, next); switches.forget(id);
+        saveSession(id, { agent: 'claude', providerSessionId: null });
+        next.staged = false;
+        for (const event of next.buffered) forward(next, event);
+        next.buffered = [];
+        next.stream.publish('path.changed', { previous: 'api', selected: 'api', reason: null });
+        if (previous.lock) occupied.delete(previous.lock);
+        // The new binding is committed. A cleanup error must not tell the renderer
+        // that its still-active old binding survived the transition.
+        try { await previous.runtime.close(); } catch { }
+        return { runtimeSessionId: spec.runtimeSessionId };
+      } catch (error) { if (next && sessions.get(id) !== next) await next.runtime.close(); throw error; }
+      finally { busy.delete(id); }
+    },
     async commands(id, runtimeSessionId) {
       const record = current(id, runtimeSessionId);
       const fallback = record.spec.agent === 'claude' ? await readCommands(record.spec) : [];
@@ -275,6 +321,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     },
     async send(id, runtimeSessionId, message) {
       const record = current(id, runtimeSessionId);
+      if (busy.has(id)) throw new Error('会话正在切换，请稍后重试。');
       if (record.inputs.has(message.clientMessageId)) return { status: record.inputs.get(message.clientMessageId) };
       if (switches.state(id)?.phase && switches.state(id).phase !== 'stable') return unsent(record, message, 'switch_in_progress');
       if (record.spec.agent === 'claude') {

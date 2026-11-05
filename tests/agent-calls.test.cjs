@@ -31,27 +31,55 @@ function finishDispatch(calls, id, reason, exitCode = 1) {
   return { start, end };
 }
 
-test('unconfirmed dispatches expire after five seconds without removing other failures or reviving duplicates', t => {
+test('ended dispatches hide after three or thirty seconds without acknowledging failures or reviving duplicates', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let changes = 0;
   const calls = new AgentCalls({ local: false, changed: () => changes++ }); t.after(() => calls.reset());
   const failed = finishDispatch(calls, 'unconfirmed', 'unconfirmed', null);
   finishDispatch(calls, 'success', 'exit', 0);
   for (const reason of ['capacity', 'scope', 'error', 'killed', 'exit']) finishDispatch(calls, reason, reason);
-  const rows = () => calls.snapshot()[0]?.items || [];
+  const rows = () => (calls.snapshot()[0]?.items || []).filter(item => !item.hidden);
   assert.deepEqual(rows().find(item => item.title === 'unconfirmed').failure, { reason: 'unconfirmed', exitCode: null });
   assert.equal(rows().find(item => item.title === 'success').state, 'done');
   t.mock.timers.tick(2999); assert.equal(rows().length, 7); assert.equal(changes, 0);
   t.mock.timers.tick(1); assert.equal(rows().length, 6); assert.equal(changes, 1);
-  t.mock.timers.tick(1999); assert.equal(rows().find(item => item.title === 'unconfirmed').state, 'reviewing');
+  t.mock.timers.tick(26999); assert.equal(rows().find(item => item.title === 'unconfirmed').state, 'reviewing');
   t.mock.timers.tick(1);
-  assert.deepEqual(rows().map(item => item.title).sort(), ['capacity', 'error', 'exit', 'killed', 'scope']);
-  assert.equal(changes, 2);
+  assert.deepEqual(rows(), []);
+  assert.equal(calls.calls.get(failed.start.id).pendingReview, true);
+  assert.equal(calls.calls.get(failed.start.id).reviewed, undefined);
+  assert.equal(changes, 7);
   assert.equal(calls.dispatch(failed.start), false);
   assert.equal(calls.dispatch(failed.end), false);
   assert.equal(calls.dispatch({ type: 'dispatch-rate', id: failed.start.id, outputTokens: 1, activeMs: 1 }), false);
   assert.equal(calls.review(6000, true), true);
-  assert.deepEqual(calls.snapshot(), []);
+  assert.deepEqual(rows(), []);
+});
+
+test('display retirement waits for a live process and never repeats completion or review', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let alive = true, completions = 0;
+  const calls = new AgentCalls({ dispatchAlive: async () => alive, finished: () => completions++ }); t.after(() => calls.reset());
+  finishDispatch(calls, 'retained-live-helper', 'error');
+  t.mock.timers.tick(30000); await Promise.resolve();
+  assert.equal(calls.snapshot()[0].items[0].hidden, false); assert.equal(completions, 1);
+  alive = false; t.mock.timers.tick(1000); await Promise.resolve();
+  assert.equal(calls.snapshot()[0].items[0].hidden, true); assert.equal(completions, 1);
+  assert.equal(calls.calls.get('retained-live-helper').pendingReview, true);
+  assert.equal(calls.calls.get('retained-live-helper').reviewed, undefined);
+});
+
+test('background Agent completion retires its display without deleting its receipt', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const calls = new AgentCalls({ local: false }); t.after(() => calls.reset());
+  calls.apply(use('background', 'Agent', { description: 'Background work', run_in_background: true }));
+  calls.apply(result('background', { agentId: 'child', isAsync: true }));
+  assert.equal(calls.snapshot()[0].items[0].hidden, false);
+  calls.apply(notice('background'));
+  t.mock.timers.tick(3000);
+  assert.equal(calls.snapshot()[0].items[0].hidden, true);
+  assert.equal(calls.calls.has('background'), true);
+  assert.equal(calls.apply(use('background')), false, 'a replayed start cannot revive a hidden child');
 });
 
 test('an unconfirmed dispatch reviewed before expiry does not publish a second change', t => {
@@ -65,14 +93,14 @@ test('an unconfirmed dispatch reviewed before expiry does not publish a second c
   assert.equal(changes, 0); assert.equal(calls.dispatch(failed.start), false);
 });
 
-test('unconfirmed expiry survives a preserving reset but not a full reset', t => {
+test('display expiry survives a preserving reset but not a full reset', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let changes = 0;
   const calls = new AgentCalls({ local: false, changed: () => changes++ }); t.after(() => calls.reset());
   const kept = finishDispatch(calls, 'kept', 'unconfirmed', null);
   t.mock.timers.tick(2000); calls.reset(true); calls.setFolder('synthetic-folder');
-  t.mock.timers.tick(2999); assert.equal(calls.snapshot()[0].items[0].title, 'kept');
-  t.mock.timers.tick(1); assert.deepEqual(calls.snapshot(), []); assert.equal(changes, 1);
+  t.mock.timers.tick(27999); assert.equal(calls.snapshot()[0].items[0].hidden, false);
+  t.mock.timers.tick(1); assert.equal(calls.snapshot()[0].items[0].hidden, true); assert.equal(changes, 1);
   assert.equal(calls.dispatch(kept.start), false);
   const cleared = finishDispatch(calls, 'cleared', 'unconfirmed', null);
   t.mock.timers.tick(2000); calls.reset();
@@ -212,7 +240,7 @@ test('Claude groups keep the latest five tasks and inherit the current provider'
     meter.apply(use(`a${i}`, 'Agent', { model: 'claude-sonnet-5-5', description: `Task ${i}` }));
     if (i < 6) meter.apply(result(`a${i}`));
   }
-  assert.deepEqual(meter.snapshot().calls[0], { agent: 'Claude Code', provider: 'relay.example', model: 'claude-sonnet-5-5', effort: null, fast: null, preparing: 0, running: 1, reviewing: 6, tasks: ['Task 2', 'Task 3', 'Task 4', 'Task 5', 'Task 6'], items: Array.from({ length: 7 }, (_, i) => ({ id: `agent:a${6 - i}`, state: i ? 'reviewing' : 'running', role: '通用', title: `Task ${6 - i}`, startedAt: null, endedAt: null, viewable: false })), rate: null });
+  assert.deepEqual(meter.snapshot().calls[0], { agent: 'Claude Code', provider: 'relay.example', model: 'claude-sonnet-5-5', effort: null, fast: null, preparing: 0, running: 1, reviewing: 6, tasks: ['Task 2', 'Task 3', 'Task 4', 'Task 5', 'Task 6'], items: Array.from({ length: 7 }, (_, i) => ({ id: `agent:a${6 - i}`, state: i ? 'reviewing' : 'running', role: '通用', title: `Task ${6 - i}`, startedAt: null, endedAt: null, viewable: false, hidden: false })), rate: null });
   meter.provider = 'Anthropic';
   assert.equal(meter.snapshot().calls[0].provider, 'Anthropic');
   meter.apply(stop());
@@ -273,7 +301,7 @@ test('subagent items keep every role and full description newest first, includin
   const roles = [['Explore', '搜索'], ['Plan', '规划'], ['general-purpose', '通用'], ['claude', '通用'], [undefined, '通用'], ['none', '通用'], ['fork', '分身'], ['custom-worker', 'custom-worker'], ['constructor', 'constructor']];
   for (const [i, [subagent_type]] of roles.entries()) calls.apply(use(`role-${i}`, 'Agent', { subagent_type, description: 'Inspect ' + 'the parser '.repeat(30) }));
   calls.apply(result('role-0'));
-  assert.deepEqual(calls.snapshot()[0].items, roles.map(([, role], i) => ({ id: `agent:role-${i}`, state: i ? 'running' : 'reviewing', role, title: 'Inspect ' + 'the parser '.repeat(30).trim(), startedAt: null, endedAt: null, viewable: false })).reverse());
+  assert.deepEqual(calls.snapshot()[0].items, roles.map(([, role], i) => ({ id: `agent:role-${i}`, state: i ? 'running' : 'reviewing', role, title: 'Inspect ' + 'the parser '.repeat(30).trim(), startedAt: null, endedAt: null, viewable: false, hidden: false })).reverse());
   assert.equal(calls.snapshot()[0].tasks.length, 1, 'hover tasks still deduplicate while rows keep each call');
   assert.equal(calls.snapshot()[0].tasks[0].length, 240, 'existing hover task length stays bounded');
   calls.apply(stop());

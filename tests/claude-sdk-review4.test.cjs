@@ -39,9 +39,9 @@ test('F2 fallback worker environments never inherit owner entrypoint in any casi
     assert.equal(original.CLAUDE_CODE_ENTRYPOINT, 'agentrix-sdk');
   }
 });
-test('F3 dispatch ignores project settings that its CLI will never load', t => {
+test('F3 dispatch refuses project keys in the settings its CLI loads', t => {
   const f = fixture(t); fs.writeFileSync(f.file, keyConfig);
-  assert.doesNotThrow(() => routeSettings({ ...f.spec, owner: 'dispatch' }));
+  assert.throws(() => routeSettings({ ...f.spec, owner: 'dispatch' }), { code: 'project_api_key_override' });
 });
 test('F4 trusted startup errors keep the settings filename and remedy without key bytes', t => {
   const f = fixture(t); fs.writeFileSync(f.file, keyConfig);

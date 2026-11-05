@@ -41,12 +41,12 @@ test('owner queries remain alive at idle and reuse the same process on the next 
   assert.equal((await session.send({ clientMessageId: first, text: 'duplicate' })).status, 'consumed');
   assert.equal(fake.inputs.length, 2);
 });
-test('a worker explicitly disables disk setting sources and blocks failed hooks', async t => {
+test('a worker loads normal setting sources while blocking failed policy hooks', async t => {
   const { runtime, spec, fake } = setup(t, { auto: false });
   const session = runtime.create({ ...spec, owner: 'dispatch', readOnly: false, allow: ['**'] }, () => {}); t.after(() => session.close());
   await session.start();
   await session.send({ clientMessageId: randomUUID(), text: 'worker' });
-  assert.deepEqual(fake.calls[0].options.settingSources, []);
+  assert.deepEqual(fake.calls[0].options.settingSources, ['user', 'project', 'local']);
   assert.equal(fake.calls[0].options.hooks.PreToolUse[0].onFailure, 'block');
   assert.equal((await fake.calls[0].options.canUseTool('Bash', { command: 'node --version' }, {})).behavior, 'allow');
 });

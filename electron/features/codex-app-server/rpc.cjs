@@ -1,17 +1,17 @@
-const MAX_FRAME = 4 * 1024 * 1024;
-const MAX_HISTORY_FRAME = 16 * 1024 * 1024;
+const { MAX_FRAME, jsonFrames } = require('../../oversized-record.cjs');
+const MAX_HISTORY_FRAME = MAX_FRAME;
 const HISTORY_READS = new Set(['thread/turns/list', 'thread/items/list']);
 const keyOf = id => `${typeof id}:${id}`;
 
 // A write accepted by the stream is never retried, including after backpressure or timeout.
-function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onDisconnect = () => {}, timeout = 8000 } = {}) {
+function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onDisconnect = () => {}, onDropped = () => {}, timeout = 8000 } = {}) {
   const pending = new Map();
-  let parts = [], bytes = 0, prefix = '', discarding = false, counter = 0, closed = false, blocked = false, queue = [], queuedBytes = 0;
+  let counter = 0, closed = false, blocked = false, queue = [], queuedBytes = 0;
   function fail(code = 'disconnected') {
     if (closed) return;
     closed = true;
     for (const task of pending.values()) { clearTimeout(task.timer); task.reject(Object.assign(new Error(code), { code, uncertain: task.sent })); }
-    pending.clear(); queue = []; queuedBytes = 0; parts = []; bytes = 0; prefix = '';
+    pending.clear(); queue = []; queuedBytes = 0;
     onDisconnect(code);
   }
   function flush() {
@@ -30,56 +30,40 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
     if (bytes > MAX_FRAME || queuedBytes + bytes > MAX_FRAME * 2) throw Object.assign(new Error('frame_limit'), { code: 'frame_limit' });
     queue.push({ line, task, key: keyOf(message.id) }); queuedBytes += bytes; flush();
   }
-  function historyResponse() {
-    // Our string request IDs lead real app-server response envelopes. Never discard an unbound frame.
-    const id = /^\s*\{\s*"id"\s*:\s*"(\d+)"\s*,\s*"result"\s*:/.exec(prefix)?.[1];
-    const task = id && pending.get(keyOf(id));
-    return task && HISTORY_READS.has(task.method) ? { id, task } : null;
-  }
-  function read(chunk) {
-    if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk);
-    let offset = 0;
-    while (!closed && offset < chunk.length) {
-      const end = chunk.indexOf(10, offset), segment = chunk.subarray(offset, end < 0 ? chunk.length : end);
-      offset = end < 0 ? chunk.length : end + 1;
-      if (!discarding) {
-        if (prefix.length < 256) prefix += segment.subarray(0, 256 - prefix.length).toString('ascii');
-        const history = historyResponse(), limit = history ? MAX_HISTORY_FRAME : MAX_FRAME;
-        if (bytes + segment.length > limit) {
-          if (!history) return fail('frame_limit');
-          // History is optional, read-only data. Drain this one response without losing the live session.
-          pending.delete(keyOf(history.id)); clearTimeout(history.task.timer);
-          history.task.reject(Object.assign(new Error('history_frame_limit'), { code: 'history_frame_limit', uncertain: false }));
-          parts = []; bytes = 0; discarding = true;
-        } else { parts.push(segment); bytes += segment.length; }
-      }
-      if (end < 0) continue;
-      if (discarding) { discarding = false; prefix = ''; continue; }
-      // Decode and parse once per bounded frame; repeated string concatenation rescans long UTF-8 frames.
-      const line = Buffer.concat(parts, bytes).toString('utf8'); parts = []; bytes = 0; prefix = '';
-      let message;
-      try { message = JSON.parse(line); } catch { return fail('invalid_json'); }
-      if (!message || typeof message !== 'object' || Array.isArray(message)) return fail('invalid_frame');
-      if (message.id !== undefined && typeof message.id !== 'string' && !Number.isSafeInteger(message.id)) return fail('invalid_id');
-      try {
-        if (typeof message.method === 'string') {
-          if (message.id !== undefined) onRequest(message); else onNotification(message.method, message.params || {});
-        } else if (message.id !== undefined) {
-          const key = keyOf(message.id), task = pending.get(key);
-          if (!task) continue;
-          pending.delete(key); clearTimeout(task.timer);
-          if (message.error) task.reject(Object.assign(new Error('rpc_rejected'), { code: message.error.code, uncertain: false,
-            // 0.166 reports parameter deserialization failures as Invalid Request. Keep only this static classification.
-            missingThreadId: message.error.code === -32600 && message.error.message === 'Invalid request: missing field `threadId`',
-            missingThread: message.error.code === -32600 && /^no rollout found for thread id [a-f\d-]{36}$/i.test(message.error.message) }));
-          else if ('result' in message) task.resolve(message.result);
-          else { task.reject(Object.assign(new Error('invalid_response'), { uncertain: task.sent })); fail('invalid_response'); }
-        } else fail('invalid_frame');
-      } catch { fail('invalid_payload'); }
+  const read = jsonFrames(message => {
+    if (closed) return;
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return fail('invalid_frame');
+    if (message.id !== undefined && typeof message.id !== 'string' && !Number.isSafeInteger(message.id)) return fail('invalid_id');
+    try {
+      if (typeof message.method === 'string') {
+        if (message.id !== undefined) onRequest(message); else onNotification(message.method, message.params || {});
+      } else if (message.id !== undefined) {
+        const key = keyOf(message.id), task = pending.get(key);
+        if (!task) return;
+        pending.delete(key); clearTimeout(task.timer);
+        if (message.error) task.reject(Object.assign(new Error('rpc_rejected'), { code: message.error.code, uncertain: false,
+          // 0.166 reports parameter deserialization failures as Invalid Request. Keep only this static classification.
+          missingThreadId: message.error.code === -32600 && message.error.message === 'Invalid request: missing field `threadId`',
+          missingThread: message.error.code === -32600 && /^no rollout found for thread id [a-f\d-]{36}$/i.test(message.error.message) }));
+        else if ('result' in message) task.resolve(message.result);
+        else { task.reject(Object.assign(new Error('invalid_response'), { uncertain: task.sent })); fail('invalid_response'); }
+      } else fail('invalid_frame');
+    } catch { fail('invalid_payload'); }
+  }, (envelope, bytes) => {
+    if (closed) return;
+    const task = pending.get(keyOf(envelope.id));
+    if (task && typeof envelope.method !== 'string') {
+      pending.delete(keyOf(envelope.id)); clearTimeout(task.timer);
+      const history = HISTORY_READS.has(task.method);
+      task.reject(Object.assign(new Error(history ? 'history_frame_limit' : 'frame_limit'),
+        { code: history ? 'history_frame_limit' : 'frame_limit', uncertain: history ? false : task.sent }));
+    } else if (envelope.id !== undefined && typeof envelope.method === 'string') {
+      try { write({ id: envelope.id, error: { code: -32600, message: 'Frame too large' } }); } catch {}
     }
-  }
+    onDropped(bytes);
+  }, fail);
   child.stdout.on('data', read);
-  child.stdout.on('end', () => fail(bytes || discarding ? 'truncated_frame' : 'disconnected'));
+  child.stdout.on('end', () => { read.end(); fail('disconnected'); });
   child.stdin.on('drain', () => { blocked = false; flush(); });
   child.stdin.on('error', () => fail('write_failed'));
   child.on('error', error => fail(['ENOENT', 'EACCES', 'EPERM', 'EINVAL'].includes(error.code) ? error.code : 'process_failed'));
@@ -100,7 +84,7 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
     notify: (method, params = {}) => write({ method, params }),
     respond: (id, result) => write({ id, result }),
     reject: (id, code = -32601) => write({ id, error: { code, message: 'Unsupported request' } }),
-    close() { fail('closed'); try { child.stdin.end(); } catch {} },
+    close() { fail('closed'); read.clear(); try { child.stdin.end(); } catch {} },
   };
 }
 

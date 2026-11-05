@@ -87,11 +87,11 @@ function oversizedRecord(head, tail) {
   const start = head.toString('utf8'), end = tail.toString('utf8');
   const item = start.indexOf('"item":');
   if (item < 0 || !/"kind":"image_gen\.generation"|"type":"imageGeneration"/.test(start.slice(item))) return null;
-  const savedPath = field(end, 'savedPath');
+  const savedPath = field(end, 'savedPath') || field(start, 'savedPath');
   if (!savedPath) return null;
   const body = start.slice(item);
   return { timestamp: field(start, 'timestamp'), type: 'event_msg', payload: { type: 'item_completed', item: {
-    type: 'Extension', kind: 'image_gen.generation', id: field(body, 'id'), status: field(body, 'status'), revisedPrompt: field(body, 'revisedPrompt'), savedPath,
+    type: 'Extension', kind: 'image_gen.generation', id: field(body, 'id') || field(end, 'id'), status: field(body, 'status') || field(end, 'status'), revisedPrompt: field(body, 'revisedPrompt') || field(end, 'revisedPrompt'), savedPath,
   } } };
 }
 
@@ -128,7 +128,7 @@ function readTranscriptChunk(reader, chunk, onRecord, Line = OversizedLine) {
     // An oversized line ends here: a generated picture's record is rebuilt from its two ends.
     const oversized = reader.oversized ?? (!reader.skipping && line.length > 1024 * 1024 ? new Line(Buffer.alloc(0)) : null);
     if (oversized) { oversized.add(line); const record = oversized.record(); if (record) onRecord(record); }
-    else if (!reader.skipping) { try { onRecord(JSON.parse(line.toString('utf8'))); } catch { } }
+    else if (!reader.skipping) { try { onRecord(JSON.parse(line.toString('utf8'), imageMetadata)); } catch { } }
     reader.skipping = false; reader.oversized = null;
   }
   if (reader.buffer.length > 1024 * 1024) {
@@ -137,4 +137,74 @@ function readTranscriptChunk(reader, chunk, onRecord, Line = OversizedLine) {
   }
 }
 
-module.exports = { OversizedLine, oversizedRecord, ClaudeImageLine, IMAGE_LIMIT, IMAGE_OMITTED, readTranscriptChunk };
+const MAX_FRAME = 64 * 1024 * 1024;
+
+// Read only envelope scalars while draining an oversized frame, including ids after its payload.
+class Envelope {
+  constructor() { this.depth = 0; this.quoted = false; this.escaped = false; this.token = ''; this.key = null; this.value = {}; }
+  scalar() {
+    if (this.depth === 1 && this.key) {
+      try { this.value[this.key] = JSON.parse(this.token); } catch {}
+      this.key = null;
+    }
+    this.token = '';
+  }
+  add(buffer) {
+    for (let at = 0; at < buffer.length; at++) {
+      const byte = buffer[at];
+      if (this.quoted) {
+        if (this.escaped) { this.escaped = false; if (this.depth === 1 && this.token.length < 512) this.token += String.fromCharCode(byte); continue; }
+        const quote = buffer.indexOf(34, at), slash = buffer.indexOf(92, at);
+        const end = Math.min(quote < 0 ? buffer.length : quote, slash < 0 ? buffer.length : slash);
+        if (this.depth === 1 && this.token.length < 512) this.token += buffer.subarray(at, Math.min(end + 1, at + 512 - this.token.length)).toString('utf8');
+        if (end === buffer.length) return;
+        if (buffer[end] === 92) this.escaped = true; else this.quoted = false;
+        at = end;
+      } else if (byte === 34) { this.quoted = true; this.token = '"'; }
+      else if (byte === 58 && this.depth === 1) {
+        try { const name = JSON.parse(this.token); this.key = ['id', 'requestId', 'method', 'type'].includes(name) ? name : null; } catch {}
+        this.token = '';
+      } else if (byte === 123 || byte === 91) { ++this.depth; this.token = ''; }
+      else if (byte === 125 || byte === 93) { this.scalar(); --this.depth; }
+      else if (byte === 44) this.scalar();
+      else if (this.depth === 1 && byte > 32 && this.token.length < 512) this.token += String.fromCharCode(byte);
+    }
+  }
+}
+
+function imageMetadata(_key, value) {
+  if (value && typeof value === 'object' && (value.type === 'imageGeneration' || value.kind === 'image_gen.generation')) delete value.result;
+  return value;
+}
+
+function jsonFrames(receive, dropped, invalid, limit = MAX_FRAME) {
+  let parts = [], bytes = 0, envelope = null;
+  const read = chunk => {
+    if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk);
+    let offset = 0;
+    while (offset < chunk.length) {
+      const end = chunk.indexOf(10, offset), segment = chunk.subarray(offset, end < 0 ? chunk.length : end);
+      offset = end < 0 ? chunk.length : end + 1;
+      bytes += segment.length;
+      if (!envelope && bytes > limit) {
+        envelope = new Envelope();
+        for (const part of parts) envelope.add(part);
+        parts = [];
+      }
+      if (envelope) envelope.add(segment); else parts.push(segment);
+      if (end < 0) continue;
+      const size = bytes, metadata = envelope?.value;
+      const line = envelope ? null : Buffer.concat(parts, bytes);
+      parts = []; bytes = 0; envelope = null;
+      if (metadata) { dropped(metadata, size); continue; }
+      let value;
+      try { value = JSON.parse(line.toString('utf8'), imageMetadata); } catch { invalid('invalid_json'); return; }
+      receive(value);
+    }
+  };
+  read.end = () => { if (bytes) invalid('truncated_frame'); read.clear(); };
+  read.clear = () => { parts = []; bytes = 0; envelope = null; };
+  return read;
+}
+
+module.exports = { OversizedLine, oversizedRecord, ClaudeImageLine, IMAGE_LIMIT, IMAGE_OMITTED, readTranscriptChunk, MAX_FRAME, jsonFrames, imageMetadata };

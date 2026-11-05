@@ -29,8 +29,8 @@ test('a picture Codex generated shows in its answer as a small copy of the saved
   assert.deepEqual(asked, [file]);
 });
 
-test('without a thumbnail a small result is shown as is; failures and unfinished pictures show nothing', () => {
-  assert.equal(generatedImage(record.payload.item, 1).images[0], 'data:image/png;base64,iVBORw0KGgo');
+test('without the saved picture no encoded result is retained; failures and unfinished pictures show nothing', () => {
+  assert.equal(generatedImage(record.payload.item, 1), null);
   assert.equal(generatedImage({ ...record.payload.item, status: 'failed' }, 1), null);
   assert.equal(generatedImage({ ...record.payload.item, result: 'x'.repeat(3_000_000) }, 1), null, 'a full-size image is never put inline');
 });

@@ -267,7 +267,8 @@ async function command(file, args, {
 
 async function git(cwd, args, options) {
   const result = await command('git', [
-    '--no-optional-locks', '-c', 'core.hooksPath=', '-c', 'core.fsmonitor=false', ...args,
+    '--no-optional-locks', '-c', 'core.hooksPath=', '-c', 'core.fsmonitor=false',
+    ...(process.platform === 'win32' ? ['-c', 'core.longpaths=true'] : []), ...args,
   ], { cwd, ...options });
   if (result.code !== 0) throw new Error(`Git: ${result.stderr.trim().slice(0, 500) || result.code}`);
   return result.stdout;

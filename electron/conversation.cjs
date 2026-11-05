@@ -95,13 +95,15 @@ function codexUserMessage(log, record, item, id, source) {
 const { isGeneratedImage } = require('./generated-image-path.cjs');
 // fromFile(path) and fromDataUrl(url) return a small data URL, or null to keep what there is.
 function setThumbnailer(fromFile, fromDataUrl = url => url) { thumbnails = new PictureThumbnails(fromFile, fromDataUrl); }
+let generatedPreview = null;
+function setGeneratedPreview(render) { generatedPreview = render; }
 function generatedImage(item, at) {
   const kind = item?.type === 'Extension' ? item.kind : item?.type;
   if (!['image_gen.generation', 'imageGeneration'].includes(kind) || item.status !== 'completed' || !isGeneratedImage(item.savedPath)) return null;
-  let src = null;
-  src = thumbnails.file(item.savedPath);
-  if (!dataImage(src) && typeof item.result === 'string' && item.result.length <= IMAGE_LIMIT) src = thumbnails.data(`data:image/png;base64,${item.result}`);
-  if (!dataImage(src)) return null;
+  // The host serves the saved file through its selected-file preview capability.
+  // Standalone transcript readers may still inject a thumbnailer for display.
+  const src = generatedPreview ? generatedPreview(item)?.images?.[0] : thumbnails.file(item.savedPath);
+  if (!src || !generatedPreview && !dataImage(src)) return null;
   return { id: `g:${item.id}`, at, role: 'assistant', text: '', images: [src], generated: { path: item.savedPath, prompt: bounded(String(item.revisedPrompt || '')) } };
 }
 const bounded = text => text.length > TEXT_LIMIT ? `${text.slice(0, TEXT_LIMIT)}\n\n…` : text;
@@ -353,4 +355,4 @@ function codexConversation(log, record, cwd) {
   for (const action of codexActions(payload, at, log.cwd || cwd)) log.put({ id: action.id, at, role: 'tool', tool: brief(action) });
 }
 
-module.exports = { ConversationLog, claudeConversation, codexConversation, clean, brief, generatedImage, isGeneratedImage, setThumbnailer, setConversationTranslator, questionReply };
+module.exports = { ConversationLog, claudeConversation, codexConversation, clean, brief, generatedImage, isGeneratedImage, setThumbnailer, setGeneratedPreview, setConversationTranslator, questionReply };

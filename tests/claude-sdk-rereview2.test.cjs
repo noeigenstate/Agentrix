@@ -32,7 +32,8 @@ test('N1 structured cancellation is not failure, and ordinary tool errors keep t
     assert.equal(item.status, interrupted ? 'interrupted' : 'failed');
     assert.equal(item.content.output, interrupted ? '' : end.message.content[0].content);
     assert.equal(log.list[0].tool.failed, !interrupted); assert.equal(actions.list[0].failed, !interrupted);
-    f.emit({ type: 'result' }); assert.equal(f.events.at(-1).payload.status, item.status);
+    f.emit({ type: 'result' }); assert.equal(f.events.findLast(event => event.type === 'item.upsert').payload.status, item.status);
+    assert.equal(f.events.at(-1).type, 'context.compacting'); assert.equal(f.events.at(-1).payload.active, false);
   }
 });
 

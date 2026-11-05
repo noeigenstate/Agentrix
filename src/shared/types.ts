@@ -33,7 +33,7 @@ export type AgentTokens = { input: number; cached: number; output: number };
 // AgentUsage.model is the main session's model as its latest reply records it, and its rate is that model's.
 export type TokenRate = { outputTokens: number; activeMs: number; samples: number; updatedAt: number; partial: boolean };
 // done: a dispatched worker that ended cleanly — shown as 已完成 and removed 3 s later; a failure stays until the lead's next round.
-export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | null; model: string; effort: string | null; fast: boolean | null; preparing: number; running: number; reviewing: number; tasks: string[]; rate?: TokenRate | null; items: { id: string; state: 'preparing' | 'running' | 'reviewing' | 'done'; role: string; title: string; startedAt: number | null; endedAt: number | null; viewable: boolean;
+export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | null; model: string; effort: string | null; fast: boolean | null; preparing: number; running: number; reviewing: number; tasks: string[]; rate?: TokenRate | null; items: { id: string; state: 'preparing' | 'running' | 'reviewing' | 'done'; role: string; title: string; startedAt: number | null; endedAt: number | null; viewable: boolean; hidden: boolean;
   // A dispatched worker that ended badly or never confirmed (skills/agent-dispatch): shown in words instead of a plain state.
   failure?: { reason: 'unconfirmed' | 'capacity' | 'killed' | 'error' | 'scope'; exitCode: number | null;
     // scope: files the worker changed outside the paths it was allowed (skills/agent-dispatch, --allow).

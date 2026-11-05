@@ -24,6 +24,18 @@ function createNormalizer(emit, clean = value => value) {
     if (message.parent_tool_use_id || message.isSidechain) return;
     const timestamp = Date.parse(message.timestamp), occurredAtMs = Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : null;
     const publish = (type, payload, extra) => emit(type, payload, { occurredAtMs, ...extra, replay: message.isReplay === true });
+    if (message.type === 'system' && message.subtype === 'status') {
+      if (!message.isReplay) publish('context.compacting', { active: message.status === 'compacting' });
+      return;
+    }
+    if (message.type === 'system' && message.subtype === 'compact_boundary') {
+      const meta = message.compact_metadata || {};
+      publish('context.compacting', { active: false });
+      publish('context.compacted', { trigger: meta.trigger === 'manual' ? 'manual' : 'auto',
+        preTokens: Number.isSafeInteger(meta.pre_tokens) && meta.pre_tokens >= 0 ? meta.pre_tokens : null,
+        postTokens: Number.isSafeInteger(meta.post_tokens) && meta.post_tokens >= 0 ? meta.post_tokens : null });
+      return;
+    }
     const local = message.type === 'system' && message.subtype === 'local_command_output' ? message.content
       : message.type === 'user' && typeof message.message?.content === 'string'
         ? /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>\s*$/.exec(message.message.content)?.[1] : null;
@@ -36,6 +48,7 @@ function createNormalizer(emit, clean = value => value) {
       return;
     }
     if (message.type === 'result') {
+      publish('context.compacting', { active: false });
       for (const [itemId, payload] of tools) publish('item.upsert', { ...payload, status: 'interrupted' }, { itemId });
       tools.clear(); return;
     }

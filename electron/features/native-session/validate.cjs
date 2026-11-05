@@ -4,7 +4,7 @@ const id = value => typeof value === 'string' && /^[\w:.-]{1,160}$/.test(value);
 const text = (value, limit = 262144, allowEmpty = false) => typeof value === 'string' && (allowEmpty || value.length > 0) && value.length <= limit && !value.includes('\0');
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const nullableCount = value => value === null || count(value);
-const eventTypes = new Set(['switch.updated', 'session.state', 'turn.started', 'turn.completed', 'item.upsert', 'item.delta', 'turn.diff', 'plan.updated', 'request.opened', 'request.resolved', 'input.receipt', 'usage.updated', 'limits.updated', 'routing.updated', 'path.changed', 'error']);
+const eventTypes = new Set(['context.compacting', 'context.compacted', 'item.dropped', 'switch.updated', 'session.state', 'turn.started', 'turn.completed', 'item.upsert', 'item.delta', 'turn.diff', 'plan.updated', 'request.opened', 'request.resolved', 'input.receipt', 'usage.updated', 'limits.updated', 'routing.updated', 'path.changed', 'error']);
 function validEvent(event) {
   if (!object(event) || event.schemaVersion !== 1 || !eventTypes.has(event.type) || !object(event.payload) ||
     !['eventId', 'connectionEpoch', 'projectId', 'terminalId', 'runtimeSessionId'].every(key => id(event[key])) ||
@@ -12,6 +12,9 @@ function validEvent(event) {
     !count(event.sequence) || !count(event.receivedAtMs) || !nullableCount(event.occurredAtMs) || typeof event.replay !== 'boolean' ||
     !['claude', 'codex'].includes(event.provider) || event.transport !== (event.provider === 'claude' ? 'claude-sdk' : 'codex-app-server')) return false;
   const value = event.payload;
+  if (event.type === 'context.compacting') return exact(value, ['active']) && typeof value.active === 'boolean';
+  if (event.type === 'context.compacted') return exact(value, ['trigger', 'preTokens', 'postTokens']) && ['auto', 'manual'].includes(value.trigger) && nullableCount(value.preTokens) && nullableCount(value.postTokens);
+  if (event.type === 'item.dropped') return exact(value, ['reason', 'bytes']) && value.reason === 'too_large' && count(value.bytes);
   if (event.type === 'switch.updated') return count(value.changeId) && ['api', 'native', 'terminal'].includes(value.current)
     && ['api', 'native', 'terminal'].includes(value.target) && ['stable', 'waiting-turn', 'awaiting-choice', 'waiting-background', 'preparing', 'switching', 'rolling-back'].includes(value.phase)
     && object(value.background) && typeof value.background.known === 'boolean' && nullableCount(value.background.count)

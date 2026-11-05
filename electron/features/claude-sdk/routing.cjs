@@ -50,7 +50,7 @@ function routeSettings(spec) {
   const home = process.platform === 'win32' ? inherited.USERPROFILE || inherited.HOME : inherited.HOME || inherited.USERPROFILE;
   const config = inherited.CLAUDE_CONFIG_DIR || (home ? path.join(home, '.claude') : null);
   let user = {};
-  if (spec.owner !== 'dispatch' && config) {
+  if (config) {
     const file = path.join(config, 'settings.json');
     // A user-config junction into the repository is still project-controlled.
     let real; try { real = fs.realpathSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -60,7 +60,7 @@ function routeSettings(spec) {
   const trusted = new Map(Object.entries({ ...inherited, ...(user.env || {}) }).map(([name, value]) => [name.toUpperCase(), value]));
   const names = new Set(ROUTE_ENV.filter(name => !conditionalRoute(name)));
   // Cover mixed-case spellings and newly added transport variables from every project settings source.
-  for (let folder = cwd; spec.owner !== 'dispatch' && (folder === root || folder.startsWith(root + path.sep)); folder = path.dirname(folder)) {
+  for (let folder = cwd; (folder === root || folder.startsWith(root + path.sep)); folder = path.dirname(folder)) {
     for (const filename of ['settings.json', 'settings.local.json']) {
       const file = path.join(folder, '.claude', filename), config = settings(file, true);
       // A parser mismatch must not remove route protection; malformed files still let the CLI start.

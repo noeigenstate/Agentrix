@@ -2,7 +2,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { StringDecoder } = require('node:string_decoder');
+const { MAX_FRAME, jsonFrames } = require('../../oversized-record.cjs');
 const { projectTeam } = require('../team/team.cjs');
 
 /**
@@ -12,38 +12,36 @@ const { projectTeam } = require('../team/team.cjs');
  * A converts Claude tools to ToolIntent and applies its policy. This channel never executes a tool.
  */
 
-const MAX_FRAME = 4 * 1024 * 1024;
 const validId = value => typeof value === 'string' && /^[\w-]{1,160}$/.test(value);
 const status = value => ['queued', 'delivered', 'consumed', 'rejected', 'unknown'].includes(value);
 
 function frames(socket, receive, disconnected) {
-  const decoder = new StringDecoder('utf8');
-  let buffer = '', queue = [], bytes = 0, blocked = false, ended = false;
+  let queue = [], bytes = 0, blocked = false, ended = false;
   const flush = () => {
     while (!blocked && queue.length && !socket.destroyed) {
       const line = queue.shift(); bytes -= Buffer.byteLength(line); blocked = !socket.write(line);
     }
   };
   socket.on('drain', () => { blocked = false; flush(); });
-  socket.on('data', chunk => {
-    buffer += decoder.write(chunk);
-    let end;
-    while ((end = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-      if (Buffer.byteLength(line) > MAX_FRAME) return socket.destroy();
-      try { const value = JSON.parse(line); if (!value || value.v !== 1) return socket.destroy(); receive(value); }
-      catch { return socket.destroy(); }
+  const read = jsonFrames(value => {
+    if (!value || value.v !== 1) return socket.destroy();
+    try { receive(value); } catch { socket.destroy(); }
+  }, (envelope, bytes) => {
+    if (envelope.type === 'result') receive({ v: 1, type: 'result', requestId: envelope.requestId, ok: false, error: 'control_frame_limit' });
+    else if (envelope.type === 'request') {
+      try { send({ type: 'result', requestId: envelope.requestId, ok: false, error: 'control_frame_limit' }); } catch {}
     }
-    if (Buffer.byteLength(buffer) > MAX_FRAME) socket.destroy();
-  });
+  }, () => socket.destroy());
+  socket.on('data', read);
   socket.on('error', () => socket.destroy());
-  socket.once('close', () => { if (!ended) { ended = true; disconnected(); } });
-  return value => {
+  socket.once('close', () => { read.clear(); if (!ended) { ended = true; disconnected(); } });
+  const send = value => {
     if (socket.destroyed) throw new Error('control_disconnected');
     const line = JSON.stringify({ ...value, v: 1 }) + '\n', size = Buffer.byteLength(line);
-    if (size > MAX_FRAME || bytes + size > MAX_FRAME * 2) { socket.destroy(); throw new Error('control_frame_limit'); }
+    if (size > MAX_FRAME || bytes + size > MAX_FRAME * 2) throw new Error('control_frame_limit');
     queue.push(line); bytes += size; flush();
   };
+  return send;
 }
 
 function createDispatchControl({ resolveRun, now = Date.now }) {

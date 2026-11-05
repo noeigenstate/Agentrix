@@ -32,14 +32,19 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
     limits: scope => scopes.get(scope) || null,
     create(initialSpec, emit) {
       const spec = { ...initialSpec, runtimeSessionId: initialSpec.runtimeSessionId || randomUUID() };
+      const render = item => renderImage?.(item, spec);
       let currentUsage = null;
-      const events = createEvents(spec, event => { if (event.type === 'usage.updated') currentUsage = event.payload; emit(event); }, now, renderImage), receipts = new Map(), finished = new Set();
+      const events = createEvents(spec, event => { if (event.type === 'usage.updated') currentUsage = event.payload; emit(event); }, now, render), receipts = new Map(), finished = new Set();
       let rpc, child, requests, state = 'stopped', closed = false, sending = Promise.resolve(), origin = 'user', clientMessageId = null;
       let lockKey, active = false, threadResponse, accountGeneration = 0, limitsRead = null;
       let skills = null, skillsRead = null, skillsGeneration = 0, skillsExpireAt = 0;
       let accountRead = null;
       let executionSeen = false, resetting = null, resetRetry = null, lastReset = null;
-      const setState = (value, reason = null) => { state = value; events.publish('session.state', { state, reason }); };
+      const setState = (value, reason = null) => {
+        state = value;
+        if (['stopping', 'stopped', 'failed', 'disconnected'].includes(value)) events.publish('context.compacting', { active: false });
+        events.publish('session.state', { state, reason });
+      };
       function bind(threadId) {
         const home = spec.codexHome || spec.env?.CODEX_HOME || path.join(spec.env?.HOME || spec.env?.USERPROFILE || homedir(), '.codex');
         const key = `${path.resolve(home)}:${threadId}`;
@@ -54,6 +59,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       }
       function notification(method, params) {
         if (closed) return;
+        if (method === 'codex/event/item_completed' && params.msg?.item?.kind === 'image_gen.generation') {
+          method = 'item/completed'; params = { ...params, item: { ...params.msg.item, type: 'imageGeneration' } };
+        }
         if (params.threadId && params.threadId !== events.binding.providerSessionId) return;
         if (active && (method.startsWith('item/') && params.item?.type !== 'userMessage'
           || ['thread/tokenUsage/updated', 'turn/plan/updated', 'turn/diff/updated'].includes(method))) executionSeen = true;
@@ -145,6 +153,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           child = spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: spec.cwd, env, windowsHide: true,
             detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
           rpc = createRpc(child, { timeout: spec.rpcTimeoutMs || 8000, onNotification: notification,
+            onDropped: bytes => events.publish('item.dropped', { reason: 'too_large', bytes }),
             onRequest: message => requests.open(message), onDisconnect: reason => {
               if (closed) return;
               requests?.cancelAll(); setState('disconnected', reason);
@@ -208,7 +217,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           for (const turn of page.data) {
             ++turns;
             for (const item of [...(turn.items || [])].reverse()) {
-              const serialized = JSON.stringify({ payload: itemPayload(item, true, renderImage), itemId: item.id, turnId: turn.id });
+              const serialized = JSON.stringify({ payload: itemPayload(item, true, render), itemId: item.id, turnId: turn.id });
               const size = Buffer.byteLength(serialized) + 1024;
               if (history.length >= 1000 || bytes + size > 4 * 1024 * 1024) { turns = 1000; break; }
               // Detach bounded text slices from the large provider frame before retaining them.

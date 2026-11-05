@@ -17,15 +17,7 @@ const skip = !cli && 'set AGENTRIX_REAL_CLAUDE';
 const { queryOptions, inputQueue } = require('../electron/features/claude-sdk/query.cjs');
 const { createPolicy } = require('../electron/features/claude-sdk/policy.cjs');
 const { spawn } = require('node:child_process');
-
-const stream = events => events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
-const finish = reason => [{ type: 'message_delta', delta: { stop_reason: reason, stop_sequence: null }, usage: { output_tokens: 1 } }, { type: 'message_stop' }];
-const opening = data => ({ type: 'message_start', message: { id: `msg_${randomUUID().replaceAll('-', '')}`, type: 'message', role: 'assistant', model: data.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } });
-const textBlock = (index, text) => [{ type: 'content_block_start', index, content_block: { type: 'text', text: '' } }, { type: 'content_block_delta', index, delta: { type: 'text_delta', text } }, { type: 'content_block_stop', index }];
-const toolThenDone = data => JSON.stringify(data.messages).includes('tool_result')
-  ? [opening(data), ...textBlock(0, 'DONE'), ...finish('end_turn')]
-  : [opening(data), { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `toolu_${randomUUID().replaceAll('-', '')}`, name: 'Bash', input: {} } },
-    { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ command: 'echo probe', description: 'probe' }) } }, { type: 'content_block_stop', index: 0 }, ...finish('tool_use')];
+const { harness, opening, textBlock, finish, stream, toolThenDone, thinkingThenText } = require('./fixtures/claude-real.cjs');
 
 test('SDK requests retain the default CLI entrypoint even with an inherited owner marker', { skip, timeout: 60000 }, async t => {
   const requests = [], f = await harness(t, data => { requests.push(data); return [opening(data), ...textBlock(0, 'DEFAULT ENTRYPOINT'), ...finish('end_turn')]; });
@@ -66,57 +58,6 @@ test('a real billing rejection preserves budget and offers only the proved unexe
   assert.equal(notice.code, 'credits_required'); assert.equal(notice.action, 'check-console'); assert.match(notice.message, /服务端拒绝/);
   assert.ok(!events.some(event => event.type === 'error' && event.payload.code === 'sdk_failed'));
 });
-const thinkingThenText = data => [opening(data), { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
-  { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'considering' } }, { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'c2ln' } }, { type: 'content_block_stop', index: 0 },
-  ...textBlock(1, 'THE VISIBLE ANSWER'), ...finish('end_turn')];
-
-async function harness(t, respond) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-real-cli-')), home = path.join(directory, 'home'), cwd = path.join(directory, 'project');
-  const cleanup = [];
-  t.after(async () => { for (const close of cleanup.reverse()) await close(); fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
-  const env = {};
-  for (const name of ['SystemRoot', 'WINDIR', 'COMSPEC', 'PATH', 'PATHEXT']) { const key = Object.keys(process.env).find(item => item.toLowerCase() === name.toLowerCase()); if (key) env[key] = process.env[key]; }
-  Object.assign(env, { HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'r'), LOCALAPPDATA: path.join(home, 'l'), TEMP: path.join(directory, 't'), TMP: path.join(directory, 't'), TMPDIR: path.join(directory, 't'),
-    CLAUDE_CONFIG_DIR: path.join(home, '.claude'), ANTHROPIC_API_KEY: 'sk-ant-offline-not-a-real-key', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1', DISABLE_AUTOUPDATER: '1', CI: '1' });
-  for (const folder of [cwd, env.APPDATA, env.LOCALAPPDATA, env.TEMP, env.CLAUDE_CONFIG_DIR]) fs.mkdirSync(folder, { recursive: true });
-  const stats = { requests: 0, keys: [] };
-  const server = http.createServer((request, response) => {
-    let body = ''; request.on('data', chunk => { body += chunk; });
-    request.on('end', () => {
-      if (/count_tokens/.test(request.url)) return response.writeHead(200, { 'content-type': 'application/json' }).end('{"input_tokens":1}');
-      if (!/\/messages/.test(request.url)) return response.writeHead(404).end();
-      stats.requests++; stats.keys.push(request.headers['x-api-key']);
-      const value = respond(JSON.parse(body));
-      if (Array.isArray(value)) response.writeHead(200, { 'content-type': 'text/event-stream' }).end(stream(value));
-      else if (value.events) { response.writeHead(200, { 'content-type': 'text/event-stream', ...value.headers }); if (value.hold) response.write(stream(value.events)); else response.end(stream(value.events)); }
-      else response.writeHead(value.status, { 'content-type': 'application/json', 'x-should-retry': 'false', ...value.headers }).end(JSON.stringify(value.body));
-    });
-  });
-  server.listen(0, '127.0.0.1'); await once(server, 'listening'); t.after(() => { server.closeAllConnections(); server.close(); });
-  env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${server.address().port}`;
-  const sdk = await import(pathToFileURL(require.resolve('@anthropic-ai/claude-agent-sdk')).href);
-  const spec = { owner: 'gui', cwd, env, model: 'claude-sonnet-4-5' };
-  function options(overrides = {}, abort = new AbortController(), changes = {}) {
-    t.after(() => abort.abort());
-    const actual = { ...spec, ...changes };
-    return { ...queryOptions(actual, { key: env.ANTHROPIC_API_KEY, executable: cli, abort, policy: createPolicy(actual),
-      canUseTool: async (_name, input) => ({ behavior: 'allow', updatedInput: input }) }), ...overrides };
-  }
-  return { stats, cwd, env, sdk, options, cleanup: close => cleanup.push(close), run: async (overrides = {}, onMessage = () => {}, changes = {}, prompt = 'go') => {
-    stats.requests = 0; const abort = new AbortController();
-    const configured = options(overrides, abort, changes);
-    try {
-      const query = sdk.query({ prompt, options: configured });
-      for await (const message of query) {
-        if (message.type === 'system' && message.subtype === 'init') require('../electron/prompt-queue.cjs').rememberClaudeSource(message.session_id, changes.owner || 'gui');
-        onMessage(message, query);
-        if (message.type === 'result') return message;
-      }
-    } finally { abort.abort(); configured.abortController.abort(); }
-    throw new Error('no result');
-  } };
-}
-
 test('a finishing worker answers a late streamed intervention before control.finish retires it', { skip, timeout: 60000 }, async t => {
   const correction = 'OWNER_LATE_CORRECTION_READ_ME';
   let read = false;
@@ -185,8 +126,8 @@ for (const [command, expected, marker] of [
   };
   await session.send({ clientMessageId: 'warmup', text: 'Warm up' }); await wait(1);
   const listed = await session.commands(fallback);
-  assert.equal(listed.some(row => row.name === command.split(' ')[0]), !command.startsWith('/model'));
-  assert.ok(!listed.some(row => ['/clear', '/reset', '/new', '/model', '/effort', '/fast', '/doctor', '/color', '/focus', '/reload-plugins'].includes(row.name)));
+  assert.equal(listed.some(row => row.name === command.split(' ')[0]), true);
+  assert.ok(!listed.some(row => ['/doctor', '/color', '/focus', '/reload-plugins'].includes(row.name)));
   const start = events.length, previousRequests = bodies.length;
   await session.send({ clientMessageId: 'slash-command', text: command }); await wait(2);
   const visible = events.slice(start).filter(event => event.type === 'item.upsert' && event.payload.kind === 'agent-message').map(event => event.payload.content.text).join('\n');
@@ -197,7 +138,13 @@ for (const [command, expected, marker] of [
   if (command.startsWith('/model ')) {
     await session.send({ clientMessageId: 'check-model', text: 'Check the chosen model' }); await wait(3);
     await session.send({ clientMessageId: 'check-renewed-model', text: 'Check after cap renewal' }); await wait(4);
-    assert.match(bodies.at(-1).model, /sonnet/, 'the host model wins at renewal; this command must stay out of the menu');
+    assert.match(bodies.at(-1).model, /sonnet/, 'raw SDK slash input does not mutate host options; the GUI control uses runOptions');
+  }
+  if (command === '/compact') {
+    const notices = events.slice(start);
+    assert.ok(notices.some(event => event.type === 'context.compacting' && event.payload.active));
+    assert.ok(notices.some(event => event.type === 'context.compacted' && event.payload.trigger === 'manual'));
+    assert.equal(notices.findLast(event => event.type === 'context.compacting').payload.active, false);
   }
   await assert.rejects(session.send({ clientMessageId: 'clear-command', text: '/clear' }), /不支持/);
 });
@@ -437,13 +384,13 @@ test('A7 product worker policy remains active on resume and a throwing hook bloc
   assert.equal(fs.existsSync(path.join(f.cwd, 'made.txt')), false);
 });
 
-test('A7 product worker ignores project hooks and permissions', { skip, timeout: 60000 }, async t => {
+test('A7 worker loads project hooks and permissions without bypassing host deny', { skip, timeout: 60000 }, async t => {
   const f = await harness(t, useTool('Write', { file_path: 'made.txt', content: 'x' }));
   fs.mkdirSync(path.join(f.cwd, '.claude'));
   fs.writeFileSync(path.join(f.cwd, '.claude/settings.json'), JSON.stringify({ permissions: { allow: ['Write'] },
     hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: 'echo project > hook.txt' }] }] } }));
   await f.run({}, () => {}, { owner: 'dispatch', allow: ['src/**'] });
-  assert.equal(fs.existsSync(path.join(f.cwd, 'made.txt')), false); assert.equal(fs.existsSync(path.join(f.cwd, 'hook.txt')), false);
+  assert.equal(fs.existsSync(path.join(f.cwd, 'made.txt')), false); assert.equal(fs.existsSync(path.join(f.cwd, 'hook.txt')), true);
 });
 
 test('A1 project transport and helper overrides are pinned while trusted user routing survives', { skip, timeout: 60000 }, async t => {
@@ -627,11 +574,11 @@ test('F2 real fallback Claude CLI cannot inherit the owner entrypoint through wo
   assert.equal((await listClaudeSessions(f.cwd, null, f.env.CLAUDE_CONFIG_DIR)).some(session => session.title === 'FALLBACK_WORKER_BRIEF'), false);
 });
 
-test('F3 real dispatch ignores a project key instead of refusing a file it does not load', { skip, timeout: 60000 }, async t => {
+test('F3 dispatch refuses a loaded project key before contacting an endpoint', { skip, timeout: 60000 }, async t => {
   const f = await harness(t, data => [opening(data), ...textBlock(0, 'WORKER DONE'), ...finish('end_turn')]);
   fs.mkdirSync(path.join(f.cwd, '.claude')); fs.writeFileSync(path.join(f.cwd, '.claude/settings.local.json'), JSON.stringify({ env: { ANTHROPIC_API_KEY: 'sk-ant-offline-unused-project-key' } }));
-  const result = await f.run({}, () => {}, { owner: 'dispatch' }); assert.equal(result.result, 'WORKER DONE');
-  assert.deepEqual(f.stats.keys, [f.env.ANTHROPIC_API_KEY]);
+  await assert.rejects(f.run({}, () => {}, { owner: 'dispatch' }), { code: 'project_api_key_override' });
+  assert.deepEqual(f.stats.keys, []);
 });
 
 test('F5 real CLI hot reload cannot replace pinned proxies in an already running query', { skip, timeout: 60000 }, async t => {
@@ -714,3 +661,6 @@ test('B4 B8 real running-turn mode changes ask about background tasks and full r
   assert.equal(events.filter(event => event.type === 'turn.started' && event.payload.origin === 'user').length, 1);
   await facade.close(); await new Promise(resolve => setTimeout(resolve, 200)); assert.equal(alive(ownedPid), false);
 });
+
+// The CI real-CLI entrypoint also owns the paired terminal regression.
+if (process.env.AGENTRIX_REQUIRE_REAL_CLI === '1') require('./claude-parity-real-cli.test.cjs');

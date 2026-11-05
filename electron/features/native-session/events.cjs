@@ -16,7 +16,8 @@ function createEventStream(spec, emit, now = Date.now) {
     if (type === 'turn.started' && !replay) {
       for (const field of ['plan.updated', 'turn.diff']) { events.delete(field); bytes -= sizes.get(field) || 0; sizes.delete(field); }
     }
-    const key = type.startsWith('item.') ? `item:${itemId}` : type.startsWith('request.') ? `request:${payload.requestId}` : type === 'input.receipt' ? `input:${payload.clientMessageId}` : type;
+    const key = ['context.compacted', 'item.dropped'].includes(type) ? `notice:${sequence}`
+      : type.startsWith('item.') ? `item:${itemId}` : type.startsWith('request.') ? `request:${payload.requestId}` : type === 'input.receipt' ? `input:${payload.clientMessageId}` : type;
     if (type === 'item.delta') {
       const previous = events.get(key);
       const field = payload.channel === 'output' ? 'output' : 'text';
@@ -30,7 +31,7 @@ function createEventStream(spec, emit, now = Date.now) {
     bytes -= sizes.get(key) || 0;
     const size = Buffer.byteLength(JSON.stringify(events.get(key))); sizes.set(key, size); bytes += size;
     while (events.size > 1000 || bytes > 4 * 1024 * 1024) {
-      const removable = [...events.keys()].find(key => key.startsWith('item:')) || [...events.keys()].find(key => events.get(key).type !== 'request.opened');
+      const removable = [...events.keys()].find(key => key.startsWith('item:') || key.startsWith('notice:')) || [...events.keys()].find(key => events.get(key).type !== 'request.opened');
       if (!removable) break;
       bytes -= sizes.get(removable) || 0; sizes.delete(removable); events.delete(removable);
     }

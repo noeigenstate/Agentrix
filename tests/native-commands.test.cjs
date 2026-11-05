@@ -39,7 +39,8 @@ test('native command IPC is sender guarded, identity bound, and lazy file fallba
   assert.ok(result.value.some(row => row.name === '/offline' && row.source === 'user'));
   assert.ok(result.value.some(row => row.name === '/compact'));
   assert.ok(result.value.every(row => row.view === 'reading'));
-  assert.equal(result.value.some(row => ['/clear', '/permissions'].includes(row.name)), false);
+  assert.ok(result.value.some(row => row.name === '/clear'));
+  assert.equal(result.value.some(row => row.name === '/permissions'), false);
   assert.equal(fake.calls.length, 0); assert.deepEqual(claude.usage.summary().monthUsdMicros, null);
   assert.ok(native.snapshot('terminal').events.every(row => !row.type.includes('command')));
   assert.equal((await commands(event, 'terminal', 'old-runtime')).ok, false);
@@ -53,7 +54,7 @@ test('native command IPC is sender guarded, identity bound, and lazy file fallba
   assert.deepEqual(sent, [['native:commands', 'terminal', started.runtimeSessionId]]);
 });
 
-test('SDK command pushes replace the list, terminal rows and unusable clear aliases stay hidden', async t => {
+test('SDK command pushes replace skills while native controls remain available', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-command-push-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const fake = fakeSdk({ auto: false }), initial = [{ name: 'old-skill', description: 'Old' }, { name: 'context', description: 'Context', builtin: true }];
@@ -71,7 +72,7 @@ test('SDK command pushes replace the list, terminal rows and unusable clear alia
   fake.emit({ type: 'system', subtype: 'commands_changed', commands: [
     { name: 'new-skill', description: 'New' }, { name: 'clear', aliases: ['reset', 'new'], builtin: true }, { name: 'context', builtin: true },
   ] }); await tick();
-  assert.deepEqual((await session.commands([])).map(row => row.name), ['/new-skill']);
+  assert.deepEqual((await session.commands([])).map(row => row.name), ['/clear', '/new-skill']);
 });
 
 test('local slash output renders once as assistant text without becoming an owner prompt or leaking wrappers', () => {

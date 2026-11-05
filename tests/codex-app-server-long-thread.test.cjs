@@ -36,7 +36,7 @@ for (const mode of ['long-many', 'long-large', 'long-huge']) test(`long thread $
   assert.equal(f.emitted.some(event => event.type === 'turn.started' || event.type === 'turn.completed' || event.type === 'input.receipt'), false);
   const pages = f.calls().filter(call => call.method === 'thread/turns/list');
   if (mode === 'long-many') { assert.equal(replay.length, 1000); assert.equal(pages.length, 20); assert.equal(replay[0].itemId, 'item-201'); assert.equal(replay.at(-1).itemId, 'item-1200'); }
-  if (mode === 'long-large') { assert.ok(pages.some(call => call.params.limit < 50)); assert.equal(replay.at(-1).itemId, 'item-60'); }
+  if (mode === 'long-large') { assert.equal(replay.at(-1).itemId, 'item-60'); }
   if (mode === 'long-huge') { assert.ok(pages.some(call => call.params.itemsView === 'notLoaded')); assert.equal(replay[0].itemId, 'item-1'); }
   assert.equal((await f.runtime.send({ clientMessageId: 'new-message', text: 'Only this new input' })).status, 'delivered');
 });
@@ -76,7 +76,7 @@ test('history frames have a finite larger byte budget; UTF-8 is decoded once acr
   try {
     const history = f.rpc.request('thread/turns/list', {});
     const text = '汉🙂'.repeat(700000), frame = Buffer.from(JSON.stringify({ id: '1', result: { text } }) + '\n');
-    assert.ok(frame.length > MAX_FRAME && frame.length < MAX_HISTORY_FRAME);
+    assert.ok(frame.length > 4 * 1024 * 1024 && frame.length < MAX_HISTORY_FRAME);
     for (let offset = 0; offset < frame.length; offset += 65533) f.child.stdout.write(frame.subarray(offset, offset + 65533));
     assert.equal((await history).text, text); assert.deepEqual(f.failures, []);
   } finally { f.rpc.close(); }
@@ -88,17 +88,17 @@ test('oversized history is drained without disconnect, replay or losing another 
     const read = f.rpc.request('account/read', {});
     const header = Buffer.from('{"id":"1","result":{"text":"');
     for (const byte of header) f.child.stdout.write(Buffer.from([byte]));
-    for (let i = 0; i < 17; i++) f.child.stdout.write(Buffer.alloc(1024 * 1024, 120));
+    for (let i = 0; i < 65; i++) f.child.stdout.write(Buffer.alloc(1024 * 1024, 120));
     f.child.stdout.write('"}}\n{"id":"2","result":{"ok":true}}\n{"method":"notice","params":{}}\n');
     await history; assert.deepEqual(await read, { ok: true }); assert.deepEqual(f.failures, []); assert.equal(f.notices.length, 1); assert.equal(f.writes.length, 2);
   } finally { f.rpc.close(); }
 });
 for (const envelope of ['{"id":"1","result":{"text":"', '{"id":"unknown","result":{"text":"', '{"method":"notice","params":{"text":"'])
-  test(`ordinary or unbound oversized frames still disconnect (${envelope})`, async () => {
+  test('unbound oversized frames drain without disconnect: ' + envelope, async () => {
     const f = rpcFixture();
     try {
-      const pending = assert.rejects(f.rpc.request('thread/resume', {}), error => error.code === 'frame_limit' && error.uncertain);
-      f.child.stdout.write(envelope); f.child.stdout.write(Buffer.alloc(MAX_FRAME + 1, 120)); await pending;
-      assert.deepEqual(f.failures, ['frame_limit']);
+      f.child.stdout.write(envelope); f.child.stdout.write(Buffer.alloc(MAX_FRAME + 1, 120));
+      f.child.stdout.write('"}}\n{"method":"alive","params":{}}\n');
+      assert.deepEqual(f.failures, []); assert.equal(f.notices.at(-1)[0], 'alive');
     } finally { f.rpc.close(); }
   });

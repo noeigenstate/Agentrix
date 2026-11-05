@@ -26,7 +26,7 @@ test('SDK worker broker applies trusted run scopes and streams events without cr
   await until(() => fake.inputs.length === 1);
   assert.equal((await fake.calls[0].options.canUseTool('Bash', { command: 'python -m pytest' }, {})).behavior, 'allow');
   fake.emit({ type: 'result', uuid: 'r', user_message_uuid: fake.inputs[0].uuid, total_cost_usd: 0.1, modelUsage: {}, queued_turn_count: 0 }); await task;
-  assert.equal(fake.calls[0].options.cwd, run.cwd); assert.deepEqual(fake.calls[0].options.settingSources, []);
+  assert.equal(fake.calls[0].options.cwd, run.cwd); assert.deepEqual(fake.calls[0].options.settingSources, ['user', 'project', 'local']);
   assert.ok(events.some(event => event.type === 'turn.completed')); assert.ok(events.every(event => event.runId === run.runId));
   assert.ok(!JSON.stringify(events).includes('fake-worker-only-credential'));
   const audit = JSON.parse(fs.readFileSync(path.join(dir, 'policy-audit.json'), 'utf8'));

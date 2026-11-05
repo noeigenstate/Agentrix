@@ -14,6 +14,7 @@ const { TokenRates } = require(path.join(runtime, 'features/agents/token-rate.cj
 const { agentSettings } = require(path.join(runtime, 'features/agents/agent-settings.cjs'));
 const { rolloutFiles, sessionMeta } = require(path.join(runtime, 'session-files.cjs'));
 const { TranscriptTail } = require(path.join(runtime, 'transcript-tail.cjs'));
+const { imageMetadata } = require(path.join(runtime, 'oversized-record.cjs'));
 const { matches, snapshot, changedBetween, boundariesFor, repoFiles } = require(path.join(runtime, 'boundaries.cjs'));
 const { projectTeam, meetingRequest, recordFindings, minutesMarkdown, FINDINGS } = require(path.join(runtime, 'features/team/team.cjs'));
 const { RunInbox, runId, validText } = require(path.join(runtime, 'features/team/inbox.cjs'));
@@ -308,7 +309,7 @@ class WorkerOutput {
   line(line) {
     const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
     let record;
-    try { record = JSON.parse(clean); } catch {
+    try { record = JSON.parse(clean, imageMetadata); } catch {
       if (/\bat capacity\b|overloaded|capacity exceeded/i.test(clean)) this.capacity = true;
       const header = /^(model|reasoning effort|service tier|speed|session id):\s*(.+)$/i.exec(clean);
       if (header) {
@@ -455,7 +456,7 @@ function readWorkerOutput(child, agent, log, output) {
       if (agent !== 'claude' || !json && !/^\s*[\[{]\s*$/.test(line)) { output.line(line); return; }
       json += line + '\n';
       if (json.length > LIMIT) { json = ''; return; }
-      try { const record = JSON.parse(json); json = ''; output.record(record); } catch {}
+      try { const record = JSON.parse(json, imageMetadata); json = ''; output.record(record); } catch {}
     };
     const accept = data => {
       buffer += data;

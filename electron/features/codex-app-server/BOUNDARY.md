@@ -11,6 +11,8 @@ Owns an independent stdio app-server for a native Codex session; normalizes its 
 - `createRpc` (`electron/features/codex-app-server/rpc.cjs`) — bounded stdio transport, also used by the separately admitted owner reset-credit client
 
 ## May import
+- `electron/oversized-record.cjs`
+- `electron/json-frames.cjs`
 - `electron/command-phrase.cjs`
 - `electron/generated-image-path.cjs`
 - `src/shared/agent-events.ts`
@@ -24,7 +26,7 @@ Owns an independent stdio app-server for a native Codex session; normalizes its 
 - Usage and limits are snapshots; absent values remain null and sparse updates retain prior fields — token activity and a reset date cannot prove remaining subscription allowance — test: `tests/codex-app-server-runtime.test.cjs` › "sparse limits retain missing fields, never infer recovery, and reject unsafe integers".
 - Completed items replace their deltas; raw reasoning is never displayed — reconstruction must not duplicate the response or disclose internal reasoning — test: `tests/codex-app-server-runtime.test.cjs` › "final items replace deltas, duplicate finals and raw reasoning are ignored".
 - A resumed thread is exclusively occupied until close inside the host — two runtimes must not write the same thread — test: `tests/codex-app-server-runtime.test.cjs` › "resumed threads have exclusive occupancy and release on close".
-- Resume requests exclude full history; optional history frames are bounded to 16 MiB and an oversized bound history response is drained without disconnecting the live session — long history must not force a transport fallback — test: `tests/codex-app-server-long-thread.test.cjs` › "oversized history is drained without disconnect, replay or losing another response".
+- Resume requests exclude full history; all input frames are bounded to 64 MiB and an oversized frame is drained without disconnecting the live session; only its matching pending response fails, and image pixels are discarded before publication — long history must not force a transport fallback — test: `tests/codex-app-server-long-thread.test.cjs` › "oversized history is drained without disconnect, replay or losing another response".
 
 ## Not ours
 - Renderer IPC, project identity and runtime selection — native-session router.

@@ -65,7 +65,7 @@ const claudeAccounts = new ClaudeAccountUsage({ changed: () => queueClaudeAccoun
   fetch: (url, options) => electronNet.fetch(url, options),
 }) });
 const { agentCommand } = require('./features/agents/agent-command.cjs');
-const { setThumbnailer, isGeneratedImage, generatedImage, setConversationTranslator } = require('./conversation.cjs');
+const { setThumbnailer, isGeneratedImage, setGeneratedPreview, setConversationTranslator } = require('./conversation.cjs');
 const { saveDialogOptions, saveTarget } = require('./image-save.cjs');
 const { registerVoiceIpc } = require('./features/voice/ipc.cjs');
 const { createIpcAdapter } = require('./shared/ipc.cjs');
@@ -156,6 +156,14 @@ const projectGit = new ProjectGit(id => remoteFor(id));
 const startupErrors = new Map();
 const restorePlans = new Map();
 const previewResources = new PreviewResources({ remote: project => remoteFor(project.id), getProjects: () => store?.projects || [] });
+function generatedPreview(item, spec) {
+  if (!isGeneratedImage(item.savedPath)) return null;
+  try {
+    const folder = fs.realpathSync.native(path.dirname(item.savedPath));
+    const project = { id: spec.projectId, path: folder, kind: 'local', previewRoot: folder, previewSingleFile: true, previewProjectPath: spec.cwd };
+    return { images: [previewResources.open(project, path.basename(item.savedPath), 'image', undefined, true).url] };
+  } catch { return null; }
+}
 const { thumbnail, small, pictureOf, thumbnailProjectImage, pictureFrom } = createImageTools({ nativeImage, BrowserWindow, previewResources });
 async function projectImageCandidates(folder, candidates = 6, theme = 'mono') {
   const result = await listProjectImageCandidates(folder, thumbnailProjectImage, { ...PROJECT_IMAGE_LIMITS, candidates });
@@ -163,6 +171,7 @@ async function projectImageCandidates(folder, candidates = 6, theme = 'mono') {
 }
 
 setThumbnailer(pictureOf, url => thumbnail(nativeImage.createFromDataURL(url)) || url);
+setGeneratedPreview(item => generatedPreview(item, { projectId: null, cwd: path.dirname(item.savedPath) }));
 const capturePage = require('./features/files/capture-page.cjs').createPageCapture(BrowserWindow);
 const fileCard = createFileCards({ previews: previewResources, capture: capturePage, shrink: pictureOf, shrinkBytes: bytes => small(nativeImage.createFromBuffer(bytes)) });
 let stateTimer;
@@ -1460,7 +1469,7 @@ async function initializeNativeSessions() {
     },
   });
   claudeRuntime.observeCli?.(await inspectClaudeExecutable());
-  const codexFactory = createCodexRuntime({ renderImage: item => generatedImage(item, Date.now()), translate: t,
+  const codexFactory = createCodexRuntime({ renderImage: generatedPreview, translate: t,
     resetAtLimit: (spec, evidence) => codexAccounts.resetAtLimit({ ...spec, remote: spec.kind === 'ssh', accountLaunch: 'project-open-v1' },
       { ...evidence, enabled: nativeSessions?.getSettings().codexAutoReset === true,
         current: () => evidence.current() && nativeSessions?.getSettings().codexAutoReset === true }) });
@@ -1500,6 +1509,10 @@ async function initializeNativeSessions() {
     },
     activateNative: (spec, _handoff, transition = {}) => {
       const old = sessions.get(spec.terminalId);
+      if (transition.newConversation) {
+        if (!old?.nativeStructured) throw new Error('session_changed');
+        spec.switchHost = old; nativeSpecs.set(spec.terminalId, spec); return;
+      }
       if (!old || old.sessionId !== spec.sessionId || !transition.recovering && observeSwitchTerminal({ identity: old }).draftBlocked) throw new Error('session_changed');
       if (spec.bootstrapFile && !fs.existsSync(spec.bootstrapFile)) fs.writeFileSync(spec.bootstrapFile, JSON.stringify({ projectId: spec.terminalId,
         projectPath: spec.cwd, sessionKey: spec.sessionKey, controlAddress, controlCapability: spec.controlCapability,

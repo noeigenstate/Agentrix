@@ -439,7 +439,7 @@ test('preparation rejects a replaced source before staging or invoking a helper'
 
 test('pipe ACL passes the user and exact restricted SID checks without administrator or broad package grants',
   { skip: process.platform !== 'win32', timeout: 15000 }, async t => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lab-pipe-security-'));
+    const root = require('node:fs').realpathSync.native(await fs.mkdtemp(path.join(os.tmpdir(), 'lab-pipe-security-')));
     t.after(() => fs.rm(root, { recursive: true, force: true }));
     // This grants only a synthetic fixture pipe and checks restricted tokens in memory; no LPAC or host preparation.
     const probe = String.raw`

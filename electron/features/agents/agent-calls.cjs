@@ -62,7 +62,7 @@ class AgentCalls {
       const state = stateOf(call);
       if (state !== 'done') group[state]++;
       group.items.push({ id: call.id, state, role: call.role, title: call.title,
-        startedAt: time(call.startedAt), endedAt: time(call.finishedAt), viewable: !!call.viewable,
+        startedAt: time(call.startedAt), endedAt: time(call.finishedAt), viewable: !!call.viewable, hidden: !!call.hidden,
         ...(call.dispatch || call.failure ? { failure: call.failure || null } : {}),
         ...(call.dispatch && call.declared ? { declared: call.declared } : {}) });
       if (call.task) { group.tasks = group.tasks.filter(task => task !== call.task); group.tasks.push(call.task); group.tasks = group.tasks.slice(-5); }
@@ -107,21 +107,32 @@ class AgentCalls {
     call.pendingReview = !!call.failure;
     this.feeds.update(call); this.refresh(event.id);
     if (!this.local) this.feeds.finish(call);
-    if (!call.failure || call.failure.reason === 'unconfirmed') {
-      call.expiry = setTimeout(() => {
-        if (this.calls.get(event.id) !== call || call.reviewed) return;
-        // Retain the receipt so a delayed duplicate start cannot resurrect a dismissed row.
-        call.reviewed = true; this.changed();
-      }, call.failure ? 5000 : 3000);
-      call.expiry.unref();
-    }
+    this.hideAfterEnd(call);
     return true;
+  }
+  hideAfterEnd(call) {
+    const hide = alive => {
+      if (this.calls.get(call.key) !== call || call.reviewed || call.hidden) return;
+      if (alive === true) { call.expiry = setTimeout(check, 1000); call.expiry.unref?.(); return; }
+      // Display retirement never acknowledges a failure or removes its receipt, feed or accounting.
+      call.hidden = true; this.changed();
+    };
+    const check = () => {
+      if (!call.dispatch || !this.local) return hide(false);
+      try {
+        const alive = this.dispatchAlive(call);
+        if (alive?.then) void alive.then(hide, () => hide(true)); else hide(alive);
+      } catch { hide(true); }
+    };
+    call.expiry = setTimeout(check, call.failure ? 30000 : 3000);
+    call.expiry.unref?.();
   }
   endSubagent(call, at, status = 'completed') {
     if (call.done) return false;
     call.done = true; call.finishedAt = time(at); call.completedAt = this.now(); call.outcome = status;
     call.failure = status === 'completed' ? null : { reason: status === 'killed' ? 'killed' : 'error', exitCode: null };
     call.recordable = !this.replaying && call.finishedAt !== null && call.finishedAt >= this.since;
+    this.hideAfterEnd(call);
     return true;
   }
   recordSubagent(call) {

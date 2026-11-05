@@ -92,7 +92,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       const count = Math.min(params.limit, total - offset);
       result = { data: Array.from({ length: count }, (_, i) => ({ id: 'history-' + (total - offset - i), status: 'completed',
         items: params.itemsView === 'notLoaded' ? [] : [{ id: 'item-' + (total - offset - i), type: 'agentMessage',
-          text: (['long-huge', 'long-mixed'].includes(mode) && offset + i === 0 ? 'x'.repeat(17 * 1024 * 1024) : mode === 'long-large' ? '汉'.repeat(200000) : 'small') + '-END' }] })),
+          text: (['long-huge', 'long-mixed'].includes(mode) && offset + i === 0 ? 'x'.repeat(65 * 1024 * 1024) : mode === 'long-large' ? '汉'.repeat(200000) : 'small') + '-END' }] })),
         nextCursor: offset + count < total ? String(offset + count) : null, backwardsCursor: null };
     } else result = { data: [{ id: mode === 'race' ? turnId : 'history', status: 'completed', items: [] }], nextCursor: 'next-page', backwardsCursor: null };
   }

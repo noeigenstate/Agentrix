@@ -8,6 +8,7 @@ const { inputQueue, queryOptions, readBillingIdentity } = require('./query.cjs')
 const { turnResult, tokensOf } = require('./result.cjs');
 const { rateLimits } = require('./limits.cjs');
 const { claudeCommands } = require('./commands.cjs');
+const { runShell } = require('./shell.cjs');
 
 async function waitWithin(task, milliseconds) {
   let timer;
@@ -21,7 +22,10 @@ function createClaudeSession(spec, emit, dependencies) {
   const sent = new Map(), results = new Set();
   let active, opening, preparing, closing, sdk, executable, started = false, closed = false, stopping = false;
   let providerId = spec.providerSessionId || null, state = 'starting', turnId = null;
-  let apiObservedAt = null, limits = null, fallbackInput = null, resultCost = 0;
+  let apiObservedAt = null, limits = null, fallbackInput = null, resultCost = 0, observedModel = null;
+  let changingOptions = null;
+  let shellAbort = null, shellContext = '';
+  const shells = new Map();
   function clean(value) {
     let text = value;
     for (const key of secrets) text = text.replaceAll(key, '<secret>');
@@ -119,6 +123,7 @@ function createClaudeSession(spec, emit, dependencies) {
           apiObservedAt = now();
           usage.bind?.(run.reservation?.id, providerId); onSession(providerId);
           run.model = message.model || null;
+          observedModel = run.model;
           publish('routing.updated', {
             declared: { model: spec.model || null, effort: spec.effort || null, fast: spec.fast ?? null },
             effective: { model: run.model, effort: null, fast: null },
@@ -233,6 +238,7 @@ function createClaudeSession(spec, emit, dependencies) {
         }
       }
     } finally {
+      publish('context.compacting', { active: false });
       cancelQuery(run, 'ended');
       try { finishReservation(run); }
       finally { secrets.delete(run.key); if (active === run) active = null; }
@@ -309,13 +315,15 @@ function createClaudeSession(spec, emit, dependencies) {
     return run;
   }
   async function send({ clientMessageId, text, images = [] }) {
+    if (shellAbort) throw new Error('命令仍在运行，请等待结束。');
+    if (changingOptions) await changingOptions;
     if (typeof text !== 'string' || !text.trim() && !images.length) throw new Error('无效的消息。');
     if (closed || stopping || !started || ['failed', 'stopped'].includes(state)) throw new Error('会话已停止。');
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
     if (!canContinue()) return { status: 'rejected' };
     if (sent.size >= 2000) throw new Error('会话消息过多，请启动新会话。');
     if (/^\/(?:clear|reset|new)(?:\s|$)/.test(text)) throw new Error('原生会话不支持此命令。');
-    const content = images.length ? [...(text.trim() ? [{ type: 'text', text }] : []), ...images.map(image => {
+    let content = images.length ? [...(text.trim() ? [{ type: 'text', text }] : []), ...images.map(image => {
       const [, media_type, data] = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(image) || [];
       if (!data) throw new Error('无效的图片。');
       return { type: 'image', source: { type: 'base64', media_type, data } };
@@ -357,10 +365,13 @@ function createClaudeSession(spec, emit, dependencies) {
     if (!turnId) begin('user', clientMessageId);
     publish('input.receipt', { clientMessageId, status: 'queued' });
     publish('item.upsert', { kind: 'user-message', status: 'completed', content: { text, clientMessageId, ...(images.length ? { images } : {}) } }, { itemId: clientMessageId });
+    if (shellContext) content = [...(typeof content === 'string' ? [{ type: 'text', text: content }] : content), { type: 'text', text: shellContext }];
     active.queue.push({ type: 'user', uuid: clientMessageId, session_id: providerId || '', parent_tool_use_id: null, message: { role: 'user', content } });
+    shellContext = '';
     return { status: 'queued' };
   }
   function close() {
+    shellAbort?.abort();
     if (closing) return closing;
     stopping = true;
     closing = (async () => {
@@ -401,7 +412,76 @@ function createClaudeSession(spec, emit, dependencies) {
       if (run.background.size) throw new Error('background_stop_unconfirmed');
     } finally { clearTimeout(timer); }
   }
+  const optionsSnapshot = () => ({ model: observedModel, effort: spec.effort || 'high', fast: spec.fast === true });
+  async function optionsQuery() {
+    if (closed || stopping || !started) throw new Error('会话已停止。');
+    if (active?.closing) await active.task;
+    if (!active) { preparing ||= createQuery(true).finally(() => { preparing = null; }); await preparing; }
+    return active;
+  }
+  async function models() {
+    const run = await optionsQuery();
+    try {
+      return (await run.query.supportedModels()).map(row => ({ value: clean(String(row.value)), displayName: clean(String(row.displayName)),
+        description: clean(String(row.description || '')), efforts: row.supportedEffortLevels || [] }));
+    } catch (error) { error.message = clean(error.message); throw error; }
+  }
+  async function runOptions(patch) {
+    if (!Object.keys(patch).length) {
+      if (changingOptions) { try { await changingOptions; } catch {} }
+      return optionsSnapshot();
+    }
+    const previous = changingOptions;
+    const update = (async () => {
+      if (previous) { try { await previous; } catch {} }
+      const run = await optionsQuery();
+      // Keep acknowledged changes on spec so budget renewal resumes with the same choices.
+      if (Object.hasOwn(patch, 'model')) { await run.query.setModel(patch.model || undefined); spec.model = patch.model; }
+      const flags = {};
+      if (Object.hasOwn(patch, 'effort')) flags.effortLevel = patch.effort;
+      if (Object.hasOwn(patch, 'fast')) flags.fastMode = patch.fast;
+      if (Object.keys(flags).length) {
+        await run.query.applyFlagSettings(flags);
+        if (Object.hasOwn(patch, 'effort')) spec.effort = patch.effort;
+        if (Object.hasOwn(patch, 'fast')) spec.fast = patch.fast;
+      }
+      const context = await run.query.getContextUsage();
+      if (typeof context.model === 'string') observedModel = context.model;
+      return optionsSnapshot();
+    })();
+    changingOptions = update;
+    try { return await update; }
+    catch (error) { error.message = clean(error.message); throw error; }
+    finally { if (changingOptions === update) changingOptions = null; }
+  }
+  function shell(clientMessageId, command) {
+    if (shells.has(clientMessageId)) {
+      const previous = shells.get(clientMessageId);
+      if (previous.command !== command) throw new Error('消息标识已用于其他命令。');
+      return previous.task;
+    }
+    if (state !== 'idle' || shellAbort || closed || changingOptions || preparing) throw new Error('当前正在工作，请等待空闲后再运行命令。');
+    if (shells.size >= 2000) throw new Error('会话消息过多，请启动新会话。');
+    shellAbort = new AbortController();
+    const itemId = `shell:${clientMessageId}`, abort = shellAbort;
+    const card = (status, output = '', exitCode = null) => publish('item.upsert', { kind: 'command', status,
+      content: { command, cwd: spec.cwd, output, exitCode } }, { itemId });
+    card('running'); setState('running');
+    const task = runShell({ cwd: spec.cwd, env: spec.env || process.env, command, signal: abort.signal,
+      output: ({ stdout, stderr }) => card('running', stdout + stderr) }).then(result => {
+      card(result.exitCode === 0 ? 'completed' : result.exitCode === null ? 'interrupted' : 'failed', result.stdout + result.stderr, result.exitCode);
+      const context = `<bash-input>${command}</bash-input>\n<bash-stdout>${result.stdout}</bash-stdout><bash-stderr>${result.stderr}</bash-stderr>\n`;
+      // Retain whole wrappers even when a long command replaces older shell context.
+      shellContext = shellContext.length + context.length > 60000 ? context : shellContext + context;
+      return { exitCode: result.exitCode };
+    }).catch(error => { card('failed'); throw error; }).finally(() => {
+      if (shellAbort === abort) shellAbort = null;
+      if (!closed && !stopping) setState('idle');
+    });
+    shells.set(clientMessageId, { command, task }); return task;
+  }
   return { start, resume: start, send, close, stopBackground, answer: requests.answer, snapshot: stream.snapshot,
+    runOptions, models, shell,
     fallbackInput: () => fallbackInput && structuredClone(fallbackInput),
     async commands(fallback = []) {
       if (closed) return [];

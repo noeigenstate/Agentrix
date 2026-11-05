@@ -40,10 +40,11 @@ export async function switchContracts(output, stages) {
       'native-project-accounts.test.cjs', 'native-router-usage.test.cjs', 'native-worker-claude.test.cjs',
       'native-worker-codex-finish.test.cjs', 'dispatch-interventions.test.cjs', 'dispatch-events.test.cjs',
       'native-commands.test.cjs', 'native-commands-codex.test.cjs', 'claude-sdk-provenance.test.cjs', 'native-api-quota.test.cjs',
-      'codex-auto-reset.test.cjs', 'codex-auto-reset-runtime.test.cjs', 'codex-auto-reset-main.test.cjs'].includes(name));
+      'codex-auto-reset.test.cjs', 'codex-auto-reset-runtime.test.cjs', 'codex-auto-reset-main.test.cjs',
+      'native-large-frames.test.cjs', 'native-parity-backend.test.cjs', 'agent-calls.test.cjs'].includes(name));
   await stages.run('switch contracts: Claude handoffs, Codex app-server only, drafts, rollback and no duplicate notifications', async () => {
     const child = spawn(process.execPath, ['--test', ...files.map(name => path.join(root, 'tests', name))], {
-      cwd: root, windowsHide: true, env: { ...desktopEnvironment(home), TEMP: home, TMP: home }, stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: root, windowsHide: true, env: { ...desktopEnvironment(home), TEMP: home, TMP: home, GIT_CEILING_DIRECTORIES: home }, stdio: ['ignore', 'pipe', 'pipe'],
     });
     let log = '';
     child.stdout.on('data', data => { log += data; }); child.stderr.on('data', data => { log += data; });
@@ -410,7 +411,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try {
     const contractsOnly = process.argv.includes('--switch-contracts');
     const output = await stages.run('prepare output', async () => {
-      return testRun(contractsOnly ? 'native-session-contracts' : 'native-session');
+      return testRun(contractsOnly ? 'native-session-contracts' : 'native-session',
+        process.env.AGENTRIX_TEST_OUTPUT_ROOT ? { root: process.env.AGENTRIX_TEST_OUTPUT_ROOT } : {});
     }); stages.output(output);
     await switchContracts(output, stages);
     if (!contractsOnly) await stages.run('GUI lock and native suite', () => withGuiLock('native-session', () => process.argv.includes('--runtime') ? runtimeSmoke(output, stages) : run(output, stages)), 140000);

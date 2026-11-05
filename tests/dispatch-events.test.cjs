@@ -41,7 +41,7 @@ test('authenticated dispatch events populate groups, replace live totals, show d
   assert.equal(f.send(launch), true);
   let group = f.calls.snapshot('Parent service')[0];
   assert.equal(group.agent, 'Codex'); assert.equal(group.provider, null); assert.equal(group.running, 1);
-  assert.deepEqual(group.items, [{ state: 'running', role: '执行', title: launch.title, failure: null, id: `dispatch:${launch.id}`, startedAt: launch.startedAt, endedAt: null, viewable: false }]);
+  assert.deepEqual(group.items, [{ state: 'running', role: '执行', title: launch.title, failure: null, id: `dispatch:${launch.id}`, startedAt: launch.startedAt, endedAt: null, viewable: false, hidden: false }]);
   assert.equal(f.send(rate(launch.id)), true);
   assert.equal(f.send(rate(launch.id, { outputTokens: 20, activeMs: 500 })), false, 'stale totals cannot regress');
   assert.equal(f.calls.snapshot()[0].rate.outputTokens, 50);
@@ -52,7 +52,7 @@ test('authenticated dispatch events populate groups, replace live totals, show d
   f.calls.apply(stop(6000));
   assert.equal(f.calls.snapshot()[0].items[0].state, 'done', 'Stop cannot shorten the three-second success display');
   t.mock.timers.tick(2999); assert.equal(f.calls.snapshot().length, 1);
-  t.mock.timers.tick(1); assert.deepEqual(f.calls.snapshot(), []); assert.equal(f.changes(), 4);
+  t.mock.timers.tick(1); assert.equal(f.calls.snapshot()[0].items[0].hidden, true); assert.equal(f.changes(), 4);
   assert.equal(f.send(launch), false); assert.equal(f.send(end(launch.id)), false); assert.equal(f.send(rate(launch.id)), false);
 });
 
@@ -172,7 +172,7 @@ test('dispatch-end accepts optional skill proposal counts without breaking old h
 test('roundtable is an authenticated role and does not change parent completion', t => {
   const f = session(t), launch = start(undefined, { role: '圆桌' });
   assert.equal(f.send(launch), true);
-  assert.deepEqual(f.calls.snapshot()[0].items[0], { state: 'running', role: '圆桌', title: launch.title, failure: null, id: `dispatch:${launch.id}`, startedAt: launch.startedAt, endedAt: null, viewable: false });
+  assert.deepEqual(f.calls.snapshot()[0].items[0], { state: 'running', role: '圆桌', title: launch.title, failure: null, id: `dispatch:${launch.id}`, startedAt: launch.startedAt, endedAt: null, viewable: false, hidden: false });
   assert.equal(f.send(start(undefined, { role: 'roundtable' })), false, 'only the explicit event role is accepted');
   f.send(end(launch.id));
   assert.equal(f.calls.snapshot()[0].items[0].state, 'done');
@@ -185,11 +185,11 @@ test('transcript re-reads preserve dispatched workers and their expiry; the next
   const launch = start(); meter.calls.dispatch(launch); meter.calls.dispatch(end(launch.id));
   meter.reset(true); meter.calls.setFolder('/new-subagent-folder');
   assert.equal(meter.snapshot().calls[0].items[0].state, 'done');
-  t.mock.timers.tick(3000); assert.deepEqual(meter.snapshot().calls, []);
+  t.mock.timers.tick(3000); assert.equal(meter.snapshot().calls[0].items[0].hidden, true);
   const failed = start(); meter.calls.dispatch(failed); meter.calls.dispatch(end(failed.id, { reason: 'capacity', exitCode: 1 }));
   meter.reset(true);
   meter.apply({ type: 'event_msg', timestamp: new Date(10000).toISOString(), payload: { type: 'user_message', message: 'Review that failure.' } });
-  assert.deepEqual(meter.snapshot().calls, []);
+  assert.ok(meter.snapshot().calls.flatMap(group => group.items).every(item => item.hidden));
 });
 
 test('the real event server and main handler authenticate dispatch without touching parent activity and broadcast changes', async t => {
@@ -216,8 +216,10 @@ test('the real event server and main handler authenticate dispatch without touch
   const failed = start(undefined, { sessionId: null, unconfirmed: true, title: 'Failed to start' });
   await send(failed); await send(end(failed.id, { reason: 'unconfirmed', exitCode: null, outputTokens: null, activeMs: null }));
   assert.equal(broadcasts, 5);
-  t.mock.timers.tick(5000);
-  assert.equal(broadcasts, 6); assert.deepEqual(calls.snapshot()[0].items.map(item => item.title), [launch.title]);
+  t.mock.timers.tick(29999); assert.equal(broadcasts, 5);
+  t.mock.timers.tick(1); assert.equal(broadcasts, 7);
+  assert.ok(calls.snapshot()[0].items.every(item => item.hidden));
+  assert.ok([...calls.calls.values()].every(call => call.pendingReview && !call.reviewed));
   assert.equal(s.codexActivity, 'complete', 'dispatch and expiry never rearm parent completion or call shell activity handling');
 });
 
