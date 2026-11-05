@@ -5,6 +5,7 @@ import { t } from '../../shared/i18n';
 import { modelName } from '../../shared/model-name';
 import { useNow } from '../../shared/useNow';
 import { readScreen, subscribeScreen, cliStateFor, nextCliState } from '../terminal/terminal-screen.ts';
+import { useNativeEntries } from '../native-session/native-store.ts';
 import { actionText } from './action-text';
 import { ApiUsage } from './ApiUsage';
 import { CALL_STATES, ModelHead } from './AgentCalls';
@@ -46,6 +47,8 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
     ? terminal.mainTurn?.state === 'interrupted' || terminal.mainTurn?.state === 'unknown' ? terminal.mainTurn.state : 'complete' : terminal.mainTurn?.state ?? terminal.codexActivity;
   // A round that ended without saying how (the provider's status was unknown) is neither complete nor interrupted: a quiet line, no check.
   const unknownEnd = activity === 'unknown' && terminal.mainTurn?.state === 'unknown';
+  // Main folds every turn that did not complete into 'interrupted'; the conversation's own turn status says which of them failed (a /compact that compacted nothing, say), as its card does.
+  const turnStatus = useNativeEntries().get(terminal.id)?.model.turn.status, failedEnd = activity === 'interrupted' && turnStatus === 'failed';
   const prompts = (terminal.prompts || []).filter(prompt => !hasState || prompt.state !== 'working' || cli.working || cli.waiting), working = prompts.find(prompt => prompt.state === 'working');
   const source = terminal.mainTurn?.background, background = activity === 'working' ? source : null;
   const summary = source ? t('处理后台结果：{summary}', { summary: source.summary }) + (source.count > 1 ? t(' 等 {count} 项', { count: source.count }) : '') : '';
@@ -54,7 +57,7 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
   const last = source ? current : workedPrompts.get(terminal.id), ended = !prompts.length && (activity === 'complete' || activity === 'interrupted') && last?.session === terminal.sessionId ? last : null;
   const action = terminal.action, running = !!action && !action.done && activity === 'working';
   const endedAt = terminal.mainTurn?.updatedAt ?? terminal.lastCompletedAt;
-  const state = activity === 'working' ? t('正在处理') : activity === 'complete' ? t('本轮已完成') : unknownEnd ? t('本轮已结束，完成状态未知。') : t('已中断');
+  const state = activity === 'working' ? t('正在处理') : activity === 'complete' ? t('本轮已完成') : unknownEnd ? t('本轮已结束，完成状态未知。') : failedEnd ? t('失败') : t('已中断');
   const step = running && <li className="is-step" title={action.detail || action.target}>
     <span className="activity-row-icon">{CALL_STATES.running.icon}</span><p><span className="activity-call-role">{t('正在')}</span>{actionText(action)}</p><span />
   </li>;
@@ -78,9 +81,9 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
       </Fragment>)}
       {!prompts.length && !background && unknownEnd && <li className="is-idle"><span className="activity-row-icon"><Circle size={14} aria-hidden="true" /></span><p>{state}</p><span /></li>}
       {!prompts.length && !background && (activity === 'complete' || activity === 'interrupted') && (ended
-        ? task(activity === 'complete' ? <CheckCircle size={14} weight="fill" aria-hidden="true" /> : <Circle size={14} aria-hidden="true" />, activity === 'complete' ? 'is-done' : 'is-idle', state, ended.summary, ended.text,
+        ? task(activity === 'complete' ? <CheckCircle size={14} weight="fill" aria-hidden="true" /> : failedEnd ? <WarningCircle size={14} aria-hidden="true" /> : <Circle size={14} aria-hidden="true" />, activity === 'complete' ? 'is-done' : 'is-idle', state, ended.summary, ended.text,
           activity === 'complete' && endedAt ? resetTime(endedAt) : '')
-        : <li className="is-idle"><span className="activity-row-icon"><Circle size={14} aria-hidden="true" /></span><p>{state}</p><span /></li>)}
+        : <li className="is-idle"><span className="activity-row-icon">{failedEnd ? <WarningCircle size={14} aria-hidden="true" /> : <Circle size={14} aria-hidden="true" />}</span><p>{state}</p><span /></li>)}
     </ul>
   </section>;
 }

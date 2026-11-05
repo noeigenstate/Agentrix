@@ -320,6 +320,26 @@ test('the launcher of an SSH project offers Codex and a plain terminal only; Cod
   try { local.render(); await settle(); assert.deepEqual(agents(local), ['is-claude', 'is-codex']); assert.match(local.note('codex'), /未安装/, 'a local project still offers the install'); assert.equal(local.note('claude'), '开始新的对话 · API · 原生界面'); } finally { local.done(); }
 });
 
+test('the history of an SSH project can always be chosen: it is asked after the click, which resumes and says main’s reason if there is none', async () => {
+  const runtime = { settings: { claudePath: 'api-then-terminal', monthlyBudgetUsd: null }, saved: true };
+  const radio = view => elements(view.render()).find(node => node.props?.role === 'radio' && node.props.children === '继承开发历史');
+  const calls = [], remote = launcher(runtime, calls, { kind: 'ssh', codexHere: false });
+  try {
+    remote.render(); await settle();
+    assert.deepEqual([radio(remote).props.disabled, radio(remote).props.title], [false, undefined], 'no record is known here, and nothing says there is none');
+    radio(remote).props.onClick(); assert.equal(remote.note('codex'), '接着上次的对话 · 原生界面', 'it does not say it starts again: the click asks');
+    remote.button('codex').props.onClick(); await settle();
+    assert.deepEqual(calls, [['start', 't1', { agent: 'codex', resume: true }], ['refresh', 't1']]);
+  } finally { remote.done(); }
+  const failing = launcher(runtime, [], { kind: 'ssh', codexHere: false, startError: '远端没有可继承的对话。' });
+  try {
+    failing.render(); await settle(); radio(failing).props.onClick(); failing.button('codex').props.onClick(); await settle();
+    assert.match(failing.text(), /<p class="agent-launcher-error" role="alert">远端没有可继承的对话。<\/p>/, 'a remote with none says so, in main’s words');
+  } finally { failing.done(); }
+  const local = launcher(runtime, [], { kind: 'local' });
+  try { local.render(); await settle(); assert.deepEqual([radio(local).props.disabled, radio(local).props.title], [true, '这个文件夹还没有开发记录'], 'a local folder with no record still cannot continue'); } finally { local.done(); }
+});
+
 test('the launcher offers no terminal mode for Codex, and Codex starts natively whatever the settings say', async () => {
   const calls = [], view = launcher({ settings: { claudePath: 'api-then-terminal', monthlyBudgetUsd: null }, saved: true }, calls);
   try {
@@ -555,7 +575,7 @@ function sessionView(events, bridge, base = {}) {
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[0] },
     './action-text': { actionText: tool => `${tool.kind}:${tool.target}` }, './ConversationFeed': feed, './feed-parts': parts,
     './native-entries.ts': load('features/native-session/native-entries.ts'), './native-pictures.ts': load('features/native-session/native-pictures.ts'), './native-bridge.ts': load('features/native-session/native-bridge.ts'), './mention-tokens': load('features/reading/mention-tokens.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './native-billing-link.ts': load('features/native-session/native-billing-link.ts'), './native-session.css': {},
-    './native-store.ts': { dismissNative: id => dismissed.push(id), refreshNativeSession: id => refreshed.push(id), nativeShown: () => true, useNativeEntries: () => new Map(), resolveSwitch: terminal => terminal },
+    './native-store.ts': { dismissNative: id => dismissed.push(id), refreshNativeSession: id => refreshed.push(id), nativeItem: (terminal, id) => entry.model.items[id], nativeShown: () => true, useNativeEntries: () => new Map(), resolveSwitch: terminal => terminal },
     './native-composer.ts': load('features/native-session/native-composer.ts'),
     './native-notices.ts': load('features/native-session/native-notices.ts'),
     // The hook of the Claude commands runs on the same hooks as the view (the harness is made just below).
@@ -2089,7 +2109,13 @@ test('a line that starts with ! is a shell command: noted over the box, sent as 
     view.type('!'); view.press(); view.type('!   '); view.press(); await settle();
     assert.deepEqual([shells.length, sends, view.box().props.value], [1, [], '!   '], 'a "!" alone does nothing');
     answer = { ok: false, error: 'the agent is working' }; view.type('!make'); view.press(); await settle();
-    assert.deepEqual([view.box().props.value, alertOf(view), sends], ['!make', 'the agent is working', []], 'a refusal brings the words back with main’s reason');
+    assert.deepEqual([view.box().props.value, alertOf(view), sends], ['!make', 'the agent is working', []], 'a refusal before the command ran brings the words back with main’s reason');
+    // A command that ran (its card has an exit code or output) is never given back: Enter would run it again.
+    const ran = sessionView(idle, { shell: async (...args) => { ran.show([...idle(ran.ev), ran.ev('item.upsert', { kind: 'command', status: 'completed', content: { command: 'make', exitCode: 0, output: 'built' } }, { itemId: `shell:${args[2]}` })]); return { ok: false, error: '命令已执行，但输出未发送给模型。' }; } });
+    try {
+      ran.type('!make'); ran.press(); await settle();
+      assert.deepEqual([ran.box().props.value, alertOf(ran)], ['', '命令已执行，但输出未发送给模型。'], 'the words stay gone and the refusal is told');
+    } finally { ran.done(); }
     view.show([...idle(view.ev), view.ev('item.upsert', { kind: 'command', status: 'completed', content: { command: 'ls -la', exitCode: 0, output: 'a' } }, { itemId: 'shell:c1' }), userMessage(view.ev, 'm1', 'hello')]);
     view.type(''); keyIn(view, 'ArrowUp'); await settle(); assert.equal(view.box().props.value, 'hello');
     keyIn(view, 'ArrowUp', { currentTarget: caretAt(0) }); assert.equal(view.box().props.value, '!ls -la', 'the line is in the history with its "!"');

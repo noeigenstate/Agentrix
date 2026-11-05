@@ -115,6 +115,9 @@ export function noteTerminalSwitch(terminalId: string, reason: string) {
 // the terminal (then the terminal's own reading view takes the cell).
 export const nativeShown = (entry: NativeEntry | undefined): entry is NativeEntry => !!entry?.model.identity && entry.model.identity.runtimeSessionId !== entry.dismissed && entry.model.path?.selected !== 'terminal';
 
+// An item of the terminal's session as the window knows it right now (not as the last render saw it); undefined when there is none.
+export const nativeItem = (terminalId: string, itemId: string) => entries.get(terminalId)?.model.items[itemId];
+
 // Whether the terminal's native view already tells this sentence (the reason its session ended with, or its error), so a bar elsewhere need not say it again.
 export const nativeTells = (entry: NativeEntry | undefined, text: string) => nativeShown(entry) && [entry.model.session?.reason, entry.model.error?.message].some(told => told === text);
 
