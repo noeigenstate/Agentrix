@@ -87,7 +87,8 @@ export function deliveredIds(entries: readonly { role: string; text?: string }[]
     if (item.route !== 'dispatch') return false;
     const line = `业主插话：${item.text}`, nth = (asked.get(line) ?? 0) + 1;
     asked.set(line, nth);
-    return users.reduce((total, text) => total + text.split(line).length - 1, 0) >= nth;
+    // A word resumed into a Claude worker carries the prefix; one steered into a running Codex turn arrives as it was typed.
+    return users.reduce((total, text) => total + (text.trim() === item.text.trim() ? 1 : text.split(line).length - 1), 0) >= nth;
   }).map(item => item.id));
 }
 

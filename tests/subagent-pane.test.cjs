@@ -273,13 +273,14 @@ test('a word to a dispatched worker is delivered once its resumed transcript car
   assert.deepEqual(delivered([item('1', 'fix the test'), item('2', 'fix the test')]), ['1'], 'the same word twice needs two lines');
   assert.deepEqual(delivered([item('1', 'fix the test', 'parent')]), [], 'a relay through the parent leaves no trace to check');
   assert.deepEqual([...deliveredIds([], [item('1', 'x')])], []);
+  assert.deepEqual([...deliveredIds([user('如何了')], [item('1', '如何了')])], ['1'], 'a word steered into a running turn arrives as it was typed');
 });
 
-test('a delivered word reads 已送达 under the conversation, a queued one 已排队', () => zh(() => {
+test('a word the conversation already shows has no second bubble; a queued one reads 已排队', () => zh(() => {
   const withSent = items => { let slot = 0; return { ...hookApi, useState: start => [slot++ === 1 ? items : typeof start === 'function' ? start() : start, () => {}] }; };
   const entries = [{ id: 'u1', role: 'user', text: '业主插话：fix the test\n\n继续执行当前任务。' }];
   const html = paneMarkup(ok({ entries }), undefined, withSent([intervention(), intervention({ id: 'i2', text: 'and the docs' }), intervention({ id: 'i3', text: 'fix the test', route: 'parent' })]));
-  assert.match(html, /<p>fix the test<\/p><small>已送达<\/small>/);
+  assert.doesNotMatch(html, /<p>fix the test<\/p><small>已送达<\/small>/);
   assert.match(html, /<p>and the docs<\/p><small>已排队<\/small>/);
   assert.match(html, /<p>fix the test<\/p><small>已排队<\/small>/);
 }));
@@ -290,6 +291,7 @@ const fill = (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, key) => v
 const intervention = (patch = {}) => ({ id: 'i1', callId: 'agent:a', text: 'fix the test', at: 5, route: 'dispatch', status: 'queued', ...patch });
 
 // SubagentInput with real hooks and a stand-in bridge; `find` looks in the view as it stands, `done` puts the globals back.
+const noteOf = view => view.find('p')?.props.children ?? null;
 function inputView(bridge, patch = {}, fit = 0) {
   const sent = [], saved = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge } });
@@ -339,8 +341,7 @@ test('Enter sends the trimmed word; Shift+Enter, an empty box and an IME composi
     assert.deepEqual(calls, [['t1', 'agent:a', 'fix the test']]);
     assert.equal(view.find('textarea').props.value, '', 'the box is empty once it was sent');
     assert.deepEqual(view.sent, [intervention()]);
-    const receipt = view.find('p');
-    assert.deepEqual([receipt.props.role, receipt.props.children], ['status', '已排队'], 'the receipt says how far the word got');
+    assert.equal(noteOf(view), null, 'how far it got shows on its bubble, not under the box');
   } finally { view.done(); }
 });
 
@@ -348,8 +349,8 @@ test('the receipt follows what main answered: delivered, read, refused or unknow
   const answers = ['delivered', 'consumed', 'rejected', 'unknown', 'mystery'], view = inputView({ interveneAgent: async () => ({ ok: true, value: intervention({ status: answers.shift() }) }) });
   try {
     const seen = [];
-    for (let round = 0; round < 5; round++) { view.type('word ' + round); view.press(); await settle(); seen.push(view.find('p').props.children); }
-    assert.deepEqual(seen, ['已送达', '已被读取', '未送达 · 工作者未提供原因。', '送达状态未知', '送达状态未知'], 'an unknown status stays unknown');
+    for (let round = 0; round < 5; round++) { view.type('word ' + round); view.press(); await settle(); seen.push(noteOf(view)); }
+    assert.deepEqual(seen, [null, null, '未送达 · 工作者未提供原因。', '送达状态未知', '送达状态未知'], 'only what went wrong shows under the box; an unknown status stays unknown');
     assert.doesNotMatch(seen.join(), /主会话|规划员/);
   } finally { view.done(); }
 });
@@ -373,9 +374,9 @@ test('停下 asks the agent to stop through the main process and says so with it
     const stop = () => view.find('button').props.onClick();
     stop(); await settle();
     assert.deepEqual(calls, [['t1', 'agent:a']]);
-    assert.deepEqual([view.find('p').props.children, view.find('p').props.role], ['已排队', 'status']);
+    assert.equal(noteOf(view), null);
     stop(); await settle();
-    assert.equal(view.find('p').props.children, '已送达');
+    assert.equal(noteOf(view), null);
     stop(); await settle();
     assert.deepEqual([view.find('p').props.role, view.find('p').props.children], ['alert', '未送达 · no such call'], 'an error replaces the note');
     assert.deepEqual(view.sent, [], 'a stop is not an entry in the conversation');
@@ -417,21 +418,21 @@ test('the worker\'s own receipt decides the bubble: read, a final refusal in wor
     intervention({ id: 'i4', status: 'delivered', text: 'odd' }), intervention({ id: 'i5', text: 'matched' }), intervention({ id: 'i6', text: 'nobody saw' }), intervention({ id: 'i7', text: 'no receipt yet', status: 'delivered' }),
   ]));
   const bubble = text => html.match(new RegExp(`<p>${text}</p><small>([^<]*)</small>`))[1];
-  assert.equal(bubble('read one'), '已被读取', 'the receipt beats the answer given when it was sent');
+  assert.match(html, /<p>read one<\/p><\/div>/, 'having been read needs no saying'); assert.doesNotMatch(html, /已被读取/);
   assert.equal(bubble('ended A'), '工作者已结束，消息未能继续处理。'); assert.equal(bubble('ended B'), '工作者结束前未能读取消息，恢复一次后仍未处理。');
   assert.equal(bubble('odd'), '未送达 · 工作者未提供原因。', 'another reason takes the existing unsent words'); assert.doesNotMatch(html, /worker_ended|some_new_code/);
-  assert.equal(bubble('matched'), '已送达', 'a queued receipt is lifted by the transcript match'); assert.equal(bubble('nobody saw'), '送达状态未知', 'unknown is not claimed delivered');
+  assert.doesNotMatch(html, /<p>matched<\/p>/, 'the conversation shows it, so no second bubble'); assert.equal(bubble('nobody saw'), '送达状态未知', 'unknown is not claimed delivered');
   assert.equal(bubble('no receipt yet'), '已送达', 'without a receipt the sent answer stands');
   const refusedAndMatched = paneMarkup(ok({ entries: [{ id: 'u', role: 'user', text: '业主插话：late' }], controlReceipts: [{ id: 'i1', status: 'rejected', reason: 'worker_ended_before_read' }] }), undefined, withSent([intervention({ text: 'late' })]));
   assert.match(refusedAndMatched, /<small>工作者结束前未能读取消息，恢复一次后仍未处理。<\/small>/, 'a final refusal is not turned back into 已送达');
 }));
 
-test('the note under the box follows the last message: a delivered word later read or finally refused says so, even when the box is closed', async () => {
+test('under the box only what went wrong: a word delivered or read says nothing, a final refusal says so, even when the box is closed', async () => {
   const receipts = new Map(), view = inputView({ interveneAgent: async () => ({ ok: true, value: intervention({ status: 'delivered' }) }) }, { receipts });
   try {
     view.type('hello'); view.press(); await settle();
-    assert.equal(view.find('p').props.children, '已送达');
-    receipts.set('i1', { id: 'i1', status: 'consumed' }); assert.equal(view.find('p').props.children, '已被读取');
+    assert.equal(noteOf(view), null);
+    receipts.set('i1', { id: 'i1', status: 'consumed' }); assert.equal(noteOf(view), null);
     receipts.set('i1', { id: 'i1', status: 'rejected', reason: 'worker_ended_without_resume' });
     const note = view.find('p');
     assert.deepEqual([note.props.children, note.props.className], ['工作者已结束，消息未能继续处理。', 'subagent-input-note is-error']);

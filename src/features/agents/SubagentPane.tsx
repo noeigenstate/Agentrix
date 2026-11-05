@@ -98,8 +98,9 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
         onScroll={event => { const end = atEnd(event.currentTarget); setPaused(current => end ? null : current ?? { after: lastId }); }}>
         {feed ? <ConversationFeed entries={feed.entries} agent={feed.agent === 'Codex' ? 'codex' : 'claude'} projectId={projectId} live={feed.state === 'running' && status === 'ok'} onError={onError} onOpenLink={onOpenLink} />
           : <p className="subagent-empty">{status === 'error' ? t('读取失败：{message}', { message: error ?? '' }) : t('正在读取…')}</p>}
-        {sent.map(item => <div key={item.id} className="subagent-sent">
-          <p>{item.text}</p><small>{receiptLine(receipts.get(item.id)!)}</small>
+        {/* Once the conversation shows a word, it is not shown again; a refused one stays, with why. Having been read needs no saying. */}
+        {sent.filter(item => !delivered.has(item.id) || receipts.get(item.id)!.status === 'rejected').map(item => <div key={item.id} className="subagent-sent">
+          <p>{item.text}</p>{receipts.get(item.id)!.status !== 'consumed' && <small>{receiptLine(receipts.get(item.id)!)}</small>}
         </div>)}
       </div>
       {/* Scrolled up: the way back to the end, with how much came after. */}

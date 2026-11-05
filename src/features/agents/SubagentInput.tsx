@@ -46,7 +46,8 @@ export function SubagentInput({ terminalId, callId, name, closed, receipts, onSe
     event.preventDefault(); send();
   };
   const shown = receipt && (receipts.get(receipt.id) ?? receipt.value), refused = shown?.status === 'rejected';
-  const note = error ? `${t('未送达')} · ${error}` : shown && receiptLine(shown);
+  // Under the box only what went wrong: how far a word got shows on its bubble, and a stop in the header's state.
+  const note = error ? `${t('未送达')} · ${error}` : shown && (refused || shown.status === 'unknown') ? receiptLine(shown) : null;
   return <div className="subagent-input">
     <div className="subagent-input-row reading-composer">
       <textarea ref={box} rows={1} value={text} maxLength={MAX_INTERVENTION} disabled={closed} aria-label={t('给 {name} 发消息', { name })} placeholder={hint} {...fullHint}
