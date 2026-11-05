@@ -1100,7 +1100,8 @@ test('the usage block groups Claude and Codex separately: only a connection row,
   assert.deepEqual(asked, ['p1'], 'the read is scoped to the project in view');
   assert.match(html, /<h3 class="activity-card-title">运行方式与额度<\/h3>/);
   assert.match(claude, /<h4[^>]*>Claude<\/h4>/); assert.match(codex, /<h4[^>]*>Codex<\/h4>/);
-  assert.deepEqual(labels(claude), ['连接']); assert.deepEqual(labels(codex), ['连接']);
+  assert.deepEqual(labels(claude), ['连接']); assert.deepEqual(labels(codex), ['连接', '通道']);
+  assert.ok(codex.includes('<dt>通道</dt><dd><span>app-server</span></dd>'), 'who pays and which way it runs are told apart');
   assert.doesNotMatch(html, /最近切换/, 'the owner asked for no last-switch row, even after a switch');
   assert.doesNotMatch(html, /新会话/, 'the new-session row is gone, and so is the route it showed');
   assert.ok(claude.includes('<dt>连接</dt><dd><span title="session init: ANTHROPIC_API_KEY">已连接 API</span></dd>'), 'the connection source stays in its tooltip');

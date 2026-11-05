@@ -137,6 +137,9 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
   const state = usage?.agents[agent], connection = connectionWord(agent, state?.connection), kind = state?.connection?.kind, notice = noticeWords(state?.limits?.notice);
   // The session in view belongs to one agent; only it has a context length and a round.
   const current = terminal.codexActive && terminal.agent === agent, tokens = terminal.agentUsage;
+  // 连接 says who pays; a ChatGPT subscription runs on app-server as well as in a terminal, so Codex says which. Its session in view, else where a new one starts.
+  const onTerminal = current ? !!terminal.sessionId : state?.next?.path === 'terminal', known = current || !!state?.next?.path;
+  const channel = agent === 'codex' && known ? onTerminal ? t('终端') : 'app-server' : null;
   const rows = [[t('本轮'), tokens?.round], [t('本次对话'), tokens?.total]] as const;
   // A session that reported plan windows of its own is on a plan even when main could not tell the connection (a terminal session): its bars show, and it is not 额度 未知.
   const plan = kind === 'subscription' || (kind !== 'api' && current && windowsFromScreen(tokens).length > 0), shown = plan || kind === 'api';
@@ -147,6 +150,7 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
     <h4 className="api-agent-title">{NAMES[agent]}</h4>
     <dl className="api-usage">
       <Row label={t('连接')}><span title={connection.source ?? undefined}>{connection.text}</span></Row>
+      {channel && <Row label={t('通道')}><span>{channel}</span></Row>}
       {!shown && <Row label={t('额度')}><span>{t('未知')}</span></Row>}
     </dl>
     {(current || shown) && <div className="activity-metrics">
