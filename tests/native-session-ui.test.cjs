@@ -249,7 +249,7 @@ test('the launch route follows the settings: native by default, the terminal whe
 
 // A stand-in for the main process on `window.agentrix`, for the launcher.
 // `kind`: the project's kind; `codexHere`: whether this computer has Codex installed; `startError`: what a start is refused with. `errors`: what the card shows of a refusal.
-function launcher(runtime, calls, { kind = 'local', codexHere = true, startError = null } = {}) {
+function launcher(runtime, calls, { kind = 'local', codexHere = true, startError = null, history = { claude: null, codex: null } } = {}) {
   const bridge = {
     getSettings: async () => ({ ok: true, value: runtime.settings }), keyStatus: async () => ({ ok: true, value: { saved: runtime.saved } }),
     start: async (...args) => { calls.push(['start', ...args]); return startError ? { ok: false, error: startError } : { ok: true, value: { runtimeSessionId: 'rs1' } }; },
@@ -259,7 +259,7 @@ function launcher(runtime, calls, { kind = 'local', codexHere = true, startError
     getAgents: async () => ({ ok: true, value: { npm: true, installing: null, error: null, codex: { installed: codexHere }, claude: { installed: true } } }), onAgents: () => () => {},
     startTerminal: async id => { calls.push(['terminal', id]); return { ok: true, value: null }; },
     installAgent: async agent => { calls.push(['install', agent]); return { ok: true, value: null }; }, openNode: async () => { calls.push(['node']); return { ok: true, value: null }; },
-    agentHistory: async () => ({ ok: true, value: { claude: null, codex: null } }),
+    agentHistory: async () => ({ ok: true, value: history }),
     getState: async () => ({ ok: true, value: { projects: [{ id: 'p', terminals: [{ id: 't1', sessionId: null, status: 'stopped' }] }] } }),
     agentLaunch: async (...args) => { calls.push(['launch', ...args]); return { ok: true, value: true }; }, nativeSession: bridge,
   } } });
@@ -331,6 +331,13 @@ test('the history of an SSH project can always be chosen: it is asked after the 
     remote.button('codex').props.onClick(); await settle();
     assert.deepEqual(calls, [['start', 't1', { agent: 'codex', resume: true }], ['refresh', 't1']]);
   } finally { remote.done(); }
+  // A history known by its id only has no time to say: neither the time nor the dot before it is written.
+  const noted = async history => {
+    const view = launcher(runtime, [], { kind: 'ssh', codexHere: false, history });
+    try { view.render(); await settle(); radio(view).props.onClick(); return view.note('codex'); } finally { view.done(); }
+  };
+  assert.equal(await noted({ claude: null, codex: { id: 'thread-1' } }), '接着上次的对话 · 原生界面', 'no time, no dangling dot');
+  assert.match(await noted({ claude: null, codex: { id: 'thread-1', at: Date.now() } }), /^接着上次的对话 · .* · 原生界面$/, 'with a time it is the same sentence as a local one');
   const failing = launcher(runtime, [], { kind: 'ssh', codexHere: false, startError: '远端没有可继承的对话。' });
   try {
     failing.render(); await settle(); radio(failing).props.onClick(); failing.button('codex').props.onClick(); await settle();

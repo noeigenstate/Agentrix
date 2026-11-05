@@ -48,7 +48,9 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
   // A round that ended without saying how (the provider's status was unknown) is neither complete nor interrupted: a quiet line, no check.
   const unknownEnd = activity === 'unknown' && terminal.mainTurn?.state === 'unknown';
   // Main folds every turn that did not complete into 'interrupted'; the conversation's own turn status says which of them failed (a /compact that compacted nothing, say), as its card does.
-  const turnStatus = useNativeEntries().get(terminal.id)?.model.turn.status, failedEnd = activity === 'interrupted' && turnStatus === 'failed';
+  // Only for the session the card runs now: an agent typed by hand into the same terminal afterwards is another session, and its Esc is an interruption.
+  const native = useNativeEntries().get(terminal.id)?.model;
+  const failedEnd = activity === 'interrupted' && !!terminal.nativeRuntimeSessionId && native?.identity?.runtimeSessionId === terminal.nativeRuntimeSessionId && native.turn.status === 'failed';
   const prompts = (terminal.prompts || []).filter(prompt => !hasState || prompt.state !== 'working' || cli.working || cli.waiting), working = prompts.find(prompt => prompt.state === 'working');
   const source = terminal.mainTurn?.background, background = activity === 'working' ? source : null;
   const summary = source ? t('处理后台结果：{summary}', { summary: source.summary }) + (source.count > 1 ? t(' 等 {count} 项', { count: source.count }) : '') : '';

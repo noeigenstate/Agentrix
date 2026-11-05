@@ -99,8 +99,8 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
     if (chosen === 'new') return t('开始新的对话');
     if (!history) return t('正在查找开发记录…');
     const last = history[agent];
-    // An SSH project is not asked until the click: it may have a conversation this window does not know of.
-    if (remote && !last) return t('接着上次的对话');
+    // An SSH project is not asked until the click: it may have a conversation this window does not know of, or know of one by its id only, with no time to say.
+    if (remote && !last?.at) return t('接着上次的对话');
     return last ? t('接着上次的对话 · {time}', { time: relativeTime(last.at, Date.now()) }) : t('没有它的开发记录，将重新开始');
   };
   // Where a click would run the agent, said beside the choice when it is not the terminal it always was.
