@@ -2772,5 +2772,13 @@
   "远程进程已关闭或已经启动。": "The remote process is closed or already started.",
   "远程 Codex 进程数量已达上限。": "Too many remote Codex processes.",
   "远端未找到 Codex 程序。": "Codex was not found on the remote machine.",
-  "远程输入块过大。": "The remote input block is too large."
+  "远程输入块过大。": "The remote input block is too large.",
+  "本轮已结束，完成状态未知。": "This round ended; its completion state is unknown.",
+  "Claude 用户设置不能覆盖应用保存的 API 密钥。请删除用户 settings.json 中的 env.ANTHROPIC_API_KEY，或改用终端。": "Claude user settings cannot override the API key saved in the app. Remove env.ANTHROPIC_API_KEY from the user's settings.json and try again.",
+  "Codex 返回只读沙箱。请在 Codex 用户配置的 [windows] 中设置 sandbox = \"unelevated\"，然后重试。": "Codex returned a read-only sandbox. Set sandbox = \"unelevated\" under [windows] in your Codex user config, then try again.",
+  "Codex 未应用只读沙箱，已停止启动。请检查 Codex 沙箱配置后重试。": "Codex did not apply the read-only sandbox, so the start was stopped. Check your Codex sandbox config and try again.",
+  "远端未找到 Codex 程序。请在远端登录 shell 中安装 Codex，并确认 type -P codex 能找到它。": "Codex was not found on the remote machine. Install it in the remote login shell and make sure type -P codex finds it.",
+  "恢复后的继续消息未确认投递，请查看会话状态。": "The continue message after resuming was not confirmed as delivered. Check the session state.",
+  "图片已保存，请在运行 Codex 的主机查看。": "Picture saved. View it on the host that runs Codex.",
+  "[输出已截断]": "[output truncated]"
 }
