@@ -718,10 +718,10 @@ test('the main card tells a round that ended unknown quietly: no check, not comp
   assert.doesNotMatch(main(activityMarkup([], 'zh', { codexActive: true })), /完成状态未知/, 'a session that has not ended a round says nothing of one');
 });
 
-test('the main card says 失败 for a round that failed (a /compact that compacted nothing), as the conversation’s card does, and 已中断 for a real interruption', () => {
+test('the main card says 失败 for a round that failed (a /compact that compacted nothing), as the conversation’s card does, and 已中断 for a real interruption or another session', () => {
   const main = html => /<section class="activity-card activity-main"[\s\S]*?<\/section>/.exec(html)[0];
-  const ended = { codexActive: true, id: 't-ended', mainTurn: { state: 'interrupted', updatedAt: Date.now(), background: null } };
-  const turn = status => { nativeTurns.clear(); nativeTurns.set('t-ended', { model: { turn: { status } } }); };
+  const ended = { codexActive: true, id: 't-ended', nativeRuntimeSessionId: 'rs1', mainTurn: { state: 'interrupted', updatedAt: Date.now(), background: null } };
+  const turn = (status, runtimeSessionId = 'rs1') => { nativeTurns.clear(); nativeTurns.set('t-ended', { model: { identity: { runtimeSessionId }, turn: { status } } }); };
   try {
     turn('failed');
     const failed = main(activityMarkup([], 'zh', ended));
@@ -730,5 +730,11 @@ test('the main card says 失败 for a round that failed (a /compact that compact
     nativeTurns.clear();
     const bare = main(activityMarkup([], 'zh', ended));
     assert.match(bare, /已中断/); assert.doesNotMatch(bare, /失败/);
+    // The native turn failed, then the owner typed `claude` into the same terminal and pressed Esc: that terminal has no native session now (or another one).
+    turn('failed');
+    for (const typed of [{ ...ended, nativeRuntimeSessionId: null }, { ...ended, nativeRuntimeSessionId: undefined }, { ...ended, nativeRuntimeSessionId: 'rs2' }]) {
+      const html = main(activityMarkup([], 'zh', typed));
+      assert.match(html, /已中断/); assert.doesNotMatch(html, /失败/, JSON.stringify(typed.nativeRuntimeSessionId));
+    }
   } finally { nativeTurns.clear(); }
 });
