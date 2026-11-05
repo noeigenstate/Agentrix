@@ -2784,5 +2784,6 @@
   "上下文未压缩，请查看命令反馈。": "The context was not compacted. Check the command's output.",
   "命令已执行，但输出未发送给模型。请检查 API 和预算后重试。": "The command ran, but its output was not sent to the model. Check the API and budget, then try again.",
   "项目已变化，请重试。": "The project changed. Try again.",
-  "输出未发送给模型": "Output not sent to the model"
+  "输出未发送给模型": "Output not sent to the model",
+  "Claude 用户设置不能覆盖应用保存的 API 密钥。": "Claude user settings cannot override the API key saved in the app."
 }
