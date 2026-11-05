@@ -43,6 +43,8 @@ export const CALL_STATES = {
   done: { word: '已完成', icon: <CheckCircle size={14} weight="fill" aria-hidden="true" /> },
 } as const;
 const MAX_CALL_ITEMS = 4;
+// A call as the list reads it; `hidden` is main's, and an older main has none.
+type CallItem = AgentCall['items'][number] & { hidden?: boolean };
 
 // A dispatched worker that did not finish cleanly, in words in the state column (skills/agent-dispatch).
 export function failureWord(failure: NonNullable<AgentCall['items'][number]['failure']>) {
@@ -56,17 +58,20 @@ export function failureWord(failure: NonNullable<AgentCall['items'][number]['fai
 // The sub-agents the agent called, listed in the left bar's Agent tab and in the narrow window's header popover: per model one head (its mark, name, settings, service and rate),
 // then two lines for each of its calls (what it does; its role and state in words). A model's calls past the fourth fold into "+N". With no call there is one quiet line saying what will appear.
 // A call whose record can be read is one button on the same row: it opens (or closes) a read-only view of that sub-agent beside the conversation.
+// A call main has hidden (it ended and no process keeps it) is not listed, unless its view is open beside the conversation: then it stays until the view closes. A model whose calls are all hidden
+// has no head (one that never had a call keeps it), and the "+N" counts the calls that are listed.
 export function CallsCard({ calls, terminalId }: { calls: AgentCall[]; terminalId: string }) {
   const open = useSplits();
-  if (!calls.length) return <section className="activity-card activity-calls" aria-label={t('调用的模型')}><p className="activity-empty">{t('还没有调用其他模型。规划员分派任务后，会显示在这里。')}</p></section>;
+  const groups = calls.map(call => ({ call, items: call.items.filter((item: CallItem) => !item.hidden || isSplitOpen(open, terminalId, item.id)) })).filter(group => group.items.length || !group.call.items.length);
+  if (!groups.length) return <section className="activity-card activity-calls" aria-label={t('调用的模型')}><p className="activity-empty">{t('还没有调用其他模型。规划员分派任务后，会显示在这里。')}</p></section>;
   return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
     <ul className="activity-call-groups">
-      {calls.map(call => {
+      {groups.map(({ call, items }) => {
         const name = modelName(call.model);
         return <li key={JSON.stringify([call.agent, call.provider, call.model, call.effort, call.fast])}>
           <ul className="activity-call-rows">
             <ModelHead agent={call.agent} name={name} effort={call.effort} fast={call.fast} provider={call.provider} title={[call.agent, call.provider, name].filter(Boolean).join(' / ')} rate={call.rate} />
-            {call.items.slice(0, MAX_CALL_ITEMS).map(item => {
+            {items.slice(0, MAX_CALL_ITEMS).map(item => {
               const failure = item.failure ? failureWord(item.failure) : null, word = failure ?? t(CALL_STATES[item.state].word), opened = isSplitOpen(open, terminalId, item.id);
               // A dispatched worker that runs other settings than the lead declared says so in its tooltip.
               const declared = item.declared && t('分派时声明 {model} · {effort} · {mode}', { model: modelName(item.declared.model), effort: item.declared.effort ?? t('未报告'), mode: item.declared.fast == null ? t('未报告') : t(item.declared.fast ? '快速' : '普通') });
@@ -82,7 +87,7 @@ export function CallsCard({ calls, terminalId }: { calls: AgentCall[]; terminalI
                   : <div className="activity-call-body">{cells}</div>}
               </li>;
             })}
-            {call.items.length > MAX_CALL_ITEMS && <li className="activity-call-more"><span /><p>{t('+{count} 个', { count: call.items.length - MAX_CALL_ITEMS })}</p></li>}
+            {items.length > MAX_CALL_ITEMS && <li className="activity-call-more"><span /><p>{t('+{count} 个', { count: items.length - MAX_CALL_ITEMS })}</p></li>}
           </ul>
         </li>;
       })}

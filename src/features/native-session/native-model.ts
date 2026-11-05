@@ -8,6 +8,7 @@
 //   session.state  state, reason     input.receipt  clientMessageId, status     path.changed  previous, selected, reason
 //   turn.completed  status, error, terminalReason, message, durationMs, costUsdMicros, costEstimated, tokens (how the provider says the turn ended)
 //   error  code, message, willRetry     switch.updated  a SwitchState (the whole payload)     limits.updated  providerStatus, notice { code, message, resetsAtMs }
+//   context.compacting  active     context.compacted  trigger, preTokens, postTokens     item.dropped  bytes  (the last two become a line of the conversation: native-notices.ts)
 // usage.updated and routing.updated are not part of the conversation: the usage panel asks the main process for the numbers (ApiUsage). Of limits.updated only
 // the provider's own notice that a limit was reached is kept, to be said in the conversation.
 import type { AgentEvent, LimitsPayload, SwitchState, TokenCounts } from '../../shared/agent-events';
@@ -37,11 +38,13 @@ export type NativeModel = {
   limits: { providerStatus: string | null; notice: LimitNotice | null } | null;
   // The run-mode change this session is going through (contract addendum): one state for both transports, replaced whole by each event.
   switchState: SwitchState | null;
+  // The context is being compacted now (live events only: a replayed one is over).
+  compacting: boolean;
 };
 
 export const emptyModel = (): NativeModel => ({
   identity: null, lastSequence: null, refused: [], session: null, turn: { running: false, status: null, error: null, end: null },
-  order: [], items: {}, requests: [], receipts: {}, diff: null, plan: null, path: null, error: null, limits: null, switchState: null,
+  order: [], items: {}, requests: [], receipts: {}, diff: null, plan: null, path: null, error: null, limits: null, switchState: null, compacting: false,
 });
 
 const SEND_STATES = new Set(['starting', 'idle', 'running', 'waiting']);
@@ -94,18 +97,25 @@ function delta(draft: NativeModel, event: AgentEvent, payload: Payload) {
   if (channel === 'output' || channel === 'plan' || channel === 'text') draft.items[base.id] = { ...base, deltas: { ...base.deltas, [channel]: base.deltas[channel] + piece } };
 }
 
+// A line of the conversation that is no item of the provider's: it stands where the event came, named by its sequence so a replay makes the same line.
+function note(draft: NativeModel, event: AgentEvent, kind: string, content: Payload) {
+  const id = `notice:${event.sequence}`;
+  draft.order.push(id);
+  draft.items[id] = { id, kind, status: 'completed', content, turnId: event.turnId, at: event.occurredAtMs ?? event.receivedAtMs, deltas: { text: '', output: '', plan: '' } };
+}
+
 function handle(draft: NativeModel, event: AgentEvent) {
   const payload = object(event.payload);
   switch (event.type) {
     case 'session.state': {
       const state = text(payload.state) ?? 'unknown';
       draft.session = { state, reason: text(payload.reason) };
-      if (OVER_STATES.has(state)) draft.requests = [];
+      if (OVER_STATES.has(state)) { draft.requests = []; draft.compacting = false; }
       break;
     }
     // A new turn starts with no plan and no diff: the last turn's are not this one's.
     case 'turn.started': draft.turn = { running: true, status: null, error: null, end: null }; draft.error = null; draft.plan = null; draft.diff = null; break;
-    case 'turn.completed': draft.turn = { running: false, status: text(payload.status), error: text(payload.error), end: endOf(payload) }; break;
+    case 'turn.completed': draft.turn = { running: false, status: text(payload.status), error: text(payload.error), end: endOf(payload) }; draft.compacting = false; break;
     case 'item.upsert': upsert(draft, event, payload); break;
     case 'item.delta': delta(draft, event, payload); break;
     case 'turn.diff': draft.diff = text(payload.diff) ?? text(payload.text); break;
@@ -132,6 +142,12 @@ function handle(draft: NativeModel, event: AgentEvent) {
         ...(notice.action === 'check-console' ? { action: 'check-console' as const } : {}), ...(url ? { url } : {}) } : null };
       break;
     }
+    case 'context.compacting': draft.compacting = payload.active === true && !event.replay; break;
+    case 'context.compacted':
+      draft.compacting = false;
+      note(draft, event, 'context-compacted', { trigger: text(payload.trigger), preTokens: count(payload.preTokens), postTokens: count(payload.postTokens) });
+      break;
+    case 'item.dropped': note(draft, event, 'item-dropped', { bytes: count(payload.bytes) }); break;
     case 'error': draft.error = { code: text(payload.code), message: text(payload.message) ?? '', willRetry: payload.willRetry === true }; break;
   }
 }
