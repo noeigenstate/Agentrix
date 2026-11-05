@@ -158,6 +158,10 @@ export type ConnectionTest = {
   billing: { status: 'ok' | 'mismatch' | 'unknown'; source: string | null };
   path: 'api' | 'terminal' | null; reason: string | null;
 };
+// What the native composer's /model, /effort and /fast read and change. An empty patch changes nothing and answers the current values.
+export type NativeRunOptionsPatch = { model?: string | null; effort?: string | null; fast?: boolean };
+export type NativeRunOptions = { model: string | null; effort: string | null; fast: boolean };
+export type NativeModelOption = { value: string; displayName: string; description: string; efforts: string[] };
 export type BillingConnection = { kind: 'api' | 'subscription' | 'none' | 'unknown'; active?: boolean; source: string | null; observedAt: number | null };
 type ConnectedUsage = Omit<NativeUsage, 'agents'> & { apiRecords: boolean; agents: Record<'claude' | 'codex', NativeUsage['agents']['claude'] & {
   connection: BillingConnection; next: { path: 'api' | 'native' | 'terminal' | null; reason: string | null };
@@ -171,6 +175,10 @@ type Bridge = {
     answer(terminalId: string, runtimeSessionId: string, requestId: string, answer: NativeAnswer): Promise<Result<unknown>>;
     snapshot(terminalId: string): Promise<Result<NativeSnapshot | null>>;
     commands(terminalId: string, runtimeSessionId: string): Promise<Result<AgentCommand[]>>;
+    runOptions(terminalId: string, runtimeSessionId: string, patch: NativeRunOptionsPatch): Promise<Result<NativeRunOptions>>;
+    models(terminalId: string, runtimeSessionId: string): Promise<Result<NativeModelOption[]>>;
+    newConversation(terminalId: string, runtimeSessionId: string): Promise<Result<{ runtimeSessionId: string }>>;
+    shell(terminalId: string, runtimeSessionId: string, clientMessageId: string, command: string): Promise<Result<{ exitCode: number | null }>>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
     getSettings(): Promise<Result<NativeSettings>>;
     setSettings(patch: Partial<NativeSettings>): Promise<Result<NativeSettings>>;

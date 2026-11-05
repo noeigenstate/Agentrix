@@ -48,6 +48,9 @@ export type AgentEventPayloads = {
   'request.resolved': { requestId: string; resolution: 'allowed' | 'denied' | 'answered' | 'cancelled' | 'expired'; reason: string | null };
   'input.receipt': { clientMessageId: string; status: 'queued' | 'delivered' | 'consumed' | 'rejected' | 'unknown' };
   'usage.updated': UsagePayload;
+  'context.compacting': { active: boolean };
+  'context.compacted': { trigger: 'auto' | 'manual'; preTokens: number | null; postTokens: number | null };
+  'item.dropped': { reason: 'too_large'; bytes: number };
   'limits.updated': LimitsPayload;
   'routing.updated': { declared: RoutingValues; effective: RoutingValues; observed: RoutingValues; reason: string | null };
   'path.changed': { previous: 'api' | 'terminal' | 'subscription' | null; selected: 'api' | 'terminal' | 'subscription'; reason: string | null };
