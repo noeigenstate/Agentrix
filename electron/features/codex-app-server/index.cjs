@@ -7,7 +7,7 @@ const { createEvents, itemPayload, turnCompletion } = require('./events.cjs');
 const { createRequests } = require('./requests.cjs');
 const { mergeLimits, accountConnection, restrictedLimits } = require('./account.cjs');
 const { assertCompatible, probeCapabilities } = require('./compatibility.cjs');
-const { codexExecutable } = require('../agents/codex-account-usage.cjs');
+const { codexExecutable, scopePathKey } = require('../agents/codex-account-usage.cjs');
 const { workerEnvironment } = require('./environment.cjs');
 
 const occupied = new Map();
@@ -36,6 +36,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       const events = createEvents(spec, event => { if (event.type === 'usage.updated') currentUsage = event.payload; emit(event); }, now, renderImage), receipts = new Map(), finished = new Set();
       let rpc, child, requests, state = 'stopped', closed = false, sending = Promise.resolve(), origin = 'user', clientMessageId = null;
       let lockKey, active = false, threadResponse, accountGeneration = 0, limitsRead = null;
+      let skills = null, skillsRead = null, skillsGeneration = 0, skillsExpireAt = 0;
       let accountRead = null;
       const setState = (value, reason = null) => { state = value; events.publish('session.state', { state, reason }); };
       function bind(threadId) {
@@ -53,6 +54,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       function notification(method, params) {
         if (closed) return;
         if (params.threadId && params.threadId !== events.binding.providerSessionId) return;
+        if (method === 'skills/changed') { ++skillsGeneration; skills = null; skillsRead = null; }
         if (method === 'item/completed' && params.item?.type === 'userMessage') {
           const id = params.item.clientId;
           if (receipts.has(id)) inputReceipt(id, 'consumed');
@@ -186,8 +188,14 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           const clientId = input.clientMessageId;
           inputReceipt(clientId, 'queued');
           const userInput = [...(input.text.trim() ? [{ type: 'text', text: input.text, text_elements: [] }] : []), ...(input.images || []).map(value => value.startsWith('data:') ? { type: 'image', url: value } : { type: 'localImage', path: value })];
-          const steering = active;
           try {
+            const command = /^\/([\w][\w:.-]{0,159})(?:\s|$)/.exec(input.text.trim());
+            if (command) {
+              await commands();
+              const skill = skills?.get(command[1]);
+              if (skill) userInput.push({ type: 'skill', name: command[1], path: skill.path });
+            }
+            const steering = active;
             clientMessageId = clientId; origin = 'user';
             const base = { threadId: events.binding.providerSessionId, clientUserMessageId: clientId, input: userInput };
             const startTurn = () => rpc.request('turn/start', { ...base, effort: spec.effort ?? null, serviceTier: spec.fast === true ? 'fast' : spec.fast === false ? 'default' : null });
@@ -250,9 +258,35 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         accountRead = task.finally(() => { if (generation === accountGeneration) accountRead = null; });
         return accountRead;
       }
+      async function commands() {
+        if (closed || !rpc) return [];
+        const list = () => [...(skills?.values() || [])].map(skill => ({ name: '/' + skill.name,
+          description: skill.description, source: 'skill', view: 'reading' }));
+        if (skills && now() < skillsExpireAt) return list();
+        if (skillsRead) return skillsRead;
+        const generation = skillsGeneration;
+        const task = rpc.request('skills/list', { cwds: [spec.cwd], forceReload: false }).then(result => {
+          if (closed || generation !== skillsGeneration) return [];
+          skills = new Map(); skillsExpireAt = now() + 30000;
+          for (const entry of result?.data || []) {
+            if (typeof entry.cwd !== 'string' || scopePathKey(entry.cwd) !== scopePathKey(spec.cwd)) continue;
+            for (const skill of Array.isArray(entry.skills) ? entry.skills : []) {
+              if (skills.size >= 300) break;
+              if (skill.enabled !== true || !/^[\w][\w:.-]{0,159}$/.test(skill.name || '') || skills.has(skill.name)
+                || typeof skill.path !== 'string' || !path.isAbsolute(skill.path) || skill.path.length > 4096) continue;
+              skills.set(skill.name, { name: skill.name, path: skill.path, description: String(skill.description || '').slice(0, 1024) });
+            }
+          }
+          return list();
+        }).catch(() => {
+          if (!closed && generation === skillsGeneration) { skills = new Map(); skillsExpireAt = now() + 5000; }
+          return [];
+        }).finally(() => { if (skillsRead === task) skillsRead = null; });
+        skillsRead = task; return task;
+      }
       return { start: override => open(false, override), resume: override => open(true, override), send, interrupt,
         answer: (id, answer) => requests.answer(id, answer), snapshot: () => ({ ...events.snapshot(), state, requests: requests?.snapshot() || [] }), close,
-        readLimits, readAccount, activity: events.activity,
+        readLimits, readAccount, commands, activity: events.activity,
         readUsage: () => rpc.request('account/usage/read', {}),
         history: cursor => rpc.request('thread/turns/list', { threadId: events.binding.providerSessionId, cursor: cursor || null, limit: 50, sortDirection: 'desc', itemsView: 'full' }),
         get pid() { return child?.pid; }, get threadResponse() { return threadResponse; },

@@ -4,7 +4,7 @@ const { validEvent } = require('./validate.cjs');
 const { createEventStream } = require('./events.cjs');
 const { nextPath } = require('./usage.cjs');
 const { createSwitches } = require('./switches.cjs');
-function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {}, terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {}, retireTerminal = () => {}, switchOptions = {} }) {
+function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {}, readCommands = async () => [], terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {}, retireTerminal = () => {}, switchOptions = {} }) {
   const sessions = new Map(), terminalStreams = new Map(), busy = new Set(), occupied = new Set();
   const agents = { claude: { path: null, reason: null, limits: null }, codex: { path: null, reason: null, limits: null } };
   const ended = new Set(['stopped', 'failed', 'disconnected']);
@@ -222,6 +222,13 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
   }
   const unsubscribeAvailability = claude.onAvailabilityChange?.(() => reconcile());
   return { start,
+    async commands(id, runtimeSessionId) {
+      const record = current(id, runtimeSessionId);
+      const fallback = record.spec.agent === 'claude' ? await readCommands(record.spec) : [];
+      const commands = await record.runtime.commands?.(fallback) || [];
+      if (current(id, runtimeSessionId) !== record) throw new Error('会话已变化，请刷新后重试。');
+      return commands;
+    },
     async send(id, runtimeSessionId, message) {
       const record = current(id, runtimeSessionId);
       if (record.inputs.has(message.clientMessageId)) return { status: record.inputs.get(message.clientMessageId) };

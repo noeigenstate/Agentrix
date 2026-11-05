@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('agentrix', {
     stop: (terminalId, runtimeSessionId) => ipcRenderer.invoke('native:stop', terminalId, runtimeSessionId),
     answer: (terminalId, runtimeSessionId, requestId, answer) => ipcRenderer.invoke('native:answer', terminalId, runtimeSessionId, requestId, answer),
     snapshot: terminalId => ipcRenderer.invoke('native:snapshot', terminalId),
+    commands: (terminalId, runtimeSessionId) => ipcRenderer.invoke('native:commands', terminalId, runtimeSessionId),
     onEvent: callback => listen('native:event', callback),
     getSettings: () => ipcRenderer.invoke('native:settings-get'),
     setSettings: patch => ipcRenderer.invoke('native:settings-set', patch),

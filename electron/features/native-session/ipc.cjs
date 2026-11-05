@@ -14,6 +14,7 @@ function registerIpc({ handle, router, settings, claude }) {
     return router.answer(terminalId, runtimeSessionId, requestId, answer);
   });
   handle('native:snapshot', terminalId => { assert(id(terminalId)); return router.snapshot(terminalId); });
+  handle('native:commands', (...args) => { assert(args.length === 2); binding(...args); return router.commands(...args); });
   handle('native:settings-get', () => settings.get());
   handle('native:settings-set', patch => settings.set(patch));
   handle('native:key-save', key => router.keySave(key));

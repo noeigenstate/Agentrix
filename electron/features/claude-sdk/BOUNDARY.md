@@ -11,6 +11,7 @@ Owner sessions currently keep tool and hook environment inheritance; dispatch wo
 - `createClaudeRuntime` (`electron/features/claude-sdk/index.cjs`) — injected SDK session factory, credentials, usage and availability
 - `createSdkLoader` (`electron/features/claude-sdk/runtime.cjs`) — deferred ESM loading from development or unpacked production paths
 - `inspectClaudeExecutable` (`electron/features/claude-sdk/executable.cjs`) — whether the installed native Claude Code exists and meets the minimum version; main reads it to say what a new session takes
+- `commands` (`electron/features/claude-sdk/session.cjs`) — a native-safe command catalog from the live SDK, its replacement pushes or the shared file catalog before a query exists; listing never starts a query
 
 ## May import
 - `electron/command-phrase.cjs`
@@ -21,7 +22,7 @@ Owner sessions currently keep tool and hook environment inheritance; dispatch wo
 - `electron/agent-actions.cjs` (the one rule for naming a command: running tests, checking types)
 
 ## Invariants
-- Owner queries stay open at idle; explicit sends renew spent caps at safe message boundaries — test: `tests/claude-sdk-budget.test.cjs` › "M1 each explicit idle turn renews its five-dollar cap without charging resumed history"
+- Owner queries stay open at idle; explicit sends renew spent caps at safe message boundaries. Listing commands never starts a query; live command feedback is visible while historical machine records stay filtered, and reset aliases or host-overridden model settings are not advertised — test: `tests/claude-sdk-budget.test.cjs` › "M1 each explicit idle turn renews its five-dollar cap without charging resumed history"; test: `tests/native-commands.test.cjs` › "local slash output renders once as assistant text without becoming an owner prompt or leaking wrappers"; test: `tests/claude-sdk-real-cli.test.cjs` › "native slash /compact has real CLI feedback and a lazy command list"
 - Workers isolate disk settings and rely on blocking PreToolUse policy under bypassPermissions; owner questions still reach canUseTool — test: `tests/claude-sdk-real-cli.test.cjs` › "A7 product worker policy remains active on resume and a throwing hook blocks"; test: `tests/claude-sdk-real-cli.test.cjs` › "under bypass a question still reaches the owner through canUseTool"
 - API identity requires the env API source; routing overrides project transport and helper settings without disabling owner project settings — test: `tests/claude-sdk-runtime.test.cjs` › "billing identity mismatch fails without trusting a subscription init"; test: `tests/claude-sdk-real-cli.test.cjs` › "A1 project settings cannot send the saved key to a trap endpoint"
 - Stopping cancels pending approvals and preserves uncertain delivery — test: `tests/claude-sdk-runtime.test.cjs` › "stop rejects queued input and stale permission answers"

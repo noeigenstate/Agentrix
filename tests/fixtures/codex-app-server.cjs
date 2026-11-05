@@ -2,7 +2,7 @@ const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
 const mode = process.env.SYNTHETIC_CODEX_MODE || 'normal';
-let threadId = 'synthetic-thread', turnId = 'turn-1', turns = 0;
+let threadId = 'synthetic-thread', turnId = 'turn-1', turns = 0, skillReads = 0;
 const send = message => process.stdout.write(JSON.stringify(message) + '\n');
 const notify = (method, params) => send({ method, params: { threadId, ...params } });
 readline.createInterface({ input: process.stdin }).on('line', line => {
@@ -29,6 +29,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     result = { thread: { id: threadId, turns: [] }, cwd: params.cwd, model: params.model, serviceTier: params.serviceTier,
       reasoningEffort: params.config?.model_reasoning_effort, approvalPolicy: params.approvalPolicy || 'on-request', sandbox: { type: sandbox === 'read-only' ? 'readOnly' : 'workspaceWrite' } };
   } else if (request.method === 'turn/start') {
+    if (mode === 'skill-catalog') notify('skills/changed', {});
     if (mode === 'sandbox-persist' && JSON.parse(fs.readFileSync(process.env.SYNTHETIC_POLICY_FILE)).sandbox === 'workspace-write') fs.writeFileSync(path.join(process.cwd(), 'synthetic-write-proof.txt'), 'workspace-write');
     turnId = 'turn-' + ++turns;
     result = { turn: { id: turnId, status: 'inProgress', items: [] } };
@@ -65,7 +66,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     }, 20);
   } else if (request.method === 'turn/interrupt') {
     notify('turn/completed', { turn: { id: turnId, status: 'interrupted' } });
-  } else if (request.method === 'account/rateLimits/read') result = { rateLimits: { limitId: 'codex', primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 100 } }, rateLimitResetCredits: { availableCount: 2 }, ordinaryUsageAllowed: true };
+  } else if (request.method === 'skills/list' && mode === 'missing-skills') return send({ id: request.id, error: { code: -32601, message: 'Unsupported method' } });
+  else if (request.method === 'skills/list') result = { data: [{ cwd: process.cwd(), skills: mode === 'skill-catalog' ? [
+    { name: ++skillReads === 1 ? 'offline' : 'replacement', description: 'Offline skill', enabled: true, path: process.env.SYNTHETIC_SKILL_PATH },
+    { name: 'disabled', enabled: false, path: process.env.SYNTHETIC_SKILL_PATH },
+  ] : [] }] };
+  else if (request.method === 'account/rateLimits/read') result = { rateLimits: { limitId: 'codex', primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 100 } }, rateLimitResetCredits: { availableCount: 2 }, ordinaryUsageAllowed: true };
   else if (request.method === 'thread/read') result = { thread: { id: threadId, status: { type: 'idle' }, turns: [{ id: turnId, status: 'completed', items: [] }] } };
   else if (request.method === 'thread/turns/list') {
     if (mode.startsWith('long-')) {
