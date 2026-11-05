@@ -2736,5 +2736,8 @@
   "正在继续本条消息。": "Continuing this message.",
   "现在可以继续发送消息。": "You can now send another message.",
   "自动重置后未能继续本条消息，请核对会话后继续。": "This message could not continue after the automatic reset. Check the conversation before continuing.",
-  "自动重置的日志未能保存。": "The automatic reset log could not be saved."
+  "自动重置的日志未能保存。": "The automatic reset log could not be saved.",
+  "额度用完时自动使用重置次数": "Automatically use a reset when the usage limit is reached",
+  "到达上限时自动用掉 1 次重置，用掉不能撤销": "One reset is used automatically when the limit is reached; this cannot be undone",
+  "付费余额": "CreditsSnapshot 的 hasCredits/unlimited/balance 与 banked reset 不同，不把余额字符串当成可用重置次数。本批没有购买、充值、设置自动充值或主动扣付费余额的 RPC。"
 }
