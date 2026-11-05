@@ -1,6 +1,8 @@
 /* The same composer geometry as the terminal reading view, with worker receipts below it. */
-.subagent-input { display: flex; flex: none; flex-direction: column; gap: 4px; padding: 8px 24px; }
+/* The box sits as far from the bottom as the reading view's composer beside it (reading.css), so the two line up. The receipt goes above the box, so showing it moves nothing. */
+.subagent-input { display: flex; flex: none; flex-direction: column; gap: 4px; padding: 8px 24px 16px; }
+.focus-mode .subagent-input { padding-bottom: 20px; }
 .subagent-input .reading-composer { margin: 0; }
-.subagent-input-note { margin: 0; color: var(--text-2); font-size: 12px; }
+.subagent-input-note { order: -1; margin: 0; color: var(--text-2); font-size: 12px; }
 .subagent-input-note.is-error { color: var(--text-1); }
-@container (max-width: 480px) { .subagent-input { padding: 8px 16px; } }
+@container (max-width: 480px) { .subagent-input { padding-inline: 16px; } }

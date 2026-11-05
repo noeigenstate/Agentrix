@@ -13,7 +13,7 @@ export const MAX_INTERVENTION = 4000;
 // The hint, longest first: the box shows the first that fits its width, so a narrow split gets a short one instead of a cut-off one. None
 // carries the worker's name (a long task title would push every one out of the box; the box's accessible name has it), and the last is short
 // enough for any box, so an empty box always says what it is for.
-const openHints = () => [t('给它发消息，Enter 发送，Shift+Enter 换行'), t('给它发消息，Enter 发送'), t('给它发消息'), t('发消息')];
+const openHints = () => [t('给它发消息 · Enter 发送，Shift+Enter 换行'), t('给它发消息 · Enter 发送'), t('给它发消息'), t('发消息')];
 const closedHints = () => [t('它已结束或不可用，不能再发消息'), t('已结束，不能再发消息')];
 
 // `receipts` are the worker's receipts by message id as the view reads them now: the note under the box follows the last message sent from here, so a word

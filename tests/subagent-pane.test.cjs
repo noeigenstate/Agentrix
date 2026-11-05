@@ -678,12 +678,12 @@ test('a narrow message box shows a shorter hint that fits, never a cut-off one: 
   const view = inputView({}, { name: '实现分块偏移的修复（default） · GPT-6.1-Sol' }, 3);
   try {
     assert.equal(view.find('textarea').props.placeholder, '发消息', 'the shortest, for the narrowest box');
-    assert.deepEqual(view.hints, ['给它发消息，Enter 发送，Shift+Enter 换行', '给它发消息，Enter 发送', '给它发消息', '发消息'], 'no hint carries the worker’s long name');
+    assert.deepEqual(view.hints, ['给它发消息 · Enter 发送，Shift+Enter 换行', '给它发消息 · Enter 发送', '给它发消息', '发消息'], 'no hint carries the worker’s long name');
   } finally { view.done(); }
 });
 
 test('whenever the box shows a shortened hint, or the last resort, the full one with its keys is its tooltip and a hidden accessible description; the full hint needs neither; the box is never empty', () => {
-  const full = '给它发消息，Enter 发送，Shift+Enter 换行';
+  const full = '给它发消息 · Enter 发送，Shift+Enter 换行';
   for (const fit of [1, 2, 3, 4]) {   // a shorter hint, a short one, the shortest, nothing fits
     const view = inputView({}, {}, fit);
     try {
@@ -691,7 +691,7 @@ test('whenever the box shows a shortened hint, or the last resort, the full one 
       assert.equal(box.props.title, full); assert.equal(box.props['aria-describedby'], 'subagent-hint-t1-agent:a');
       assert.equal(note.props.id, box.props['aria-describedby']); assert.equal(note.props.children, full);
       assert.equal(note.props.style.position, 'absolute', 'not drawn');
-      assert.equal(box.props.placeholder, ['给它发消息，Enter 发送', '给它发消息', '发消息', '发消息'][fit - 1], 'the visible hint is the longest that fits; when none does, the shortest — never an empty box');
+      assert.equal(box.props.placeholder, ['给它发消息 · Enter 发送', '给它发消息', '发消息', '发消息'][fit - 1], 'the visible hint is the longest that fits; when none does, the shortest — never an empty box');
     } finally { view.done(); }
   }
   const whole = inputView({}, {}, 0);
