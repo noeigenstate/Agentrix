@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Play, Plus, DotsThree, GitBranch, X, FolderOpen, ArrowCounterClockwise, Info, Globe, ImageSquare, Microphone } from '@phosphor-icons/react';
 import type { Project, Result } from '../../shared/types';
+import { nativeTells, useNativeEntries } from '../native-session/native-store.ts';
 import { ProjectTerminals } from '../terminal/ProjectTerminals';
 import { terminalInUse, visibleTerminals } from '../terminal/terminal-visibility.ts';
 import { setActiveTerminal, useActiveTerminal } from '../terminal/active-terminal';
@@ -48,6 +49,7 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [imageOpen, setImageOpen] = useState(false);
+  const natives = useNativeEntries();
   const menu = useRef<HTMLDivElement>(null);
   const activeTerminalId = useActiveTerminal(project.id);
   const terminals = visibleTerminals(project.terminals, focused);
@@ -122,6 +124,6 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
     {imageOpen && <ProjectImageDialog project={project} index={index} onClose={() => setImageOpen(false)} />}
     <ProjectTerminals project={project} focused={focused} fontSize={fontSize} activeId={activeTerminalId} setActiveId={id => setActiveTerminal(project.id, id)} onExpand={() => onFocus(project.id)} onAction={onAction} onError={onError} onOpenLink={onOpenLink} />
     {showActivity && <ActivityPane terminal={currentTerminal} projectId={project.id} />}
-    {project.error && <div className="panel-error"><Info size={13} /><span>{t(project.error)}</span></div>}
+    {project.error && !project.terminals.some(terminal => nativeTells(natives.get(terminal.id), project.error!)) && <div className="panel-error"><Info size={13} /><span>{t(project.error)}</span></div>}
   </article>;
 }

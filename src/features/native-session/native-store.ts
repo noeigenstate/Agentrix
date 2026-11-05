@@ -115,6 +115,9 @@ export function noteTerminalSwitch(terminalId: string, reason: string) {
 // the terminal (then the terminal's own reading view takes the cell).
 export const nativeShown = (entry: NativeEntry | undefined): entry is NativeEntry => !!entry?.model.identity && entry.model.identity.runtimeSessionId !== entry.dismissed && entry.model.path?.selected !== 'terminal';
 
+// Whether the terminal's native view already tells this sentence (the reason its session ended with, or its error), so a bar elsewhere need not say it again.
+export const nativeTells = (entry: NativeEntry | undefined, text: string) => nativeShown(entry) && [entry.model.session?.reason, entry.model.error?.message].some(told => told === text);
+
 // The reason a session was moved to the terminal, while the owner has not dismissed the notice.
 export const terminalSwitch = (entry: NativeEntry | undefined) => (entry && !entry.noteDismissed && entry.model.path?.selected === 'terminal' ? entry.model.path : null);
 

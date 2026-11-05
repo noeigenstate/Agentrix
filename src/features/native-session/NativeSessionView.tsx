@@ -11,7 +11,7 @@ import { ConversationDecorations, ConversationFeed } from '../reading/Conversati
 import { AgentMark, commandList, composerAria, isCommandDraft, latestResult, MentionPalette, pastedPicture, PendingPromptEntries, QuoteChip, quoteExcerpt, ResultActions, ResultChecks, ResultStatus, TimelineStep, useCommandPalette, useComposerHistory, useMentions, useStickToBottom, UserImages, withQuote, WorkingLine, type MessageQuote, type PendingPrompt } from '../reading/feed-parts';
 import { nativeBridge, type NativePendingInput, type SwitchState } from './native-bridge.ts';
 import type { Handoff } from './draft-handoff.ts';
-import { nativeEntries, nativePending, runningStep, sentTexts, type SentMessage } from './native-entries.ts';
+import { nativeEntries, nativePending, runningStep, sentTexts, shellRound, type SentMessage } from './native-entries.ts';
 import { composerAction, type ListLine } from './native-composer.ts';
 import { isNotice } from './native-notices.ts';
 import { canSend, isOver, isWorking } from './native-model.ts';
@@ -158,19 +158,21 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const settled = !over && model.session?.state === 'idle' && !model.turn.running && !pending.prompts.length && !model.requests.length && !asksChoice(change);
   // How the turn ended is the provider's own: its status draws the row (a turn that did not complete is never drawn as done) and the sentence main wrote for
   // it is shown as it is (translated like any interface text). An error event for a limit the provider's notice already tells is not told twice.
-  const turnStatus = model.turn.status, failed = turnStatus === 'failed', stopped = turnStatus === 'interrupted', end = model.turn.end;
-  const ended = turnStatus && turnStatus !== 'completed' ? sentence(end?.message ?? model.turn.error) : null;
+  // A turn whose end the provider did not tell (unknown) is neither done nor failed: no check and no result card, a quiet line with its sentence.
+  const turnStatus = model.turn.status, failed = turnStatus === 'failed', stopped = turnStatus === 'interrupted', unknown = turnStatus === 'unknown', end = model.turn.end;
+  const ended = turnStatus && turnStatus !== 'completed' ? sentence(end?.message ?? model.turn.error) ?? (unknown ? t('本轮已结束，完成状态未知。') : null) : null;
   const noticed = model.limits?.notice?.code !== undefined && model.limits.notice.code === model.error?.code;
   const why = ended ?? (noticed ? null : sentence(model.error?.message));
   const facts = useMemo(() => turnFacts(end, kind, turnStatus === 'completed'), [end, kind, turnStatus]);
   // The lines of a compaction or a dropped result are no reply and no step of the round: its result is the one it would have without them.
-  const result = useMemo(() => latestResult(entries.filter(entry => !isNotice(entry)), { idle: settled, interrupted: stopped, stopped, failure: failed ? why ?? turnFailed() : undefined, facts }),
-    [entries, settled, stopped, failed, why, facts]);
+  const result = useMemo(() => unknown ? null : latestResult(entries.filter(entry => !isNotice(entry)), { idle: settled, interrupted: stopped, stopped, failure: failed ? why ?? turnFailed() : undefined, facts }),
+    [entries, settled, stopped, failed, unknown, why, facts]);
   // Only the owner's click on a message's 引用 gets here.
   const quoteMessage = (who: string, words: string) => { const excerpt = quoteExcerpt(words); if (excerpt) { setQuote({ who, excerpt }); box.current?.focus(); } };
   const continueWith = (prefill?: string) => { if (prefill && !text.trim()) edit(prefill); box.current?.focus(); };
   const resultStatus = result && <ResultStatus result={result} taskTitle={undefined} onError={setError} />;
-  const resultActions = result && <>
+  // A round a "!" line drove has no message to send again, so it offers no retry (nor any other action under it).
+  const resultActions = result && !shellRound(entries) && <>
     {result.kind === 'code' && <ResultChecks result={result} />}
     <ResultActions result={result} projectId={projectId} remote={false} canSend={open} onContinue={continueWith} onRetry={() => void post(result.request, NO_PICTURES)} onError={setError} />
   </>;
@@ -178,7 +180,8 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   // An error the result card does not carry (the round is still going, or left nothing to show) is a line of its own.
   // A turn that was stopped is told in a quiet line; one that failed, or an error while it runs, is an alert. The provider's notice that a limit was reached
   // comes with when it recovers, only if the provider says when.
-  const errorLine = !result && why ? why : null, retrying = !failed && model.error?.willRetry === true, notice = noticeWords(model.limits?.notice);
+  // The words that end a session are told above the box, with the way to a new conversation; the line in the conversation does not say them again.
+  const errorLine = !result && why && why !== (over ? reasonWords(model.session?.reason) : null) ? why : null, retrying = !failed && model.error?.willRetry === true, notice = noticeWords(model.limits?.notice);
   // The notice's sentence is said once: when the turn's own line, the result card or the agent's reply to the last message already says it, the notice adds only when
   // it recovers and the console button.
   const lastUser = entries.map(entry => entry.role).lastIndexOf('user'), replies = entries.slice(lastUser + 1).flatMap(entry => entry.role === 'assistant' ? [entry.text] : []);
@@ -189,7 +192,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     {status && !statusInTurn && <TimelineStep at={pending.prompts.at(-1)?.at ?? last?.at} kind="agent" who={agent} state={working ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}
     {(switchLine(change) || errorLine || noticeLine || actions.told || checkNotice || model.requests.length > 0 || asksChoice(change)) && <div className="native-tail">
       <SwitchLine state={change} />
-      {errorLine && (stopped ? <p className="reading-status" role="status">{errorLine}</p> : <p className="form-error" role="alert">{errorLine}{retrying ? ` · ${t('正在重试')}` : ''}</p>)}
+      {errorLine && (stopped || unknown ? <p className="reading-status" role="status">{errorLine}</p> : <p className="form-error" role="alert">{errorLine}{retrying ? ` · ${t('正在重试')}` : ''}</p>)}
       {noticeLine && <p className="reading-status" role="status">{noticeLine}</p>}
       {actions.told && <p className="reading-status" role="status">{actions.told}</p>}
       {checkNotice && <BillingLink projectId={projectId} />}

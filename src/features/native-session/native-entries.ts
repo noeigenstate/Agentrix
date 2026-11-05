@@ -32,7 +32,9 @@ function commandStep(item: NativeItem, state: StepMark): Step {
   // The command and its phrase (运行测试, 检查类型…) are main's, from the same rules the terminal transcript uses (electron/command-phrase.cjs), so the result
   // row's list of checks reads the same in both. A record that gives only the tool's input names the command there.
   const { command: given, phrase, cwd, exitCode, durationMs, output } = commandOf(item), mark = marks(state);
-  const facts = [cwd && shortPath(cwd), exitCode !== null && t('退出码 {code}', { code: exitCode }), durationMs !== null && t('用时 {seconds} 秒', { seconds: (durationMs / 1000).toFixed(1) })].filter(Boolean).join(' · ');
+  // A "!" line's output the model did not get (main says so) is said on its card: the command ran, but the model never saw what it printed.
+  const facts = [cwd && shortPath(cwd), exitCode !== null && t('退出码 {code}', { code: exitCode }), durationMs !== null && t('用时 {seconds} 秒', { seconds: (durationMs / 1000).toFixed(1) }),
+    item.content.modelDelivery === 'rejected' && t('输出未发送给模型')].filter(Boolean).join(' · ');
   return { kind: 'command', tool: 'command', target: given || fieldOf(toolOf(item).fields, 'command'), detail: facts, ...mark, failed: mark.failed || !!exitCode, output, ...(phrase ? { phrase } : {}) };
 }
 
@@ -124,6 +126,9 @@ export function nativePending(model: NativeModel, sent: readonly SentMessage[], 
   for (const id of discarded) { lost.delete(id); queued.delete(id); }
   return { prompts: [...prompts.values()].sort((a, b) => a.at - b.at), queued, lost };
 }
+
+// Whether the latest round (after the owner's last message) holds a "!" line: it has no message of its own, so the message above it is not the round's to send again.
+export const shellRound = (entries: readonly ConversationEntry[]) => entries.slice(entries.map(entry => entry.role).lastIndexOf('user') + 1).some(entry => entry.id.startsWith('shell:'));
 
 // The step the agent is on now, for the line that says what it is doing; null when no step runs.
 export const runningStep = (entries: readonly ConversationEntry[]) => entries.filter(entry => entry.tool && !entry.tool.done).at(-1)?.tool ?? null;

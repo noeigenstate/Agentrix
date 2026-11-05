@@ -313,7 +313,8 @@ test('the launcher of an SSH project offers Codex and a plain terminal only; Cod
   const refused = [], failing = launcher(runtime, refused, { kind: 'ssh', codexHere: false, startError: '远端未找到 Codex 程序。' });
   try {
     failing.render(); await settle(); failing.button('codex').props.onClick(); await settle();
-    assert.deepEqual([refused, failing.errors], [[['start', 't1', { agent: 'codex', resume: false }]], ['远端未找到 Codex 程序。']], 'what main says about the other computer is what the click shows, and nothing is installed');
+    assert.deepEqual([refused, failing.errors], [[['start', 't1', { agent: 'codex', resume: false }], ['refresh', 't1']], []], 'the session that failed is asked for, nothing is installed, and no message goes to the corner of the window');
+    assert.match(failing.text(), /<p class="agent-launcher-error" role="alert">远端未找到 Codex 程序。<\/p>/, 'what main says about the other computer is said once, in the card, where no session has taken its place');
   } finally { failing.done(); }
   const local = launcher(runtime, [], { kind: 'local', codexHere: false });
   try { local.render(); await settle(); assert.deepEqual(agents(local), ['is-claude', 'is-codex']); assert.match(local.note('codex'), /未安装/, 'a local project still offers the install'); assert.equal(local.note('claude'), '开始新的对话 · API · 原生界面'); } finally { local.done(); }
@@ -2113,4 +2114,46 @@ test('a /fast the runtime cannot do shows its reason and never says fast mode is
     await typeIn(view, '/fast off'); keyIn(view, 'Enter'); await settle(); view.tree();
     assert.deepEqual([alertOf(view), statuses(view)], [undefined, ['快速模式已关闭']], 'what it can do is still told');
   } finally { view.done(); }
+});
+
+// ---- a turn that ended unknown, a "!" round, and a sentence told once (round r13) -----------------------------------------------------------
+const statusLines = view => elements(view.tree()).filter(node => node.props?.role === 'status' && node.props.className === 'reading-status').map(node => node.props.children);
+const answered = (make, status = 'completed', extra = {}) => [...idle(make), userMessage(make, 'c1', '/status'), make('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'It is fine.' } }, { itemId: 'a1' }), make('turn.completed', { status, error: null, ...extra })];
+
+test('a turn that ended unknown is told quietly: no result card with a check, no alert, and the sentence main gave', () => {
+  const done = sessionView(make => answered(make), {}), unknown = sessionView(make => answered(make, 'unknown', { message: '本轮已结束，完成状态未知。' }), {}), bare = sessionView(make => answered(make, 'unknown'), {});
+  try {
+    assert.equal(done.decorations().anchor, 'a1', 'a completed turn has its result card');
+    assert.deepEqual([unknown.decorations().anchor, !!unknown.decorations().beforeResult, !!unknown.decorations().afterResult], [undefined, false, false], 'an unknown end has no card of success');
+    assert.deepEqual([statusLines(unknown), alertOf(unknown)], [['本轮已结束，完成状态未知。'], undefined], 'a quiet line, not an alert');
+    assert.deepEqual([statusLines(bare), alertOf(bare)], [['本轮已结束，完成状态未知。'], undefined], 'with no sentence of its own the view says the same');
+  } finally { done.done(); unknown.done(); bare.done(); }
+});
+
+test('a round a ! line drove offers no retry of the message above it, and a command whose output the model never got says so', () => {
+  const { shellRound } = load('features/native-session/native-entries.ts');
+  const card = (make, extra = {}) => make('item.upsert', { kind: 'command', status: 'failed', content: { command: 'false', cwd: '/work', output: 'x', exitCode: 1, ...extra } }, { itemId: 'shell:s1' });
+  const asked = make => [...idle(make), userMessage(make, 'c1', 'fix it'), make('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'Done.' } }, { itemId: 'a1' }), make('turn.completed', { status: 'completed', error: null })];
+  const plain = sessionView(asked, {}), shelled = sessionView(make => [...asked(make), card(make, { modelDelivery: 'rejected' })], {});
+  try {
+    assert.ok(plain.decorations().afterResult, 'a round of a message has its actions');
+    assert.deepEqual([!!shelled.decorations().afterResult, shellRound(shelled.feed().entries), shellRound(plain.feed().entries)], [false, true, false], 'no action under a round a "!" line drove: its retry would send the earlier message again');
+    assert.match(shelled.feed().entries.find(entry => entry.id === 'shell:s1').tool.detail, /退出码 1 · 输出未发送给模型/, 'the card says the model never saw the output');
+    const ok = sessionView(make => [...asked(make), card(make)], {});
+    try { assert.doesNotMatch(ok.feed().entries.find(entry => entry.id === 'shell:s1').tool.detail, /输出未发送给模型/); } finally { ok.done(); }
+  } finally { plain.done(); shelled.done(); }
+});
+
+test('the sentence that ends a session is told above the box once: not again in the conversation, nor by the bar of the card', () => {
+  const words = 'Codex app-server 连接失败，请重试。';
+  const failedWith = make => [make('session.state', { state: 'failed', reason: words }), make('error', { code: 'codex_start_failed', message: words, retryable: true, willRetry: false, stage: 'startup' })];
+  const view = sessionView(failedWith, {}), other = sessionView(make => [make('session.state', { state: 'failed', reason: words }), make('error', { code: 'x', message: '另一句话', retryable: false, willRetry: false, stage: 'turn' })], {});
+  try {
+    assert.equal(alertOf(view), undefined, 'the conversation does not say it again');
+    assert.deepEqual(elements(view.tree()).filter(node => node.props?.className === 'native-ended').flatMap(node => elements(node).filter(child => child.type === 'span').map(child => child.props.children)), [words], 'it is told with the way to a new conversation');
+    assert.equal(alertOf(other)?.[0], '另一句话', 'a different sentence is still told');
+    const { nativeTells } = load('features/native-session/native-store.ts'), { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
+    const entry = { model: applyEvents(emptyModel(), failedWith(ev)).model, dismissed: null, noteDismissed: false, handoff: null };
+    assert.deepEqual([nativeTells(entry, words), nativeTells(entry, '另一句话'), nativeTells(undefined, words), nativeTells({ ...entry, dismissed: 'rs1' }, words)], [true, false, false, false], 'a bar elsewhere leaves out what the view tells, and says anything else');
+  } finally { view.done(); other.done(); }
 });

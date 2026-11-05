@@ -64,8 +64,10 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   const launch = async (id: string, agent: Agent) => {
     const route = routeOf(agent), bridge = nativeBridge();
     if (route.how === 'native' && bridge) {
-      const session = await onAction(bridge.start(id, { agent, resume: chosen === 'continue' }));
-      if (session) refreshNativeSession(id);
+      // A start that fails is told in the card it leaves (the session that failed shows its reason, or this card says it): not again as a message in the corner.
+      const started = await bridge.start(id, { agent, resume: chosen === 'continue' }).catch(error => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }));
+      if (!started.ok) setNotice(started.error);
+      refreshNativeSession(id);
     } else if (route.how === 'blocked') setNotice(t('只用 API 运行，但还没有保存 API key。请到设置的「运行方式」里保存。'));
     else {
       await onAction(window.agentrix.agentLaunch(id, agent, chosen));

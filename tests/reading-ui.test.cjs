@@ -121,6 +121,7 @@ function projectHeaderHarness(t) {
   const { ProjectPanel } = loadUI('features/workspace/ProjectPanel.tsx', {
     react: hooks,
     './ProjectTerminals': { ProjectTerminals: () => null },
+    './native-store.ts': { useNativeEntries: () => new Map(), nativeTells: () => false },
     './ActivityPane': { ActivityPane: () => null },
     './SubagentChip': { SubagentChip: () => null },
     './ProjectImageDialog': { ProjectImageDialog: () => null },

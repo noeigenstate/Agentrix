@@ -318,7 +318,7 @@ test('card restart and voice actions target the visible agent even when the stor
   const { ProjectPanel } = loadUI('workspace/ProjectPanel.tsx', {
     react: { useState: initial => [[true, false][stateIndex++] ?? initial, () => {}], useRef: current => ({ current }), useEffect() {} },
     'active-terminal': { useActiveTerminal: () => 'shell', setActiveTerminal() {} },
-    ProjectTerminals: { ProjectTerminals: () => null }, ActivityPane: { ActivityPane: () => null }, SubagentChip: { SubagentChip: () => null }, ProjectImageDialog: { ProjectImageDialog: () => null },
+    ProjectTerminals: { ProjectTerminals: () => null }, 'native-store.ts': { useNativeEntries: () => new Map(), nativeTells: () => false }, ActivityPane: { ActivityPane: () => null }, SubagentChip: { SubagentChip: () => null }, ProjectImageDialog: { ProjectImageDialog: () => null },
     IconButton: { IconButton: () => null }, shortcuts: { shortcut: () => '' },
     'voice-input': { useVoice: () => ({ recording: null }), toggleDictation: (id, session) => calls.push(['voice', id, session]) },
   });

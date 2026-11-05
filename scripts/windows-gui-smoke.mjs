@@ -4,9 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { withGuiLock } from './gui-lock.mjs';
-const suites = ['smoke','restore-slow','session','completion','gpu-terminal','workspace','editor-terminals','themes-markdown','visual','navigation','git','cmd','clipboard','material','composer','reading','dashboard','native-question','native-session','native-session-runtime','reading-hierarchy','path-refresh'];
-const selected = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only')+1].split(',') : suites;
-if (selected.some(name => !suites.includes(name))) throw new Error('Unknown GUI suite');
+import { selectSuites } from './gui-suites.mjs';
+let plan;
+try { plan = selectSuites(process.argv, process.env); } catch (error) { console.error(error.message); process.exit(1); }
+const { selected, skipped } = plan;
+if (skipped.length) console.log(`Skipped (they use the system clipboard, so they run only on the remote CI): ${skipped.join(', ')}`);
 const output = await fs.mkdtemp(path.join(os.tmpdir(), 'agx-windows-gui-'));
 const results = [];
 console.log('GUI evidence: '+output);

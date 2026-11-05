@@ -45,7 +45,7 @@ function compileFile(filename, language) {
     if (name === '@phosphor-icons/react') return new Proxy({}, { get: (_, icon) => ({ className }) => React.createElement('svg', { className, 'data-icon': icon }) });
     return original(name);
   };
-  mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
+  mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 } }).outputText, filename);
   return mod.exports;
 }
 function activityMarkup(calls, language = 'zh', terminal = {}) {
@@ -688,4 +688,30 @@ test('an agent’s sections follow the connection: a session that reports plan w
   // An API connection shows no subscription windows even when the session has some, and has no limit reset.
   const api = agentSection(usageMarkup('zh', { agent: 'codex', agentUsage: own }, { codex: 'api' }), 'Codex');
   assert.doesNotMatch(api, /5 小时额度|activity-estop/); assert.match(api, /API 花费/);
+});
+
+test('the session’s own windows win when the screen read them after main did; main’s win otherwise, and neither an API connection nor another agent borrows them', () => {
+  const future = Date.now() + 3600000, at = Date.now();
+  const main = observedAtMs => ({ state: 'ready', observedAtMs, ordinaryUsageAllowed: true, limitsById: { codex: { primary: { usedPercent: 70, windowDurationMins: 300, resetsAtMs: future } } } });
+  const screen = limitsAt => ({ limits: [{ minutes: 300, percent: 20, resetsAt: future }], limitsAt, limitsFrom: 'Codex' });
+  const codex = (agentUsage, limits, kind = 'subscription') => agentSection(usageMarkup('zh', { agent: 'codex', agentUsage }, { codex: kind, limits: { codex: limits } }), 'Codex');
+  assert.match(codex(screen(at), main(at - 60000)), /20%/, 'the screen read it later than main: the screen’s');
+  assert.doesNotMatch(codex(screen(at), main(at - 60000)), /70%/);
+  assert.match(codex(screen(at - 60000), main(at)), /70%/, 'main read it later: main’s');
+  assert.doesNotMatch(codex(screen(at - 60000), main(at)), /20%/);
+  assert.match(codex(screen(at), main(null)), /20%/, 'main says when it read nothing: the screen’s, which has a time');
+  assert.match(codex({ ...screen(null), limitsAt: null }, main(at)), /70%/, 'a screen with no time never replaces main');
+  assert.match(codex({ limits: [], limitsAt: at }, main(at - 60000)), /70%/, 'a screen with no windows replaces nothing');
+  const api = codex(screen(at), main(at - 60000), 'api');
+  assert.doesNotMatch(api, /5 小时额度|20%|70%/, 'an API connection shows no subscription windows, whichever is newer');
+  assert.doesNotMatch(agentSection(usageMarkup('zh', { agent: 'codex', agentUsage: screen(at) }, { claude: 'subscription', limits: { claude: main(at - 60000) } }), 'Claude'), /20%/, 'the other agent never borrows the session’s windows');
+});
+
+test('the main card tells a round that ended unknown quietly: no check, not complete, not interrupted; a complete one keeps its check', () => {
+  const turn = state => ({ codexActive: true, mainTurn: { state, updatedAt: Date.now(), background: null } });
+  const main = html => /<section class="activity-card activity-main"[\s\S]*?<\/section>/.exec(html)[0];
+  const unknown = main(activityMarkup([], 'zh', turn('unknown'))), complete = main(activityMarkup([], 'zh', turn('complete')));
+  assert.match(unknown, /本轮已结束，完成状态未知。/); assert.doesNotMatch(unknown, /本轮已完成|已中断|is-done|data-icon="CheckCircle"/);
+  assert.match(complete, /本轮已完成/); assert.doesNotMatch(complete, /完成状态未知/);
+  assert.doesNotMatch(main(activityMarkup([], 'zh', { codexActive: true })), /完成状态未知/, 'a session that has not ended a round says nothing of one');
 });

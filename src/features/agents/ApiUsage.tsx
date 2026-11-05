@@ -86,7 +86,9 @@ function ContextMetric({ usage }: { usage: AgentUsage | null | undefined }) {
 // The windows a subscription shows: main's; else, for the session's own agent, the ones its screen and records gave (onScreen).
 function quotaWindows(limits: LimitsPayload | null | undefined, current: boolean, usage: AgentUsage | null | undefined) {
   const fromMain = limitWindows(limits), fromScreen = current ? windowsFromScreen(usage) : [];
-  return fromMain.length ? { windows: fromMain, onScreen: false } : { windows: fromScreen, onScreen: fromScreen.length > 0 };
+  const newer = fromScreen.length > 0 && typeof usage?.limitsAt === 'number'
+    && (typeof limits?.observedAtMs !== 'number' || usage.limitsAt > limits.observedAtMs);
+  return fromMain.length && !newer ? { windows: fromMain, onScreen: false } : { windows: fromScreen, onScreen: fromScreen.length > 0 };
 }
 
 // Where the numbers come from, under the bars: the account read (main's answer, with when it was observed) or the session's own source; null when nothing is said.
