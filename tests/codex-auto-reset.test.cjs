@@ -108,7 +108,7 @@ test('disposing the service aborts only its pending reset client without consumi
 test('legacy settings retain existing routes and budget while auto-reset defaults on and persists off', t => {
   const f = fixture(t), file = path.join(f.root, 'settings.json');
   fs.writeFileSync(file, JSON.stringify({ claudePath: 'terminal-only', codexView: 'terminal', monthlyBudgetUsd: 12 }));
-  const settings = createSettings(file); assert.equal(settings.get().codexAutoReset, true); assert.equal(settings.get().monthlyBudgetUsd, 12);
+  const settings = createSettings(file); assert.equal(settings.get().codexAutoReset, false, 'the owner turns this on; a reset cannot be undone'); assert.equal(settings.get().monthlyBudgetUsd, 12);
   settings.set({ codexAutoReset: false }); assert.equal(createSettings(file).get().codexAutoReset, false);
   assert.throws(() => settings.set({ codexAutoReset: 1 }));
 });

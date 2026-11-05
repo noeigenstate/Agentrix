@@ -119,7 +119,7 @@ export function AgentRuntimeSettings({ projectId }: { projectId?: string }) {
     <label className="setting-row"><span><TerminalIcon size={19} /><span><b>{t('Codex 的界面')}</b><small>{t('原生：Codex 的 app-server，在应用自己的界面里；终端：Codex 命令行')}</small></span></span>
       <Select label={t('Codex 的界面')} value={settings?.codexView ?? 'native'} disabled={!settings || busy} options={CODEX_VIEWS()} onChange={value => void change({ codexView: value as CodexView })} /></label>
     <label className="setting-row"><span><ArrowCounterClockwise size={19} /><span><b>{t('额度用完时自动使用重置次数')}</b><small>{t('到达上限时自动用掉 1 次重置，用掉不能撤销')}</small></span></span>
-      <input type="checkbox" aria-label={t('额度用完时自动使用重置次数')} checked={settings?.codexAutoReset ?? true} disabled={!settings || busy} onChange={event => void setAutoReset(event.target.checked)} /></label>
+      <input type="checkbox" aria-label={t('额度用完时自动使用重置次数')} checked={settings?.codexAutoReset ?? false} disabled={!settings || busy} onChange={event => void setAutoReset(event.target.checked)} /></label>
     <div className="setting-row"><span><CurrencyDollar size={19} /><span><b>{t('API 月预算（美元）')}</b><small>{t('按 UTC 自然月累计的估算；用完后 Claude 按上面的选择处理。留空表示不限')}</small></span></span>
       <span className="runtime-budget">
         <input type="text" inputMode="decimal" autoComplete="off" aria-label={t('API 月预算（美元）')} placeholder={t('不限')} value={budget} disabled={!settings || busy}

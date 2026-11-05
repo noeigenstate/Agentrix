@@ -1,5 +1,5 @@
 const { readJson, writeJson } = require('./storage.cjs');
-const defaults = { claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: null, codexAutoReset: true };
+const defaults = { claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: null, codexAutoReset: false };
 function validSettings(value, partial = false) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !Object.hasOwn(defaults, key))) return false;
   return (partial && value.claudePath === undefined || ['api-then-terminal', 'api-only', 'terminal-only'].includes(value.claudePath)) &&
