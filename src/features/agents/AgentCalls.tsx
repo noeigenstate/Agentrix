@@ -4,7 +4,7 @@ import { t } from '../../shared/i18n';
 import { modelName } from '../../shared/model-name';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { exactCount } from './Metric';
-import { isSplitOpen, toggleSplit, useSplits } from './subagent-splits.ts';
+import { isSplitOpen, listedCalls, toggleSplit, useSplits } from './subagent-splits.ts';
 import './activity-pane.css';
 
 // How fast a model writes, at the right end of its head: the average over its recent replies (output tokens per second of the time it spent writing). The column is a fixed width, so
@@ -43,8 +43,6 @@ export const CALL_STATES = {
   done: { word: '已完成', icon: <CheckCircle size={14} weight="fill" aria-hidden="true" /> },
 } as const;
 const MAX_CALL_ITEMS = 4;
-// A call as the list reads it; `hidden` is main's, and an older main has none.
-type CallItem = AgentCall['items'][number] & { hidden?: boolean };
 
 // A dispatched worker that did not finish cleanly, in words in the state column (skills/agent-dispatch).
 export function failureWord(failure: NonNullable<AgentCall['items'][number]['failure']>) {
@@ -58,11 +56,10 @@ export function failureWord(failure: NonNullable<AgentCall['items'][number]['fai
 // The sub-agents the agent called, listed in the left bar's Agent tab and in the narrow window's header popover: per model one head (its mark, name, settings, service and rate),
 // then two lines for each of its calls (what it does; its role and state in words). A model's calls past the fourth fold into "+N". With no call there is one quiet line saying what will appear.
 // A call whose record can be read is one button on the same row: it opens (or closes) a read-only view of that sub-agent beside the conversation.
-// A call main has hidden (it ended and no process keeps it) is not listed, unless its view is open beside the conversation: then it stays until the view closes. A model whose calls are all hidden
-// has no head (one that never had a call keeps it), and the "+N" counts the calls that are listed.
+// The calls listed are `listedCalls`' (hidden ones left out), and the "+N" counts those.
 export function CallsCard({ calls, terminalId }: { calls: AgentCall[]; terminalId: string }) {
   const open = useSplits();
-  const groups = calls.map(call => ({ call, items: call.items.filter((item: CallItem) => !item.hidden || isSplitOpen(open, terminalId, item.id)) })).filter(group => group.items.length || !group.call.items.length);
+  const groups = listedCalls(calls, open, terminalId);
   if (!groups.length) return <section className="activity-card activity-calls" aria-label={t('调用的模型')}><p className="activity-empty">{t('还没有调用其他模型。规划员分派任务后，会显示在这里。')}</p></section>;
   return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
     <ul className="activity-call-groups">

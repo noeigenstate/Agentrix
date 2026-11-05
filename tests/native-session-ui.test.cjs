@@ -257,9 +257,10 @@ function launcher(runtime, calls, { kind = 'local', codexHere = true, startError
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: {
     getAgents: async () => ({ ok: true, value: { npm: true, installing: null, error: null, codex: { installed: codexHere }, claude: { installed: true } } }), onAgents: () => () => {},
+    startTerminal: async id => { calls.push(['terminal', id]); return { ok: true, value: null }; },
     installAgent: async agent => { calls.push(['install', agent]); return { ok: true, value: null }; }, openNode: async () => { calls.push(['node']); return { ok: true, value: null }; },
     agentHistory: async () => ({ ok: true, value: { claude: null, codex: null } }),
-    getState: async () => ({ ok: true, value: { projects: [{ id: 'p', kind, terminals: [{ id: 't1', sessionId: null, status: 'stopped' }] }] } }),
+    getState: async () => ({ ok: true, value: { projects: [{ id: 'p', terminals: [{ id: 't1', sessionId: null, status: 'stopped' }] }] } }),
     agentLaunch: async (...args) => { calls.push(['launch', ...args]); return { ok: true, value: true }; }, nativeSession: bridge,
   } } });
   const bridgeModule = require('../src/features/native-session/native-bridge.ts');
@@ -267,7 +268,7 @@ function launcher(runtime, calls, { kind = 'local', codexHere = true, startError
     '@phosphor-icons/react': { CircleNotch() {}, Terminal() {} }, './AgentBrandIcon.ts': { ClaudeLogo() {}, CodexLogo() {} }, './time': { relativeTime: () => '' }, './i18n': { t: fill }, './agent-launcher.css': {},
     './native-store.ts': { noteTerminalSwitch: (...args) => calls.push(['note', ...args]), refreshNativeSession: id => calls.push(['refresh', id]) }, './native-bridge.ts': bridgeModule,
   });
-  const errors = [], props = { terminalId: 't1', projectId: 'p', onAction: async promise => { const result = await promise; if (!result.ok) errors.push(result.error); return result.ok ? result.value : undefined; }, onOpenTerminal() {} };
+  const errors = [], props = { terminalId: 't1', projectId: 'p', kind, onAction: async promise => { const result = await promise; if (!result.ok) errors.push(result.error); return result.ok ? result.value : undefined; }, onOpenTerminal: id => calls.push(['open', id]) };
   const render = () => harness.render('AgentLauncher', props).result;
   const button = agent => elements(render()).find(node => node.type === 'button' && node.props.className?.startsWith(`agent-launcher-agent is-${agent}`));
   const note = agent => elements(button(agent)).find(node => node.type === 'small').props.children;
@@ -295,14 +296,19 @@ test('the launcher starts a native session or a terminal by the settings, says w
   }
 });
 
-test('Codex of an SSH project starts at once whether or not this computer has Codex: no 未安装, no install, no Node.js; a local project and Claude are unchanged', async () => {
+test('the launcher of an SSH project offers Codex and a plain terminal only; Codex starts at once whether or not this computer has it: no 未安装, no install, no Node.js; a local project is unchanged', async () => {
   const runtime = { settings: { claudePath: 'api-then-terminal', monthlyBudgetUsd: null }, saved: true };
   const calls = [], remote = launcher(runtime, calls, { kind: 'ssh', codexHere: false });
+  const agents = view => elements(view.render()).filter(node => node.type === 'button' && node.props.className?.startsWith('agent-launcher-agent')).map(node => node.props.className.split(' ')[1]);
   try {
     remote.render(); await settle();
+    assert.deepEqual(agents(remote), ['is-codex'], 'Claude on another computer is the owner’s own, in its terminal');
     assert.equal(remote.note('codex'), '开始新的对话 · 原生界面', 'no "not installed" for a computer that is not the one it runs on');
     remote.button('codex').props.onClick(); await settle();
     assert.deepEqual(calls, [['start', 't1', { agent: 'codex', resume: false }], ['refresh', 't1']], 'the session starts through the bridge, with no install and no Node.js');
+    calls.length = 0;
+    elements(remote.render()).find(node => node.type === 'button' && node.props.children?.includes?.('只打开终端')).props.onClick(); await settle();
+    assert.deepEqual(calls, [['terminal', 't1'], ['open', 't1']], 'the plain terminal starts and the card opens it');
   } finally { remote.done(); }
   const refused = [], failing = launcher(runtime, refused, { kind: 'ssh', codexHere: false, startError: '远端未找到 Codex 程序。' });
   try {
@@ -310,12 +316,7 @@ test('Codex of an SSH project starts at once whether or not this computer has Co
     assert.deepEqual([refused, failing.errors], [[['start', 't1', { agent: 'codex', resume: false }]], ['远端未找到 Codex 程序。']], 'what main says about the other computer is what the click shows, and nothing is installed');
   } finally { failing.done(); }
   const local = launcher(runtime, [], { kind: 'local', codexHere: false });
-  try { local.render(); await settle(); assert.match(local.note('codex'), /未安装/, 'a local project still offers the install'); assert.equal(local.note('claude'), '开始新的对话 · API · 原生界面'); } finally { local.done(); }
-  const claudeCalls = [], claude = launcher({ ...runtime, settings: { claudePath: 'terminal-only', monthlyBudgetUsd: null } }, claudeCalls, { kind: 'ssh', codexHere: false });
-  try {
-    claude.render(); await settle(); claude.button('claude').props.onClick(); await settle();
-    assert.deepEqual(claudeCalls, [['launch', 't1', 'claude', 'new']], 'Claude on an SSH project takes the terminal path as before');
-  } finally { claude.done(); }
+  try { local.render(); await settle(); assert.deepEqual(agents(local), ['is-claude', 'is-codex']); assert.match(local.note('codex'), /未安装/, 'a local project still offers the install'); assert.equal(local.note('claude'), '开始新的对话 · API · 原生界面'); } finally { local.done(); }
 });
 
 test('the launcher offers no terminal mode for Codex, and Codex starts natively whatever the settings say', async () => {
@@ -1968,6 +1969,11 @@ test('a compaction and a dropped result are lines of the conversation, and the c
   assert.deepEqual(lines([next('context.compacted', { trigger: 'manual', preTokens: 180000, postTokens: null })]), [['notice:4', 'assistant', '上下文已压缩（手动）', undefined]], 'a count no event gave is not written, and no number alone');
   assert.deepEqual(lines([next('item.dropped', { reason: 'too_large', bytes: 73400320 })]), [['notice:4', 'assistant', '有一条结果太大（70.0 MB），未显示，任务继续', undefined]]);
   assert.equal(lines([next('item.dropped', { reason: 'too_large' })])[0][2], '有一条结果太大，未显示，任务继续');
+  i18n.applyLanguage('en');
+  try {
+    assert.equal(lines([next('context.compacted', { trigger: 'auto', preTokens: 180000, postTokens: 20000 })])[0][2], 'Context compacted (automatic) · 180k → 20k tokens', 'in English: a space before the dot, and tokens');
+    assert.deepEqual(load('features/native-session/native-composer.ts').fastChoices(true).map(choice => choice.description), ['On', 'Off'], 'the /fast menu says On and Off, not another button’s words');
+  } finally { i18n.applyLanguage('zh'); }
   for (const end of [next('context.compacting', { active: false }), next('context.compacted', { trigger: 'auto', preTokens: null, postTokens: null }), next('turn.completed', { status: 'completed' }), next('session.state', { state: 'stopped', reason: 'user' })])
     assert.equal(applyEvents(model, [end]).model.compacting, false, end.type);
   assert.equal(applyEvents(emptyModel(), [stream()('context.compacting', { active: true }, { replay: true })]).model.compacting, false, 'a replayed compaction is over');
@@ -1985,9 +1991,9 @@ test('a compaction and a dropped result are lines of the conversation, and the c
   assert.deepEqual([anchor(make => []), anchor(make => [compacted(make)])], [undefined, undefined], 'a round with only the line (a /compact) has no result of its own');
   const view = sessionView(make => [make('session.state', { state: 'running', reason: null }), make('context.compacting', { active: true })], {});
   try {
-    assert.equal(elements(view.tree()).find(node => node.type === view.parts.WorkingLine).props.label, '正在压缩上下文…');
+    assert.equal(elements(view.tree()).find(node => node.type === view.parts.WorkingLine).props.label, '正在压缩上下文');
     view.show([view.ev('session.state', { state: 'running', reason: null })]);
-    assert.notEqual(elements(view.tree()).find(node => node.type === view.parts.WorkingLine).props.label, '正在压缩上下文…');
+    assert.notEqual(elements(view.tree()).find(node => node.type === view.parts.WorkingLine).props.label, '正在压缩上下文');
   } finally { view.done(); }
 });
 

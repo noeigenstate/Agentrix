@@ -14,10 +14,11 @@ const AGENTS: { agent: Agent; name: string; mark: ReactNode }[] = [{ agent: 'cla
 
 // A project with no agent on the card: pick the agent to work with, fresh or continuing this folder's latest conversation
 // with it. An agent not installed yet is installed by the same click (Node.js first, when even npm is missing), then
-// started; Codex of an SSH project is not installed here and starts at once (the other computer says if it has none). A plain terminal (for other CLIs) stays one click away. By the settings (运行方式) the agent starts as a native session
+// started. An SSH project offers Codex only (Claude there is the owner's own in its terminal), which is not installed here and starts at once: the other
+// computer says if it has none. A plain terminal (for other CLIs) stays one click away. By the settings (运行方式) the agent starts as a native session
 // (Claude on the API key, Codex on its app-server) or, as before, in a terminal.
-export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal, runningCount = 0, onExpand }: {
-  terminalId: string; projectId: string; onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>;
+export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction, onOpenTerminal, runningCount = 0, onExpand }: {
+  terminalId: string; projectId: string; kind?: 'local' | 'ssh'; onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>;
   onOpenTerminal: (id: string) => void; runningCount?: number; onExpand?: () => void;
 }) {
   const [history, setHistory] = useState<History | null>(null);
@@ -26,13 +27,6 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
   const [agents, setAgents] = useState<AgentsState | null>(null);
   const [runtime, setRuntime] = useState<{ settings: NativeSettings; keySaved: boolean | null } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  // A project on another computer (SSH). Its Codex runs there, on that computer's app-server: whether this computer has Codex is none of its business.
-  const [remote, setRemote] = useState(false);
-  useEffect(() => {
-    let active = true;
-    void window.agentrix.getState?.()?.then(result => { if (active && result.ok) setRemote(result.value.projects.find(project => project.id === projectId)?.kind === 'ssh'); });
-    return () => { active = false; };
-  }, [projectId]);
   useEffect(() => {
     const bridge = nativeBridge();
     if (!bridge) return;
@@ -46,7 +40,8 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
     const off = window.agentrix.onAgents(state => { if (active) setAgents(state); });
     return () => { active = false; off(); };
   }, []);
-  const runsHere = (agent: Agent) => !(remote && agent === 'codex');
+  // The Codex of a project on another computer (SSH) runs there, on that computer's app-server: whether this computer has Codex is none of its business.
+  const remote = kind === 'ssh', runsHere = (agent: Agent) => !(remote && agent === 'codex');
   const missing = (agent: Agent) => runsHere(agent) && !!agents && !agents[agent].installed;
   useEffect(() => {
     let active = true;
@@ -117,8 +112,8 @@ export function AgentLauncher({ terminalId, projectId, onAction, onOpenTerminal,
       <button type="button" role="radio" aria-checked={chosen === 'new'} onClick={() => setMode('new')}>{t('开始新开发')}</button>
       <button type="button" role="radio" aria-checked={chosen === 'continue'} disabled={!known} title={history && !known ? t('这个文件夹还没有开发记录') : undefined} onClick={() => setMode('continue')}>{t('继承开发历史')}</button>
     </div>
-    <div className="agent-launcher-agents">{AGENTS.map(({ agent, name, mark }) => <button type="button" key={agent} className={`agent-launcher-agent is-${agent}${missing(agent) ? ' is-missing' : ''}`} disabled={!!starting || !!agents?.installing} onClick={() => void start(agent)}>
-      <span className="agent-launcher-mark" aria-hidden="true" data-audit-ignore>{starting === agent || agents?.installing === agent ? <CircleNotch size={16} className="loading-spinner" /> : mark}</span>
+    <div className="agent-launcher-agents">{AGENTS.filter(({ agent }) => !remote || agent === 'codex').map(({ agent, name, mark }) => <button type="button" key={agent} className={`agent-launcher-agent is-${agent}${missing(agent) ? ' is-missing' : ''}`} disabled={!!starting || (runsHere(agent) && !!agents?.installing)} onClick={() => void start(agent)}>
+      <span className="agent-launcher-mark" aria-hidden="true" data-audit-ignore>{starting === agent || (runsHere(agent) && agents?.installing === agent) ? <CircleNotch size={16} className="loading-spinner" /> : mark}</span>
       <b>{name}</b><small>{[note(agent), routeNote(agent)].filter(Boolean).join(' · ')}</small>
     </button>)}</div>
     {(agents?.error || notice) && <p className="agent-launcher-error" role="alert">{agents?.error || notice}</p>}

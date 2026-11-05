@@ -17,7 +17,8 @@ export const sizeWords = (bytes: number) => (bytes / 1048576).toFixed(1);
 function compactedLine({ content }: NativeItem) {
   const before = number(content.preTokens), after = number(content.postTokens);
   const what = content.trigger === 'manual' ? t('上下文已压缩（手动）') : t('上下文已压缩（自动）');
-  return before !== null && after !== null ? `${what}· ${t('{from} → {to} token', { from: tokenWords(before), to: tokenWords(after) })}` : what;
+  // A Chinese bracket needs no space before the dot; an English one does.
+  return before !== null && after !== null ? `${what}${currentLanguage() === 'en' ? ' ' : ''}· ${t('{from} → {to} token', { from: tokenWords(before), to: tokenWords(after) })}` : what;
 }
 
 function droppedLine({ content }: NativeItem) {

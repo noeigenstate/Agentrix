@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { CallsCard } from './AgentCalls';
+import { listedCalls, useSplits } from './subagent-splits.ts';
 import './subagent-chip.css';
 
 // The activity pane's way in when a narrow window hides the pane (CSS shows this only there): a chip in the project header that opens the very same list of called models
@@ -10,7 +11,8 @@ import './subagent-chip.css';
 export function SubagentChip({ terminal }: { terminal: ProjectTerminal }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLDivElement>(null), chip = useRef<HTMLButtonElement>(null);
-  const calls = terminal.agentUsage?.calls ?? [], items = calls.flatMap(call => call.items);
+  // The count and the running ones are of the calls the list shows, so the popover is never empty behind a number.
+  const calls = terminal.agentUsage?.calls ?? [], items = listedCalls(calls, useSplits(), terminal.id).flatMap(group => group.items);
   const viewable = items.some(item => item.viewable);
   useEffect(() => {
     if (!open) return;

@@ -34,7 +34,7 @@ export function effortChoices(models: readonly NativeModelOption[], model: strin
   const known = models.find(found => found.value === model), efforts = known ? known.efforts : [...new Set(models.flatMap(found => found.efforts))];
   return efforts.map(name => choice(name, '', name === effort));
 }
-export const fastChoices = (on: boolean) => [choice('on', t('开启'), on), choice('off', t('关闭'), !on)];
+export const fastChoices = (on: boolean) => [choice('on', t('开'), on), choice('off', t('关'), !on)];
 
 // The line that says what the session runs with once an option was changed.
 export function optionTold(option: ComposerOption, now: NativeRunOptions, value: string) {
