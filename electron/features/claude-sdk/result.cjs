@@ -26,6 +26,17 @@ function tokensOf(usage) {
   return { input: count(usage.input_tokens), cachedInput: count(usage.cache_read_input_tokens), cacheWrite: count(usage.cache_creation_input_tokens),
     output: count(usage.output_tokens), reasoning: null };
 }
+function hasModelReply(message) {
+  if (message.parent_tool_use_id) return false;
+  const nonempty = value => typeof value === 'string' && value.trim().length > 0;
+  if (message.type === 'assistant') {
+    return message.message?.model !== '<synthetic>' && Array.isArray(message.message?.content)
+      && message.message.content.some(block => block?.type === 'tool_use' || nonempty(block?.text ?? block?.thinking));
+  }
+  if (message.type !== 'stream_event') return false;
+  const event = message.event;
+  return event?.content_block?.type === 'tool_use' || [event?.delta?.text, event?.delta?.thinking, event?.delta?.partial_json].some(nonempty);
+}
 function turnResult(result, { interrupted = false, costUsdMicros = null, compacted = false } = {}) {
   let reason = Object.hasOwn(reasons, result.terminal_reason) ? result.terminal_reason
     : result.terminal_reason ? 'unknown' : result.deferred_tool_use ? 'tool_deferred'
@@ -39,4 +50,4 @@ function turnResult(result, { interrupted = false, costUsdMicros = null, compact
     durationMs: count(result.duration_ms), apiDurationMs: count(result.duration_api_ms), costUsdMicros: count(costUsdMicros), costEstimated: true,
     tokens: tokensOf(result.usage) };
 }
-module.exports = { turnResult, tokensOf, reasons };
+module.exports = { turnResult, tokensOf, reasons, hasModelReply };

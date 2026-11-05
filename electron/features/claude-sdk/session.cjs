@@ -5,7 +5,7 @@ const { createRequests } = require('./requests.cjs');
 const { createPolicy } = require('./policy.cjs');
 const { billingIdentityError, startupFailure } = require('./identity.cjs');
 const { inputQueue, queryOptions, readBillingIdentity } = require('./query.cjs');
-const { turnResult, tokensOf } = require('./result.cjs');
+const { turnResult, tokensOf, hasModelReply } = require('./result.cjs');
 const { rateLimits } = require('./limits.cjs');
 const { claudeCommands } = require('./commands.cjs');
 const { runShell } = require('./shell.cjs');
@@ -153,6 +153,7 @@ function createClaudeSession(spec, emit, dependencies) {
           || message.type === 'stream_event' || message.type === 'user' && Array.isArray(message.message?.content) && message.message.content.some(block => block.type === 'tool_result')) run.executed = true;
         if (message.type === 'assistant' && !message.parent_tool_use_id && message.message?.model === '<synthetic>') run.synthetic = true;
         if (message.error === 'billing_error' && message.message?.model === '<synthetic>') run.billingRejected = true;
+        if (hasModelReply(message)) run.modelReplied = true;
         if (message.type === 'assistant' && !message.parent_tool_use_id && message.message?.usage) {
           run.lastUsage = tokensOf(message.message.usage); run.lastModel = message.message.model;
         }
@@ -175,7 +176,9 @@ function createClaudeSession(spec, emit, dependencies) {
         const rejected = refusal && message.is_error === true && message.usage
           && Object.values(tokensOf(message.usage)).every(value => value === null || value === 0);
         if (run.quotaRejected && spec.owner !== 'dispatch') {
-          const inputs = run.turnInputs || [];
+          // Shell context is already recorded by the CLI. Never turn it back into
+          // an executable !command in the fallback composer or automatic replay.
+          const inputs = (run.turnInputs || []).filter(input => !run.shellInputs?.has(input.clientMessageId));
           // A CLI consumption receipt proves stdin delivery, not model execution. Only the final
           // synthetic refusal plus explicit zero usage can override that receipt for this one input.
           fallbackInput = inputs.length ? { input: inputs[0], ...(inputs.length > 1 ? { remaining: inputs.slice(1) } : {}),
@@ -198,8 +201,13 @@ function createClaudeSession(spec, emit, dependencies) {
         const interrupted = run.interrupted;
         const outcome = turnResult(message, { interrupted, costUsdMicros: entry.deltaUsdMicros, compacted: context?.compacted });
         if (budgetBlocked) outcome.error = outcome.message = budgetNotice();
+        if (!run.modelReplied && (message.is_error === true || outcome.status === 'failed')) {
+          for (const id of run.shellInputs || []) shells.get(id)?.reject(null, { completedTurn: true,
+            switching: spec.quotaFallback?.() && (run.quotaRejected || budgetBlocked) });
+        }
+        for (const id of run.shellInputs || []) delete shells.get(id)?.reject;
         publish('turn.completed', outcome);
-        run.turnInputs = []; run.executed = false; run.synthetic = false; run.quotaRejected = false;
+        run.turnInputs = []; run.shellInputs = null; run.modelReplied = false; run.executed = false; run.synthetic = false; run.quotaRejected = false;
         run.interrupted = false;
         turnId = null; stream.turn(null);
         if (interrupted) unknownInput();
@@ -246,6 +254,7 @@ function createClaudeSession(spec, emit, dependencies) {
         }
       }
     } finally {
+      for (const id of run.shellInputs || []) delete shells.get(id)?.reject;
       publish('context.compacting', { active: false });
       cancelQuery(run, 'ended');
       try { finishReservation(run); }
@@ -376,7 +385,7 @@ function createClaudeSession(spec, emit, dependencies) {
     active.busy = true;
     (active.turnInputs ||= []).push({ clientMessageId, text, images });
     fallbackInput = null;
-    if (shellContent) active.executed = true;
+    if (shellContent) { active.executed = true; (active.shellInputs ||= new Set()).add(clientMessageId); }
     sent.set(clientMessageId, 'queued');
     if (!turnId) begin('user', clientMessageId);
     publish('input.receipt', { clientMessageId, status: 'queued' });
@@ -483,15 +492,20 @@ function createClaudeSession(spec, emit, dependencies) {
     shellAbort = new AbortController();
     const job = { abort: shellAbort }; shellControllers.add(job);
     const itemId = `shell:${clientMessageId}`, abort = shellAbort;
-    let savedOutput = '', savedExitCode = null;
+    let savedOutput = '', savedExitCode = null, notified = false;
     const card = (status, output = savedOutput, exitCode = savedExitCode, extra = {}) => {
       savedOutput = output; savedExitCode = exitCode;
       publish('item.upsert', { kind: 'command', status, content: { command, cwd: spec.cwd, output, exitCode, ...extra } }, { itemId });
     };
     const notSent = '命令已执行，但输出未发送给模型。请检查 API 和预算后重试。';
-    const rejected = error => {
-      card(savedExitCode === 0 ? 'completed' : 'failed', savedOutput, savedExitCode, { modelDelivery: 'rejected' });
-      publish('error', { code: 'shell_context_rejected', message: notSent, retryable: false, willRetry: false, stage: 'input' });
+    const rejected = (error, { completedTurn = false, switching = false } = {}) => {
+      if (!notified) {
+        notified = true;
+        delete shells.get(clientMessageId)?.reject;
+        card(savedExitCode === 0 ? 'completed' : savedExitCode === null ? 'interrupted' : 'failed', savedOutput, savedExitCode, { modelDelivery: 'rejected' });
+        const retained = switching ? '命令输出保留在本次会话历史中，切换到终端后会随下一条消息发送给模型，无需重新执行命令。' : '';
+        publish('error', { code: 'shell_context_rejected', message: notSent + (retained ? '\n' + retained : ''), retryable: false, willRetry: false, stage: completedTurn ? 'turn' : 'input' });
+      }
       const detail = typeof error?.message === 'string' ? clean(error.message) : '';
       return new Error(notSent + (detail && detail !== notSent ? '\n' + detail : ''));
     };
@@ -511,11 +525,12 @@ function createClaudeSession(spec, emit, dependencies) {
       }
       return { exitCode: result.exitCode };
     }).catch(error => { if (job.returned) throw rejected(error); card('failed'); throw error; }).finally(() => {
+      if (!sent.has(clientMessageId)) delete shells.get(clientMessageId)?.reject;
       if (shellAbort === abort) shellAbort = null;
       if (!closed && !stopping && !active?.busy) setState('idle');
     });
     job.task = task;
-    shells.set(clientMessageId, { command, task }); return task;
+    shells.set(clientMessageId, { command, task, reject: rejected }); return task;
   }
   return { start, resume: start, send, close, stopBackground, answer: requests.answer, snapshot: stream.snapshot,
     runOptions, models, shell,
